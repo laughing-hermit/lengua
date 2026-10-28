@@ -256,10 +256,26 @@ Trust:
   that runs out of time, leaves the step unsettled: "not proven". cvc5 takes several times longer
   than z3's bit-blasting on these questions, so it gets four times z3's limit. With only one
   solver installed, the report says the proof rests on it alone.
-- **The remaining gap.** Both solvers answer the same questions, which lengua's own code builds:
-  the model of each instruction, the simplifier and the encoding of the formulas. A mistake there
-  could make both agree on a wrong answer. The check of the model against real runs, above, is
-  the guard there.
+- **lengua's own code is tested against random values.** Both solvers answer questions that
+  lengua's own code builds, so a mistake there could make them agree on a wrong answer. Four
+  tests draw fresh random values on every run (`LENGUA_RANDOM_SEED` repeats one):
+  - *Each instruction against this CPU* (`src/prove/exec/against_cpu.rs`): a harness runs about
+    1,200 probes, every instruction form the model runs in every width and operand kind, plus
+    each condition after each flag-setting instruction, on about 28,000 register, flag and
+    memory values. The model must end with the same registers, flags and memory; where Intel
+    leaves a flag undefined, the CPU's value must be one the model allows. Its first run found
+    a real bug: a 32-bit shift by zero still clears the register's upper half.
+  - *The simplifier against plain arithmetic* (`src/prove/term/random.rs`): 4,000 random
+    expressions shaped like the prover's are built through the simplifying pool and evaluated at
+    random inputs. They must equal SMT-LIB's arithmetic as written, and every term's range must
+    hold its value. It found dividing by a constant zero simplified wrongly.
+  - *The solvers against the pool*: with every input fixed, both solvers must find any other
+    value of a random term impossible, so the SMT-LIB text means what the pool evaluates. It
+    found that z3's bit-blaster can't divide by a non-constant; every division is now a
+    quotient and remainder that multiply back.
+  - *Output conditions* (`src/prove/outputs.rs`): printed numbers, with and without text
+    around them and from print loops shaped like the template's, must be accepted exactly when
+    the bytes are the formula's text, never for leading zeros, a lost sign or a wrong digit.
 
 The first milestone covers whole-number inputs and formulas (`+ - * / %`, `abs`, `min`, `max`,
 `if`) with at most one computed value per output. Text, decimals, files and threads stay tested,

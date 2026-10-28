@@ -931,6 +931,9 @@ impl<'a> Cpu<'a> {
         let mask = if width == 64 { 63 } else { 31 };
         let count = u32::try_from(self.constant(count)? & mask).unwrap_or(0);
         if count == 0 {
+            // The flags stay, but the destination is still written: a 32-bit register's upper
+            // half clears.
+            self.write(0, a)?;
             return Ok(Step::Next);
         }
         let amount = self.pool.bv(width, u128::from(count));
@@ -1295,6 +1298,9 @@ pub fn bytes(pool: &mut Pool, text: &[u8]) -> Vec<Term> {
         .map(|byte| pool.bv(8, u128::from(*byte)))
         .collect()
 }
+
+#[cfg(test)]
+mod against_cpu;
 
 #[cfg(test)]
 mod tests {

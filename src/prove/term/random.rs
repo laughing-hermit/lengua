@@ -1,0 +1,736 @@
+//! Random-value tests of the term pool: random expressions are built through the pool, whose
+//! builders simplify as they go, and evaluated at random inputs. Each must equal the plain
+//! SMT-LIB arithmetic of the expression as written, every term's range must hold its value, and
+//! the solvers must read each term's SMT-LIB text as the pool evaluates it.
+
+use std::collections::HashMap;
+
+use rand::rngs::ChaCha8Rng;
+use rand::{RngExt, SeedableRng};
+
+use super::{Pool, Term};
+use crate::prove::smt::{Answer, Solver};
+
+/// An expression as written, before the pool simplifies it.
+#[derive(Debug, Clone)]
+enum Expr {
+    Var(usize),
+    Const(u32, u128),
+    Bool(bool),
+    Binary(Op, Box<Self>, Box<Self>),
+    Not(Box<Self>),
+    Neg(Box<Self>),
+    Extract(Box<Self>, u32, u32),
+    ZeroExtend(Box<Self>, u32),
+    SignExtend(Box<Self>, u32),
+    Concat(Box<Self>, Box<Self>),
+    Ite(Box<Self>, Box<Self>, Box<Self>),
+    Compare(Comparison, Box<Self>, Box<Self>),
+    Logic(bool, Box<Self>, Box<Self>),
+    BoolNot(Box<Self>),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Op {
+    Add,
+    Sub,
+    Mul,
+    Udiv,
+    Urem,
+    Sdiv,
+    Srem,
+    And,
+    Or,
+    Xor,
+    Shl,
+    Lshr,
+    Ashr,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Comparison {
+    Eq,
+    Ult,
+    Ule,
+    Slt,
+    Sle,
+}
+
+/// A variable: its width and the range its values are drawn from.
+#[derive(Debug, Clone)]
+struct Variable {
+    width: u32,
+    low: u128,
+    high: u128,
+}
+
+const fn mask(width: u32) -> u128 {
+    if width >= 128 {
+        u128::MAX
+    } else {
+        (1 << width) - 1
+    }
+}
+
+const fn top_bit(value: u128, width: u32) -> bool {
+    value >> (width - 1) & 1 == 1
+}
+
+const fn negate(value: u128, width: u32) -> u128 {
+    value.wrapping_neg() & mask(width)
+}
+
+/// The value as a signed number of `width` bits.
+const fn signed(value: u128, width: u32) -> i128 {
+    if width < 128 && top_bit(value, width) {
+        value as i128 - (1 << width)
+    } else {
+        value as i128
+    }
+}
+
+/// SMT-LIB's bit-vector operations, written from the standard's definitions.
+fn apply(op: Op, a: u128, b: u128, width: u32) -> u128 {
+    let udiv = |a: u128, b: u128| a.checked_div(b).unwrap_or(mask(width));
+    let urem = |a: u128, b: u128| if b == 0 { a } else { a % b };
+    let (negative_a, negative_b) = (top_bit(a, width), top_bit(b, width));
+    match op {
+        Op::Add => a.wrapping_add(b) & mask(width),
+        Op::Sub => a.wrapping_sub(b) & mask(width),
+        Op::Mul => a.wrapping_mul(b) & mask(width),
+        Op::Udiv => udiv(a, b),
+        Op::Urem => urem(a, b),
+        Op::Sdiv => match (negative_a, negative_b) {
+            (false, false) => udiv(a, b),
+            (true, false) => negate(udiv(negate(a, width), b), width),
+            (false, true) => negate(udiv(a, negate(b, width)), width),
+            (true, true) => udiv(negate(a, width), negate(b, width)),
+        },
+        Op::Srem => match (negative_a, negative_b) {
+            (false, false) => urem(a, b),
+            (true, false) => negate(urem(negate(a, width), b), width),
+            (false, true) => urem(a, negate(b, width)),
+            (true, true) => negate(urem(negate(a, width), negate(b, width)), width),
+        },
+        Op::And => a & b,
+        Op::Or => a | b,
+        Op::Xor => a ^ b,
+        Op::Shl => {
+            if b >= u128::from(width) {
+                0
+            } else {
+                (a << b) & mask(width)
+            }
+        }
+        Op::Lshr => {
+            if b >= u128::from(width) {
+                0
+            } else {
+                a >> b
+            }
+        }
+        Op::Ashr => {
+            let fill = if negative_a { mask(width) } else { 0 };
+            if b >= u128::from(width) {
+                fill
+            } else if b == 0 {
+                a
+            } else {
+                let shift = u32::try_from(b).unwrap_or(0);
+                (a >> shift) | (fill << (width - shift) & mask(width))
+            }
+        }
+    }
+}
+
+/// The expression's value and width (0 for true and false).
+fn reference(expr: &Expr, variables: &[Variable], values: &[u128]) -> (u128, u32) {
+    match expr {
+        Expr::Var(index) => (values[*index], variables[*index].width),
+        Expr::Const(width, value) => (*value, *width),
+        Expr::Bool(value) => (u128::from(*value), 0),
+        Expr::Binary(op, a, b) => {
+            let ((a, width), (b, _)) = (
+                reference(a, variables, values),
+                reference(b, variables, values),
+            );
+            (apply(*op, a, b, width), width)
+        }
+        Expr::Not(a) => {
+            let (a, width) = reference(a, variables, values);
+            (!a & mask(width), width)
+        }
+        Expr::Neg(a) => {
+            let (a, width) = reference(a, variables, values);
+            (negate(a, width), width)
+        }
+        Expr::Extract(a, high, low) => {
+            let (a, _) = reference(a, variables, values);
+            ((a >> low) & mask(high - low + 1), high - low + 1)
+        }
+        Expr::ZeroExtend(a, by) => {
+            let (a, width) = reference(a, variables, values);
+            (a, width + by)
+        }
+        Expr::SignExtend(a, by) => {
+            let (a, width) = reference(a, variables, values);
+            let fill = if top_bit(a, width) {
+                mask(*by) << width
+            } else {
+                0
+            };
+            (a | fill, width + by)
+        }
+        Expr::Concat(high, low) => {
+            let ((high, high_width), (low, low_width)) = (
+                reference(high, variables, values),
+                reference(low, variables, values),
+            );
+            ((high << low_width) | low, high_width + low_width)
+        }
+        Expr::Ite(condition, then, otherwise) => {
+            if reference(condition, variables, values).0 == 1 {
+                reference(then, variables, values)
+            } else {
+                reference(otherwise, variables, values)
+            }
+        }
+        Expr::Compare(comparison, a, b) => {
+            let ((a, width), (b, _)) = (
+                reference(a, variables, values),
+                reference(b, variables, values),
+            );
+            let (sa, sb) = (signed(a, width), signed(b, width));
+            let truth = match comparison {
+                Comparison::Eq => a == b,
+                Comparison::Ult => a < b,
+                Comparison::Ule => a <= b,
+                Comparison::Slt => sa < sb,
+                Comparison::Sle => sa <= sb,
+            };
+            (u128::from(truth), 0)
+        }
+        Expr::Logic(and, a, b) => {
+            let (a, b) = (
+                reference(a, variables, values).0 == 1,
+                reference(b, variables, values).0 == 1,
+            );
+            (u128::from(if *and { a && b } else { a || b }), 0)
+        }
+        Expr::BoolNot(a) => (u128::from(reference(a, variables, values).0 == 0), 0),
+    }
+}
+
+/// The expression built through the pool's builders, which simplify it.
+fn build(pool: &mut Pool, expr: &Expr, variables: &[Term]) -> Term {
+    match expr {
+        Expr::Var(index) => variables[*index],
+        Expr::Const(width, value) => pool.bv(*width, *value),
+        Expr::Bool(value) => pool.boolean(*value),
+        Expr::Binary(op, a, b) => {
+            let (a, b) = (build(pool, a, variables), build(pool, b, variables));
+            match op {
+                Op::Add => pool.add(a, b),
+                Op::Sub => pool.sub(a, b),
+                Op::Mul => pool.mul(a, b),
+                Op::Udiv => pool.udiv(a, b),
+                Op::Urem => pool.urem(a, b),
+                Op::Sdiv => pool.sdiv(a, b),
+                Op::Srem => pool.srem(a, b),
+                Op::And => pool.and(a, b),
+                Op::Or => pool.or(a, b),
+                Op::Xor => pool.xor(a, b),
+                Op::Shl => pool.shl(a, b),
+                Op::Lshr => pool.lshr(a, b),
+                Op::Ashr => pool.ashr(a, b),
+            }
+        }
+        Expr::Not(a) => {
+            let a = build(pool, a, variables);
+            pool.not(a)
+        }
+        Expr::Neg(a) => {
+            let a = build(pool, a, variables);
+            pool.neg(a)
+        }
+        Expr::Extract(a, high, low) => {
+            let a = build(pool, a, variables);
+            pool.extract(a, *high, *low)
+        }
+        Expr::ZeroExtend(a, by) => {
+            let a = build(pool, a, variables);
+            pool.zero_extend(a, *by)
+        }
+        Expr::SignExtend(a, by) => {
+            let a = build(pool, a, variables);
+            pool.sign_extend(a, *by)
+        }
+        Expr::Concat(high, low) => {
+            let (high, low) = (build(pool, high, variables), build(pool, low, variables));
+            pool.concat(high, low)
+        }
+        Expr::Ite(condition, then, otherwise) => {
+            let condition = build(pool, condition, variables);
+            let (then, otherwise) = (
+                build(pool, then, variables),
+                build(pool, otherwise, variables),
+            );
+            pool.ite(condition, then, otherwise)
+        }
+        Expr::Compare(comparison, a, b) => {
+            let (a, b) = (build(pool, a, variables), build(pool, b, variables));
+            match comparison {
+                Comparison::Eq => pool.eq(a, b),
+                Comparison::Ult => pool.ult(a, b),
+                Comparison::Ule => pool.ule(a, b),
+                Comparison::Slt => pool.slt(a, b),
+                Comparison::Sle => pool.sle(a, b),
+            }
+        }
+        Expr::Logic(and, a, b) => {
+            let (a, b) = (build(pool, a, variables), build(pool, b, variables));
+            if *and {
+                pool.bool_and(a, b)
+            } else {
+                pool.bool_or(a, b)
+            }
+        }
+        Expr::BoolNot(a) => {
+            let a = build(pool, a, variables);
+            pool.bool_not(a)
+        }
+    }
+}
+
+/// Writes expressions like the ones the prover builds: digit chains, widenings of sums, divisions
+/// by constants, comparisons with constants, all over variables with small ranges.
+struct Writer<'a> {
+    rng: &'a mut ChaCha8Rng,
+    variables: Vec<Variable>,
+    /// The widths to write in, narrowest first.
+    widths: &'static [u32],
+}
+
+const WIDTHS: [u32; 8] = [1, 8, 16, 32, 63, 64, 65, 128];
+
+/// Widths up to 65 bits: a solver multiplies twice the width to check a division, and 256-bit
+/// multipliers take seconds even with every input known.
+const NARROW: [u32; 7] = [1, 8, 16, 32, 63, 64, 65];
+
+impl Writer<'_> {
+    fn constant(&mut self, width: u32) -> u128 {
+        let interesting = [
+            0,
+            1,
+            2,
+            9,
+            10,
+            48,
+            57,
+            100,
+            1000,
+            mask(width),
+            mask(width) - 1,
+            mask(width) >> 1,
+            (mask(width) >> 1) + 1,
+            10_u128.pow(9),
+            10_u128.pow(18),
+        ];
+        match self.rng.random_range(0..3) {
+            0 => self.rng.random::<u128>() & mask(width),
+            _ => interesting[self.rng.random_range(0..interesting.len())] & mask(width),
+        }
+    }
+
+    fn variable(&mut self, width: u32) -> Expr {
+        let existing: Vec<usize> = (0..self.variables.len())
+            .filter(|index| self.variables[*index].width == width)
+            .collect();
+        if !existing.is_empty() && self.rng.random_bool(0.6) {
+            return Expr::Var(existing[self.rng.random_range(0..existing.len())]);
+        }
+        let (low, high) = match self.rng.random_range(0..4) {
+            0 => (0, mask(width)),
+            // A digit's character.
+            1 if width >= 8 => (48, 57),
+            // A small range, like a value with a few digits.
+            2 => {
+                let low = self.rng.random_range(0..1000) & mask(width);
+                let span = [9, 99, 999_999, 10_u128.pow(12)][self.rng.random_range(0..4)];
+                (low, low.saturating_add(span).min(mask(width)))
+            }
+            _ => {
+                let (a, b) = (self.constant(width), self.constant(width));
+                (a.min(b), a.max(b))
+            }
+        };
+        self.variables.push(Variable { width, low, high });
+        Expr::Var(self.variables.len() - 1)
+    }
+
+    fn number(&mut self, width: u32, depth: u32) -> Expr {
+        if depth == 0 || self.rng.random_range(0..10) < 2 {
+            return if self.rng.random_bool(0.3) {
+                Expr::Const(width, self.constant(width))
+            } else {
+                self.variable(width)
+            };
+        }
+        let deeper = depth - 1;
+        match self.rng.random_range(0..12) {
+            0..=3 => {
+                let ops = [
+                    Op::Add,
+                    Op::Sub,
+                    Op::Mul,
+                    Op::Udiv,
+                    Op::Urem,
+                    Op::Sdiv,
+                    Op::Srem,
+                    Op::And,
+                    Op::Or,
+                    Op::Xor,
+                    Op::Shl,
+                    Op::Lshr,
+                    Op::Ashr,
+                ];
+                let op = ops[self.rng.random_range(0..ops.len())];
+                let a = self.number(width, deeper);
+                // Constants on the right, as the prover's divisions, shifts and products have.
+                let b = if self.rng.random_bool(0.5) {
+                    let value = match op {
+                        Op::Shl | Op::Lshr | Op::Ashr => {
+                            u128::from(self.rng.random_range(0..width + 2)) & mask(width)
+                        }
+                        _ => self.constant(width),
+                    };
+                    Expr::Const(width, value)
+                } else {
+                    self.number(width, deeper)
+                };
+                Expr::Binary(op, Box::new(a), Box::new(b))
+            }
+            4 => Expr::Not(Box::new(self.number(width, deeper))),
+            5 => Expr::Neg(Box::new(self.number(width, deeper))),
+            6 if width < self.widths[self.widths.len() - 1] => {
+                let widest = self.widths[self.widths.len() - 1];
+                let wider = self
+                    .widths
+                    .iter()
+                    .copied()
+                    .filter(|candidate| *candidate > width)
+                    .nth(self.rng.random_range(0..2))
+                    .unwrap_or(widest);
+                let low = self.rng.random_range(0..=wider - width);
+                Expr::Extract(Box::new(self.number(wider, deeper)), low + width - 1, low)
+            }
+            7 | 8 if width > 1 => {
+                let narrower: Vec<u32> = self
+                    .widths
+                    .iter()
+                    .copied()
+                    .filter(|candidate| *candidate < width)
+                    .collect();
+                let from = narrower[self.rng.random_range(0..narrower.len())];
+                let inner = Box::new(self.number(from, deeper));
+                if self.rng.random_bool(0.5) {
+                    Expr::ZeroExtend(inner, width - from)
+                } else {
+                    Expr::SignExtend(inner, width - from)
+                }
+            }
+            9 if width > 1 => {
+                let split = self.rng.random_range(1..width);
+                Expr::Concat(
+                    Box::new(self.number(width - split, deeper)),
+                    Box::new(self.number(split, deeper)),
+                )
+            }
+            10 => Expr::Ite(
+                Box::new(self.truth(deeper)),
+                Box::new(self.number(width, deeper)),
+                Box::new(self.number(width, deeper)),
+            ),
+            11 if width >= 8 => {
+                // A sum of a digit chain's kind: x * 10 + (zext(d) - 48), widened.
+                let d = self.variable(8);
+                let wide = if width > 8 {
+                    Expr::ZeroExtend(Box::new(d), width - 8)
+                } else {
+                    d
+                };
+                let digit = Expr::Binary(Op::Sub, Box::new(wide), Box::new(Expr::Const(width, 48)));
+                let times_ten = Expr::Binary(
+                    Op::Mul,
+                    Box::new(self.number(width, deeper)),
+                    Box::new(Expr::Const(width, 10 & mask(width))),
+                );
+                Expr::Binary(Op::Add, Box::new(times_ten), Box::new(digit))
+            }
+            _ => Expr::Binary(
+                Op::Add,
+                Box::new(self.number(width, deeper)),
+                Box::new(self.number(width, deeper)),
+            ),
+        }
+    }
+
+    fn truth(&mut self, depth: u32) -> Expr {
+        if depth == 0 {
+            return Expr::Bool(self.rng.random_bool(0.5));
+        }
+        let deeper = depth - 1;
+        match self.rng.random_range(0..6) {
+            0..=3 => {
+                let width = self.widths[self.rng.random_range(1..self.widths.len())];
+                let comparisons = [
+                    Comparison::Eq,
+                    Comparison::Ult,
+                    Comparison::Ule,
+                    Comparison::Slt,
+                    Comparison::Sle,
+                ];
+                let comparison = comparisons[self.rng.random_range(0..comparisons.len())];
+                let a = self.number(width, deeper);
+                let b = if self.rng.random_bool(0.5) {
+                    Expr::Const(width, self.constant(width))
+                } else {
+                    self.number(width, deeper)
+                };
+                Expr::Compare(comparison, Box::new(a), Box::new(b))
+            }
+            4 => Expr::Logic(
+                self.rng.random_bool(0.5),
+                Box::new(self.truth(deeper)),
+                Box::new(self.truth(deeper)),
+            ),
+            _ => Expr::BoolNot(Box::new(self.truth(deeper))),
+        }
+    }
+}
+
+/// A value for `variable`, often at its edges.
+fn draw(rng: &mut ChaCha8Rng, variable: &Variable) -> u128 {
+    let Variable { low, high, .. } = *variable;
+    match rng.random_range(0..5) {
+        0 => low,
+        1 => high,
+        2 => low + (high - low) / 2,
+        _ => {
+            let span = high - low;
+            if span == u128::MAX {
+                rng.random()
+            } else {
+                low + rng.random::<u128>() % (span + 1)
+            }
+        }
+    }
+}
+
+fn seed() -> u64 {
+    std::env::var("LENGUA_RANDOM_SEED")
+        .ok()
+        .and_then(|seed| seed.parse().ok())
+        .unwrap_or_else(|| {
+            let mut bytes = [0; 8];
+            getrandom::fill(&mut bytes).expect("a seed");
+            u64::from_le_bytes(bytes)
+        })
+}
+
+/// Pool variables for `variables`, named `{prefix}v{index}`, each with its range when it has one.
+fn declare(pool: &mut Pool, variables: &[Variable], prefix: &str) -> Vec<Term> {
+    variables
+        .iter()
+        .enumerate()
+        .map(|(index, variable)| {
+            let name = format!("{prefix}v{index}");
+            if (variable.low, variable.high) == (0, mask(variable.width)) {
+                pool.var(variable.width, &name)
+            } else {
+                pool.var_in(variable.width, &name, variable.low, variable.high)
+            }
+        })
+        .collect()
+}
+
+/// Checks every term `term` is made of: its value at `values` must lie in its ranges.
+fn ranges_hold(pool: &Pool, term: Term, values: &HashMap<String, u128>) -> Result<(), String> {
+    let mut pending = vec![term];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(current) = pending.pop() {
+        if !seen.insert(current) {
+            continue;
+        }
+        pending.extend(pool.operands(current));
+        let Some(value) = pool.evaluate(current, values) else {
+            continue;
+        };
+        if matches!(pool.sort(current), super::Sort::Bool) {
+            continue;
+        }
+        let width = pool.width(current);
+        let (low, high) = pool.range(current);
+        if !(low..=high).contains(&value) {
+            return Err(format!(
+                "t{} = {} is {value:#x}, outside its range {low:#x}..={high:#x}",
+                current.index(),
+                pool.smt_node(current)
+            ));
+        }
+        let (low, high) = pool.signed_range(current);
+        let signed_value = signed(value, width);
+        if !(low..=high).contains(&signed_value) {
+            return Err(format!(
+                "t{} = {} is {signed_value} signed, outside its range {low}..={high}",
+                current.index(),
+                pool.smt_node(current)
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn simplified_terms_keep_their_values_and_ranges() {
+    let seed = seed();
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    let mut problems = Vec::new();
+    let mut checked = 0;
+    for _ in 0..4000 {
+        let mut writer = Writer {
+            rng: &mut rng,
+            variables: Vec::new(),
+            widths: &WIDTHS,
+        };
+        let expr = if writer.rng.random_bool(0.25) {
+            writer.truth(4)
+        } else {
+            let width = WIDTHS[writer.rng.random_range(0..WIDTHS.len())];
+            writer.number(width, 4)
+        };
+        let variables = writer.variables;
+        let mut pool = Pool::default();
+        let terms = declare(&mut pool, &variables, "");
+        let term = build(&mut pool, &expr, &terms);
+        for _ in 0..8 {
+            let values: Vec<u128> = variables
+                .iter()
+                .map(|variable| draw(&mut rng, variable))
+                .collect();
+            let by_name: HashMap<String, u128> = values
+                .iter()
+                .enumerate()
+                .map(|(index, value)| (format!("v{index}"), *value))
+                .collect();
+            let (expected, _) = reference(&expr, &variables, &values);
+            checked += 1;
+            match pool.evaluate(term, &by_name) {
+                Some(value) if value == expected => {}
+                found => problems.push(format!(
+                    "{expr:?} at {values:?}: the pool's terms give {found:?}, plain arithmetic \
+                     gives {expected}"
+                )),
+            }
+            if let Err(problem) = ranges_hold(&pool, term, &by_name) {
+                problems.push(format!("{expr:?} at {values:?}: {problem}"));
+            }
+        }
+    }
+    let count = problems.len();
+    problems.truncate(10);
+    assert!(
+        problems.is_empty(),
+        "seed {seed}: {count} of {checked} evaluations went wrong:\n{}",
+        problems.join("\n")
+    );
+}
+
+#[test]
+fn the_solvers_read_terms_as_the_pool_evaluates_them() {
+    let Ok(mut solver) = Solver::start(3000) else {
+        eprintln!("no solver is installed");
+        return;
+    };
+    let seed = seed();
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    let mut problems = Vec::new();
+    let mut slow = 0;
+    let mut pool = Pool::default();
+    for round in 0..150 {
+        let mut writer = Writer {
+            rng: &mut rng,
+            variables: Vec::new(),
+            widths: &NARROW,
+        };
+        let expr = if round % 4 == 0 {
+            writer.truth(3)
+        } else {
+            let width = NARROW[writer.rng.random_range(0..NARROW.len())];
+            writer.number(width, 3)
+        };
+        let variables = writer.variables;
+        // A solver knows the terms of one pool, so both start over together now and then.
+        if round % 25 == 0 {
+            solver = Solver::start(3000).expect("the solver starts again");
+            pool = Pool::default();
+        }
+        let prefix = format!("r{round}");
+        let terms = declare(&mut pool, &variables, &prefix);
+        let term = build(&mut pool, &expr, &terms);
+        let values: Vec<u128> = variables
+            .iter()
+            .map(|variable| draw(&mut rng, variable))
+            .collect();
+        let by_name: HashMap<String, u128> = values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| (format!("{prefix}v{index}"), *value))
+            .collect();
+        let Some(value) = pool.evaluate(term, &by_name) else {
+            continue;
+        };
+        let mut fixed: Vec<Term> = terms
+            .iter()
+            .zip(&values)
+            .map(|(variable, value)| {
+                let width = pool.width(*variable);
+                let constant = pool.bv(width, *value);
+                pool.eq(*variable, constant)
+            })
+            .collect();
+        // With every variable fixed, the term can't be anything but the pool's value.
+        let other = if matches!(pool.sort(term), super::Sort::Bool) {
+            if value == 1 {
+                pool.bool_not(term)
+            } else {
+                term
+            }
+        } else {
+            let constant = pool.bv(pool.width(term), value);
+            let same = pool.eq(term, constant);
+            pool.bool_not(same)
+        };
+        fixed.push(other);
+        let (answer, _) = solver
+            .check(&pool, &fixed, &[])
+            .expect("the solver answers");
+        // Out of time is no answer, which a proof reports as not proven; any other answer but
+        // impossible is a mistake.
+        if answer == Answer::Unknown && solver.why_unknown.ends_with("ran out of time") {
+            slow += 1;
+        } else if answer != Answer::Unsat {
+            problems.push(format!(
+                "{expr:?} at {values:?}: the pool says {value:#x}, but the solvers answer \
+                 {answer:?} ({})",
+                solver.why_unknown
+            ));
+        }
+    }
+    problems.truncate(10);
+    assert!(problems.is_empty(), "seed {seed}:\n{}", problems.join("\n"));
+    assert!(
+        slow < 15,
+        "seed {seed}: {slow} of 150 questions ran out of time"
+    );
+}

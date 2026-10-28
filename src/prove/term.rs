@@ -527,7 +527,7 @@ impl Pool {
     pub fn udiv(&mut self, a: Term, b: Term) -> Term {
         let width = self.width(a);
         match (self.constant(a), self.constant(b)) {
-            (Some(_), Some(0)) => return self.bv(width, mask(width)),
+            (_, Some(0)) => return self.bv(width, mask(width)),
             (Some(x), Some(y)) => return self.bv(width, x / y),
             (_, Some(1)) => return a,
             (_, Some(y)) => {
@@ -596,6 +596,13 @@ impl Pool {
         if self.constant(b) == Some(1) {
             return a;
         }
+        if self.constant(b) == Some(0) {
+            // 1 for a negative dividend and -1 otherwise, as SMT-LIB defines it.
+            let zero = self.bv(width, 0);
+            let negative = self.slt(a, zero);
+            let (one, minus_one) = (self.bv(width, 1), self.bv(width, mask(width)));
+            return self.ite(negative, one, minus_one);
+        }
         // By a positive constant: divide the magnitude, then put the sign back, toward zero.
         if let Some(c) = self.constant(b)
             && c > 0
@@ -621,6 +628,9 @@ impl Pool {
                 return a;
             }
             return self.bv_signed(width, sx.wrapping_rem(sy));
+        }
+        if self.constant(b) == Some(0) {
+            return a;
         }
         if let Some(c) = self.constant(b)
             && c > 0
@@ -1357,6 +1367,9 @@ impl Pool {
         }
     }
 }
+
+#[cfg(test)]
+mod random;
 
 #[cfg(test)]
 mod tests {

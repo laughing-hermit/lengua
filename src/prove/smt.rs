@@ -170,6 +170,26 @@ impl Process {
         )
     }
 
+    /// Why the solver's last answer was unknown, in its own words: "ran out of time" for a
+    /// timeout.
+    fn reason(&mut self) -> io::Result<String> {
+        self.send("(get-info :reason-unknown)\n")?;
+        let text = self.sync()?.join(" ");
+        let reason = text
+            .split_once(":reason-unknown")
+            .map_or(text.as_str(), |(_, reason)| reason)
+            .trim_matches(|character: char| character == ')' || character.is_whitespace())
+            .trim_matches('"')
+            .to_owned();
+        Ok(
+            if reason.contains("timeout") || reason.contains("canceled") || reason.is_empty() {
+                "ran out of time".to_owned()
+            } else {
+                format!("couldn't decide ({reason})")
+            },
+        )
+    }
+
     /// The values of `values` and of every variable in the inputs the solver found, when they
     /// really meet every condition: a solver's model is checked, never trusted.
     fn model(
@@ -220,14 +240,41 @@ pub struct Solver {
     timeout_ms: u64,
     /// When to stop asking: questions after it are unknown.
     deadline: Option<std::time::Instant>,
-    /// The quotient and remainder variables standing for each division by a constant.
-    divisions: HashMap<(Term, u128), (String, String)>,
+    /// The quotient and remainder variables standing for each division.
+    divisions: HashMap<Division, (String, String)>,
 }
 
 fn sort_text(sort: Sort) -> String {
     match sort {
         Sort::Bool => "Bool".into(),
         Sort::Bv(width) => format!("(_ BitVec {width})"),
+    }
+}
+
+/// A division the solver gets as quotient and remainder variables: by a constant, by a term, or
+/// signed (on the sizes of two terms).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Division {
+    ByConstant(Term, u128),
+    ByTerm(Term, Term),
+    Signed(Term, Term),
+}
+
+/// `value` as a bit-vector literal `width` bits wide.
+fn literal(value: u128, width: u32) -> String {
+    if width.is_multiple_of(4) {
+        format!("#x{value:0digits$x}", digits = (width / 4) as usize)
+    } else {
+        format!("#b{value:0digits$b}", digits = width as usize)
+    }
+}
+
+/// Every bit of `width` set.
+const fn ones(width: u32) -> u128 {
+    if width >= 128 {
+        u128::MAX
+    } else {
+        (1 << width) - 1
     }
 }
 
@@ -386,11 +433,14 @@ impl Solver {
                 Node::BoolVar(_) => {
                     text.push_str(&format!("(declare-const t{} {sort})\n", current.index()));
                 }
-                &Node::Udiv(dividend, divisor) | &Node::Urem(dividend, divisor)
-                    if pool.constant(divisor).is_some_and(|c| c > 0) =>
-                {
-                    let constant = pool.constant(divisor).unwrap_or(1);
-                    let (quotient, remainder) = self.division(pool, dividend, constant, &mut text);
+                // z3's bit-blaster can't divide, so every division is a quotient and a remainder
+                // that multiply back.
+                &Node::Udiv(dividend, divisor) | &Node::Urem(dividend, divisor) => {
+                    let division = match pool.constant(divisor) {
+                        Some(constant) if constant > 0 => Division::ByConstant(dividend, constant),
+                        _ => Division::ByTerm(dividend, divisor),
+                    };
+                    let (quotient, remainder) = self.division(pool, division, &mut text);
                     let name = if matches!(pool.node(current), Node::Udiv(..)) {
                         quotient
                     } else {
@@ -398,6 +448,30 @@ impl Solver {
                     };
                     text.push_str(&format!(
                         "(define-fun t{} () {sort} {name})\n",
+                        current.index()
+                    ));
+                }
+                &Node::Sdiv(dividend, divisor) | &Node::Srem(dividend, divisor) => {
+                    // As SMT-LIB defines them: divide the sizes, then the quotient is negative
+                    // when the signs differ, and the remainder takes the dividend's sign.
+                    let (quotient, remainder) =
+                        self.division(pool, Division::Signed(dividend, divisor), &mut text);
+                    let width = pool.width(current);
+                    let (zero, one) = (literal(0, width), literal(1, width));
+                    let (a, b) = (dividend.index(), divisor.index());
+                    let value = if matches!(pool.node(current), Node::Sdiv(..)) {
+                        format!(
+                            "(ite (xor (bvslt t{a} {zero}) (bvslt t{b} {zero})) (bvadd (bvnot \
+                             {quotient}) {one}) {quotient})"
+                        )
+                    } else {
+                        format!(
+                            "(ite (bvslt t{a} {zero}) (bvadd (bvnot {remainder}) {one}) \
+                             {remainder})"
+                        )
+                    };
+                    text.push_str(&format!(
+                        "(define-fun t{} () {sort} {value})\n",
                         current.index()
                     ));
                 }
@@ -420,40 +494,72 @@ impl Solver {
         self.send(&text)
     }
 
-    /// The quotient and remainder of `dividend` by the constant `divisor`, as variables defined
-    /// by `dividend = quotient × divisor + remainder` and `remainder < divisor`, computed in
-    /// double width so nothing wraps. The definitions are asserted once, outside any question.
-    fn division(
-        &mut self,
-        pool: &Pool,
-        dividend: Term,
-        divisor: u128,
-        text: &mut String,
-    ) -> (String, String) {
-        if let Some(names) = self.divisions.get(&(dividend, divisor)) {
+    /// The quotient and remainder of a division, as variables defined by `dividend = quotient ×
+    /// divisor + remainder` and `remainder < divisor`, computed in double width so nothing wraps;
+    /// dividing by zero gives all ones and the dividend, as in SMT-LIB. A signed division divides
+    /// the sizes. The definitions are asserted once, outside any question.
+    fn division(&mut self, pool: &Pool, division: Division, text: &mut String) -> (String, String) {
+        if let Some(names) = self.divisions.get(&division) {
             return names.clone();
         }
-        let width = pool.width(dividend);
         let index = self.divisions.len();
         let (quotient, remainder) = (format!("q{index}"), format!("r{index}"));
-        let constant = |value: u128, bits: u32| {
-            if bits.is_multiple_of(4) {
-                format!("#x{value:0digits$x}", digits = (bits / 4) as usize)
-            } else {
-                format!("#b{value:0digits$b}", digits = bits as usize)
-            }
-        };
+        let (Division::ByConstant(dividend, _)
+        | Division::ByTerm(dividend, _)
+        | Division::Signed(dividend, _)) = division;
+        let width = pool.width(dividend);
         let wide = |name: &str| format!("((_ zero_extend {width}) {name})");
+        let size = |term: Term| {
+            format!(
+                "(ite (bvslt t{index} {zero}) (bvadd (bvnot t{index}) {one}) t{index})",
+                index = term.index(),
+                zero = literal(0, width),
+                one = literal(1, width),
+            )
+        };
         text.push_str(&format!(
             "(declare-const {quotient} (_ BitVec {width}))\n(declare-const {remainder} (_ BitVec \
-             {width}))\n(assert (= {} (bvadd {} {})))\n(assert (bvult {remainder} {}))\n",
-            wide(&format!("t{}", dividend.index())),
-            shifted_sum(&wide(&quotient), divisor, 2 * width),
-            wide(&remainder),
-            constant(divisor, width),
+             {width}))\n"
         ));
+        match division {
+            Division::ByConstant(dividend, divisor) => text.push_str(&format!(
+                "(assert (= {} (bvadd {} {})))\n(assert (bvult {remainder} {}))\n",
+                wide(&format!("t{}", dividend.index())),
+                shifted_sum(&wide(&quotient), divisor, 2 * width),
+                wide(&remainder),
+                literal(divisor, width),
+            )),
+            Division::ByTerm(dividend, divisor) | Division::Signed(dividend, divisor) => {
+                let (dividend, divisor) = if matches!(division, Division::Signed(..)) {
+                    let (a, b) = (format!("a{index}"), format!("b{index}"));
+                    text.push_str(&format!(
+                        "(define-fun {a} () (_ BitVec {width}) {})\n(define-fun {b} () (_ \
+                         BitVec {width}) {})\n",
+                        size(dividend),
+                        size(divisor)
+                    ));
+                    (a, b)
+                } else {
+                    (
+                        format!("t{}", dividend.index()),
+                        format!("t{}", divisor.index()),
+                    )
+                };
+                text.push_str(&format!(
+                    "(assert (ite (= {divisor} {zero}) (and (= {quotient} {all}) (= {remainder} \
+                     {dividend})) (and (= {} (bvadd (bvmul {} {}) {})) (bvult {remainder} \
+                     {divisor}))))\n",
+                    wide(&dividend),
+                    wide(&quotient),
+                    wide(&divisor),
+                    wide(&remainder),
+                    zero = literal(0, width),
+                    all = literal(ones(width), width),
+                ));
+            }
+        }
         self.divisions
-            .insert((dividend, divisor), (quotient.clone(), remainder.clone()));
+            .insert(division, (quotient.clone(), remainder.clone()));
         (quotient, remainder)
     }
 
@@ -512,7 +618,7 @@ impl Solver {
             }
             Answer::Unsat => self.confirm(pool, conditions, values, &mut model)?,
             Answer::Unknown => {
-                self.why_unknown = format!("{name} ran out of time");
+                self.why_unknown = format!("{name} {}", self.first.reason()?);
                 Answer::Unknown
             }
         };
@@ -557,7 +663,10 @@ impl Solver {
             },
             Answer::Unknown => (
                 Answer::Unknown,
-                format!("{name} couldn't confirm {first}'s answer in time"),
+                format!(
+                    "{name} couldn't confirm {first}'s answer: it {}",
+                    second.reason()?
+                ),
             ),
         };
         self.note(&format!("; {name}: {answer:?} in {elapsed:?}\n"));
@@ -790,7 +899,7 @@ mod tests {
             .expect("answers");
         assert_eq!(answer, Answer::Unknown);
         assert!(
-            solver.why_unknown.contains("in time"),
+            solver.why_unknown.contains("couldn't confirm"),
             "{}",
             solver.why_unknown
         );

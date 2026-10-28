@@ -728,4 +728,6 @@ pub fn agrees(machine: &Machine, cases: &[crate::testfile::Case]) -> Result<(), 
 }
 
 #[cfg(test)]
+mod outputs;
+#[cfg(test)]
 mod tests;
