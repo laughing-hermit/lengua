@@ -18,6 +18,7 @@ path = "src/main.rs"
 [dependencies]
 getrandom = "0.4"
 hmac = "0.13"
+rand = { version = "0.10", default-features = false, features = ["chacha"] }
 rmcp = { version = "3.8.0", features = ["transport-io", "elicitation"] }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }

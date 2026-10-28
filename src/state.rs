@@ -15,6 +15,12 @@ pub const TESTS_FILE: &str = "tests.toml";
 /// The code's file name inside a program folder.
 pub const CODE_FILE: &str = "main.s";
 
+/// Where the server keeps a copy of checked tests, so frozen tests can be restored.
+#[must_use]
+pub fn stamped_copy(data_dir: &Path, tests: &Sha256Hex) -> PathBuf {
+    data_dir.join("stamped").join(tests.as_str())
+}
+
 /// A program folder, given as an absolute path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProgramFolder(PathBuf);
@@ -242,9 +248,9 @@ impl State {
             ),
             Self::TestsChanged { stamped } => format!(
                 "Blocked: {TESTS_FILE} changed after it was checked, and tests stay frozen until \
-                 the spec changes. Restore it by copying {}/stamped/{stamped} to \
-                 {folder}/{TESTS_FILE}, or change {SPEC_FILE} and get it approved again.",
-                context.data_dir.display()
+                 the spec changes. Restore it by copying {} to {folder}/{TESTS_FILE}, or \
+                 change {SPEC_FILE} and get it approved again.",
+                stamped_copy(context.data_dir, stamped).display()
             ),
             Self::CodeMissing => format!(
                 "Next: write {folder}/{CODE_FILE} with the write-assembly skill (first line: \

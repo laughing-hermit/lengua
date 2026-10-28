@@ -122,28 +122,79 @@ fn the_spec_template_is_a_valid_spec() {
     }
 }
 
-#[test]
-fn specs_shown_in_skills_are_valid() {
-    let mut checked = 0;
-    for (folder, text) in skills() {
-        let mut block: Option<Vec<&str>> = None;
-        for line in text.lines() {
-            match (&mut block, line) {
-                (None, "```markdown") => block = Some(Vec::new()),
-                (Some(lines), "```") => {
-                    let spec = lines.join("\n") + "\n";
-                    if spec.contains("type: lengua/program-spec") {
-                        if let Err(problems) = lengua::spec::parse(&spec) {
-                            panic!("{folder} shows an invalid spec: {problems:#?}");
-                        }
-                        checked += 1;
-                    }
-                    block = None;
-                }
-                (Some(lines), line) => lines.push(line),
-                (None, _) => {}
+/// Every markdown file under plugin/skills, as (path relative to the skills folder, text).
+fn documents() -> Vec<(String, String)> {
+    fn walk(folder: &Path, found: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(folder).expect("list a skills folder") {
+            let path = entry.expect("folder entry").path();
+            if path.is_dir() {
+                walk(&path, found);
+            } else if path.extension().is_some_and(|extension| extension == "md") {
+                found.push(path);
             }
         }
     }
-    assert!(checked > 0, "no example specs found");
+    let mut paths = Vec::new();
+    walk(&skills_dir(), &mut paths);
+    paths.sort();
+    paths
+        .into_iter()
+        .map(|path| {
+            let name = path
+                .strip_prefix(skills_dir())
+                .expect("inside the skills folder")
+                .display()
+                .to_string();
+            (name, read(&path))
+        })
+        .collect()
+}
+
+/// The fenced code blocks of a markdown text, as (language, content).
+fn code_blocks(text: &str) -> Vec<(String, String)> {
+    let mut blocks = Vec::new();
+    let mut open: Option<(String, Vec<&str>)> = None;
+    for line in text.lines() {
+        match (&mut open, line.strip_prefix("```")) {
+            (None, Some(language)) => open = Some((language.trim().to_owned(), Vec::new())),
+            (Some(_), Some("")) => {
+                let (language, lines) = open.take().expect("an open block");
+                blocks.push((language, lines.join("\n") + "\n"));
+            }
+            (Some((_, lines)), _) => lines.push(line),
+            (None, None) => {}
+        }
+    }
+    blocks
+}
+
+/// Each spec the skills show is valid, and each tests.toml they show passes check_tests
+/// against the spec shown before it in the same file.
+#[test]
+fn examples_in_the_skills_pass_lenguas_own_checks() {
+    let (mut specs, mut tests) = (0, 0);
+    for (document, text) in documents() {
+        let mut spec = None;
+        for (language, block) in code_blocks(&text) {
+            if language == "markdown" && block.contains("type: lengua/program-spec") {
+                let parsed = lengua::spec::parse(&block).unwrap_or_else(|problems| {
+                    panic!("{document} shows an invalid spec: {problems:#?}")
+                });
+                let label = lengua::hash::Sha256Hex::of(block.as_bytes()).label();
+                spec = Some((parsed, label));
+                specs += 1;
+            } else if language == "toml" && block.starts_with("[meta]") {
+                let (parsed, label) = spec
+                    .as_ref()
+                    .unwrap_or_else(|| panic!("{document} shows tests before any spec"));
+                let filled = block.replace("sha256:<from status>", label);
+                if let Err(problems) = lengua::testfile::check(&filled, parsed, label) {
+                    panic!("{document} shows tests that fail check_tests: {problems:#?}");
+                }
+                tests += 1;
+            }
+        }
+    }
+    assert!(specs >= 4, "found only {specs} example specs");
+    assert!(tests >= 3, "found only {tests} example tests");
 }

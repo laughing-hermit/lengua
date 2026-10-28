@@ -45,6 +45,40 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
 - Allowed system calls: read, write, exit
 ";
 
+/// Valid tests for the add spec, with `{label}` standing for the spec's label.
+pub const ADD_TESTS: &str = r#"[meta]
+spec = "{label}"
+
+[[example]]
+id = "B1"
+args = ["2", "3"]
+stdout = "5\n"
+exit_code = 0
+
+[[example]]
+id = "B2"
+stderr = "usage: add <a> <b>\n"
+exit_code = 1
+
+[[generated]]
+id = "B1"
+runs = 200
+vars = { a = "int(-1000000000, 1000000000)", b = "int(-1000000000, 1000000000)" }
+args = ["{a}", "{b}"]
+stdout = "{a + b}\n"
+exit_code = 0
+"#;
+
+/// The label tests and code carry for a spec: `sha256:<hex>`.
+pub fn label(spec: &str) -> String {
+    lengua::hash::Sha256Hex::of(spec.as_bytes()).label()
+}
+
+/// The add tests, labeled for `spec`.
+pub fn add_tests(spec: &str) -> String {
+    ADD_TESTS.replacen("{label}", &label(spec), 1)
+}
+
 /// Which MCP protocol generation the client speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Protocol {

@@ -19,10 +19,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::data_dir::DataDir;
 use crate::hash::{Sha256Hex, hex};
-use crate::lock::{self, ApprovedVia, Key, Lock};
+use crate::lock::{self, ApprovedVia, Key, Lock, TestsStamp};
 use crate::platform::{CpuFeatures, Machine};
 use crate::spec::{self, Spec, Syscall};
-use crate::state::{LockStatus, ProgramFolder, SPEC_FILE, Snapshot, State, StepContext};
+use crate::state::{
+    LockStatus, ProgramFolder, SPEC_FILE, Snapshot, State, StepContext, TESTS_FILE, stamped_copy,
+};
+use crate::testfile;
 use crate::toolchain::Toolchain;
 
 /// Server-wide guidance sent to every client at startup.
@@ -223,6 +226,25 @@ pub struct ApprovalReport {
     pub next_step: String,
 }
 
+/// What `check_tests` reports.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct TestsReport {
+    /// Whether tests.toml is checked and frozen now.
+    pub checked: bool,
+    /// SHA-256 of the checked tests.toml.
+    pub tests_sha256: String,
+    /// Number of examples.
+    pub examples: usize,
+    /// Number of generated blocks.
+    pub generated_blocks: usize,
+    /// Runs of all generated blocks together, each with fresh inputs.
+    pub generated_runs: u64,
+    /// What happened.
+    pub message: String,
+    /// The single next thing to do.
+    pub next_step: String,
+}
+
 /// The approval dialog's form: one checkbox, on by default.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct SpecApproval {
@@ -369,9 +391,141 @@ impl LenguaServer {
             self.approve_with_dialog(&ctx, &folder, &spec, &shown).await
         }
     }
+
+    #[tool(
+        name = "check_tests",
+        description = "Checks <path>/tests.toml against the approved spec.md and, if it passes, \
+            records it in lengua.lock; from then on the tests stay frozen until the spec changes. \
+            It checks the [meta] spec label, one example per behavior holding the spec's values, \
+            a [[generated]] block for every behavior with inputs, generator ranges taken from the \
+            spec, formulas that reproduce each example without overflow or division by zero, and \
+            output that depends on the inputs. Returns every problem at once. path: absolute path \
+            of the program folder.",
+        annotations(
+            title = "Check the tests",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn check_tests(
+        &self,
+        Parameters(params): Parameters<ProgramParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<TestsReport>, String> {
+        let folder = ProgramFolder::new(&params.path)?;
+        let elicitation = client_report(&ctx).elicitation;
+        let (state, next_step) = self.program_state(&folder, elicitation)?;
+        let already_checked = match state {
+            State::TestsUnchecked => false,
+            State::CodeMissing | State::CodeUnchecked | State::Ready => true,
+            State::TestsMissing => {
+                return Err(format!(
+                    "There's no {TESTS_FILE} in {folder} yet. {next_step}"
+                ));
+            }
+            State::TestsChanged { .. } => return Err(next_step),
+            State::NoSpec | State::SpecNotApproved | State::LockInvalid(_) => {
+                return Err(format!(
+                    "Tests are checked against an approved spec, and {folder} has none yet. \
+                     {next_step}"
+                ));
+            }
+        };
+        let spec_text = read_spec(&folder)?;
+        let spec = spec::parse(&spec_text).map_err(|problems| spec_problems(&folder, &problems))?;
+        let spec_hash = Sha256Hex::of(spec_text.as_bytes());
+        let tests_text = read_tests(&folder)?;
+        let tests_hash = Sha256Hex::of(tests_text.as_bytes());
+        let suite = testfile::check(&tests_text, &spec, &spec_hash.label())
+            .map_err(|problems| tests_problems(&folder, &problems))?;
+        let message = if already_checked {
+            format!("{TESTS_FILE} was already checked; nothing changed.")
+        } else {
+            self.stamp_tests(&folder, &spec_hash, &tests_hash, &tests_text)
+                .await?;
+            format!(
+                "{TESTS_FILE} passed every check and is now frozen: it can't change until \
+                 {SPEC_FILE} does."
+            )
+        };
+        Ok(Json(TestsReport {
+            checked: true,
+            tests_sha256: tests_hash.to_string(),
+            examples: suite.examples.len(),
+            generated_blocks: suite.generated.len(),
+            generated_runs: suite
+                .generated
+                .iter()
+                .map(|block| u64::from(block.runs))
+                .sum(),
+            message,
+            next_step: self.program_state(&folder, elicitation)?.1,
+        }))
+    }
 }
 
 impl LenguaServer {
+    /// The program's state and its next step.
+    fn program_state(
+        &self,
+        folder: &ProgramFolder,
+        elicitation: bool,
+    ) -> Result<(State, String), String> {
+        let key = Key::load(&self.data_dir).map_err(|error| error.to_string())?;
+        let snapshot = Snapshot::read(folder, key.as_ref())
+            .map_err(|error| format!("can't read {folder}: {error}"))?;
+        let state = State::of(&snapshot);
+        let step = state.next_step(&StepContext {
+            folder,
+            spec: snapshot.spec.as_ref(),
+            data_dir: self.data_dir.path(),
+            elicitation,
+        });
+        Ok((state, step))
+    }
+
+    /// Records checked tests in the lock, provided neither file changed while being checked,
+    /// and keeps a copy so frozen tests can be restored.
+    async fn stamp_tests(
+        &self,
+        folder: &ProgramFolder,
+        spec: &Sha256Hex,
+        tests: &Sha256Hex,
+        text: &str,
+    ) -> Result<(), String> {
+        let _writing = self.lock_writes.lock().await;
+        let changed = || {
+            format!(
+                "{SPEC_FILE} or {TESTS_FILE} changed while the tests were being checked, so \
+                 nothing was recorded; call check_tests again."
+            )
+        };
+        let key = Key::load(&self.data_dir)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(changed)?;
+        let lock = lock::read(folder.path(), Some(&key))
+            .ok()
+            .flatten()
+            .ok_or_else(changed)?;
+        let current_spec = Sha256Hex::of(read_spec(folder)?.as_bytes());
+        let current_tests = Sha256Hex::of(read_tests(folder)?.as_bytes());
+        if lock.spec.sha256 != *spec || current_spec != *spec || current_tests != *tests {
+            return Err(changed());
+        }
+        write_stamped_copy(&self.data_dir, tests, text)?;
+        let lock = Lock {
+            tests: Some(TestsStamp {
+                sha256: tests.clone(),
+            }),
+            code: None,
+            ..lock
+        };
+        lock::write(folder.path(), &lock, &key)
+            .map_err(|error| format!("couldn't write {folder}/{}: {error}", lock::LOCK_FILE))
+    }
+
     fn program_report(
         &self,
         folder: &ProgramFolder,
@@ -705,6 +859,48 @@ fn read_spec(folder: &ProgramFolder) -> Result<String, String> {
         )),
         Err(error) => Err(format!("couldn't read {folder}/{SPEC_FILE}: {error}")),
     }
+}
+
+fn read_tests(folder: &ProgramFolder) -> Result<String, String> {
+    match std::fs::read_to_string(folder.file(TESTS_FILE)) {
+        Ok(text) => Ok(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(format!(
+            "There's no {TESTS_FILE} in {folder}. Write it with the write-tests skill, then call \
+             check_tests."
+        )),
+        Err(error) => Err(format!("couldn't read {folder}/{TESTS_FILE}: {error}")),
+    }
+}
+
+/// Saves the checked tests under their hash, written atomically.
+fn write_stamped_copy(data_dir: &DataDir, tests: &Sha256Hex, text: &str) -> Result<(), String> {
+    use std::io::Write as _;
+    let path = stamped_copy(data_dir.path(), tests);
+    let failed = |error: std::io::Error| {
+        format!(
+            "couldn't keep a copy of the checked tests at {}: {error}",
+            path.display()
+        )
+    };
+    let folder = path.parent().unwrap_or(data_dir.path());
+    std::fs::create_dir_all(folder).map_err(failed)?;
+    let mut file = tempfile::NamedTempFile::new_in(folder).map_err(failed)?;
+    file.write_all(text.as_bytes()).map_err(failed)?;
+    file.persist(&path).map_err(|error| failed(error.error))?;
+    Ok(())
+}
+
+fn tests_problems(folder: &ProgramFolder, problems: &[testfile::Problem]) -> String {
+    let count = problems.len();
+    let mut text = format!(
+        "{folder}/{TESTS_FILE} has {count} problem{}, so it wasn't checked:\n",
+        if count == 1 { "" } else { "s" }
+    );
+    for problem in problems {
+        let _ = writeln!(text, "- {problem}");
+    }
+    text.push_str("Fix them with the write-tests skill, then call check_tests again.");
+    text
 }
 
 fn spec_problems(folder: &ProgramFolder, problems: &[spec::Problem]) -> String {

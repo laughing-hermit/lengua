@@ -67,6 +67,26 @@ Both MCP configs start the same binary, `plugin/server/lengua-mcp` (built by
 `~/.local/share/lengua` (or `$XDG_DATA_HOME/lengua`): one signing key per user, shared by every
 harness, so a lock approved in one harness verifies in all of them.
 
+## Tests
+
+`tests.toml` has one example per behavior, holding that behavior's backtick values, and
+generated blocks that draw new inputs on every run (boundary values first, then seeded random
+ones) and compute the expected results with formulas. The formula language has checked 128-bit
+whole numbers, strings, comparisons, `&& || !` and the functions `len`, `abs`, `min`, `max`,
+`if`, `upper`, `lower` and `reverse`. It has no loops, so every formula finishes.
+
+`check_tests` ties the tests to the approved spec: example exit codes equal the spec's, generator
+limits are numbers the spec states, and args and stdin hold bare variables so each example can be
+read back into variable values and every formula must reproduce it. A dry run evaluates every
+run's expected results, so overflow and division by zero are caught before any code exists, and
+output with placeholders must vary, so a program that prints a constant can't pass. Several
+generated blocks may cover one behavior (divisors on both sides of zero, for example) when they
+share their templates. Checked tests are frozen until the spec changes: the lock records them and
+the server keeps a copy that restores them.
+
+The examples in the skills are checked by the test suite against lengua's own checks, so the
+documentation can't drift from the checker.
+
 ## The lengua dialect
 
 AI-written assembly takes the best of C (transparency, no macros, the standard calling convention,
