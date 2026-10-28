@@ -49,6 +49,12 @@ of the same rule.
   bits. If the program reads or writes, Purpose says
   which exit code it uses when reading or writing fails, without backticks (tests can't make
   those fail), such as: If writing the output fails, the program exits with code 2.
+- **Decimals** are written with a point, in Purpose too: `0.00` to `999.99` means two places.
+  **Exact decimals** such as money (`12.50`) are computed exactly, in whole cents; say in words
+  how a result rounds when it has more places than it prints ("half a cent rounds away from
+  zero"). **Measured decimals** (lengths, ratios, square roots) are computed in doubles: in their
+  examples, avoid values that end in exactly 5 past the printed places, such as `1.015` printed
+  with 2, because binary doubles round them in ways people don't expect.
 - **One rule per behavior,** under a heading `## B<n>: <title>` with a unique ID (B1, B2, B3…).
   The title names the rule in the user's words, such as `Adds two numbers` or `Rejects a line
   that is too long`, and no two titles are the same. Don't add a behavior that only repeats

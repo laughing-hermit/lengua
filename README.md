@@ -53,12 +53,19 @@ Your harness may ask permission the first time each lengua tool runs. Allowing t
 skip your approval: only your words approve a spec. The first approval creates a signing key in
 `~/.local/share/lengua`.
 
-## Example
+## Examples
 
-[`examples/add`](examples/add) is a complete program: its spec, tests and assembly. Its
-`lengua.lock` isn't committed, because a lock is signed with each machine's own key. Ask the agent
-to run it with lengua: after you approve its spec, the agent checks the tests and the code, which
-creates the lock.
+Complete programs, each with its spec, tests and assembly:
+
+- [`examples/add`](examples/add) adds two whole numbers;
+- [`examples/mean`](examples/mean) averages two prices exactly, in whole cents, rounding half a
+  cent away from zero;
+- [`examples/hypotenuse`](examples/hypotenuse) computes a square root in double-precision floating
+  point and prints it with three decimals.
+
+Their `lengua.lock` files aren't committed, because a lock is signed with each machine's own key.
+Ask the agent to run one with lengua: after you approve its spec, the agent checks the tests and
+the code, which creates the lock.
 
 ## Develop
 

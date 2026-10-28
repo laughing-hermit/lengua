@@ -696,3 +696,49 @@ async fn vector_accesses_stay_inside_their_data() {
         "reaches 6 bytes past the end of usage_msg, which has 18 bytes",
     );
 }
+
+#[tokio::test]
+async fn double_precision_is_in_dialect_2() {
+    let doubles = "    cvtsi2sd xmm0, rdi\n    addsd xmm0, xmm1\n    divsd xmm0, xmm1\n    \
+                   sqrtsd xmm0, xmm0\n    roundsd xmm0, xmm0, 4\n    vmulpd ymm0, ymm1, ymm2\n    \
+                   vaddpd zmm0 {k1}, zmm1, qword ptr [rdi]{1to8}\n    ucomisd xmm0, xmm1\n    \
+                   cvttsd2si rax, xmm0\n";
+    let text = with(
+        ".section .rodata\n",
+        ".section .rodata\n\n.type hundred, @object\nhundred:\n    .double 100.0, -0.5\n.size \
+         hundred, . - hundred\n",
+    );
+    let text = text.replacen("parse_i64:\n", &format!("parse_i64:\n{doubles}"), 1);
+    let report = check(&text).await;
+    let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+    assert!(report.passed(), "{all:#?}");
+
+    for (line, needle) in [
+        ("    addss xmm0, xmm1\n", "`addss` isn't in dialect 2"),
+        (
+            "    vfmadd231sd xmm0, xmm1, xmm2\n",
+            "`vfmadd231sd` isn't in dialect 2",
+        ),
+        (
+            "    ldmxcsr dword ptr [rsp]\n",
+            "`ldmxcsr` isn't in dialect 2",
+        ),
+        ("    movsd\n", "string instruction"),
+    ] {
+        let text = with_after("parse_i64:", line);
+        let report = check(&text).await;
+        assert_violation(&report, Rule::Dialect, line_of(&text, line), needle);
+    }
+    let text = with(
+        ".section .rodata\n",
+        ".section .rodata\n\n.type hundred, @object\nhundred:\n    .double HUNDRED\n.size hundred, \
+         . - hundred\n",
+    );
+    let report = check(&text).await;
+    assert_violation(
+        &report,
+        Rule::Constants,
+        line_of(&text, "    .double HUNDRED"),
+        "isn't a plain decimal number",
+    );
+}

@@ -88,7 +88,8 @@ AVX-512 only when `status` lists them, and keep every vector access inside its b
 
 - `;`, `/* */`, a label and an instruction on one line, `rep` or `lock`
 - a constant defined after its use, `. - name` outside `.size`, `[name]` without `rip`, or `offset`
-- `leave`, `enter`, `loop`, string instructions, x87 or floating point
+- `leave`, `enter`, `loop`, string instructions, x87, single precision or fused multiply-add
+- floating-point steps in another order than the formula's, or `* 0.1` for `/ 10.0`
 - `movdqa` or `vmovdqa` (use `movdqu`), an SSE instruction other than `movdqu` reading 16 bytes of
   memory, rounding overrides (`{rn-sae}`), gathers or scatters
 - `and rsp`, `mov rsp`, or memory below `rsp`

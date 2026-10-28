@@ -344,3 +344,38 @@ async fn small_ranges_run_every_value() {
     );
     session.service.cancel().await.expect("close the session");
 }
+
+/// A file of one of the examples in examples/.
+fn example(program: &str, name: &str) -> String {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join(program)
+        .join(name);
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
+}
+
+#[tokio::test]
+async fn the_decimal_examples_pass_their_tests() {
+    // mean computes in exact cents; hypotenuse in doubles, with sqrtsd.
+    for (program, args, stdout) in [
+        ("mean", ["2.5", "3.76"], "3.13\n"),
+        ("hypotenuse", ["3", "4"], "5.000\n"),
+    ] {
+        let session = session().await;
+        let folder = Program::new();
+        for name in ["spec.md", "tests.toml", "main.s"] {
+            folder.write(name, &example(program, name));
+        }
+        session.approve(&folder).await;
+        let tests = session.call_ok("check_tests", folder.arguments()).await;
+        assert_eq!(tests["checked"], true, "{program}: {tests}");
+        let report = session.call_ok("check_code", folder.arguments()).await;
+        assert_eq!(report["stamped"], true, "{program}: {report}");
+        let mut arguments = folder.arguments();
+        arguments["args"] = serde_json::json!(args);
+        let run = session.call_ok("run", arguments).await;
+        assert_eq!(run["stdout"], stdout, "{program}: {run}");
+        session.service.cancel().await.expect("close the session");
+    }
+}

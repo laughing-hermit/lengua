@@ -7,7 +7,7 @@ use std::fmt;
 use serde::Deserialize;
 use toml::Spanned;
 
-use crate::expr::{self, Env, EvalError, Generator, PatternPart, Template, Value};
+use crate::expr::{self, Env, EvalError, Generator, Limit, PatternPart, Template, Value};
 use crate::hash::Sha256Hex;
 use crate::spec::{ASSERTION_EXIT_CODE, Behavior, BehaviorId, Spec};
 
@@ -706,24 +706,68 @@ impl<'a> Checker<'a> {
     /// Generators may only use numbers that Purpose states, so their ranges come from the spec.
     /// Numbers from behaviors don't count: an example's own inputs would make `int(2, 3)` pass.
     fn check_limits(&mut self, line: usize, name: &str, var: &str, generator: &Generator) {
-        let stated: BTreeSet<i128> = self
+        // Each value Purpose states, with the most places it's written with.
+        let mut stated: BTreeMap<Limit, u8> = BTreeMap::new();
+        for (limit, places) in self
             .spec
             .purpose_values
             .iter()
-            .filter_map(|value| value.parse().ok())
+            .filter_map(|value| Limit::parse(value))
+        {
+            let most = stated.entry(limit).or_insert(places);
+            *most = (*most).max(places);
+        }
+        let unreadable: Vec<&str> = self
+            .spec
+            .purpose_values
+            .iter()
+            .map(String::as_str)
+            .filter(|value| {
+                Limit::parse(value).is_none() && value.bytes().any(|byte| byte.is_ascii_digit())
+            })
             .collect();
+        let hint = if unreadable.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " (Purpose writes {}: write numbers plainly, like `12.50`, with no `$`, comma or \
+                 exponent)",
+                unreadable
+                    .iter()
+                    .map(|value| format!("`{value}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
         for limit in generator.limits() {
-            if !stated.contains(&limit) {
+            if !stated.contains_key(&limit) {
                 self.problem(
                     Some(line),
                     format!(
                         "{name}: vars.{var} = {generator} uses {limit}, which spec.md's Purpose \
                          doesn't state. Generators take their ranges from Purpose: use the \
                          numbers it gives in backticks, or ask the user to add the range to \
-                         Purpose and approve spec.md again"
+                         Purpose and approve spec.md again{hint}"
                     ),
                 );
             }
+        }
+        if let Some(places) = generator.places()
+            && let Some(written) = generator
+                .limits()
+                .iter()
+                .filter_map(|limit| stated.get(limit))
+                .max()
+            && *written != places
+        {
+            self.problem(
+                Some(line),
+                format!(
+                    "{name}: vars.{var} = {generator} draws numbers with {places} decimal \
+                     places, but Purpose writes them with {written}; write the bounds the way \
+                     Purpose does"
+                ),
+            );
         }
     }
 
@@ -1389,6 +1433,62 @@ Negates a whole number between `{lo}` and `{hi}`.
             ));
         }
         text
+    }
+
+    #[test]
+    fn decimal_ranges_come_from_purpose_as_written() {
+        let spec = |purpose: &str| {
+            spec::parse(&format!(
+                "---
+type: lengua/program-spec
+title: half
+---
+# Purpose
+Halves a price between {purpose}.
+
+# Behaviors
+## B1: Halves a price
+- Given the argument `3.00`
+- When the program runs
+- Then it prints `1.50` followed by a newline
+- And it exits with code `0`
+
+# Constraints
+- Allowed system calls: write, exit
+"
+            ))
+            .expect("valid spec")
+        };
+        let tests = |generator: &str| {
+            tests(&format!(
+                "[[example]]\nid = \"B1\"\nargs = [\"3.00\"]\nstdout = \"1.50\\n\"\nexit_code = 0\n\n\
+                 [[generated]]\nid = \"B1\"\nvars = {{ x = \"{generator}\" }}\nargs = [\"{{x}}\"]\n\
+                 stdout = \"{{fixed(x / 2.0, 2)}}\\n\"\nexit_code = 0\n"
+            ))
+        };
+        let plain = spec("`0.00` and `100.00`");
+        assert!(check(&tests("decimal(0.00, 100.00)"), &plain, LABEL).is_ok());
+        let problems = |text: &str, spec: &Spec| match check(text, spec, LABEL) {
+            Ok(_) => panic!("accepted {text}"),
+            Err(problems) => problems.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        };
+        let found = problems(&tests("decimal(0.000, 100.000)"), &plain);
+        assert!(
+            found.iter().any(|problem| problem
+                .contains("draws numbers with 3 decimal places, but Purpose writes them with 2")),
+            "{found:#?}"
+        );
+        let found = problems(
+            &tests("decimal(0.00, 100.00)"),
+            &spec("`0.00` and `$100.00`"),
+        );
+        assert!(
+            found.iter().any(
+                |problem| problem.contains("uses 100, which spec.md's Purpose")
+                    && problem.contains("Purpose writes `$100.00`")
+            ),
+            "{found:#?}"
+        );
     }
 
     #[test]

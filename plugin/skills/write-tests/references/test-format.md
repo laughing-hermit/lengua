@@ -56,27 +56,37 @@ sides of zero. Their `args`, `stdin`, `stdout`, `stderr` and `exit_code` must be
 | Generator | Draws | Boundary values tried first |
 |---|---|---|
 | `int(lo, hi)` | Whole numbers from `lo` to `hi` inclusive, within 64 bits | `lo`, `hi`, 0, 1 and -1, when in range |
-| `choice(a, b, …)` | One of the values: all numbers or all strings | Every value (the first and last when there are more than 16) |
+| `decimal(lo, hi)` | Decimals from `lo` to `hi`, with the places the bounds are written with: `decimal(0.00, 999.99)` prints 12.30, and reads 12.3, 4 and 12.30 alike | `lo`, `hi`, 0 and the smallest steps either side of it, when in range |
+| `choice(a, b, …)` | One of the values: all whole numbers, all decimals or all strings | Every value (the first and last when there are more than 16) |
 | `string(min, max, "chars")` | `min` to `max` characters (at most 1048576) drawn from `chars` | The shortest string of the first character, the longest of the last |
 
 Linux limits each argument to 131072 bytes, so `check_tests` refuses a run whose argument is
 longer; long text belongs on standard input.
 
-Arguments must be literal values. The limits of `int` and the lengths of `string` must be numbers
-that the `# Purpose` section of `spec.md` writes in backticks, so every range comes from the
-approved spec. Numbers from behaviors don't count: an example's own inputs aren't a range.
+Arguments must be literal values. The limits of `int` and `decimal` and the lengths of `string`
+must be numbers that the `# Purpose` section of `spec.md` writes in backticks, so every range
+comes from the approved spec, and a `decimal` uses the places Purpose writes (`0.00` means 2).
+Numbers from behaviors don't count: an example's own inputs aren't a range.
 
 For input that isn't valid, list hand-picked values with `choice`: the example's own value plus
 values that go wrong late, such as `choice("abc", "12x", "-", "1.5", "--1", "")` for a number.
 
 ## Templates
 
-Text with `{expression}` placeholders. `{{` and `}}` stand for literal braces. Numbers print in
-decimal and strings as they are; true and false can't be printed, so use `if` to choose text.
+Text with `{expression}` placeholders. `{{` and `}}` stand for literal braces. Whole numbers print in
+decimal, `decimal(…)` values with exactly their places, and strings as they are. A computed
+decimal prints only through `fixed(x, places)`, and true and false can't be printed, so use `if`
+to choose text.
 
 ## Expressions
 
-- **Numbers** are whole and checked 128-bit: overflow is an error, never a wrapped value.
+- **Whole numbers** are checked 128-bit: overflow is an error, never a wrapped value.
+- **Decimals** are written `12.50`, with 1 to 15 places. Arithmetic on decimals (`+ - * /`) is
+  done in doubles, exactly as `addsd`, `subsd`, `mulsd` and `divsd` compute, so `0.1 + 0.2` is
+  0.30000000000000004, and the order of operations is part of the formula: `a + b + c` is
+  `(a + b) + c`. A result must be a finite number.
+- **Whole numbers and decimals don't mix** in arithmetic: write `2.0`, not `2`, or `float(n)`.
+  Comparisons may mix them (`x > 0`), and `12.5 == 12.50`.
 - **Strings** are written `"text"`, with the escapes `\"`, `\\`, `\n` and `\t`.
 - **True and false** come from comparisons, or from `true` and `false`.
 - **Operators**, from lowest precedence to highest: `||`, then `&&`, then the comparisons
@@ -96,6 +106,16 @@ decimal and strings as they are; true and false can't be printed, so use `if` to
 | `upper(s)`, `lower(s)` | ASCII letters in upper or lower case |
 | `reverse(s)` | The characters in reverse order |
 | `count(s, part)` | How many times `part` appears in `s`, without overlaps: `count(line, "e")` |
+| `fixed(x, places)` | `x` printed with exactly `places` decimals (0 to 15): x·10^places rounded to the nearest whole number, ties to even, like `mulsd` then `cvtsd2si`. `fixed(2.5, 0)` is "2", `fixed(-0.004, 2)` is "0.00" |
+| `float(n)` | A whole number as a double, exactly (up to 2^53) |
+| `round(x)`, `trunc(x)`, `floor(x)`, `ceil(x)` | A whole number: nearest with ties to even (like `cvtsd2si`), toward zero (like `cvttsd2si`), down, up |
+| `sqrt(x)` | The square root, as `sqrtsd` computes it |
+| `scaled(x, places)` | An exact decimal as a whole number of its smallest units: `scaled(12.5, 2)` is 1250 (cents) |
+| `places(n, places)` | A whole number of units printed as a decimal: `places(1250, 2)` is "12.50", `places(-5, 2)` is "-0.05" |
+
+Exact decimals such as money stay exact in whole units: `{places((scaled(a, 2) + scaled(b, 2)), 2)}`
+adds two prices in cents, and any rounding rule the spec states is whole-number arithmetic with
+`if`. Use `fixed` for measurements computed in doubles.
 | `sha256(s)` | The SHA-256 of `s`'s bytes, in lowercase hex |
 | `crc32(s)` | The CRC-32 of `s`'s bytes, as zlib, gzip and PNG compute it |
 | `crc32c(s)` | The CRC-32C (Castagnoli) of `s`'s bytes, as the `crc32` instruction computes it |

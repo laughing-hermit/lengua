@@ -41,6 +41,10 @@ the tests come before the code, and they decide whether the code is right.
 - **Invalid input gets hand-picked values.** For a behavior about input that isn't valid, use
   `choice(…)` with the example's own value plus values that go wrong late, not only at the first
   character. For a number: `"12x"`, `"-"`, `"1.5"`, `"--1"` and `""`.
+- **Decimals.** Draw decimal inputs with `decimal(lo, hi)`, written with Purpose's places. For
+  exact decimals such as money, compute in whole units and print with `places`:
+  `{places(scaled(a, 2) + scaled(b, 2), 2)}`. For measured decimals, compute in doubles and print
+  with `fixed`: `{fixed(sqrt(x), 3)}`. Write `2.0`, not `2`, next to decimals.
 - **Inputs are bare variables.** In `args` and `stdin`, a placeholder holds just a variable
   (`{a}`); computations belong in `stdout`, `stderr` and `exit_code` (`{a + b}`).
 - **Small ranges are checked in full.** A block whose ranges hold at most 5000 combinations (and

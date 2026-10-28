@@ -27,11 +27,47 @@ const SHOWN_CHARS: usize = 200;
 /// Boundary combinations tried before random values, at most.
 const MAX_BOUNDARY_CASES: usize = 64;
 
+/// Decimals have at most this many places, so every decimal is exact in a double.
+pub const MAX_PLACES: u8 = 15;
+
+/// A decimal's mantissa stays below this (10^15), so it's exact in a double.
+const MAX_MANTISSA: i128 = 1_000_000_000_000_000;
+
+/// The largest whole number a double holds exactly: 2^53.
+const EXACT_INT: i128 = 1 << 53;
+
+/// Powers of ten, each exact in a double.
+const POW10: [f64; 16] = [
+    1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15,
+];
+
+/// A finite double, kept as its bits so values stay comparable; formulas compare numbers by
+/// value, as the CPU does, never by these bits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Bits(u64);
+
+impl Bits {
+    /// The number.
+    #[must_use]
+    pub fn value(self) -> f64 {
+        f64::from_bits(self.0)
+    }
+}
+
 /// A value an expression produces.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Value {
     /// A whole number.
     Int(i128),
+    /// An exact decimal such as 12.30: the mantissa `m` (1230) and the places `p` (2).
+    Dec {
+        /// The digits as a whole number.
+        m: i128,
+        /// How many of them follow the decimal point, 1 to 15.
+        p: u8,
+    },
+    /// A computed double; formulas print it with `fixed(x, places)`.
+    Float(Bits),
     /// Text.
     Str(String),
     /// True or false, from comparisons.
@@ -41,7 +77,8 @@ pub enum Value {
 impl Value {
     fn kind(&self) -> &'static str {
         match self {
-            Self::Int(_) => "a number",
+            Self::Int(_) => "a whole number",
+            Self::Dec { .. } | Self::Float(_) => "a decimal",
             Self::Str(_) => "a string",
             Self::Bool(_) => "true/false",
         }
@@ -55,6 +92,12 @@ impl Value {
     pub fn render(&self) -> Result<String, EvalError> {
         match self {
             Self::Int(number) => Ok(number.to_string()),
+            Self::Dec { m, p } => Ok(decimal_text(*m, *p)),
+            Self::Float(_) => Err(EvalError::Type(
+                "a placeholder prints a computed decimal only through fixed(x, places), such as \
+                 fixed(x, 2)"
+                    .into(),
+            )),
             Self::Str(text) => Ok(text.clone()),
             Self::Bool(_) => Err(EvalError::Type(
                 "a placeholder can't print true or false; use if(…) to choose the text".into(),
@@ -67,6 +110,8 @@ impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Int(number) => write!(f, "{number}"),
+            Self::Dec { m, p } => write!(f, "{}", decimal_text(*m, *p)),
+            Self::Float(bits) => write!(f, "{}", bits.value()),
             // Messages quote text, shortened when it's long.
             Self::Str(text) if text.chars().count() > SHOWN_CHARS => {
                 let start: String = text.chars().take(SHOWN_CHARS).collect();
@@ -75,6 +120,91 @@ impl fmt::Display for Value {
             Self::Str(text) => write!(f, "{text:?}"),
             Self::Bool(value) => write!(f, "{value}"),
         }
+    }
+}
+
+/// A decimal's text: "12.30" for 1230 with 2 places, "-0.05" for -5, "7" with no places.
+#[must_use]
+pub fn decimal_text(m: i128, p: u8) -> String {
+    let places = usize::from(p);
+    let digits = format!("{:0>width$}", m.unsigned_abs(), width = places + 1);
+    let (whole, fraction) = digits.split_at(digits.len() - places);
+    let sign = if m < 0 { "-" } else { "" };
+    if places == 0 {
+        format!("{sign}{whole}")
+    } else {
+        format!("{sign}{whole}.{fraction}")
+    }
+}
+
+/// A decimal's value as a double: one division of two exact numbers, as a program computes it.
+fn decimal_value(m: i128, p: u8) -> f64 {
+    #[allow(clippy::cast_precision_loss)] // |m| < 10^15, exact in a double.
+    let m = m as f64;
+    m / POW10[usize::from(p)]
+}
+
+/// A finite double as a value; infinity or NaN is an error.
+fn finite(number: f64, what: &str) -> Result<Value, EvalError> {
+    if number.is_finite() {
+        Ok(Value::Float(Bits(number.to_bits())))
+    } else {
+        Err(EvalError::Overflow(format!("{what} isn't a finite number")))
+    }
+}
+
+/// A decimal operand as a double. Whole numbers don't mix with decimals.
+fn double(value: Value, operation: &str) -> Result<f64, EvalError> {
+    match value {
+        Value::Dec { m, p } => Ok(decimal_value(m, p)),
+        Value::Float(bits) => Ok(bits.value()),
+        Value::Int(_) => Err(EvalError::Type(format!(
+            "{operation} mixes a whole number and a decimal: write 2.0 instead of 2, or float(n)"
+        ))),
+        other => Err(EvalError::Type(format!(
+            "{operation} needs a number, not {}",
+            other.kind()
+        ))),
+    }
+}
+
+fn is_number(value: &Value) -> bool {
+    matches!(value, Value::Int(_) | Value::Dec { .. } | Value::Float(_))
+}
+
+/// Compares two numbers by value: whole numbers and decimals exactly, doubles as the CPU does.
+fn compare(a: &Value, b: &Value, operation: &str) -> Result<std::cmp::Ordering, EvalError> {
+    let exact = |value: &Value| match value {
+        Value::Int(number) => Some((*number, 0_u8)),
+        Value::Dec { m, p } => Some((*m, *p)),
+        _ => None,
+    };
+    if let (Some((x, xp)), Some((y, yp))) = (exact(a), exact(b)) {
+        let places = xp.max(yp);
+        let scale = |number: i128, from: u8| {
+            10_i128
+                .checked_pow(u32::from(places - from))
+                .and_then(|factor| number.checked_mul(factor))
+        };
+        if let (Some(x), Some(y)) = (scale(x, xp), scale(y, yp)) {
+            return Ok(x.cmp(&y));
+        }
+    }
+    let as_double = |value: &Value| match value {
+        #[allow(clippy::cast_precision_loss)]
+        // Only huge whole numbers round, and they compare in order.
+        Value::Int(number) => Some(*number as f64),
+        Value::Dec { m, p } => Some(decimal_value(*m, *p)),
+        Value::Float(bits) => Some(bits.value()),
+        _ => None,
+    };
+    match (as_double(a), as_double(b)) {
+        (Some(x), Some(y)) => Ok(x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal)),
+        _ => Err(EvalError::Type(format!(
+            "{operation} compares {} with {}",
+            a.kind(),
+            b.kind()
+        ))),
     }
 }
 
@@ -211,10 +341,30 @@ pub enum Function {
     Crc32,
     /// `crc32c(s)`: the CRC-32C (Castagnoli) of `s`'s bytes, as the `crc32` instruction computes it.
     Crc32c,
+    /// `float(n)`: a whole number as a double, exactly.
+    Float,
+    /// `round(x)`: the nearest whole number, ties to even, as `cvtsd2si` rounds.
+    Round,
+    /// `trunc(x)`: toward zero, as `cvttsd2si` rounds.
+    Trunc,
+    /// `floor(x)`: down.
+    Floor,
+    /// `ceil(x)`: up.
+    Ceil,
+    /// `sqrt(x)`: the square root, as `sqrtsd` computes it.
+    Sqrt,
+    /// `fixed(x, places)`: `x` printed with exactly `places` decimals.
+    Fixed,
+    /// `scaled(x, places)`: an exact decimal as a whole number of its smallest units: 12.5 with
+    /// 2 places is 1250 (cents).
+    Scaled,
+    /// `places(n, places)`: a whole number of units printed as a decimal: 1250 with 2 places is
+    /// "12.50".
+    Places,
 }
 
 impl Function {
-    const ALL: [Self; 12] = [
+    const ALL: [Self; 21] = [
         Self::Len,
         Self::Abs,
         Self::Min,
@@ -227,6 +377,15 @@ impl Function {
         Self::Sha256,
         Self::Crc32,
         Self::Crc32c,
+        Self::Float,
+        Self::Round,
+        Self::Trunc,
+        Self::Floor,
+        Self::Ceil,
+        Self::Sqrt,
+        Self::Fixed,
+        Self::Scaled,
+        Self::Places,
     ];
 
     fn name(self) -> &'static str {
@@ -243,6 +402,15 @@ impl Function {
             Self::Sha256 => "sha256",
             Self::Crc32 => "crc32",
             Self::Crc32c => "crc32c",
+            Self::Float => "float",
+            Self::Round => "round",
+            Self::Trunc => "trunc",
+            Self::Floor => "floor",
+            Self::Ceil => "ceil",
+            Self::Sqrt => "sqrt",
+            Self::Fixed => "fixed",
+            Self::Scaled => "scaled",
+            Self::Places => "places",
         }
     }
 
@@ -251,7 +419,7 @@ impl Function {
         match self {
             Self::Min | Self::Max => (2, usize::MAX),
             Self::If => (3, 3),
-            Self::Count => (2, 2),
+            Self::Count | Self::Fixed | Self::Scaled | Self::Places => (2, 2),
             Self::Len
             | Self::Abs
             | Self::Upper
@@ -259,7 +427,13 @@ impl Function {
             | Self::Reverse
             | Self::Sha256
             | Self::Crc32
-            | Self::Crc32c => (1, 1),
+            | Self::Crc32c
+            | Self::Float
+            | Self::Round
+            | Self::Trunc
+            | Self::Floor
+            | Self::Ceil
+            | Self::Sqrt => (1, 1),
         }
     }
 }
@@ -267,7 +441,8 @@ impl Function {
 /// Names that can't be used as variables.
 const RESERVED: &[&str] = &[
     "true", "false", "len", "abs", "min", "max", "if", "upper", "lower", "reverse", "count",
-    "sha256", "crc32", "crc32c", "int", "choice", "string",
+    "sha256", "crc32", "crc32c", "float", "round", "trunc", "floor", "ceil", "sqrt", "fixed",
+    "scaled", "places", "int", "choice", "string", "decimal",
 ];
 
 /// Whether `name` can name a variable: lowercase letters, digits and `_`, not starting with a
@@ -285,6 +460,7 @@ pub fn is_variable_name(name: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Token {
     Int(i128),
+    Dec(i128, u8),
     Str(String),
     Ident(String),
     Open,
@@ -304,11 +480,40 @@ fn lex(text: &str) -> Result<Vec<Token>, ParseError> {
             rest = &rest[next.len_utf8()..];
         } else if next.is_ascii_digit() {
             let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
-            let number = rest[..digits]
+            let number: i128 = rest[..digits]
                 .parse()
                 .map_err(|_| ParseError(format!("the number {} is too large", &rest[..digits])))?;
-            tokens.push(Token::Int(number));
             rest = &rest[digits..];
+            if let Some(after) = rest.strip_prefix('.') {
+                let places = after.bytes().take_while(u8::is_ascii_digit).count();
+                if places == 0 {
+                    return Err(ParseError(format!(
+                        "write a digit after the decimal point, such as {number}.0"
+                    )));
+                }
+                let fraction: i128 = after[..places].parse().unwrap_or(0);
+                let mantissa = u32::try_from(places)
+                    .ok()
+                    .filter(|places| *places <= u32::from(MAX_PLACES))
+                    .and_then(|places| 10_i128.checked_pow(places))
+                    .and_then(|scale| number.checked_mul(scale))
+                    .and_then(|scaled| scaled.checked_add(fraction))
+                    .filter(|mantissa| *mantissa < MAX_MANTISSA)
+                    .ok_or_else(|| {
+                        ParseError(format!(
+                            "{number}.{} has too many digits: decimals have at most 15, so \
+                             they're exact",
+                            &after[..places]
+                        ))
+                    })?;
+                tokens.push(Token::Dec(
+                    mantissa,
+                    u8::try_from(places).unwrap_or(MAX_PLACES),
+                ));
+                rest = &after[places..];
+            } else {
+                tokens.push(Token::Int(number));
+            }
         } else if next.is_ascii_alphabetic() || next == '_' {
             let length = rest
                 .bytes()
@@ -466,6 +671,7 @@ impl Parser {
     fn primary(&mut self) -> Result<Expr, ParseError> {
         match self.next() {
             Some(Token::Int(number)) => Ok(Expr::Literal(Value::Int(number))),
+            Some(Token::Dec(m, p)) => Ok(Expr::Literal(Value::Dec { m, p })),
             Some(Token::Str(text)) => Ok(Expr::Literal(Value::Str(text))),
             Some(Token::Ident(name)) if name == "true" || name == "false" => {
                 Ok(Expr::Literal(Value::Bool(name == "true")))
@@ -515,6 +721,16 @@ impl Parser {
         if arguments.len() < fewest || arguments.len() > most {
             let expected = match (fewest, most) {
                 (1, 1) => "one argument".to_owned(),
+                (2, 2) if function == Function::Fixed => {
+                    "two arguments: a decimal and how many places, such as fixed(x, 2)".into()
+                }
+                (2, 2) if function == Function::Scaled => {
+                    "two arguments: a decimal and how many places, such as scaled(price, 2)".into()
+                }
+                (2, 2) if function == Function::Places => {
+                    "two arguments: a whole number and how many places, such as places(cents, 2)"
+                        .into()
+                }
                 (2, 2) => "two arguments: a string and the part to count".into(),
                 (3, 3) => "three arguments: a condition, a then value and an else value".into(),
                 _ => "two or more arguments".into(),
@@ -528,6 +744,7 @@ impl Parser {
 fn describe(token: &Token) -> String {
     match token {
         Token::Int(number) => format!("number {number}"),
+        Token::Dec(m, p) => format!("number {}", decimal_text(*m, *p)),
         Token::Str(text) => format!("string {text:?}"),
         Token::Ident(name) => format!("name `{name}`"),
         Token::Open => "(".into(),
@@ -599,13 +816,17 @@ pub fn eval(expr: &Expr, env: &Env) -> Result<Value, EvalError> {
             .get(name)
             .cloned()
             .ok_or_else(|| EvalError::UnknownVariable(name.clone())),
-        Expr::Neg(inner) => {
-            let number = int(eval(inner, env)?, "-")?;
-            number
-                .checked_neg()
-                .map(Value::Int)
-                .ok_or_else(|| EvalError::Overflow(format!("-({number})")))
-        }
+        Expr::Neg(inner) => match eval(inner, env)? {
+            Value::Dec { m, p } => Ok(Value::Dec { m: -m, p }),
+            Value::Float(bits) => finite(-bits.value(), "-x"),
+            value => {
+                let number = int(value, "-")?;
+                number
+                    .checked_neg()
+                    .map(Value::Int)
+                    .ok_or_else(|| EvalError::Overflow(format!("-({number})")))
+            }
+        },
         Expr::Not(inner) => Ok(Value::Bool(!boolean(eval(inner, env)?, "!")?)),
         Expr::Binary(op, left, right) => binary(*op, left, right, env),
         Expr::Call(function, arguments) => call(*function, arguments, env),
@@ -624,6 +845,10 @@ fn binary(op: BinaryOp, left: &Expr, right: &Expr, env: &Env) -> Result<Value, E
         }
         BinaryOp::Eq | BinaryOp::Ne => {
             let (a, b) = (eval(left, env)?, eval(right, env)?);
+            if is_number(&a) && is_number(&b) {
+                let equal = compare(&a, &b, symbol)? == std::cmp::Ordering::Equal;
+                return Ok(Value::Bool(equal == (op == BinaryOp::Eq)));
+            }
             if std::mem::discriminant(&a) != std::mem::discriminant(&b) {
                 return Err(EvalError::Type(format!(
                     "{symbol} compares {} with {}",
@@ -634,18 +859,31 @@ fn binary(op: BinaryOp, left: &Expr, right: &Expr, env: &Env) -> Result<Value, E
             Ok(Value::Bool((a == b) == (op == BinaryOp::Eq)))
         }
         BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
-            let a = int(eval(left, env)?, symbol)?;
-            let b = int(eval(right, env)?, symbol)?;
+            let (a, b) = (eval(left, env)?, eval(right, env)?);
+            for value in [&a, &b] {
+                if !is_number(value) {
+                    return Err(EvalError::Type(format!(
+                        "{symbol} needs a number, not {}",
+                        value.kind()
+                    )));
+                }
+            }
+            let order = compare(&a, &b, symbol)?;
             Ok(Value::Bool(match op {
-                BinaryOp::Lt => a < b,
-                BinaryOp::Le => a <= b,
-                BinaryOp::Gt => a > b,
-                _ => a >= b,
+                BinaryOp::Lt => order.is_lt(),
+                BinaryOp::Le => order.is_le(),
+                BinaryOp::Gt => order.is_gt(),
+                _ => order.is_ge(),
             }))
         }
         BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
-            let a = int(eval(left, env)?, symbol)?;
-            let b = int(eval(right, env)?, symbol)?;
+            let (a, b) = (eval(left, env)?, eval(right, env)?);
+            if !matches!((&a, &b), (Value::Int(_), Value::Int(_))) && is_number(&a) && is_number(&b)
+            {
+                return decimal_arithmetic(op, symbol, a, b);
+            }
+            let a = int(a, symbol)?;
+            let b = int(b, symbol)?;
             if matches!(op, BinaryOp::Div | BinaryOp::Rem) && b == 0 {
                 return Err(EvalError::DivideByZero);
             }
@@ -663,6 +901,34 @@ fn binary(op: BinaryOp, left: &Expr, right: &Expr, env: &Env) -> Result<Value, E
     }
 }
 
+/// A count of decimal places, 0 to 15.
+fn places_argument(value: Value, name: &str) -> Result<u8, EvalError> {
+    let places = int(value, name)?;
+    u8::try_from(places)
+        .ok()
+        .filter(|places| *places <= MAX_PLACES)
+        .ok_or_else(|| EvalError::Type(format!("{name}'s places go from 0 to 15, not {places}")))
+}
+
+/// `+ - * /` on decimals, in doubles, exactly as `addsd`, `subsd`, `mulsd` and `divsd` compute.
+fn decimal_arithmetic(op: BinaryOp, symbol: &str, a: Value, b: Value) -> Result<Value, EvalError> {
+    if op == BinaryOp::Rem {
+        return Err(EvalError::Type("% works on whole numbers only".into()));
+    }
+    let x = double(a, symbol)?;
+    let y = double(b, symbol)?;
+    if op == BinaryOp::Div && y == 0.0 {
+        return Err(EvalError::DivideByZero);
+    }
+    let result = match op {
+        BinaryOp::Add => x + y,
+        BinaryOp::Sub => x - y,
+        BinaryOp::Mul => x * y,
+        _ => x / y,
+    };
+    finite(result, &format!("{x} {symbol} {y}"))
+}
+
 fn call(function: Function, arguments: &[Expr], env: &Env) -> Result<Value, EvalError> {
     let name = function.name();
     let argument = |index: usize| eval(&arguments[index], env);
@@ -675,24 +941,134 @@ fn call(function: Function, arguments: &[Expr], env: &Env) -> Result<Value, Eval
             let text = string(argument(0)?, name)?;
             Ok(Value::Int(i128::try_from(text.len()).unwrap_or(i128::MAX)))
         }
-        Function::Abs => {
-            let number = int(argument(0)?, name)?;
-            number
-                .checked_abs()
-                .map(Value::Int)
-                .ok_or_else(|| EvalError::Overflow(format!("abs({number})")))
-        }
-        Function::Min | Function::Max => {
-            let mut best = int(argument(0)?, name)?;
-            for index in 1..arguments.len() {
-                let number = int(argument(index)?, name)?;
-                best = if function == Function::Min {
-                    best.min(number)
-                } else {
-                    best.max(number)
-                };
+        Function::Abs => match argument(0)? {
+            Value::Dec { m, p } => Ok(Value::Dec { m: m.abs(), p }),
+            Value::Float(bits) => finite(bits.value().abs(), "abs"),
+            value => {
+                let number = int(value, name)?;
+                number
+                    .checked_abs()
+                    .map(Value::Int)
+                    .ok_or_else(|| EvalError::Overflow(format!("abs({number})")))
             }
-            Ok(Value::Int(best))
+        },
+        Function::Min | Function::Max => {
+            let mut best = argument(0)?;
+            for index in 0..arguments.len() {
+                let next = argument(index)?;
+                if !is_number(&next) {
+                    return Err(EvalError::Type(format!(
+                        "{name} needs numbers, not {}",
+                        next.kind()
+                    )));
+                }
+                if matches!(best, Value::Int(_)) != matches!(next, Value::Int(_)) {
+                    return Err(EvalError::Type(format!(
+                        "{name} mixes whole numbers and decimals: write 2.0 instead of 2, or \
+                         float(n)"
+                    )));
+                }
+                let order = compare(&next, &best, name)?;
+                if (function == Function::Min && order.is_lt())
+                    || (function == Function::Max && order.is_gt())
+                {
+                    best = next;
+                }
+            }
+            Ok(best)
+        }
+        Function::Float => match argument(0)? {
+            #[allow(clippy::cast_precision_loss)] // Checked: |n| ≤ 2^53 is exact.
+            Value::Int(number) if number.abs() <= EXACT_INT => finite(number as f64, name),
+            Value::Int(number) => Err(EvalError::Overflow(format!(
+                "float({number}) isn't exact: a double holds whole numbers up to 2^53 exactly"
+            ))),
+            value => finite(double(value, name)?, name),
+        },
+        Function::Round | Function::Trunc | Function::Floor | Function::Ceil => {
+            let x = double(argument(0)?, name)?;
+            let whole = match function {
+                Function::Round => x.round_ties_even(),
+                Function::Trunc => x.trunc(),
+                Function::Floor => x.floor(),
+                _ => x.ceil(),
+            };
+            // cvtsd2si and cvttsd2si give 64-bit whole numbers.
+            #[allow(clippy::cast_precision_loss)]
+            let limit = i64::MAX as f64;
+            if !(-limit..limit).contains(&whole) {
+                return Err(EvalError::Overflow(format!(
+                    "{name}({x}) is outside 64-bit whole numbers"
+                )));
+            }
+            #[allow(clippy::cast_possible_truncation)] // A whole double inside the 64-bit range.
+            let whole = whole as i64;
+            Ok(Value::Int(i128::from(whole)))
+        }
+        Function::Sqrt => {
+            let x = double(argument(0)?, name)?;
+            if x < 0.0 {
+                return Err(EvalError::Type(format!("sqrt({x}) of a negative number")));
+            }
+            finite(x.sqrt(), name)
+        }
+        Function::Fixed => {
+            let x = double(argument(0)?, name)?;
+            let places = int(argument(1)?, name)?;
+            let places = u8::try_from(places)
+                .ok()
+                .filter(|places| *places <= MAX_PLACES)
+                .ok_or_else(|| {
+                    EvalError::Type(format!("fixed's places go from 0 to 15, not {places}"))
+                })?;
+            // One multiplication by an exact power of ten, then ties to even: mulsd, cvtsd2si.
+            let scaled = x * POW10[usize::from(places)];
+            #[allow(clippy::cast_precision_loss)] // 2^53 is exact.
+            let limit = EXACT_INT as f64;
+            if !scaled.is_finite() || scaled.abs() >= limit {
+                return Err(EvalError::Overflow(format!(
+                    "fixed({x}, {places}): {x} × 10^{places} is too large to round exactly"
+                )));
+            }
+            #[allow(clippy::cast_possible_truncation)] // A whole double below 2^53.
+            let whole = scaled.round_ties_even() as i64;
+            Ok(Value::Str(decimal_text(i128::from(whole), places)))
+        }
+        Function::Scaled => {
+            let places = places_argument(argument(1)?, name)?;
+            let (m, p) = match argument(0)? {
+                Value::Int(number) => (number, 0),
+                Value::Dec { m, p } => (m, p),
+                Value::Float(_) => {
+                    return Err(EvalError::Type(
+                        "scaled works on exact decimals; a computed double needs round(x * \
+                         100.0)"
+                            .into(),
+                    ));
+                }
+                other => {
+                    return Err(EvalError::Type(format!(
+                        "scaled needs a number, not {}",
+                        other.kind()
+                    )));
+                }
+            };
+            let normal = Limit::decimal(m, p);
+            if normal.p > places {
+                return Err(EvalError::Type(format!(
+                    "scaled({normal}, {places}) would drop digits: it has more than {places} places"
+                )));
+            }
+            10_i128
+                .checked_pow(u32::from(places - normal.p))
+                .and_then(|factor| normal.m.checked_mul(factor))
+                .map(Value::Int)
+                .ok_or_else(|| EvalError::Overflow(format!("scaled({normal}, {places})")))
+        }
+        Function::Places => {
+            let number = int(argument(0)?, name)?;
+            let places = places_argument(argument(1)?, name)?;
+            Ok(Value::Str(decimal_text(number, places)))
         }
         Function::Upper => Ok(Value::Str(string(argument(0)?, name)?.to_ascii_uppercase())),
         Function::Lower => Ok(Value::Str(string(argument(0)?, name)?.to_ascii_lowercase())),
@@ -941,6 +1317,62 @@ pub enum Generator {
         /// The characters to draw from, without duplicates.
         charset: Vec<char>,
     },
+    /// `decimal(lo, hi)`: decimals from `lo` to `hi`, with the places they're written with.
+    Dec {
+        /// The smallest mantissa.
+        lo: i128,
+        /// The largest mantissa.
+        hi: i128,
+        /// Decimal places, 1 to 15.
+        places: u8,
+    },
+}
+
+/// A number as the spec states it, compared by value: `12.5` and `12.50` are the same limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Limit {
+    m: i128,
+    p: u8,
+}
+
+impl Limit {
+    /// A whole number.
+    #[must_use]
+    pub fn whole(number: i128) -> Self {
+        Self { m: number, p: 0 }
+    }
+
+    /// The decimal `m` with `p` places, without trailing zeros.
+    #[must_use]
+    pub fn decimal(mut m: i128, mut p: u8) -> Self {
+        while p > 0 && m % 10 == 0 {
+            m /= 10;
+            p -= 1;
+        }
+        Self { m, p }
+    }
+
+    /// Reads a backtick value from a spec, such as `12`, `-3` or `12.50`, with the places it's
+    /// written with.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<(Self, u8)> {
+        let digits = text.strip_prefix('-').unwrap_or(text);
+        let (whole, fraction) = digits.split_once('.').unwrap_or((digits, ""));
+        let plain = |part: &str| part.bytes().all(|byte| byte.is_ascii_digit());
+        if whole.is_empty() || !plain(whole) || !plain(fraction) || digits.ends_with('.') {
+            return None;
+        }
+        let places = u8::try_from(fraction.len()).ok()?;
+        let m: i128 = format!("{whole}{fraction}").parse().ok()?;
+        let m = if text.starts_with('-') { -m } else { m };
+        Some((Self::decimal(m, places), places))
+    }
+}
+
+impl fmt::Display for Limit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&decimal_text(self.m, self.p))
+    }
 }
 
 impl Generator {
@@ -950,8 +1382,8 @@ impl Generator {
     ///
     /// Explains what the generator should look like.
     pub fn parse(text: &str) -> Result<Self, ParseError> {
-        let usage = "write int(lo, hi), choice(a, b, …) or string(min, max, \"chars\") with \
-                     literal arguments";
+        let usage = "write int(lo, hi), decimal(lo, hi), choice(a, b, …) or string(min, max, \
+                     \"chars\") with literal arguments";
         let tokens = lex(text)?;
         let (Some(Token::Ident(name)), Some(Token::Open), Some(Token::Close)) =
             (tokens.first(), tokens.get(1), tokens.last())
@@ -967,6 +1399,12 @@ impl Generator {
                     let number = *number;
                     inner.next();
                     Value::Int(-number)
+                }
+                (Some(Token::Dec(m, p)), _) => Value::Dec { m: *m, p: *p },
+                (Some(Token::Op("-")), Some(Token::Dec(m, p))) => {
+                    let (m, p) = (*m, *p);
+                    inner.next();
+                    Value::Dec { m: -m, p }
                 }
                 (Some(Token::Str(text)), _) => Value::Str(text.clone()),
                 _ => return error(format!("{name}(…) takes literal values only; {usage}")),
@@ -993,12 +1431,49 @@ impl Generator {
             ("int", _) => error("int takes two whole numbers: int(lo, hi)"),
             ("choice", values) if !values.is_empty() => {
                 let all_ints = values.iter().all(|value| matches!(value, Value::Int(_)));
+                let all_decimals = values
+                    .iter()
+                    .all(|value| matches!(value, Value::Dec { .. }));
                 let all_strings = values.iter().all(|value| matches!(value, Value::Str(_)));
-                if !all_ints && !all_strings {
-                    return error("choice's values must be all numbers or all strings");
+                if !all_ints && !all_decimals && !all_strings {
+                    return error(
+                        "choice's values must be all whole numbers, all decimals or all strings",
+                    );
                 }
                 Ok(Self::Choice(values.to_vec()))
             }
+            (
+                "decimal",
+                [
+                    Value::Dec {
+                        m: lo,
+                        p: lo_places,
+                    },
+                    Value::Dec {
+                        m: hi,
+                        p: hi_places,
+                    },
+                ],
+            ) => {
+                if lo_places != hi_places {
+                    return error(
+                        "write both bounds with the same decimal places, such as decimal(0.00, \
+                         999.99)",
+                    );
+                }
+                if lo > hi {
+                    return error("decimal(lo, hi) needs lo ≤ hi");
+                }
+                Ok(Self::Dec {
+                    lo: *lo,
+                    hi: *hi,
+                    places: *lo_places,
+                })
+            }
+            ("decimal", _) => error(
+                "decimal takes two decimals written with the same places, such as decimal(0.00, \
+                 999.99)",
+            ),
             ("choice", _) => error("choice needs at least one value"),
             ("string", [Value::Int(min), Value::Int(max), Value::Str(chars)]) => {
                 let limit = i128::try_from(MAX_STRING_LEN).unwrap_or(i128::MAX);
@@ -1040,6 +1515,9 @@ impl Generator {
                 (min..=max).contains(&&text.chars().count())
                     && text.chars().all(|character| charset.contains(&character))
             }
+            (Self::Dec { lo, hi, places }, Value::Dec { m, p }) => {
+                p == places && (lo..=hi).contains(&m)
+            }
             _ => false,
         }
     }
@@ -1065,6 +1543,21 @@ impl Generator {
                 .find(|value| value.render().is_ok_and(|rendered| rendered == text))
                 .cloned(),
             Self::Str { .. } => Some(Value::Str(text.to_owned())),
+            Self::Dec { places, .. } => {
+                // A plain decimal with up to the generator's places: "2.5", "4" and "2.50" all
+                // read as 2.50. No "+", leading zeros, exponent or "-0".
+                let (limit, written) = Limit::parse(text)?;
+                let digits = text.strip_prefix('-').unwrap_or(text);
+                let whole = digits.split('.').next().unwrap_or("");
+                let negative_zero = text.starts_with('-') && limit == Limit::whole(0);
+                if written > *places || negative_zero || (whole != "0" && whole.starts_with('0')) {
+                    return None;
+                }
+                let m = limit
+                    .m
+                    .checked_mul(10_i128.checked_pow(u32::from(places - limit.p))?)?;
+                Some(Value::Dec { m, p: *places })
+            }
         }
     }
 
@@ -1084,6 +1577,12 @@ impl Generator {
                 Value::Str(charset[0].to_string().repeat(*min)),
                 Value::Str(charset[charset.len() - 1].to_string().repeat(*max)),
             ],
+            // The smallest steps around zero catch a program that prints "-0.00".
+            Self::Dec { lo, hi, places } => [*lo, *hi, 0, 1, -1]
+                .into_iter()
+                .filter(|m| (lo..=hi).contains(&m))
+                .map(|m| Value::Dec { m, p: *places })
+                .collect(),
         };
         let mut seen = Vec::new();
         values.retain(|value| {
@@ -1107,6 +1606,10 @@ impl Generator {
                         .collect(),
                 )
             }
+            Self::Dec { lo, hi, places } => Value::Dec {
+                m: rng.random_range(*lo..=*hi),
+                p: *places,
+            },
         }
     }
 
@@ -1115,7 +1618,9 @@ impl Generator {
     #[must_use]
     pub fn domain_size(&self) -> Option<u128> {
         match self {
-            Self::Int { lo, hi } => u128::try_from(hi - lo).ok()?.checked_add(1),
+            Self::Int { lo, hi } | Self::Dec { lo, hi, .. } => {
+                u128::try_from(hi - lo).ok()?.checked_add(1)
+            }
             Self::Choice(values) => u128::try_from(distinct(values).len()).ok(),
             Self::Str { min, max, charset } => {
                 let base = u128::try_from(charset.len()).ok()?;
@@ -1135,6 +1640,10 @@ impl Generator {
     pub fn nth(&self, index: u128) -> Value {
         match self {
             Self::Int { lo, .. } => Value::Int(lo + i128::try_from(index).unwrap_or(0)),
+            Self::Dec { lo, places, .. } => Value::Dec {
+                m: lo + i128::try_from(index).unwrap_or(0),
+                p: *places,
+            },
             Self::Choice(values) => {
                 let values = distinct(values);
                 values[usize::try_from(index).unwrap_or(0) % values.len()].clone()
@@ -1162,14 +1671,26 @@ impl Generator {
 
     /// The numbers that bound this generator: an int range's ends and a string's lengths.
     #[must_use]
-    pub fn limits(&self) -> Vec<i128> {
+    pub fn limits(&self) -> Vec<Limit> {
         match self {
-            Self::Int { lo, hi } => vec![*lo, *hi],
+            Self::Int { lo, hi } => vec![Limit::whole(*lo), Limit::whole(*hi)],
             Self::Choice(_) => Vec::new(),
             Self::Str { min, max, .. } => [*min, *max]
                 .into_iter()
-                .map(|length| i128::try_from(length).unwrap_or(i128::MAX))
+                .map(|length| Limit::whole(i128::try_from(length).unwrap_or(i128::MAX)))
                 .collect(),
+            Self::Dec { lo, hi, places } => {
+                vec![Limit::decimal(*lo, *places), Limit::decimal(*hi, *places)]
+            }
+        }
+    }
+
+    /// The decimal places a `decimal(lo, hi)` draws with.
+    #[must_use]
+    pub fn places(&self) -> Option<u8> {
+        match self {
+            Self::Dec { places, .. } => Some(*places),
+            _ => None,
         }
     }
 }
@@ -1186,6 +1707,12 @@ impl fmt::Display for Generator {
                 let chars: String = charset.iter().collect();
                 write!(f, "string({min}, {max}, {chars:?})")
             }
+            Self::Dec { lo, hi, places } => write!(
+                f,
+                "decimal({}, {})",
+                decimal_text(*lo, *places),
+                decimal_text(*hi, *places)
+            ),
         }
     }
 }
@@ -1413,6 +1940,151 @@ mod tests {
             Err(EvalError::Overflow(_))
         ));
         assert!(parse("999999999999999999999999999999999999999999").is_err());
+    }
+
+    #[test]
+    fn decimals_compute_as_a_double_does() {
+        let none = env(&[]);
+        let string = |text: &str| Ok(Value::Str(text.into()));
+        // Literals are exact decimals and print as written.
+        assert_eq!(value("12.30", &none), Ok(Value::Dec { m: 1230, p: 2 }));
+        assert_eq!(
+            value("-0.05", &none).map(|v| v.to_string()),
+            Ok("-0.05".into())
+        );
+        // Arithmetic happens in doubles: 0.1 + 0.2 isn't 0.3, but prints as 0.30.
+        assert_eq!(
+            value("0.1 + 0.2", &none),
+            Ok(Value::Float(Bits(0.300_000_000_000_000_04_f64.to_bits())))
+        );
+        assert_eq!(value("fixed(0.1 + 0.2, 2)", &none), string("0.30"));
+        // fixed rounds x·10^d to the nearest whole number, ties to even, like mulsd + cvtsd2si.
+        assert_eq!(value("fixed(2.5, 0)", &none), string("2"));
+        assert_eq!(value("fixed(3.5, 0)", &none), string("4"));
+        assert_eq!(value("fixed(2.675, 2)", &none), string("2.68"));
+        assert_eq!(value("fixed(0.05, 2)", &none), string("0.05"));
+        assert_eq!(
+            value("fixed(-0.004, 2)", &none),
+            string("0.00"),
+            "no minus on zero"
+        );
+        assert_eq!(value("fixed(-1.5, 1)", &none), string("-1.5"));
+        assert!(parse("1.0e3").is_err(), "no exponents");
+        assert!(
+            value("fixed(10000000000.0 * 10000.0, 3)", &none).is_err(),
+            "past 2^53"
+        );
+        // Whole numbers and decimals don't mix in arithmetic; comparisons are fine.
+        assert!(value("1 + 2.0", &none).is_err_and(|error| {
+            error
+                .to_string()
+                .contains("mixes a whole number and a decimal")
+        }));
+        assert_eq!(value("12.5 == 12.50", &none), Ok(Value::Bool(true)));
+        assert_eq!(value("1 < 1.5", &none), Ok(Value::Bool(true)));
+        assert_eq!(value("-0.0 == 0.0", &none), Ok(Value::Bool(true)));
+        assert!(value("2.0 % 1.0", &none).is_err());
+        assert_eq!(value("1.0 / 0.0", &none), Err(EvalError::DivideByZero));
+        // Rounding to whole numbers, as the CPU does.
+        assert_eq!(value("round(2.5)", &none), Ok(Value::Int(2)));
+        assert_eq!(value("round(3.5)", &none), Ok(Value::Int(4)));
+        assert_eq!(value("trunc(-2.7)", &none), Ok(Value::Int(-2)));
+        assert_eq!(value("floor(-2.7)", &none), Ok(Value::Int(-3)));
+        assert_eq!(value("ceil(2.1)", &none), Ok(Value::Int(3)));
+        assert_eq!(
+            value("sqrt(2.0)", &none),
+            Ok(Value::Float(Bits(2_f64.sqrt().to_bits())))
+        );
+        assert!(value("sqrt(-1.0)", &none).is_err());
+        assert_eq!(
+            value("float(3)", &none),
+            Ok(Value::Float(Bits(3_f64.to_bits())))
+        );
+        assert!(
+            value("float(9007199254740993)", &none).is_err(),
+            "2^53 + 1 isn't exact"
+        );
+        // A computed double prints only through fixed.
+        let template = Template::parse("{0.1 + 0.2}").expect("valid");
+        assert!(template.render(&none).is_err());
+        assert!(parse("1.").is_err());
+    }
+
+    #[test]
+    fn whole_units_keep_decimal_money_exact() {
+        let none = env(&[]);
+        let string = |text: &str| Ok(Value::Str(text.into()));
+        assert_eq!(value("scaled(12.5, 2)", &none), Ok(Value::Int(1250)));
+        assert_eq!(value("scaled(-0.05, 2)", &none), Ok(Value::Int(-5)));
+        assert_eq!(value("scaled(4, 2)", &none), Ok(Value::Int(400)));
+        assert!(
+            value("scaled(1.234, 2)", &none).is_err(),
+            "would drop a digit"
+        );
+        assert!(
+            value("scaled(0.1 + 0.2, 2)", &none).is_err(),
+            "doubles aren't exact"
+        );
+        assert_eq!(value("places(1250, 2)", &none), string("12.50"));
+        assert_eq!(value("places(-5, 2)", &none), string("-0.05"));
+        assert_eq!(value("places(7, 0)", &none), string("7"));
+        // The mean of -1.01 and -1.02, half a cent rounded away from zero, in whole cents.
+        let vars = env(&[
+            ("a", Value::Dec { m: -101, p: 2 }),
+            ("b", Value::Dec { m: -102, p: 2 }),
+        ]);
+        let mean = "places(if((scaled(a, 2) + scaled(b, 2)) % 2 == 0, (scaled(a, 2) + \
+                    scaled(b, 2)) / 2, if(scaled(a, 2) + scaled(b, 2) > 0, (scaled(a, 2) + \
+                    scaled(b, 2) + 1) / 2, (scaled(a, 2) + scaled(b, 2) - 1) / 2)), 2)";
+        assert_eq!(value(mean, &vars), string("-1.02"));
+    }
+
+    #[test]
+    fn decimal_generators_read_plain_decimals() {
+        let generator = Generator::parse("decimal(0.00, 999.99)").expect("valid");
+        assert_eq!(generator.domain_size(), Some(100_000));
+        assert_eq!(generator.places(), Some(2));
+        // Up to the generator's places, as people write them: all read as two places.
+        for (text, m) in [("12.30", 1230), ("12.3", 1230), ("4", 400), ("0.05", 5)] {
+            assert_eq!(generator.read(text), Some(Value::Dec { m, p: 2 }), "{text}");
+        }
+        for text in [
+            "12.345", "012.30", "-0.00", "-0", "+1.00", "1e3", "12,30", ".50",
+        ] {
+            assert_eq!(generator.read(text), None, "{text}");
+        }
+        assert!(generator.contains(&Value::Dec { m: 1230, p: 2 }));
+        assert!(
+            !generator.contains(&Value::Dec { m: 123, p: 1 }),
+            "other places"
+        );
+        assert_eq!(
+            generator.boundaries(),
+            [0, 99_999, 1].map(|m| Value::Dec { m, p: 2 })
+        );
+        let around_zero = Generator::parse("decimal(-1.00, 1.00)").expect("valid");
+        assert!(
+            around_zero
+                .boundaries()
+                .contains(&Value::Dec { m: -1, p: 2 })
+        );
+        assert!(
+            Generator::parse("decimal(0.00, 1.0)").is_err(),
+            "same places"
+        );
+        assert!(Generator::parse("decimal(0, 1)").is_err(), "places needed");
+        assert_eq!(
+            generator.limits(),
+            [Limit::whole(0), Limit::decimal(99_999, 2)]
+        );
+        assert_eq!(
+            Limit::parse("12.50").map(|(limit, _)| limit),
+            Limit::parse("12.5").map(|(limit, _)| limit)
+        );
+        assert_eq!(Limit::parse("12.50").map(|(_, places)| places), Some(2));
+        for text in ["$12", "12,50", "1e3", "12.", "-"] {
+            assert_eq!(Limit::parse(text), None, "{text}");
+        }
     }
 
     #[test]

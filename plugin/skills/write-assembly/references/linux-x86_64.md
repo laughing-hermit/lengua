@@ -77,3 +77,15 @@ temporary folder of their own. `_start` has no return address: it ends with `exi
   `v` (VEX) forms don't. lengua allows only unaligned loads and stores.
 - After using 256-bit or 512-bit registers, `vzeroupper` before SSE code avoids a slowdown on
   some CPUs.
+
+## Floating-point facts
+
+- Doubles travel in `xmm` registers: arguments in `xmm0` to `xmm7`, the result in `xmm0`. No
+  `xmm` register is callee-saved.
+- `cvtsi2sd xmm0, rax` turns a whole number into a double, exactly up to 2^53. `cvtsd2si rax,
+  xmm0` rounds to the nearest whole number, ties to even; `cvttsd2si` rounds toward zero.
+- After `ucomisd xmm0, xmm1`, jump with the unsigned conditions: `jb` (less), `ja` (greater),
+  `je` (equal), and `jp` when either is NaN.
+- Constants: `.double 100.0` in `.rodata`, read with `movsd xmm1, qword ptr [rip + hundred]`, or
+  `mov eax, 100` and `cvtsi2sd xmm1, eax`.
+- "12.34" is 1234 / 100.0: one `divsd` of two exact numbers gives the double the tests use.

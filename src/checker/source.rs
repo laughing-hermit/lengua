@@ -1110,8 +1110,10 @@ impl Parser {
             }
             ".type" => self.type_directive(number, arguments),
             ".size" => self.size(number, arguments),
-            ".ascii" | ".asciz" | ".string" | ".byte" | ".short" | ".long" | ".quad" | ".zero"
-            | ".skip" | ".balign" => self.data_directive(number, name, arguments, code),
+            ".ascii" | ".asciz" | ".string" | ".byte" | ".short" | ".long" | ".quad"
+            | ".double" | ".zero" | ".skip" | ".balign" => {
+                self.data_directive(number, name, arguments, code)
+            }
             ".intel_syntax" => self.dialect(
                 number,
                 ".intel_syntax appears again",
@@ -1313,6 +1315,19 @@ impl Parser {
                     "align data to a power of two",
                 ),
             },
+            ".double" => {
+                for value in split_operands(arguments) {
+                    if crate::expr::Limit::parse(value.trim()).is_none() {
+                        self.violation(
+                            Rule::Constants,
+                            number,
+                            format!("`.double {value}` isn't a plain decimal number"),
+                            "write doubles as plain decimals, such as `.double 100.0`, with no \
+                             names or exponents",
+                        );
+                    }
+                }
+            }
             ".byte" | ".short" | ".long" | ".quad" => {
                 for value in split_operands(arguments) {
                     if let Err(problem) = evaluate(value, &self.source.constants) {

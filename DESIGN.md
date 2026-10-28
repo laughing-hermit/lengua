@@ -78,13 +78,18 @@ harness, so a lock approved in one harness verifies in all of them.
 
 ## Tests
 
-`tests.toml` has one example per behavior, holding that behavior's backtick values, and
-generated blocks that draw new inputs on every run (boundary values first, then seeded random
-ones) and compute the expected results with formulas. A block whose ranges hold at most 5000
-combinations runs every one of them instead, within 20000 runs per file: for those inputs the
-program is checked, not sampled, which is the first step toward the proof below. The formula language has checked 128-bit
-whole numbers, strings, comparisons, `&& || !` and the functions `len`, `abs`, `min`, `max`,
-`if`, `upper`, `lower`, `reverse`, `count`, `sha256`, `crc32` and `crc32c`. It has no loops, so every formula finishes.
+`tests.toml` has one example per behavior, holding that behavior's backtick values, and generated
+blocks that draw new inputs on every run (boundary values first, then seeded random ones) and
+compute the expected results with formulas. A block whose ranges hold at most 5000 combinations runs
+every one of them instead, within 20000 runs per file: for those inputs the program is checked, not
+sampled, which is the first step toward the proof below. The formula language has checked 128-bit
+whole numbers, strings, comparisons, `&& || !` and the functions `len`, `abs`, `min`, `max`, `if`,
+`upper`, `lower`, `reverse`, `count`, `sha256`, `crc32` and `crc32c`. Decimals come in two kinds.
+Exact decimals (`decimal(0.00, 999.99)` inputs, money) are computed in whole units with `scaled` and
+printed with `places`, so any rounding rule the spec states is exact. Measured decimals are computed
+in doubles exactly as `addsd`, `mulsd`, `divsd` and `sqrtsd` do, and printed with `fixed` (x·10^d
+rounded ties to even, like `cvtsd2si`); whole numbers and decimals never mix silently in arithmetic.
+It has no loops, so every formula finishes.
 
 `check_tests` ties the tests to the approved spec: example exit codes equal the spec's, generator
 limits are numbers the spec states, and args and stdin hold bare variables so each example can be
@@ -149,11 +154,13 @@ its message to standard error and exit with 134, whatever the spec allows). An a
 reached through a conditional jump, the fall-through of one, or a `jmp` right after one (the end
 of a comparison chain or of an exhausted loop).
 
-Instruction sets: dialect 2 (the current one) uses x86-64's integer instructions and its integer
-vector instructions. Integer extensions (BMI1, BMI2, POPCNT, LZCNT, ADX, MOVBE), crypto and checksum
-extensions (AES-NI, VAES, SHA, PCLMULQDQ, VPCLMULQDQ, GFNI) and vector sets beyond SSE2 (SSE3 to
-SSE4.2, AVX, AVX2 and AVX-512) are allowed only when the CPU has them: the checker reads which CPU
-features each instruction needs. Vectors follow four extra rules:
+Instruction sets: dialect 2 (the current one) uses x86-64's integer instructions, its integer vector
+instructions and double-precision floating point (scalar and packed; no single precision, fused
+multiply-add, rounding-mode changes or x87, so the tests can compute exactly what the code does).
+Integer extensions (BMI1, BMI2, POPCNT, LZCNT, ADX, MOVBE), crypto and checksum extensions (AES-NI,
+VAES, SHA, PCLMULQDQ, VPCLMULQDQ, GFNI) and vector sets beyond SSE2 (SSE3 to SSE4.2, AVX, AVX2 and
+AVX-512) are allowed only when the CPU has them: the checker reads which CPU features each
+instruction needs. Vectors follow four extra rules:
 
 - unaligned loads and stores only (`movdqu`; an SSE instruction other than `movdqu` or `lddqu` may
   not read 16 bytes of memory, since it would need alignment);

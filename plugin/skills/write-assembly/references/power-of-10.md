@@ -27,6 +27,7 @@ assembly and combined with ideas from C, C++ and Rust.
   ```
 
   Data directives: `.ascii`, `.asciz`, `.byte`, `.short`, `.long`, `.quad` (numbers only),
+  `.double` (plain decimals, such as `100.0`),
   `.zero NAME` and `.skip NAME` (sizes are named constants), and `.balign N`. `.bss` holds only
   `.zero` and `.skip`.
 - **A function:**
@@ -63,7 +64,8 @@ constant, and `lea reg, [rip + name]` loads an address. Write the size (`byte pt
 
 ## Instruction set
 
-Dialect 2 is integer instructions, `syscall` and integer vector instructions:
+Dialect 2 is integer instructions, `syscall`, vector instructions and double-precision floating
+point:
 
 - `mov movzx movsx movsxd lea push pop xchg bswap` and every `cmovCC`
 - `add adc sub sbb neg inc dec mul imul div idiv cbw cwde cdqe cwd cdq cqo`
@@ -124,6 +126,41 @@ Rules for vectors:
 
 [assets/vector-template.s](../assets/vector-template.s) is a complete, checked SSE2 program
 (capitalizing a line 16 bytes at a time) with its spec and tests.
+
+### Floating point
+
+Double precision, scalar and packed (`sd` and `pd`), from SSE2 to AVX-512:
+
+- moves: `movsd`, `movupd`, `movhpd`, `movlpd`, `movddup`, `movmskpd`, `vbroadcastsd`, and the
+  `movq`/`movd` moves between general-purpose and vector registers
+- arithmetic: `addsd subsd mulsd divsd sqrtsd minsd maxsd`, the same with `pd`, `haddpd`,
+  `hsubpd`, `addsubpd`; logic: `andpd andnpd orpd xorpd`
+- compares: `ucomisd`/`comisd` (then `jb`, `jbe`, `ja`, `jae`, `je`, and `jp` for NaN), `cmpsd`,
+  `cmppd`, `vcmppd` into a mask register
+- conversions: `cvtsi2sd`, `cvtsd2si` (nearest, ties to even), `cvttsd2si` (toward zero),
+  `cvtdq2pd`, `cvtpd2dq`, `cvttpd2dq`, and AVX-512's 64-bit and unsigned forms
+- rounding: `roundsd`, `roundpd`, `vrndscalesd`, `vrndscalepd`; shuffles: `unpcklpd`, `unpckhpd`,
+  `shufpd`, `blendpd`, `blendvpd`, `vpermilpd`, `vpermpd`, `vperm2f128`, `vinsertf*`,
+  `vextractf*`, `vshuff64x2`, `vpermi2pd`, `vpermt2pd`, `vblendmpd`, `vcompresspd`, `vexpandpd`
+- the `v` forms of all of these, and `.double 100.0` constants in `.rodata`
+
+Exact decimals such as money don't need floating point: parse "12.5" into 1250 cents, compute
+with whole-number instructions, and print the cents with the point two digits from the right, as
+the tests' `scaled` and `places` do. Use floating point for measured values, where the tests use
+doubles too.
+
+The tests compute exactly what these instructions compute, so:
+
+- **Same operations, same order.** `{a + b + c}` is `(a + b) + c`: add in that order, never in
+  pairs across lanes. Don't turn `/ 10.0` into `* 0.1`, which rounds differently.
+- **Read decimals as one division.** Parse "12.34" into the whole number 1234 and its 2 places,
+  then `cvtsi2sd` both 1234 and 100 and `divsd` once: that's the value the tests use.
+- **Print with `fixed`'s recipe.** `fixed(x, 2)` is `mulsd` by 100.0 (one constant), `cvtsd2si`
+  (nearest, ties to even), then the whole number printed with the point two digits from the
+  right ("0.05", "-0.05"). Take the sign from that whole number, so −0.004 prints "0.00".
+- **Left out:** single and half precision (the tests compute in doubles), fused multiply-add
+  (`vfmadd*` rounds once where the formulas round twice), the `rcp`/`rsqrt` approximations,
+  `ldmxcsr` (rounding stays nearest, ties to even) and x87.
 
 Everything else is out: x87, string instructions (`movs`, `stos`, …), `loop`, `jrcxz`, `enter`,
 `leave`, `int`, `pushf` and `popf`.

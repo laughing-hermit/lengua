@@ -755,6 +755,132 @@ const VECTOR: &[&str] = &[
     "vgf2p8mulb",
 ];
 
+/// Double-precision floating point, scalar and packed, from SSE2 to AVX-512. Left out on purpose:
+/// single and half precision (the tests compute in doubles), fused multiply-add (it rounds once
+/// where the formulas round twice), the `rcp`/`rsqrt` approximations, `ldmxcsr` (rounding stays
+/// nearest, ties to even) and x87.
+const FLOAT: &[&str] = &[
+    "movsd",
+    "vmovsd",
+    "movupd",
+    "vmovupd",
+    "movhpd",
+    "vmovhpd",
+    "movlpd",
+    "vmovlpd",
+    "movddup",
+    "vmovddup",
+    "movmskpd",
+    "vmovmskpd",
+    "vbroadcastsd",
+    "vbroadcastf128",
+    "addsd",
+    "vaddsd",
+    "subsd",
+    "vsubsd",
+    "mulsd",
+    "vmulsd",
+    "divsd",
+    "vdivsd",
+    "sqrtsd",
+    "vsqrtsd",
+    "minsd",
+    "vminsd",
+    "maxsd",
+    "vmaxsd",
+    "addpd",
+    "vaddpd",
+    "subpd",
+    "vsubpd",
+    "mulpd",
+    "vmulpd",
+    "divpd",
+    "vdivpd",
+    "sqrtpd",
+    "vsqrtpd",
+    "minpd",
+    "vminpd",
+    "maxpd",
+    "vmaxpd",
+    "haddpd",
+    "vhaddpd",
+    "hsubpd",
+    "vhsubpd",
+    "addsubpd",
+    "vaddsubpd",
+    "andpd",
+    "vandpd",
+    "andnpd",
+    "vandnpd",
+    "orpd",
+    "vorpd",
+    "xorpd",
+    "vxorpd",
+    "comisd",
+    "vcomisd",
+    "ucomisd",
+    "vucomisd",
+    "cmpsd",
+    "vcmpsd",
+    "cmppd",
+    "vcmppd",
+    "cvtsi2sd",
+    "vcvtsi2sd",
+    "cvttsd2si",
+    "vcvttsd2si",
+    "cvtsd2si",
+    "vcvtsd2si",
+    "cvtdq2pd",
+    "vcvtdq2pd",
+    "cvtpd2dq",
+    "vcvtpd2dq",
+    "cvttpd2dq",
+    "vcvttpd2dq",
+    "vcvtqq2pd",
+    "vcvtpd2qq",
+    "vcvttpd2qq",
+    "vcvtusi2sd",
+    "vcvtsd2usi",
+    "vcvttsd2usi",
+    "vcvtudq2pd",
+    "vcvtuqq2pd",
+    "vcvtpd2udq",
+    "vcvttpd2udq",
+    "vcvtpd2uqq",
+    "vcvttpd2uqq",
+    "roundsd",
+    "vroundsd",
+    "roundpd",
+    "vroundpd",
+    "vrndscalesd",
+    "vrndscalepd",
+    "unpcklpd",
+    "vunpcklpd",
+    "unpckhpd",
+    "vunpckhpd",
+    "shufpd",
+    "vshufpd",
+    "blendpd",
+    "vblendpd",
+    "blendvpd",
+    "vblendvpd",
+    "vpermilpd",
+    "vpermpd",
+    "vperm2f128",
+    "vinsertf128",
+    "vinsertf64x2",
+    "vinsertf64x4",
+    "vextractf128",
+    "vextractf64x2",
+    "vextractf64x4",
+    "vshuff64x2",
+    "vpermi2pd",
+    "vpermt2pd",
+    "vblendmpd",
+    "vcompresspd",
+    "vexpandpd",
+];
+
 /// Moves that need aligned memory, and what to write instead.
 const ALIGNED_MOVES: &[(&str, &str)] = &[
     ("movdqa", "movdqu"),
@@ -1180,16 +1306,31 @@ fn check_instruction(step: &Step<'_>, features: CpuFeatures, violations: &mut Ve
         });
         return;
     }
-    if !ALLOWED.contains(&name.as_str()) && !VECTOR.contains(&name.as_str()) {
+    if instruction.is_string_instruction() {
         violations.push(Violation {
             rule: Rule::Dialect,
             line,
             problem: format!(
-                "`{name}` isn't in dialect 2, which allows integer instructions and integer vector \
+                "`{}` is a string instruction, which isn't in the dialect",
+                step.source.text
+            ),
+            fix: "use a bounded loop; the floating-point movsd and cmpsd take xmm registers".into(),
+        });
+        return;
+    }
+    if !ALLOWED.contains(&name.as_str())
+        && !VECTOR.contains(&name.as_str())
+        && !FLOAT.contains(&name.as_str())
+    {
+        violations.push(Violation {
+            rule: Rule::Dialect,
+            line,
+            problem: format!(
+                "`{name}` isn't in dialect 2, which allows integer, vector and double-precision \
                  instructions"
             ),
-            fix: "use the instructions listed in references/power-of-10.md: no floating point, \
-                  x87, MMX, string instructions, gathers or scatters"
+            fix: "use the instructions listed in references/power-of-10.md: no single precision, \
+                  fused multiply-add, x87, MMX, string instructions, gathers or scatters"
                 .into(),
         });
         return;
@@ -1349,7 +1490,13 @@ mod tests {
             .map(|mnemonic| format!("{mnemonic:?}").to_ascii_lowercase())
             .collect();
         let aligned = ALIGNED_MOVES.iter().map(|(aligned, _)| *aligned);
-        for name in ALLOWED.iter().chain(VECTOR).copied().chain(aligned) {
+        for name in ALLOWED
+            .iter()
+            .chain(VECTOR)
+            .chain(FLOAT)
+            .copied()
+            .chain(aligned)
+        {
             assert!(known.contains(name), "{name} isn't an iced-x86 mnemonic");
         }
         for (alias, canonical) in ALIASES {
