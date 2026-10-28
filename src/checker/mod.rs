@@ -9,6 +9,7 @@ pub mod cfg;
 pub mod decode;
 pub mod rules;
 pub mod source;
+pub mod threads;
 
 #[cfg(test)]
 mod tests;
@@ -25,6 +26,11 @@ pub use source::{Source, UnsafeBlock};
 /// The template program; its assert_fail and assert_message are the canonical ones.
 pub const TEMPLATE: &str =
     include_str!("../../plugin/skills/write-assembly/assets/main-template.s");
+
+/// The parallel template; its parallel_for, start_worker and join_worker, their data and their
+/// constants are the canonical thread code.
+pub const PARALLEL_TEMPLATE: &str =
+    include_str!("../../plugin/skills/write-assembly/assets/parallel-template.s");
 
 /// At most this many violations are reported at once.
 pub const MAX_VIOLATIONS: usize = 20;
@@ -126,6 +132,8 @@ impl fmt::Display for Violation {
 pub struct Context<'a> {
     /// The system calls the spec allows.
     pub syscalls: &'a [Syscall],
+    /// How many threads the spec allows at once, when it allows more than one.
+    pub threads: Option<u32>,
     /// This CPU's extensions.
     pub features: CpuFeatures,
     /// The platform.
@@ -221,6 +229,14 @@ pub fn check_program(source: &Source, executable: &[u8], context: Context<'_>) -
         context.syscalls,
         context.profile,
         &template,
+        &mut violations,
+    );
+    let parallel_template = source::parse(PARALLEL_TEMPLATE).0;
+    threads::check(
+        &program,
+        &flows,
+        &parallel_template,
+        context.threads,
         &mut violations,
     );
     Report::new(violations, Some(facts), source)

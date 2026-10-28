@@ -134,6 +134,7 @@ to choose text.
 | `if(condition, then, else)` | `then` or `else`; only the chosen one is evaluated, so `if(b == 0, 0, a / b)` is safe |
 | `upper(s)`, `lower(s)` | ASCII letters in upper or lower case |
 | `reverse(s)` | The characters in reverse order |
+| `tr(s, from, to)` | Each character of `s` listed in `from` becomes the one at the same place in `to`, as Unix `tr` does; `a-z` is a range. ROT13 is `tr(s, "A-Za-z", "N-ZA-Mn-za-m")` |
 | `count(s, part)` | How many times `part` appears in `s`, without overlaps: `count(line, "e")` |
 | `fixed(x, places)` | `x` printed with exactly `places` decimals (0 to 15): x·10^places rounded to the nearest whole number, ties to even, like `mulsd` then `cvtsd2si`. `fixed(2.5, 0)` is "2", `fixed(-0.004, 2)` is "0.00". A single widens exactly first (`cvtss2sd`), then prints as a double does |
 | `double(x)` | `x` as a double: a whole number exactly (up to 2^53), a single exactly (like `cvtss2sd`) |
@@ -173,8 +174,9 @@ adds two prices in cents, and any rounding rule the spec states is whole-number 
 10. Blocks of one behavior share their templates.
 11. Given each example's inputs, the formulas produce the example's results.
 
-When everything passes, `lengua.lock` records the tests and the server keeps a copy. The tests
-then stay frozen until the spec changes, and the copy can restore them.
+When everything passes, `lengua.lock` records the tests and the server keeps a copy. Until
+`check_code` first runs them, a fixed `tests.toml` can be checked again; from then on the tests
+stay frozen until the spec changes, and the copy can restore them.
 
 ## More examples
 

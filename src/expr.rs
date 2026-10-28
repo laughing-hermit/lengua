@@ -430,6 +430,9 @@ pub enum Function {
     Lower,
     /// `reverse(s)`: characters in reverse order.
     Reverse,
+    /// `tr(s, from, to)`: each character of `s` found in `from` becomes the character at the same
+    /// place in `to`, as the Unix `tr` does; `a-z` stands for a range.
+    Tr,
     /// `count(s, part)`: how many times `part` appears in `s`, without overlaps.
     Count,
     /// `sha256(s)`: the SHA-256 of `s`'s bytes, in lowercase hex.
@@ -467,7 +470,7 @@ pub enum Function {
 }
 
 impl Function {
-    const ALL: [Self; 23] = [
+    const ALL: [Self; 24] = [
         Self::Len,
         Self::Abs,
         Self::Min,
@@ -476,6 +479,7 @@ impl Function {
         Self::Upper,
         Self::Lower,
         Self::Reverse,
+        Self::Tr,
         Self::Count,
         Self::Sha256,
         Self::Crc32,
@@ -503,6 +507,7 @@ impl Function {
             Self::Upper => "upper",
             Self::Lower => "lower",
             Self::Reverse => "reverse",
+            Self::Tr => "tr",
             Self::Count => "count",
             Self::Sha256 => "sha256",
             Self::Crc32 => "crc32",
@@ -525,7 +530,7 @@ impl Function {
     fn arity(self) -> (usize, usize) {
         match self {
             Self::Min | Self::Max => (2, usize::MAX),
-            Self::If | Self::Fma => (3, 3),
+            Self::If | Self::Fma | Self::Tr => (3, 3),
             Self::Count | Self::Fixed | Self::Scaled | Self::Places => (2, 2),
             Self::Len
             | Self::Abs
@@ -548,7 +553,7 @@ impl Function {
 
 /// Names that can't be used as variables.
 const RESERVED: &[&str] = &[
-    "true", "false", "len", "abs", "min", "max", "if", "upper", "lower", "reverse", "count",
+    "true", "false", "len", "abs", "min", "max", "if", "upper", "lower", "reverse", "tr", "count",
     "sha256", "crc32", "crc32c", "double", "single", "fma", "round", "trunc", "floor", "ceil",
     "sqrt", "fixed", "scaled", "places", "int", "choice", "string", "decimal",
 ];
@@ -840,6 +845,11 @@ impl Parser {
                         .into()
                 }
                 (2, 2) => "two arguments: a string and the part to count".into(),
+                (3, 3) if function == Function::Tr => {
+                    "three strings: the text, the characters to replace and their replacements, \
+                     such as tr(s, \"a-z\", \"A-Z\")"
+                        .into()
+                }
                 (3, 3) if function == Function::Fma => {
                     "three decimals: fma(a, b, c) is a × b + c, rounded once".into()
                 }
@@ -1241,6 +1251,25 @@ fn call(function: Function, arguments: &[Expr], env: &Env) -> Result<Value, Eval
         }
         Function::Upper => Ok(Value::Str(string(argument(0)?, name)?.to_ascii_uppercase())),
         Function::Lower => Ok(Value::Str(string(argument(0)?, name)?.to_ascii_lowercase())),
+        Function::Tr => {
+            let text = string(argument(0)?, name)?;
+            let from = tr_set(&string(argument(1)?, name)?);
+            let to = tr_set(&string(argument(2)?, name)?);
+            if from.len() != to.len() {
+                return Err(EvalError::Type(format!(
+                    "tr's second and third strings list {} and {} characters; give each \
+                     character its replacement",
+                    from.len(),
+                    to.len()
+                )));
+            }
+            let map: BTreeMap<char, char> = from.into_iter().zip(to).collect();
+            Ok(Value::Str(
+                text.chars()
+                    .map(|character| map.get(&character).copied().unwrap_or(character))
+                    .collect(),
+            ))
+        }
         Function::Reverse => Ok(Value::Str(
             string(argument(0)?, name)?.chars().rev().collect(),
         )),
@@ -1272,6 +1301,27 @@ fn call(function: Function, arguments: &[Expr], env: &Env) -> Result<Value, Eval
             0x82f6_3b78,
         )))),
     }
+}
+
+/// The characters a `tr` set lists, with `a-z` standing for a range; a `-` first or last is
+/// itself.
+fn tr_set(set: &str) -> Vec<char> {
+    let characters: Vec<char> = set.chars().collect();
+    let mut listed = Vec::new();
+    let mut index = 0;
+    while index < characters.len() {
+        match characters.get(index..index + 3) {
+            Some([first, '-', last]) if first <= last => {
+                listed.extend(*first..=*last);
+                index += 3;
+            }
+            _ => {
+                listed.push(characters[index]);
+                index += 1;
+            }
+        }
+    }
+    listed
 }
 
 /// A reflected 32-bit CRC with the given polynomial, starting from and finishing with all ones.
@@ -2357,6 +2407,17 @@ mod tests {
         assert_eq!(value("upper(s)", &vars), Ok(Value::Str("HéLLO".into())));
         assert_eq!(value("lower(s)", &vars), Ok(Value::Str("héllo".into())));
         assert_eq!(value("reverse(s)", &vars), Ok(Value::Str("olléH".into())));
+        let rot13 = r#"tr(s, "A-Za-z", "N-ZA-Mn-za-m")"#;
+        assert_eq!(value(rot13, &vars), Ok(Value::Str("Uéyyb".into())));
+        assert_eq!(
+            value(r#"tr("a-b", "-ab", "_xy")"#, &vars),
+            Ok(Value::Str("x_y".into())),
+            "a dash first is itself"
+        );
+        assert!(
+            value(r#"tr(s, "a-z", "A")"#, &vars)
+                .is_err_and(|error| error.to_string().contains("list 26 and 1 characters"))
+        );
         assert_eq!(value("count(s, \"l\")", &vars), Ok(Value::Int(2)));
         assert_eq!(
             value("count(\"aaaa\", \"aa\")", &vars),

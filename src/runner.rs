@@ -13,7 +13,7 @@
 //! and seccomp stops it at any system call outside the list it was given. The checker has already
 //! made sure the code makes no other calls: this makes the kernel keep the same promise.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::io::{self, Read as _};
 use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
@@ -25,14 +25,19 @@ use landlock::{
     ABI, Access as _, AccessFs, AccessNet, PathBeneath, PathFd, Ruleset, RulesetAttr as _,
     RulesetCreatedAttr as _, Scope,
 };
-use seccompiler::{BpfProgram, SeccompAction, SeccompFilter, TargetArch};
+use seccompiler::{
+    BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter,
+    SeccompRule, TargetArch,
+};
 
 use perf_event::events::{Event, Hardware, Software};
-use perf_event::{Builder, Counter};
+use perf_event::{Builder, Counter, ReadFormat};
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::UnixListener;
 use tokio::process::Command;
 use tokio::sync::mpsc;
+
+use crate::platform::Allowed;
 
 /// The command-line flag that starts the binary as a launcher.
 pub const LAUNCH_FLAG: &str = "--launch";
@@ -77,8 +82,8 @@ pub struct Job<'a> {
     pub files: &'a BTreeMap<String, String>,
     /// A folder to run in instead of a fresh one; the program may read and write inside it.
     pub folder: Option<&'a Path>,
-    /// The system calls it may make, by number; any other stops it.
-    pub syscalls: &'a [i64],
+    /// The system calls it may make; any other stops it.
+    pub syscalls: &'a [Allowed],
 }
 
 impl<'a> Job<'a> {
@@ -88,7 +93,7 @@ impl<'a> Job<'a> {
         program: &'a Path,
         args: &'a [String],
         stdin: &'a [u8],
-        syscalls: &'a [i64],
+        syscalls: &'a [Allowed],
     ) -> Self {
         static NO_FILES: BTreeMap<String, String> = BTreeMap::new();
         Self {
@@ -159,9 +164,11 @@ pub struct Run {
     pub instructions: Option<u64>,
     /// CPU cycles spent in its own code, when available.
     pub cycles: Option<u64>,
-    /// CPU time in nanoseconds, including what the kernel did for it when the system allows
-    /// measuring that, when available.
+    /// CPU time in nanoseconds over all its threads, including what the kernel did for it when
+    /// the system allows measuring that, when available.
     pub cpu_time_ns: Option<u64>,
+    /// Time on the clock from its start to its end, in nanoseconds: what threads shorten.
+    pub wall_time_ns: u64,
     /// Every file in its fresh working folder afterwards, by name relative to the folder, or why
     /// they couldn't be read. Empty when it ran in a folder of the user's.
     pub files: Result<BTreeMap<String, Vec<u8>>, String>,
@@ -173,14 +180,24 @@ const MAX_FILES_BACK: usize = 256;
 /// The most bytes read back from a working folder after a run.
 const MAX_BYTES_BACK: u64 = 256 * 1024 * 1024;
 
-/// A counter on `pid` that starts at its `exec`, or `None` when the system doesn't allow it.
+/// A counter on `pid` and every thread it starts, from its `exec`, or `None` when the system
+/// doesn't allow it.
 fn attach<E: Event>(event: E, pid: i32, with_kernel: bool) -> Option<Counter> {
     let mut builder = Builder::new(event);
     builder
         .observe_pid(pid)
+        .inherit(true)
         .enable_on_exec(true)
-        .exclude_kernel(!with_kernel);
+        .exclude_kernel(!with_kernel)
+        .read_format(ReadFormat::TOTAL_TIME_ENABLED | ReadFormat::TOTAL_TIME_RUNNING);
     builder.build().ok()
+}
+
+/// A counter's count, unless the CPU had to share it with other counters for part of the run,
+/// which would make the count an estimate.
+fn exact_count(counter: &mut Counter) -> Option<u64> {
+    let data = counter.read_full().ok()?;
+    (data.time_running() == data.time_enabled()).then(|| data.count())
 }
 
 /// Runs `job` through `launcher` (this server's own binary).
@@ -201,7 +218,14 @@ pub async fn run(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<Ru
         }
     };
     let listener = UnixListener::bind(&socket)?;
-    let syscalls: Vec<String> = job.syscalls.iter().map(i64::to_string).collect();
+    let syscalls: Vec<String> = job
+        .syscalls
+        .iter()
+        .map(|allowed| match allowed.first_argument {
+            None => allowed.number.to_string(),
+            Some(argument) => format!("{}:{argument}", allowed.number),
+        })
+        .collect();
     let file_limit = limits
         .max_file_size
         .map_or_else(|| "none".to_owned(), |bytes| bytes.to_string());
@@ -236,6 +260,7 @@ pub async fn run(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<Ru
     ];
     go.write_all(&[1]).await?;
     drop(go);
+    let started = std::time::Instant::now();
 
     let mut input = child
         .stdin
@@ -257,8 +282,10 @@ pub async fn run(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<Ru
     let (overflow, mut overflowed) = mpsc::channel::<()>(2);
     let stdout_reader = tokio::spawn(read_capped(output, limits.max_output, overflow.clone()));
     let stderr_reader = tokio::spawn(read_capped(errors, limits.max_output, overflow));
+    let mut wall_time = Duration::ZERO;
     let end = tokio::select! {
         status = child.wait() => {
+            wall_time = started.elapsed();
             let status = status?;
             match status.code() {
                 Some(code) => End::Exited(code),
@@ -278,9 +305,7 @@ pub async fn run(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<Ru
     let stdout = stdout_reader.await.map_err(io::Error::other)??;
     let stderr = stderr_reader.await.map_err(io::Error::other)??;
     let [instructions, cycles, cpu_time_ns] = counters.each_mut().map(|counter| match end {
-        End::Exited(_) | End::Signaled(_) => {
-            counter.as_mut().and_then(|counter| counter.read().ok())
-        }
+        End::Exited(_) | End::Signaled(_) => counter.as_mut().and_then(exact_count),
         End::TimedOut | End::OutputTooLarge => None,
     });
     let files = if job.folder.is_some() {
@@ -295,6 +320,7 @@ pub async fn run(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<Ru
         instructions,
         cycles,
         cpu_time_ns,
+        wall_time_ns: u64::try_from(wall_time.as_nanos()).unwrap_or(u64::MAX),
         files,
     })
 }
@@ -411,21 +437,28 @@ pub fn launch(mut args: impl Iterator<Item = OsString>) -> ExitCode {
     ExitCode::from(127)
 }
 
-/// Reads the launcher's system call list ("0,1,60") and file limit ("1048576" or "none").
+/// Reads the launcher's system call list ("0,1,56:3477248": a number and, after a colon, the
+/// only first argument allowed) and file limit ("1048576" or "none").
 fn parse_confinement(
     syscalls: &OsString,
     file_limit: &OsString,
-) -> Result<(Vec<i64>, Option<u64>), String> {
+) -> Result<(Vec<Allowed>, Option<u64>), String> {
     let syscalls = syscalls.to_string_lossy();
     let numbers = syscalls
         .split(',')
-        .filter(|number| !number.is_empty())
-        .map(|number| {
-            number
-                .parse()
-                .map_err(|_| format!("{number:?} isn't a system call number"))
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            let bad = || format!("{entry:?} isn't a system call");
+            let (number, argument) = match entry.split_once(':') {
+                Some((number, argument)) => (number, Some(argument.parse().map_err(|_| bad())?)),
+                None => (entry, None),
+            };
+            Ok(Allowed {
+                number: number.parse().map_err(|_| bad())?,
+                first_argument: argument,
+            })
         })
-        .collect::<Result<_, _>>()?;
+        .collect::<Result<_, String>>()?;
     let file_limit = match file_limit.to_string_lossy().as_ref() {
         "none" => None,
         bytes => Some(
@@ -441,7 +474,7 @@ fn parse_confinement(
 /// (its working folder), executing only `program`, no network and no signals to other
 /// processes (Landlock); files of at most `file_limit` bytes and no core files; and only the
 /// system calls in `syscalls` (seccomp), so any other stops it with SIGSYS.
-fn confine(program: &Path, syscalls: &[i64], file_limit: Option<u64>) -> Result<(), String> {
+fn confine(program: &Path, syscalls: &[Allowed], file_limit: Option<u64>) -> Result<(), String> {
     let abi = ABI::V6;
     let folder = PathFd::new(".").map_err(|error| format!("working folder: {error}"))?;
     let executable = PathFd::new(program).map_err(|error| format!("program: {error}"))?;
@@ -470,10 +503,25 @@ fn confine(program: &Path, syscalls: &[i64], file_limit: Option<u64>) -> Result<
     // A crash leaves no core file behind.
     rustix::process::setrlimit(rustix::process::Resource::Core, limit(0))
         .map_err(|error| format!("core file limit: {error}"))?;
-    let rules = syscalls
-        .iter()
-        .map(|number| (*number, Vec::new()))
-        .collect();
+    // No rules allow any arguments; a rule allows only its first argument.
+    let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
+    let mut any = BTreeSet::new();
+    for allowed in syscalls {
+        let entry = rules.entry(allowed.number).or_default();
+        match allowed.first_argument {
+            None => {
+                any.insert(allowed.number);
+            }
+            Some(argument) => entry.push(
+                SeccompCondition::new(0, SeccompCmpArgLen::Qword, SeccompCmpOp::Eq, argument)
+                    .and_then(|condition| SeccompRule::new(vec![condition]))
+                    .map_err(|error| format!("seccomp: {error}"))?,
+            ),
+        }
+    }
+    for number in any {
+        rules.insert(number, Vec::new());
+    }
     let arch = TargetArch::try_from(std::env::consts::ARCH)
         .map_err(|error| format!("seccomp: {error}"))?;
     let filter = SeccompFilter::new(

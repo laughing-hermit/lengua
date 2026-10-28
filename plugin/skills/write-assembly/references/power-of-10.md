@@ -27,9 +27,10 @@ assembly and combined with ideas from C, C++ and Rust.
   ```
 
   Data directives: `.ascii`, `.asciz`, `.byte`, `.short`, `.long`, `.quad` (numbers only),
-  `.double` (plain decimals, such as `100.0`),
+  `.double` and `.float` (plain decimals, such as `100.0`),
   `.zero NAME` and `.skip NAME` (sizes are named constants), and `.balign N`. `.bss` holds only
-  `.zero` and `.skip`.
+  `.zero` and `.skip`. `.balign N` (1 to 64) between `.type name, @object` and `name:` makes the
+  symbol start at a multiple of N.
 - **A function:**
 
   ```
@@ -180,6 +181,42 @@ The tests compute exactly what these instructions compute, so:
 Everything else is out: x87, string instructions (`movs`, `stos`, …), `loop`, `jrcxz`, `enter`,
 `leave`, `int`, `pushf` and `popf`.
 
+### Threads
+
+When the spec allows threads (`- Threads: up to N` under Constraints), a program can split its
+work across cores with fork-join: `parallel_for` starts the threads and waits for all of them,
+like Rust's scoped threads. Copy `parallel_for`, `start_worker`, `join_worker`, the constants
+from `SYS_CLONE` to `MAX_WAITS`, and the data `stacks`, `tids`, `results` and `slots` word for
+word from [the parallel template](../assets/parallel-template.s); `check_code` compares them. Then
+choose three constants:
+- `THREADS`, at most the spec's N;
+- `STACK_SIZE`, each thread's stack: a multiple of 64 that holds the worker's deepest call path,
+  which `check_code` computes;
+- `SLOT_SIZE`, each worker's output: a multiple of 64.
+
+Write a function named `worker`. `call parallel_for` with `rdi` = how many workers to run, from 1
+to `THREADS`, and it calls `worker` once for each index, worker 0 on the calling thread:
+- `worker` gets its index in `rdi` and its slot, `slots + index * SLOT_SIZE`, in `rsi`. It starts
+  with `push rbx` and `mov rbx, rsi` (before any call), and leaves `rbx` alone after that.
+- It returns a 64-bit result in `rax`, which lands in `results[index]`.
+- It and every function it calls write only their own stack frame (`[rsp + …]`, inside what they
+  pushed or reserved) and the slot (`[rbx + …]`, inside `SLOT_SIZE`, with the usual bounds
+  checks). They read anything, including data the main thread wrote before `parallel_for`.
+- They make no system calls, and only `worker` and its callees call them. Read and write on the
+  main thread, before and after.
+
+No two threads ever write the same byte, so results are the same on every run: combine `results`
+in index order for a reduction (a count, a sum), or lay the slots end to end for a map (each
+worker writes its part of the output, and one `write` prints them all). Assertions 901 to 999 are
+the thread code's; number yours from 1 to 899. The kernel lets a threaded program call `clone`
+only with `parallel_for`'s flags.
+
+Threads pay off when each worker has real work: starting one costs about 10 to 20 microseconds,
+and splitting a fast vector loop over a megabyte saves little. Pick the worker count from the
+input's size, as the template does, and compare `wall_time_us` (time on the clock) in the
+`check_code` report: threads lower it while `cpu_time_us`, the total over all threads, stays or
+rises.
+
 ## The rules
 
 ### 1. Simple control flow
@@ -223,9 +260,10 @@ large `.bss` buffer costs nothing until it's used, because Linux hands out zeroe
 program touches them, so a 64 MiB buffer for a program that reads up to 64 MiB is fine. Nothing
 is allocated or freed while the program runs, so there's no leak, double free or use after free.
 
-The program runs as one thread. It uses only the system calls its spec allows, which are the
-capabilities the person approved, and each `syscall` is chosen by `mov eax, SYS_NAME` in the same
-straight-line code (no label or call between). The stack changes only through 64-bit `push` and
+The program runs as one thread unless its spec allows threads (`- Threads: up to N`); then it
+starts them only through the canonical `parallel_for` (see "Threads" below). It uses only the
+system calls its spec allows, which are the capabilities the person approved, and each `syscall`
+is chosen by `mov eax, SYS_NAME` in the same straight-line code (no label or call between). The stack changes only through 64-bit `push` and
 `pop`, `call`, `ret`, and `sub rsp, N` / `add rsp, N`; every path into a line has the same depth,
 and nothing reads or writes below `rsp` (no red zone). `check_code` reports the deepest stack
 over all call paths.

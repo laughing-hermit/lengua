@@ -183,9 +183,14 @@ impl State {
             (None, None) => return Self::TestsMissing,
             (None, Some(_)) => return Self::TestsUnchecked,
             (Some(stamp), current) => {
+                // Until code has run against them, tests can still be fixed and checked again.
                 if current.as_ref() != Some(&stamp.sha256) {
-                    return Self::TestsChanged {
-                        stamped: stamp.sha256.clone(),
+                    return match current {
+                        Some(_) if !stamp.frozen => Self::TestsUnchecked,
+                        None if !stamp.frozen => Self::TestsMissing,
+                        _ => Self::TestsChanged {
+                            stamped: stamp.sha256.clone(),
+                        },
                     };
                 }
             }
@@ -242,9 +247,12 @@ impl State {
                  {TESTS_FILE} with the write-tests skill."
             ),
             Self::TestsChanged { stamped } => format!(
-                "Blocked: {TESTS_FILE} changed after it was checked, and tests stay frozen until \
-                 the spec changes. Restore it by copying {} to {folder}/{TESTS_FILE}, or \
-                 change {SPEC_FILE} and get it approved again.",
+                "Blocked: {TESTS_FILE} changed after code ran against it, and tests stay frozen \
+                 so they can't be bent to fit the code. Restore it by copying {} to \
+                 {folder}/{TESTS_FILE}. If the tests were wrong, tell the user in a line or two \
+                 what was wrong and ask them to approve {folder}/{SPEC_FILE} again (it hasn't \
+                 changed); when they do, call approve_spec with their words, which reopens the \
+                 tests.",
                 stamped_copy(context.data_dir, stamped).display()
             ),
             Self::CodeMissing => format!(
@@ -280,6 +288,7 @@ mod tests {
         Lock {
             tests: Some(TestsStamp {
                 sha256: digest("tests"),
+                frozen: true,
             }),
             ..approved()
         }
@@ -407,6 +416,21 @@ mod tests {
             step.contains(&format!("/data/lengua/stamped/{}", digest("tests"))),
             "{step}"
         );
+        // Before code first runs against them, tests can still be fixed and checked again.
+        let open = Lock {
+            tests: Some(TestsStamp {
+                sha256: digest("tests"),
+                frozen: false,
+            }),
+            ..approved()
+        };
+        let fixed = state(
+            [Some("spec"), Some("fixed tests"), None],
+            LockStatus::Valid(open.clone()),
+        );
+        assert_eq!(fixed, State::TestsUnchecked);
+        let removed = state([Some("spec"), None, None], LockStatus::Valid(open));
+        assert_eq!(removed, State::TestsMissing);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! Control flow and stack depth: which instruction can follow which, what can run at all, and
 //! exactly how deep the stack is before every instruction.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use iced_x86::{FlowControl, Instruction, InstructionInfoFactory, OpAccess, OpKind, Register};
 
@@ -428,4 +428,44 @@ fn stack_effect(
         _ if writes(instruction, Register::RSP, factory) => Err(format!("`{name}` changes rsp")),
         _ => Ok(before),
     }
+}
+
+/// The deepest the stack gets, in bytes, over every call path from `name`, counting the return
+/// address that called it.
+#[must_use]
+pub fn deepest(name: &str, program: &Program<'_>, flows: &BTreeMap<String, Flow>) -> i64 {
+    fn walk(
+        name: &str,
+        program: &Program<'_>,
+        flows: &BTreeMap<String, Flow>,
+        memo: &mut BTreeMap<String, i64>,
+        visiting: &mut BTreeSet<String>,
+    ) -> i64 {
+        if let Some(known) = memo.get(name) {
+            return *known;
+        }
+        let (Some(_), Some(flow)) = (program.function(name), flows.get(name)) else {
+            return 0;
+        };
+        if !visiting.insert(name.to_owned()) {
+            return 0;
+        }
+        let mut most = flow.max_depth;
+        for (index, exit) in flow.exits.iter().enumerate() {
+            if let Exit::Call { callee } = exit {
+                let at_call = flow.depth[index].unwrap_or(0);
+                most = most.max(at_call + walk(callee, program, flows, memo, visiting));
+            }
+        }
+        visiting.remove(name);
+        memo.insert(name.to_owned(), most);
+        most
+    }
+    walk(
+        name,
+        program,
+        flows,
+        &mut BTreeMap::new(),
+        &mut BTreeSet::new(),
+    )
 }

@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use crate::checker::source::{Item, Operand, Source};
+use crate::platform::Allowed;
 use crate::runner::{self, End, Job, Limits, Run};
 use crate::spec::ASSERTION_EXIT_CODE;
 use crate::testfile::{TestSuite, describe_inputs};
@@ -56,8 +57,12 @@ pub struct Cost {
     /// CPU cycles in the program's own code: its time, with slow instructions such as division
     /// weighing more.
     pub cycles: Option<Spread>,
-    /// CPU time in microseconds, including what the kernel does for its system calls.
+    /// CPU time in microseconds over all threads, including what the kernel does for its system
+    /// calls.
     pub cpu_time_us: Option<Spread>,
+    /// Time on the clock in microseconds, from start to end: threads shorten it while CPU time
+    /// stays.
+    pub wall_time_us: Option<Spread>,
 }
 
 /// Measurements collected over runs.
@@ -67,6 +72,7 @@ struct Samples {
     instructions: Vec<u64>,
     cycles: Vec<u64>,
     cpu_time_us: Vec<u64>,
+    wall_time_us: Vec<u64>,
 }
 
 impl Samples {
@@ -76,6 +82,7 @@ impl Samples {
         self.cycles.extend(run.cycles);
         self.cpu_time_us
             .extend(run.cpu_time_ns.map(|nanoseconds| nanoseconds / 1000));
+        self.wall_time_us.push(run.wall_time_ns / 1000);
     }
 
     fn cost(self, test: String) -> Cost {
@@ -85,6 +92,7 @@ impl Samples {
             instructions: Spread::of(self.instructions),
             cycles: Spread::of(self.cycles),
             cpu_time_us: Spread::of(self.cpu_time_us),
+            wall_time_us: Spread::of(self.wall_time_us),
         }
     }
 }
@@ -312,7 +320,7 @@ pub async fn run_tests(
     program: &Path,
     source: &Source,
     seed: u64,
-    syscalls: &[i64],
+    syscalls: &[Allowed],
 ) -> io::Result<Outcome> {
     let assertions = assertion_lines(source);
     let deadline = Instant::now() + TOTAL_TIMEOUT;
@@ -432,6 +440,7 @@ mod tests {
             instructions: Some(100),
             cycles: Some(300),
             cpu_time_ns: Some(1000),
+            wall_time_ns: 2000,
             files: Ok(BTreeMap::new()),
         }
     }

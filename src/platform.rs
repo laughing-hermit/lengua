@@ -54,23 +54,59 @@ impl Profile {
         }
     }
 
-    /// The system calls the kernel lets a program make: those its spec allows, `write` and
-    /// `exit` (which `assert_fail` may always make), and what the launcher needs between
-    /// confining itself and becoming the program (`rt_sigprocmask`, `rt_sigaction`, `execve`).
+    /// The flags `parallel_for` starts threads with: `CLONE_VM`, `CLONE_FS`, `CLONE_FILES`,
+    /// `CLONE_SIGHAND`, `CLONE_THREAD`, `CLONE_SYSVSEM`, `CLONE_PARENT_SETTID` and
+    /// `CLONE_CHILD_CLEARTID`.
+    pub const CLONE_FLAGS: u64 = 0x0035_0F00;
+
+    /// The system calls the kernel lets a program make: those its spec allows; `write` and
+    /// `exit_group`, which `assert_fail` may always make; for a program whose spec allows
+    /// threads, `clone` with exactly [`Self::CLONE_FLAGS`], `futex` and the thread's own `exit`;
+    /// and what the launcher needs between confining itself and becoming the program
+    /// (`rt_sigprocmask`, `rt_sigaction`, `execve`).
     #[must_use]
-    pub fn allowed_syscalls(self, spec: &[Syscall]) -> Vec<i64> {
-        let launch: &[i64] = match self {
-            Self::LinuxX86_64 => &[14, 13, 59],
+    pub fn allowed_syscalls(self, spec: &[Syscall], threads: bool) -> Vec<Allowed> {
+        let (launch, clone, futex): (&[i64], i64, i64) = match self {
+            Self::LinuxX86_64 => (&[14, 13, 59], 56, 202),
         };
-        let mut numbers: Vec<i64> = spec
+        let mut allowed: Vec<Allowed> = spec
             .iter()
-            .chain(&[Syscall::Write, Syscall::Exit])
-            .map(|syscall| self.syscall_number(*syscall))
-            .chain(launch.iter().copied())
+            .chain(&[Syscall::Write, Syscall::ExitGroup])
+            .chain(if threads { &[Syscall::Exit][..] } else { &[] })
+            .map(|syscall| Allowed::any(self.syscall_number(*syscall)))
+            .chain(launch.iter().copied().map(Allowed::any))
             .collect();
-        numbers.sort_unstable();
-        numbers.dedup();
-        numbers
+        if threads {
+            allowed.push(Allowed {
+                number: clone,
+                first_argument: Some(Self::CLONE_FLAGS),
+            });
+            allowed.push(Allowed::any(futex));
+        }
+        allowed.sort_unstable();
+        allowed.dedup();
+        allowed
+    }
+}
+
+/// A system call the kernel lets a program make, by number, and the only first argument it may
+/// pass, if just one is allowed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Allowed {
+    /// The system call's number.
+    pub number: i64,
+    /// The one first argument allowed, if any.
+    pub first_argument: Option<u64>,
+}
+
+impl Allowed {
+    /// The system call with any arguments.
+    #[must_use]
+    pub fn any(number: i64) -> Self {
+        Self {
+            number,
+            first_argument: None,
+        }
     }
 }
 
@@ -188,6 +224,8 @@ pub struct Machine {
     pub arch: &'static str,
     /// Human-readable CPU model, when the OS reports one.
     pub cpu_model: Option<String>,
+    /// How many threads can run at once: the cores this process may use.
+    pub cores: usize,
     /// Detected CPU extensions.
     pub features: CpuFeatures,
     /// The matching profile, or `None` when this platform isn't supported yet.
@@ -204,6 +242,7 @@ impl Machine {
             os,
             arch,
             cpu_model: cpu_model(),
+            cores: std::thread::available_parallelism().map_or(1, std::num::NonZero::get),
             features: cpu_features(),
             profile: Profile::for_target(os, arch),
         }

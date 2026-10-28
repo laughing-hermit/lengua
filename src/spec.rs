@@ -30,6 +30,8 @@ pub struct Spec {
     pub behaviors: Vec<Behavior>,
     /// System calls the program may use, in the order the spec lists them.
     pub syscalls: Vec<Syscall>,
+    /// How many threads the program may run at once, when the spec allows more than one.
+    pub threads: Option<u32>,
     /// The backtick values in `# Purpose`, in order of first appearance: the ranges of the
     /// program's inputs, which generated tests draw from.
     pub purpose_values: Vec<String>,
@@ -134,6 +136,9 @@ impl fmt::Display for BehaviorId {
         write!(f, "B{}", self.0)
     }
 }
+
+/// The most threads a spec may allow: each needs its own stack.
+pub const MAX_THREADS: u32 = 64;
 
 /// A system call a spec may allow. Programs can't use any other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -348,6 +353,7 @@ struct Parser {
     titles: Vec<(String, BehaviorId)>,
     behaviors: Vec<Behavior>,
     syscalls: Option<Vec<Syscall>>,
+    threads: Option<u32>,
     /// Whether `# Purpose` holds any text.
     purpose_written: bool,
     purpose_values: Vec<String>,
@@ -365,6 +371,7 @@ impl Default for Parser {
             titles: Vec::new(),
             behaviors: Vec::new(),
             syscalls: None,
+            threads: None,
             purpose_written: false,
             purpose_values: Vec::new(),
         }
@@ -769,6 +776,10 @@ impl Parser {
             return;
         };
         let item = item.trim();
+        if let Some(rest) = strip_prefix_ignore_case(item, "threads:") {
+            self.threads_line(number, rest);
+            return;
+        }
         let Some(rest) = strip_prefix_ignore_case(item, "allowed system calls:") else {
             return;
         };
@@ -789,12 +800,17 @@ impl Parser {
             match Syscall::from_name(name) {
                 Some(syscall) if !syscalls.contains(&syscall) => syscalls.push(syscall),
                 Some(_) => {}
+                None if matches!(name, "clone" | "clone3" | "futex") => self.problem(
+                    Some(number),
+                    "threads aren't a system call to allow: write `- Threads: up to N` instead, \
+                     and the program starts them with parallel_for",
+                ),
                 None if FORBIDDEN_SYSCALLS.contains(&name) => self.problem(
                     Some(number),
                     format!(
                         "`{name}` isn't allowed: lengua programs can't allocate memory, start \
-                         processes or threads, handle signals, use the network or change the \
-                         file system. Allowed: {allowed}"
+                         processes, handle signals, use the network or change the file system. \
+                         Allowed: {allowed}"
                     ),
                 ),
                 None => self.problem(
@@ -810,6 +826,33 @@ impl Parser {
             );
         }
         self.syscalls = Some(syscalls);
+    }
+
+    /// `- Threads: up to 16`: how many threads the program may run at once.
+    fn threads_line(&mut self, number: usize, rest: &str) {
+        let rest = rest.trim().trim_end_matches('.');
+        let count = strip_prefix_ignore_case(rest, "up to")
+            .unwrap_or(rest)
+            .trim()
+            .trim_matches('`');
+        let count = count
+            .parse::<u32>()
+            .ok()
+            .filter(|count| (2..=MAX_THREADS).contains(count));
+        match (count, self.threads) {
+            (_, Some(_)) => self.problem(
+                Some(number),
+                "the threads are given twice; keep one `- Threads: up to N` line",
+            ),
+            (Some(count), None) => self.threads = Some(count),
+            (None, None) => self.problem(
+                Some(number),
+                format!(
+                    "write the threads as `- Threads: up to N`, with N from 2 to {MAX_THREADS}, \
+                     such as `- Threads: up to 16`"
+                ),
+            ),
+        }
     }
 
     fn finish(mut self, header: Option<(String, Option<String>)>) -> Result<Spec, Vec<Problem>> {
@@ -849,6 +892,7 @@ impl Parser {
                 description,
                 behaviors: self.behaviors,
                 syscalls,
+                threads: self.threads,
                 purpose_values: self.purpose_values,
             }),
             _ => Err(self.into_problems()),
@@ -1027,6 +1071,39 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
         assert_eq!(
             spec.behavior(id).map(|b| b.title.as_str()),
             Some("Missing arguments")
+        );
+    }
+
+    #[test]
+    fn threads_are_allowed_in_plain_words() {
+        assert_eq!(parse(ADD).expect("valid spec").threads, None);
+        let with = |line: &str| {
+            ADD.replace(
+                "- Allowed system calls: read, write, exit\n",
+                &format!("- Allowed system calls: read, write, exit\n{line}\n"),
+            )
+        };
+        for line in [
+            "- Threads: up to 16",
+            "- Threads: 16",
+            "- threads: up to `16`.",
+        ] {
+            assert_eq!(
+                parse(&with(line)).expect("valid").threads,
+                Some(16),
+                "{line}"
+            );
+        }
+        assert_problem(&with("- Threads: up to 1"), "with N from 2 to 64");
+        assert_problem(&with("- Threads: up to 65"), "with N from 2 to 64");
+        assert_problem(&with("- Threads: many"), "with N from 2 to 64");
+        assert_problem(
+            &with("- Threads: up to 4\n- Threads: up to 8"),
+            "the threads are given twice",
+        );
+        assert_problem(
+            &ADD.replace("read, write, exit", "read, write, clone, exit"),
+            "threads aren't a system call to allow",
         );
     }
 

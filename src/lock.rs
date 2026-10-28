@@ -60,6 +60,9 @@ pub struct SpecStamp {
 pub struct TestsStamp {
     /// SHA-256 of tests.toml.
     pub sha256: Sha256Hex,
+    /// Whether code has run against them, which freezes them until the spec changes. Until
+    /// then, a fixed tests.toml can be checked again.
+    pub frozen: bool,
 }
 
 /// The checked code.
@@ -144,7 +147,11 @@ impl Lock {
             toml_string(&self.spec.approval)
         );
         if let Some(tests) = &self.tests {
-            let _ = write!(text, "\n[tests]\nsha256 = \"{}\"\n", tests.sha256);
+            let _ = write!(
+                text,
+                "\n[tests]\nsha256 = \"{}\"\nfrozen = {}\n",
+                tests.sha256, tests.frozen
+            );
         }
         if let Some(code) = &self.code {
             let _ = write!(
@@ -195,6 +202,8 @@ struct SpecTable {
 #[serde(deny_unknown_fields)]
 struct TestsTable {
     sha256: String,
+    /// Locks written before tests could be fixed until code first ran treat them as frozen.
+    frozen: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -230,7 +239,12 @@ fn parse_body(body: &str) -> Result<Lock, LockError> {
         },
         tests: file
             .tests
-            .map(|tests| digest(&tests.sha256).map(|sha256| TestsStamp { sha256 }))
+            .map(|tests| {
+                digest(&tests.sha256).map(|sha256| TestsStamp {
+                    sha256,
+                    frozen: tests.frozen.unwrap_or(true),
+                })
+            })
             .transpose()?,
         code: file
             .code
@@ -537,6 +551,7 @@ mod tests {
             },
             tests: Some(TestsStamp {
                 sha256: Sha256Hex::of(b"tests"),
+                frozen: true,
             }),
             code: Some(CodeStamp {
                 sha256: Sha256Hex::of(b"code"),

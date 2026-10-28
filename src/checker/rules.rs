@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use iced_x86::{FlowControl, InstructionInfoFactory, OpAccess, OpKind, Register};
 
 use super::cfg::{
-    ASSERT_FAIL, CALLEE_SAVED, Exit, Flow, rax_value_before, reads, run_start, writes,
+    ASSERT_FAIL, CALLEE_SAVED, Exit, Flow, deepest, rax_value_before, reads, run_start, writes,
 };
 use super::decode::{MappedFunction, Program, mnemonic};
 use super::source::{Operand, Source};
@@ -85,7 +85,11 @@ pub fn check(
         checker.size_and_returns(function, flow);
         checker.callee_saved(function, flow);
         checker.red_zone(function);
-        checker.syscalls(function, flow, syscalls, profile);
+        // The thread code's clone and futex calls aren't the spec's to list: the spec allows
+        // threads instead, and the code is checked word for word against the template.
+        if !super::threads::FUNCTIONS.contains(&function.name()) {
+            checker.syscalls(function, flow, syscalls, profile);
+        }
         checker.exit_statuses(function, flow);
         checker.results(function, flow);
         checker.indexes(function, flow);
@@ -1075,42 +1079,6 @@ impl Checker<'_, '_> {
 
     /// The deepest stack over every call path from `_start`.
     fn max_stack(&self) -> u64 {
-        fn deepest(
-            name: &str,
-            program: &Program<'_>,
-            flows: &BTreeMap<String, Flow>,
-            memo: &mut BTreeMap<String, i64>,
-            visiting: &mut BTreeSet<String>,
-        ) -> i64 {
-            if let Some(known) = memo.get(name) {
-                return *known;
-            }
-            let (Some(function), Some(flow)) = (program.function(name), flows.get(name)) else {
-                return 0;
-            };
-            if !visiting.insert(name.to_owned()) {
-                return 0;
-            }
-            let mut most = flow.max_depth;
-            for (index, exit) in flow.exits.iter().enumerate() {
-                if let Exit::Call { callee } = exit {
-                    let at_call = flow.depth[index].unwrap_or(0);
-                    most = most.max(at_call + deepest(callee, program, flows, memo, visiting));
-                }
-            }
-            let _ = function;
-            visiting.remove(name);
-            memo.insert(name.to_owned(), most);
-            most
-        }
-        let mut memo = BTreeMap::new();
-        let depth = deepest(
-            "_start",
-            self.program,
-            self.flows,
-            &mut memo,
-            &mut BTreeSet::new(),
-        );
-        u64::try_from(depth).unwrap_or(0)
+        u64::try_from(deepest("_start", self.program, self.flows)).unwrap_or(0)
     }
 }

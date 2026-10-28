@@ -58,7 +58,8 @@ Change `main.s` and call `check_code` again: the tests must stay green, and the 
 CPU time should drop. Every measure varies a little between runs, so compare medians. Starting and
 ending a process costs about 100 microseconds whatever the program does, so speed work shows on
 large inputs: compare cycles on the tests with the longest input (generated tests try the longest
-text first).
+text first). For a program with threads, the measures cover every thread, and `wall_time_us`
+says how long it took on the clock.
 
 The biggest win on text and arrays is usually vector instructions: one `pcmpeqb` compares 16
 bytes, and AVX2 and AVX-512 do 32 and 64. [The vector template](assets/vector-template.s) (with
@@ -68,6 +69,13 @@ AVX-512 only when `status` lists them, and keep every vector access inside its b
 "Vectors" in [the rules](references/power-of-10.md). For floating point, packed instructions do 2
 to 8 doubles at once, or 4 to 16 singles, as long as each element's steps stay in the formula's
 order.
+
+When the spec allows threads (`- Threads: up to N`), split heavy work across cores with
+`parallel_for`: [the parallel template](assets/parallel-template.s) (with
+[its spec](assets/parallel-template-spec.md) and [tests](assets/parallel-template-tests.toml))
+capitalizes up to a megabyte on 16 threads, each worker filling its own slot. Copy its thread code
+word for word, follow "Threads" in [the rules](references/power-of-10.md), and compare
+`wall_time_us`, the time on the clock, which threads shorten.
 
 ## The rules in brief
 

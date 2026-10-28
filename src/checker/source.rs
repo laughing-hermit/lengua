@@ -1285,6 +1285,24 @@ impl Parser {
     }
 
     fn data_directive(&mut self, number: usize, name: &str, arguments: &str, code: &str) {
+        // `.balign N` between `.type name, @object` and `name:` aligns where the symbol starts;
+        // the padding before it belongs to no symbol and is never read.
+        if self.data.is_none()
+            && name == ".balign"
+            && matches!(self.pending_type, Some((_, false, _)))
+        {
+            if !matches!(
+                evaluate(arguments, &self.source.constants),
+                Ok(1 | 2 | 4 | 8 | 16 | 32 | 64)
+            ) {
+                self.dialect(
+                    number,
+                    ".balign takes 1, 2, 4, 8, 16, 32 or 64",
+                    "align data to a power of two",
+                );
+            }
+            return;
+        }
         let Some(data) = self.data.as_mut() else {
             self.dialect(
                 number,

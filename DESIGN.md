@@ -43,7 +43,7 @@ titles); the write-spec skill teaches the style.
 | What changed | Result |
 |---|---|
 | `spec.md` | Tests and code are stale; re-approve, then re-check tests and code |
-| `tests.toml` only | Refused: tests are frozen until the spec changes (the stamped copy can be restored) |
+| `tests.toml` only | Before code has run against the tests: checked again. After: refused, frozen until the spec changes (the stamped copy can be restored) |
 | `main.s` only | Re-run `check_code`; if everything passes, the new code is stamped |
 | nothing | `run` works |
 
@@ -104,7 +104,9 @@ read back into variable values and every formula must reproduce it. A dry run ev
 run's expected results, so overflow and division by zero are caught before any code exists, and
 output with placeholders must vary, so a program that prints a constant can't pass. Several
 generated blocks may cover one behavior (divisors on both sides of zero, for example) when they
-share their templates. Checked tests are frozen until the spec changes: the lock records them and
+share their templates. Checked tests freeze when code first runs against them (until then a
+mistake can be fixed and checked again), and stay frozen until the spec changes: the lock records
+them and
 the server keeps a copy that restores them.
 
 The examples in the skills are checked by the test suite against lengua's own checks, so the
@@ -114,7 +116,9 @@ documentation can't drift from the checker.
 
 Tests and `run` start a program the same way: through the server's own binary in launcher mode,
 which waits until the server has attached a CPU performance counter that turns on at `exec`, then
-replaces itself with the program (no `unsafe` code needed). The program gets its stdin up front
+replaces itself with the program (no `unsafe` code needed). The counters follow every thread the
+program starts, and the runner also measures time on the clock, which is what threads shorten.
+The program gets its stdin up front
 and then the end of input, an empty environment, a working folder of its own (a fresh temporary
 one, or for `run` a folder of the user's files), a time limit (2 s per test, 10 s for `run`) and
 8 MiB of output, and it's killed past either.
@@ -220,17 +224,21 @@ Rust share: everything a program may touch must be something the checker can acc
 | Need | C and C++ | Rust | lengua |
 |---|---|---|---|
 | Memory | `malloc`/`free`, `new`/`delete`: leaks, double frees, use after free | Ownership frees memory automatically; arenas without the standard library | Reserved up front: static buffers sized from the spec's limits, plus the stack. Nothing is allocated or freed while running (rule 3), and `.bss` costs nothing until touched |
-| Threads | pthreads: any thread may write anything, and data races are undefined behavior | `Send`/`Sync`, scoped threads and rayon: no data races, checked at compile time | Next, as dialect 3: fork-join only. A canonical `parallel_for` (copied word for word, like `assert_fail`) starts workers on static stacks and waits for them all. Each worker owns one disjoint slice of the data (JPL: one owner per shared object, passed on explicitly). No locks, atomics or shared mutation, so results stay deterministic and testable |
+| Threads | pthreads: any thread may write anything, and data races are undefined behavior | `Send`/`Sync`, scoped threads and rayon: no data races, checked at compile time | Fork-join only, when the spec allows threads. A canonical `parallel_for` (copied word for word, like `assert_fail`) starts workers with `clone` on static stacks and waits on `futex` for them all. Each worker owns its stack and one output slot, like Rust's `chunks_mut`: the checker proves it writes nothing else (JPL: one owner per shared object). No locks, atomics or shared mutation, so results stay deterministic and testable |
 | System access | Any system call | The standard library, within the OS's permissions | Capabilities: the spec lists the system calls the person approves, and the kernel enforces the list (seccomp) and keeps files inside the program's working folder (Landlock) |
 | Network, clock, random | Sockets, `time()`, `rand()` | `std::net`, `Instant`, `rand` | Later, as approved capabilities, once tests can describe outputs by rules (a loopback server, ranges, patterns) instead of exact text |
 
-Until dialect 3, a program runs as one thread; vector instructions make that thread fast.
+A worker gets its index and its slot. It and every function it calls write only their own stack
+frames and the slot, which it keeps in `rbx`, inside bounds checks; they make no system calls; and
+each thread's stack is sized from the worker's deepest call path. Combining `results` in index
+order makes reductions deterministic, and laying the slots end to end makes a map's output one
+`write`. The kernel allows `clone` only with `parallel_for`'s flags, and `assert_fail` ends every
+thread with `exit_group`, so a failed check anywhere stops the whole program.
 
 Roadmap, in order:
-1. fork-join threads;
-2. the proof step;
-3. network, clock and random capabilities;
-4. the other platforms, toward the top 5–6 CPU and OS targets.
+1. the proof step;
+2. network, clock and random capabilities;
+3. the other platforms, toward the top 5–6 CPU and OS targets.
 
 ## Platforms
 
@@ -288,11 +296,11 @@ Dialect 2 followed:
   the test language;
 - inputs up to 1 MiB;
 - every value tried when a range is small;
-- files in tests, and the kernel confining every run to what the spec approves.
+- files in tests, and the kernel confining every run to what the spec approves;
+- fork-join threads, with each worker proven to write only its own stack and slot.
 
 All of it is proven on this machine (x86-64 Linux). The long-term goal is the top 5 or 6 CPU and
 OS targets, through LLVM and one profile per target. Next, in order:
-1. fork-join threads;
-2. the proof step;
-3. network, clock and random capabilities;
-4. the other targets.
+1. the proof step;
+2. network, clock and random capabilities;
+3. the other targets.

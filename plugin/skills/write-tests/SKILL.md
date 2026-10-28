@@ -1,6 +1,6 @@
 ---
 name: write-tests
-description: Writes a lengua program's tests.toml from its approved spec.md, with one example per behavior holding the spec's own values plus generated tests whose formulas compute the expected results for fresh random inputs on every run. Use after a spec is approved or changed, when the lengua status tool says to write tests.toml, or when check_tests reports problems. Ends with check_tests, which freezes the tests.
+description: Writes a lengua program's tests.toml from its approved spec.md, with one example per behavior holding the spec's own values plus generated tests whose formulas compute the expected results for fresh random inputs on every run. Use after a spec is approved or changed, when the lengua status tool says to write tests.toml, or when check_tests reports problems. Ends with check_tests, which records the tests; they freeze when code first runs against them.
 license: Apache-2.0
 compatibility: Needs the lengua MCP server from the lengua plugin.
 ---
@@ -64,8 +64,19 @@ the tests come before the code, and they decide whether the code is right.
 - **Formulas agree with the spec.** Given the example's inputs, they must produce the example's
   results. They must never overflow or divide by zero for inputs in range, and the output must
   change with the inputs.
-- **Tests freeze when they pass.** After `check_tests` passes, `tests.toml` can't change until the
-  spec does. To change a test, change the spec and get it approved again.
+- **One formula per output.** Compute text output from the whole input with the functions, such
+  as `{upper(text)}` or `{tr(text, "A-Za-z", "N-ZA-Mn-za-m")}`, not one variable per character.
+- **Joined text counts whole.** A template that adds text around a variable, such as `"{a}x"`
+  or `"{word} {rest}"`, gives the program more than the variable alone: keep the total inside
+  the spec's limits for behaviors about valid input.
+- **Lengths count characters.** `string(0, 1048576, "aé€")` can reach 3 MiB, since `é` takes 2
+  bytes and `€` 3, while specs and programs count bytes. Draw long text from 1-byte (ASCII)
+  characters, and test other characters in short strings.
+- **Tests freeze when code first runs against them.** Until `check_code` runs them, a mistake
+  can be fixed in `tests.toml` and checked again. After that, they can't change to fit the code.
+  If a frozen test turns out to be wrong, fix `tests.toml`, tell the user in a line or two what
+  was wrong, and ask them to approve `spec.md` again (it didn't change): their approval reopens
+  the tests. Don't change the spec just to unfreeze them.
 
 ## Example
 

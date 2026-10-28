@@ -12,9 +12,8 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 
 > Status: dialect 2 on Linux x86-64. It covers whole numbers, exact decimals, floating point in
 > double and single precision with fused multiply-add, vectors from SSE2 to AVX-512, hashing and
-> checksums, files, and inputs up to 1 MiB. The kernel holds every run to what its spec approves.
-> Next:
-> - fork-join threads;
+> checksums, files, fork-join threads, and inputs up to 1 MiB. The kernel holds every run to what
+> its spec approves. Next:
 > - proofs with an SMT solver;
 > - more of the top CPU and OS targets, which LLVM already supports.
 

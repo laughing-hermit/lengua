@@ -32,9 +32,9 @@ use crate::toolchain::Toolchain;
 pub const INSTRUCTIONS: &str = "lengua builds programs as folders holding spec.md (the source \
 of truth), tests.toml, main.s and lengua.lock. Order: spec, then tests, then code. Only the user \
 approves spec.md: when they say so, pass their words to approve_spec. Never edit lengua.lock. \
-Tests stay frozen until the spec changes. Run programs only with the run tool. Pass absolute \
-folder paths. When unsure, call status and follow its next step; the write-spec, write-tests and \
-write-assembly skills explain each file.";
+Tests freeze once code runs, until the spec changes. Run programs only with the run tool. Pass \
+absolute folder paths. When unsure, call status and follow its next step; the write-spec, \
+write-tests and write-assembly skills explain each file.";
 
 /// The longest approval the lock records: the user's words, not a whole conversation.
 const MAX_APPROVAL_CHARS: usize = 500;
@@ -117,6 +117,8 @@ pub struct MachineReport {
     pub arch: String,
     /// CPU model, when the OS reports one.
     pub cpu_model: Option<String>,
+    /// How many threads can run at once; a spec allows at most this many.
+    pub cores: usize,
     /// CPU extensions the optimize step may use.
     pub features: CpuFeatures,
     /// The platform profile, e.g. `linux-x86_64`, or null when unsupported.
@@ -221,7 +223,7 @@ pub struct ApprovalReport {
 /// What `check_tests` reports.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct TestsReport {
-    /// Whether tests.toml is checked and frozen now.
+    /// Whether tests.toml is checked and recorded now.
     pub checked: bool,
     /// SHA-256 of the checked tests.toml.
     pub tests_sha256: String,
@@ -305,8 +307,10 @@ pub struct RunReport {
     pub instructions: Option<u64>,
     /// CPU cycles in the program's own code, when available.
     pub cycles: Option<u64>,
-    /// CPU time in microseconds, including system calls, when available.
+    /// CPU time in microseconds over all its threads, including system calls, when available.
     pub cpu_time_us: Option<u64>,
+    /// Time on the clock in microseconds, from start to end.
+    pub wall_time_us: u64,
     /// The fingerprint of the spec, tests and code that ran.
     pub fingerprint: String,
 }
@@ -350,6 +354,7 @@ impl LenguaServer {
                 os: machine.os.to_owned(),
                 arch: machine.arch.to_owned(),
                 cpu_model: machine.cpu_model.clone(),
+                cores: machine.cores,
                 features: machine.features,
                 profile: machine.profile.map(|profile| profile.name().to_owned()),
                 supported: machine.profile.is_some(),
@@ -369,8 +374,9 @@ impl LenguaServer {
             after the user has read the spec and told you, in their own words, that they approve \
             it, and pass those words as approval; never on your own. It first checks the spec's \
             format and returns any problems. Approving a changed spec resets the tests and code \
-            checks. path: absolute path of the program folder or of its spec.md; approval: the \
-            user's words, quoted exactly.",
+            checks; approving the same spec again after fixing frozen tests reopens them. path: \
+            absolute path of the program folder or of its spec.md; approval: the user's words, \
+            quoted exactly.",
         annotations(
             title = "Approve spec",
             read_only_hint = false,
@@ -403,11 +409,38 @@ impl LenguaServer {
         let spec = spec::parse(&text).map_err(|problems| spec_problems(&folder, &problems))?;
         let current = Sha256Hex::of(text.as_bytes());
         let key = Key::load_or_create(&self.data_dir).map_err(|error| error.to_string())?;
-        let (approval, message) = match lock::read(folder.path(), Some(&key)) {
-            Ok(Some(lock)) if lock.spec.sha256 == current => (
+        let lock = lock::read(folder.path(), Some(&key));
+        // Approving the same spec again reopens frozen tests that were found wrong and edited.
+        let reopens = match &lock {
+            Ok(Some(lock)) if lock.spec.sha256 == current => {
+                lock.tests.as_ref().is_some_and(|stamp| {
+                    stamp.frozen
+                        && std::fs::read(folder.file(TESTS_FILE))
+                            .is_ok_and(|tests| Sha256Hex::of(&tests) != stamp.sha256)
+                })
+            }
+            _ => false,
+        };
+        let (approval, message) = match lock {
+            Ok(Some(lock)) if lock.spec.sha256 == current && !reopens => (
                 lock.spec.approval,
                 format!("{SPEC_FILE} was already approved; nothing changed."),
             ),
+            _ if reopens => {
+                lock::write(
+                    folder.path(),
+                    &Lock::approved(current.clone(), approval.to_owned()),
+                    &key,
+                )
+                .map_err(|error| format!("couldn't write {folder}/{}: {error}", lock::LOCK_FILE))?;
+                (
+                    approval.to_owned(),
+                    format!(
+                        "The user approved {SPEC_FILE} again, which reopens its tests: the fixed \
+                         {TESTS_FILE} and then the code are checked again."
+                    ),
+                )
+            }
             _ => {
                 lock::write(
                     folder.path(),
@@ -437,8 +470,9 @@ impl LenguaServer {
     #[tool(
         name = "check_tests",
         title = "Check tests",
-        description = "Checks <path>/tests.toml against the approved spec, then freezes it: \
-            lengua.lock records it, and it can't change until the spec does. It checks the [meta] \
+        description = "Checks <path>/tests.toml against the approved spec and records it in \
+            lengua.lock. Until check_code first runs it, a fixed tests.toml can be checked again; \
+            from then on it's frozen until the spec changes. It checks the [meta] \
             spec label, one example per behavior holding the spec's values, a [[generated]] block \
             for every behavior with inputs, generator ranges taken from the spec's Purpose, \
             formulas that reproduce each example without overflow or division by zero, and \
@@ -487,8 +521,9 @@ impl LenguaServer {
             self.stamp_tests(&folder, &spec_hash, &tests_hash, &tests_text)
                 .await?;
             format!(
-                "{TESTS_FILE} covers every behavior in {SPEC_FILE} and is now frozen: it can't \
-                 change until {SPEC_FILE} does. No code has run yet."
+                "{TESTS_FILE} covers every behavior in {SPEC_FILE}. No code has run yet: until \
+                 check_code first runs it, a mistake in it can still be fixed and checked again. \
+                 From then on it's frozen until {SPEC_FILE} changes."
             )
         };
         Ok(Json(TestsReport {
@@ -572,6 +607,7 @@ impl LenguaServer {
             &built.bytes,
             checker::Context {
                 syscalls: &spec.syscalls,
+                threads: spec.threads,
                 features: machine.features,
                 profile,
             },
@@ -592,7 +628,8 @@ impl LenguaServer {
                     .map(|text| (block.id.to_string(), text))
             })
             .collect();
-        let syscalls = profile.allowed_syscalls(&spec.syscalls);
+        self.freeze_tests(&folder, &tests_hash).await?;
+        let syscalls = profile.allowed_syscalls(&spec.syscalls, spec.threads.is_some());
         let outcome = testrun::run_tests(
             &suite,
             &self.launcher,
@@ -709,7 +746,7 @@ impl LenguaServer {
             max_file_size: None,
             ..Limits::default()
         };
-        let syscalls = profile.allowed_syscalls(&spec.syscalls);
+        let syscalls = profile.allowed_syscalls(&spec.syscalls, spec.threads.is_some());
         let job = Job {
             folder: workspace.as_deref(),
             ..Job::new(
@@ -734,6 +771,7 @@ impl LenguaServer {
             instructions: result.instructions,
             cycles: result.cycles,
             cpu_time_us: result.cpu_time_ns.map(|nanoseconds| nanoseconds / 1000),
+            wall_time_us: result.wall_time_ns / 1000,
             fingerprint: fingerprint.to_string(),
         }))
     }
@@ -802,12 +840,44 @@ impl LenguaServer {
         let lock = Lock {
             tests: Some(TestsStamp {
                 sha256: tests.clone(),
+                frozen: false,
             }),
             code: None,
             ..lock
         };
         lock::write(folder.path(), &lock, &key)
             .map_err(|error| format!("couldn't write {folder}/{}: {error}", lock::LOCK_FILE))
+    }
+
+    /// Freezes the checked tests before code first runs against them, so they can't be changed
+    /// to fit the code; they stay frozen until the spec changes.
+    async fn freeze_tests(&self, folder: &ProgramFolder, tests: &Sha256Hex) -> Result<(), String> {
+        let _writing = self.lock_writes.lock().await;
+        let key = Key::load(&self.data_dir)
+            .map_err(|error| error.to_string())?
+            .ok_or("lengua's signing key is missing; call status")?;
+        let lock = lock::read(folder.path(), Some(&key))
+            .map_err(|error| format!("lengua.lock can't be trusted: {error}"))?
+            .ok_or("lengua.lock is missing; call status")?;
+        match &lock.tests {
+            Some(stamp) if stamp.sha256 == *tests && !stamp.frozen => {
+                let lock = Lock {
+                    tests: Some(TestsStamp {
+                        sha256: tests.clone(),
+                        frozen: true,
+                    }),
+                    ..lock
+                };
+                lock::write(folder.path(), &lock, &key).map_err(|error| {
+                    format!("couldn't write {folder}/{}: {error}", lock::LOCK_FILE)
+                })
+            }
+            Some(stamp) if stamp.sha256 == *tests => Ok(()),
+            _ => Err(format!(
+                "{TESTS_FILE} changed while the code was being checked; call check_tests, then \
+                 check_code again."
+            )),
+        }
     }
 
     /// Records checked code in the lock, provided spec, tests and code didn't change while being

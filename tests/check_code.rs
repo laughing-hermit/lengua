@@ -417,3 +417,78 @@ async fn the_file_example_reads_and_writes_files() {
     assert!(error.contains("folder must be an absolute path"), "{error}");
     session.service.cancel().await.expect("close the session");
 }
+
+#[tokio::test]
+async fn the_parallel_template_runs_on_several_cores() {
+    let session = session().await;
+    let program = Program::new();
+    program.write("spec.md", &asset("parallel-template-spec.md"));
+    session.approve(&program).await;
+    program.write("tests.toml", &asset("parallel-template-tests.toml"));
+    let tests = session.call_ok("check_tests", program.arguments()).await;
+    assert_eq!(tests["checked"], true, "{tests}");
+    program.write("main.s", &asset("parallel-template.s"));
+    let report = session.call_ok("check_code", program.arguments()).await;
+    assert_eq!(report["stamped"], true, "{report}");
+    let costs = report["performance"].as_array().expect("performance");
+    assert!(
+        costs
+            .iter()
+            .all(|cost| cost["wall_time_us"]["median"].is_u64()),
+        "{report}"
+    );
+    // A megabyte comes back capitalized: sixteen threads each did their part.
+    let text: String = "Hello, threads! ".repeat(65536);
+    let mut arguments = program.arguments();
+    arguments["stdin"] = serde_json::json!(text);
+    let run = session.call_ok("run", arguments).await;
+    assert_eq!(run["exit_code"], 0, "{run}");
+    assert_eq!(run["stdout"], text.to_ascii_uppercase());
+    session.service.cancel().await.expect("close the session");
+}
+
+#[tokio::test]
+async fn tests_freeze_when_code_first_runs_against_them() {
+    let session = session().await;
+    let program = checked_template(&session).await;
+    program.write("main.s", &asset("main-template.s"));
+    let report = session.call_ok("check_code", program.arguments()).await;
+    assert_eq!(report["stamped"], true, "{report}");
+    let tests = asset("template-tests.toml");
+    let stored = session
+        .data_dir
+        .path()
+        .join("stamped")
+        .join(lengua::hash::Sha256Hex::of(tests.as_bytes()).to_string());
+
+    // Code has run against the tests, so they can't change to fit it: only restored.
+    program.write("tests.toml", &tests.replace("runs = 200", "runs = 10"));
+    let status = session.call_ok("status", program.arguments()).await;
+    assert_eq!(status["program"]["state"], "tests_changed", "{status}");
+    let error = session.call_error("check_tests", program.arguments()).await;
+    assert!(error.contains("tests stay frozen"), "{error}");
+    assert!(error.contains(&stored.display().to_string()), "{error}");
+    std::fs::copy(&stored, program.file("tests.toml")).expect("restore the tests");
+    let status = session.call_ok("status", program.arguments()).await;
+    assert_eq!(status["program"]["state"], "ready", "{status}");
+
+    // When the tests were wrong, the user's approval of the same spec reopens them.
+    program.write("tests.toml", &tests.replace("runs = 200", "runs = 150"));
+    let approval = session
+        .call_ok(
+            "approve_spec",
+            program.approval("I approve it again, fix the tests"),
+        )
+        .await;
+    assert!(
+        approval["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("reopens its tests")),
+        "{approval}"
+    );
+    let report = session.call_ok("check_tests", program.arguments()).await;
+    assert_eq!(report["checked"], true, "{report}");
+    let report = session.call_ok("check_code", program.arguments()).await;
+    assert_eq!(report["stamped"], true, "{report}");
+    session.service.cancel().await.expect("close the session");
+}

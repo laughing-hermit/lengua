@@ -1,5 +1,5 @@
-//! Checking tests.toml: the checks, the freeze rule, and the stored copy that restores frozen
-//! tests.
+//! Checking tests.toml: the checks, fixing tests before code runs, and the stored copy that
+//! restores frozen tests.
 
 mod common;
 
@@ -35,7 +35,10 @@ async fn checks_and_freezes_valid_tests() {
         assert_eq!(report["examples"], 2, "{report}");
         assert_eq!(report["generated_blocks"], 1, "{report}");
         assert_eq!(report["generated_runs"], 200, "{report}");
-        assert!(text(&report["message"]).contains("now frozen"), "{report}");
+        assert!(
+            text(&report["message"]).contains("can still be fixed and checked again"),
+            "{report}"
+        );
         assert!(
             text(&report["next_step"]).contains(&format!("# lengua: spec {}", label(ADD_SPEC))),
             "{report}"
@@ -67,25 +70,19 @@ async fn checks_and_freezes_valid_tests() {
 }
 
 #[tokio::test]
-async fn frozen_tests_can_only_be_restored() {
+async fn tests_can_be_fixed_until_code_runs() {
     let session = Session::start(Protocol::Discover).await;
     let program = approved_program(&session).await;
     let tests = add_tests(ADD_SPEC);
     program.write("tests.toml", &tests);
+    session.call_ok("check_tests", program.arguments()).await;
+
+    // No code has run against them yet, so a fix is simply checked again.
+    let fixed = tests.replace("runs = 200", "runs = 300");
+    program.write("tests.toml", &fixed);
+    assert_eq!(state(&session, &program).await, "tests_unchecked");
     let report = session.call_ok("check_tests", program.arguments()).await;
-    let stored = session
-        .data_dir
-        .path()
-        .join("stamped")
-        .join(text(&report["tests_sha256"]));
-
-    program.write("tests.toml", &tests.replace("runs = 200", "runs = 10"));
-    assert_eq!(state(&session, &program).await, "tests_changed");
-    let error = session.call_error("check_tests", program.arguments()).await;
-    assert!(error.contains("tests stay frozen"), "{error}");
-    assert!(error.contains(&stored.display().to_string()), "{error}");
-
-    std::fs::copy(&stored, program.file("tests.toml")).expect("restore the tests");
+    assert_eq!(report["generated_runs"], 300, "{report}");
     assert_eq!(state(&session, &program).await, "code_missing");
     session.service.cancel().await.expect("close the session");
 }

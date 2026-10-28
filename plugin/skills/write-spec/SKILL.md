@@ -90,8 +90,12 @@ of the same rule.
 - **System calls:** under `# Constraints`, write `- Allowed system calls: …` with only what the
   program needs, chosen from read, write, openat, close, lseek, exit and exit_group. `exit` is
   always needed, and files need openat and close. lengua programs can't allocate memory, start
-  processes or threads, handle signals or use the network. The kernel enforces this list when
-  the program runs, so it's a promise the user can rely on.
+  processes, handle signals or use the network. The kernel enforces this list when the program
+  runs, so it's a promise the user can rely on.
+- **Threads:** when the user wants a program that does heavy work on large inputs as fast as
+  possible, add `- Threads: up to N` under `# Constraints`, with N up to the machine's cores
+  (`status` reports them; at most 64). The program may then split its work across that many
+  cores. Behaviors don't change: the output is the same as on one thread.
 
 ## Example
 

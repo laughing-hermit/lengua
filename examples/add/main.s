@@ -288,7 +288,7 @@ write_all:
 
 # lengua's assertion handler. check_code compares it word for word: copy it exactly.
 # In: edi = the assertion's number, 1 to 999. Prints "lengua: assertion NNN failed" to
-# standard error and exits with code 134.
+# standard error and ends the program, every thread of it, with code 134.
 .type assert_fail, @function
 assert_fail:
     sub rsp, 40
@@ -321,7 +321,7 @@ assert_fail:
     mov rsi, rsp
     mov edx, 29
     syscall
-    mov eax, 60
+    mov eax, 231
     mov edi, 134
     syscall
 .size assert_fail, . - assert_fail

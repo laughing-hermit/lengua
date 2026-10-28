@@ -8,6 +8,15 @@ use crate::toolchain::Toolchain;
 const SYSCALLS: [Syscall; 2] = [Syscall::Write, Syscall::Exit];
 
 async fn check_with(text: &str, features: CpuFeatures) -> Report {
+    check_full(text, features, &SYSCALLS, None).await
+}
+
+async fn check_full(
+    text: &str,
+    features: CpuFeatures,
+    syscalls: &[Syscall],
+    threads: Option<u32>,
+) -> Report {
     let (source, layout) = check_layout(text);
     if !layout.passed() {
         return layout;
@@ -33,7 +42,8 @@ async fn check_with(text: &str, features: CpuFeatures) -> Report {
         &source,
         &bytes,
         Context {
-            syscalls: &SYSCALLS,
+            syscalls,
+            threads,
             features,
             profile: Profile::LinuxX86_64,
         },
@@ -216,6 +226,7 @@ async fn operands_must_mean_what_the_machine_does() {
         &bytes,
         Context {
             syscalls: &SYSCALLS,
+            threads: None,
             features: CpuFeatures::all(),
             profile: Profile::LinuxX86_64,
         },
@@ -789,5 +800,194 @@ async fn single_precision_and_fma_are_in_dialect_2() {
         Rule::Constants,
         line_of(&text, "    .float 1e1"),
         "`.float 1e1` isn't a plain decimal number",
+    );
+}
+
+/// What the parallel template's spec allows.
+const PARALLEL_SYSCALLS: [Syscall; 3] = [Syscall::Read, Syscall::Write, Syscall::Exit];
+
+async fn check_parallel(text: &str) -> Report {
+    check_full(text, CpuFeatures::all(), &PARALLEL_SYSCALLS, Some(16)).await
+}
+
+#[tokio::test]
+async fn the_parallel_template_passes_every_rule() {
+    let report = check_parallel(PARALLEL_TEMPLATE).await;
+    let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+    assert!(report.passed(), "{all:#?}");
+}
+
+#[tokio::test]
+async fn threads_need_the_spec_and_the_canonical_code() {
+    // Threads the spec doesn't allow.
+    let report = check_full(
+        PARALLEL_TEMPLATE,
+        CpuFeatures::all(),
+        &PARALLEL_SYSCALLS,
+        None,
+    )
+    .await;
+    assert_violation(
+        &report,
+        Rule::Resources,
+        line_of(PARALLEL_TEMPLATE, "parallel_for:"),
+        "spec.md doesn't allow threads",
+    );
+    // More threads than it allows.
+    let report = check_full(
+        PARALLEL_TEMPLATE,
+        CpuFeatures::all(),
+        &PARALLEL_SYSCALLS,
+        Some(8),
+    )
+    .await;
+    assert_violation(
+        &report,
+        Rule::Resources,
+        line_of(PARALLEL_TEMPLATE, ".equ THREADS, 16"),
+        "THREADS is 16, but the spec allows from 1 to 8 threads",
+    );
+    for (old, new, rule, needle, message) in [
+        (
+            "    mov ebx, 1\n    mov r13, THREADS\n.Lparallel_for_start:",
+            "    mov ebx, 2\n    mov r13, THREADS\n.Lparallel_for_start:",
+            Rule::Resources,
+            "parallel_for:",
+            "parallel_for differs from the template",
+        ),
+        (
+            ".equ CLONE_FLAGS, 0x350F00",
+            ".equ CLONE_FLAGS, 0x50F00",
+            Rule::Resources,
+            ".equ CLONE_FLAGS",
+            "CLONE_FLAGS must be 3477248",
+        ),
+        (
+            ".equ SLOT_SIZE, CHUNK",
+            ".equ SLOT_SIZE, CHUNK + 8",
+            Rule::Resources,
+            ".equ SLOT_SIZE",
+            "isn't a positive multiple of 64",
+        ),
+    ] {
+        let text = PARALLEL_TEMPLATE.replacen(old, new, 1);
+        assert_ne!(text, PARALLEL_TEMPLATE, "{old}");
+        let report = check_parallel(&text).await;
+        assert_violation(&report, rule, line_of(&text, needle), message);
+    }
+    // Each thread's stack must hold the worker's deepest path: here 128 bytes, in 64.
+    let text = PARALLEL_TEMPLATE
+        .replacen(".equ STACK_SIZE, 4096", ".equ STACK_SIZE, 64", 1)
+        .replacen(
+            "worker:\n    push rbx\n",
+            "worker:\n    push rbx\n    sub rsp, 64\n",
+            1,
+        )
+        .replacen(
+            ".Lworker_done:\n    mov rax, rdx\n    pop rbx\n",
+            ".Lworker_done:\n    mov rax, rdx\n    add rsp, 64\n    pop rbx\n",
+            1,
+        );
+    let report = check_parallel(&text).await;
+    assert_violation(
+        &report,
+        Rule::Resources,
+        line_of(&text, ".equ STACK_SIZE"),
+        "a worker's stack can reach 128 bytes, but STACK_SIZE is 64",
+    );
+}
+
+#[tokio::test]
+async fn workers_write_only_their_stack_and_their_slot() {
+    let loop_end = "    add rcx, VECTOR\n    add r9, VECTOR\n    dec r8\n    jnz .Lworker_loop\n";
+    for (old, new, rule, needle, message) in [
+        (
+            loop_end,
+            "    mov qword ptr [rip + input_size], rcx\n    add rcx, VECTOR\n    add r9, VECTOR\n    \
+             dec r8\n    jnz .Lworker_loop\n",
+            Rule::Scope,
+            "    mov qword ptr [rip + input_size], rcx",
+            "writes input_size on a worker thread",
+        ),
+        (
+            loop_end,
+            "    mov byte ptr [rsi], al\n    add rcx, VECTOR\n    add r9, VECTOR\n    dec r8\n    \
+             jnz .Lworker_loop\n",
+            Rule::Scope,
+            "    mov byte ptr [rsi], al",
+            "writes through rsi on a worker thread",
+        ),
+        (
+            "    cmp r9, SLOT_SIZE - VECTOR + 1\n",
+            "    cmp r9, SLOT_SIZE\n",
+            Rule::Scope,
+            "    movdqu xmmword ptr [rbx + r9], xmm0",
+            "outside the worker's slot",
+        ),
+        (
+            loop_end,
+            "    add rbx, VECTOR\n    add rcx, VECTOR\n    add r9, VECTOR\n    dec r8\n    \
+             jnz .Lworker_loop\n",
+            Rule::Scope,
+            "    add rbx, VECTOR",
+            "changes rbx, which holds the worker's slot",
+        ),
+        (
+            ".Lworker_done:\n    mov rax, rdx\n",
+            ".Lworker_done:\n    mov eax, SYS_WRITE\n    syscall\n    test rax, rax\n    \
+             js .Lworker_done_assert\n    mov rax, rdx\n",
+            Rule::Resources,
+            "    mov eax, SYS_WRITE\n    syscall\n    test rax, rax\n    js .Lworker_done_assert",
+            "makes a system call on a worker thread",
+        ),
+    ] {
+        let mut text = PARALLEL_TEMPLATE.replacen(old, new, 1);
+        assert_ne!(text, PARALLEL_TEMPLATE, "{old}");
+        if new.contains(".Lworker_done_assert") {
+            text = text.replacen(
+                ".Lworker_assert_index:\n",
+                ".Lworker_done_assert:\n    mov edi, 16\n    call assert_fail\n.Lworker_assert_index:\n",
+                1,
+            );
+        }
+        let report = check_parallel(&text).await;
+        let line = line_of(&text, needle.lines().next().unwrap_or(needle))
+            + usize::from(needle.contains("syscall"));
+        assert_violation(&report, rule, line, message);
+    }
+}
+
+#[tokio::test]
+async fn only_the_thread_code_starts_threads() {
+    // clone anywhere else is a system call the spec doesn't list.
+    let text = PARALLEL_TEMPLATE.replacen(
+        "_start:\n    call read_input\n",
+        "_start:\n    mov edi, CLONE_FLAGS\n    mov eax, SYS_CLONE\n    syscall\n    test rax, rax\n    \
+         js .Lstart_assert_length\n    call read_input\n",
+        1,
+    );
+    let report = check_parallel(&text).await;
+    assert_violation(
+        &report,
+        Rule::Resources,
+        line_of(
+            &text,
+            "    mov eax, SYS_CLONE\n    syscall\n    test rax, rax\n    js .Lstart",
+        ) + 1,
+        "system call 56 isn't one the spec allows",
+    );
+    // The main thread can't call a function that runs on worker threads.
+    let text = PARALLEL_TEMPLATE.replacen(
+        "    mov rdi, r12\n    call total_results\n",
+        "    mov rdi, r12\n    call total_results\n    xor edi, edi\n    lea rsi, [rip + slots]\n    \
+         call worker\n",
+        1,
+    );
+    let report = check_parallel(&text).await;
+    assert_violation(
+        &report,
+        Rule::Resources,
+        line_of(&text, "    call worker\n    cmp rax, rbx"),
+        "_start calls worker, which only the thread code may call",
     );
 }

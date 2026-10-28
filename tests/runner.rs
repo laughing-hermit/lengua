@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use lengua::platform::Profile;
+use lengua::platform::{Allowed, Profile};
 use lengua::runner::{End, Job, Limits, Run, run};
 use lengua::spec::Syscall;
 use lengua::toolchain::Toolchain;
@@ -19,14 +19,17 @@ fn args(list: &[&str]) -> Vec<String> {
 }
 
 /// The system calls of a spec that reads, writes and opens files.
-fn file_syscalls() -> Vec<i64> {
-    Profile::LinuxX86_64.allowed_syscalls(&[
-        Syscall::Read,
-        Syscall::Write,
-        Syscall::Openat,
-        Syscall::Close,
-        Syscall::Exit,
-    ])
+fn file_syscalls() -> Vec<Allowed> {
+    Profile::LinuxX86_64.allowed_syscalls(
+        &[
+            Syscall::Read,
+            Syscall::Write,
+            Syscall::Openat,
+            Syscall::Close,
+            Syscall::Exit,
+        ],
+        false,
+    )
 }
 
 /// Assembles and links `source` into `folder` and returns the executable.
@@ -65,7 +68,7 @@ async fn run_with(
     arguments: &[String],
     stdin: &[u8],
     files: &BTreeMap<String, String>,
-    syscalls: &[i64],
+    syscalls: &[Allowed],
     limits: Limits,
 ) -> Run {
     let job = Job {
@@ -343,4 +346,35 @@ async fn the_kernel_keeps_programs_inside_what_their_spec_allows() {
     let result = run_with(&grow, &[], b"", &BTreeMap::new(), &file_syscalls(), limits).await;
     assert_eq!(result.end, End::Signaled(25));
     assert!(result.end.describe(limits).contains("size limit"));
+}
+
+#[tokio::test]
+async fn threads_start_only_with_the_canonical_flags() {
+    let folder = tempfile::tempdir().expect("temporary folder");
+    // A fork, clone with SIGCHLD alone: a new process rather than a thread of this one.
+    let fork = build(
+        folder.path(),
+        "fork",
+        &program(
+            "    mov edi, 17\n    xor esi, esi\n    mov eax, 56\n    syscall\n    mov eax, 60\n    \
+             xor edi, edi\n    syscall",
+            "",
+        ),
+    )
+    .await;
+    let threaded = Profile::LinuxX86_64.allowed_syscalls(&[Syscall::Write, Syscall::Exit], true);
+    let result = run_with(
+        &fork,
+        &[],
+        b"",
+        &BTreeMap::new(),
+        &threaded,
+        Limits::default(),
+    )
+    .await;
+    assert_eq!(
+        result.end,
+        End::Signaled(31),
+        "only parallel_for's flags pass"
+    );
 }
