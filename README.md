@@ -1,15 +1,21 @@
 # lengua
 
-Spec-driven programming in checked assembly. An AI agent writes a plain-language spec for you to
-approve, then tests from it, then x86-64 assembly that must pass every test and an adapted NASA
-"Power of 10" rule set. A signed lock keeps spec, tests and code in sync, and a program only runs
-when all three match. See [DESIGN.md](DESIGN.md) for how and why.
+Natural language in, checked machine code out. lengua makes your AI agent the compiler: you
+describe a program in plain words, and there's no programming language in between. The agent
+writes a spec for you to approve, tests from the spec, and then the fastest x86-64 assembly it
+can. That assembly must pass every test and an adapted NASA "Power of 10" rule set, and lengua
+validates each step of the translation. A signed lock keeps spec, tests and code in sync, and a
+program runs only while all three match. See [DESIGN.md](DESIGN.md) for how and why.
 
 lengua is an [Agent Plugin](https://agent-plugins.org): three skills and an MCP server, using only
 open standards, so it works in Claude Code, Codex, Cursor and other agent harnesses.
 
-> Status: MVP plus dialect 2 (integer vector instructions, SSE2 to AVX-512), Linux x86-64 only.
-> Next: proofs with an SMT solver, and more platforms.
+> Status: dialect 2 on Linux x86-64. It covers whole numbers, exact and floating-point decimals,
+> vectors from SSE2 to AVX-512, hashing and checksums, and inputs up to 1 MiB. Next:
+> - fork-join threads;
+> - files in tests;
+> - proofs with an SMT solver;
+> - more of the top CPU and OS targets, which LLVM already supports.
 
 ## Requirements
 

@@ -7,6 +7,9 @@ Where the code and this file disagree, fix one of them.
 
 Programming languages and compilers were made as human middlemen to machine code. With AI, the
 natural-language **spec is the source code**, the AI translates it, and tools check the result.
+lengua aims to make assembly a general-purpose "language that isn't a programming language". It's
+built for AI agents: the person describes what they want, and the agent produces the fastest
+machine code it can.
 In short: turn the spec with its tests into machine code, using Claude Code (or any agent) as the
 compiler. lengua's AI writes **assembly**: readable for review, and turned into machine code by a
 deterministic assembler that only encodes each line as one instruction and makes no choices of its
@@ -259,6 +262,19 @@ decides.
 
 The MVP is built: milestones 1 foundation, 2 spec and lock, 3 tests, 4 rule checker, 5 code and
 run, and 6 end to end, each committed after the project owner approved it. `tests/e2e.rs` runs the
-whole workflow on `examples/add` in both MCP protocol generations. Dialect 2 (integer vector
-instructions) followed. Next come the proof step and the platforms (Linux ARM64, macOS ARM64,
-Windows x86-64, Windows ARM64, in that order), with the order between those two still to decide.
+whole workflow on `examples/add` in both MCP protocol generations.
+
+Dialect 2 followed:
+- vectors from SSE2 to AVX-512, with masks and broadcasts;
+- hashing and checksum instructions;
+- double-precision floating point, plus exact decimals in the test language;
+- inputs up to 1 MiB;
+- every value tried when a range is small.
+
+All of it is proven on this machine (x86-64 Linux). The long-term goal is the top 5 or 6 CPU and
+OS targets, through LLVM and one profile per target. Next, in order:
+1. fork-join threads (dialect 3);
+2. files in tests;
+3. the proof step;
+4. network, clock and random capabilities;
+5. the other targets.
