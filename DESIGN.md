@@ -209,12 +209,50 @@ it produces, the idea behind translation validation (Pnueli, Siegel and Singerma
 | spec → `tests.toml` | the AI | Structure and coverage; each behavior's spec values appear in its example; each formula reproduces its example; generator ranges are numbers that the spec's Purpose states (not an example's own values) |
 | spec + tests → `main.s` | the AI | The rules, then every example plus fresh random tests on every check |
 | `main.s` → machine code | LLVM | The checker reads the linked executable back and matches it to `main.s` instruction by instruction, operands included; the lock records the executable's hash, and `run` refuses any other build |
+| machine code, every input | — | `prove`: for generated tests over whole-number ranges, the output equals the formulas for every input in range, not only the sampled ones |
 
-This is strong evidence, not proof: tests only sample inputs, and a plain-language spec has no
-formal meaning a tool can check. After the MVP, a symbolic executor and an SMT solver will prove
-that the output equals the formulas for every input in range, as Alive2 does for LLVM. The Power of
-10 rules make that proof complete: without recursion and with a fixed maximum for every loop,
-every path through a program is finite.
+Tests sample inputs, so on their own they are strong evidence, not proof. The `prove` tool turns
+them into a proof where it can, as Alive2 does for LLVM. The Power of 10 rules make that possible:
+without recursion and with a fixed maximum for every loop, every path through a program is finite.
+
+How `prove` works (`src/prove/`):
+
+- **Input shapes.** It splits each `int(lo, hi)` variable into shapes: a sign and a range for each
+  digit, like a regular expression for a number range, so that every number a shape allows is in
+  range. The full 64-bit range takes about 70 shapes.
+- **Symbolic execution.** It runs the executable's own instructions on terms: each register, flag
+  and byte holds an expression over the input's digits. A branch the inputs decide splits the run,
+  and each side keeps its condition.
+- **Ranges settle most branches.** Terms are simplified as they're built and know their ranges:
+  digits are 0 to 9, a 10-digit number is below 10^10, and so on. With those ranges, the parse
+  loop's checks, the overflow checks and the print loop's digit count are mostly settled with no
+  solver at all.
+- **Identical terms, not equivalence proofs.** Normalization makes the program's 64-bit
+  two's-complement arithmetic and the formula's exact 128-bit arithmetic come out the same term
+  where neither can overflow. Printed digits are matched through their common root, the value
+  divided by powers of ten. So "prints the formula's value" usually reduces to identical terms,
+  and the solver is asked only what remains.
+- **The solver.** It asks z3 in SMT-LIB 2, one fresh process per shape and every core in use.
+  `examples/add` takes about a minute for 4×10^18 input pairs; the template takes a few seconds.
+
+Trust:
+
+- **Counterexamples are confirmed.** A counterexample is re-run for real before it's reported as
+  a failure. If the real program passes, the result is "not proven".
+- **The model is checked against the CPU.** Before a proof, the model runs concretely on sample
+  inputs the real program has already passed, and must agree.
+- **Models are checked.** Every satisfying model z3 returns is checked against the assertions by
+  lengua's own evaluator.
+- **Only z3's bit-blaster and SAT core.** z3 4.16 (Fedora's) got bit-vector formulas wrong in both
+  directions in its own simplifier and its default strategy. So lengua never uses them. It does
+  its own simplification, asks z3 only to bit-blast and run SAT, writes negation as `~x + 1`, and
+  defines division itself (`x = q × c + r`, `r < c`).
+- **The remaining gap.** An `unsat` that z3's SAT core got wrong would go unnoticed. A second
+  solver (cvc5 or Bitwuzla) re-checking every `unsat` would close it.
+
+The first milestone covers whole-number inputs and formulas (`+ - * / %`, `abs`, `min`, `max`,
+`if`) with at most one computed value per output. Text, decimals, files and threads stay tested,
+not proven.
 
 ## Resources, threads and capabilities
 
@@ -236,7 +274,7 @@ order makes reductions deterministic, and laying the slots end to end makes a ma
 thread with `exit_group`, so a failed check anywhere stops the whole program.
 
 Roadmap, in order:
-1. the proof step;
+1. proofs beyond whole numbers;
 2. network, clock and random capabilities;
 3. the other platforms, toward the top 5–6 CPU and OS targets.
 
@@ -297,10 +335,11 @@ Dialect 2 followed:
 - inputs up to 1 MiB;
 - every value tried when a range is small;
 - files in tests, and the kernel confining every run to what the spec approves;
-- fork-join threads, with each worker proven to write only its own stack and slot.
+- fork-join threads, with each worker proven to write only its own stack and slot;
+- `prove`, which proves whole-number programs right for every input in range.
 
 All of it is proven on this machine (x86-64 Linux). The long-term goal is the top 5 or 6 CPU and
 OS targets, through LLVM and one profile per target. Next, in order:
-1. the proof step;
+1. proofs for text and decimals, and a second solver;
 2. network, clock and random capabilities;
 3. the other targets.

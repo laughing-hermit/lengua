@@ -33,7 +33,7 @@ fn run_arguments(program: &Program, args: &[&str]) -> Value {
 }
 
 #[tokio::test]
-async fn the_server_offers_exactly_five_tools() {
+async fn the_server_offers_exactly_six_tools() {
     for protocol in Protocol::ALL {
         let session = Session::start(protocol).await;
         let tools = session.service.list_all_tools().await.expect("list tools");
@@ -41,7 +41,14 @@ async fn the_server_offers_exactly_five_tools() {
         names.sort_unstable();
         assert_eq!(
             names,
-            ["approve_spec", "check_code", "check_tests", "run", "status"],
+            [
+                "approve_spec",
+                "check_code",
+                "check_tests",
+                "prove",
+                "run",
+                "status"
+            ],
             "{protocol:?}"
         );
         let mut titles: Vec<&str> = tools
@@ -55,6 +62,7 @@ async fn the_server_offers_exactly_five_tools() {
                 "Approve spec",
                 "Check code",
                 "Check tests",
+                "Prove for every input",
                 "Run program",
                 "Status"
             ],
@@ -69,7 +77,7 @@ async fn the_server_offers_exactly_five_tools() {
                 tool.name
             );
             match tool.name.as_ref() {
-                "status" => assert_eq!(hints.read_only_hint, Some(true)),
+                "status" | "prove" => assert_eq!(hints.read_only_hint, Some(true)),
                 "run" => assert_eq!(hints.read_only_hint, Some(false)),
                 _ => {
                     assert_eq!(hints.read_only_hint, Some(false), "{}", tool.name);

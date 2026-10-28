@@ -1372,6 +1372,15 @@ enum Part {
     Placeholder(Expr),
 }
 
+/// A piece of a template: literal text, or a placeholder's expression.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Piece<'a> {
+    /// Literal text.
+    Text(&'a str),
+    /// A placeholder.
+    Expr(&'a Expr),
+}
+
 /// A piece of a template made only of text and bare variables.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PatternPart {
@@ -1382,6 +1391,18 @@ pub enum PatternPart {
 }
 
 impl Template {
+    /// The template's literal text and placeholders, in order.
+    #[must_use]
+    pub fn pieces(&self) -> Vec<Piece<'_>> {
+        self.parts
+            .iter()
+            .map(|part| match part {
+                Part::Text(text) => Piece::Text(text),
+                Part::Placeholder(expr) => Piece::Expr(expr),
+            })
+            .collect()
+    }
+
     /// Parses a template.
     ///
     /// # Errors

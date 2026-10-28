@@ -302,6 +302,33 @@ fn compare(
     (!problems.is_empty()).then(|| problems.join("; "))
 }
 
+/// Runs `program` on one generated case and says what's wrong, if anything.
+///
+/// # Errors
+///
+/// Fails when the program can't be started.
+pub async fn check_case(
+    launcher: &Path,
+    program: &Path,
+    source: &Source,
+    case: &crate::testfile::Case,
+    syscalls: &[Allowed],
+) -> io::Result<Option<String>> {
+    let job = Job {
+        files: &case.files,
+        ..Job::new(program, &case.args, case.stdin.as_bytes(), syscalls)
+    };
+    let run = runner::run(launcher, job, Limits::default()).await?;
+    let expected = Expected {
+        stdout: &case.stdout,
+        stderr: &case.stderr,
+        exit_code: case.exit_code,
+        files: &case.files,
+        files_after: &case.files_after,
+    };
+    Ok(compare(&run, &expected, &assertion_lines(source)))
+}
+
 fn record(outcome: &mut Outcome, message: String) {
     if outcome.failures.len() < MAX_FAILURES {
         outcome.failures.push(message);

@@ -10,6 +10,7 @@ pub mod expr;
 pub mod hash;
 pub mod lock;
 pub mod platform;
+pub mod prove;
 pub mod runner;
 pub mod server;
 pub mod spec;

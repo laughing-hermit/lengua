@@ -492,3 +492,33 @@ async fn tests_freeze_when_code_first_runs_against_them() {
     assert_eq!(report["stamped"], true, "{report}");
     session.service.cancel().await.expect("close the session");
 }
+
+#[tokio::test]
+async fn the_template_is_proven_for_every_input() {
+    if std::process::Command::new("z3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("z3 isn't installed");
+        return;
+    }
+    let session = session().await;
+    let program = checked_template(&session).await;
+    program.write("main.s", &asset("main-template.s"));
+    let report = session.call_ok("check_code", program.arguments()).await;
+    assert_eq!(report["stamped"], true, "{report}");
+    let proof = session.call_ok("prove", program.arguments()).await;
+    assert_eq!(proof["proofs"][0]["proven"], true, "{proof}");
+    assert_eq!(
+        proof["message"], "Proven for every input in range: generated B1.",
+        "{proof}"
+    );
+    assert!(
+        proof["proofs"][1]["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("isn't drawn by int(lo, hi)")),
+        "text inputs aren't proven yet: {proof}"
+    );
+    session.service.cancel().await.expect("close the session");
+}

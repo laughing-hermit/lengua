@@ -13,9 +13,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::checker;
 use crate::data_dir::DataDir;
+use crate::expr;
 use crate::hash::Sha256Hex;
 use crate::lock::{self, CodeStamp, Key, Lock, TestsStamp};
 use crate::platform::{CpuFeatures, Machine, Profile};
+use crate::prove;
 use crate::runner::{self, End, Job, Limits};
 use crate::spec;
 use crate::state::{
@@ -273,6 +275,32 @@ pub struct CodeReport {
     /// The single next thing to do.
     pub next_step: String,
 }
+
+/// One generated test's proof.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct ProofReport {
+    /// The test, such as `generated B1`.
+    pub test: String,
+    /// Whether the program is right for every input in the test's ranges, not just the
+    /// sampled ones.
+    pub proven: bool,
+    /// What was proven, or why it wasn't.
+    pub detail: String,
+}
+
+/// What `prove` reports.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct ProveReport {
+    /// Each generated test's proof.
+    pub proofs: Vec<ProofReport>,
+    /// What happened.
+    pub message: String,
+    /// The single next thing to do.
+    pub next_step: String,
+}
+
+/// The longest one `prove` call may take.
+const PROOF_TIME: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// Input for `run`.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -773,6 +801,187 @@ impl LenguaServer {
             cpu_time_us: result.cpu_time_ns.map(|nanoseconds| nanoseconds / 1000),
             wall_time_us: result.wall_time_ns / 1000,
             fingerprint: fingerprint.to_string(),
+        }))
+    }
+
+    #[tool(
+        name = "prove",
+        title = "Prove for every input",
+        description = "Proves that the checked program in <path> prints exactly what its tests' \
+            formulas say for every input in range, not only the sampled ones: for each generated \
+            test that draws whole numbers with int(lo, hi) and computes whole-number output, it \
+            runs the machine code on symbols and asks the z3 solver whether any input could make \
+            the output differ. Call it after check_code passes. It can take a few minutes. A \
+            counterexample is confirmed with a real run and reported as a failure. path: absolute \
+            path of the program folder.",
+        annotations(
+            title = "Prove for every input",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn prove(
+        &self,
+        Parameters(params): Parameters<ProgramParams>,
+    ) -> Result<Json<ProveReport>, String> {
+        let folder = ProgramFolder::new(&params.path)?;
+        let (state, next_step) = self.program_state(&folder)?;
+        if state != State::Ready {
+            return Err(format!(
+                "lengua proves a program after check_code has recorded it, and {folder} isn't \
+                 ready. {next_step}"
+            ));
+        }
+        let key = Key::load(&self.data_dir)
+            .map_err(|error| error.to_string())?
+            .ok_or("lengua's signing key is missing; call status")?;
+        let lock = lock::read(folder.path(), Some(&key))
+            .map_err(|error| format!("lengua.lock can't be trusted: {error}"))?
+            .ok_or("lengua.lock is missing; call status")?;
+        let stamp = lock
+            .code
+            .as_ref()
+            .ok_or("main.s isn't checked; call check_code first.")?;
+        let spec_text = read_spec(&folder)?;
+        let spec = spec::parse(&spec_text).map_err(|problems| spec_problems(&folder, &problems))?;
+        let suite = testfile::check(
+            &read_tests(&folder)?,
+            &spec,
+            &Sha256Hex::of(spec_text.as_bytes()).label(),
+        )
+        .map_err(|problems| tests_problems(&folder, &problems))?;
+        let code = read_code(&folder)?;
+        let source = checker::check_layout(&code).0;
+        let machine_info = Machine::detect();
+        let profile = supported(&machine_info)?;
+        let built = build(&code, profile).await?;
+        if Sha256Hex::of(&built.bytes) != stamp.executable_sha256 {
+            return Err(format!(
+                "This build of {CODE_FILE} differs from the one check_code tested, so lengua \
+                 won't prove it. Call check_code with path {folder} first."
+            ));
+        }
+        let decoded = checker::decode::read(&built.bytes)?;
+        let syscalls = profile.allowed_syscalls(&spec.syscalls, spec.threads.is_some());
+        let deadline = std::time::Instant::now() + PROOF_TIME;
+        let mut proofs = Vec::new();
+        let mut wrong = false;
+        for block in &suite.generated {
+            let test = format!("generated {}", block.id);
+            if let Some(every) = block.every_value_text() {
+                proofs.push(ProofReport {
+                    test,
+                    proven: true,
+                    detail: format!("check_code tried {every}"),
+                });
+                continue;
+            }
+            // The model must agree with the real program on inputs it passed before it's
+            // trusted to cover the rest.
+            let samples: Vec<testfile::Case> =
+                block.cases(1).take(24).filter_map(Result::ok).collect();
+            let (machine, owned) = (decoded.clone(), block.clone());
+            let verdict = tokio::task::spawn_blocking(move || {
+                prove::agrees(&machine, &samples).map(|()| {
+                    prove::prove(
+                        &machine,
+                        &owned,
+                        prove::Budget {
+                            deadline,
+                            max_paths: 256,
+                            max_shapes: 20_000,
+                            question_ms: 20_000,
+                        },
+                    )
+                })
+            })
+            .await
+            .map_err(|error| format!("the proof stopped: {error}"))?;
+            let (proven, detail) = match verdict {
+                Err(reason) => (false, format!("tested, not proven: {reason}")),
+                Ok(prove::Verdict::Proven { shapes, paths }) => (
+                    true,
+                    format!(
+                        "proven for every input in range ({shapes} input shapes, {paths} paths \
+                         through the machine code)"
+                    ),
+                ),
+                Ok(prove::Verdict::NotProven(reason)) => {
+                    (false, format!("tested, not proven: {reason}"))
+                }
+                Ok(prove::Verdict::Counterexample(values)) => {
+                    let inputs: expr::Env = values
+                        .iter()
+                        .map(|(name, value)| (name.clone(), expr::Value::Int(*value)))
+                        .collect();
+                    let described = testfile::describe_inputs(&inputs);
+                    match block.case(inputs) {
+                        Ok(case) => match testrun::check_case(
+                            &self.launcher,
+                            &built.executable,
+                            &source,
+                            &case,
+                            &syscalls,
+                        )
+                        .await
+                        .map_err(|error| format!("couldn't run the program: {error}"))?
+                        {
+                            Some(problem) => {
+                                wrong = true;
+                                (
+                                    false,
+                                    format!(
+                                        "the proof found inputs the tests didn't try where main.s \
+                                         is wrong: with {described}: {problem}"
+                                    ),
+                                )
+                            }
+                            None => (
+                                false,
+                                format!(
+                                    "tested, not proven: the prover's model disagreed with a \
+                                     real run on {described}"
+                                ),
+                            ),
+                        },
+                        Err((_, field, error)) => (
+                            false,
+                            format!("tested, not proven: with {described}, {field} {error}"),
+                        ),
+                    }
+                }
+            };
+            proofs.push(ProofReport {
+                test,
+                proven,
+                detail,
+            });
+        }
+        let proven: Vec<&str> = proofs
+            .iter()
+            .filter(|proof| proof.proven)
+            .map(|proof| proof.test.as_str())
+            .collect();
+        let message = if wrong {
+            "The proof found inputs where main.s is wrong; see proofs.".to_owned()
+        } else if proven.len() == proofs.len() && !proofs.is_empty() {
+            "Every generated test is proven for every input in its range.".to_owned()
+        } else if proven.is_empty() {
+            "Nothing could be proven; the tests still pass. See proofs for why.".to_owned()
+        } else {
+            format!("Proven for every input in range: {}.", proven.join(", "))
+        };
+        Ok(Json(ProveReport {
+            proofs,
+            message,
+            next_step: if wrong {
+                format!(
+                    "Next: fix {folder}/{CODE_FILE} with the write-assembly skill so it handles \
+                     those inputs, then call check_code and prove again."
+                )
+            } else {
+                next_step
+            },
         }))
     }
 }

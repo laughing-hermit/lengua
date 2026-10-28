@@ -33,13 +33,19 @@ Nothing runs before every rule passes.
    the seed, what was expected and what happened, and `assertion N failed at main.s:LINE` when an
    assertion fires. Fix everything and call it again until it passes; then `lengua.lock` records
    the code.
-6. Run the program once with `run`, using the spec's first example: `path`, plus `args` and
+6. If a generated test draws whole numbers with `int(…)`, call `prove` with `path`. It proves,
+   for every input in range rather than a sample, that the program prints what the formulas say;
+   it can take a minute or two. If it finds inputs where the program is wrong, fix `main.s` and
+   call `check_code` and `prove` again. "Tested, not proven" is fine: say why in one line.
+   Programs that read and print numbers with the template's `parse_i64` and `write_i64` prove
+   best; a digit loop built another way may only be tested.
+7. Run the program once with `run`, using the spec's first example: `path`, plus `args` and
    `stdin` when it reads them. A program that works on files runs in a folder holding the
    example's input files: create `<path>/demo/` with them, pass it as `folder`, and name the
    files in `args` relative to it. Later, to work on the user's own files, pass the folder that
    holds them; the program can't touch anything outside it.
-7. Tell the user in a few short lines and plain words: where the program is, that it follows
-   every rule and passed all its test runs, what `run` printed (and the files it wrote, if any),
+8. Tell the user in a few short lines and plain words: where the program is, that it follows
+   every rule and passed all its test runs, which behaviors are proven for every input, what `run` printed (and the files it wrote, if any),
    and that they can ask you to run it with other inputs or to change what it does (which starts
    with the spec). If the code
    handles a case the spec doesn't mention, such as input longer than a buffer, say so in one line
