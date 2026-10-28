@@ -23,10 +23,20 @@ Nothing runs before every rule passes.
    checked program that prints the negative of a number (its spec and tests are
    [template-spec.md](assets/template-spec.md) and [template-tests.toml](assets/template-tests.toml));
    its `parse_i64`, `write_i64` and `write_all` can be reused as they are.
-4. Write the code by [the rules](references/power-of-10.md).
-5. Call `check_code` with `path`. It lists each violation as `rule N (name) main.s:LINE: problem.
-   Fix: …`. Fix them all and call it again until everything passes.
-6. Follow the `next_step` it returns.
+4. Write the code by [the rules](references/power-of-10.md), with
+   [the Linux x86-64 reference](references/linux-x86_64.md) for system calls, the program's start
+   and the calling convention.
+5. Call `check_code` with `path`. It checks the rules first and lists each violation as
+   `rule N (name) main.s:LINE: problem. Fix: …`. Then it runs every test: the examples, and the
+   generated tests with fresh random inputs (boundary values first). A failure shows the inputs,
+   the seed, what was expected and what happened, and `assertion N failed at main.s:LINE` when an
+   assertion fires. Fix everything and call it again until it passes; then `lengua.lock` records
+   the code.
+6. To make the program faster, read `instructions` in the report: the instructions each test
+   executed (fewer is faster). Change `main.s` and call `check_code` again; the tests must stay
+   green. Counts can differ by an instruction or two between runs, because the CPU counts some
+   interrupts as instructions.
+7. Run the program with `run`: `path`, plus `args` and `stdin` when it reads them.
 
 ## The rules in brief
 

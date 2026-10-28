@@ -1,0 +1,61 @@
+# Linux x86-64 reference
+
+## System calls
+
+`mov eax, SYS_NAME` picks the call, the arguments go in `rdi`, `rsi`, `rdx`, `r10`, `r8` and `r9`
+(`r10`, not `rcx`), and `syscall` runs it. It returns in `rax` and changes `rcx` and `r11`; every
+other register keeps its value. A result from -4095 to -1 is an error (the negative errno), so
+test it right away with `test rax, rax` and `js`.
+
+| Call | `SYS_` number | Arguments | Result |
+|---|---|---|---|
+| `read` | 0 | `edi` fd, `rsi` buffer, `rdx` count | bytes read, 0 at the end of input, or an error |
+| `write` | 1 | `edi` fd, `rsi` bytes, `rdx` count | bytes written, possibly fewer than asked, or an error |
+| `close` | 3 | `edi` fd | 0 or an error |
+| `lseek` | 8 | `edi` fd, `rsi` offset, `edx` whence (0 start, 1 current, 2 end) | the new offset or an error |
+| `exit` | 60 | `edi` status | doesn't return |
+| `exit_group` | 231 | `edi` status | doesn't return |
+| `openat` | 257 | `edi` -100 (the current folder), `rsi` NUL-terminated path, `edx` flags, `r10d` mode | a file descriptor or an error |
+
+File descriptors 0, 1 and 2 are standard input, output and error. `openat` flags: `O_RDONLY` 0,
+`O_WRONLY` 1, `O_RDWR` 2, `O_CREAT` 0x40, `O_TRUNC` 0x200, `O_APPEND` 0x400; a mode such as 0o644
+is 420 in decimal. `write` and `read` may move fewer bytes than asked, so loop until done, as the
+template's `write_all` does.
+
+## Program start
+
+At `_start` the stack holds the arguments, and `rsp` is 16-byte aligned:
+
+| Address | Holds |
+|---|---|
+| `[rsp]` | `argc`, the number of arguments including the program's path |
+| `[rsp + 8]` | `argv[0]`, the program's path |
+| `[rsp + 16]` | `argv[1]`, the first argument, and so on |
+| `[rsp + 8 * (argc + 1)]` | 0, the end of the list |
+
+Each argument is a NUL-terminated string. lengua runs programs with an empty environment, in a
+temporary folder of their own. `_start` has no return address: it ends with `exit`.
+
+## Calling convention (System V)
+
+- Arguments go in `rdi`, `rsi`, `rdx`, `rcx`, `r8` and `r9`; results come back in `rax`, and in
+  `rdx` for a second value.
+- A function must give back `rbx`, `rbp`, `r12` to `r15` (and `rsp`) unchanged; it may change
+  `rax`, `rcx`, `rdx`, `rsi`, `rdi` and `r8` to `r11`.
+- `rsp` is a multiple of 16 at every `call`, so a function starts 8 bytes off (the return
+  address).
+
+## Integer facts
+
+- Writing a 32-bit register clears the upper half: `mov eax, 1` sets `rax` to 1, and
+  `xor eax, eax` clears `rax`. Writing 8 or 16 bits leaves the rest unchanged, so load bytes with
+  `movzx`.
+- Signed division: `cqo`, then `idiv` (quotient in `rax`, remainder in `rdx`, truncated toward
+  zero). Dividing by zero, or the most negative number by -1, kills the program with SIGFPE.
+- Unsigned division: `xor edx, edx`, then `div`.
+- `jo` catches signed overflow after `add`, `sub`, `imul` and `neg`; `jc` catches unsigned carry.
+- Signed comparisons jump with `jl`, `jle`, `jg` and `jge`; unsigned ones with `jb`, `jbe`, `ja` and
+  `jae`. Bounds checks use the unsigned ones, which also catch negative indexes.
+- `imul rax, rbx, 10` multiplies by a constant. Characters are numbers: `sub eax, '0'` turns a
+  digit's character into its value.
+- Exit codes go from 0 to 255; 134 is lengua's code for a failed assertion.

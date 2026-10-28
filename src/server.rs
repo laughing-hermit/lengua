@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -20,14 +21,16 @@ use serde::{Deserialize, Serialize};
 use crate::checker;
 use crate::data_dir::DataDir;
 use crate::hash::{Sha256Hex, hex};
-use crate::lock::{self, ApprovedVia, Key, Lock, TestsStamp};
-use crate::platform::{CpuFeatures, Machine};
+use crate::lock::{self, ApprovedVia, CodeStamp, Key, Lock, TestsStamp};
+use crate::platform::{CpuFeatures, Machine, Profile};
+use crate::runner::{self, End, Limits};
 use crate::spec::{self, Spec};
 use crate::state::{
     CODE_FILE, LockStatus, ProgramFolder, SPEC_FILE, Snapshot, State, StepContext, TESTS_FILE,
     stamped_copy,
 };
 use crate::testfile;
+use crate::testrun;
 use crate::toolchain::Toolchain;
 
 /// Server-wide guidance sent to every client at startup.
@@ -57,6 +60,8 @@ pub struct LenguaServer {
     approvals: Arc<Mutex<HashMap<String, PendingApproval>>>,
     /// Serializes every read-modify-write of a lock file.
     lock_writes: Arc<tokio::sync::Mutex<()>>,
+    /// This server's own binary, which launches programs so their instructions can be counted.
+    launcher: Arc<PathBuf>,
 }
 
 /// An approval dialog waiting for the client's retry.
@@ -77,6 +82,7 @@ impl LenguaServer {
             data_dir: Arc::new(data_dir),
             approvals: Arc::default(),
             lock_writes: Arc::default(),
+            launcher: Arc::new(std::env::current_exe().unwrap_or_default()),
         }
     }
 }
@@ -247,11 +253,15 @@ pub struct TestsReport {
     pub next_step: String,
 }
 
-/// What `check_code` reports when main.s follows every rule.
+/// What `check_code` reports when main.s follows every rule and passes every test.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct CodeReport {
     /// Whether main.s follows every rule of the dialect.
     pub rules_passed: bool,
+    /// Whether every test passed.
+    pub tests_passed: bool,
+    /// Whether lengua.lock now records this main.s.
+    pub stamped: bool,
     /// Functions, assert_fail excluded.
     pub functions: usize,
     /// Assertions in the program.
@@ -260,17 +270,70 @@ pub struct CodeReport {
     pub max_stack_bytes: u64,
     /// Every `# unsafe:` block, as `main.s:START-END: reason`.
     pub unsafe_blocks: Vec<String>,
+    /// Program runs made by the tests.
+    pub test_runs: usize,
+    /// The seed that drew this check's random inputs.
+    pub seed: String,
+    /// Instructions executed per test (fewer is faster), when the CPU's counters are available.
+    pub instructions: Vec<InstructionCount>,
+    /// One hash over spec, tests and code.
+    pub fingerprint: String,
     /// What happened.
     pub message: String,
     /// The single next thing to do.
     pub next_step: String,
 }
 
+/// Instructions executed by one test, or by all runs of a generated block.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct InstructionCount {
+    /// The test, such as `example B1` or `generated B1`.
+    pub test: String,
+    /// Runs counted.
+    pub runs: usize,
+    /// Fewest instructions in a run.
+    pub min: u64,
+    /// The median run.
+    pub median: u64,
+    /// Most instructions in a run.
+    pub max: u64,
+}
+
+/// Input for `run`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RunParams {
+    /// Absolute path of the program folder.
+    pub path: String,
+    /// The program's command-line arguments.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Text for the program's standard input, which ends after it.
+    #[serde(default)]
+    pub stdin: String,
+}
+
+/// What `run` reports.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct RunReport {
+    /// Standard output (invalid UTF-8 replaced).
+    pub stdout: String,
+    /// Standard error (invalid UTF-8 replaced).
+    pub stderr: String,
+    /// The exit code, unless the program was killed.
+    pub exit_code: Option<i32>,
+    /// How the program ended.
+    pub ended: String,
+    /// Instructions the program executed, when the CPU's counters are available.
+    pub instructions: Option<u64>,
+    /// The fingerprint of the spec, tests and code that ran.
+    pub fingerprint: String,
+}
+
 /// The approval dialog's form: one checkbox, on by default.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct SpecApproval {
     /// Approve spec.md exactly as written.
-    #[schemars(title = "Approve this spec", extend("default" = true))]
+    #[schemars(title = "Approve", extend("default" = true))]
     approve: bool,
 }
 
@@ -289,7 +352,7 @@ impl Answer {
     fn describe(self) -> &'static str {
         match self {
             Self::Approve => "approved",
-            Self::LeftUnchecked => "left \"Approve this spec\" unchecked",
+            Self::LeftUnchecked => "left \"Approve\" unchecked",
             Self::Declined => "declined",
             Self::Cancelled => "closed the dialog",
         }
@@ -488,12 +551,13 @@ impl LenguaServer {
 
     #[tool(
         name = "check_code",
-        description = "Checks <path>/main.s against the lengua Power of 10 rules (dialect 1). It \
+        description = "Checks <path>/main.s and, when it passes, records it in lengua.lock. It \
             assembles and links the program, reads the machine code back and matches it to main.s \
-            line by line, then checks every rule; nothing runs before the rules pass. Needs an \
-            approved spec and checked tests, and main.s's first line must be the spec label from \
-            status. Returns every violation with its rule, line and a fix. path: absolute path of \
-            the program folder.",
+            line by line, and checks every lengua Power of 10 rule; nothing runs before the rules \
+            pass. Then it runs every test, generated tests with fresh random inputs, and reports \
+            the instructions each test executed. Needs an approved spec and checked tests, and \
+            main.s's first line must be the spec label from status. Returns every violation or \
+            failed test with its line. path: absolute path of the program folder.",
         annotations(
             title = "Check the code",
             read_only_hint = false,
@@ -526,7 +590,10 @@ impl LenguaServer {
         }
         let spec_text = read_spec(&folder)?;
         let spec = spec::parse(&spec_text).map_err(|problems| spec_problems(&folder, &problems))?;
-        let label = Sha256Hex::of(spec_text.as_bytes()).label();
+        let spec_hash = Sha256Hex::of(spec_text.as_bytes());
+        let label = spec_hash.label();
+        let tests_text = read_tests(&folder)?;
+        let tests_hash = Sha256Hex::of(tests_text.as_bytes());
         let code = read_code(&folder)?;
         let header = format!("# lengua: spec {label}");
         let first_line = code.lines().next().unwrap_or_default();
@@ -542,37 +609,11 @@ impl LenguaServer {
             return Err(violations_text(&folder, &layout));
         }
         let machine = Machine::detect();
-        let profile = machine.profile.ok_or_else(|| {
-            format!(
-                "lengua can't build programs on {}-{} yet.",
-                machine.os, machine.arch
-            )
-        })?;
-        let toolchain = Toolchain::discover()
-            .await
-            .map_err(|error| error.to_string())?;
-        let build = tempfile::tempdir()
-            .map_err(|error| format!("couldn't create a build folder: {error}"))?;
-        let main = build.path().join(CODE_FILE);
-        let object = build.path().join("main.o");
-        let executable = build.path().join("main");
-        std::fs::write(&main, &code)
-            .map_err(|error| format!("couldn't copy main.s to the build folder: {error}"))?;
-        let built = match toolchain.assemble(profile, &main, &object).await {
-            Ok(()) => toolchain.link(&object, &executable).await,
-            Err(error) => Err(error),
-        };
-        built.map_err(|error| {
-            format!(
-                "{CODE_FILE} doesn't build: {error}\nFix it with the write-assembly skill, then call \
-                 check_code again."
-            )
-        })?;
-        let bytes = std::fs::read(&executable)
-            .map_err(|error| format!("couldn't read the built program: {error}"))?;
+        let profile = supported(&machine)?;
+        let built = build(&code, profile).await?;
         let report = checker::check_program(
             &source,
-            &bytes,
+            &built.bytes,
             checker::Context {
                 syscalls: &spec.syscalls,
                 features: machine.features,
@@ -582,9 +623,30 @@ impl LenguaServer {
         if !report.passed() {
             return Err(violations_text(&folder, &report));
         }
-        let facts = report.facts.unwrap_or_default();
+        let facts = report.facts.clone().unwrap_or_default();
+        let suite = testfile::check(&tests_text, &spec, &label)
+            .map_err(|problems| tests_problems(&folder, &problems))?;
+        let seed = random_seed()?;
+        let outcome = testrun::run_tests(&suite, &self.launcher, &built.executable, &source, seed)
+            .await
+            .map_err(|error| format!("couldn't run the program: {error}"))?;
+        if !outcome.passed() {
+            return Err(failures_text(&folder, &outcome));
+        }
+        let stamp = CodeStamp {
+            sha256: Sha256Hex::of(code.as_bytes()),
+            executable_sha256: Sha256Hex::of(&built.bytes),
+            toolchain: built.toolchain.clone(),
+            max_stack_bytes: facts.max_stack_bytes,
+            unsafe_blocks: u32::try_from(report.unsafe_blocks.len()).unwrap_or(u32::MAX),
+        };
+        let fingerprint = self
+            .stamp_code(&folder, &spec_hash, &tests_hash, stamp)
+            .await?;
         Ok(Json(CodeReport {
             rules_passed: true,
+            tests_passed: true,
+            stamped: true,
             functions: facts.functions,
             assertions: facts.assertions,
             max_stack_bytes: facts.max_stack_bytes,
@@ -593,13 +655,104 @@ impl LenguaServer {
                 .iter()
                 .map(|block| format!("main.s:{}-{}: {}", block.start, block.end, block.reason))
                 .collect(),
+            test_runs: outcome.runs,
+            seed: seed.to_string(),
+            instructions: outcome
+                .instructions
+                .into_iter()
+                .map(|count| InstructionCount {
+                    test: count.test,
+                    runs: count.runs,
+                    min: count.min,
+                    median: count.median,
+                    max: count.max,
+                })
+                .collect(),
+            fingerprint: fingerprint.to_string(),
             message: format!(
-                "{CODE_FILE} follows every rule of dialect 1. This version of lengua doesn't run \
-                 the tests or stamp the code yet."
+                "{CODE_FILE} follows every rule and passed all {} test runs (seed {seed}). \
+                 lengua.lock now binds spec, tests and code: fingerprint {}. To make the program \
+                 faster, change {CODE_FILE} and call check_code again: the tests must stay green, \
+                 and fewer instructions means faster.",
+                outcome.runs,
+                fingerprint.short()
             ),
-            next_step: "Wait: running the tests and stamping the code come in the next version \
-                        of lengua."
-                .to_owned(),
+            next_step: self.program_state(&folder, elicitation)?.1,
+        }))
+    }
+
+    #[tool(
+        name = "run",
+        description = "Runs the program in <path> with args and stdin, but only when lengua.lock \
+            shows that spec.md, tests.toml and main.s are exactly the versions that were approved \
+            and checked, and a fresh build of main.s is byte for byte the executable check_code \
+            tested. The program gets an empty environment, its own temporary folder, 10 seconds \
+            and 1 MiB of output. path: absolute path of the program folder; args: the program's \
+            arguments; stdin: text for its standard input.",
+        annotations(
+            title = "Run a program",
+            read_only_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn run(
+        &self,
+        Parameters(params): Parameters<RunParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<RunReport>, String> {
+        let folder = ProgramFolder::new(&params.path)?;
+        let elicitation = client_report(&ctx).elicitation;
+        let (state, next_step) = self.program_state(&folder, elicitation)?;
+        if state != State::Ready {
+            return Err(format!(
+                "lengua runs a program only when its spec, tests and code all match \
+                 lengua.lock, and {folder} doesn't. {next_step}"
+            ));
+        }
+        let key = Key::load(&self.data_dir)
+            .map_err(|error| error.to_string())?
+            .ok_or("lengua's signing key is missing; call status")?;
+        let lock = lock::read(folder.path(), Some(&key))
+            .map_err(|error| format!("lengua.lock can't be trusted: {error}"))?
+            .ok_or("lengua.lock is missing; call status")?;
+        let (Some(stamp), Some(fingerprint)) = (lock.code.as_ref(), lock.fingerprint()) else {
+            return Err(format!("{CODE_FILE} isn't checked; call check_code first."));
+        };
+        let code = read_code(&folder)?;
+        let source = checker::check_layout(&code).0;
+        let machine = Machine::detect();
+        let built = build(&code, supported(&machine)?).await?;
+        if Sha256Hex::of(&built.bytes) != stamp.executable_sha256 {
+            return Err(format!(
+                "This build of {CODE_FILE} differs from the one check_code tested (built with {}; \
+                 now {}), so it won't run. Call check_code with path {folder} to test this build.",
+                stamp.toolchain, built.toolchain
+            ));
+        }
+        let limits = Limits {
+            timeout: std::time::Duration::from_secs(10),
+            ..Limits::default()
+        };
+        let result = runner::run(
+            &self.launcher,
+            &built.executable,
+            &params.args,
+            params.stdin.as_bytes(),
+            limits,
+        )
+        .await
+        .map_err(|error| format!("couldn't run the program: {error}"))?;
+        let ended = testrun::explain_end(&result, &testrun::assertion_lines(&source), limits);
+        Ok(Json(RunReport {
+            stdout: String::from_utf8_lossy(&result.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&result.stderr).into_owned(),
+            exit_code: match result.end {
+                End::Exited(code) => Some(code),
+                _ => None,
+            },
+            ended,
+            instructions: result.instructions,
+            fingerprint: fingerprint.to_string(),
         }))
     }
 }
@@ -662,6 +815,47 @@ impl LenguaServer {
         };
         lock::write(folder.path(), &lock, &key)
             .map_err(|error| format!("couldn't write {folder}/{}: {error}", lock::LOCK_FILE))
+    }
+
+    /// Records checked code in the lock, provided spec, tests and code didn't change while being
+    /// checked. Returns the new fingerprint.
+    async fn stamp_code(
+        &self,
+        folder: &ProgramFolder,
+        spec: &Sha256Hex,
+        tests: &Sha256Hex,
+        code: CodeStamp,
+    ) -> Result<Sha256Hex, String> {
+        let _writing = self.lock_writes.lock().await;
+        let changed = || {
+            format!(
+                "{SPEC_FILE}, {TESTS_FILE} or {CODE_FILE} changed while the code was being \
+                 checked, so nothing was recorded; call check_code again."
+            )
+        };
+        let key = Key::load(&self.data_dir)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(changed)?;
+        let lock = lock::read(folder.path(), Some(&key))
+            .ok()
+            .flatten()
+            .ok_or_else(changed)?;
+        let unchanged = lock.spec.sha256 == *spec
+            && lock.tests.as_ref().map(|stamp| &stamp.sha256) == Some(tests)
+            && Sha256Hex::of(read_spec(folder)?.as_bytes()) == *spec
+            && Sha256Hex::of(read_tests(folder)?.as_bytes()) == *tests
+            && Sha256Hex::of(read_code(folder)?.as_bytes()) == code.sha256;
+        if !unchanged {
+            return Err(changed());
+        }
+        let lock = Lock {
+            code: Some(code),
+            ..lock
+        };
+        let fingerprint = lock.fingerprint().ok_or_else(changed)?;
+        lock::write(folder.path(), &lock, &key)
+            .map_err(|error| format!("couldn't write {folder}/{}: {error}", lock::LOCK_FILE))?;
+        Ok(fingerprint)
     }
 
     fn program_report(
@@ -732,7 +926,7 @@ impl LenguaServer {
     ) -> Result<CallToolResponse, String> {
         let answer = match ctx
             .peer
-            .elicit::<SpecApproval>(approval_message(folder, spec))
+            .elicit::<SpecApproval>(approval_message(folder))
             .await
         {
             Ok(Some(SpecApproval { approve: true })) => Answer::Approve,
@@ -781,7 +975,7 @@ impl LenguaServer {
             .map_err(|error| format!("couldn't build the approval form: {error}"))?;
         let dialog = ElicitRequest::new(ElicitRequestParams::FormElicitationParams {
             meta: None,
-            message: approval_message(folder, spec),
+            message: approval_message(folder),
             requested_schema: schema,
         });
         let requests =
@@ -999,6 +1193,82 @@ fn read_spec(folder: &ProgramFolder) -> Result<String, String> {
     }
 }
 
+/// A built program, in a temporary folder that lives as long as this value.
+struct Build {
+    _folder: tempfile::TempDir,
+    executable: PathBuf,
+    bytes: Vec<u8>,
+    toolchain: String,
+}
+
+/// Assembles and links `code` in a fresh temporary folder.
+async fn build(code: &str, profile: Profile) -> Result<Build, String> {
+    let toolchain = Toolchain::discover()
+        .await
+        .map_err(|error| error.to_string())?;
+    let folder =
+        tempfile::tempdir().map_err(|error| format!("couldn't create a build folder: {error}"))?;
+    let main = folder.path().join(CODE_FILE);
+    let object = folder.path().join("main.o");
+    let executable = folder.path().join("main");
+    std::fs::write(&main, code)
+        .map_err(|error| format!("couldn't copy main.s to the build folder: {error}"))?;
+    let built = match toolchain.assemble(profile, &main, &object).await {
+        Ok(()) => toolchain.link(&object, &executable).await,
+        Err(error) => Err(error),
+    };
+    built.map_err(|error| {
+        format!(
+            "{CODE_FILE} doesn't build: {error}\nFix it with the write-assembly skill, then call \
+             check_code again."
+        )
+    })?;
+    let bytes = std::fs::read(&executable)
+        .map_err(|error| format!("couldn't read the built program: {error}"))?;
+    Ok(Build {
+        _folder: folder,
+        executable,
+        bytes,
+        toolchain: format!(
+            "llvm-mc {}, ld.lld {}",
+            toolchain.assembler.version, toolchain.linker.version
+        ),
+    })
+}
+
+fn supported(machine: &Machine) -> Result<Profile, String> {
+    machine.profile.ok_or_else(|| {
+        format!(
+            "lengua can't build programs on {}-{} yet.",
+            machine.os, machine.arch
+        )
+    })
+}
+
+fn random_seed() -> Result<u64, String> {
+    let mut bytes = [0_u8; 8];
+    getrandom::fill(&mut bytes).map_err(|error| format!("couldn't draw a seed: {error}"))?;
+    Ok(u64::from_le_bytes(bytes))
+}
+
+/// Failed tests as a message for the AI.
+fn failures_text(folder: &ProgramFolder, outcome: &testrun::Outcome) -> String {
+    let count = outcome.failures.len();
+    let mut text = format!(
+        "{folder}/{CODE_FILE} follows every rule but fails {count} test{}, so it wasn't \
+         stamped:\n",
+        if count == 1 { "" } else { "s" }
+    );
+    for failure in &outcome.failures {
+        let _ = writeln!(text, "- {failure}");
+    }
+    text.push_str(
+        "Fix main.s with the write-assembly skill, then call check_code again. Boundary values \
+         run first every time; the other generated inputs are new on every call.",
+    );
+    text
+}
+
 fn read_code(folder: &ProgramFolder) -> Result<String, String> {
     match std::fs::read_to_string(folder.file(CODE_FILE)) {
         Ok(text) => Ok(text),
@@ -1085,13 +1355,10 @@ fn spec_problems(folder: &ProgramFolder, problems: &[spec::Problem]) -> String {
     text
 }
 
-/// The text of the approval dialog: the document's name and path. The person approves the
-/// document itself, which they read in full before approving.
-fn approval_message(folder: &ProgramFolder, spec: &Spec) -> String {
-    format!(
-        "Approve {SPEC_FILE} for \"{}\"? {folder}/{SPEC_FILE}",
-        spec.title
-    )
+/// The text of the approval dialog: just the spec's path. The person approves the document
+/// itself, which they read in full before approving.
+fn approval_message(folder: &ProgramFolder) -> String {
+    format!("Approve {folder}/{SPEC_FILE}?")
 }
 
 fn toolchain_report(
@@ -1173,7 +1440,7 @@ mod tests {
         let field = &json["properties"]["approve"];
         assert_eq!(field["type"], "boolean", "{json}");
         assert_eq!(field["default"], true, "{json}");
-        assert_eq!(field["title"], "Approve this spec", "{json}");
+        assert_eq!(field["title"], "Approve", "{json}");
         assert_eq!(json["properties"].as_object().map(|p| p.len()), Some(1));
     }
 

@@ -87,6 +87,21 @@ the server keeps a copy that restores them.
 The examples in the skills are checked by the test suite against lengua's own checks, so the
 documentation can't drift from the checker.
 
+## Running programs
+
+Tests and `run` start a program the same way: through the server's own binary in launcher mode,
+which waits until the server has attached a CPU performance counter that turns on at `exec`, then
+replaces itself with the program (no `unsafe` code needed). The program gets its stdin up front
+and then the end of input, an empty environment, its own temporary folder, a time limit (2 s per
+test, 10 s for `run`) and 1 MiB of output, and it's killed past either. The counter reports the
+user-space instructions it executed, which the optimize step compares; a count can be one higher
+now and then, because the CPU counts the odd interrupt or page fault as an instruction.
+
+`check_code` draws a new seed on every call, runs boundary values first, and reports the seed and
+inputs with any failure, down to the line of a failed assertion. Only when the rules and every
+test pass does it stamp `[code]`, including the executable's SHA-256 and the toolchain versions.
+`run` rebuilds `main.s` and runs it only if the build is byte for byte that executable.
+
 ## The lengua dialect
 
 AI-written assembly takes the best of C (transparency, no macros, the standard calling convention,
@@ -178,8 +193,11 @@ order above. The order between the proof and the platforms is decided after the 
   bound to the folder and to the spec text the dialog showed, and expires after 30 minutes. The
   spec is hashed again before the lock is written, so an edit made while the dialog is open is
   never approved.
-- Pointer depth (NASA rule 9) isn't checked; bounds checks and compare-chain detection are
-  pattern-based.
+- Rule 9 checks the shape of each bounds check (`cmp` and an unsigned `jae` before the access)
+  and, for the program's own data symbols, that the limit fits the buffer. Moving a pointer
+  instead of indexing isn't checked, nor is pointer depth, and compare-chain detection is
+  pattern-based. So passing the rules doesn't make a program memory-safe: the tests guard the
+  rest until the proof step.
 - Tests sample inputs, so until the proof step a program is checked, not proven. The same AI
   writes the formulas and the code: each formula must reproduce its spec example, which narrows
   that gap, but a wrong formula can still match an example by coincidence.

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use lengua::data_dir::DataDir;
+use lengua::runner;
 use lengua::server::LenguaServer;
 use rmcp::ServiceExt;
 use rmcp::transport::stdio;
@@ -11,8 +12,14 @@ use tracing_subscriber::EnvFilter;
 
 const USAGE: &str = "usage: lengua-mcp [--data-dir <absolute path>] [--version]";
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
+    // Launcher mode runs before anything else, with no threads, and replaces this process.
+    let mut raw = std::env::args_os().skip(1).peekable();
+    if raw.peek().is_some_and(|arg| arg == runner::LAUNCH_FLAG) {
+        raw.next();
+        return runner::launch(raw);
+    }
+
     // stdout carries the MCP protocol, so all logging goes to stderr.
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
@@ -33,7 +40,19 @@ async fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime.block_on(serve(data_dir)),
+        Err(error) => {
+            eprintln!("lengua-mcp: could not start: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
 
+async fn serve(data_dir: DataDir) -> ExitCode {
     let server = LenguaServer::new(data_dir);
     let running = match server.serve(stdio()).await {
         Ok(running) => running,

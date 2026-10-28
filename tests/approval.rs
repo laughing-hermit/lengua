@@ -66,11 +66,8 @@ async fn approves_in_a_dialog_in_both_protocols() {
         assert_eq!(prompts.len(), 1, "{protocol:?}: {prompts:?}");
         assert_eq!(
             prompts[0],
-            format!(
-                "Approve spec.md for \"add\"? {}/spec.md",
-                program.path().display()
-            ),
-            "{protocol:?}: the dialog names the document and its path"
+            format!("Approve {}/spec.md?", program.path().display()),
+            "{protocol:?}: the dialog is just Approve and the spec's path"
         );
 
         let status = status(&session, &program).await;

@@ -492,6 +492,33 @@ async fn indexed_accesses_are_bounds_checked() {
 }
 
 #[tokio::test]
+async fn bounds_checks_compare_without_sign_and_fit_the_buffer() {
+    let text = with(
+        "    jae .Lparse_assert_index\n",
+        "    jge .Lparse_assert_index\n",
+    );
+    let report = check(&text).await;
+    assert_violation(
+        &report,
+        Rule::Indirection,
+        line_of(&text, "    jge .Lparse_assert_index"),
+        "jumps with jge",
+    );
+
+    let text = with(
+        "    cmp ecx, OUT_BUF_LEN\n    jae .Lwrite_i64_assert_digit_index\n",
+        "    cmp ecx, OUT_BUF_LEN + 1\n    jae .Lwrite_i64_assert_digit_index\n",
+    );
+    let report = check(&text).await;
+    assert_violation(
+        &report,
+        Rule::Indirection,
+        line_of(&text, "    cmp ecx, OUT_BUF_LEN + 1"),
+        "reach byte 21 of out_buf, which has 21 bytes",
+    );
+}
+
+#[tokio::test]
 async fn functions_stay_small_and_save_what_they_change() {
     let text = with(
         "    test rsi, rsi\n",

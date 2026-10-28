@@ -88,7 +88,7 @@ pub fn check(
         checker.syscalls(function, flow, syscalls, profile);
         checker.exit_statuses(function, flow);
         checker.results(function, flow);
-        checker.indexes(function);
+        checker.indexes(function, flow);
         checker.chains(function, flow);
         checker.loops(function, flow);
         assertions += checker.assertions(function, flow, &mut ids);
@@ -410,7 +410,7 @@ impl Checker<'_, '_> {
 
     /// Rule 9: an indexed access needs a `cmp` of its index and a conditional jump earlier in
     /// the same straight-line code, with no change to the index in between.
-    fn indexes(&mut self, function: &MappedFunction<'_>) {
+    fn indexes(&mut self, function: &MappedFunction<'_>, flow: &Flow) {
         for (index, step) in function.steps.iter().enumerate() {
             let instruction = &step.machine;
             let has_memory = (0..instruction.op_count())
@@ -422,7 +422,8 @@ impl Checker<'_, '_> {
                 continue;
             }
             let register = instruction.memory_index().full_register();
-            let mut checked = false;
+            let name = format!("{register:?}").to_ascii_lowercase();
+            let mut check = None;
             for position in (run_start(function, index)..index).rev() {
                 let candidate = &function.steps[position].machine;
                 let compares = mnemonic(candidate) == "cmp"
@@ -432,15 +433,14 @@ impl Checker<'_, '_> {
                         next.machine.flow_control() == FlowControl::ConditionalBranch
                     });
                 if compares {
-                    checked = true;
+                    check = Some(position);
                     break;
                 }
                 if writes(candidate, register, &mut self.factory) {
                     break;
                 }
             }
-            if !checked {
-                let name = format!("{register:?}").to_ascii_lowercase();
+            let Some(position) = check else {
                 self.violation(
                     Rule::Indirection,
                     step.source.line,
@@ -455,8 +455,120 @@ impl Checker<'_, '_> {
                          … `# end unsafe`"
                     ),
                 );
+                continue;
+            };
+            let jump = mnemonic(&function.steps[position + 1].machine);
+            if !matches!(jump.as_str(), "jae" | "ja") {
+                self.violation(
+                    Rule::Indirection,
+                    function.steps[position + 1].source.line,
+                    format!("the bounds check of {name} jumps with {jump}"),
+                    format!(
+                        "jump away with jae (or ja), which compares without sign, so a {name} \
+                         that's too big or negative never reaches the access"
+                    ),
+                );
+                continue;
+            }
+            self.check_buffer_size(function, flow, index, position, jump == "ja");
+        }
+    }
+
+    /// When an indexed access goes through a register that only ever holds the address of one
+    /// data symbol, the bounds check's limit must keep every access inside that symbol.
+    fn check_buffer_size(
+        &mut self,
+        function: &MappedFunction<'_>,
+        flow: &Flow,
+        index: usize,
+        check: usize,
+        inclusive: bool,
+    ) {
+        let access = &function.steps[index].machine;
+        let compare = &function.steps[check].machine;
+        if matches!(compare.op_kind(1), OpKind::Register | OpKind::Memory) {
+            return;
+        }
+        let limit = i64::from_ne_bytes(compare.immediate(1).to_ne_bytes());
+        let Some((symbol, base_offset)) = self.buffer(function, flow, index, access.memory_base())
+        else {
+            return;
+        };
+        let Some(size) = self
+            .program
+            .data
+            .get(&symbol)
+            .and_then(|data| i64::try_from(data.size).ok())
+        else {
+            return;
+        };
+        let largest_index = if inclusive { limit } else { limit - 1 };
+        let width = i64::try_from(access.memory_size().size())
+            .unwrap_or(1)
+            .max(1);
+        let displacement = i64::from_ne_bytes(access.memory_displacement64().to_ne_bytes());
+        let first = base_offset + displacement;
+        let last = first + largest_index * i64::from(access.memory_index_scale()) + width - 1;
+        if first < 0 || last >= size {
+            self.violation(
+                Rule::Indirection,
+                function.steps[check].source.line,
+                format!(
+                    "this check lets `{}` reach byte {last} of {symbol}, which has {size} bytes",
+                    function.steps[index].source.text
+                ),
+                format!("compare with a limit that keeps every access inside {symbol}"),
+            );
+        }
+    }
+
+    /// The data symbol (and offset into it) that `register` holds before the instruction at
+    /// `index`, when every path sets it with `lea register, [rip + symbol]`.
+    fn buffer(
+        &mut self,
+        function: &MappedFunction<'_>,
+        flow: &Flow,
+        index: usize,
+        register: Register,
+    ) -> Option<(String, i64)> {
+        if register == Register::None {
+            return None;
+        }
+        let mut found: Option<(String, i64)> = None;
+        let mut seen = BTreeSet::new();
+        let mut pending = flow.predecessors[index].clone();
+        if pending.is_empty() {
+            return None;
+        }
+        while let Some(position) = pending.pop() {
+            if !seen.insert(position) {
+                continue;
+            }
+            let instruction = &function.steps[position].machine;
+            if !writes(instruction, register, &mut self.factory) {
+                if flow.predecessors[position].is_empty() {
+                    // The register comes from the caller: its buffer is unknown.
+                    return None;
+                }
+                pending.extend(&flow.predecessors[position]);
+                continue;
+            }
+            let loads_address = mnemonic(instruction) == "lea"
+                && instruction.op_register(0).full_register() == register.full_register()
+                && instruction.memory_base() == Register::RIP;
+            if !loads_address {
+                return None;
+            }
+            let target = instruction.memory_displacement64();
+            let (name, data) = self.program.data_at(target)?;
+            let offset = i64::try_from(target - data.address).ok()?;
+            match &found {
+                Some(known) if *known != (name.to_owned(), offset) => return None,
+                Some(_) => {}
+                None => found = Some((name.to_owned(), offset)),
             }
         }
+        found
     }
 
     /// Rule 6: rip-relative operands name data symbols; read-only data isn't written; and who

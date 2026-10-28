@@ -36,25 +36,163 @@ async fn session() -> Session {
 }
 
 #[tokio::test]
-async fn the_template_passes_the_rules() {
+async fn the_template_passes_its_tests_and_is_stamped() {
     let session = session().await;
     let program = checked_template(&session).await;
     program.write("main.s", &asset("main-template.s"));
     let report: Value = session.call_ok("check_code", program.arguments()).await;
     assert_eq!(report["rules_passed"], true, "{report}");
+    assert_eq!(report["tests_passed"], true, "{report}");
+    assert_eq!(report["stamped"], true, "{report}");
     assert_eq!(report["functions"], 4, "{report}");
     assert_eq!(report["assertions"], 11, "{report}");
+    assert_eq!(report["test_runs"], 3 + 200 + 50, "{report}");
     assert!(
         report["max_stack_bytes"]
             .as_u64()
             .is_some_and(|bytes| bytes >= 48),
         "{report}"
     );
-    assert_eq!(
-        report["unsafe_blocks"].as_array().map(Vec::len),
-        Some(0),
+    assert!(
+        report["fingerprint"]
+            .as_str()
+            .is_some_and(|hex| hex.len() == 64),
         "{report}"
     );
+    let counts = report["instructions"]
+        .as_array()
+        .expect("instruction counts");
+    if let Some(first) = counts.first() {
+        assert_eq!(first["test"], "example B1", "{report}");
+        assert!(
+            first["min"].as_u64().is_some_and(|count| count > 0),
+            "{report}"
+        );
+    }
+    assert!(
+        report["next_step"]
+            .as_str()
+            .is_some_and(|step| step.starts_with("Ready")),
+        "{report}"
+    );
+    let lock = program.read("lengua.lock").expect("the lock");
+    assert!(
+        lock.contains("[code]") && lock.contains("executable_sha256 = "),
+        "{lock}"
+    );
+    assert!(lock.contains("toolchain = \"llvm-mc "), "{lock}");
+    let status = session.call_ok("status", program.arguments()).await;
+    assert_eq!(status["program"]["state"], "ready", "{status}");
+    session.service.cancel().await.expect("close the session");
+}
+
+#[tokio::test]
+async fn hardcoded_answers_fail_generated_tests() {
+    let session = session().await;
+    let program = checked_template(&session).await;
+    // Always prints -7 for any number: right for the example, wrong for the rest.
+    let code = asset("main-template.s").replacen(
+        "    js .Lstart_not_a_number\n    neg rdx\n",
+        "    js .Lstart_not_a_number\n    mov rdx, 7\n    neg rdx\n",
+        1,
+    );
+    program.write("main.s", &code);
+    let error = session.call_error("check_code", program.arguments()).await;
+    assert!(
+        error.contains("follows every rule but fails 1 test"),
+        "{error}"
+    );
+    assert!(error.contains("generated B1"), "{error}");
+    assert!(error.contains("(seed "), "{error}");
+    assert!(error.contains("but was \"-7\\n\""), "{error}");
+    assert!(
+        !program
+            .read("lengua.lock")
+            .expect("the lock")
+            .contains("[code]")
+    );
+    session.service.cancel().await.expect("close the session");
+}
+
+#[tokio::test]
+async fn failed_assertions_name_their_line() {
+    let session = session().await;
+    let program = checked_template(&session).await;
+    // The bounds check now trips on the second character.
+    let code = asset("main-template.s").replacen("    cmp rcx, MAX_CHARS\n", "    cmp rcx, 1\n", 1);
+    program.write("main.s", &code);
+    let error = session.call_error("check_code", program.arguments()).await;
+    let line = code
+        .lines()
+        .position(|line| line == "    mov edi, 4")
+        .expect("assertion 4")
+        + 1;
+    assert!(
+        error.contains(&format!("assertion 4 failed at main.s:{line}")),
+        "{error}"
+    );
+    session.service.cancel().await.expect("close the session");
+}
+
+#[tokio::test]
+async fn run_needs_matching_files_and_the_tested_build() {
+    let session = session().await;
+    let program = checked_template(&session).await;
+    let code = asset("main-template.s");
+    program.write("main.s", &code);
+    let error = session.call_error("run", program.arguments()).await;
+    assert!(
+        error.contains("doesn't"),
+        "run refuses unchecked code: {error}"
+    );
+    session.call_ok("check_code", program.arguments()).await;
+
+    let arguments = |args: &[&str]| {
+        let mut value = program.arguments();
+        value["args"] = serde_json::json!(args);
+        value
+    };
+    let report = session.call_ok("run", arguments(&["7"])).await;
+    assert_eq!(report["stdout"], "-7\n", "{report}");
+    assert_eq!(report["exit_code"], 0, "{report}");
+    assert_eq!(report["ended"], "exit code 0", "{report}");
+    let report = session.call_ok("run", arguments(&[])).await;
+    assert_eq!(report["stderr"], "usage: negate <n>\n", "{report}");
+    assert_eq!(report["exit_code"], 1, "{report}");
+
+    // A build that differs from the tested one (as after an LLVM upgrade) doesn't run.
+    let key_bytes: [u8; 32] = std::fs::read(session.data_dir.path().join("key"))
+        .expect("the signing key")
+        .try_into()
+        .expect("32 bytes");
+    let key = lengua::lock::Key::from_bytes(key_bytes);
+    let mut lock = lengua::lock::read(program.path(), Some(&key))
+        .expect("a valid lock")
+        .expect("a lock");
+    let stamp = lock.code.as_mut().expect("code stamp");
+    stamp.executable_sha256 = lengua::hash::Sha256Hex::of(b"another build");
+    stamp.toolchain = "llvm-mc 21.0.0, ld.lld 21.0.0".into();
+    lengua::lock::write(program.path(), &lock, &key).expect("write the lock");
+    let error = session.call_error("run", arguments(&["7"])).await;
+    assert!(
+        error.contains("differs from the one check_code tested"),
+        "{error}"
+    );
+    assert!(error.contains("built with llvm-mc 21.0.0"), "{error}");
+    session.call_ok("check_code", program.arguments()).await;
+
+    // Any edit stops run until it's checked or approved again.
+    program.write("main.s", &format!("{code}\n"));
+    let error = session.call_error("run", arguments(&["7"])).await;
+    assert!(error.contains("call check_code"), "{error}");
+    program.write("main.s", &code);
+    let lock_text = program.read("lengua.lock").expect("the lock");
+    program.write(
+        "lengua.lock",
+        &lock_text.replace("max_stack_bytes = ", "max_stack_bytes = 1"),
+    );
+    let error = session.call_error("run", arguments(&["7"])).await;
+    assert!(error.contains("can't be trusted"), "{error}");
     session.service.cancel().await.expect("close the session");
 }
 

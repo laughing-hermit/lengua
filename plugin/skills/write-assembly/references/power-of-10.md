@@ -177,8 +177,9 @@ to the exit; 0 to 255, never 134), `.zero` and `.skip` sizes, and loop counts. A
 ### 9. No indirection, checked indexes
 
 No jumps or calls through registers or memory, and data holds numbers, never addresses. A memory
-operand with an index register needs, since the last label, a `cmp` of that register followed by
-a conditional jump, and no change to the register before the access:
+operand with an index register needs, since the last label, `cmp index, LIMIT` followed by `jae`
+(or `ja`) away from the access, and no change to the index before the access. `jae` compares
+without sign, so a negative index is caught too:
 
 ```
 .Lparse_loop:  # bound: 20
@@ -187,9 +188,14 @@ a conditional jump, and no change to the register before the access:
     movzx edx, byte ptr [rdi + rcx]
 ```
 
-Where the check is provably unnecessary, wrap the access in `# unsafe: <reason>` …
-`# end unsafe`. Only bounds checks can be skipped this way, and `check_code` reports every unsafe
-block.
+When the base register holds the address of one of the program's data symbols (every path sets
+it with `lea base, [rip + name]`), the limit must keep every access inside that symbol. Where a
+check is provably unnecessary, wrap the access in `# unsafe: <reason>` … `# end unsafe`. Only
+bounds checks can be skipped this way, and `check_code` reports every unsafe block.
+
+This rule checks the shape of each bounds check, and the limit against data symbols. It doesn't
+check moving a pointer (`add rsi, rcx`) instead of indexing: the tests guard that until the proof
+step after the MVP.
 
 ### 10. Checked by tools
 
