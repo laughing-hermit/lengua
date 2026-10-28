@@ -98,6 +98,10 @@ and AVX-512 (F, BW, CD, DQ, VL, VBMI, VBMI2, VNNI, BITALG, VPOPCNTDQ):
   `vpblendm*`, `vpcompress*`, `vpexpand*`
 - bit counts and dot products: `vpopcnt*`, `vplzcnt*`, `vpconflict*`, `vpdpbusd`, `vpdpwssd`
 - `vzeroupper`, `vzeroall`, and `crc32`
+- hashing, checksums and ciphers, when the CPU has them: AES-NI and VAES (`aesenc`, `aesdec`,
+  `aesimc`, `aeskeygenassist` and their `v` forms), SHA (`sha1*`, `sha256*`), PCLMULQDQ and
+  VPCLMULQDQ (`pclmulqdq`), GFNI (`gf2p8affineqb`, `gf2p8affineinvqb`, `gf2p8mulb`). The test
+  language has `sha256`, `crc32` and `crc32c` to check such programs.
 
 Rules for vectors:
 

@@ -105,6 +105,18 @@ pub struct CpuFeatures {
     pub avx512vpopcntdq: bool,
     /// VEX-encoded dot products (`vpdpbusd` on AVX registers).
     pub avxvnni: bool,
+    /// AES rounds on 128-bit lanes (`aesenc`, `aesdec`, …).
+    pub aes: bool,
+    /// AES rounds on 256-bit and 512-bit registers (`vaesenc ymm0, …`).
+    pub vaes: bool,
+    /// SHA-1 and SHA-256 rounds (`sha256rnds2`, …).
+    pub sha: bool,
+    /// Carry-less multiplication (`pclmulqdq`), for CRCs and hashes.
+    pub pclmulqdq: bool,
+    /// Carry-less multiplication on 256-bit and 512-bit registers.
+    pub vpclmulqdq: bool,
+    /// Galois-field byte operations (`gf2p8affineqb`, `gf2p8mulb`).
+    pub gfni: bool,
 }
 
 impl CpuFeatures {
@@ -135,6 +147,12 @@ impl CpuFeatures {
             avx512bitalg: true,
             avx512vpopcntdq: true,
             avxvnni: true,
+            aes: true,
+            vaes: true,
+            sha: true,
+            pclmulqdq: true,
+            vpclmulqdq: true,
+            gfni: true,
         }
     }
 }
@@ -208,6 +226,12 @@ fn cpu_features() -> CpuFeatures {
         avx512bitalg: std::arch::is_x86_feature_detected!("avx512bitalg"),
         avx512vpopcntdq: std::arch::is_x86_feature_detected!("avx512vpopcntdq"),
         avxvnni: std::arch::is_x86_feature_detected!("avxvnni"),
+        aes: std::arch::is_x86_feature_detected!("aes"),
+        vaes: std::arch::is_x86_feature_detected!("vaes"),
+        sha: std::arch::is_x86_feature_detected!("sha"),
+        pclmulqdq: std::arch::is_x86_feature_detected!("pclmulqdq"),
+        vpclmulqdq: std::arch::is_x86_feature_detected!("vpclmulqdq"),
+        gfni: std::arch::is_x86_feature_detected!("gfni"),
     }
 }
 

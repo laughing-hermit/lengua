@@ -96,6 +96,9 @@ decimal and strings as they are; true and false can't be printed, so use `if` to
 | `upper(s)`, `lower(s)` | ASCII letters in upper or lower case |
 | `reverse(s)` | The characters in reverse order |
 | `count(s, part)` | How many times `part` appears in `s`, without overlaps: `count(line, "e")` |
+| `sha256(s)` | The SHA-256 of `s`'s bytes, in lowercase hex |
+| `crc32(s)` | The CRC-32 of `s`'s bytes, as zlib, gzip and PNG compute it |
+| `crc32c(s)` | The CRC-32C (Castagnoli) of `s`'s bytes, as the `crc32` instruction computes it |
 
 ## Writing TOML strings
 

@@ -84,7 +84,7 @@ ones) and compute the expected results with formulas. A block whose ranges hold 
 combinations runs every one of them instead, within 20000 runs per file: for those inputs the
 program is checked, not sampled, which is the first step toward the proof below. The formula language has checked 128-bit
 whole numbers, strings, comparisons, `&& || !` and the functions `len`, `abs`, `min`, `max`,
-`if`, `upper`, `lower` and `reverse`. It has no loops, so every formula finishes.
+`if`, `upper`, `lower`, `reverse`, `count`, `sha256`, `crc32` and `crc32c`. It has no loops, so every formula finishes.
 
 `check_tests` ties the tests to the approved spec: example exit codes equal the spec's, generator
 limits are numbers the spec states, and args and stdin hold bare variables so each example can be
@@ -150,9 +150,10 @@ reached through a conditional jump, the fall-through of one, or a `jmp` right af
 of a comparison chain or of an exhausted loop).
 
 Instruction sets: dialect 2 (the current one) uses x86-64's integer instructions and its integer
-vector instructions. Integer extensions (BMI1, BMI2, POPCNT, LZCNT, ADX, MOVBE) and vector sets
-beyond SSE2 (SSE3 to SSE4.2, AVX, AVX2 and AVX-512) are allowed only when the CPU has them: the
-checker reads which CPU features each instruction needs. Vectors follow four extra rules:
+vector instructions. Integer extensions (BMI1, BMI2, POPCNT, LZCNT, ADX, MOVBE), crypto and checksum
+extensions (AES-NI, VAES, SHA, PCLMULQDQ, VPCLMULQDQ, GFNI) and vector sets beyond SSE2 (SSE3 to
+SSE4.2, AVX, AVX2 and AVX-512) are allowed only when the CPU has them: the checker reads which CPU
+features each instruction needs. Vectors follow four extra rules:
 
 - unaligned loads and stores only (`movdqu`; an SSE instruction other than `movdqu` or `lddqu` may
   not read 16 bytes of memory, since it would need alignment);

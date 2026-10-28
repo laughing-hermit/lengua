@@ -205,10 +205,16 @@ pub enum Function {
     Reverse,
     /// `count(s, part)`: how many times `part` appears in `s`, without overlaps.
     Count,
+    /// `sha256(s)`: the SHA-256 of `s`'s bytes, in lowercase hex.
+    Sha256,
+    /// `crc32(s)`: the CRC-32 of `s`'s bytes, as zlib, gzip and PNG compute it.
+    Crc32,
+    /// `crc32c(s)`: the CRC-32C (Castagnoli) of `s`'s bytes, as the `crc32` instruction computes it.
+    Crc32c,
 }
 
 impl Function {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 12] = [
         Self::Len,
         Self::Abs,
         Self::Min,
@@ -218,6 +224,9 @@ impl Function {
         Self::Lower,
         Self::Reverse,
         Self::Count,
+        Self::Sha256,
+        Self::Crc32,
+        Self::Crc32c,
     ];
 
     fn name(self) -> &'static str {
@@ -231,6 +240,9 @@ impl Function {
             Self::Lower => "lower",
             Self::Reverse => "reverse",
             Self::Count => "count",
+            Self::Sha256 => "sha256",
+            Self::Crc32 => "crc32",
+            Self::Crc32c => "crc32c",
         }
     }
 
@@ -240,15 +252,22 @@ impl Function {
             Self::Min | Self::Max => (2, usize::MAX),
             Self::If => (3, 3),
             Self::Count => (2, 2),
-            Self::Len | Self::Abs | Self::Upper | Self::Lower | Self::Reverse => (1, 1),
+            Self::Len
+            | Self::Abs
+            | Self::Upper
+            | Self::Lower
+            | Self::Reverse
+            | Self::Sha256
+            | Self::Crc32
+            | Self::Crc32c => (1, 1),
         }
     }
 }
 
 /// Names that can't be used as variables.
 const RESERVED: &[&str] = &[
-    "true", "false", "len", "abs", "min", "max", "if", "upper", "lower", "reverse", "count", "int",
-    "choice", "string",
+    "true", "false", "len", "abs", "min", "max", "if", "upper", "lower", "reverse", "count",
+    "sha256", "crc32", "crc32c", "int", "choice", "string",
 ];
 
 /// Whether `name` can name a variable: lowercase letters, digits and `_`, not starting with a
@@ -691,7 +710,39 @@ fn call(function: Function, arguments: &[Expr], env: &Env) -> Result<Value, Eval
             let found = text.matches(part.as_str()).count();
             Ok(Value::Int(i128::try_from(found).unwrap_or(i128::MAX)))
         }
+        Function::Sha256 => {
+            let text = string(argument(0)?, name)?;
+            Ok(Value::Str(
+                crate::hash::Sha256Hex::of(text.as_bytes())
+                    .as_str()
+                    .to_owned(),
+            ))
+        }
+        Function::Crc32 => Ok(Value::Int(i128::from(crc(
+            string(argument(0)?, name)?.as_bytes(),
+            0xedb8_8320,
+        )))),
+        Function::Crc32c => Ok(Value::Int(i128::from(crc(
+            string(argument(0)?, name)?.as_bytes(),
+            0x82f6_3b78,
+        )))),
     }
+}
+
+/// A reflected 32-bit CRC with the given polynomial, starting from and finishing with all ones.
+fn crc(bytes: &[u8], polynomial: u32) -> u32 {
+    let mut crc = u32::MAX;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 {
+                (crc >> 1) ^ polynomial
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
 }
 
 fn collect_variables(expr: &Expr, names: &mut BTreeSet<String>) {
@@ -1407,6 +1458,16 @@ mod tests {
         );
         assert!(value("count(s, \"\")", &vars).is_err());
         assert!(parse("count(s)").is_err_and(|error| error.0.contains("two arguments")));
+        let check = env(&[("t", Value::Str("123456789".into()))]);
+        assert_eq!(value("crc32(t)", &check), Ok(Value::Int(0xcbf4_3926)));
+        assert_eq!(value("crc32c(t)", &check), Ok(Value::Int(0xe306_9283)));
+        let abc = env(&[("t", Value::Str("abc".into()))]);
+        assert_eq!(
+            value("sha256(t)", &abc),
+            Ok(Value::Str(
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into()
+            ))
+        );
         assert_eq!(
             value("if(1 > 0, \"yes\", 1 / 0)", &vars),
             Ok(Value::Str("yes".into())),
