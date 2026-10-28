@@ -35,6 +35,8 @@ pub enum Verdict {
         shapes: usize,
         /// Paths through the code followed.
         paths: usize,
+        /// Why one solver answered alone, when no second solver confirmed what it ruled out.
+        alone: Option<String>,
     },
     /// Inputs where the program, as the prover reads it, disagrees with the formulas.
     Counterexample(BTreeMap<String, i128>),
@@ -61,7 +63,10 @@ impl Oracle for Solver {
         conditions.push(condition);
         let (answer, _) = self
             .check(pool, &conditions, &[])
-            .map_err(|error| format!("z3 stopped answering: {error}"))?;
+            .map_err(|error| format!("the solver failed: {error}"))?;
+        if self.out_of_time() {
+            return Err("the proof ran out of time".into());
+        }
         Ok(answer != Answer::Unsat)
     }
 }
@@ -510,6 +515,7 @@ fn attempt(machine: &Machine, block: &Generated, budget: Budget) -> Result<Verdi
     // counterexample turns up, or something can't be proven.
     let next = AtomicUsize::new(0);
     let paths = AtomicUsize::new(0);
+    let alone: Mutex<Option<String>> = Mutex::new(None);
     let stop = AtomicBool::new(false);
     let found: Mutex<Option<BTreeMap<String, i128>>> = Mutex::new(None);
     let failure: Mutex<Option<String>> = Mutex::new(None);
@@ -530,8 +536,11 @@ fn attempt(machine: &Machine, block: &Generated, budget: Budget) -> Result<Verdi
                         prove_shape(&image, block, &each, combination, budget)
                     };
                     match result {
-                        Ok(count) => {
+                        Ok((count, reason)) => {
                             paths.fetch_add(count, Ordering::Relaxed);
+                            if let (Some(reason), Ok(mut alone)) = (reason, alone.lock()) {
+                                alone.get_or_insert(reason);
+                            }
                         }
                         Err(Stop::Counterexample(values)) => {
                             if let Ok(mut found) = found.lock() {
@@ -559,6 +568,7 @@ fn attempt(machine: &Machine, block: &Generated, budget: Budget) -> Result<Verdi
     Ok(Verdict::Proven {
         shapes: total,
         paths: paths.into_inner(),
+        alone: alone.into_inner().ok().flatten(),
     })
 }
 
@@ -583,16 +593,18 @@ impl From<&str> for Stop {
 }
 
 /// Proves one combination of shapes, with its own terms and solver so questions only carry what
-/// they're about. Returns how many paths it followed.
+/// they're about. Returns how many paths it followed, and why one solver answered alone when no
+/// second one checked it.
 fn prove_shape(
     image: &Image,
     block: &Generated,
     each: &[(String, Vec<Shape>)],
     combination: usize,
     budget: Budget,
-) -> Result<usize, Stop> {
-    let mut solver =
-        Solver::start(budget.question_ms).map_err(|error| format!("z3 couldn't start: {error}"))?;
+) -> Result<(usize, Option<String>), Stop> {
+    let mut solver = Solver::start(budget.question_ms)
+        .map_err(|error| format!("no SMT solver could start: {error}"))?;
+    solver.until(budget.deadline);
     let mut pool = Pool::default();
     let mut rest = combination;
     let mut inputs = BTreeMap::new();
@@ -638,7 +650,7 @@ fn prove_shape(
         let values: Vec<Term> = numbers.values().map(|number| number.term).collect();
         let (answer, model) = solver
             .check(&pool, &conditions, &values)
-            .map_err(|error| format!("z3 stopped answering: {error}"))?;
+            .map_err(|error| format!("the solver failed: {error}"))?;
         match answer {
             Answer::Unsat => {}
             Answer::Sat => {
@@ -653,19 +665,20 @@ fn prove_shape(
                 return Err(Stop::Counterexample(found));
             }
             Answer::Unknown => {
-                return Err("the solver couldn't settle a path in time".into());
+                return Err(format!("a path couldn't be settled: {}", solver.why_unknown).into());
             }
         }
     }
     if trace {
         eprintln!(
             "shape {combination}: {count} runs, {questions} questions exploring in {explored:?}, \
-             {} checking, {} terms",
+             {} checking, {} terms, {} overruled",
             solver.questions - questions,
-            pool.len()
+            pool.len(),
+            solver.overruled
         );
     }
-    Ok(count)
+    Ok((count, solver.alone.take()))
 }
 
 /// Runs the prover's model of the code on concrete inputs that the real program has passed, and

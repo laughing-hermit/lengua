@@ -13,7 +13,8 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 > Status: dialect 2 on Linux x86-64. It covers whole numbers, exact decimals, floating point in
 > double and single precision with fused multiply-add, vectors from SSE2 to AVX-512, hashing and
 > checksums, files, fork-join threads, and inputs up to 1 MiB. The kernel holds every run to what
-> its spec approves, and whole-number programs can be proven right for every input with z3. Next:
+> its spec approves, and whole-number programs can be proven right for every input, each step
+> confirmed by two independent solvers, z3 and cvc5. Next:
 > - proofs for text and decimals;
 > - more of the top CPU and OS targets, which LLVM already supports.
 
@@ -23,7 +24,8 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 - Rust 1.89 or newer (to build the server)
 - LLVM's assembler and linker: `sudo dnf install llvm lld` (Fedora) or `sudo apt install llvm lld`
   (Debian/Ubuntu)
-- For proofs, the z3 solver: `sudo dnf install z3` or `sudo apt install z3`
+- For proofs, the z3 and cvc5 solvers: `sudo dnf install z3 cvc5` or `sudo apt install z3 cvc5`.
+  With only one of them installed, proofs still run, and say that one solver answered alone.
 
 ## Build
 

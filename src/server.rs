@@ -810,10 +810,10 @@ impl LenguaServer {
         description = "Proves that the checked program in <path> prints exactly what its tests' \
             formulas say for every input in range, not only the sampled ones: for each generated \
             test that draws whole numbers with int(lo, hi) and computes whole-number output, it \
-            runs the machine code on symbols and asks the z3 solver whether any input could make \
-            the output differ. Call it after check_code passes. It can take a few minutes. A \
-            counterexample is confirmed with a real run and reported as a failure. path: absolute \
-            path of the program folder.",
+            runs the machine code on symbols and asks two independent SMT solvers, z3 and cvc5, \
+            whether any input could make the output differ. Call it after check_code passes. It \
+            can take a few minutes. A counterexample is confirmed with a real run and reported \
+            as a failure. path: absolute path of the program folder.",
         annotations(
             title = "Prove for every input",
             read_only_hint = true,
@@ -899,11 +899,24 @@ impl LenguaServer {
             .map_err(|error| format!("the proof stopped: {error}"))?;
             let (proven, detail) = match verdict {
                 Err(reason) => (false, format!("tested, not proven: {reason}")),
-                Ok(prove::Verdict::Proven { shapes, paths }) => (
+                Ok(prove::Verdict::Proven {
+                    shapes,
+                    paths,
+                    alone,
+                }) => (
                     true,
                     format!(
                         "proven for every input in range ({shapes} input shapes, {paths} paths \
-                         through the machine code)"
+                         through the machine code), {}",
+                        alone.map_or_else(
+                            || "with each step confirmed by two independent solvers, z3 and \
+                                cvc5"
+                                .to_owned(),
+                            |reason| format!(
+                                "by one solver alone ({reason}; with both z3 and cvc5 \
+                                 installed, each step is confirmed twice)"
+                            )
+                        )
                     ),
                 ),
                 Ok(prove::Verdict::NotProven(reason)) => {

@@ -45,7 +45,9 @@ Nothing runs before every rule passes.
    files in `args` relative to it. Later, to work on the user's own files, pass the folder that
    holds them; the program can't touch anything outside it.
 8. Tell the user in a few short lines and plain words: where the program is, that it follows
-   every rule and passed all its test runs, which behaviors are proven for every input, what `run` printed (and the files it wrote, if any),
+   every rule and passed all its test runs, which behaviors are proven for every input (and, if
+   the proof says one solver answered alone, which one to install for a second check), what
+   `run` printed (and the files it wrote, if any),
    and that they can ask you to run it with other inputs or to change what it does (which starts
    with the spec). If the code
    handles a case the spec doesn't mention, such as input longer than a buffer, say so in one line

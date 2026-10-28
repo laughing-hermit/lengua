@@ -232,8 +232,10 @@ How `prove` works (`src/prove/`):
   where neither can overflow. Printed digits are matched through their common root, the value
   divided by powers of ten. So "prints the formula's value" usually reduces to identical terms,
   and the solver is asked only what remains.
-- **The solver.** It asks z3 in SMT-LIB 2, one fresh process per shape and every core in use.
-  `examples/add` takes about a minute for 4×10^18 input pairs; the template takes a few seconds.
+- **The solvers.** It asks z3 in SMT-LIB 2, and cvc5 confirms, with one fresh pair of processes
+  per shape and every core in use. `examples/add` takes about a minute and a half for 4×10^18
+  input pairs; the template takes about ten seconds. Every question has a time limit, cut to what
+  is left of the proof's five minutes.
 
 Trust:
 
@@ -241,14 +243,23 @@ Trust:
   a failure. If the real program passes, the result is "not proven".
 - **The model is checked against the CPU.** Before a proof, the model runs concretely on sample
   inputs the real program has already passed, and must agree.
-- **Models are checked.** Every satisfying model z3 returns is checked against the assertions by
-  lengua's own evaluator.
+- **Models are checked.** Every satisfying model a solver returns is checked against the
+  assertions by lengua's own evaluator.
 - **Only z3's bit-blaster and SAT core.** z3 4.16 (Fedora's) got bit-vector formulas wrong in both
   directions in its own simplifier and its default strategy. So lengua never uses them. It does
   its own simplification, asks z3 only to bit-blast and run SAT, writes negation as `~x + 1`, and
   defines division itself (`x = q × c + r`, `r < c`).
-- **The remaining gap.** An `unsat` that z3's SAT core got wrong would go unnoticed. A second
-  solver (cvc5 or Bitwuzla) re-checking every `unsat` would close it.
+- **A second, independent solver.** Every `unsat` a proof relies on, whether it prunes a branch
+  or rules out a wrong output, must also be `unsat` from cvc5, whose bit-blaster and SAT solver
+  (CaDiCaL) share no code with z3's. If cvc5 instead finds inputs that really meet the
+  conditions, z3 was wrong and those inputs are used. Any other disagreement, or a confirmation
+  that runs out of time, leaves the step unsettled: "not proven". cvc5 takes several times longer
+  than z3's bit-blasting on these questions, so it gets four times z3's limit. With only one
+  solver installed, the report says the proof rests on it alone.
+- **The remaining gap.** Both solvers answer the same questions, which lengua's own code builds:
+  the model of each instruction, the simplifier and the encoding of the formulas. A mistake there
+  could make both agree on a wrong answer. The check of the model against real runs, above, is
+  the guard there.
 
 The first milestone covers whole-number inputs and formulas (`+ - * / %`, `abs`, `min`, `max`,
 `if`) with at most one computed value per output. Text, decimals, files and threads stay tested,
