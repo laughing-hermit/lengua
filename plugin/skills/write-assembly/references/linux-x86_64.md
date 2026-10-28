@@ -89,3 +89,8 @@ temporary folder of their own. `_start` has no return address: it ends with `exi
 - Constants: `.double 100.0` in `.rodata`, read with `movsd xmm1, qword ptr [rip + hundred]`, or
   `mov eax, 100` and `cvtsi2sd xmm1, eax`.
 - "12.34" is 1234 / 100.0: one `divsd` of two exact numbers gives the double the tests use.
+- Singles work the same way with `ss` instructions: `cvtsi2ss` is exact up to 2^24, `.float 2.5`
+  makes a constant, and `cvtss2sd` widens a single to a double exactly. The low 4 bytes of an
+  `xmm` register hold a single.
+- `vfmadd231sd xmm0, xmm1, xmm2` sets `xmm0 = xmm1 × xmm2 + xmm0` with one rounding; `132` and
+  `213` choose other operand orders.

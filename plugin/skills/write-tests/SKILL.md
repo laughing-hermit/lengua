@@ -44,7 +44,10 @@ the tests come before the code, and they decide whether the code is right.
 - **Decimals.** Draw decimal inputs with `decimal(lo, hi)`, written with Purpose's places. For
   exact decimals such as money, compute in whole units and print with `places`:
   `{places(scaled(a, 2) + scaled(b, 2), 2)}`. For measured decimals, compute in doubles and print
-  with `fixed`: `{fixed(sqrt(x), 3)}`. Write `2.0`, not `2`, next to decimals.
+  with `fixed`: `{fixed(sqrt(x), 3)}`, or in singles when the spec says single precision:
+  `{fixed(sqrt(single(x)), 3)}`. Write a multiply followed by an add, as in a dot product or a
+  polynomial, as `fma(a, b, c)`: it rounds once, which is more accurate, and lets the program use
+  one `vfmadd` instruction. Write `2.0`, not `2`, next to decimals.
 - **Inputs are bare variables.** In `args` and `stdin`, a placeholder holds just a variable
   (`{a}`); computations belong in `stdout`, `stderr` and `exit_code` (`{a + b}`).
 - **Small ranges are checked in full.** A block whose ranges hold at most 5000 combinations (and

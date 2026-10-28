@@ -56,7 +56,12 @@ of the same rule.
   how a result rounds when it has more places than it prints ("half a cent rounds away from
   zero"). **Measured decimals** (lengths, ratios, square roots) are computed in doubles: in their
   examples, avoid values that end in exactly 5 past the printed places, such as `1.015` printed
-  with 2, because binary doubles round them in ways people don't expect.
+  with 2, because binary doubles round them in ways people don't expect. When the user wants
+  speed more than digits, Purpose may say the results are computed in single precision (about 7
+  significant digits), which doubles what each vector instruction does; it pays off when the
+  program computes many values, not one. Either way the tests compute in the same precision, step
+  by step, so they always agree with the program: precision decides which digits print, never
+  whether a test passes.
 - **One rule per behavior,** under a heading `## B<n>: <title>` with a unique ID (B1, B2, B3…).
   The title names the rule in the user's words, such as `Adds two numbers` or `Rejects a line
   that is too long`, and no two titles are the same. Don't add a behavior that only repeats

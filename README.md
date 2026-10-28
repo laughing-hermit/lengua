@@ -10,8 +10,9 @@ program runs only while all three match. See [DESIGN.md](DESIGN.md) for how and 
 lengua is an [Agent Plugin](https://agent-plugins.org): three skills and an MCP server, using only
 open standards, so it works in Claude Code, Codex, Cursor and other agent harnesses.
 
-> Status: dialect 2 on Linux x86-64. It covers whole numbers, exact and floating-point decimals,
-> vectors from SSE2 to AVX-512, hashing and checksums, and inputs up to 1 MiB. Next:
+> Status: dialect 2 on Linux x86-64. It covers whole numbers, exact decimals, floating point in
+> double and single precision with fused multiply-add, vectors from SSE2 to AVX-512, hashing and
+> checksums, and inputs up to 1 MiB. Next:
 > - fork-join threads;
 > - files in tests;
 > - proofs with an SMT solver;

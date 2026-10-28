@@ -83,6 +83,8 @@ pub struct CpuFeatures {
     pub avx: bool,
     /// AVX2: 256-bit integer vectors (`vpaddb ymm0, …`).
     pub avx2: bool,
+    /// Fused multiply-add (`vfmadd231sd`, …): `a × b + c` rounded once.
+    pub fma: bool,
     /// AVX-512 Foundation: 512-bit vectors and mask registers.
     pub avx512f: bool,
     /// AVX-512 byte and word instructions.
@@ -136,6 +138,7 @@ impl CpuFeatures {
             sse4_2: true,
             avx: true,
             avx2: true,
+            fma: true,
             avx512f: true,
             avx512bw: true,
             avx512cd: true,
@@ -215,6 +218,7 @@ fn cpu_features() -> CpuFeatures {
         sse4_2: std::arch::is_x86_feature_detected!("sse4.2"),
         avx: std::arch::is_x86_feature_detected!("avx"),
         avx2: std::arch::is_x86_feature_detected!("avx2"),
+        fma: std::arch::is_x86_feature_detected!("fma"),
         avx512f: std::arch::is_x86_feature_detected!("avx512f"),
         avx512bw: std::arch::is_x86_feature_detected!("avx512bw"),
         avx512cd: std::arch::is_x86_feature_detected!("avx512cd"),

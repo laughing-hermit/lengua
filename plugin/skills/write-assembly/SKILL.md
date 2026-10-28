@@ -1,6 +1,6 @@
 ---
 name: write-assembly
-description: Writes a lengua program's main.s, the x86-64 assembly (integer and vector instructions) that implements its approved spec and passes its frozen tests, in lengua's dialect checked against the lengua Power of 10 (NASA's rules adapted for assembly). Use after check_tests passes, when the lengua status tool says to write main.s, when check_code reports violations, or when the user asks for a faster program. Ends with a first run and a short report to the user.
+description: Writes a lengua program's main.s, the x86-64 assembly (integer, vector and floating-point instructions) that implements its approved spec and passes its frozen tests, in lengua's dialect checked against the lengua Power of 10 (NASA's rules adapted for assembly). Use after check_tests passes, when the lengua status tool says to write main.s, when check_code reports violations, or when the user asks for a faster program. Ends with a first run and a short report to the user.
 license: Apache-2.0
 compatibility: Needs the lengua MCP server from the lengua plugin, on Linux x86-64 with LLVM (llvm-mc and ld.lld).
 ---
@@ -61,7 +61,9 @@ bytes, and AVX2 and AVX-512 do 32 and 64. [The vector template](assets/vector-te
 [its spec](assets/vector-template-spec.md) and [tests](assets/vector-template-tests.toml)) is a
 checked SSE2 program that finds a newline and capitalizes a line 16 bytes at a time. Use AVX2 or
 AVX-512 only when `status` lists them, and keep every vector access inside its buffer: see
-"Vectors" in [the rules](references/power-of-10.md).
+"Vectors" in [the rules](references/power-of-10.md). For floating point, packed instructions do 2
+to 8 doubles at once, or 4 to 16 singles, as long as each element's steps stay in the formula's
+order.
 
 ## The rules in brief
 
@@ -88,8 +90,9 @@ AVX-512 only when `status` lists them, and keep every vector access inside its b
 
 - `;`, `/* */`, a label and an instruction on one line, `rep` or `lock`
 - a constant defined after its use, `. - name` outside `.size`, `[name]` without `rip`, or `offset`
-- `leave`, `enter`, `loop`, string instructions, x87, single precision or fused multiply-add
-- floating-point steps in another order than the formula's, or `* 0.1` for `/ 10.0`
+- `leave`, `enter`, `loop`, string instructions, x87, half precision or `rcp`/`rsqrt`
+- floating-point steps in another order than the formula's, `* 0.1` for `/ 10.0`, or a fused
+  multiply-add where the formula doesn't say `fma`
 - `movdqa` or `vmovdqa` (use `movdqu`), an SSE instruction other than `movdqu` reading 16 bytes of
   memory, rounding overrides (`{rn-sae}`), gathers or scatters
 - `and rsp`, `mov rsp`, or memory below `rsp`

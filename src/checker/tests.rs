@@ -618,7 +618,7 @@ async fn integer_vector_instructions_are_in_dialect_2() {
 #[tokio::test]
 async fn vectors_leave_out_alignment_and_rounding_overrides() {
     for (line, needle) in [
-        ("    addps xmm0, xmm1\n", "`addps` isn't in dialect 2"),
+        ("    rcpps xmm0, xmm1\n", "`rcpps` isn't in dialect 2"),
         (
             "    movdqa xmm0, xmm1\n",
             "`movdqa` faults unless its memory is aligned",
@@ -714,11 +714,16 @@ async fn double_precision_is_in_dialect_2() {
     assert!(report.passed(), "{all:#?}");
 
     for (line, needle) in [
-        ("    addss xmm0, xmm1\n", "`addss` isn't in dialect 2"),
+        ("    rcpss xmm0, xmm1\n", "`rcpss` isn't in dialect 2"),
         (
-            "    vfmadd231sd xmm0, xmm1, xmm2\n",
-            "`vfmadd231sd` isn't in dialect 2",
+            "    vrsqrt14ps zmm0, zmm1\n",
+            "`vrsqrt14ps` isn't in dialect 2",
         ),
+        (
+            "    vcvtph2ps xmm0, xmm1\n",
+            "`vcvtph2ps` isn't in dialect 2",
+        ),
+        ("    dpps xmm0, xmm1, 0xff\n", "`dpps` isn't in dialect 2"),
         (
             "    ldmxcsr dword ptr [rsp]\n",
             "`ldmxcsr` isn't in dialect 2",
@@ -740,5 +745,49 @@ async fn double_precision_is_in_dialect_2() {
         Rule::Constants,
         line_of(&text, "    .double HUNDRED"),
         "isn't a plain decimal number",
+    );
+}
+
+#[tokio::test]
+async fn single_precision_and_fma_are_in_dialect_2() {
+    let singles = "    cvtsi2ss xmm0, rdi\n    divss xmm0, dword ptr [rip + tenth]\n    \
+                   vfmadd231ss xmm0, xmm1, xmm2\n    vfmadd213pd ymm0, ymm1, ymm2\n    \
+                   vfnmadd231ps zmm0 {k1}, zmm1, dword ptr [rdi]{1to16}\n    \
+                   cvtss2sd xmm1, xmm0\n    cvtsd2ss xmm0, xmm1\n    sqrtss xmm0, xmm0\n    \
+                   vmulps ymm0, ymm1, ymm2\n    ucomiss xmm0, xmm1\n    cvttss2si eax, xmm0\n";
+    let text = with(
+        ".section .rodata\n",
+        ".section .rodata\n\n.type tenth, @object\ntenth:\n    .float 10.0\n.size tenth, . - \
+         tenth\n",
+    );
+    let text = text.replacen("parse_i64:\n", &format!("parse_i64:\n{singles}"), 1);
+    let report = check(&text).await;
+    let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+    assert!(report.passed(), "{all:#?}");
+
+    // Fused multiply-add needs the CPU to have it.
+    let without_fma = CpuFeatures {
+        fma: false,
+        ..CpuFeatures::all()
+    };
+    let report = check_with(&text, without_fma).await;
+    assert_violation(
+        &report,
+        Rule::Dialect,
+        line_of(&text, "    vfmadd231ss"),
+        "`vfmadd231ss` needs FMA, which this CPU doesn't have",
+    );
+
+    let text = with(
+        ".section .rodata\n",
+        ".section .rodata\n\n.type tenth, @object\ntenth:\n    .float 1e1\n.size tenth, . - \
+         tenth\n",
+    );
+    let report = check(&text).await;
+    assert_violation(
+        &report,
+        Rule::Constants,
+        line_of(&text, "    .float 1e1"),
+        "`.float 1e1` isn't a plain decimal number",
     );
 }

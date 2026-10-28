@@ -86,7 +86,15 @@ to choose text.
   done in doubles, exactly as `addsd`, `subsd`, `mulsd` and `divsd` compute, so `0.1 + 0.2` is
   0.30000000000000004, and the order of operations is part of the formula: `a + b + c` is
   `(a + b) + c`. A result must be a finite number.
-- **Whole numbers and decimals don't mix** in arithmetic: write `2.0`, not `2`, or `float(n)`.
+- **Singles** (32-bit floating point) come from `single(x)`. Arithmetic with a single is done in
+  singles, as `addss`, `subss`, `mulss` and `divss` compute, and a decimal written next to one
+  becomes the nearest single, as a `.float` constant does: `single(x) * 2.5` multiplies by
+  `.float 2.5`. Singles hold about 7 significant digits; use them only when the spec's precision
+  allows it.
+- **Singles and doubles don't mix:** convert one side with `single(x)` or `double(x)`.
+- **`fma(a, b, c)`** is `a × b + c` rounded once, as `vfmadd231sd` (or `vfmadd231ss` for singles)
+  computes. `a * b + c` rounds twice, so the formula says which of the two the program does.
+- **Whole numbers and decimals don't mix** in arithmetic: write `2.0`, not `2`, or `double(n)`.
   Comparisons may mix them (`x > 0`), and `12.5 == 12.50`.
 - **Strings** are written `"text"`, with the escapes `\"`, `\\`, `\n` and `\t`.
 - **True and false** come from comparisons, or from `true` and `false`.
@@ -107,19 +115,21 @@ to choose text.
 | `upper(s)`, `lower(s)` | ASCII letters in upper or lower case |
 | `reverse(s)` | The characters in reverse order |
 | `count(s, part)` | How many times `part` appears in `s`, without overlaps: `count(line, "e")` |
-| `fixed(x, places)` | `x` printed with exactly `places` decimals (0 to 15): x·10^places rounded to the nearest whole number, ties to even, like `mulsd` then `cvtsd2si`. `fixed(2.5, 0)` is "2", `fixed(-0.004, 2)` is "0.00" |
-| `float(n)` | A whole number as a double, exactly (up to 2^53) |
+| `fixed(x, places)` | `x` printed with exactly `places` decimals (0 to 15): x·10^places rounded to the nearest whole number, ties to even, like `mulsd` then `cvtsd2si`. `fixed(2.5, 0)` is "2", `fixed(-0.004, 2)` is "0.00". A single widens exactly first (`cvtss2sd`), then prints as a double does |
+| `double(x)` | `x` as a double: a whole number exactly (up to 2^53), a single exactly (like `cvtss2sd`) |
+| `single(x)` | `x` as a single: a whole number exactly (up to 2^24), a double to the nearest single (like `cvtsd2ss`), an exact decimal to the nearest single (up to 7 digits and 10 places, like `cvtsi2ss` then `divss`) |
+| `fma(a, b, c)` | `a × b + c` rounded once, like `vfmadd231sd`; in singles when an argument is a single |
 | `round(x)`, `trunc(x)`, `floor(x)`, `ceil(x)` | A whole number: nearest with ties to even (like `cvtsd2si`), toward zero (like `cvttsd2si`), down, up |
-| `sqrt(x)` | The square root, as `sqrtsd` computes it |
+| `sqrt(x)` | The square root, as `sqrtsd` computes it, or `sqrtss` for a single |
 | `scaled(x, places)` | An exact decimal as a whole number of its smallest units: `scaled(12.5, 2)` is 1250 (cents) |
 | `places(n, places)` | A whole number of units printed as a decimal: `places(1250, 2)` is "12.50", `places(-5, 2)` is "-0.05" |
-
-Exact decimals such as money stay exact in whole units: `{places((scaled(a, 2) + scaled(b, 2)), 2)}`
-adds two prices in cents, and any rounding rule the spec states is whole-number arithmetic with
-`if`. Use `fixed` for measurements computed in doubles.
 | `sha256(s)` | The SHA-256 of `s`'s bytes, in lowercase hex |
 | `crc32(s)` | The CRC-32 of `s`'s bytes, as zlib, gzip and PNG compute it |
 | `crc32c(s)` | The CRC-32C (Castagnoli) of `s`'s bytes, as the `crc32` instruction computes it |
+
+Exact decimals such as money stay exact in whole units: `{places((scaled(a, 2) + scaled(b, 2)), 2)}`
+adds two prices in cents, and any rounding rule the spec states is whole-number arithmetic with
+`if`. Use `fixed` for measurements computed in doubles or singles.
 
 ## Writing TOML strings
 

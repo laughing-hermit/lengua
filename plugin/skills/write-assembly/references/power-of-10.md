@@ -64,8 +64,8 @@ constant, and `lea reg, [rip + name]` loads an address. Write the size (`byte pt
 
 ## Instruction set
 
-Dialect 2 is integer instructions, `syscall`, vector instructions and double-precision floating
-point:
+Dialect 2 is integer instructions, `syscall`, vector instructions and floating point in double
+and single precision:
 
 - `mov movzx movsx movsxd lea push pop xchg bswap` and every `cmovCC`
 - `add adc sub sbb neg inc dec mul imul div idiv cbw cwde cdqe cwd cdq cqo`
@@ -144,23 +144,38 @@ Double precision, scalar and packed (`sd` and `pd`), from SSE2 to AVX-512:
   `vextractf*`, `vshuff64x2`, `vpermi2pd`, `vpermt2pd`, `vblendmpd`, `vcompresspd`, `vexpandpd`
 - the `v` forms of all of these, and `.double 100.0` constants in `.rodata`
 
+Single precision (`ss` and `ps`) has the same operations on 32-bit numbers: `movss`, `movups`,
+`addss` … `sqrtps`, `ucomiss`, `cmpss`, `cvtsi2ss`, `cvtss2si`, `cvttss2si`, `roundss`,
+`shufps`, `insertps`, `extractps`, `vpermps` and the rest, with `.float 2.5` constants. Convert
+between the precisions with `cvtss2sd` (exact) and `cvtsd2ss` (to the nearest single), and
+`cvtps2pd`/`cvtpd2ps` for vectors. A `ymm` register holds 8 singles and a `zmm` register 16, twice
+as many as doubles.
+
+Fused multiply-add (`vfmadd*`, `vfmsub*`, `vfnmadd*`, `vfnmsub*`, `vfmaddsub*`, `vfmsubadd*`, in
+`132`, `213` and `231` forms, for `ss`, `sd`, `ps` and `pd`) needs the FMA extension. It computes
+`a × b + c` with one rounding instead of two, so use it exactly where the tests' formula says
+`fma(a, b, c)`.
+
 Exact decimals such as money don't need floating point: parse "12.5" into 1250 cents, compute
 with whole-number instructions, and print the cents with the point two digits from the right, as
-the tests' `scaled` and `places` do. Use floating point for measured values, where the tests use
-doubles too.
+the tests' `scaled` and `places` do. Use floating point for measured values, in the precision the
+tests use: doubles, or singles where the formula says `single(x)`.
 
 The tests compute exactly what these instructions compute, so:
 
 - **Same operations, same order.** `{a + b + c}` is `(a + b) + c`: add in that order, never in
   pairs across lanes. Don't turn `/ 10.0` into `* 0.1`, which rounds differently.
 - **Read decimals as one division.** Parse "12.34" into the whole number 1234 and its 2 places,
-  then `cvtsi2sd` both 1234 and 100 and `divsd` once: that's the value the tests use.
+  then `cvtsi2sd` both 1234 and 100 and `divsd` once: that's the value the tests use. For a
+  single, `cvtsi2ss` and `divss` the same way.
 - **Print with `fixed`'s recipe.** `fixed(x, 2)` is `mulsd` by 100.0 (one constant), `cvtsd2si`
   (nearest, ties to even), then the whole number printed with the point two digits from the
-  right ("0.05", "-0.05"). Take the sign from that whole number, so −0.004 prints "0.00".
-- **Left out:** single and half precision (the tests compute in doubles), fused multiply-add
-  (`vfmadd*` rounds once where the formulas round twice), the `rcp`/`rsqrt` approximations,
-  `ldmxcsr` (rounding stays nearest, ties to even) and x87.
+  right ("0.05", "-0.05"). Take the sign from that whole number, so −0.004 prints "0.00". Print a
+  single by widening it with `cvtss2sd` first, then the same recipe.
+- **Fuse only where the formula does.** `a * b + c` is `mulsd` then `addsd`; `fma(a, b, c)` is
+  one `vfmadd231sd`. Swapping one for the other changes the last bit.
+- **Left out:** half precision, the `rcp`/`rsqrt` approximations (their results differ between
+  CPU makers), `dpps`/`dppd`, `ldmxcsr` (rounding stays nearest, ties to even) and x87.
 
 Everything else is out: x87, string instructions (`movs`, `stos`, …), `loop`, `jrcxz`, `enter`,
 `leave`, `int`, `pushf` and `popf`.

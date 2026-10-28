@@ -158,8 +158,10 @@ reached through a conditional jump, the fall-through of one, or a `jmp` right af
 of a comparison chain or of an exhausted loop).
 
 Instruction sets: dialect 2 (the current one) uses x86-64's integer instructions, its integer vector
-instructions and double-precision floating point (scalar and packed; no single precision, fused
-multiply-add, rounding-mode changes or x87, so the tests can compute exactly what the code does).
+instructions and floating point in double and single precision, with fused multiply-add (scalar and
+packed; no half precision, approximations, rounding-mode changes or x87, so the tests can compute
+exactly what the code does: `single(x)` and `fma(a, b, c)` in a formula match `ss` instructions and
+`vfmadd*`).
 Integer extensions (BMI1, BMI2, POPCNT, LZCNT, ADX, MOVBE), crypto and checksum extensions (AES-NI,
 VAES, SHA, PCLMULQDQ, VPCLMULQDQ, GFNI) and vector sets beyond SSE2 (SSE3 to SSE4.2, AVX, AVX2 and
 AVX-512) are allowed only when the CPU has them: the checker reads which CPU features each
@@ -267,7 +269,8 @@ whole workflow on `examples/add` in both MCP protocol generations.
 Dialect 2 followed:
 - vectors from SSE2 to AVX-512, with masks and broadcasts;
 - hashing and checksum instructions;
-- double-precision floating point, plus exact decimals in the test language;
+- floating point in double and single precision, with fused multiply-add, plus exact decimals in
+  the test language;
 - inputs up to 1 MiB;
 - every value tried when a range is small.
 

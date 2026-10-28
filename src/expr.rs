@@ -2,12 +2,12 @@
 //!
 //! A template is text with `{expression}` placeholders; `{{` and `}}` stand for literal braces.
 //! Expressions work on whole numbers (checked 128-bit integers, so overflow is an error rather
-//! than a wrong answer), strings and true/false values: `+ - * / %` (division truncates toward
-//! zero, like the CPU's `idiv`), unary `-`, comparisons, `&& || !`, parentheses, and the functions
-//! `len`, `abs`, `min`, `max`, `if`, `upper`, `lower` and `reverse`.
+//! than a wrong answer), exact decimals, doubles and singles (computed as the CPU computes them),
+//! strings and true/false values: `+ - * / %` (division truncates toward zero, like the CPU's
+//! `idiv`), unary `-`, comparisons, `&& || !`, parentheses, and the functions in [`Function`].
 //!
-//! Generators draw each variable's inputs: `int(lo, hi)`, `choice(a, b, …)` and
-//! `string(min, max, "chars")`, with literal arguments only.
+//! Generators draw each variable's inputs: `int(lo, hi)`, `decimal(lo, hi)`, `choice(a, b, …)`
+//! and `string(min, max, "chars")`, with literal arguments only.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -41,6 +41,12 @@ const POW10: [f64; 16] = [
     1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15,
 ];
 
+/// The largest whole number a single holds exactly: 2^24.
+const EXACT_SINGLE_INT: i128 = 1 << 24;
+
+/// Powers of ten, each exact in a single: 10^10 is the last, as 5^11 needs more than 24 bits.
+const POW10_SINGLE: [f32; 11] = [1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10];
+
 /// A finite double, kept as its bits so values stay comparable; formulas compare numbers by
 /// value, as the CPU does, never by these bits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -51,6 +57,18 @@ impl Bits {
     #[must_use]
     pub fn value(self) -> f64 {
         f64::from_bits(self.0)
+    }
+}
+
+/// A finite single, kept as its bits like [`Bits`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Bits32(u32);
+
+impl Bits32 {
+    /// The number.
+    #[must_use]
+    pub fn value(self) -> f32 {
+        f32::from_bits(self.0)
     }
 }
 
@@ -68,6 +86,8 @@ pub enum Value {
     },
     /// A computed double; formulas print it with `fixed(x, places)`.
     Float(Bits),
+    /// A computed single (32-bit floating point), from `single(x)`.
+    Single(Bits32),
     /// Text.
     Str(String),
     /// True or false, from comparisons.
@@ -78,7 +98,7 @@ impl Value {
     fn kind(&self) -> &'static str {
         match self {
             Self::Int(_) => "a whole number",
-            Self::Dec { .. } | Self::Float(_) => "a decimal",
+            Self::Dec { .. } | Self::Float(_) | Self::Single(_) => "a decimal",
             Self::Str(_) => "a string",
             Self::Bool(_) => "true/false",
         }
@@ -93,7 +113,7 @@ impl Value {
         match self {
             Self::Int(number) => Ok(number.to_string()),
             Self::Dec { m, p } => Ok(decimal_text(*m, *p)),
-            Self::Float(_) => Err(EvalError::Type(
+            Self::Float(_) | Self::Single(_) => Err(EvalError::Type(
                 "a placeholder prints a computed decimal only through fixed(x, places), such as \
                  fixed(x, 2)"
                     .into(),
@@ -112,6 +132,7 @@ impl fmt::Display for Value {
             Self::Int(number) => write!(f, "{number}"),
             Self::Dec { m, p } => write!(f, "{}", decimal_text(*m, *p)),
             Self::Float(bits) => write!(f, "{}", bits.value()),
+            Self::Single(bits) => write!(f, "{}", bits.value()),
             // Messages quote text, shortened when it's long.
             Self::Str(text) if text.chars().count() > SHOWN_CHARS => {
                 let start: String = text.chars().take(SHOWN_CHARS).collect();
@@ -153,13 +174,30 @@ fn finite(number: f64, what: &str) -> Result<Value, EvalError> {
     }
 }
 
-/// A decimal operand as a double. Whole numbers don't mix with decimals.
+/// A finite single as a value; infinity or NaN is an error.
+fn finite_single(number: f32, what: &str) -> Result<Value, EvalError> {
+    if number.is_finite() {
+        Ok(Value::Single(Bits32(number.to_bits())))
+    } else {
+        Err(EvalError::Overflow(format!("{what} isn't a finite number")))
+    }
+}
+
+/// The error for arithmetic that mixes the two precisions.
+fn mixed_precision(operation: &str) -> EvalError {
+    EvalError::Type(format!(
+        "{operation} mixes a single and a double: convert one with single(x) or double(x)"
+    ))
+}
+
+/// A decimal operand as a double. Whole numbers don't mix with decimals, nor singles with doubles.
 fn double(value: Value, operation: &str) -> Result<f64, EvalError> {
     match value {
         Value::Dec { m, p } => Ok(decimal_value(m, p)),
         Value::Float(bits) => Ok(bits.value()),
+        Value::Single(_) => Err(mixed_precision(operation)),
         Value::Int(_) => Err(EvalError::Type(format!(
-            "{operation} mixes a whole number and a decimal: write 2.0 instead of 2, or float(n)"
+            "{operation} mixes a whole number and a decimal: write 2.0 instead of 2, or double(n)"
         ))),
         other => Err(EvalError::Type(format!(
             "{operation} needs a number, not {}",
@@ -168,12 +206,70 @@ fn double(value: Value, operation: &str) -> Result<f64, EvalError> {
     }
 }
 
-fn is_number(value: &Value) -> bool {
-    matches!(value, Value::Int(_) | Value::Dec { .. } | Value::Float(_))
+/// An exact decimal as a single: one division of two exact numbers, `cvtsi2ss` then `divss`, so
+/// the mantissa must fit 24 bits and the places 10.
+fn decimal_single(m: i128, p: u8, operation: &str) -> Result<f32, EvalError> {
+    let normal = Limit::decimal(m, p);
+    if normal.m.abs() > EXACT_SINGLE_INT || usize::from(normal.p) >= POW10_SINGLE.len() {
+        return Err(EvalError::Type(format!(
+            "{operation}: {normal} has too many digits for a single, which holds whole numbers up \
+             to 16777216 and 10 places exactly; compute in doubles instead"
+        )));
+    }
+    #[allow(clippy::cast_precision_loss)] // |m| ≤ 2^24, exact in a single.
+    let mantissa = normal.m as f32;
+    Ok(mantissa / POW10_SINGLE[usize::from(normal.p)])
 }
 
-/// Compares two numbers by value: whole numbers and decimals exactly, doubles as the CPU does.
+/// A decimal operand as a single: singles as they are and exact decimals converted, as a program
+/// loads a `.float` constant. Doubles and whole numbers don't mix in.
+fn single(value: Value, operation: &str) -> Result<f32, EvalError> {
+    match value {
+        Value::Single(bits) => Ok(bits.value()),
+        Value::Dec { m, p } => decimal_single(m, p, operation),
+        Value::Float(_) => Err(mixed_precision(operation)),
+        Value::Int(_) => Err(EvalError::Type(format!(
+            "{operation} mixes a whole number and a decimal: write 2.0 instead of 2, or single(n)"
+        ))),
+        other => Err(EvalError::Type(format!(
+            "{operation} needs a number, not {}",
+            other.kind()
+        ))),
+    }
+}
+
+/// Any decimal as a double, widening a single exactly (`cvtss2sd`): for rounding and printing.
+fn widened(value: Value, operation: &str) -> Result<f64, EvalError> {
+    match value {
+        Value::Single(bits) => Ok(f64::from(bits.value())),
+        other => double(other, operation),
+    }
+}
+
+fn is_number(value: &Value) -> bool {
+    matches!(
+        value,
+        Value::Int(_) | Value::Dec { .. } | Value::Float(_) | Value::Single(_)
+    )
+}
+
+/// Compares two numbers by value: whole numbers and decimals exactly, doubles and singles as the
+/// CPU does. A decimal next to a single is the single nearest it, as a `.float` constant is.
 fn compare(a: &Value, b: &Value, operation: &str) -> Result<std::cmp::Ordering, EvalError> {
+    match (a, b) {
+        (Value::Single(_), Value::Float(_)) | (Value::Float(_), Value::Single(_)) => {
+            return Err(mixed_precision(operation));
+        }
+        (Value::Single(_), Value::Dec { m, p }) => {
+            let near = finite_single(decimal_single(*m, *p, operation)?, operation)?;
+            return compare(a, &near, operation);
+        }
+        (Value::Dec { m, p }, Value::Single(_)) => {
+            let near = finite_single(decimal_single(*m, *p, operation)?, operation)?;
+            return compare(&near, b, operation);
+        }
+        _ => {}
+    }
     let exact = |value: &Value| match value {
         Value::Int(number) => Some((*number, 0_u8)),
         Value::Dec { m, p } => Some((*m, *p)),
@@ -196,6 +292,7 @@ fn compare(a: &Value, b: &Value, operation: &str) -> Result<std::cmp::Ordering, 
         Value::Int(number) => Some(*number as f64),
         Value::Dec { m, p } => Some(decimal_value(*m, *p)),
         Value::Float(bits) => Some(bits.value()),
+        Value::Single(bits) => Some(f64::from(bits.value())),
         _ => None,
     };
     match (as_double(a), as_double(b)) {
@@ -341,8 +438,14 @@ pub enum Function {
     Crc32,
     /// `crc32c(s)`: the CRC-32C (Castagnoli) of `s`'s bytes, as the `crc32` instruction computes it.
     Crc32c,
-    /// `float(n)`: a whole number as a double, exactly.
-    Float,
+    /// `double(x)`: a number as a double: whole numbers exactly up to 2^53, singles exactly
+    /// (`cvtss2sd`), exact decimals to the nearest double.
+    Double,
+    /// `single(x)`: a number as a single: whole numbers exactly up to 2^24, doubles to the nearest
+    /// single (`cvtsd2ss`), exact decimals to the nearest single.
+    Single,
+    /// `fma(a, b, c)`: `a × b + c` with one rounding, as `vfmadd231sd` and `vfmadd231ss` compute.
+    Fma,
     /// `round(x)`: the nearest whole number, ties to even, as `cvtsd2si` rounds.
     Round,
     /// `trunc(x)`: toward zero, as `cvttsd2si` rounds.
@@ -364,7 +467,7 @@ pub enum Function {
 }
 
 impl Function {
-    const ALL: [Self; 21] = [
+    const ALL: [Self; 23] = [
         Self::Len,
         Self::Abs,
         Self::Min,
@@ -377,7 +480,9 @@ impl Function {
         Self::Sha256,
         Self::Crc32,
         Self::Crc32c,
-        Self::Float,
+        Self::Double,
+        Self::Single,
+        Self::Fma,
         Self::Round,
         Self::Trunc,
         Self::Floor,
@@ -402,7 +507,9 @@ impl Function {
             Self::Sha256 => "sha256",
             Self::Crc32 => "crc32",
             Self::Crc32c => "crc32c",
-            Self::Float => "float",
+            Self::Double => "double",
+            Self::Single => "single",
+            Self::Fma => "fma",
             Self::Round => "round",
             Self::Trunc => "trunc",
             Self::Floor => "floor",
@@ -418,7 +525,7 @@ impl Function {
     fn arity(self) -> (usize, usize) {
         match self {
             Self::Min | Self::Max => (2, usize::MAX),
-            Self::If => (3, 3),
+            Self::If | Self::Fma => (3, 3),
             Self::Count | Self::Fixed | Self::Scaled | Self::Places => (2, 2),
             Self::Len
             | Self::Abs
@@ -428,7 +535,8 @@ impl Function {
             | Self::Sha256
             | Self::Crc32
             | Self::Crc32c
-            | Self::Float
+            | Self::Double
+            | Self::Single
             | Self::Round
             | Self::Trunc
             | Self::Floor
@@ -441,8 +549,8 @@ impl Function {
 /// Names that can't be used as variables.
 const RESERVED: &[&str] = &[
     "true", "false", "len", "abs", "min", "max", "if", "upper", "lower", "reverse", "count",
-    "sha256", "crc32", "crc32c", "float", "round", "trunc", "floor", "ceil", "sqrt", "fixed",
-    "scaled", "places", "int", "choice", "string", "decimal",
+    "sha256", "crc32", "crc32c", "double", "single", "fma", "round", "trunc", "floor", "ceil",
+    "sqrt", "fixed", "scaled", "places", "int", "choice", "string", "decimal",
 ];
 
 /// Whether `name` can name a variable: lowercase letters, digits and `_`, not starting with a
@@ -732,6 +840,9 @@ impl Parser {
                         .into()
                 }
                 (2, 2) => "two arguments: a string and the part to count".into(),
+                (3, 3) if function == Function::Fma => {
+                    "three decimals: fma(a, b, c) is a × b + c, rounded once".into()
+                }
                 (3, 3) => "three arguments: a condition, a then value and an else value".into(),
                 _ => "two or more arguments".into(),
             };
@@ -819,6 +930,7 @@ pub fn eval(expr: &Expr, env: &Env) -> Result<Value, EvalError> {
         Expr::Neg(inner) => match eval(inner, env)? {
             Value::Dec { m, p } => Ok(Value::Dec { m: -m, p }),
             Value::Float(bits) => finite(-bits.value(), "-x"),
+            Value::Single(bits) => finite_single(-bits.value(), "-x"),
             value => {
                 let number = int(value, "-")?;
                 number
@@ -910,10 +1022,25 @@ fn places_argument(value: Value, name: &str) -> Result<u8, EvalError> {
         .ok_or_else(|| EvalError::Type(format!("{name}'s places go from 0 to 15, not {places}")))
 }
 
-/// `+ - * /` on decimals, in doubles, exactly as `addsd`, `subsd`, `mulsd` and `divsd` compute.
+/// `+ - * /` on decimals, in doubles, exactly as `addsd`, `subsd`, `mulsd` and `divsd` compute;
+/// in singles when either side is one, as `addss`, `subss`, `mulss` and `divss` compute.
 fn decimal_arithmetic(op: BinaryOp, symbol: &str, a: Value, b: Value) -> Result<Value, EvalError> {
     if op == BinaryOp::Rem {
         return Err(EvalError::Type("% works on whole numbers only".into()));
+    }
+    if matches!(a, Value::Single(_)) || matches!(b, Value::Single(_)) {
+        let x = single(a, symbol)?;
+        let y = single(b, symbol)?;
+        if op == BinaryOp::Div && y == 0.0 {
+            return Err(EvalError::DivideByZero);
+        }
+        let result = match op {
+            BinaryOp::Add => x + y,
+            BinaryOp::Sub => x - y,
+            BinaryOp::Mul => x * y,
+            _ => x / y,
+        };
+        return finite_single(result, &format!("{x} {symbol} {y}"));
     }
     let x = double(a, symbol)?;
     let y = double(b, symbol)?;
@@ -944,6 +1071,7 @@ fn call(function: Function, arguments: &[Expr], env: &Env) -> Result<Value, Eval
         Function::Abs => match argument(0)? {
             Value::Dec { m, p } => Ok(Value::Dec { m: m.abs(), p }),
             Value::Float(bits) => finite(bits.value().abs(), "abs"),
+            Value::Single(bits) => finite_single(bits.value().abs(), "abs"),
             value => {
                 let number = int(value, name)?;
                 number
@@ -953,9 +1081,19 @@ fn call(function: Function, arguments: &[Expr], env: &Env) -> Result<Value, Eval
             }
         },
         Function::Min | Function::Max => {
-            let mut best = argument(0)?;
-            for index in 0..arguments.len() {
-                let next = argument(index)?;
+            let mut values = (0..arguments.len())
+                .map(argument)
+                .collect::<Result<Vec<_>, _>>()?;
+            // Next to a single, decimals are singles, so the answer has one kind whatever wins.
+            if values.iter().any(|value| matches!(value, Value::Single(_))) {
+                for value in &mut values {
+                    if let Value::Dec { m, p } = *value {
+                        *value = finite_single(decimal_single(m, p, name)?, name)?;
+                    }
+                }
+            }
+            let mut best = values[0].clone();
+            for next in values {
                 if !is_number(&next) {
                     return Err(EvalError::Type(format!(
                         "{name} needs numbers, not {}",
@@ -965,7 +1103,7 @@ fn call(function: Function, arguments: &[Expr], env: &Env) -> Result<Value, Eval
                 if matches!(best, Value::Int(_)) != matches!(next, Value::Int(_)) {
                     return Err(EvalError::Type(format!(
                         "{name} mixes whole numbers and decimals: write 2.0 instead of 2, or \
-                         float(n)"
+                         double(n)"
                     )));
                 }
                 let order = compare(&next, &best, name)?;
@@ -977,16 +1115,38 @@ fn call(function: Function, arguments: &[Expr], env: &Env) -> Result<Value, Eval
             }
             Ok(best)
         }
-        Function::Float => match argument(0)? {
+        Function::Double => match argument(0)? {
             #[allow(clippy::cast_precision_loss)] // Checked: |n| ≤ 2^53 is exact.
             Value::Int(number) if number.abs() <= EXACT_INT => finite(number as f64, name),
             Value::Int(number) => Err(EvalError::Overflow(format!(
-                "float({number}) isn't exact: a double holds whole numbers up to 2^53 exactly"
+                "double({number}) isn't exact: a double holds whole numbers up to 2^53 exactly"
             ))),
-            value => finite(double(value, name)?, name),
+            value => finite(widened(value, name)?, name),
         },
+        Function::Single => match argument(0)? {
+            #[allow(clippy::cast_precision_loss)] // Checked: |n| ≤ 2^24 is exact.
+            Value::Int(number) if number.abs() <= EXACT_SINGLE_INT => {
+                finite_single(number as f32, name)
+            }
+            Value::Int(number) => Err(EvalError::Overflow(format!(
+                "single({number}) isn't exact: a single holds whole numbers up to 2^24 \
+                 (16777216) exactly"
+            ))),
+            #[allow(clippy::cast_possible_truncation)] // Rounds to the nearest, as cvtsd2ss does.
+            Value::Float(bits) => finite_single(bits.value() as f32, name),
+            value => finite_single(single(value, name)?, name),
+        },
+        Function::Fma => {
+            let values = [argument(0)?, argument(1)?, argument(2)?];
+            if values.iter().any(|value| matches!(value, Value::Single(_))) {
+                let [a, b, c] = values.map(|value| single(value, name));
+                return finite_single(a?.mul_add(b?, c?), name);
+            }
+            let [a, b, c] = values.map(|value| double(value, name));
+            finite(a?.mul_add(b?, c?), name)
+        }
         Function::Round | Function::Trunc | Function::Floor | Function::Ceil => {
-            let x = double(argument(0)?, name)?;
+            let x = widened(argument(0)?, name)?;
             let whole = match function {
                 Function::Round => x.round_ties_even(),
                 Function::Trunc => x.trunc(),
@@ -1006,14 +1166,23 @@ fn call(function: Function, arguments: &[Expr], env: &Env) -> Result<Value, Eval
             Ok(Value::Int(i128::from(whole)))
         }
         Function::Sqrt => {
-            let x = double(argument(0)?, name)?;
+            let value = argument(0)?;
+            if let Value::Single(bits) = value {
+                let x = bits.value();
+                if x < 0.0 {
+                    return Err(EvalError::Type(format!("sqrt({x}) of a negative number")));
+                }
+                return finite_single(x.sqrt(), name);
+            }
+            let x = double(value, name)?;
             if x < 0.0 {
                 return Err(EvalError::Type(format!("sqrt({x}) of a negative number")));
             }
             finite(x.sqrt(), name)
         }
         Function::Fixed => {
-            let x = double(argument(0)?, name)?;
+            // A single widens exactly first, so it prints as a double does: cvtss2sd, then mulsd.
+            let x = widened(argument(0)?, name)?;
             let places = int(argument(1)?, name)?;
             let places = u8::try_from(places)
                 .ok()
@@ -1039,7 +1208,7 @@ fn call(function: Function, arguments: &[Expr], env: &Env) -> Result<Value, Eval
             let (m, p) = match argument(0)? {
                 Value::Int(number) => (number, 0),
                 Value::Dec { m, p } => (m, p),
-                Value::Float(_) => {
+                Value::Float(_) | Value::Single(_) => {
                     return Err(EvalError::Type(
                         "scaled works on exact decimals; a computed double needs round(x * \
                          100.0)"
@@ -1997,17 +2166,83 @@ mod tests {
         );
         assert!(value("sqrt(-1.0)", &none).is_err());
         assert_eq!(
-            value("float(3)", &none),
+            value("double(3)", &none),
             Ok(Value::Float(Bits(3_f64.to_bits())))
         );
         assert!(
-            value("float(9007199254740993)", &none).is_err(),
+            value("double(9007199254740993)", &none).is_err(),
             "2^53 + 1 isn't exact"
         );
         // A computed double prints only through fixed.
         let template = Template::parse("{0.1 + 0.2}").expect("valid");
         assert!(template.render(&none).is_err());
         assert!(parse("1.").is_err());
+    }
+
+    #[test]
+    fn singles_and_fma_compute_as_the_cpu_does() {
+        let none = env(&[]);
+        let string = |text: &str| Ok(Value::Str(text.into()));
+        let single = |number: f32| Ok(Value::Single(Bits32(number.to_bits())));
+        let double = |number: f64| Ok(Value::Float(Bits(number.to_bits())));
+        // A decimal becomes the nearest single, as cvtsi2ss then divss, or a .float constant.
+        assert_eq!(value("single(0.1)", &none), single(0.1));
+        assert_eq!(value("single(-2.5)", &none), single(-2.5));
+        assert_eq!(value("single(16777216)", &none), single(16_777_216.0));
+        assert!(value("single(16777217)", &none).is_err(), "past 2^24");
+        assert!(
+            value("single(123456.789)", &none)
+                .is_err_and(|error| error.to_string().contains("too many digits for a single")),
+            "the mantissa needs more than 24 bits"
+        );
+        // A double rounds to the nearest single, as cvtsd2ss does; a single widens exactly.
+        assert_eq!(value("single(0.1 + 0.2)", &none), single(0.3));
+        assert_eq!(
+            value("double(single(0.1))", &none),
+            double(f64::from(0.1_f32))
+        );
+        // Arithmetic with a single stays in singles, and decimal literals join it as singles.
+        assert_eq!(value("single(0.1) + 0.2", &none), single(0.1_f32 + 0.2_f32));
+        assert_eq!(value("single(1.0) / 3.0", &none), single(1.0_f32 / 3.0));
+        assert_eq!(
+            value("fixed(single(0.1), 10)", &none),
+            string("0.1000000015"),
+            "fixed widens a single exactly first"
+        );
+        assert_eq!(value("sqrt(single(2.0))", &none), single(2_f32.sqrt()));
+        assert_eq!(value("round(single(2.5))", &none), Ok(Value::Int(2)));
+        assert_eq!(value("trunc(single(-2.7))", &none), Ok(Value::Int(-2)));
+        assert_eq!(value("abs(single(-1.5))", &none), single(1.5));
+        assert_eq!(value("-single(1.5)", &none), single(-1.5));
+        assert_eq!(value("single(0.1) == 0.1", &none), Ok(Value::Bool(true)));
+        assert_eq!(value("min(single(2.0), 0.5)", &none), single(0.5));
+        // Singles and doubles don't mix, nor singles and whole numbers.
+        for mixed in [
+            "single(0.5) + double(0.5)",
+            "single(0.5) < double(0.5)",
+            "max(single(0.5), double(0.5))",
+            "fma(single(0.5), double(0.5), 1.0)",
+        ] {
+            assert!(
+                value(mixed, &none)
+                    .is_err_and(|error| error.to_string().contains("mixes a single and a double")),
+                "{mixed}"
+            );
+        }
+        assert!(value("single(0.5) * 2", &none).is_err());
+        // fma rounds once: 0.1 × 10 rounds to exactly 1, but fma keeps the 5.55e-17 left over.
+        assert_eq!(value("0.1 * 10.0 - 1.0", &none), double(0.0));
+        let fused = 0.1_f64.mul_add(10.0, -1.0);
+        assert!(fused != 0.0);
+        assert_eq!(value("fma(0.1, 10.0, -1.0)", &none), double(fused));
+        assert_eq!(
+            value("fma(single(0.1), 10.0, -1.0)", &none),
+            single(0.1_f32.mul_add(10.0, -1.0))
+        );
+        assert!(parse("fma(1.0, 2.0)").is_err_and(|error| error.0.contains("rounded once")));
+        // A computed single prints only through fixed.
+        let template = Template::parse("{single(0.5)}").expect("valid");
+        assert!(template.render(&none).is_err());
     }
 
     #[test]
