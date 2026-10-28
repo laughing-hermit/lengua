@@ -1,0 +1,37 @@
+[package]
+name = "lengua-mcp"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "Apache-2.0"
+description = "MCP server for lengua: spec-driven programming in checked x86-64 assembly"
+publish = false
+
+[lib]
+name = "lengua"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lengua-mcp"
+path = "src/main.rs"
+
+[dependencies]
+rmcp = { version = "3.8.0", features = ["transport-io", "elicitation"] }
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+jsonschema = { version = "0.60", default-features = false }
+rmcp = { version = "3.8.0", features = ["client", "transport-child-process"] }
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+unwrap_used = "warn"
