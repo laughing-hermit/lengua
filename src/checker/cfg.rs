@@ -1,0 +1,431 @@
+//! Control flow and stack depth: which instruction can follow which, what can run at all, and
+//! exactly how deep the stack is before every instruction.
+
+use std::collections::VecDeque;
+
+use iced_x86::{FlowControl, Instruction, InstructionInfoFactory, OpAccess, OpKind, Register};
+
+use super::decode::{MappedFunction, Program, mnemonic};
+use super::{Rule, Violation};
+
+/// Registers a `call` may change (System V).
+pub const CALLER_SAVED: [Register; 9] = [
+    Register::RAX,
+    Register::RCX,
+    Register::RDX,
+    Register::RSI,
+    Register::RDI,
+    Register::R8,
+    Register::R9,
+    Register::R10,
+    Register::R11,
+];
+
+/// Registers a `syscall` changes.
+pub const SYSCALL_CLOBBERS: [Register; 3] = [Register::RAX, Register::RCX, Register::R11];
+
+/// Registers a function must give back unchanged (System V).
+pub const CALLEE_SAVED: [Register; 6] = [
+    Register::RBX,
+    Register::RBP,
+    Register::R12,
+    Register::R13,
+    Register::R14,
+    Register::R15,
+];
+
+/// The function every assertion calls.
+pub const ASSERT_FAIL: &str = "assert_fail";
+
+/// How control leaves an instruction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Exit {
+    /// Falls through to the next instruction.
+    Next,
+    /// Jumps to the instruction at this index.
+    Jump(usize),
+    /// Jumps to this index or falls through.
+    Branch(usize),
+    /// Returns to the caller.
+    Return,
+    /// Calls a function, which returns unless it's `assert_fail`.
+    Call {
+        /// The function's name.
+        callee: String,
+    },
+    /// A system call; exits end the program.
+    Syscall {
+        /// Whether it's `exit` or `exit_group`.
+        exit: bool,
+    },
+    /// Something the dialect doesn't allow; already reported.
+    Stop,
+}
+
+/// The control flow and stack depths of one function.
+#[derive(Debug, Clone)]
+pub struct Flow {
+    /// How control leaves each instruction.
+    pub exits: Vec<Exit>,
+    /// The instructions that can run next, for each instruction.
+    pub successors: Vec<Vec<usize>>,
+    /// The instructions that can run just before, for each instruction.
+    pub predecessors: Vec<Vec<usize>>,
+    /// Whether each instruction can run at all.
+    pub reachable: Vec<bool>,
+    /// Bytes on the stack before each instruction, counting the return address.
+    pub depth: Vec<Option<i64>>,
+    /// The deepest the stack gets inside the function itself.
+    pub max_depth: i64,
+}
+
+/// Whether `instruction` changes `register` (any part of it), counting what calls and system
+/// calls change.
+#[must_use]
+pub fn writes(
+    instruction: &Instruction,
+    register: Register,
+    factory: &mut InstructionInfoFactory,
+) -> bool {
+    let full = register.full_register();
+    let name = mnemonic(instruction);
+    if (name == "call" && CALLER_SAVED.contains(&full))
+        || (name == "syscall" && SYSCALL_CLOBBERS.contains(&full))
+    {
+        return true;
+    }
+    factory
+        .info(instruction)
+        .used_registers()
+        .iter()
+        .any(|used| {
+            used.register().full_register() == full
+                && matches!(
+                    used.access(),
+                    OpAccess::Write
+                        | OpAccess::CondWrite
+                        | OpAccess::ReadWrite
+                        | OpAccess::ReadCondWrite
+                )
+        })
+}
+
+/// Whether `instruction` reads `register` (any part of it).
+#[must_use]
+pub fn reads(
+    instruction: &Instruction,
+    register: Register,
+    factory: &mut InstructionInfoFactory,
+) -> bool {
+    let full = register.full_register();
+    factory
+        .info(instruction)
+        .used_registers()
+        .iter()
+        .any(|used| {
+            used.register().full_register() == full
+                && matches!(
+                    used.access(),
+                    OpAccess::Read
+                        | OpAccess::CondRead
+                        | OpAccess::ReadWrite
+                        | OpAccess::ReadCondWrite
+                )
+        })
+}
+
+/// The index of the first instruction of the straight-line run holding `index`: runs start at
+/// the function's start and at every label.
+#[must_use]
+pub fn run_start(function: &MappedFunction<'_>, index: usize) -> usize {
+    function
+        .labels
+        .iter()
+        .map(|label| label.index)
+        .filter(|start| *start <= index)
+        .max()
+        .unwrap_or(0)
+}
+
+/// The value `mov eax, VALUE` (or `mov rax, VALUE`) puts in rax as the last write to rax in the
+/// straight-line run before `index`.
+#[must_use]
+pub fn rax_value_before(
+    function: &MappedFunction<'_>,
+    index: usize,
+    factory: &mut InstructionInfoFactory,
+) -> Option<(usize, i64)> {
+    let start = run_start(function, index);
+    (start..index)
+        .rev()
+        .find_map(|position| {
+            let instruction = &function.steps[position].machine;
+            if !writes(instruction, Register::RAX, factory) {
+                return None;
+            }
+            let is_mov_immediate = mnemonic(instruction) == "mov"
+                && instruction.op_kind(0) == OpKind::Register
+                && matches!(instruction.op_register(0), Register::EAX | Register::RAX)
+                && instruction.op_count() == 2
+                && instruction.op_kind(1) != OpKind::Register
+                && instruction.op_kind(1) != OpKind::Memory;
+            Some(is_mov_immediate.then(|| {
+                (
+                    position,
+                    i64::from_ne_bytes(instruction.immediate(1).to_ne_bytes()),
+                )
+            }))
+        })
+        .flatten()
+}
+
+/// Builds the control flow of a function and checks it (rule 1) and its stack (rules 3 and 4).
+/// `exits` holds the system call numbers that end the program.
+pub fn analyze(
+    function: &MappedFunction<'_>,
+    program: &Program<'_>,
+    exit_numbers: &[i64],
+    violations: &mut Vec<Violation>,
+) -> Flow {
+    let name = function.name();
+    let exempt = name == ASSERT_FAIL;
+    let count = function.steps.len();
+    let mut factory = InstructionInfoFactory::new();
+    let mut report = |rule: Rule, line: usize, problem: String, fix: &str| {
+        if !exempt {
+            violations.push(Violation {
+                rule,
+                line: Some(line),
+                problem,
+                fix: fix.to_owned(),
+            });
+        }
+    };
+    let mut exits = Vec::with_capacity(count);
+    for (index, step) in function.steps.iter().enumerate() {
+        let instruction = &step.machine;
+        let line = step.source.line;
+        let exit = match instruction.flow_control() {
+            FlowControl::Next => Exit::Next,
+            FlowControl::UnconditionalBranch | FlowControl::ConditionalBranch => {
+                match function.index_of(instruction.near_branch_target()) {
+                    Some(target)
+                        if instruction.flow_control() == FlowControl::ConditionalBranch =>
+                    {
+                        Exit::Branch(target)
+                    }
+                    Some(target) => Exit::Jump(target),
+                    None => {
+                        report(
+                            Rule::ControlFlow,
+                            line,
+                            format!("`{}` jumps outside {name}", step.source.text),
+                            "jump only to labels inside the same function",
+                        );
+                        Exit::Stop
+                    }
+                }
+            }
+            FlowControl::Return => Exit::Return,
+            FlowControl::Call if mnemonic(instruction) == "syscall" => {
+                let exit = rax_value_before(function, index, &mut factory)
+                    .is_some_and(|(_, number)| exit_numbers.contains(&number));
+                Exit::Syscall { exit }
+            }
+            FlowControl::Call => match program.function_at(instruction.near_branch_target()) {
+                Some(callee) => Exit::Call {
+                    callee: callee.name().to_owned(),
+                },
+                None => {
+                    report(
+                        Rule::ControlFlow,
+                        line,
+                        format!(
+                            "`{}` doesn't call the start of a function",
+                            step.source.text
+                        ),
+                        "call functions by name",
+                    );
+                    Exit::Stop
+                }
+            },
+            _ => Exit::Stop,
+        };
+        exits.push(exit);
+    }
+
+    let mut successors = vec![Vec::new(); count];
+    for (index, exit) in exits.iter().enumerate() {
+        let falls_through = match exit {
+            Exit::Next | Exit::Branch(_) => true,
+            Exit::Call { callee } => callee != ASSERT_FAIL,
+            Exit::Syscall { exit } => !exit,
+            Exit::Jump(_) | Exit::Return | Exit::Stop => false,
+        };
+        if let Exit::Jump(target) | Exit::Branch(target) = exit {
+            successors[index].push(*target);
+        }
+        if falls_through {
+            if index + 1 < count {
+                successors[index].push(index + 1);
+            } else {
+                report(
+                    Rule::ControlFlow,
+                    function.steps[index].source.line,
+                    format!("control runs off the end of {name} after this line"),
+                    "end every path with ret, jmp, an exit system call or an assertion",
+                );
+            }
+        }
+    }
+    let mut predecessors = vec![Vec::new(); count];
+    for (index, targets) in successors.iter().enumerate() {
+        for target in targets {
+            predecessors[*target].push(index);
+        }
+    }
+
+    let entry_depth = if name == "_start" { 0 } else { 8 };
+    let mut reachable = vec![false; count];
+    let mut depth: Vec<Option<i64>> = vec![None; count];
+    let mut max_depth = entry_depth;
+    let mut queue = VecDeque::new();
+    if count > 0 {
+        reachable[0] = true;
+        depth[0] = Some(entry_depth);
+        queue.push_back(0);
+    }
+    while let Some(index) = queue.pop_front() {
+        let before = depth[index].unwrap_or(entry_depth);
+        let step = &function.steps[index];
+        let line = step.source.line;
+        let after = stack_effect(&step.machine, before, &mut factory).unwrap_or_else(|problem| {
+            report(
+                Rule::Resources,
+                line,
+                problem,
+                "change rsp only with push, pop, call, ret, and add or sub rsp with a constant",
+            );
+            before
+        });
+        if after < entry_depth {
+            report(
+                Rule::Resources,
+                line,
+                "this pops more than the function pushed".into(),
+                "pop exactly what you push",
+            );
+        }
+        if exits[index] == Exit::Return && before != 8 {
+            report(
+                Rule::Functions,
+                line,
+                format!("ret runs with {} bytes still on the stack", before - 8),
+                "undo every push and sub rsp before ret",
+            );
+        }
+        if let Exit::Call { callee } = &exits[index]
+            && callee != ASSERT_FAIL
+            && before % 16 != 0
+        {
+            report(
+                Rule::Functions,
+                line,
+                format!(
+                    "the stack isn't 16-byte aligned at this call ({before} bytes deep, counting \
+                     the return address)"
+                ),
+                "adjust rsp by 8 (sub rsp, 8 … add rsp, 8, or an extra push) so calls happen at \
+                 a multiple of 16",
+            );
+        }
+        max_depth = max_depth.max(before).max(after);
+        for &next in &successors[index] {
+            reachable[next] = true;
+            match depth[next] {
+                None => {
+                    depth[next] = Some(after);
+                    queue.push_back(next);
+                }
+                Some(known) if known != after => report(
+                    Rule::Resources,
+                    function.steps[next].source.line,
+                    format!(
+                        "the stack is {known} bytes deep on one path here and {after} on another"
+                    ),
+                    "push and pop the same amount on every path",
+                ),
+                Some(_) => {}
+            }
+        }
+    }
+    let mut index = 0;
+    while index < count {
+        if reachable[index] {
+            index += 1;
+            continue;
+        }
+        report(
+            Rule::ControlFlow,
+            function.steps[index].source.line,
+            "this line can never run".into(),
+            "remove unreachable code, or jump to it",
+        );
+        while index < count && !reachable[index] {
+            index += 1;
+        }
+    }
+    Flow {
+        exits,
+        successors,
+        predecessors,
+        reachable,
+        depth,
+        max_depth,
+    }
+}
+
+/// The stack depth after `instruction`, given the depth before it.
+fn stack_effect(
+    instruction: &Instruction,
+    before: i64,
+    factory: &mut InstructionInfoFactory,
+) -> Result<i64, String> {
+    let name = mnemonic(instruction);
+    let operand_is_rsp = instruction.op_count() >= 1
+        && instruction.op_kind(0) == OpKind::Register
+        && instruction.op_register(0) == Register::RSP;
+    match name.as_str() {
+        "push" | "pop" => {
+            let wide = match instruction.op_kind(0) {
+                OpKind::Register => instruction.op_register(0).size() == 8,
+                _ => instruction.stack_pointer_increment().abs() == 8,
+            };
+            if !wide {
+                return Err(format!(
+                    "`{name}` moves 16 bits; push and pop 64-bit registers"
+                ));
+            }
+            Ok(if name == "push" {
+                before + 8
+            } else {
+                before - 8
+            })
+        }
+        "sub" | "add" if operand_is_rsp => {
+            let kind = instruction.op_kind(1);
+            if matches!(kind, OpKind::Register | OpKind::Memory) {
+                return Err(format!("`{name} rsp` uses a register or memory"));
+            }
+            let amount = i64::from_ne_bytes(instruction.immediate(1).to_ne_bytes());
+            Ok(if name == "sub" {
+                before + amount
+            } else {
+                before - amount
+            })
+        }
+        "call" | "ret" | "syscall" => Ok(before),
+        _ if writes(instruction, Register::RSP, factory) => Err(format!("`{name}` changes rsp")),
+        _ => Ok(before),
+    }
+}

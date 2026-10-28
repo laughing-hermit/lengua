@@ -64,19 +64,14 @@ async fn approves_in_a_dialog_in_both_protocols() {
 
         let prompts = session.client.prompts();
         assert_eq!(prompts.len(), 1, "{protocol:?}: {prompts:?}");
-        for expected in [
-            "Approve the spec for \"add\"?",
-            "B1: Adds two numbers",
-            "B2: Missing arguments",
-            "Allowed system calls: read, write, exit",
-            hash.short(),
-        ] {
-            assert!(
-                prompts[0].contains(expected),
-                "{protocol:?}: {expected:?} is missing from the dialog:\n{}",
-                prompts[0]
-            );
-        }
+        assert_eq!(
+            prompts[0],
+            format!(
+                "Approve spec.md for \"add\"? {}/spec.md",
+                program.path().display()
+            ),
+            "{protocol:?}: the dialog names the document and its path"
+        );
 
         let status = status(&session, &program).await;
         let program_report = &status["program"];
@@ -177,13 +172,9 @@ async fn a_spec_edited_while_the_dialog_is_open_is_not_approved() {
 
         let report = session.call_ok("approve_spec", program.arguments()).await;
         assert_eq!(report["approved"], true, "{protocol:?}: {report}");
-        let prompts = session.client.prompts();
-        assert!(
-            prompts
-                .last()
-                .is_some_and(|prompt| prompt.contains("B1: Adds two integers")),
-            "{prompts:?}"
-        );
+        let lock = program.read("lengua.lock").expect("the lock is written");
+        let edited_hash = Sha256Hex::of(edited.as_bytes());
+        assert!(lock.contains(edited_hash.as_str()), "{lock}");
         session.service.cancel().await.expect("close the session");
     }
 }

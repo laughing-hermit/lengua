@@ -8,8 +8,8 @@ when all three match. See [DESIGN.md](DESIGN.md) for how and why.
 lengua is an [Agent Plugin](https://agent-plugins.org): three skills and an MCP server, using only
 open standards, so it works in Claude Code, Codex, Cursor and other agent harnesses.
 
-> Status: MVP in progress (milestone 3 of 6: specs can be written and approved, and tests
-> written and checked; the rule checker, code and run come next). Linux x86-64 only.
+> Status: MVP in progress (milestone 4 of 6: specs, tests and the rule checker work; running the
+> tests, stamping the code and `run` come next). Linux x86-64 only.
 
 ## Requirements
 

@@ -4,6 +4,7 @@
 //! `main.s` and `lengua.lock`. This crate is the MCP server that checks, stamps and runs them.
 //! See `DESIGN.md` at the repository root for every design decision.
 
+pub mod checker;
 pub mod data_dir;
 pub mod expr;
 pub mod hash;

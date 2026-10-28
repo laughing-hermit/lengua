@@ -5,6 +5,8 @@
 
 use serde::Serialize;
 
+use crate::spec::Syscall;
+
 /// The OS + CPU combinations lengua knows how to build for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Profile {
@@ -37,17 +39,59 @@ impl Profile {
             Self::LinuxX86_64 => "x86_64-unknown-linux-gnu",
         }
     }
+
+    /// The number a program loads into `eax` to make this system call.
+    #[must_use]
+    pub fn syscall_number(self, syscall: Syscall) -> i64 {
+        match (self, syscall) {
+            (Self::LinuxX86_64, Syscall::Read) => 0,
+            (Self::LinuxX86_64, Syscall::Write) => 1,
+            (Self::LinuxX86_64, Syscall::Close) => 3,
+            (Self::LinuxX86_64, Syscall::Lseek) => 8,
+            (Self::LinuxX86_64, Syscall::Exit) => 60,
+            (Self::LinuxX86_64, Syscall::ExitGroup) => 231,
+            (Self::LinuxX86_64, Syscall::Openat) => 257,
+        }
+    }
 }
 
-/// CPU instruction-set extensions the optimize step may use when present.
+/// CPU instruction-set extensions. Dialect 1 may use the integer ones when present; the vector
+/// ones are for dialect 2.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct CpuFeatures {
-    /// AVX2 vector instructions.
-    pub avx2: bool,
-    /// AVX-512 Foundation.
-    pub avx512f: bool,
-    /// BMI2 bit-manipulation instructions.
+    /// BMI1 bit manipulation (`andn`, `bextr`, `blsi`, `blsmsk`, `blsr`, `tzcnt`).
+    pub bmi1: bool,
+    /// BMI2 bit manipulation (`bzhi`, `mulx`, `pdep`, `pext`, `rorx`, `sarx`, `shlx`, `shrx`).
     pub bmi2: bool,
+    /// `popcnt`.
+    pub popcnt: bool,
+    /// `lzcnt`.
+    pub lzcnt: bool,
+    /// Multi-precision add-carry (`adcx`, `adox`).
+    pub adx: bool,
+    /// Byte-swapping moves (`movbe`).
+    pub movbe: bool,
+    /// AVX2 vector instructions (dialect 2).
+    pub avx2: bool,
+    /// AVX-512 Foundation (dialect 2).
+    pub avx512f: bool,
+}
+
+impl CpuFeatures {
+    /// Every feature present, for tests and documentation.
+    #[must_use]
+    pub fn all() -> Self {
+        Self {
+            bmi1: true,
+            bmi2: true,
+            popcnt: true,
+            lzcnt: true,
+            adx: true,
+            movbe: true,
+            avx2: true,
+            avx512f: true,
+        }
+    }
 }
 
 /// What lengua knows about the machine it runs on.
@@ -96,9 +140,14 @@ fn model_name_from_cpuinfo(cpuinfo: &str) -> Option<String> {
 #[cfg(target_arch = "x86_64")]
 fn cpu_features() -> CpuFeatures {
     CpuFeatures {
+        bmi1: std::arch::is_x86_feature_detected!("bmi1"),
+        bmi2: std::arch::is_x86_feature_detected!("bmi2"),
+        popcnt: std::arch::is_x86_feature_detected!("popcnt"),
+        lzcnt: std::arch::is_x86_feature_detected!("lzcnt"),
+        adx: std::arch::is_x86_feature_detected!("adx"),
+        movbe: std::arch::is_x86_feature_detected!("movbe"),
         avx2: std::arch::is_x86_feature_detected!("avx2"),
         avx512f: std::arch::is_x86_feature_detected!("avx512f"),
-        bmi2: std::arch::is_x86_feature_detected!("bmi2"),
     }
 }
 

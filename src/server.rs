@@ -17,13 +17,15 @@ use rmcp::service::{ElicitationError, RequestContext};
 use rmcp::{RoleServer, ServerHandler, tool, tool_handler, tool_router};
 use serde::{Deserialize, Serialize};
 
+use crate::checker;
 use crate::data_dir::DataDir;
 use crate::hash::{Sha256Hex, hex};
 use crate::lock::{self, ApprovedVia, Key, Lock, TestsStamp};
 use crate::platform::{CpuFeatures, Machine};
-use crate::spec::{self, Spec, Syscall};
+use crate::spec::{self, Spec};
 use crate::state::{
-    LockStatus, ProgramFolder, SPEC_FILE, Snapshot, State, StepContext, TESTS_FILE, stamped_copy,
+    CODE_FILE, LockStatus, ProgramFolder, SPEC_FILE, Snapshot, State, StepContext, TESTS_FILE,
+    stamped_copy,
 };
 use crate::testfile;
 use crate::toolchain::Toolchain;
@@ -239,6 +241,25 @@ pub struct TestsReport {
     pub generated_blocks: usize,
     /// Runs of all generated blocks together, each with fresh inputs.
     pub generated_runs: u64,
+    /// What happened.
+    pub message: String,
+    /// The single next thing to do.
+    pub next_step: String,
+}
+
+/// What `check_code` reports when main.s follows every rule.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct CodeReport {
+    /// Whether main.s follows every rule of the dialect.
+    pub rules_passed: bool,
+    /// Functions, assert_fail excluded.
+    pub functions: usize,
+    /// Assertions in the program.
+    pub assertions: usize,
+    /// The deepest the stack can get over every call path, in bytes.
+    pub max_stack_bytes: u64,
+    /// Every `# unsafe:` block, as `main.s:START-END: reason`.
+    pub unsafe_blocks: Vec<String>,
     /// What happened.
     pub message: String,
     /// The single next thing to do.
@@ -464,6 +485,123 @@ impl LenguaServer {
             next_step: self.program_state(&folder, elicitation)?.1,
         }))
     }
+
+    #[tool(
+        name = "check_code",
+        description = "Checks <path>/main.s against the lengua Power of 10 rules (dialect 1). It \
+            assembles and links the program, reads the machine code back and matches it to main.s \
+            line by line, then checks every rule; nothing runs before the rules pass. Needs an \
+            approved spec and checked tests, and main.s's first line must be the spec label from \
+            status. Returns every violation with its rule, line and a fix. path: absolute path of \
+            the program folder.",
+        annotations(
+            title = "Check the code",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn check_code(
+        &self,
+        Parameters(params): Parameters<ProgramParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<CodeReport>, String> {
+        let folder = ProgramFolder::new(&params.path)?;
+        let elicitation = client_report(&ctx).elicitation;
+        let (state, next_step) = self.program_state(&folder, elicitation)?;
+        match state {
+            State::CodeUnchecked | State::Ready => {}
+            State::CodeMissing => {
+                return Err(format!(
+                    "There's no {CODE_FILE} in {folder} yet. {next_step}"
+                ));
+            }
+            _ => {
+                return Err(format!(
+                    "Code is checked against an approved spec and checked tests, which {folder} \
+                     doesn't have yet. {next_step}"
+                ));
+            }
+        }
+        let spec_text = read_spec(&folder)?;
+        let spec = spec::parse(&spec_text).map_err(|problems| spec_problems(&folder, &problems))?;
+        let label = Sha256Hex::of(spec_text.as_bytes()).label();
+        let code = read_code(&folder)?;
+        let header = format!("# lengua: spec {label}");
+        let first_line = code.lines().next().unwrap_or_default();
+        if first_line != header {
+            return Err(format!(
+                "{CODE_FILE}'s first line must be `{header}`, the label of the approved spec, but \
+                 it's `{first_line}`. Set it, after making sure the code implements the current \
+                 spec."
+            ));
+        }
+        let (source, layout) = checker::check_layout(&code);
+        if !layout.passed() {
+            return Err(violations_text(&folder, &layout));
+        }
+        let machine = Machine::detect();
+        let profile = machine.profile.ok_or_else(|| {
+            format!(
+                "lengua can't build programs on {}-{} yet.",
+                machine.os, machine.arch
+            )
+        })?;
+        let toolchain = Toolchain::discover()
+            .await
+            .map_err(|error| error.to_string())?;
+        let build = tempfile::tempdir()
+            .map_err(|error| format!("couldn't create a build folder: {error}"))?;
+        let main = build.path().join(CODE_FILE);
+        let object = build.path().join("main.o");
+        let executable = build.path().join("main");
+        std::fs::write(&main, &code)
+            .map_err(|error| format!("couldn't copy main.s to the build folder: {error}"))?;
+        let built = match toolchain.assemble(profile, &main, &object).await {
+            Ok(()) => toolchain.link(&object, &executable).await,
+            Err(error) => Err(error),
+        };
+        built.map_err(|error| {
+            format!(
+                "{CODE_FILE} doesn't build: {error}\nFix it with the write-assembly skill, then call \
+                 check_code again."
+            )
+        })?;
+        let bytes = std::fs::read(&executable)
+            .map_err(|error| format!("couldn't read the built program: {error}"))?;
+        let report = checker::check_program(
+            &source,
+            &bytes,
+            checker::Context {
+                syscalls: &spec.syscalls,
+                features: machine.features,
+                profile,
+            },
+        );
+        if !report.passed() {
+            return Err(violations_text(&folder, &report));
+        }
+        let facts = report.facts.unwrap_or_default();
+        Ok(Json(CodeReport {
+            rules_passed: true,
+            functions: facts.functions,
+            assertions: facts.assertions,
+            max_stack_bytes: facts.max_stack_bytes,
+            unsafe_blocks: report
+                .unsafe_blocks
+                .iter()
+                .map(|block| format!("main.s:{}-{}: {}", block.start, block.end, block.reason))
+                .collect(),
+            message: format!(
+                "{CODE_FILE} follows every rule of dialect 1. This version of lengua doesn't run \
+                 the tests or stamp the code yet."
+            ),
+            next_step: "Wait: running the tests and stamping the code come in the next version \
+                        of lengua."
+                .to_owned(),
+        }))
+    }
 }
 
 impl LenguaServer {
@@ -594,7 +732,7 @@ impl LenguaServer {
     ) -> Result<CallToolResponse, String> {
         let answer = match ctx
             .peer
-            .elicit::<SpecApproval>(approval_message(folder, spec, shown))
+            .elicit::<SpecApproval>(approval_message(folder, spec))
             .await
         {
             Ok(Some(SpecApproval { approve: true })) => Answer::Approve,
@@ -643,7 +781,7 @@ impl LenguaServer {
             .map_err(|error| format!("couldn't build the approval form: {error}"))?;
         let dialog = ElicitRequest::new(ElicitRequestParams::FormElicitationParams {
             meta: None,
-            message: approval_message(folder, spec, current),
+            message: approval_message(folder, spec),
             requested_schema: schema,
         });
         let requests =
@@ -861,6 +999,37 @@ fn read_spec(folder: &ProgramFolder) -> Result<String, String> {
     }
 }
 
+fn read_code(folder: &ProgramFolder) -> Result<String, String> {
+    match std::fs::read_to_string(folder.file(CODE_FILE)) {
+        Ok(text) => Ok(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(format!(
+            "There's no {CODE_FILE} in {folder}. Write it with the write-assembly skill, then call \
+             check_code."
+        )),
+        Err(error) => Err(format!("couldn't read {folder}/{CODE_FILE}: {error}")),
+    }
+}
+
+/// The checker's findings as a message for the AI.
+fn violations_text(folder: &ProgramFolder, report: &checker::Report) -> String {
+    let total = report.violations.len() + report.hidden;
+    let mut text = format!(
+        "{folder}/{CODE_FILE} has {total} rule violation{}, so nothing ran:\n",
+        if total == 1 { "" } else { "s" }
+    );
+    for violation in &report.violations {
+        let _ = writeln!(text, "- {violation}");
+    }
+    if report.hidden > 0 {
+        let _ = writeln!(text, "- …and {} more", report.hidden);
+    }
+    text.push_str(
+        "Fix them with the write-assembly skill (the full rules are in its \
+         references/power-of-10.md), then call check_code again.",
+    );
+    text
+}
+
 fn read_tests(folder: &ProgramFolder) -> Result<String, String> {
     match std::fs::read_to_string(folder.file(TESTS_FILE)) {
         Ok(text) => Ok(text),
@@ -916,29 +1085,13 @@ fn spec_problems(folder: &ProgramFolder, problems: &[spec::Problem]) -> String {
     text
 }
 
-/// The text of the approval dialog.
-fn approval_message(folder: &ProgramFolder, spec: &Spec, hash: &Sha256Hex) -> String {
-    let mut message = format!("Approve the spec for \"{}\"?\n\n", spec.title);
-    if let Some(description) = &spec.description {
-        let _ = writeln!(message, "{description}\n");
-    }
-    let _ = writeln!(
-        message,
-        "File: {folder}/{SPEC_FILE} (sha256:{}…)\n\nBehaviors:",
-        hash.short()
-    );
-    for behavior in &spec.behaviors {
-        let _ = writeln!(message, "- {}: {}", behavior.id, behavior.title);
-    }
-    let syscalls: Vec<&str> = spec.syscalls.iter().copied().map(Syscall::name).collect();
-    let _ = writeln!(
-        message,
-        "\nAllowed system calls: {}\n\nApproving makes this exact text the program's source of \
-         truth: the AI writes the tests and code from it, and any later edit to {SPEC_FILE} \
-         needs a new approval.",
-        syscalls.join(", ")
-    );
-    message
+/// The text of the approval dialog: the document's name and path. The person approves the
+/// document itself, which they read in full before approving.
+fn approval_message(folder: &ProgramFolder, spec: &Spec) -> String {
+    format!(
+        "Approve {SPEC_FILE} for \"{}\"? {folder}/{SPEC_FILE}",
+        spec.title
+    )
 }
 
 fn toolchain_report(

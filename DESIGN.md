@@ -95,7 +95,7 @@ constants, local labels, specialized code instead of templates) and Rust (one ow
 allocation, single-threaded, pointer + length bounds checks, `Result`-style errors, exhaustive
 branches, marked `unsafe` blocks, dialect versions), checked against NASA's "Power of 10" rules
 adapted for assembly. The full rule text lives in
-`plugin/skills/write-assembly/references/power-of-10.md` (milestone 4). In short:
+`plugin/skills/write-assembly/references/power-of-10.md`. In short:
 
 1. Simple control flow: jumps stay in their function, no recursion, compare chains end in an assertion.
 2. Every loop counts down from a named maximum.
@@ -109,7 +109,15 @@ adapted for assembly. The full rule text lives in
 10. Warnings are errors, every change is checked, and the dialect is versioned.
 
 The checker analyzes the **linked executable** together with the source, and nothing AI-written
-runs before it passes the rules.
+runs before it passes the rules. It reads `main.s` (one instruction per line, constants before
+use, no macros), builds it, decodes the executable with iced-x86 and matches every instruction to
+its line, operands included; anything that doesn't match is a violation, so what runs is exactly
+what `main.s` says. Then it builds each function's control flow and exact stack depth and checks
+the rules: unreachable lines are violations too. `assert_fail` is lengua's own code: it's compared
+word for word with the template and is exempt from the rules it must break (it may always write
+its message to standard error and exit with 134, whatever the spec allows). An assertion is
+reached through a conditional jump, the fall-through of one, or a `jmp` right after one (the end
+of a comparison chain or of an exhausted loop).
 
 Instruction sets: dialect 1 uses x86-64's integer instructions, plus the integer extensions BMI1,
 BMI2, POPCNT, LZCNT, ADX and MOVBE only when the CPU has them (the checker reads which CPU features

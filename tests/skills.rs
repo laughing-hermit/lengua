@@ -115,6 +115,25 @@ fn skills_link_only_to_files_that_exist() {
 }
 
 #[test]
+fn the_assembly_template_is_a_complete_lengua_program() {
+    let assets = skills_dir().join("write-assembly/assets");
+    let spec_text = read(&assets.join("template-spec.md"));
+    let spec = lengua::spec::parse(&spec_text)
+        .unwrap_or_else(|problems| panic!("the template's spec has problems: {problems:#?}"));
+    let label = lengua::hash::Sha256Hex::of(spec_text.as_bytes()).label();
+    let tests = read(&assets.join("template-tests.toml"));
+    if let Err(problems) = lengua::testfile::check(&tests, &spec, &label) {
+        panic!("the template's tests fail check_tests: {problems:#?}");
+    }
+    let code = read(&assets.join("main-template.s"));
+    assert_eq!(
+        code.lines().next(),
+        Some(format!("# lengua: spec {label}").as_str()),
+        "main-template.s carries its spec's label"
+    );
+}
+
+#[test]
 fn the_spec_template_is_a_valid_spec() {
     let text = read(&skills_dir().join("write-spec/assets/spec-template.md"));
     if let Err(problems) = lengua::spec::parse(&text) {
