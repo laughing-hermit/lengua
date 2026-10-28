@@ -739,7 +739,12 @@ impl<'a> Checker<'a> {
                     .join(", ")
             )
         };
+        // "At most N bytes" implies the empty text, so a text length may start at 0 unstated.
+        let empty_text = matches!(generator, Generator::Str { min: 0, .. });
         for limit in generator.limits() {
+            if empty_text && limit == Limit::whole(0) {
+                continue;
+            }
             if !stated.contains_key(&limit) {
                 self.problem(
                     Some(line),
@@ -1433,6 +1438,37 @@ Negates a whole number between `{lo}` and `{hi}`.
             ));
         }
         text
+    }
+
+    #[test]
+    fn text_may_start_empty_without_purpose_saying_so() {
+        let spec = spec::parse(
+            "---
+type: lengua/program-spec
+title: lines
+---
+# Purpose
+Counts the lines of at most `1048576` bytes of text.
+
+# Behaviors
+## B1: Counts lines
+- Given the input `a` followed by a newline
+- When the program runs
+- Then it prints `1` followed by a newline
+- And it exits with code `0`
+
+# Constraints
+- Allowed system calls: read, write, exit
+",
+        )
+        .expect("valid spec");
+        let tests = tests(
+            "[[example]]\nid = \"B1\"\nstdin = \"a\\n\"\nstdout = \"1\\n\"\nexit_code = 0\n\n\
+             [[generated]]\nid = \"B1\"\nvars = { text = 'string(0, 1048576, \"a\\n\")' }\n\
+             stdin = \"{text}\"\nstdout = \"{count(text, \\\"\\\\n\\\")}\\n\"\nexit_code = 0\n",
+        );
+        let result = check(&tests, &spec, LABEL);
+        assert!(result.is_ok(), "{result:#?}");
     }
 
     #[test]

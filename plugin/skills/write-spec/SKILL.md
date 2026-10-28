@@ -44,7 +44,9 @@ of the same rule.
 - **Purpose** says in plain words what the program does, for whom and why. It then gives in
   backticks the range of every number the program reads and the length of any text it reads,
   including a range only one behavior uses: generated tests draw their inputs from exactly these
-  ranges, so nothing else goes in backticks there. Keep text on standard input to at most
+  ranges, so nothing else goes in backticks there. Give both ends of every number's range (from
+  `1` to `100`); a text length may start at 0 without saying so. Keep text on standard input to at
+  most
   `1048576` bytes and each argument to at most `131072` (Linux's limit), and numbers within 64
   bits. If the program reads or writes, Purpose says
   which exit code it uses when reading or writing fails, without backticks (tests can't make

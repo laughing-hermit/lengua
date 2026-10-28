@@ -65,7 +65,8 @@ longer; long text belongs on standard input.
 
 Arguments must be literal values. The limits of `int` and `decimal` and the lengths of `string`
 must be numbers that the `# Purpose` section of `spec.md` writes in backticks, so every range
-comes from the approved spec, and a `decimal` uses the places Purpose writes (`0.00` means 2).
+comes from the approved spec, and a `decimal` uses the places Purpose writes (`0.00` means 2). A
+`string` may start at length 0 without Purpose saying so.
 Numbers from behaviors don't count: an example's own inputs aren't a range.
 
 For input that isn't valid, list hand-picked values with `choice`: the example's own value plus
