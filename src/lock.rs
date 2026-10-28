@@ -19,7 +19,7 @@ use crate::hash::{Sha256Hex, hex};
 pub const LOCK_FILE: &str = "lengua.lock";
 
 /// The lock format this server reads and writes.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 /// The lengua dialect this server checks.
 pub const DIALECT: u32 = 1;
@@ -51,35 +51,8 @@ pub struct Lock {
 pub struct SpecStamp {
     /// SHA-256 of spec.md.
     pub sha256: Sha256Hex,
-    /// How the person approved it.
-    pub approved_via: ApprovedVia,
-}
-
-/// How the person approved a spec.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ApprovedVia {
-    /// In an MCP approval dialog.
-    Elicitation,
-    /// Through the harness's permission prompt for the `approve_spec` tool, because the client
-    /// can't show approval dialogs.
-    ToolPermission,
-}
-
-impl ApprovedVia {
-    /// The name written in the lock.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Elicitation => "elicitation",
-            Self::ToolPermission => "tool-permission",
-        }
-    }
-
-    fn parse(text: &str) -> Option<Self> {
-        [Self::Elicitation, Self::ToolPermission]
-            .into_iter()
-            .find(|via| via.as_str() == text)
-    }
+    /// The user's own words approving it, as the agent quoted them.
+    pub approval: String,
 }
 
 /// The checked tests.
@@ -107,11 +80,11 @@ pub struct CodeStamp {
 impl Lock {
     /// A lock that records only an approved spec; tests and code must be checked again.
     #[must_use]
-    pub fn approved(spec: Sha256Hex, approved_via: ApprovedVia) -> Self {
+    pub fn approved(spec: Sha256Hex, approval: String) -> Self {
         Self {
             spec: SpecStamp {
                 sha256: spec,
-                approved_via,
+                approval,
             },
             tests: None,
             code: None,
@@ -166,9 +139,9 @@ impl Lock {
         }
         let _ = write!(
             text,
-            "\n[spec]\nsha256 = \"{}\"\napproved_via = \"{}\"\n",
+            "\n[spec]\nsha256 = \"{}\"\napproval = {}\n",
             self.spec.sha256,
-            self.spec.approved_via.as_str()
+            toml_string(&self.spec.approval)
         );
         if let Some(tests) = &self.tests {
             let _ = write!(text, "\n[tests]\nsha256 = \"{}\"\n", tests.sha256);
@@ -215,7 +188,7 @@ struct LockFile {
 #[serde(deny_unknown_fields)]
 struct SpecTable {
     sha256: String,
-    approved_via: String,
+    approval: String,
 }
 
 #[derive(Deserialize)]
@@ -253,8 +226,7 @@ fn parse_body(body: &str) -> Result<Lock, LockError> {
     let lock = Lock {
         spec: SpecStamp {
             sha256: digest(&file.spec.sha256)?,
-            approved_via: ApprovedVia::parse(&file.spec.approved_via)
-                .ok_or_else(|| malformed("approved_via is unknown"))?,
+            approval: file.spec.approval,
         },
         tests: file
             .tests
@@ -334,7 +306,8 @@ impl fmt::Display for LockError {
             Self::Unreadable(error) => write!(f, "it can't be read: {error}"),
             Self::Malformed(detail) => write!(f, "{detail}"),
             Self::BadSignature => f.write_str(
-                "its signature doesn't match, so something other than lengua changed it",
+                "its signature doesn't match: it was signed on another machine or changed outside \
+                 lengua",
             ),
             Self::UnsupportedVersion(version) => write!(
                 f,
@@ -560,7 +533,7 @@ mod tests {
         Lock {
             spec: SpecStamp {
                 sha256: Sha256Hex::of(b"spec"),
-                approved_via: ApprovedVia::Elicitation,
+                approval: "I approve ~/add/spec.md".into(),
             },
             tests: Some(TestsStamp {
                 sha256: Sha256Hex::of(b"tests"),
@@ -582,12 +555,15 @@ mod tests {
 
     #[test]
     fn round_trips_a_spec_only_lock() {
-        let lock = Lock::approved(Sha256Hex::of(b"spec"), ApprovedVia::ToolPermission);
+        let lock = Lock::approved(
+            Sha256Hex::of(b"spec"),
+            "Looks right: \"approve\" it\n".into(),
+        );
         let text = lock.to_signed_text(&key(1));
         assert!(text.starts_with(HEADER), "{text}");
         assert!(!text.contains("fingerprint"), "{text}");
         assert!(
-            text.contains("approved_via = \"tool-permission\"\n"),
+            text.contains("approval = \"Looks right: \\\"approve\\\" it\\n\"\n"),
             "{text}"
         );
         assert!(text.ends_with("\"\n"), "{text}");
@@ -661,10 +637,10 @@ mod tests {
     #[test]
     fn unknown_versions_and_dialects_are_reported() {
         let body = full_lock().body();
-        let newer = forge(&body.replace("version = 1", "version = 2"), &key(1));
+        let older = forge(&body.replace("version = 2", "version = 1"), &key(1));
         assert_eq!(
-            Lock::from_signed_text(&newer, &key(1)),
-            Err(LockError::UnsupportedVersion("2".into()))
+            Lock::from_signed_text(&older, &key(1)),
+            Err(LockError::UnsupportedVersion("1".into()))
         );
         let dialect = forge(&body.replace("dialect = 1", "dialect = 2"), &key(1));
         assert_eq!(
@@ -685,7 +661,7 @@ mod tests {
                 &lock.fingerprint().expect("fingerprint").to_string(),
                 Sha256Hex::of(b"other").as_str(),
             ),
-            body.replace("\"elicitation\"", "\"telepathy\""),
+            body.replace("approval = ", "approved_via = "),
             {
                 let start = body.find("\n[tests]").expect("tests table");
                 let end = body.find("\n[code]").expect("code table");

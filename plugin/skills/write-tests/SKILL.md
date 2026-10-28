@@ -12,8 +12,8 @@ the tests come before the code, and they decide whether the code is right.
 
 ## Steps
 
-1. Call the lengua `status` tool with `path` set to the program folder's absolute path, and note
-   `program.spec_label` (it looks like `sha256:…`).
+1. Take the spec label (`sha256:…`) from the last `next_step`, which names it. If you don't have
+   it, call the lengua `status` tool with `path` and read `program.spec_label`.
 2. Read `<path>/spec.md`.
 3. Write `<path>/tests.toml` by the rules below.
    [The format reference](references/test-format.md) lists every field and function, with more
@@ -24,7 +24,7 @@ the tests come before the code, and they decide whether the code is right.
 
 ## Rules
 
-- **`[meta]`** holds `spec = "<spec_label>"`, copied from status.
+- **`[meta]`** holds `spec = "<spec_label>"`, the label from step 1.
 - **One `[[example]]` per behavior,** with `id` set to the behavior's ID and the behavior's
   values copied exactly into `args`, `stdin`, `stdout`, `stderr` and `exit_code`. Every backtick
   value of the behavior must appear in its example.
@@ -60,8 +60,8 @@ title: add
 description: Adds two whole numbers given as arguments and prints the sum.
 ---
 # Purpose
-Adds two whole numbers between `-1000000000` and `1000000000`. If writing the output fails, the
-program exits with code 2.
+Lets a shell script add two whole numbers: it prints the sum of two numbers between `-1000000000`
+and `1000000000`, given as arguments. If writing the output fails, the program exits with code 2.
 
 # Behaviors
 ## B1: Adds two numbers
@@ -70,7 +70,7 @@ program exits with code 2.
 - Then it prints `5` followed by a newline
 - And it exits with code `0`
 
-## B2: Missing arguments
+## B2: Shows usage when arguments are missing
 - Given no arguments
 - When the program runs
 - Then it prints `usage: add <a> <b>` followed by a newline to standard error

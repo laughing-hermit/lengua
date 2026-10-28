@@ -1,6 +1,6 @@
 ---
 name: write-assembly
-description: Writes a lengua program's main.s, the x86-64 assembly that implements its approved spec and passes its frozen tests, in lengua's dialect checked against the lengua Power of 10 (NASA's rules adapted for assembly). Use after check_tests passes, when the lengua status tool says to write main.s, when check_code reports violations, or to make a checked program faster. Ends with check_code.
+description: Writes a lengua program's main.s, the x86-64 assembly that implements its approved spec and passes its frozen tests, in lengua's dialect checked against the lengua Power of 10 (NASA's rules adapted for assembly). Use after check_tests passes, when the lengua status tool says to write main.s, when check_code reports violations, or when the user asks for a faster program. Ends with a first run and a short report to the user.
 license: Apache-2.0
 compatibility: Needs the lengua MCP server from the lengua plugin, on Linux x86-64 with LLVM (llvm-mc and ld.lld).
 ---
@@ -14,13 +14,14 @@ Nothing runs before every rule passes.
 
 ## Steps
 
-1. Call the lengua `status` tool with `path` set to the program folder's absolute path. Note
-   `program.spec_label` and the CPU features under `machine.features`.
+1. Take the spec label (`sha256:…`) from the last `next_step`, which names it. If you don't have
+   it, or you want the CPU's features (`machine.features`) before using BMI, POPCNT, LZCNT, ADX
+   or MOVBE instructions, call the lengua `status` tool with `path`.
 2. Read `<path>/spec.md` and `<path>/tests.toml`.
-3. Copy [the template](assets/main-template.s) to `<path>/main.s` and set line 1 to
-   `# lengua: spec <spec_label>`. Keep `.intel_syntax noprefix`, `assert_fail` and
-   `assert_message` exactly; replace the rest with the program. The template is a complete,
-   checked program that prints the negative of a number (its spec and tests are
+3. Write `<path>/main.s` in the shape of [the template](assets/main-template.s): line 1 is
+   `# lengua: spec <spec_label>`, line 2 is `.intel_syntax noprefix`, and `assert_fail` and
+   `assert_message` are copied word for word; the rest is the program. The template is a
+   complete, checked program that prints the negative of a number (its spec and tests are
    [template-spec.md](assets/template-spec.md) and [template-tests.toml](assets/template-tests.toml));
    its `parse_i64`, `write_i64` and `write_all` can be reused as they are.
 4. Write the code by [the rules](references/power-of-10.md), with
@@ -32,14 +33,23 @@ Nothing runs before every rule passes.
    the seed, what was expected and what happened, and `assertion N failed at main.s:LINE` when an
    assertion fires. Fix everything and call it again until it passes; then `lengua.lock` records
    the code.
-6. To make the program faster, read `performance` in the report. For each test it gives the
-   instructions executed (the steadiest measure of work), the CPU cycles in the program's own
-   code (its time, where slow instructions such as division weigh more), and the CPU time in
-   microseconds (which also counts the kernel's work for system calls, so many small writes show
-   up there). Change `main.s` and call `check_code` again: the tests must stay green, and the
-   median cycles and CPU time should drop. Every measure varies a little between runs, so compare
-   medians.
-7. Run the program with `run`: `path`, plus `args` and `stdin` when it reads them.
+6. Run the program once with `run`, using the spec's first example: `path`, plus `args` and
+   `stdin` when it reads them.
+7. Tell the user in a few short lines and plain words: where the program is, that it follows
+   every rule and passed all its test runs, what `run` printed, and that they can ask you to run
+   it with other inputs or to change what it does (which starts with the spec). If the code
+   handles a case the spec doesn't mention, such as input longer than a buffer, say so in one line
+   and offer to add it to the spec. Leave out hashes, seeds and fingerprints.
+
+## Making it faster
+
+Only when the user asks for a faster program: read `performance` in the `check_code` report. For
+each test it gives the instructions executed (the steadiest measure of work), the CPU cycles in
+the program's own code (its time, where slow instructions such as division weigh more), and the
+CPU time in microseconds (which also counts the kernel's work for system calls, so many small
+writes show up there; for a short run it's mostly the kernel starting and ending the process).
+Change `main.s` and call `check_code` again: the tests must stay green, and the median cycles and
+CPU time should drop. Every measure varies a little between runs, so compare medians.
 
 ## The rules in brief
 

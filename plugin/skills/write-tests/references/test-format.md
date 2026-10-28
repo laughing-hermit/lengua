@@ -134,7 +134,7 @@ capital letters.
 - Then it prints `HELLO WORLD` followed by a newline
 - And it exits with code `0`
 
-## B2: Empty input
+## B2: Rejects empty input
 - Given empty input
 - When the program runs
 - Then it prints `error: no input` followed by a newline to standard error
@@ -186,7 +186,7 @@ Divides a whole number between `-1000000` and `1000000` by a whole number betwee
 - Then it prints `3` followed by a newline
 - And it exits with code `0`
 
-## B2: Division by zero
+## B2: Rejects division by zero
 - Given the arguments `7` and `0`
 - When the program runs
 - Then it prints `error: division by zero` followed by a newline to standard error

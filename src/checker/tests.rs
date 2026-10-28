@@ -516,6 +516,14 @@ async fn bounds_checks_compare_without_sign_and_fit_the_buffer() {
         line_of(&text, "    cmp ecx, OUT_BUF_LEN + 1"),
         "reach byte 21 of out_buf, which has 21 bytes",
     );
+
+    // `lea` computes an address without touching memory, so its index needs no check.
+    let text = with(
+        "    cmp rcx, MAX_CHARS\n",
+        "    lea r11, [rdi + rcx]\n    cmp rcx, MAX_CHARS\n",
+    );
+    let report = check(&text).await;
+    assert!(report.violations.is_empty(), "{:#?}", report.violations);
 }
 
 #[tokio::test]

@@ -1,7 +1,7 @@
 # lengua
 
-Spec-driven programming in checked assembly. You and an AI agent write a plain-language spec; the
-agent writes tests from it, then x86-64 assembly that must pass every test and an adapted NASA
+Spec-driven programming in checked assembly. An AI agent writes a plain-language spec for you to
+approve, then tests from it, then x86-64 assembly that must pass every test and an adapted NASA
 "Power of 10" rule set. A signed lock keeps spec, tests and code in sync, and a program only runs
 when all three match. See [DESIGN.md](DESIGN.md) for how and why.
 
@@ -27,29 +27,38 @@ scripts/build-plugin.sh
 This builds the server and installs it at `plugin/server/lengua-mcp`, where both plugin manifests
 expect it. Run it again after every change to the Rust code.
 
-## Use it in Claude Code
+## Use it
+
+Load the plugin in your agent harness. In Claude Code:
 
 ```sh
 claude --plugin-dir /absolute/path/to/lengua/plugin
 ```
 
-Then ask for a program, for example: "Use lengua to write a program in /home/you/projects/add
-that adds two whole numbers given as arguments and prints the sum." The agent:
+Then describe a program, for example: "Use lengua to write a program that adds two whole numbers
+given as arguments and prints the sum."
 
-1. writes `spec.md` with you (the `write-spec` skill) and asks you to approve it in a dialog:
-   "Approve /home/you/projects/add/spec.md?";
-2. writes `tests.toml` from the spec and checks it (`write-tests`, `check_tests`);
-3. writes `main.s` and checks it against the rules and every test (`write-assembly`,
-   `check_code`), which reports the instructions, cycles and CPU time each test took;
-4. runs it (`run`), which works only while spec, tests and code all match `lengua.lock`.
+1. The agent writes `spec.md` and tells you where it is. Read it in your editor.
+2. When it says what you want, tell the agent so, for example: "I approve
+   /home/you/add/spec.md". That's your one decision, and lengua records your words in
+   `lengua.lock`.
+3. The rest is automatic: the agent writes the tests and the assembly, lengua checks both, and the
+   agent runs the program once and tells you how it went.
 
-The first approval creates a signing key in `~/.local/share/lengua`.
+Later, ask the agent to run the program with other inputs, or to change what it does; a change
+starts with a new spec for you to approve. If you don't name a folder, the program goes in a new
+folder inside the current one.
+
+Your harness may ask permission the first time each lengua tool runs. Allowing the tools doesn't
+skip your approval: only your words approve a spec. The first approval creates a signing key in
+`~/.local/share/lengua`.
 
 ## Example
 
 [`examples/add`](examples/add) is a complete program: its spec, tests and assembly. Its
-`lengua.lock` isn't committed, because a lock is signed with each machine's own key; approve the
-spec on yours and run `check_tests` and `check_code` to create it.
+`lengua.lock` isn't committed, because a lock is signed with each machine's own key. Ask the agent
+to run it with lengua: after you approve its spec, the agent checks the tests and the code, which
+creates the lock.
 
 ## Develop
 

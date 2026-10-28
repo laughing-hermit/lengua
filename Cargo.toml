@@ -22,7 +22,7 @@ iced-x86 = { version = "1.21", default-features = false, features = ["std", "dec
 object = { version = "0.40", default-features = false, features = ["std", "read_core", "elf"] }
 perf-event2 = "0.7.4"
 rand = { version = "0.10", default-features = false, features = ["chacha"] }
-rmcp = { version = "3.8.0", features = ["transport-io", "elicitation"] }
+rmcp = { version = "3.8.0", features = ["transport-io"] }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde-saphyr = "2.0"

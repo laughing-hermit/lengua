@@ -2,13 +2,13 @@
 
 mod common;
 
-use common::{Answer, Protocol, Session, TestClient};
+use common::{Protocol, Session};
 use serde_json::json;
 
 #[tokio::test]
 async fn lists_status_as_a_read_only_tool_in_both_protocols() {
     for protocol in Protocol::ALL {
-        let session = Session::start(protocol, TestClient::with_elicitation(Answer::Approve)).await;
+        let session = Session::start(protocol).await;
         let tools = session.service.list_all_tools().await.expect("list tools");
         let status = tools
             .iter()
@@ -22,7 +22,7 @@ async fn lists_status_as_a_read_only_tool_in_both_protocols() {
 
 #[tokio::test]
 async fn handshake_reports_server_name_version_and_instructions() {
-    let session = Session::start(Protocol::Handshake, TestClient::without_elicitation()).await;
+    let session = Session::start(Protocol::Handshake).await;
     let info = session
         .service
         .peer_info()
@@ -40,7 +40,7 @@ async fn handshake_reports_server_name_version_and_instructions() {
 #[tokio::test]
 async fn status_reports_machine_toolchain_and_client() {
     for protocol in Protocol::ALL {
-        let session = Session::start(protocol, TestClient::with_elicitation(Answer::Approve)).await;
+        let session = Session::start(protocol).await;
         let report = session.call_ok("status", json!({})).await;
         assert_eq!(
             report["machine"]["os"],
@@ -62,10 +62,6 @@ async fn status_reports_machine_toolchain_and_client() {
             report["toolchain"]["linker"]["version"].is_string(),
             "{report}"
         );
-        assert_eq!(
-            report["client"]["elicitation"], true,
-            "{protocol:?}: {report}"
-        );
         let expected_protocol = match protocol {
             Protocol::Handshake => "2025-11-25",
             Protocol::Discover => "2026-07-28",
@@ -83,25 +79,6 @@ async fn status_reports_machine_toolchain_and_client() {
             report["next_step"]
                 .as_str()
                 .is_some_and(|step| step.starts_with("Ready")),
-            "{report}"
-        );
-        session.service.cancel().await.expect("close the session");
-    }
-}
-
-#[tokio::test]
-async fn status_notices_a_client_without_approval_dialogs() {
-    for protocol in Protocol::ALL {
-        let session = Session::start(protocol, TestClient::without_elicitation()).await;
-        let report = session.call_ok("status", json!({})).await;
-        assert_eq!(
-            report["client"]["elicitation"], false,
-            "{protocol:?}: {report}"
-        );
-        assert!(
-            report["next_step"]
-                .as_str()
-                .is_some_and(|step| step.contains("tool-permission prompt")),
             "{report}"
         );
         session.service.cancel().await.expect("close the session");

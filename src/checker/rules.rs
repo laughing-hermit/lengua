@@ -415,7 +415,9 @@ impl Checker<'_, '_> {
             let instruction = &step.machine;
             let has_memory = (0..instruction.op_count())
                 .any(|operand| instruction.op_kind(operand) == OpKind::Memory);
+            // `lea` only computes an address and never touches memory, like `add`.
             if !has_memory
+                || mnemonic(instruction) == "lea"
                 || instruction.memory_index() == Register::None
                 || step.source.unsafe_block.is_some()
             {

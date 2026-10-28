@@ -1,30 +1,23 @@
 //! The lengua MCP server: tool definitions and server instructions.
 
-use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use rmcp::handler::server::router::tool::ToolRouter;
-use rmcp::handler::server::tool::{InputResponses, RequestState, schema_for_output};
 use rmcp::handler::server::wrapper::{Json, Parameters};
-use rmcp::model::{
-    CallToolResponse, CallToolResult, ElicitRequest, ElicitRequestParams, ElicitResult,
-    ElicitationAction, ElicitationSchema, Implementation, InputRequest, InputRequiredResult,
-    ProtocolVersion, ServerCapabilities, ServerConfig,
-};
-use rmcp::service::{ElicitationError, RequestContext};
+use rmcp::model::{Implementation, ServerCapabilities, ServerConfig};
+use rmcp::service::RequestContext;
 use rmcp::{RoleServer, ServerHandler, tool, tool_handler, tool_router};
 use serde::{Deserialize, Serialize};
 
 use crate::checker;
 use crate::data_dir::DataDir;
-use crate::hash::{Sha256Hex, hex};
-use crate::lock::{self, ApprovedVia, CodeStamp, Key, Lock, TestsStamp};
+use crate::hash::Sha256Hex;
+use crate::lock::{self, CodeStamp, Key, Lock, TestsStamp};
 use crate::platform::{CpuFeatures, Machine, Profile};
 use crate::runner::{self, End, Limits};
-use crate::spec::{self, Spec};
+use crate::spec;
 use crate::state::{
     CODE_FILE, LockStatus, ProgramFolder, SPEC_FILE, Snapshot, State, StepContext, TESTS_FILE,
     stamped_copy,
@@ -37,40 +30,24 @@ use crate::toolchain::Toolchain;
 ///
 /// Kept under 512 characters and self-contained: some harnesses only show the beginning.
 pub const INSTRUCTIONS: &str = "lengua builds programs as folders holding spec.md (the source \
-of truth), tests.toml, main.s and lengua.lock. Order: spec, then tests, then code. Never edit \
-lengua.lock; only this server writes it. Tests stay frozen until the spec changes. Run programs \
-only with the run tool. Always pass absolute folder paths. When unsure, call status and follow \
-its next step; the write-spec, write-tests and write-assembly skills explain each file.";
+of truth), tests.toml, main.s and lengua.lock. Order: spec, then tests, then code. Only the user \
+approves spec.md: when they say so, pass their words to approve_spec. Never edit lengua.lock. \
+Tests stay frozen until the spec changes. Run programs only with the run tool. Pass absolute \
+folder paths. When unsure, call status and follow its next step; the write-spec, write-tests and \
+write-assembly skills explain each file.";
 
-/// The key of the approval dialog inside an input-required result.
-const APPROVAL_INPUT: &str = "approve_spec";
-
-/// How long an approval dialog shown through an input-required result stays answerable.
-const APPROVAL_TTL: Duration = Duration::from_secs(30 * 60);
-
-/// At most this many approval dialogs wait for an answer at once.
-const MAX_PENDING_APPROVALS: usize = 64;
+/// The longest approval the lock records: the user's words, not a whole conversation.
+const MAX_APPROVAL_CHARS: usize = 500;
 
 /// The lengua MCP server.
 #[derive(Debug, Clone)]
 pub struct LenguaServer {
     tool_router: ToolRouter<Self>,
     data_dir: Arc<DataDir>,
-    /// Approval dialogs shown through input-required results, by their single-use nonce.
-    approvals: Arc<Mutex<HashMap<String, PendingApproval>>>,
     /// Serializes every read-modify-write of a lock file.
     lock_writes: Arc<tokio::sync::Mutex<()>>,
     /// This server's own binary, which launches programs so their instructions can be counted.
     launcher: Arc<PathBuf>,
-}
-
-/// An approval dialog waiting for the client's retry.
-#[derive(Debug, Clone)]
-struct PendingApproval {
-    folder: ProgramFolder,
-    /// The spec.md hash the dialog showed.
-    spec: Sha256Hex,
-    expires: Instant,
 }
 
 impl LenguaServer {
@@ -80,7 +57,6 @@ impl LenguaServer {
         Self {
             tool_router: Self::tool_router(),
             data_dir: Arc::new(data_dir),
-            approvals: Arc::default(),
             lock_writes: Arc::default(),
             launcher: Arc::new(std::env::current_exe().unwrap_or_default()),
         }
@@ -101,6 +77,16 @@ pub struct StatusParams {
 pub struct ProgramParams {
     /// Absolute path of the program folder, the folder that holds spec.md.
     pub path: String,
+}
+
+/// Input for `approve_spec`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ApprovalParams {
+    /// Absolute path of the program folder, or of its spec.md.
+    pub path: String,
+    /// The user's own words approving the spec, quoted exactly, such as "I approve
+    /// /home/you/projects/add/spec.md".
+    pub approval: String,
 }
 
 /// Everything `status` reports.
@@ -164,8 +150,6 @@ pub struct ToolReport {
 pub struct ClientReport {
     /// The negotiated MCP protocol version.
     pub protocol_version: Option<String>,
-    /// Whether the client can show the spec-approval dialog (MCP form elicitation).
-    pub elicitation: bool,
 }
 
 /// Program part of the status report.
@@ -213,8 +197,8 @@ pub struct LockReport {
     pub state: String,
     /// Why the lock can't be trusted, when it's invalid.
     pub problem: Option<String>,
-    /// How the spec was approved: `elicitation` or `tool-permission`.
-    pub approved_via: Option<String>,
+    /// The user's words that approved the spec.
+    pub approval: Option<String>,
     /// One hash over spec, tests and code, once all three are checked.
     pub fingerprint: Option<String>,
 }
@@ -224,8 +208,8 @@ pub struct LockReport {
 pub struct ApprovalReport {
     /// Whether spec.md is approved now.
     pub approved: bool,
-    /// How it was approved: `elicitation` (a dialog) or `tool-permission`.
-    pub approved_via: Option<String>,
+    /// The user's words that approved it, as lengua.lock records them.
+    pub approval: String,
     /// The label tests.toml and main.s must carry: `sha256:<hex>` of spec.md.
     pub spec_label: String,
     /// What happened.
@@ -319,51 +303,18 @@ pub struct RunReport {
     pub fingerprint: String,
 }
 
-/// The approval dialog's form: one checkbox, on by default.
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SpecApproval {
-    /// Approve spec.md exactly as written.
-    #[schemars(title = "Approve", extend("default" = true))]
-    approve: bool,
-}
-
-rmcp::elicit_safe!(SpecApproval);
-
-/// The person's answer to an approval dialog.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Answer {
-    Approve,
-    LeftUnchecked,
-    Declined,
-    Cancelled,
-}
-
-impl Answer {
-    fn describe(self) -> &'static str {
-        match self {
-            Self::Approve => "approved",
-            Self::LeftUnchecked => "left \"Approve\" unchecked",
-            Self::Declined => "declined",
-            Self::Cancelled => "closed the dialog",
-        }
-    }
-}
-
 #[tool_router]
 impl LenguaServer {
     #[tool(
         name = "status",
-        description = "Shows whether lengua can build programs here: OS, CPU and its features, \
-            the LLVM tools (llvm-mc, ld.lld), the MCP protocol in use and whether this client can \
-            show approval dialogs. Given path, also shows where that program stands: each file's \
-            hash, whether lengua.lock stamps it, and the label tests.toml and main.s must carry. \
-            Ends with the single next step to take. path: absolute path of a program folder \
-            (optional).",
-        annotations(
-            title = "lengua status",
-            read_only_hint = true,
-            open_world_hint = false
-        )
+        title = "Status",
+        description = "Shows whether lengua can build programs on this machine and, given a \
+            program folder, what that program needs next. It reports the OS, CPU and its \
+            features, the LLVM tools (llvm-mc, ld.lld) and the MCP protocol in use; for a \
+            program, each file's hash, whether lengua.lock records it, the label tests.toml and \
+            main.s must carry, and any problems in an unapproved spec.md. Ends with the single \
+            next step to take. path: absolute path of a program folder (optional).",
+        annotations(title = "Status", read_only_hint = true, open_world_hint = false)
     )]
     async fn status(
         &self,
@@ -374,9 +325,7 @@ impl LenguaServer {
         let toolchain = Toolchain::discover().await;
         let client = client_report(&ctx);
         let program = match params.path.as_deref() {
-            Some(path) => {
-                Some(self.program_report(&ProgramFolder::new(path)?, client.elicitation)?)
-            }
+            Some(path) => Some(self.program_report(&ProgramFolder::new(path)?)?),
             None => None,
         };
         let next_step = match (
@@ -385,7 +334,7 @@ impl LenguaServer {
         ) {
             (Some(blocker), _) => blocker,
             (None, Some((_, step))) => step.clone(),
-            (None, None) => ready_step(client.elicitation),
+            (None, None) => READY_STEP.to_owned(),
         };
         Ok(Json(StatusReport {
             server_version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -407,76 +356,88 @@ impl LenguaServer {
 
     #[tool(
         name = "approve_spec",
-        description = "Asks the user to approve <path>/spec.md as the program's source of truth \
-            and records the approval in lengua.lock. Call it after showing the user the finished \
-            spec. It first checks the spec's format and returns any problems without asking. The \
-            user confirms in a dialog; on clients that can't show one, the permission prompt for \
-            this tool is the approval. Approving a changed spec resets the tests and code checks. \
-            path: absolute path of the program folder.",
+        title = "Approve spec",
+        description = "Records in lengua.lock that the user approved <path>/spec.md. Call it only \
+            after the user has read the spec and told you, in their own words, that they approve \
+            it, and pass those words as approval; never on your own. It first checks the spec's \
+            format and returns any problems. Approving a changed spec resets the tests and code \
+            checks. path: absolute path of the program folder or of its spec.md; approval: the \
+            user's words, quoted exactly.",
         annotations(
-            title = "Approve a spec",
+            title = "Approve spec",
             read_only_hint = false,
             destructive_hint = false,
             idempotent_hint = true,
             open_world_hint = false
-        ),
-        output_schema = schema_for_output::<ApprovalReport>()
+        )
     )]
     async fn approve_spec(
         &self,
-        Parameters(params): Parameters<ProgramParams>,
-        RequestState(request_state): RequestState,
-        InputResponses(responses): InputResponses,
-        ctx: RequestContext<RoleServer>,
-    ) -> Result<CallToolResponse, String> {
-        let folder = ProgramFolder::new(&params.path)?;
+        Parameters(params): Parameters<ApprovalParams>,
+    ) -> Result<Json<ApprovalReport>, String> {
+        let folder = folder_of(&params.path)?;
+        let approval = params.approval.trim();
+        if approval.is_empty() {
+            return Err(format!(
+                "approval must quote the user's own words approving {folder}/{SPEC_FILE}. Only \
+                 the user can approve a spec: tell them where it is, and wait until they say they \
+                 approve it."
+            ));
+        }
+        if approval.chars().count() > MAX_APPROVAL_CHARS {
+            return Err(format!(
+                "approval holds more than {MAX_APPROVAL_CHARS} characters; quote only the user's \
+                 words that approve the spec."
+            ));
+        }
+        let _writing = self.lock_writes.lock().await;
         let text = read_spec(&folder)?;
         let spec = spec::parse(&text).map_err(|problems| spec_problems(&folder, &problems))?;
-        let shown = Sha256Hex::of(text.as_bytes());
-        let elicitation = client_report(&ctx).elicitation;
+        let current = Sha256Hex::of(text.as_bytes());
         let key = Key::load_or_create(&self.data_dir).map_err(|error| error.to_string())?;
-        if let Ok(Some(lock)) = lock::read(folder.path(), Some(&key))
-            && lock.spec.sha256 == shown
-        {
-            return self.respond(
-                &folder,
-                &shown,
-                Some(lock.spec.approved_via),
-                "spec.md was already approved; nothing changed.".to_owned(),
-                None,
-                elicitation,
-            );
-        }
-        if !elicitation {
-            return self
-                .stamp(&folder, &spec, &shown, ApprovedVia::ToolPermission)
-                .await;
-        }
-        if uses_input_required(&ctx) {
-            self.approve_with_input_required(
-                &folder,
-                &spec,
-                &shown,
-                request_state,
-                responses.as_ref(),
-            )
-            .await
-        } else {
-            self.approve_with_dialog(&ctx, &folder, &spec, &shown).await
-        }
+        let (approval, message) = match lock::read(folder.path(), Some(&key)) {
+            Ok(Some(lock)) if lock.spec.sha256 == current => (
+                lock.spec.approval,
+                format!("{SPEC_FILE} was already approved; nothing changed."),
+            ),
+            _ => {
+                lock::write(
+                    folder.path(),
+                    &Lock::approved(current.clone(), approval.to_owned()),
+                    &key,
+                )
+                .map_err(|error| format!("couldn't write {folder}/{}: {error}", lock::LOCK_FILE))?;
+                (
+                    approval.to_owned(),
+                    format!(
+                        "The user approved {SPEC_FILE} for \"{}\". It's now the source of truth \
+                         that the tests and code are checked against.",
+                        spec.title
+                    ),
+                )
+            }
+        };
+        Ok(Json(ApprovalReport {
+            approved: true,
+            approval,
+            spec_label: current.label(),
+            message,
+            next_step: self.program_state(&folder)?.1,
+        }))
     }
 
     #[tool(
         name = "check_tests",
-        description = "Checks <path>/tests.toml against the approved spec.md and, if it passes, \
-            records it in lengua.lock; from then on the tests stay frozen until the spec changes. \
-            It checks the [meta] spec label, one example per behavior holding the spec's values, \
-            a [[generated]] block for every behavior with inputs, generator ranges taken from the \
-            spec, formulas that reproduce each example without overflow or division by zero, and \
+        title = "Check tests",
+        description = "Checks <path>/tests.toml against the approved spec, then freezes it: \
+            lengua.lock records it, and it can't change until the spec does. It checks the [meta] \
+            spec label, one example per behavior holding the spec's values, a [[generated]] block \
+            for every behavior with inputs, generator ranges taken from the spec's Purpose, \
+            formulas that reproduce each example without overflow or division by zero, and \
             output that depends on the inputs. Returns every problem at once. path: absolute path \
             of the program folder.",
         annotations(
-            title = "Check the tests",
+            title = "Check tests",
             read_only_hint = false,
             destructive_hint = false,
             idempotent_hint = true,
@@ -486,11 +447,9 @@ impl LenguaServer {
     async fn check_tests(
         &self,
         Parameters(params): Parameters<ProgramParams>,
-        ctx: RequestContext<RoleServer>,
     ) -> Result<Json<TestsReport>, String> {
         let folder = ProgramFolder::new(&params.path)?;
-        let elicitation = client_report(&ctx).elicitation;
-        let (state, next_step) = self.program_state(&folder, elicitation)?;
+        let (state, next_step) = self.program_state(&folder)?;
         let already_checked = match state {
             State::TestsUnchecked => false,
             State::CodeMissing | State::CodeUnchecked | State::Ready => true,
@@ -520,8 +479,8 @@ impl LenguaServer {
             self.stamp_tests(&folder, &spec_hash, &tests_hash, &tests_text)
                 .await?;
             format!(
-                "{TESTS_FILE} passed every check and is now frozen: it can't change until \
-                 {SPEC_FILE} does."
+                "{TESTS_FILE} covers every behavior in {SPEC_FILE} and is now frozen: it can't \
+                 change until {SPEC_FILE} does. No code has run yet."
             )
         };
         Ok(Json(TestsReport {
@@ -535,21 +494,22 @@ impl LenguaServer {
                 .map(|block| u64::from(block.runs))
                 .sum(),
             message,
-            next_step: self.program_state(&folder, elicitation)?.1,
+            next_step: self.program_state(&folder)?.1,
         }))
     }
 
     #[tool(
         name = "check_code",
-        description = "Checks <path>/main.s and, when it passes, records it in lengua.lock. It \
-            assembles and links the program, reads the machine code back and matches it to main.s \
-            line by line, and checks every lengua Power of 10 rule; nothing runs before the rules \
-            pass. Then it runs every test, generated tests with fresh random inputs, and reports \
-            the instructions each test executed. Needs an approved spec and checked tests, and \
-            main.s's first line must be the spec label from status. Returns every violation or \
-            failed test with its line. path: absolute path of the program folder.",
+        title = "Check code",
+        description = "Checks <path>/main.s against lengua's rules and every test, then records \
+            it in lengua.lock. It assembles and links the program, reads the machine code back \
+            and matches it to main.s line by line, and checks every lengua Power of 10 rule; \
+            nothing runs before the rules pass. Then it runs every test, generated tests with \
+            fresh random inputs, and reports what each test cost. Needs an approved spec and \
+            checked tests, and main.s's first line must be the spec label. Returns every \
+            violation or failed test with its line. path: absolute path of the program folder.",
         annotations(
-            title = "Check the code",
+            title = "Check code",
             read_only_hint = false,
             destructive_hint = false,
             idempotent_hint = true,
@@ -559,11 +519,9 @@ impl LenguaServer {
     async fn check_code(
         &self,
         Parameters(params): Parameters<ProgramParams>,
-        ctx: RequestContext<RoleServer>,
     ) -> Result<Json<CodeReport>, String> {
         let folder = ProgramFolder::new(&params.path)?;
-        let elicitation = client_report(&ctx).elicitation;
-        let (state, next_step) = self.program_state(&folder, elicitation)?;
+        let (state, next_step) = self.program_state(&folder)?;
         match state {
             State::CodeUnchecked | State::Ready => {}
             State::CodeMissing => {
@@ -650,40 +608,31 @@ impl LenguaServer {
             performance: outcome.costs,
             fingerprint: fingerprint.to_string(),
             message: format!(
-                "{CODE_FILE} follows every rule and passed all {} test runs (seed {seed}). \
-                 lengua.lock now binds spec, tests and code: fingerprint {}. To make the program \
-                 faster, change {CODE_FILE} and call check_code again: the tests must stay green, \
-                 and the median cycles and CPU time should drop (CPU time also counts system \
-                 calls).",
-                outcome.runs,
-                fingerprint.short()
+                "{CODE_FILE} follows every rule and passed all {} test runs. lengua.lock now \
+                 records spec, tests and code together, so the program can run.",
+                outcome.runs
             ),
-            next_step: self.program_state(&folder, elicitation)?.1,
+            next_step: self.program_state(&folder)?.1,
         }))
     }
 
     #[tool(
         name = "run",
-        description = "Runs the program in <path> with args and stdin, but only when lengua.lock \
-            shows that spec.md, tests.toml and main.s are exactly the versions that were approved \
-            and checked, and a fresh build of main.s is byte for byte the executable check_code \
-            tested. The program gets an empty environment, its own temporary folder, 10 seconds \
-            and 1 MiB of output. path: absolute path of the program folder; args: the program's \
-            arguments; stdin: text for its standard input.",
-        annotations(
-            title = "Run a program",
-            read_only_hint = false,
-            open_world_hint = false
-        )
+        title = "Run program",
+        description = "Runs the checked program in <path> with args and stdin. It runs only \
+            when lengua.lock shows that spec.md, tests.toml and main.s are exactly the versions \
+            that were approved and checked, and a fresh build of main.s is byte for byte the \
+            executable check_code tested. The program gets an empty environment, its own \
+            temporary folder, 10 seconds and 1 MiB of output. path: absolute path of the program \
+            folder; args: the program's arguments; stdin: text for its standard input.",
+        annotations(title = "Run program", read_only_hint = false, open_world_hint = false)
     )]
     async fn run(
         &self,
         Parameters(params): Parameters<RunParams>,
-        ctx: RequestContext<RoleServer>,
     ) -> Result<Json<RunReport>, String> {
         let folder = ProgramFolder::new(&params.path)?;
-        let elicitation = client_report(&ctx).elicitation;
-        let (state, next_step) = self.program_state(&folder, elicitation)?;
+        let (state, next_step) = self.program_state(&folder)?;
         if state != State::Ready {
             return Err(format!(
                 "lengua runs a program only when its spec, tests and code all match \
@@ -742,22 +691,33 @@ impl LenguaServer {
 
 impl LenguaServer {
     /// The program's state and its next step.
-    fn program_state(
-        &self,
-        folder: &ProgramFolder,
-        elicitation: bool,
-    ) -> Result<(State, String), String> {
+    fn program_state(&self, folder: &ProgramFolder) -> Result<(State, String), String> {
         let key = Key::load(&self.data_dir).map_err(|error| error.to_string())?;
         let snapshot = Snapshot::read(folder, key.as_ref())
             .map_err(|error| format!("can't read {folder}: {error}"))?;
         let state = State::of(&snapshot);
-        let step = state.next_step(&StepContext {
+        let step = self.next_step(folder, &snapshot, &state);
+        Ok((state, step))
+    }
+
+    /// The state's next step. An unapproved spec.md is checked first, so the user is only asked
+    /// to approve a spec lengua accepts.
+    fn next_step(&self, folder: &ProgramFolder, snapshot: &Snapshot, state: &State) -> String {
+        if *state == State::SpecNotApproved
+            && let Ok(text) = read_spec(folder)
+            && let Err(problems) = spec::parse(&text)
+        {
+            return format!(
+                "Next: fix {folder}/{SPEC_FILE} before asking the user to approve it:\n{}Fix them \
+                 with the write-spec skill, then call status again.",
+                problem_list(&problems)
+            );
+        }
+        state.next_step(&StepContext {
             folder,
             spec: snapshot.spec.as_ref(),
             data_dir: self.data_dir.path(),
-            elicitation,
-        });
-        Ok((state, step))
+        })
     }
 
     /// Records checked tests in the lock, provided neither file changed while being checked,
@@ -841,21 +801,12 @@ impl LenguaServer {
         Ok(fingerprint)
     }
 
-    fn program_report(
-        &self,
-        folder: &ProgramFolder,
-        elicitation: bool,
-    ) -> Result<(ProgramReport, String), String> {
+    fn program_report(&self, folder: &ProgramFolder) -> Result<(ProgramReport, String), String> {
         let key = Key::load(&self.data_dir).map_err(|error| error.to_string())?;
         let snapshot = Snapshot::read(folder, key.as_ref())
             .map_err(|error| format!("can't read {folder}: {error}"))?;
         let state = State::of(&snapshot);
-        let step = state.next_step(&StepContext {
-            folder,
-            spec: snapshot.spec.as_ref(),
-            data_dir: self.data_dir.path(),
-            elicitation,
-        });
+        let step = self.next_step(folder, &snapshot, &state);
         let lock = snapshot.valid_lock();
         let file = |current: &Option<Sha256Hex>, stamp: Option<&Sha256Hex>| FileReport {
             exists: current.is_some(),
@@ -890,222 +841,13 @@ impl LenguaServer {
                     LockStatus::Invalid(error) => Some(error.to_string()),
                     LockStatus::Missing | LockStatus::Valid(_) => None,
                 },
-                approved_via: lock.map(|lock| lock.spec.approved_via.as_str().to_owned()),
+                approval: lock.map(|lock| lock.spec.approval.clone()),
                 fingerprint: lock
                     .and_then(Lock::fingerprint)
                     .map(|fingerprint| fingerprint.to_string()),
             },
         };
         Ok((report, step))
-    }
-
-    /// Shows the approval dialog as a server-to-client request (protocol 2025-11-25 and older).
-    async fn approve_with_dialog(
-        &self,
-        ctx: &RequestContext<RoleServer>,
-        folder: &ProgramFolder,
-        spec: &Spec,
-        shown: &Sha256Hex,
-    ) -> Result<CallToolResponse, String> {
-        let answer = match ctx
-            .peer
-            .elicit::<SpecApproval>(approval_message(folder))
-            .await
-        {
-            Ok(Some(SpecApproval { approve: true })) => Answer::Approve,
-            Ok(_) => Answer::LeftUnchecked,
-            Err(ElicitationError::UserDeclined) => Answer::Declined,
-            Err(ElicitationError::UserCancelled) => Answer::Cancelled,
-            Err(error) => {
-                return Err(format!(
-                    "The approval dialog failed ({error}), so nothing was approved."
-                ));
-            }
-        };
-        self.conclude(folder, spec, shown, shown, answer).await
-    }
-
-    /// Shows the approval dialog through an input-required result (protocol 2026-07-28 and
-    /// newer, which has no server-to-client requests). The client shows the dialog and calls
-    /// this tool again with the answer and the nonce.
-    async fn approve_with_input_required(
-        &self,
-        folder: &ProgramFolder,
-        spec: &Spec,
-        current: &Sha256Hex,
-        request_state: Option<String>,
-        responses: Option<&rmcp::model::InputResponses>,
-    ) -> Result<CallToolResponse, String> {
-        if let Some(nonce) = request_state
-            && let Some(pending) = self.take_approval(&nonce, folder)
-            && let Some(answer) = dialog_answer(responses)
-        {
-            return self
-                .conclude(folder, spec, &pending.spec, current, answer)
-                .await;
-        }
-        // No answer yet, or an unknown, used or expired nonce: show a new dialog.
-        let nonce = new_nonce()?;
-        self.remember_approval(
-            nonce.clone(),
-            PendingApproval {
-                folder: folder.clone(),
-                spec: current.clone(),
-                expires: Instant::now() + APPROVAL_TTL,
-            },
-        );
-        let schema = ElicitationSchema::from_type::<SpecApproval>()
-            .map_err(|error| format!("couldn't build the approval form: {error}"))?;
-        let dialog = ElicitRequest::new(ElicitRequestParams::FormElicitationParams {
-            meta: None,
-            message: approval_message(folder),
-            requested_schema: schema,
-        });
-        let requests =
-            BTreeMap::from([(APPROVAL_INPUT.to_owned(), InputRequest::Elicitation(dialog))]);
-        Ok(InputRequiredResult::new(Some(requests), Some(nonce)).into())
-    }
-
-    /// Acts on the person's answer to a dialog that showed the spec hashed as `shown`.
-    async fn conclude(
-        &self,
-        folder: &ProgramFolder,
-        spec: &Spec,
-        shown: &Sha256Hex,
-        current: &Sha256Hex,
-        answer: Answer,
-    ) -> Result<CallToolResponse, String> {
-        if answer != Answer::Approve {
-            return self.respond(
-                folder,
-                current,
-                None,
-                format!(
-                    "The user {} instead of approving spec.md, so nothing was approved.",
-                    answer.describe()
-                ),
-                Some(format!(
-                    "Next: ask the user what to change in {folder}/{SPEC_FILE}, update it with \
-                     the write-spec skill, then call approve_spec with path {folder} again."
-                )),
-                true,
-            );
-        }
-        if shown != current {
-            return self.spec_changed(folder, current);
-        }
-        self.stamp(folder, spec, shown, ApprovedVia::Elicitation)
-            .await
-    }
-
-    /// Records the approval, provided spec.md still has the approved content.
-    async fn stamp(
-        &self,
-        folder: &ProgramFolder,
-        spec: &Spec,
-        approved: &Sha256Hex,
-        approved_via: ApprovedVia,
-    ) -> Result<CallToolResponse, String> {
-        let _writing = self.lock_writes.lock().await;
-        let current = Sha256Hex::of(read_spec(folder)?.as_bytes());
-        if current != *approved {
-            return self.spec_changed(folder, &current);
-        }
-        let key = Key::load_or_create(&self.data_dir).map_err(|error| error.to_string())?;
-        lock::write(
-            folder.path(),
-            &Lock::approved(current.clone(), approved_via),
-            &key,
-        )
-        .map_err(|error| format!("couldn't write {folder}/{}: {error}", lock::LOCK_FILE))?;
-        let message = match approved_via {
-            ApprovedVia::Elicitation => format!(
-                "The user approved spec.md for \"{}\". It's now the source of truth that the \
-                 tests and code are checked against.",
-                spec.title
-            ),
-            ApprovedVia::ToolPermission => format!(
-                "spec.md for \"{}\" is approved through this client's permission prompt, \
-                 because it can't show approval dialogs. It's now the source of truth.",
-                spec.title
-            ),
-        };
-        self.respond(
-            folder,
-            &current,
-            Some(approved_via),
-            message,
-            None,
-            approved_via == ApprovedVia::Elicitation,
-        )
-    }
-
-    fn spec_changed(
-        &self,
-        folder: &ProgramFolder,
-        current: &Sha256Hex,
-    ) -> Result<CallToolResponse, String> {
-        self.respond(
-            folder,
-            current,
-            None,
-            "spec.md changed while the approval dialog was open, so nothing was approved."
-                .to_owned(),
-            Some(format!(
-                "Next: show the user the current {folder}/{SPEC_FILE}, then call approve_spec \
-                 with path {folder} again."
-            )),
-            true,
-        )
-    }
-
-    /// Builds the tool result. `next_step` defaults to the program's state.
-    fn respond(
-        &self,
-        folder: &ProgramFolder,
-        spec: &Sha256Hex,
-        approved_via: Option<ApprovedVia>,
-        message: String,
-        next_step: Option<String>,
-        elicitation: bool,
-    ) -> Result<CallToolResponse, String> {
-        let next_step = match next_step {
-            Some(step) => step,
-            None => self.program_report(folder, elicitation)?.1,
-        };
-        let report = ApprovalReport {
-            approved: approved_via.is_some(),
-            approved_via: approved_via.map(|via| via.as_str().to_owned()),
-            spec_label: spec.label(),
-            message,
-            next_step,
-        };
-        let value = serde_json::to_value(report)
-            .map_err(|error| format!("couldn't encode the report: {error}"))?;
-        Ok(CallToolResult::structured(value).into())
-    }
-
-    fn remember_approval(&self, nonce: String, pending: PendingApproval) {
-        let mut approvals = self.approvals.lock().expect("approval map lock");
-        let now = Instant::now();
-        approvals.retain(|_, pending| pending.expires > now);
-        if approvals.len() >= MAX_PENDING_APPROVALS
-            && let Some(oldest) = approvals
-                .iter()
-                .min_by_key(|(_, pending)| pending.expires)
-                .map(|(nonce, _)| nonce.clone())
-        {
-            approvals.remove(&oldest);
-        }
-        approvals.insert(nonce, pending);
-    }
-
-    /// Takes a pending dialog: each nonce answers once, for its own folder, before it expires.
-    fn take_approval(&self, nonce: &str, folder: &ProgramFolder) -> Option<PendingApproval> {
-        let mut approvals = self.approvals.lock().expect("approval map lock");
-        approvals
-            .remove(nonce)
-            .filter(|pending| pending.expires > Instant::now() && pending.folder == *folder)
     }
 }
 
@@ -1119,58 +861,30 @@ impl ServerHandler for LenguaServer {
 }
 
 fn client_report(ctx: &RequestContext<RoleServer>) -> ClientReport {
-    let elicitation = ctx
-        .client_capabilities()
-        .and_then(|capabilities| capabilities.elicitation)
-        // An empty elicitation capability means form mode (MCP spec).
-        .is_some_and(|elicitation| elicitation.form.is_some() || elicitation.url.is_none());
     ClientReport {
         protocol_version: ctx.protocol_version().map(|version| version.to_string()),
-        elicitation,
     }
 }
 
-/// Protocol 2026-07-28 dropped server-to-client requests; dialogs travel in input-required
-/// results instead.
-fn uses_input_required(ctx: &RequestContext<RoleServer>) -> bool {
-    ctx.protocol_version()
-        .is_some_and(|version| version >= ProtocolVersion::NO_INITIALIZE)
-}
-
-/// Reads the person's answer from a retried call's input responses.
-fn dialog_answer(responses: Option<&rmcp::model::InputResponses>) -> Option<Answer> {
-    let response = responses?.get(APPROVAL_INPUT)?;
-    let result: ElicitResult = serde_json::from_value(response.clone()).ok()?;
-    Some(match result.action {
-        ElicitationAction::Accept => {
-            let approved = result
-                .content
-                .and_then(|content| serde_json::from_value::<SpecApproval>(content).ok())
-                .is_some_and(|form| form.approve);
-            if approved {
-                Answer::Approve
-            } else {
-                Answer::LeftUnchecked
-            }
-        }
-        ElicitationAction::Decline => Answer::Declined,
-        _ => Answer::Cancelled,
-    })
-}
-
-fn new_nonce() -> Result<String, String> {
-    let mut bytes = [0_u8; 16];
-    getrandom::fill(&mut bytes)
-        .map_err(|error| format!("couldn't create an approval nonce: {error}"))?;
-    Ok(hex(&bytes))
+/// The program folder `path` names: the folder itself or its spec.md.
+fn folder_of(path: &str) -> Result<ProgramFolder, String> {
+    let path = path.trim();
+    match Path::new(path).file_name() {
+        Some(name) if name == SPEC_FILE => ProgramFolder::new(
+            Path::new(path)
+                .parent()
+                .and_then(Path::to_str)
+                .unwrap_or_default(),
+        ),
+        _ => ProgramFolder::new(path),
+    }
 }
 
 fn read_spec(folder: &ProgramFolder) -> Result<String, String> {
     match std::fs::read_to_string(folder.file(SPEC_FILE)) {
         Ok(text) => Ok(text),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(format!(
-            "There's no {SPEC_FILE} in {folder}. Write it with the write-spec skill, show it to \
-             the user, then call approve_spec."
+            "There's no {SPEC_FILE} in {folder}. Write it with the write-spec skill first."
         )),
         Err(error) => Err(format!("couldn't read {folder}/{SPEC_FILE}: {error}")),
     }
@@ -1238,8 +952,8 @@ fn random_seed() -> Result<u64, String> {
 fn failures_text(folder: &ProgramFolder, outcome: &testrun::Outcome) -> String {
     let count = outcome.failures.len();
     let mut text = format!(
-        "{folder}/{CODE_FILE} follows every rule but fails {count} test{}, so it wasn't \
-         stamped:\n",
+        "{folder}/{CODE_FILE} follows every rule but fails {count} test{}, so lengua.lock \
+         doesn't record it:\n",
         if count == 1 { "" } else { "s" }
     );
     for failure in &outcome.failures {
@@ -1327,21 +1041,22 @@ fn tests_problems(folder: &ProgramFolder, problems: &[testfile::Problem]) -> Str
 
 fn spec_problems(folder: &ProgramFolder, problems: &[spec::Problem]) -> String {
     let count = problems.len();
-    let mut text = format!(
-        "{folder}/{SPEC_FILE} has {count} problem{} to fix before it can be approved:\n",
-        if count == 1 { "" } else { "s" }
-    );
+    format!(
+        "{folder}/{SPEC_FILE} has {count} problem{} to fix before it can be approved:\n{}Fix \
+         them with the write-spec skill, tell the user what changed, and ask them to approve it \
+         again.",
+        if count == 1 { "" } else { "s" },
+        problem_list(problems)
+    )
+}
+
+/// Problems as a bulleted list, one per line.
+fn problem_list(problems: &[spec::Problem]) -> String {
+    let mut text = String::new();
     for problem in problems {
         let _ = writeln!(text, "- {problem}");
     }
-    text.push_str("Fix them with the write-spec skill, then call approve_spec again.");
     text
-}
-
-/// The text of the approval dialog: just the spec's path. The person approves the document
-/// itself, which they read in full before approving.
-fn approval_message(folder: &ProgramFolder) -> String {
-    format!("Approve {folder}/{SPEC_FILE}?")
 }
 
 fn toolchain_report(
@@ -1382,17 +1097,8 @@ fn machine_blocker(
     toolchain_error.map(|error| format!("Blocked: {error}"))
 }
 
-fn ready_step(elicitation: bool) -> String {
-    let ready = "Ready: write a program's spec.md with the write-spec skill.";
-    if elicitation {
-        ready.to_owned()
-    } else {
-        format!(
-            "{ready} Note: this client can't show approval dialogs, so approving a spec will rely \
-             on its tool-permission prompt."
-        )
-    }
-}
+/// The next step when no program was named and the machine can build programs.
+const READY_STEP: &str = "Ready: write a program's spec.md with the write-spec skill.";
 
 #[cfg(test)]
 mod tests {
@@ -1417,43 +1123,11 @@ mod tests {
     }
 
     #[test]
-    fn approval_form_is_one_checkbox_that_defaults_to_on() {
-        let schema = ElicitationSchema::from_type::<SpecApproval>().expect("valid form");
-        let json = serde_json::to_value(schema).expect("serializable");
-        let field = &json["properties"]["approve"];
-        assert_eq!(field["type"], "boolean", "{json}");
-        assert_eq!(field["default"], true, "{json}");
-        assert_eq!(field["title"], "Approve", "{json}");
-        assert_eq!(json["properties"].as_object().map(|p| p.len()), Some(1));
-    }
-
-    #[test]
-    fn reads_dialog_answers() {
-        let respond = |value: serde_json::Value| {
-            let responses = BTreeMap::from([(APPROVAL_INPUT.to_owned(), value)]);
-            dialog_answer(Some(&responses))
-        };
-        assert_eq!(
-            respond(serde_json::json!({"action": "accept", "content": {"approve": true}})),
-            Some(Answer::Approve)
-        );
-        assert_eq!(
-            respond(serde_json::json!({"action": "accept", "content": {"approve": false}})),
-            Some(Answer::LeftUnchecked)
-        );
-        assert_eq!(
-            respond(serde_json::json!({"action": "accept", "content": {}})),
-            Some(Answer::LeftUnchecked)
-        );
-        assert_eq!(
-            respond(serde_json::json!({"action": "decline"})),
-            Some(Answer::Declined)
-        );
-        assert_eq!(
-            respond(serde_json::json!({"action": "cancel"})),
-            Some(Answer::Cancelled)
-        );
-        assert_eq!(respond(serde_json::json!("nonsense")), None);
-        assert_eq!(dialog_answer(None), None);
+    fn approval_may_name_the_folder_or_its_spec() {
+        let folder = folder_of("/home/you/add/spec.md").expect("a spec path");
+        assert_eq!(folder.to_string(), "/home/you/add");
+        let folder = folder_of(" /home/you/add ").expect("a folder path");
+        assert_eq!(folder.to_string(), "/home/you/add");
+        assert!(folder_of("add/spec.md").is_err());
     }
 }

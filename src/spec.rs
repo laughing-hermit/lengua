@@ -344,8 +344,12 @@ struct Parser {
     sections: Vec<(Section, usize)>,
     current: Option<Draft>,
     started: Vec<(BehaviorId, usize)>,
+    /// Each behavior's title in lowercase, so no two behaviors name the same rule.
+    titles: Vec<(String, BehaviorId)>,
     behaviors: Vec<Behavior>,
     syscalls: Option<Vec<Syscall>>,
+    /// Whether `# Purpose` holds any text.
+    purpose_written: bool,
     purpose_values: Vec<String>,
 }
 
@@ -358,8 +362,10 @@ impl Default for Parser {
             sections: Vec::new(),
             current: None,
             started: Vec::new(),
+            titles: Vec::new(),
             behaviors: Vec::new(),
             syscalls: None,
+            purpose_written: false,
             purpose_values: Vec::new(),
         }
     }
@@ -471,6 +477,7 @@ impl Parser {
 
     /// Keeps Purpose's backtick values: the ranges of the program's inputs.
     fn purpose_line(&mut self, line: &str) {
+        self.purpose_written |= !line.trim().is_empty();
         let (values, _) = backtick_values(line);
         for value in values {
             if !self.purpose_values.contains(&value) {
@@ -528,6 +535,22 @@ impl Parser {
                 format!("{id} needs a short title after the colon"),
             );
         }
+        let key = title.to_lowercase();
+        if let Some((_, other)) = self
+            .titles
+            .iter()
+            .find(|(seen, _)| !key.is_empty() && *seen == key)
+        {
+            let other = *other;
+            self.problem(
+                Some(number),
+                format!(
+                    "{id} has the same title as {other}; each behavior's title names its own \
+                     rule, such as `Adds two numbers` or `Rejects a missing argument`"
+                ),
+            );
+        }
+        self.titles.push((key, id));
         self.started.push((id, number));
         self.current = Some(Draft {
             id: Some(id),
@@ -790,6 +813,13 @@ impl Parser {
     }
 
     fn finish(mut self, header: Option<(String, Option<String>)>) -> Result<Spec, Vec<Problem>> {
+        if !self.purpose_written {
+            self.problem(
+                None,
+                "spec.md needs a `# Purpose` section that says in plain words what the program \
+                 does, for whom and why, and the ranges of its inputs",
+            );
+        }
         if !self
             .sections
             .iter()
@@ -998,6 +1028,18 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
             spec.behavior(id).map(|b| b.title.as_str()),
             Some("Missing arguments")
         );
+    }
+
+    #[test]
+    fn each_behavior_names_its_own_rule_and_purpose_says_why() {
+        assert_problem(
+            &ADD.replace("## B2: Missing arguments", "## B2: Adds two NUMBERS"),
+            "B2 has the same title as B1",
+        );
+        let start = ADD.find("# Purpose").expect("purpose");
+        let end = ADD.find("# Behaviors").expect("behaviors");
+        let without_purpose = format!("{}{}", &ADD[..start], &ADD[end..]);
+        assert_problem(&without_purpose, "needs a `# Purpose` section");
     }
 
     #[test]

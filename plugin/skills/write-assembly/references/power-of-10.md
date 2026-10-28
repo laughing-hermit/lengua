@@ -177,9 +177,10 @@ to the exit; 0 to 255, never 134), `.zero` and `.skip` sizes, and loop counts. A
 ### 9. No indirection, checked indexes
 
 No jumps or calls through registers or memory, and data holds numbers, never addresses. A memory
-operand with an index register needs, since the last label, `cmp index, LIMIT` followed by `jae`
+access with an index register needs, since the last label, `cmp index, LIMIT` followed by `jae`
 (or `ja`) away from the access, and no change to the index before the access. `jae` compares
-without sign, so a negative index is caught too:
+without sign, so a negative index is caught too. `lea` doesn't access memory, so `lea rdi,
+[rbx + rdx]` needs no check:
 
 ```
 .Lparse_loop:  # bound: 20

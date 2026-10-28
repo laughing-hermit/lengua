@@ -5,7 +5,7 @@ mod common;
 
 use std::path::PathBuf;
 
-use common::{Answer, Program, Protocol, Session, TestClient};
+use common::{Program, Protocol, Session};
 use lengua::hash::Sha256Hex;
 use serde_json::{Value, json};
 
@@ -35,13 +35,29 @@ fn run_arguments(program: &Program, args: &[&str]) -> Value {
 #[tokio::test]
 async fn the_server_offers_exactly_five_tools() {
     for protocol in Protocol::ALL {
-        let session = Session::start(protocol, TestClient::with_elicitation(Answer::Approve)).await;
+        let session = Session::start(protocol).await;
         let tools = session.service.list_all_tools().await.expect("list tools");
         let mut names: Vec<&str> = tools.iter().map(|tool| tool.name.as_ref()).collect();
         names.sort_unstable();
         assert_eq!(
             names,
             ["approve_spec", "check_code", "check_tests", "run", "status"],
+            "{protocol:?}"
+        );
+        let mut titles: Vec<&str> = tools
+            .iter()
+            .filter_map(|tool| tool.title.as_deref())
+            .collect();
+        titles.sort_unstable();
+        assert_eq!(
+            titles,
+            [
+                "Approve spec",
+                "Check code",
+                "Check tests",
+                "Run program",
+                "Status"
+            ],
             "{protocol:?}"
         );
         for tool in &tools {
@@ -79,7 +95,7 @@ fn the_example_carries_its_spec_label() {
 #[tokio::test]
 async fn add_goes_from_spec_to_run_in_both_protocols() {
     for protocol in Protocol::ALL {
-        let session = Session::start(protocol, TestClient::with_elicitation(Answer::Approve)).await;
+        let session = Session::start(protocol).await;
         let program = Program::new();
         for name in ["spec.md", "tests.toml", "main.s"] {
             program.write(name, &example(name));
@@ -90,7 +106,7 @@ async fn add_goes_from_spec_to_run_in_both_protocols() {
             "{protocol:?}"
         );
 
-        let approval = session.call_ok("approve_spec", program.arguments()).await;
+        let approval = session.approve(&program).await;
         assert_eq!(approval["approved"], true, "{protocol:?}: {approval}");
         assert_eq!(state(&session, &program).await, "tests_unchecked");
         let tests = session.call_ok("check_tests", program.arguments()).await;
@@ -144,26 +160,39 @@ async fn add_goes_from_spec_to_run_in_both_protocols() {
         let error = session
             .call_error("run", run_arguments(&program, &["2", "3"]))
             .await;
-        assert!(error.contains("Blocked"), "{error}");
-        session.call_ok("approve_spec", program.arguments()).await;
+        assert!(error.contains("can't be used"), "{error}");
+        session.approve(&program).await;
         session.call_ok("check_tests", program.arguments()).await;
         session.call_ok("check_code", program.arguments()).await;
         assert_eq!(state(&session, &program).await, "ready");
 
-        // Declining an edited spec changes nothing.
-        let lock = program.read("lengua.lock").expect("the lock");
+        // An edited spec stops everything until the user approves it in their own words.
         let edited = example("spec.md").replace("Adds two numbers", "Adds two integers");
         program.write("spec.md", &edited);
-        session.client.set_answer(Answer::Decline);
-        let declined = session.call_ok("approve_spec", program.arguments()).await;
-        assert_eq!(declined["approved"], false, "{declined}");
-        assert_eq!(program.read("lengua.lock").as_deref(), Some(lock.as_str()));
         assert_eq!(state(&session, &program).await, "spec_not_approved");
+        let error = session
+            .call_error("run", run_arguments(&program, &["2", "3"]))
+            .await;
+        assert!(
+            error.contains("wait until they say they approve it"),
+            "{error}"
+        );
+        let error = session
+            .call_error("approve_spec", program.approval("  "))
+            .await;
+        assert!(
+            error.contains("Only the user can approve a spec"),
+            "{error}"
+        );
 
-        // Approving it resets the tests and code checks.
-        session.client.set_answer(Answer::Approve);
-        session.call_ok("approve_spec", program.arguments()).await;
+        // Approving it records their words and resets the tests and code checks.
+        let approval = session.approve(&program).await;
+        assert_eq!(approval["approval"], program.approval_words(), "{approval}");
         let lock = program.read("lengua.lock").expect("the lock");
+        assert!(
+            lock.contains(&format!("approval = \"{}\"", program.approval_words())),
+            "{lock}"
+        );
         assert!(
             !lock.contains("[tests]") && !lock.contains("[code]"),
             "{lock}"
@@ -181,7 +210,7 @@ async fn add_goes_from_spec_to_run_in_both_protocols() {
 #[tokio::test]
 async fn code_that_breaks_a_rule_runs_no_tests() {
     for protocol in Protocol::ALL {
-        let session = Session::start(protocol, TestClient::with_elicitation(Answer::Approve)).await;
+        let session = Session::start(protocol).await;
         let program = Program::new();
         program.write("spec.md", &example("spec.md"));
         program.write("tests.toml", &example("tests.toml"));
@@ -193,7 +222,7 @@ async fn code_that_breaks_a_rule_runs_no_tests() {
                 1,
             ),
         );
-        session.call_ok("approve_spec", program.arguments()).await;
+        session.approve(&program).await;
         session.call_ok("check_tests", program.arguments()).await;
         let error = session.call_error("check_code", program.arguments()).await;
         assert!(error.contains("so nothing ran"), "{protocol:?}: {error}");

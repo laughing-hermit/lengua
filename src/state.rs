@@ -162,8 +162,6 @@ pub struct StepContext<'a> {
     pub spec: Option<&'a Sha256Hex>,
     /// The server's data folder, which keeps copies of checked tests.
     pub data_dir: &'a Path,
-    /// Whether the client can show approval dialogs.
-    pub elicitation: bool,
 }
 
 impl State {
@@ -225,18 +223,15 @@ impl State {
         match self {
             Self::NoSpec => format!("Next: write {folder}/{SPEC_FILE} with the write-spec skill."),
             Self::LockInvalid(error) => format!(
-                "Blocked: {folder}/{} can't be trusted: {error}. Call approve_spec with path \
-                 {folder} to start over; the tests and code will be checked again.",
+                "Next: {folder}/{} can't be used: {error}. Tell the user, and ask them to approve \
+                 {folder}/{SPEC_FILE} again; when they do, call approve_spec with path {folder} \
+                 and their words. The tests and code are then checked again.",
                 lock::LOCK_FILE
             ),
-            Self::SpecNotApproved if context.elicitation => format!(
-                "Next: show the user {folder}/{SPEC_FILE}, then call approve_spec with path \
-                 {folder}; they confirm in a dialog."
-            ),
             Self::SpecNotApproved => format!(
-                "Next: show the user {folder}/{SPEC_FILE}, then call approve_spec with path \
-                 {folder}; this client can't show approval dialogs, so its permission prompt for \
-                 approve_spec is the user's approval."
+                "Next: tell the user {folder}/{SPEC_FILE} is ready to read in their editor, and \
+                 wait until they say they approve it; then call approve_spec with path {folder} \
+                 and their words."
             ),
             Self::TestsMissing => format!(
                 "Next: write {folder}/{TESTS_FILE} with the write-tests skill; its [meta] table \
@@ -271,14 +266,14 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lock::{ApprovedVia, CodeStamp, TestsStamp};
+    use crate::lock::{CodeStamp, TestsStamp};
 
     fn digest(name: &str) -> Sha256Hex {
         Sha256Hex::of(name.as_bytes())
     }
 
     fn approved() -> Lock {
-        Lock::approved(digest("spec"), ApprovedVia::Elicitation)
+        Lock::approved(digest("spec"), "I approve it".to_owned())
     }
 
     fn with_tests() -> Lock {
@@ -313,14 +308,13 @@ mod tests {
         })
     }
 
-    fn next_step(state: &State, elicitation: bool) -> String {
+    fn next_step(state: &State) -> String {
         let folder = ProgramFolder::new("/projects/add").expect("absolute path");
         let spec = digest("spec");
         state.next_step(&StepContext {
             folder: &folder,
             spec: Some(&spec),
             data_dir: Path::new("/data/lengua"),
-            elicitation,
         })
     }
 
@@ -329,7 +323,7 @@ mod tests {
         let state = state([None, Some("tests"), None], LockStatus::Valid(approved()));
         assert_eq!(state, State::NoSpec);
         assert_eq!(
-            next_step(&state, true),
+            next_step(&state),
             "Next: write /projects/add/spec.md with the write-spec skill."
         );
     }
@@ -341,15 +335,15 @@ mod tests {
             LockStatus::Invalid(LockError::BadSignature),
         );
         assert_eq!(state, State::LockInvalid(LockError::BadSignature));
-        let step = next_step(&state, true);
+        let step = next_step(&state);
         assert!(
             step.starts_with(
-                "Blocked: /projects/add/lengua.lock can't be trusted: its signature doesn't match"
+                "Next: /projects/add/lengua.lock can't be used: its signature doesn't match"
             ),
             "{step}"
         );
         assert!(
-            step.contains("Call approve_spec with path /projects/add"),
+            step.contains("call approve_spec with path /projects/add"),
             "{step}"
         );
     }
@@ -363,15 +357,22 @@ mod tests {
         );
         assert_eq!(missing, State::SpecNotApproved);
         assert_eq!(changed, State::SpecNotApproved);
-        assert!(next_step(&missing, true).ends_with("they confirm in a dialog."));
-        assert!(next_step(&missing, false).contains("permission prompt"));
+        let step = next_step(&missing);
+        assert!(
+            step.contains("wait until they say they approve it"),
+            "{step}"
+        );
+        assert!(
+            step.contains("call approve_spec with path /projects/add and their words"),
+            "{step}"
+        );
     }
 
     #[test]
     fn row_tests_missing() {
         let state = state([Some("spec"), None, None], LockStatus::Valid(approved()));
         assert_eq!(state, State::TestsMissing);
-        let step = next_step(&state, true);
+        let step = next_step(&state);
         assert!(
             step.contains(&format!("spec = \"{}\"", digest("spec").label())),
             "{step}"
@@ -386,7 +387,7 @@ mod tests {
             LockStatus::Valid(approved()),
         );
         assert_eq!(state, State::TestsUnchecked);
-        assert!(next_step(&state, true).starts_with("Next: call check_tests"));
+        assert!(next_step(&state).starts_with("Next: call check_tests"));
     }
 
     #[test]
@@ -401,7 +402,7 @@ mod tests {
         };
         assert_eq!(edited, expected);
         assert_eq!(deleted, expected);
-        let step = next_step(&edited, true);
+        let step = next_step(&edited);
         assert!(
             step.contains(&format!("/data/lengua/stamped/{}", digest("tests"))),
             "{step}"
@@ -415,7 +416,7 @@ mod tests {
             LockStatus::Valid(with_tests()),
         );
         assert_eq!(state, State::CodeMissing);
-        let step = next_step(&state, true);
+        let step = next_step(&state);
         assert!(
             step.contains(&format!("# lengua: spec {}", digest("spec").label())),
             "{step}"
@@ -434,7 +435,7 @@ mod tests {
         );
         assert_eq!(unchecked, State::CodeUnchecked);
         assert_eq!(edited, State::CodeUnchecked);
-        assert!(next_step(&edited, true).starts_with("Next: call check_code"));
+        assert!(next_step(&edited).starts_with("Next: call check_code"));
     }
 
     #[test]
@@ -444,7 +445,7 @@ mod tests {
             LockStatus::Valid(with_code()),
         );
         assert_eq!(state, State::Ready);
-        assert!(next_step(&state, true).starts_with("Ready: call run with path /projects/add"));
+        assert!(next_step(&state).starts_with("Ready: call run with path /projects/add"));
     }
 
     #[test]

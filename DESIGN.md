@@ -18,14 +18,24 @@ A program is a folder with four files, created in this order:
 
 | File | Written by | Purpose |
 |---|---|---|
-| `spec.md` | the person with the AI | The single source of truth: natural language, Given/When/Then behaviors with IDs, in [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) (OKF) |
+| `spec.md` | the AI, approved by the person | The single source of truth: natural language, Given/When/Then behaviors with IDs, in [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) (OKF) |
 | `tests.toml` | the AI, from the spec only | One example test per behavior, plus generated tests with fresh random inputs on every run |
 | `main.s` | the AI | x86-64 assembly in the lengua dialect |
 | `lengua.lock` | only the lengua server | SHA-256 of all three files and of the checked executable, a combined fingerprint, and a signature |
 
-**Workflow:** spec → approve (the person confirms in a dialog) → tests (stamped) → code (stamped
-once every rule and test passes) → optimize (tests stay green) → run. A program only runs when the
-lock matches all three files, so documentation, tests and code can't drift from the spec.
+**Workflow:** spec → approve (the person reads `spec.md` in their editor and says, in their own
+words, that they approve it) → tests (stamped) → code (stamped once every rule and test passes) →
+run, and optimize when asked (tests stay green). A program only runs when the lock matches all
+three files, so documentation, tests and code can't drift from the spec.
+
+**Specs follow behavior-driven development (BDD).** Purpose says what the program does, for whom
+and why. Each behavior is one rule, titled in the user's words and shown by one concrete example:
+Given sets the scene (arguments, input), the one When is the program running, and Then states only
+what the user observes (output and exit code). Steps describe behavior, never implementation.
+`spec.md` is the living documentation: tests.toml turns each example into an executable test and
+adds generated examples of the same rule, and the lock keeps the code in step with it. The parser
+enforces the structure (a Purpose, Given before one When before Then, one exit code, unique IDs and
+titles); the write-spec skill teaches the style.
 
 | What changed | Result |
 |---|---|
@@ -44,14 +54,13 @@ The plugin folder `plugin/` contains:
 
 | Tool | Does |
 |---|---|
-| `status` | Machine (OS, CPU, features, LLVM tools), client support, a program's state, and the next step |
-| `approve_spec` | Validates `spec.md`, asks the person to approve it, stamps it |
+| `status` | Machine (OS, CPU, features, LLVM tools), a program's state, problems in an unapproved spec, and the next step |
+| `approve_spec` | Validates `spec.md` and records the person's words approving it |
 | `check_tests` | Validates `tests.toml` (coverage, cross-checks, red check, freeze) and stamps it |
 | `check_code` | Assembles, links, checks the rules, runs every test and counts the instructions executed, then stamps and signs |
 | `run` | Verifies the lock against every file, rebuilds, confirms the build is byte-identical to the checked one, then runs it |
 
-Only open standards are used: MCP (tools, server instructions, elicitation), Agent Skills and Agent
-Plugins. No hooks and no subagents, so the plugin works the same in Claude Code, Codex, Cursor and
+Only open standards are used: MCP (tools and server instructions), Agent Skills and Agent Plugins. No hooks and no subagents, so the plugin works the same in Claude Code, Codex, Cursor and
 other harnesses. Every guarantee lives in the server, which detects changes and refuses to stamp
 or run.
 
@@ -190,16 +199,10 @@ order above. The order between the proof and the platforms is decided after the 
 - Without hooks, the server detects and refuses rather than prevents. Someone could still assemble
   `main.s` by hand outside lengua, but that isn't a lengua run, and nothing lengua stamps or runs is
   affected.
-- Clients without MCP elicitation approve specs through their tool-permission prompt; the lock
-  records `approved_via = "tool-permission"`.
-- An approval means the client reported that the user accepted the dialog. Some clients can be
-  set up to answer dialogs automatically (in Claude Code, an `Elicitation` hook), and lengua can't
-  tell the difference, so don't set one up for lengua.
-- Approval dialogs travel as elicitation requests on protocol 2025-11-25 and as input-required
-  results on 2026-07-28 (which has no server-to-client requests). There, the nonce is single-use,
-  bound to the folder and to the spec text the dialog showed, and expires after 30 minutes. The
-  spec is hashed again before the lock is written, so an edit made while the dialog is open is
-  never approved.
+- Approval is the person's own words, which the agent passes to `approve_spec` and the lock
+  records (`approval = "I approve …/spec.md"`). lengua can't tell real words from words an agent
+  made up: it relies on the skills and the tool's description, which say only the person
+  approves. Reading the lock shows exactly what was recorded.
 - Rule 9 checks the shape of each bounds check (`cmp` and an unsigned `jae` before the access)
   and, for the program's own data symbols, that the limit fits the buffer. Moving a pointer
   instead of indexing isn't checked, nor is pointer depth, and compare-chain detection is

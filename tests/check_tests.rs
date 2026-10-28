@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{ADD_SPEC, Answer, Program, Protocol, Session, TestClient, add_tests, label};
+use common::{ADD_SPEC, Program, Protocol, Session, add_tests, label};
 use serde_json::Value;
 
 fn text(value: &Value) -> &str {
@@ -12,7 +12,7 @@ fn text(value: &Value) -> &str {
 
 async fn approved_program(session: &Session) -> Program {
     let program = Program::with_add_spec();
-    let report = session.call_ok("approve_spec", program.arguments()).await;
+    let report = session.approve(&program).await;
     assert_eq!(report["approved"], true, "{report}");
     program
 }
@@ -25,7 +25,7 @@ async fn state(session: &Session, program: &Program) -> Value {
 #[tokio::test]
 async fn checks_and_freezes_valid_tests() {
     for protocol in Protocol::ALL {
-        let session = Session::start(protocol, TestClient::with_elicitation(Answer::Approve)).await;
+        let session = Session::start(protocol).await;
         let program = approved_program(&session).await;
         let tests = add_tests(ADD_SPEC);
         program.write("tests.toml", &tests);
@@ -68,11 +68,7 @@ async fn checks_and_freezes_valid_tests() {
 
 #[tokio::test]
 async fn frozen_tests_can_only_be_restored() {
-    let session = Session::start(
-        Protocol::Discover,
-        TestClient::with_elicitation(Answer::Approve),
-    )
-    .await;
+    let session = Session::start(Protocol::Discover).await;
     let program = approved_program(&session).await;
     let tests = add_tests(ADD_SPEC);
     program.write("tests.toml", &tests);
@@ -96,11 +92,7 @@ async fn frozen_tests_can_only_be_restored() {
 
 #[tokio::test]
 async fn problems_are_reported_and_nothing_is_recorded() {
-    let session = Session::start(
-        Protocol::Discover,
-        TestClient::with_elicitation(Answer::Approve),
-    )
-    .await;
+    let session = Session::start(Protocol::Discover).await;
     let program = approved_program(&session).await;
     program.write(
         "tests.toml",
@@ -124,11 +116,7 @@ async fn problems_are_reported_and_nothing_is_recorded() {
 
 #[tokio::test]
 async fn tests_need_an_approved_spec_and_a_file() {
-    let session = Session::start(
-        Protocol::Discover,
-        TestClient::with_elicitation(Answer::Approve),
-    )
-    .await;
+    let session = Session::start(Protocol::Discover).await;
     let unapproved = Program::with_add_spec();
     unapproved.write("tests.toml", &add_tests(ADD_SPEC));
     let error = session
@@ -146,18 +134,14 @@ async fn tests_need_an_approved_spec_and_a_file() {
 
 #[tokio::test]
 async fn a_new_spec_unfreezes_the_tests() {
-    let session = Session::start(
-        Protocol::Discover,
-        TestClient::with_elicitation(Answer::Approve),
-    )
-    .await;
+    let session = Session::start(Protocol::Discover).await;
     let program = approved_program(&session).await;
     program.write("tests.toml", &add_tests(ADD_SPEC));
     session.call_ok("check_tests", program.arguments()).await;
 
     let edited = ADD_SPEC.replace("Adds two numbers", "Adds two integers");
     program.write("spec.md", &edited);
-    let approval = session.call_ok("approve_spec", program.arguments()).await;
+    let approval = session.approve(&program).await;
     assert_eq!(approval["approved"], true, "{approval}");
     assert_eq!(state(&session, &program).await, "tests_unchecked");
 

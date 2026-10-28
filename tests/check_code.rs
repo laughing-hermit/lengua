@@ -4,7 +4,7 @@ mod common;
 
 use std::path::PathBuf;
 
-use common::{Answer, Program, Protocol, Session, TestClient};
+use common::{Program, Protocol, Session};
 use serde_json::Value;
 
 fn asset(name: &str) -> String {
@@ -19,7 +19,7 @@ fn asset(name: &str) -> String {
 async fn checked_template(session: &Session) -> Program {
     let program = Program::new();
     program.write("spec.md", &asset("template-spec.md"));
-    let approval = session.call_ok("approve_spec", program.arguments()).await;
+    let approval = session.approve(&program).await;
     assert_eq!(approval["approved"], true, "{approval}");
     program.write("tests.toml", &asset("template-tests.toml"));
     let tests = session.call_ok("check_tests", program.arguments()).await;
@@ -28,11 +28,7 @@ async fn checked_template(session: &Session) -> Program {
 }
 
 async fn session() -> Session {
-    Session::start(
-        Protocol::Discover,
-        TestClient::with_elicitation(Answer::Approve),
-    )
-    .await
+    Session::start(Protocol::Discover).await
 }
 
 #[tokio::test]
@@ -205,7 +201,7 @@ async fn run_needs_matching_files_and_the_tested_build() {
         &lock_text.replace("max_stack_bytes = ", "max_stack_bytes = 1"),
     );
     let error = session.call_error("run", arguments(&["7"])).await;
-    assert!(error.contains("can't be trusted"), "{error}");
+    assert!(error.contains("can't be used"), "{error}");
     session.service.cancel().await.expect("close the session");
 }
 
@@ -277,7 +273,7 @@ async fn code_needs_checked_tests_first() {
     let session = session().await;
     let program = Program::new();
     program.write("spec.md", &asset("template-spec.md"));
-    session.call_ok("approve_spec", program.arguments()).await;
+    session.approve(&program).await;
     program.write("main.s", &asset("main-template.s"));
     let error = session.call_error("check_code", program.arguments()).await;
     assert!(error.contains("approved spec and checked tests"), "{error}");
