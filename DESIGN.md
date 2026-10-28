@@ -156,8 +156,9 @@ checker reads which CPU features each instruction needs. Vectors follow four ext
 
 - unaligned loads and stores only (`movdqu`; an SSE instruction other than `movdqu` or `lddqu` may
   not read 16 bytes of memory, since it would need alignment);
-- whole registers: no AVX-512 write masks, zeroing, broadcasts or rounding;
-- integer lanes: no floating point, gathers, scatters, compress, expand or non-temporal moves;
+- AVX-512 write masks, zeroing and broadcasts are allowed, but masked accesses count their full
+  width; rounding overrides aren't allowed;
+- no gathers, scatters or non-temporal moves (floating point arrives with its own rules);
 - every byte of an access counts: rule 9's bounds checks and `[rip + name]` accesses must keep
   the full 16 to 64 bytes inside their data symbol.
 

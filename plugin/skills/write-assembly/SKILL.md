@@ -90,7 +90,7 @@ AVX-512 only when `status` lists them, and keep every vector access inside its b
 - a constant defined after its use, `. - name` outside `.size`, `[name]` without `rip`, or `offset`
 - `leave`, `enter`, `loop`, string instructions, x87 or floating point
 - `movdqa` or `vmovdqa` (use `movdqu`), an SSE instruction other than `movdqu` reading 16 bytes of
-  memory, AVX-512 write masks or broadcasts, gathers or scatters
+  memory, rounding overrides (`{rn-sae}`), gathers or scatters
 - `and rsp`, `mov rsp`, or memory below `rsp`
 - a loop counter in `rax`, `rcx` or `r11` across a `syscall`, or in any caller-saved register
   across a `call`

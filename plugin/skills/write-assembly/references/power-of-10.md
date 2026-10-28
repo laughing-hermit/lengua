@@ -94,7 +94,8 @@ and AVX-512 (F, BW, CD, DQ, VL, VBMI, VBMI2, VNNI, BITALG, VPOPCNTDQ):
   `vperm*`, `vinserti*`, `vextracti*`, `vpbroadcast*`, `vbroadcasti*`
 - widening and narrowing: `pmovzx*`, `pmovsx*`, `vpmov*`
 - AVX-512 mask registers: `kmov*`, `kand*`, `kor*`, `kxor*`, `knot*`, `kortest*`, `ktest*`,
-  `kshift*`, `kunpck*`, `vpmovm2*`, `vpmov*2m`
+  `kshift*`, `kunpck*`, `vpmovm2*`, `vpmov*2m`; masked blends, compress and expand:
+  `vpblendm*`, `vpcompress*`, `vpexpand*`
 - bit counts and dot products: `vpopcnt*`, `vplzcnt*`, `vpconflict*`, `vpdpbusd`, `vpdpwssd`
 - `vzeroupper`, `vzeroall`, and `crc32`
 
@@ -104,10 +105,13 @@ Rules for vectors:
   `vmovdqa`) fault on an unaligned address and aren't in the dialect. An SSE instruction (no `v`)
   may read 16 bytes of memory only as `movdqu` or `lddqu`, because the others need alignment:
   load into a register first, or use the `v` form when the CPU has AVX.
-- **Whole registers.** AVX-512 write masks (`{k1}`, `{z}`), broadcasts (`{1to16}`) and rounding
-  aren't in the dialect. Compare into a mask register and act on it with `kmov` or `kortest`.
-- **Integer lanes.** Floating point isn't in the dialect, nor are gathers, scatters, compress,
-  expand, non-temporal moves, MMX and the crypto extensions.
+- **Masks and broadcasts.** AVX-512 write masks (`vpaddd zmm0 {k1}, zmm1, zmm2`, with `{z}` to
+  zero the lanes the mask leaves out) and broadcasts (`dword ptr [rax]{1to16}`) are in the
+  dialect, and so are `vpblendm*`, `vpcompress*` and `vpexpand*`. A masked load or store still
+  counts its full width for bounds checks, so size buffers in whole vectors. Rounding overrides
+  (`{rn-sae}`) aren't in the dialect.
+- **Left out:** gathers and scatters (their addresses can't be bounds-checked), non-temporal
+  moves, the AVX2 masked moves (`vpmaskmovd`) and MMX.
 - **Every byte of an access counts.** A 16-byte load at index `rcx` reads bytes `rcx` to
   `rcx + 15`, and rule 9's bounds check must keep all of them inside the buffer (see below).
   Size buffers in whole chunks so the last chunk stays inside.

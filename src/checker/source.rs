@@ -111,6 +111,10 @@ pub struct Instruction {
     pub mnemonic: String,
     /// The operands, in order.
     pub operands: Vec<Operand>,
+    /// The AVX-512 write mask on the first operand: `{k1}` to `{k7}`.
+    pub mask: Option<Register>,
+    /// Whether the mask zeroes the lanes it leaves out (`{z}`) instead of keeping them.
+    pub zeroing: bool,
     /// The line's code without its comment.
     pub text: String,
     /// The `# unsafe:` block it's in, by index.
@@ -150,6 +154,8 @@ pub struct Memory {
     pub displacement: i64,
     /// The data symbol of a `[rip + symbol]` operand.
     pub symbol: Option<String>,
+    /// Whether one element is repeated across the vector (`{1to16}`).
+    pub broadcast: bool,
 }
 
 /// An `# unsafe:` … `# end unsafe` block, where bounds checks may be left out.
@@ -524,6 +530,49 @@ fn evaluate(text: &str, constants: &BTreeMap<String, Constant>) -> Result<i64, S
     }
 }
 
+/// AVX-512 decorations written after an operand.
+#[derive(Debug, Default)]
+struct Decorations {
+    mask: Option<Register>,
+    zeroing: bool,
+    broadcast: bool,
+}
+
+/// Splits `zmm0 {k1} {z}` or `dword ptr [rax]{1to16}` into the operand and its decorations.
+/// Write masks and zeroing belong to the first operand.
+fn decorations(text: &str, position: usize) -> Result<(&str, Decorations), String> {
+    let mut rest = text.trim_end();
+    let mut found = Decorations::default();
+    while let Some(inner) = rest.strip_suffix('}') {
+        let open = inner.rfind('{').ok_or("a `}` has no `{` before it")?;
+        let decoration = inner[open + 1..].trim().to_ascii_lowercase();
+        rest = inner[..open].trim_end();
+        let mask = register(&decoration)
+            .filter(|register| (Register::K1..=Register::K7).contains(register));
+        match decoration.as_str() {
+            "z" => found.zeroing = true,
+            "k0" => return Err("k0 can't be a write mask; use k1 to k7".into()),
+            _ if mask.is_some() => found.mask = mask,
+            "1to2" | "1to4" | "1to8" | "1to16" | "1to32" | "1to64" => found.broadcast = true,
+            "rn-sae" | "rd-sae" | "ru-sae" | "rz-sae" | "sae" => {
+                return Err(
+                    "rounding overrides ({rn-sae}) aren't in the dialect: they change how \
+                            results round"
+                        .into(),
+                );
+            }
+            other => return Err(format!("`{{{other}}}` isn't a decoration lengua knows")),
+        }
+    }
+    if (found.mask.is_some() || found.zeroing) && position != 0 {
+        return Err("a write mask ({k1}) and {z} go on the first operand".into());
+    }
+    if found.zeroing && found.mask.is_none() {
+        return Err("{z} needs a write mask before it, such as {k1} {z}".into());
+    }
+    Ok((rest, found))
+}
+
 /// Parses one operand. Branches take label names; everything else names registers, numbers or
 /// memory.
 fn operand(
@@ -532,11 +581,10 @@ fn operand(
     constants: &BTreeMap<String, Constant>,
 ) -> Result<Operand, String> {
     let lower = text.to_ascii_lowercase();
-    if text.contains('{') {
+    if text.contains('{') || text.contains('}') {
         return Err(
-            "AVX-512 write masks ({k1}), zeroing ({z}), broadcasts ({1to16}) and rounding \
-                    aren't in dialect 2; work on whole registers, and use kmov or kortest to act \
-                    on a compare's mask"
+            "braces go only at the end of an operand: {k1} and {z} after the first \
+                    operand, {1to16} after a memory operand"
                 .into(),
         );
     }
@@ -615,6 +663,7 @@ fn memory(text: &str, constants: &BTreeMap<String, Constant>) -> Result<Memory, 
         scale: 1,
         displacement: 0,
         symbol: None,
+        broadcast: false,
     };
     let mut constant_terms = String::new();
     for (negative, term) in signed_terms(inner) {
@@ -1324,8 +1373,22 @@ impl Parser {
             );
             return;
         }
-        for text in texts {
-            match operand(text, branch, &self.source.constants) {
+        let mut mask = None;
+        let mut zeroing = false;
+        for (position, text) in texts.into_iter().enumerate() {
+            let parsed = decorations(text, position).and_then(|(text, decoration)| {
+                let mut parsed = operand(text, branch, &self.source.constants)?;
+                if decoration.broadcast {
+                    let Operand::Memory(memory) = &mut parsed else {
+                        return Err("a broadcast ({1to16}) goes on a memory operand".into());
+                    };
+                    memory.broadcast = true;
+                }
+                mask = mask.or(decoration.mask);
+                zeroing |= decoration.zeroing;
+                Ok(parsed)
+            });
+            match parsed {
                 Ok(parsed) => operands.push(parsed),
                 Err(problem) => {
                     self.dialect(
@@ -1342,6 +1405,8 @@ impl Parser {
                 line: number,
                 mnemonic,
                 operands,
+                mask,
+                zeroing,
                 text: normalize(code),
                 unsafe_block,
             }));
@@ -1554,6 +1619,7 @@ mod tests {
                 scale: 1,
                 displacement: 16,
                 symbol: None,
+                broadcast: false,
             }))
         );
         assert_eq!(
@@ -1569,6 +1635,7 @@ mod tests {
                 scale: 1,
                 displacement: 20,
                 symbol: Some("out_buf".into()),
+                broadcast: false,
             }))
         );
         assert_eq!(
@@ -1580,6 +1647,7 @@ mod tests {
                 scale: 8,
                 displacement: -8,
                 symbol: None,
+                broadcast: false,
             }))
         );
         assert_eq!(

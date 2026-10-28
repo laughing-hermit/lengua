@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use iced_x86::{
     CpuidFeature, Decoder, DecoderOptions, EncodingKind, FlowControl, Formatter, Instruction,
-    IntelFormatter, MemorySize, OpKind, Register,
+    IntelFormatter, MemorySize, OpKind, Register, RoundingControl,
 };
 use object::{Object, ObjectSection, ObjectSymbol, SectionKind, SymbolKind};
 
@@ -247,9 +247,9 @@ const ALLOWED: &[&str] = &[
 ];
 
 /// Integer vector instructions, added in dialect 2: SSE2 through SSE4.2, AVX, AVX2 and AVX-512,
-/// each usable only when this CPU has it. Left out on purpose: floating point, aligned and
-/// non-temporal moves (`movdqa`, `movntdq`), masked moves (`vpmaskmovd`), gathers, scatters,
-/// compress and expand, MMX, and the crypto extensions.
+/// each usable only when this CPU has it, with AVX-512 write masks, zeroing and broadcasts. Left
+/// out on purpose: aligned and non-temporal moves (`movdqa`, `movntdq`), the AVX2 masked moves
+/// (`vpmaskmovd`), gathers, scatters and MMX.
 const VECTOR: &[&str] = &[
     // Unaligned loads and stores, and moves between general-purpose and vector registers.
     "movdqu",
@@ -541,6 +541,18 @@ const VECTOR: &[&str] = &[
     "vpermw",
     "vpermd",
     "vpermq",
+    "vpblendmb",
+    "vpblendmw",
+    "vpblendmd",
+    "vpblendmq",
+    "vpcompressb",
+    "vpcompressw",
+    "vpcompressd",
+    "vpcompressq",
+    "vpexpandb",
+    "vpexpandw",
+    "vpexpandd",
+    "vpexpandq",
     "vperm2i128",
     "vpermi2b",
     "vpermi2w",
@@ -1049,6 +1061,16 @@ fn same_instruction(
             }
         }
     }
+    let mask = step.source.mask.unwrap_or(Register::None);
+    if instruction.op_mask() != mask {
+        return Err(format!(
+            "the write mask is {:?} in the machine code",
+            instruction.op_mask()
+        ));
+    }
+    if instruction.zeroing_masking() != step.source.zeroing {
+        return Err("{z} differs in the machine code".into());
+    }
     Ok(())
 }
 
@@ -1081,6 +1103,9 @@ fn same_memory(
     };
     if instruction.memory_displacement64() != expected {
         return Err("the address differs in the machine code".into());
+    }
+    if memory.broadcast != instruction.is_broadcast() {
+        return Err("the broadcast ({1toN}) differs in the machine code".into());
     }
     if let Some(size) = memory.size {
         let decoded = instruction.memory_size();
@@ -1155,17 +1180,29 @@ fn check_instruction(step: &Step<'_>, features: CpuFeatures, violations: &mut Ve
             fix: "use xmm registers".into(),
         });
     }
-    if instruction.has_op_mask() || instruction.is_broadcast() || instruction.is_vsib() {
+    if instruction.is_vsib() {
         violations.push(Violation {
             rule: Rule::Dialect,
             line,
             problem: format!(
-                "`{}` uses an AVX-512 write mask, a broadcast or a gather address, which aren't \
-                 in dialect 2",
+                "`{}` gathers or scatters through a vector of addresses, which can't be \
+                 bounds-checked",
                 step.source.text
             ),
-            fix: "work on whole registers, and use kmov or kortest to act on a compare's mask"
-                .into(),
+            fix: "load the elements with indexed, bounds-checked accesses".into(),
+        });
+    }
+    if instruction.rounding_control() != RoundingControl::None
+        || instruction.suppress_all_exceptions()
+    {
+        violations.push(Violation {
+            rule: Rule::Dialect,
+            line,
+            problem: format!(
+                "`{}` overrides rounding or exceptions, which aren't in the dialect",
+                step.source.text
+            ),
+            fix: "leave rounding to the default: nearest, ties to even".into(),
         });
     }
     let has_memory =

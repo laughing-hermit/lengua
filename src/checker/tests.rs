@@ -585,7 +585,10 @@ fn with_after(label: &str, lines: &str) -> String {
 async fn integer_vector_instructions_are_in_dialect_2() {
     let vectors = "    pxor xmm0, xmm0\n    vpaddb xmm1, xmm1, xmmword ptr [rdi]\n    \
                    vpaddb ymm1, ymm2, ymm3\n    vpcmpeqb k1, zmm0, zmm1\n    kortestq k1, k1\n    \
-                   vpternlogd zmm0, zmm1, zmm2, 0x96\n    vzeroupper\n";
+                   vpternlogd zmm0, zmm1, zmm2, 0x96\n    vpaddd zmm0 {k1}, zmm1, zmm2\n    \
+                   vpaddd zmm0 {k1} {z}, zmm1, dword ptr [rdi]{1to16}\n    \
+                   vpcmpeqb k1 {k2}, zmm0, zmm1\n    vmovdqu8 zmm0 {k1} {z}, zmmword ptr [rdi]\n    \
+                   vpcompressb zmm1 {k1} {z}, zmm0\n    vzeroupper\n";
     let text = with_after("parse_i64:", vectors);
     let report = check(&text).await;
     let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
@@ -613,7 +616,7 @@ async fn integer_vector_instructions_are_in_dialect_2() {
 }
 
 #[tokio::test]
-async fn vectors_leave_out_floating_point_alignment_and_masks() {
+async fn vectors_leave_out_alignment_and_rounding_overrides() {
     for (line, needle) in [
         ("    addps xmm0, xmm1\n", "`addps` isn't in dialect 2"),
         (
@@ -624,7 +627,14 @@ async fn vectors_leave_out_floating_point_alignment_and_masks() {
             "    paddb xmm0, xmmword ptr [rdi]\n",
             "`paddb` reads 16 bytes of memory in its SSE form",
         ),
-        ("    vpaddd zmm0 {k1}, zmm1, zmm2\n", "write masks ({k1})"),
+        (
+            "    vpaddd zmm0, zmm1, zmm2, {rn-sae}\n",
+            "rounding overrides ({rn-sae}) aren't in the dialect",
+        ),
+        (
+            "    vpaddd zmm0, zmm1 {k1}, zmm2\n",
+            "go on the first operand",
+        ),
         (
             "    paddb mm0, mm1\n",
             "MMX registers aren't in the dialect",
@@ -657,6 +667,20 @@ async fn vector_accesses_stay_inside_their_data() {
         Rule::Indirection,
         compare,
         "reach byte 35 of out_buf, which has 21 bytes",
+    );
+
+    // A masked access counts its full width too: the mask may leave lanes out, but the check
+    // doesn't trust it to.
+    let text = with(
+        "    mov byte ptr [rsi + rcx], dl\n",
+        "    vmovdqu8 zmmword ptr [rsi + rcx] {k1}, zmm0\n",
+    );
+    let report = check(&text).await;
+    assert_violation(
+        &report,
+        Rule::Indirection,
+        compare,
+        "reach byte 83 of out_buf, which has 21 bytes",
     );
 
     // A [rip + name] access must fit the symbol over its whole width.
