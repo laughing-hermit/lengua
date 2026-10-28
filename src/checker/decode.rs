@@ -4,8 +4,8 @@
 use std::collections::BTreeMap;
 
 use iced_x86::{
-    CpuidFeature, Decoder, DecoderOptions, FlowControl, Formatter, Instruction, IntelFormatter,
-    MemorySize, OpKind, Register,
+    CpuidFeature, Decoder, DecoderOptions, EncodingKind, FlowControl, Formatter, Instruction,
+    IntelFormatter, MemorySize, OpKind, Register,
 };
 use object::{Object, ObjectSection, ObjectSymbol, SectionKind, SymbolKind};
 
@@ -232,7 +232,7 @@ impl Program<'_> {
     }
 }
 
-/// Instructions dialect 1 allows: integer instructions and `syscall`.
+/// Integer instructions and `syscall`, the part of the dialect that dates from dialect 1.
 const ALLOWED: &[&str] = &[
     "mov", "movzx", "movsx", "movsxd", "lea", "push", "pop", "xchg", "bswap", "movbe", "cmovo",
     "cmovno", "cmovb", "cmovae", "cmove", "cmovne", "cmovbe", "cmova", "cmovs", "cmovns", "cmovp",
@@ -244,6 +244,487 @@ const ALLOWED: &[&str] = &[
     "setg", "andn", "bextr", "blsi", "blsmsk", "blsr", "tzcnt", "bzhi", "pdep", "pext", "rorx",
     "sarx", "shlx", "shrx", "lzcnt", "popcnt", "jmp", "jo", "jno", "jb", "jae", "je", "jne", "jbe",
     "ja", "js", "jns", "jp", "jnp", "jl", "jge", "jle", "jg", "call", "ret", "syscall", "nop",
+];
+
+/// Integer vector instructions, added in dialect 2: SSE2 through SSE4.2, AVX, AVX2 and AVX-512,
+/// each usable only when this CPU has it. Left out on purpose: floating point, aligned and
+/// non-temporal moves (`movdqa`, `movntdq`), masked moves (`vpmaskmovd`), gathers, scatters,
+/// compress and expand, MMX, and the crypto extensions.
+const VECTOR: &[&str] = &[
+    // Unaligned loads and stores, and moves between general-purpose and vector registers.
+    "movdqu",
+    "vmovdqu",
+    "vmovdqu8",
+    "vmovdqu16",
+    "vmovdqu32",
+    "vmovdqu64",
+    "lddqu",
+    "vlddqu",
+    "movd",
+    "vmovd",
+    "movq",
+    "vmovq",
+    // Arithmetic.
+    "paddb",
+    "paddw",
+    "paddd",
+    "paddq",
+    "paddsb",
+    "paddsw",
+    "paddusb",
+    "paddusw",
+    "psubb",
+    "psubw",
+    "psubd",
+    "psubq",
+    "psubsb",
+    "psubsw",
+    "psubusb",
+    "psubusw",
+    "pmullw",
+    "pmulhw",
+    "pmulhuw",
+    "pmulld",
+    "pmuludq",
+    "pmuldq",
+    "pmaddwd",
+    "pmaddubsw",
+    "pmulhrsw",
+    "psadbw",
+    "pavgb",
+    "pavgw",
+    "pabsb",
+    "pabsw",
+    "pabsd",
+    "psignb",
+    "psignw",
+    "psignd",
+    "pminub",
+    "pminuw",
+    "pminud",
+    "pminsb",
+    "pminsw",
+    "pminsd",
+    "pmaxub",
+    "pmaxuw",
+    "pmaxud",
+    "pmaxsb",
+    "pmaxsw",
+    "pmaxsd",
+    "phaddw",
+    "phaddd",
+    "phaddsw",
+    "phsubw",
+    "phsubd",
+    "phsubsw",
+    "phminposuw",
+    "mpsadbw",
+    "vpaddb",
+    "vpaddw",
+    "vpaddd",
+    "vpaddq",
+    "vpaddsb",
+    "vpaddsw",
+    "vpaddusb",
+    "vpaddusw",
+    "vpsubb",
+    "vpsubw",
+    "vpsubd",
+    "vpsubq",
+    "vpsubsb",
+    "vpsubsw",
+    "vpsubusb",
+    "vpsubusw",
+    "vpmullw",
+    "vpmulhw",
+    "vpmulhuw",
+    "vpmulld",
+    "vpmullq",
+    "vpmuludq",
+    "vpmuldq",
+    "vpmaddwd",
+    "vpmaddubsw",
+    "vpmulhrsw",
+    "vpsadbw",
+    "vdbpsadbw",
+    "vpavgb",
+    "vpavgw",
+    "vpabsb",
+    "vpabsw",
+    "vpabsd",
+    "vpabsq",
+    "vpsignb",
+    "vpsignw",
+    "vpsignd",
+    "vpminub",
+    "vpminuw",
+    "vpminud",
+    "vpminuq",
+    "vpminsb",
+    "vpminsw",
+    "vpminsd",
+    "vpminsq",
+    "vpmaxub",
+    "vpmaxuw",
+    "vpmaxud",
+    "vpmaxuq",
+    "vpmaxsb",
+    "vpmaxsw",
+    "vpmaxsd",
+    "vpmaxsq",
+    "vphaddw",
+    "vphaddd",
+    "vphaddsw",
+    "vphsubw",
+    "vphsubd",
+    "vphsubsw",
+    "vphminposuw",
+    "vmpsadbw",
+    // Logic.
+    "pand",
+    "pandn",
+    "por",
+    "pxor",
+    "vpand",
+    "vpandn",
+    "vpor",
+    "vpxor",
+    "vpandd",
+    "vpandq",
+    "vpandnd",
+    "vpandnq",
+    "vpord",
+    "vporq",
+    "vpxord",
+    "vpxorq",
+    "vpternlogd",
+    "vpternlogq",
+    // Compares, into vector registers, mask registers or flags.
+    "pcmpeqb",
+    "pcmpeqw",
+    "pcmpeqd",
+    "pcmpeqq",
+    "pcmpgtb",
+    "pcmpgtw",
+    "pcmpgtd",
+    "pcmpgtq",
+    "vpcmpeqb",
+    "vpcmpeqw",
+    "vpcmpeqd",
+    "vpcmpeqq",
+    "vpcmpgtb",
+    "vpcmpgtw",
+    "vpcmpgtd",
+    "vpcmpgtq",
+    "vpcmpb",
+    "vpcmpub",
+    "vpcmpw",
+    "vpcmpuw",
+    "vpcmpd",
+    "vpcmpud",
+    "vpcmpq",
+    "vpcmpuq",
+    "vptestmb",
+    "vptestmw",
+    "vptestmd",
+    "vptestmq",
+    "vptestnmb",
+    "vptestnmw",
+    "vptestnmd",
+    "vptestnmq",
+    "ptest",
+    "vptest",
+    "pcmpestri",
+    "pcmpestri64",
+    "pcmpestrm",
+    "pcmpestrm64",
+    "pcmpistri",
+    "pcmpistrm",
+    "vpcmpestri",
+    "vpcmpestri64",
+    "vpcmpestrm",
+    "vpcmpestrm64",
+    "vpcmpistri",
+    "vpcmpistrm",
+    // Shifts and rotates.
+    "psllw",
+    "pslld",
+    "psllq",
+    "psrlw",
+    "psrld",
+    "psrlq",
+    "psraw",
+    "psrad",
+    "pslldq",
+    "psrldq",
+    "vpsllw",
+    "vpslld",
+    "vpsllq",
+    "vpsrlw",
+    "vpsrld",
+    "vpsrlq",
+    "vpsraw",
+    "vpsrad",
+    "vpsraq",
+    "vpslldq",
+    "vpsrldq",
+    "vpsllvw",
+    "vpsllvd",
+    "vpsllvq",
+    "vpsrlvw",
+    "vpsrlvd",
+    "vpsrlvq",
+    "vpsravw",
+    "vpsravd",
+    "vpsravq",
+    "vprold",
+    "vprolq",
+    "vprord",
+    "vprorq",
+    "vprolvd",
+    "vprolvq",
+    "vprorvd",
+    "vprorvq",
+    "vpshldw",
+    "vpshldd",
+    "vpshldq",
+    "vpshrdw",
+    "vpshrdd",
+    "vpshrdq",
+    "vpshldvw",
+    "vpshldvd",
+    "vpshldvq",
+    "vpshrdvw",
+    "vpshrdvd",
+    "vpshrdvq",
+    // Shuffles, permutes, packs, unpacks and blends.
+    "pshufb",
+    "pshufd",
+    "pshufhw",
+    "pshuflw",
+    "palignr",
+    "punpcklbw",
+    "punpcklwd",
+    "punpckldq",
+    "punpcklqdq",
+    "punpckhbw",
+    "punpckhwd",
+    "punpckhdq",
+    "punpckhqdq",
+    "packsswb",
+    "packssdw",
+    "packuswb",
+    "packusdw",
+    "pblendw",
+    "pblendvb",
+    "vpshufb",
+    "vpshufd",
+    "vpshufhw",
+    "vpshuflw",
+    "vpalignr",
+    "vpunpcklbw",
+    "vpunpcklwd",
+    "vpunpckldq",
+    "vpunpcklqdq",
+    "vpunpckhbw",
+    "vpunpckhwd",
+    "vpunpckhdq",
+    "vpunpckhqdq",
+    "vpacksswb",
+    "vpackssdw",
+    "vpackuswb",
+    "vpackusdw",
+    "vpblendw",
+    "vpblendvb",
+    "vpblendd",
+    "vpermb",
+    "vpermw",
+    "vpermd",
+    "vpermq",
+    "vperm2i128",
+    "vpermi2b",
+    "vpermi2w",
+    "vpermi2d",
+    "vpermi2q",
+    "vpermt2b",
+    "vpermt2w",
+    "vpermt2d",
+    "vpermt2q",
+    "valignd",
+    "valignq",
+    "vpmultishiftqb",
+    "vpshufbitqmb",
+    "vinserti128",
+    "vinserti32x4",
+    "vinserti64x2",
+    "vinserti32x8",
+    "vinserti64x4",
+    "vextracti128",
+    "vextracti32x4",
+    "vextracti64x2",
+    "vextracti32x8",
+    "vextracti64x4",
+    "vpbroadcastb",
+    "vpbroadcastw",
+    "vpbroadcastd",
+    "vpbroadcastq",
+    "vbroadcasti128",
+    "vbroadcasti32x2",
+    "vbroadcasti32x4",
+    "vbroadcasti64x2",
+    "vbroadcasti32x8",
+    "vbroadcasti64x4",
+    // Lanes in and out of general-purpose registers, and byte masks.
+    "pextrb",
+    "pextrw",
+    "pextrd",
+    "pextrq",
+    "pinsrb",
+    "pinsrw",
+    "pinsrd",
+    "pinsrq",
+    "pmovmskb",
+    "vpextrb",
+    "vpextrw",
+    "vpextrd",
+    "vpextrq",
+    "vpinsrb",
+    "vpinsrw",
+    "vpinsrd",
+    "vpinsrq",
+    "vpmovmskb",
+    // Widening and narrowing.
+    "pmovzxbw",
+    "pmovzxbd",
+    "pmovzxbq",
+    "pmovzxwd",
+    "pmovzxwq",
+    "pmovzxdq",
+    "pmovsxbw",
+    "pmovsxbd",
+    "pmovsxbq",
+    "pmovsxwd",
+    "pmovsxwq",
+    "pmovsxdq",
+    "vpmovzxbw",
+    "vpmovzxbd",
+    "vpmovzxbq",
+    "vpmovzxwd",
+    "vpmovzxwq",
+    "vpmovzxdq",
+    "vpmovsxbw",
+    "vpmovsxbd",
+    "vpmovsxbq",
+    "vpmovsxwd",
+    "vpmovsxwq",
+    "vpmovsxdq",
+    "vpmovwb",
+    "vpmovdb",
+    "vpmovqb",
+    "vpmovdw",
+    "vpmovqw",
+    "vpmovqd",
+    "vpmovswb",
+    "vpmovsdb",
+    "vpmovsqb",
+    "vpmovsdw",
+    "vpmovsqw",
+    "vpmovsqd",
+    "vpmovuswb",
+    "vpmovusdb",
+    "vpmovusqb",
+    "vpmovusdw",
+    "vpmovusqw",
+    "vpmovusqd",
+    // AVX-512 mask registers.
+    "kmovb",
+    "kmovw",
+    "kmovd",
+    "kmovq",
+    "kandb",
+    "kandw",
+    "kandd",
+    "kandq",
+    "kandnb",
+    "kandnw",
+    "kandnd",
+    "kandnq",
+    "korb",
+    "korw",
+    "kord",
+    "korq",
+    "kxorb",
+    "kxorw",
+    "kxord",
+    "kxorq",
+    "kxnorb",
+    "kxnorw",
+    "kxnord",
+    "kxnorq",
+    "knotb",
+    "knotw",
+    "knotd",
+    "knotq",
+    "kortestb",
+    "kortestw",
+    "kortestd",
+    "kortestq",
+    "ktestb",
+    "ktestw",
+    "ktestd",
+    "ktestq",
+    "kshiftlb",
+    "kshiftlw",
+    "kshiftld",
+    "kshiftlq",
+    "kshiftrb",
+    "kshiftrw",
+    "kshiftrd",
+    "kshiftrq",
+    "kaddb",
+    "kaddw",
+    "kaddd",
+    "kaddq",
+    "kunpckbw",
+    "kunpckwd",
+    "kunpckdq",
+    "vpmovm2b",
+    "vpmovm2w",
+    "vpmovm2d",
+    "vpmovm2q",
+    "vpmovb2m",
+    "vpmovw2m",
+    "vpmovd2m",
+    "vpmovq2m",
+    // Bit counts, conflicts and dot products.
+    "vpopcntb",
+    "vpopcntw",
+    "vpopcntd",
+    "vpopcntq",
+    "vplzcntd",
+    "vplzcntq",
+    "vpconflictd",
+    "vpconflictq",
+    "vpdpbusd",
+    "vpdpbusds",
+    "vpdpwssd",
+    "vpdpwssds",
+    // The rest.
+    "vzeroupper",
+    "vzeroall",
+    "crc32",
+];
+
+/// Moves that need aligned memory, and what to write instead.
+const ALIGNED_MOVES: &[(&str, &str)] = &[
+    ("movdqa", "movdqu"),
+    ("vmovdqa", "vmovdqu"),
+    ("vmovdqa32", "vmovdqu32"),
+    ("vmovdqa64", "vmovdqu64"),
+    ("movaps", "movdqu"),
+    ("movapd", "movdqu"),
+    ("vmovaps", "vmovdqu"),
+    ("vmovapd", "vmovdqu"),
 ];
 
 /// Alternative spellings the assembler accepts, and the name the decoder gives them.
@@ -320,10 +801,12 @@ pub fn display(instruction: &Instruction) -> String {
 
 /// The CPU features an instruction needs beyond the x86-64 baseline, checked against this CPU.
 fn missing_feature(instruction: &Instruction, features: CpuFeatures) -> Option<&'static str> {
+    let needs = |present: bool, name: &'static str| (!present).then_some(name);
     instruction
         .cpuid_features()
         .iter()
         .find_map(|feature| match feature {
+            // Every x86-64 CPU has these, SSE and SSE2 included.
             CpuidFeature::INTEL8086
             | CpuidFeature::INTEL186
             | CpuidFeature::INTEL286
@@ -331,14 +814,33 @@ fn missing_feature(instruction: &Instruction, features: CpuFeatures) -> Option<&
             | CpuidFeature::INTEL486
             | CpuidFeature::X64
             | CpuidFeature::CMOV
-            | CpuidFeature::SYSCALL => None,
-            CpuidFeature::BMI1 => (!features.bmi1).then_some("BMI1"),
-            CpuidFeature::BMI2 => (!features.bmi2).then_some("BMI2"),
-            CpuidFeature::POPCNT => (!features.popcnt).then_some("POPCNT"),
-            CpuidFeature::LZCNT => (!features.lzcnt).then_some("LZCNT"),
-            CpuidFeature::ADX => (!features.adx).then_some("ADX"),
-            CpuidFeature::MOVBE => (!features.movbe).then_some("MOVBE"),
-            _ => Some("a feature outside dialect 1"),
+            | CpuidFeature::SYSCALL
+            | CpuidFeature::SSE
+            | CpuidFeature::SSE2 => None,
+            CpuidFeature::BMI1 => needs(features.bmi1, "BMI1"),
+            CpuidFeature::BMI2 => needs(features.bmi2, "BMI2"),
+            CpuidFeature::POPCNT => needs(features.popcnt, "POPCNT"),
+            CpuidFeature::LZCNT => needs(features.lzcnt, "LZCNT"),
+            CpuidFeature::ADX => needs(features.adx, "ADX"),
+            CpuidFeature::MOVBE => needs(features.movbe, "MOVBE"),
+            CpuidFeature::SSE3 => needs(features.sse3, "SSE3"),
+            CpuidFeature::SSSE3 => needs(features.ssse3, "SSSE3"),
+            CpuidFeature::SSE4_1 => needs(features.sse4_1, "SSE4.1"),
+            CpuidFeature::SSE4_2 => needs(features.sse4_2, "SSE4.2"),
+            CpuidFeature::AVX => needs(features.avx, "AVX"),
+            CpuidFeature::AVX2 => needs(features.avx2, "AVX2"),
+            CpuidFeature::AVX512F => needs(features.avx512f, "AVX-512F"),
+            CpuidFeature::AVX512BW => needs(features.avx512bw, "AVX-512BW"),
+            CpuidFeature::AVX512CD => needs(features.avx512cd, "AVX-512CD"),
+            CpuidFeature::AVX512DQ => needs(features.avx512dq, "AVX-512DQ"),
+            CpuidFeature::AVX512VL => needs(features.avx512vl, "AVX-512VL"),
+            CpuidFeature::AVX512_VBMI => needs(features.avx512vbmi, "AVX-512 VBMI"),
+            CpuidFeature::AVX512_VBMI2 => needs(features.avx512vbmi2, "AVX-512 VBMI2"),
+            CpuidFeature::AVX512_VNNI => needs(features.avx512vnni, "AVX-512 VNNI"),
+            CpuidFeature::AVX512_BITALG => needs(features.avx512bitalg, "AVX-512 BITALG"),
+            CpuidFeature::AVX512_VPOPCNTDQ => needs(features.avx512vpopcntdq, "AVX-512 VPOPCNTDQ"),
+            CpuidFeature::AVX_VNNI => needs(features.avxvnni, "AVX-VNNI"),
+            _ => Some("an extension outside the dialect"),
         })
 }
 
@@ -608,13 +1110,27 @@ fn check_instruction(step: &Step<'_>, features: CpuFeatures, violations: &mut Ve
     let instruction = &step.machine;
     let line = Some(step.source.line);
     let name = mnemonic(instruction);
-    if !ALLOWED.contains(&name.as_str()) {
+    if let Some((_, unaligned)) = ALIGNED_MOVES.iter().find(|(aligned, _)| *aligned == name) {
         violations.push(Violation {
             rule: Rule::Dialect,
             line,
-            problem: format!("`{name}` isn't in dialect 1, which allows integer instructions only"),
-            fix: "use the integer instructions listed in references/power-of-10.md; vector \
-                  instructions come in dialect 2"
+            problem: format!("`{name}` faults unless its memory is aligned"),
+            fix: format!(
+                "use `{unaligned}`: the dialect moves vectors with unaligned loads and stores"
+            ),
+        });
+        return;
+    }
+    if !ALLOWED.contains(&name.as_str()) && !VECTOR.contains(&name.as_str()) {
+        violations.push(Violation {
+            rule: Rule::Dialect,
+            line,
+            problem: format!(
+                "`{name}` isn't in dialect 2, which allows integer instructions and integer vector \
+                 instructions"
+            ),
+            fix: "use the instructions listed in references/power-of-10.md: no floating point, \
+                  x87, MMX, string instructions, gathers or scatters"
                 .into(),
         });
         return;
@@ -624,7 +1140,52 @@ fn check_instruction(step: &Step<'_>, features: CpuFeatures, violations: &mut Ve
             rule: Rule::Dialect,
             line,
             problem: format!("`{name}` needs {feature}, which this CPU doesn't have"),
-            fix: "use baseline x86-64 instructions instead".into(),
+            fix: "use instructions this CPU has (status lists its features); SSE2 vectors work \
+                  on every x86-64 CPU"
+                .into(),
+        });
+    }
+    if (0..instruction.op_count()).any(|index| {
+        instruction.op_kind(index) == OpKind::Register && instruction.op_register(index).is_mm()
+    }) {
+        violations.push(Violation {
+            rule: Rule::Dialect,
+            line,
+            problem: "MMX registers aren't in the dialect".into(),
+            fix: "use xmm registers".into(),
+        });
+    }
+    if instruction.has_op_mask() || instruction.is_broadcast() || instruction.is_vsib() {
+        violations.push(Violation {
+            rule: Rule::Dialect,
+            line,
+            problem: format!(
+                "`{}` uses an AVX-512 write mask, a broadcast or a gather address, which aren't \
+                 in dialect 2",
+                step.source.text
+            ),
+            fix: "work on whole registers, and use kmov or kortest to act on a compare's mask"
+                .into(),
+        });
+    }
+    let has_memory =
+        (0..instruction.op_count()).any(|index| instruction.op_kind(index) == OpKind::Memory);
+    if has_memory
+        && instruction.encoding() == EncodingKind::Legacy
+        && instruction.memory_size().size() == 16
+        && !matches!(name.as_str(), "movdqu" | "lddqu")
+    {
+        violations.push(Violation {
+            rule: Rule::Dialect,
+            line,
+            problem: format!(
+                "`{name}` reads 16 bytes of memory in its SSE form, which faults unless the \
+                 address is a multiple of 16"
+            ),
+            fix: format!(
+                "load the bytes into a register with movdqu first, or use the VEX form `v{name}` \
+                 when the CPU has AVX"
+            ),
         });
     }
     if instruction.segment_prefix() != Register::None {
@@ -648,8 +1209,6 @@ fn check_instruction(step: &Step<'_>, features: CpuFeatures, violations: &mut Ve
                 .into(),
         });
     }
-    let has_memory =
-        (0..instruction.op_count()).any(|index| instruction.op_kind(index) == OpKind::Memory);
     if has_memory
         && instruction.memory_base() == Register::None
         && !instruction.is_ip_rel_memory_operand()
@@ -671,6 +1230,8 @@ fn check_instruction(step: &Step<'_>, features: CpuFeatures, violations: &mut Ve
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
 
     fn decode(bytes: &[u8]) -> Instruction {
@@ -709,5 +1270,42 @@ mod tests {
             missing_feature(&decode(&[0x0f, 0x05]), CpuFeatures::default()),
             None
         );
+    }
+
+    #[test]
+    fn every_listed_instruction_is_one_the_decoder_names() {
+        let known: BTreeSet<String> = iced_x86::Mnemonic::values()
+            .map(|mnemonic| format!("{mnemonic:?}").to_ascii_lowercase())
+            .collect();
+        let aligned = ALIGNED_MOVES.iter().map(|(aligned, _)| *aligned);
+        for name in ALLOWED.iter().chain(VECTOR).copied().chain(aligned) {
+            assert!(known.contains(name), "{name} isn't an iced-x86 mnemonic");
+        }
+        for (alias, canonical) in ALIASES {
+            assert!(known.contains(*canonical), "{alias} → {canonical}");
+        }
+    }
+
+    #[test]
+    fn gates_vector_extensions_on_the_cpu() {
+        // paddb xmm0, xmm1: SSE2, in every x86-64 CPU.
+        let paddb = decode(&[0x66, 0x0f, 0xfc, 0xc1]);
+        assert_eq!(mnemonic(&paddb), "paddb");
+        assert_eq!(missing_feature(&paddb, CpuFeatures::default()), None);
+        // pshufb xmm0, xmm1: SSSE3.
+        let pshufb = decode(&[0x66, 0x0f, 0x38, 0x00, 0xc1]);
+        assert_eq!(
+            missing_feature(&pshufb, CpuFeatures::default()),
+            Some("SSSE3")
+        );
+        // vpaddb ymm0, ymm1, ymm2: AVX2.
+        let vpaddb = decode(&[0xc5, 0xf5, 0xfc, 0xc2]);
+        assert_eq!(mnemonic(&vpaddb), "vpaddb");
+        assert_eq!(missing_feature(&vpaddb, CpuFeatures::all()), None);
+        let without_avx2 = CpuFeatures {
+            avx2: false,
+            ..CpuFeatures::all()
+        };
+        assert_eq!(missing_feature(&vpaddb, without_avx2), Some("AVX2"));
     }
 }

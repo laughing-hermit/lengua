@@ -257,7 +257,8 @@ const REGISTERS: [(&str, Register); 69] = [
     ("rip", Register::RIP),
 ];
 
-/// The register with this name, in any case.
+/// The register with this name, in any case: a general-purpose register, a vector register
+/// (`xmm0`–`xmm31`, `ymm0`–`ymm31`, `zmm0`–`zmm31`) or an AVX-512 mask register (`k0`–`k7`).
 #[must_use]
 pub fn register(name: &str) -> Option<Register> {
     let name = name.to_ascii_lowercase();
@@ -265,6 +266,22 @@ pub fn register(name: &str) -> Option<Register> {
         .iter()
         .find(|(known, _)| *known == name)
         .map(|(_, register)| *register)
+        .or_else(|| vector_register(&name))
+}
+
+fn vector_register(name: &str) -> Option<Register> {
+    let (bank, number) = ["xmm", "ymm", "zmm", "k"]
+        .into_iter()
+        .find_map(|bank| Some((bank, name.strip_prefix(bank)?)))?;
+    let limit = if bank == "k" { 7 } else { 31 };
+    let valid = !number.is_empty()
+        && number.bytes().all(|byte| byte.is_ascii_digit())
+        && (number == "0" || !number.starts_with('0'))
+        && number.parse::<u32>().is_ok_and(|value| value <= limit);
+    if !valid {
+        return None;
+    }
+    Register::values().find(|register| format!("{register:?}").eq_ignore_ascii_case(name))
 }
 
 /// Words that would add prefixes to an instruction.
@@ -515,10 +532,24 @@ fn operand(
     constants: &BTreeMap<String, Constant>,
 ) -> Result<Operand, String> {
     let lower = text.to_ascii_lowercase();
+    if text.contains('{') {
+        return Err(
+            "AVX-512 write masks ({k1}), zeroing ({z}), broadcasts ({1to16}) and rounding \
+                    aren't in dialect 2; work on whole registers, and use kmov or kortest to act \
+                    on a compare's mask"
+                .into(),
+        );
+    }
     if lower.split_whitespace().any(|word| word == "offset") {
         return Err(
             "`offset` isn't in the dialect; load addresses with lea reg, [rip + symbol]".into(),
         );
+    }
+    if lower.len() == 3
+        && lower.starts_with("mm")
+        && lower.ends_with(|c: char| ('0'..='7').contains(&c))
+    {
+        return Err("MMX registers aren't in the dialect; use xmm registers".into());
     }
     if let Some(register) = register(text) {
         if register == Register::RIP {
@@ -555,12 +586,16 @@ fn memory(text: &str, constants: &BTreeMap<String, Constant>) -> Result<Memory, 
         "word ptr" => Some(2),
         "dword ptr" => Some(4),
         "qword ptr" => Some(8),
+        "xmmword ptr" => Some(16),
+        "ymmword ptr" => Some(32),
+        "zmmword ptr" => Some(64),
         other if other.contains(':') => {
             return Err("segment registers aren't in the dialect".into());
         }
         other => {
             return Err(format!(
-                "`{other}` isn't a size; use byte ptr, word ptr, dword ptr or qword ptr"
+                "`{other}` isn't a size; use byte, word, dword, qword, xmmword (16 bytes), \
+                 ymmword (32) or zmmword ptr (64)"
             ));
         }
     };

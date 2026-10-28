@@ -94,7 +94,7 @@ async fn layout_hazards_are_dialect_violations() {
         ),
         ("    xor r9d, r9d /* clear */\n", "`/* */` comments"),
         ("    rep\n", "is a prefix"),
-        ("    vpaddd ymm0, ymm1, ymm2\n", "`ymm0`"),
+        ("    fld1\n", "`fld1` isn't in dialect 2"),
         ("    mov rax, offset usage_msg\n", "offset"),
         ("    mov rax, [usage_msg]\n", "address data relative to rip"),
     ] {
@@ -164,7 +164,7 @@ async fn x87_breaks_the_line_to_instruction_match() {
 async fn instructions_outside_dialect_1_are_rejected() {
     let line = line_of(TEMPLATE, "    xor r9d, r9d");
     let report = check(&with("    xor r9d, r9d\n", "    leave\n")).await;
-    assert_violation(&report, Rule::Dialect, line, "`leave` isn't in dialect 1");
+    assert_violation(&report, Rule::Dialect, line, "`leave` isn't in dialect 2");
 }
 
 #[tokio::test]
@@ -573,5 +573,102 @@ fn reports_have_a_fixed_format() {
         layout.to_string(),
         "dialect main.s:7: `;` puts several statements on one line. Fix: write one instruction \
          per line."
+    );
+}
+
+/// The template with `lines` added right after `label`, the first line of a function.
+fn with_after(label: &str, lines: &str) -> String {
+    with(&format!("{label}\n"), &format!("{label}\n{lines}"))
+}
+
+#[tokio::test]
+async fn integer_vector_instructions_are_in_dialect_2() {
+    let vectors = "    pxor xmm0, xmm0\n    vpaddb xmm1, xmm1, xmmword ptr [rdi]\n    \
+                   vpaddb ymm1, ymm2, ymm3\n    vpcmpeqb k1, zmm0, zmm1\n    kortestq k1, k1\n    \
+                   vpternlogd zmm0, zmm1, zmm2, 0x96\n    vzeroupper\n";
+    let text = with_after("parse_i64:", vectors);
+    let report = check(&text).await;
+    let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+    assert!(report.passed(), "{all:#?}");
+
+    // Each extension needs the CPU to have it; SSE2 is in every x86-64 CPU.
+    let without_avx2 = CpuFeatures {
+        avx2: false,
+        ..CpuFeatures::all()
+    };
+    let report = check_with(&text, without_avx2).await;
+    assert_violation(
+        &report,
+        Rule::Dialect,
+        line_of(&text, "    vpaddb ymm1"),
+        "`vpaddb` needs AVX2, which this CPU doesn't have",
+    );
+    assert!(
+        !report
+            .violations
+            .iter()
+            .any(|violation| violation.to_string().contains("`pxor`")),
+        "SSE2 is baseline"
+    );
+}
+
+#[tokio::test]
+async fn vectors_leave_out_floating_point_alignment_and_masks() {
+    for (line, needle) in [
+        ("    addps xmm0, xmm1\n", "`addps` isn't in dialect 2"),
+        (
+            "    movdqa xmm0, xmm1\n",
+            "`movdqa` faults unless its memory is aligned",
+        ),
+        (
+            "    paddb xmm0, xmmword ptr [rdi]\n",
+            "`paddb` reads 16 bytes of memory in its SSE form",
+        ),
+        ("    vpaddd zmm0 {k1}, zmm1, zmm2\n", "write masks ({k1})"),
+        (
+            "    paddb mm0, mm1\n",
+            "MMX registers aren't in the dialect",
+        ),
+    ] {
+        let text = with_after("parse_i64:", line);
+        let report = check(&text).await;
+        assert_violation(&report, Rule::Dialect, line_of(&text, line), needle);
+    }
+}
+
+#[tokio::test]
+async fn vector_accesses_stay_inside_their_data() {
+    // An indexed 16-byte store must fit the buffer for every index the check lets through.
+    let text = with(
+        "    mov byte ptr [rsi + rcx], dl\n",
+        "    movdqu xmmword ptr [rsi + rcx], xmm0\n",
+    );
+    let report = check(&text).await;
+    let compare = text
+        .lines()
+        .take(line_of(&text, "    movdqu xmmword ptr [rsi + rcx], xmm0"))
+        .collect::<Vec<_>>()
+        .iter()
+        .rposition(|line| line.trim() == "cmp ecx, OUT_BUF_LEN")
+        .expect("the bounds check")
+        + 1;
+    assert_violation(
+        &report,
+        Rule::Indirection,
+        compare,
+        "reach byte 35 of out_buf, which has 21 bytes",
+    );
+
+    // A [rip + name] access must fit the symbol over its whole width.
+    let text = with_after(
+        "_start:",
+        "    movdqu xmm0, xmmword ptr [rip + usage_msg + 8]\n",
+    );
+    let report = check(&text).await;
+    assert_violation(
+        &report,
+        Rule::Scope,
+        line_of(&text, "    movdqu xmm0, xmmword ptr [rip + usage_msg + 8]"),
+        "reaches 6 bytes past the end of usage_msg, which has 18 bytes",
     );
 }

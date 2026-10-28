@@ -59,3 +59,21 @@ temporary folder of their own. `_start` has no return address: it ends with `exi
 - `imul rax, rbx, 10` multiplies by a constant. Characters are numbers: `sub eax, '0'` turns a
   digit's character into its value.
 - Exit codes go from 0 to 255; 134 is lengua's code for a failed assertion.
+
+## Vector facts
+
+- Every x86-64 CPU has SSE2: 16 `xmm` registers of 16 bytes. AVX2 adds 32-byte `ymm` forms
+  (`vpaddb ymm0, ymm1, ymm2`) and AVX-512 64-byte `zmm` forms, 32 vector registers and the mask
+  registers `k0` to `k7`; `status` lists which this CPU has.
+- No vector or mask register is callee-saved: after a `call` they hold anything. System calls keep
+  them.
+- Spread a byte over a register without data: `mov eax, 0x0a0a0a0a`, `movd xmm1, eax`,
+  `pshufd xmm1, xmm1, 0`. With AVX2: `vpbroadcastb ymm1, xmm1`.
+- Find bytes 16 at a time: `pcmpeqb xmm0, xmm1` sets each matching byte to `0xff`, `pmovmskb
+  eax, xmm0` gathers one bit per byte, and `bsf` or `tzcnt` gives the first match's index.
+- Byte compares are signed (`pcmpgtb`): ASCII letters are below `0x80`, so they compare as
+  expected.
+- SSE instructions that read 16 bytes of memory need it aligned, except `movdqu` and `lddqu`; the
+  `v` (VEX) forms don't. lengua allows only unaligned loads and stores.
+- After using 256-bit or 512-bit registers, `vzeroupper` before SSE code avoids a slowdown on
+  some CPUs.

@@ -598,6 +598,22 @@ impl Checker<'_, '_> {
                 );
                 continue;
             };
+            // Every byte of the access stays inside the symbol, vector widths included.
+            let width = u64::try_from(instruction.memory_size().size()).unwrap_or(0);
+            let end = data.address + data.size;
+            if mnemonic(instruction) != "lea" && address.saturating_add(width) > end {
+                self.violation(
+                    Rule::Scope,
+                    step.source.line,
+                    format!(
+                        "`{}` reaches {} bytes past the end of {name}, which has {} bytes",
+                        step.source.text,
+                        address.saturating_add(width) - end,
+                        data.size
+                    ),
+                    format!("keep the whole access inside {name}"),
+                );
+            }
             let (name, writable) = (name.to_owned(), data.writable);
             let writes_memory = self
                 .factory

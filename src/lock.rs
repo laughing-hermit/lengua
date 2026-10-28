@@ -22,7 +22,7 @@ pub const LOCK_FILE: &str = "lengua.lock";
 pub const VERSION: u32 = 2;
 
 /// The lengua dialect this server checks.
-pub const DIALECT: u32 = 1;
+pub const DIALECT: u32 = 2;
 
 const HEADER: &str = "# lengua.lock: written only by the lengua MCP server. Do not edit.\n";
 const SIGNATURE_DOMAIN: &[u8] = b"lengua-lock-v1\n";
@@ -642,10 +642,10 @@ mod tests {
             Lock::from_signed_text(&older, &key(1)),
             Err(LockError::UnsupportedVersion("1".into()))
         );
-        let dialect = forge(&body.replace("dialect = 1", "dialect = 2"), &key(1));
+        let dialect = forge(&body.replace("dialect = 2", "dialect = 1"), &key(1));
         assert_eq!(
             Lock::from_signed_text(&dialect, &key(1)),
-            Err(LockError::UnsupportedDialect(2))
+            Err(LockError::UnsupportedDialect(1))
         );
     }
 

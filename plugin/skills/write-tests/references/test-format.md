@@ -87,6 +87,7 @@ decimal and strings as they are; true and false can't be printed, so use `if` to
 | `if(condition, then, else)` | `then` or `else`; only the chosen one is evaluated, so `if(b == 0, 0, a / b)` is safe |
 | `upper(s)`, `lower(s)` | ASCII letters in upper or lower case |
 | `reverse(s)` | The characters in reverse order |
+| `count(s, part)` | How many times `part` appears in `s`, without overlaps: `count(line, "e")` |
 
 ## Writing TOML strings
 

@@ -1,0 +1,35 @@
+[meta]
+spec = "sha256:79a7a51052c6de2bcf381b92071059b7ee7e67e6c52cc4113eda18f40787e3d5"
+
+[[example]]
+id = "B1"
+stdin = "hello world\n"
+stdout = "HELLO WORLD\n"
+exit_code = 0
+
+[[example]]
+id = "B2"
+stderr = "error: no input\n"
+exit_code = 1
+
+[[example]]
+id = "B3"
+stdin = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+stderr = "error: line too long\n"
+exit_code = 2
+
+[[generated]]
+id = "B1"
+runs = 200
+vars = { line = 'string(1, 64, "abcdefghijklmnopqrstuvwxyz ")' }
+stdin = "{line}\n"
+stdout = "{upper(line)}\n"
+exit_code = 0
+
+[[generated]]
+id = "B3"
+runs = 50
+vars = { line = 'string(65, 4096, "abcdefghijklmnopqrstuvwxyz ")' }
+stdin = "{line}\n"
+stderr = "error: line too long\n"
+exit_code = 2

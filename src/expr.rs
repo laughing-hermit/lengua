@@ -195,10 +195,12 @@ pub enum Function {
     Lower,
     /// `reverse(s)`: characters in reverse order.
     Reverse,
+    /// `count(s, part)`: how many times `part` appears in `s`, without overlaps.
+    Count,
 }
 
 impl Function {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::Len,
         Self::Abs,
         Self::Min,
@@ -207,6 +209,7 @@ impl Function {
         Self::Upper,
         Self::Lower,
         Self::Reverse,
+        Self::Count,
     ];
 
     fn name(self) -> &'static str {
@@ -219,6 +222,7 @@ impl Function {
             Self::Upper => "upper",
             Self::Lower => "lower",
             Self::Reverse => "reverse",
+            Self::Count => "count",
         }
     }
 
@@ -227,6 +231,7 @@ impl Function {
         match self {
             Self::Min | Self::Max => (2, usize::MAX),
             Self::If => (3, 3),
+            Self::Count => (2, 2),
             Self::Len | Self::Abs | Self::Upper | Self::Lower | Self::Reverse => (1, 1),
         }
     }
@@ -234,7 +239,7 @@ impl Function {
 
 /// Names that can't be used as variables.
 const RESERVED: &[&str] = &[
-    "true", "false", "len", "abs", "min", "max", "if", "upper", "lower", "reverse", "int",
+    "true", "false", "len", "abs", "min", "max", "if", "upper", "lower", "reverse", "count", "int",
     "choice", "string",
 ];
 
@@ -483,6 +488,7 @@ impl Parser {
         if arguments.len() < fewest || arguments.len() > most {
             let expected = match (fewest, most) {
                 (1, 1) => "one argument".to_owned(),
+                (2, 2) => "two arguments: a string and the part to count".into(),
                 (3, 3) => "three arguments: a condition, a then value and an else value".into(),
                 _ => "two or more arguments".into(),
             };
@@ -666,6 +672,17 @@ fn call(function: Function, arguments: &[Expr], env: &Env) -> Result<Value, Eval
         Function::Reverse => Ok(Value::Str(
             string(argument(0)?, name)?.chars().rev().collect(),
         )),
+        Function::Count => {
+            let text = string(argument(0)?, name)?;
+            let part = string(argument(1)?, name)?;
+            if part.is_empty() {
+                return Err(EvalError::Type(
+                    "count needs a part of at least one character".into(),
+                ));
+            }
+            let found = text.matches(part.as_str()).count();
+            Ok(Value::Int(i128::try_from(found).unwrap_or(i128::MAX)))
+        }
     }
 }
 
@@ -1201,6 +1218,14 @@ mod tests {
         assert_eq!(value("upper(s)", &vars), Ok(Value::Str("HéLLO".into())));
         assert_eq!(value("lower(s)", &vars), Ok(Value::Str("héllo".into())));
         assert_eq!(value("reverse(s)", &vars), Ok(Value::Str("olléH".into())));
+        assert_eq!(value("count(s, \"l\")", &vars), Ok(Value::Int(2)));
+        assert_eq!(
+            value("count(\"aaaa\", \"aa\")", &vars),
+            Ok(Value::Int(2)),
+            "count doesn't overlap"
+        );
+        assert!(value("count(s, \"\")", &vars).is_err());
+        assert!(parse("count(s)").is_err_and(|error| error.0.contains("two arguments")));
         assert_eq!(
             value("if(1 > 0, \"yes\", 1 / 0)", &vars),
             Ok(Value::Str("yes".into())),

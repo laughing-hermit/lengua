@@ -1,4 +1,4 @@
-# The lengua Power of 10 (dialect 1)
+# The lengua Power of 10 (dialect 2)
 
 `main.s` is x86-64 assembly for Linux in Intel syntax. `check_code` builds it, reads the machine
 code back, matches it to `main.s` line by line (operands included), and checks the rules below.
@@ -51,18 +51,19 @@ assembly and combined with ideas from C, C++ and Rust.
 
 | Kind | Examples |
 |---|---|
-| Register | `rax`, `eax`, `ax`, `al`, `r8`, `r8d`, `r8w`, `r8b` |
+| Register | `rax`, `eax`, `ax`, `al`, `r8`, `r8d`, `r8w`, `r8b`; vectors `xmm0`–`xmm31`, `ymm0`–`ymm31`, `zmm0`–`zmm31`; masks `k0`–`k7` |
 | Number | `10`, `0x1f`, `'0'`, `MAX_DIGITS`, `OUT_BUF_LEN - 1` |
-| Memory | `qword ptr [rsp + 16]`, `byte ptr [rdi + rcx]`, `[rbx + rcx*8 + 8]`, `qword ptr [rip + out_buf]` |
+| Memory | `qword ptr [rsp + 16]`, `byte ptr [rdi + rcx]`, `[rbx + rcx*8 + 8]`, `qword ptr [rip + out_buf]`, `xmmword ptr [rsi + rcx]` |
 | Target | `.Lloop` (jumps), `parse_i64` (calls) |
 
 Memory needs a base register. Data symbols are reached only as `[rip + name]`, plus an optional
 constant, and `lea reg, [rip + name]` loads an address. Write the size (`byte ptr`, `word ptr`,
-`dword ptr`, `qword ptr`) when no register operand gives it.
+`dword ptr`, `qword ptr`, and for vectors `xmmword ptr` (16 bytes), `ymmword ptr` (32) and
+`zmmword ptr` (64)) when no register operand gives it.
 
 ## Instruction set
 
-Dialect 1 is integer instructions and `syscall`:
+Dialect 2 is integer instructions, `syscall` and integer vector instructions:
 
 - `mov movzx movsx movsxd lea push pop xchg bswap` and every `cmovCC`
 - `add adc sub sbb neg inc dec mul imul div idiv cbw cwde cdqe cwd cdq cqo`
@@ -74,8 +75,50 @@ When the CPU has them (the `status` tool lists its features): BMI1 (`andn bextr 
 tzcnt`), BMI2 (`bzhi mulx pdep pext rorx sarx shlx shrx`), POPCNT (`popcnt`), LZCNT (`lzcnt`),
 ADX (`adcx adox`) and MOVBE (`movbe`).
 
-Everything else is out: x87, MMX, SSE and AVX (vector instructions come in dialect 2), string
-instructions (`movs`, `stos`, …), `loop`, `jrcxz`, `enter`, `leave`, `int`, `pushf` and `popf`.
+### Vectors
+
+Integer vector instructions on `xmm` (16 bytes), `ymm` (32) and `zmm` (64) registers. SSE2 is in
+every x86-64 CPU; the rest only when `status` lists them: SSE3, SSSE3, SSE4.1, SSE4.2, AVX, AVX2
+and AVX-512 (F, BW, CD, DQ, VL, VBMI, VBMI2, VNNI, BITALG, VPOPCNTDQ):
+
+- loads and stores: `movdqu`, `vmovdqu` (and `vmovdqu8` … `vmovdqu64`), `lddqu`; between
+  general-purpose and vector registers: `movd`, `movq`, `pextrb`…`pextrq`, `pinsrb`…`pinsrq`,
+  `pmovmskb`
+- arithmetic: `padd*`, `psub*` (also saturating), `pmull*`, `pmulh*`, `pmuludq`, `pmaddwd`,
+  `pmaddubsw`, `psadbw`, `pavg*`, `pabs*`, `pmin*`, `pmax*`, `phadd*`, `phsub*`
+- logic and compares: `pand pandn por pxor`, `vpternlog*`, `pcmpeq*`, `pcmpgt*`, `vpcmp*`
+  (into mask registers), `vptestm*`, `ptest`, and the SSE4.2 string compares `pcmpistri` and
+  friends
+- shifts and shuffles: `psll*`, `psrl*`, `psra*`, `pslldq`, `psrldq`, `vpsllv*`, `vprol*`,
+  `pshufb`, `pshufd`, `palignr`, `punpck*`, `pack*`, `pblendw`, `pblendvb`, `vpblendd`,
+  `vperm*`, `vinserti*`, `vextracti*`, `vpbroadcast*`, `vbroadcasti*`
+- widening and narrowing: `pmovzx*`, `pmovsx*`, `vpmov*`
+- AVX-512 mask registers: `kmov*`, `kand*`, `kor*`, `kxor*`, `knot*`, `kortest*`, `ktest*`,
+  `kshift*`, `kunpck*`, `vpmovm2*`, `vpmov*2m`
+- bit counts and dot products: `vpopcnt*`, `vplzcnt*`, `vpconflict*`, `vpdpbusd`, `vpdpwssd`
+- `vzeroupper`, `vzeroall`, and `crc32`
+
+Rules for vectors:
+
+- **Unaligned only.** Load and store with `movdqu`/`vmovdqu`; aligned moves (`movdqa`,
+  `vmovdqa`) fault on an unaligned address and aren't in the dialect. An SSE instruction (no `v`)
+  may read 16 bytes of memory only as `movdqu` or `lddqu`, because the others need alignment:
+  load into a register first, or use the `v` form when the CPU has AVX.
+- **Whole registers.** AVX-512 write masks (`{k1}`, `{z}`), broadcasts (`{1to16}`) and rounding
+  aren't in the dialect. Compare into a mask register and act on it with `kmov` or `kortest`.
+- **Integer lanes.** Floating point isn't in the dialect, nor are gathers, scatters, compress,
+  expand, non-temporal moves, MMX and the crypto extensions.
+- **Every byte of an access counts.** A 16-byte load at index `rcx` reads bytes `rcx` to
+  `rcx + 15`, and rule 9's bounds check must keep all of them inside the buffer (see below).
+  Size buffers in whole chunks so the last chunk stays inside.
+- **Calls clobber vectors.** No vector register is callee-saved, so a function never saves one,
+  and a value in a vector register is gone after a `call`. System calls keep them.
+
+[assets/vector-template.s](../assets/vector-template.s) is a complete, checked SSE2 program
+(capitalizing a line 16 bytes at a time) with its spec and tests.
+
+Everything else is out: x87, string instructions (`movs`, `stos`, …), `loop`, `jrcxz`, `enter`,
+`leave`, `int`, `pushf` and `popf`.
 
 ## The rules
 
@@ -190,7 +233,16 @@ without sign, so a negative index is caught too. `lea` doesn't access memory, so
 ```
 
 When the base register holds the address of one of the program's data symbols (every path sets
-it with `lea base, [rip + name]`), the limit must keep every access inside that symbol. Where a
+it with `lea base, [rip + name]`), the limit must keep every byte of every access inside that
+symbol. For a 16-byte load from an 80-byte buffer, the largest index is 64:
+
+```
+    cmp rcx, LINE_BUF_LEN - CHUNK + 1
+    jae .Lshout_assert_index
+    movdqu xmm0, xmmword ptr [rsi + rcx]
+```
+
+An access through `[rip + name]` must fit inside `name` in the same way. Where a
 check is provably unnecessary, wrap the access in `# unsafe: <reason>` … `# end unsafe`. Only
 bounds checks can be skipped this way, and `check_code` reports every unsafe block.
 
@@ -201,4 +253,4 @@ step after the MVP.
 ### 10. Checked by tools
 
 The assembler and linker treat warnings as errors. `check_code` runs on every change, and nothing
-runs or is stamped before every rule passes. The lock records `dialect = 1`.
+runs or is stamped before every rule passes. The lock records `dialect = 2`.

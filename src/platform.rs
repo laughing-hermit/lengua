@@ -55,8 +55,8 @@ impl Profile {
     }
 }
 
-/// CPU instruction-set extensions. Dialect 1 may use the integer ones when present; the vector
-/// ones are for dialect 2.
+/// CPU instruction-set extensions beyond the x86-64 baseline (which includes SSE2). Programs may
+/// use an extension's instructions only when this CPU has it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct CpuFeatures {
     /// BMI1 bit manipulation (`andn`, `bextr`, `blsi`, `blsmsk`, `blsr`, `tzcnt`).
@@ -71,10 +71,40 @@ pub struct CpuFeatures {
     pub adx: bool,
     /// Byte-swapping moves (`movbe`).
     pub movbe: bool,
-    /// AVX2 vector instructions (dialect 2).
+    /// SSE3 vector instructions (`lddqu`).
+    pub sse3: bool,
+    /// SSSE3 vector instructions (`pshufb`, `pabsb`, `palignr`, `pmaddubsw`, …).
+    pub ssse3: bool,
+    /// SSE4.1 vector instructions (`pminud`, `pmulld`, `pmovzxbw`, `pextrb`, `ptest`, …).
+    pub sse4_1: bool,
+    /// SSE4.2 (`pcmpgtq`, the string compares and `crc32`).
+    pub sse4_2: bool,
+    /// AVX: VEX-encoded 128-bit forms of the SSE instructions, without alignment rules.
+    pub avx: bool,
+    /// AVX2: 256-bit integer vectors (`vpaddb ymm0, …`).
     pub avx2: bool,
-    /// AVX-512 Foundation (dialect 2).
+    /// AVX-512 Foundation: 512-bit vectors and mask registers.
     pub avx512f: bool,
+    /// AVX-512 byte and word instructions.
+    pub avx512bw: bool,
+    /// AVX-512 conflict detection (`vpconflictd`, `vplzcntd`).
+    pub avx512cd: bool,
+    /// AVX-512 doubleword and quadword instructions.
+    pub avx512dq: bool,
+    /// AVX-512 on 128-bit and 256-bit registers.
+    pub avx512vl: bool,
+    /// AVX-512 byte permutes (`vpermb`, `vpmultishiftqb`).
+    pub avx512vbmi: bool,
+    /// AVX-512 byte shifts, compress and expand (`vpshldw`, …).
+    pub avx512vbmi2: bool,
+    /// AVX-512 dot products (`vpdpbusd`, `vpdpwssd`).
+    pub avx512vnni: bool,
+    /// AVX-512 bit algorithms (`vpopcntb`, `vpshufbitqmb`).
+    pub avx512bitalg: bool,
+    /// AVX-512 population counts on doublewords and quadwords (`vpopcntd`).
+    pub avx512vpopcntdq: bool,
+    /// VEX-encoded dot products (`vpdpbusd` on AVX registers).
+    pub avxvnni: bool,
 }
 
 impl CpuFeatures {
@@ -88,8 +118,23 @@ impl CpuFeatures {
             lzcnt: true,
             adx: true,
             movbe: true,
+            sse3: true,
+            ssse3: true,
+            sse4_1: true,
+            sse4_2: true,
+            avx: true,
             avx2: true,
             avx512f: true,
+            avx512bw: true,
+            avx512cd: true,
+            avx512dq: true,
+            avx512vl: true,
+            avx512vbmi: true,
+            avx512vbmi2: true,
+            avx512vnni: true,
+            avx512bitalg: true,
+            avx512vpopcntdq: true,
+            avxvnni: true,
         }
     }
 }
@@ -146,8 +191,23 @@ fn cpu_features() -> CpuFeatures {
         lzcnt: std::arch::is_x86_feature_detected!("lzcnt"),
         adx: std::arch::is_x86_feature_detected!("adx"),
         movbe: std::arch::is_x86_feature_detected!("movbe"),
+        sse3: std::arch::is_x86_feature_detected!("sse3"),
+        ssse3: std::arch::is_x86_feature_detected!("ssse3"),
+        sse4_1: std::arch::is_x86_feature_detected!("sse4.1"),
+        sse4_2: std::arch::is_x86_feature_detected!("sse4.2"),
+        avx: std::arch::is_x86_feature_detected!("avx"),
         avx2: std::arch::is_x86_feature_detected!("avx2"),
         avx512f: std::arch::is_x86_feature_detected!("avx512f"),
+        avx512bw: std::arch::is_x86_feature_detected!("avx512bw"),
+        avx512cd: std::arch::is_x86_feature_detected!("avx512cd"),
+        avx512dq: std::arch::is_x86_feature_detected!("avx512dq"),
+        avx512vl: std::arch::is_x86_feature_detected!("avx512vl"),
+        avx512vbmi: std::arch::is_x86_feature_detected!("avx512vbmi"),
+        avx512vbmi2: std::arch::is_x86_feature_detected!("avx512vbmi2"),
+        avx512vnni: std::arch::is_x86_feature_detected!("avx512vnni"),
+        avx512bitalg: std::arch::is_x86_feature_detected!("avx512bitalg"),
+        avx512vpopcntdq: std::arch::is_x86_feature_detected!("avx512vpopcntdq"),
+        avxvnni: std::arch::is_x86_feature_detected!("avxvnni"),
     }
 }
 

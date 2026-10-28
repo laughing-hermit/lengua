@@ -1,4 +1,5 @@
-//! The rule checker for dialect 1: the lengua Power of 10 for x86-64 assembly.
+//! The rule checker for dialect 2: the lengua Power of 10 for x86-64 assembly, integer and
+//! integer vector instructions.
 //!
 //! It reads main.s ([`source`]), reads the linked executable back and matches every instruction
 //! to its line ([`decode`]), builds each function's control flow and stack depths ([`cfg`]), and

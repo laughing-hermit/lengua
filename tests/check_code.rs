@@ -279,3 +279,25 @@ async fn code_needs_checked_tests_first() {
     assert!(error.contains("approved spec and checked tests"), "{error}");
     session.service.cancel().await.expect("close the session");
 }
+
+#[tokio::test]
+async fn the_vector_template_passes_its_tests() {
+    let session = session().await;
+    let program = Program::new();
+    program.write("spec.md", &asset("vector-template-spec.md"));
+    session.approve(&program).await;
+    program.write("tests.toml", &asset("vector-template-tests.toml"));
+    let tests = session.call_ok("check_tests", program.arguments()).await;
+    assert_eq!(tests["checked"], true, "{tests}");
+    program.write("main.s", &asset("vector-template.s"));
+    let report = session.call_ok("check_code", program.arguments()).await;
+    assert_eq!(report["stamped"], true, "{report}");
+    assert_eq!(report["test_runs"], 3 + 200 + 50, "{report}");
+
+    let mut arguments = program.arguments();
+    arguments["stdin"] = Value::from("lengua checks vectors\n");
+    let run = session.call_ok("run", arguments).await;
+    assert_eq!(run["stdout"], "LENGUA CHECKS VECTORS\n", "{run}");
+    assert_eq!(run["exit_code"], 0, "{run}");
+    session.service.cancel().await.expect("close the session");
+}

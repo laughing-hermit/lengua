@@ -133,7 +133,7 @@ adapted for assembly. The full rule text lives in
 6. Smallest scope: one owning function per buffer, only `_start` exported, read-only data stays read-only.
 7. Every result is checked (`rax` < 0 means error).
 8. No macros; named constants for system calls, exit codes, sizes and loop bounds.
-9. No function pointers; indexed accesses are bounds-checked, except inside a reported `unsafe` block.
+9. No function pointers; indexed accesses are bounds-checked over their full width (16 to 64 bytes for vectors), except inside a reported `unsafe` block.
 10. Warnings are errors, every change is checked, and the dialect is versioned.
 
 The checker analyzes the **linked executable** together with the source, and nothing AI-written
@@ -147,10 +147,21 @@ its message to standard error and exit with 134, whatever the spec allows). An a
 reached through a conditional jump, the fall-through of one, or a `jmp` right after one (the end
 of a comparison chain or of an exhausted loop).
 
-Instruction sets: dialect 1 uses x86-64's integer instructions, plus the integer extensions BMI1,
-BMI2, POPCNT, LZCNT, ADX and MOVBE only when the CPU has them (the checker reads which CPU features
-each instruction needs). Vector instructions (SSE, AVX2, AVX-512) come in dialect 2, right after
-the MVP, with rules for their wider memory accesses.
+Instruction sets: dialect 2 (the current one) uses x86-64's integer instructions and its integer
+vector instructions. Integer extensions (BMI1, BMI2, POPCNT, LZCNT, ADX, MOVBE) and vector sets
+beyond SSE2 (SSE3 to SSE4.2, AVX, AVX2 and AVX-512) are allowed only when the CPU has them: the
+checker reads which CPU features each instruction needs. Vectors follow four extra rules:
+
+- unaligned loads and stores only (`movdqu`; an SSE instruction other than `movdqu` or `lddqu` may
+  not read 16 bytes of memory, since it would need alignment);
+- whole registers: no AVX-512 write masks, zeroing, broadcasts or rounding;
+- integer lanes: no floating point, gathers, scatters, compress, expand or non-temporal moves;
+- every byte of an access counts: rule 9's bounds checks and `[rip + name]` accesses must keep
+  the full 16 to 64 bytes inside their data symbol.
+
+Dialect 1 was the integer-only subset; locks record the dialect that checked the code, and a
+lock from another dialect has to be checked again. `assets/vector-template.s` is a checked SSE2
+program that finds a newline and capitalizes a line 16 bytes at a time.
 
 ## Translation validation
 
@@ -180,8 +191,8 @@ per-(OS, CPU) platform profiles so each platform is an added profile, not a rewr
 The plugin's own binary will ship for x86_64/aarch64 Linux (musl), aarch64 macOS and x86_64/aarch64
 Windows.
 
-After the MVP: dialect 2 (vector instructions), the proof step, and the other platforms in the
-order above. The order between the proof and the platforms is decided after the MVP.
+Next: the proof step and the other platforms in the order above, in an order the project owner
+decides.
 
 ## Code conventions
 
@@ -216,6 +227,6 @@ order above. The order between the proof and the platforms is decided after the 
 
 The MVP is built: milestones 1 foundation, 2 spec and lock, 3 tests, 4 rule checker, 5 code and
 run, and 6 end to end, each committed after the project owner approved it. `tests/e2e.rs` runs the
-whole workflow on `examples/add` in both MCP protocol generations. Next comes dialect 2 (vector
-instructions); then the proof step and the platforms (Linux ARM64, macOS ARM64, Windows x86-64,
-Windows ARM64, in that order), with the order between those two decided after the MVP.
+whole workflow on `examples/add` in both MCP protocol generations. Dialect 2 (integer vector
+instructions) followed. Next come the proof step and the platforms (Linux ARM64, macOS ARM64,
+Windows x86-64, Windows ARM64, in that order), with the order between those two still to decide.

@@ -1,6 +1,6 @@
 ---
 name: write-assembly
-description: Writes a lengua program's main.s, the x86-64 assembly that implements its approved spec and passes its frozen tests, in lengua's dialect checked against the lengua Power of 10 (NASA's rules adapted for assembly). Use after check_tests passes, when the lengua status tool says to write main.s, when check_code reports violations, or when the user asks for a faster program. Ends with a first run and a short report to the user.
+description: Writes a lengua program's main.s, the x86-64 assembly (integer and vector instructions) that implements its approved spec and passes its frozen tests, in lengua's dialect checked against the lengua Power of 10 (NASA's rules adapted for assembly). Use after check_tests passes, when the lengua status tool says to write main.s, when check_code reports violations, or when the user asks for a faster program. Ends with a first run and a short report to the user.
 license: Apache-2.0
 compatibility: Needs the lengua MCP server from the lengua plugin, on Linux x86-64 with LLVM (llvm-mc and ld.lld).
 ---
@@ -51,6 +51,13 @@ writes show up there; for a short run it's mostly the kernel starting and ending
 Change `main.s` and call `check_code` again: the tests must stay green, and the median cycles and
 CPU time should drop. Every measure varies a little between runs, so compare medians.
 
+The biggest win on text and arrays is usually vector instructions: one `pcmpeqb` compares 16
+bytes, and AVX2 and AVX-512 do 32 and 64. [The vector template](assets/vector-template.s) (with
+[its spec](assets/vector-template-spec.md) and [tests](assets/vector-template-tests.toml)) is a
+checked SSE2 program that finds a newline and capitalizes a line 16 bytes at a time. Use AVX2 or
+AVX-512 only when `status` lists them, and keep every vector access inside its buffer: see
+"Vectors" in [the rules](references/power-of-10.md).
+
 ## The rules in brief
 
 1. **Simple control flow:** jumps stay in their function, no recursion, every path ends, and a
@@ -68,15 +75,17 @@ CPU time should drop. Every measure varies a little between runs, so compare med
    every call to a `# returns: result` function.
 8. **Named constants:** for system calls, exit codes, sizes and loop counts, all defined at the
    top; `NAME_LEN` equals the size of `name`.
-9. **No indirection:** no jumps through registers; indexed accesses bounds-checked first, or
-   inside `# unsafe: <reason>` … `# end unsafe`.
+9. **No indirection:** no jumps through registers; indexed accesses bounds-checked first over
+   their whole width (16 to 64 bytes for vectors), or inside `# unsafe: <reason>` … `# end unsafe`.
 10. **Checked by tools:** warnings are errors, and `check_code` runs on every change.
 
 ## Never
 
 - `;`, `/* */`, a label and an instruction on one line, `rep` or `lock`
 - a constant defined after its use, `. - name` outside `.size`, `[name]` without `rip`, or `offset`
-- `leave`, `enter`, `loop`, string instructions, x87, SSE or AVX
+- `leave`, `enter`, `loop`, string instructions, x87 or floating point
+- `movdqa` or `vmovdqa` (use `movdqu`), an SSE instruction other than `movdqu` reading 16 bytes of
+  memory, AVX-512 write masks or broadcasts, gathers or scatters
 - `and rsp`, `mov rsp`, or memory below `rsp`
 - a loop counter in `rax`, `rcx` or `r11` across a `syscall`, or in any caller-saved register
   across a `call`
