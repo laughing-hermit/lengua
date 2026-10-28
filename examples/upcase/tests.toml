@@ -1,0 +1,60 @@
+[meta]
+spec = "sha256:a18de0162937a9587771311f4aa21a4ecc19e145c0e5d0aa3ec25ad40f4a9a45"
+
+[[example]]
+id = "B1"
+args = ["in.txt", "out.txt"]
+files = { "in.txt" = "Hello, World 42!\n" }
+files_after = { "out.txt" = "HELLO, WORLD 42!\n" }
+exit_code = 0
+
+[[example]]
+id = "B2"
+args = ["in.txt"]
+stderr = "usage: upcase <input> <output>\n"
+exit_code = 1
+
+[[example]]
+id = "B3"
+args = ["missing.txt", "out.txt"]
+stderr = "upcase: cannot open missing.txt\n"
+exit_code = 2
+
+[[example]]
+id = "B4"
+args = ["big.txt", "out.txt"]
+files = { "big.txt" = [{ repeat = "a", times = 1048576 }, "x"] }
+stderr = "upcase: big.txt is larger than 1048576 bytes\n"
+exit_code = 3
+
+[[generated]]
+id = "B1"
+runs = 100
+vars = { text = 'string(0, 1048576, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 !,.@[`{~\t\n")' }
+args = ["in.txt", "out.txt"]
+files = { "in.txt" = "{text}" }
+files_after = { "out.txt" = "{upper(text)}" }
+exit_code = 0
+
+[[generated]]
+id = "B2"
+vars = { a = 'choice("in.txt", "out.txt", "x", "")' }
+args = ["{a}"]
+stderr = "usage: upcase <input> <output>\n"
+exit_code = 1
+
+[[generated]]
+id = "B3"
+vars = { name = 'choice("missing.txt", "a", "no such file.txt", "in.txt.bak")' }
+args = ["{name}", "out.txt"]
+stderr = "upcase: cannot open {name}\n"
+exit_code = 2
+
+[[generated]]
+id = "B4"
+runs = 10
+vars = { a = 'string(1048576, 1048576, "abcXYZ\n")' }
+args = ["big.txt", "out.txt"]
+files = { "big.txt" = "{a}x" }
+stderr = "upcase: big.txt is larger than 1048576 bytes\n"
+exit_code = 3

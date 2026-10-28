@@ -87,11 +87,15 @@ compute the expected results with formulas. A block whose ranges hold at most 50
 every one of them instead, within 20000 runs per file: for those inputs the program is checked, not
 sampled, which is the first step toward the proof below. The formula language has checked 128-bit
 whole numbers, strings, comparisons, `&& || !` and the functions `len`, `abs`, `min`, `max`, `if`,
-`upper`, `lower`, `reverse`, `count`, `sha256`, `crc32` and `crc32c`. Decimals come in two kinds.
+`upper`, `lower`, `reverse`, `count`, `sha256`, `crc32` and `crc32c`. Tests can give a program
+files (`files`) and check the exact files it leaves (`files_after`): after a run its working
+folder must hold exactly those, so a stray file or a changed input fails. Decimals come in two kinds.
 Exact decimals (`decimal(0.00, 999.99)` inputs, money) are computed in whole units with `scaled` and
 printed with `places`, so any rounding rule the spec states is exact. Measured decimals are computed
-in doubles exactly as `addsd`, `mulsd`, `divsd` and `sqrtsd` do, and printed with `fixed` (x·10^d
-rounded ties to even, like `cvtsd2si`); whole numbers and decimals never mix silently in arithmetic.
+in doubles exactly as `addsd`, `mulsd`, `divsd` and `sqrtsd` do, or in singles where the formula
+says `single(x)`, with `fma(a, b, c)` for a fused multiply-add, and printed with `fixed` (x·10^d
+rounded ties to even, like `cvtsd2si`); whole numbers and decimals, and singles and doubles, never
+mix silently in arithmetic.
 It has no loops, so every formula finishes.
 
 `check_tests` ties the tests to the approved spec: example exit codes equal the spec's, generator
@@ -111,8 +115,20 @@ documentation can't drift from the checker.
 Tests and `run` start a program the same way: through the server's own binary in launcher mode,
 which waits until the server has attached a CPU performance counter that turns on at `exec`, then
 replaces itself with the program (no `unsafe` code needed). The program gets its stdin up front
-and then the end of input, an empty environment, its own temporary folder, a time limit (2 s per
-test, 10 s for `run`) and 1 MiB of output, and it's killed past either. The counters report three
+and then the end of input, an empty environment, a working folder of its own (a fresh temporary
+one, or for `run` a folder of the user's files), a time limit (2 s per test, 10 s for `run`) and
+8 MiB of output, and it's killed past either.
+
+Before it becomes the program, the launcher confines itself, so the kernel enforces what the
+person approved:
+- Landlock lets the program touch files only inside its working folder, execute only itself, use
+  no network and signal no other process;
+- seccomp kills it at any system call its spec doesn't list (plus `write` and `exit`, which
+  `assert_fail` may always make);
+- resource limits cap the files it writes (64 MiB in tests) and leave no core files.
+
+The checker already proves the code makes no other system calls; the kernel makes the promise hold
+even if the checker missed something. The counters report three
 measures, which the optimize step compares by their medians: instructions executed in the
 program's own code (the steadiest measure of work, though a count can be one higher now and then,
 because the CPU counts the odd interrupt or page fault as one), CPU cycles in its own code (time,
@@ -205,17 +221,16 @@ Rust share: everything a program may touch must be something the checker can acc
 |---|---|---|---|
 | Memory | `malloc`/`free`, `new`/`delete`: leaks, double frees, use after free | Ownership frees memory automatically; arenas without the standard library | Reserved up front: static buffers sized from the spec's limits, plus the stack. Nothing is allocated or freed while running (rule 3), and `.bss` costs nothing until touched |
 | Threads | pthreads: any thread may write anything, and data races are undefined behavior | `Send`/`Sync`, scoped threads and rayon: no data races, checked at compile time | Next, as dialect 3: fork-join only. A canonical `parallel_for` (copied word for word, like `assert_fail`) starts workers on static stacks and waits for them all. Each worker owns one disjoint slice of the data (JPL: one owner per shared object, passed on explicitly). No locks, atomics or shared mutation, so results stay deterministic and testable |
-| System access | Any system call | The standard library, within the OS's permissions | Capabilities: the spec lists the system calls the person approves |
+| System access | Any system call | The standard library, within the OS's permissions | Capabilities: the spec lists the system calls the person approves, and the kernel enforces the list (seccomp) and keeps files inside the program's working folder (Landlock) |
 | Network, clock, random | Sockets, `time()`, `rand()` | `std::net`, `Instant`, `rand` | Later, as approved capabilities, once tests can describe outputs by rules (a loopback server, ranges, patterns) instead of exact text |
 
 Until dialect 3, a program runs as one thread; vector instructions make that thread fast.
 
 Roadmap, in order:
-1. fork-join threads (dialect 3);
-2. files in tests, so programs that read and write files can be checked;
-3. the proof step;
-4. network, clock and random capabilities;
-5. the other platforms, toward the top 5–6 CPU and OS targets.
+1. fork-join threads;
+2. the proof step;
+3. network, clock and random capabilities;
+4. the other platforms, toward the top 5–6 CPU and OS targets.
 
 ## Platforms
 
@@ -272,12 +287,12 @@ Dialect 2 followed:
 - floating point in double and single precision, with fused multiply-add, plus exact decimals in
   the test language;
 - inputs up to 1 MiB;
-- every value tried when a range is small.
+- every value tried when a range is small;
+- files in tests, and the kernel confining every run to what the spec approves.
 
 All of it is proven on this machine (x86-64 Linux). The long-term goal is the top 5 or 6 CPU and
 OS targets, through LLVM and one profile per target. Next, in order:
-1. fork-join threads (dialect 3);
-2. files in tests;
-3. the proof step;
-4. network, clock and random capabilities;
-5. the other targets.
+1. fork-join threads;
+2. the proof step;
+3. network, clock and random capabilities;
+4. the other targets.

@@ -22,6 +22,12 @@ File descriptors 0, 1 and 2 are standard input, output and error. `openat` flags
 is 420 in decimal. `write` and `read` may move fewer bytes than asked, so loop until done, as the
 template's `write_all` does.
 
+Files: open an input with `openat` (-100, name, `O_RDONLY`), and create or replace an output with
+`O_WRONLY | O_CREAT | O_TRUNC` (0x241) and mode 420; `close` each when done. Name files relative to
+the working folder. The kernel lets a program open files only inside that folder, so any other
+path fails with `EACCES` (-13); a missing file fails with `ENOENT` (-2). Each error is a behavior
+the spec names, with its own exit code.
+
 ## Program start
 
 At `_start` the stack holds the arguments, and `rsp` is 16-byte aligned:
@@ -34,7 +40,8 @@ At `_start` the stack holds the arguments, and `rsp` is 16-byte aligned:
 | `[rsp + 8 * (argc + 1)]` | 0, the end of the list |
 
 Each argument is a NUL-terminated string. lengua runs programs with an empty environment, in a
-temporary folder of their own. `_start` has no return address: it ends with `exit`.
+working folder of their own: an empty temporary folder, or the user's folder when they ask to run
+the program on their files. `_start` has no return address: it ends with `exit`.
 
 ## Calling convention (System V)
 

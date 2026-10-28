@@ -18,11 +18,16 @@ A test with fixed values, copied from the spec's behavior.
 | `id` | required | The behavior's ID, such as `"B1"` |
 | `args` | `[]` | Command-line arguments, without the program name |
 | `stdin` | `""` | Everything the program can read; then input ends |
+| `files` | `{}` | Files in the working folder before the run, by name: `{ "notes.txt" = "hello\n" }` |
 | `stdout` | `""` | Exact standard output |
 | `stderr` | `""` | Exact standard error |
+| `files_after` | `{}` | Files the program must leave, with their exact contents: `{ "loud.txt" = "HELLO\n" }` |
 | `exit_code` | required | 0 to 255, the code the spec states; never 134 |
 
-Example values are literal: braces in them are plain characters.
+Example values are literal: braces in them are plain characters. A long value, such as a file one
+byte over a limit, can be written as a list of strings and repeated runs instead of one string:
+`files = { "big.txt" = [{ repeat = "a", times = 1048576 }, "x"] }` is 1048576 `a`s and an `x`. It
+works for `args`, `stdin`, `files`, `stdout`, `stderr` and `files_after`, up to 8 MiB a value.
 
 ## [[generated]]
 
@@ -35,7 +40,9 @@ A test that draws new inputs on every run and computes the expected results.
 | `vars` | required | Each variable's generator, such as `{ a = "int(-10, 10)" }` |
 | `args` | `[]` | Templates that hold bare variables only, such as `"{a}"` or `"--n={a}"` |
 | `stdin` | `""` | A template that holds bare variables only |
+| `files` | `{}` | File names and templates that hold bare variables only: `{ "notes.txt" = "{text}" }` |
 | `stdout`, `stderr` | `""` | Templates with any expressions |
+| `files_after` | `{}` | File names and templates with any expressions: `{ "loud.txt" = "{upper(text)}" }` |
 | `exit_code` | required | A number, or a template that is one placeholder, such as `"{if(a < 0, 1, 0)}"` |
 
 Runs try boundary values first: every combination when there are 64 or fewer, otherwise each
@@ -48,8 +55,21 @@ the whole file stays within 20000 runs. `check_code` then reports that the block
 value in its range: for those inputs the program is checked, not sampled.
 
 Several blocks may share an `id` when one range can't cover the inputs, such as divisors on both
-sides of zero. Their `args`, `stdin`, `stdout`, `stderr` and `exit_code` must be identical; only
-`vars` and `runs` differ.
+sides of zero. Their `args`, `stdin`, `files`, `stdout`, `stderr`, `files_after` and `exit_code`
+must be identical; only `vars` and `runs` differ.
+
+## Files
+
+Each run happens in a fresh, empty working folder. `files` puts files there before the program
+starts, and after it ends the folder must hold exactly:
+- every file in `files_after`, with exactly those contents;
+- every file in `files` that `files_after` doesn't name, unchanged;
+- nothing else.
+
+So a program that writes a stray file, changes its input or leaves out its output fails. Name files
+relative to the working folder (`notes.txt`, `in/data.csv`), never with `/` at the start or `..`.
+A test names at most 16 files of at most 8 MiB each. The program can't reach files outside its
+working folder at all: the kernel stops it.
 
 ## Generators
 

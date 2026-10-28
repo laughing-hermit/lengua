@@ -66,10 +66,14 @@ of the same rule.
   The title names the rule in the user's words, such as `Adds two numbers` or `Rejects a line
   that is too long`, and no two titles are the same. Don't add a behavior that only repeats
   another with other values: adding negative numbers is still adding.
-- **Given, When, Then:** Given steps set the scene (the arguments, the input), the one When is the
-  event (`- When the program runs`), and Then steps say only what the user can observe: the
-  output and the exit code. `- And …` or `- But …` continue the step before. Keep each behavior
-  to these few steps.
+- **Given, When, Then:** Given steps set the scene (the arguments, the input, the files), the one
+  When is the event (`- When the program runs`), and Then steps say only what the user can
+  observe: the output, the files written and the exit code. `- And …` or `- But …` continue the
+  step before. Keep each behavior to these few steps.
+- **Files:** name them and quote their contents: ``- Given a file named `notes.txt` holding
+  `hello` `` and ``- Then `loud.txt` holds `HELLO` ``. A program works only on files in the folder
+  it runs in, named relative to it; it can't reach other files at all. Purpose states the largest
+  file it reads in backticks, like any other range, and what happens when a file is missing.
 - **Declarative steps:** say what the user gives and sees, never how the code works. No buffers,
   registers, system calls or function names in a behavior.
 - **One concrete example per behavior,** holding just the values its rule needs. Backticks hold
@@ -85,8 +89,9 @@ of the same rule.
   isn't a number. Give each one its own exit code other than 0.
 - **System calls:** under `# Constraints`, write `- Allowed system calls: …` with only what the
   program needs, chosen from read, write, openat, close, lseek, exit and exit_group. `exit` is
-  always needed. lengua programs can't allocate memory, start processes or threads, handle
-  signals or use the network.
+  always needed, and files need openat and close. lengua programs can't allocate memory, start
+  processes or threads, handle signals or use the network. The kernel enforces this list when
+  the program runs, so it's a promise the user can rely on.
 
 ## Example
 

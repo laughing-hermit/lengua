@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use crate::checker::source::{Item, Operand, Source};
-use crate::runner::{self, End, Limits, Run};
+use crate::runner::{self, End, Job, Limits, Run};
 use crate::spec::ASSERTION_EXIT_CODE;
 use crate::testfile::{TestSuite, describe_inputs};
 
@@ -156,20 +156,95 @@ fn show(bytes: &[u8]) -> String {
 pub fn explain_end(run: &Run, assertions: &BTreeMap<i64, usize>, limits: Limits) -> String {
     match run.end {
         End::Exited(code) if code == i32::from(ASSERTION_EXIT_CODE) => {
-            compare(run, "", "", 0, assertions).unwrap_or_else(|| run.end.describe(limits))
+            let none = BTreeMap::new();
+            let expected = Expected {
+                stdout: "",
+                stderr: "",
+                exit_code: 0,
+                files: &none,
+                files_after: &none,
+            };
+            compare(run, &expected, assertions).unwrap_or_else(|| run.end.describe(limits))
         }
         other => other.describe(limits),
+    }
+}
+
+/// What a run should produce.
+struct Expected<'a> {
+    stdout: &'a str,
+    stderr: &'a str,
+    exit_code: u8,
+    /// The files given before the run: each must stay as it was unless `files_after` names it.
+    files: &'a BTreeMap<String, String>,
+    /// The files expected after the run, with their exact contents.
+    files_after: &'a BTreeMap<String, String>,
+}
+
+/// Why a run's files don't match, if they don't.
+fn compare_files(run: &Run, expected: &Expected<'_>, problems: &mut Vec<String>) {
+    let found = match &run.files {
+        Ok(found) => found,
+        Err(problem) => {
+            problems.push(format!("the program's files can't be checked: {problem}"));
+            return;
+        }
+    };
+    for (name, contents) in expected.files_after {
+        match found.get(name) {
+            None => problems.push(format!(
+                "{name} should hold {}, but it wasn't written",
+                show(contents.as_bytes())
+            )),
+            Some(actual) if actual != contents.as_bytes() => problems.push(format!(
+                "{name} should hold {}, but held {}",
+                show(contents.as_bytes()),
+                show(actual)
+            )),
+            Some(_) => {}
+        }
+    }
+    for (name, contents) in expected.files {
+        if expected.files_after.contains_key(name) {
+            continue;
+        }
+        match found.get(name) {
+            None => problems.push(format!("{name} should stay as it was, but it's gone")),
+            Some(actual) if actual != contents.as_bytes() => problems.push(format!(
+                "{name} should stay as it was, {}, but it now holds {}",
+                show(contents.as_bytes()),
+                show(actual)
+            )),
+            Some(_) => {}
+        }
+    }
+    let unexpected: Vec<&str> = found
+        .keys()
+        .filter(|name| {
+            !expected.files.contains_key(*name) && !expected.files_after.contains_key(*name)
+        })
+        .map(String::as_str)
+        .collect();
+    if !unexpected.is_empty() {
+        problems.push(format!(
+            "the program wrote files the test doesn't expect: {}",
+            unexpected.join(", ")
+        ));
     }
 }
 
 /// Why a run didn't match, or `None` when it did.
 fn compare(
     run: &Run,
-    stdout: &str,
-    stderr: &str,
-    exit_code: u8,
+    expected: &Expected<'_>,
     assertions: &BTreeMap<i64, usize>,
 ) -> Option<String> {
+    let Expected {
+        stdout,
+        stderr,
+        exit_code,
+        ..
+    } = *expected;
     let code = match run.end {
         End::Exited(code) => code,
         other => {
@@ -210,6 +285,7 @@ fn compare(
             show(&run.stderr)
         ));
     }
+    compare_files(run, expected, &mut problems);
     if code != i32::from(exit_code) {
         problems.push(format!(
             "the exit code should be {exit_code}, but was {code}"
@@ -224,7 +300,8 @@ fn record(outcome: &mut Outcome, message: String) {
     }
 }
 
-/// Runs every test of `suite` against `program`, drawing generated inputs from `seed`.
+/// Runs every test of `suite` against `program`, drawing generated inputs from `seed`. The
+/// kernel lets the program make only the system calls in `syscalls`.
 ///
 /// # Errors
 ///
@@ -235,6 +312,7 @@ pub async fn run_tests(
     program: &Path,
     source: &Source,
     seed: u64,
+    syscalls: &[i64],
 ) -> io::Result<Outcome> {
     let assertions = assertion_lines(source);
     let deadline = Instant::now() + TOTAL_TIMEOUT;
@@ -248,23 +326,21 @@ pub async fn run_tests(
             );
             return Ok(outcome);
         }
-        let run = runner::run(
-            launcher,
-            program,
-            &example.args,
-            example.stdin.as_bytes(),
-            limits,
-        )
-        .await?;
+        let job = Job {
+            files: &example.files,
+            ..Job::new(program, &example.args, example.stdin.as_bytes(), syscalls)
+        };
+        let run = runner::run(launcher, job, limits).await?;
         outcome.runs += 1;
         let name = format!("example {}", example.id);
-        match compare(
-            &run,
-            &example.stdout,
-            &example.stderr,
-            example.exit_code,
-            &assertions,
-        ) {
+        let expected = Expected {
+            stdout: &example.stdout,
+            stderr: &example.stderr,
+            exit_code: example.exit_code,
+            files: &example.files,
+            files_after: &example.files_after,
+        };
+        match compare(&run, &expected, &assertions) {
             Some(problem) => {
                 let mut message = format!("{name} (tests.toml line {}): {problem}", example.line);
                 if !example.args.is_empty() {
@@ -308,16 +384,20 @@ pub async fn run_tests(
                 );
                 return Ok(outcome);
             }
-            let run =
-                runner::run(launcher, program, &case.args, case.stdin.as_bytes(), limits).await?;
+            let job = Job {
+                files: &case.files,
+                ..Job::new(program, &case.args, case.stdin.as_bytes(), syscalls)
+            };
+            let run = runner::run(launcher, job, limits).await?;
             outcome.runs += 1;
-            if let Some(problem) = compare(
-                &run,
-                &case.stdout,
-                &case.stderr,
-                case.exit_code,
-                &assertions,
-            ) {
+            let expected = Expected {
+                stdout: &case.stdout,
+                stderr: &case.stderr,
+                exit_code: case.exit_code,
+                files: &case.files,
+                files_after: &case.files_after,
+            };
+            if let Some(problem) = compare(&run, &expected, &assertions) {
                 record(
                     &mut outcome,
                     format!(
@@ -352,14 +432,32 @@ mod tests {
             instructions: Some(100),
             cycles: Some(300),
             cpu_time_ns: Some(1000),
+            files: Ok(BTreeMap::new()),
+        }
+    }
+
+    fn expect<'a>(
+        stdout: &'a str,
+        exit_code: u8,
+        files: &'a BTreeMap<String, String>,
+        files_after: &'a BTreeMap<String, String>,
+    ) -> Expected<'a> {
+        Expected {
+            stdout,
+            stderr: "",
+            exit_code,
+            files,
+            files_after,
         }
     }
 
     #[test]
     fn compares_every_stream_and_the_exit_code() {
         let none = BTreeMap::new();
-        assert_eq!(compare(&finished("5\n", "", 0), "5\n", "", 0, &none), None);
-        let wrong = compare(&finished("6\n", "oops\n", 1), "5\n", "", 0, &none).expect("differs");
+        let no_files = BTreeMap::new();
+        let five = expect("5\n", 0, &no_files, &no_files);
+        assert_eq!(compare(&finished("5\n", "", 0), &five, &none), None);
+        let wrong = compare(&finished("6\n", "oops\n", 1), &five, &none).expect("differs");
         assert!(
             wrong.contains("stdout should be \"5\\n\", but was \"6\\n\""),
             "{wrong}"
@@ -377,9 +475,11 @@ mod tests {
     #[test]
     fn names_the_line_of_a_failed_assertion() {
         let lines = BTreeMap::from([(7, 42)]);
+        let no_files = BTreeMap::new();
+        let nothing = expect("", 0, &no_files, &no_files);
         let run = finished("", "lengua: assertion 007 failed\n", 134);
         assert_eq!(
-            compare(&run, "", "", 0, &lines),
+            compare(&run, &nothing, &lines),
             Some("assertion 7 failed at main.s:42".to_owned())
         );
         let killed = Run {
@@ -387,7 +487,59 @@ mod tests {
             ..finished("", "", 0)
         };
         assert!(
-            compare(&killed, "", "", 0, &lines).is_some_and(|problem| problem.contains("SIGSEGV"))
+            compare(&killed, &nothing, &lines).is_some_and(|problem| problem.contains("SIGSEGV"))
+        );
+    }
+
+    #[test]
+    fn compares_the_files_left_behind() {
+        let none = BTreeMap::new();
+        let file = |name: &str, contents: &str| (name.to_owned(), contents.to_owned());
+        let given = BTreeMap::from([file("notes.txt", "hello\n")]);
+        let wanted = BTreeMap::from([file("out.txt", "HELLO\n")]);
+        let expected = expect("", 0, &given, &wanted);
+        let left = |files: &[(&str, &str)]| Run {
+            files: Ok(files
+                .iter()
+                .map(|(name, contents)| ((*name).to_owned(), contents.as_bytes().to_vec()))
+                .collect()),
+            ..finished("", "", 0)
+        };
+        let good = left(&[("notes.txt", "hello\n"), ("out.txt", "HELLO\n")]);
+        assert_eq!(compare(&good, &expected, &none), None);
+        let problem =
+            |files: &[(&str, &str)]| compare(&left(files), &expected, &none).expect("differs");
+        assert!(
+            problem(&[("notes.txt", "hello\n")])
+                .contains("out.txt should hold \"HELLO\\n\", but it wasn't written")
+        );
+        assert!(
+            problem(&[("notes.txt", "hello\n"), ("out.txt", "hello\n")])
+                .contains("out.txt should hold \"HELLO\\n\", but held \"hello\\n\"")
+        );
+        assert!(
+            problem(&[("out.txt", "HELLO\n")])
+                .contains("notes.txt should stay as it was, but it's gone")
+        );
+        assert!(
+            problem(&[("notes.txt", ""), ("out.txt", "HELLO\n")])
+                .contains("notes.txt should stay as it was")
+        );
+        assert!(
+            problem(&[
+                ("notes.txt", "hello\n"),
+                ("out.txt", "HELLO\n"),
+                ("tmp", "")
+            ])
+            .contains("the program wrote files the test doesn't expect: tmp")
+        );
+        let unreadable = Run {
+            files: Err("it left more than 256 files".into()),
+            ..finished("", "", 0)
+        };
+        assert!(
+            compare(&unreadable, &expected, &none)
+                .is_some_and(|problem| problem.contains("more than 256 files"))
         );
     }
 

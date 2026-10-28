@@ -26,18 +26,26 @@ the tests come before the code, and they decide whether the code is right.
 
 - **`[meta]`** holds `spec = "<spec_label>"`, the label from step 1.
 - **One `[[example]]` per behavior,** with `id` set to the behavior's ID and the behavior's
-  values copied exactly into `args`, `stdin`, `stdout`, `stderr` and `exit_code`. Every backtick
-  value of the behavior must appear in its example.
+  values copied exactly into `args`, `stdin`, `files`, `stdout`, `stderr`, `files_after` and
+  `exit_code`. Every backtick value of the behavior must appear in its example.
 - **Output is exact,** including the final newline (`"5\n"`). Leave out a stream the program
   doesn't write; it must then stay empty.
 - **`exit_code` is required** and equals the code the spec states. 134 is reserved for failed
   assertions.
-- **A `[[generated]]` block for every behavior whose example has args or stdin,** with the same
-  `id`. Its `vars` draw new inputs on every run, and its formulas compute the expected results.
+- **A `[[generated]]` block for every behavior whose example has args, stdin or files,** with the
+  same `id`. Its `vars` draw new inputs on every run, and its formulas compute the expected
+  results.
+- **Files.** A behavior that reads a file gives it in `files`, and one that writes a file expects
+  it in `files_after`: `files = { "notes.txt" = "{text}" }` and
+  `files_after = { "loud.txt" = "{upper(text)}" }`. After the run the working folder must hold
+  exactly those files, so leave out nothing the program writes.
 - **Ranges come from Purpose.** `int(lo, hi)` and `string(min, max, "chars")` may only use
   numbers that the spec's `# Purpose` writes in backticks; numbers from behaviors don't count.
   If Purpose doesn't state a range you need, ask the user to add it to `spec.md` and approve the
   spec again.
+- **Long literal inputs,** such as a line or a file just over a limit, are written as repeats
+  in the example: `files = { "big.txt" = [{ repeat = "a", times = 1048576 }, "x"] }`. Never
+  generate a huge string into tests.toml.
 - **Invalid input gets hand-picked values.** For a behavior about input that isn't valid, use
   `choice(…)` with the example's own value plus values that go wrong late, not only at the first
   character. For a number: `"12x"`, `"-"`, `"1.5"`, `"--1"` and `""`.

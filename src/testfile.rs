@@ -40,10 +40,14 @@ pub struct Example {
     pub args: Vec<String>,
     /// Standard input.
     pub stdin: String,
+    /// Files in the working folder before the run, by name.
+    pub files: BTreeMap<String, String>,
     /// Expected standard output.
     pub stdout: String,
     /// Expected standard error.
     pub stderr: String,
+    /// Files expected in the working folder after the run, by name, with their exact contents.
+    pub files_after: BTreeMap<String, String>,
     /// Expected exit code.
     pub exit_code: u8,
 }
@@ -63,10 +67,14 @@ pub struct Generated {
     pub args: Vec<Template>,
     /// Standard input template.
     pub stdin: Template,
+    /// Templates of the files in the working folder before the run, by name.
+    pub files: BTreeMap<String, Template>,
     /// Expected standard output template.
     pub stdout: Template,
     /// Expected standard error template.
     pub stderr: Template,
+    /// Templates of the files expected after the run, by name.
+    pub files_after: BTreeMap<String, Template>,
     /// Expected exit code.
     pub exit_code: ExitCode,
     /// Whether every combination of the variables' values runs, instead of a sample.
@@ -97,10 +105,14 @@ pub struct Case {
     pub args: Vec<String>,
     /// Standard input.
     pub stdin: String,
+    /// Files in the working folder before the run.
+    pub files: BTreeMap<String, String>,
     /// Expected standard output.
     pub stdout: String,
     /// Expected standard error.
     pub stderr: String,
+    /// Files expected after the run.
+    pub files_after: BTreeMap<String, String>,
     /// Expected exit code.
     pub exit_code: u8,
 }
@@ -113,24 +125,21 @@ impl Generated {
     /// Fails when a formula can't be evaluated or gives an impossible exit code.
     pub fn case(&self, inputs: Env) -> Result<Case, (Env, &'static str, EvalError)> {
         match self.results(&inputs) {
-            Ok((args, stdin, stdout, stderr, exit_code)) => Ok(Case {
-                inputs,
-                args,
-                stdin,
-                stdout,
-                stderr,
-                exit_code,
-            }),
+            Ok(case) => Ok(Case { inputs, ..case }),
             Err((field, error)) => Err((inputs, field, error)),
         }
     }
 
-    /// The rendered args, stdin, stdout, stderr and exit code for `inputs`.
-    #[allow(clippy::type_complexity)]
-    fn results(
-        &self,
-        inputs: &Env,
-    ) -> Result<(Vec<String>, String, String, String, u8), (&'static str, EvalError)> {
+    /// The rendered args, stdin, files, expected outputs and exit code for `inputs`, with no
+    /// inputs recorded.
+    fn results(&self, inputs: &Env) -> Result<Case, (&'static str, EvalError)> {
+        let render_files = |files: &BTreeMap<String, Template>, field| {
+            files
+                .iter()
+                .map(|(name, template)| Ok((name.clone(), template.render(inputs)?)))
+                .collect::<Result<BTreeMap<_, _>, _>>()
+                .map_err(|error| (field, error))
+        };
         let args = self
             .args
             .iter()
@@ -141,6 +150,7 @@ impl Generated {
             .stdin
             .render(inputs)
             .map_err(|error| ("stdin", error))?;
+        let files = render_files(&self.files, "files")?;
         let stdout = self
             .stdout
             .render(inputs)
@@ -149,13 +159,23 @@ impl Generated {
             .stderr
             .render(inputs)
             .map_err(|error| ("stderr", error))?;
+        let files_after = render_files(&self.files_after, "files_after")?;
         let exit_code = match &self.exit_code {
             ExitCode::Fixed(code) => *code,
             ExitCode::Formula(template) => {
                 exit_code_value(template, inputs).map_err(|error| ("exit_code", error))?
             }
         };
-        Ok((args, stdin, stdout, stderr, exit_code))
+        Ok(Case {
+            inputs: Env::new(),
+            args,
+            stdin,
+            files,
+            stdout,
+            stderr,
+            files_after,
+            exit_code,
+        })
     }
 
     /// Every run for `seed`: boundary values first, then random ones.
@@ -255,6 +275,68 @@ fn mark_every_value(blocks: &mut [Generated]) {
     }
 }
 
+/// The most files a test may give the program or expect from it.
+pub const MAX_FILES: usize = 16;
+
+/// The most bytes a test's file may hold.
+pub const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
+
+/// Why `name` can't name a test's file, if it can't: files are named relative to the program's
+/// working folder and stay inside it.
+fn file_name_problem(name: &str) -> Option<String> {
+    if name.is_empty() {
+        return Some("a file name can't be empty".into());
+    }
+    if name.starts_with('/') {
+        return Some(format!(
+            "`{name}` is an absolute path; name files relative to the working folder, such as \
+             `notes.txt`"
+        ));
+    }
+    if name.chars().any(char::is_control) || name.len() > 255 {
+        return Some(format!(
+            "{name:?} isn't a usable file name: keep it under 256 bytes, with no control \
+             characters"
+        ));
+    }
+    if name
+        .split('/')
+        .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Some(format!(
+            "`{name}` must stay inside the working folder: no `..`, `.` or empty parts"
+        ));
+    }
+    None
+}
+
+/// Problems with a test's file names: bad names, too many files, or a name used both as a file
+/// and as a folder.
+fn file_set_problems<'n>(names: impl Iterator<Item = &'n String>) -> Vec<String> {
+    let names: BTreeSet<&String> = names.collect();
+    let mut problems: Vec<String> = names
+        .iter()
+        .filter_map(|name| file_name_problem(name))
+        .collect();
+    if names.len() > MAX_FILES {
+        problems.push(format!(
+            "it names {} files; a test gives and expects at most {MAX_FILES}",
+            names.len()
+        ));
+    }
+    for name in &names {
+        if let Some(inside) = names
+            .iter()
+            .find(|other| other.starts_with(&format!("{name}/")))
+        {
+            problems.push(format!(
+                "`{name}` is a file, so `{inside}` can't be inside it"
+            ));
+        }
+    }
+    problems
+}
+
 /// Linux refuses to start a program with an argument longer than this.
 pub const MAX_ARG_BYTES: usize = 128 * 1024;
 
@@ -336,14 +418,81 @@ struct Meta {
 struct ExampleTable {
     id: String,
     #[serde(default)]
-    args: Vec<String>,
+    args: Vec<Text>,
     #[serde(default)]
-    stdin: String,
+    stdin: Text,
     #[serde(default)]
-    stdout: String,
+    files: BTreeMap<String, Text>,
     #[serde(default)]
-    stderr: String,
+    stdout: Text,
+    #[serde(default)]
+    stderr: Text,
+    #[serde(default)]
+    files_after: BTreeMap<String, Text>,
     exit_code: i64,
+}
+
+/// An example's literal text: a string, or a list of strings and repeated runs, so a long input
+/// such as a file one byte over a limit stays short to write: `[{ repeat = "a", times = 1048576
+/// }, "x"]`.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum Text {
+    Plain(String),
+    Parts(Vec<TextPart>),
+}
+
+impl Default for Text {
+    fn default() -> Self {
+        Self::Plain(String::new())
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum TextPart {
+    Plain(String),
+    Repeat(Repeat),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Repeat {
+    repeat: String,
+    times: u64,
+}
+
+impl Text {
+    /// The text written out, up to [`MAX_FILE_BYTES`].
+    fn expand(self) -> Result<String, String> {
+        let parts = match self {
+            Self::Plain(text) => return Ok(text),
+            Self::Parts(parts) => parts,
+        };
+        let mut text = String::new();
+        for part in parts {
+            match part {
+                TextPart::Plain(plain) => text.push_str(&plain),
+                TextPart::Repeat(Repeat { repeat, times }) => {
+                    let bytes = usize::try_from(times)
+                        .ok()
+                        .and_then(|times| repeat.len().checked_mul(times))
+                        .filter(|bytes| text.len() + bytes <= MAX_FILE_BYTES);
+                    if repeat.is_empty() || bytes.is_none() {
+                        return Err(format!(
+                            "{{ repeat = {repeat:?}, times = {times} }} must repeat some text, \
+                             and the whole value must stay within {MAX_FILE_BYTES} bytes"
+                        ));
+                    }
+                    text.push_str(&repeat.repeat(usize::try_from(times).unwrap_or(0)));
+                }
+            }
+            if text.len() > MAX_FILE_BYTES {
+                return Err(format!("it holds more than {MAX_FILE_BYTES} bytes"));
+            }
+        }
+        Ok(text)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -357,9 +506,13 @@ struct GeneratedTable {
     #[serde(default)]
     stdin: String,
     #[serde(default)]
+    files: BTreeMap<String, String>,
+    #[serde(default)]
     stdout: String,
     #[serde(default)]
     stderr: String,
+    #[serde(default)]
+    files_after: BTreeMap<String, String>,
     exit_code: ExitCodeField,
 }
 
@@ -499,6 +652,36 @@ impl<'a> Checker<'a> {
                 );
                 continue;
             }
+            let mut expand = |field: &str, text: Text| {
+                text.expand().unwrap_or_else(|problem| {
+                    self.problem(Some(line), format!("example {id}: {field}: {problem}"));
+                    String::new()
+                })
+            };
+            let args: Vec<String> = table
+                .args
+                .into_iter()
+                .map(|arg| expand("args", arg))
+                .collect();
+            let stdin = expand("stdin", table.stdin);
+            let stdout = expand("stdout", table.stdout);
+            let stderr = expand("stderr", table.stderr);
+            let files: BTreeMap<String, String> = table
+                .files
+                .into_iter()
+                .map(|(name, contents)| {
+                    let contents = expand(&format!("files.{name}"), contents);
+                    (name, contents)
+                })
+                .collect();
+            let files_after: BTreeMap<String, String> = table
+                .files_after
+                .into_iter()
+                .map(|(name, contents)| {
+                    let contents = expand(&format!("files_after.{name}"), contents);
+                    (name, contents)
+                })
+                .collect();
             let exit_code = match u8::try_from(table.exit_code) {
                 Ok(ASSERTION_EXIT_CODE) => {
                     self.problem(
@@ -531,28 +714,40 @@ impl<'a> Checker<'a> {
                     ),
                 );
             }
+            for problem in file_set_problems(files.keys().chain(files_after.keys())) {
+                self.problem(Some(line), format!("example {id}: {problem}"));
+            }
             let example = Example {
                 id,
                 line,
-                args: table.args,
-                stdin: table.stdin,
-                stdout: table.stdout,
-                stderr: table.stderr,
+                args,
+                stdin,
+                files,
+                stdout,
+                stderr,
+                files_after,
                 exit_code,
             };
             for value in values {
+                let in_files = |files: &BTreeMap<String, String>| {
+                    files
+                        .iter()
+                        .any(|(name, contents)| name.contains(&value) || contents.contains(&value))
+                };
                 let present = example.args.contains(&value)
                     || example.stdin.contains(&value)
                     || example.stdout.contains(&value)
                     || example.stderr.contains(&value)
+                    || in_files(&example.files)
+                    || in_files(&example.files_after)
                     || example.exit_code.to_string() == value;
                 if !present {
                     self.problem(
                         Some(line),
                         format!(
                             "example {id} doesn't contain the spec's value `{value}`; copy every \
-                             backtick value of {id} into its args, stdin, stdout, stderr or \
-                             exit_code"
+                             backtick value of {id} into its args, stdin, files, stdout, stderr, \
+                             files_after or exit_code"
                         ),
                     );
                 }
@@ -647,8 +842,21 @@ impl<'a> Checker<'a> {
         let args: Vec<Option<Template>> =
             table.args.iter().map(|arg| template("args", arg)).collect();
         let stdin = template("stdin", &table.stdin);
+        let files: Option<BTreeMap<String, Template>> = table
+            .files
+            .iter()
+            .map(|(file, source)| Some((file.clone(), template("files", source)?)))
+            .collect();
         let stdout = template("stdout", &table.stdout);
         let stderr = template("stderr", &table.stderr);
+        let files_after: Option<BTreeMap<String, Template>> = table
+            .files_after
+            .iter()
+            .map(|(file, source)| Some((file.clone(), template("files_after", source)?)))
+            .collect();
+        for problem in file_set_problems(table.files.keys().chain(table.files_after.keys())) {
+            self.problem(Some(line), format!("{name}: {problem}"));
+        }
         let exit_code = match &table.exit_code {
             ExitCodeField::Number(code) => match u8::try_from(*code) {
                 Ok(code) if code == behavior_exit => Some(ExitCode::Fixed(code)),
@@ -678,13 +886,24 @@ impl<'a> Checker<'a> {
                 }
             },
         };
-        let (Some(args), Some(stdin), Some(stdout), Some(stderr), Some(exit_code)) = (
+        let (
+            Some(args),
+            Some(stdin),
+            Some(files),
+            Some(stdout),
+            Some(stderr),
+            Some(files_after),
+            Some(exit_code),
+        ) = (
             args.into_iter().collect::<Option<Vec<_>>>(),
             stdin,
+            files,
             stdout,
             stderr,
+            files_after,
             exit_code,
-        ) else {
+        )
+        else {
             return None;
         };
         let block = Generated {
@@ -694,8 +913,10 @@ impl<'a> Checker<'a> {
             vars,
             args,
             stdin,
+            files,
             stdout,
             stderr,
+            files_after,
             exit_code,
             every_value: false,
         };
@@ -784,14 +1005,15 @@ impl<'a> Checker<'a> {
             .iter()
             .map(|arg| ("args", arg))
             .chain([("stdin", &block.stdin)])
+            .chain(block.files.values().map(|file| ("files", file)))
         {
             if template.pattern().is_none() {
                 self.problem(
                     Some(block.line),
                     format!(
-                        "{name}: {field} {:?} computes a value; args and stdin may only hold \
-                         bare variables like {{a}}, so move the computation to stdout, stderr or \
-                         exit_code",
+                        "{name}: {field} {:?} computes a value; args, stdin and files may only \
+                         hold bare variables like {{a}}, so move the computation to stdout, \
+                         stderr, files_after or exit_code",
                         template.source()
                     ),
                 );
@@ -801,6 +1023,9 @@ impl<'a> Checker<'a> {
         let mut used = inputs.clone();
         used.extend(block.stdout.variables());
         used.extend(block.stderr.variables());
+        for template in block.files_after.values() {
+            used.extend(template.variables());
+        }
         if let ExitCode::Formula(template) = &block.exit_code {
             used.extend(template.variables());
         }
@@ -814,8 +1039,8 @@ impl<'a> Checker<'a> {
             self.problem(
                 Some(block.line),
                 format!(
-                    "{name}: `{var}` never reaches the program; use it in args or stdin, or \
-                     remove it"
+                    "{name}: `{var}` never reaches the program; use it in args, stdin or \
+                     files, or remove it"
                 ),
             );
         }
@@ -825,9 +1050,11 @@ impl<'a> Checker<'a> {
     /// or prints the same thing for every input is caught before any code exists.
     fn dry_run(&mut self, block: &Generated, seed: u64) {
         let name = format!("generated {}", block.id);
-        let varies = block.stdout.has_placeholders() || block.stderr.has_placeholders();
+        let varies = block.stdout.has_placeholders()
+            || block.stderr.has_placeholders()
+            || block.files_after.values().any(Template::has_placeholders);
         // Two different outputs are enough to know they vary; keep no more, since text is large.
-        let mut outputs: Vec<(String, String)> = Vec::new();
+        let mut outputs: Vec<(String, String, BTreeMap<String, String>)> = Vec::new();
         let mut runs = 0;
         for result in block.cases(seed) {
             let case = match result {
@@ -848,13 +1075,30 @@ impl<'a> Checker<'a> {
                 self.problem(Some(block.line), format!("{name}: {problem}"));
                 return;
             }
+            if let Some((file, contents)) = case
+                .files
+                .iter()
+                .chain(&case.files_after)
+                .find(|(_, contents)| contents.len() > MAX_FILE_BYTES)
+            {
+                self.problem(
+                    Some(block.line),
+                    format!(
+                        "{name}: with {}, {file} holds {} bytes; a test's files hold at most \
+                         {MAX_FILE_BYTES}",
+                        describe_inputs(&case.inputs),
+                        contents.len()
+                    ),
+                );
+                return;
+            }
             runs += 1;
             if outputs.len() < 2
-                && !outputs
-                    .iter()
-                    .any(|(stdout, stderr)| *stdout == case.stdout && *stderr == case.stderr)
+                && !outputs.iter().any(|(stdout, stderr, files)| {
+                    *stdout == case.stdout && *stderr == case.stderr && *files == case.files_after
+                })
             {
-                outputs.push((case.stdout, case.stderr));
+                outputs.push((case.stdout, case.stderr, case.files_after));
             }
         }
         if varies && outputs.len() < 2 {
@@ -877,7 +1121,8 @@ impl<'a> Checker<'a> {
                 .iter()
                 .filter(|block| block.id == example.id)
                 .collect();
-            let has_inputs = !example.args.is_empty() || !example.stdin.is_empty();
+            let has_inputs =
+                !example.args.is_empty() || !example.stdin.is_empty() || !example.files.is_empty();
             if has_inputs && blocks.is_empty() {
                 self.problem(
                     Some(example.line),
@@ -894,9 +1139,9 @@ impl<'a> Checker<'a> {
                         self.problem(
                             Some(block.line),
                             format!(
-                                "the [[generated]] blocks of {} must share args, stdin, stdout, \
-                                 stderr and exit_code (as on line {}); only vars and runs may \
-                                 differ",
+                                "the [[generated]] blocks of {} must share args, stdin, files, \
+                                 stdout, stderr, files_after and exit_code (as on line {}); only \
+                                 vars and runs may differ",
                                 block.id, first.line
                             ),
                         );
@@ -979,6 +1224,12 @@ impl<'a> Checker<'a> {
                     format!("{:?}", case.stderr),
                     format!("{:?}", example.stderr),
                 ))
+            } else if case.files_after != example.files_after {
+                Some((
+                    "files_after",
+                    format!("{:?}", case.files_after),
+                    format!("{:?}", example.files_after),
+                ))
             } else if case.exit_code != example.exit_code {
                 Some((
                     "exit code",
@@ -1003,37 +1254,56 @@ impl<'a> Checker<'a> {
     }
 }
 
-type TemplateSources<'a> = (
-    Vec<&'a str>,
-    &'a str,
-    &'a str,
-    &'a str,
-    Option<&'a str>,
-    Option<u8>,
-);
+/// A generated block's templates as written, to tell whether two blocks share them.
+#[derive(PartialEq, Eq)]
+struct TemplateSources<'a> {
+    args: Vec<&'a str>,
+    stdin: &'a str,
+    files: BTreeMap<&'a str, &'a str>,
+    stdout: &'a str,
+    stderr: &'a str,
+    files_after: BTreeMap<&'a str, &'a str>,
+    formula: Option<&'a str>,
+    fixed: Option<u8>,
+}
 
 fn templates(block: &Generated) -> TemplateSources<'_> {
     let (formula, fixed) = match &block.exit_code {
         ExitCode::Fixed(code) => (None, Some(*code)),
         ExitCode::Formula(template) => (Some(template.source()), None),
     };
-    (
-        block.args.iter().map(Template::source).collect(),
-        block.stdin.source(),
-        block.stdout.source(),
-        block.stderr.source(),
+    fn sources(files: &BTreeMap<String, Template>) -> BTreeMap<&str, &str> {
+        files
+            .iter()
+            .map(|(name, template)| (name.as_str(), template.source()))
+            .collect()
+    }
+    TemplateSources {
+        args: block.args.iter().map(Template::source).collect(),
+        stdin: block.stdin.source(),
+        files: sources(&block.files),
+        stdout: block.stdout.source(),
+        stderr: block.stderr.source(),
+        files_after: sources(&block.files_after),
         formula,
         fixed,
-    )
+    }
 }
 
-/// Reads the variables' values back out of the example's args and stdin.
+/// Reads the variables' values back out of the example's args, stdin and files.
 fn bind(block: &Generated, example: &Example) -> Result<Env, String> {
     if block.args.len() != example.args.len() {
         return Err(format!(
             "it has {} args and the example has {}",
             block.args.len(),
             example.args.len()
+        ));
+    }
+    if !block.files.keys().eq(example.files.keys()) {
+        return Err(format!(
+            "it gives the files {:?} and the example gives {:?}",
+            block.files.keys().collect::<Vec<_>>(),
+            example.files.keys().collect::<Vec<_>>()
         ));
     }
     let generators: BTreeMap<&str, &Generator> = block
@@ -1047,10 +1317,11 @@ fn bind(block: &Generated, example: &Example) -> Result<Env, String> {
         .iter()
         .zip(&example.args)
         .chain([(&block.stdin, &example.stdin)])
+        .chain(block.files.values().zip(example.files.values()))
     {
         let pattern = template
             .pattern()
-            .ok_or_else(|| "its args and stdin must be bare variables".to_owned())?;
+            .ok_or_else(|| "its args, stdin and files must be bare variables".to_owned())?;
         pairs.push((pattern, text.as_str()));
     }
     let mut solutions = Vec::new();
@@ -1116,10 +1387,19 @@ fn solve(
                 let Some(generator) = generators.get(name.as_str()) else {
                     return;
                 };
+                // Only the splits where the rest can still match are worth reading: the value
+                // runs to the end, or up to where the next fixed text starts. On long inputs this
+                // keeps matching linear.
+                let viable = |split: usize| match tail.first() {
+                    None => split == text.len(),
+                    Some(PatternPart::Text(literal)) => text[split..].starts_with(literal.as_str()),
+                    Some(PatternPart::Var(_)) => true,
+                };
                 let splits: Vec<usize> = text
                     .char_indices()
                     .map(|(position, _)| position)
                     .chain([text.len()])
+                    .filter(|split| viable(*split))
                     .collect();
                 for split in splits {
                     if let Some(value) = generator.read(&text[..split]) {
@@ -1661,11 +1941,115 @@ Prints the length of a word of `1` to `200000` letters.
         let text = tests(&format!("{EXAMPLES}{GENERATED}{second}"));
         assert_problem(
             &text,
-            "must share args, stdin, stdout, stderr and exit_code",
+            "must share args, stdin, files, stdout, stderr, files_after and exit_code",
         );
         let narrower = GENERATED.replace("runs = 200", "runs = 50");
         let ok = tests(&format!("{EXAMPLES}{GENERATED}{narrower}"));
         assert!(check(&ok, &spec(), LABEL).is_ok());
+    }
+
+    #[test]
+    fn long_example_text_can_be_written_as_repeats() {
+        let parse = |toml_text: &str| {
+            let mut table: BTreeMap<String, Text> = toml::from_str(toml_text).expect("valid TOML");
+            table.remove("v").expect("the value").expand()
+        };
+        assert_eq!(parse(r#"v = "plain""#), Ok("plain".into()));
+        assert_eq!(
+            parse(r#"v = [{ repeat = "ab", times = 3 }, "x"]"#),
+            Ok("abababx".into())
+        );
+        assert!(parse(r#"v = [{ repeat = "", times = 3 }]"#).is_err());
+        assert!(parse(r#"v = [{ repeat = "a", times = 9000000 }]"#).is_err());
+        assert!(
+            toml::from_str::<BTreeMap<String, Text>>(r#"v = [{ repeat = "a", count = 3 }]"#)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn files_go_in_before_the_run_and_are_checked_after() {
+        let spec_text = "---
+type: lengua/program-spec
+title: shout-file
+---
+# Purpose
+Uppercases a text file of at most `1000` bytes, `notes.txt`, into `loud.txt`.
+
+# Behaviors
+## B1: Uppercases the file
+- Given a file named `notes.txt` holding `hello`
+- When the program runs
+- Then `loud.txt` holds `HELLO`
+- And it exits with code `0`
+
+# Constraints
+- Allowed system calls: openat, read, write, close, exit
+";
+        let spec = spec::parse(spec_text).expect("valid spec");
+        let valid = tests(
+            r#"
+[[example]]
+id = "B1"
+files = { "notes.txt" = "hello" }
+files_after = { "loud.txt" = "HELLO" }
+exit_code = 0
+
+[[generated]]
+id = "B1"
+vars = { s = 'string(0, 1000, "helo XYZ")' }
+files = { "notes.txt" = "{s}" }
+files_after = { "loud.txt" = "{upper(s)}" }
+exit_code = 0
+"#,
+        );
+        let suite = check(&valid, &spec, LABEL).expect("valid tests");
+        let case = suite.generated[0]
+            .cases(7)
+            .next()
+            .expect("a run")
+            .expect("computable");
+        assert_eq!(
+            case.files_after["loud.txt"],
+            case.files["notes.txt"].to_ascii_uppercase()
+        );
+        let problems = |text: &str| match check(text, &spec, LABEL) {
+            Ok(_) => panic!("expected problems in {text}"),
+            Err(problems) => problems.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        };
+        for (from, to, needle) in [
+            (
+                r#"files = { "notes.txt" = "hello" }"#,
+                r#"files = { "/tmp/notes.txt" = "hello" }"#,
+                "is an absolute path",
+            ),
+            (
+                r#"files = { "notes.txt" = "{s}" }"#,
+                r#"files = { "../notes.txt" = "{s}" }"#,
+                "must stay inside the working folder",
+            ),
+            (
+                r#"files = { "notes.txt" = "{s}" }"#,
+                r#"files = { "notes.txt" = "{upper(s)}" }"#,
+                "args, stdin and files may only hold bare variables",
+            ),
+            (
+                "{upper(s)}",
+                "{lower(s)}",
+                "formula disagrees with the spec",
+            ),
+            (
+                r#"files = { "notes.txt" = "hello" }"#,
+                "",
+                "the example gives []",
+            ),
+        ] {
+            let found = problems(&valid.replacen(from, to, 1));
+            assert!(
+                found.iter().any(|problem| problem.contains(needle)),
+                "no problem containing {needle:?} in {found:#?}"
+            );
+        }
     }
 
     #[test]

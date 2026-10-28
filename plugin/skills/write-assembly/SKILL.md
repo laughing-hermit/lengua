@@ -34,10 +34,14 @@ Nothing runs before every rule passes.
    assertion fires. Fix everything and call it again until it passes; then `lengua.lock` records
    the code.
 6. Run the program once with `run`, using the spec's first example: `path`, plus `args` and
-   `stdin` when it reads them.
+   `stdin` when it reads them. A program that works on files runs in a folder holding the
+   example's input files: create `<path>/demo/` with them, pass it as `folder`, and name the
+   files in `args` relative to it. Later, to work on the user's own files, pass the folder that
+   holds them; the program can't touch anything outside it.
 7. Tell the user in a few short lines and plain words: where the program is, that it follows
-   every rule and passed all its test runs, what `run` printed, and that they can ask you to run
-   it with other inputs or to change what it does (which starts with the spec). If the code
+   every rule and passed all its test runs, what `run` printed (and the files it wrote, if any),
+   and that they can ask you to run it with other inputs or to change what it does (which starts
+   with the spec). If the code
    handles a case the spec doesn't mention, such as input longer than a buffer, say so in one line
    and offer to add it to the spec. When `check_code` reports that a generated test tried every
    value in its range, say that behavior was checked for every input in its range. Leave out

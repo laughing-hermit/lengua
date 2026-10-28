@@ -379,3 +379,41 @@ async fn the_decimal_examples_pass_their_tests() {
         session.service.cancel().await.expect("close the session");
     }
 }
+
+#[tokio::test]
+async fn the_file_example_reads_and_writes_files() {
+    // upcase reads one file and writes another; its tests give files and check the files left.
+    let session = session().await;
+    let folder = Program::new();
+    for name in ["spec.md", "tests.toml", "main.s"] {
+        folder.write(name, &example("upcase", name));
+    }
+    session.approve(&folder).await;
+    let tests = session.call_ok("check_tests", folder.arguments()).await;
+    assert_eq!(tests["checked"], true, "{tests}");
+    let report = session.call_ok("check_code", folder.arguments()).await;
+    assert_eq!(report["stamped"], true, "{report}");
+
+    // Run on a folder of the user's: the program works on the files there, and only there.
+    let user = tempfile::tempdir().expect("a user folder");
+    std::fs::write(user.path().join("notes.txt"), "Hello, files!\n").expect("a user file");
+    let mut arguments = folder.arguments();
+    arguments["args"] = serde_json::json!(["notes.txt", "loud.txt"]);
+    arguments["folder"] = serde_json::json!(user.path());
+    let run = session.call_ok("run", arguments.clone()).await;
+    assert_eq!(run["exit_code"], 0, "{run}");
+    assert_eq!(
+        std::fs::read_to_string(user.path().join("loud.txt")).expect("written"),
+        "HELLO, FILES!\n"
+    );
+    arguments["args"] = serde_json::json!(["/etc/hostname", "loud.txt"]);
+    let outside = session.call_ok("run", arguments.clone()).await;
+    assert_eq!(
+        outside["exit_code"], 2,
+        "files outside the folder can't be opened: {outside}"
+    );
+    arguments["folder"] = serde_json::json!("relative/folder");
+    let error = session.call_error("run", arguments).await;
+    assert!(error.contains("folder must be an absolute path"), "{error}");
+    session.service.cancel().await.expect("close the session");
+}

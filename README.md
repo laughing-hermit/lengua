@@ -12,9 +12,9 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 
 > Status: dialect 2 on Linux x86-64. It covers whole numbers, exact decimals, floating point in
 > double and single precision with fused multiply-add, vectors from SSE2 to AVX-512, hashing and
-> checksums, and inputs up to 1 MiB. Next:
+> checksums, files, and inputs up to 1 MiB. The kernel holds every run to what its spec approves.
+> Next:
 > - fork-join threads;
-> - files in tests;
 > - proofs with an SMT solver;
 > - more of the top CPU and OS targets, which LLVM already supports.
 
@@ -52,9 +52,12 @@ given as arguments and prints the sum."
 3. The rest is automatic: the agent writes the tests and the assembly, lengua checks both, and the
    agent runs the program once and tells you how it went.
 
-Later, ask the agent to run the program with other inputs, or to change what it does; a change
-starts with a new spec for you to approve. If you don't name a folder, the program goes in a new
-folder inside the current one.
+Later, ask the agent to run the program with other inputs, or on your files ("run it on
+notes.txt in ~/docs"), or to change what it does; a change starts with a new spec for you to
+approve. If you don't name a folder, the program goes in a new folder inside the current one.
+
+Every run is confined by the kernel: the program can make only the system calls its spec
+approves, and touch files only in the folder it runs in.
 
 Your harness may ask permission the first time each lengua tool runs. Allowing the tools doesn't
 skip your approval: only your words approve a spec. The first approval creates a signing key in
@@ -68,7 +71,9 @@ Complete programs, each with its spec, tests and assembly:
 - [`examples/mean`](examples/mean) averages two prices exactly, in whole cents, rounding half a
   cent away from zero;
 - [`examples/hypotenuse`](examples/hypotenuse) computes a square root in double-precision floating
-  point and prints it with three decimals.
+  point and prints it with three decimals;
+- [`examples/upcase`](examples/upcase) writes a copy of a text file in capitals, 16 bytes at a
+  time.
 
 Their `lengua.lock` files aren't committed, because a lock is signed with each machine's own key.
 Ask the agent to run one with lengua: after you approve its spec, the agent checks the tests and

@@ -53,6 +53,25 @@ impl Profile {
             (Self::LinuxX86_64, Syscall::Openat) => 257,
         }
     }
+
+    /// The system calls the kernel lets a program make: those its spec allows, `write` and
+    /// `exit` (which `assert_fail` may always make), and what the launcher needs between
+    /// confining itself and becoming the program (`rt_sigprocmask`, `rt_sigaction`, `execve`).
+    #[must_use]
+    pub fn allowed_syscalls(self, spec: &[Syscall]) -> Vec<i64> {
+        let launch: &[i64] = match self {
+            Self::LinuxX86_64 => &[14, 13, 59],
+        };
+        let mut numbers: Vec<i64> = spec
+            .iter()
+            .chain(&[Syscall::Write, Syscall::Exit])
+            .map(|syscall| self.syscall_number(*syscall))
+            .chain(launch.iter().copied())
+            .collect();
+        numbers.sort_unstable();
+        numbers.dedup();
+        numbers
+    }
 }
 
 /// CPU instruction-set extensions beyond the x86-64 baseline (which includes SSE2). Programs may

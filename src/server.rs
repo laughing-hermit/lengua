@@ -16,7 +16,7 @@ use crate::data_dir::DataDir;
 use crate::hash::Sha256Hex;
 use crate::lock::{self, CodeStamp, Key, Lock, TestsStamp};
 use crate::platform::{CpuFeatures, Machine, Profile};
-use crate::runner::{self, End, Limits};
+use crate::runner::{self, End, Job, Limits};
 use crate::spec;
 use crate::state::{
     CODE_FILE, LockStatus, ProgramFolder, SPEC_FILE, Snapshot, State, StepContext, TESTS_FILE,
@@ -283,6 +283,11 @@ pub struct RunParams {
     /// Text for the program's standard input, which ends after it.
     #[serde(default)]
     pub stdin: String,
+    /// Absolute path of a folder to run the program in, so it can read and write the user's
+    /// files there, named relative to it. Without it, the program runs in an empty temporary
+    /// folder.
+    #[serde(default)]
+    pub folder: Option<String>,
 }
 
 /// What `run` reports.
@@ -587,9 +592,17 @@ impl LenguaServer {
                     .map(|text| (block.id.to_string(), text))
             })
             .collect();
-        let outcome = testrun::run_tests(&suite, &self.launcher, &built.executable, &source, seed)
-            .await
-            .map_err(|error| format!("couldn't run the program: {error}"))?;
+        let syscalls = profile.allowed_syscalls(&spec.syscalls);
+        let outcome = testrun::run_tests(
+            &suite,
+            &self.launcher,
+            &built.executable,
+            &source,
+            seed,
+            &syscalls,
+        )
+        .await
+        .map_err(|error| format!("couldn't run the program: {error}"))?;
         if !outcome.passed() {
             return Err(failures_text(&folder, &outcome));
         }
@@ -642,9 +655,13 @@ impl LenguaServer {
         description = "Runs the checked program in <path> with args and stdin. It runs only \
             when lengua.lock shows that spec.md, tests.toml and main.s are exactly the versions \
             that were approved and checked, and a fresh build of main.s is byte for byte the \
-            executable check_code tested. The program gets an empty environment, its own \
-            temporary folder, 10 seconds and 1 MiB of output. path: absolute path of the program \
-            folder; args: the program's arguments; stdin: text for its standard input.",
+            executable check_code tested. The program gets an empty environment, 10 seconds and \
+            8 MiB of output, and the kernel lets it make only the system calls its spec allows \
+            and touch files only inside its working folder: an empty temporary folder, or \
+            `folder`. path: absolute path of the program folder; args: the program's arguments; \
+            stdin: text for its standard input; folder: absolute path of a folder of the user's \
+            files to run in, naming the files in args relative to it (\"notes.txt\", not \
+            \"/home/me/notes.txt\").",
         annotations(title = "Run program", read_only_hint = false, open_world_hint = false)
     )]
     async fn run(
@@ -670,8 +687,16 @@ impl LenguaServer {
         };
         let code = read_code(&folder)?;
         let source = checker::check_layout(&code).0;
+        let spec = read_spec(&folder).and_then(|text| {
+            spec::parse(&text).map_err(|problems| spec_problems(&folder, &problems))
+        })?;
+        let workspace = match params.folder.as_deref() {
+            None => None,
+            Some(path) => Some(working_folder(path)?),
+        };
         let machine = Machine::detect();
-        let built = build(&code, supported(&machine)?).await?;
+        let profile = supported(&machine)?;
+        let built = build(&code, profile).await?;
         if Sha256Hex::of(&built.bytes) != stamp.executable_sha256 {
             return Err(format!(
                 "This build of {CODE_FILE} differs from the one check_code tested (built with {}; \
@@ -681,17 +706,22 @@ impl LenguaServer {
         }
         let limits = Limits {
             timeout: std::time::Duration::from_secs(10),
+            max_file_size: None,
             ..Limits::default()
         };
-        let result = runner::run(
-            &self.launcher,
-            &built.executable,
-            &params.args,
-            params.stdin.as_bytes(),
-            limits,
-        )
-        .await
-        .map_err(|error| format!("couldn't run the program: {error}"))?;
+        let syscalls = profile.allowed_syscalls(&spec.syscalls);
+        let job = Job {
+            folder: workspace.as_deref(),
+            ..Job::new(
+                &built.executable,
+                &params.args,
+                params.stdin.as_bytes(),
+                &syscalls,
+            )
+        };
+        let result = runner::run(&self.launcher, job, limits)
+            .await
+            .map_err(|error| format!("couldn't run the program: {error}"))?;
         let ended = testrun::explain_end(&result, &testrun::assertion_lines(&source), limits);
         Ok(Json(RunReport {
             stdout: String::from_utf8_lossy(&result.stdout).into_owned(),
@@ -951,6 +981,28 @@ async fn build(code: &str, profile: Profile) -> Result<Build, String> {
             toolchain.assembler.version, toolchain.linker.version
         ),
     })
+}
+
+/// The folder a `run` happens in: an existing absolute folder other than `/`, where confining
+/// the program would mean nothing.
+fn working_folder(path: &str) -> Result<PathBuf, String> {
+    let path = Path::new(path);
+    if !path.is_absolute() {
+        return Err(format!(
+            "folder must be an absolute path, such as /home/you/notes, not {}",
+            path.display()
+        ));
+    }
+    let folder = path
+        .canonicalize()
+        .map_err(|error| format!("folder {}: {error}", path.display()))?;
+    if !folder.is_dir() {
+        return Err(format!("folder {} isn't a folder", folder.display()));
+    }
+    if folder.parent().is_none() {
+        return Err("folder can't be /; name the folder that holds the user's files".into());
+    }
+    Ok(folder)
 }
 
 fn supported(machine: &Machine) -> Result<Profile, String> {
