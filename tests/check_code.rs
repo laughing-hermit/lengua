@@ -59,15 +59,28 @@ async fn the_template_passes_its_tests_and_is_stamped() {
             .is_some_and(|hex| hex.len() == 64),
         "{report}"
     );
-    let counts = report["instructions"]
+    let costs = report["performance"]
         .as_array()
-        .expect("instruction counts");
-    if let Some(first) = counts.first() {
-        assert_eq!(first["test"], "example B1", "{report}");
-        assert!(
-            first["min"].as_u64().is_some_and(|count| count > 0),
-            "{report}"
-        );
+        .expect("what each test cost");
+    assert_eq!(
+        costs.len(),
+        5,
+        "3 examples and 2 generated blocks: {report}"
+    );
+    assert_eq!(costs[0]["test"], "example B1", "{report}");
+    assert_eq!(costs[3]["runs"], 200, "{report}");
+    for measure in ["instructions", "cycles", "cpu_time_us"] {
+        let spread = &costs[3][measure];
+        if !spread.is_null() {
+            assert!(
+                spread["min"].as_u64() <= spread["median"].as_u64(),
+                "{report}"
+            );
+            assert!(
+                spread["median"].as_u64() <= spread["max"].as_u64(),
+                "{report}"
+            );
+        }
     }
     assert!(
         report["next_step"]

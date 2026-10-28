@@ -55,7 +55,11 @@ sides of zero. Their `args`, `stdin`, `stdout`, `stderr` and `exit_code` must be
 | `string(min, max, "chars")` | `min` to `max` characters (at most 4096) drawn from `chars` | The shortest string of the first character, the longest of the last |
 
 Arguments must be literal values. The limits of `int` and the lengths of `string` must be numbers
-that `spec.md` writes in backticks, so every range comes from the approved spec.
+that the `# Purpose` section of `spec.md` writes in backticks, so every range comes from the
+approved spec. Numbers from behaviors don't count: an example's own inputs aren't a range.
+
+For input that isn't valid, list hand-picked values with `choice`: the example's own value plus
+values that go wrong late, such as `choice("abc", "12x", "-", "1.5", "--1", "")` for a number.
 
 ## Templates
 
@@ -98,7 +102,7 @@ decimal and strings as they are; true and false can't be printed, so use `if` to
 3. There is exactly one example per behavior, and no unknown IDs.
 4. Each example has its behavior's exit code and contains every backtick value of the behavior.
 5. Each behavior whose example has inputs has a generated block.
-6. Generators are valid and their limits are numbers from the spec.
+6. Generators are valid and their limits are numbers from the spec's Purpose.
 7. `args` and `stdin` hold bare variables; every variable is declared and reaches the program.
 8. A dry run computes every run's expected results: no overflow, no division by zero, and exit
    codes from 0 to 255 that are never 134.

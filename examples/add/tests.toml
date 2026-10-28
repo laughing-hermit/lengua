@@ -1,0 +1,35 @@
+[meta]
+spec = "sha256:ca70f775f4a59a860555a2ea0ca10fe07af3990b78c6a709f594d5b6d23fcafe"
+
+[[example]]
+id = "B1"
+args = ["2", "3"]
+stdout = "5\n"
+exit_code = 0
+
+[[example]]
+id = "B2"
+stderr = "usage: add <a> <b>\n"
+exit_code = 1
+
+[[example]]
+id = "B3"
+args = ["2", "x"]
+stderr = "error: not a number\n"
+exit_code = 2
+
+[[generated]]
+id = "B1"
+runs = 200
+vars = { a = "int(-1000000000, 1000000000)", b = "int(-1000000000, 1000000000)" }
+args = ["{a}", "{b}"]
+stdout = "{a + b}\n"
+exit_code = 0
+
+[[generated]]
+id = "B3"
+runs = 50
+vars = { a = "int(-1000000000, 1000000000)", s = 'choice("x", "", "-", "1.5", "1000000001", "-1000000001", "9223372036854775808")' }
+args = ["{a}", "{s}"]
+stderr = "error: not a number\n"
+exit_code = 2

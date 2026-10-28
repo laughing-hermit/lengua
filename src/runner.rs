@@ -14,8 +14,8 @@ use std::path::Path;
 use std::process::{ExitCode, Stdio};
 use std::time::Duration;
 
-use perf_event::Builder;
-use perf_event::events::Hardware;
+use perf_event::events::{Event, Hardware, Software};
+use perf_event::{Builder, Counter};
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::UnixListener;
 use tokio::process::Command;
@@ -98,6 +98,21 @@ pub struct Run {
     pub end: End,
     /// User-space instructions it executed, when the CPU's counters are available.
     pub instructions: Option<u64>,
+    /// CPU cycles spent in its own code, when available.
+    pub cycles: Option<u64>,
+    /// CPU time in nanoseconds, including what the kernel did for it when the system allows
+    /// measuring that, when available.
+    pub cpu_time_ns: Option<u64>,
+}
+
+/// A counter on `pid` that starts at its `exec`, or `None` when the system doesn't allow it.
+fn attach<E: Event>(event: E, pid: i32, with_kernel: bool) -> Option<Counter> {
+    let mut builder = Builder::new(event);
+    builder
+        .observe_pid(pid)
+        .enable_on_exec(true)
+        .exclude_kernel(!with_kernel);
+    builder.build().ok()
 }
 
 /// Runs `program` with `args` and `stdin` through `launcher` (this server's own binary).
@@ -134,13 +149,14 @@ pub async fn run(
     let (mut go, _) = tokio::time::timeout(LAUNCH_TIMEOUT, listener.accept())
         .await
         .map_err(|_| io::Error::other("the launcher didn't start"))??;
-    // Counts user-space instructions from the program's exec to its exit; unavailable when the
-    // system doesn't allow performance counters.
-    let mut counter = Builder::new(Hardware::INSTRUCTIONS)
-        .observe_pid(pid)
-        .enable_on_exec(true)
-        .build()
-        .ok();
+    // Count from the program's exec to its exit; unavailable when the system doesn't allow
+    // performance counters.
+    let mut counters = [
+        attach(Hardware::INSTRUCTIONS, pid, false),
+        attach(Hardware::CPU_CYCLES, pid, false),
+        attach(Software::TASK_CLOCK, pid, true)
+            .or_else(|| attach(Software::TASK_CLOCK, pid, false)),
+    ];
     go.write_all(&[1]).await?;
     drop(go);
 
@@ -184,17 +200,19 @@ pub async fn run(
     writer.abort();
     let stdout = stdout_reader.await.map_err(io::Error::other)??;
     let stderr = stderr_reader.await.map_err(io::Error::other)??;
-    let instructions = match end {
+    let [instructions, cycles, cpu_time_ns] = counters.each_mut().map(|counter| match end {
         End::Exited(_) | End::Signaled(_) => {
             counter.as_mut().and_then(|counter| counter.read().ok())
         }
         End::TimedOut | End::OutputTooLarge => None,
-    };
+    });
     Ok(Run {
         stdout,
         stderr,
         end,
         instructions,
+        cycles,
+        cpu_time_ns,
     })
 }
 

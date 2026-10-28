@@ -30,8 +30,9 @@ pub struct Spec {
     pub behaviors: Vec<Behavior>,
     /// System calls the program may use, in the order the spec lists them.
     pub syscalls: Vec<Syscall>,
-    /// Every backtick value in the body, in order of first appearance.
-    pub values: Vec<String>,
+    /// The backtick values in `# Purpose`, in order of first appearance: the ranges of the
+    /// program's inputs, which generated tests draw from.
+    pub purpose_values: Vec<String>,
 }
 
 impl Spec {
@@ -345,7 +346,7 @@ struct Parser {
     started: Vec<(BehaviorId, usize)>,
     behaviors: Vec<Behavior>,
     syscalls: Option<Vec<Syscall>>,
-    values: Vec<String>,
+    purpose_values: Vec<String>,
 }
 
 impl Default for Parser {
@@ -359,7 +360,7 @@ impl Default for Parser {
             started: Vec::new(),
             behaviors: Vec::new(),
             syscalls: None,
-            values: Vec::new(),
+            purpose_values: Vec::new(),
         }
     }
 }
@@ -448,18 +449,13 @@ impl Parser {
     }
 
     fn line(&mut self, number: usize, line: &str) {
-        let (values, _) = backtick_values(line);
-        for value in values {
-            if !self.values.contains(&value) {
-                self.values.push(value);
-            }
-        }
         if let Some(name) = heading(line, 1) {
             self.finish_behavior();
             self.enter_section(number, name);
             return;
         }
         match self.section {
+            Section::Purpose => self.purpose_line(line),
             Section::Behaviors => {
                 if let Some(text) = heading(line, 2) {
                     self.finish_behavior();
@@ -469,7 +465,17 @@ impl Parser {
                 }
             }
             Section::Constraints => self.constraint_line(number, line),
-            Section::Preamble | Section::Purpose | Section::Other => {}
+            Section::Preamble | Section::Other => {}
+        }
+    }
+
+    /// Keeps Purpose's backtick values: the ranges of the program's inputs.
+    fn purpose_line(&mut self, line: &str) {
+        let (values, _) = backtick_values(line);
+        for value in values {
+            if !self.purpose_values.contains(&value) {
+                self.purpose_values.push(value);
+            }
         }
     }
 
@@ -813,7 +819,7 @@ impl Parser {
                 description,
                 behaviors: self.behaviors,
                 syscalls,
-                values: self.values,
+                purpose_values: self.purpose_values,
             }),
             _ => Err(self.into_problems()),
         }
@@ -985,10 +991,8 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
             spec.syscalls,
             [Syscall::Read, Syscall::Write, Syscall::Exit]
         );
-        assert_eq!(
-            spec.values[..2],
-            ["-1000000000".to_owned(), "1000000000".to_owned()]
-        );
+        // Only Purpose states ranges; the behaviors' values (2, 3, 5, 0, 1) aren't among them.
+        assert_eq!(spec.purpose_values, ["-1000000000", "1000000000"]);
         let id = BehaviorId::parse("B2").expect("valid ID");
         assert_eq!(
             spec.behavior(id).map(|b| b.title.as_str()),

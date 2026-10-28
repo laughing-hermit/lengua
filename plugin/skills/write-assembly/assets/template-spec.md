@@ -6,7 +6,7 @@ description: Prints the negative of a whole number given as an argument.
 # Purpose
 Reads one whole number between `-9223372036854775807` and `9223372036854775807`, written in
 decimal with an optional leading minus sign, and prints its negative. If writing the output
-fails, the program exits with code `3`.
+fails, the program exits with code 3.
 
 # Behaviors
 ## B1: Negates a number

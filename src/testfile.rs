@@ -584,11 +584,12 @@ impl<'a> Checker<'a> {
         (self.problems.len() + self.hidden == before).then_some(block)
     }
 
-    /// Generators may only use numbers the spec states, so their ranges come from the spec.
+    /// Generators may only use numbers that Purpose states, so their ranges come from the spec.
+    /// Numbers from behaviors don't count: an example's own inputs would make `int(2, 3)` pass.
     fn check_limits(&mut self, line: usize, name: &str, var: &str, generator: &Generator) {
         let stated: BTreeSet<i128> = self
             .spec
-            .values
+            .purpose_values
             .iter()
             .filter_map(|value| value.parse().ok())
             .collect();
@@ -597,9 +598,10 @@ impl<'a> Checker<'a> {
                 self.problem(
                     Some(line),
                     format!(
-                        "{name}: vars.{var} = {generator} uses {limit}, which spec.md doesn't \
-                         state. Generators take their ranges from the spec: use the numbers it \
-                         gives in backticks, or add the range to spec.md and get it approved"
+                        "{name}: vars.{var} = {generator} uses {limit}, which spec.md's Purpose \
+                         doesn't state. Generators take their ranges from Purpose: use the \
+                         numbers it gives in backticks, or ask the user to add the range to \
+                         Purpose and approve spec.md again"
                     ),
                 );
             }
@@ -1197,9 +1199,9 @@ exit_code = 0
         assert_problem(
             &valid().replace(
                 "int(-1000000000, 1000000000)\" }",
-                "int(-1000000000, 1)\" }",
+                "int(-1000000000, -1000000000)\" }",
             ),
-            "b = 3 is outside int(-1000000000, 1)",
+            "b = 3 is outside int(-1000000000, -1000000000)",
         );
         assert_problem(
             &valid().replace(
@@ -1217,13 +1219,30 @@ exit_code = 0
     }
 
     #[test]
-    fn generator_limits_come_from_the_spec() {
+    fn generator_limits_come_from_purpose() {
         assert_problem(
             &valid().replace(
                 "b = \"int(-1000000000, 1000000000)\"",
                 "b = \"int(-1000, 1000000000)\"",
             ),
-            "uses -1000, which spec.md doesn't state",
+            "uses -1000, which spec.md's Purpose doesn't state",
+        );
+        // 2 and 3 are B1's example inputs, not a stated range: int(2, 3) would test almost nothing.
+        assert_problem(
+            &valid().replace(
+                "vars = { a = \"int(-1000000000, 1000000000)\", b = \"int(-1000000000, \
+                 1000000000)\" }",
+                "vars = { a = \"int(2, 3)\", b = \"int(2, 3)\" }",
+            ),
+            "uses 2, which spec.md's Purpose doesn't state",
+        );
+        // String lengths too: the spec has 1 and 3 only as an exit code and an argument.
+        assert_problem(
+            &valid().replace(
+                "b = \"int(-1000000000, 1000000000)\"",
+                "b = 'string(1, 3, \"123\")'",
+            ),
+            "uses 1, which spec.md's Purpose doesn't state",
         );
     }
 

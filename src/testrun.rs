@@ -8,6 +8,8 @@ use std::io;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use serde::Serialize;
+
 use crate::checker::source::{Item, Operand, Source};
 use crate::runner::{self, End, Limits, Run};
 use crate::spec::ASSERTION_EXIT_CODE;
@@ -19,19 +21,72 @@ pub const TOTAL_TIMEOUT: Duration = Duration::from_secs(90);
 /// At most this many failures are reported.
 pub const MAX_FAILURES: usize = 10;
 
-/// Instructions executed by one test, or by every run of a generated block.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Instructions {
+/// The smallest, middle and largest of a measurement over runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+pub struct Spread {
+    /// The smallest.
+    pub min: u64,
+    /// The median.
+    pub median: u64,
+    /// The largest.
+    pub max: u64,
+}
+
+impl Spread {
+    fn of(mut values: Vec<u64>) -> Option<Self> {
+        values.sort_unstable();
+        Some(Self {
+            min: *values.first()?,
+            median: values[values.len() / 2],
+            max: *values.last()?,
+        })
+    }
+}
+
+/// What one test, or all runs of a generated block, cost. Each measure is missing when the
+/// system doesn't allow the CPU's performance counters.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+pub struct Cost {
     /// The test, such as `example B1` or `generated B1`.
     pub test: String,
-    /// How many runs were counted.
+    /// Runs measured.
     pub runs: usize,
-    /// Fewest instructions in a run.
-    pub min: u64,
-    /// The median run.
-    pub median: u64,
-    /// Most instructions in a run.
-    pub max: u64,
+    /// Instructions executed in the program's own code: the steadiest measure of its work.
+    pub instructions: Option<Spread>,
+    /// CPU cycles in the program's own code: its time, with slow instructions such as division
+    /// weighing more.
+    pub cycles: Option<Spread>,
+    /// CPU time in microseconds, including what the kernel does for its system calls.
+    pub cpu_time_us: Option<Spread>,
+}
+
+/// Measurements collected over runs.
+#[derive(Debug, Default)]
+struct Samples {
+    runs: usize,
+    instructions: Vec<u64>,
+    cycles: Vec<u64>,
+    cpu_time_us: Vec<u64>,
+}
+
+impl Samples {
+    fn add(&mut self, run: &Run) {
+        self.runs += 1;
+        self.instructions.extend(run.instructions);
+        self.cycles.extend(run.cycles);
+        self.cpu_time_us
+            .extend(run.cpu_time_ns.map(|nanoseconds| nanoseconds / 1000));
+    }
+
+    fn cost(self, test: String) -> Cost {
+        Cost {
+            test,
+            runs: self.runs,
+            instructions: Spread::of(self.instructions),
+            cycles: Spread::of(self.cycles),
+            cpu_time_us: Spread::of(self.cpu_time_us),
+        }
+    }
 }
 
 /// What running the tests found.
@@ -42,7 +97,7 @@ pub struct Outcome {
     /// Failures, at most [`MAX_FAILURES`].
     pub failures: Vec<String>,
     /// Instruction counts per test, when the CPU's counters are available.
-    pub instructions: Vec<Instructions>,
+    pub costs: Vec<Cost>,
 }
 
 impl Outcome {
@@ -163,20 +218,6 @@ fn compare(
     (!problems.is_empty()).then(|| problems.join("; "))
 }
 
-fn summarize(test: String, mut counts: Vec<u64>) -> Option<Instructions> {
-    counts.sort_unstable();
-    let (Some(min), Some(max)) = (counts.first().copied(), counts.last().copied()) else {
-        return None;
-    };
-    Some(Instructions {
-        test,
-        runs: counts.len(),
-        min,
-        median: counts[counts.len() / 2],
-        max,
-    })
-}
-
 fn record(outcome: &mut Outcome, message: String) {
     if outcome.failures.len() < MAX_FAILURES {
         outcome.failures.push(message);
@@ -232,12 +273,9 @@ pub async fn run_tests(
                 record(&mut outcome, message);
             }
             None => {
-                if let Some(count) = run
-                    .instructions
-                    .and_then(|count| summarize(name, vec![count]))
-                {
-                    outcome.instructions.push(count);
-                }
+                let mut samples = Samples::default();
+                samples.add(&run);
+                outcome.costs.push(samples.cost(name));
             }
         }
     }
@@ -259,7 +297,7 @@ pub async fn run_tests(
             }
         };
         let total = cases.len();
-        let mut counts = Vec::new();
+        let mut samples = Samples::default();
         let mut failed = false;
         for (number, case) in cases.iter().enumerate() {
             if Instant::now() > deadline {
@@ -292,10 +330,10 @@ pub async fn run_tests(
                 failed = true;
                 break;
             }
-            counts.extend(run.instructions);
+            samples.add(&run);
         }
-        if !failed && let Some(count) = summarize(name, counts) {
-            outcome.instructions.push(count);
+        if !failed {
+            outcome.costs.push(samples.cost(name));
         }
     }
     Ok(outcome)
@@ -311,6 +349,8 @@ mod tests {
             stderr: stderr.as_bytes().to_vec(),
             end: End::Exited(code),
             instructions: Some(100),
+            cycles: Some(300),
+            cpu_time_ns: Some(1000),
         }
     }
 
@@ -364,12 +404,25 @@ mod tests {
     }
 
     #[test]
-    fn summarizes_instruction_counts() {
-        let summary = summarize("generated B1".into(), vec![30, 10, 20]).expect("counts");
+    fn summarizes_measurements() {
         assert_eq!(
-            (summary.min, summary.median, summary.max, summary.runs),
-            (10, 20, 30, 3)
+            Spread::of(vec![30, 10, 20]),
+            Some(Spread {
+                min: 10,
+                median: 20,
+                max: 30
+            })
         );
-        assert_eq!(summarize("x".into(), Vec::new()), None);
+        assert_eq!(Spread::of(Vec::new()), None);
+        let mut samples = Samples::default();
+        samples.add(&finished("", "", 0));
+        samples.add(&Run {
+            instructions: None,
+            ..finished("", "", 0)
+        });
+        let cost = samples.cost("generated B1".into());
+        assert_eq!(cost.runs, 2);
+        assert_eq!(cost.instructions.map(|spread| spread.median), Some(100));
+        assert_eq!(cost.cpu_time_us.map(|spread| spread.max), Some(1));
     }
 }

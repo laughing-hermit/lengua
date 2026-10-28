@@ -20,12 +20,12 @@ and checked against it. You write it with the user, and the user approves it.
    error), its exit codes, and the range of every number.
 3. Copy [the template](assets/spec-template.md) to `<path>/spec.md` and fill it in by the rules
    below. To change an approved spec, edit it in place.
-4. Show the user the whole spec and ask whether it says exactly what they want. Revise it until
-   it does.
-5. Call `approve_spec` with `path`. The user confirms in a dialog (on clients without dialogs,
-   the tool's permission prompt is the approval). If it lists problems, fix them and call it
-   again. If the user declines, ask what to change.
-6. Follow the `next_step` it returns. Next comes `tests.toml`, with the write-tests skill.
+4. Show the user the whole spec in your message, and in the same turn call `approve_spec` with
+   `path`. Its dialog, "Approve <path>/spec.md?", is the user's only question: don't ask
+   separately whether the spec is right. (On clients without dialogs, the tool's permission
+   prompt is the approval.) If the tool lists problems, fix them and call it again. If the user
+   declines or closes the dialog, ask what to change, revise the spec, and call it again.
+5. Follow the `next_step` it returns. Next comes `tests.toml`, with the write-tests skill.
 
 ## Rules
 
@@ -46,8 +46,12 @@ and checked against it. You write it with the user, and the user approves it.
   from 0 to 255, and 134 is reserved for failed assertions.
 - **Errors are behaviors too:** missing or extra arguments, numbers out of range, text that
   isn't a number. Give each one its own exit code other than 0.
-- **Ranges:** state the range of every number in Purpose as backtick values. Generated tests draw
-  random inputs from exactly these ranges.
+- **Ranges:** in Purpose, give in backticks the range of every number the program reads and the
+  length of any text it reads, including a range that only one behavior uses. Generated tests
+  draw their inputs from exactly these ranges, so put nothing else in backticks there.
+- **Write errors:** if the program prints, say in Purpose which exit code it uses when writing
+  fails, without backticks (tests can't make writing fail), such as: If writing the output fails,
+  the program exits with code 2.
 - **System calls:** under `# Constraints`, write `- Allowed system calls: …` with only what the
   program needs, chosen from read, write, openat, close, lseek, exit and exit_group. `exit` is
   always needed. lengua programs can't allocate memory, start processes or threads, handle
@@ -62,7 +66,8 @@ title: add
 description: Adds two whole numbers given as arguments and prints the sum.
 ---
 # Purpose
-Adds two whole numbers between `-1000000000` and `1000000000`.
+Adds two whole numbers between `-1000000000` and `1000000000`. If writing the output fails, the
+program exits with code 2.
 
 # Behaviors
 ## B1: Adds two numbers

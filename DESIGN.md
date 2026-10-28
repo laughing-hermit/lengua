@@ -93,9 +93,13 @@ Tests and `run` start a program the same way: through the server's own binary in
 which waits until the server has attached a CPU performance counter that turns on at `exec`, then
 replaces itself with the program (no `unsafe` code needed). The program gets its stdin up front
 and then the end of input, an empty environment, its own temporary folder, a time limit (2 s per
-test, 10 s for `run`) and 1 MiB of output, and it's killed past either. The counter reports the
-user-space instructions it executed, which the optimize step compares; a count can be one higher
-now and then, because the CPU counts the odd interrupt or page fault as an instruction.
+test, 10 s for `run`) and 1 MiB of output, and it's killed past either. The counters report three
+measures, which the optimize step compares by their medians: instructions executed in the
+program's own code (the steadiest measure of work, though a count can be one higher now and then,
+because the CPU counts the odd interrupt or page fault as one), CPU cycles in its own code (time,
+where slow instructions such as division weigh more), and CPU time including the kernel's work for
+its system calls (fewer instructions isn't always faster: a program that writes one byte at a time
+can execute fewer instructions yet spend far more time in the kernel).
 
 `check_code` draws a new seed on every call, runs boundary values first, and reports the seed and
 inputs with any failure, down to the line of a failed assertion. Only when the rules and every
@@ -146,7 +150,7 @@ it produces, the idea behind translation validation (Pnueli, Siegel and Singerma
 
 | Step | Translated by | How lengua checks it |
 |---|---|---|
-| spec → `tests.toml` | the AI | Structure and coverage; each behavior's spec values appear in its example; each formula reproduces its example; generator ranges are numbers from the spec |
+| spec → `tests.toml` | the AI | Structure and coverage; each behavior's spec values appear in its example; each formula reproduces its example; generator ranges are numbers that the spec's Purpose states (not an example's own values) |
 | spec + tests → `main.s` | the AI | The rules, then every example plus fresh random tests on every check |
 | `main.s` → machine code | LLVM | The checker reads the linked executable back and matches it to `main.s` instruction by instruction, operands included; the lock records the executable's hash, and `run` refuses any other build |
 
@@ -188,6 +192,9 @@ order above. The order between the proof and the platforms is decided after the 
   affected.
 - Clients without MCP elicitation approve specs through their tool-permission prompt; the lock
   records `approved_via = "tool-permission"`.
+- An approval means the client reported that the user accepted the dialog. Some clients can be
+  set up to answer dialogs automatically (in Claude Code, an `Elicitation` hook), and lengua can't
+  tell the difference, so don't set one up for lengua.
 - Approval dialogs travel as elicitation requests on protocol 2025-11-25 and as input-required
   results on 2026-07-28 (which has no server-to-client requests). There, the nonce is single-use,
   bound to the folder and to the spec text the dialog showed, and expires after 30 minutes. The
@@ -204,5 +211,8 @@ order above. The order between the proof and the platforms is decided after the 
 
 ## Status
 
-MVP milestones: 1 foundation · 2 spec and lock · 3 tests · 4 rule checker · 5 code and run · 6 end
-to end. Each milestone is committed after the project owner approves it.
+The MVP is built: milestones 1 foundation, 2 spec and lock, 3 tests, 4 rule checker, 5 code and
+run, and 6 end to end, each committed after the project owner approved it. `tests/e2e.rs` runs the
+whole workflow on `examples/add` in both MCP protocol generations. Next comes dialect 2 (vector
+instructions); then the proof step and the platforms (Linux ARM64, macOS ARM64, Windows x86-64,
+Windows ARM64, in that order), with the order between those two decided after the MVP.

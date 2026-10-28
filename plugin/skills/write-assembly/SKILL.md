@@ -32,10 +32,13 @@ Nothing runs before every rule passes.
    the seed, what was expected and what happened, and `assertion N failed at main.s:LINE` when an
    assertion fires. Fix everything and call it again until it passes; then `lengua.lock` records
    the code.
-6. To make the program faster, read `instructions` in the report: the instructions each test
-   executed (fewer is faster). Change `main.s` and call `check_code` again; the tests must stay
-   green. Counts can differ by an instruction or two between runs, because the CPU counts some
-   interrupts as instructions.
+6. To make the program faster, read `performance` in the report. For each test it gives the
+   instructions executed (the steadiest measure of work), the CPU cycles in the program's own
+   code (its time, where slow instructions such as division weigh more), and the CPU time in
+   microseconds (which also counts the kernel's work for system calls, so many small writes show
+   up there). Change `main.s` and call `check_code` again: the tests must stay green, and the
+   median cycles and CPU time should drop. Every measure varies a little between runs, so compare
+   medians.
 7. Run the program with `run`: `path`, plus `args` and `stdin` when it reads them.
 
 ## The rules in brief

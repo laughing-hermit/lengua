@@ -34,9 +34,13 @@ the tests come before the code, and they decide whether the code is right.
   assertions.
 - **A `[[generated]]` block for every behavior whose example has args or stdin,** with the same
   `id`. Its `vars` draw new inputs on every run, and its formulas compute the expected results.
-- **Ranges come from the spec.** `int(lo, hi)` and `string(min, max, "chars")` may only use
-  numbers the spec writes in backticks. If the spec doesn't state a range, ask the user to add it
-  to `spec.md` and approve the spec again.
+- **Ranges come from Purpose.** `int(lo, hi)` and `string(min, max, "chars")` may only use
+  numbers that the spec's `# Purpose` writes in backticks; numbers from behaviors don't count.
+  If Purpose doesn't state a range you need, ask the user to add it to `spec.md` and approve the
+  spec again.
+- **Invalid input gets hand-picked values.** For a behavior about input that isn't valid, use
+  `choice(…)` with the example's own value plus values that go wrong late, not only at the first
+  character. For a number: `"12x"`, `"-"`, `"1.5"`, `"--1"` and `""`.
 - **Inputs are bare variables.** In `args` and `stdin`, a placeholder holds just a variable
   (`{a}`); computations belong in `stdout`, `stderr` and `exit_code` (`{a + b}`).
 - **Formulas agree with the spec.** Given the example's inputs, they must produce the example's
@@ -56,7 +60,8 @@ title: add
 description: Adds two whole numbers given as arguments and prints the sum.
 ---
 # Purpose
-Adds two whole numbers between `-1000000000` and `1000000000`.
+Adds two whole numbers between `-1000000000` and `1000000000`. If writing the output fails, the
+program exits with code 2.
 
 # Behaviors
 ## B1: Adds two numbers

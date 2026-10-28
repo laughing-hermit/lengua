@@ -274,29 +274,15 @@ pub struct CodeReport {
     pub test_runs: usize,
     /// The seed that drew this check's random inputs.
     pub seed: String,
-    /// Instructions executed per test (fewer is faster), when the CPU's counters are available.
-    pub instructions: Vec<InstructionCount>,
+    /// What each test cost: instructions, cycles and CPU time (lower is faster), when the CPU's
+    /// counters are available.
+    pub performance: Vec<testrun::Cost>,
     /// One hash over spec, tests and code.
     pub fingerprint: String,
     /// What happened.
     pub message: String,
     /// The single next thing to do.
     pub next_step: String,
-}
-
-/// Instructions executed by one test, or by all runs of a generated block.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct InstructionCount {
-    /// The test, such as `example B1` or `generated B1`.
-    pub test: String,
-    /// Runs counted.
-    pub runs: usize,
-    /// Fewest instructions in a run.
-    pub min: u64,
-    /// The median run.
-    pub median: u64,
-    /// Most instructions in a run.
-    pub max: u64,
 }
 
 /// Input for `run`.
@@ -323,8 +309,12 @@ pub struct RunReport {
     pub exit_code: Option<i32>,
     /// How the program ended.
     pub ended: String,
-    /// Instructions the program executed, when the CPU's counters are available.
+    /// Instructions executed in the program's own code, when the CPU's counters are available.
     pub instructions: Option<u64>,
+    /// CPU cycles in the program's own code, when available.
+    pub cycles: Option<u64>,
+    /// CPU time in microseconds, including system calls, when available.
+    pub cpu_time_us: Option<u64>,
     /// The fingerprint of the spec, tests and code that ran.
     pub fingerprint: String,
 }
@@ -657,23 +647,14 @@ impl LenguaServer {
                 .collect(),
             test_runs: outcome.runs,
             seed: seed.to_string(),
-            instructions: outcome
-                .instructions
-                .into_iter()
-                .map(|count| InstructionCount {
-                    test: count.test,
-                    runs: count.runs,
-                    min: count.min,
-                    median: count.median,
-                    max: count.max,
-                })
-                .collect(),
+            performance: outcome.costs,
             fingerprint: fingerprint.to_string(),
             message: format!(
                 "{CODE_FILE} follows every rule and passed all {} test runs (seed {seed}). \
                  lengua.lock now binds spec, tests and code: fingerprint {}. To make the program \
                  faster, change {CODE_FILE} and call check_code again: the tests must stay green, \
-                 and fewer instructions means faster.",
+                 and the median cycles and CPU time should drop (CPU time also counts system \
+                 calls).",
                 outcome.runs,
                 fingerprint.short()
             ),
@@ -752,6 +733,8 @@ impl LenguaServer {
             },
             ended,
             instructions: result.instructions,
+            cycles: result.cycles,
+            cpu_time_us: result.cpu_time_ns.map(|nanoseconds| nanoseconds / 1000),
             fingerprint: fingerprint.to_string(),
         }))
     }

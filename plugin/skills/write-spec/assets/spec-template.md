@@ -5,8 +5,10 @@ description: One sentence that says what the program does.
 ---
 # Purpose
 
-Say what the program does and for whom, in plain words. Give the range of every number it reads
-or prints as backtick values, for example: whole numbers between `-1000` and `1000`.
+Say what the program does, in plain words. Give in backticks the range of every number it reads
+and the length of any text it reads, for example: whole numbers between `-1000` and `1000`. Put
+nothing else in backticks here. If it prints, say which exit code it uses when writing fails, for
+example: If writing the output fails, the program exits with code 2.
 
 # Behaviors
 
