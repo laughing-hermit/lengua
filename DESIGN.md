@@ -129,7 +129,7 @@ adapted for assembly. The full rule text lives in
 
 1. Simple control flow: jumps stay in their function, no recursion, compare chains end in an assertion.
 2. Every loop counts down from a named maximum.
-3. Fixed resources: no allocation, a system-call allowlist (read, write, exit by default), a computed maximum stack size.
+3. Resources reserved up front: memory is static (`.bss` sized from the spec's limits) plus the stack, nothing is allocated while running, one thread, and only the system calls the spec approves (read, write, exit by default), with a computed maximum stack size.
 4. Functions of at most 60 instructions, standard calling convention, one exit.
 5. At least two assertions per function on average; a failed assertion exits with code 134.
 6. Smallest scope: one owning function per buffer, only `_start` exported, read-only data stays read-only.
@@ -181,6 +181,27 @@ formal meaning a tool can check. After the MVP, a symbolic executor and an SMT s
 that the output equals the formulas for every input in range, as Alive2 does for LLVM. The Power of
 10 rules make that proof complete: without recursion and with a fixed maximum for every loop,
 every path through a program is finite.
+
+## Resources, threads and capabilities
+
+lengua takes the path that safety-critical C (NASA's Power of 10 and JPL's coding standard) and
+Rust share: everything a program may touch must be something the checker can account for.
+
+| Need | C and C++ | Rust | lengua |
+|---|---|---|---|
+| Memory | `malloc`/`free`, `new`/`delete`: leaks, double frees, use after free | Ownership frees memory automatically; arenas without the standard library | Reserved up front: static buffers sized from the spec's limits, plus the stack. Nothing is allocated or freed while running (rule 3), and `.bss` costs nothing until touched |
+| Threads | pthreads: any thread may write anything, and data races are undefined behavior | `Send`/`Sync`, scoped threads and rayon: no data races, checked at compile time | Next, as dialect 3: fork-join only. A canonical `parallel_for` (copied word for word, like `assert_fail`) starts workers on static stacks and waits for them all. Each worker owns one disjoint slice of the data (JPL: one owner per shared object, passed on explicitly). No locks, atomics or shared mutation, so results stay deterministic and testable |
+| System access | Any system call | The standard library, within the OS's permissions | Capabilities: the spec lists the system calls the person approves |
+| Network, clock, random | Sockets, `time()`, `rand()` | `std::net`, `Instant`, `rand` | Later, as approved capabilities, once tests can describe outputs by rules (a loopback server, ranges, patterns) instead of exact text |
+
+Until dialect 3, a program runs as one thread; vector instructions make that thread fast.
+
+Roadmap, in order:
+1. fork-join threads (dialect 3);
+2. files in tests, so programs that read and write files can be checked;
+3. the proof step;
+4. network, clock and random capabilities;
+5. the other platforms, toward the top 5–6 CPU and OS targets.
 
 ## Platforms
 

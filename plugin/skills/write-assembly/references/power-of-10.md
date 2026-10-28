@@ -154,13 +154,21 @@ Nothing in the body changes `R`: `syscall` changes `rax`, `rcx` and `r11`, and `
 `rax`, `rcx`, `rdx`, `rsi`, `rdi` and `r8` to `r11`, so a loop that calls counts in `rbx` or `r12`
 to `r15`. Every backward jump must be such a loop's end.
 
-### 3. Fixed resources
+### 3. Resources reserved up front
 
-No memory allocation: a program uses only the system calls its spec allows, and each `syscall`
-is chosen by `mov eax, SYS_NAME` in the same straight-line code (no label or call between). The
-stack changes only through 64-bit `push` and `pop`, `call`, `ret`, and `sub rsp, N` / `add rsp,
-N`; every path into a line has the same depth, and nothing reads or writes below `rsp` (no red
-zone). `check_code` reports the deepest stack over all call paths.
+NASA's rule is "no dynamic memory allocation after initialization". In lengua all memory is
+reserved before the program runs: data in `.rodata`, `.data` and `.bss`, plus the stack. Size
+every buffer from the spec's limits (the longest input it allows, the most items it holds). A
+large `.bss` buffer costs nothing until it's used, because Linux hands out zeroed pages as the
+program touches them, so a 64 MiB buffer for a program that reads up to 64 MiB is fine. Nothing
+is allocated or freed while the program runs, so there's no leak, double free or use after free.
+
+The program runs as one thread. It uses only the system calls its spec allows, which are the
+capabilities the person approved, and each `syscall` is chosen by `mov eax, SYS_NAME` in the same
+straight-line code (no label or call between). The stack changes only through 64-bit `push` and
+`pop`, `call`, `ret`, and `sub rsp, N` / `add rsp, N`; every path into a line has the same depth,
+and nothing reads or writes below `rsp` (no red zone). `check_code` reports the deepest stack
+over all call paths.
 
 ### 4. Small functions
 
