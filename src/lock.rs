@@ -1,0 +1,779 @@
+//! `lengua.lock`: the signed record of what was approved and checked.
+//!
+//! Only the lengua server writes it. The file is canonical TOML ending in a `[signature]` table
+//! that holds an HMAC-SHA256 of every byte before it, keyed with a per-user secret, so any edit
+//! made outside lengua is detected.
+
+use std::fmt::{self, Write as _};
+use std::io::{self, Read as _, Write as _};
+use std::path::{Path, PathBuf};
+
+use hmac::{Hmac, KeyInit, Mac};
+use serde::Deserialize;
+use sha2::Sha256;
+
+use crate::data_dir::DataDir;
+use crate::hash::{Sha256Hex, hex};
+
+/// The lock's file name inside a program folder.
+pub const LOCK_FILE: &str = "lengua.lock";
+
+/// The lock format this server reads and writes.
+pub const VERSION: u32 = 1;
+
+/// The lengua dialect this server checks.
+pub const DIALECT: u32 = 1;
+
+const HEADER: &str = "# lengua.lock: written only by the lengua MCP server. Do not edit.\n";
+const SIGNATURE_DOMAIN: &[u8] = b"lengua-lock-v1\n";
+const FINGERPRINT_DOMAIN: &str = "lengua-fingerprint-v1\n";
+const SIGNATURE_START: &str = "\n[signature]\nhmac_sha256 = \"";
+const SIGNATURE_END: &str = "\"\n";
+const KEY_FILE: &str = "key";
+const KEY_LEN: usize = 32;
+
+/// Locks are a few hundred bytes; anything much bigger wasn't written by lengua.
+const MAX_LOCK_BYTES: u64 = 64 * 1024;
+
+/// What `lengua.lock` records.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Lock {
+    /// The approved spec.
+    pub spec: SpecStamp,
+    /// The checked tests, once stamped.
+    pub tests: Option<TestsStamp>,
+    /// The checked code, once stamped. Requires `tests`.
+    pub code: Option<CodeStamp>,
+}
+
+/// The approved spec.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpecStamp {
+    /// SHA-256 of spec.md.
+    pub sha256: Sha256Hex,
+    /// How the person approved it.
+    pub approved_via: ApprovedVia,
+}
+
+/// How the person approved a spec.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovedVia {
+    /// In an MCP approval dialog.
+    Elicitation,
+    /// Through the harness's permission prompt for the `approve_spec` tool, because the client
+    /// can't show approval dialogs.
+    ToolPermission,
+}
+
+impl ApprovedVia {
+    /// The name written in the lock.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Elicitation => "elicitation",
+            Self::ToolPermission => "tool-permission",
+        }
+    }
+
+    fn parse(text: &str) -> Option<Self> {
+        [Self::Elicitation, Self::ToolPermission]
+            .into_iter()
+            .find(|via| via.as_str() == text)
+    }
+}
+
+/// The checked tests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestsStamp {
+    /// SHA-256 of tests.toml.
+    pub sha256: Sha256Hex,
+}
+
+/// The checked code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodeStamp {
+    /// SHA-256 of main.s.
+    pub sha256: Sha256Hex,
+    /// SHA-256 of the linked executable that passed the checks.
+    pub executable_sha256: Sha256Hex,
+    /// The assembler and linker versions that built it.
+    pub toolchain: String,
+    /// The deepest stack the program can use.
+    pub max_stack_bytes: u64,
+    /// How many `# unsafe:` blocks the code has.
+    pub unsafe_blocks: u32,
+}
+
+impl Lock {
+    /// A lock that records only an approved spec; tests and code must be checked again.
+    #[must_use]
+    pub fn approved(spec: Sha256Hex, approved_via: ApprovedVia) -> Self {
+        Self {
+            spec: SpecStamp {
+                sha256: spec,
+                approved_via,
+            },
+            tests: None,
+            code: None,
+        }
+    }
+
+    /// One hash over spec, tests and code, once all three are stamped.
+    #[must_use]
+    pub fn fingerprint(&self) -> Option<Sha256Hex> {
+        let tests = self.tests.as_ref()?;
+        let code = self.code.as_ref()?;
+        let input = format!(
+            "{FINGERPRINT_DOMAIN}spec:{}\ntests:{}\ncode:{}\n",
+            self.spec.sha256, tests.sha256, code.sha256
+        );
+        Some(Sha256Hex::of(input.as_bytes()))
+    }
+
+    /// The complete file text, signed with `key`.
+    #[must_use]
+    pub fn to_signed_text(&self, key: &Key) -> String {
+        sign_body(&self.body(), key)
+    }
+
+    /// Verifies a lock file's signature and parses it.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the text isn't exactly what this server writes, or when the signature doesn't
+    /// match `key`.
+    pub fn from_signed_text(text: &str, key: &Key) -> Result<Self, LockError> {
+        let damaged = || LockError::Malformed("its [signature] table is missing or damaged".into());
+        let start = text.find(SIGNATURE_START).ok_or_else(damaged)?;
+        let body = &text[..start];
+        let tail = &text[start + SIGNATURE_START.len()..];
+        let signature = tail.strip_suffix(SIGNATURE_END).ok_or_else(damaged)?;
+        let signature = Sha256Hex::parse(signature).ok_or_else(damaged)?;
+        if !key.verifies(body, &signature) {
+            return Err(LockError::BadSignature);
+        }
+        parse_body(body)
+    }
+
+    /// The canonical text before the `[signature]` table.
+    fn body(&self) -> String {
+        let mut text = String::from(HEADER);
+        // Writing to a String can't fail.
+        let _ = writeln!(text, "version = {VERSION}");
+        let _ = writeln!(text, "dialect = {DIALECT}");
+        if let Some(fingerprint) = self.fingerprint() {
+            let _ = writeln!(text, "fingerprint = \"{fingerprint}\"");
+        }
+        let _ = write!(
+            text,
+            "\n[spec]\nsha256 = \"{}\"\napproved_via = \"{}\"\n",
+            self.spec.sha256,
+            self.spec.approved_via.as_str()
+        );
+        if let Some(tests) = &self.tests {
+            let _ = write!(text, "\n[tests]\nsha256 = \"{}\"\n", tests.sha256);
+        }
+        if let Some(code) = &self.code {
+            let _ = write!(
+                text,
+                "\n[code]\nsha256 = \"{}\"\nexecutable_sha256 = \"{}\"\ntoolchain = {}\n\
+                 max_stack_bytes = {}\nunsafe_blocks = {}\n",
+                code.sha256,
+                code.executable_sha256,
+                toml_string(&code.toolchain),
+                code.max_stack_bytes,
+                code.unsafe_blocks
+            );
+        }
+        text
+    }
+}
+
+fn sign_body(body: &str, key: &Key) -> String {
+    format!("{body}{SIGNATURE_START}{}{SIGNATURE_END}", key.sign(body))
+}
+
+#[derive(Deserialize)]
+struct VersionOnly {
+    version: Option<i64>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LockFile {
+    /// Already checked through `VersionOnly`; declared so `deny_unknown_fields` accepts it.
+    #[serde(rename = "version")]
+    _version: u32,
+    dialect: u32,
+    fingerprint: Option<String>,
+    spec: SpecTable,
+    tests: Option<TestsTable>,
+    code: Option<CodeTable>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SpecTable {
+    sha256: String,
+    approved_via: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TestsTable {
+    sha256: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CodeTable {
+    sha256: String,
+    executable_sha256: String,
+    toolchain: String,
+    max_stack_bytes: u64,
+    unsafe_blocks: u32,
+}
+
+fn parse_body(body: &str) -> Result<Lock, LockError> {
+    let malformed = |detail: &str| LockError::Malformed(detail.to_owned());
+    let version = toml::from_str::<VersionOnly>(body)
+        .map_err(|_| malformed("it isn't valid TOML"))?
+        .version;
+    if version != Some(i64::from(VERSION)) {
+        return Err(LockError::UnsupportedVersion(
+            version.map_or_else(|| "none".to_owned(), |version| version.to_string()),
+        ));
+    }
+    let file: LockFile =
+        toml::from_str(body).map_err(|_| malformed("it has fields lengua doesn't write"))?;
+    if file.dialect != DIALECT {
+        return Err(LockError::UnsupportedDialect(file.dialect));
+    }
+    let digest = |text: &str| Sha256Hex::parse(text).ok_or_else(|| malformed("a hash is damaged"));
+    let lock = Lock {
+        spec: SpecStamp {
+            sha256: digest(&file.spec.sha256)?,
+            approved_via: ApprovedVia::parse(&file.spec.approved_via)
+                .ok_or_else(|| malformed("approved_via is unknown"))?,
+        },
+        tests: file
+            .tests
+            .map(|tests| digest(&tests.sha256).map(|sha256| TestsStamp { sha256 }))
+            .transpose()?,
+        code: file
+            .code
+            .map(|code| {
+                Ok::<_, LockError>(CodeStamp {
+                    sha256: digest(&code.sha256)?,
+                    executable_sha256: digest(&code.executable_sha256)?,
+                    toolchain: code.toolchain,
+                    max_stack_bytes: code.max_stack_bytes,
+                    unsafe_blocks: code.unsafe_blocks,
+                })
+            })
+            .transpose()?,
+    };
+    if lock.code.is_some() && lock.tests.is_none() {
+        return Err(malformed("it stamps code without stamping tests"));
+    }
+    let fingerprint = file.fingerprint.as_deref().map(digest).transpose()?;
+    if fingerprint != lock.fingerprint() {
+        return Err(malformed("its fingerprint doesn't match its hashes"));
+    }
+    if lock.body() != body {
+        return Err(malformed("it isn't laid out the way lengua writes it"));
+    }
+    Ok(lock)
+}
+
+/// A TOML basic string.
+fn toml_string(text: &str) -> String {
+    let mut quoted = String::with_capacity(text.len() + 2);
+    quoted.push('"');
+    for character in text.chars() {
+        match character {
+            '"' => quoted.push_str("\\\""),
+            '\\' => quoted.push_str("\\\\"),
+            '\n' => quoted.push_str("\\n"),
+            '\t' => quoted.push_str("\\t"),
+            '\r' => quoted.push_str("\\r"),
+            control if control.is_control() => {
+                let _ = write!(quoted, "\\u{:04X}", u32::from(control));
+            }
+            other => quoted.push(other),
+        }
+    }
+    quoted.push('"');
+    quoted
+}
+
+/// Why a lock can't be trusted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LockError {
+    /// This machine has no signing key, so no lock can be verified.
+    NoKey,
+    /// The file couldn't be read.
+    Unreadable(String),
+    /// The file isn't in the format this server writes.
+    Malformed(String),
+    /// The signature doesn't match: something other than this server changed the file.
+    BadSignature,
+    /// The file uses a lock format this server doesn't read.
+    UnsupportedVersion(String),
+    /// The file was checked against a dialect this server doesn't check.
+    UnsupportedDialect(u32),
+}
+
+impl fmt::Display for LockError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoKey => f.write_str(
+                "this machine has no lengua signing key to verify it (was it copied from another \
+                 machine?)",
+            ),
+            Self::Unreadable(error) => write!(f, "it can't be read: {error}"),
+            Self::Malformed(detail) => write!(f, "{detail}"),
+            Self::BadSignature => f.write_str(
+                "its signature doesn't match, so something other than lengua changed it",
+            ),
+            Self::UnsupportedVersion(version) => write!(
+                f,
+                "it uses lock format version {version}; this lengua reads version {VERSION}"
+            ),
+            Self::UnsupportedDialect(dialect) => write!(
+                f,
+                "it was checked against dialect {dialect}; this lengua checks dialect {DIALECT}"
+            ),
+        }
+    }
+}
+
+/// Reads and verifies `<folder>/lengua.lock`. `Ok(None)` means there is no lock yet.
+///
+/// # Errors
+///
+/// Fails when a lock exists but can't be trusted.
+pub fn read(folder: &Path, key: Option<&Key>) -> Result<Option<Lock>, LockError> {
+    let path = folder.join(LOCK_FILE);
+    let file = match std::fs::File::open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(LockError::Unreadable(error.to_string())),
+    };
+    let mut bytes = Vec::new();
+    file.take(MAX_LOCK_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| LockError::Unreadable(error.to_string()))?;
+    if bytes.len() as u64 > MAX_LOCK_BYTES {
+        return Err(LockError::Malformed("it's far too large".into()));
+    }
+    let text =
+        String::from_utf8(bytes).map_err(|_| LockError::Malformed("it isn't UTF-8 text".into()))?;
+    let key = key.ok_or(LockError::NoKey)?;
+    Lock::from_signed_text(&text, key).map(Some)
+}
+
+/// Writes `<folder>/lengua.lock` atomically: readers see the old lock or the new one, never a
+/// partial file.
+///
+/// # Errors
+///
+/// Fails when the folder isn't writable.
+pub fn write(folder: &Path, lock: &Lock, key: &Key) -> io::Result<()> {
+    let mut file = tempfile::NamedTempFile::new_in(folder)?;
+    file.write_all(lock.to_signed_text(key).as_bytes())?;
+    file.as_file().sync_all()?;
+    file.persist(folder.join(LOCK_FILE))
+        .map_err(|error| error.error)?;
+    Ok(())
+}
+
+/// The per-user secret that signs locks.
+#[derive(Clone)]
+pub struct Key([u8; KEY_LEN]);
+
+impl fmt::Debug for Key {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Key(<secret>)")
+    }
+}
+
+/// Why the signing key can't be used.
+#[derive(Debug)]
+pub enum KeyError {
+    /// The key file or its folder couldn't be read or written.
+    Io {
+        /// The file or folder involved.
+        path: PathBuf,
+        /// What went wrong.
+        error: io::Error,
+    },
+    /// The key file exists but isn't a key.
+    Damaged(PathBuf),
+}
+
+impl fmt::Display for KeyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io { path, error } => {
+                write!(
+                    f,
+                    "can't use the signing key at {}: {error}",
+                    path.display()
+                )
+            }
+            Self::Damaged(path) => write!(
+                f,
+                "the signing key at {} is damaged; delete it, then approve each spec again",
+                path.display()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for KeyError {}
+
+impl Key {
+    /// A key from raw bytes.
+    #[must_use]
+    pub fn from_bytes(bytes: [u8; KEY_LEN]) -> Self {
+        Self(bytes)
+    }
+
+    /// The path of the key file in `data_dir`.
+    #[must_use]
+    pub fn path(data_dir: &DataDir) -> PathBuf {
+        data_dir.path().join(KEY_FILE)
+    }
+
+    /// Loads this user's key, if one exists.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the key file exists but can't be read or is damaged.
+    pub fn load(data_dir: &DataDir) -> Result<Option<Self>, KeyError> {
+        let path = Self::path(data_dir);
+        match std::fs::read(&path) {
+            Ok(bytes) => <[u8; KEY_LEN]>::try_from(bytes.as_slice())
+                .map(|bytes| Some(Self(bytes)))
+                .map_err(|_| KeyError::Damaged(path)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(KeyError::Io { path, error }),
+        }
+    }
+
+    /// Loads this user's key, creating it (32 random bytes, readable only by the user) on
+    /// first use.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the data folder can't be created or the key can't be read or written.
+    pub fn load_or_create(data_dir: &DataDir) -> Result<Self, KeyError> {
+        if let Some(key) = Self::load(data_dir)? {
+            return Ok(key);
+        }
+        let folder = data_dir.path();
+        create_private_dir(folder).map_err(|error| KeyError::Io {
+            path: folder.to_owned(),
+            error,
+        })?;
+        let mut bytes = [0_u8; KEY_LEN];
+        getrandom::fill(&mut bytes).map_err(|error| KeyError::Io {
+            path: folder.to_owned(),
+            error: io::Error::other(error.to_string()),
+        })?;
+        let path = Self::path(data_dir);
+        let io_error = |error| KeyError::Io {
+            path: path.clone(),
+            error,
+        };
+        // tempfile creates the file readable only by its owner.
+        let mut file = tempfile::NamedTempFile::new_in(folder).map_err(io_error)?;
+        file.write_all(&bytes).map_err(io_error)?;
+        file.as_file().sync_all().map_err(io_error)?;
+        match file.persist_noclobber(&path) {
+            Ok(_) => Ok(Self(bytes)),
+            // Another lengua process created the key first; use that one.
+            Err(error) if error.error.kind() == io::ErrorKind::AlreadyExists => {
+                Self::load(data_dir)?.ok_or(KeyError::Damaged(path))
+            }
+            Err(error) => Err(io_error(error.error)),
+        }
+    }
+
+    fn sign(&self, body: &str) -> Sha256Hex {
+        let tag = self.mac(body).finalize().into_bytes();
+        Sha256Hex::parse(&hex(&tag)).expect("an HMAC-SHA256 tag is 32 bytes")
+    }
+
+    fn verifies(&self, body: &str, signature: &Sha256Hex) -> bool {
+        let Some(tag) = unhex(signature.as_str()) else {
+            return false;
+        };
+        // Constant-time comparison.
+        self.mac(body).verify_slice(&tag).is_ok()
+    }
+
+    fn mac(&self, body: &str) -> Hmac<Sha256> {
+        let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(&self.0)
+            .expect("HMAC accepts any key length");
+        mac.update(SIGNATURE_DOMAIN);
+        mac.update(body.as_bytes());
+        mac
+    }
+}
+
+fn unhex(text: &str) -> Option<Vec<u8>> {
+    let digit = |byte: u8| char::from(byte).to_digit(16);
+    text.as_bytes()
+        .chunks(2)
+        .map(|pair| match pair {
+            [high, low] => Some(u8::try_from(digit(*high)? * 16 + digit(*low)?).ok()?),
+            _ => None,
+        })
+        .collect()
+}
+
+#[cfg(unix)]
+fn create_private_dir(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt as _;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path)
+}
+
+#[cfg(not(unix))]
+fn create_private_dir(path: &Path) -> io::Result<()> {
+    std::fs::create_dir_all(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(byte: u8) -> Key {
+        Key::from_bytes([byte; KEY_LEN])
+    }
+
+    fn full_lock() -> Lock {
+        Lock {
+            spec: SpecStamp {
+                sha256: Sha256Hex::of(b"spec"),
+                approved_via: ApprovedVia::Elicitation,
+            },
+            tests: Some(TestsStamp {
+                sha256: Sha256Hex::of(b"tests"),
+            }),
+            code: Some(CodeStamp {
+                sha256: Sha256Hex::of(b"code"),
+                executable_sha256: Sha256Hex::of(b"executable"),
+                toolchain: "llvm-mc 22.1.8, ld.lld 22.1.8 \"quoted\" \\ tab\t".into(),
+                max_stack_bytes: 96,
+                unsafe_blocks: 1,
+            }),
+        }
+    }
+
+    /// Signs arbitrary body text, as if a server had written it.
+    fn forge(body: &str, key: &Key) -> String {
+        sign_body(body, key)
+    }
+
+    #[test]
+    fn round_trips_a_spec_only_lock() {
+        let lock = Lock::approved(Sha256Hex::of(b"spec"), ApprovedVia::ToolPermission);
+        let text = lock.to_signed_text(&key(1));
+        assert!(text.starts_with(HEADER), "{text}");
+        assert!(!text.contains("fingerprint"), "{text}");
+        assert!(
+            text.contains("approved_via = \"tool-permission\"\n"),
+            "{text}"
+        );
+        assert!(text.ends_with("\"\n"), "{text}");
+        assert_eq!(Lock::from_signed_text(&text, &key(1)), Ok(lock));
+    }
+
+    #[test]
+    fn round_trips_a_full_lock_with_its_fingerprint() {
+        let lock = full_lock();
+        let text = lock.to_signed_text(&key(1));
+        let fingerprint = lock.fingerprint().expect("all three are stamped");
+        assert!(
+            text.contains(&format!("fingerprint = \"{fingerprint}\"\n")),
+            "{text}"
+        );
+        assert_eq!(Lock::from_signed_text(&text, &key(1)), Ok(lock));
+    }
+
+    #[test]
+    fn fingerprint_needs_tests_and_code() {
+        let mut lock = full_lock();
+        assert!(lock.fingerprint().is_some());
+        lock.code = None;
+        assert_eq!(lock.fingerprint(), None);
+    }
+
+    #[test]
+    fn any_flipped_byte_is_detected() {
+        let text = full_lock().to_signed_text(&key(1));
+        for index in 0..text.len() {
+            let mut bytes = text.clone().into_bytes();
+            bytes[index] ^= 0x01;
+            let Ok(flipped) = String::from_utf8(bytes) else {
+                continue;
+            };
+            assert!(
+                Lock::from_signed_text(&flipped, &key(1)).is_err(),
+                "flipping byte {index} went unnoticed"
+            );
+        }
+    }
+
+    #[test]
+    fn a_different_key_is_detected() {
+        let text = full_lock().to_signed_text(&key(1));
+        assert_eq!(
+            Lock::from_signed_text(&text, &key(2)),
+            Err(LockError::BadSignature)
+        );
+    }
+
+    #[test]
+    fn truncation_and_trailing_bytes_are_detected() {
+        let text = full_lock().to_signed_text(&key(1));
+        for cut in [1, 10, 80] {
+            assert!(matches!(
+                Lock::from_signed_text(&text[..text.len() - cut], &key(1)),
+                Err(LockError::Malformed(_))
+            ));
+        }
+        assert!(matches!(
+            Lock::from_signed_text(&format!("{text}# more\n"), &key(1)),
+            Err(LockError::Malformed(_))
+        ));
+        assert!(matches!(
+            Lock::from_signed_text("", &key(1)),
+            Err(LockError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn unknown_versions_and_dialects_are_reported() {
+        let body = full_lock().body();
+        let newer = forge(&body.replace("version = 1", "version = 2"), &key(1));
+        assert_eq!(
+            Lock::from_signed_text(&newer, &key(1)),
+            Err(LockError::UnsupportedVersion("2".into()))
+        );
+        let dialect = forge(&body.replace("dialect = 1", "dialect = 2"), &key(1));
+        assert_eq!(
+            Lock::from_signed_text(&dialect, &key(1)),
+            Err(LockError::UnsupportedDialect(2))
+        );
+    }
+
+    #[test]
+    fn signed_but_unexpected_content_is_rejected() {
+        let lock = full_lock();
+        let body = lock.body();
+        let cases = [
+            body.replace("[tests]", "[tests]\nextra = 1"),
+            body.replace("max_stack_bytes = 96", "max_stack_bytes = 96 # note"),
+            body.replace("\n\n[spec]", "\n\n\n[spec]"),
+            body.replace(
+                &lock.fingerprint().expect("fingerprint").to_string(),
+                Sha256Hex::of(b"other").as_str(),
+            ),
+            body.replace("\"elicitation\"", "\"telepathy\""),
+            {
+                let start = body.find("\n[tests]").expect("tests table");
+                let end = body.find("\n[code]").expect("code table");
+                let without_tests = format!("{}{}", &body[..start], &body[end..]);
+                without_tests.replace(
+                    &format!(
+                        "fingerprint = \"{}\"\n",
+                        lock.fingerprint().expect("fingerprint")
+                    ),
+                    "",
+                )
+            },
+        ];
+        for body in cases {
+            assert!(
+                matches!(
+                    Lock::from_signed_text(&forge(&body, &key(1)), &key(1)),
+                    Err(LockError::Malformed(_))
+                ),
+                "accepted:\n{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn writes_and_reads_a_lock_file() {
+        let folder = tempfile::tempdir().expect("temporary folder");
+        assert_eq!(read(folder.path(), Some(&key(1))), Ok(None));
+        let lock = full_lock();
+        write(folder.path(), &lock, &key(1)).expect("write the lock");
+        assert_eq!(read(folder.path(), Some(&key(1))), Ok(Some(lock.clone())));
+        assert_eq!(read(folder.path(), None), Err(LockError::NoKey));
+        let leftovers: Vec<_> = std::fs::read_dir(folder.path())
+            .expect("list the folder")
+            .map(|entry| {
+                entry
+                    .expect("entry")
+                    .file_name()
+                    .into_string()
+                    .expect("UTF-8")
+            })
+            .collect();
+        assert_eq!(leftovers, [LOCK_FILE], "no temporary files are left behind");
+        std::fs::write(folder.path().join(LOCK_FILE), vec![b'#'; 70_000]).expect("overwrite");
+        assert!(matches!(
+            read(folder.path(), Some(&key(1))),
+            Err(LockError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn creates_a_private_key_once() {
+        let home = tempfile::tempdir().expect("temporary folder");
+        let data_dir = DataDir::new(home.path().join("data/lengua"));
+        assert!(Key::load(&data_dir).expect("no key yet").is_none());
+        let created = Key::load_or_create(&data_dir).expect("create the key");
+        let loaded = Key::load_or_create(&data_dir).expect("load the key");
+        assert_eq!(created.0, loaded.0);
+        assert_ne!(created.0, [0; KEY_LEN]);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = |path: &Path| {
+                std::fs::metadata(path)
+                    .expect("metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777
+            };
+            assert_eq!(mode(&Key::path(&data_dir)), 0o600);
+            assert_eq!(mode(data_dir.path()), 0o700);
+        }
+    }
+
+    #[test]
+    fn reports_a_damaged_key() {
+        let home = tempfile::tempdir().expect("temporary folder");
+        let data_dir = DataDir::new(home.path().to_owned());
+        std::fs::write(Key::path(&data_dir), b"short").expect("write a bad key");
+        assert!(matches!(Key::load(&data_dir), Err(KeyError::Damaged(_))));
+        assert!(matches!(
+            Key::load_or_create(&data_dir),
+            Err(KeyError::Damaged(_))
+        ));
+    }
+
+    #[test]
+    fn debug_output_hides_the_key() {
+        assert_eq!(format!("{:?}", key(7)), "Key(<secret>)");
+    }
+}

@@ -4,17 +4,46 @@
 // Each test file uses a different subset of these helpers.
 #![allow(dead_code)]
 
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, ClientCapabilities, ClientConfig, ElicitRequestParams,
-    ElicitResult, ElicitationAction, ErrorData, Implementation, ProtocolVersion,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ClientCapabilities, ClientConfig,
+    ElicitRequestParams, ElicitResult, ElicitationAction, ErrorData, Implementation,
+    ProtocolVersion,
 };
 use rmcp::service::{RequestContext, RunningService};
 use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
 use rmcp::{ClientHandler, ClientLifecycleMode, ClientServiceExt, RoleClient, ServiceExt};
 use serde_json::{Map, Value};
 use tempfile::TempDir;
+
+/// A valid spec for a program that adds two numbers.
+pub const ADD_SPEC: &str = "---
+type: lengua/program-spec
+title: add
+description: Adds two whole numbers given as arguments and prints the sum.
+---
+# Purpose
+Adds two whole numbers between `-1000000000` and `1000000000`.
+
+# Behaviors
+## B1: Adds two numbers
+- Given the arguments `2` and `3`
+- When the program runs
+- Then it prints `5` followed by a newline
+- And it exits with code `0`
+
+## B2: Missing arguments
+- Given no arguments
+- When the program runs
+- Then it prints `usage: add <a> <b>` followed by a newline to standard error
+- And it exits with code `1`
+
+# Constraints
+- Allowed system calls: read, write, exit
+";
 
 /// Which MCP protocol generation the client speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,6 +79,8 @@ pub struct TestClient {
     elicitation: bool,
     answer: Arc<Mutex<Answer>>,
     prompts: Arc<Mutex<Vec<String>>>,
+    /// A file to overwrite while the next dialog is open, as if the user edited it.
+    edit: Arc<Mutex<Option<(PathBuf, String)>>>,
 }
 
 impl TestClient {
@@ -59,6 +90,7 @@ impl TestClient {
             elicitation: true,
             answer: Arc::new(Mutex::new(answer)),
             prompts: Arc::default(),
+            edit: Arc::default(),
         }
     }
 
@@ -68,12 +100,18 @@ impl TestClient {
             elicitation: false,
             answer: Arc::new(Mutex::new(Answer::Decline)),
             prompts: Arc::default(),
+            edit: Arc::default(),
         }
     }
 
     /// Changes the scripted answer for the next dialogs.
     pub fn set_answer(&self, answer: Answer) {
         *self.answer.lock().expect("answer lock") = answer;
+    }
+
+    /// Overwrites `path` with `text` while the next dialog is open.
+    pub fn edit_during_next_dialog(&self, path: PathBuf, text: String) {
+        *self.edit.lock().expect("edit lock") = Some((path, text));
     }
 
     /// The messages of every dialog shown so far.
@@ -105,6 +143,9 @@ impl ClientHandler for TestClient {
                 .lock()
                 .expect("prompts lock")
                 .push(message.clone());
+        }
+        if let Some((path, text)) = self.edit.lock().expect("edit lock").take() {
+            std::fs::write(path, text).expect("edit the file during the dialog");
         }
         let answer = *self.answer.lock().expect("answer lock");
         Ok(match answer {
@@ -159,16 +200,10 @@ impl Session {
         }
     }
 
-    /// Calls a tool with JSON object arguments and returns its result.
+    /// Calls a tool with JSON object arguments and returns its result, answering any dialogs.
     pub async fn call(&self, tool: &'static str, arguments: Value) -> CallToolResult {
-        let mut params = CallToolRequestParams::new(tool);
-        if let Value::Object(map) = arguments {
-            params = params.with_arguments(map);
-        } else {
-            params = params.with_arguments(Map::new());
-        }
         self.service
-            .call_tool(params)
+            .call_tool(params(tool, arguments))
             .await
             .unwrap_or_else(|error| panic!("calling {tool} failed: {error}"))
     }
@@ -188,5 +223,97 @@ impl Session {
                 result.content
             ),
         }
+    }
+
+    /// Calls a tool that must fail and returns its error text.
+    pub async fn call_error(&self, tool: &'static str, arguments: Value) -> String {
+        let result = self.call(tool, arguments).await;
+        assert_eq!(
+            result.is_error,
+            Some(true),
+            "{tool} should have failed: {result:?}"
+        );
+        result
+            .content
+            .iter()
+            .filter_map(|content| content.as_text().map(|text| text.text.clone()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Sends one `tools/call` without answering dialogs, optionally as a retry that carries
+    /// `request_state` and `responses`.
+    pub async fn call_once(
+        &self,
+        tool: &'static str,
+        arguments: Value,
+        request_state: Option<&str>,
+        responses: Option<BTreeMap<String, Value>>,
+    ) -> CallToolResponse {
+        let mut params = params(tool, arguments);
+        if let Some(state) = request_state {
+            params = params.with_request_state(state);
+        }
+        if let Some(responses) = responses {
+            params = params.with_input_responses(responses);
+        }
+        self.service
+            .call_tool_once(params)
+            .await
+            .unwrap_or_else(|error| panic!("calling {tool} failed: {error}"))
+    }
+}
+
+fn params(tool: &'static str, arguments: Value) -> CallToolRequestParams {
+    let arguments = match arguments {
+        Value::Object(map) => map,
+        _ => Map::new(),
+    };
+    CallToolRequestParams::new(tool).with_arguments(arguments)
+}
+
+/// A temporary program folder.
+pub struct Program {
+    dir: TempDir,
+}
+
+impl Program {
+    /// An empty program folder.
+    pub fn new() -> Self {
+        Self {
+            dir: tempfile::tempdir().expect("create a temporary program folder"),
+        }
+    }
+
+    /// A program folder holding the add spec.
+    pub fn with_add_spec() -> Self {
+        let program = Self::new();
+        program.write("spec.md", ADD_SPEC);
+        program
+    }
+
+    /// The folder.
+    pub fn path(&self) -> &Path {
+        self.dir.path()
+    }
+
+    /// The folder as a tool argument.
+    pub fn arguments(&self) -> Value {
+        serde_json::json!({ "path": self.path().to_str().expect("UTF-8 path") })
+    }
+
+    /// A file in the folder.
+    pub fn file(&self, name: &str) -> PathBuf {
+        self.path().join(name)
+    }
+
+    /// Writes a file in the folder.
+    pub fn write(&self, name: &str, text: &str) {
+        std::fs::write(self.file(name), text).expect("write a program file");
+    }
+
+    /// Reads a file in the folder, if it exists.
+    pub fn read(&self, name: &str) -> Option<String> {
+        std::fs::read_to_string(self.file(name)).ok()
     }
 }

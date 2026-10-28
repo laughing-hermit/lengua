@@ -5,6 +5,10 @@
 //! See `DESIGN.md` at the repository root for every design decision.
 
 pub mod data_dir;
+pub mod hash;
+pub mod lock;
 pub mod platform;
 pub mod server;
+pub mod spec;
+pub mod state;
 pub mod toolchain;

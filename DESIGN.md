@@ -7,8 +7,10 @@ Where the code and this file disagree, fix one of them.
 
 Programming languages and compilers were made as human middlemen to machine code. With AI, the
 natural-language **spec is the source code**, the AI translates it, and tools check the result.
-lengua's AI writes **assembly**: readable for review, and turned into machine code by a small,
-deterministic assembler. The guarantees a compiler used to give come from rules and tests instead.
+In short: turn the spec with its tests into machine code, using Claude Code (or any agent) as the
+compiler. lengua's AI writes **assembly**: readable for review, and turned into machine code by a
+deterministic assembler that only encodes each line as one instruction and makes no choices of its
+own. The guarantees a compiler used to give come from rules and tests instead.
 
 ## A lengua program
 
@@ -19,7 +21,7 @@ A program is a folder with four files, created in this order:
 | `spec.md` | the person with the AI | The single source of truth: natural language, Given/When/Then behaviors with IDs, in [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) (OKF) |
 | `tests.toml` | the AI, from the spec only | One example test per behavior, plus generated tests with fresh random inputs on every run |
 | `main.s` | the AI | x86-64 assembly in the lengua dialect |
-| `lengua.lock` | only the lengua server | SHA-256 of all three files, a combined fingerprint, and a signature |
+| `lengua.lock` | only the lengua server | SHA-256 of all three files and of the checked executable, a combined fingerprint, and a signature |
 
 **Workflow:** spec → approve (the person confirms in a dialog) → tests (stamped) → code (stamped
 once every rule and test passes) → optimize (tests stay green) → run. A program only runs when the
@@ -45,8 +47,8 @@ The plugin folder `plugin/` contains:
 | `status` | Machine (OS, CPU, features, LLVM tools), client support, a program's state, and the next step |
 | `approve_spec` | Validates `spec.md`, asks the person to approve it, stamps it |
 | `check_tests` | Validates `tests.toml` (coverage, cross-checks, red check, freeze) and stamps it |
-| `check_code` | Assembles, links, checks the rules, runs every test, then stamps and signs |
-| `run` | Verifies the lock against every file, then runs the program |
+| `check_code` | Assembles, links, checks the rules, runs every test and counts the instructions executed, then stamps and signs |
+| `run` | Verifies the lock against every file, rebuilds, confirms the build is byte-identical to the checked one, then runs it |
 
 Only open standards are used: MCP (tools, server instructions, elicitation), Agent Skills and Agent
 Plugins. No hooks and no subagents, so the plugin works the same in Claude Code, Codex, Cursor and
@@ -89,6 +91,28 @@ adapted for assembly. The full rule text lives in
 The checker analyzes the **linked executable** together with the source, and nothing AI-written
 runs before it passes the rules.
 
+Instruction sets: dialect 1 uses x86-64's integer instructions, plus the integer extensions BMI1,
+BMI2, POPCNT, LZCNT, ADX and MOVBE only when the CPU has them (the checker reads which CPU features
+each instruction needs). Vector instructions (SSE, AVX2, AVX-512) come in dialect 2, right after
+the MVP, with rules for their wider memory accesses.
+
+## Translation validation
+
+lengua treats the AI as an untrusted compiler. Instead of trusting it, lengua checks every output
+it produces, the idea behind translation validation (Pnueli, Siegel and Singerman, 1998):
+
+| Step | Translated by | How lengua checks it |
+|---|---|---|
+| spec → `tests.toml` | the AI | Structure and coverage; each behavior's spec values appear in its example; each formula reproduces its example; generator ranges are numbers from the spec |
+| spec + tests → `main.s` | the AI | The rules, then every example plus fresh random tests on every check |
+| `main.s` → machine code | LLVM | The checker reads the linked executable back and matches it to `main.s` instruction by instruction, operands included; the lock records the executable's hash, and `run` refuses any other build |
+
+This is strong evidence, not proof: tests only sample inputs, and a plain-language spec has no
+formal meaning a tool can check. After the MVP, a symbolic executor and an SMT solver will prove
+that the output equals the formulas for every input in range, as Alive2 does for LLVM. The Power of
+10 rules make that proof complete: without recursion and with a fixed maximum for every loop,
+every path through a program is finite.
+
 ## Platforms
 
 The MVP builds for Linux x86-64 (ELF, direct system calls), assembled by LLVM's `llvm-mc` and
@@ -99,6 +123,9 @@ per-(OS, CPU) platform profiles so each platform is an added profile, not a rewr
 
 The plugin's own binary will ship for x86_64/aarch64 Linux (musl), aarch64 macOS and x86_64/aarch64
 Windows.
+
+After the MVP: dialect 2 (vector instructions), the proof step, and the other platforms in the
+order above. The order between the proof and the platforms is decided after the MVP.
 
 ## Code conventions
 
@@ -118,8 +145,16 @@ Windows.
   affected.
 - Clients without MCP elicitation approve specs through their tool-permission prompt; the lock
   records `approved_via = "tool-permission"`.
+- Approval dialogs travel as elicitation requests on protocol 2025-11-25 and as input-required
+  results on 2026-07-28 (which has no server-to-client requests). There, the nonce is single-use,
+  bound to the folder and to the spec text the dialog showed, and expires after 30 minutes. The
+  spec is hashed again before the lock is written, so an edit made while the dialog is open is
+  never approved.
 - Pointer depth (NASA rule 9) isn't checked; bounds checks and compare-chain detection are
   pattern-based.
+- Tests sample inputs, so until the proof step a program is checked, not proven. The same AI
+  writes the formulas and the code: each formula must reproduce its spec example, which narrows
+  that gap, but a wrong formula can still match an example by coincidence.
 
 ## Status
 
