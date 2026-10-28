@@ -40,7 +40,7 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             timeout: Duration::from_secs(2),
-            max_output: 1024 * 1024,
+            max_output: 8 * 1024 * 1024,
         }
     }
 }

@@ -44,8 +44,9 @@ of the same rule.
 - **Purpose** says in plain words what the program does, for whom and why. It then gives in
   backticks the range of every number the program reads and the length of any text it reads,
   including a range only one behavior uses: generated tests draw their inputs from exactly these
-  ranges, so nothing else goes in backticks there. Keep text at most `4096` characters, the
-  longest a generated test can produce, and numbers within 64 bits. If the program reads or writes, Purpose says
+  ranges, so nothing else goes in backticks there. Keep text on standard input to at most
+  `1048576` bytes and each argument to at most `131072` (Linux's limit), and numbers within 64
+  bits. If the program reads or writes, Purpose says
   which exit code it uses when reading or writing fails, without backticks (tests can't make
   those fail), such as: If writing the output fails, the program exits with code 2.
 - **One rule per behavior,** under a heading `## B<n>: <title>` with a unique ID (B1, B2, B3…).

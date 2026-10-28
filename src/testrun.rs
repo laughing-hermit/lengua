@@ -281,25 +281,26 @@ pub async fn run_tests(
     }
     for block in &suite.generated {
         let name = format!("generated {}", block.id);
-        let cases = match block.cases(seed) {
-            Ok(cases) => cases,
-            Err((inputs, field, error)) => {
-                record(
-                    &mut outcome,
-                    format!(
-                        "{name} (tests.toml line {}, seed {seed}): with {}, the expected {field} \
-                         {error}",
-                        block.line,
-                        describe_inputs(&inputs)
-                    ),
-                );
-                continue;
-            }
-        };
-        let total = cases.len();
+        let total = block.run_count();
         let mut samples = Samples::default();
         let mut failed = false;
-        for (number, case) in cases.iter().enumerate() {
+        for (number, case) in block.cases(seed).enumerate() {
+            let case = match case {
+                Ok(case) => case,
+                Err((inputs, field, error)) => {
+                    record(
+                        &mut outcome,
+                        format!(
+                            "{name} (tests.toml line {}, seed {seed}): with {}, the expected \
+                             {field} {error}",
+                            block.line,
+                            describe_inputs(&inputs)
+                        ),
+                    );
+                    failed = true;
+                    break;
+                }
+            };
             if Instant::now() > deadline {
                 record(
                     &mut outcome,

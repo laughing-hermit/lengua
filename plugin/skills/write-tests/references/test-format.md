@@ -52,7 +52,10 @@ sides of zero. Their `args`, `stdin`, `stdout`, `stderr` and `exit_code` must be
 |---|---|---|
 | `int(lo, hi)` | Whole numbers from `lo` to `hi` inclusive, within 64 bits | `lo`, `hi`, 0, 1 and -1, when in range |
 | `choice(a, b, …)` | One of the values: all numbers or all strings | Every value (the first and last when there are more than 16) |
-| `string(min, max, "chars")` | `min` to `max` characters (at most 4096) drawn from `chars` | The shortest string of the first character, the longest of the last |
+| `string(min, max, "chars")` | `min` to `max` characters (at most 1048576) drawn from `chars` | The shortest string of the first character, the longest of the last |
+
+Linux limits each argument to 131072 bytes, so `check_tests` refuses a run whose argument is
+longer; long text belongs on standard input.
 
 Arguments must be literal values. The limits of `int` and the lengths of `string` must be numbers
 that the `# Purpose` section of `spec.md` writes in backticks, so every range comes from the

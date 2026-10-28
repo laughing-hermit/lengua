@@ -103,39 +103,51 @@ impl Generated {
     /// # Errors
     ///
     /// Fails when a formula can't be evaluated or gives an impossible exit code.
-    pub fn case(&self, inputs: Env) -> Result<Case, (&'static str, EvalError)> {
+    pub fn case(&self, inputs: Env) -> Result<Case, (Env, &'static str, EvalError)> {
+        match self.results(&inputs) {
+            Ok((args, stdin, stdout, stderr, exit_code)) => Ok(Case {
+                inputs,
+                args,
+                stdin,
+                stdout,
+                stderr,
+                exit_code,
+            }),
+            Err((field, error)) => Err((inputs, field, error)),
+        }
+    }
+
+    /// The rendered args, stdin, stdout, stderr and exit code for `inputs`.
+    #[allow(clippy::type_complexity)]
+    fn results(
+        &self,
+        inputs: &Env,
+    ) -> Result<(Vec<String>, String, String, String, u8), (&'static str, EvalError)> {
         let args = self
             .args
             .iter()
-            .map(|arg| arg.render(&inputs))
+            .map(|arg| arg.render(inputs))
             .collect::<Result<_, _>>()
             .map_err(|error| ("args", error))?;
         let stdin = self
             .stdin
-            .render(&inputs)
+            .render(inputs)
             .map_err(|error| ("stdin", error))?;
         let stdout = self
             .stdout
-            .render(&inputs)
+            .render(inputs)
             .map_err(|error| ("stdout", error))?;
         let stderr = self
             .stderr
-            .render(&inputs)
+            .render(inputs)
             .map_err(|error| ("stderr", error))?;
         let exit_code = match &self.exit_code {
             ExitCode::Fixed(code) => *code,
             ExitCode::Formula(template) => {
-                exit_code_value(template, &inputs).map_err(|error| ("exit_code", error))?
+                exit_code_value(template, inputs).map_err(|error| ("exit_code", error))?
             }
         };
-        Ok(Case {
-            inputs,
-            args,
-            stdin,
-            stdout,
-            stderr,
-            exit_code,
-        })
+        Ok((args, stdin, stdout, stderr, exit_code))
     }
 
     /// Every run for `seed`: boundary values first, then random ones.
@@ -143,15 +155,17 @@ impl Generated {
     /// # Errors
     ///
     /// Returns the first inputs whose results can't be computed.
-    pub fn cases(&self, seed: u64) -> Result<Vec<Case>, (Env, &'static str, EvalError)> {
-        let runs = usize::try_from(self.runs).unwrap_or(usize::MAX);
-        expr::cases(&self.vars, runs, seed)
-            .into_iter()
-            .map(|inputs| {
-                self.case(inputs.clone())
-                    .map_err(|(field, error)| (inputs, field, error))
-            })
-            .collect()
+    pub fn cases(
+        &self,
+        seed: u64,
+    ) -> impl ExactSizeIterator<Item = Result<Case, (Env, &'static str, EvalError)>> + '_ {
+        expr::cases(&self.vars, self.run_count(), seed).map(|inputs| self.case(inputs))
+    }
+
+    /// How many runs the block makes.
+    #[must_use]
+    pub fn run_count(&self) -> usize {
+        usize::try_from(self.runs).unwrap_or(usize::MAX)
     }
 }
 
@@ -170,6 +184,38 @@ fn exit_code_value(template: &Template, inputs: &Env) -> Result<u8, EvalError> {
             "must give a number for the exit code, not {other}"
         ))),
     }
+}
+
+/// Linux refuses to start a program with an argument longer than this.
+pub const MAX_ARG_BYTES: usize = 128 * 1024;
+
+/// lengua keeps a program's arguments together under this, well inside Linux's limit.
+pub const MAX_ARGS_BYTES: usize = 1024 * 1024;
+
+/// Why Linux couldn't start a run with these arguments, if it couldn't.
+fn oversized_args(case: &Case) -> Option<String> {
+    let total: usize = case.args.iter().map(String::len).sum();
+    if let Some((index, arg)) = case
+        .args
+        .iter()
+        .enumerate()
+        .find(|(_, arg)| arg.len() > MAX_ARG_BYTES)
+    {
+        return Some(format!(
+            "with {}, argument {} is {} bytes, but Linux limits each argument to {MAX_ARG_BYTES} \
+             bytes; narrow the range, or pass long text on standard input",
+            describe_inputs(&case.inputs),
+            index + 1,
+            arg.len()
+        ));
+    }
+    (total > MAX_ARGS_BYTES).then(|| {
+        format!(
+            "with {}, the arguments total {total} bytes, over lengua's limit of {MAX_ARGS_BYTES}; \
+             pass long text on standard input",
+            describe_inputs(&case.inputs)
+        )
+    })
 }
 
 /// Shows variable values as `a = 2, s = "x"`.
@@ -657,32 +703,47 @@ impl<'a> Checker<'a> {
     /// or prints the same thing for every input is caught before any code exists.
     fn dry_run(&mut self, block: &Generated, seed: u64) {
         let name = format!("generated {}", block.id);
-        match block.cases(seed) {
-            Err((inputs, field, error)) => self.problem(
-                Some(block.line),
-                format!(
-                    "{name}: with {}, {field} {error}; narrow the generators or fix the formula",
-                    describe_inputs(&inputs)
-                ),
-            ),
-            Ok(cases) => {
-                let varies = block.stdout.has_placeholders() || block.stderr.has_placeholders();
-                let outputs: BTreeSet<(&str, &str)> = cases
-                    .iter()
-                    .map(|case| (case.stdout.as_str(), case.stderr.as_str()))
-                    .collect();
-                if varies && outputs.len() < 2 {
+        let varies = block.stdout.has_placeholders() || block.stderr.has_placeholders();
+        // Two different outputs are enough to know they vary; keep no more, since text is large.
+        let mut outputs: Vec<(String, String)> = Vec::new();
+        let mut runs = 0;
+        for result in block.cases(seed) {
+            let case = match result {
+                Ok(case) => case,
+                Err((inputs, field, error)) => {
                     self.problem(
                         Some(block.line),
                         format!(
-                            "{name}: all {} runs expect the same output, so a program that \
-                             always prints it would pass. Make the output depend on the inputs, \
-                             widen the generators, raise runs, or drop the placeholders",
-                            cases.len()
+                            "{name}: with {}, {field} {error}; narrow the generators or fix the \
+                             formula",
+                            describe_inputs(&inputs)
                         ),
                     );
+                    return;
                 }
+            };
+            if let Some(problem) = oversized_args(&case) {
+                self.problem(Some(block.line), format!("{name}: {problem}"));
+                return;
             }
+            runs += 1;
+            if outputs.len() < 2
+                && !outputs
+                    .iter()
+                    .any(|(stdout, stderr)| *stdout == case.stdout && *stderr == case.stderr)
+            {
+                outputs.push((case.stdout, case.stderr));
+            }
+        }
+        if varies && outputs.len() < 2 {
+            self.problem(
+                Some(block.line),
+                format!(
+                    "{name}: all {runs} runs expect the same output, so a program that always \
+                     prints it would pass. Make the output depend on the inputs, widen the \
+                     generators, raise runs, or drop the placeholders"
+                ),
+            );
         }
     }
 
@@ -771,9 +832,9 @@ impl<'a> Checker<'a> {
                 );
                 continue;
             };
-            let case = match block.case(inputs.clone()) {
+            let case = match block.case(inputs) {
                 Ok(case) => case,
-                Err((field, error)) => {
+                Err((inputs, field, error)) => {
                     self.problem(
                         Some(block.line),
                         format!(
@@ -812,7 +873,7 @@ impl<'a> Checker<'a> {
                         "generated {id}'s formula disagrees with the spec: with example {id}'s \
                          inputs ({}) it expects {field} {formula}, but example {id} expects \
                          {spec}. Fix the formula",
-                        describe_inputs(&inputs)
+                        describe_inputs(&case.inputs)
                     ),
                 );
             }
@@ -1052,7 +1113,10 @@ exit_code = 0
         let block = &suite.generated[0];
         assert_eq!(block.runs, 200);
         assert_eq!(block.line, 15);
-        let cases = block.cases(42).expect("computable");
+        let cases: Vec<Case> = block
+            .cases(42)
+            .collect::<Result<_, _>>()
+            .expect("computable");
         assert_eq!(cases.len(), 200);
         let first = &cases[0];
         assert_eq!(first.args, ["-1000000000", "-1000000000"]);
@@ -1215,6 +1279,51 @@ exit_code = 0
                 .replace("args = [\"{a}\", \"{b}\"]", "args = [\"{a}{b}\"]")
                 .replace("args = [\"2\", \"3\"]", "args = [\"123\"]"),
             "more than one way",
+        );
+    }
+
+    #[test]
+    fn arguments_stay_within_linux_limits() {
+        let spec = spec::parse(
+            "---
+type: lengua/program-spec
+title: len
+---
+# Purpose
+Prints the length of a word of `1` to `200000` letters.
+
+# Behaviors
+## B1: Prints the length
+- Given the argument `abc`
+- When the program runs
+- Then it prints `3` followed by a newline
+- And it exits with code `0`
+
+# Constraints
+- Allowed system calls: write, exit
+",
+        )
+        .expect("valid spec");
+        let tests = |generator: &str| {
+            tests(&format!(
+                "[[example]]\nid = \"B1\"\nargs = [\"abc\"]\nstdout = \"3\\n\"\nexit_code = 0\n\n\
+                 [[generated]]\nid = \"B1\"\nvars = {{ w = '{generator}' }}\nargs = [\"{{w}}\"]\n\
+                 stdout = \"{{len(w)}}\\n\"\nexit_code = 0\n"
+            ))
+        };
+        let problems = match check(&tests(r#"string(1, 200000, "abc")"#), &spec, LABEL) {
+            Ok(_) => panic!("a 200000-byte argument was accepted"),
+            Err(problems) => problems.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        };
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains("Linux limits each argument to 131072 bytes")),
+            "{problems:#?}"
+        );
+        assert!(
+            problems.iter().all(|problem| problem.len() < 2000),
+            "messages shorten long values: {problems:#?}"
         );
     }
 

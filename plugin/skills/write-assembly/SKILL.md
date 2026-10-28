@@ -49,7 +49,10 @@ the program's own code (its time, where slow instructions such as division weigh
 CPU time in microseconds (which also counts the kernel's work for system calls, so many small
 writes show up there; for a short run it's mostly the kernel starting and ending the process).
 Change `main.s` and call `check_code` again: the tests must stay green, and the median cycles and
-CPU time should drop. Every measure varies a little between runs, so compare medians.
+CPU time should drop. Every measure varies a little between runs, so compare medians. Starting and
+ending a process costs about 100 microseconds whatever the program does, so speed work shows on
+large inputs: compare cycles on the tests with the longest input (generated tests try the longest
+text first).
 
 The biggest win on text and arrays is usually vector instructions: one `pcmpeqb` compares 16
 bytes, and AVX2 and AVX-512 do 32 and 64. [The vector template](assets/vector-template.s) (with

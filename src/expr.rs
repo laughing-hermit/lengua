@@ -19,7 +19,10 @@ use rand::{RngExt, SeedableRng};
 pub type Env = BTreeMap<String, Value>;
 
 /// The longest string a generator may produce.
-pub const MAX_STRING_LEN: usize = 4096;
+pub const MAX_STRING_LEN: usize = 1_048_576;
+
+/// Messages show at most this many characters of a string value.
+const SHOWN_CHARS: usize = 200;
 
 /// Boundary combinations tried before random values, at most.
 const MAX_BOUNDARY_CASES: usize = 64;
@@ -64,6 +67,11 @@ impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Int(number) => write!(f, "{number}"),
+            // Messages quote text, shortened when it's long.
+            Self::Str(text) if text.chars().count() > SHOWN_CHARS => {
+                let start: String = text.chars().take(SHOWN_CHARS).collect();
+                write!(f, "{start:?}… ({} bytes)", text.len())
+            }
             Self::Str(text) => write!(f, "{text:?}"),
             Self::Bool(value) => write!(f, "{value}"),
         }
@@ -1081,10 +1089,10 @@ impl fmt::Display for Generator {
     }
 }
 
-/// The inputs a generated block runs with: every combination of boundary values first (or one
-/// sweep through them when there are too many), then random values from `seed`, `runs` in all.
-#[must_use]
-pub fn cases(vars: &[(String, Generator)], runs: usize, seed: u64) -> Vec<Env> {
+/// Every run's variable values: boundary values first (every combination when there are at most
+/// 64, otherwise each boundary value once), then values drawn from a ChaCha8 generator seeded with
+/// `seed`. Runs are made one at a time, so long strings don't pile up in memory.
+pub fn cases(vars: &[(String, Generator)], runs: usize, seed: u64) -> Cases<'_> {
     let boundaries: Vec<Vec<Value>> = vars
         .iter()
         .map(|(_, generator)| generator.boundaries())
@@ -1092,48 +1100,78 @@ pub fn cases(vars: &[(String, Generator)], runs: usize, seed: u64) -> Vec<Env> {
     let combinations = boundaries
         .iter()
         .try_fold(1_usize, |product, values| product.checked_mul(values.len()));
-    let mut envs = Vec::new();
-    match combinations {
-        Some(count) if count <= MAX_BOUNDARY_CASES => {
-            for index in 0..count {
-                let mut rest = index;
-                envs.push(
-                    vars.iter()
-                        .zip(&boundaries)
-                        .map(|((name, _), values)| {
+    let (boundary_runs, every_combination) = match combinations {
+        Some(count) if count <= MAX_BOUNDARY_CASES => (count, true),
+        _ => (boundaries.iter().map(Vec::len).max().unwrap_or(0), false),
+    };
+    Cases {
+        vars,
+        boundaries,
+        boundary_runs: boundary_runs.min(runs),
+        every_combination,
+        runs,
+        index: 0,
+        rng: ChaCha8Rng::seed_from_u64(seed),
+    }
+}
+
+/// The runs [`cases`] makes, one at a time.
+#[derive(Debug)]
+pub struct Cases<'a> {
+    vars: &'a [(String, Generator)],
+    boundaries: Vec<Vec<Value>>,
+    boundary_runs: usize,
+    every_combination: bool,
+    runs: usize,
+    index: usize,
+    rng: ChaCha8Rng,
+}
+
+impl Iterator for Cases<'_> {
+    type Item = Env;
+
+    fn next(&mut self) -> Option<Env> {
+        if self.index >= self.runs {
+            return None;
+        }
+        let index = self.index;
+        self.index += 1;
+        if index < self.boundary_runs {
+            let mut rest = index;
+            let every_combination = self.every_combination;
+            return Some(
+                self.vars
+                    .iter()
+                    .zip(&self.boundaries)
+                    .map(|((name, _), values)| {
+                        let value = if every_combination {
                             let value = values[rest % values.len()].clone();
                             rest /= values.len();
-                            (name.clone(), value)
-                        })
-                        .collect(),
-                );
-            }
+                            value
+                        } else {
+                            values[index % values.len()].clone()
+                        };
+                        (name.clone(), value)
+                    })
+                    .collect(),
+            );
         }
-        _ => {
-            let longest = boundaries.iter().map(Vec::len).max().unwrap_or(0);
-            for index in 0..longest {
-                envs.push(
-                    vars.iter()
-                        .zip(&boundaries)
-                        .map(|((name, _), values)| {
-                            (name.clone(), values[index % values.len()].clone())
-                        })
-                        .collect(),
-                );
-            }
-        }
-    }
-    envs.truncate(runs);
-    let mut rng = ChaCha8Rng::seed_from_u64(seed);
-    while envs.len() < runs {
-        envs.push(
-            vars.iter()
-                .map(|(name, generator)| (name.clone(), generator.sample(&mut rng)))
+        let rng = &mut self.rng;
+        Some(
+            self.vars
+                .iter()
+                .map(|(name, generator)| (name.clone(), generator.sample(rng)))
                 .collect(),
-        );
+        )
     }
-    envs
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let left = self.runs - self.index;
+        (left, Some(left))
+    }
 }
+
+impl ExactSizeIterator for Cases<'_> {}
 
 #[cfg(test)]
 mod tests {
@@ -1318,7 +1356,7 @@ mod tests {
             "choice(1, \"a\")",
             "string(2, 1, \"a\")",
             "string(0, 3, \"\")",
-            "string(0, 5000, \"a\")",
+            "string(0, 1048577, \"a\")",
             "float(0, 1)",
             "int(1, 2",
             "int(1 2)",
@@ -1374,7 +1412,7 @@ mod tests {
             ("a".to_owned(), Generator::Int { lo: -5, hi: 5 }),
             ("b".to_owned(), Generator::Int { lo: 1, hi: 10 }),
         ];
-        let runs = cases(&vars, 20, 1);
+        let runs: Vec<Env> = cases(&vars, 20, 1).collect();
         assert_eq!(runs.len(), 20);
         assert_eq!(runs[0], env(&[("a", Value::Int(-5)), ("b", Value::Int(1))]));
         assert_eq!(runs[1], env(&[("a", Value::Int(5)), ("b", Value::Int(1))]));
@@ -1409,8 +1447,9 @@ mod tests {
                 },
             ),
         ];
-        assert_eq!(cases(&vars, 50, 7), cases(&vars, 50, 7));
-        assert_ne!(cases(&vars, 50, 7), cases(&vars, 50, 8));
+        let collect = |seed| cases(&vars, 50, seed).collect::<Vec<Env>>();
+        assert_eq!(collect(7), collect(7));
+        assert_ne!(collect(7), collect(8));
         assert_eq!(cases(&vars, 3, 7).len(), 3);
     }
 
