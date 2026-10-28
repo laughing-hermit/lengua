@@ -301,3 +301,46 @@ async fn the_vector_template_passes_its_tests() {
     assert_eq!(run["exit_code"], 0, "{run}");
     session.service.cancel().await.expect("close the session");
 }
+
+#[tokio::test]
+async fn small_ranges_run_every_value() {
+    let session = session().await;
+    let program = Program::new();
+    let spec = asset("template-spec.md").replace(
+        "between `-9223372036854775807`\nand `9223372036854775807`",
+        "between `-100`\nand `100`",
+    );
+    assert_ne!(spec, asset("template-spec.md"), "the range was narrowed");
+    let old_label = common::label(&asset("template-spec.md"));
+    let new_label = common::label(&spec);
+    program.write("spec.md", &spec);
+    session.approve(&program).await;
+    program.write(
+        "tests.toml",
+        &asset("template-tests.toml")
+            .replace(&old_label, &new_label)
+            .replace(
+                "int(-9223372036854775807, 9223372036854775807)",
+                "int(-100, 100)",
+            ),
+    );
+    let tests = session.call_ok("check_tests", program.arguments()).await;
+    assert_eq!(tests["generated_runs"], 201 + 50, "{tests}");
+    program.write(
+        "main.s",
+        &asset("main-template.s").replace(&old_label, &new_label),
+    );
+    let report = session.call_ok("check_code", program.arguments()).await;
+    assert_eq!(report["test_runs"], 3 + 201 + 50, "{report}");
+    assert_eq!(
+        report["every_value"],
+        serde_json::json!(["generated B1: every value of n in its range (all 201)"]),
+        "{report}"
+    );
+    assert!(
+        report["message"].as_str().is_some_and(|message| message
+            .contains("Generated B1 tried every value of n in its range (all 201).")),
+        "{report}"
+    );
+    session.service.cancel().await.expect("close the session");
+}

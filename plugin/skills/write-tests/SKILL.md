@@ -43,6 +43,9 @@ the tests come before the code, and they decide whether the code is right.
   character. For a number: `"12x"`, `"-"`, `"1.5"`, `"--1"` and `""`.
 - **Inputs are bare variables.** In `args` and `stdin`, a placeholder holds just a variable
   (`{a}`); computations belong in `stdout`, `stderr` and `exit_code` (`{a + b}`).
+- **Small ranges are checked in full.** A block whose ranges hold at most 5000 combinations (and
+  no `choice`) runs every one of them, so a range the spec states exactly is worth more than a
+  wide one.
 - **Formulas agree with the spec.** Given the example's inputs, they must produce the example's
   results. They must never overflow or divide by zero for inputs in range, and the output must
   change with the inputs.

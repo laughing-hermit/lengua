@@ -42,6 +42,11 @@ Runs try boundary values first: every combination when there are 64 or fewer, ot
 boundary value once. Random values fill the remaining runs, and a failing run reports its inputs
 and the seed that drew them.
 
+Small ranges run in full instead: when a block's generators are all ranges (`int`, `string`, no
+`choice`) with at most 5000 combinations, every combination runs and `runs` is ignored, as long as
+the whole file stays within 20000 runs. `check_code` then reports that the block tried every
+value in its range: for those inputs the program is checked, not sampled.
+
 Several blocks may share an `id` when one range can't cover the inputs, such as divisors on both
 sides of zero. Their `args`, `stdin`, `stdout`, `stderr` and `exit_code` must be identical; only
 `vars` and `runs` differ.

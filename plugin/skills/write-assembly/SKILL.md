@@ -39,7 +39,9 @@ Nothing runs before every rule passes.
    every rule and passed all its test runs, what `run` printed, and that they can ask you to run
    it with other inputs or to change what it does (which starts with the spec). If the code
    handles a case the spec doesn't mention, such as input longer than a buffer, say so in one line
-   and offer to add it to the spec. Leave out hashes, seeds and fingerprints.
+   and offer to add it to the spec. When `check_code` reports that a generated test tried every
+   value in its range, say that behavior was checked for every input in its range. Leave out
+   hashes, seeds and fingerprints.
 
 ## Making it faster
 

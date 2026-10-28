@@ -69,7 +69,15 @@ pub struct Generated {
     pub stderr: Template,
     /// Expected exit code.
     pub exit_code: ExitCode,
+    /// Whether every combination of the variables' values runs, instead of a sample.
+    pub every_value: bool,
 }
+
+/// A generated block runs every combination of its values when there are at most this many…
+const EVERY_VALUE_MAX: u128 = 5000;
+
+/// …and the whole suite stays within this many runs, about 30 seconds of tests.
+const SUITE_RUNS_MAX: u128 = 20_000;
 
 /// A generated block's expected exit code.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -159,13 +167,44 @@ impl Generated {
         &self,
         seed: u64,
     ) -> impl ExactSizeIterator<Item = Result<Case, (Env, &'static str, EvalError)>> + '_ {
-        expr::cases(&self.vars, self.run_count(), seed).map(|inputs| self.case(inputs))
+        let inputs = if self.every_value {
+            expr::every_case(&self.vars)
+        } else {
+            expr::cases(&self.vars, self.run_count(), seed)
+        };
+        inputs.map(|inputs| self.case(inputs))
     }
 
-    /// How many runs the block makes.
+    /// How many runs the block makes: every combination when [`Self::every_value`], otherwise
+    /// `runs`.
     #[must_use]
     pub fn run_count(&self) -> usize {
-        usize::try_from(self.runs).unwrap_or(usize::MAX)
+        if self.every_value {
+            expr::combinations(&self.vars)
+                .and_then(|count| usize::try_from(count).ok())
+                .unwrap_or(0)
+        } else {
+            usize::try_from(self.runs).unwrap_or(usize::MAX)
+        }
+    }
+
+    /// When every combination runs, says so in plain words: "every value of n in its range (all
+    /// 201)".
+    #[must_use]
+    pub fn every_value_text(&self) -> Option<String> {
+        if !self.every_value {
+            return None;
+        }
+        let names: Vec<&str> = self.vars.iter().map(|(name, _)| name.as_str()).collect();
+        let count = self.run_count();
+        Some(match names.as_slice() {
+            [name] => format!("every value of {name} in its range (all {count})"),
+            [rest @ .., last] => format!(
+                "every combination of {} and {last} in their ranges (all {count})",
+                rest.join(", ")
+            ),
+            [] => format!("all {count} runs"),
+        })
     }
 }
 
@@ -183,6 +222,36 @@ fn exit_code_value(template: &Template, inputs: &Env) -> Result<u8, EvalError> {
         other => Err(EvalError::Type(format!(
             "must give a number for the exit code, not {other}"
         ))),
+    }
+}
+
+/// Marks the generated blocks that run every combination of their values: those with at most
+/// [`EVERY_VALUE_MAX`] combinations, smallest first, while the suite stays within
+/// [`SUITE_RUNS_MAX`] runs. A block with `choice(…)` never is: its values are hand-picked, not a
+/// range.
+fn mark_every_value(blocks: &mut [Generated]) {
+    let mut candidates: Vec<(u128, usize)> = blocks
+        .iter()
+        .enumerate()
+        .filter(|(_, block)| {
+            !block
+                .vars
+                .iter()
+                .any(|(_, generator)| matches!(generator, Generator::Choice(_)))
+        })
+        .filter_map(|(index, block)| {
+            let count = expr::combinations(&block.vars)?;
+            (count <= EVERY_VALUE_MAX).then_some((count, index))
+        })
+        .collect();
+    candidates.sort_unstable();
+    let mut total: u128 = blocks.iter().map(|block| u128::from(block.runs)).sum();
+    for (count, index) in candidates {
+        let next = total - u128::from(blocks[index].runs) + count;
+        if next <= SUITE_RUNS_MAX {
+            blocks[index].every_value = true;
+            total = next;
+        }
     }
 }
 
@@ -515,9 +584,12 @@ impl<'a> Checker<'a> {
         for table in tables {
             let line = self.line(table.span().start);
             if let Some(block) = self.generated(line, table.into_inner()) {
-                self.dry_run(&block, seed);
                 blocks.push(block);
             }
+        }
+        mark_every_value(&mut blocks);
+        for block in &blocks {
+            self.dry_run(block, seed);
         }
         blocks
     }
@@ -625,6 +697,7 @@ impl<'a> Checker<'a> {
             stdout,
             stderr,
             exit_code,
+            every_value: false,
         };
         self.check_variables(&block, &name);
         (self.problems.len() + self.hidden == before).then_some(block)
@@ -1280,6 +1353,97 @@ exit_code = 0
                 .replace("args = [\"2\", \"3\"]", "args = [\"123\"]"),
             "more than one way",
         );
+    }
+
+    /// A spec for negating whole numbers from `lo` to `hi`.
+    fn negate_spec(lo: i64, hi: i64) -> Spec {
+        spec::parse(&format!(
+            "---
+type: lengua/program-spec
+title: negate
+---
+# Purpose
+Negates a whole number between `{lo}` and `{hi}`.
+
+# Behaviors
+## B1: Negates a number
+- Given the argument `7`
+- When the program runs
+- Then it prints `-7` followed by a newline
+- And it exits with code `0`
+
+# Constraints
+- Allowed system calls: write, exit
+"
+        ))
+        .expect("valid spec")
+    }
+
+    fn negate_tests(blocks: &[&str]) -> String {
+        let mut text =
+            tests("[[example]]\nid = \"B1\"\nargs = [\"7\"]\nstdout = \"-7\\n\"\nexit_code = 0\n");
+        for vars in blocks {
+            text.push_str(&format!(
+                "\n[[generated]]\nid = \"B1\"\nvars = {{ {vars} }}\nargs = [\"{{n}}\"]\n\
+                 stdout = \"{{-n}}\\n\"\nexit_code = 0\n"
+            ));
+        }
+        text
+    }
+
+    #[test]
+    fn small_ranges_run_every_value() {
+        let suite = check(
+            &negate_tests(&[r#"n = "int(-100, 100)""#]),
+            &negate_spec(-100, 100),
+            LABEL,
+        )
+        .expect("valid tests");
+        let block = &suite.generated[0];
+        assert!(block.every_value);
+        assert_eq!(block.run_count(), 201);
+        assert_eq!(
+            block.every_value_text().as_deref(),
+            Some("every value of n in its range (all 201)")
+        );
+        let values: BTreeSet<String> = block
+            .cases(1)
+            .map(|case| case.expect("computable").args[0].clone())
+            .collect();
+        assert_eq!(values.len(), 201);
+
+        // A large range is sampled, as are hand-picked values.
+        let suite = check(&valid(), &spec(), LABEL).expect("valid tests");
+        assert!(!suite.generated[0].every_value);
+        assert_eq!(suite.generated[0].run_count(), 200);
+        let suite = check(
+            &negate_tests(&[r#"n = "choice(-100, 7, 100)""#]),
+            &negate_spec(-100, 100),
+            LABEL,
+        )
+        .expect("valid tests");
+        assert!(
+            !suite.generated[0].every_value,
+            "choice values aren't a range"
+        );
+    }
+
+    #[test]
+    fn every_value_stays_within_the_suite_budget() {
+        let block = r#"n = "int(-2500, 2499)""#;
+        let suite = check(&negate_tests(&[block; 5]), &negate_spec(-2500, 2499), LABEL)
+            .expect("valid tests");
+        let full = suite
+            .generated
+            .iter()
+            .filter(|block| block.every_value)
+            .count();
+        assert_eq!(
+            full, 3,
+            "5000 runs each, while the suite stays within 20000"
+        );
+        let runs: usize = suite.generated.iter().map(Generated::run_count).sum();
+        assert_eq!(runs, 3 * 5000 + 2 * 100);
     }
 
     #[test]

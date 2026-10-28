@@ -1059,6 +1059,56 @@ impl Generator {
         }
     }
 
+    /// How many different values it can draw, counted exactly; `None` when it's more than a
+    /// `u128` holds.
+    #[must_use]
+    pub fn domain_size(&self) -> Option<u128> {
+        match self {
+            Self::Int { lo, hi } => u128::try_from(hi - lo).ok()?.checked_add(1),
+            Self::Choice(values) => u128::try_from(distinct(values).len()).ok(),
+            Self::Str { min, max, charset } => {
+                let base = u128::try_from(charset.len()).ok()?;
+                let mut total: u128 = 0;
+                for length in *min..=*max {
+                    let count = base.checked_pow(u32::try_from(length).ok()?)?;
+                    total = total.checked_add(count)?;
+                }
+                Some(total)
+            }
+        }
+    }
+
+    /// The value at `index` (below [`Self::domain_size`]) in a fixed order: numbers from low to
+    /// high, choices as listed, strings by length and then by the order of their characters.
+    #[must_use]
+    pub fn nth(&self, index: u128) -> Value {
+        match self {
+            Self::Int { lo, .. } => Value::Int(lo + i128::try_from(index).unwrap_or(0)),
+            Self::Choice(values) => {
+                let values = distinct(values);
+                values[usize::try_from(index).unwrap_or(0) % values.len()].clone()
+            }
+            Self::Str { min, max, charset } => {
+                let base = charset.len() as u128;
+                let mut rest = index;
+                for length in *min..=*max {
+                    let count = base.saturating_pow(u32::try_from(length).unwrap_or(u32::MAX));
+                    if rest < count {
+                        let mut digits = Vec::with_capacity(length);
+                        for _ in 0..length {
+                            digits.push(charset[usize::try_from(rest % base).unwrap_or(0)]);
+                            rest /= base;
+                        }
+                        digits.reverse();
+                        return Value::Str(digits.into_iter().collect());
+                    }
+                    rest -= count;
+                }
+                Value::Str(String::new())
+            }
+        }
+    }
+
     /// The numbers that bound this generator: an int range's ends and a string's lengths.
     #[must_use]
     pub fn limits(&self) -> Vec<i128> {
@@ -1089,6 +1139,41 @@ impl fmt::Display for Generator {
     }
 }
 
+/// The values without repeats, in their first order.
+fn distinct(values: &[Value]) -> Vec<Value> {
+    let mut seen = Vec::new();
+    for value in values {
+        if !seen.contains(value) {
+            seen.push(value.clone());
+        }
+    }
+    seen
+}
+
+/// Every combination of the variables' values, in a fixed order: the first variable changes
+/// fastest. Use it only when [`combinations`] is small.
+pub fn every_case(vars: &[(String, Generator)]) -> Cases<'_> {
+    let sizes: Vec<u128> = vars
+        .iter()
+        .map(|(_, generator)| generator.domain_size().unwrap_or(0))
+        .collect();
+    let total = combinations(vars).map_or(0, |count| usize::try_from(count).unwrap_or(0));
+    Cases {
+        vars,
+        mode: Mode::Every { sizes },
+        runs: total,
+        index: 0,
+    }
+}
+
+/// How many combinations of values the variables have, when it fits a `u128`.
+#[must_use]
+pub fn combinations(vars: &[(String, Generator)]) -> Option<u128> {
+    vars.iter().try_fold(1_u128, |product, (_, generator)| {
+        product.checked_mul(generator.domain_size()?)
+    })
+}
+
 /// Every run's variable values: boundary values first (every combination when there are at most
 /// 64, otherwise each boundary value once), then values drawn from a ChaCha8 generator seeded with
 /// `seed`. Runs are made one at a time, so long strings don't pile up in memory.
@@ -1106,25 +1191,37 @@ pub fn cases(vars: &[(String, Generator)], runs: usize, seed: u64) -> Cases<'_> 
     };
     Cases {
         vars,
-        boundaries,
-        boundary_runs: boundary_runs.min(runs),
-        every_combination,
+        mode: Mode::Sampled {
+            boundaries,
+            boundary_runs: boundary_runs.min(runs),
+            every_combination,
+            rng: Box::new(ChaCha8Rng::seed_from_u64(seed)),
+        },
         runs,
         index: 0,
-        rng: ChaCha8Rng::seed_from_u64(seed),
     }
 }
 
-/// The runs [`cases`] makes, one at a time.
+/// The runs [`cases`] or [`every_case`] makes, one at a time.
 #[derive(Debug)]
 pub struct Cases<'a> {
     vars: &'a [(String, Generator)],
-    boundaries: Vec<Vec<Value>>,
-    boundary_runs: usize,
-    every_combination: bool,
+    mode: Mode,
     runs: usize,
     index: usize,
-    rng: ChaCha8Rng,
+}
+
+#[derive(Debug)]
+enum Mode {
+    /// Boundary values, then random ones.
+    Sampled {
+        boundaries: Vec<Vec<Value>>,
+        boundary_runs: usize,
+        every_combination: bool,
+        rng: Box<ChaCha8Rng>,
+    },
+    /// Every combination; each variable's domain size.
+    Every { sizes: Vec<u128> },
 }
 
 impl Iterator for Cases<'_> {
@@ -1136,33 +1233,53 @@ impl Iterator for Cases<'_> {
         }
         let index = self.index;
         self.index += 1;
-        if index < self.boundary_runs {
-            let mut rest = index;
-            let every_combination = self.every_combination;
-            return Some(
+        match &mut self.mode {
+            Mode::Every { sizes } => {
+                let mut rest = index as u128;
+                Some(
+                    self.vars
+                        .iter()
+                        .zip(sizes.iter())
+                        .map(|((name, generator), size)| {
+                            let value = generator.nth(rest % size);
+                            rest /= size;
+                            (name.clone(), value)
+                        })
+                        .collect(),
+                )
+            }
+            Mode::Sampled {
+                boundaries,
+                boundary_runs,
+                every_combination,
+                ..
+            } if index < *boundary_runs => {
+                let mut rest = index;
+                let every_combination = *every_combination;
+                Some(
+                    self.vars
+                        .iter()
+                        .zip(boundaries.iter())
+                        .map(|((name, _), values)| {
+                            let value = if every_combination {
+                                let value = values[rest % values.len()].clone();
+                                rest /= values.len();
+                                value
+                            } else {
+                                values[index % values.len()].clone()
+                            };
+                            (name.clone(), value)
+                        })
+                        .collect(),
+                )
+            }
+            Mode::Sampled { rng, .. } => Some(
                 self.vars
                     .iter()
-                    .zip(&self.boundaries)
-                    .map(|((name, _), values)| {
-                        let value = if every_combination {
-                            let value = values[rest % values.len()].clone();
-                            rest /= values.len();
-                            value
-                        } else {
-                            values[index % values.len()].clone()
-                        };
-                        (name.clone(), value)
-                    })
+                    .map(|(name, generator)| (name.clone(), generator.sample(rng)))
                     .collect(),
-            );
+            ),
         }
-        let rng = &mut self.rng;
-        Some(
-            self.vars
-                .iter()
-                .map(|(name, generator)| (name.clone(), generator.sample(rng)))
-                .collect(),
-        )
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -1175,6 +1292,8 @@ impl ExactSizeIterator for Cases<'_> {}
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
 
     fn value(text: &str, env: &Env) -> Result<Value, EvalError> {
@@ -1243,6 +1362,30 @@ mod tests {
             Err(EvalError::Overflow(_))
         ));
         assert!(parse("999999999999999999999999999999999999999999").is_err());
+    }
+
+    #[test]
+    fn counts_and_lists_every_value() {
+        let int = Generator::parse("int(-2, 2)").expect("valid");
+        assert_eq!(int.domain_size(), Some(5));
+        assert_eq!(int.nth(0), Value::Int(-2));
+        assert_eq!(int.nth(4), Value::Int(2));
+        let choice = Generator::parse("choice(1, 2, 1)").expect("valid");
+        assert_eq!(choice.domain_size(), Some(2), "repeats count once");
+        let text = Generator::parse(r#"string(0, 2, "ab")"#).expect("valid");
+        assert_eq!(text.domain_size(), Some(1 + 2 + 4));
+        let all: Vec<Value> = (0..7).map(|index| text.nth(index)).collect();
+        let strings = ["", "a", "b", "aa", "ab", "ba", "bb"];
+        assert_eq!(all, strings.map(|text| Value::Str(text.into())));
+        let huge = Generator::parse(r#"string(0, 4096, "abc")"#).expect("valid");
+        assert_eq!(huge.domain_size(), None, "too many to count");
+
+        let vars = vec![("a".to_owned(), int), ("s".to_owned(), text)];
+        assert_eq!(combinations(&vars), Some(35));
+        let every: Vec<Env> = every_case(&vars).collect();
+        assert_eq!(every.len(), 35);
+        let distinct: BTreeSet<String> = every.iter().map(|env| format!("{env:?}")).collect();
+        assert_eq!(distinct.len(), 35, "each combination once");
     }
 
     #[test]

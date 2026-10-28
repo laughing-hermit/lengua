@@ -256,6 +256,9 @@ pub struct CodeReport {
     pub unsafe_blocks: Vec<String>,
     /// Program runs made by the tests.
     pub test_runs: usize,
+    /// The generated tests that ran every value in their ranges, not a sample, such as
+    /// "generated B1: every value of n in its range (all 201)".
+    pub every_value: Vec<String>,
     /// The seed that drew this check's random inputs.
     pub seed: String,
     /// What each test cost: instructions, cycles and CPU time (lower is faster), when the CPU's
@@ -491,7 +494,7 @@ impl LenguaServer {
             generated_runs: suite
                 .generated
                 .iter()
-                .map(|block| u64::from(block.runs))
+                .map(|block| u64::try_from(block.run_count()).unwrap_or(u64::MAX))
                 .sum(),
             message,
             next_step: self.program_state(&folder)?.1,
@@ -575,6 +578,15 @@ impl LenguaServer {
         let suite = testfile::check(&tests_text, &spec, &label)
             .map_err(|problems| tests_problems(&folder, &problems))?;
         let seed = random_seed()?;
+        let every_value: Vec<(String, String)> = suite
+            .generated
+            .iter()
+            .filter_map(|block| {
+                block
+                    .every_value_text()
+                    .map(|text| (block.id.to_string(), text))
+            })
+            .collect();
         let outcome = testrun::run_tests(&suite, &self.launcher, &built.executable, &source, seed)
             .await
             .map_err(|error| format!("couldn't run the program: {error}"))?;
@@ -604,13 +616,21 @@ impl LenguaServer {
                 .map(|block| format!("main.s:{}-{}: {}", block.start, block.end, block.reason))
                 .collect(),
             test_runs: outcome.runs,
+            every_value: every_value
+                .iter()
+                .map(|(id, text)| format!("generated {id}: {text}"))
+                .collect(),
             seed: seed.to_string(),
             performance: outcome.costs,
             fingerprint: fingerprint.to_string(),
             message: format!(
-                "{CODE_FILE} follows every rule and passed all {} test runs. lengua.lock now \
+                "{CODE_FILE} follows every rule and passed all {} test runs.{} lengua.lock now \
                  records spec, tests and code together, so the program can run.",
-                outcome.runs
+                outcome.runs,
+                every_value
+                    .iter()
+                    .map(|(id, text)| format!(" Generated {id} tried {text}."))
+                    .collect::<String>()
             ),
             next_step: self.program_state(&folder)?.1,
         }))

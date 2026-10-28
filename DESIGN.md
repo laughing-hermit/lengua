@@ -80,7 +80,9 @@ harness, so a lock approved in one harness verifies in all of them.
 
 `tests.toml` has one example per behavior, holding that behavior's backtick values, and
 generated blocks that draw new inputs on every run (boundary values first, then seeded random
-ones) and compute the expected results with formulas. The formula language has checked 128-bit
+ones) and compute the expected results with formulas. A block whose ranges hold at most 5000
+combinations runs every one of them instead, within 20000 runs per file: for those inputs the
+program is checked, not sampled, which is the first step toward the proof below. The formula language has checked 128-bit
 whole numbers, strings, comparisons, `&& || !` and the functions `len`, `abs`, `min`, `max`,
 `if`, `upper`, `lower` and `reverse`. It has no loops, so every formula finishes.
 
