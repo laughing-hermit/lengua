@@ -907,8 +907,8 @@ fn confine(
                 AccessFs::Execute | AccessFs::ReadFile,
             ))
         })
-        // TCP connections only to the approved ports; binding none, since a server's socket is
-        // already listening.
+        // TCP connections only to the ports the spec names; binding none, since a server's
+        // socket is already listening.
         .and_then(|ruleset| {
             ruleset.add_rules(
                 net.connect
@@ -922,8 +922,8 @@ fn confine(
     // to them doesn't run it.
     if net.is_used() && status.ruleset != RulesetStatus::FullyEnforced {
         return Err(
-            "this kernel can't hold the program to its approved ports; Landlock needs Linux 6.7 \
-             or newer"
+            "this kernel can't hold the program to the ports its spec names; Landlock needs \
+             Linux 6.7 or newer"
                 .into(),
         );
     }

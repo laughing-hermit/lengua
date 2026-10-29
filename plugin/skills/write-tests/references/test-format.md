@@ -7,7 +7,7 @@ tables for every behavior whose example has inputs.
 
 | Field | Meaning |
 |---|---|
-| `spec` | The approved spec's label from the `status` tool: `"sha256:<64 hex digits>"` |
+| `spec` | The recorded spec's label from the `status` tool: `"sha256:<64 hex digits>"` |
 
 ## [[example]]
 
@@ -159,7 +159,7 @@ longer; long text belongs on standard input.
 
 Arguments must be literal values. The limits of `int` and `decimal` and the lengths of `string`
 must be numbers that the `# Purpose` section of `spec.md` writes in backticks, so every range
-comes from the approved spec, and a `decimal` uses the places Purpose writes (`0.00` means 2). A
+comes from the recorded spec, and a `decimal` uses the places Purpose writes (`0.00` means 2). A
 `string` may start at length 0 without Purpose saying so.
 Numbers from behaviors don't count: an example's own inputs aren't a range.
 
@@ -241,7 +241,7 @@ adds two prices in cents, and any rounding rule the spec states is whole-number 
 
 1. The file is valid TOML and uses only the fields above. Its text never holds the characters
    U+FDD0, U+FDD1 and U+FDD2, which mark rules inside lengua.
-2. `[meta].spec` is the approved spec's label.
+2. `[meta].spec` is the recorded spec's label.
 3. There is exactly one example per behavior, and no unknown IDs.
 4. Each example has its behavior's exit code and contains every backtick value of the behavior.
 5. Each behavior whose example has inputs has a generated block.
@@ -257,9 +257,11 @@ adds two prices in cents, and any rounding rule the spec states is whole-number 
 11. Given each example's inputs, the formulas produce the example's results. Where the example
     has a rule, the block's output must have the same rule, or exact text the rule allows.
 
-When everything passes, `lengua.lock` records the tests and the server keeps a copy. Until
-`check_code` first runs them, a fixed `tests.toml` can be checked again; from then on the tests
-stay frozen until the spec changes, and the copy can restore them.
+When everything passes, `lengua.lock` records the tests and the server keeps a copy. A wrong test
+can be fixed at any time and checked again. After code has run, the reply shows what changed since
+the tests code first ran against (`tests_changed`) and lengua's own marks on the changes that test
+less (`tests_less`): fewer runs, a generator that draws fewer values, exact output turned into a
+rule, or a removed block, variable or expected file.
 
 ## More examples
 

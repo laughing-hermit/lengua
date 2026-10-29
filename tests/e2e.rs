@@ -1,11 +1,11 @@
 //! The whole workflow through the MCP server, in both protocol generations, on the `add` example:
-//! spec → approval → tests → code → run, and every way lengua refuses or recovers.
+//! spec → record → tests → code → run, and every way lengua refuses or recovers.
 
 mod common;
 
 use std::path::PathBuf;
 
-use common::{Program, Protocol, Session};
+use common::{Program, Protocol, REQUEST, Session};
 use lengua::hash::Sha256Hex;
 use serde_json::{Value, json};
 
@@ -42,10 +42,10 @@ async fn the_server_offers_exactly_six_tools() {
         assert_eq!(
             names,
             [
-                "approve_spec",
                 "check_code",
                 "check_tests",
                 "prove",
+                "record_spec",
                 "run",
                 "status"
             ],
@@ -59,10 +59,10 @@ async fn the_server_offers_exactly_six_tools() {
         assert_eq!(
             titles,
             [
-                "Approve spec",
                 "Check code",
                 "Check tests",
                 "Prove for every input",
+                "Record spec",
                 "Run program",
                 "Status"
             ],
@@ -110,12 +110,13 @@ async fn add_goes_from_spec_to_run_in_both_protocols() {
         }
         assert_eq!(
             state(&session, &program).await,
-            "spec_not_approved",
+            "spec_unrecorded",
             "{protocol:?}"
         );
 
-        let approval = session.approve(&program).await;
-        assert_eq!(approval["approved"], true, "{protocol:?}: {approval}");
+        let record = session.record(&program).await;
+        assert_eq!(record["recorded"], true, "{protocol:?}: {record}");
+        assert_eq!(record["requests"], json!([REQUEST]), "{record}");
         assert_eq!(state(&session, &program).await, "tests_unchecked");
         let tests = session.call_ok("check_tests", program.arguments()).await;
         assert_eq!(tests["checked"], true, "{tests}");
@@ -148,17 +149,35 @@ async fn add_goes_from_spec_to_run_in_both_protocols() {
         program.write("main.s", &example("main.s"));
         assert_eq!(state(&session, &program).await, "ready");
 
-        // Checked tests are frozen.
+        // Tests can be fixed after code ran: the change is shown, and lengua marks what tests
+        // less.
         program.write(
             "tests.toml",
             &example("tests.toml").replace("runs = 200", "runs = 20"),
         );
-        let error = session.call_error("check_tests", program.arguments()).await;
-        assert!(error.contains("tests stay frozen"), "{error}");
+        assert_eq!(state(&session, &program).await, "tests_unchecked");
+        let fixed = session.call_ok("check_tests", program.arguments()).await;
+        assert!(
+            text(&fixed["tests_changed"]).contains("runs = 20"),
+            "{fixed}"
+        );
+        assert!(
+            fixed["tests_less"][0]
+                .as_str()
+                .is_some_and(|mark| mark.contains("fewer runs, 20 instead of 200")),
+            "{fixed}"
+        );
+        assert_eq!(state(&session, &program).await, "code_unchecked");
+        let code = session.call_ok("check_code", program.arguments()).await;
+        assert!(code["tests_less"].is_array(), "{code}");
+        assert!(text(&code["message"]).contains("tests_less"), "{code}");
         program.write("tests.toml", &example("tests.toml"));
+        session.call_ok("check_tests", program.arguments()).await;
+        let code = session.call_ok("check_code", program.arguments()).await;
+        assert!(code.get("tests_changed").is_none(), "{code}");
         assert_eq!(state(&session, &program).await, "ready");
 
-        // A lock edited by hand can't be trusted; approving again starts over.
+        // A lock edited by hand can't be trusted; recording again starts over.
         let lock = program.read("lengua.lock").expect("the lock");
         program.write(
             "lengua.lock",
@@ -169,38 +188,37 @@ async fn add_goes_from_spec_to_run_in_both_protocols() {
             .call_error("run", run_arguments(&program, &["2", "3"]))
             .await;
         assert!(error.contains("can't be used"), "{error}");
-        session.approve(&program).await;
+        session.record(&program).await;
         session.call_ok("check_tests", program.arguments()).await;
         session.call_ok("check_code", program.arguments()).await;
         assert_eq!(state(&session, &program).await, "ready");
 
-        // An edited spec stops everything until the user approves it in their own words.
+        // An edited spec stops everything until it's recorded again, with the user's words.
         let edited = example("spec.md").replace("Adds two numbers", "Adds two integers");
         program.write("spec.md", &edited);
-        assert_eq!(state(&session, &program).await, "spec_not_approved");
+        assert_eq!(state(&session, &program).await, "spec_unrecorded");
         let error = session
             .call_error("run", run_arguments(&program, &["2", "3"]))
             .await;
-        assert!(
-            error.contains("wait until they say they approve it"),
-            "{error}"
-        );
+        assert!(error.contains("call record_spec"), "{error}");
         let error = session
-            .call_error("approve_spec", program.approval("  "))
+            .call_error("record_spec", program.request("  "))
             .await;
-        assert!(
-            error.contains("Only the user can approve a spec"),
-            "{error}"
-        );
+        assert!(error.contains("Never make them up"), "{error}");
 
-        // Approving it records their words and resets the tests and code checks.
-        let approval = session.approve(&program).await;
-        assert_eq!(approval["approval"], program.approval_words(), "{approval}");
-        let lock = program.read("lengua.lock").expect("the lock");
-        assert!(
-            lock.contains(&format!("approval = \"{}\"", program.approval_words())),
-            "{lock}"
+        // A new request after a finished build starts a new one, recording the user's words
+        // and resetting the tests and code checks.
+        let record = session
+            .call_ok("record_spec", program.request("Call them integers"))
+            .await;
+        assert_eq!(
+            record["requests"],
+            json!(["Call them integers"]),
+            "{record}"
         );
+        assert!(record.get("spec_changed").is_none(), "{record}");
+        let lock = program.read("lengua.lock").expect("the lock");
+        assert!(lock.contains("words = [\"Call them integers\"]"), "{lock}");
         assert!(
             !lock.contains("[tests]") && !lock.contains("[code]"),
             "{lock}"
@@ -230,7 +248,7 @@ async fn code_that_breaks_a_rule_runs_no_tests() {
                 1,
             ),
         );
-        session.approve(&program).await;
+        session.record(&program).await;
         session.call_ok("check_tests", program.arguments()).await;
         let error = session.call_error("check_code", program.arguments()).await;
         assert!(error.contains("so nothing ran"), "{protocol:?}: {error}");

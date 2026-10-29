@@ -1,14 +1,14 @@
 ---
 name: write-assembly
-description: Writes a lengua program's main.s, the x86-64 assembly (integer, vector and floating-point instructions) that implements its approved spec and passes its frozen tests, in lengua's dialect checked against the lengua Power of 10 (NASA's rules adapted for assembly). Use after check_tests passes, when the lengua status tool says to write main.s, when check_code reports violations, or when the user asks for a faster program. Ends with a first run and a short report to the user.
+description: Writes a lengua program's main.s, the x86-64 assembly (integer, vector and floating-point instructions) that implements its recorded spec and passes its tests, in lengua's dialect checked against the lengua Power of 10 (NASA's rules adapted for assembly). Use after check_tests passes, when the lengua status tool says to write main.s, when check_code reports violations, or when the user asks for a faster program. Ends with a first run and a short report to the user.
 license: Apache-2.0
 compatibility: Needs the lengua MCP server from the lengua plugin, on Linux x86-64 with LLVM (llvm-mc and ld.lld).
 ---
 
 # Write lengua assembly
 
-`main.s` is the program: x86-64 assembly for Linux that you write from the approved spec and its
-frozen tests. You are the compiler. lengua checks your translation: it assembles `main.s`, reads
+`main.s` is the program: x86-64 assembly for Linux that you write from the recorded spec and its
+tests. You are the compiler. lengua checks your translation: it assembles `main.s`, reads
 the machine code back, matches it to `main.s` line by line, and checks the lengua Power of 10.
 Nothing runs before every rule passes.
 
@@ -32,7 +32,9 @@ Nothing runs before every rule passes.
    generated tests with fresh random inputs (boundary values first). A failure shows the inputs,
    the seed, what was expected and what happened, and `assertion N failed at main.s:LINE` when an
    assertion fires. Fix everything and call it again until it passes; then `lengua.lock` records
-   the code.
+   the code. When a test fails, decide from `spec.md` whether `main.s` or the test is wrong: fix
+   `main.s`, or fix `tests.toml` with the write-tests skill and call `check_tests`. Keep going
+   until everything passes; never stop to ask the user.
 6. **Make it fast.** lengua aims for programs faster than C, C++ and Rust built with every
    optimization. When the program loops over its input (text, numbers, files, a stream), make one
    pass for speed now that the tests are green, then call `check_code` again: the tests must stay
@@ -69,12 +71,15 @@ Nothing runs before every rule passes.
    on its spec's port and `run` returns its address: try it with your own tools, such as `curl`
    or `nc`, then call `run` with `stop: true` to stop it and see what it printed. A program
    that connects reaches only the ports its spec names.
-9. Tell the user in a few short lines and plain words: where the program is, that it follows
-   every rule and passed all its test runs, which behaviors are proven for every input (and, if
-   the proof says one solver answered alone, which one to install for a second check), what
-   `run` printed (and the files it wrote, if any),
-   and that they can ask you to run it with other inputs or to change what it does (which starts
-   with the spec). If the code
+9. Tell the user in a few short lines and plain words: where the program is; what its spec
+   promises, in two or three lines (its behaviors, its limits such as input sizes and ranges, and
+   what it may touch: files, ports); that it follows every rule and passed all its test runs;
+   which behaviors are proven for every input (and, if the proof says one solver answered alone,
+   which one to install for a second check); what `run` printed (and the files it wrote, if any);
+   and that they can ask you to run it with other inputs or to change what it does. If
+   `check_code` listed `spec_changed`, `tests_changed` or `tests_less`, say in a line each what
+   changed after their request and why, and name every change that tests less. If `requests`
+   holds more than one request, every one must be the user's own words. If the code
    handles a case the spec doesn't mention, such as input longer than a buffer, say so in one line
    and offer to add it to the spec. When `check_code` reports that a generated test tried every
    value in its range, say that behavior was checked for every input in its range. Leave out

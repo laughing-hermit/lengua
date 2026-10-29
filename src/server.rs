@@ -15,7 +15,7 @@ use crate::checker;
 use crate::data_dir::DataDir;
 use crate::expr;
 use crate::hash::Sha256Hex;
-use crate::lock::{self, CodeStamp, Key, Lock, ProofStamp, TestsStamp};
+use crate::lock::{self, CodeStamp, Key, Lock, ProofStamp, SpecStamp, TestsStamp};
 use crate::platform::{CpuFeatures, Machine, Profile};
 use crate::prove;
 use crate::runner::{self, End, Job, Limits, Net, Started};
@@ -24,6 +24,7 @@ use crate::state::{
     CODE_FILE, LockStatus, ProgramFolder, SPEC_FILE, Snapshot, State, StepContext, TESTS_FILE,
     stamped_copy,
 };
+use crate::testdiff;
 use crate::testfile;
 use crate::testrun;
 use crate::toolchain::Toolchain;
@@ -32,14 +33,14 @@ use crate::toolchain::Toolchain;
 ///
 /// Kept under 512 characters and self-contained: some harnesses only show the beginning.
 pub const INSTRUCTIONS: &str = "lengua builds programs as folders holding spec.md (the source \
-of truth), tests.toml, main.s and lengua.lock. Order: spec, then tests, then code. Only the user \
-approves spec.md: when they say so, pass their words to approve_spec. Never edit lengua.lock. \
-Tests freeze once code runs, until the spec changes. Run programs only with the run tool. Pass \
-absolute folder paths. When unsure, call status and follow its next step; the write-spec, \
-write-tests and write-assembly skills explain each file.";
+of truth), tests.toml, main.s and lengua.lock. Order: spec, then tests, then code. Write spec.md \
+from the user's request and record it with record_spec and their words; don't wait for an \
+approval. Never edit lengua.lock. Run programs only with the run tool. Pass absolute folder \
+paths. When unsure, call status and follow its next step; the write-spec, write-tests and \
+write-assembly skills explain each file.";
 
-/// The longest approval the lock records: the user's words, not a whole conversation.
-const MAX_APPROVAL_CHARS: usize = 500;
+/// The longest request the lock records: the user's words, not a whole conversation.
+const MAX_REQUEST_CHARS: usize = 2000;
 
 /// The lengua MCP server.
 #[derive(Debug, Clone)]
@@ -108,14 +109,14 @@ pub struct ProgramParams {
     pub path: String,
 }
 
-/// Input for `approve_spec`.
+/// Input for `record_spec`.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct ApprovalParams {
+pub struct RecordParams {
     /// Absolute path of the program folder, or of its spec.md.
     pub path: String,
-    /// The user's own words approving the spec, quoted exactly, such as "I approve
-    /// /home/you/projects/add/spec.md".
-    pub approval: String,
+    /// The user's own words that asked for this program or this change, quoted exactly, such as
+    /// "Make me a program that adds two numbers".
+    pub request: String,
 }
 
 /// Everything `status` reports: only what the agent can't find out for itself.
@@ -148,8 +149,8 @@ pub struct MachineReport {
 pub struct ProgramReport {
     /// The program folder.
     pub path: String,
-    /// Workflow state: no_spec, lock_invalid, spec_not_approved, tests_missing,
-    /// tests_unchecked, tests_changed, code_missing, code_unchecked or ready.
+    /// Workflow state: no_spec, lock_invalid, spec_unrecorded, tests_missing,
+    /// tests_unchecked, code_missing, code_unchecked or ready.
     pub state: String,
     /// The label tests.toml and main.s must carry: `sha256:<hex>` of the current spec.md.
     pub spec_label: Option<String>,
@@ -162,6 +163,18 @@ pub struct ProgramReport {
     pub proven: Vec<String>,
     /// Which solvers checked those proofs.
     pub proven_by: Option<String>,
+    /// The user's requests in this build, as recorded, oldest first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub requests: Vec<String>,
+    /// How spec.md changed since the build's first request, as `-`/`+` lines.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spec_changed: Option<String>,
+    /// How tests.toml changed since code first ran in this build, as `-`/`+` lines.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tests_changed: Option<String>,
+    /// lengua's own list of the test changes that test less than before.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tests_less: Vec<String>,
 }
 
 /// The three files of a program.
@@ -182,7 +195,7 @@ pub struct FileReport {
     pub exists: bool,
     /// SHA-256 of its bytes.
     pub sha256: Option<String>,
-    /// Whether lengua.lock records exactly this version as approved or checked.
+    /// Whether lengua.lock records exactly this version as recorded or checked.
     pub stamped: bool,
 }
 
@@ -193,21 +206,22 @@ pub struct LockReport {
     pub state: String,
     /// Why the lock can't be trusted, when it's invalid.
     pub problem: Option<String>,
-    /// The user's words that approved the spec.
-    pub approval: Option<String>,
     /// One hash over spec, tests and code, once all three are checked.
     pub fingerprint: Option<String>,
 }
 
-/// What `approve_spec` reports.
+/// What `record_spec` reports.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct ApprovalReport {
-    /// Whether spec.md is approved now.
-    pub approved: bool,
-    /// The user's words that approved it, as lengua.lock records them.
-    pub approval: String,
+pub struct RecordReport {
+    /// Whether spec.md is recorded now.
+    pub recorded: bool,
     /// The label tests.toml and main.s must carry: `sha256:<hex>` of spec.md.
     pub spec_label: String,
+    /// The user's requests in this build, as recorded, oldest first.
+    pub requests: Vec<String>,
+    /// How spec.md changed since the build's first request, as `-`/`+` lines.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spec_changed: Option<String>,
     /// What happened.
     pub message: String,
     /// The single next thing to do.
@@ -227,6 +241,12 @@ pub struct TestsReport {
     pub generated_blocks: usize,
     /// Runs of all generated blocks together, each with fresh inputs.
     pub generated_runs: u64,
+    /// How tests.toml changed since code first ran in this build, as `-`/`+` lines.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tests_changed: Option<String>,
+    /// lengua's own list of the test changes that test less than before.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tests_less: Vec<String>,
     /// What happened.
     pub message: String,
     /// The single next thing to do.
@@ -262,6 +282,17 @@ pub struct CodeReport {
     pub performance: Vec<testrun::Cost>,
     /// One hash over spec, tests and code.
     pub fingerprint: String,
+    /// The user's requests in this build, as recorded, oldest first.
+    pub requests: Vec<String>,
+    /// How spec.md changed since the build's first request, as `-`/`+` lines.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spec_changed: Option<String>,
+    /// How tests.toml changed since code first ran in this build, as `-`/`+` lines.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tests_changed: Option<String>,
+    /// lengua's own list of the test changes that test less than before.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tests_less: Vec<String>,
     /// What happened.
     pub message: String,
     /// The single next thing to do.
@@ -448,9 +479,10 @@ impl LenguaServer {
         description = "Shows what lengua allows on this machine (the CPU extensions main.s may \
             use and the cores a spec may ask for) and, given a program folder, what that program \
             needs next: each file's hash, whether lengua.lock records it, the label tests.toml \
-            and main.s must carry, any problems in an unapproved spec.md, and which tests prove \
-            has proven for every input. Ends with the single next step to take, or why lengua \
-            can't build programs here. path: absolute path of a program folder (optional).",
+            and main.s must carry, any problems in an unrecorded spec.md, which tests prove has \
+            proven for every input, the user's requests, and what changed in spec.md and \
+            tests.toml since them. Ends with the single next step to take, or why lengua can't \
+            build programs here. path: absolute path of a program folder (optional).",
         annotations(title = "Status", read_only_hint = true, open_world_hint = false)
     )]
     async fn status(
@@ -484,40 +516,41 @@ impl LenguaServer {
     }
 
     #[tool(
-        name = "approve_spec",
-        title = "Approve spec",
-        description = "Records in lengua.lock that the user approved <path>/spec.md. Call it only \
-            after the user has read the spec and told you, in their own words, that they approve \
-            it, and pass those words as approval; never on your own. It first checks the spec's \
-            format and returns any problems. Approving a changed spec resets the tests and code \
-            checks; approving the same spec again after fixing frozen tests reopens them. path: \
-            absolute path of the program folder or of its spec.md; approval: the user's words, \
-            quoted exactly.",
+        name = "record_spec",
+        title = "Record spec",
+        description = "Records <path>/spec.md in lengua.lock as the source of truth, with the \
+            user's words that asked for this program or this change. Call it right after writing \
+            or changing spec.md; don't wait for an approval. It first checks the spec's format \
+            and returns any problems. A changed spec makes the tests and code be checked again, \
+            and every change after the build's first request is shown, never hidden. path: \
+            absolute path of the program folder or of its spec.md; request: the user's words, \
+            quoted exactly, never made up.",
         annotations(
-            title = "Approve spec",
+            title = "Record spec",
             read_only_hint = false,
             destructive_hint = false,
             idempotent_hint = true,
             open_world_hint = false
         )
     )]
-    async fn approve_spec(
+    async fn record_spec(
         &self,
-        Parameters(params): Parameters<ApprovalParams>,
-    ) -> Result<Json<ApprovalReport>, String> {
+        Parameters(params): Parameters<RecordParams>,
+    ) -> Result<Json<RecordReport>, String> {
         let folder = folder_of(&params.path)?;
-        let approval = params.approval.trim();
-        if approval.is_empty() {
-            return Err(format!(
-                "approval must quote the user's own words approving {folder}/{SPEC_FILE}. Only \
-                 the user can approve a spec: tell them where it is, and wait until they say they \
-                 approve it."
-            ));
+        let words = params.request.trim();
+        if words.is_empty() {
+            return Err(
+                "request must quote the user's own words that asked for this program or this \
+                 change, exactly as they wrote them. Never make them up: if the user hasn't asked \
+                 for a program yet, ask them what it should do."
+                    .to_owned(),
+            );
         }
-        if approval.chars().count() > MAX_APPROVAL_CHARS {
+        if words.chars().count() > MAX_REQUEST_CHARS {
             return Err(format!(
-                "approval holds more than {MAX_APPROVAL_CHARS} characters; quote only the user's \
-                 words that approve the spec."
+                "request holds more than {MAX_REQUEST_CHARS} characters; quote only the user's \
+                 words that ask for the program or the change."
             ));
         }
         let _writing = self.lock_writes.lock().await;
@@ -525,59 +558,89 @@ impl LenguaServer {
         let spec = spec::parse(&text).map_err(|problems| spec_problems(&folder, &problems))?;
         let current = Sha256Hex::of(text.as_bytes());
         let key = Key::load_or_create(&self.data_dir).map_err(|error| error.to_string())?;
-        let lock = lock::read(folder.path(), Some(&key));
-        // Approving the same spec again reopens frozen tests that were found wrong and edited.
-        let reopens = match &lock {
-            Ok(Some(lock)) if lock.spec.sha256 == current => {
-                lock.tests.as_ref().is_some_and(|stamp| {
-                    stamp.frozen
-                        && std::fs::read(folder.file(TESTS_FILE))
-                            .is_ok_and(|tests| Sha256Hex::of(&tests) != stamp.sha256)
-                })
-            }
-            _ => false,
+        // Every recorded version is kept by its hash, so later changes can be shown.
+        write_stamped_copy(&self.data_dir, &current, &text)?;
+        let previous = lock::read(folder.path(), Some(&key)).ok().flatten();
+        let fresh = || {
+            format!(
+                "lengua recorded {SPEC_FILE} for \"{}\" with the user's request. It's the source \
+                 of truth the tests and code are checked against.",
+                spec.title
+            )
         };
-        let (approval, message) = match lock {
-            Ok(Some(lock)) if lock.spec.sha256 == current && !reopens => (
-                lock.spec.approval,
-                format!("{SPEC_FILE} was already approved; nothing changed."),
+        let (lock, message) = match previous {
+            Some(lock)
+                if lock.request.words.iter().any(|known| known == words)
+                    && lock.spec.sha256 == current =>
+            {
+                (
+                    lock,
+                    format!("{SPEC_FILE} was already recorded for this request; nothing changed."),
+                )
+            }
+            // The spec was revised under a request it already has: it's checked again, and
+            // the change is shown.
+            Some(lock) if lock.request.words.iter().any(|known| known == words) => (
+                Lock {
+                    spec: SpecStamp {
+                        sha256: current.clone(),
+                    },
+                    tests: None,
+                    code: None,
+                    proofs: None,
+                    ..lock
+                },
+                format!(
+                    "{SPEC_FILE} changed under the same request, so lengua records it; the tests \
+                     and code are checked against it again. spec_changed shows every change \
+                     since the build's first request: tell the user each, and why, in your final \
+                     report."
+                ),
             ),
-            _ if reopens => {
-                lock::write(
-                    folder.path(),
-                    &Lock::approved(current.clone(), approval.to_owned()),
-                    &key,
-                )
-                .map_err(|error| format!("couldn't write {folder}/{}: {error}", lock::LOCK_FILE))?;
+            // New words in the middle of a build join it, so nothing changed before them drops
+            // out of what is shown.
+            Some(lock) if lock.code.is_none() => {
+                let unchanged = lock.spec.sha256 == current;
+                let mut request = lock.request;
+                if request.words.len() >= lock::MAX_REQUESTS {
+                    request.words.remove(1);
+                }
+                request.words.push(words.to_owned());
                 (
-                    approval.to_owned(),
+                    Lock {
+                        request,
+                        spec: SpecStamp {
+                            sha256: current.clone(),
+                        },
+                        tests: if unchanged { lock.tests } else { None },
+                        code: None,
+                        proofs: None,
+                    },
                     format!(
-                        "The user approved {SPEC_FILE} again, which reopens its tests: the fixed \
-                         {TESTS_FILE} and then the code are checked again."
+                        "lengua recorded {SPEC_FILE} with the user's new words. The build they \
+                         join isn't finished, so changes are still shown from the spec it started \
+                         with, and requests lists every request in it."
                     ),
                 )
             }
-            _ => {
-                lock::write(
-                    folder.path(),
-                    &Lock::approved(current.clone(), approval.to_owned()),
-                    &key,
-                )
-                .map_err(|error| format!("couldn't write {folder}/{}: {error}", lock::LOCK_FILE))?;
-                (
-                    approval.to_owned(),
-                    format!(
-                        "The user approved {SPEC_FILE} for \"{}\". It's now the source of truth \
-                         that the tests and code are checked against.",
-                        spec.title
-                    ),
-                )
+            // A new request after a finished build starts a new build.
+            // With the spec unchanged, its checked tests and code stay, and the tests the code
+            // ran against are where test changes are counted from.
+            Some(lock) if lock.spec.sha256 == current => {
+                let mut request = Lock::requested(current.clone(), words.to_owned()).request;
+                request.tests = lock.tests.as_ref().map(|tests| tests.sha256.clone());
+                (Lock { request, ..lock }, fresh())
             }
+            _ => (Lock::requested(current.clone(), words.to_owned()), fresh()),
         };
-        Ok(Json(ApprovalReport {
-            approved: true,
-            approval,
+        lock::write(folder.path(), &lock, &key)
+            .map_err(|error| format!("couldn't write {folder}/{}: {error}", lock::LOCK_FILE))?;
+        let changes = self.changes(&folder, &lock);
+        Ok(Json(RecordReport {
+            recorded: true,
             spec_label: current.label(),
+            requests: lock.request.words.clone(),
+            spec_changed: changes.spec,
             message,
             next_step: self.program_state(&folder)?.1,
         }))
@@ -586,10 +649,10 @@ impl LenguaServer {
     #[tool(
         name = "check_tests",
         title = "Check tests",
-        description = "Checks <path>/tests.toml against the approved spec and records it in \
-            lengua.lock. Until check_code first runs it, a fixed tests.toml can be checked again; \
-            from then on it's frozen until the spec changes. It checks the [meta] \
-            spec label, one example per behavior holding the spec's values, a [[generated]] block \
+        description = "Checks <path>/tests.toml against the recorded spec and records it in \
+            lengua.lock. A wrong test can be fixed at any time: each version is checked against \
+            the spec again, and after code has run, the reply shows what changed and which \
+            changes test less. It checks the [meta] spec label, one example per behavior holding the spec's values, a [[generated]] block \
             for every behavior with inputs, generator ranges taken from the spec's Purpose, \
             formulas that reproduce each example without overflow or division by zero, and \
             output that depends on the inputs. Returns every problem at once. path: absolute path \
@@ -616,10 +679,9 @@ impl LenguaServer {
                     "There's no {TESTS_FILE} in {folder} yet. {next_step}"
                 ));
             }
-            State::TestsChanged { .. } => return Err(next_step),
-            State::NoSpec | State::SpecNotApproved | State::LockInvalid(_) => {
+            State::NoSpec | State::SpecUnrecorded | State::LockInvalid(_) => {
                 return Err(format!(
-                    "Tests are checked against an approved spec, and {folder} has none yet. \
+                    "Tests are checked against a recorded spec, and {folder} has none yet. \
                      {next_step}"
                 ));
             }
@@ -631,16 +693,22 @@ impl LenguaServer {
         let tests_hash = Sha256Hex::of(tests_text.as_bytes());
         let suite = testfile::check(&tests_text, &spec, &spec_hash.label())
             .map_err(|problems| tests_problems(&folder, &problems))?;
-        let message = if already_checked {
-            format!("{TESTS_FILE} was already checked; nothing changed.")
-        } else {
+        if !already_checked {
             self.stamp_tests(&folder, &spec_hash, &tests_hash, &tests_text)
                 .await?;
+        }
+        let changes = self.current_changes(&folder);
+        let message = if already_checked {
+            format!("{TESTS_FILE} was already checked; nothing changed.")
+        } else if changes.tests.is_some() || !changes.tests_less.is_empty() {
             format!(
-                "{TESTS_FILE} covers every behavior in {SPEC_FILE}. No code has run yet: until \
-                 check_code first runs it, a mistake in it can still be fixed and checked again. \
-                 From then on it's frozen until {SPEC_FILE} changes."
+                "{TESTS_FILE} changed after code ran against it. It still matches {SPEC_FILE}, so \
+                 lengua records it, and the code is checked against it again. tests_changed \
+                 shows the changes since code first ran, and tests_less the ones that test less: \
+                 tell the user each, and why it's right, in your final report."
             )
+        } else {
+            format!("{TESTS_FILE} covers every behavior in {SPEC_FILE}, so lengua records it.")
         };
         Ok(Json(TestsReport {
             checked: true,
@@ -652,6 +720,8 @@ impl LenguaServer {
                 .iter()
                 .map(|block| u64::try_from(block.run_count()).unwrap_or(u64::MAX))
                 .sum(),
+            tests_changed: changes.tests,
+            tests_less: changes.tests_less,
             message,
             next_step: self.program_state(&folder)?.1,
         }))
@@ -664,7 +734,7 @@ impl LenguaServer {
             it in lengua.lock. It assembles and links the program, reads the machine code back \
             and matches it to main.s line by line, and checks every lengua Power of 10 rule; \
             nothing runs before the rules pass. Then it runs every test, generated tests with \
-            fresh random inputs, and reports what each test cost. Needs an approved spec and \
+            fresh random inputs, and reports what each test cost. Needs a recorded spec and \
             checked tests, and main.s's first line must be the spec label. Returns every \
             violation or failed test with its line. path: absolute path of the program folder.",
         annotations(
@@ -690,7 +760,7 @@ impl LenguaServer {
             }
             _ => {
                 return Err(format!(
-                    "Code is checked against an approved spec and checked tests, which {folder} \
+                    "Code is checked against a recorded spec and checked tests, which {folder} \
                      doesn't have yet. {next_step}"
                 ));
             }
@@ -706,7 +776,7 @@ impl LenguaServer {
         let first_line = code.lines().next().unwrap_or_default();
         if first_line != header {
             return Err(format!(
-                "{CODE_FILE}'s first line must be `{header}`, the label of the approved spec, but \
+                "{CODE_FILE}'s first line must be `{header}`, the label of the recorded spec, but \
                  it's `{first_line}`. Set it, after making sure the code implements the current \
                  spec."
             ));
@@ -744,7 +814,7 @@ impl LenguaServer {
                     .map(|text| (block.id.to_string(), text))
             })
             .collect();
-        self.freeze_tests(&folder, &tests_hash).await?;
+        self.note_first_run(&folder, &tests_hash).await?;
         let syscalls = profile.allowed_syscalls(&spec.syscalls, spec.threads.is_some());
         let outcome = testrun::run_tests(
             &suite,
@@ -770,6 +840,14 @@ impl LenguaServer {
         let fingerprint = self
             .stamp_code(&folder, &spec_hash, &tests_hash, stamp)
             .await?;
+        let changes = self.current_changes(&folder);
+        let shown = if changes.spec.is_some() || changes.tests.is_some() {
+            " spec_changed and tests_changed show what changed after the user's request, and \
+             tests_less the test changes that test less: tell the user each, and why, in your \
+             final report."
+        } else {
+            ""
+        };
         Ok(Json(CodeReport {
             rules_passed: true,
             tests_passed: true,
@@ -790,9 +868,13 @@ impl LenguaServer {
             seed: seed.to_string(),
             performance: outcome.costs,
             fingerprint: fingerprint.to_string(),
+            requests: changes.requests,
+            spec_changed: changes.spec,
+            tests_changed: changes.tests,
+            tests_less: changes.tests_less,
             message: format!(
                 "{CODE_FILE} follows every rule and passed all {} test runs.{} lengua.lock now \
-                 records spec, tests and code together, so the program can run.",
+                 records spec, tests and code together, so the program can run.{shown}",
                 outcome.runs,
                 every_value
                     .iter()
@@ -808,7 +890,7 @@ impl LenguaServer {
         title = "Run program",
         description = "Runs the checked program in <path> with args and stdin. It runs only \
             when lengua.lock shows that spec.md, tests.toml and main.s are exactly the versions \
-            that were approved and checked, and a fresh build of main.s is byte for byte the \
+            that were recorded and checked, and a fresh build of main.s is byte for byte the \
             executable check_code tested. The program gets an empty environment, 10 seconds and \
             8 MiB of output, and the kernel lets it make only the system calls its spec allows, \
             connect only to the ports it names, and touch files only inside its working folder: \
@@ -913,7 +995,7 @@ impl LenguaServer {
             }
         };
         let syscalls = profile.allowed_syscalls(&spec.syscalls, spec.threads.is_some());
-        // The ports the spec approves, and for a server, its own port on the loopback.
+        // The ports the spec names, and for a server, its own port on the loopback.
         let net = Net {
             connect: spec.network.connects.clone(),
             listen: spec.network.listens,
@@ -1215,28 +1297,78 @@ impl LenguaServer {
         Ok((state, step))
     }
 
-    /// The state's next step. An unapproved spec.md is checked first, so the user is only asked
-    /// to approve a spec lengua accepts.
+    /// The state's next step. An unrecorded spec.md is checked first, so only a spec lengua
+    /// accepts is recorded.
     fn next_step(&self, folder: &ProgramFolder, snapshot: &Snapshot, state: &State) -> String {
-        if *state == State::SpecNotApproved
+        if *state == State::SpecUnrecorded
             && let Ok(text) = read_spec(folder)
             && let Err(problems) = spec::parse(&text)
         {
             return format!(
-                "Next: fix {folder}/{SPEC_FILE} before asking the user to approve it:\n{}Fix them \
-                 with the write-spec skill, then call status again.",
+                "Next: fix {folder}/{SPEC_FILE}:\n{}Fix them with the write-spec skill, then call \
+                 record_spec.",
                 problem_list(&problems)
             );
         }
         state.next_step(&StepContext {
             folder,
             spec: snapshot.spec.as_ref(),
-            data_dir: self.data_dir.path(),
         })
     }
 
+    /// What changed after the user's request, by the program's current lock; nothing when it
+    /// has no lock that can be trusted.
+    fn current_changes(&self, folder: &ProgramFolder) -> Changes {
+        let lock = Key::load(&self.data_dir)
+            .ok()
+            .flatten()
+            .and_then(|key| lock::read(folder.path(), Some(&key)).ok().flatten());
+        lock.map_or_else(Changes::default, |lock| self.changes(folder, &lock))
+    }
+
+    /// What changed after the user's request: spec.md since the build's first request, and
+    /// tests.toml since code first ran in the build, each against the copy lengua kept.
+    fn changes(&self, folder: &ProgramFolder, lock: &Lock) -> Changes {
+        let kept = |hash: &Sha256Hex| {
+            std::fs::read_to_string(stamped_copy(self.data_dir.path(), hash))
+                .ok()
+                .filter(|text| Sha256Hex::of(text.as_bytes()) == *hash)
+        };
+        let unseen = "the first version isn't on this machine to compare";
+        let spec = match std::fs::read_to_string(folder.file(SPEC_FILE)) {
+            Ok(now) if Sha256Hex::of(now.as_bytes()) != lock.request.spec => {
+                Some(kept(&lock.request.spec).map_or_else(
+                    || format!("{SPEC_FILE} changed; {unseen}"),
+                    |before| testdiff::line_diff(&before, &now),
+                ))
+            }
+            _ => None,
+        };
+        let (tests, tests_less) = match (
+            &lock.request.tests,
+            std::fs::read_to_string(folder.file(TESTS_FILE)),
+        ) {
+            (Some(first), Ok(now)) if Sha256Hex::of(now.as_bytes()) != *first => {
+                match kept(first) {
+                    Some(before) => (
+                        Some(testdiff::tests_diff(&before, &now)),
+                        testdiff::tests_less(&before, &now),
+                    ),
+                    None => (Some(format!("{TESTS_FILE} changed; {unseen}")), Vec::new()),
+                }
+            }
+            _ => (None, Vec::new()),
+        };
+        Changes {
+            requests: lock.request.words.clone(),
+            spec: spec.filter(|diff| !diff.is_empty()),
+            tests: tests.filter(|diff| !diff.is_empty()),
+            tests_less,
+        }
+    }
+
     /// Records checked tests in the lock, provided neither file changed while being checked,
-    /// and keeps a copy so frozen tests can be restored.
+    /// and keeps a copy so later changes can be shown against it.
     async fn stamp_tests(
         &self,
         folder: &ProgramFolder,
@@ -1267,7 +1399,6 @@ impl LenguaServer {
         let lock = Lock {
             tests: Some(TestsStamp {
                 sha256: tests.clone(),
-                frozen: false,
             }),
             code: None,
             proofs: None,
@@ -1277,9 +1408,13 @@ impl LenguaServer {
             .map_err(|error| format!("couldn't write {folder}/{}: {error}", lock::LOCK_FILE))
     }
 
-    /// Freezes the checked tests before code first runs against them, so they can't be changed
-    /// to fit the code; they stay frozen until the spec changes.
-    async fn freeze_tests(&self, folder: &ProgramFolder, tests: &Sha256Hex) -> Result<(), String> {
+    /// Notes the tests code first runs against in this build, the version later test changes
+    /// are shown against.
+    async fn note_first_run(
+        &self,
+        folder: &ProgramFolder,
+        tests: &Sha256Hex,
+    ) -> Result<(), String> {
         let _writing = self.lock_writes.lock().await;
         let key = Key::load(&self.data_dir)
             .map_err(|error| error.to_string())?
@@ -1288,19 +1423,16 @@ impl LenguaServer {
             .map_err(|error| format!("lengua.lock can't be trusted: {error}"))?
             .ok_or("lengua.lock is missing; call status")?;
         match &lock.tests {
-            Some(stamp) if stamp.sha256 == *tests && !stamp.frozen => {
-                let lock = Lock {
-                    tests: Some(TestsStamp {
-                        sha256: tests.clone(),
-                        frozen: true,
-                    }),
-                    ..lock
-                };
+            Some(stamp) if stamp.sha256 == *tests => {
+                if lock.request.tests.is_some() {
+                    return Ok(());
+                }
+                let mut lock = lock;
+                lock.request.tests = Some(tests.clone());
                 lock::write(folder.path(), &lock, &key).map_err(|error| {
                     format!("couldn't write {folder}/{}: {error}", lock::LOCK_FILE)
                 })
             }
-            Some(stamp) if stamp.sha256 == *tests => Ok(()),
             _ => Err(format!(
                 "{TESTS_FILE} changed while the code was being checked; call check_tests, then \
                  check_code again."
@@ -1395,6 +1527,7 @@ impl LenguaServer {
         let state = State::of(&snapshot);
         let step = self.next_step(folder, &snapshot, &state);
         let lock = snapshot.valid_lock();
+        let changes = lock.map_or_else(Changes::default, |lock| self.changes(folder, lock));
         // Proofs speak for the files only while all three are the ones checked.
         let proofs = lock
             .and_then(|lock| lock.proofs.as_ref())
@@ -1432,7 +1565,6 @@ impl LenguaServer {
                     LockStatus::Invalid(error) => Some(error.to_string()),
                     LockStatus::Missing | LockStatus::Valid(_) => None,
                 },
-                approval: lock.map(|lock| lock.spec.approval.clone()),
                 fingerprint: lock
                     .and_then(Lock::fingerprint)
                     .map(|fingerprint| fingerprint.to_string()),
@@ -1441,6 +1573,10 @@ impl LenguaServer {
                 .map(|proofs| proofs.proven.clone())
                 .unwrap_or_default(),
             proven_by: proofs.map(|proofs| proofs.solvers.clone()),
+            requests: changes.requests,
+            spec_changed: changes.spec,
+            tests_changed: changes.tests,
+            tests_less: changes.tests_less,
         };
         Ok((report, step))
     }
@@ -1453,6 +1589,19 @@ impl ServerHandler for LenguaServer {
             .with_server_info(Implementation::new("lengua", env!("CARGO_PKG_VERSION")))
             .with_instructions(INSTRUCTIONS)
     }
+}
+
+/// What changed after the user's request.
+#[derive(Debug, Default)]
+struct Changes {
+    /// The user's requests in this build, oldest first.
+    requests: Vec<String>,
+    /// spec.md since the build's first request.
+    spec: Option<String>,
+    /// tests.toml since code first ran in the build.
+    tests: Option<String>,
+    /// The test changes that test less, by lengua's own comparison.
+    tests_less: Vec<String>,
 }
 
 /// The program folder `path` names: the folder itself or its spec.md.
@@ -1620,13 +1769,17 @@ fn read_tests(folder: &ProgramFolder) -> Result<String, String> {
     }
 }
 
-/// Saves the checked tests under their hash, written atomically.
-fn write_stamped_copy(data_dir: &DataDir, tests: &Sha256Hex, text: &str) -> Result<(), String> {
+/// Saves a recorded spec.md or tests.toml under its hash, written atomically.
+fn write_stamped_copy(data_dir: &DataDir, file: &Sha256Hex, text: &str) -> Result<(), String> {
     use std::io::Write as _;
-    let path = stamped_copy(data_dir.path(), tests);
+    let path = stamped_copy(data_dir.path(), file);
+    if std::fs::read(&path).is_ok_and(|kept| Sha256Hex::of(&kept) == *file) {
+        return Ok(());
+    }
     let failed = |error: std::io::Error| {
         format!(
-            "couldn't keep a copy of the checked tests at {}: {error}",
+            "couldn't keep a copy of {} at {}: {error}",
+            file.label(),
             path.display()
         )
     };
@@ -1654,9 +1807,8 @@ fn tests_problems(folder: &ProgramFolder, problems: &[testfile::Problem]) -> Str
 fn spec_problems(folder: &ProgramFolder, problems: &[spec::Problem]) -> String {
     let count = problems.len();
     format!(
-        "{folder}/{SPEC_FILE} has {count} problem{} to fix before it can be approved:\n{}Fix \
-         them with the write-spec skill, tell the user what changed, and ask them to approve it \
-         again.",
+        "{folder}/{SPEC_FILE} has {count} problem{} to fix before lengua can record it:\n{}Fix \
+         them with the write-spec skill, then call record_spec again.",
         if count == 1 { "" } else { "s" },
         problem_list(problems)
     )
@@ -1711,7 +1863,7 @@ mod tests {
     }
 
     #[test]
-    fn approval_may_name_the_folder_or_its_spec() {
+    fn a_record_may_name_the_folder_or_its_spec() {
         let folder = folder_of("/home/you/add/spec.md").expect("a spec path");
         assert_eq!(folder.to_string(), "/home/you/add");
         let folder = folder_of(" /home/you/add ").expect("a folder path");

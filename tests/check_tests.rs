@@ -1,5 +1,5 @@
-//! Checking tests.toml: the checks, fixing tests before code runs, and the stored copy that
-//! restores frozen tests.
+//! Checking tests.toml: the checks, fixing tests at any time, and the stored copy that later
+//! changes are shown against.
 
 mod common;
 
@@ -10,10 +10,10 @@ fn text(value: &Value) -> &str {
     value.as_str().unwrap_or_default()
 }
 
-async fn approved_program(session: &Session) -> Program {
+async fn recorded_program(session: &Session) -> Program {
     let program = Program::with_add_spec();
-    let report = session.approve(&program).await;
-    assert_eq!(report["approved"], true, "{report}");
+    let report = session.record(&program).await;
+    assert_eq!(report["recorded"], true, "{report}");
     program
 }
 
@@ -23,10 +23,10 @@ async fn state(session: &Session, program: &Program) -> Value {
 }
 
 #[tokio::test]
-async fn checks_and_freezes_valid_tests() {
+async fn checks_and_records_valid_tests() {
     for protocol in Protocol::ALL {
         let session = Session::start(protocol).await;
-        let program = approved_program(&session).await;
+        let program = recorded_program(&session).await;
         let tests = add_tests(ADD_SPEC);
         program.write("tests.toml", &tests);
 
@@ -36,9 +36,10 @@ async fn checks_and_freezes_valid_tests() {
         assert_eq!(report["generated_blocks"], 1, "{report}");
         assert_eq!(report["generated_runs"], 200, "{report}");
         assert!(
-            text(&report["message"]).contains("can still be fixed and checked again"),
+            text(&report["message"]).contains("covers every behavior"),
             "{report}"
         );
+        assert!(report.get("tests_changed").is_none(), "{report}");
         assert!(
             text(&report["next_step"]).contains(&format!("# lengua: spec {}", label(ADD_SPEC))),
             "{report}"
@@ -70,9 +71,9 @@ async fn checks_and_freezes_valid_tests() {
 }
 
 #[tokio::test]
-async fn tests_can_be_fixed_until_code_runs() {
+async fn tests_can_be_fixed_before_code_runs() {
     let session = Session::start(Protocol::Discover).await;
-    let program = approved_program(&session).await;
+    let program = recorded_program(&session).await;
     let tests = add_tests(ADD_SPEC);
     program.write("tests.toml", &tests);
     session.call_ok("check_tests", program.arguments()).await;
@@ -83,6 +84,8 @@ async fn tests_can_be_fixed_until_code_runs() {
     assert_eq!(state(&session, &program).await, "tests_unchecked");
     let report = session.call_ok("check_tests", program.arguments()).await;
     assert_eq!(report["generated_runs"], 300, "{report}");
+    // Before code runs, nothing is counted as a change after it.
+    assert!(report.get("tests_changed").is_none(), "{report}");
     assert_eq!(state(&session, &program).await, "code_missing");
     session.service.cancel().await.expect("close the session");
 }
@@ -90,7 +93,7 @@ async fn tests_can_be_fixed_until_code_runs() {
 #[tokio::test]
 async fn problems_are_reported_and_nothing_is_recorded() {
     let session = Session::start(Protocol::Discover).await;
-    let program = approved_program(&session).await;
+    let program = recorded_program(&session).await;
     program.write(
         "tests.toml",
         &add_tests(ADD_SPEC).replace("{a + b}", "{a - b}"),
@@ -112,16 +115,17 @@ async fn problems_are_reported_and_nothing_is_recorded() {
 }
 
 #[tokio::test]
-async fn tests_need_an_approved_spec_and_a_file() {
+async fn tests_need_a_recorded_spec_and_a_file() {
     let session = Session::start(Protocol::Discover).await;
-    let unapproved = Program::with_add_spec();
-    unapproved.write("tests.toml", &add_tests(ADD_SPEC));
+    let unrecorded = Program::with_add_spec();
+    unrecorded.write("tests.toml", &add_tests(ADD_SPEC));
     let error = session
-        .call_error("check_tests", unapproved.arguments())
+        .call_error("check_tests", unrecorded.arguments())
         .await;
-    assert!(error.contains("approved spec"), "{error}");
+    assert!(error.contains("recorded spec"), "{error}");
+    assert!(error.contains("call record_spec"), "{error}");
 
-    let without_tests = approved_program(&session).await;
+    let without_tests = recorded_program(&session).await;
     let error = session
         .call_error("check_tests", without_tests.arguments())
         .await;
@@ -130,16 +134,21 @@ async fn tests_need_an_approved_spec_and_a_file() {
 }
 
 #[tokio::test]
-async fn a_new_spec_unfreezes_the_tests() {
+async fn a_changed_spec_needs_its_tests_checked_again() {
     let session = Session::start(Protocol::Discover).await;
-    let program = approved_program(&session).await;
+    let program = recorded_program(&session).await;
     program.write("tests.toml", &add_tests(ADD_SPEC));
     session.call_ok("check_tests", program.arguments()).await;
 
     let edited = ADD_SPEC.replace("Adds two numbers", "Adds two integers");
     program.write("spec.md", &edited);
-    let approval = session.approve(&program).await;
-    assert_eq!(approval["approved"], true, "{approval}");
+    let record = session.record(&program).await;
+    assert_eq!(record["recorded"], true, "{record}");
+    // Recorded again under the same request, the change is shown.
+    assert!(
+        text(&record["spec_changed"]).contains("Adds two integers"),
+        "{record}"
+    );
     assert_eq!(state(&session, &program).await, "tests_unchecked");
 
     let error = session.call_error("check_tests", program.arguments()).await;

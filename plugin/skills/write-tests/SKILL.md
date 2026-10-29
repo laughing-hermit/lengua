@@ -1,13 +1,13 @@
 ---
 name: write-tests
-description: Writes a lengua program's tests.toml from its approved spec.md, with one example per behavior holding the spec's own values plus generated tests whose formulas compute the expected results for fresh random inputs on every run. Use after a spec is approved or changed, when the lengua status tool says to write tests.toml, or when check_tests reports problems. Ends with check_tests, which records the tests; they freeze when code first runs against them.
+description: Writes a lengua program's tests.toml from its recorded spec.md, with one example per behavior holding the spec's own values plus generated tests whose formulas compute the expected results for fresh random inputs on every run. Use after a spec is recorded or changed, when the lengua status tool says to write tests.toml, when check_tests reports problems, or when a test turns out wrong. Ends with check_tests, which checks the tests against the spec and records them.
 license: Apache-2.0
 compatibility: Needs the lengua MCP server from the lengua plugin.
 ---
 
 # Write lengua tests
 
-`tests.toml` turns the approved spec into tests. Write it from `spec.md` alone, never from code:
+`tests.toml` turns the recorded spec into tests. Write it from `spec.md` alone, never from code:
 the tests come before the code, and they decide whether the code is right.
 
 ## Steps
@@ -61,8 +61,8 @@ the tests come before the code, and they decide whether the code is right.
   exactly those files, so leave out nothing the program writes.
 - **Ranges come from Purpose.** `int(lo, hi)` and `string(min, max, "chars")` may only use
   numbers that the spec's `# Purpose` writes in backticks; numbers from behaviors don't count.
-  If Purpose doesn't state a range you need, ask the user to add it to `spec.md` and approve the
-  spec again.
+  If Purpose doesn't state a range you need, add it to Purpose in `spec.md`, call `record_spec`
+  again with the same words, and go on; the change shows in the final report.
 - **Long literal inputs,** such as a line or a file just over a limit, are written as repeats
   in the example: `files = { "big.txt" = [{ repeat = "a", times = 1048576 }, "x"] }`. Never
   generate a huge string into tests.toml.
@@ -92,11 +92,12 @@ the tests come before the code, and they decide whether the code is right.
 - **Lengths count characters.** `string(0, 1048576, "aé€")` can reach 3 MiB, since `é` takes 2
   bytes and `€` 3, while specs and programs count bytes. Draw long text from 1-byte (ASCII)
   characters, and test other characters in short strings.
-- **Tests freeze when code first runs against them.** Until `check_code` runs them, a mistake
-  can be fixed in `tests.toml` and checked again. After that, they can't change to fit the code.
-  If a frozen test turns out to be wrong, fix `tests.toml`, tell the user in a line or two what
-  was wrong, and ask them to approve `spec.md` again (it didn't change): their approval reopens
-  the tests. Don't change the spec just to unfreeze them.
+- **Fix a wrong test any time.** When `check_code` fails, decide from `spec.md` whether the test
+  or `main.s` is wrong. If the test is, fix `tests.toml` and call `check_tests`: it checks the fix
+  against the spec again and records it, with no one to ask. After code has run, its reply shows
+  what changed (`tests_changed`) and lengua's own marks on the changes that test less
+  (`tests_less`). Tell the user each in your final report, with why the new test matches the
+  spec. Never weaken a test to make code pass: fix the code.
 
 ## Example
 

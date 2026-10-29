@@ -827,9 +827,9 @@ enum ExitCodeField {
     Formula(String),
 }
 
-/// Checks tests.toml against the approved spec, reporting every problem found (up to 20).
+/// Checks tests.toml against the recorded spec, reporting every problem found (up to 20).
 ///
-/// `spec_label` is `sha256:<hex>` of the approved spec.md.
+/// `spec_label` is `sha256:<hex>` of the recorded spec.md.
 ///
 /// # Errors
 ///
@@ -866,7 +866,7 @@ pub fn check(text: &str, spec: &Spec, spec_label: &str) -> Result<TestSuite, Vec
         checker.problem(
             Some(meta_line),
             format!(
-                "[meta] says spec = {:?}, but the approved spec is {spec_label:?}. Write the \
+                "[meta] says spec = {:?}, but the recorded spec is {spec_label:?}. Write the \
                  tests from the current spec.md, then set spec = {spec_label:?}",
                 file.meta.get_ref().spec
             ),
@@ -1607,8 +1607,8 @@ impl<'a> Checker<'a> {
                     format!(
                         "{name}: vars.{var} = {generator} uses {limit}, which spec.md's Purpose \
                          doesn't state. Generators take their ranges from Purpose: use the \
-                         numbers it gives in backticks, or ask the user to add the range to \
-                         Purpose and approve spec.md again{hint}"
+                         numbers it gives in backticks, or add the range to Purpose in spec.md \
+                         and call record_spec again{hint}"
                     ),
                 );
             }
@@ -1954,7 +1954,7 @@ impl<'a> Checker<'a> {
     }
 
     /// Each behavior's formulas must reproduce its example, whose values come from the
-    /// approved spec.
+    /// recorded spec.
     fn formulas(&mut self, examples: &[Example], generated: &[Generated]) {
         for example in examples {
             let blocks: Vec<&Generated> = generated

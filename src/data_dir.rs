@@ -1,6 +1,6 @@
 //! The server's private data folder: the lock-signing key, stamped test copies and scratch space.
 //!
-//! One folder per user, shared by every agent harness, so a lock approved in one harness verifies
+//! One folder per user, shared by every agent harness, so a lock recorded in one harness verifies
 //! in all of them.
 
 use std::ffi::OsString;

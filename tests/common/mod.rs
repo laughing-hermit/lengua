@@ -66,6 +66,9 @@ stdout = "{a + b}\n"
 exit_code = 0
 "#;
 
+/// What a user says to ask for a program.
+pub const REQUEST: &str = "Make me a program that adds two numbers";
+
 /// The label tests and code carry for a spec: `sha256:<hex>`.
 pub fn label(spec: &str) -> String {
     lengua::hash::Sha256Hex::of(spec.as_bytes()).label()
@@ -178,10 +181,10 @@ impl Session {
             .join("\n")
     }
 
-    /// Approves the program's spec.md the way an agent does after the user said so.
-    pub async fn approve(&self, program: &Program) -> Value {
-        self.call_ok("approve_spec", program.approval(&program.approval_words()))
-            .await
+    /// Records the program's spec.md the way an agent does after writing it from the user's
+    /// request.
+    pub async fn record(&self, program: &Program) -> Value {
+        self.call_ok("record_spec", program.request(REQUEST)).await
     }
 }
 
@@ -223,17 +226,12 @@ impl Program {
         serde_json::json!({ "path": self.path().to_str().expect("UTF-8 path") })
     }
 
-    /// Arguments for `approve_spec`: the folder and the user's words.
-    pub fn approval(&self, words: &str) -> Value {
+    /// Arguments for `record_spec`: the folder and the user's words asking for the program.
+    pub fn request(&self, words: &str) -> Value {
         serde_json::json!({
             "path": self.path().to_str().expect("UTF-8 path"),
-            "approval": words,
+            "request": words,
         })
-    }
-
-    /// What a user says to approve this program's spec.
-    pub fn approval_words(&self) -> String {
-        format!("I approve {}/spec.md", self.path().display())
     }
 
     /// A file in the folder.

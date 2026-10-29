@@ -18,6 +18,7 @@ pub mod spec;
 pub mod state;
 pub mod supervise;
 pub mod supply;
+pub mod testdiff;
 pub mod testfile;
 pub mod testrun;
 pub mod toolchain;

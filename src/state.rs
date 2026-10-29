@@ -15,10 +15,11 @@ pub const TESTS_FILE: &str = "tests.toml";
 /// The code's file name inside a program folder.
 pub const CODE_FILE: &str = "main.s";
 
-/// Where the server keeps a copy of checked tests, so frozen tests can be restored.
+/// Where the server keeps a copy of each spec.md and tests.toml it recorded, by hash, so later
+/// changes can be shown against them.
 #[must_use]
-pub fn stamped_copy(data_dir: &Path, tests: &Sha256Hex) -> PathBuf {
-    data_dir.join("stamped").join(tests.as_str())
+pub fn stamped_copy(data_dir: &Path, file: &Sha256Hex) -> PathBuf {
+    data_dir.join("stamped").join(file.as_str())
 }
 
 /// A program folder, given as an absolute path.
@@ -134,17 +135,12 @@ pub enum State {
     NoSpec,
     /// lengua.lock exists but can't be trusted.
     LockInvalid(LockError),
-    /// The spec was never approved, or changed since.
-    SpecNotApproved,
-    /// The spec is approved; tests.toml doesn't exist.
+    /// The spec was never recorded, or changed since.
+    SpecUnrecorded,
+    /// The spec is recorded; tests.toml doesn't exist.
     TestsMissing,
-    /// tests.toml exists but hasn't been checked.
+    /// tests.toml exists but hasn't been checked, or changed since.
     TestsUnchecked,
-    /// tests.toml changed (or disappeared) after it was checked.
-    TestsChanged {
-        /// The hash of the checked version, which names its stored copy.
-        stamped: Sha256Hex,
-    },
     /// The tests are checked; main.s doesn't exist.
     CodeMissing,
     /// main.s hasn't been checked, or changed since.
@@ -160,8 +156,6 @@ pub struct StepContext<'a> {
     pub folder: &'a ProgramFolder,
     /// SHA-256 of the current spec.md, when it exists.
     pub spec: Option<&'a Sha256Hex>,
-    /// The server's data folder, which keeps copies of checked tests.
-    pub data_dir: &'a Path,
 }
 
 impl State {
@@ -172,28 +166,19 @@ impl State {
             return Self::NoSpec;
         };
         let lock = match &snapshot.lock {
-            LockStatus::Missing => return Self::SpecNotApproved,
+            LockStatus::Missing => return Self::SpecUnrecorded,
             LockStatus::Invalid(error) => return Self::LockInvalid(error.clone()),
             LockStatus::Valid(lock) => lock,
         };
         if lock.spec.sha256 != *spec {
-            return Self::SpecNotApproved;
+            return Self::SpecUnrecorded;
         }
+        // Tests can be fixed at any time: each version is checked against the spec again, and
+        // what changed after code ran is shown, not refused.
         match (&lock.tests, &snapshot.tests) {
-            (None, None) => return Self::TestsMissing,
-            (None, Some(_)) => return Self::TestsUnchecked,
-            (Some(stamp), current) => {
-                // Until code has run against them, tests can still be fixed and checked again.
-                if current.as_ref() != Some(&stamp.sha256) {
-                    return match current {
-                        Some(_) if !stamp.frozen => Self::TestsUnchecked,
-                        None if !stamp.frozen => Self::TestsMissing,
-                        _ => Self::TestsChanged {
-                            stamped: stamp.sha256.clone(),
-                        },
-                    };
-                }
-            }
+            (_, None) => return Self::TestsMissing,
+            (Some(stamp), Some(current)) if stamp.sha256 == *current => {}
+            (_, Some(_)) => return Self::TestsUnchecked,
         }
         match (&lock.code, &snapshot.code) {
             (_, None) => Self::CodeMissing,
@@ -208,10 +193,9 @@ impl State {
         match self {
             Self::NoSpec => "no_spec",
             Self::LockInvalid(_) => "lock_invalid",
-            Self::SpecNotApproved => "spec_not_approved",
+            Self::SpecUnrecorded => "spec_unrecorded",
             Self::TestsMissing => "tests_missing",
             Self::TestsUnchecked => "tests_unchecked",
-            Self::TestsChanged { .. } => "tests_changed",
             Self::CodeMissing => "code_missing",
             Self::CodeUnchecked => "code_unchecked",
             Self::Ready => "ready",
@@ -228,15 +212,14 @@ impl State {
         match self {
             Self::NoSpec => format!("Next: write {folder}/{SPEC_FILE} with the write-spec skill."),
             Self::LockInvalid(error) => format!(
-                "Next: {folder}/{} can't be used: {error}. Tell the user, and ask them to approve \
-                 {folder}/{SPEC_FILE} again; when they do, call approve_spec with path {folder} \
-                 and their words. The tests and code are then checked again.",
+                "Next: {folder}/{} can't be used: {error}. Call record_spec with path {folder} \
+                 and the user's words that asked for this program; the tests and code are then \
+                 checked again.",
                 lock::LOCK_FILE
             ),
-            Self::SpecNotApproved => format!(
-                "Next: tell the user {folder}/{SPEC_FILE} is ready to read in their editor, and \
-                 wait until they say they approve it; then call approve_spec with path {folder} \
-                 and their words."
+            Self::SpecUnrecorded => format!(
+                "Next: call record_spec with path {folder} and the user's words that asked for \
+                 this program or this change, quoted exactly."
             ),
             Self::TestsMissing => format!(
                 "Next: write {folder}/{TESTS_FILE} with the write-tests skill; its [meta] table \
@@ -245,15 +228,6 @@ impl State {
             Self::TestsUnchecked => format!(
                 "Next: call check_tests with path {folder}; if it reports problems, fix \
                  {TESTS_FILE} with the write-tests skill."
-            ),
-            Self::TestsChanged { stamped } => format!(
-                "Blocked: {TESTS_FILE} changed after code ran against it, and tests stay frozen \
-                 so they can't be bent to fit the code. Restore it by copying {} to \
-                 {folder}/{TESTS_FILE}. If the tests were wrong, tell the user in a line or two \
-                 what was wrong and ask them to approve {folder}/{SPEC_FILE} again (it hasn't \
-                 changed); when they do, call approve_spec with their words, which reopens the \
-                 tests.",
-                stamped_copy(context.data_dir, stamped).display()
             ),
             Self::CodeMissing => format!(
                 "Next: write {folder}/{CODE_FILE} with the write-assembly skill (first line: \
@@ -280,17 +254,16 @@ mod tests {
         Sha256Hex::of(name.as_bytes())
     }
 
-    fn approved() -> Lock {
-        Lock::approved(digest("spec"), "I approve it".to_owned())
+    fn recorded() -> Lock {
+        Lock::requested(digest("spec"), "Make me an adder".to_owned())
     }
 
     fn with_tests() -> Lock {
         Lock {
             tests: Some(TestsStamp {
                 sha256: digest("tests"),
-                frozen: true,
             }),
-            ..approved()
+            ..recorded()
         }
     }
 
@@ -323,13 +296,12 @@ mod tests {
         state.next_step(&StepContext {
             folder: &folder,
             spec: Some(&spec),
-            data_dir: Path::new("/data/lengua"),
         })
     }
 
     #[test]
     fn row_no_spec() {
-        let state = state([None, Some("tests"), None], LockStatus::Valid(approved()));
+        let state = state([None, Some("tests"), None], LockStatus::Valid(recorded()));
         assert_eq!(state, State::NoSpec);
         assert_eq!(
             next_step(&state),
@@ -352,34 +324,31 @@ mod tests {
             "{step}"
         );
         assert!(
-            step.contains("call approve_spec with path /projects/add"),
+            step.contains("Call record_spec with path /projects/add"),
             "{step}"
         );
     }
 
     #[test]
-    fn row_spec_not_approved() {
+    fn row_spec_unrecorded() {
         let missing = state([Some("spec"), None, None], LockStatus::Missing);
         let changed = state(
             [Some("edited spec"), Some("tests"), Some("code")],
             LockStatus::Valid(with_code()),
         );
-        assert_eq!(missing, State::SpecNotApproved);
-        assert_eq!(changed, State::SpecNotApproved);
+        assert_eq!(missing, State::SpecUnrecorded);
+        assert_eq!(changed, State::SpecUnrecorded);
         let step = next_step(&missing);
         assert!(
-            step.contains("wait until they say they approve it"),
+            step.contains("call record_spec with path /projects/add and the user's words"),
             "{step}"
         );
-        assert!(
-            step.contains("call approve_spec with path /projects/add and their words"),
-            "{step}"
-        );
+        assert!(!step.contains("approve"), "{step}");
     }
 
     #[test]
     fn row_tests_missing() {
-        let state = state([Some("spec"), None, None], LockStatus::Valid(approved()));
+        let state = state([Some("spec"), None, None], LockStatus::Valid(recorded()));
         assert_eq!(state, State::TestsMissing);
         let step = next_step(&state);
         assert!(
@@ -393,44 +362,23 @@ mod tests {
     fn row_tests_unchecked() {
         let state = state(
             [Some("spec"), Some("tests"), None],
-            LockStatus::Valid(approved()),
+            LockStatus::Valid(recorded()),
         );
         assert_eq!(state, State::TestsUnchecked);
         assert!(next_step(&state).starts_with("Next: call check_tests"));
     }
 
     #[test]
-    fn row_tests_changed() {
+    fn edited_tests_are_checked_again_even_after_code_ran() {
+        let mut ran = with_code();
+        ran.request.tests = Some(digest("tests"));
         let edited = state(
-            [Some("spec"), Some("edited tests"), None],
-            LockStatus::Valid(with_tests()),
+            [Some("spec"), Some("edited tests"), Some("code")],
+            LockStatus::Valid(ran.clone()),
         );
-        let deleted = state([Some("spec"), None, None], LockStatus::Valid(with_tests()));
-        let expected = State::TestsChanged {
-            stamped: digest("tests"),
-        };
-        assert_eq!(edited, expected);
-        assert_eq!(deleted, expected);
-        let step = next_step(&edited);
-        assert!(
-            step.contains(&format!("/data/lengua/stamped/{}", digest("tests"))),
-            "{step}"
-        );
-        // Before code first runs against them, tests can still be fixed and checked again.
-        let open = Lock {
-            tests: Some(TestsStamp {
-                sha256: digest("tests"),
-                frozen: false,
-            }),
-            ..approved()
-        };
-        let fixed = state(
-            [Some("spec"), Some("fixed tests"), None],
-            LockStatus::Valid(open.clone()),
-        );
-        assert_eq!(fixed, State::TestsUnchecked);
-        let removed = state([Some("spec"), None, None], LockStatus::Valid(open));
-        assert_eq!(removed, State::TestsMissing);
+        assert_eq!(edited, State::TestsUnchecked);
+        let deleted = state([Some("spec"), None, Some("code")], LockStatus::Valid(ran));
+        assert_eq!(deleted, State::TestsMissing);
     }
 
     #[test]

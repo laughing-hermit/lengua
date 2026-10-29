@@ -1386,7 +1386,7 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
 
     #[test]
     fn ignores_other_frontmatter_fields() {
-        // Approval lives in lengua.lock; keeping it out of the frontmatter is the skill's job.
+        // The record lives in lengua.lock; keeping it out of the frontmatter is the skill's job.
         assert!(parse(&ADD.replace("title: add\n", "title: add\nstatus: approved\n")).is_ok());
     }
 

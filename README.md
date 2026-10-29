@@ -2,9 +2,10 @@
 
 Natural language in, checked machine code out. lengua makes your AI agent the compiler: you
 describe a program in plain words, and there's no programming language in between. The agent
-writes a spec for you to approve, tests from the spec, and then the fastest x86-64 assembly it
+writes a spec from your request, tests from the spec, and then the fastest x86-64 assembly it
 can. That assembly must pass every test and an adapted NASA "Power of 10" rule set, and lengua
-validates each step of the translation. A signed lock keeps spec, tests and code in sync, and a
+validates each step of the translation; the one step no machine can check, your request to the
+spec, comes back to you in the agent's report. A signed lock keeps spec, tests and code in sync, and a
 program runs only while all three match. See [DESIGN.md](DESIGN.md) for how and why.
 
 lengua is an [Agent Plugin](https://agent-plugins.org): three skills and an MCP server, using only
@@ -13,9 +14,9 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 > Status: dialect 2 on Linux x86-64. It covers whole numbers, exact decimals, floating point in
 > double and single precision with fused multiply-add, vectors from SSE2 to AVX-512, hashing and
 > checksums, files, fork-join threads, the clock and random bytes (which tests supply, so such
-> output is exact), plain TCP clients and servers on the ports a spec approves, and inputs up to
+> output is exact), plain TCP clients and servers on the ports a spec names, and inputs up to
 > 1 MiB. The
-> kernel holds every run to what its spec approves. `prove` proves programs right for every
+> kernel holds every run to what its spec allows. `prove` proves programs right for every
 > input, not just the tested ones, over whole numbers, decimals, choices, short texts and files,
 > with each step confirmed by two independent solvers, z3 and cvc5; `lengua.lock` records what's
 > proven. Next:
@@ -50,25 +51,28 @@ claude --plugin-dir /absolute/path/to/lengua/plugin
 ```
 
 Then describe a program, for example: "Use lengua to write a program that adds two whole numbers
-given as arguments and prints the sum."
+given as arguments and prints the sum." That request is all it takes:
 
-1. The agent writes `spec.md` and tells you where it is. Read it in your editor.
-2. When it says what you want, tell the agent so, for example: "I approve
-   /home/you/add/spec.md". That's your one decision, and lengua records your words in
-   `lengua.lock`.
-3. The rest is automatic: the agent writes the tests and the assembly, lengua checks both, and the
-   agent runs the program once and tells you how it went.
+1. The agent writes `spec.md` from your request and records it with your words in `lengua.lock`.
+   It asks you something only when your request leaves open what only you can decide.
+2. It writes the tests and the assembly, and lengua checks both. When a test fails, the agent
+   decides from the spec whether the test or the code is wrong and fixes it, until everything
+   passes, then proves what it can and runs the program once.
+3. Its report says where the program is, what the spec promises (behaviors, limits, and the files
+   and ports it may touch), what's proven, and every change made to the spec or the tests after
+   your request, with lengua's own marks on any test change that tests less.
 
-Later, ask the agent to run the program with other inputs, or on your files ("run it on
-notes.txt in ~/docs"), or to change what it does; a change starts with a new spec for you to
-approve. If you don't name a folder, the program goes in a new folder inside the current one.
+If you'd rather read the spec before the agent builds, say "show me the spec first", and it
+waits for your go-ahead. Later, ask the agent to run the program with other inputs, or on your
+files ("run it on notes.txt in ~/docs"), or to change what it does. If you don't name a folder,
+the program goes in a new folder inside the current one.
 
-Every run is confined by the kernel: the program can make only the system calls its spec
-approves, and touch files only in the folder it runs in.
+Every run is confined by the kernel: the program can make only the system calls its spec allows,
+and touch files only in the folder it runs in.
 
-Your harness may ask permission the first time each lengua tool runs. Allowing the tools doesn't
-skip your approval: only your words approve a spec. The first approval creates a signing key in
-`~/.local/share/lengua`.
+Your harness asks permission the first time each lengua tool runs. To be asked nothing more, allow
+them all once: in Claude Code, `/permissions` and add `mcp__plugin_lengua_lengua__*` to the allowed
+tools. The first record creates a signing key in `~/.local/share/lengua`.
 
 ## Examples
 
@@ -95,8 +99,8 @@ Complete programs, each with its spec, tests and assembly:
   than GNU `wc`.
 
 Their `lengua.lock` files aren't committed, because a lock is signed with each machine's own key.
-Ask the agent to run one with lengua: after you approve its spec, the agent checks the tests and
-the code, which creates the lock.
+Ask the agent to run one with lengua: it records the spec, then checks the tests and the code,
+which creates the lock.
 
 ## Against C, C++ and Rust
 

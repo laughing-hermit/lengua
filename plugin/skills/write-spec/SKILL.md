@@ -1,6 +1,6 @@
 ---
 name: write-spec
-description: Writes or updates a lengua program's spec.md for the user. spec.md is the natural-language source of truth that lengua turns into tests and checked x86-64 assembly. Use when the user wants a new lengua program, wants to change what one does, or when the lengua status tool says to write or fix spec.md. Ends when the user says they approve the spec and you record it with the approve_spec tool.
+description: Writes or updates a lengua program's spec.md from the user's request. spec.md is the natural-language source of truth that lengua turns into tests and checked x86-64 assembly. Use when the user wants a new lengua program, wants to change what one does, or when the lengua status tool says to write or fix spec.md. Ends when you record the spec with the record_spec tool and the user's own words, without waiting for an approval.
 license: Apache-2.0
 compatibility: Needs the lengua MCP server from the lengua plugin.
 ---
@@ -9,7 +9,8 @@ compatibility: Needs the lengua MCP server from the lengua plugin.
 
 A lengua program is a folder holding `spec.md`, `tests.toml`, `main.s` and `lengua.lock`. The
 spec comes first and is the single source of truth: the tests and the code are derived from it
-and checked against it. You write it; the user reads it in their own editor and approves it.
+and checked against it. You write it from the user's request; their request is the go-ahead, so
+don't ask them to approve it. They read it in your final report, which says what it promises.
 
 ## Steps
 
@@ -18,18 +19,16 @@ and checked against it. You write it; the user reads it in their own editor and 
 2. Call the lengua `status` tool with `path`. If its `next_step` starts with "Blocked", tell the
    user and stop.
 3. Write `<path>/spec.md` in the shape of [the template](assets/spec-template.md), by the rules
-   below. Ask the user only what you can't sensibly decide yourself, such as what the program
-   computes; choose the rest yourself: messages, exit codes 1, 2, 3… and ranges. To change an
-   approved spec, edit it in place.
+   below. Ask the user only what their request leaves open and only they can decide, such as what
+   the program computes; choose the rest yourself: messages, exit codes 1, 2, 3… and ranges. To
+   change a spec, edit it in place.
 4. Call `status` with `path` again. If its `next_step` lists problems in the spec, fix them.
-5. Tell the user in a few lines that `<path>/spec.md` is ready to read in their editor, and name in
-   one sentence the choices you made that they didn't state. Don't paste the spec into the chat.
-   Ask them to tell you when they approve it, for example "I approve <path>/spec.md".
-6. When the user says they approve it, call `approve_spec` with `path` and their words, quoted
-   exactly, as `approval`. Only the user approves a spec: never call it on your own or put words
-   in their mouth. If they ask for changes instead, edit `spec.md`, tell them it's ready again,
-   and wait.
-7. Follow the `next_step` it returns. Next comes `tests.toml`, with the write-tests skill.
+5. Call `record_spec` with `path` and, as `request`, the user's words that asked for this program
+   or this change, quoted exactly from their message. Never make words up or put them in the
+   user's mouth. Don't wait for an approval: go straight on. Only if the user asked to see the
+   spec before you build, tell them in a line where it is, wait for their go-ahead, and record it
+   with their words then.
+6. Follow the `next_step` it returns. Next comes `tests.toml`, with the write-tests skill.
 
 ## Rules
 
@@ -38,8 +37,8 @@ by one concrete example, in the user's words. The tests then run that example an
 of the same rule.
 
 - **Frontmatter:** `type: lengua/program-spec`, a short `title` and a one-sentence
-  `description`. Never add a `status` field: approval lives in `lengua.lock`, and any edit to the
-  spec, even a status change, needs a new approval.
+  `description`. Never add a `status` field: the record lives in `lengua.lock`, and any edit to
+  the spec, even a status change, is recorded again.
 - **Sections:** `# Purpose`, `# Behaviors` and `# Constraints`.
 - **Purpose** says in plain words what the program does, for whom and why. It then gives in
   backticks the range of every number the program reads and the length of any text it reads,
@@ -47,7 +46,7 @@ of the same rule.
   ranges, so nothing else goes in backticks there. Write each range as the tests will draw it:
   when an input is built from parts, give each part's own range, such as a path that is `/`
   followed by `0` to `2047` characters, or a reply of headers up to `1000` bytes and a body up to
-  `1000000`, so the tests never need the spec reworded and approved again. Give both ends of every number's range (from
+  `1000000`, so the tests never need the spec reworded. Give both ends of every number's range (from
   `1` to `100`); a text length may start at 0 without saying so. Keep text on standard input to at
   most
   `1048576` bytes and each argument to at most `131072` (Linux's limit), and numbers within 64
@@ -106,8 +105,9 @@ of the same rule.
   program the socket as file descriptor 3; it answers with sendto, so a client that hangs up early
   can't stop it (with write, the kernel would end it with SIGPIPE); and its behaviors may end
   with `- And it keeps serving` instead of an exit code. Write a protocol's line breaks as they
-  are sent, such as `GET / HTTP/1.0\r\n`. Tell the user in plain words what they approve, such as "it can open TCP
-  connections to port 8080 on any computer; the kernel refuses every other port."
+  are sent, such as `GET / HTTP/1.0\r\n`. In the final report, tell the user in plain words what the program may reach, such
+  as "it can open TCP connections to port 8080 on any computer; the kernel refuses every other
+  port."
 - **Websites and APIs:** lengua programs speak plain TCP, not HTTPS. A program that needs a
   website's data reads it from standard input or a file; you fetch it with your own tools and
   pass it in, and tell the user the line for their shell, such as `curl -s URL | ./program`.
@@ -155,7 +155,11 @@ and `1000000000`, given as arguments. If writing the output fails, the program e
 - Allowed system calls: read, write, exit
 ```
 
-## After approval
+## After recording
 
-Every edit to `spec.md` makes `tests.toml` and `main.s` stale. lengua won't run the program
-until the user approves the edited spec and the tests and code pass their checks again.
+Every edit to `spec.md` makes `tests.toml` and `main.s` stale: call `record_spec` again, with the
+same words when the edit carries out the same request (such as adding a range the tests need) or
+with the user's new words when they asked for a change, then check the tests and the code again.
+lengua shows every change after the user's request in its replies (`spec_changed`), and keeps
+every request of a build until its code passes, so nothing drops out: tell the user each change,
+and why, in your final report. Never change the spec to make code pass; fix the code.

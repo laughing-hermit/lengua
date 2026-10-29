@@ -1,4 +1,4 @@
-//! `lengua.lock`: the signed record of what was approved and checked.
+//! `lengua.lock`: the signed record of the user's request and what was checked against it.
 //!
 //! Only the lengua server writes it. The file is canonical TOML ending in a `[signature]` table
 //! that holds an HMAC-SHA256 of every byte before it, keyed with a per-user secret, so any edit
@@ -19,7 +19,7 @@ use crate::hash::{Sha256Hex, hex};
 pub const LOCK_FILE: &str = "lengua.lock";
 
 /// The lock format this server reads and writes.
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 /// The lengua dialect this server checks.
 pub const DIALECT: u32 = 2;
@@ -38,7 +38,9 @@ const MAX_LOCK_BYTES: u64 = 64 * 1024;
 /// What `lengua.lock` records.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Lock {
-    /// The approved spec.
+    /// The user's request the spec was written for, and what was first recorded under it.
+    pub request: RequestStamp,
+    /// The recorded spec.
     pub spec: SpecStamp,
     /// The checked tests, once stamped.
     pub tests: Option<TestsStamp>,
@@ -48,13 +50,31 @@ pub struct Lock {
     pub proofs: Option<Box<ProofStamp>>,
 }
 
-/// The approved spec.
+/// The user's requests for the build in progress, and the versions every later change is shown
+/// against.
+///
+/// A build starts with the first request and lasts until its code passes `check_code`. Words
+/// recorded in the middle of a build join it rather than start over, so no change can drop out
+/// of what is shown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestStamp {
+    /// The user's own words asking for the program or a change, as the agent quoted them, oldest
+    /// first: the build's first request, then the latest ones.
+    pub words: Vec<String>,
+    /// SHA-256 of spec.md when the build's first request was recorded.
+    pub spec: Sha256Hex,
+    /// SHA-256 of the tests.toml code first ran against in this build, once it has.
+    pub tests: Option<Sha256Hex>,
+}
+
+/// The most request words a build keeps: its first and the latest ones.
+pub const MAX_REQUESTS: usize = 6;
+
+/// The recorded spec.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpecStamp {
     /// SHA-256 of spec.md.
     pub sha256: Sha256Hex,
-    /// The user's own words approving it, as the agent quoted them.
-    pub approval: String,
 }
 
 /// The checked tests.
@@ -62,9 +82,6 @@ pub struct SpecStamp {
 pub struct TestsStamp {
     /// SHA-256 of tests.toml.
     pub sha256: Sha256Hex,
-    /// Whether code has run against them, which freezes them until the spec changes. Until
-    /// then, a fixed tests.toml can be checked again.
-    pub frozen: bool,
 }
 
 /// The checked code.
@@ -94,14 +111,17 @@ pub struct ProofStamp {
 }
 
 impl Lock {
-    /// A lock that records only an approved spec; tests and code must be checked again.
+    /// A lock that records only a new request and its spec; tests and code must be checked
+    /// again.
     #[must_use]
-    pub fn approved(spec: Sha256Hex, approval: String) -> Self {
+    pub fn requested(spec: Sha256Hex, words: String) -> Self {
         Self {
-            spec: SpecStamp {
-                sha256: spec,
-                approval,
+            request: RequestStamp {
+                words: vec![words],
+                spec: spec.clone(),
+                tests: None,
             },
+            spec: SpecStamp { sha256: spec },
             tests: None,
             code: None,
             proofs: None,
@@ -154,18 +174,24 @@ impl Lock {
         if let Some(fingerprint) = self.fingerprint() {
             let _ = writeln!(text, "fingerprint = \"{fingerprint}\"");
         }
+        let words: Vec<String> = self
+            .request
+            .words
+            .iter()
+            .map(|words| toml_string(words))
+            .collect();
         let _ = write!(
             text,
-            "\n[spec]\nsha256 = \"{}\"\napproval = {}\n",
-            self.spec.sha256,
-            toml_string(&self.spec.approval)
+            "\n[request]\nwords = [{}]\nspec = \"{}\"\n",
+            words.join(", "),
+            self.request.spec
         );
+        if let Some(tests) = &self.request.tests {
+            let _ = writeln!(text, "tests = \"{tests}\"");
+        }
+        let _ = write!(text, "\n[spec]\nsha256 = \"{}\"\n", self.spec.sha256);
         if let Some(tests) = &self.tests {
-            let _ = write!(
-                text,
-                "\n[tests]\nsha256 = \"{}\"\nfrozen = {}\n",
-                tests.sha256, tests.frozen
-            );
+            let _ = write!(text, "\n[tests]\nsha256 = \"{}\"\n", tests.sha256);
         }
         if let Some(code) = &self.code {
             let _ = write!(
@@ -210,6 +236,7 @@ struct LockFile {
     _version: u32,
     dialect: u32,
     fingerprint: Option<String>,
+    request: RequestTable,
     spec: SpecTable,
     tests: Option<TestsTable>,
     code: Option<CodeTable>,
@@ -226,17 +253,22 @@ struct ProofsTable {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct RequestTable {
+    words: Vec<String>,
+    spec: String,
+    tests: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SpecTable {
     sha256: String,
-    approval: String,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TestsTable {
     sha256: String,
-    /// Locks written before tests could be fixed until code first ran treat them as frozen.
-    frozen: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -265,19 +297,21 @@ fn parse_body(body: &str) -> Result<Lock, LockError> {
         return Err(LockError::UnsupportedDialect(file.dialect));
     }
     let digest = |text: &str| Sha256Hex::parse(text).ok_or_else(|| malformed("a hash is damaged"));
+    if file.request.words.is_empty() || file.request.words.len() > MAX_REQUESTS {
+        return Err(malformed("its [request] table is damaged"));
+    }
     let lock = Lock {
+        request: RequestStamp {
+            words: file.request.words,
+            spec: digest(&file.request.spec)?,
+            tests: file.request.tests.as_deref().map(digest).transpose()?,
+        },
         spec: SpecStamp {
             sha256: digest(&file.spec.sha256)?,
-            approval: file.spec.approval,
         },
         tests: file
             .tests
-            .map(|tests| {
-                digest(&tests.sha256).map(|sha256| TestsStamp {
-                    sha256,
-                    frozen: tests.frozen.unwrap_or(true),
-                })
-            })
+            .map(|tests| digest(&tests.sha256).map(|sha256| TestsStamp { sha256 }))
             .transpose()?,
         code: file
             .code
@@ -462,7 +496,8 @@ impl fmt::Display for KeyError {
             }
             Self::Damaged(path) => write!(
                 f,
-                "the signing key at {} is damaged; delete it, then approve each spec again",
+                "the signing key at {} is damaged; delete it, then record each program's spec \
+                 again",
                 path.display()
             ),
         }
@@ -596,13 +631,19 @@ mod tests {
 
     fn full_lock() -> Lock {
         Lock {
+            request: RequestStamp {
+                words: vec![
+                    "Make me a program that adds two numbers".into(),
+                    "Also take \"negative\" numbers".into(),
+                ],
+                spec: Sha256Hex::of(b"first spec"),
+                tests: Some(Sha256Hex::of(b"first tests")),
+            },
             spec: SpecStamp {
                 sha256: Sha256Hex::of(b"spec"),
-                approval: "I approve ~/add/spec.md".into(),
             },
             tests: Some(TestsStamp {
                 sha256: Sha256Hex::of(b"tests"),
-                frozen: true,
             }),
             code: Some(CodeStamp {
                 sha256: Sha256Hex::of(b"code"),
@@ -622,17 +663,15 @@ mod tests {
 
     #[test]
     fn round_trips_a_spec_only_lock() {
-        let lock = Lock::approved(
-            Sha256Hex::of(b"spec"),
-            "Looks right: \"approve\" it\n".into(),
-        );
+        let lock = Lock::requested(Sha256Hex::of(b"spec"), "Make it say \"hi\"\nplease".into());
         let text = lock.to_signed_text(&key(1));
         assert!(text.starts_with(HEADER), "{text}");
         assert!(!text.contains("fingerprint"), "{text}");
         assert!(
-            text.contains("approval = \"Looks right: \\\"approve\\\" it\\n\"\n"),
+            text.contains("words = [\"Make it say \\\"hi\\\"\\nplease\"]\n"),
             "{text}"
         );
+        assert!(!text.contains("\ntests = "), "{text}");
         assert!(text.ends_with("\"\n"), "{text}");
         assert_eq!(Lock::from_signed_text(&text, &key(1)), Ok(lock));
     }
@@ -737,10 +776,10 @@ mod tests {
     #[test]
     fn unknown_versions_and_dialects_are_reported() {
         let body = full_lock().body();
-        let older = forge(&body.replace("version = 2", "version = 1"), &key(1));
+        let older = forge(&body.replace("version = 3", "version = 2"), &key(1));
         assert_eq!(
             Lock::from_signed_text(&older, &key(1)),
-            Err(LockError::UnsupportedVersion("1".into()))
+            Err(LockError::UnsupportedVersion("2".into()))
         );
         let dialect = forge(&body.replace("dialect = 2", "dialect = 1"), &key(1));
         assert_eq!(
@@ -761,7 +800,13 @@ mod tests {
                 &lock.fingerprint().expect("fingerprint").to_string(),
                 Sha256Hex::of(b"other").as_str(),
             ),
-            body.replace("approval = ", "approved_via = "),
+            body.replace("words = ", "approval = "),
+            {
+                let start = body.find("words = [").expect("words");
+                let end = body[start..].find('\n').expect("end of words") + start;
+                format!("{}words = []{}", &body[..start], &body[end..])
+            },
+            body.replace("[tests]\nsha256", "[tests]\nfrozen = true\nsha256"),
             {
                 let start = body.find("\n[tests]").expect("tests table");
                 let end = body.find("\n[code]").expect("code table");

@@ -15,12 +15,12 @@ fn asset(name: &str) -> String {
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
 }
 
-/// A program folder holding the template's spec (approved) and tests (checked).
+/// A program folder holding the template's spec (recorded) and tests (checked).
 async fn checked_template(session: &Session) -> Program {
     let program = Program::new();
     program.write("spec.md", &asset("template-spec.md"));
-    let approval = session.approve(&program).await;
-    assert_eq!(approval["approved"], true, "{approval}");
+    let record = session.record(&program).await;
+    assert_eq!(record["recorded"], true, "{record}");
     program.write("tests.toml", &asset("template-tests.toml"));
     let tests = session.call_ok("check_tests", program.arguments()).await;
     assert_eq!(tests["checked"], true, "{tests}");
@@ -190,7 +190,7 @@ async fn run_needs_matching_files_and_the_tested_build() {
     assert!(error.contains("built with llvm-mc 21.0.0"), "{error}");
     session.call_ok("check_code", program.arguments()).await;
 
-    // Any edit stops run until it's checked or approved again.
+    // Any edit stops run until it's checked or recorded again.
     program.write("main.s", &format!("{code}\n"));
     let error = session.call_error("run", arguments(&["7"])).await;
     assert!(error.contains("call check_code"), "{error}");
@@ -273,10 +273,10 @@ async fn code_needs_checked_tests_first() {
     let session = session().await;
     let program = Program::new();
     program.write("spec.md", &asset("template-spec.md"));
-    session.approve(&program).await;
+    session.record(&program).await;
     program.write("main.s", &asset("main-template.s"));
     let error = session.call_error("check_code", program.arguments()).await;
-    assert!(error.contains("approved spec and checked tests"), "{error}");
+    assert!(error.contains("recorded spec and checked tests"), "{error}");
     session.service.cancel().await.expect("close the session");
 }
 
@@ -285,7 +285,7 @@ async fn the_vector_template_passes_its_tests() {
     let session = session().await;
     let program = Program::new();
     program.write("spec.md", &asset("vector-template-spec.md"));
-    session.approve(&program).await;
+    session.record(&program).await;
     program.write("tests.toml", &asset("vector-template-tests.toml"));
     let tests = session.call_ok("check_tests", program.arguments()).await;
     assert_eq!(tests["checked"], true, "{tests}");
@@ -314,7 +314,7 @@ async fn small_ranges_run_every_value() {
     let old_label = common::label(&asset("template-spec.md"));
     let new_label = common::label(&spec);
     program.write("spec.md", &spec);
-    session.approve(&program).await;
+    session.record(&program).await;
     program.write(
         "tests.toml",
         &asset("template-tests.toml")
@@ -367,7 +367,7 @@ async fn the_decimal_examples_pass_their_tests() {
         for name in ["spec.md", "tests.toml", "main.s"] {
             folder.write(name, &example(program, name));
         }
-        session.approve(&folder).await;
+        session.record(&folder).await;
         let tests = session.call_ok("check_tests", folder.arguments()).await;
         assert_eq!(tests["checked"], true, "{program}: {tests}");
         let report = session.call_ok("check_code", folder.arguments()).await;
@@ -388,7 +388,7 @@ async fn the_file_example_reads_and_writes_files() {
     for name in ["spec.md", "tests.toml", "main.s"] {
         folder.write(name, &example("upcase", name));
     }
-    session.approve(&folder).await;
+    session.record(&folder).await;
     let tests = session.call_ok("check_tests", folder.arguments()).await;
     assert_eq!(tests["checked"], true, "{tests}");
     let report = session.call_ok("check_code", folder.arguments()).await;
@@ -423,7 +423,7 @@ async fn the_parallel_template_runs_on_several_cores() {
     let session = session().await;
     let program = Program::new();
     program.write("spec.md", &asset("parallel-template-spec.md"));
-    session.approve(&program).await;
+    session.record(&program).await;
     program.write("tests.toml", &asset("parallel-template-tests.toml"));
     let tests = session.call_ok("check_tests", program.arguments()).await;
     assert_eq!(tests["checked"], true, "{tests}");
@@ -448,48 +448,85 @@ async fn the_parallel_template_runs_on_several_cores() {
 }
 
 #[tokio::test]
-async fn tests_freeze_when_code_first_runs_against_them() {
+async fn tests_can_be_fixed_after_code_ran() {
     let session = session().await;
     let program = checked_template(&session).await;
     program.write("main.s", &asset("main-template.s"));
     let report = session.call_ok("check_code", program.arguments()).await;
     assert_eq!(report["stamped"], true, "{report}");
+    assert!(report.get("tests_changed").is_none(), "{report}");
     let tests = asset("template-tests.toml");
-    let stored = session
-        .data_dir
-        .path()
-        .join("stamped")
-        .join(lengua::hash::Sha256Hex::of(tests.as_bytes()).to_string());
 
-    // Code has run against the tests, so they can't change to fit it: only restored.
+    // A fix after code ran is checked against the spec like any version, and shown with lengua's
+    // own marks on what tests less; nobody has to approve anything.
     program.write("tests.toml", &tests.replace("runs = 200", "runs = 10"));
     let status = session.call_ok("status", program.arguments()).await;
-    assert_eq!(status["program"]["state"], "tests_changed", "{status}");
-    let error = session.call_error("check_tests", program.arguments()).await;
-    assert!(error.contains("tests stay frozen"), "{error}");
-    assert!(error.contains(&stored.display().to_string()), "{error}");
-    std::fs::copy(&stored, program.file("tests.toml")).expect("restore the tests");
-    let status = session.call_ok("status", program.arguments()).await;
-    assert_eq!(status["program"]["state"], "ready", "{status}");
-
-    // When the tests were wrong, the user's approval of the same spec reopens them.
-    program.write("tests.toml", &tests.replace("runs = 200", "runs = 150"));
-    let approval = session
-        .call_ok(
-            "approve_spec",
-            program.approval("I approve it again, fix the tests"),
-        )
-        .await;
-    assert!(
-        approval["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("reopens its tests")),
-        "{approval}"
-    );
+    assert_eq!(status["program"]["state"], "tests_unchecked", "{status}");
     let report = session.call_ok("check_tests", program.arguments()).await;
     assert_eq!(report["checked"], true, "{report}");
+    let changed = report["tests_changed"].as_str().unwrap_or_default();
+    assert!(changed.contains("- ") && changed.contains("+ "), "{report}");
+    assert!(changed.contains("runs = 10"), "{report}");
+    assert_eq!(
+        report["tests_less"][0], "generated B1: fewer runs, 10 instead of 200",
+        "{report}"
+    );
+    assert!(
+        report["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("changed after code ran")),
+        "{report}"
+    );
     let report = session.call_ok("check_code", program.arguments()).await;
     assert_eq!(report["stamped"], true, "{report}");
+    assert_eq!(
+        report["tests_less"].as_array().map(Vec::len),
+        Some(1),
+        "{report}"
+    );
+    let status = session.call_ok("status", program.arguments()).await;
+    assert_eq!(
+        status["program"]["tests_less"], report["tests_less"],
+        "{status}"
+    );
+
+    // A change that tests more gets no mark, and going back to the first version shows nothing.
+    program.write("tests.toml", &tests.replace("runs = 200", "runs = 300"));
+    let report = session.call_ok("check_tests", program.arguments()).await;
+    assert!(report.get("tests_less").is_none(), "{report}");
+    assert!(report["tests_changed"].is_string(), "{report}");
+    program.write("tests.toml", &tests);
+    let report = session.call_ok("check_tests", program.arguments()).await;
+    assert!(report.get("tests_changed").is_none(), "{report}");
+    let report = session.call_ok("check_code", program.arguments()).await;
+    assert_eq!(report["stamped"], true, "{report}");
+    session.service.cancel().await.expect("close the session");
+}
+
+#[tokio::test]
+async fn new_words_in_the_middle_of_a_build_never_hide_a_change() {
+    let session = session().await;
+    let program = checked_template(&session).await;
+    // The build isn't finished: no code has passed yet. Changing the spec and recording it with
+    // other words keeps the first spec as what changes are shown against.
+    let spec = asset("template-spec.md");
+    let edited = spec.replacen("# Purpose\n", "# Purpose\nIt is quick. ", 1);
+    assert_ne!(spec, edited, "the edit applies");
+    program.write("spec.md", &edited);
+    let record = session
+        .call_ok("record_spec", program.request("Also make it quick"))
+        .await;
+    assert_eq!(
+        record["requests"],
+        serde_json::json!([common::REQUEST, "Also make it quick"]),
+        "{record}"
+    );
+    assert!(
+        record["spec_changed"]
+            .as_str()
+            .is_some_and(|diff| diff.contains("It is quick.")),
+        "{record}"
+    );
     session.service.cancel().await.expect("close the session");
 }
 
@@ -571,7 +608,7 @@ async fn the_absolute_difference_example_is_proven() {
     for name in ["spec.md", "tests.toml", "main.s"] {
         folder.write(name, &example("absdiff", name));
     }
-    session.approve(&folder).await;
+    session.record(&folder).await;
     let tests = session.call_ok("check_tests", folder.arguments()).await;
     assert_eq!(tests["checked"], true, "{tests}");
     let report = session.call_ok("check_code", folder.arguments()).await;
@@ -608,7 +645,7 @@ async fn the_avx512_shouts_in_the_benchmark_pass_their_checks() {
             )
             .expect("an AVX-512 shout"),
         );
-        session.approve(&folder).await;
+        session.record(&folder).await;
         let tests = session.call_ok("check_tests", folder.arguments()).await;
         assert_eq!(tests["checked"], true, "{variant}: {tests}");
         let report = session.call_ok("check_code", folder.arguments()).await;
@@ -637,7 +674,7 @@ async fn the_avx512_upcase_in_the_benchmark_passes_its_checks() {
         )
         .expect("the AVX-512 upcase"),
     );
-    session.approve(&folder).await;
+    session.record(&folder).await;
     let tests = session.call_ok("check_tests", folder.arguments()).await;
     assert_eq!(tests["checked"], true, "{tests}");
     let report = session.call_ok("check_code", folder.arguments()).await;
@@ -661,7 +698,7 @@ async fn the_file_example_proves_its_file_handling() {
     for name in ["spec.md", "tests.toml", "main.s"] {
         folder.write(name, &example("upcase", name));
     }
-    session.approve(&folder).await;
+    session.record(&folder).await;
     let tests = session.call_ok("check_tests", folder.arguments()).await;
     assert_eq!(tests["checked"], true, "{tests}");
     let report = session.call_ok("check_code", folder.arguments()).await;
@@ -701,7 +738,7 @@ async fn the_decimal_example_is_proven() {
     for name in ["spec.md", "tests.toml", "main.s"] {
         folder.write(name, &example("mean", name));
     }
-    session.approve(&folder).await;
+    session.record(&folder).await;
     let tests = session.call_ok("check_tests", folder.arguments()).await;
     assert_eq!(tests["checked"], true, "{tests}");
     let report = session.call_ok("check_code", folder.arguments()).await;
@@ -724,7 +761,7 @@ async fn the_dice_example_rolls_with_the_tests_random_bytes() {
     for name in ["spec.md", "tests.toml", "main.s"] {
         folder.write(name, &example("dice", name));
     }
-    session.approve(&folder).await;
+    session.record(&folder).await;
     let tests = session.call_ok("check_tests", folder.arguments()).await;
     assert_eq!(tests["checked"], true, "{tests}");
     let report = session.call_ok("check_code", folder.arguments()).await;
@@ -766,7 +803,7 @@ async fn the_echo_server_answers_the_tests_client() {
     for name in ["spec.md", "tests.toml", "main.s"] {
         folder.write(name, &example("echo", name));
     }
-    session.approve(&folder).await;
+    session.record(&folder).await;
     let tests = session.call_ok("check_tests", folder.arguments()).await;
     assert_eq!(tests["checked"], true, "{tests}");
     let report = session.call_ok("check_code", folder.arguments()).await;
@@ -832,7 +869,7 @@ async fn the_fetch_client_talks_to_the_tests_server() {
     for name in ["spec.md", "tests.toml", "main.s"] {
         folder.write(name, &example("fetch", name));
     }
-    session.approve(&folder).await;
+    session.record(&folder).await;
     let tests = session.call_ok("check_tests", folder.arguments()).await;
     assert_eq!(tests["checked"], true, "{tests}");
     let report = session.call_ok("check_code", folder.arguments()).await;
@@ -887,7 +924,7 @@ async fn the_benchmarks_own_programs_pass_their_checks() {
         folder.write("spec.md", &source("spec.md"));
         folder.write("tests.toml", &source("tests.toml"));
         folder.write("main.s", &source("main.s"));
-        session.approve(&folder).await;
+        session.record(&folder).await;
         let tests = session.call_ok("check_tests", folder.arguments()).await;
         assert_eq!(tests["checked"], true, "{workload}: {tests}");
         let report = session.call_ok("check_code", folder.arguments()).await;
@@ -908,7 +945,7 @@ async fn the_word_count_claude_code_wrote_passes_its_checks() {
     for name in ["spec.md", "tests.toml", "main.s"] {
         folder.write(name, &example("count", name));
     }
-    session.approve(&folder).await;
+    session.record(&folder).await;
     let tests = session.call_ok("check_tests", folder.arguments()).await;
     assert_eq!(tests["checked"], true, "{tests}");
     let report = session.call_ok("check_code", folder.arguments()).await;
