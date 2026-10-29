@@ -1325,3 +1325,26 @@ async fn proves_the_fetch_client() {
         assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
     }
 }
+
+/// Output padded to a column by a chain of if(…)s choosing among texts of different lengths, as
+/// the AVX-512 word count Claude Code wrote in interactive round 2 prints its counts.
+#[tokio::test]
+async fn proves_counts_padded_to_a_column() {
+    if !crate::platform::Machine::detect().features.avx512bw {
+        eprintln!("this CPU has no AVX-512BW");
+        return;
+    }
+    // Texts up to 120 bytes, so counts of one, two and three digits each get their padding.
+    let spec = fixture("padded", "spec.md").replacen(
+        "of up to `1048576` bytes",
+        "of up to `1048576` bytes (tests: `120`)",
+        1,
+    );
+    let tests = fixture("padded", "tests.toml").replacen("string(0, 1048576,", "string(0, 120,", 1);
+    let machine = machine(&fixture("padded", "main.s")).await;
+    let verdict = prove(&machine, &block(&spec, &tests, 0), text_budget());
+    assert!(
+        matches!(verdict, Verdict::Proven { bound: None, .. }),
+        "{verdict:?}"
+    );
+}

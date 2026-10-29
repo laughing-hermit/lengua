@@ -9,3 +9,5 @@ And one written for the tests themselves:
 
 - `cat`: standard input of up to 5,000 bytes printed back, whose proof covers texts up to the
   4,096 bytes a proof reaches.
+- `padded`: an AVX-512 `wc -lw` from interactive round 2, which pads its counts to seven
+  columns with a chain of `if(…)`s choosing among texts of different lengths.

@@ -954,7 +954,7 @@ enum Segment<'a> {
     Number(&'a crate::expr::Expr, u8),
     Any(&'a crate::expr::Expr, &'a crate::expr::Expr),
     /// `if(condition, "text", "other text")`: one of two fixed texts, as a condition says.
-    Either(&'a crate::expr::Expr, Vec<Term>, Vec<Term>),
+    Either(&'a crate::expr::Expr),
 }
 
 /// What must hold for `bytes` to be exactly `template`'s text for these inputs. Literal text, a
@@ -992,21 +992,10 @@ fn text_is(
                     .map_err(|error| format!("a placeholder that can't be written: {error}"))?;
                 Segment::Bytes(exec::bytes(pool, text.as_bytes()))
             }
-            Piece::Expr(crate::expr::Expr::Call(crate::expr::Function::If, arguments))
-                if arguments.len() == 3 && fixed_text(&arguments[1], known).is_some() =>
+            Piece::Expr(expr @ crate::expr::Expr::Call(crate::expr::Function::If, arguments))
+                if arguments.len() == 3 && chooses_text(expr, known) =>
             {
-                let texts = (
-                    fixed_text(&arguments[1], known),
-                    fixed_text(&arguments[2], known),
-                );
-                let (Some(then), Some(otherwise)) = texts else {
-                    return Err("an if(…) that chooses between text and a number".into());
-                };
-                Segment::Either(
-                    &arguments[0],
-                    exec::bytes(pool, then.as_bytes()),
-                    exec::bytes(pool, otherwise.as_bytes()),
-                )
+                Segment::Either(expr)
             }
             Piece::Expr(crate::expr::Expr::Call(crate::expr::Function::Places, arguments)) => {
                 match arguments.as_slice() {
@@ -1050,14 +1039,9 @@ fn text_is(
                 ));
                 literals.push(Vec::new());
             }
-            Segment::Either(condition, then, otherwise) => {
-                let condition = match known.translate(pool, condition)? {
-                    Formula::Truth(condition) => condition,
-                    Formula::Number(_) | Formula::Text(_) => {
-                        return Err("an if(…) whose condition isn't true or false".into());
-                    }
-                };
-                computed.push(Computed::Either(condition, then, otherwise));
+            Segment::Either(expr) => {
+                let always = pool.boolean(true);
+                computed.push(Computed::Either(alternatives(pool, expr, known, always)?));
                 literals.push(Vec::new());
             }
         }
@@ -1090,15 +1074,17 @@ fn text_is(
             at += literal.len();
             let piece = &bytes[at..at + length];
             checks.push(match &computed[index] {
-                Computed::Exact(number, places) => number_is(pool, piece, *number, *places),
+                Computed::Exact(number, places, _) => number_is(pool, piece, *number, *places),
                 Computed::Range(low, high) => number_in(pool, piece, *low, *high),
-                Computed::Either(condition, then, otherwise) => {
-                    let first = same_terms(pool, piece, then);
-                    let first = pool.all(&[*condition, first]);
-                    let not = pool.bool_not(*condition);
-                    let second = same_terms(pool, piece, otherwise);
-                    let second = pool.all(&[not, second]);
-                    pool.any(&[first, second])
+                Computed::Either(alternatives) => {
+                    let mut chosen = Vec::new();
+                    for (condition, text) in alternatives {
+                        if text.len() == piece.len() {
+                            let same = same_terms(pool, piece, text);
+                            chosen.push(pool.bool_and(*condition, same));
+                        }
+                    }
+                    pool.any(&chosen)
                 }
             });
             at += length;
@@ -1111,23 +1097,69 @@ fn text_is(
 }
 
 /// A computed part of a test's output: a formula's value printed with this many decimal places,
-/// any whole number in a range, or one of two fixed texts as a condition says.
+/// any whole number in a range, or one of several fixed texts, each where its condition holds.
 enum Computed {
-    Exact(Number, u8),
+    /// A value printed with this many places, which can take these many bytes.
+    Exact(Number, u8, Vec<usize>),
     Range(Number, Number),
-    Either(Term, Vec<Term>, Vec<Term>),
+    Either(Vec<(Term, Vec<Term>)>),
 }
 
 impl Computed {
     /// How many bytes it can take.
     fn lengths(&self) -> Vec<usize> {
         match self {
-            Self::Exact(..) | Self::Range(..) => (1..=MAX_PRINTED).collect(),
-            Self::Either(_, then, otherwise) => {
-                let mut lengths = vec![then.len(), otherwise.len()];
+            Self::Exact(_, _, lengths) => lengths.clone(),
+            Self::Range(..) => (1..=MAX_PRINTED).collect(),
+            Self::Either(alternatives) => {
+                let mut lengths: Vec<usize> =
+                    alternatives.iter().map(|(_, text)| text.len()).collect();
+                lengths.sort_unstable();
                 lengths.dedup();
                 lengths
             }
+        }
+    }
+}
+
+/// Whether `expr` is an `if(…)` chain whose every outcome is a fixed text, such as padding
+/// that depends on a number's size.
+fn chooses_text(expr: &crate::expr::Expr, known: &Known<'_>) -> bool {
+    match expr {
+        crate::expr::Expr::Call(crate::expr::Function::If, arguments) if arguments.len() == 3 => {
+            chooses_text(&arguments[1], known) && chooses_text(&arguments[2], known)
+        }
+        leaf => fixed_text(leaf, known).is_some(),
+    }
+}
+
+/// The fixed texts an `if(…)` chain can give, each with the condition, under `guard`, that it's
+/// the one given.
+fn alternatives(
+    pool: &mut Pool,
+    expr: &crate::expr::Expr,
+    known: &Known<'_>,
+    guard: Term,
+) -> Result<Vec<(Term, Vec<Term>)>, String> {
+    match expr {
+        crate::expr::Expr::Call(crate::expr::Function::If, arguments) if arguments.len() == 3 => {
+            let condition = match known.translate(pool, &arguments[0])? {
+                Formula::Truth(condition) => condition,
+                Formula::Number(_) | Formula::Text(_) => {
+                    return Err("an if(…) whose condition isn't true or false".into());
+                }
+            };
+            let yes = pool.bool_and(guard, condition);
+            let not = pool.bool_not(condition);
+            let no = pool.bool_and(guard, not);
+            let mut found = alternatives(pool, &arguments[1], known, yes)?;
+            found.extend(alternatives(pool, &arguments[2], known, no)?);
+            Ok(found)
+        }
+        leaf => {
+            let text =
+                fixed_text(leaf, known).ok_or("an if(…) that chooses between text and a number")?;
+            Ok(vec![(guard, exec::bytes(pool, text.as_bytes()))])
         }
     }
 }
@@ -1161,7 +1193,24 @@ fn printed(
         (_, 0) => places,
         _ => return Err("places of a decimal; scale it to a whole number first".into()),
     };
-    Ok(Computed::Exact(number, places))
+    // A whole number takes as many bytes as its term's range allows its digits and sign: the
+    // range the terms settle, so a run's own branch on a digit count still meets its length.
+    let lengths = if places == 0 {
+        let (low, high) = pool.signed_range(number.term);
+        let digits = |value: i128| value.unsigned_abs().to_string().len();
+        let shortest = if low <= 0 && high >= 0 {
+            1
+        } else if low > 0 {
+            digits(low)
+        } else {
+            digits(high) + 1
+        };
+        let longest = digits(high).max(if low < 0 { digits(low) + 1 } else { 1 });
+        (shortest..=longest.min(MAX_PRINTED)).collect()
+    } else {
+        (1..=MAX_PRINTED).collect()
+    };
+    Ok(Computed::Exact(number, places, lengths))
 }
 
 /// The most characters one printed value may take: 39 digits, a sign and a point.
@@ -1667,6 +1716,19 @@ fn serving(
     Ok(pool.bool_and(stdout, stderr))
 }
 
+/// The conditions `condition` is the disjunction of.
+fn disjuncts(pool: &Pool, condition: Term) -> Vec<Term> {
+    let mut parts = Vec::new();
+    let mut pending = vec![condition];
+    while let Some(current) = pending.pop() {
+        match *pool.node(current) {
+            Node::BoolOr(a, b) => pending.extend([a, b]),
+            _ => parts.push(current),
+        }
+    }
+    parts
+}
+
 /// The conditions `condition` is the conjunction of.
 fn conjuncts(pool: &Pool, condition: Term) -> Vec<Term> {
     let mut parts = Vec::new();
@@ -2042,12 +2104,17 @@ fn prove_shape(
         // whose every condition is one of the run's own branches, as a printed number's digit
         // count is the print loop's.
         let holding = pool.bool_not(broken);
-        if pool.truth(broken) == Some(false)
-            || conjuncts(&pool, holding).iter().all(|part| {
-                run.path
+        let branched = |part: &Term| {
+            pool.truth(*part) == Some(true)
+                || run
+                    .path
                     .iter()
                     .any(|condition| pool.equivalent(*condition, *part))
-            })
+        };
+        if pool.truth(broken) == Some(false)
+            || disjuncts(&pool, holding)
+                .iter()
+                .any(|case| conjuncts(&pool, *case).iter().all(branched))
         {
             continue;
         }
