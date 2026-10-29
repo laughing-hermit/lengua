@@ -181,9 +181,12 @@ async fn proves_absolute_difference() {
     assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
 }
 
-/// The mean of two prices in cents, rounded half away from zero: decimals in, decimals out.
+/// The mean of two prices in cents, rounded half away from zero: decimals in, decimals out. Not
+/// proven yet: mean adds whole × 100 + cents, the input is one chain of digits, and the solver
+/// can't settle that the two are equal in time. A linear normal form for sums would make them
+/// one term.
 #[tokio::test]
-#[ignore = "slow: proves mean's decimal arithmetic"]
+#[ignore = "not proven yet: the parse and the input differ in shape"]
 async fn proves_the_mean_of_two_prices() {
     let machine = machine(&example("mean", "main.s")).await;
     let block = block(
@@ -195,4 +198,31 @@ async fn proves_the_mean_of_two_prices() {
     let verdict = prove(&machine, &block, budget(300));
     eprintln!("mean: {verdict:?} in {:?}", started.elapsed());
     assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
+}
+
+/// Decimal inputs: mean's usage (B4), a bad second price drawn by choice (B5) and a price out of
+/// range (B6), each with a decimal drawn over its whole range.
+#[tokio::test]
+async fn proves_decimal_inputs_where_the_output_is_fixed() {
+    if std::process::Command::new("z3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let machine = machine(&example("mean", "main.s")).await;
+    for index in 3..6 {
+        let block = block(
+            &example("mean", "spec.md"),
+            &example("mean", "tests.toml"),
+            index,
+        );
+        let verdict = prove(&machine, &block, budget(120));
+        assert!(
+            matches!(verdict, Verdict::Proven { .. }),
+            "{}: {verdict:?}",
+            block.id
+        );
+    }
 }
