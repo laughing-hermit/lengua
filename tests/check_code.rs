@@ -585,3 +585,61 @@ async fn the_absolute_difference_example_is_proven() {
     assert_eq!(proof["proofs"][0]["proven"], true, "{proof}");
     session.service.cancel().await.expect("close the session");
 }
+
+#[tokio::test]
+async fn the_avx512_shouts_in_the_benchmark_pass_their_checks() {
+    // The benchmark's AVX-512 versions of the parallel template, on 16 threads and on one.
+    if !lengua::platform::Machine::detect().features.avx512bw {
+        eprintln!("this CPU has no AVX-512BW");
+        return;
+    }
+    for variant in ["avx512.s", "avx512-one.s"] {
+        let session = session().await;
+        let folder = Program::new();
+        folder.write("spec.md", &asset("parallel-template-spec.md"));
+        folder.write("tests.toml", &asset("parallel-template-tests.toml"));
+        folder.write(
+            "main.s",
+            &std::fs::read_to_string(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("benches/programs/shout")
+                    .join(variant),
+            )
+            .expect("an AVX-512 shout"),
+        );
+        session.approve(&folder).await;
+        let tests = session.call_ok("check_tests", folder.arguments()).await;
+        assert_eq!(tests["checked"], true, "{variant}: {tests}");
+        let report = session.call_ok("check_code", folder.arguments()).await;
+        assert_eq!(report["stamped"], true, "{variant}: {report}");
+        session.service.cancel().await.expect("close the session");
+    }
+}
+
+#[tokio::test]
+async fn the_avx512_upcase_in_the_benchmark_passes_its_checks() {
+    // The benchmark's AVX-512 upcase is a lengua program too: same spec and tests as the
+    // example, 64 bytes at a time. Only where the CPU has AVX-512BW.
+    if !lengua::platform::Machine::detect().features.avx512bw {
+        eprintln!("this CPU has no AVX-512BW");
+        return;
+    }
+    let session = session().await;
+    let folder = Program::new();
+    for name in ["spec.md", "tests.toml"] {
+        folder.write(name, &example("upcase", name));
+    }
+    folder.write(
+        "main.s",
+        &std::fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("benches/programs/upcase/avx512.s"),
+        )
+        .expect("the AVX-512 upcase"),
+    );
+    session.approve(&folder).await;
+    let tests = session.call_ok("check_tests", folder.arguments()).await;
+    assert_eq!(tests["checked"], true, "{tests}");
+    let report = session.call_ok("check_code", folder.arguments()).await;
+    assert_eq!(report["stamped"], true, "{report}");
+    session.service.cancel().await.expect("close the session");
+}

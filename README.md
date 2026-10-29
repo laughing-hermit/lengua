@@ -75,11 +75,29 @@ Complete programs, each with its spec, tests and assembly:
 - [`examples/hypotenuse`](examples/hypotenuse) computes a square root in double-precision floating
   point and prints it with three decimals;
 - [`examples/upcase`](examples/upcase) writes a copy of a text file in capitals, 16 bytes at a
-  time.
+  time;
+- [`examples/absdiff`](examples/absdiff) prints how far apart two numbers are. Claude Code wrote
+  it through lengua, and `prove` proves it for every pair of inputs.
 
 Their `lengua.lock` files aren't committed, because a lock is signed with each machine's own key.
 Ask the agent to run one with lengua: after you approve its spec, the agent checks the tests and
 the code, which creates the lock.
+
+## Against Rust and C
+
+[BENCHMARKS.md](BENCHMARKS.md) measures lengua programs against the same programs in Rust and C,
+built with every optimization for this CPU (`cargo bench --bench against_rust_and_c` measures
+again). On this machine:
+
+- A short program, `add`, runs 441 instructions where C runs about 100,000 and Rust about
+  260,000, finishing in about half the wall time, with a third of the memory and a quarter of C's
+  file size (Rust's is 1,500 times larger), because lengua's programs need no C library and no
+  dynamic loader.
+- Capitalizing a 1 MiB file 64 bytes at a time with AVX-512 takes 1.4 times fewer instructions and
+  4 times fewer cycles than `gcc -O3 -march=native`.
+- Not yet ahead: the 16-byte SSE2 versions run more instructions than compilers' AVX-512 code,
+  and the threaded template touches twice the memory, so C spends a little less CPU time. The
+  write-assembly skill now asks for the widest vectors the CPU has.
 
 ## Develop
 
@@ -87,6 +105,8 @@ the code, which creates the lock.
 cargo test
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
+cargo bench --bench against_rust_and_c   # rewrites BENCHMARKS.md
+cargo test --release -- --ignored        # the slow proof of examples/add
 ```
 
 ## License

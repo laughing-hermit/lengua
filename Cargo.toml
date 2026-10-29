@@ -47,3 +47,7 @@ missing_docs = "warn"
 
 [lints.clippy]
 unwrap_used = "warn"
+
+[[bench]]
+name = "against_rust_and_c"
+harness = false

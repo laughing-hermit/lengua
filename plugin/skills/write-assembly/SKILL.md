@@ -26,7 +26,10 @@ Nothing runs before every rule passes.
    its `parse_i64`, `write_i64` and `write_all` can be reused as they are.
 4. Write the code by [the rules](references/power-of-10.md), with
    [the Linux x86-64 reference](references/linux-x86_64.md) for system calls, the program's start
-   and the calling convention.
+   and the calling convention. lengua aims for programs faster and leaner than Rust and C, so a
+   loop over text or an array goes a vector at a time, as wide as `machine.features` in `status`
+   allows (AVX-512: 64 bytes): `gcc -O3 -march=native` vectorizes such loops that wide, and only
+   then does assembly beat it.
 5. Call `check_code` with `path`. It checks the rules first and lists each violation as
    `rule N (name) main.s:LINE: problem. Fix: …`. Then it runs every test: the examples, and the
    generated tests with fresh random inputs (boundary values first). A failure shows the inputs,
@@ -69,21 +72,28 @@ large inputs: compare cycles on the tests with the longest input (generated test
 text first). For a program with threads, the measures cover every thread, and `wall_time_us`
 says how long it took on the clock.
 
-The biggest win on text and arrays is usually vector instructions: one `pcmpeqb` compares 16
-bytes, and AVX2 and AVX-512 do 32 and 64. [The vector template](assets/vector-template.s) (with
+The biggest win on text and arrays is usually vector instructions: one `pcmpeqb` compares 16 bytes,
+and AVX2 and AVX-512 do 32 and 64. [The vector template](assets/vector-template.s) (with
 [its spec](assets/vector-template-spec.md) and [tests](assets/vector-template-tests.toml)) is a
 checked SSE2 program that finds a newline and capitalizes a line 16 bytes at a time. Use AVX2 or
-AVX-512 only when `status` lists them, and keep every vector access inside its buffer: see
-"Vectors" in [the rules](references/power-of-10.md). For floating point, packed instructions do 2
-to 8 doubles at once, or 4 to 16 singles, as long as each element's steps stay in the formula's
-order.
+AVX-512 when `status` lists them, and keep every vector access inside its buffer: see "Vectors" in
+[the rules](references/power-of-10.md). With AVX-512BW, a byte test is one compare into a mask
+register and the change one masked instruction: `vpsubb zmm4, zmm0, zmm1` (subtract `'a'`),
+`vpcmpub k1, zmm4, zmm2, 1` (below 26), `vpsubb zmm0 {k1}, zmm0, zmm3` (subtract the case bit).
+Measured against Rust and C on a 1 MiB file, that loop takes 4 times fewer cycles than
+`gcc -O3 -march=native`, where the 16-byte one takes more instructions than C. Memory the program
+touches costs kernel time too, a page fault per 4 KiB: work in place where the rules allow it. For
+floating point, packed instructions do 2 to 8 doubles at once, or 4 to 16 singles, as long as each
+element's steps stay in the formula's order.
 
 When the spec allows threads (`- Threads: up to N`), split heavy work across cores with
 `parallel_for`: [the parallel template](assets/parallel-template.s) (with
 [its spec](assets/parallel-template-spec.md) and [tests](assets/parallel-template-tests.toml))
 capitalizes up to a megabyte on 16 threads, each worker filling its own slot. Copy its thread code
 word for word, follow "Threads" in [the rules](references/power-of-10.md), and compare
-`wall_time_us`, the time on the clock, which threads shorten.
+`wall_time_us`, the time on the clock, which threads shorten. Starting a thread costs tens of
+microseconds, so give each one at least a few hundred kilobytes of vector work: on a megabyte,
+one 64-byte loop is as fast as sixteen threads.
 
 ## The rules in brief
 
