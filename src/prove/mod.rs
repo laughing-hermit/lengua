@@ -686,11 +686,14 @@ enum Segment<'a> {
     Bytes(Vec<Term>),
     Number(&'a crate::expr::Expr, u8),
     Any(&'a crate::expr::Expr, &'a crate::expr::Expr),
+    /// `if(condition, "text", "other text")`: one of two fixed texts, as a condition says.
+    Either(&'a crate::expr::Expr, Vec<Term>, Vec<Term>),
 }
 
 /// What must hold for `bytes` to be exactly `template`'s text for these inputs. Literal text, a
 /// placeholder whose variables all have fixed values, and a placeholder that's just a drawn text
-/// are known bytes; at most one placeholder may compute a number or allow a range of them.
+/// are known bytes; the other placeholders compute a number, allow a range of them, or choose
+/// between two fixed texts.
 fn text_is(
     pool: &mut Pool,
     bytes: &[Term],
@@ -722,6 +725,22 @@ fn text_is(
                     .map_err(|error| format!("a placeholder that can't be written: {error}"))?;
                 Segment::Bytes(exec::bytes(pool, text.as_bytes()))
             }
+            Piece::Expr(crate::expr::Expr::Call(crate::expr::Function::If, arguments))
+                if arguments.len() == 3 && fixed_text(&arguments[1], known).is_some() =>
+            {
+                let texts = (
+                    fixed_text(&arguments[1], known),
+                    fixed_text(&arguments[2], known),
+                );
+                let (Some(then), Some(otherwise)) = texts else {
+                    return Err("an if(…) that chooses between text and a number".into());
+                };
+                Segment::Either(
+                    &arguments[0],
+                    exec::bytes(pool, then.as_bytes()),
+                    exec::bytes(pool, otherwise.as_bytes()),
+                )
+            }
             Piece::Expr(crate::expr::Expr::Call(crate::expr::Function::Places, arguments)) => {
                 match arguments.as_slice() {
                     [value, crate::expr::Expr::Literal(Value::Int(places))] => Segment::Number(
@@ -742,33 +761,122 @@ fn text_is(
             (_, segment) => segments.push(segment),
         }
     }
-    let empty = Vec::new();
-    // Neighboring bytes joined, so a computed segment stands between bytes or the ends.
-    let (prefix, middle, suffix) = match segments.as_slice() {
-        [] => (&empty, None, &empty),
-        [Segment::Bytes(all)] => (all, None, &empty),
-        [middle] => (&empty, Some(middle), &empty),
-        [Segment::Bytes(before), middle] => (before, Some(middle), &empty),
-        [middle, Segment::Bytes(after)] => (&empty, Some(middle), after),
-        [Segment::Bytes(before), middle, Segment::Bytes(after)] => (before, Some(middle), after),
-        _ => return Err("a test output with more than one computed value".into()),
-    };
-    let (expr, places) = match middle {
-        None => return Ok(same_terms(pool, bytes, prefix)),
-        Some(Segment::Number(expr, places)) => (*expr, *places),
-        Some(Segment::Any(low, high)) => {
-            let (low, high) = (bound(pool, low, known)?, bound(pool, high, known)?);
-            if bytes.len() < prefix.len() + suffix.len() + 1 {
-                return Ok(pool.boolean(false));
+    // Neighboring bytes joined, so the template is literal text and computed values in turn:
+    // literals[i] comes before computed[i], and the last literal after the last value.
+    let mut literals: Vec<Vec<Term>> = vec![Vec::new()];
+    let mut computed = Vec::new();
+    for segment in segments {
+        match segment {
+            Segment::Bytes(text) => *literals.last_mut().unwrap_or(&mut Vec::new()) = text,
+            Segment::Number(expr, places) => {
+                computed.push(printed(pool, expr, places, known)?);
+                literals.push(Vec::new());
             }
-            let end = bytes.len() - suffix.len();
-            let starts = same_terms(pool, &bytes[..prefix.len()], prefix);
-            let ends = same_terms(pool, &bytes[end..], suffix);
-            let middle = number_in(pool, &bytes[prefix.len()..end], low, high);
-            return Ok(pool.all(&[starts, ends, middle]));
+            Segment::Any(low, high) => {
+                computed.push(Computed::Range(
+                    bound(pool, low, known)?,
+                    bound(pool, high, known)?,
+                ));
+                literals.push(Vec::new());
+            }
+            Segment::Either(condition, then, otherwise) => {
+                let condition = match formula::translate(pool, condition, known.numbers)? {
+                    Formula::Truth(condition) => condition,
+                    Formula::Number(_) => return Err("an if(…) whose condition is a number".into()),
+                };
+                computed.push(Computed::Either(condition, then, otherwise));
+                literals.push(Vec::new());
+            }
         }
-        Some(Segment::Bytes(_)) => return Err("bytes next to bytes in a test output".into()),
+    }
+    if computed.is_empty() {
+        return Ok(same_terms(pool, bytes, &literals[0]));
+    }
+    // A range has no fixed text after it to show where its number ends.
+    let ranged = |index: usize| matches!(computed.get(index), Some(Computed::Range(..)));
+    if (1..computed.len())
+        .any(|index| literals[index].is_empty() && (ranged(index - 1) || ranged(index)))
+    {
+        return Err("a range of numbers right next to another computed value".into());
+    }
+    // The values' lengths aren't known ahead, so try every way to split the rest of the output
+    // among them: each split is exact, and the output is right when one of them holds.
+    let fixed: usize = literals.iter().map(Vec::len).sum();
+    let Some(rest) = bytes.len().checked_sub(fixed) else {
+        return Ok(pool.boolean(false));
     };
+    let lengths: Vec<Vec<usize>> = computed.iter().map(Computed::lengths).collect();
+    let splits = splits(rest, &lengths)?;
+    let mut cases = Vec::with_capacity(splits.len());
+    for lengths in splits {
+        let mut checks = Vec::new();
+        let mut at = 0;
+        for (index, length) in lengths.iter().enumerate() {
+            let literal = &literals[index];
+            checks.push(same_terms(pool, &bytes[at..at + literal.len()], literal));
+            at += literal.len();
+            let piece = &bytes[at..at + length];
+            checks.push(match &computed[index] {
+                Computed::Exact(number, places) => number_is(pool, piece, *number, *places),
+                Computed::Range(low, high) => number_in(pool, piece, *low, *high),
+                Computed::Either(condition, then, otherwise) => {
+                    let first = same_terms(pool, piece, then);
+                    let first = pool.all(&[*condition, first]);
+                    let not = pool.bool_not(*condition);
+                    let second = same_terms(pool, piece, otherwise);
+                    let second = pool.all(&[not, second]);
+                    pool.any(&[first, second])
+                }
+            });
+            at += length;
+        }
+        let last = &literals[computed.len()];
+        checks.push(same_terms(pool, &bytes[at..], last));
+        cases.push(pool.all(&checks));
+    }
+    Ok(pool.any(&cases))
+}
+
+/// A computed part of a test's output: a formula's value printed with this many decimal places,
+/// any whole number in a range, or one of two fixed texts as a condition says.
+enum Computed {
+    Exact(Number, u8),
+    Range(Number, Number),
+    Either(Term, Vec<Term>, Vec<Term>),
+}
+
+impl Computed {
+    /// How many bytes it can take.
+    fn lengths(&self) -> Vec<usize> {
+        match self {
+            Self::Exact(..) | Self::Range(..) => (1..=MAX_PRINTED).collect(),
+            Self::Either(_, then, otherwise) => {
+                let mut lengths = vec![then.len(), otherwise.len()];
+                lengths.dedup();
+                lengths
+            }
+        }
+    }
+}
+
+/// A placeholder's text when its variables all have fixed values and it's text.
+fn fixed_text(expr: &crate::expr::Expr, known: &Known<'_>) -> Option<String> {
+    let fixed = crate::expr::variables_of(expr)
+        .iter()
+        .all(|name| known.fixed.contains_key(name));
+    match crate::expr::eval(expr, known.fixed) {
+        Ok(Value::Str(text)) if fixed && !crate::expect::has_holes(&text) => Some(text),
+        _ => None,
+    }
+}
+
+/// The value a placeholder prints, with the places it prints.
+fn printed(
+    pool: &mut Pool,
+    expr: &crate::expr::Expr,
+    places: u8,
+    known: &Known<'_>,
+) -> Result<Computed, String> {
     let number = match formula::translate(pool, expr, known.numbers)? {
         Formula::Number(number) => number,
         Formula::Truth(_) => return Err("a placeholder that prints true or false".into()),
@@ -779,14 +887,54 @@ fn text_is(
         (_, 0) => places,
         _ => return Err("places of a decimal; scale it to a whole number first".into()),
     };
-    if bytes.len() < prefix.len() + suffix.len() + 1 {
-        return Ok(pool.boolean(false));
+    Ok(Computed::Exact(number, places))
+}
+
+/// The most characters one printed value may take: 39 digits, a sign and a point.
+const MAX_PRINTED: usize = 41;
+
+/// The most ways to split an output among its values that a proof tries.
+const MAX_SPLITS: usize = 4096;
+
+/// Every way to give the computed values `total` bytes in all, each one a length it can take.
+fn splits(total: usize, lengths: &[Vec<usize>]) -> Result<Vec<Vec<usize>>, String> {
+    fn fill(
+        total: usize,
+        lengths: &[Vec<usize>],
+        prefix: &mut Vec<usize>,
+        out: &mut Vec<Vec<usize>>,
+    ) {
+        if out.len() > MAX_SPLITS {
+            return;
+        }
+        let Some((first, rest)) = lengths.split_first() else {
+            if total == 0 {
+                out.push(prefix.clone());
+            }
+            return;
+        };
+        let most: usize = rest
+            .iter()
+            .map(|lengths| lengths.iter().max().unwrap_or(&0))
+            .sum();
+        for length in first.iter().copied().filter(|length| *length <= total) {
+            if total - length > most {
+                continue;
+            }
+            prefix.push(length);
+            fill(total - length, rest, prefix, out);
+            prefix.pop();
+        }
     }
-    let end = bytes.len() - suffix.len();
-    let starts = same_terms(pool, &bytes[..prefix.len()], prefix);
-    let ends = same_terms(pool, &bytes[end..], suffix);
-    let middle = number_is(pool, &bytes[prefix.len()..end], number, places);
-    Ok(pool.all(&[starts, ends, middle]))
+    let mut out = Vec::new();
+    fill(total, lengths, &mut Vec::new(), &mut out);
+    if out.len() > MAX_SPLITS {
+        return Err(format!(
+            "an output whose {} computed values could split it more than {MAX_SPLITS} ways",
+            lengths.len()
+        ));
+    }
+    Ok(out)
 }
 
 /// A bound of `any(lo, hi)` as a whole number: a formula, or a fixed value in this shape.

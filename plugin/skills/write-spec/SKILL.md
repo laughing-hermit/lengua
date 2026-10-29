@@ -44,7 +44,10 @@ of the same rule.
 - **Purpose** says in plain words what the program does, for whom and why. It then gives in
   backticks the range of every number the program reads and the length of any text it reads,
   including a range only one behavior uses: generated tests draw their inputs from exactly these
-  ranges, so nothing else goes in backticks there. Give both ends of every number's range (from
+  ranges, so nothing else goes in backticks there. Write each range as the tests will draw it:
+  when an input is built from parts, give each part's own range, such as a path that is `/`
+  followed by `0` to `2047` characters, or a reply of headers up to `1000` bytes and a body up to
+  `1000000`, so the tests never need the spec reworded and approved again. Give both ends of every number's range (from
   `1` to `100`); a text length may start at 0 without saying so. Keep text on standard input to at
   most
   `1048576` bytes and each argument to at most `131072` (Linux's limit), and numbers within 64
@@ -97,9 +100,11 @@ of the same rule.
   `- Network: connects to TCP port 8080` (or `ports 80 and 8080`) and allows socket and connect;
   the address and port it reaches come from its arguments or input, as numbers (`127.0.0.1`),
   since lengua programs don't look up names. A server says `- Network: listens on TCP port 8080`
-  and allows accept4: lengua listens on that port of this computer and hands the program the
-  socket as file descriptor 3, and its behaviors may end with `- And it keeps serving` instead of
-  an exit code. Tell the user in plain words what they approve, such as "it can open TCP
+  and allows accept4 and sendto: lengua listens on that port of this computer and hands the
+  program the socket as file descriptor 3; it answers with sendto, so a client that hangs up early
+  can't stop it (with write, the kernel would end it with SIGPIPE); and its behaviors may end
+  with `- And it keeps serving` instead of an exit code. Write a protocol's line breaks as they
+  are sent, such as `GET / HTTP/1.0\r\n`. Tell the user in plain words what they approve, such as "it can open TCP
   connections to port 8080 on any computer; the kernel refuses every other port."
 - **Websites and APIs:** lengua programs speak plain TCP, not HTTPS. A program that needs a
   website's data reads it from standard input or a file; you fetch it with your own tools and

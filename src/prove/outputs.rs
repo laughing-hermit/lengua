@@ -382,3 +382,84 @@ fn printed_digits_fit_any_only_in_range() {
         }
     }
 }
+
+#[test]
+fn several_numbers_in_one_line_match_exactly() {
+    // Three computed values with text between them: true only for the exact text.
+    let seed = seed();
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    let template = Template::parse("{a} + {b} = {a + b}\n").expect("a template");
+    for _ in 0..300 {
+        let mut pool = Pool::default();
+        let numbers = BTreeMap::from([
+            ("a".to_owned(), formula(&mut pool, "a")),
+            ("b".to_owned(), formula(&mut pool, "b")),
+        ]);
+        let (a, b) = (number(&mut rng) / 4, number(&mut rng) / 4);
+        let exact = format!("{a} + {b} = {}\n", a + b);
+        let text = match rng.random_range(0..6) {
+            0 => format!("{} + {b} = {}\n", near(&mut rng, a), a + b),
+            1 => format!("{a} + {} = {}\n", near(&mut rng, b), a + b),
+            2 => format!("{a} + {b} = {}\n", near(&mut rng, a + b)),
+            3 => format!("{a}+ {b} = {}\n", a + b),
+            4 => format!("{b} + {a} = {}\n", a + b),
+            _ => exact.clone(),
+        };
+        let bytes = bytes_of(&mut pool, &text);
+        let known = super::Known {
+            numbers: &numbers,
+            fixed: &BTreeMap::new(),
+            texts: &BTreeMap::new(),
+        };
+        let condition = text_is(&mut pool, &bytes, &template, &known).expect("a condition");
+        assert_eq!(
+            holds(&pool, condition, &[("a", bits(a)), ("b", bits(b))]),
+            text == exact,
+            "seed {seed}: {text:?} with a = {a}, b = {b}"
+        );
+    }
+}
+
+#[test]
+fn a_chosen_text_matches_only_its_own_choice() {
+    // Zero padding: `if(a < 10, "0", "")` before a number. True only for the exact text.
+    let seed = seed();
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    let template = Template::parse("{if(a < 10, \"0\", \"\")}{a}:{if(b < 10, \"0\", \"\")}{b}\n")
+        .expect("a template");
+    for _ in 0..600 {
+        let mut pool = Pool::default();
+        let numbers = BTreeMap::from([
+            ("a".to_owned(), formula(&mut pool, "a")),
+            ("b".to_owned(), formula(&mut pool, "b")),
+        ]);
+        let (a, b) = (rng.random_range(-3..30_i128), rng.random_range(-3..30_i128));
+        let pad = |value: i128| {
+            if value < 10 {
+                format!("0{value}")
+            } else {
+                value.to_string()
+            }
+        };
+        let exact = format!("{}:{}\n", pad(a), pad(b));
+        let text = match rng.random_range(0..5) {
+            0 => format!("{a}:{}\n", pad(b)),
+            1 => format!("{}:{b}\n", pad(a)),
+            2 => format!("0{}:{}\n", pad(a), pad(b)),
+            3 => format!("{}:{}\n", pad(a + 1), pad(b)),
+            _ => exact.clone(),
+        };
+        let bytes = bytes_of(&mut pool, &text);
+        let known = super::Known {
+            numbers: &numbers,
+            fixed: &BTreeMap::new(),
+            texts: &BTreeMap::new(),
+        };
+        let condition = text_is(&mut pool, &bytes, &template, &known).expect("a condition");
+        assert_eq!(
+            holds(&pool, condition, &[("a", bits(a)), ("b", bits(b))]),
+            text == exact,
+            "seed {seed}: {text:?} with a = {a}, b = {b}"
+        );
+    }
+}

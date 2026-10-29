@@ -655,23 +655,23 @@ struct ExampleTable {
     random: Option<String>,
     #[serde(default)]
     clock: Vec<String>,
-    server: Option<ServerField>,
+    server: Option<ServerField<Text>>,
     #[serde(default)]
-    client: Vec<ClientTable>,
+    client: Vec<ClientTable<Text>>,
     #[serde(default)]
     serves: bool,
 }
 
 /// The test's own server: one connection's script, or a list of them.
 #[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum ServerField {
-    One(ServerTable),
-    Many(Vec<ServerTable>),
+#[serde(untagged, bound(deserialize = "T: Deserialize<'de> + Default"))]
+enum ServerField<T> {
+    One(ServerTable<T>),
+    Many(Vec<ServerTable<T>>),
 }
 
-impl ServerField {
-    fn into_vec(self) -> Vec<ServerTable> {
+impl<T> ServerField<T> {
+    fn into_vec(self) -> Vec<ServerTable<T>> {
         match self {
             Self::One(table) => vec![table],
             Self::Many(tables) => tables,
@@ -680,21 +680,27 @@ impl ServerField {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ServerTable {
+#[serde(
+    deny_unknown_fields,
+    bound(deserialize = "T: Deserialize<'de> + Default")
+)]
+struct ServerTable<T> {
     #[serde(default)]
-    receives: String,
+    receives: T,
     #[serde(default)]
-    replies: String,
+    replies: T,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ClientTable {
+#[serde(
+    deny_unknown_fields,
+    bound(deserialize = "T: Deserialize<'de> + Default")
+)]
+struct ClientTable<T> {
     #[serde(default)]
-    sends: String,
+    sends: T,
     #[serde(default)]
-    receives: String,
+    receives: T,
 }
 
 /// An example's literal text: a string, or a list of strings and repeated runs, so a long input
@@ -807,9 +813,9 @@ struct GeneratedTable {
     random: Option<String>,
     #[serde(default)]
     clock: Vec<String>,
-    server: Option<ServerField>,
+    server: Option<ServerField<String>>,
     #[serde(default)]
-    client: Vec<ClientTable>,
+    client: Vec<ClientTable<String>>,
     #[serde(default)]
     serves: bool,
 }
@@ -885,6 +891,31 @@ pub fn check(text: &str, spec: &Spec, spec_label: &str) -> Result<TestSuite, Vec
         }
         Err(checker.problems)
     }
+}
+
+/// A spec's backtick value with `\r`, `\n`, `\t` and `\\` read as the characters they name, as
+/// people write line breaks and tabs in a protocol.
+fn unescape(written: &str) -> String {
+    let mut text = String::with_capacity(written.len());
+    let mut characters = written.chars();
+    while let Some(character) = characters.next() {
+        if character != '\\' {
+            text.push(character);
+            continue;
+        }
+        match characters.next() {
+            Some('r') => text.push('\r'),
+            Some('n') => text.push('\n'),
+            Some('t') => text.push('\t'),
+            Some('\\') => text.push('\\'),
+            Some(other) => {
+                text.push('\\');
+                text.push(other);
+            }
+            None => text.push('\\'),
+        }
+    }
+    text
 }
 
 /// Whether any string in `value`, or any key, holds a character lengua uses to mark holes.
@@ -1007,6 +1038,26 @@ impl<'a> Checker<'a> {
                     (name, contents)
                 })
                 .collect();
+            // What the test's server and client send is exact; what the program answers its client
+            // may hold rules. Long ones may be written with repeats, like any example text.
+            let server: Vec<Reply> = table
+                .server
+                .map(ServerField::into_vec)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|table| Reply {
+                    receives: expand("server.receives", table.receives, false),
+                    replies: expand("server.replies", table.replies, false),
+                })
+                .collect();
+            let client: Vec<Exchange> = table
+                .client
+                .into_iter()
+                .map(|table| Exchange {
+                    sends: expand("client.sends", table.sends, false),
+                    receives: expand("client.receives", table.receives, true),
+                })
+                .collect();
             let name = format!("example {id}");
             let Some(written_exit) = self.check_ending(
                 line,
@@ -1054,24 +1105,6 @@ impl<'a> Checker<'a> {
             if let Err(problem) = Supply::parse(table.random.as_deref(), &table.clock) {
                 self.problem(Some(line), format!("{name}: {problem}"));
             }
-            let server: Vec<Reply> = table
-                .server
-                .map(ServerField::into_vec)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|table| Reply {
-                    receives: table.receives,
-                    replies: table.replies,
-                })
-                .collect();
-            let client: Vec<Exchange> = table
-                .client
-                .into_iter()
-                .map(|table| Exchange {
-                    sends: table.sends,
-                    receives: table.receives,
-                })
-                .collect();
             self.check_peers(
                 line,
                 &name,
@@ -1118,7 +1151,9 @@ impl<'a> Checker<'a> {
                 .chain(&self.spec.network.listens)
                 .map(u16::to_string)
                 .collect();
-            for value in values {
+            for written in values {
+                // `\r\n` in a spec's backticks means the line break a protocol needs.
+                let value = unescape(&written);
                 let in_files = |files: &BTreeMap<String, String>| {
                     files
                         .iter()
@@ -1148,7 +1183,7 @@ impl<'a> Checker<'a> {
                     self.problem(
                         Some(line),
                         format!(
-                            "example {id} doesn't contain the spec's value `{value}`; copy every \
+                            "example {id} doesn't contain the spec's value `{written}`; copy every \
                              backtick value of {id} into its args, stdin, files, stdout, stderr, \
                              files_after, random, clock or exit_code"
                         ),
@@ -1952,8 +1987,8 @@ impl<'a> Checker<'a> {
                     .iter()
                     .filter_map(|(name, generator)| {
                         let value = inputs.get(name)?;
-                        (!generator.contains(value))
-                            .then(|| format!("{name} = {value} is outside {generator}"))
+                        let why = generator.why_outside(value)?;
+                        Some(format!("{name} = {value} is outside {generator}: {why}"))
                     })
                     .collect();
                 self.problem(
@@ -2185,14 +2220,47 @@ fn bind(block: &Generated, example: &Example) -> Result<Env, String> {
     let mut solutions = Vec::new();
     solve(&pairs, 0, &generators, &mut env, &mut solutions);
     match solutions.len() {
-        0 => Err(format!(
-            "no values of its vars turn args {:?} and stdin {:?} into the example's args {:?} \
-             and stdin {:?}",
-            block.args.iter().map(Template::source).collect::<Vec<_>>(),
-            block.stdin.source(),
-            example.args,
-            example.stdin
-        )),
+        0 => {
+            // Each input on its own, to name the ones that can't fit.
+            let misfits: Vec<String> = pairs
+                .iter()
+                .filter(|pair| {
+                    let mut alone = Vec::new();
+                    solve(
+                        std::slice::from_ref(*pair),
+                        0,
+                        &generators,
+                        &mut env.clone(),
+                        &mut alone,
+                    );
+                    alone.is_empty()
+                })
+                .map(|(pattern, text)| {
+                    let written: String = pattern
+                        .iter()
+                        .map(|part| match part {
+                            PatternPart::Text(text) => text.replace('{', "{{"),
+                            PatternPart::Var(name) => format!("{{{name}}}"),
+                        })
+                        .collect();
+                    format!(
+                        "{written:?} can't become {}",
+                        Value::Str((*text).to_owned())
+                    )
+                })
+                .collect();
+            Err(if misfits.is_empty() {
+                "no values of its vars give all of what the example gives the program at once; \
+                 check that a variable used twice holds the same text in both places"
+                    .into()
+            } else {
+                format!(
+                    "no values of its vars turn what it gives the program into what the example \
+                     gives it: {}",
+                    misfits.join("; ")
+                )
+            })
+        }
         1 => Ok(solutions.remove(0)),
         _ => Err(
             "the example's inputs fit its placeholders in more than one way; separate \
@@ -2760,6 +2828,45 @@ exit_code = 0
             "stdout = \"{any(now - 1, now)}\\n\"",
         ));
         assert!(now.contains("supplies the clock"), "{now}");
+    }
+
+    #[test]
+    fn network_tests_read_like_any_example() {
+        // A spec writes a protocol's line breaks as `\r\n`; the example holds the real ones, and
+        // long messages may be written with repeats.
+        let spec = spec::parse(&spec_text("echo").replace(
+            "Given a client that sends `hello` followed by a newline",
+            "Given a client that sends `hello\\r\\n`",
+        ))
+        .expect("valid spec");
+        let label = LABEL;
+        let body = |example: &str| {
+            format!(
+                "[meta]\nspec = \"{label}\"\n\n[[example]]\nid = \"B1\"\n{example}\nserves = true\n\n\
+                 [[generated]]\nid = \"B1\"\nvars = {{ line = 'string(0, 1023, \"ehlo\")' }}\n\
+                 client = [{{ sends = \"{{line}}\\r\\n\", receives = \"{{line}}\\r\\n\" }}]\n\
+                 serves = true\n"
+            )
+        };
+        let crlf = body(r#"client = [{ sends = "hello\r\n", receives = "hello\r\n" }]"#);
+        check(&crlf, &spec, label).expect("`hello\\r\\n` is in the example");
+        let repeated = body(
+            r#"client = [{ sends = [{ repeat = "hel", times = 1 }, "lo\r\n"], receives = "hello\r\n" }]"#,
+        );
+        check(&repeated, &spec, label).expect("repeats work in network fields");
+        // When the block can't produce the example, the message names what doesn't fit.
+        let misfit = crlf.replace("sends = \"{line}\\r\\n\"", "sends = \"{line}!\\r\\n\"");
+        let problems: Vec<String> = check(&misfit, &spec, label)
+            .expect_err("a misfit")
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains(r#""{line}!\r\n" can't become "hello\r\n""#)),
+            "{problems:#?}"
+        );
     }
 
     #[test]

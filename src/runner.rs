@@ -80,6 +80,8 @@ pub struct Job<'a> {
     pub args: &'a [String],
     /// Its standard input, closed after these bytes.
     pub stdin: &'a [u8],
+    /// A file to be its standard input instead, read by the program itself, however large.
+    pub stdin_file: Option<&'a Path>,
     /// Files put in its fresh working folder before it starts, by name relative to the folder.
     pub files: &'a BTreeMap<String, String>,
     /// A folder to run in instead of a fresh one; the program may read and write inside it.
@@ -111,6 +113,7 @@ impl<'a> Job<'a> {
             syscalls,
             supply: None,
             net: None,
+            stdin_file: None,
         }
     }
 }
@@ -453,6 +456,10 @@ pub async fn start(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<
         .as_ref()
         .and_then(tokio::process::Child::id)
         .map_or_else(|| "none".to_owned(), |pid| pid.to_string());
+    let input = match job.stdin_file {
+        Some(path) => Stdio::from(std::fs::File::open(path)?),
+        None => Stdio::piped(),
+    };
     let mut child = Command::new(launcher)
         .arg(LAUNCH_FLAG)
         .arg(&socket)
@@ -464,7 +471,7 @@ pub async fn start(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<
         .args(job.args)
         .current_dir(&folder)
         .env_clear()
-        .stdin(Stdio::piped())
+        .stdin(input)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
@@ -515,10 +522,7 @@ pub async fn start(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<
     drop(go);
     let began = std::time::Instant::now();
 
-    let mut input = child
-        .stdin
-        .take()
-        .ok_or_else(|| io::Error::other("no stdin pipe"))?;
+    let input = child.stdin.take();
     let output = child
         .stdout
         .take()
@@ -530,7 +534,9 @@ pub async fn start(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<
     let bytes = job.stdin.to_vec();
     let writer = tokio::spawn(async move {
         // A program may exit without reading its input; that's not an error.
-        let _ = input.write_all(&bytes).await;
+        if let Some(mut input) = input {
+            let _ = input.write_all(&bytes).await;
+        }
     });
     let (overflow, overflowed) = mpsc::channel::<()>(2);
     let stdout = tokio::spawn(read_capped(output, limits.max_output, overflow.clone()));

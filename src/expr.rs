@@ -696,9 +696,44 @@ fn lex_string(text: &str) -> Result<(String, &str), ParseError> {
                 Some('\\') => string.push('\\'),
                 Some('n') => string.push('\n'),
                 Some('t') => string.push('\t'),
+                Some('r') => string.push('\r'),
+                Some('0') => string.push('\0'),
+                // \xHH, \uHHHH and \u{H…}: a character by its number.
+                Some(kind @ ('x' | 'u')) => {
+                    let rest = &text[index + 2..];
+                    let (digits, used) = match rest.strip_prefix('{').filter(|_| kind == 'u') {
+                        Some(braced) => {
+                            let end = braced
+                                .find('}')
+                                .ok_or_else(|| ParseError("\\u{…} is missing its }".into()))?;
+                            (&braced[..end], end + 2)
+                        }
+                        None => {
+                            let count = if kind == 'x' { 2 } else { 4 };
+                            (rest.get(..count).unwrap_or(""), count)
+                        }
+                    };
+                    let hex = !digits.is_empty()
+                        && digits.len() <= 6
+                        && digits.bytes().all(|byte| byte.is_ascii_hexdigit());
+                    let character = hex
+                        .then(|| u32::from_str_radix(digits, 16).ok())
+                        .flatten()
+                        .and_then(char::from_u32)
+                        .ok_or_else(|| {
+                            ParseError(format!(
+                                "\\{kind}{digits} isn't a character; write \\xHH, \\uHHHH or \\u{{H…}}"
+                            ))
+                        })?;
+                    string.push(character);
+                    for _ in 0..used {
+                        chars.next();
+                    }
+                }
                 Some(other) => {
                     return error(format!(
-                        "unknown escape \\{other} in a string; use \\\", \\\\, \\n or \\t"
+                        "unknown escape \\{other} in a string; use \\\", \\\\, \\n, \\t, \\r, \\0, \\xHH \\
+                         or \\u{{H…}}"
                     ));
                 }
                 None => break,
@@ -2019,6 +2054,41 @@ impl Generator {
         }
     }
 
+    /// Why `value` is outside this generator, in a few words, when it is.
+    #[must_use]
+    pub fn why_outside(&self, value: &Value) -> Option<String> {
+        if self.contains(value) {
+            return None;
+        }
+        Some(match (self, value) {
+            (Self::Str { min, max, charset }, Value::Str(text)) => {
+                let mut missing: Vec<char> = text
+                    .chars()
+                    .filter(|character| !charset.contains(character))
+                    .collect();
+                missing.sort_unstable();
+                missing.dedup();
+                let length = text.chars().count();
+                if missing.is_empty() {
+                    format!("its {length} characters are outside {min} to {max}")
+                } else {
+                    let shown: String = missing.iter().take(12).collect();
+                    format!(
+                        "it holds {shown:?}, which the generator never draws: add them to its characters"
+                    )
+                }
+            }
+            (Self::Int { lo, .. }, Value::Int(number)) if number < lo => format!("it's below {lo}"),
+            (Self::Int { hi, .. }, Value::Int(_)) => format!("it's above {hi}"),
+            (Self::Dec { places, .. }, Value::Dec { p, .. }) if p != places => {
+                format!("it's written with {p} decimal places, not {places}")
+            }
+            (Self::Dec { .. }, Value::Dec { .. }) => "it's outside the range".to_owned(),
+            (Self::Choice(_), _) => "it isn't one of the choices".to_owned(),
+            _ => "it isn't a value of that kind".to_owned(),
+        })
+    }
+
     /// The value whose printed form is `text`, if this generator's kind can print it.
     #[must_use]
     pub fn read(&self, text: &str) -> Option<Value> {
@@ -2373,6 +2443,18 @@ mod tests {
 
     fn value(text: &str, env: &Env) -> Result<Value, EvalError> {
         eval(&parse(text).expect("valid expression"), env)
+    }
+
+    #[test]
+    fn strings_take_escapes_people_write() {
+        let none = Env::new();
+        assert_eq!(
+            value(r#""a\r\n\x41\u000b\u{1F600}\0""#, &none),
+            Ok(Value::Str("a\r\nA\u{b}\u{1F600}\0".into()))
+        );
+        for bad in [r#""\x4""#, r#""\u12""#, r#""\u{110000}""#, r#""\q""#] {
+            assert!(parse(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

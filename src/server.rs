@@ -313,6 +313,13 @@ pub struct RunParams {
     /// Stops the server that `run` started for this program and reports what it printed.
     #[serde(default)]
     pub stop: bool,
+    /// The name of a file in `folder` to give the program as its standard input instead of
+    /// `stdin`, read by the program itself however large it is.
+    #[serde(default)]
+    pub stdin_file: Option<String>,
+    /// How many seconds the program may run, 1 to 600; 10 when not given.
+    #[serde(default)]
+    pub timeout_seconds: Option<u64>,
 }
 
 /// What `run` reports.
@@ -811,7 +818,9 @@ impl LenguaServer {
             absolute path of the program folder; args: the program's arguments; stdin: text for \
             its standard input; folder: absolute path of a folder of the user's files to run in, \
             naming the files in args relative to it (\"notes.txt\", not \"/home/me/notes.txt\"); \
-            stop: true to stop the server run started.",
+            stdin_file: a file in folder to read as standard input instead of stdin, however \
+            large; timeout_seconds: up to 600 for long runs on large data (10 by default); stop: \
+            true to stop the server run started.",
         annotations(title = "Run program", read_only_hint = false, open_world_hint = false)
     )]
     async fn run(
@@ -877,10 +886,31 @@ impl LenguaServer {
                 stamp.toolchain, built.toolchain
             ));
         }
+        let seconds = params.timeout_seconds.unwrap_or(10);
+        if !(1..=600).contains(&seconds) {
+            return Err("timeout_seconds goes from 1 to 600".into());
+        }
         let limits = Limits {
-            timeout: std::time::Duration::from_secs(10),
+            timeout: std::time::Duration::from_secs(seconds),
             max_file_size: None,
             ..Limits::default()
+        };
+        // Standard input from a file in the program's folder, which it reads itself.
+        let stdin_file = match (params.stdin_file.as_deref(), workspace.as_deref()) {
+            (None, _) => None,
+            (Some(_), None) => {
+                return Err("stdin_file names a file in folder; give folder too".into());
+            }
+            (Some(name), Some(folder)) => {
+                let path = folder.join(name);
+                let inside = path
+                    .canonicalize()
+                    .map_err(|error| format!("stdin_file {name}: {error}"))?;
+                if !inside.starts_with(folder) || !inside.is_file() {
+                    return Err(format!("stdin_file {name} must be a file inside folder"));
+                }
+                Some(inside)
+            }
         };
         let syscalls = profile.allowed_syscalls(&spec.syscalls, spec.threads.is_some());
         // The ports the spec approves, and for a server, its own port on the loopback.
@@ -891,6 +921,7 @@ impl LenguaServer {
         let job = Job {
             folder: workspace.as_deref(),
             net: Some(&net),
+            stdin_file: stdin_file.as_deref(),
             ..Job::new(
                 &built.executable,
                 &params.args,
