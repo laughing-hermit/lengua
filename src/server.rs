@@ -164,16 +164,16 @@ pub struct ProgramReport {
     /// Which solvers checked those proofs.
     pub proven_by: Option<String>,
     /// The user's requests in this build, as recorded, oldest first.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requests: Vec<String>,
     /// How spec.md changed since the build's first request, as `-`/`+` lines.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spec_changed: Option<String>,
     /// How tests.toml changed since code first ran in this build, as `-`/`+` lines.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tests_changed: Option<String>,
     /// lengua's own list of the test changes that test less than before.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tests_less: Vec<String>,
 }
 
@@ -220,7 +220,7 @@ pub struct RecordReport {
     /// The user's requests in this build, as recorded, oldest first.
     pub requests: Vec<String>,
     /// How spec.md changed since the build's first request, as `-`/`+` lines.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spec_changed: Option<String>,
     /// What happened.
     pub message: String,
@@ -242,10 +242,10 @@ pub struct TestsReport {
     /// Runs of all generated blocks together, each with fresh inputs.
     pub generated_runs: u64,
     /// How tests.toml changed since code first ran in this build, as `-`/`+` lines.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tests_changed: Option<String>,
     /// lengua's own list of the test changes that test less than before.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tests_less: Vec<String>,
     /// What happened.
     pub message: String,
@@ -285,13 +285,13 @@ pub struct CodeReport {
     /// The user's requests in this build, as recorded, oldest first.
     pub requests: Vec<String>,
     /// How spec.md changed since the build's first request, as `-`/`+` lines.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spec_changed: Option<String>,
     /// How tests.toml changed since code first ran in this build, as `-`/`+` lines.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tests_changed: Option<String>,
     /// lengua's own list of the test changes that test less than before.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tests_less: Vec<String>,
     /// What happened.
     pub message: String,

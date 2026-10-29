@@ -156,13 +156,28 @@ impl Session {
             Some(true),
             "{tool} returned an error: {result:?}"
         );
-        match result.structured_content {
+        let content = match result.structured_content {
             Some(content) => content,
             None => panic!(
                 "{tool} returned no structured content: {:?}",
                 result.content
             ),
+        };
+        // Harnesses check replies against the tool's output schema and refuse any that don't
+        // fit, so every reply a test gets must fit too.
+        let tools = self.service.list_all_tools().await.expect("list tools");
+        let schema = tools
+            .iter()
+            .find(|listed| listed.name == tool)
+            .and_then(|listed| listed.output_schema.as_ref())
+            .map(|schema| serde_json::to_value(schema.as_ref()).expect("a JSON schema"));
+        if let Some(schema) = schema {
+            let validator = jsonschema::validator_for(&schema).expect("compile the output schema");
+            if let Err(error) = validator.validate(&content) {
+                panic!("{tool} replied outside its output schema: {error}: {content}");
+            }
         }
+        content
     }
 
     /// Calls a tool that must fail and returns its error text.
