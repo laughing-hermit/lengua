@@ -30,7 +30,14 @@ the tests come before the code, and they decide whether the code is right.
   `exit_code`. Every backtick value of the behavior must appear in its example.
 - **Output is exact,** including the final newline (`"5\n"`). Leave out a stream the program
   doesn't write; it must then stay empty.
-- **Output the program chooses,** such as a random roll or the time, is a rule: in the example,
+- **Random bytes and the clock come from the test** when the spec gives them: the example has
+  `random = "fc2a"` (hex) or `clock = ["1735689600"]` (seconds since 1970), and the generated
+  block draws them, `random = "{hex(first, 1)}{hex(second, 1)}"` with
+  `first = "int(0, 255)"`, or `clock = ["{t}"]`. The output is then exact. A variable that only
+  fills random bytes draws every value they can hold (`int(0, 255)` for one byte); one that only
+  sets the clock draws seconds from 0 up. Bytes past the end of `random` are zeros, and the last
+  reading repeats.
+- **Output the program chooses** without the test supplying it is a rule: in the example,
   `stdout = { matches = "rolled {any(1, 6)}\n" }`, and in the generated block,
   `stdout = "rolled {any(1, 6)}\n"`. `now` is when the run starts in Unix seconds, and only
   bounds a rule: `{any(now - 2, now + 2)}`.

@@ -713,6 +713,7 @@ dependencies = [
  "iced-x86",
  "jsonschema",
  "landlock",
+ "nix",
  "object",
  "perf-event2",
  "rand",

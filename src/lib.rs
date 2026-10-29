@@ -16,6 +16,8 @@ pub mod runner;
 pub mod server;
 pub mod spec;
 pub mod state;
+pub mod supervise;
+pub mod supply;
 pub mod testfile;
 pub mod testrun;
 pub mod toolchain;

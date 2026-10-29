@@ -138,6 +138,14 @@ pub struct State {
     steps: u64,
     /// How the run ended, once it has.
     pub end: Option<End>,
+    /// The bytes a test supplies for `getrandom`, in order, when it supplies them: the kernel's
+    /// are any value.
+    random: Option<Rc<Vec<Term>>>,
+    random_used: usize,
+    /// The readings a test supplies for `clock_gettime`, seconds and nanoseconds, 64 bits each;
+    /// the last one repeats. Empty, the kernel's are any time.
+    clock: Rc<Vec<(Term, Term)>>,
+    readings_used: usize,
 }
 
 /// A file the program has open.
@@ -161,6 +169,7 @@ const O_TRUNC: u64 = 0o1000;
 const O_HARMLESS: u64 = 0o400 | 0o100_000 | 0o2_000_000;
 const ENOENT: i64 = 2;
 const EBADF: i64 = 9;
+const EINVAL: i64 = 22;
 
 /// The general-purpose register a register is part of, 0 for rax to 15 for r15.
 fn slot(register: Register) -> Option<usize> {
@@ -203,6 +212,10 @@ impl State {
             stderr: Vec::new(),
             steps: 0,
             end: None,
+            random: None,
+            random_used: 0,
+            clock: Rc::new(Vec::new()),
+            readings_used: 0,
         };
         // The strings above the pointers: the program's path, then each argument.
         let program_name: Vec<Term> = b"/lengua/main"
@@ -237,6 +250,14 @@ impl State {
     #[must_use]
     pub fn with_files(mut self, files: BTreeMap<String, Vec<Term>>) -> Self {
         self.files = Rc::new(files);
+        self
+    }
+
+    /// The same state with a test's random bytes and clock readings in place of the kernel's.
+    #[must_use]
+    pub fn with_supply(mut self, random: Option<Vec<Term>>, clock: Vec<(Term, Term)>) -> Self {
+        self.random = random.map(Rc::new);
+        self.clock = Rc::new(clock);
         self
     }
 
@@ -1388,6 +1409,42 @@ impl<'a> Cpu<'a> {
                 }
             }
             257 => self.open_at()?,
+            // The test's readings, as the supervisor gives them, the last one repeating.
+            228 if !self.state.clock.is_empty() => {
+                let buffer = self.constant(rsi)?;
+                let readings = Rc::clone(&self.state.clock);
+                let index = self.state.readings_used.min(readings.len() - 1);
+                let (seconds, nanoseconds) = readings[index];
+                self.save(buffer, seconds)?;
+                self.save(buffer + 8, nanoseconds)?;
+                self.state.readings_used += 1;
+                0
+            }
+            // The test's bytes, as the supervisor gives them: zeros past their end.
+            318 if self.state.random.is_some() => {
+                let buffer = self.constant(rdi)?;
+                let count = self.constant(rsi)?;
+                let flags = self.constant(rdx)?;
+                if flags & !7 != 0 || flags & 6 == 6 {
+                    (-EINVAL).cast_unsigned()
+                } else {
+                    if count > 4096 {
+                        return Err(unsupported("getrandom for more than 4096 bytes at once"));
+                    }
+                    let bytes = self.state.random.clone().unwrap_or_default();
+                    let used = self.state.random_used;
+                    for offset in 0..count {
+                        let index = used + usize::try_from(offset).unwrap_or(usize::MAX);
+                        let byte = match bytes.get(index) {
+                            Some(byte) => *byte,
+                            None => self.pool.bv(8, 0),
+                        };
+                        self.save(buffer + offset, byte)?;
+                    }
+                    self.state.random_used += usize::try_from(count).unwrap_or(usize::MAX);
+                    count
+                }
+            }
             // Values the kernel chooses: any at all, a fresh variable for each.
             228 => {
                 let clock = self.constant(rdi)? & 0xffff_ffff;

@@ -10,7 +10,7 @@
 //! and `string(min, max, "chars")`, with literal arguments only.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
+use std::fmt::{self, Write as _};
 
 use rand::rngs::ChaCha8Rng;
 use rand::{RngExt, SeedableRng};
@@ -473,10 +473,14 @@ pub enum Function {
     /// `any(lo, hi)`, in expected output only: any whole number from `lo` to `hi`, written
     /// plainly, for output the test can't know exactly, such as a roll of the real dice.
     Any,
+    /// `hex(x, n)`, in a test's `random` bytes only: `x` as `n` bytes, least significant first,
+    /// in hex; `hex(258, 2)` is "0201". Eight bytes take any 64-bit value, negatives as two's
+    /// complement.
+    Hex,
 }
 
 impl Function {
-    const ALL: [Self; 25] = [
+    const ALL: [Self; 26] = [
         Self::Len,
         Self::Abs,
         Self::Min,
@@ -502,6 +506,7 @@ impl Function {
         Self::Scaled,
         Self::Places,
         Self::Any,
+        Self::Hex,
     ];
 
     fn name(self) -> &'static str {
@@ -531,6 +536,7 @@ impl Function {
             Self::Scaled => "scaled",
             Self::Places => "places",
             Self::Any => "any",
+            Self::Hex => "hex",
         }
     }
 
@@ -539,7 +545,9 @@ impl Function {
         match self {
             Self::Min | Self::Max => (2, usize::MAX),
             Self::If | Self::Fma | Self::Tr => (3, 3),
-            Self::Count | Self::Fixed | Self::Scaled | Self::Places | Self::Any => (2, 2),
+            Self::Count | Self::Fixed | Self::Scaled | Self::Places | Self::Any | Self::Hex => {
+                (2, 2)
+            }
             Self::Len
             | Self::Abs
             | Self::Upper
@@ -859,6 +867,10 @@ impl Parser {
                 (2, 2) if function == Function::Any => {
                     "two whole numbers, the smallest and the largest, such as any(1, 6)".into()
                 }
+                (2, 2) if function == Function::Hex => {
+                    "a whole number and how many bytes it takes, 1 to 8, such as hex(roll, 1)"
+                        .into()
+                }
                 (2, 2) => "two arguments: a string and the part to count".into(),
                 (3, 3) if function == Function::Tr => {
                     "three strings: the text, the characters to replace and their replacements, \
@@ -918,6 +930,21 @@ fn int(value: Value, operation: &str) -> Result<i128, EvalError> {
             other.kind()
         ))),
     }
+}
+
+/// `value` as `count` bytes, least significant first, when it fits: 0 to 256^count - 1, or any
+/// 64-bit value in 8 bytes (negatives as two's complement).
+#[must_use]
+pub fn hex_bytes(value: i128, count: i128) -> Option<Vec<u8>> {
+    let count = usize::try_from(count)
+        .ok()
+        .filter(|count| (1..=8).contains(count))?;
+    let fits = if count == 8 {
+        i64::try_from(value).is_ok()
+    } else {
+        (0..1_i128 << (8 * count)).contains(&value)
+    };
+    fits.then(|| value.to_le_bytes()[..count].to_vec())
 }
 
 /// Why `operation` can't read text holding a rule such as `any(1, 6)`.
@@ -1291,6 +1318,22 @@ fn call(function: Function, arguments: &[Expr], env: &Env) -> Result<Value, Eval
                 crate::expect::Bound::Number(high),
             )))
         }
+        Function::Hex => {
+            let (value, count) = (int(argument(0)?, name)?, int(argument(1)?, name)?);
+            let bytes = hex_bytes(value, count).ok_or_else(|| {
+                EvalError::Type(format!(
+                    "hex({value}, {count}) needs 1 to 8 bytes and a value that fits them: 0 to \
+                     256^n - 1, or any 64-bit value in 8"
+                ))
+            })?;
+            Ok(Value::Str(bytes.iter().fold(
+                String::new(),
+                |mut text, byte| {
+                    let _ = write!(text, "{byte:02x}");
+                    text
+                },
+            )))
+        }
         Function::Upper => Ok(Value::Str(string(argument(0)?, name)?.to_ascii_uppercase())),
         Function::Lower => Ok(Value::Str(string(argument(0)?, name)?.to_ascii_lowercase())),
         Function::Tr => {
@@ -1440,6 +1483,15 @@ pub enum PatternPart {
     Var(String),
 }
 
+/// A piece of a test's `random` bytes: hex digits as written, or a variable's value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HexPart {
+    /// Bytes written as hex digits.
+    Digits(String),
+    /// `hex(x, n)`: the variable's value as this many bytes, least significant first.
+    Var(String, usize),
+}
+
 impl Template {
     /// The template's literal text and placeholders, in order.
     #[must_use]
@@ -1537,6 +1589,49 @@ impl Template {
                 Part::Placeholder(_) => None,
             })
             .collect()
+    }
+
+    /// The template as hex digits and `hex(x, n)` placeholders, with a variable and a literal
+    /// byte count from 1 to 8, or `None` when it holds anything else.
+    #[must_use]
+    pub fn hex_parts(&self) -> Option<Vec<HexPart>> {
+        self.parts
+            .iter()
+            .map(|part| match part {
+                Part::Text(text) => Some(HexPart::Digits(text.clone())),
+                Part::Placeholder(Expr::Call(Function::Hex, arguments)) => {
+                    match arguments.as_slice() {
+                        [Expr::Var(name), Expr::Literal(Value::Int(count))] => {
+                            usize::try_from(*count)
+                                .ok()
+                                .filter(|count| (1..=8).contains(count))
+                                .map(|count| HexPart::Var(name.clone(), count))
+                        }
+                        _ => None,
+                    }
+                }
+                Part::Placeholder(_) => None,
+            })
+            .collect()
+    }
+
+    /// Whether a placeholder calls `function`.
+    #[must_use]
+    pub fn calls(&self, function: Function) -> bool {
+        fn within(expr: &Expr, function: Function) -> bool {
+            match expr {
+                Expr::Literal(_) | Expr::Var(_) => false,
+                Expr::Neg(inner) | Expr::Not(inner) => within(inner, function),
+                Expr::Binary(_, left, right) => within(left, function) || within(right, function),
+                Expr::Call(called, arguments) => {
+                    *called == function
+                        || arguments.iter().any(|argument| within(argument, function))
+                }
+            }
+        }
+        self.parts
+            .iter()
+            .any(|part| matches!(part, Part::Placeholder(expr) if within(expr, function)))
     }
 
     /// Whether a placeholder uses the variable `name` other than in the bounds of `any(…)`.

@@ -7,9 +7,12 @@ use std::fmt;
 use serde::Deserialize;
 use toml::Spanned;
 
-use crate::expr::{self, Env, EvalError, Generator, Limit, PatternPart, Template, Value};
+use crate::expr::{
+    self, Env, EvalError, Function, Generator, HexPart, Limit, PatternPart, Template, Value,
+};
 use crate::hash::Sha256Hex;
-use crate::spec::{ASSERTION_EXIT_CODE, Behavior, BehaviorId, Spec};
+use crate::spec::{ASSERTION_EXIT_CODE, Behavior, BehaviorId, Spec, Syscall};
+use crate::supply::Supply;
 
 /// The most runs a generated block may ask for.
 pub const MAX_RUNS: u32 = 1000;
@@ -54,6 +57,18 @@ pub struct Example {
     pub files_after: BTreeMap<String, String>,
     /// Expected exit code.
     pub exit_code: u8,
+    /// The bytes its `getrandom` calls receive, in hex, or `None` when the kernel draws them.
+    pub random: Option<String>,
+    /// What its `clock_gettime` calls read, in seconds; empty when the kernel's clock answers.
+    pub clock: Vec<String>,
+}
+
+impl Example {
+    /// What the test supplies in place of the kernel.
+    #[must_use]
+    pub fn supply(&self) -> Supply {
+        Supply::parse(self.random.as_deref(), &self.clock).unwrap_or_default()
+    }
 }
 
 /// A test that draws new inputs on every run and computes the expected results.
@@ -83,6 +98,10 @@ pub struct Generated {
     pub exit_code: ExitCode,
     /// Whether every combination of the variables' values runs, instead of a sample.
     pub every_value: bool,
+    /// The random bytes template: hex digits and `hex(x, n)`.
+    pub random: Option<Template>,
+    /// The clock reading templates.
+    pub clock: Vec<Template>,
 }
 
 /// A generated block runs every combination of its values when there are at most this many…
@@ -119,6 +138,18 @@ pub struct Case {
     pub files_after: BTreeMap<String, String>,
     /// Expected exit code.
     pub exit_code: u8,
+    /// The bytes its `getrandom` calls receive, in hex, or `None` when the kernel draws them.
+    pub random: Option<String>,
+    /// What its `clock_gettime` calls read, in seconds; empty when the kernel's clock answers.
+    pub clock: Vec<String>,
+}
+
+impl Case {
+    /// What the test supplies in place of the kernel.
+    #[must_use]
+    pub fn supply(&self) -> Supply {
+        Supply::parse(self.random.as_deref(), &self.clock).unwrap_or_default()
+    }
 }
 
 impl Generated {
@@ -130,6 +161,54 @@ impl Generated {
             && self
                 .outputs()
                 .any(|template| template.variables().contains(NOW))
+    }
+
+    /// The variables that reach the program only as random bytes, with the byte counts
+    /// `hex(x, n)` gives them.
+    #[must_use]
+    pub fn random_only(&self) -> BTreeMap<String, BTreeSet<usize>> {
+        let others = self.reached_otherwise(true);
+        let mut random: BTreeMap<String, BTreeSet<usize>> = BTreeMap::new();
+        for part in self
+            .random
+            .as_ref()
+            .and_then(Template::hex_parts)
+            .unwrap_or_default()
+        {
+            if let HexPart::Var(var, count) = part
+                && !others.contains(&var)
+            {
+                random.entry(var).or_default().insert(count);
+            }
+        }
+        random
+    }
+
+    /// The variables that reach the program only as clock readings.
+    #[must_use]
+    pub fn clock_only(&self) -> BTreeSet<String> {
+        let others = self.reached_otherwise(false);
+        let random = self
+            .random
+            .as_ref()
+            .map(Template::variables)
+            .unwrap_or_default();
+        self.clock
+            .iter()
+            .flat_map(Template::variables)
+            .filter(|var| !others.contains(var) && !random.contains(var))
+            .collect()
+    }
+
+    /// The variables in args, stdin and files, and in clock readings unless `clock` is false.
+    fn reached_otherwise(&self, clock: bool) -> BTreeSet<String> {
+        self.args
+            .iter()
+            .chain([&self.stdin])
+            .chain(self.files.values())
+            .chain(self.clock.iter().filter(|_| clock))
+            .flat_map(Template::variables)
+            .collect()
     }
 
     /// The templates of the expected results.
@@ -207,6 +286,18 @@ impl Generated {
                 exit_code_value(template, inputs).map_err(|error| ("exit_code", error))?
             }
         };
+        let random = self
+            .random
+            .as_ref()
+            .map(|template| template.render(inputs))
+            .transpose()
+            .map_err(|error| ("random", error))?;
+        let clock = self
+            .clock
+            .iter()
+            .map(|template| template.render(inputs))
+            .collect::<Result<_, _>>()
+            .map_err(|error| ("clock", error))?;
         Ok(Case {
             inputs: Env::new(),
             args,
@@ -216,6 +307,8 @@ impl Generated {
             stderr,
             files_after,
             exit_code,
+            random,
+            clock,
         })
     }
 
@@ -471,6 +564,9 @@ struct ExampleTable {
     #[serde(default)]
     files_after: BTreeMap<String, Text>,
     exit_code: i64,
+    random: Option<String>,
+    #[serde(default)]
+    clock: Vec<String>,
 }
 
 /// An example's literal text: a string, or a list of strings and repeated runs, so a long input
@@ -580,6 +676,9 @@ struct GeneratedTable {
     #[serde(default)]
     files_after: BTreeMap<String, String>,
     exit_code: ExitCodeField,
+    random: Option<String>,
+    #[serde(default)]
+    clock: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -810,6 +909,11 @@ impl<'a> Checker<'a> {
             for problem in file_set_problems(files.keys().chain(files_after.keys())) {
                 self.problem(Some(line), format!("example {id}: {problem}"));
             }
+            let name = format!("example {id}");
+            self.check_supply(line, &name, table.random.is_some(), !table.clock.is_empty());
+            if let Err(problem) = Supply::parse(table.random.as_deref(), &table.clock) {
+                self.problem(Some(line), format!("{name}: {problem}"));
+            }
             let example = Example {
                 id,
                 line,
@@ -820,6 +924,8 @@ impl<'a> Checker<'a> {
                 stderr,
                 files_after,
                 exit_code,
+                random: table.random,
+                clock: table.clock,
             };
             for value in values {
                 let in_files = |files: &BTreeMap<String, String>| {
@@ -833,14 +939,19 @@ impl<'a> Checker<'a> {
                     || example.stderr.contains(&value)
                     || in_files(&example.files)
                     || in_files(&example.files_after)
-                    || example.exit_code.to_string() == value;
+                    || example.exit_code.to_string() == value
+                    || example
+                        .random
+                        .as_deref()
+                        .is_some_and(|random| random.contains(&value))
+                    || example.clock.iter().any(|reading| reading.contains(&value));
                 if !present {
                     self.problem(
                         Some(line),
                         format!(
                             "example {id} doesn't contain the spec's value `{value}`; copy every \
                              backtick value of {id} into its args, stdin, files, stdout, stderr, \
-                             files_after or exit_code"
+                             files_after, random, clock or exit_code"
                         ),
                     );
                 }
@@ -918,10 +1029,7 @@ impl<'a> Checker<'a> {
                 continue;
             }
             match Generator::parse(source) {
-                Ok(generator) => {
-                    self.check_limits(line, &name, var, &generator);
-                    vars.push((var.clone(), generator));
-                }
+                Ok(generator) => vars.push((var.clone(), generator)),
                 Err(error) => self.problem(Some(line), format!("{name}: vars.{var}: {error}")),
             }
         }
@@ -947,9 +1055,19 @@ impl<'a> Checker<'a> {
             .iter()
             .map(|(file, source)| Some((file.clone(), template("files_after", source)?)))
             .collect();
+        let random = match &table.random {
+            None => Some(None),
+            Some(source) => template("random", source).map(Some),
+        };
+        let clock: Option<Vec<Template>> = table
+            .clock
+            .iter()
+            .map(|source| template("clock", source))
+            .collect();
         for problem in file_set_problems(table.files.keys().chain(table.files_after.keys())) {
             self.problem(Some(line), format!("{name}: {problem}"));
         }
+        self.check_supply(line, &name, table.random.is_some(), !table.clock.is_empty());
         let exit_code = match &table.exit_code {
             ExitCodeField::Number(code) => match u8::try_from(*code) {
                 Ok(code) if code == behavior_exit => Some(ExitCode::Fixed(code)),
@@ -987,6 +1105,8 @@ impl<'a> Checker<'a> {
             Some(stderr),
             Some(files_after),
             Some(exit_code),
+            Some(random),
+            Some(clock),
         ) = (
             args.into_iter().collect::<Option<Vec<_>>>(),
             stdin,
@@ -995,6 +1115,8 @@ impl<'a> Checker<'a> {
             stderr,
             files_after,
             exit_code,
+            random,
+            clock,
         )
         else {
             return None;
@@ -1012,9 +1134,95 @@ impl<'a> Checker<'a> {
             files_after,
             exit_code,
             every_value: false,
+            random,
+            clock,
         };
         self.check_variables(&block, &name);
+        self.check_ranges(&block, &name);
         (self.problems.len() + self.hidden == before).then_some(block)
+    }
+
+    /// A test may supply random bytes only when the spec allows `getrandom`, and clock readings
+    /// only when it allows `clock_gettime`.
+    fn check_supply(&mut self, line: usize, name: &str, random: bool, clock: bool) {
+        let allows = |call: Syscall| self.spec.syscalls.contains(&call);
+        if random && !allows(Syscall::Getrandom) {
+            self.problem(
+                Some(line),
+                format!(
+                    "{name} supplies random bytes, but spec.md doesn't allow getrandom; drop \
+                     random, or ask the user to allow getrandom"
+                ),
+            );
+        }
+        if clock && !allows(Syscall::ClockGettime) {
+            self.problem(
+                Some(line),
+                format!(
+                    "{name} supplies clock readings, but spec.md doesn't allow clock_gettime; \
+                     drop clock, or ask the user to allow clock_gettime"
+                ),
+            );
+        }
+    }
+
+    /// Generators take their ranges from Purpose, except for a variable that reaches the program
+    /// only as random bytes or clock readings. Random bytes draw every value they can hold, as
+    /// the kernel's would; a clock reading draws times from 1970 on.
+    fn check_ranges(&mut self, block: &Generated, name: &str) {
+        let line = block.line;
+        let random = block.random_only();
+        let clock = block.clock_only();
+        for (var, generator) in &block.vars {
+            if !random.contains_key(var) && !clock.contains(var) {
+                self.check_limits(line, name, var, generator);
+            } else if let Some(counts) = random.get(var) {
+                let [count] = counts.iter().copied().collect::<Vec<_>>()[..] else {
+                    self.problem(
+                        Some(line),
+                        format!("{name}: {var} fills random bytes with different byte counts"),
+                    );
+                    continue;
+                };
+                let every = if count == 8 {
+                    Generator::Int {
+                        lo: i64::MIN.into(),
+                        hi: i64::MAX.into(),
+                    }
+                } else {
+                    Generator::Int {
+                        lo: 0,
+                        hi: (1 << (8 * count)) - 1,
+                    }
+                };
+                if *generator != every {
+                    self.problem(
+                        Some(line),
+                        format!(
+                            "{name}: vars.{var} = {generator} fills {count} random byte(s), which \
+                             the kernel could give any value, so it draws them all: \
+                             {var} = \"{every}\""
+                        ),
+                    );
+                }
+            } else {
+                let from_1970 = match generator {
+                    Generator::Int { lo, .. } => *lo >= 0,
+                    Generator::Dec { lo, places, .. } => *lo >= 0 && *places <= 9,
+                    _ => false,
+                };
+                if !from_1970 {
+                    self.problem(
+                        Some(line),
+                        format!(
+                            "{name}: vars.{var} = {generator} is a clock reading; draw seconds \
+                             since 1970 with int(lo, hi), or decimal(lo, hi) with up to 9 \
+                             places, from 0 up"
+                        ),
+                    );
+                }
+            }
+        }
     }
 
     /// Generators may only use numbers that Purpose states, so their ranges come from the spec.
@@ -1099,19 +1307,58 @@ impl<'a> Checker<'a> {
             .map(|arg| ("args", arg))
             .chain([("stdin", &block.stdin)])
             .chain(block.files.values().map(|file| ("files", file)))
+            .chain(block.clock.iter().map(|reading| ("clock", reading)))
         {
             if template.pattern().is_none() {
                 self.problem(
                     Some(block.line),
                     format!(
-                        "{name}: {field} {:?} computes a value; args, stdin and files may only \
-                         hold bare variables like {{a}}, so move the computation to stdout, \
-                         stderr, files_after or exit_code",
+                        "{name}: {field} {:?} computes a value; args, stdin, files and clock may \
+                         only hold bare variables like {{a}}, so move the computation to \
+                         stdout, stderr, files_after or exit_code",
                         template.source()
                     ),
                 );
             }
             inputs.extend(template.variables());
+        }
+        if let Some(random) = &block.random {
+            if random.hex_parts().is_none() {
+                self.problem(
+                    Some(block.line),
+                    format!(
+                        "{name}: random {:?} may only hold hex digits and hex(x, n), a variable \
+                         and 1 to 8 bytes, such as \"{{hex(roll, 1)}}\"",
+                        random.source()
+                    ),
+                );
+            }
+            inputs.extend(random.variables());
+        }
+        let others = block
+            .args
+            .iter()
+            .chain([&block.stdin])
+            .chain(block.files.values())
+            .chain(block.clock.iter())
+            .chain(block.outputs());
+        if others
+            .into_iter()
+            .any(|template| template.calls(Function::Hex))
+        {
+            self.problem(
+                Some(block.line),
+                format!("{name}: hex(x, n) only fills random bytes, in random"),
+            );
+        }
+        if !block.clock.is_empty() && block.uses_now() {
+            self.problem(
+                Some(block.line),
+                format!(
+                    "{name} supplies the clock, so the time is known exactly: compute the output \
+                     from the clock's variables instead of now"
+                ),
+            );
         }
         let mut used = inputs.clone();
         used.extend(block.stdout.variables());
@@ -1158,8 +1405,8 @@ impl<'a> Checker<'a> {
             self.problem(
                 Some(block.line),
                 format!(
-                    "{name}: `{var}` never reaches the program; use it in args, stdin or \
-                     files, or remove it"
+                    "{name}: `{var}` never reaches the program; use it in args, stdin, files, \
+                     random or clock, or remove it"
                 ),
             );
         }
@@ -1192,6 +1439,13 @@ impl<'a> Checker<'a> {
             };
             if let Some(problem) = oversized_args(&case) {
                 self.problem(Some(block.line), format!("{name}: {problem}"));
+                return;
+            }
+            if let Err(problem) = Supply::parse(case.random.as_deref(), &case.clock) {
+                self.problem(
+                    Some(block.line),
+                    format!("{name}: with {}, {problem}", describe_inputs(&case.inputs)),
+                );
                 return;
             }
             if let Some((file, contents)) = case
@@ -1248,8 +1502,25 @@ impl<'a> Checker<'a> {
                 .iter()
                 .filter(|block| block.id == example.id)
                 .collect();
-            let has_inputs =
-                !example.args.is_empty() || !example.stdin.is_empty() || !example.files.is_empty();
+            let has_inputs = !example.args.is_empty()
+                || !example.stdin.is_empty()
+                || !example.files.is_empty()
+                || example.random.is_some()
+                || !example.clock.is_empty();
+            for block in &blocks {
+                if block.random.is_some() != example.random.is_some()
+                    || block.clock.is_empty() != example.clock.is_empty()
+                {
+                    self.problem(
+                        Some(block.line),
+                        format!(
+                            "generated {} and its example must supply the same things: random \
+                             bytes in both or neither, and clock readings in both or neither",
+                            block.id
+                        ),
+                    );
+                }
+            }
             if has_inputs && blocks.is_empty() {
                 self.problem(
                     Some(example.line),
@@ -1267,8 +1538,8 @@ impl<'a> Checker<'a> {
                             Some(block.line),
                             format!(
                                 "the [[generated]] blocks of {} must share args, stdin, files, \
-                                 stdout, stderr, files_after and exit_code (as on line {}); only \
-                                 vars and runs may differ",
+                                 random, clock, stdout, stderr, files_after and exit_code (as on \
+                                 line {}); only vars and runs may differ",
                                 block.id, first.line
                             ),
                         );
@@ -1408,6 +1679,8 @@ struct TemplateSources<'a> {
     files_after: BTreeMap<&'a str, &'a str>,
     formula: Option<&'a str>,
     fixed: Option<u8>,
+    random: Option<&'a str>,
+    clock: Vec<&'a str>,
 }
 
 fn templates(block: &Generated) -> TemplateSources<'_> {
@@ -1430,6 +1703,8 @@ fn templates(block: &Generated) -> TemplateSources<'_> {
         files_after: sources(&block.files_after),
         formula,
         fixed,
+        random: block.random.as_ref().map(Template::source),
+        clock: block.clock.iter().map(Template::source).collect(),
     }
 }
 
@@ -1449,6 +1724,18 @@ fn bind(block: &Generated, example: &Example) -> Result<Env, String> {
             example.files.keys().collect::<Vec<_>>()
         ));
     }
+    if block.clock.len() != example.clock.len() {
+        return Err(format!(
+            "it gives {} clock readings and the example gives {}",
+            block.clock.len(),
+            example.clock.len()
+        ));
+    }
+    // The random bytes say their variables' values outright.
+    let mut env = Env::new();
+    if let (Some(template), Some(bytes)) = (&block.random, &example.random) {
+        read_hex(template, bytes, &mut env)?;
+    }
     let generators: BTreeMap<&str, &Generator> = block
         .vars
         .iter()
@@ -1461,14 +1748,15 @@ fn bind(block: &Generated, example: &Example) -> Result<Env, String> {
         .zip(&example.args)
         .chain([(&block.stdin, &example.stdin)])
         .chain(block.files.values().zip(example.files.values()))
+        .chain(block.clock.iter().zip(&example.clock))
     {
         let pattern = template
             .pattern()
-            .ok_or_else(|| "its args, stdin and files must be bare variables".to_owned())?;
+            .ok_or_else(|| "its args, stdin, files and clock must be bare variables".to_owned())?;
         pairs.push((pattern, text.as_str()));
     }
     let mut solutions = Vec::new();
-    solve(&pairs, 0, &generators, &mut Env::new(), &mut solutions);
+    solve(&pairs, 0, &generators, &mut env, &mut solutions);
     match solutions.len() {
         0 => Err(format!(
             "no values of its vars turn args {:?} and stdin {:?} into the example's args {:?} \
@@ -1484,6 +1772,53 @@ fn bind(block: &Generated, example: &Example) -> Result<Env, String> {
                   neighboring placeholders with fixed text"
                 .into(),
         ),
+    }
+}
+
+/// Reads the variables of a block's `random` template out of an example's random bytes.
+fn read_hex(template: &Template, bytes: &str, env: &mut Env) -> Result<(), String> {
+    let misfit = || {
+        format!(
+            "the example's random bytes {bytes:?} don't fit its random {:?}",
+            template.source()
+        )
+    };
+    let parts = template
+        .hex_parts()
+        .ok_or("its random bytes must be hex digits and hex(x, n)")?;
+    let mut rest = bytes.to_ascii_lowercase();
+    for part in parts {
+        match part {
+            HexPart::Digits(digits) => {
+                rest = rest
+                    .strip_prefix(&digits.to_ascii_lowercase())
+                    .ok_or_else(misfit)?
+                    .to_owned();
+            }
+            HexPart::Var(name, count) => {
+                let digits = rest.get(..2 * count).ok_or_else(misfit)?;
+                let value = crate::supply::hex(digits).map_err(|_| misfit())?;
+                let mut word = [0_u8; 8];
+                word[..count].copy_from_slice(&value);
+                let value = if count == 8 {
+                    i128::from(i64::from_le_bytes(word))
+                } else {
+                    i128::from(u64::from_le_bytes(word))
+                };
+                if env
+                    .insert(name, Value::Int(value))
+                    .is_some_and(|before| before != Value::Int(value))
+                {
+                    return Err(misfit());
+                }
+                rest = rest[2 * count..].to_owned();
+            }
+        }
+    }
+    if rest.is_empty() {
+        Ok(())
+    } else {
+        Err(misfit())
     }
 }
 
@@ -1845,6 +2180,159 @@ exit_code = 0
             declared.contains("`now` never reaches the program"),
             "{declared}"
         );
+    }
+
+    fn spec_text(name: &str) -> String {
+        std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("examples")
+                .join(name)
+                .join("spec.md"),
+        )
+        .expect("an example spec")
+    }
+
+    const SUPPLIED: &str = r#"
+[[example]]
+id = "B1"
+random = "fc2a"
+stdout = "rolled 1\n"
+exit_code = 0
+
+[[generated]]
+id = "B1"
+vars = { first = "int(0, 255)", second = "int(0, 255)" }
+random = "{hex(first, 1)}{hex(second, 1)}"
+stdout = "rolled {if(first < 252, first % 6, if(second < 252, second % 6, 0)) + 1}\n"
+exit_code = 0
+"#;
+
+    fn supplied(body: &str) -> Result<TestSuite, Vec<String>> {
+        let spec = spec::parse(&spec_text("dice")).expect("valid spec");
+        check(&tests(body), &spec, LABEL)
+            .map_err(|problems| problems.iter().map(ToString::to_string).collect())
+    }
+
+    fn assert_supplied_problem(body: &str, needle: &str) {
+        let problems = supplied(body).expect_err("problems");
+        assert!(
+            problems.iter().any(|problem| problem.contains(needle)),
+            "no problem containing {needle:?} in {problems:#?}"
+        );
+    }
+
+    #[test]
+    fn tests_supply_random_bytes_from_variables() {
+        let suite = supplied(SUPPLIED).expect("valid tests");
+        assert_eq!(suite.examples[0].supply().random, Some(vec![0xfc, 0x2a]));
+        let block = &suite.generated[0];
+        let inputs = BTreeMap::from([
+            ("first".to_owned(), Value::Int(252)),
+            ("second".to_owned(), Value::Int(42)),
+        ]);
+        let case = block.case(inputs, 0).expect("computable");
+        assert_eq!(case.random.as_deref(), Some("fc2a"));
+        assert_eq!(case.stdout, "rolled 1\n");
+        assert_eq!(block.random_only().len(), 2);
+    }
+
+    #[test]
+    fn supplied_values_follow_their_rules() {
+        // Random bytes take every value the kernel could give.
+        assert_supplied_problem(
+            &SUPPLIED.replace(r#"first = "int(0, 255)""#, r#"first = "int(0, 9)""#),
+            "first = \"int(0, 255)\"",
+        );
+        assert_supplied_problem(
+            &SUPPLIED.replace("rolled {if(", "rolled {hex(first, 1)}{if("),
+            "hex(x, n) only fills random bytes",
+        );
+        assert_supplied_problem(
+            &SUPPLIED.replace("{hex(first, 1)}{hex(second, 1)}", "{first}{second}"),
+            "may only hold hex digits and hex(x, n)",
+        );
+        assert_supplied_problem(
+            &SUPPLIED.replace(r#"random = "fc2a""#, r#"random = "fc2g""#),
+            "pairs of hex digits",
+        );
+        // The spec's bytes must be in the example, and the example and block supply alike.
+        assert_supplied_problem(
+            &SUPPLIED.replace(r#"random = "fc2a""#, r#"random = "fd2a""#),
+            "doesn't contain the spec's value `fc`",
+        );
+        assert_supplied_problem(
+            &SUPPLIED.replace("random = \"fc2a\"\n", ""),
+            "must supply the same things",
+        );
+        // A spec that doesn't allow getrandom gets no random bytes.
+        assert_problem(
+            &valid().replace(
+                "args = [\"2\", \"3\"]",
+                "args = [\"2\", \"3\"]\nrandom = \"00\"",
+            ),
+            "spec.md doesn't allow getrandom",
+        );
+    }
+
+    #[test]
+    fn tests_supply_clock_readings() {
+        const HOUR: &str = "---
+type: lengua/program-spec
+title: hour
+---
+# Purpose
+Prints the hour of the day in UTC, from `0` to `23`, for a reader numbered from `1` to `9`.
+
+# Behaviors
+## B1: Prints the hour
+- Given the argument `1` and the clock at `1735693200.5`
+- When the program runs
+- Then it prints `1` followed by a newline
+- And it exits with code `0`
+
+# Constraints
+- Allowed system calls: write, clock_gettime, exit
+";
+        let body = r#"
+[[example]]
+id = "B1"
+args = ["1"]
+clock = ["1735693200.5"]
+stdout = "1\n"
+exit_code = 0
+
+[[generated]]
+id = "B1"
+vars = { reader = "int(1, 9)", t = "decimal(0.0, 4102444800.0)" }
+args = ["{reader}"]
+clock = ["{t}"]
+stdout = "{floor(t) % 86400 / 3600}\n"
+exit_code = 0
+"#;
+        let spec = spec::parse(HOUR).expect("valid spec");
+        let problems = |body: &str| {
+            check(&tests(body), &spec, LABEL)
+                .err()
+                .unwrap_or_default()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let suite = check(&tests(body), &spec, LABEL).expect("valid tests");
+        let reading = suite.examples[0].supply().clock[0];
+        assert_eq!(
+            (reading.seconds, reading.nanoseconds),
+            (1_735_693_200, 500_000_000)
+        );
+        assert!(suite.generated[0].clock_only().contains("t"));
+        let early = problems(&body.replace("decimal(0.0,", "decimal(-1.0,"));
+        assert!(early.contains("is a clock reading"), "{early}");
+        let now = problems(&body.replace(
+            "stdout = \"{floor(t) % 86400 / 3600}\\n\"",
+            "stdout = \"{any(now - 1, now)}\\n\"",
+        ));
+        assert!(now.contains("supplies the clock"), "{now}");
     }
 
     #[test]
@@ -2262,7 +2750,7 @@ Prints the length of a word of `1` to `200000` letters.
         let text = tests(&format!("{EXAMPLES}{GENERATED}{second}"));
         assert_problem(
             &text,
-            "must share args, stdin, files, stdout, stderr, files_after and exit_code",
+            "must share args, stdin, files, random, clock, stdout, stderr, files_after and exit_code",
         );
         let narrower = GENERATED.replace("runs = 200", "runs = 50");
         let ok = tests(&format!("{EXAMPLES}{GENERATED}{narrower}"));
@@ -2352,7 +2840,7 @@ exit_code = 0
             (
                 r#"files = { "notes.txt" = "{s}" }"#,
                 r#"files = { "notes.txt" = "{upper(s)}" }"#,
-                "args, stdin and files may only hold bare variables",
+                "args, stdin, files and clock may only hold bare variables",
             ),
             (
                 "{upper(s)}",

@@ -6,6 +6,7 @@ use std::process::ExitCode;
 use lengua::data_dir::DataDir;
 use lengua::runner;
 use lengua::server::LenguaServer;
+use lengua::supervise;
 use rmcp::ServiceExt;
 use rmcp::transport::stdio;
 use tracing_subscriber::EnvFilter;
@@ -18,6 +19,13 @@ fn main() -> ExitCode {
     if raw.peek().is_some_and(|arg| arg == runner::LAUNCH_FLAG) {
         raw.next();
         return runner::launch(raw);
+    }
+    // So does supervisor mode, which traces a launcher for a test that supplies values.
+    if raw
+        .peek()
+        .is_some_and(|arg| arg == supervise::SUPERVISE_FLAG)
+    {
+        return supervise::supervise();
     }
 
     // stdout carries the MCP protocol, so all logging goes to stderr.

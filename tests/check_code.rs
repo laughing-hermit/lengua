@@ -714,3 +714,45 @@ async fn the_decimal_example_is_proven() {
     }
     session.service.cancel().await.expect("close the session");
 }
+
+#[tokio::test]
+async fn the_dice_example_rolls_with_the_tests_random_bytes() {
+    // The tests supply the random bytes, so each roll is exact: 200 runs, plus the proof that
+    // every pair of first bytes rolls as the spec says.
+    let session = session().await;
+    let folder = Program::new();
+    for name in ["spec.md", "tests.toml", "main.s"] {
+        folder.write(name, &example("dice", name));
+    }
+    session.approve(&folder).await;
+    let tests = session.call_ok("check_tests", folder.arguments()).await;
+    assert_eq!(tests["checked"], true, "{tests}");
+    let report = session.call_ok("check_code", folder.arguments()).await;
+    assert_eq!(report["stamped"], true, "{report}");
+    // A die that's off by one: the tests catch it with the bytes they supply.
+    folder.write(
+        "main.s",
+        &example("dice", "main.s").replace("add edx, '1'", "add edx, '0'"),
+    );
+    let text = session.call_error("check_code", folder.arguments()).await;
+    assert!(
+        text.contains(r#"stdout should be "rolled 1\n", but was "rolled 0\n""#),
+        "{text}"
+    );
+    folder.write("main.s", &example("dice", "main.s"));
+    let report = session.call_ok("check_code", folder.arguments()).await;
+    assert_eq!(report["stamped"], true, "{report}");
+    if std::process::Command::new("z3")
+        .arg("--version")
+        .output()
+        .is_ok()
+    {
+        let proof = session.call_ok("prove", folder.arguments()).await;
+        assert_eq!(
+            proof["message"],
+            "Every generated test is proven for every input in its range. lengua.lock records it.",
+            "{proof}"
+        );
+    }
+    session.service.cancel().await.expect("close the session");
+}

@@ -93,10 +93,13 @@ of the same rule.
   files need openat and close. lengua programs can't allocate memory, start processes, handle
   signals or use the network. The kernel enforces this list when the program runs, so it's a
   promise the user can rely on.
-- **Output the program chooses:** when output depends on the time or on random bytes, the
-  behavior says the range it falls in, both ends in backticks: ``- Then it prints `rolled ` and
-  a number from `1` to `6` ``. The tests check that the number is in range, and the proof covers
-  every value the clock or the random bytes could give.
+- **Output from random bytes or the clock** is best made exact. Purpose says how the program
+  turns them into output ("the roll is the first byte below `252`, modulo 6, plus 1"), and the
+  behavior gives them as its scene: ``- Given the kernel's random bytes `fc` and `2a` `` or
+  ``- Given the clock at `1735689600` `` (seconds since 1970). The tests then supply exactly
+  those bytes and readings, and the proof covers every value they could take. When the user
+  only cares that output falls in a range, the behavior can say that instead, both ends in
+  backticks: ``- Then it prints `rolled ` and a number from `1` to `6` ``.
 - **Threads:** when the user wants a program that does heavy work on large inputs as fast as
   possible, add `- Threads: up to N` under `# Constraints`, with N up to the machine's cores
   (`status` reports them; at most 64). The program may then split its work across that many

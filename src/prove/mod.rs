@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Instant;
 
 use crate::checker::decode::Machine;
-use crate::expr::{Generator, PatternPart, Piece, Template, Value};
+use crate::expr::{Generator, HexPart, PatternPart, Piece, Template, Value};
 use crate::testfile::{ExitCode, Generated};
 
 use exec::{End, Image, Oracle, State};
@@ -186,6 +186,11 @@ enum Part {
     Fixed(Value),
     /// Text of this many bytes, each one of the generator's characters.
     Text(usize, Vec<u8>),
+    /// A number the program reads only as this many random bytes: one shape, a variable a byte.
+    Bytes(usize),
+    /// A number the program reads only as a clock reading, from the first to the second, with
+    /// this many decimal places: one shape, since its digits are never read.
+    Plain(i128, i128, u8),
 }
 
 /// The most lengths of text one variable may be proven over, one shape each.
@@ -230,6 +235,136 @@ struct Input {
     text: Vec<Term>,
     number: Option<Number>,
     constraints: Vec<Term>,
+}
+
+/// The input for a number the program reads only as `count` random bytes, least significant
+/// first: a variable for each byte, which may be any value. Eight bytes are a 64-bit two's
+/// complement value; fewer are a value from 0.
+fn bytes_input(pool: &mut Pool, name: &str, count: usize) -> Input {
+    let bytes: Vec<Term> = (0..count)
+        .map(|index| pool.var(8, &format!("{name}.byte{index}")))
+        .collect();
+    let mut word = bytes[0];
+    for byte in &bytes[1..] {
+        word = pool.concat(*byte, word);
+    }
+    let width = pool.width(word);
+    let (term, low, high) = if count == 8 {
+        (
+            pool.sign_extend(word, WIDTH - width),
+            i128::from(i64::MIN),
+            i128::from(i64::MAX),
+        )
+    } else {
+        (
+            pool.zero_extend(word, WIDTH - width),
+            0,
+            (1_i128 << (8 * count)) - 1,
+        )
+    };
+    Input {
+        text: bytes,
+        number: Some(Number::whole(term, low, high)),
+        constraints: Vec::new(),
+    }
+}
+
+/// The input for a number the program reads only as a clock reading: one variable in range, its
+/// digits never written out. A decimal's term is its digits without the point.
+fn plain_input(pool: &mut Pool, name: &str, low: i128, high: i128, places: u8) -> Input {
+    let bound = |value: i128| u128::try_from(value).unwrap_or(0);
+    let variable = pool.var_in(64, &format!("{name}.plain"), bound(low), bound(high));
+    let (bottom, top) = (pool.bv(64, bound(low)), pool.bv(64, bound(high)));
+    let constraints = vec![pool.ule(bottom, variable), pool.ule(variable, top)];
+    let term = pool.zero_extend(variable, WIDTH - 64);
+    Input {
+        text: Vec::new(),
+        number: Some(Number {
+            term,
+            low,
+            high,
+            places,
+        }),
+        constraints,
+    }
+}
+
+/// The bytes a block's `random` template supplies, or `None` when the kernel draws them.
+fn random_stream(
+    pool: &mut Pool,
+    block: &Generated,
+    inputs: &BTreeMap<String, Input>,
+) -> Result<Option<Vec<Term>>, String> {
+    let Some(template) = &block.random else {
+        return Ok(None);
+    };
+    let parts = template
+        .hex_parts()
+        .ok_or("random bytes that aren't hex digits and hex(x, n)")?;
+    let bytes_only = block.random_only();
+    let mut stream = Vec::new();
+    for part in parts {
+        match part {
+            HexPart::Digits(digits) => {
+                stream.extend(exec::bytes(pool, &crate::supply::hex(&digits)?));
+            }
+            HexPart::Var(name, count) => {
+                let input = inputs
+                    .get(&name)
+                    .ok_or("random bytes from an unknown variable")?;
+                if bytes_only.contains_key(&name) {
+                    stream.extend(&input.text[..count]);
+                } else {
+                    let number = input.number.ok_or("random bytes from text")?;
+                    for index in 0..count {
+                        let low = u32::try_from(8 * index).unwrap_or(0);
+                        stream.push(pool.extract(number.term, low + 7, low));
+                    }
+                }
+            }
+        }
+    }
+    Ok(Some(stream))
+}
+
+/// The readings a block's `clock` templates supply, seconds and nanoseconds; empty when the
+/// kernel's clock answers.
+fn clock_readings(
+    pool: &mut Pool,
+    block: &Generated,
+    inputs: &BTreeMap<String, Input>,
+) -> Result<Vec<(Term, Term)>, String> {
+    let mut readings = Vec::new();
+    for template in &block.clock {
+        let reading = match template.pattern().as_deref() {
+            Some([PatternPart::Text(text)]) => {
+                let time = crate::supply::Time::parse(text)?;
+                (
+                    pool.bv(64, u128::from(time.seconds.cast_unsigned())),
+                    pool.bv(64, u128::from(time.nanoseconds)),
+                )
+            }
+            Some([PatternPart::Var(name)]) => {
+                let number = inputs
+                    .get(name)
+                    .and_then(|input| input.number)
+                    .ok_or("a clock reading that isn't a number")?;
+                let places = u32::from(number.places);
+                let scale = pool.bv(WIDTH, 10_u128.pow(places));
+                let seconds = pool.udiv(number.term, scale);
+                let rest = pool.urem(number.term, scale);
+                let nano = pool.bv(WIDTH, 10_u128.pow(9 - places.min(9)));
+                let nanoseconds = pool.mul(rest, nano);
+                (
+                    pool.extract(seconds, 63, 0),
+                    pool.extract(nanoseconds, 63, 0),
+                )
+            }
+            _ => return Err("a clock reading that mixes text and variables".into()),
+        };
+        readings.push(reading);
+    }
+    Ok(readings)
 }
 
 /// The input for text of `length` bytes from `characters`: a variable for each byte.
@@ -816,8 +951,19 @@ fn attempt(machine: &Machine, block: &Generated, budget: Budget) -> Result<Verdi
         return Err("it uses now, the second a run starts, which a proof can't fix".into());
     }
     let mut each = Vec::new();
+    let (random, clock) = (block.random_only(), block.clock_only());
     for (name, generator) in &block.vars {
-        each.push((name.clone(), parts(name, generator)?));
+        let these = match (random.get(name), generator) {
+            (Some(counts), _) => vec![Part::Bytes(counts.iter().copied().max().unwrap_or(1))],
+            (None, Generator::Int { lo, hi }) if clock.contains(name) => {
+                vec![Part::Plain(*lo, *hi, 0)]
+            }
+            (None, Generator::Dec { lo, hi, places }) if clock.contains(name) => {
+                vec![Part::Plain(*lo, *hi, *places)]
+            }
+            _ => parts(name, generator)?,
+        };
+        each.push((name.clone(), these));
     }
     let total = each
         .iter()
@@ -944,6 +1090,8 @@ fn prove_shape(
                 texts.insert(name.clone(), input.text.clone());
                 input
             }
+            Part::Bytes(count) => bytes_input(&mut pool, name, *count),
+            Part::Plain(low, high, places) => plain_input(&mut pool, name, *low, *high, *places),
         };
         constraints.extend(&input.constraints);
         if let Some(number) = input.number {
@@ -966,7 +1114,11 @@ fn prove_shape(
     for (name, template) in &block.files {
         files.insert(name.clone(), pattern_bytes(&mut pool, template, &inputs)?);
     }
-    let mut start = State::start(image, &mut pool, &args, stdin).with_files(files);
+    let random = random_stream(&mut pool, block, &inputs)?;
+    let clock = clock_readings(&mut pool, block, &inputs)?;
+    let mut start = State::start(image, &mut pool, &args, stdin)
+        .with_files(files)
+        .with_supply(random, clock);
     start.path = constraints;
     let began = Instant::now();
     let runs = exec::explore(image, start, &mut pool, &mut solver, budget.max_paths)?;
@@ -1071,7 +1223,24 @@ pub fn agrees(machine: &Machine, cases: &[crate::testfile::Case]) -> Result<(), 
             .iter()
             .map(|(name, contents)| (name.clone(), exec::bytes(&mut pool, contents.as_bytes())))
             .collect();
-        let start = State::start(&image, &mut pool, &args, stdin).with_files(files);
+        let supply = case.supply();
+        let random = supply
+            .random
+            .as_ref()
+            .map(|bytes| exec::bytes(&mut pool, bytes));
+        let clock = supply
+            .clock
+            .iter()
+            .map(|time| {
+                (
+                    pool.bv(64, u128::from(time.seconds.cast_unsigned())),
+                    pool.bv(64, u128::from(time.nanoseconds)),
+                )
+            })
+            .collect();
+        let start = State::start(&image, &mut pool, &args, stdin)
+            .with_files(files)
+            .with_supply(random, clock);
         let mut runs = exec::explore(&image, start, &mut pool, &mut exec::Concrete, 2)?;
         let run = runs.pop().ok_or("the model didn't run")?;
         let text = |bytes: &[Term]| -> Option<Vec<u8>> {

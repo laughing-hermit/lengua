@@ -24,6 +24,12 @@ File descriptors 0, 1 and 2 are standard input, output and error. `openat` flags
 is 420 in decimal. `write` and `read` may move fewer bytes than asked, so loop until done, as the
 template's `write_all` does.
 
+Random bytes and the clock: tests usually supply them in place of the kernel's, so output that
+depends on them can be checked exactly. Draw the random bytes the spec's Purpose says how to use,
+in any batch size: bytes asked for past what a test supplies are zeros, so only the bytes the
+program uses decide its output. Each `clock_gettime` call reads the test's next reading, and the
+last one repeats. Check both results like any call's.
+
 Files: open an input with `openat` (-100, name, `O_RDONLY`), and create or replace an output with
 `O_WRONLY | O_CREAT | O_TRUNC` (0x241) and mode 420; `close` each when done. Name files relative to
 the working folder. The kernel lets a program open files only inside that folder, so any other

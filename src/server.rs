@@ -828,14 +828,14 @@ impl LenguaServer {
         let mut proven_ids = Vec::new();
         let mut solved = 0;
         let mut alone_reason: Option<String> = None;
-        // Every value of a block's variables is every input only when the program reads nothing
-        // else: no random bytes, no clock, and no `now` in the expected results.
-        let kernel_values = spec
-            .syscalls
-            .iter()
-            .any(|call| matches!(call, spec::Syscall::Getrandom | spec::Syscall::ClockGettime));
+        let allows = |call: spec::Syscall| spec.syscalls.contains(&call);
         for block in &suite.generated {
             let test = format!("generated {}", block.id);
+            // Every value of a block's variables is every input only when the program reads
+            // nothing else: no random bytes or clock readings the test doesn't supply, and no
+            // `now` in the expected results.
+            let kernel_values = (allows(spec::Syscall::Getrandom) && block.random.is_none())
+                || (allows(spec::Syscall::ClockGettime) && block.clock.is_empty());
             if let Some(every) = block
                 .every_value_text()
                 .filter(|_| !kernel_values && !block.uses_now())

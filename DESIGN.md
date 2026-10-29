@@ -96,8 +96,12 @@ in doubles exactly as `addsd`, `mulsd`, `divsd` and `sqrtsd` do, or in singles w
 says `single(x)`, with `fma(a, b, c)` for a fused multiply-add, and printed with `fixed` (x·10^d
 rounded ties to even, like `cvtsd2si`); whole numbers and decimals, and singles and doubles, never
 mix silently in arithmetic.
-It has no loops, so every formula finishes. Where the program chooses part of its output, such as
-a random roll or the time, a rule stands for it: `{any(lo, hi)}` is any whole number in that
+It has no loops, so every formula finishes. Tests can supply the program's random bytes
+(`random`, in hex, with `hex(x, n)` filling bytes from a variable) and clock readings (`clock`, in
+seconds), so output that depends on them is exact: a variable that only fills random bytes draws
+every value they can hold, as the kernel's could, and bytes asked for past the supply are zeros,
+so a program may draw in batches of any size. Where a test doesn't supply them, a rule stands for
+what the program chooses: `{any(lo, hi)}` is any whole number in that
 range, written plainly, and `now` (the second a run starts) may bound one. Inside lengua a rule
 travels in the expected text as a marker between Unicode noncharacters, which tests.toml can't
 hold, so expected output stays text everywhere and only matching reads the markers.
@@ -136,7 +140,16 @@ person approved:
 - resource limits cap the files it writes (64 MiB in tests) and leave no core files.
 
 The checker already proves the code makes no other system calls; the kernel makes the promise hold
-even if the checker missed something. The counters report three
+even if the checker missed something.
+
+When a test supplies random bytes or clock readings, a second process of the server's binary, the
+supervisor, traces the launcher with ptrace before it becomes the program. The launcher installs
+one more seccomp filter first, which stops only `getrandom` and `clock_gettime` for the
+supervisor; the supervisor writes the test's bytes or reading into the program's memory with
+`process_vm_writev` and skips the kernel's call, so the program sees the test's values. Signals,
+threads, the exit status, the counters and the time limit work as in any run, and runs that
+supply nothing have no supervisor at all. Each supplied call adds a few microseconds of wall
+time, never instructions or cycles. The counters report three
 measures, which the optimize step compares by their medians: instructions executed in the
 program's own code (the steadiest measure of work, though a count can be one higher now and then,
 because the CPU counts the odd interrupt or page fault as one), CPU cycles in its own code (time,
@@ -329,7 +342,7 @@ Rust share: everything a program may touch must be something the checker can acc
 | Memory | `malloc`/`free`, `new`/`delete`: leaks, double frees, use after free | Ownership frees memory automatically; arenas without the standard library | Reserved up front: static buffers sized from the spec's limits, plus the stack. Nothing is allocated or freed while running (rule 3), and `.bss` costs nothing until touched |
 | Threads | pthreads: any thread may write anything, and data races are undefined behavior | `Send`/`Sync`, scoped threads and rayon: no data races, checked at compile time | Fork-join only, when the spec allows threads. A canonical `parallel_for` (copied word for word, like `assert_fail`) starts workers with `clone` on static stacks and waits on `futex` for them all. Each worker owns its stack and one output slot, like Rust's `chunks_mut`: the checker proves it writes nothing else (JPL: one owner per shared object). No locks, atomics or shared mutation, so results stay deterministic and testable |
 | System access | Any system call | The standard library, within the OS's permissions | Capabilities: the spec lists the system calls the person approves, and the kernel enforces the list (seccomp) and keeps files inside the program's working folder (Landlock) |
-| Clock, random | `time()`, `rand()` | `Instant`, `SystemTime`, `rand` | Approved system calls, `clock_gettime` and `getrandom`, enforced by the kernel like the rest. The prover treats what they return as any value. Tests describe output that depends on them with rules, such as "a number from 1 to 6" (`{any(1, 6)}`), which the prover covers for every value they could return |
+| Clock, random | `time()`, `rand()` | `Instant`, `SystemTime`, `rand` | Approved system calls, `clock_gettime` and `getrandom`, enforced by the kernel like the rest. Tests supply the bytes and readings, so output that depends on them is exact, and the prover covers every value the test's variables can take; without a supply, a rule such as "a number from 1 to 6" (`{any(1, 6)}`) checks the output, and the prover treats the kernel's values as any value |
 | Network | Sockets | `std::net` | Later, as an approved capability: Landlock can limit a program to chosen TCP ports, and tests need a server of their own on the loopback |
 
 A worker gets its index and its slot. It and every function it calls write only their own stack
@@ -340,10 +353,9 @@ order makes reductions deterministic, and laying the slots end to end makes a ma
 thread with `exit_group`, so a failed check anywhere stops the whole program.
 
 Roadmap, in order:
-1. tests that supply the random bytes and the clock, so such output is exact and provable;
-2. the network capability;
-3. proofs of text formulas, vector code and decimal arithmetic written in a different shape;
-4. the other platforms, toward the top 5–6 CPU and OS targets.
+1. the network capability;
+2. proofs of text formulas, vector code and decimal arithmetic written in a different shape;
+3. the other platforms, toward the top 5–6 CPU and OS targets.
 
 ## Platforms
 

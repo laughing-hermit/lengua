@@ -1,0 +1,16 @@
+[meta]
+spec = "sha256:721c17ef6bd6170dd13d9304a98c0aef298603a55f4f3b1eb3960572593eeac9"
+
+[[example]]
+id = "B1"
+random = "fc2a"
+stdout = "rolled 1\n"
+exit_code = 0
+
+[[generated]]
+id = "B1"
+runs = 200
+vars = { first = "int(0, 255)", second = "int(0, 255)" }
+random = "{hex(first, 1)}{hex(second, 1)}"
+stdout = "rolled {if(first < 252, first % 6, if(second < 252, second % 6, 0)) + 1}\n"
+exit_code = 0

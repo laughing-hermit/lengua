@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use lengua::platform::{Allowed, Profile};
 use lengua::runner::{End, Job, Limits, Run, run};
 use lengua::spec::Syscall;
+use lengua::supply::Supply;
 use lengua::toolchain::Toolchain;
 
 fn launcher() -> &'static Path {
@@ -412,4 +413,183 @@ async fn the_clock_and_random_bytes_need_the_specs_approval() {
     assert_eq!(result.end, End::Exited(16), "16 bytes, and the clock read");
     let result = run_simply(&reader, &[], b"").await;
     assert_eq!(result.end, End::Signaled(31), "not approved: stopped");
+}
+
+/// Reads 4 random bytes and the clock twice, writes all of it to stdout, and exits with what
+/// getrandom returned.
+fn draws_and_reads_the_clock(buffer: &str) -> String {
+    program(
+        &format!(
+            "    mov eax, 318\n    lea rdi, {buffer}\n    mov esi, 4\n    xor edx, edx\n    \
+             syscall\n    mov ebx, eax\n    \
+             mov eax, 228\n    xor edi, edi\n    lea rsi, [rip + first]\n    syscall\n    \
+             mov eax, 228\n    mov edi, 1\n    lea rsi, [rip + second]\n    syscall\n    \
+             mov eax, 1\n    mov edi, 1\n    lea rsi, [rip + buffer]\n    mov edx, 36\n    \
+             syscall\n    mov edi, ebx\n    mov eax, 60\n    syscall"
+        ),
+        ".bss\nbuffer:\n    .zero 4\nfirst:\n    .zero 16\nsecond:\n    .zero 16",
+    )
+}
+
+fn clock_and_random() -> Vec<Allowed> {
+    Profile::LinuxX86_64.allowed_syscalls(
+        &[
+            Syscall::Getrandom,
+            Syscall::ClockGettime,
+            Syscall::Write,
+            Syscall::Exit,
+        ],
+        false,
+    )
+}
+
+async fn run_supplied(executable: &Path, supply: &Supply, limits: Limits) -> Run {
+    let syscalls = clock_and_random();
+    let job = Job {
+        supply: Some(supply),
+        ..Job::new(executable, &[], b"", &syscalls)
+    };
+    run(launcher(), job, limits).await.expect("run")
+}
+
+fn time(seconds: i64, nanoseconds: i64) -> Vec<u8> {
+    [seconds.to_le_bytes(), nanoseconds.to_le_bytes()].concat()
+}
+
+#[tokio::test]
+async fn tests_supply_the_random_bytes_and_the_clock() {
+    let folder = tempfile::tempdir().expect("temporary folder");
+    let program = build(
+        folder.path(),
+        "draw",
+        &draws_and_reads_the_clock("[rip + buffer]"),
+    )
+    .await;
+    let supply =
+        Supply::parse(Some("01020304ff"), &["5".into(), "7.000000001".into()]).expect("a supply");
+    let result = run_supplied(&program, &supply, Limits::default()).await;
+    assert_eq!(result.supplied, None);
+    assert_eq!(result.end, End::Exited(4), "{result:?}");
+    let expected = [vec![1, 2, 3, 4], time(5, 0), time(7, 1)].concat();
+    assert_eq!(result.stdout, expected);
+    assert!(
+        result.instructions.is_some_and(|count| count < 40),
+        "{result:?}"
+    );
+
+    // The last reading repeats.
+    let one_reading = Supply::parse(Some("01020304"), &["5".into()]).expect("a supply");
+    let result = run_supplied(&program, &one_reading, Limits::default()).await;
+    assert_eq!(result.stdout[4..], [time(5, 0), time(5, 0)].concat());
+
+    // Bytes past the end of the supply are zeros, and the run says how many were asked for.
+    let short = Supply::parse(Some("0102"), &["5".into()]).expect("a supply");
+    let result = run_supplied(&program, &short, Limits::default()).await;
+    assert_eq!(result.supplied, None);
+    assert_eq!(result.random_asked, Some(4));
+    assert_eq!(result.stdout[..4], [1, 2, 0, 0]);
+    assert_eq!(result.end, End::Exited(4));
+
+    // Only the random bytes supplied: the kernel's clock answers.
+    let random_only = Supply::parse(Some("01020304"), &[]).expect("a supply");
+    let result = run_supplied(&program, &random_only, Limits::default()).await;
+    let seconds = i64::from_le_bytes(result.stdout[4..12].try_into().expect("8 bytes"));
+    assert!(seconds > 1_700_000_000, "the real time, {seconds}");
+}
+
+#[tokio::test]
+async fn supplied_calls_behave_like_the_kernels() {
+    let folder = tempfile::tempdir().expect("temporary folder");
+    // A buffer the program can't write: getrandom fails with EFAULT, as the kernel's would.
+    let unwritable = build(
+        folder.path(),
+        "unwritable",
+        &draws_and_reads_the_clock("[rip + _start]"),
+    )
+    .await;
+    let supply = Supply::parse(Some("01020304"), &["5".into()]).expect("a supply");
+    let result = run_supplied(&unwritable, &supply, Limits::default()).await;
+    assert_eq!(result.end, End::Exited(256 - 14), "-EFAULT: {result:?}");
+    assert_eq!(result.supplied, None);
+
+    // A crash after a supplied call ends the program as it would alone.
+    let crash = build(
+        folder.path(),
+        "crash",
+        &program(
+            "    mov eax, 318\n    lea rdi, [rip + buffer]\n    mov esi, 1\n    xor edx, edx\n    \
+             syscall\n    mov qword ptr [0], rax",
+            ".bss\nbuffer:\n    .zero 1",
+        ),
+    )
+    .await;
+    let result = run_supplied(&crash, &supply, Limits::default()).await;
+    assert_eq!(result.end, End::Signaled(11), "{result:?}");
+    assert_eq!(result.supplied, None);
+
+    // A program still running at the time limit is killed, supervisor and all.
+    let spin = build(
+        folder.path(),
+        "spin",
+        &program(
+            "    mov eax, 318\n    lea rdi, [rip + buffer]\n    mov esi, 1\n    xor edx, edx\n    \
+             syscall\nagain:\n    jmp again",
+            ".bss\nbuffer:\n    .zero 1",
+        ),
+    )
+    .await;
+    let limits = Limits {
+        timeout: Duration::from_millis(300),
+        ..Limits::default()
+    };
+    let started = Instant::now();
+    let result = run_supplied(&spin, &supply, limits).await;
+    assert_eq!(result.end, End::TimedOut);
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+#[tokio::test]
+async fn the_supervisor_follows_threaded_programs() {
+    // The parallel template starts workers with clone; the supervisor follows each one and the
+    // program prints just what it prints alone.
+    let folder = tempfile::tempdir().expect("temporary folder");
+    let source = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("plugin/skills/write-assembly/assets/parallel-template.s"),
+    )
+    .expect("the parallel template");
+    let program = build(folder.path(), "shout", &source).await;
+    let syscalls = Profile::LinuxX86_64.allowed_syscalls(
+        &[
+            Syscall::Read,
+            Syscall::Write,
+            Syscall::Exit,
+            Syscall::Getrandom,
+        ],
+        true,
+    );
+    let text = "hello, threads! ".repeat(40_000);
+    let alone = run(
+        launcher(),
+        Job::new(&program, &[], text.as_bytes(), &syscalls),
+        Limits::default(),
+    )
+    .await
+    .expect("run");
+    let supply = Supply::parse(Some("00"), &[]).expect("a supply");
+    let supervised = run(
+        launcher(),
+        Job {
+            supply: Some(&supply),
+            ..Job::new(&program, &[], text.as_bytes(), &syscalls)
+        },
+        Limits::default(),
+    )
+    .await
+    .expect("run");
+    assert_eq!(alone.end, End::Exited(0), "{alone:?}");
+    assert_eq!(supervised.end, End::Exited(0), "{supervised:?}");
+    assert_eq!(supervised.stdout, text.to_uppercase().into_bytes());
+    assert_eq!(supervised.supplied, None);
+    assert_eq!(supervised.random_asked, Some(0));
 }

@@ -12,13 +12,13 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 
 > Status: dialect 2 on Linux x86-64. It covers whole numbers, exact decimals, floating point in
 > double and single precision with fused multiply-add, vectors from SSE2 to AVX-512, hashing and
-> checksums, files, fork-join threads, the clock and random bytes (tested with rules such as
-> `{any(1, 6)}` for output the program chooses), and inputs up to 1 MiB. The
+> checksums, files, fork-join threads, the clock and random bytes (which tests supply, so such
+> output is exact), and inputs up to 1 MiB. The
 > kernel holds every run to what its spec approves. `prove` proves programs right for every
 > input, not just the tested ones, over whole numbers, decimals, choices, short texts and files,
 > with each step confirmed by two independent solvers, z3 and cvc5; `lengua.lock` records what's
 > proven. Next:
-> - tests that supply the random bytes and the clock, so such output is exact, then the network;
+> - the network: plain TCP on the ports a spec approves;
 > - proofs of text formulas, vector code and decimal arithmetic written in another shape;
 > - more of the top CPU and OS targets, which LLVM already supports.
 
@@ -81,7 +81,10 @@ Complete programs, each with its spec, tests and assembly:
 - [`examples/upcase`](examples/upcase) writes a copy of a text file in capitals, 16 bytes at a
   time;
 - [`examples/absdiff`](examples/absdiff) prints how far apart two numbers are. Claude Code wrote
-  it through lengua, and `prove` proves it for every pair of inputs.
+  it through lengua, and `prove` proves it for every pair of inputs;
+- [`examples/dice`](examples/dice) rolls a fair die from the kernel's random bytes. Its tests
+  supply the bytes, so every roll is checked exactly, and `prove` covers every pair of first
+  bytes.
 
 Their `lengua.lock` files aren't committed, because a lock is signed with each machine's own key.
 Ask the agent to run one with lengua: after you approve its spec, the agent checks the tests and

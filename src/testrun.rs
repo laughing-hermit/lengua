@@ -177,6 +177,7 @@ pub fn explain_end(run: &Run, assertions: &BTreeMap<i64, usize>, limits: Limits)
                 files: &none,
                 files_after: &none,
                 now: 0,
+                random_supplied: None,
             };
             compare(run, &expected, assertions).unwrap_or_else(|| run.end.describe(limits))
         }
@@ -195,6 +196,8 @@ struct Expected<'a> {
     files_after: &'a BTreeMap<String, String>,
     /// When the run started, in Unix seconds, which a rule's `now` stands for.
     now: i128,
+    /// How many random bytes the test supplies, when it supplies them.
+    random_supplied: Option<usize>,
 }
 
 /// Why a run's files don't match, if they don't.
@@ -263,6 +266,10 @@ fn compare(
         now,
         ..
     } = *expected;
+    // Running out of supplied random bytes stops the program; that's the failure to report.
+    if let Some(problem) = &run.supplied {
+        return Some(problem.clone());
+    }
     let code = match run.end {
         End::Exited(code) => code,
         other => {
@@ -309,6 +316,17 @@ fn compare(
             "the exit code should be {exit_code}, but was {code}"
         ));
     }
+    if let (false, Some(asked), Some(supplied)) = (
+        problems.is_empty(),
+        run.random_asked,
+        expected.random_supplied,
+    ) && asked > supplied
+    {
+        problems.push(format!(
+            "the program asked for {asked} random bytes and the test supplies {supplied}, so \
+             the rest were zeros"
+        ));
+    }
     (!problems.is_empty()).then(|| problems.join("; "))
 }
 
@@ -324,8 +342,10 @@ pub async fn check_case(
     case: &crate::testfile::Case,
     syscalls: &[Allowed],
 ) -> io::Result<Option<String>> {
+    let supply = case.supply();
     let job = Job {
         files: &case.files,
+        supply: Some(&supply),
         ..Job::new(program, &case.args, case.stdin.as_bytes(), syscalls)
     };
     let now = crate::expect::now();
@@ -337,6 +357,7 @@ pub async fn check_case(
         files: &case.files,
         files_after: &case.files_after,
         now,
+        random_supplied: supply.random.as_ref().map(Vec::len),
     };
     Ok(compare(&run, &expected, &assertion_lines(source)))
 }
@@ -373,8 +394,10 @@ pub async fn run_tests(
             );
             return Ok(outcome);
         }
+        let supply = example.supply();
         let job = Job {
             files: &example.files,
+            supply: Some(&supply),
             ..Job::new(program, &example.args, example.stdin.as_bytes(), syscalls)
         };
         let now = crate::expect::now();
@@ -388,6 +411,7 @@ pub async fn run_tests(
             files: &example.files,
             files_after: &example.files_after,
             now,
+            random_supplied: supply.random.as_ref().map(Vec::len),
         };
         match compare(&run, &expected, &assertions) {
             Some(problem) => {
@@ -433,8 +457,10 @@ pub async fn run_tests(
                 );
                 return Ok(outcome);
             }
+            let supply = case.supply();
             let job = Job {
                 files: &case.files,
+                supply: Some(&supply),
                 ..Job::new(program, &case.args, case.stdin.as_bytes(), syscalls)
             };
             let now = crate::expect::now();
@@ -447,6 +473,7 @@ pub async fn run_tests(
                 files: &case.files,
                 files_after: &case.files_after,
                 now,
+                random_supplied: supply.random.as_ref().map(Vec::len),
             };
             if let Some(problem) = compare(&run, &expected, &assertions) {
                 record(
@@ -485,6 +512,8 @@ mod tests {
             cpu_time_ns: Some(1000),
             wall_time_ns: 2000,
             files: Ok(BTreeMap::new()),
+            supplied: None,
+            random_asked: None,
         }
     }
 
@@ -501,6 +530,7 @@ mod tests {
             files,
             files_after,
             now: 1_735_689_600,
+            random_supplied: None,
         }
     }
 

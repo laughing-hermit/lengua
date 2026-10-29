@@ -321,3 +321,84 @@ random:
     let verdict = prove(&wrong, &block, budget(120));
     assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
 }
+
+/// A clock reading the test supplies, taken modulo 7: proven for every second from 1970 to 2100,
+/// one shape, since the program never reads the time as digits. (Days of the week need a second
+/// 64-bit division, which cvc5 doesn't confirm in time.)
+#[tokio::test]
+async fn proves_what_a_program_does_with_the_supplied_clock() {
+    if std::process::Command::new("z3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    const SPEC: &str = "---
+type: lengua/program-spec
+title: weekday
+---
+# Purpose
+Exits with the clock's seconds since 1970 modulo 7, from `0` to `6`.
+
+# Behaviors
+## B1: Exits with the seconds modulo 7
+- Given the clock at `1735689600`
+- When the program runs
+- Then it exits with code `1`
+
+# Constraints
+- Allowed system calls: clock_gettime, exit
+";
+    const TESTS: &str = r#"[meta]
+spec = "sha256:0"
+
+[[example]]
+id = "B1"
+clock = ["1735689600"]
+exit_code = 1
+
+[[generated]]
+id = "B1"
+vars = { t = "int(0, 4102444800)" }
+clock = ["{t}"]
+exit_code = "{t % 7}"
+"#;
+    let program = |days: u32| {
+        format!(
+            "    .intel_syntax noprefix
+    .globl _start
+    .text
+    .type _start, @function
+_start:
+    mov eax, 228
+    xor edi, edi
+    lea rsi, [rip + time]
+    syscall
+    mov rax, qword ptr [rip + time]
+    xor edx, edx
+    mov ecx, {days}
+    div rcx
+    mov edi, edx
+    mov eax, 60
+    syscall
+    .size _start, . - _start
+    .data
+    .type time, @object
+time:
+    .zero 16
+    .size time, 16
+"
+        )
+    };
+    let block = block(SPEC, TESTS, 0);
+    let samples: Vec<crate::testfile::Case> =
+        block.cases(1).take(4).filter_map(Result::ok).collect();
+    let right = machine(&program(7)).await;
+    agrees(&right, &samples).expect("the model agrees with the samples");
+    let verdict = prove(&right, &block, budget(120));
+    assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
+    let wrong = machine(&program(6)).await;
+    let verdict = prove(&wrong, &block, budget(120));
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+}

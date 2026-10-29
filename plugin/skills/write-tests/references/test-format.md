@@ -22,6 +22,8 @@ A test with fixed values, copied from the spec's behavior.
 | `stdout` | `""` | Exact standard output, or a rule: `{ matches = "rolled {any(1, 6)}\n" }` |
 | `stderr` | `""` | Exact standard error, or a rule |
 | `files_after` | `{}` | Files the program must leave, with their exact contents or a rule: `{ "loud.txt" = "HELLO\n" }` |
+| `random` | none | The bytes the program's `getrandom` calls receive, in hex: `"fc2a"`. See [Random bytes and the clock](#random-bytes-and-the-clock) |
+| `clock` | `[]` | What its `clock_gettime` calls read, in seconds since 1970: `["1735689600", "1735689600.25"]` |
 | `exit_code` | required | 0 to 255, the code the spec states; never 134 |
 
 Example values are literal: braces in them are plain characters, except in a rule (see
@@ -44,6 +46,8 @@ A test that draws new inputs on every run and computes the expected results.
 | `files` | `{}` | File names and templates that hold bare variables only: `{ "notes.txt" = "{text}" }` |
 | `stdout`, `stderr` | `""` | Templates with any expressions |
 | `files_after` | `{}` | File names and templates with any expressions: `{ "loud.txt" = "{upper(text)}" }` |
+| `random` | none | Hex digits and `{hex(x, n)}`: `"{hex(first, 1)}{hex(second, 1)}"` |
+| `clock` | `[]` | Readings that hold bare variables only: `["{t}"]` |
 | `exit_code` | required | A number, or a template that is one placeholder, such as `"{if(a < 0, 1, 0)}"` |
 
 Runs try boundary values first: every combination when there are 64 or fewer, otherwise each
@@ -58,6 +62,28 @@ value in its range: for those inputs the program is checked, not sampled.
 Several blocks may share an `id` when one range can't cover the inputs, such as divisors on both
 sides of zero. Their `args`, `stdin`, `files`, `stdout`, `stderr`, `files_after` and `exit_code`
 must be identical; only `vars` and `runs` differ.
+
+## Random bytes and the clock
+
+A test can give the program its random bytes and clock readings, so output that depends on them
+is exact and the proof covers every value they could take. The spec allows `getrandom` for
+`random` and `clock_gettime` for `clock`.
+
+- **`random`** holds the bytes the program's `getrandom` calls receive, in order, as hex digits.
+  Bytes asked for past its end are zeros, so a program may draw in batches of any size and only
+  the bytes it uses decide its output. In a generated block, `{hex(x, n)}` writes the whole
+  number `x` as `n` bytes (1 to 8), least significant first: `hex(258, 2)` is `0201`, and eight
+  bytes take any 64-bit value, negatives as two's complement.
+- **A variable that only fills random bytes draws every value they can hold,** as the kernel's
+  could: `int(0, 255)` for one byte, `int(0, 65535)` for two, and
+  `int(-9223372036854775808, 9223372036854775807)` for eight. Purpose needn't state that range.
+- **`clock`** holds what successive `clock_gettime` calls read, in seconds since 1970, with up to
+  9 decimal places; the last reading repeats. A variable that only sets the clock draws seconds
+  from 0 up, with `int` or `decimal`, and Purpose needn't state its range either. A block that
+  supplies the clock knows the time exactly, so it never uses `now`.
+- **An example and its generated blocks supply alike:** random bytes in all or none, and clock
+  readings in all or none. The example's bytes and readings count as inputs, so its block reads
+  its variables back from them when checking the formulas.
 
 ## Rules: output the program chooses
 
@@ -168,6 +194,7 @@ to choose text.
 | `crc32(s)` | The CRC-32 of `s`'s bytes, as zlib, gzip and PNG compute it |
 | `crc32c(s)` | The CRC-32C (Castagnoli) of `s`'s bytes, as the `crc32` instruction computes it |
 | `any(lo, hi)` | In expected output only: any whole number from `lo` to `hi`, written plainly. See [Rules](#rules-output-the-program-chooses) |
+| `hex(x, n)` | In `random` only: `x` as `n` bytes, least significant first, in hex. See [Random bytes and the clock](#random-bytes-and-the-clock) |
 
 Exact decimals such as money stay exact in whole units: `{places((scaled(a, 2) + scaled(b, 2)), 2)}`
 adds two prices in cents, and any rounding rule the spec states is whole-number arithmetic with
@@ -189,7 +216,9 @@ adds two prices in cents, and any rounding rule the spec states is whole-number 
 4. Each example has its behavior's exit code and contains every backtick value of the behavior.
 5. Each behavior whose example has inputs has a generated block.
 6. Generators are valid and their limits are numbers from the spec's Purpose.
-7. `args` and `stdin` hold bare variables; every variable is declared and reaches the program.
+7. `args`, `stdin`, `files` and `clock` hold bare variables, and `random` hex digits and
+   `hex(x, n)`; every variable is declared and reaches the program. `random` and `clock` need the
+   spec to allow `getrandom` and `clock_gettime`.
 8. A dry run computes every run's expected results: no overflow, no division by zero, and exit
    codes from 0 to 255 that are never 134.
 9. Output with placeholders differs between runs, so a program that prints a constant can't pass.
@@ -323,6 +352,55 @@ args = ["{a}", "{b}"]
 stderr = "error: division by zero\n"
 exit_code = 2
 ```
+
+### Random bytes from the test
+
+```markdown
+---
+type: lengua/program-spec
+title: dice
+description: Rolls a fair six-sided die and prints the roll.
+---
+# Purpose
+Rolls a fair six-sided die for a board game and prints the roll, a whole number from `1` to `6`.
+It reads random bytes from the kernel and rolls with the first byte below `252`: the roll is that
+byte's remainder after dividing by 6, plus 1. Bytes from `252` to `255` are set aside, so every
+face is equally likely. If the kernel gives no random bytes, or the first 64 are all set aside
+(which a fair kernel practically never does), the program exits with code 3. If writing the
+output fails, it exits with code 2.
+
+# Behaviors
+## B1: Rolls a die
+- Given the kernel's random bytes `fc` and `2a`
+- When the program runs
+- Then it prints `rolled 1` followed by a newline
+- And it exits with code `0`
+
+# Constraints
+- Allowed system calls: write, getrandom, exit
+```
+
+```toml
+[meta]
+spec = "sha256:<from status>"
+
+[[example]]
+id = "B1"
+random = "fc2a"
+stdout = "rolled 1\n"
+exit_code = 0
+
+[[generated]]
+id = "B1"
+runs = 200
+vars = { first = "int(0, 255)", second = "int(0, 255)" }
+random = "{hex(first, 1)}{hex(second, 1)}"
+stdout = "rolled {if(first < 252, first % 6, if(second < 252, second % 6, 0)) + 1}\n"
+exit_code = 0
+```
+
+When both bytes are set aside, the third byte is past the end of `random`, so it's 0, and the
+roll is 1.
 
 ### Output the program chooses
 
