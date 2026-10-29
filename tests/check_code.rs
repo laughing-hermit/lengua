@@ -895,3 +895,23 @@ async fn the_benchmarks_own_programs_pass_their_checks() {
         session.service.cancel().await.expect("close the session");
     }
 }
+
+#[tokio::test]
+async fn the_word_count_claude_code_wrote_passes_its_checks() {
+    // Written through lengua from a plain request in an interactive Claude Code session.
+    if !lengua::platform::Machine::detect().features.avx512bw {
+        eprintln!("this CPU has no AVX-512BW");
+        return;
+    }
+    let session = session().await;
+    let folder = Program::new();
+    for name in ["spec.md", "tests.toml", "main.s"] {
+        folder.write(name, &example("count", name));
+    }
+    session.approve(&folder).await;
+    let tests = session.call_ok("check_tests", folder.arguments()).await;
+    assert_eq!(tests["checked"], true, "{tests}");
+    let report = session.call_ok("check_code", folder.arguments()).await;
+    assert_eq!(report["stamped"], true, "{report}");
+    session.service.cancel().await.expect("close the session");
+}

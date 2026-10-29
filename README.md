@@ -88,7 +88,11 @@ Complete programs, each with its spec, tests and assembly:
   bytes;
 - [`examples/fetch`](examples/fetch) fetches a page from a web server on this computer over
   HTTP/1.0, and [`examples/echo`](examples/echo) is a line-echo server. Their tests bring their
-  own server and client, and the kernel keeps each to the ports its spec names.
+  own server and client, and the kernel keeps each to the ports its spec names;
+- [`examples/count`](examples/count) counts lines and words like `wc -lw`. Claude Code wrote it
+  through lengua from one plain request in an interactive session; on a 4 GiB file it ran at
+  15.8 GB/s, ahead of hand-written AVX-512 C, 12 times faster than plain C and 25 times faster
+  than GNU `wc`.
 
 Their `lengua.lock` files aren't committed, because a lock is signed with each machine's own key.
 Ask the agent to run one with lengua: after you approve its spec, the agent checks the tests and
@@ -103,10 +107,10 @@ every measure, and uses less than half the memory:
 
 | Workload | Cycles | CPU time | Wall time |
 |---|---|---|---|
-| `add`, mostly starting and exiting | 104× fewer | 1.8× less | 1.4× less |
+| `add`, mostly starting and exiting | 106× fewer | 1.8× less | 1.4× less |
 | Capitalize a 1 MiB file | 4.4× fewer | 1.2× less | 1.2× less |
 | Capitalize 1 MiB of standard input | 4.8× fewer | 1.6× less | 1.3× less |
-| Count lines and words of 64 MiB | 11.9× fewer | 1.8× less | 1.1× less |
+| Count lines and words of 64 MiB (Claude Code's version) | 13.7× fewer | 1.6× less | 1.3× less |
 | CRC-32C of 64 MiB | 2.9× fewer | 1.1× less | 1.1× less |
 | Byte histogram of 64 MiB | level | level | level |
 

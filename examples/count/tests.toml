@@ -1,0 +1,57 @@
+[meta]
+spec = "sha256:5b66c154c1e3459e9ef09009ecd735ff200090bd4621acab4f975588a819b3fc"
+
+[[example]]
+id = "B1"
+stdin = "hello world\nfoo\n"
+stdout = "2 3\n"
+exit_code = 0
+
+[[example]]
+id = "B2"
+stdin = "a\t\tb   \rc"
+stdout = "0 3\n"
+exit_code = 0
+
+[[example]]
+id = "B3"
+stdout = "0 0\n"
+exit_code = 0
+
+[[example]]
+id = "B4"
+args = ["file.txt"]
+stderr = "usage: count < input\n"
+exit_code = 1
+
+[[generated]]  # text with sparse whitespace, as in prose
+id = "B1"
+runs = 300
+vars = { text = 'string(0, 1048576, "abcdefghijklmnopqrstuvwxyz0123456789 \n")' }
+stdin = "{text}"
+stdout = "{count(text, \"\n\")} {words(text)}\n"
+exit_code = 0
+
+[[generated]]  # text dense with every kind of whitespace
+id = "B1"
+runs = 300
+vars = { text = "string(0, 1048576, \"x. \t\n\u000B\f\r\")" }
+stdin = "{text}"
+stdout = "{count(text, \"\n\")} {words(text)}\n"
+exit_code = 0
+
+[[generated]]
+id = "B2"
+runs = 300
+vars = { text = "string(0, 1048576, \"abc \t\u000B\f\r\")" }
+stdin = "{text}"
+stdout = "{count(text, \"\n\")} {words(text)}\n"
+exit_code = 0
+
+[[generated]]
+id = "B4"
+runs = 20
+vars = { a = 'choice("file.txt", "-l", "-", "", "--help")' }
+args = ["{a}"]
+stderr = "usage: count < input\n"
+exit_code = 1

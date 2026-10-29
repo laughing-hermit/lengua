@@ -168,11 +168,16 @@ fn workloads() -> Vec<Workload> {
             name: "wc",
             about: "Counts the lines and words of 64 MiB on standard input, as `wc -lw` does. \
                     C, C++ and Rust compare each byte with the one before it, which compilers \
-                    can vectorize; lengua's version takes 64 bytes a step with AVX-512 masks.",
-            lengua: &[(
-                "lengua",
-                "plugin/skills/write-assembly/assets/fast/wc/main.s",
-            )],
+                    can vectorize. lengua's versions take 64 bytes a step with AVX-512 masks: \
+                    the skill's example, and the program Claude Code wrote through lengua from \
+                    a plain request in an interactive session.",
+            lengua: &[
+                (
+                    "lengua",
+                    "plugin/skills/write-assembly/assets/fast/wc/main.s",
+                ),
+                ("lengua, by Claude Code", "examples/count/main.s"),
+            ],
             others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
             args: Vec::new(),
             stdin: large.clone(),
