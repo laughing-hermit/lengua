@@ -100,6 +100,9 @@ pub struct Label {
     pub line: usize,
     /// The `# bound: N` written after it, for loop heads.
     pub bound: Option<u64>,
+    /// Whether it says `# bound: forever`: a server's loop that takes connections until the
+    /// program is stopped.
+    pub forever: bool,
 }
 
 /// One instruction line.
@@ -972,10 +975,12 @@ impl Parser {
     }
 
     fn label(&mut self, number: usize, name: &str, comment: Option<&str>) {
-        let bound = comment
+        let written = comment
             .map(str::trim)
             .and_then(|comment| comment.strip_prefix("bound:"))
-            .map(|bound| bound.trim().parse::<u64>());
+            .map(str::trim);
+        let forever = written == Some("forever");
+        let bound = written.filter(|_| !forever).map(str::parse::<u64>);
         let bound = match bound {
             Some(Ok(bound)) => Some(bound),
             Some(Err(_)) => {
@@ -995,6 +1000,7 @@ impl Parser {
                     name: name.to_owned(),
                     line: number,
                     bound,
+                    forever,
                 })),
                 None => self.dialect(
                     number,

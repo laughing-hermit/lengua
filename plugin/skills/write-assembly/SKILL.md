@@ -46,7 +46,10 @@ Nothing runs before every rule passes.
    `stdin` when it reads them. A program that works on files runs in a folder holding the
    example's input files: create `<path>/demo/` with them, pass it as `folder`, and name the
    files in `args` relative to it. Later, to work on the user's own files, pass the folder that
-   holds them; the program can't touch anything outside it.
+   holds them; the program can't touch anything outside it. A server starts in the background
+   on its spec's port and `run` returns its address: try it with your own tools, such as `curl`
+   or `nc`, then call `run` with `stop: true` to stop it and see what it printed. A program
+   that connects reaches only the ports its spec names.
 8. Tell the user in a few short lines and plain words: where the program is, that it follows
    every rule and passed all its test runs, which behaviors are proven for every input (and, if
    the proof says one solver answered alone, which one to install for a second check), what
@@ -100,7 +103,8 @@ one 64-byte loop is as fast as sixteen threads.
 1. **Simple control flow:** jumps stay in their function, no recursion, every path ends, and a
    chain of `cmp` + `je` ends in an assertion.
 2. **Bounded loops:** `mov R, NAME` before a head label with `# bound: N`, and `dec R` + `jnz`
-   back; nothing else changes `R`.
+   back; nothing else changes `R`. A server's loop that takes connections may say
+   `# bound: forever` and close with `jmp`.
 3. **Fixed resources:** only the spec's system calls, each set up by `mov eax, SYS_NAME`; the stack
    moves only by push, pop, call, ret and `add`/`sub rsp`; nothing below `rsp`.
 4. **Small functions:** at most 60 instructions, one `ret`, calls 16-byte aligned, and `rbx`,

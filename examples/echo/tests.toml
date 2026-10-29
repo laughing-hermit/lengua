@@ -1,0 +1,13 @@
+[meta]
+spec = "sha256:00038473a95871b7d5e19f89ae16dc84ccbe76b98282f4f54944b18aa93de0bf"
+
+[[example]]
+id = "B1"
+client = [{ sends = "hello\n", receives = "hello\n" }]
+serves = true
+
+[[generated]]
+id = "B1"
+vars = { line = 'string(0, 1023, "abcdefghijklmnopqrstuvwxyz ")' }
+client = [{ sends = "{line}\n", receives = "{line}\n" }]
+serves = true

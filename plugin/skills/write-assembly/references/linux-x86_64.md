@@ -18,11 +18,24 @@ test it right away with `test rax, rax` and `js`.
 | `exit_group` | 231 | `edi` status | doesn't return |
 | `openat` | 257 | `edi` -100 (the current folder), `rsi` NUL-terminated path, `edx` flags, `r10d` mode | a file descriptor or an error |
 | `getrandom` | 318 | `rdi` buffer, `rsi` count, `edx` flags (0) | bytes filled, all of them for up to 256, or an error |
+| `socket` | 41 | `edi` 2 (IPv4) or 10 (IPv6), `esi` 1 (a stream), `edx` 0 | a file descriptor or an error |
+| `connect` | 42 | `edi` the socket, `rsi` the address, `edx` its length (16 for IPv4) | 0 or an error; `EACCES` (-13) for a port the spec doesn't name |
+| `sendto` | 44 | `edi` the connection, `rsi` bytes, `rdx` count, `r10d` 0x4000 (`MSG_NOSIGNAL`), `r8` 0, `r9` 0 | bytes sent or an error |
+| `shutdown` | 48 | `edi` the connection, `esi` 1 to stop sending | 0 or an error |
+| `accept4` | 288 | `edi` 3, `rsi` 0, `rdx` 0, `r10d` 0 | the next connection's file descriptor, or an error |
 
 File descriptors 0, 1 and 2 are standard input, output and error. `openat` flags: `O_RDONLY` 0,
 `O_WRONLY` 1, `O_RDWR` 2, `O_CREAT` 0x40, `O_TRUNC` 0x200, `O_APPEND` 0x400; a mode such as 0o644
 is 420 in decimal. `write` and `read` may move fewer bytes than asked, so loop until done, as the
 template's `write_all` does.
+
+The network: an IPv4 address for `connect` is 16 bytes, a `.short` 2, the port in network byte
+order (`rol ax, 8` swaps a port's two bytes), the four address bytes (`127, 0, 0, 1`), then 8
+zero bytes. A server never binds or listens: lengua gives it the listening socket as file
+descriptor 3, and it takes each connection with `accept4`, reads until it has the request, answers
+with `sendto` and `MSG_NOSIGNAL` (with `write`, a client that hangs up early would kill it with
+SIGPIPE), and closes the connection. A client reads until `read` returns 0, when the server has
+closed its side. Data can arrive in pieces, so never assume one `read` gets it all.
 
 Random bytes and the clock: tests usually supply them in place of the kernel's, so output that
 depends on them can be checked exactly. Draw the random bytes the spec's Purpose says how to use,

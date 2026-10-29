@@ -34,6 +34,26 @@ pub struct Spec {
     /// The backtick values in `# Purpose`, in order of first appearance: the ranges of the
     /// program's inputs, which generated tests draw from.
     pub purpose_values: Vec<String>,
+    /// What it may do on the network.
+    pub network: Network,
+}
+
+/// What a spec lets a program do on the network: plain TCP, on the ports it names.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Network {
+    /// The ports it may connect to, on any computer, by number address.
+    pub connects: Vec<u16>,
+    /// The port it serves on. lengua binds it on the loopback and hands the program the
+    /// listening socket as file descriptor 3, so the program never binds or listens itself.
+    pub listens: Option<u16>,
+}
+
+impl Network {
+    /// Whether the program uses the network at all.
+    #[must_use]
+    pub fn is_used(&self) -> bool {
+        !self.connects.is_empty() || self.listens.is_some()
+    }
 }
 
 impl Spec {
@@ -55,8 +75,10 @@ pub struct Behavior {
     pub line: usize,
     /// The steps, in order.
     pub steps: Vec<Step>,
-    /// The exit code the behavior states.
+    /// The exit code the behavior states; 0 for one that keeps serving.
     pub exit_code: u8,
+    /// Whether the behavior ends with the program still serving, instead of an exit code.
+    pub serves: bool,
 }
 
 impl Behavior {
@@ -160,11 +182,21 @@ pub enum Syscall {
     ClockGettime,
     /// Fill a buffer with random bytes from the kernel.
     Getrandom,
+    /// Open a TCP socket, for a program that connects.
+    Socket,
+    /// Connect a socket to a port the spec names.
+    Connect,
+    /// Take the next connection on file descriptor 3, for a program that serves.
+    Accept4,
+    /// End one direction of a connection.
+    Shutdown,
+    /// Send on a connection, with no address, possibly with `MSG_NOSIGNAL`.
+    Sendto,
 }
 
 impl Syscall {
     /// Every system call a spec may allow.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 14] = [
         Self::Read,
         Self::Write,
         Self::Openat,
@@ -174,6 +206,20 @@ impl Syscall {
         Self::ExitGroup,
         Self::ClockGettime,
         Self::Getrandom,
+        Self::Socket,
+        Self::Connect,
+        Self::Accept4,
+        Self::Shutdown,
+        Self::Sendto,
+    ];
+
+    /// The calls only a program on the network may make.
+    pub const NETWORK: [Self; 5] = [
+        Self::Socket,
+        Self::Connect,
+        Self::Accept4,
+        Self::Shutdown,
+        Self::Sendto,
     ];
 
     /// The Linux name, as written in specs.
@@ -189,6 +235,11 @@ impl Syscall {
             Self::ExitGroup => "exit_group",
             Self::ClockGettime => "clock_gettime",
             Self::Getrandom => "getrandom",
+            Self::Socket => "socket",
+            Self::Connect => "connect",
+            Self::Accept4 => "accept4",
+            Self::Shutdown => "shutdown",
+            Self::Sendto => "sendto",
         }
     }
 
@@ -202,14 +253,12 @@ impl Syscall {
 /// Real system calls that lengua programs may never use, named so the message can say why.
 const FORBIDDEN_SYSCALLS: &[&str] = &[
     "accept",
-    "accept4",
     "bind",
     "brk",
     "chmod",
     "chown",
     "clone",
     "clone3",
-    "connect",
     "creat",
     "dup",
     "dup2",
@@ -242,10 +291,7 @@ const FORBIDDEN_SYSCALLS: &[&str] = &[
     "rt_sigaction",
     "rt_sigprocmask",
     "sendmsg",
-    "sendto",
-    "shutdown",
     "sigaltstack",
-    "socket",
     "tgkill",
     "tkill",
     "unlink",
@@ -360,6 +406,7 @@ struct Parser {
     behaviors: Vec<Behavior>,
     syscalls: Option<Vec<Syscall>>,
     threads: Option<u32>,
+    network: Network,
     /// Whether `# Purpose` holds any text.
     purpose_written: bool,
     purpose_values: Vec<String>,
@@ -378,6 +425,7 @@ impl Default for Parser {
             behaviors: Vec::new(),
             syscalls: None,
             threads: None,
+            network: Network::default(),
             purpose_written: false,
             purpose_values: Vec::new(),
         }
@@ -624,20 +672,22 @@ impl Parser {
         let Some(id) = draft.id else {
             return;
         };
-        if let Some(exit_code) = self.check_steps(id, draft.line, &draft.steps) {
+        if let Some(ending) = self.check_steps(id, draft.line, &draft.steps) {
             self.behaviors.push(Behavior {
                 id,
                 title: draft.title,
                 line: draft.line,
                 steps: draft.steps,
-                exit_code,
+                exit_code: ending.unwrap_or(0),
+                serves: ending.is_none(),
             });
         }
     }
 
-    /// Finds the stated exit code, in a step after the When. The order of Given, When and Then is
-    /// the write-spec skill's to keep; lengua only needs one When, since an example is one run.
-    fn check_steps(&mut self, id: BehaviorId, line: usize, steps: &[Step]) -> Option<u8> {
+    /// Finds the stated exit code, in a step after the When, or `Some(None)` for a behavior that
+    /// ends with the program still serving. The order of Given, When and Then is the write-spec
+    /// skill's to keep; lengua only needs one When, since an example is one run.
+    fn check_steps(&mut self, id: BehaviorId, line: usize, steps: &[Step]) -> Option<Option<u8>> {
         if steps.is_empty() {
             self.problem(
                 Some(line),
@@ -647,6 +697,7 @@ impl Parser {
         }
         let mut phase: Option<Keyword> = None;
         let mut exit_steps = Vec::new();
+        let mut serving = Vec::new();
         for step in steps {
             match step.keyword {
                 Keyword::Given => phase = Some(Keyword::Given),
@@ -668,6 +719,9 @@ impl Parser {
             if phase == Some(Keyword::Then) && states_exit_code(&step.text) {
                 exit_steps.push(step);
             }
+            if phase == Some(Keyword::Then) && keeps_serving(&step.text) {
+                serving.push(step);
+            }
         }
         let missing: Vec<&str> = [Keyword::Given, Keyword::When, Keyword::Then]
             .into_iter()
@@ -687,19 +741,37 @@ impl Parser {
                 ),
             );
         }
-        match exit_steps.as_slice() {
-            [] => {
+        match (exit_steps.as_slice(), serving.as_slice()) {
+            ([], [_]) => Some(None),
+            ([], []) => {
                 self.problem(
                     Some(line),
                     format!(
                         "{id} doesn't say how the program exits; add a step such as \
-                         `- And it exits with code `0``"
+                         `- And it exits with code `0``, or for a server that keeps running, \
+                         `- And it keeps serving`"
                     ),
                 );
                 None
             }
-            [step] => self.exit_code(id, step),
-            [first, second, ..] => {
+            ([], [_, second, ..]) => {
+                self.problem(
+                    Some(second.line),
+                    format!("{id} says twice that it keeps serving; keep one"),
+                );
+                None
+            }
+            ([_, ..], [serving, ..]) => {
+                self.problem(
+                    Some(serving.line),
+                    format!(
+                        "{id} both exits and keeps serving; a behavior ends one way, so keep one"
+                    ),
+                );
+                None
+            }
+            ([step], []) => self.exit_code(id, step).map(Some),
+            ([first, second, ..], []) => {
                 self.problem(
                     Some(second.line),
                     format!(
@@ -756,6 +828,10 @@ impl Parser {
             self.threads_line(number, rest);
             return;
         }
+        if let Some(rest) = strip_prefix_ignore_case(item, "network:") {
+            self.network_line(number, rest);
+            return;
+        }
         let Some(rest) = strip_prefix_ignore_case(item, "allowed system calls:") else {
             return;
         };
@@ -781,12 +857,20 @@ impl Parser {
                     "threads aren't a system call to allow: write `- Threads: up to N` instead, \
                      and the program starts them with parallel_for",
                 ),
+                None if matches!(name, "bind" | "listen" | "accept") => self.problem(
+                    Some(number),
+                    format!(
+                        "`{name}` isn't allowed: a server gets its listening socket from lengua \
+                         as file descriptor 3, so write `- Network: listens on TCP port N` and \
+                         allow `accept4`"
+                    ),
+                ),
                 None if FORBIDDEN_SYSCALLS.contains(&name) => self.problem(
                     Some(number),
                     format!(
                         "`{name}` isn't allowed: lengua programs can't allocate memory, start \
-                         processes, handle signals, use the network or change the file system. \
-                         Allowed: {allowed}"
+                         processes, handle signals, change the file system, or use the network \
+                         beyond plain TCP. Allowed: {allowed}"
                     ),
                 ),
                 None => self.problem(
@@ -802,6 +886,56 @@ impl Parser {
             );
         }
         self.syscalls = Some(syscalls);
+    }
+
+    /// `- Network: connects to TCP ports 80 and 8080` or `- Network: listens on TCP port 8080`.
+    fn network_line(&mut self, number: usize, rest: &str) {
+        let usage = "write `- Network: connects to TCP port 8080` (or `ports 80 and 8080`) for a \
+                     program that opens connections, or `- Network: listens on TCP port 8080` \
+                     for one that serves them";
+        let rest = rest.trim().trim_end_matches('.').replace('`', "");
+        let lower = rest.to_ascii_lowercase();
+        let (listens, numbers) = if let Some(numbers) = lower
+            .strip_prefix("connects to tcp ports")
+            .or_else(|| lower.strip_prefix("connects to tcp port"))
+        {
+            (false, numbers)
+        } else if let Some(numbers) = lower.strip_prefix("listens on tcp port") {
+            (true, numbers)
+        } else {
+            self.problem(Some(number), usage);
+            return;
+        };
+        let ports: Option<Vec<u16>> = numbers
+            .split(',')
+            .flat_map(|part| part.split(" and "))
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .map(|port| port.parse::<u16>().ok().filter(|port| *port > 0))
+            .collect();
+        match (listens, ports.as_deref()) {
+            (_, None | Some([])) => {
+                self.problem(Some(number), format!("ports go from 1 to 65535; {usage}"))
+            }
+            (true, Some([port])) if self.network.listens.is_none() => {
+                self.network.listens = Some(*port);
+            }
+            (true, Some([_])) => self.problem(
+                Some(number),
+                "the port it listens on is given twice; keep one line",
+            ),
+            (true, Some(_)) => self.problem(
+                Some(number),
+                "a program listens on one port; keep one in `- Network: listens on TCP port N`",
+            ),
+            (false, Some(ports)) => {
+                for port in ports {
+                    if !self.network.connects.contains(port) {
+                        self.network.connects.push(*port);
+                    }
+                }
+            }
+        }
     }
 
     /// `- Threads: up to 16`: how many threads the program may run at once.
@@ -862,6 +996,10 @@ impl Parser {
                  program uses, for example `- Allowed system calls: read, write, exit`",
             );
         }
+        if let Some(syscalls) = self.syscalls.take() {
+            self.check_network(&syscalls);
+            self.syscalls = Some(syscalls);
+        }
         match (header, self.syscalls.take()) {
             (Some((title, description)), Some(syscalls)) if self.problems.is_empty() => Ok(Spec {
                 title,
@@ -870,8 +1008,62 @@ impl Parser {
                 syscalls,
                 threads: self.threads,
                 purpose_values: self.purpose_values,
+                network: self.network,
             }),
             _ => Err(self.into_problems()),
+        }
+    }
+
+    /// The network line and the network calls go together: connecting needs `socket` and
+    /// `connect`, serving needs `accept4`, and a behavior keeps serving only in a server.
+    fn check_network(&mut self, syscalls: &[Syscall]) {
+        let allows = |call: Syscall| syscalls.contains(&call);
+        let connects = !self.network.connects.is_empty();
+        let listens = self.network.listens.is_some();
+        if connects && !(allows(Syscall::Socket) && allows(Syscall::Connect)) {
+            self.problem(
+                None,
+                "a program that connects to a port needs `socket` and `connect` in its allowed \
+                 system calls",
+            );
+        }
+        if !connects && (allows(Syscall::Socket) || allows(Syscall::Connect)) {
+            self.problem(
+                None,
+                "`socket` and `connect` need the ports they reach: add `- Network: connects to \
+                 TCP port N` under `# Constraints`",
+            );
+        }
+        if listens != allows(Syscall::Accept4) {
+            self.problem(
+                None,
+                "a server needs both `- Network: listens on TCP port N` and `accept4` in its \
+                 allowed system calls: lengua binds the port and the program takes connections \
+                 on file descriptor 3",
+            );
+        }
+        if !connects && !listens && (allows(Syscall::Shutdown) || allows(Syscall::Sendto)) {
+            self.problem(
+                None,
+                "`shutdown` and `sendto` work on connections: add a `- Network:` line, or drop \
+                 them",
+            );
+        }
+        let serving: Vec<String> = self
+            .behaviors
+            .iter()
+            .filter(|behavior| behavior.serves)
+            .map(|behavior| behavior.id.to_string())
+            .collect();
+        if !serving.is_empty() && !listens {
+            self.problem(
+                None,
+                format!(
+                    "{} keeps serving, which only a server does: add `- Network: listens on TCP \
+                     port N`, or end it with an exit code",
+                    serving.join(", ")
+                ),
+            );
         }
     }
 }
@@ -953,8 +1145,8 @@ fn find_exact_run(text: &str, run: usize) -> Option<usize> {
     None
 }
 
-/// Whether a Then step states the exit code, judged by its words outside backticks.
-fn states_exit_code(text: &str) -> bool {
+/// A step's words outside backticks, in lowercase.
+fn words(text: &str) -> String {
     let mut words = String::new();
     let mut inside = false;
     for character in text.chars() {
@@ -964,7 +1156,26 @@ fn states_exit_code(text: &str) -> bool {
             words.push(character.to_ascii_lowercase());
         }
     }
+    words
+}
+
+/// Whether a Then step states the exit code, judged by its words outside backticks.
+fn states_exit_code(text: &str) -> bool {
+    let words = words(text);
     words.contains("exit") && (words.contains("code") || words.contains("status"))
+}
+
+/// Whether a Then step says the program is still serving at the end, as a server does.
+fn keeps_serving(text: &str) -> bool {
+    let words = words(text);
+    [
+        "keeps serving",
+        "keeps listening",
+        "still serving",
+        "still listening",
+    ]
+    .iter()
+    .any(|phrase| words.contains(phrase))
 }
 
 fn strip_prefix_ignore_case<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
@@ -1125,6 +1336,51 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
         assert_problem(
             &ADD.replace("title: add", "title: \"  \""),
             "has no `title`",
+        );
+    }
+
+    #[test]
+    fn network_lines_name_the_ports() {
+        let client = ADD.replace(
+            "- Allowed system calls: read, write, exit",
+            "- Allowed system calls: read, write, socket, connect, close, exit\n\
+             - Network: connects to TCP ports `80` and 8080.",
+        );
+        let spec = parse(&client).expect("valid spec");
+        assert_eq!(spec.network.connects, [80, 8080]);
+        assert_eq!(spec.network.listens, None);
+        let server = ADD
+            .replace(
+                "- Allowed system calls: read, write, exit",
+                "- Allowed system calls: read, accept4, sendto, close, exit\n\
+                 - Network: listens on TCP port 7007",
+            )
+            .replace("- And it exits with code `0`", "- And it keeps serving");
+        let spec = parse(&server).expect("valid spec");
+        assert_eq!(spec.network.listens, Some(7007));
+        assert!(spec.behaviors[0].serves);
+        assert!(!spec.behaviors[1].serves);
+        // The calls and the lines go together.
+        assert_problem(
+            &ADD.replace("read, write, exit", "read, write, socket, connect, exit"),
+            "`socket` and `connect` need the ports they reach",
+        );
+        assert_problem(
+            &client.replace("socket, connect, ", ""),
+            "needs `socket` and `connect`",
+        );
+        assert_problem(&server.replace("accept4, ", ""), "a server needs both");
+        assert_problem(
+            &ADD.replace("- And it exits with code `0`", "- And it keeps serving"),
+            "B1 keeps serving, which only a server does",
+        );
+        assert_problem(
+            &client.replace("ports `80` and 8080", "port 0"),
+            "ports go from 1 to 65535",
+        );
+        assert_problem(
+            &ADD.replace("read, write, exit", "read, write, bind, exit"),
+            "a server gets its listening socket from lengua",
         );
     }
 

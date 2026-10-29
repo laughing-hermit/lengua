@@ -53,6 +53,11 @@ impl Profile {
             (Self::LinuxX86_64, Syscall::ClockGettime) => 228,
             (Self::LinuxX86_64, Syscall::Getrandom) => 318,
             (Self::LinuxX86_64, Syscall::Openat) => 257,
+            (Self::LinuxX86_64, Syscall::Socket) => 41,
+            (Self::LinuxX86_64, Syscall::Connect) => 42,
+            (Self::LinuxX86_64, Syscall::Sendto) => 44,
+            (Self::LinuxX86_64, Syscall::Shutdown) => 48,
+            (Self::LinuxX86_64, Syscall::Accept4) => 288,
         }
     }
 
@@ -75,13 +80,21 @@ impl Profile {
             .iter()
             .chain(&[Syscall::Write, Syscall::ExitGroup])
             .chain(if threads { &[Syscall::Exit][..] } else { &[] })
-            .map(|syscall| Allowed::any(self.syscall_number(*syscall)))
+            .map(|syscall| Allowed {
+                number: self.syscall_number(*syscall),
+                pin: match syscall {
+                    Syscall::Socket => Pin::TcpSocket,
+                    Syscall::Accept4 => Pin::ListeningSocket,
+                    Syscall::Sendto => Pin::NoAddress,
+                    _ => Pin::Any,
+                },
+            })
             .chain(launch.iter().copied().map(Allowed::any))
             .collect();
         if threads {
             allowed.push(Allowed {
                 number: clone,
-                first_argument: Some(Self::CLONE_FLAGS),
+                pin: Pin::First(Self::CLONE_FLAGS),
             });
             allowed.push(Allowed::any(futex));
         }
@@ -91,14 +104,13 @@ impl Profile {
     }
 }
 
-/// A system call the kernel lets a program make, by number, and the only first argument it may
-/// pass, if just one is allowed.
+/// A system call the kernel lets a program make, by number, and what its arguments may be.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Allowed {
     /// The system call's number.
     pub number: i64,
-    /// The one first argument allowed, if any.
-    pub first_argument: Option<u64>,
+    /// What its arguments must be.
+    pub pin: Pin,
 }
 
 impl Allowed {
@@ -107,7 +119,49 @@ impl Allowed {
     pub fn any(number: i64) -> Self {
         Self {
             number,
-            first_argument: None,
+            pin: Pin::Any,
+        }
+    }
+}
+
+/// What a system call's arguments must be for the kernel to allow it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Pin {
+    /// Any arguments.
+    Any,
+    /// Exactly this first argument: `clone` with `parallel_for`'s flags.
+    First(u64),
+    /// `socket` for TCP over IPv4 or IPv6, and nothing else: no UDP, raw or local sockets.
+    TcpSocket,
+    /// `accept4` on file descriptor 3, the listening socket lengua bound for the program.
+    ListeningSocket,
+    /// `sendto` on a connection: no address, and no flag but `MSG_NOSIGNAL`, so it can't open a
+    /// connection of its own.
+    NoAddress,
+}
+
+impl Pin {
+    /// How the launcher's argument writes it after the call's number: nothing, `:N`, `:tcp`,
+    /// `:listening` or `:noaddress`.
+    #[must_use]
+    pub fn encode(self) -> String {
+        match self {
+            Self::Any => String::new(),
+            Self::First(argument) => format!(":{argument}"),
+            Self::TcpSocket => ":tcp".into(),
+            Self::ListeningSocket => ":listening".into(),
+            Self::NoAddress => ":noaddress".into(),
+        }
+    }
+
+    /// Reads what [`Self::encode`] wrote after the colon.
+    #[must_use]
+    pub fn decode(text: &str) -> Option<Self> {
+        match text {
+            "tcp" => Some(Self::TcpSocket),
+            "listening" => Some(Self::ListeningSocket),
+            "noaddress" => Some(Self::NoAddress),
+            argument => argument.parse().ok().map(Self::First),
         }
     }
 }

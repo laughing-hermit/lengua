@@ -756,3 +756,110 @@ async fn the_dice_example_rolls_with_the_tests_random_bytes() {
     }
     session.service.cancel().await.expect("close the session");
 }
+
+#[tokio::test]
+async fn the_echo_server_answers_the_tests_client() {
+    // A server: lengua listens for it, hands it the socket as file descriptor 3, has the test's
+    // client talk to it, and stops it when it keeps serving.
+    let session = session().await;
+    let folder = Program::new();
+    for name in ["spec.md", "tests.toml", "main.s"] {
+        folder.write(name, &example("echo", name));
+    }
+    session.approve(&folder).await;
+    let tests = session.call_ok("check_tests", folder.arguments()).await;
+    assert_eq!(tests["checked"], true, "{tests}");
+    let report = session.call_ok("check_code", folder.arguments()).await;
+    assert_eq!(report["stamped"], true, "{report}");
+    let proof = session.call_ok("prove", folder.arguments()).await;
+    assert_eq!(proof["proofs"][0]["proven"], false, "{proof}");
+
+    // run serves in the background on the spec's port until it's stopped.
+    let serving = session.call_ok("run", folder.arguments()).await;
+    assert_eq!(serving["serving"], "127.0.0.1:7007", "{serving}");
+    let again = session.call_error("run", folder.arguments()).await;
+    assert!(again.contains("already serving"), "{again}");
+    {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let mut stream = tokio::net::TcpStream::connect("127.0.0.1:7007")
+            .await
+            .expect("connect");
+        stream.write_all(b"ping\n").await.expect("send");
+        let mut answer = Vec::new();
+        stream.read_to_end(&mut answer).await.expect("read");
+        assert_eq!(answer, b"ping\n");
+    }
+    let mut stop = folder.arguments();
+    stop["stop"] = serde_json::json!(true);
+    let stopped = session.call_ok("run", stop.clone()).await;
+    assert!(
+        stopped["ended"]
+            .as_str()
+            .is_some_and(|ended| ended.contains("stopped by lengua")),
+        "{stopped}"
+    );
+    let nothing = session.call_error("run", stop).await;
+    assert!(nothing.contains("no server"), "{nothing}");
+
+    // A server that stops after one connection fails: the spec says it keeps serving.
+    folder.write(
+        "main.s",
+        &example("echo", "main.s")
+            .replace(
+                ".equ SYS_ACCEPT4, 288\n",
+                ".equ SYS_ACCEPT4, 288\n.equ SYS_EXIT, 60\n.equ EXIT_DONE, 0\n",
+            )
+            .replace(
+                ".Lstart_next:\n    jmp .Lstart_serve",
+                ".Lstart_next:\n    mov eax, SYS_EXIT\n    mov edi, EXIT_DONE\n    syscall",
+            ),
+    );
+    let text = session.call_error("check_code", folder.arguments()).await;
+    assert!(
+        text.contains("while the test expects it to keep serving")
+            || text.contains("wasn't waiting for the next one"),
+        "{text}"
+    );
+    session.service.cancel().await.expect("close the session");
+}
+
+#[tokio::test]
+async fn the_fetch_client_talks_to_the_tests_server() {
+    // A client: the test's own server listens on a free port, which the example names as
+    // {port}, and the kernel lets the program connect to that port alone.
+    let session = session().await;
+    let folder = Program::new();
+    for name in ["spec.md", "tests.toml", "main.s"] {
+        folder.write(name, &example("fetch", name));
+    }
+    session.approve(&folder).await;
+    let tests = session.call_ok("check_tests", folder.arguments()).await;
+    assert_eq!(tests["checked"], true, "{tests}");
+    let report = session.call_ok("check_code", folder.arguments()).await;
+    assert_eq!(report["stamped"], true, "{report}");
+    // run reaches a real server on a port the spec approves, and no other.
+    let mut refused = folder.arguments();
+    refused["args"] = serde_json::json!(["9", "/"]);
+    let refused = session.call_ok("run", refused).await;
+    assert_eq!(refused["exit_code"], 3, "{refused}");
+    if let Ok(listener) = tokio::net::TcpListener::bind("127.0.0.1:8080").await {
+        let server = tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let mut request = vec![0_u8; 64];
+            let read = stream.read(&mut request).await.expect("read");
+            request.truncate(read);
+            stream
+                .write_all(b"HTTP/1.0 200 OK\r\n\r\nfrom 8080")
+                .await
+                .expect("reply");
+            request
+        });
+        let mut fetch = folder.arguments();
+        fetch["args"] = serde_json::json!(["8080", "/hi"]);
+        let fetched = session.call_ok("run", fetch).await;
+        assert_eq!(fetched["stdout"], "from 8080", "{fetched}");
+        assert_eq!(server.await.expect("served"), b"GET /hi HTTP/1.0\r\n\r\n");
+    }
+    session.service.cancel().await.expect("close the session");
+}

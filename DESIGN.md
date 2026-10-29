@@ -343,7 +343,7 @@ Rust share: everything a program may touch must be something the checker can acc
 | Threads | pthreads: any thread may write anything, and data races are undefined behavior | `Send`/`Sync`, scoped threads and rayon: no data races, checked at compile time | Fork-join only, when the spec allows threads. A canonical `parallel_for` (copied word for word, like `assert_fail`) starts workers with `clone` on static stacks and waits on `futex` for them all. Each worker owns its stack and one output slot, like Rust's `chunks_mut`: the checker proves it writes nothing else (JPL: one owner per shared object). No locks, atomics or shared mutation, so results stay deterministic and testable |
 | System access | Any system call | The standard library, within the OS's permissions | Capabilities: the spec lists the system calls the person approves, and the kernel enforces the list (seccomp) and keeps files inside the program's working folder (Landlock) |
 | Clock, random | `time()`, `rand()` | `Instant`, `SystemTime`, `rand` | Approved system calls, `clock_gettime` and `getrandom`, enforced by the kernel like the rest. Tests supply the bytes and readings, so output that depends on them is exact, and the prover covers every value the test's variables can take; without a supply, a rule such as "a number from 1 to 6" (`{any(1, 6)}`) checks the output, and the prover treats the kernel's values as any value |
-| Network | Sockets | `std::net` | Later, as an approved capability: Landlock can limit a program to chosen TCP ports, and tests need a server of their own on the loopback |
+| Network | Sockets | `std::net` | Plain TCP on the ports the spec names. seccomp allows only TCP sockets (no UDP, raw or local ones), `sendto` without an address, and `accept4` on descriptor 3; Landlock lets `connect` reach only the approved ports. A server never binds: the launcher listens on its port and hands it the socket as descriptor 3, and only its accept loop may run forever (`# bound: forever`, NASA's exception). Tests bring their own server or client on a free loopback port; websites and APIs go through the agent's own tools, which pass the data in |
 
 A worker gets its index and its slot. It and every function it calls write only their own stack
 frames and the slot, which it keeps in `rbx`, inside bounds checks; they make no system calls; and
@@ -353,9 +353,8 @@ order makes reductions deterministic, and laying the slots end to end makes a ma
 thread with `exit_group`, so a failed check anywhere stops the whole program.
 
 Roadmap, in order:
-1. the network capability;
-2. proofs of text formulas, vector code and decimal arithmetic written in a different shape;
-3. the other platforms, toward the top 5–6 CPU and OS targets.
+1. proofs of the network, text formulas, vector code and decimal arithmetic written in a different shape;
+2. the other platforms, toward the top 5–6 CPU and OS targets.
 
 ## Platforms
 
@@ -415,10 +414,15 @@ Dialect 2 followed:
 - every value tried when a range is small;
 - files in tests, and the kernel confining every run to what the spec approves;
 - fork-join threads, with each worker proven to write only its own stack and slot;
-- `prove`, which proves whole-number programs right for every input in range.
+- `prove`, which proves programs right for every input in range over whole numbers, decimals,
+  choices, short texts, files, and random bytes and clock readings the tests supply, with every
+  step confirmed by a second solver;
+- the clock and random bytes, which tests supply through a ptrace supervisor, and rules such as
+  `{any(1, 6)}` where they don't;
+- plain TCP clients and servers on the ports a spec names, tested against their own loopback
+  server or client.
 
-All of it is proven on this machine (x86-64 Linux). The long-term goal is the top 5 or 6 CPU and
+All of it is checked on this machine (x86-64 Linux). The long-term goal is the top 5 or 6 CPU and
 OS targets, through LLVM and one profile per target. Next, in order:
-1. proofs for text and decimals, and a second solver;
-2. network, clock and random capabilities;
-3. the other targets.
+1. proofs of programs on the network, text formulas and vector code;
+2. the other targets.

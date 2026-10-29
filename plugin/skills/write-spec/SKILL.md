@@ -89,10 +89,21 @@ of the same rule.
   isn't a number. Give each one its own exit code other than 0.
 - **System calls:** under `# Constraints`, write `- Allowed system calls: …` with only what the
   program needs, chosen from read, write, openat, close, lseek, exit, exit_group, clock_gettime
-  (reading the time) and getrandom (random bytes from the kernel). `exit` is always needed, and
-  files need openat and close. lengua programs can't allocate memory, start processes, handle
-  signals or use the network. The kernel enforces this list when the program runs, so it's a
-  promise the user can rely on.
+  (reading the time), getrandom (random bytes from the kernel), and for the network socket,
+  connect, accept4, shutdown and sendto. `exit` is always needed, and files need openat and
+  close. lengua programs can't allocate memory, start processes or handle signals. The kernel
+  enforces this list when the program runs, so it's a promise the user can rely on.
+- **Network:** plain TCP, on ports the spec names. A program that opens connections says
+  `- Network: connects to TCP port 8080` (or `ports 80 and 8080`) and allows socket and connect;
+  the address and port it reaches come from its arguments or input, as numbers (`127.0.0.1`),
+  since lengua programs don't look up names. A server says `- Network: listens on TCP port 8080`
+  and allows accept4: lengua listens on that port of this computer and hands the program the
+  socket as file descriptor 3, and its behaviors may end with `- And it keeps serving` instead of
+  an exit code. Tell the user in plain words what they approve, such as "it can open TCP
+  connections to port 8080 on any computer; the kernel refuses every other port."
+- **Websites and APIs:** lengua programs speak plain TCP, not HTTPS. A program that needs a
+  website's data reads it from standard input or a file; you fetch it with your own tools and
+  pass it in, and tell the user the line for their shell, such as `curl -s URL | ./program`.
 - **Output from random bytes or the clock** is best made exact. Purpose says how the program
   turns them into output ("the roll is the first byte below `252`, modulo 6, plus 1"), and the
   behavior gives them as its scene: ``- Given the kernel's random bytes `fc` and `2a` `` or

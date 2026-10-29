@@ -251,6 +251,18 @@ Nothing in the body changes `R`: `syscall` changes `rax`, `rcx` and `r11`, and `
 `rax`, `rcx`, `rdx`, `rsi`, `rdi` and `r8` to `r11`, so a loop that calls counts in `rbx` or `r12`
 to `r15`. Every backward jump must be such a loop's end.
 
+One loop may run without a bound, as NASA's rule allows for loops meant never to end: a server's
+loop that takes connections, in a program whose spec says `- Network: listens on TCP port N`. Its
+head label says `# bound: forever` and it closes with an unconditional `jmp` to the head, so it
+provably never ends by itself; leaving early (to exit) uses forward jumps as usual:
+
+```
+.Lstart_serve:  # bound: forever
+    mov eax, SYS_ACCEPT4
+    ... take one connection, answer it, close it ...
+    jmp .Lstart_serve
+```
+
 ### 3. Resources reserved up front
 
 NASA's rule is "no dynamic memory allocation after initialization". In lengua all memory is

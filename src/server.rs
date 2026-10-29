@@ -1,5 +1,6 @@
 //! The lengua MCP server: tool definitions and server instructions.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -17,7 +18,7 @@ use crate::hash::Sha256Hex;
 use crate::lock::{self, CodeStamp, Key, Lock, ProofStamp, TestsStamp};
 use crate::platform::{CpuFeatures, Machine, Profile};
 use crate::prove;
-use crate::runner::{self, End, Job, Limits};
+use crate::runner::{self, End, Job, Limits, Net, Started};
 use crate::spec;
 use crate::state::{
     CODE_FILE, LockStatus, ProgramFolder, SPEC_FILE, Snapshot, State, StepContext, TESTS_FILE,
@@ -49,7 +50,33 @@ pub struct LenguaServer {
     lock_writes: Arc<tokio::sync::Mutex<()>>,
     /// This server's own binary, which launches programs so their instructions can be counted.
     launcher: Arc<PathBuf>,
+    /// Servers that `run` started, by program folder, until `run` stops them, ten minutes
+    /// pass, or the session ends and drops them.
+    background: Arc<tokio::sync::Mutex<BTreeMap<PathBuf, Background>>>,
 }
+
+/// A server `run` started in the background.
+struct Background {
+    started: Started,
+    /// The build folder of the executable it started from.
+    _build: Arc<tempfile::TempDir>,
+    /// Which start this is, so an old timer never stops a newer one.
+    id: u64,
+    assertions: BTreeMap<i64, usize>,
+    fingerprint: String,
+}
+
+impl std::fmt::Debug for Background {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Background")
+            .field("id", &self.id)
+            .field("port", &self.started.port())
+            .finish_non_exhaustive()
+    }
+}
+
+/// How long a server `run` started keeps serving at most.
+const BACKGROUND_LIMIT: std::time::Duration = std::time::Duration::from_secs(600);
 
 impl LenguaServer {
     /// Creates a server that keeps its private data in `data_dir`.
@@ -60,6 +87,7 @@ impl LenguaServer {
             data_dir: Arc::new(data_dir),
             lock_writes: Arc::default(),
             launcher: Arc::new(std::env::current_exe().unwrap_or_default()),
+            background: Arc::default(),
         }
     }
 }
@@ -282,6 +310,9 @@ pub struct RunParams {
     /// folder.
     #[serde(default)]
     pub folder: Option<String>,
+    /// Stops the server that `run` started for this program and reports what it printed.
+    #[serde(default)]
+    pub stop: bool,
 }
 
 /// What `run` reports.
@@ -305,6 +336,101 @@ pub struct RunReport {
     pub wall_time_us: u64,
     /// The fingerprint of the spec, tests and code that ran.
     pub fingerprint: String,
+    /// Where a server is taking connections, while it runs in the background.
+    pub serving: Option<String>,
+}
+
+/// What `run` reports about a program that has ended.
+fn ended_report(
+    result: &runner::Run,
+    assertions: &BTreeMap<i64, usize>,
+    limits: Limits,
+    fingerprint: String,
+) -> RunReport {
+    RunReport {
+        stdout: String::from_utf8_lossy(&result.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&result.stderr).into_owned(),
+        exit_code: match result.end {
+            End::Exited(code) => Some(code),
+            _ => None,
+        },
+        ended: testrun::explain_end(result, assertions, limits),
+        instructions: result.instructions,
+        cycles: result.cycles,
+        cpu_time_us: result.cpu_time_ns.map(|nanoseconds| nanoseconds / 1000),
+        wall_time_us: result.wall_time_ns / 1000,
+        fingerprint,
+        serving: None,
+    }
+}
+
+impl LenguaServer {
+    /// Starts a server and leaves it serving, at most one per program folder, until `run` stops
+    /// it, ten minutes pass, or the session ends.
+    async fn serve_in_background(
+        &self,
+        folder: &ProgramFolder,
+        job: Job<'_>,
+        build: Arc<tempfile::TempDir>,
+        assertions: BTreeMap<i64, usize>,
+        fingerprint: String,
+    ) -> Result<RunReport, String> {
+        static STARTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let mut background = self.background.lock().await;
+        if let Some(entry) = background.get(folder.path()) {
+            return Err(format!(
+                "{folder} is already serving on 127.0.0.1:{}; call run with stop: true first",
+                entry.started.port().unwrap_or(0)
+            ));
+        }
+        let limits = Limits {
+            timeout: BACKGROUND_LIMIT,
+            max_file_size: None,
+            ..Limits::default()
+        };
+        let started = runner::start(&self.launcher, job, limits)
+            .await
+            .map_err(|error| format!("couldn't start the server: {error}"))?;
+        let address = format!("127.0.0.1:{}", started.port().unwrap_or(0));
+        let id = STARTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        background.insert(
+            folder.path().to_path_buf(),
+            Background {
+                started,
+                _build: build,
+                id,
+                assertions,
+                fingerprint: fingerprint.clone(),
+            },
+        );
+        let (servers, key) = (Arc::clone(&self.background), folder.path().to_path_buf());
+        tokio::spawn(async move {
+            tokio::time::sleep(BACKGROUND_LIMIT).await;
+            let mut servers = servers.lock().await;
+            if servers.get(&key).is_some_and(|entry| entry.id == id)
+                && let Some(entry) = servers.remove(&key)
+            {
+                drop(servers);
+                let _ = entry.started.stop().await;
+            }
+        });
+        Ok(RunReport {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: None,
+            ended: format!(
+                "serving on {address}. Try it with your own tools, such as curl or nc, then call \
+                 run with stop: true to stop it and see what it printed. It stops by itself \
+                 after ten minutes or when this session ends."
+            ),
+            instructions: None,
+            cycles: None,
+            cpu_time_us: None,
+            wall_time_us: 0,
+            fingerprint,
+            serving: Some(address),
+        })
+    }
 }
 
 #[tool_router]
@@ -620,6 +746,7 @@ impl LenguaServer {
             &source,
             seed,
             &syscalls,
+            &spec.network,
         )
         .await
         .map_err(|error| format!("couldn't run the program: {error}"))?;
@@ -676,12 +803,15 @@ impl LenguaServer {
             when lengua.lock shows that spec.md, tests.toml and main.s are exactly the versions \
             that were approved and checked, and a fresh build of main.s is byte for byte the \
             executable check_code tested. The program gets an empty environment, 10 seconds and \
-            8 MiB of output, and the kernel lets it make only the system calls its spec allows \
-            and touch files only inside its working folder: an empty temporary folder, or \
-            `folder`. path: absolute path of the program folder; args: the program's arguments; \
-            stdin: text for its standard input; folder: absolute path of a folder of the user's \
-            files to run in, naming the files in args relative to it (\"notes.txt\", not \
-            \"/home/me/notes.txt\").",
+            8 MiB of output, and the kernel lets it make only the system calls its spec allows, \
+            connect only to the ports it names, and touch files only inside its working folder: \
+            an empty temporary folder, or `folder`. A server starts in the background on its \
+            spec's port and run returns its address; call run with stop: true to stop it and get \
+            what it printed (it also stops after ten minutes or when the session ends). path: \
+            absolute path of the program folder; args: the program's arguments; stdin: text for \
+            its standard input; folder: absolute path of a folder of the user's files to run in, \
+            naming the files in args relative to it (\"notes.txt\", not \"/home/me/notes.txt\"); \
+            stop: true to stop the server run started.",
         annotations(title = "Run program", read_only_hint = false, open_world_hint = false)
     )]
     async fn run(
@@ -689,6 +819,29 @@ impl LenguaServer {
         Parameters(params): Parameters<RunParams>,
     ) -> Result<Json<RunReport>, String> {
         let folder = ProgramFolder::new(&params.path)?;
+        if params.stop {
+            let entry = self.background.lock().await.remove(folder.path());
+            let Some(entry) = entry else {
+                return Err(format!(
+                    "no server that run started is running for {folder}"
+                ));
+            };
+            let result = entry
+                .started
+                .stop()
+                .await
+                .map_err(|error| format!("couldn't stop the program: {error}"))?;
+            let limits = Limits {
+                timeout: BACKGROUND_LIMIT,
+                ..Limits::default()
+            };
+            return Ok(Json(ended_report(
+                &result,
+                &entry.assertions,
+                limits,
+                entry.fingerprint,
+            )));
+        }
         let (state, next_step) = self.program_state(&folder)?;
         if state != State::Ready {
             return Err(format!(
@@ -730,8 +883,14 @@ impl LenguaServer {
             ..Limits::default()
         };
         let syscalls = profile.allowed_syscalls(&spec.syscalls, spec.threads.is_some());
+        // The ports the spec approves, and for a server, its own port on the loopback.
+        let net = Net {
+            connect: spec.network.connects.clone(),
+            listen: spec.network.listens,
+        };
         let job = Job {
             folder: workspace.as_deref(),
+            net: Some(&net),
             ..Job::new(
                 &built.executable,
                 &params.args,
@@ -739,24 +898,28 @@ impl LenguaServer {
                 &syscalls,
             )
         };
+        let assertions = testrun::assertion_lines(&source);
+        if spec.network.listens.is_some() {
+            return self
+                .serve_in_background(
+                    &folder,
+                    job,
+                    Arc::clone(&built.folder),
+                    assertions,
+                    fingerprint.to_string(),
+                )
+                .await
+                .map(Json);
+        }
         let result = runner::run(&self.launcher, job, limits)
             .await
             .map_err(|error| format!("couldn't run the program: {error}"))?;
-        let ended = testrun::explain_end(&result, &testrun::assertion_lines(&source), limits);
-        Ok(Json(RunReport {
-            stdout: String::from_utf8_lossy(&result.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&result.stderr).into_owned(),
-            exit_code: match result.end {
-                End::Exited(code) => Some(code),
-                _ => None,
-            },
-            ended,
-            instructions: result.instructions,
-            cycles: result.cycles,
-            cpu_time_us: result.cpu_time_ns.map(|nanoseconds| nanoseconds / 1000),
-            wall_time_us: result.wall_time_ns / 1000,
-            fingerprint: fingerprint.to_string(),
-        }))
+        Ok(Json(ended_report(
+            &result,
+            &assertions,
+            limits,
+            fingerprint.to_string(),
+        )))
     }
 
     #[tool(
@@ -836,6 +999,16 @@ impl LenguaServer {
             // `now` in the expected results.
             let kernel_values = (allows(spec::Syscall::Getrandom) && block.random.is_none())
                 || (allows(spec::Syscall::ClockGettime) && block.clock.is_empty());
+            if spec.network.is_used() {
+                proofs.push(ProofReport {
+                    test,
+                    proven: false,
+                    detail: "tested, not proven: the proof doesn't follow a program over the \
+                             network yet"
+                        .into(),
+                });
+                continue;
+            }
             if let Some(every) = block
                 .every_value_text()
                 .filter(|_| !kernel_values && !block.uses_now())
@@ -911,6 +1084,7 @@ impl LenguaServer {
                             &source,
                             &case,
                             &syscalls,
+                            &spec.network,
                         )
                         .await
                         .map_err(|error| format!("couldn't run the program: {error}"))?
@@ -1276,7 +1450,8 @@ fn read_spec(folder: &ProgramFolder) -> Result<String, String> {
 
 /// A built program, in a temporary folder that lives as long as this value.
 struct Build {
-    _folder: tempfile::TempDir,
+    /// The build folder, kept while anything may still start the executable in it.
+    folder: Arc<tempfile::TempDir>,
     executable: PathBuf,
     bytes: Vec<u8>,
     toolchain: String,
@@ -1307,7 +1482,7 @@ async fn build(code: &str, profile: Profile) -> Result<Build, String> {
     let bytes = std::fs::read(&executable)
         .map_err(|error| format!("couldn't read the built program: {error}"))?;
     Ok(Build {
-        _folder: folder,
+        folder: Arc::new(folder),
         executable,
         bytes,
         toolchain: format!(

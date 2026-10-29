@@ -37,6 +37,13 @@ the tests come before the code, and they decide whether the code is right.
   fills random bytes draws every value they can hold (`int(0, 255)` for one byte); one that only
   sets the clock draws seconds from 0 up. Bytes past the end of `random` are zeros, and the last
   reading repeats.
+- **Network tests bring their own server or client.** For a program that connects:
+  `server = { receives = "GET / HTTP/1.0\r\n\r\n", replies = "HTTP/1.0 200 OK\r\n\r\nhi" }`
+  (a list for several connections), and `{port}` in args or stdin where the program needs the
+  server's port: the test's server listens on a free port of its own and lengua writes it in.
+  For a server: `client = [{ sends = "hello\n", receives = "hello\n" }]`, plus
+  `serves = true` and no `exit_code` when the spec says it keeps serving. The server reads
+  exactly `receives`; the client reads all the program answers until it closes the connection.
 - **Output the program chooses** without the test supplying it is a rule: in the example,
   `stdout = { matches = "rolled {any(1, 6)}\n" }`, and in the generated block,
   `stdout = "rolled {any(1, 6)}\n"`. `now` is when the run starts in Unix seconds, and only

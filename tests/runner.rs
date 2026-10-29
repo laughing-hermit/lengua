@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use lengua::platform::{Allowed, Profile};
-use lengua::runner::{End, Job, Limits, Run, run};
+use lengua::runner::{End, Job, Limits, Net, Run, run, start};
 use lengua::spec::Syscall;
 use lengua::supply::Supply;
 use lengua::toolchain::Toolchain;
@@ -592,4 +592,126 @@ async fn the_supervisor_follows_threaded_programs() {
     assert_eq!(supervised.stdout, text.to_uppercase().into_bytes());
     assert_eq!(supervised.supplied, None);
     assert_eq!(supervised.random_asked, Some(0));
+}
+
+/// Connects to 127.0.0.1:`port` and exits with the negated result of `connect`: 0 when it got
+/// through, 13 (EACCES) when the kernel refused the port.
+fn connects_to(port: u16) -> String {
+    program(
+        "    mov eax, 41\n    mov edi, 2\n    mov esi, 1\n    xor edx, edx\n    syscall\n    \
+         mov r12, rax\n    mov eax, 42\n    mov rdi, r12\n    lea rsi, [rip + address]\n    \
+         mov edx, 16\n    syscall\n    neg eax\n    mov edi, eax\n    mov eax, 60\n    syscall",
+        &format!(
+            ".data\naddress:\n    .word 2\n    .byte {}, {}\n    .byte 127, 0, 0, 1\n    .zero 8",
+            port >> 8,
+            port & 0xff
+        ),
+    )
+}
+
+fn network_syscalls(calls: &[Syscall]) -> Vec<Allowed> {
+    Profile::LinuxX86_64.allowed_syscalls(calls, false)
+}
+
+async fn run_on(executable: &Path, syscalls: &[Allowed], net: &Net) -> Run {
+    let job = Job {
+        net: Some(net),
+        ..Job::new(executable, &[], b"", syscalls)
+    };
+    run(launcher(), job, Limits::default()).await.expect("run")
+}
+
+#[tokio::test]
+async fn programs_connect_only_to_approved_ports() {
+    let folder = tempfile::tempdir().expect("temporary folder");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a free port");
+    let port = listener.local_addr().expect("an address").port();
+    let client = build(folder.path(), "client", &connects_to(port)).await;
+    let calls = network_syscalls(&[Syscall::Socket, Syscall::Connect, Syscall::Exit]);
+    let approved = Net {
+        connect: vec![port],
+        listen: None,
+    };
+    assert_eq!(run_on(&client, &calls, &approved).await.end, End::Exited(0));
+    let other = Net {
+        connect: vec![port.wrapping_add(1).max(1)],
+        listen: None,
+    };
+    assert_eq!(
+        run_on(&client, &calls, &other).await.end,
+        End::Exited(13),
+        "EACCES: the kernel refuses a port the spec doesn't name"
+    );
+    // A UDP socket isn't TCP: stopped.
+    let udp = build(
+        folder.path(),
+        "udp",
+        &program(
+            "    mov eax, 41\n    mov edi, 2\n    mov esi, 2\n    xor edx, edx\n    syscall\n    \
+             mov eax, 60\n    xor edi, edi\n    syscall",
+            "",
+        ),
+    )
+    .await;
+    assert_eq!(run_on(&udp, &calls, &approved).await.end, End::Signaled(31));
+}
+
+#[tokio::test]
+async fn servers_take_connections_on_descriptor_3() {
+    use tokio::io::AsyncReadExt as _;
+    let folder = tempfile::tempdir().expect("temporary folder");
+    // Takes one connection, says hi on it and exits.
+    let server = build(
+        folder.path(),
+        "server",
+        &program(
+            "    mov eax, 288\n    mov edi, 3\n    xor esi, esi\n    xor edx, edx\n    \
+             xor r10d, r10d\n    syscall\n    mov rdi, rax\n    mov eax, 1\n    \
+             lea rsi, [rip + hi]\n    mov edx, 2\n    syscall\n    mov eax, 60\n    \
+             xor edi, edi\n    syscall",
+            ".data\nhi:\n    .ascii \"hi\"",
+        ),
+    )
+    .await;
+    let calls = network_syscalls(&[Syscall::Accept4, Syscall::Write, Syscall::Exit]);
+    let net = Net {
+        connect: Vec::new(),
+        listen: Some(0),
+    };
+    let job = Job {
+        net: Some(&net),
+        ..Job::new(&server, &[], b"", &calls)
+    };
+    let started = start(launcher(), job, Limits::default())
+        .await
+        .expect("start");
+    let port = started.port().expect("a port");
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("connect");
+    let mut said = Vec::new();
+    stream.read_to_end(&mut said).await.expect("read");
+    assert_eq!(said, b"hi");
+    assert_eq!(started.wait().await.expect("wait").end, End::Exited(0));
+
+    // A server that keeps serving is stopped by lengua.
+    let forever = build(
+        folder.path(),
+        "forever",
+        &program(
+            "again:\n    mov eax, 288\n    mov edi, 3\n    xor esi, esi\n    xor edx, edx\n    \
+             xor r10d, r10d\n    syscall\n    jmp again",
+            "",
+        ),
+    )
+    .await;
+    let job = Job {
+        net: Some(&net),
+        ..Job::new(&forever, &[], b"", &calls)
+    };
+    let started = start(launcher(), job, Limits::default())
+        .await
+        .expect("start");
+    assert!(started.port().is_some());
+    assert_eq!(started.stop().await.expect("stop").end, End::Stopped);
 }

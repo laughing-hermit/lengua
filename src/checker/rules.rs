@@ -94,7 +94,7 @@ pub fn check(
         checker.results(function, flow);
         checker.indexes(function, flow);
         checker.chains(function, flow);
-        checker.loops(function, flow);
+        checker.loops(function, flow, syscalls.contains(&Syscall::Accept4));
         assertions += checker.assertions(function, flow, &mut ids);
     }
     checker.recursion();
@@ -823,8 +823,10 @@ impl Checker<'_, '_> {
             })
     }
 
-    /// Rule 2: every backward jump closes a counted loop.
-    fn loops(&mut self, function: &MappedFunction<'_>, flow: &Flow) {
+    /// Rule 2: every backward jump closes a counted loop, except in a server: its loop that takes
+    /// connections, `# bound: forever`, closes with an unconditional jump, so it provably never
+    /// ends by itself (NASA's exception for loops meant not to terminate).
+    fn loops(&mut self, function: &MappedFunction<'_>, flow: &Flow, server: bool) {
         let steps = &function.steps;
         let fix = "write loops as: mov R, NAME (a constant of at most the bound) right before the \
                    head label `.Lname:  # bound: N`, the body, then dec R and jnz .Lname; enter \
@@ -835,6 +837,31 @@ impl Checker<'_, '_> {
                 _ => continue,
             };
             let line = steps[back].source.line;
+            let forever = function
+                .labels
+                .iter()
+                .any(|label| label.index == head && label.label.forever);
+            if forever {
+                if !server {
+                    self.violation(
+                        Rule::Loops,
+                        steps[head].source.line,
+                        "only a server's loop that takes connections may run forever",
+                        "give the loop a counter and `# bound: N`; `# bound: forever` is for a \
+                         program whose spec says `- Network: listens on TCP port N`",
+                    );
+                } else if !matches!(exit, Exit::Jump(_)) {
+                    self.violation(
+                        Rule::Loops,
+                        line,
+                        "a loop that runs forever closes with an unconditional `jmp` to its head",
+                        "end the loop with `jmp` to its `# bound: forever` label, so it provably \
+                         never ends by itself",
+                    );
+                }
+                self.entered_through_head(steps, flow, head, back);
+                continue;
+            }
             let counter = back
                 .checked_sub(1)
                 .map(|index| &steps[index].machine)
@@ -900,20 +927,7 @@ impl Checker<'_, '_> {
                 ),
                 Some(_) => {}
             }
-            for position in head..=back {
-                for &from in &flow.predecessors[position] {
-                    let inside = (head..=back).contains(&from);
-                    let entering_head = position == head && from + 1 == head;
-                    if !inside && !entering_head {
-                        self.violation(
-                            Rule::Loops,
-                            steps[from].source.line,
-                            "this jumps into the middle of a loop",
-                            "enter loops only through their head, right after the counter is set",
-                        );
-                    }
-                }
-            }
+            self.entered_through_head(steps, flow, head, back);
             for step in &steps[head..back.saturating_sub(1)] {
                 if writes(&step.machine, counter, &mut self.factory) {
                     let name = format!("{counter:?}").to_ascii_lowercase();
@@ -924,6 +938,30 @@ impl Checker<'_, '_> {
                         "keep the counter in a register nothing in the body changes; calls change \
                          rax, rcx, rdx, rsi, rdi and r8-r11, and syscall changes rax, rcx and r11, \
                          so loops with calls count in rbx or r12-r15",
+                    );
+                }
+            }
+        }
+    }
+
+    /// Nothing jumps into a loop's body from outside: it's entered by falling into its head.
+    fn entered_through_head(
+        &mut self,
+        steps: &[super::decode::Step<'_>],
+        flow: &Flow,
+        head: usize,
+        back: usize,
+    ) {
+        for position in head..=back {
+            for &from in &flow.predecessors[position] {
+                let inside = (head..=back).contains(&from);
+                let entering_head = position == head && from + 1 == head;
+                if !inside && !entering_head {
+                    self.violation(
+                        Rule::Loops,
+                        steps[from].source.line,
+                        "this jumps into the middle of a loop",
+                        "enter loops only through their head, right after the counter is set",
                     );
                 }
             }

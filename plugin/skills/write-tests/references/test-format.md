@@ -24,7 +24,10 @@ A test with fixed values, copied from the spec's behavior.
 | `files_after` | `{}` | Files the program must leave, with their exact contents or a rule: `{ "loud.txt" = "HELLO\n" }` |
 | `random` | none | The bytes the program's `getrandom` calls receive, in hex: `"fc2a"`. See [Random bytes and the clock](#random-bytes-and-the-clock) |
 | `clock` | `[]` | What its `clock_gettime` calls read, in seconds since 1970: `["1735689600", "1735689600.25"]` |
-| `exit_code` | required | 0 to 255, the code the spec states; never 134 |
+| `server` | none | The test's own server, for a program that connects: `{ receives = "…", replies = "…" }`, or a list, one a connection. See [The network](#the-network) |
+| `client` | `[]` | The test's own client, for a program that serves: `[{ sends = "…", receives = "…" }]`, one a connection |
+| `serves` | `false` | `true` when the program must still be serving at the end; then there's no `exit_code` |
+| `exit_code` | required | 0 to 255, the code the spec states; never 134. Left out when `serves = true` |
 
 Example values are literal: braces in them are plain characters, except in a rule (see
 [Rules](#rules-output-the-program-chooses)). A long value, such as a file one
@@ -48,7 +51,10 @@ A test that draws new inputs on every run and computes the expected results.
 | `files_after` | `{}` | File names and templates with any expressions: `{ "loud.txt" = "{upper(text)}" }` |
 | `random` | none | Hex digits and `{hex(x, n)}`: `"{hex(first, 1)}{hex(second, 1)}"` |
 | `clock` | `[]` | Readings that hold bare variables only: `["{t}"]` |
-| `exit_code` | required | A number, or a template that is one placeholder, such as `"{if(a < 0, 1, 0)}"` |
+| `server` | none | `receives` with any expressions, `replies` with bare variables only |
+| `client` | `[]` | `sends` with bare variables only, `receives` with any expressions and rules |
+| `serves` | `false` | As in an example |
+| `exit_code` | required | A number, or a template that is one placeholder, such as `"{if(a < 0, 1, 0)}"`; left out when `serves = true` |
 
 Runs try boundary values first: every combination when there are 64 or fewer, otherwise each
 boundary value once. Random values fill the remaining runs, and a failing run reports its inputs
@@ -84,6 +90,28 @@ is exact and the proof covers every value they could take. The spec allows `getr
 - **An example and its generated blocks supply alike:** random bytes in all or none, and clock
   readings in all or none. The example's bytes and readings count as inputs, so its block reads
   its variables back from them when checking the formulas.
+
+## The network
+
+A spec that says `- Network: connects to TCP port N` or `- Network: listens on TCP port N` gets
+tests with their own server or client, on the loopback, on a free port of their own: never the
+spec's port, which the kernel allows only for `run`.
+
+- **A program that connects** gets `server`: the test's server takes each connection, reads
+  exactly `receives` (failing at the first byte that differs), sends `replies`, closes its side,
+  and expects nothing more. The program learns the port from its arguments or input: write
+  `{port}` there, in an example as in a generated block, and lengua writes in the test server's
+  port. In tests, the kernel lets the program connect to that port alone.
+- **A program that serves** gets its listening socket from lengua as file descriptor 3, in every
+  test. `client` connects once per entry: it sends `sends`, closes its side, and reads everything
+  the program answers until it closes the connection, which must match `receives` (rules
+  allowed). With `serves = true`, the program must then be waiting for the next connection; lengua
+  stops it, and the test has no `exit_code`.
+- **Pieces:** on every other generated run, the test's server and client send in three pieces
+  with short pauses, as a network may deliver them, so a program must read until it has what it
+  needs.
+- The spec's own port numbers count as present in a network test's example, since the test
+  talks over its own port.
 
 ## Rules: output the program chooses
 

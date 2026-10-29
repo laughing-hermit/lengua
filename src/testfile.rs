@@ -27,6 +27,13 @@ const MAX_PROBLEMS: usize = 20;
 /// variable of that name.
 const NOW: &str = "now";
 
+/// The built-in variable for the port of the test's own server, when a block declares no
+/// variable of that name. It renders as [`PORT_TEXT`], which the runner fills in.
+const PORT: &str = "port";
+
+/// Where a test names its own server's port: the runner writes the real one in its place.
+pub const PORT_TEXT: &str = "{port}";
+
 /// A checked tests.toml.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TestSuite {
@@ -61,6 +68,32 @@ pub struct Example {
     pub random: Option<String>,
     /// What its `clock_gettime` calls read, in seconds; empty when the kernel's clock answers.
     pub clock: Vec<String>,
+    /// The test's own server, one entry a connection, for a program that connects.
+    pub server: Vec<Reply>,
+    /// The test's own client, one entry a connection, for a program that serves.
+    pub client: Vec<Exchange>,
+    /// Whether the program must still be serving at the end, instead of exiting.
+    pub serves: bool,
+}
+
+/// What the test's own server does with one connection from the program: it reads exactly
+/// `receives`, sends `replies`, closes its side, and expects nothing more.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reply {
+    /// What the program must send.
+    pub receives: String,
+    /// What the server sends back.
+    pub replies: String,
+}
+
+/// What the test's own client does on one connection to the program: it sends `sends`, closes
+/// its side, and reads everything the program answers, which must be `receives`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Exchange {
+    /// What the client sends.
+    pub sends: String,
+    /// What the program must answer, with any rules.
+    pub receives: String,
 }
 
 impl Example {
@@ -102,6 +135,12 @@ pub struct Generated {
     pub random: Option<Template>,
     /// The clock reading templates.
     pub clock: Vec<Template>,
+    /// The test server's templates, one pair a connection: what it receives, what it replies.
+    pub server: Vec<(Template, Template)>,
+    /// The test client's templates, one pair a connection: what it sends, what it receives.
+    pub client: Vec<(Template, Template)>,
+    /// Whether the program must still be serving at the end, instead of exiting.
+    pub serves: bool,
 }
 
 /// A generated block runs every combination of its values when there are at most this many…
@@ -142,6 +181,12 @@ pub struct Case {
     pub random: Option<String>,
     /// What its `clock_gettime` calls read, in seconds; empty when the kernel's clock answers.
     pub clock: Vec<String>,
+    /// The test's own server, one entry a connection.
+    pub server: Vec<Reply>,
+    /// The test's own client, one entry a connection.
+    pub client: Vec<Exchange>,
+    /// Whether the program must still be serving at the end, instead of exiting.
+    pub serves: bool,
 }
 
 impl Case {
@@ -200,18 +245,22 @@ impl Generated {
             .collect()
     }
 
-    /// The variables in args, stdin and files, and in clock readings unless `clock` is false.
+    /// The variables in args, stdin, files and what the test's server and client send, and in
+    /// clock readings unless `clock` is false.
     fn reached_otherwise(&self, clock: bool) -> BTreeSet<String> {
         self.args
             .iter()
             .chain([&self.stdin])
             .chain(self.files.values())
             .chain(self.clock.iter().filter(|_| clock))
+            .chain(self.server.iter().map(|(_, replies)| replies))
+            .chain(self.client.iter().map(|(sends, _)| sends))
             .flat_map(Template::variables)
             .collect()
     }
 
-    /// The templates of the expected results.
+    /// The templates of the expected results: what the program prints, writes, exits with and
+    /// sends over the network.
     fn outputs(&self) -> impl Iterator<Item = &Template> {
         let formula = match &self.exit_code {
             ExitCode::Formula(template) => Some(template),
@@ -221,6 +270,20 @@ impl Generated {
             .into_iter()
             .chain(self.files_after.values())
             .chain(formula)
+            .chain(self.server.iter().map(|(receives, _)| receives))
+            .chain(self.client.iter().map(|(_, receives)| receives))
+    }
+
+    /// The templates of what the test gives the program: arguments, input, files, clock
+    /// readings, and what its own server replies and its own client sends.
+    fn given(&self) -> impl Iterator<Item = &Template> {
+        self.args
+            .iter()
+            .chain([&self.stdin])
+            .chain(self.files.values())
+            .chain(self.clock.iter())
+            .chain(self.server.iter().map(|(_, replies)| replies))
+            .chain(self.client.iter().map(|(sends, _)| sends))
     }
 
     /// The expected results for `inputs`, for a run that starts at `now` (Unix seconds).
@@ -238,14 +301,14 @@ impl Generated {
     /// The rendered args, stdin, files, expected outputs and exit code for `inputs`, with no
     /// inputs recorded.
     fn results(&self, inputs: &Env, now: i128) -> Result<Case, (&'static str, EvalError)> {
-        let mut with_now;
-        let inputs = if inputs.contains_key(NOW) {
-            inputs
-        } else {
-            with_now = inputs.clone();
-            with_now.insert(NOW.to_owned(), Value::Int(now));
-            &with_now
-        };
+        let mut with_built_ins = inputs.clone();
+        if !inputs.contains_key(NOW) {
+            with_built_ins.insert(NOW.to_owned(), Value::Int(now));
+        }
+        if !inputs.contains_key(PORT) {
+            with_built_ins.insert(PORT.to_owned(), Value::Str(PORT_TEXT.to_owned()));
+        }
+        let inputs = &with_built_ins;
         let render_files = |files: &BTreeMap<String, Template>, field| {
             files
                 .iter()
@@ -298,6 +361,28 @@ impl Generated {
             .map(|template| template.render(inputs))
             .collect::<Result<_, _>>()
             .map_err(|error| ("clock", error))?;
+        let server = self
+            .server
+            .iter()
+            .map(|(receives, replies)| {
+                Ok(Reply {
+                    receives: receives.render(inputs)?,
+                    replies: replies.render(inputs)?,
+                })
+            })
+            .collect::<Result<_, EvalError>>()
+            .map_err(|error| ("server", error))?;
+        let client = self
+            .client
+            .iter()
+            .map(|(sends, receives)| {
+                Ok(Exchange {
+                    sends: sends.render(inputs)?,
+                    receives: receives.render(inputs)?,
+                })
+            })
+            .collect::<Result<_, EvalError>>()
+            .map_err(|error| ("client", error))?;
         Ok(Case {
             inputs: Env::new(),
             args,
@@ -309,6 +394,9 @@ impl Generated {
             exit_code,
             random,
             clock,
+            server,
+            client,
+            serves: self.serves,
         })
     }
 
@@ -563,10 +651,50 @@ struct ExampleTable {
     stderr: Text,
     #[serde(default)]
     files_after: BTreeMap<String, Text>,
-    exit_code: i64,
+    exit_code: Option<i64>,
     random: Option<String>,
     #[serde(default)]
     clock: Vec<String>,
+    server: Option<ServerField>,
+    #[serde(default)]
+    client: Vec<ClientTable>,
+    #[serde(default)]
+    serves: bool,
+}
+
+/// The test's own server: one connection's script, or a list of them.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ServerField {
+    One(ServerTable),
+    Many(Vec<ServerTable>),
+}
+
+impl ServerField {
+    fn into_vec(self) -> Vec<ServerTable> {
+        match self {
+            Self::One(table) => vec![table],
+            Self::Many(tables) => tables,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ServerTable {
+    #[serde(default)]
+    receives: String,
+    #[serde(default)]
+    replies: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClientTable {
+    #[serde(default)]
+    sends: String,
+    #[serde(default)]
+    receives: String,
 }
 
 /// An example's literal text: a string, or a list of strings and repeated runs, so a long input
@@ -675,10 +803,15 @@ struct GeneratedTable {
     stderr: String,
     #[serde(default)]
     files_after: BTreeMap<String, String>,
-    exit_code: ExitCodeField,
+    exit_code: Option<ExitCodeField>,
     random: Option<String>,
     #[serde(default)]
     clock: Vec<String>,
+    server: Option<ServerField>,
+    #[serde(default)]
+    client: Vec<ClientTable>,
+    #[serde(default)]
+    serves: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -874,7 +1007,18 @@ impl<'a> Checker<'a> {
                     (name, contents)
                 })
                 .collect();
-            let exit_code = match u8::try_from(table.exit_code) {
+            let name = format!("example {id}");
+            let Some(written_exit) = self.check_ending(
+                line,
+                &name,
+                behavior,
+                table.exit_code.is_some(),
+                table.serves,
+            ) else {
+                continue;
+            };
+            let written_exit = table.exit_code.unwrap_or(written_exit);
+            let exit_code = match u8::try_from(written_exit) {
                 Ok(ASSERTION_EXIT_CODE) => {
                     self.problem(
                         Some(line),
@@ -889,10 +1033,7 @@ impl<'a> Checker<'a> {
                 Err(_) => {
                     self.problem(
                         Some(line),
-                        format!(
-                            "example {id}: exit codes go from 0 to 255, not {}",
-                            table.exit_code
-                        ),
+                        format!("example {id}: exit codes go from 0 to 255, not {written_exit}"),
                     );
                     continue;
                 }
@@ -909,10 +1050,47 @@ impl<'a> Checker<'a> {
             for problem in file_set_problems(files.keys().chain(files_after.keys())) {
                 self.problem(Some(line), format!("example {id}: {problem}"));
             }
-            let name = format!("example {id}");
             self.check_supply(line, &name, table.random.is_some(), !table.clock.is_empty());
             if let Err(problem) = Supply::parse(table.random.as_deref(), &table.clock) {
                 self.problem(Some(line), format!("{name}: {problem}"));
+            }
+            let server: Vec<Reply> = table
+                .server
+                .map(ServerField::into_vec)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|table| Reply {
+                    receives: table.receives,
+                    replies: table.replies,
+                })
+                .collect();
+            let client: Vec<Exchange> = table
+                .client
+                .into_iter()
+                .map(|table| Exchange {
+                    sends: table.sends,
+                    receives: table.receives,
+                })
+                .collect();
+            self.check_peers(
+                line,
+                &name,
+                !server.is_empty(),
+                !client.is_empty() || table.serves,
+            );
+            let uses_port = args
+                .iter()
+                .chain([&stdin])
+                .chain(files.values())
+                .any(|text| text.contains(PORT_TEXT));
+            if uses_port && server.is_empty() {
+                self.problem(
+                    Some(line),
+                    format!(
+                        "{name} names {PORT_TEXT}, the port of the test's own server, but has no \
+                         server; add server = {{ receives = \"…\", replies = \"…\" }}"
+                    ),
+                );
             }
             let example = Example {
                 id,
@@ -926,7 +1104,20 @@ impl<'a> Checker<'a> {
                 exit_code,
                 random: table.random,
                 clock: table.clock,
+                server,
+                client,
+                serves: table.serves,
             };
+            let network_test =
+                !example.server.is_empty() || !example.client.is_empty() || example.serves;
+            let network_ports: Vec<String> = self
+                .spec
+                .network
+                .connects
+                .iter()
+                .chain(&self.spec.network.listens)
+                .map(u16::to_string)
+                .collect();
             for value in values {
                 let in_files = |files: &BTreeMap<String, String>| {
                     files
@@ -944,7 +1135,15 @@ impl<'a> Checker<'a> {
                         .random
                         .as_deref()
                         .is_some_and(|random| random.contains(&value))
-                    || example.clock.iter().any(|reading| reading.contains(&value));
+                    || example.clock.iter().any(|reading| reading.contains(&value))
+                    || example.server.iter().any(|reply| {
+                        reply.receives.contains(&value) || reply.replies.contains(&value)
+                    })
+                    || example.client.iter().any(|exchange| {
+                        exchange.sends.contains(&value) || exchange.receives.contains(&value)
+                    })
+                    // The spec's own ports: a test talks over a free port of its own instead.
+                    || (network_test && network_ports.contains(&value));
                 if !present {
                     self.problem(
                         Some(line),
@@ -1064,11 +1263,49 @@ impl<'a> Checker<'a> {
             .iter()
             .map(|source| template("clock", source))
             .collect();
+        let server: Option<Vec<(Template, Template)>> = table
+            .server
+            .map(ServerField::into_vec)
+            .unwrap_or_default()
+            .iter()
+            .map(|reply| {
+                Some((
+                    template("server.receives", &reply.receives)?,
+                    template("server.replies", &reply.replies)?,
+                ))
+            })
+            .collect();
+        let client: Option<Vec<(Template, Template)>> = table
+            .client
+            .iter()
+            .map(|exchange| {
+                Some((
+                    template("client.sends", &exchange.sends)?,
+                    template("client.receives", &exchange.receives)?,
+                ))
+            })
+            .collect();
         for problem in file_set_problems(table.files.keys().chain(table.files_after.keys())) {
             self.problem(Some(line), format!("{name}: {problem}"));
         }
         self.check_supply(line, &name, table.random.is_some(), !table.clock.is_empty());
-        let exit_code = match &table.exit_code {
+        self.check_peers(
+            line,
+            &name,
+            server.as_ref().is_some_and(|server| !server.is_empty()),
+            client.as_ref().is_some_and(|client| !client.is_empty()) || table.serves,
+        );
+        self.check_ending(
+            line,
+            &name,
+            behavior,
+            table.exit_code.is_some(),
+            table.serves,
+        )?;
+        let exit_field = table
+            .exit_code
+            .unwrap_or(ExitCodeField::Number(i64::from(behavior_exit)));
+        let exit_code = match &exit_field {
             ExitCodeField::Number(code) => match u8::try_from(*code) {
                 Ok(code) if code == behavior_exit => Some(ExitCode::Fixed(code)),
                 Ok(code) => {
@@ -1107,6 +1344,8 @@ impl<'a> Checker<'a> {
             Some(exit_code),
             Some(random),
             Some(clock),
+            Some(server),
+            Some(client),
         ) = (
             args.into_iter().collect::<Option<Vec<_>>>(),
             stdin,
@@ -1117,6 +1356,8 @@ impl<'a> Checker<'a> {
             exit_code,
             random,
             clock,
+            server,
+            client,
         )
         else {
             return None;
@@ -1136,10 +1377,68 @@ impl<'a> Checker<'a> {
             every_value: false,
             random,
             clock,
+            server,
+            client,
+            serves: table.serves,
         };
         self.check_variables(&block, &name);
         self.check_ranges(&block, &name);
         (self.problems.len() + self.hidden == before).then_some(block)
+    }
+
+    /// A test has its own server only for a program that connects, and its own client, or
+    /// expects the program to keep serving, only for one that serves.
+    fn check_peers(&mut self, line: usize, name: &str, server: bool, client: bool) {
+        if server && self.spec.network.connects.is_empty() {
+            self.problem(
+                Some(line),
+                format!(
+                    "{name} has a server for the program to connect to, but spec.md doesn't say \
+                     `- Network: connects to TCP port N`"
+                ),
+            );
+        }
+        if client && self.spec.network.listens.is_none() {
+            self.problem(
+                Some(line),
+                format!(
+                    "{name} has a client or serves = true, but spec.md doesn't say `- Network: \
+                     listens on TCP port N`"
+                ),
+            );
+        }
+    }
+
+    /// A test ends as its behavior does: with the exit code the spec states, or, for a behavior
+    /// that keeps serving, with `serves = true` and no exit code. Returns the exit code the test
+    /// needs when it gives none, or `None` after a problem.
+    fn check_ending(
+        &mut self,
+        line: usize,
+        name: &str,
+        behavior: &Behavior,
+        has_exit_code: bool,
+        serves: bool,
+    ) -> Option<i64> {
+        let id = behavior.id;
+        let problem = match (behavior.serves, serves, has_exit_code) {
+            (true, true, false) => return Some(0),
+            (false, false, true) => return Some(i64::from(behavior.exit_code)),
+            (true, false, _) => format!(
+                "{name}: the spec says {id} keeps serving, so write serves = true and no \
+                 exit_code"
+            ),
+            (false, true, _) => format!(
+                "{name} has serves = true, but the spec says {id} exits with code {}",
+                behavior.exit_code
+            ),
+            (true, true, true) => {
+                format!("{name} keeps serving, so it has no exit_code; remove it")
+            }
+            (false, false, false) => format!("{name} needs exit_code, the code the spec states"),
+        };
+        self.problem(Some(line), problem);
+        None
     }
 
     /// A test may supply random bytes only when the spec allows `getrandom`, and clock readings
@@ -1308,19 +1607,49 @@ impl<'a> Checker<'a> {
             .chain([("stdin", &block.stdin)])
             .chain(block.files.values().map(|file| ("files", file)))
             .chain(block.clock.iter().map(|reading| ("clock", reading)))
+            .chain(
+                block
+                    .server
+                    .iter()
+                    .map(|(_, replies)| ("server.replies", replies)),
+            )
+            .chain(
+                block
+                    .client
+                    .iter()
+                    .map(|(sends, _)| ("client.sends", sends)),
+            )
         {
             if template.pattern().is_none() {
                 self.problem(
                     Some(block.line),
                     format!(
-                        "{name}: {field} {:?} computes a value; args, stdin, files and clock may \
-                         only hold bare variables like {{a}}, so move the computation to \
-                         stdout, stderr, files_after or exit_code",
+                        "{name}: {field} {:?} computes a value; what a test gives the program \
+                         (args, stdin, files, clock, server.replies, client.sends) may only hold \
+                         bare variables like {{a}}, so move the computation to what it expects",
                         template.source()
                     ),
                 );
             }
             inputs.extend(template.variables());
+        }
+        // `port` is the test server's, filled in when the test runs.
+        let port_built_in = !declared.contains(PORT);
+        let uses_port = block
+            .given()
+            .chain(block.outputs())
+            .any(|template| template.variables().contains(PORT));
+        if port_built_in && uses_port && block.server.is_empty() {
+            self.problem(
+                Some(block.line),
+                format!(
+                    "{name} uses port, the port of the test's own server, but has no server; \
+                     add server = {{ receives = \"…\", replies = \"…\" }}"
+                ),
+            );
+        }
+        if port_built_in {
+            inputs.remove(PORT);
         }
         if let Some(random) = &block.random {
             if random.hex_parts().is_none() {
@@ -1393,7 +1722,7 @@ impl<'a> Checker<'a> {
             );
         }
         for var in used.difference(&declared) {
-            if now_built_in && var == NOW {
+            if (now_built_in && var == NOW) || (port_built_in && var == PORT) {
                 continue;
             }
             self.problem(
@@ -1418,9 +1747,17 @@ impl<'a> Checker<'a> {
         let name = format!("generated {}", block.id);
         let varies = block.stdout.has_placeholders()
             || block.stderr.has_placeholders()
-            || block.files_after.values().any(Template::has_placeholders);
+            || block.files_after.values().any(Template::has_placeholders)
+            || block
+                .server
+                .iter()
+                .any(|(receives, _)| receives.has_placeholders())
+            || block
+                .client
+                .iter()
+                .any(|(_, receives)| receives.has_placeholders());
         // Two different outputs are enough to know they vary; keep no more, since text is large.
-        let mut outputs: Vec<(String, String, BTreeMap<String, String>)> = Vec::new();
+        let mut outputs: Vec<Vec<String>> = Vec::new();
         let mut runs = 0;
         for result in block.cases(seed) {
             let case = match result {
@@ -1465,23 +1802,38 @@ impl<'a> Checker<'a> {
                 );
                 return;
             }
-            runs += 1;
-            if outputs.len() < 2
-                && !outputs.iter().any(|(stdout, stderr, files)| {
-                    *stdout == case.stdout && *stderr == case.stderr && *files == case.files_after
-                })
+            // The test's server reads exactly what it expects, so that can't be a rule.
+            if case
+                .server
+                .iter()
+                .any(|reply| crate::expect::has_holes(&reply.receives))
             {
-                outputs.push((case.stdout, case.stderr, case.files_after));
+                self.problem(
+                    Some(block.line),
+                    format!(
+                        "{name}: server.receives must be exact, since the test's server reads \
+                         exactly those bytes; a rule such as any(…) goes in what the program \
+                         prints or answers"
+                    ),
+                );
+                return;
+            }
+            runs += 1;
+            let expected: Vec<String> = [case.stdout, case.stderr]
+                .into_iter()
+                .chain(case.files_after.into_values())
+                .chain(case.server.into_iter().map(|reply| reply.receives))
+                .chain(case.client.into_iter().map(|exchange| exchange.receives))
+                .collect();
+            if outputs.len() < 2 && !outputs.contains(&expected) {
+                outputs.push(expected);
             }
         }
         // A rule such as {any(1, 6)} stands for what the program chooses, not for the inputs.
-        let rule = outputs.iter().any(|(stdout, stderr, files)| {
-            crate::expect::has_holes(stdout)
-                || crate::expect::has_holes(stderr)
-                || files
-                    .values()
-                    .any(|contents| crate::expect::has_holes(contents))
-        });
+        let rule = outputs
+            .iter()
+            .flatten()
+            .any(|text| crate::expect::has_holes(text));
         if varies && outputs.len() < 2 && !rule {
             self.problem(
                 Some(block.line),
@@ -1506,8 +1858,25 @@ impl<'a> Checker<'a> {
                 || !example.stdin.is_empty()
                 || !example.files.is_empty()
                 || example.random.is_some()
-                || !example.clock.is_empty();
+                || !example.clock.is_empty()
+                || !example.server.is_empty()
+                || !example.client.is_empty();
             for block in &blocks {
+                if block.server.len() != example.server.len()
+                    || block.client.len() != example.client.len()
+                {
+                    self.problem(
+                        Some(block.line),
+                        format!(
+                            "generated {} and its example must talk over the same number of \
+                             connections: {} with the test's server and {} with its client in \
+                             the example",
+                            block.id,
+                            example.server.len(),
+                            example.client.len()
+                        ),
+                    );
+                }
                 if block.random.is_some() != example.random.is_some()
                     || block.clock.is_empty() != example.clock.is_empty()
                 {
@@ -1644,6 +2013,28 @@ impl<'a> Checker<'a> {
                     shown(&case.files_after),
                     shown(&example.files_after),
                 ))
+            } else if let Some((computed, written)) = case
+                .server
+                .iter()
+                .zip(&example.server)
+                .find(|(computed, written)| computed.receives != written.receives)
+            {
+                Some((
+                    "server.receives",
+                    format!("{:?}", computed.receives),
+                    format!("{:?}", written.receives),
+                ))
+            } else if let Some((computed, written)) = case
+                .client
+                .iter()
+                .zip(&example.client)
+                .find(|(computed, written)| !agree(&computed.receives, &written.receives))
+            {
+                Some((
+                    "client.receives",
+                    format!("{:?}", crate::expect::show(&computed.receives)),
+                    format!("{:?}", crate::expect::show(&written.receives)),
+                ))
             } else if case.exit_code != example.exit_code {
                 Some((
                     "exit code",
@@ -1681,6 +2072,9 @@ struct TemplateSources<'a> {
     fixed: Option<u8>,
     random: Option<&'a str>,
     clock: Vec<&'a str>,
+    server: Vec<(&'a str, &'a str)>,
+    client: Vec<(&'a str, &'a str)>,
+    serves: bool,
 }
 
 fn templates(block: &Generated) -> TemplateSources<'_> {
@@ -1705,6 +2099,17 @@ fn templates(block: &Generated) -> TemplateSources<'_> {
         fixed,
         random: block.random.as_ref().map(Template::source),
         clock: block.clock.iter().map(Template::source).collect(),
+        server: block
+            .server
+            .iter()
+            .map(|(receives, replies)| (receives.source(), replies.source()))
+            .collect(),
+        client: block
+            .client
+            .iter()
+            .map(|(sends, receives)| (sends.source(), receives.source()))
+            .collect(),
+        serves: block.serves,
     }
 }
 
@@ -1749,11 +2154,33 @@ fn bind(block: &Generated, example: &Example) -> Result<Env, String> {
         .chain([(&block.stdin, &example.stdin)])
         .chain(block.files.values().zip(example.files.values()))
         .chain(block.clock.iter().zip(&example.clock))
+        .chain(
+            block
+                .server
+                .iter()
+                .map(|(_, replies)| replies)
+                .zip(example.server.iter().map(|reply| &reply.replies)),
+        )
+        .chain(
+            block
+                .client
+                .iter()
+                .map(|(sends, _)| sends)
+                .zip(example.client.iter().map(|exchange| &exchange.sends)),
+        )
     {
-        let pattern = template
-            .pattern()
-            .ok_or_else(|| "its args, stdin, files and clock must be bare variables".to_owned())?;
+        let pattern = template.pattern().ok_or_else(|| {
+            "what it gives the program must be bare variables, as in args".to_owned()
+        })?;
         pairs.push((pattern, text.as_str()));
+    }
+    // The test server's port reads as its stand-in, just as the example writes it.
+    let uses_port = block
+        .given()
+        .chain(block.outputs())
+        .any(|template| template.variables().contains(PORT));
+    if uses_port && !generators.contains_key(PORT) {
+        env.insert(PORT.to_owned(), Value::Str(PORT_TEXT.to_owned()));
     }
     let mut solutions = Vec::new();
     solve(&pairs, 0, &generators, &mut env, &mut solutions);
@@ -2350,7 +2777,7 @@ exit_code = 0
         );
         assert_problem(
             &valid().replace("exit_code = 1\n", ""),
-            "missing field `exit_code`",
+            "needs exit_code, the code the spec states",
         );
     }
 
@@ -2840,7 +3267,7 @@ exit_code = 0
             (
                 r#"files = { "notes.txt" = "{s}" }"#,
                 r#"files = { "notes.txt" = "{upper(s)}" }"#,
-                "args, stdin, files and clock may only hold bare variables",
+                "may only hold bare variables",
             ),
             (
                 "{upper(s)}",

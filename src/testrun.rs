@@ -8,12 +8,16 @@ use std::io;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use tokio::io::AsyncWriteExt as _;
+
 use serde::Serialize;
 
 use crate::checker::source::{Item, Operand, Source};
 use crate::platform::Allowed;
-use crate::runner::{self, End, Job, Limits, Run};
+use crate::runner::{self, End, Job, Limits, Net, Run};
 use crate::spec::ASSERTION_EXIT_CODE;
+use crate::spec::Network;
+use crate::testfile::{Exchange, PORT_TEXT, Reply};
 use crate::testfile::{TestSuite, describe_inputs};
 
 /// The longest a program's tests may take together.
@@ -178,6 +182,7 @@ pub fn explain_end(run: &Run, assertions: &BTreeMap<i64, usize>, limits: Limits)
                 files_after: &none,
                 now: 0,
                 random_supplied: None,
+                serves: false,
             };
             compare(run, &expected, assertions).unwrap_or_else(|| run.end.describe(limits))
         }
@@ -198,6 +203,8 @@ struct Expected<'a> {
     now: i128,
     /// How many random bytes the test supplies, when it supplies them.
     random_supplied: Option<usize>,
+    /// Whether the program must still be serving at the end, instead of exiting.
+    serves: bool,
 }
 
 /// Why a run's files don't match, if they don't.
@@ -264,6 +271,7 @@ fn compare(
         stderr,
         exit_code,
         now,
+        serves,
         ..
     } = *expected;
     // Running out of supplied random bytes stops the program; that's the failure to report.
@@ -271,6 +279,14 @@ fn compare(
         return Some(problem.clone());
     }
     let code = match run.end {
+        // A server still serving at the end of its test: nothing to exit with.
+        End::Stopped if serves => i32::from(exit_code),
+        ending if serves => {
+            return Some(format!(
+                "the program was {} while the test expects it to keep serving",
+                ending.describe(Limits::default())
+            ));
+        }
         End::Exited(code) => code,
         other => {
             return Some(format!(
@@ -341,25 +357,336 @@ pub async fn check_case(
     source: &Source,
     case: &crate::testfile::Case,
     syscalls: &[Allowed],
+    network: &Network,
 ) -> io::Result<Option<String>> {
-    let supply = case.supply();
+    let (_, problem) = check_one(
+        launcher,
+        program,
+        &Test::of_case(case),
+        syscalls,
+        network,
+        false,
+        &assertion_lines(source),
+    )
+    .await?;
+    Ok(problem)
+}
+
+/// A test's inputs and what it expects, from an example or a generated run.
+struct Test<'a> {
+    args: &'a [String],
+    stdin: &'a str,
+    files: &'a BTreeMap<String, String>,
+    stdout: &'a str,
+    stderr: &'a str,
+    files_after: &'a BTreeMap<String, String>,
+    exit_code: u8,
+    random: Option<&'a str>,
+    clock: &'a [String],
+    server: &'a [Reply],
+    client: &'a [Exchange],
+    serves: bool,
+}
+
+impl<'a> Test<'a> {
+    fn of_example(example: &'a crate::testfile::Example) -> Self {
+        Self {
+            args: &example.args,
+            stdin: &example.stdin,
+            files: &example.files,
+            stdout: &example.stdout,
+            stderr: &example.stderr,
+            files_after: &example.files_after,
+            exit_code: example.exit_code,
+            random: example.random.as_deref(),
+            clock: &example.clock,
+            server: &example.server,
+            client: &example.client,
+            serves: example.serves,
+        }
+    }
+
+    fn of_case(case: &'a crate::testfile::Case) -> Self {
+        Self {
+            args: &case.args,
+            stdin: &case.stdin,
+            files: &case.files,
+            stdout: &case.stdout,
+            stderr: &case.stderr,
+            files_after: &case.files_after,
+            exit_code: case.exit_code,
+            random: case.random.as_deref(),
+            clock: &case.clock,
+            server: &case.server,
+            client: &case.client,
+            serves: case.serves,
+        }
+    }
+}
+
+/// How long the test's own server or client waits on the program at each step.
+const PEER_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// The most the test's own server or client reads back on one connection.
+const MAX_ANSWER: u64 = 8 * 1024 * 1024;
+
+/// Runs one test, with the test's own server or client when it has one, and says what went
+/// wrong, if anything. `pieces` makes the test's server and client send in small pieces, as a
+/// network may deliver them.
+async fn check_one(
+    launcher: &Path,
+    program: &Path,
+    test: &Test<'_>,
+    syscalls: &[Allowed],
+    network: &Network,
+    pieces: bool,
+    assertions: &BTreeMap<i64, usize>,
+) -> io::Result<(Run, Option<String>)> {
+    let supply = crate::supply::Supply::parse(test.random, test.clock).unwrap_or_default();
+    // The test's own server listens before the program starts, on a free port of its own.
+    let server = if test.server.is_empty() {
+        None
+    } else {
+        Some(tokio::net::TcpListener::bind("127.0.0.1:0").await?)
+    };
+    let port = server
+        .as_ref()
+        .map(tokio::net::TcpListener::local_addr)
+        .transpose()?
+        .map(|address| address.port());
+    let fill = |text: &str| match port {
+        Some(port) => text.replace(PORT_TEXT, &port.to_string()),
+        None => text.to_owned(),
+    };
+    let args: Vec<String> = test.args.iter().map(|arg| fill(arg)).collect();
+    let stdin = fill(test.stdin);
+    let fill_files = |files: &BTreeMap<String, String>| -> BTreeMap<String, String> {
+        files
+            .iter()
+            .map(|(name, contents)| (name.clone(), fill(contents)))
+            .collect()
+    };
+    let (files, files_after) = (fill_files(test.files), fill_files(test.files_after));
+    let net = Net {
+        connect: port.into_iter().collect(),
+        listen: network.listens.map(|_| 0),
+    };
     let job = Job {
-        files: &case.files,
+        files: &files,
         supply: Some(&supply),
-        ..Job::new(program, &case.args, case.stdin.as_bytes(), syscalls)
+        net: Some(&net),
+        ..Job::new(program, &args, stdin.as_bytes(), syscalls)
     };
     let now = crate::expect::now();
-    let run = runner::run(launcher, job, Limits::default()).await?;
+    let started = runner::start(launcher, job, Limits::default()).await?;
+    let mut problem = None;
+    let run = if let Some(listener) = server {
+        let replies: Vec<Reply> = test
+            .server
+            .iter()
+            .map(|reply| Reply {
+                receives: fill(&reply.receives),
+                replies: fill(&reply.replies),
+            })
+            .collect();
+        let peer = tokio::spawn(serve(listener, replies, pieces));
+        let run = started.wait().await?;
+        problem = match tokio::time::timeout(PEER_TIMEOUT, peer).await {
+            Ok(Ok(result)) => result.err(),
+            Ok(Err(error)) => Some(format!("the test's server failed: {error}")),
+            Err(_) => Some("the program ended before it finished with the test's server".into()),
+        };
+        run
+    } else if let Some(port) = started
+        .port()
+        .filter(|_| !test.client.is_empty() || test.serves)
+    {
+        problem = talk(port, test.client, pieces, now).await.err();
+        if test.serves {
+            if problem.is_none() && !waiting_for_connections(started.pid()).await {
+                problem = Some(
+                    "after its connections the program wasn't waiting for the next one, as a \
+                     server that keeps serving does"
+                        .into(),
+                );
+            }
+            started.stop().await?
+        } else {
+            started.wait().await?
+        }
+    } else {
+        started.wait().await?
+    };
+    let (stdout, stderr) = (fill(test.stdout), fill(test.stderr));
     let expected = Expected {
-        stdout: &case.stdout,
-        stderr: &case.stderr,
-        exit_code: case.exit_code,
-        files: &case.files,
-        files_after: &case.files_after,
+        stdout: &stdout,
+        stderr: &stderr,
+        exit_code: test.exit_code,
+        files: &files,
+        files_after: &files_after,
         now,
         random_supplied: supply.random.as_ref().map(Vec::len),
+        serves: test.serves,
     };
-    Ok(compare(&run, &expected, &assertion_lines(source)))
+    let problem = match (problem, compare(&run, &expected, assertions)) {
+        (Some(network), Some(rest)) => Some(format!("{network}; {rest}")),
+        (network, rest) => network.or(rest),
+    };
+    Ok((run, problem))
+}
+
+/// Sends `bytes`, in three pieces with short pauses when `pieces`, as a network may deliver
+/// them: a program that expects one `read` to get everything fails.
+async fn send(
+    writer: &mut (impl tokio::io::AsyncWrite + Unpin),
+    bytes: &[u8],
+    pieces: bool,
+) -> io::Result<()> {
+    if !pieces || bytes.len() < 3 {
+        return writer.write_all(bytes).await;
+    }
+    let middle = bytes.len() / 2;
+    for piece in [&bytes[..1], &bytes[1..middle], &bytes[middle..]] {
+        writer.write_all(piece).await?;
+        writer.flush().await?;
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    Ok(())
+}
+
+/// The test's own server: for each connection, reads exactly what the program must send,
+/// replies, closes its side, and expects nothing more.
+async fn serve(
+    listener: tokio::net::TcpListener,
+    replies: Vec<Reply>,
+    pieces: bool,
+) -> Result<(), String> {
+    use tokio::io::AsyncReadExt as _;
+    let many = replies.len() > 1;
+    for (index, reply) in replies.iter().enumerate() {
+        let on = if many {
+            format!(" on connection {}", index + 1)
+        } else {
+            String::new()
+        };
+        let (mut stream, _) = tokio::time::timeout(PEER_TIMEOUT, listener.accept())
+            .await
+            .map_err(|_| format!("the program didn't connect to the test's server{on}"))?
+            .map_err(|error| format!("the test's server couldn't take a connection: {error}"))?;
+        let expected = reply.receives.as_bytes();
+        let mut got = Vec::new();
+        let mut chunk = vec![0_u8; 64 * 1024];
+        while got.len() < expected.len() {
+            let want = (expected.len() - got.len()).min(chunk.len());
+            let read = tokio::time::timeout(PEER_TIMEOUT, stream.read(&mut chunk[..want]))
+                .await
+                .map_err(|_| {
+                    format!(
+                        "the program sent {} and then waited{on}, but the test's server expects \
+                         {}",
+                        show(&got),
+                        show(expected)
+                    )
+                })?
+                .map_err(|error| format!("reading from the program{on} failed: {error}"))?;
+            if read == 0 {
+                return Err(format!(
+                    "the program sent {} and closed the connection{on}, but the test's server \
+                     expects {}",
+                    show(&got),
+                    show(expected)
+                ));
+            }
+            got.extend_from_slice(&chunk[..read]);
+            if !expected.starts_with(&got) {
+                return Err(format!(
+                    "the program sent {}{on}, but the test's server expects {}",
+                    show(&got),
+                    show(expected)
+                ));
+            }
+        }
+        let (mut reader, mut writer) = stream.into_split();
+        // The program may close as soon as it has its answer, so a failed send is its doing.
+        let _ = send(&mut writer, reply.replies.as_bytes(), pieces).await;
+        let _ = writer.shutdown().await;
+        let mut extra = Vec::new();
+        let _ = tokio::time::timeout(
+            PEER_TIMEOUT,
+            (&mut reader).take(MAX_ANSWER).read_to_end(&mut extra),
+        )
+        .await;
+        if !extra.is_empty() {
+            return Err(format!(
+                "after the test's server replied{on}, the program sent {} more",
+                show(&extra)
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The test's own client: for each connection, sends, closes its side, and reads everything
+/// the program answers until it closes the connection.
+async fn talk(port: u16, exchanges: &[Exchange], pieces: bool, now: i128) -> Result<(), String> {
+    use tokio::io::AsyncReadExt as _;
+    let many = exchanges.len() > 1;
+    for (index, exchange) in exchanges.iter().enumerate() {
+        let on = if many {
+            format!(" on connection {}", index + 1)
+        } else {
+            String::new()
+        };
+        let stream = tokio::time::timeout(
+            PEER_TIMEOUT,
+            tokio::net::TcpStream::connect(("127.0.0.1", port)),
+        )
+        .await
+        .map_err(|_| format!("the test's client couldn't connect{on}"))?
+        .map_err(|error| format!("the test's client couldn't connect{on}: {error}"))?;
+        let (mut reader, mut writer) = stream.into_split();
+        let sends = exchange.sends.clone().into_bytes();
+        let sending = tokio::spawn(async move {
+            let _ = send(&mut writer, &sends, pieces).await;
+            let _ = writer.shutdown().await;
+        });
+        let mut answer = Vec::new();
+        let read = tokio::time::timeout(
+            PEER_TIMEOUT,
+            (&mut reader).take(MAX_ANSWER).read_to_end(&mut answer),
+        )
+        .await;
+        sending.abort();
+        if read.is_err() {
+            return Err(format!(
+                "the program answered {}{on} and then kept the connection open; close it after \
+                 answering",
+                show(&answer)
+            ));
+        }
+        if !crate::expect::matches(&exchange.receives, &answer, now) {
+            return Err(format!(
+                "the program answered {}{on}, but the test expects {}",
+                show(&answer),
+                show_expected(&exchange.receives)
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Whether the program is waiting in `accept4` on file descriptor 3 for the next connection,
+/// checked for up to half a second.
+async fn waiting_for_connections(pid: i32) -> bool {
+    let path = format!("/proc/{pid}/syscall");
+    for _ in 0..100 {
+        match tokio::fs::read_to_string(&path).await {
+            Ok(call) if call.starts_with("288 0x3 ") => return true,
+            Ok(_) => tokio::time::sleep(Duration::from_millis(5)).await,
+            Err(_) => return false,
+        }
+    }
+    false
 }
 
 fn record(outcome: &mut Outcome, message: String) {
@@ -381,10 +708,10 @@ pub async fn run_tests(
     source: &Source,
     seed: u64,
     syscalls: &[Allowed],
+    network: &Network,
 ) -> io::Result<Outcome> {
     let assertions = assertion_lines(source);
     let deadline = Instant::now() + TOTAL_TIMEOUT;
-    let limits = Limits::default();
     let mut outcome = Outcome::default();
     for example in &suite.examples {
         if Instant::now() > deadline {
@@ -394,26 +721,19 @@ pub async fn run_tests(
             );
             return Ok(outcome);
         }
-        let supply = example.supply();
-        let job = Job {
-            files: &example.files,
-            supply: Some(&supply),
-            ..Job::new(program, &example.args, example.stdin.as_bytes(), syscalls)
-        };
-        let now = crate::expect::now();
-        let run = runner::run(launcher, job, limits).await?;
+        let (run, problem) = check_one(
+            launcher,
+            program,
+            &Test::of_example(example),
+            syscalls,
+            network,
+            false,
+            &assertions,
+        )
+        .await?;
         outcome.runs += 1;
         let name = format!("example {}", example.id);
-        let expected = Expected {
-            stdout: &example.stdout,
-            stderr: &example.stderr,
-            exit_code: example.exit_code,
-            files: &example.files,
-            files_after: &example.files_after,
-            now,
-            random_supplied: supply.random.as_ref().map(Vec::len),
-        };
-        match compare(&run, &expected, &assertions) {
+        match problem {
             Some(problem) => {
                 let mut message = format!("{name} (tests.toml line {}): {problem}", example.line);
                 if !example.args.is_empty() {
@@ -457,25 +777,19 @@ pub async fn run_tests(
                 );
                 return Ok(outcome);
             }
-            let supply = case.supply();
-            let job = Job {
-                files: &case.files,
-                supply: Some(&supply),
-                ..Job::new(program, &case.args, case.stdin.as_bytes(), syscalls)
-            };
-            let now = crate::expect::now();
-            let run = runner::run(launcher, job, limits).await?;
+            // Every other run, the test's server and client send in pieces.
+            let (run, problem) = check_one(
+                launcher,
+                program,
+                &Test::of_case(&case),
+                syscalls,
+                network,
+                number % 2 == 1,
+                &assertions,
+            )
+            .await?;
             outcome.runs += 1;
-            let expected = Expected {
-                stdout: &case.stdout,
-                stderr: &case.stderr,
-                exit_code: case.exit_code,
-                files: &case.files,
-                files_after: &case.files_after,
-                now,
-                random_supplied: supply.random.as_ref().map(Vec::len),
-            };
-            if let Some(problem) = compare(&run, &expected, &assertions) {
+            if let Some(problem) = problem {
                 record(
                     &mut outcome,
                     format!(
@@ -531,6 +845,7 @@ mod tests {
             files_after,
             now: 1_735_689_600,
             random_supplied: None,
+            serves: false,
         }
     }
 

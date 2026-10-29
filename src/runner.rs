@@ -15,15 +15,15 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
-use std::io::{self, Read as _};
+use std::io::{self, Read as _, Write as _};
 use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
 use std::path::Path;
 use std::process::{ExitCode, Stdio};
 use std::time::Duration;
 
 use landlock::{
-    ABI, Access as _, AccessFs, AccessNet, PathBeneath, PathFd, Ruleset, RulesetAttr as _,
-    RulesetCreatedAttr as _, Scope,
+    ABI, Access as _, AccessFs, AccessNet, NetPort, PathBeneath, PathFd, Ruleset, RulesetAttr as _,
+    RulesetCreatedAttr as _, RulesetStatus, Scope,
 };
 use seccompiler::{
     BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter,
@@ -37,7 +37,7 @@ use tokio::net::UnixListener;
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
-use crate::platform::Allowed;
+use crate::platform::{Allowed, Pin};
 use crate::supervise::{CLOCK_GETTIME, GETRANDOM, SUPERVISE_FLAG};
 use crate::supply::Supply;
 
@@ -88,6 +88,8 @@ pub struct Job<'a> {
     pub syscalls: &'a [Allowed],
     /// Random bytes and clock readings the test gives it in place of the kernel's.
     pub supply: Option<&'a Supply>,
+    /// The network it may use; none at all when `None`.
+    pub net: Option<&'a Net>,
 }
 
 impl<'a> Job<'a> {
@@ -108,6 +110,7 @@ impl<'a> Job<'a> {
             folder: None,
             syscalls,
             supply: None,
+            net: None,
         }
     }
 }
@@ -123,6 +126,8 @@ pub enum End {
     TimedOut,
     /// It printed past the output limit and was killed.
     OutputTooLarge,
+    /// lengua stopped it while it was still running, as a server is at the end of its test.
+    Stopped,
 }
 
 impl End {
@@ -137,6 +142,7 @@ impl End {
                 "printed more than {} bytes, so it was killed",
                 limits.max_output
             ),
+            Self::Stopped => "stopped by lengua while it was still running".into(),
         }
     }
 }
@@ -209,12 +215,193 @@ fn exact_count(counter: &mut Counter) -> Option<u64> {
     (data.time_running() == data.time_enabled()).then(|| data.count())
 }
 
-/// Runs `job` through `launcher` (this server's own binary).
+/// The network a run may use.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Net {
+    /// TCP ports the program may connect to.
+    pub connect: Vec<u16>,
+    /// The loopback port lengua listens on for the program and hands it as file descriptor 3,
+    /// or 0 for any free one; `None` for a program that doesn't serve.
+    pub listen: Option<u16>,
+}
+
+impl Net {
+    /// Whether the program uses the network at all.
+    #[must_use]
+    pub fn is_used(&self) -> bool {
+        !self.connect.is_empty() || self.listen.is_some()
+    }
+
+    /// The launcher's argument: `none`, or `connect=80,8080` and `listen=0`, joined by `;`.
+    fn encode(&self) -> String {
+        let mut parts = Vec::new();
+        if !self.connect.is_empty() {
+            let ports: Vec<String> = self.connect.iter().map(u16::to_string).collect();
+            parts.push(format!("connect={}", ports.join(",")));
+        }
+        if let Some(port) = self.listen {
+            parts.push(format!("listen={port}"));
+        }
+        if parts.is_empty() {
+            "none".into()
+        } else {
+            parts.join(";")
+        }
+    }
+
+    fn decode(text: &str) -> Result<Self, String> {
+        let mut net = Self::default();
+        let bad = || format!("{text:?} isn't a network setting");
+        for part in text.split(';').filter(|part| *part != "none") {
+            match part.split_once('=') {
+                Some(("connect", ports)) => {
+                    for port in ports.split(',') {
+                        net.connect.push(port.parse().map_err(|_| bad())?);
+                    }
+                }
+                Some(("listen", port)) => net.listen = Some(port.parse().map_err(|_| bad())?),
+                _ => return Err(bad()),
+            }
+        }
+        Ok(net)
+    }
+}
+
+/// Runs `job` through `launcher` (this server's own binary) until it ends.
 ///
 /// # Errors
 ///
 /// Fails when the program can't be started.
 pub async fn run(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<Run> {
+    start(launcher, job, limits).await?.wait().await
+}
+
+/// A program that's running.
+pub struct Started {
+    child: tokio::process::Child,
+    pid: i32,
+    port: Option<u16>,
+    began: std::time::Instant,
+    limits: Limits,
+    counters: [Option<Counter>; 3],
+    writer: tokio::task::JoinHandle<()>,
+    stdout: tokio::task::JoinHandle<io::Result<Vec<u8>>>,
+    stderr: tokio::task::JoinHandle<io::Result<Vec<u8>>>,
+    overflowed: mpsc::Receiver<()>,
+    supervisor: Option<(tokio::process::Child, SupervisorLines)>,
+    /// The fresh working folder to read back, when it isn't one of the user's.
+    work: Option<std::path::PathBuf>,
+    _scratch: tempfile::TempDir,
+}
+
+type SupervisorLines = tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>;
+
+impl Started {
+    /// The program's process id.
+    #[must_use]
+    pub const fn pid(&self) -> i32 {
+        self.pid
+    }
+
+    /// The loopback port it serves on, when it serves.
+    #[must_use]
+    pub const fn port(&self) -> Option<u16> {
+        self.port
+    }
+
+    /// Waits for the program to end, stopping it at the time or output limit.
+    ///
+    /// # Errors
+    ///
+    /// Fails when its outcome can't be read.
+    pub async fn wait(self) -> io::Result<Run> {
+        self.finish(false).await
+    }
+
+    /// Stops the program now, as lengua does a server that's still serving.
+    ///
+    /// # Errors
+    ///
+    /// Fails when its outcome can't be read.
+    pub async fn stop(self) -> io::Result<Run> {
+        self.finish(true).await
+    }
+
+    async fn finish(mut self, stop: bool) -> io::Result<Run> {
+        let deadline = tokio::time::Instant::from_std(self.began + self.limits.timeout);
+        let mut wall_time = Duration::ZERO;
+        let exited = if stop { self.child.try_wait()? } else { None };
+        let end = if let Some(status) = exited {
+            wall_time = self.began.elapsed();
+            match status.code() {
+                Some(code) => End::Exited(code),
+                None => End::Signaled(status.signal().unwrap_or(0)),
+            }
+        } else if stop {
+            let _ = self.child.kill().await;
+            wall_time = self.began.elapsed();
+            End::Stopped
+        } else {
+            tokio::select! {
+                status = self.child.wait() => {
+                    wall_time = self.began.elapsed();
+                    let status = status?;
+                    match status.code() {
+                        Some(code) => End::Exited(code),
+                        None => End::Signaled(status.signal().unwrap_or(0)),
+                    }
+                }
+                Some(()) = self.overflowed.recv() => {
+                    let _ = self.child.kill().await;
+                    End::OutputTooLarge
+                }
+                () = tokio::time::sleep_until(deadline) => {
+                    let _ = self.child.kill().await;
+                    End::TimedOut
+                }
+            }
+        };
+        self.writer.abort();
+        let stdout = self.stdout.await.map_err(io::Error::other)??;
+        let stderr = self.stderr.await.map_err(io::Error::other)??;
+        let (supplied, random_asked) = match self.supervisor.as_mut() {
+            Some((supervisor, lines)) => match supervisor_verdict(supervisor, lines).await {
+                Ok(asked) => (None, Some(asked)),
+                Err(problem) => (Some(problem), None),
+            },
+            None => (None, None),
+        };
+        let [instructions, cycles, cpu_time_ns] =
+            self.counters.each_mut().map(|counter| match end {
+                End::Exited(_) | End::Signaled(_) => counter.as_mut().and_then(exact_count),
+                End::TimedOut | End::OutputTooLarge | End::Stopped => None,
+            });
+        let files = match &self.work {
+            Some(work) => read_files(work),
+            None => Ok(BTreeMap::new()),
+        };
+        Ok(Run {
+            stdout,
+            stderr,
+            end,
+            instructions,
+            cycles,
+            cpu_time_ns,
+            wall_time_ns: u64::try_from(wall_time.as_nanos()).unwrap_or(u64::MAX),
+            files,
+            supplied,
+            random_asked,
+        })
+    }
+}
+
+/// Starts `job` through `launcher` (this server's own binary) and returns once the program is
+/// running: confined, counted, and serving on its port if it serves.
+///
+/// # Errors
+///
+/// Fails when the program can't be started.
+pub async fn start(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<Started> {
     let scratch = tempfile::tempdir()?;
     let socket = scratch.path().join("go");
     let work = scratch.path().join("work");
@@ -228,6 +415,7 @@ pub async fn run(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<Ru
     };
     let listener = UnixListener::bind(&socket)?;
     let supply = job.supply.filter(|supply| !supply.is_empty());
+    let net = job.net.cloned().unwrap_or_default();
     // The calls the supply answers stop for the supervisor; the rest run as in any test.
     let traced = supply.map_or_else(Vec::new, |supply| {
         let mut traced = Vec::new();
@@ -242,10 +430,7 @@ pub async fn run(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<Ru
     let syscalls: Vec<String> = job
         .syscalls
         .iter()
-        .map(|allowed| match allowed.first_argument {
-            None => allowed.number.to_string(),
-            Some(argument) => format!("{}:{argument}", allowed.number),
-        })
+        .map(|allowed| format!("{}{}", allowed.number, allowed.pin.encode()))
         .chain(traced.iter().map(|number| format!("{number}:trace")))
         .collect();
     let file_limit = limits
@@ -274,6 +459,7 @@ pub async fn run(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<Ru
         .arg(syscalls.join(","))
         .arg(file_limit)
         .arg(tracer)
+        .arg(net.encode())
         .arg(job.program)
         .args(job.args)
         .current_dir(&folder)
@@ -287,17 +473,39 @@ pub async fn run(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<Ru
         .id()
         .and_then(|pid| i32::try_from(pid).ok())
         .ok_or_else(|| io::Error::other("the launcher has no process id"))?;
-    let (mut go, _) = tokio::time::timeout(LAUNCH_TIMEOUT, listener.accept())
-        .await
-        .map_err(|_| io::Error::other("the launcher didn't start"))??;
-    // The launcher has let the supervisor trace it; now it may, before the program starts.
-    let mut verdict = None;
-    if let (Some(supervisor), Some(supply)) = (supervisor.as_mut(), supply) {
-        verdict = Some(attach_supervisor(supervisor, pid, supply).await?);
+    let accepted = tokio::time::timeout(LAUNCH_TIMEOUT, listener.accept()).await;
+    let Ok(Ok((mut go, _))) = accepted else {
+        // The launcher says why on its standard error, such as a port that's taken.
+        let _ = child.kill().await;
+        let mut said = String::new();
+        if let Some(mut errors) = child.stderr.take() {
+            let _ = errors.read_to_string(&mut said).await;
+        }
+        let said = said.trim().trim_start_matches("lengua-mcp: ");
+        return Err(io::Error::other(if said.is_empty() {
+            "the launcher didn't start".to_owned()
+        } else {
+            said.to_owned()
+        }));
+    };
+    // A server's launcher has already bound its port, and says which.
+    let mut port = None;
+    if net.listen.is_some() {
+        let mut bytes = [0_u8; 2];
+        go.read_exact(&mut bytes).await?;
+        port = Some(u16::from_be_bytes(bytes));
     }
+    // The launcher has let the supervisor trace it; now it may, before the program starts.
+    let supervisor = match (supervisor.take(), supply) {
+        (Some(mut supervisor), Some(supply)) => {
+            let lines = attach_supervisor(&mut supervisor, pid, supply).await?;
+            Some((supervisor, lines))
+        }
+        _ => None,
+    };
     // Count from the program's exec to its exit; unavailable when the system doesn't allow
     // performance counters.
-    let mut counters = [
+    let counters = [
         attach(Hardware::INSTRUCTIONS, pid, false),
         attach(Hardware::CPU_CYCLES, pid, false),
         attach(Software::TASK_CLOCK, pid, true)
@@ -305,7 +513,7 @@ pub async fn run(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<Ru
     ];
     go.write_all(&[1]).await?;
     drop(go);
-    let started = std::time::Instant::now();
+    let began = std::time::Instant::now();
 
     let mut input = child
         .stdin
@@ -324,58 +532,23 @@ pub async fn run(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<Ru
         // A program may exit without reading its input; that's not an error.
         let _ = input.write_all(&bytes).await;
     });
-    let (overflow, mut overflowed) = mpsc::channel::<()>(2);
-    let stdout_reader = tokio::spawn(read_capped(output, limits.max_output, overflow.clone()));
-    let stderr_reader = tokio::spawn(read_capped(errors, limits.max_output, overflow));
-    let mut wall_time = Duration::ZERO;
-    let end = tokio::select! {
-        status = child.wait() => {
-            wall_time = started.elapsed();
-            let status = status?;
-            match status.code() {
-                Some(code) => End::Exited(code),
-                None => End::Signaled(status.signal().unwrap_or(0)),
-            }
-        }
-        Some(()) = overflowed.recv() => {
-            let _ = child.kill().await;
-            End::OutputTooLarge
-        }
-        () = tokio::time::sleep(limits.timeout) => {
-            let _ = child.kill().await;
-            End::TimedOut
-        }
-    };
-    writer.abort();
-    let stdout = stdout_reader.await.map_err(io::Error::other)??;
-    let stderr = stderr_reader.await.map_err(io::Error::other)??;
-    let (supplied, random_asked) = match (supervisor.as_mut(), verdict) {
-        (Some(supervisor), Some(verdict)) => match supervisor_verdict(supervisor, verdict).await {
-            Ok(asked) => (None, Some(asked)),
-            Err(problem) => (Some(problem), None),
-        },
-        _ => (None, None),
-    };
-    let [instructions, cycles, cpu_time_ns] = counters.each_mut().map(|counter| match end {
-        End::Exited(_) | End::Signaled(_) => counter.as_mut().and_then(exact_count),
-        End::TimedOut | End::OutputTooLarge => None,
-    });
-    let files = if job.folder.is_some() {
-        Ok(BTreeMap::new())
-    } else {
-        read_files(&work)
-    };
-    Ok(Run {
+    let (overflow, overflowed) = mpsc::channel::<()>(2);
+    let stdout = tokio::spawn(read_capped(output, limits.max_output, overflow.clone()));
+    let stderr = tokio::spawn(read_capped(errors, limits.max_output, overflow));
+    Ok(Started {
+        child,
+        pid,
+        port,
+        began,
+        limits,
+        counters,
+        writer,
         stdout,
         stderr,
-        end,
-        instructions,
-        cycles,
-        cpu_time_ns,
-        wall_time_ns: u64::try_from(wall_time.as_nanos()).unwrap_or(u64::MAX),
-        files,
-        supplied,
-        random_asked,
+        overflowed,
+        supervisor,
+        work: job.folder.is_none().then_some(work),
+        _scratch: scratch,
     })
 }
 
@@ -385,7 +558,7 @@ async fn attach_supervisor(
     supervisor: &mut tokio::process::Child,
     launcher: i32,
     supply: &Supply,
-) -> io::Result<tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>> {
+) -> io::Result<SupervisorLines> {
     use tokio::io::AsyncBufReadExt as _;
     let mut input = supervisor
         .stdin
@@ -418,7 +591,7 @@ async fn attach_supervisor(
 /// for, or what went wrong.
 async fn supervisor_verdict(
     supervisor: &mut tokio::process::Child,
-    mut lines: tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>,
+    lines: &mut SupervisorLines,
 ) -> Result<usize, String> {
     let last = tokio::time::timeout(LAUNCH_TIMEOUT, lines.next_line()).await;
     let _ = supervisor.kill().await;
@@ -510,20 +683,45 @@ async fn read_capped(
 /// (or `none`), the program, then the program's arguments.
 #[must_use]
 pub fn launch(mut args: impl Iterator<Item = OsString>) -> ExitCode {
-    let (Some(socket), Some(syscalls), Some(file_limit), Some(tracer), Some(program)) = (
+    let (
+        Some(socket),
+        Some(syscalls),
+        Some(file_limit),
+        Some(tracer),
+        Some(network),
+        Some(program),
+    ) = (
         args.next(),
         args.next(),
         args.next(),
         args.next(),
         args.next(),
-    ) else {
+        args.next(),
+    )
+    else {
         eprintln!(
-            "lengua-mcp: {LAUNCH_FLAG} needs a socket, system calls, a file limit, a supervisor \
-             and a program"
+            "lengua-mcp: {LAUNCH_FLAG} needs a socket, system calls, a file limit, a supervisor, \
+             a network setting and a program"
         );
         return ExitCode::from(127);
     };
     let rest: Vec<OsString> = args.collect();
+    let net = match Net::decode(&network.to_string_lossy()) {
+        Ok(net) => net,
+        Err(problem) => {
+            eprintln!("lengua-mcp: {problem}");
+            return ExitCode::from(127);
+        }
+    };
+    // A server's listening socket comes first, so it's file descriptor 3; it stays open into
+    // the program, which only takes connections on it.
+    let listener = match net.listen.map(listen_on_fd3).transpose() {
+        Ok(listener) => listener,
+        Err(problem) => {
+            eprintln!("lengua-mcp: {problem}");
+            return ExitCode::from(127);
+        }
+    };
     // Only the test's supervisor may trace the program, even where the system restricts tracing.
     let supervisor = tracer
         .to_str()
@@ -536,15 +734,19 @@ pub fn launch(mut args: impl Iterator<Item = OsString>) -> ExitCode {
         return ExitCode::from(127);
     }
     let mut go = [0_u8; 1];
-    let signalled = std::os::unix::net::UnixStream::connect(&socket)
-        .and_then(|mut stream| stream.read_exact(&mut go));
+    let signalled = std::os::unix::net::UnixStream::connect(&socket).and_then(|mut stream| {
+        if let Some(listener) = &listener {
+            stream.write_all(&listener.local_addr()?.port().to_be_bytes())?;
+        }
+        stream.read_exact(&mut go)
+    });
     if let Err(error) = signalled {
         eprintln!("lengua-mcp: no go signal from the server: {error}");
         return ExitCode::from(127);
     }
     let confined =
         parse_confinement(&syscalls, &file_limit).and_then(|(syscalls, traced, file_limit)| {
-            confine(Path::new(&program), &syscalls, &traced, file_limit)
+            confine(Path::new(&program), &syscalls, &traced, file_limit, &net)
         });
     if let Err(problem) = confined {
         eprintln!("lengua-mcp: couldn't confine the program: {problem}");
@@ -559,6 +761,20 @@ pub fn launch(mut args: impl Iterator<Item = OsString>) -> ExitCode {
         Path::new(&program).display()
     );
     ExitCode::from(127)
+}
+
+/// Listens on `port` of the loopback (any free port for 0) with file descriptor 3, kept open
+/// across `exec`.
+fn listen_on_fd3(port: u16) -> Result<std::net::TcpListener, String> {
+    use std::os::fd::AsRawFd as _;
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
+        .map_err(|error| format!("couldn't listen on 127.0.0.1:{port}: {error}"))?;
+    if listener.as_raw_fd() != 3 {
+        return Err("the listening socket isn't file descriptor 3".into());
+    }
+    rustix::io::fcntl_setfd(&listener, rustix::io::FdFlags::empty())
+        .map_err(|error| format!("couldn't keep the listening socket open: {error}"))?;
+    Ok(listener)
 }
 
 /// The launcher's confinement: the calls allowed, the calls the supervisor answers, and the
@@ -585,13 +801,13 @@ fn parse_confinement(syscalls: &OsString, file_limit: &OsString) -> Result<Confi
         .filter(|entry| !entry.is_empty() && !entry.ends_with(":trace"))
         .map(|entry| {
             let bad = || format!("{entry:?} isn't a system call");
-            let (number, argument) = match entry.split_once(':') {
-                Some((number, argument)) => (number, Some(argument.parse().map_err(|_| bad())?)),
-                None => (entry, None),
+            let (number, pin) = match entry.split_once(':') {
+                Some((number, pin)) => (number, Pin::decode(pin).ok_or_else(bad)?),
+                None => (entry, Pin::Any),
             };
             Ok(Allowed {
                 number: number.parse().map_err(|_| bad())?,
-                first_argument: argument,
+                pin,
             })
         })
         .collect::<Result<_, String>>()?;
@@ -606,6 +822,59 @@ fn parse_confinement(syscalls: &OsString, file_limit: &OsString) -> Result<Confi
     Ok((numbers, traced, file_limit))
 }
 
+/// The seccomp rules a pin stands for: any one of them allows the call.
+fn pin_rules(pin: Pin) -> Result<Vec<SeccompRule>, seccompiler::BackendError> {
+    use SeccompCmpArgLen::{Dword, Qword};
+    let condition = |argument, length, operator, value| {
+        SeccompCondition::new(argument, length, operator, value)
+    };
+    const SOCK_STREAM: u64 = 1;
+    // Everything but SOCK_NONBLOCK and SOCK_CLOEXEC, which only change how it waits and closes.
+    const SOCKET_TYPE: u64 = 0xFFF7_F7FF;
+    const MSG_NOSIGNAL: u64 = 0x4000;
+    match pin {
+        Pin::Any => Ok(Vec::new()),
+        Pin::First(value) => Ok(vec![SeccompRule::new(vec![condition(
+            0,
+            Qword,
+            SeccompCmpOp::Eq,
+            value,
+        )?])?]),
+        // AF_INET or AF_INET6, a stream, and protocol 0 or IPPROTO_TCP: never UDP, raw or
+        // local sockets, or MPTCP.
+        Pin::TcpSocket => {
+            let mut rules = Vec::new();
+            for domain in [2, 10] {
+                for protocol in [0, 6] {
+                    rules.push(SeccompRule::new(vec![
+                        condition(0, Dword, SeccompCmpOp::Eq, domain)?,
+                        condition(1, Dword, SeccompCmpOp::MaskedEq(SOCKET_TYPE), SOCK_STREAM)?,
+                        condition(2, Dword, SeccompCmpOp::Eq, protocol)?,
+                    ])?);
+                }
+            }
+            Ok(rules)
+        }
+        Pin::ListeningSocket => Ok(vec![SeccompRule::new(vec![condition(
+            0,
+            Dword,
+            SeccompCmpOp::Eq,
+            3,
+        )?])?]),
+        // No flag but MSG_NOSIGNAL (MSG_FASTOPEN would connect), and no address.
+        Pin::NoAddress => Ok(vec![SeccompRule::new(vec![
+            condition(
+                3,
+                Dword,
+                SeccompCmpOp::MaskedEq(!MSG_NOSIGNAL & 0xFFFF_FFFF),
+                0,
+            )?,
+            condition(4, Qword, SeccompCmpOp::Eq, 0)?,
+            condition(5, Dword, SeccompCmpOp::Eq, 0)?,
+        ])?]),
+    }
+}
+
 /// Confines this process, and so the program it becomes: files only inside the current folder
 /// (its working folder), executing only `program`, no network and no signals to other
 /// processes (Landlock); files of at most `file_limit` bytes and no core files; and only the
@@ -615,11 +884,12 @@ fn confine(
     syscalls: &[Allowed],
     traced: &[i64],
     file_limit: Option<u64>,
+    net: &Net,
 ) -> Result<(), String> {
     let abi = ABI::V6;
     let folder = PathFd::new(".").map_err(|error| format!("working folder: {error}"))?;
     let executable = PathFd::new(program).map_err(|error| format!("program: {error}"))?;
-    Ruleset::default()
+    let status = Ruleset::default()
         .handle_access(AccessFs::from_all(abi))
         .and_then(|ruleset| ruleset.handle_access(AccessNet::from_all(abi)))
         .and_then(|ruleset| ruleset.scope(Scope::from_all(abi)))
@@ -631,8 +901,26 @@ fn confine(
                 AccessFs::Execute | AccessFs::ReadFile,
             ))
         })
+        // TCP connections only to the approved ports; binding none, since a server's socket is
+        // already listening.
+        .and_then(|ruleset| {
+            ruleset.add_rules(
+                net.connect
+                    .iter()
+                    .map(|port| Ok(NetPort::new(*port, AccessNet::ConnectTcp))),
+            )
+        })
         .and_then(|ruleset| ruleset.restrict_self())
         .map_err(|error| format!("Landlock: {error}"))?;
+    // A program on the network relies on Landlock for its ports: a kernel that can't hold it
+    // to them doesn't run it.
+    if net.is_used() && status.ruleset != RulesetStatus::FullyEnforced {
+        return Err(
+            "this kernel can't hold the program to its approved ports; Landlock needs Linux 6.7 \
+             or newer"
+                .into(),
+        );
+    }
     let limit = |bytes| rustix::process::Rlimit {
         current: Some(bytes),
         maximum: Some(bytes),
@@ -644,20 +932,15 @@ fn confine(
     // A crash leaves no core file behind.
     rustix::process::setrlimit(rustix::process::Resource::Core, limit(0))
         .map_err(|error| format!("core file limit: {error}"))?;
-    // No rules allow any arguments; a rule allows only its first argument.
+    // No rules allow any arguments; each rule allows the arguments its conditions name.
     let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
     let mut any = BTreeSet::new();
     for allowed in syscalls {
-        let entry = rules.entry(allowed.number).or_default();
-        match allowed.first_argument {
-            None => {
-                any.insert(allowed.number);
-            }
-            Some(argument) => entry.push(
-                SeccompCondition::new(0, SeccompCmpArgLen::Qword, SeccompCmpOp::Eq, argument)
-                    .and_then(|condition| SeccompRule::new(vec![condition]))
-                    .map_err(|error| format!("seccomp: {error}"))?,
-            ),
+        if allowed.pin == Pin::Any {
+            any.insert(allowed.number);
+        } else {
+            let pinned = pin_rules(allowed.pin).map_err(|error| format!("seccomp: {error}"))?;
+            rules.entry(allowed.number).or_default().extend(pinned);
         }
     }
     for number in any {

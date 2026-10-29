@@ -991,3 +991,42 @@ async fn only_the_thread_code_starts_threads() {
         "_start calls worker, which only the thread code may call",
     );
 }
+
+#[tokio::test]
+async fn only_a_server_takes_connections_forever() {
+    let echo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/echo/main.s"),
+    )
+    .expect("the echo example");
+    let server = [
+        Syscall::Read,
+        Syscall::Close,
+        Syscall::Accept4,
+        Syscall::Sendto,
+        Syscall::Exit,
+    ];
+    let report = check_full(&echo, CpuFeatures::all(), &server, None).await;
+    assert!(report.passed(), "{report:#?}");
+    // A program that doesn't serve has no loop without a bound.
+    let not_a_server = [Syscall::Read, Syscall::Close, Syscall::Exit];
+    let report = check_full(&echo, CpuFeatures::all(), &not_a_server, None).await;
+    assert_violation(
+        &report,
+        Rule::Loops,
+        line_of(&echo, ".Lstart_serve:  # bound: forever") + 1,
+        "only a server's loop that takes connections may run forever",
+    );
+    // A loop that could end by itself isn't one that runs forever.
+    let ending = echo.replacen(
+        "    jmp .Lstart_serve\n",
+        "    test rbx, rbx\n    jnz .Lstart_serve\n    jmp .Lstart_serve\n",
+        1,
+    );
+    let report = check_full(&ending, CpuFeatures::all(), &server, None).await;
+    assert_violation(
+        &report,
+        Rule::Loops,
+        line_of(&ending, "    jnz .Lstart_serve"),
+        "closes with an unconditional `jmp`",
+    );
+}
