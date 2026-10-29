@@ -439,6 +439,17 @@ impl Writer<'_> {
                     Expr::SignExtend(inner, width - from)
                 }
             }
+            // A value with copies of its sign above it, as cqo makes for idiv.
+            9 if width > 1 && width.is_multiple_of(2) && self.rng.random_bool(0.3) => {
+                let half = width / 2;
+                let value = self.number(half, deeper);
+                let sign = Expr::Binary(
+                    Op::Ashr,
+                    Box::new(value.clone()),
+                    Box::new(Expr::Const(half, u128::from(half - 1))),
+                );
+                Expr::Concat(Box::new(sign), Box::new(value))
+            }
             9 if width > 1 => {
                 let split = self.rng.random_range(1..width);
                 Expr::Concat(

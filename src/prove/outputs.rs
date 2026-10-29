@@ -26,11 +26,7 @@ fn seed() -> u64 {
 
 /// A formula value of any 128-bit size, by its name.
 fn formula(pool: &mut Pool, name: &str) -> Number {
-    Number {
-        term: pool.var(WIDTH, name),
-        low: -(1 << 120),
-        high: 1 << 120,
-    }
+    Number::whole(pool.var(WIDTH, name), -(1 << 120), 1 << 120)
 }
 
 /// `value` as the solver's 128-bit two's complement.
@@ -96,7 +92,7 @@ fn printed_text_matches_exactly_its_formula() {
         let text = near(&mut rng, target);
         let bytes = bytes_of(&mut pool, &text);
         let value = formula(&mut pool, "F");
-        let condition = number_is(&mut pool, &bytes, value);
+        let condition = number_is(&mut pool, &bytes, value, 0);
         let parsed = text.parse::<i128>().ok();
         for candidate in [
             Some(target),
@@ -159,7 +155,7 @@ fn printed_digits_match_only_their_own_value() {
             printed(&mut pool, v, count)
         };
         let value = formula(&mut pool, "F");
-        let condition = number_is(&mut pool, &bytes, value);
+        let condition = number_is(&mut pool, &bytes, value, 0);
         for _ in 0..30 {
             // The value the print loop was made for, a neighbor, or anything at all.
             let fitting = 10_i128.pow(count - 1) + rng.random_range(0..10_i128.pow(count) * 9 / 10);
@@ -224,11 +220,49 @@ fn text_around_a_number_matches_exactly() {
             _ => format!("sum = {sum}!"),
         };
         let bytes = bytes_of(&mut pool, &text);
-        let condition = text_is(&mut pool, &bytes, &template, &numbers).expect("a condition");
+        let known = super::Known {
+            numbers: &numbers,
+            fixed: &BTreeMap::new(),
+            texts: &BTreeMap::new(),
+        };
+        let condition = text_is(&mut pool, &bytes, &template, &known).expect("a condition");
         assert_eq!(
             holds(&pool, condition, &[("a", bits(a)), ("b", bits(b))]),
             text == format!("sum = {}!", a + b),
             "seed {seed}: \"{text}\" with a = {a}, b = {b}"
         );
+    }
+}
+
+#[test]
+fn printed_decimals_match_exactly_their_formula() {
+    // places(F, k): a whole number's digits with a point before the last k, padded to 0.05.
+    let seed = seed();
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    for _ in 0..3000 {
+        let places = rng.random_range(1..=4_u8);
+        let target = number(&mut rng) / 1000;
+        let exact = crate::expr::decimal_text(target, places);
+        let text = match rng.random_range(0..9) {
+            0 => format!("0{exact}"),
+            1 => exact.replacen('.', "", 1),
+            2 => format!("{exact}0"),
+            3 => exact[..exact.len() - 1].to_owned(),
+            4 => exact.replacen("0.", ".", 1),
+            5 => format!("-{exact}"),
+            6 => crate::expr::decimal_text(target, places + 1),
+            _ => exact.clone(),
+        };
+        let mut pool = Pool::default();
+        let bytes = bytes_of(&mut pool, &text);
+        let value = formula(&mut pool, "F");
+        let condition = number_is(&mut pool, &bytes, value, places);
+        for candidate in [target, target + 1, target - 1, -target, 0, target * 10] {
+            assert_eq!(
+                holds(&pool, condition, &[("F", bits(candidate))]),
+                text == crate::expr::decimal_text(candidate, places),
+                "seed {seed}: \"{text}\" against {candidate} with {places} places"
+            );
+        }
     }
 }

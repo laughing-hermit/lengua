@@ -1141,6 +1141,14 @@ impl Pool {
         if self.constant(high) == Some(0) {
             return self.zero_extend(low, high_width);
         }
+        // Copies of a value's sign above it, as cqo and cdq make for idiv, sign-extend it.
+        if let Node::Ashr(inner, amount) = *self.node(high)
+            && inner == low
+            && high_width == low_width
+            && self.constant(amount) == Some(u128::from(low_width - 1))
+        {
+            return self.sign_extend(low, high_width);
+        }
         // Neighboring parts of one term join back into it.
         if let (
             Node::Extract(upper, upper_high, upper_low),

@@ -9,15 +9,32 @@ use crate::expr::{BinaryOp, Expr, Function, Value};
 /// The width formulas are computed in: wide enough for any product of two 64-bit numbers.
 pub const WIDTH: u32 = 128;
 
-/// A whole number: its term and the smallest and largest values it can take.
+/// A whole number, or a decimal as its digits: its term and the smallest and largest values it
+/// can take.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Number {
-    /// The value, as a signed 128-bit term.
+    /// The value, as a signed 128-bit term: a decimal's digits without its point.
     pub term: Term,
     /// The smallest it can be.
     pub low: i128,
     /// The largest it can be.
     pub high: i128,
+    /// The decimal places the digits have: 0 for a whole number. Formulas compute on whole
+    /// numbers, so a decimal is used through `scaled(x, places)`.
+    pub places: u8,
+}
+
+impl Number {
+    /// A whole number from `low` to `high`.
+    #[must_use]
+    pub const fn whole(term: Term, low: i128, high: i128) -> Self {
+        Self {
+            term,
+            low,
+            high,
+            places: 0,
+        }
+    }
 }
 
 /// A translated formula.
@@ -33,9 +50,13 @@ fn overflow() -> String {
     "the formula could leave 128-bit whole numbers".into()
 }
 
+/// The whole number `formula` is: a decimal must go through `scaled(x, places)` first.
 fn number(formula: Formula) -> Result<Number, String> {
     match formula {
-        Formula::Number(number) => Ok(number),
+        Formula::Number(number) if number.places == 0 => Ok(number),
+        Formula::Number(_) => {
+            Err("a formula computes on a decimal without scaled(x, places)".into())
+        }
         Formula::Truth(_) => Err("a formula uses true/false where a number goes".into()),
     }
 }
@@ -70,11 +91,11 @@ pub fn translate(
     vars: &BTreeMap<String, Number>,
 ) -> Result<Formula, String> {
     match expr {
-        Expr::Literal(Value::Int(value)) => Ok(Formula::Number(Number {
-            term: pool.bv_signed(WIDTH, *value),
-            low: *value,
-            high: *value,
-        })),
+        Expr::Literal(Value::Int(value)) => Ok(Formula::Number(Number::whole(
+            pool.bv_signed(WIDTH, *value),
+            *value,
+            *value,
+        ))),
         Expr::Literal(Value::Bool(value)) => Ok(Formula::Truth(pool.boolean(*value))),
         Expr::Literal(_) => Err("a formula with text or decimals".into()),
         Expr::Var(name) => vars
@@ -85,11 +106,11 @@ pub fn translate(
         Expr::Neg(inner) => {
             let inner = number(translate(pool, inner, vars)?)?;
             let (low, high) = span(&[inner.high.checked_neg(), inner.low.checked_neg()])?;
-            Ok(Formula::Number(Number {
-                term: pool.neg(inner.term),
+            Ok(Formula::Number(Number::whole(
+                pool.neg(inner.term),
                 low,
                 high,
-            }))
+            )))
         }
         Expr::Not(inner) => {
             let inner = truth(translate(pool, inner, vars)?)?;
@@ -174,7 +195,7 @@ fn binary(
                     )
                 }
             };
-            Ok(Formula::Number(Number { term, low, high }))
+            Ok(Formula::Number(Number::whole(term, low, high)))
         }
     }
 }
@@ -208,11 +229,11 @@ fn call(
                 .checked_abs()
                 .ok_or_else(overflow)?
                 .max(a.high.checked_abs().ok_or_else(overflow)?);
-            Ok(Formula::Number(Number {
-                term: pool.ite(negative, negated, a.term),
+            Ok(Formula::Number(Number::whole(
+                pool.ite(negative, negated, a.term),
                 low,
                 high,
-            }))
+            )))
         }
         Function::Min | Function::Max => {
             let mut best = number(values[0])?;
@@ -223,35 +244,65 @@ fn call(
                 } else {
                     pool.slt(best.term, next.term)
                 };
-                best = Number {
-                    term: pool.ite(better, next.term, best.term),
-                    low: if function == Function::Min {
+                best = Number::whole(
+                    pool.ite(better, next.term, best.term),
+                    if function == Function::Min {
                         best.low.min(next.low)
                     } else {
                         best.low.max(next.low)
                     },
-                    high: if function == Function::Min {
+                    if function == Function::Min {
                         best.high.min(next.high)
                     } else {
                         best.high.max(next.high)
                     },
-                };
+                );
             }
             Ok(Formula::Number(best))
         }
         Function::If => {
             let condition = truth(values[0])?;
             match (values[1], values[2]) {
-                (Formula::Number(a), Formula::Number(b)) => Ok(Formula::Number(Number {
-                    term: pool.ite(condition, a.term, b.term),
-                    low: a.low.min(b.low),
-                    high: a.high.max(b.high),
-                })),
+                (Formula::Number(a), Formula::Number(b)) => {
+                    let (a, b) = (number(Formula::Number(a))?, number(Formula::Number(b))?);
+                    Ok(Formula::Number(Number::whole(
+                        pool.ite(condition, a.term, b.term),
+                        a.low.min(b.low),
+                        a.high.max(b.high),
+                    )))
+                }
                 (Formula::Truth(a), Formula::Truth(b)) => {
                     Ok(Formula::Truth(pool.ite(condition, a, b)))
                 }
                 _ => Err("an if with a number on one side and true/false on the other".into()),
             }
+        }
+        Function::Scaled => {
+            let Formula::Number(value) = values[0] else {
+                return Err("scaled of true or false".into());
+            };
+            let places = match &arguments[1] {
+                Expr::Literal(Value::Int(places)) => u8::try_from(*places)
+                    .ok()
+                    .filter(|places| *places <= 30)
+                    .ok_or("scaled with an unusual number of places")?,
+                _ => return Err("scaled with places given by a formula".into()),
+            };
+            // The digits are the value at its own places; more places multiply by ten each.
+            let more = places
+                .checked_sub(value.places)
+                .ok_or("scaled to fewer places than the decimal has")?;
+            let factor = 10_i128.checked_pow(u32::from(more)).ok_or_else(overflow)?;
+            let (low, high) = span(&[
+                value.low.checked_mul(factor),
+                value.high.checked_mul(factor),
+            ])?;
+            let factor = pool.bv_signed(WIDTH, factor);
+            Ok(Formula::Number(Number::whole(
+                pool.mul(value.term, factor),
+                low,
+                high,
+            )))
         }
         other => Err(format!("the function {other:?}")),
     }

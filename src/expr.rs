@@ -1340,6 +1340,14 @@ fn crc(bytes: &[u8], polynomial: u32) -> u32 {
     !crc
 }
 
+/// Every variable `expr` uses.
+#[must_use]
+pub fn variables_of(expr: &Expr) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    collect_variables(expr, &mut names);
+    names
+}
+
 fn collect_variables(expr: &Expr, names: &mut BTreeSet<String>) {
     match expr {
         Expr::Literal(_) => {}

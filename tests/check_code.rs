@@ -510,21 +510,17 @@ async fn the_template_is_proven_for_every_input() {
     assert_eq!(report["stamped"], true, "{report}");
     let proof = session.call_ok("prove", program.arguments()).await;
     assert_eq!(proof["proofs"][0]["proven"], true, "{proof}");
+    // B3's bad inputs come from choice(…), each proven in turn.
     assert_eq!(
-        proof["message"], "Proven for every input in range: generated B1. lengua.lock records it.",
+        proof["message"],
+        "Every generated test is proven for every input in its range. lengua.lock records it.",
         "{proof}"
-    );
-    assert!(
-        proof["proofs"][1]["detail"]
-            .as_str()
-            .is_some_and(|detail| detail.contains("isn't drawn by int(lo, hi)")),
-        "text inputs aren't proven yet: {proof}"
     );
     // The lock records the proof, and status shows it.
     let status = session.call_ok("status", program.arguments()).await;
     assert_eq!(
         status["program"]["proven"],
-        serde_json::json!(["B1"]),
+        serde_json::json!(["B1", "B3"]),
         "{status}"
     );
     assert_eq!(status["program"]["proven_by"], "z3 and cvc5", "{status}");
@@ -534,7 +530,7 @@ async fn the_template_is_proven_for_every_input() {
     let status = session.call_ok("status", program.arguments()).await;
     assert_eq!(
         status["program"]["proven"],
-        serde_json::json!(["B1"]),
+        serde_json::json!(["B1", "B3"]),
         "{status}"
     );
     program.write(
@@ -582,7 +578,12 @@ async fn the_absolute_difference_example_is_proven() {
     assert_eq!(report["stamped"], true, "{report}");
     let proof = session.call_ok("prove", folder.arguments()).await;
     assert_eq!(proof["proofs"][0]["test"], "generated B1", "{proof}");
-    assert_eq!(proof["proofs"][0]["proven"], true, "{proof}");
+    // B3 and B4 draw bad arguments with choice(…): each one is proven with every number.
+    assert_eq!(
+        proof["message"],
+        "Every generated test is proven for every input in its range. lengua.lock records it.",
+        "{proof}"
+    );
     session.service.cancel().await.expect("close the session");
 }
 
@@ -641,5 +642,73 @@ async fn the_avx512_upcase_in_the_benchmark_passes_its_checks() {
     assert_eq!(tests["checked"], true, "{tests}");
     let report = session.call_ok("check_code", folder.arguments()).await;
     assert_eq!(report["stamped"], true, "{report}");
+    session.service.cancel().await.expect("close the session");
+}
+
+#[tokio::test]
+async fn the_file_example_proves_its_file_handling() {
+    // upcase's usage and missing-file behaviors draw their names with choice(…); the proof opens,
+    // reads and writes files as the test gives them.
+    if std::process::Command::new("z3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let session = session().await;
+    let folder = Program::new();
+    for name in ["spec.md", "tests.toml", "main.s"] {
+        folder.write(name, &example("upcase", name));
+    }
+    session.approve(&folder).await;
+    let tests = session.call_ok("check_tests", folder.arguments()).await;
+    assert_eq!(tests["checked"], true, "{tests}");
+    let report = session.call_ok("check_code", folder.arguments()).await;
+    assert_eq!(report["stamped"], true, "{report}");
+    let proof = session.call_ok("prove", folder.arguments()).await;
+    // Usage (B2), a missing input (B3) and a file over the limit (B4, a mebibyte of any of its
+    // characters) are proven; capitalizing any text (B1) is only tested: its loop is SSE.
+    assert_eq!(
+        proof["message"],
+        "Proven for every input in range: generated B2, generated B3, generated B4. lengua.lock \
+         records it.",
+        "{proof}"
+    );
+    assert!(
+        proof["proofs"][0]["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("the instruction Movd")),
+        "{proof}"
+    );
+    session.service.cancel().await.expect("close the session");
+}
+
+#[tokio::test]
+async fn the_decimal_example_is_proven() {
+    // mean takes decimals and prints exact cents: scaled(a, 2) and places(x, 2) in its tests.
+    if std::process::Command::new("z3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let session = session().await;
+    let folder = Program::new();
+    for name in ["spec.md", "tests.toml", "main.s"] {
+        folder.write(name, &example("mean", name));
+    }
+    session.approve(&folder).await;
+    let tests = session.call_ok("check_tests", folder.arguments()).await;
+    assert_eq!(tests["checked"], true, "{tests}");
+    let report = session.call_ok("check_code", folder.arguments()).await;
+    assert_eq!(report["stamped"], true, "{report}");
+    let proof = session.call_ok("prove", folder.arguments()).await;
+    // Decimal inputs prove where the output is fixed text: usage (B4), a bad argument (B5) and
+    // an argument out of range (B6).
+    for index in 3..6 {
+        assert_eq!(proof["proofs"][index]["proven"], true, "{proof}");
+    }
     session.service.cancel().await.expect("close the session");
 }

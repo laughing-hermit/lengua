@@ -125,6 +125,12 @@ pub struct State {
     pub path: Vec<Term>,
     stdin: Rc<Vec<Term>>,
     stdin_read: usize,
+    /// The files in the working folder before the run, by name.
+    files: Rc<BTreeMap<String, Vec<Term>>>,
+    /// The files the run created or replaced, by name, with everything written to them.
+    pub written: BTreeMap<String, Vec<Term>>,
+    /// The files open, by descriptor.
+    open: BTreeMap<u64, Open>,
     /// Bytes written to standard output.
     pub stdout: Vec<Term>,
     /// Bytes written to standard error.
@@ -133,6 +139,28 @@ pub struct State {
     /// How the run ended, once it has.
     pub end: Option<End>,
 }
+
+/// A file the program has open.
+#[derive(Debug, Clone)]
+struct Open {
+    name: String,
+    /// The next byte a read gets.
+    position: usize,
+    writing: bool,
+}
+
+/// `openat`'s directory meaning the working folder, as the kernel reads it: the low 32 bits,
+/// an `int`. The flags lengua models.
+const AT_FDCWD: u64 = 0xffff_ff9c;
+const O_ACCMODE: u64 = 3;
+const O_WRONLY: u64 = 1;
+const O_CREAT: u64 = 0o100;
+const O_TRUNC: u64 = 0o1000;
+/// Flags that change nothing the model tracks: no controlling terminal, large files, closing on
+/// exec.
+const O_HARMLESS: u64 = 0o400 | 0o100_000 | 0o2_000_000;
+const ENOENT: i64 = 2;
+const EBADF: i64 = 9;
 
 /// The general-purpose register a register is part of, 0 for rax to 15 for r15.
 fn slot(register: Register) -> Option<usize> {
@@ -168,6 +196,9 @@ impl State {
             path: Vec::new(),
             stdin: Rc::new(stdin),
             stdin_read: 0,
+            files: Rc::new(BTreeMap::new()),
+            written: BTreeMap::new(),
+            open: BTreeMap::new(),
             stdout: Vec::new(),
             stderr: Vec::new(),
             steps: 0,
@@ -200,6 +231,29 @@ impl State {
         }
         state.registers[4] = pool.bv(64, u128::from(STACK_TOP));
         state
+    }
+
+    /// The same state with `files` in its working folder.
+    #[must_use]
+    pub fn with_files(mut self, files: BTreeMap<String, Vec<Term>>) -> Self {
+        self.files = Rc::new(files);
+        self
+    }
+
+    /// What the file `name` holds after the run, if it exists: what the run wrote, or else what
+    /// it held before.
+    #[must_use]
+    pub fn file(&self, name: &str) -> Option<&[Term]> {
+        self.written
+            .get(name)
+            .or_else(|| self.files.get(name))
+            .map(Vec::as_slice)
+    }
+
+    /// The files the working folder held before the run.
+    #[must_use]
+    pub fn files_before(&self) -> &BTreeMap<String, Vec<Term>> {
+        &self.files
     }
 
     /// Writes `value` little-endian at `address`, which must be known to be writable.
@@ -1182,6 +1236,74 @@ impl<'a> Cpu<'a> {
         }
     }
 
+    /// `openat` on the test's files: a file the working folder holds opens for reading; any
+    /// name opens for writing, created or emptied. A name the folder doesn't hold can't be read.
+    fn open_at(&mut self) -> Result<u64, Stop> {
+        let registers = self.state.registers;
+        let (folder, path, flags) = (registers[7], registers[6], registers[2]);
+        // The kernel reads the folder and the flags as ints, and file descriptors as unsigned ints.
+        if self.constant(folder)? & 0xffff_ffff != AT_FDCWD {
+            return Err(unsupported(
+                "opening a file other than in the working folder",
+            ));
+        }
+        let mut address = self.constant(path)?;
+        let mut name = Vec::new();
+        loop {
+            let byte = self.load(address, 1)?;
+            let byte = self
+                .pool
+                .constant(byte)
+                .ok_or_else(|| unsupported("a file name chosen by the input"))?;
+            if byte == 0 {
+                break;
+            }
+            name.push(u8::try_from(byte).unwrap_or(0));
+            if name.len() > 4096 {
+                return Err(unsupported("a file name longer than 4096 bytes"));
+            }
+            address += 1;
+        }
+        let name =
+            String::from_utf8(name).map_err(|_| unsupported("a file name that isn't UTF-8"))?;
+        // Only the test's folder is modeled: no absolute paths and no way out of it.
+        if name.starts_with('/') || name.split('/').any(|part| part == "..") || name.is_empty() {
+            return Err(unsupported(format!(
+                "opening {name:?}, outside the working folder"
+            )));
+        }
+        let flags = self.constant(flags)? & 0xffff_ffff;
+        let writing = match flags & O_ACCMODE {
+            0 if flags & !O_ACCMODE & !O_HARMLESS == 0 => false,
+            O_WRONLY if flags & !O_ACCMODE & !O_HARMLESS & !O_TRUNC == O_CREAT => true,
+            _ => return Err(unsupported(format!("opening a file with flags {flags:#o}"))),
+        };
+        if writing {
+            let exists =
+                self.state.files.contains_key(&name) || self.state.written.contains_key(&name);
+            if exists && flags & O_TRUNC == 0 {
+                return Err(unsupported("writing into a file without emptying it first"));
+            }
+            self.state.written.insert(name.clone(), Vec::new());
+        } else if self.state.written.contains_key(&name) {
+            return Err(unsupported("reading a file the program wrote"));
+        } else if !self.state.files.contains_key(&name) {
+            return Ok((-ENOENT).cast_unsigned());
+        }
+        let fd = (3..)
+            .find(|fd| !self.state.open.contains_key(fd))
+            .unwrap_or(3);
+        self.state.open.insert(
+            fd,
+            Open {
+                name,
+                position: 0,
+                writing,
+            },
+        );
+        Ok(fd)
+    }
+
     fn syscall(&mut self) -> Result<Step, Stop> {
         let number = self.state.registers[0];
         let number = self
@@ -1192,42 +1314,80 @@ impl<'a> Cpu<'a> {
         let (rdi, rsi, rdx) = (registers[7], registers[6], registers[2]);
         let result = match number {
             0 => {
-                if self.pool.constant(rdi) != Some(0) {
-                    return Err(unsupported("reading something other than standard input"));
-                }
+                let fd = self.constant(rdi)? & 0xffff_ffff;
                 let buffer = self.constant(rsi)?;
                 let count = self.constant(rdx)?;
-                let available = (self.state.stdin.len() - self.state.stdin_read) as u64;
-                let taken = count.min(available);
-                for offset in 0..taken {
-                    let byte = self.state.stdin[self.state.stdin_read + offset as usize];
-                    self.save(buffer + offset, byte)?;
+                if fd == 0 {
+                    let available = (self.state.stdin.len() - self.state.stdin_read) as u64;
+                    let taken = count.min(available);
+                    for offset in 0..taken {
+                        let byte = self.state.stdin[self.state.stdin_read + offset as usize];
+                        self.save(buffer + offset, byte)?;
+                    }
+                    self.state.stdin_read += taken as usize;
+                    taken
+                } else if let Some(open) = self.state.open.get(&fd).cloned()
+                    && !open.writing
+                {
+                    // A regular file gives everything asked for, up to its end.
+                    let files = Rc::clone(&self.state.files);
+                    let contents = files.get(&open.name).map_or(&[][..], Vec::as_slice);
+                    let available = (contents.len() - open.position.min(contents.len())) as u64;
+                    let taken = count.min(available);
+                    for offset in 0..taken {
+                        let byte = contents[open.position + offset as usize];
+                        self.save(buffer + offset, byte)?;
+                    }
+                    if let Some(open) = self.state.open.get_mut(&fd) {
+                        open.position += taken as usize;
+                    }
+                    taken
+                } else {
+                    (-EBADF).cast_unsigned()
                 }
-                self.state.stdin_read += taken as usize;
-                taken
             }
             1 => {
-                let target = match self.pool.constant(rdi) {
-                    Some(1) => 1,
-                    Some(2) => 2,
-                    _ => {
-                        return Err(unsupported(
-                            "writing something other than standard output or error",
-                        ));
-                    }
-                };
+                let fd = self.constant(rdi)? & 0xffff_ffff;
                 let buffer = self.constant(rsi)?;
                 let count = self.constant(rdx)?;
-                for offset in 0..count {
-                    let byte = self.load(buffer + offset, 1)?;
-                    if target == 1 {
-                        self.state.stdout.push(byte);
-                    } else {
-                        self.state.stderr.push(byte);
+                // Standard output or error, a file open for writing, or nothing that can be.
+                let target = match fd {
+                    1 | 2 => Some(None),
+                    _ => match self.state.open.get(&fd) {
+                        Some(open) if open.writing => Some(Some(open.name.clone())),
+                        _ => None,
+                    },
+                };
+                match target {
+                    None => (-EBADF).cast_unsigned(),
+                    Some(file) => {
+                        for offset in 0..count {
+                            let byte = self.load(buffer + offset, 1)?;
+                            match (&file, fd) {
+                                (Some(name), _) => {
+                                    self.state
+                                        .written
+                                        .entry(name.clone())
+                                        .or_default()
+                                        .push(byte);
+                                }
+                                (None, 1) => self.state.stdout.push(byte),
+                                (None, _) => self.state.stderr.push(byte),
+                            }
+                        }
+                        count
                     }
                 }
-                count
             }
+            3 => {
+                let fd = self.constant(rdi)? & 0xffff_ffff;
+                if self.state.open.remove(&fd).is_some() {
+                    0
+                } else {
+                    (-EBADF).cast_unsigned()
+                }
+            }
+            257 => self.open_at()?,
             60 | 231 => {
                 let status = self.pool.extract(rdi, 7, 0);
                 return Err(End::Exit(status));

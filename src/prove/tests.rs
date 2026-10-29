@@ -154,7 +154,7 @@ async fn finds_a_bug_the_samples_miss() {
     let verdict = prove(&machine, &block, budget(120));
     assert_eq!(
         verdict,
-        Verdict::Counterexample(BTreeMap::from([("n".to_owned(), 1_234_567)]))
+        Verdict::Counterexample(BTreeMap::from([("n".to_owned(), Value::Int(1_234_567))]))
     );
 }
 
@@ -178,5 +178,21 @@ async fn proves_absolute_difference() {
     let started = Instant::now();
     let verdict = prove(&machine, &block, budget(300));
     eprintln!("absdiff: {verdict:?} in {:?}", started.elapsed());
+    assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
+}
+
+/// The mean of two prices in cents, rounded half away from zero: decimals in, decimals out.
+#[tokio::test]
+#[ignore = "slow: proves mean's decimal arithmetic"]
+async fn proves_the_mean_of_two_prices() {
+    let machine = machine(&example("mean", "main.s")).await;
+    let block = block(
+        &example("mean", "spec.md"),
+        &example("mean", "tests.toml"),
+        0,
+    );
+    let started = Instant::now();
+    let verdict = prove(&machine, &block, budget(300));
+    eprintln!("mean: {verdict:?} in {:?}", started.elapsed());
     assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
 }

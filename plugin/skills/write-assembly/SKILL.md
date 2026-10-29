@@ -36,12 +36,12 @@ Nothing runs before every rule passes.
    the seed, what was expected and what happened, and `assertion N failed at main.s:LINE` when an
    assertion fires. Fix everything and call it again until it passes; then `lengua.lock` records
    the code.
-6. If a generated test draws whole numbers with `int(…)`, call `prove` with `path`. It proves,
-   for every input in range rather than a sample, that the program prints what the formulas say;
-   it can take a minute or two. If it finds inputs where the program is wrong, fix `main.s` and
-   call `check_code` and `prove` again. "Tested, not proven" is fine: say why in one line.
-   Programs that read and print numbers with the template's `parse_i64` and `write_i64` prove
-   best; a digit loop built another way may only be tested.
+6. Call `prove` with `path`. For each generated test it can, it proves for every input rather
+   than a sample that the program prints what the formulas say: whole numbers, decimals, each
+   value of a `choice(…)`, short texts, and files. It can take a minute or two. If it finds
+   inputs where the program is wrong, fix `main.s` and call `check_code` and `prove` again.
+   "Tested, not proven" is fine: say why in one line. Programs that read and print numbers with
+   the template's `parse_i64` and `write_i64` prove best.
 7. Run the program once with `run`, using the spec's first example: `path`, plus `args` and
    `stdin` when it reads them. A program that works on files runs in a folder holding the
    example's input files: create `<path>/demo/` with them, pass it as `folder`, and name the

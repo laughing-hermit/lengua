@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Instant;
 
 use crate::checker::decode::Machine;
-use crate::expr::{Generator, PatternPart, Piece, Template};
+use crate::expr::{Generator, PatternPart, Piece, Template, Value};
 use crate::testfile::{ExitCode, Generated};
 
 use exec::{End, Image, Oracle, State};
@@ -39,7 +39,7 @@ pub enum Verdict {
         alone: Option<String>,
     },
     /// Inputs where the program, as the prover reads it, disagrees with the formulas.
-    Counterexample(BTreeMap<String, i128>),
+    Counterexample(BTreeMap<String, Value>),
     /// The proof couldn't be finished, and why.
     NotProven(String),
 }
@@ -177,22 +177,138 @@ fn shapes(low: i128, high: i128) -> Vec<Shape> {
     shapes
 }
 
-/// A variable's text and value for one shape, with what its digits must satisfy.
+/// The values of one variable a proof covers at once: a shape of whole numbers, or one value of
+/// a `choice(…)`, whose text is fixed.
+#[derive(Debug, Clone)]
+enum Part {
+    /// Whole numbers, or decimals' digits with this many places.
+    Number(Shape, u8),
+    Fixed(Value),
+    /// Text of this many bytes, each one of the generator's characters.
+    Text(usize, Vec<u8>),
+}
+
+/// The most lengths of text one variable may be proven over, one shape each.
+const MAX_LENGTHS: usize = 4096;
+
+/// Texts this long or shorter have each byte held to the generator's characters; longer ones
+/// only to the range the characters span, which proves more than needed but nothing false.
+const MAX_CHECKED_TEXT: usize = 4096;
+
+/// The parts that cover every value `generator` draws.
+fn parts(name: &str, generator: &Generator) -> Result<Vec<Part>, String> {
+    match generator {
+        Generator::Int { lo, hi } => Ok(shapes(*lo, *hi)
+            .into_iter()
+            .map(|shape| Part::Number(shape, 0))
+            .collect()),
+        Generator::Dec { lo, hi, places } => Ok(shapes(*lo, *hi)
+            .into_iter()
+            .map(|shape| Part::Number(shape, *places))
+            .collect()),
+        Generator::Choice(values) => Ok(values.iter().cloned().map(Part::Fixed).collect()),
+        Generator::Str { min, max, charset } => {
+            if !charset.iter().all(char::is_ascii) {
+                return Err(format!("{name} is drawn from characters beyond ASCII"));
+            }
+            if max - min >= MAX_LENGTHS {
+                return Err(format!(
+                    "{name} is text of more than {MAX_LENGTHS} lengths, each a shape of its own"
+                ));
+            }
+            let bytes: Vec<u8> = charset.iter().map(|character| *character as u8).collect();
+            Ok((*min..=*max)
+                .map(|length| Part::Text(length, bytes.clone()))
+                .collect())
+        }
+    }
+}
+
+/// A variable's text and value for one shape, with what its digits must satisfy. A fixed value
+/// that isn't a whole number has no value formulas can use.
 struct Input {
     text: Vec<Term>,
-    number: Number,
+    number: Option<Number>,
     constraints: Vec<Term>,
 }
 
-fn input(pool: &mut Pool, name: &str, number: usize, shape: &Shape) -> Input {
+/// The input for text of `length` bytes from `characters`: a variable for each byte.
+fn text_input(pool: &mut Pool, name: &str, length: usize, characters: &[u8]) -> Input {
+    let (lowest, highest) = (
+        characters.iter().copied().min().unwrap_or(0),
+        characters.iter().copied().max().unwrap_or(0),
+    );
+    let mut text = Vec::with_capacity(length);
+    let mut constraints = Vec::new();
+    for index in 0..length {
+        let byte = pool.var_in(
+            8,
+            &format!("{name}.text{length}.{index}"),
+            u128::from(lowest),
+            u128::from(highest),
+        );
+        if length <= MAX_CHECKED_TEXT {
+            let choices: Vec<Term> = characters
+                .iter()
+                .map(|character| {
+                    let character = pool.bv(8, u128::from(*character));
+                    pool.eq(byte, character)
+                })
+                .collect();
+            constraints.push(pool.any(&choices));
+        }
+        text.push(byte);
+    }
+    Input {
+        text,
+        number: None,
+        constraints,
+    }
+}
+
+/// The input for one value of a `choice(…)`: its text, and its value when it's a whole number.
+fn fixed(pool: &mut Pool, value: &Value) -> Result<Input, String> {
+    let text = value
+        .render()
+        .map_err(|error| format!("a choice that can't be written: {error}"))?;
+    Ok(Input {
+        text: exec::bytes(pool, text.as_bytes()),
+        number: match value {
+            Value::Int(number) => Some(Number::whole(
+                pool.bv_signed(WIDTH, *number),
+                *number,
+                *number,
+            )),
+            Value::Dec { m, p } => Some(Number {
+                term: pool.bv_signed(WIDTH, *m),
+                low: *m,
+                high: *m,
+                places: *p,
+            }),
+            _ => None,
+        },
+        constraints: Vec::new(),
+    })
+}
+
+fn input(pool: &mut Pool, name: &str, number: usize, shape: &Shape, places: u8) -> Input {
     let (ten, forty_eight) = (pool.bv(WIDTH, 10), pool.bv(WIDTH, u128::from(b'0')));
     let mut text = Vec::new();
     let mut constraints = Vec::new();
     if shape.negative {
         text.push(pool.bv(8, u128::from(b'-')));
     }
+    // A decimal shows at least one digit before its point: 0.05, not .05.
+    let mut digits = shape.digits.clone();
+    while digits.len() <= usize::from(places) {
+        digits.insert(0, (0, 0));
+    }
+    let point = (places > 0).then(|| digits.len() - usize::from(places));
     let mut magnitude = pool.bv(WIDTH, 0);
-    for (index, (lowest, highest)) in shape.digits.iter().enumerate() {
+    for (index, (lowest, highest)) in digits.iter().enumerate() {
+        if point == Some(index) {
+            text.push(pool.bv(8, u128::from(b'.')));
+        }
         // A digit with one possible value is that value.
         let digit = pool.var_in(
             8,
@@ -225,11 +341,12 @@ fn input(pool: &mut Pool, name: &str, number: usize, shape: &Shape) -> Input {
     constraints.push(pool.sle(value, high));
     Input {
         text,
-        number: Number {
+        number: Some(Number {
             term: value,
             low: shape.low,
             high: shape.high,
-        },
+            places,
+        }),
         constraints,
     }
 }
@@ -307,6 +424,7 @@ fn digits_are(
     magnitude: Term,
     value: Term,
     negative: bool,
+    padded_to: usize,
 ) -> Term {
     let count = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
     let (Some(top), Some(bottom)) = (
@@ -315,7 +433,11 @@ fn digits_are(
     ) else {
         return pool.boolean(false);
     };
-    let bottom = if count == 1 { 0 } else { bottom };
+    if bytes.len() < padded_to {
+        return pool.boolean(false);
+    }
+    // Leading zeros only pad to the shortest length: 0.05's 005, never 007's for 7.
+    let bottom = if bytes.len() <= padded_to { 0 } else { bottom };
     let (bottom, top) = (pool.bv(WIDTH, bottom), pool.bv(WIDTH, top));
     let at_least = pool.ule(bottom, magnitude);
     let below = pool.ult(magnitude, top);
@@ -364,8 +486,9 @@ fn digits_are(
     pool.all(&checks)
 }
 
-/// What must hold for `bytes` to be exactly `number` in decimal.
-fn number_is(pool: &mut Pool, bytes: &[Term], number: Number) -> Term {
+/// What must hold for `bytes` to be exactly `number` in decimal, its last `places` digits after a
+/// point, as `places(number, places)` writes it.
+fn number_is(pool: &mut Pool, bytes: &[Term], number: Number, places: u8) -> Term {
     let zero = pool.bv(WIDTH, 0);
     let negative = pool.slt(number.term, zero);
     let negated = pool.neg(number.term);
@@ -376,92 +499,158 @@ fn number_is(pool: &mut Pool, bytes: &[Term], number: Number) -> Term {
     if bytes.len() >= 2 && first.is_none_or(|byte| byte == u128::from(b'-')) {
         let minus = pool.bv(8, u128::from(b'-'));
         let signed = pool.eq(bytes[0], minus);
-        let digits = digits_are(pool, &bytes[1..], magnitude, number.term, true);
+        let digits = pointed_digits(pool, &bytes[1..], magnitude, number.term, true, places);
         cases.push(pool.all(&[negative, signed, digits]));
     }
     if !bytes.is_empty() && first != Some(u128::from(b'-')) {
         let not_negative = pool.bool_not(negative);
-        let digits = digits_are(pool, bytes, magnitude, number.term, false);
+        let digits = pointed_digits(pool, bytes, magnitude, number.term, false, places);
         cases.push(pool.all(&[not_negative, digits]));
     }
     pool.any(&cases)
 }
 
-/// What must hold for `bytes` to be exactly `template`'s text for these inputs.
+/// What must hold for `bytes` to be the digits of `magnitude` with a point before the last
+/// `places`, and at least one digit before it.
+fn pointed_digits(
+    pool: &mut Pool,
+    bytes: &[Term],
+    magnitude: Term,
+    value: Term,
+    negative: bool,
+    places: u8,
+) -> Term {
+    let places = usize::from(places);
+    if places == 0 {
+        return digits_are(pool, bytes, magnitude, value, negative, 1);
+    }
+    if bytes.len() < places + 2 {
+        return pool.boolean(false);
+    }
+    let point = bytes.len() - places - 1;
+    let dot = pool.bv(8, u128::from(b'.'));
+    let has_point = pool.eq(bytes[point], dot);
+    let mut digits = bytes[..point].to_vec();
+    digits.extend_from_slice(&bytes[point + 1..]);
+    let digits = digits_are(pool, &digits, magnitude, value, negative, places + 1);
+    pool.all(&[has_point, digits])
+}
+
+/// What a shape knows about the variables: the whole numbers' values, the fixed values chosen,
+/// and the texts drawn, byte by byte.
+struct Known<'a> {
+    numbers: &'a BTreeMap<String, Number>,
+    fixed: &'a crate::expr::Env,
+    texts: &'a BTreeMap<String, Vec<Term>>,
+}
+
+/// A run of a template once what's known in this shape is filled in: bytes, or a number's
+/// formula, printed with this many decimal places (`places(x, 2)`), or none.
+enum Segment<'a> {
+    Bytes(Vec<Term>),
+    Number(&'a crate::expr::Expr, u8),
+}
+
+/// What must hold for `bytes` to be exactly `template`'s text for these inputs. Literal text, a
+/// placeholder whose variables all have fixed values, and a placeholder that's just a drawn text
+/// are known bytes; at most one placeholder may compute a number.
 fn text_is(
     pool: &mut Pool,
     bytes: &[Term],
     template: &Template,
-    numbers: &BTreeMap<String, Number>,
+    known: &Known<'_>,
 ) -> Result<Term, String> {
-    let pieces = template.pieces();
-    let placeholders: Vec<usize> = pieces
-        .iter()
-        .enumerate()
-        .filter(|(_, piece)| matches!(piece, Piece::Expr(_)))
-        .map(|(index, _)| index)
-        .collect();
-    let literal = |range: &[Piece<'_>]| -> Vec<u8> {
-        range
-            .iter()
-            .filter_map(|piece| match piece {
-                Piece::Text(text) => Some(text.as_bytes().to_vec()),
-                Piece::Expr(_) => None,
-            })
-            .flatten()
-            .collect()
-    };
-    let same_bytes = |pool: &mut Pool, actual: &[Term], expected: &[u8]| -> Term {
-        let checks: Vec<Term> = actual
-            .iter()
-            .zip(expected)
-            .map(|(byte, expected)| {
-                let expected = pool.bv(8, u128::from(*expected));
-                pool.eq(*byte, expected)
-            })
-            .collect();
-        pool.all(&checks)
-    };
-    match placeholders.as_slice() {
-        [] => {
-            let expected = literal(&pieces);
-            if bytes.len() != expected.len() {
-                return Ok(pool.boolean(false));
+    let mut segments: Vec<Segment<'_>> = Vec::new();
+    for piece in template.pieces() {
+        let segment = match piece {
+            Piece::Text(text) => Segment::Bytes(exec::bytes(pool, text.as_bytes())),
+            Piece::Expr(crate::expr::Expr::Var(name)) if known.texts.contains_key(name) => {
+                Segment::Bytes(known.texts[name].clone())
             }
-            Ok(same_bytes(pool, bytes, &expected))
-        }
-        [index] => {
-            let (prefix, suffix) = (literal(&pieces[..*index]), literal(&pieces[index + 1..]));
-            let Piece::Expr(expr) = pieces[*index] else {
-                return Err("a placeholder".into());
-            };
-            let number = match formula::translate(pool, expr, numbers)? {
-                Formula::Number(number) => number,
-                Formula::Truth(_) => return Err("a placeholder that prints true or false".into()),
-            };
-            if bytes.len() < prefix.len() + suffix.len() + 1 {
-                return Ok(pool.boolean(false));
+            Piece::Expr(expr)
+                if crate::expr::variables_of(expr)
+                    .iter()
+                    .all(|name| known.fixed.contains_key(name)) =>
+            {
+                let value = crate::expr::eval(expr, known.fixed)
+                    .map_err(|error| format!("a placeholder that can't be computed: {error}"))?;
+                let text = value
+                    .render()
+                    .map_err(|error| format!("a placeholder that can't be written: {error}"))?;
+                Segment::Bytes(exec::bytes(pool, text.as_bytes()))
             }
-            let end = bytes.len() - suffix.len();
-            let starts = same_bytes(pool, &bytes[..prefix.len()], &prefix);
-            let ends = same_bytes(pool, &bytes[end..], &suffix);
-            let middle = number_is(pool, &bytes[prefix.len()..end], number);
-            Ok(pool.all(&[starts, ends, middle]))
+            Piece::Expr(crate::expr::Expr::Call(crate::expr::Function::Places, arguments)) => {
+                match arguments.as_slice() {
+                    [value, crate::expr::Expr::Literal(Value::Int(places))] => Segment::Number(
+                        value,
+                        u8::try_from(*places)
+                            .ok()
+                            .filter(|places| (1..=30).contains(places))
+                            .ok_or("places with an unusual number of places")?,
+                    ),
+                    _ => return Err("places with its places given by a formula".into()),
+                }
+            }
+            Piece::Expr(expr) => Segment::Number(expr, 0),
+        };
+        // Neighboring bytes join, so a template is at most bytes, a number, bytes.
+        match (segments.last_mut(), segment) {
+            (Some(Segment::Bytes(before)), Segment::Bytes(more)) => before.extend(more),
+            (_, segment) => segments.push(segment),
         }
-        _ => Err("a test output with more than one computed value".into()),
     }
+    let empty = Vec::new();
+    let (prefix, number, suffix) = match segments.as_slice() {
+        [] => (&empty, None, &empty),
+        [Segment::Bytes(all)] => (all, None, &empty),
+        [Segment::Number(expr, places)] => (&empty, Some((*expr, *places)), &empty),
+        [Segment::Bytes(before), Segment::Number(expr, places)] => {
+            (before, Some((*expr, *places)), &empty)
+        }
+        [Segment::Number(expr, places), Segment::Bytes(after)] => {
+            (&empty, Some((*expr, *places)), after)
+        }
+        [
+            Segment::Bytes(before),
+            Segment::Number(expr, places),
+            Segment::Bytes(after),
+        ] => (before, Some((*expr, *places)), after),
+        _ => return Err("a test output with more than one computed value".into()),
+    };
+    let Some((expr, places)) = number else {
+        return Ok(same_terms(pool, bytes, prefix));
+    };
+    let number = match formula::translate(pool, expr, known.numbers)? {
+        Formula::Number(number) => number,
+        Formula::Truth(_) => return Err("a placeholder that prints true or false".into()),
+    };
+    // places(x, k) prints a whole number with k places; a decimal itself prints with its own.
+    let places = match (places, number.places) {
+        (0, own) => own,
+        (_, 0) => places,
+        _ => return Err("places of a decimal; scale it to a whole number first".into()),
+    };
+    if bytes.len() < prefix.len() + suffix.len() + 1 {
+        return Ok(pool.boolean(false));
+    }
+    let end = bytes.len() - suffix.len();
+    let starts = same_terms(pool, &bytes[..prefix.len()], prefix);
+    let ends = same_terms(pool, &bytes[end..], suffix);
+    let middle = number_is(pool, &bytes[prefix.len()..end], number, places);
+    Ok(pool.all(&[starts, ends, middle]))
 }
 
 /// What must hold for a run that exited with `status` to pass the block.
 fn passes(
     pool: &mut Pool,
     block: &Generated,
-    numbers: &BTreeMap<String, Number>,
+    known: &Known<'_>,
     run: &State,
     status: Term,
 ) -> Result<Term, String> {
-    let stdout = text_is(pool, &run.stdout, &block.stdout, numbers)?;
-    let stderr = text_is(pool, &run.stderr, &block.stderr, numbers)?;
+    let (numbers, fixed) = (known.numbers, known.fixed);
+    let stdout = text_is(pool, &run.stdout, &block.stdout, known)?;
+    let stderr = text_is(pool, &run.stderr, &block.stderr, known)?;
     let exit = match &block.exit_code {
         ExitCode::Fixed(code) => {
             let code = pool.bv(8, u128::from(*code));
@@ -471,9 +660,20 @@ fn passes(
             let [Piece::Expr(expr)] = template.pieces()[..] else {
                 return Err("an exit code template with text around its formula".into());
             };
-            let number = match formula::translate(pool, expr, numbers)? {
-                Formula::Number(number) => number,
-                Formula::Truth(_) => return Err("an exit code that's true or false".into()),
+            // With every variable fixed, the formula is just a number.
+            let known = crate::expr::variables_of(expr)
+                .iter()
+                .all(|name| fixed.contains_key(name));
+            let number = if known {
+                match crate::expr::eval(expr, fixed) {
+                    Ok(Value::Int(code)) => Number::whole(pool.bv_signed(WIDTH, code), code, code),
+                    _ => return Err("an exit code that isn't a whole number".into()),
+                }
+            } else {
+                match formula::translate(pool, expr, numbers)? {
+                    Formula::Number(number) => number,
+                    Formula::Truth(_) => return Err("an exit code that's true or false".into()),
+                }
             };
             let (zero, top) = (pool.bv(WIDTH, 0), pool.bv(WIDTH, 255));
             let at_least = pool.sle(zero, number.term);
@@ -483,7 +683,39 @@ fn passes(
             pool.all(&[at_least, at_most, same])
         }
     };
-    Ok(pool.all(&[stdout, stderr, exit]))
+    let mut checks = vec![stdout, stderr, exit];
+    // As the runner checks files: each expected one holds exactly its text, the others given
+    // stay as they were, and nothing else is written.
+    for (name, template) in &block.files_after {
+        checks.push(match run.file(name) {
+            Some(bytes) => text_is(pool, bytes, template, known)?,
+            None => pool.boolean(false),
+        });
+    }
+    for (name, before) in run.files_before() {
+        if block.files_after.contains_key(name) {
+            continue;
+        }
+        let after = run.file(name).unwrap_or_default();
+        checks.push(same_terms(pool, before, after));
+    }
+    if run
+        .written
+        .keys()
+        .any(|name| !block.files.contains_key(name) && !block.files_after.contains_key(name))
+    {
+        checks.push(pool.boolean(false));
+    }
+    Ok(pool.all(&checks))
+}
+
+/// Whether two runs of bytes are the same.
+fn same_terms(pool: &mut Pool, a: &[Term], b: &[Term]) -> Term {
+    if a.len() != b.len() {
+        return pool.boolean(false);
+    }
+    let checks: Vec<Term> = a.iter().zip(b).map(|(x, y)| pool.eq(*x, *y)).collect();
+    pool.all(&checks)
 }
 
 /// Proves `block` about the program `machine` holds, within `budget`.
@@ -493,15 +725,9 @@ pub fn prove(machine: &Machine, block: &Generated, budget: Budget) -> Verdict {
 }
 
 fn attempt(machine: &Machine, block: &Generated, budget: Budget) -> Result<Verdict, String> {
-    if !block.files.is_empty() || !block.files_after.is_empty() {
-        return Err("tests with files".into());
-    }
     let mut each = Vec::new();
     for (name, generator) in &block.vars {
-        let Generator::Int { lo, hi } = generator else {
-            return Err(format!("{name} isn't drawn by int(lo, hi)"));
-        };
-        each.push((name.clone(), shapes(*lo, *hi)));
+        each.push((name.clone(), parts(name, generator)?));
     }
     let total = each
         .iter()
@@ -517,7 +743,7 @@ fn attempt(machine: &Machine, block: &Generated, budget: Budget) -> Result<Verdi
     let paths = AtomicUsize::new(0);
     let alone: Mutex<Option<String>> = Mutex::new(None);
     let stop = AtomicBool::new(false);
-    let found: Mutex<Option<BTreeMap<String, i128>>> = Mutex::new(None);
+    let found: Mutex<Option<BTreeMap<String, Value>>> = Mutex::new(None);
     let failure: Mutex<Option<String>> = Mutex::new(None);
     let workers = std::thread::available_parallelism()
         .map_or(1, std::num::NonZero::get)
@@ -575,7 +801,7 @@ fn attempt(machine: &Machine, block: &Generated, budget: Budget) -> Result<Verdi
 /// Why proving one shape stopped short.
 enum Stop {
     /// Inputs where the program disagrees with the formulas.
-    Counterexample(BTreeMap<String, i128>),
+    Counterexample(BTreeMap<String, Value>),
     /// Something the proof can't settle.
     Unproven(String),
 }
@@ -598,7 +824,7 @@ impl From<&str> for Stop {
 fn prove_shape(
     image: &Image,
     block: &Generated,
-    each: &[(String, Vec<Shape>)],
+    each: &[(String, Vec<Part>)],
     combination: usize,
     budget: Budget,
 ) -> Result<(usize, Option<String>), Stop> {
@@ -610,12 +836,29 @@ fn prove_shape(
     let mut inputs = BTreeMap::new();
     let mut numbers = BTreeMap::new();
     let mut constraints = Vec::new();
-    for (name, shapes) in each {
-        let number = rest % shapes.len();
-        rest /= shapes.len();
-        let input = input(&mut pool, name, number, &shapes[number]);
+    // The fixed values chosen, which a counterexample reports with the numbers found, and the
+    // texts drawn, byte by byte.
+    let mut chosen = BTreeMap::new();
+    let mut texts: BTreeMap<String, Vec<Term>> = BTreeMap::new();
+    for (name, parts) in each {
+        let number = rest % parts.len();
+        rest /= parts.len();
+        let input = match &parts[number] {
+            Part::Number(shape, places) => input(&mut pool, name, number, shape, *places),
+            Part::Fixed(value) => {
+                chosen.insert(name.clone(), value.clone());
+                fixed(&mut pool, value)?
+            }
+            Part::Text(length, characters) => {
+                let input = text_input(&mut pool, name, *length, characters);
+                texts.insert(name.clone(), input.text.clone());
+                input
+            }
+        };
         constraints.extend(&input.constraints);
-        numbers.insert(name.clone(), input.number);
+        if let Some(number) = input.number {
+            numbers.insert(name.clone(), number);
+        }
         inputs.insert(name.clone(), input);
     }
     let args = block
@@ -629,7 +872,11 @@ fn prove_shape(
     if stdin.len() > 4096 {
         return Err("standard input over 4096 bytes".into());
     }
-    let mut start = State::start(image, &mut pool, &args, stdin);
+    let mut files = BTreeMap::new();
+    for (name, template) in &block.files {
+        files.insert(name.clone(), pattern_bytes(&mut pool, template, &inputs)?);
+    }
+    let mut start = State::start(image, &mut pool, &args, stdin).with_files(files);
     start.path = constraints;
     let began = Instant::now();
     let runs = exec::explore(image, start, &mut pool, &mut solver, budget.max_paths)?;
@@ -639,7 +886,14 @@ fn prove_shape(
     let trace = std::env::var_os("LENGUA_PROVE_TRACE").is_some();
     for run in runs {
         let holds = match &run.end {
-            Some(End::Exit(status)) => passes(&mut pool, block, &numbers, &run, *status)?,
+            Some(End::Exit(status)) => {
+                let known = Known {
+                    numbers: &numbers,
+                    fixed: &chosen,
+                    texts: &texts,
+                };
+                passes(&mut pool, block, &known, &run, *status)?
+            }
             Some(End::Signal(_)) => pool.boolean(false),
             Some(End::Unsupported(reason)) => return Err(Stop::Unproven(reason.clone())),
             None => return Err("a run that didn't end".into()),
@@ -647,20 +901,45 @@ fn prove_shape(
         let broken = pool.bool_not(holds);
         let mut conditions = run.path.clone();
         conditions.push(broken);
-        let values: Vec<Term> = numbers.values().map(|number| number.term).collect();
+        // A counterexample shows each number, and each text short enough to show.
+        let shown: Vec<(&String, &Vec<Term>)> = texts
+            .iter()
+            .filter(|(_, bytes)| bytes.len() <= MAX_CHECKED_TEXT)
+            .collect();
+        let values: Vec<Term> = numbers
+            .values()
+            .map(|number| number.term)
+            .chain(shown.iter().flat_map(|(_, bytes)| bytes.iter().copied()))
+            .collect();
         let (answer, model) = solver
             .check(&pool, &conditions, &values)
             .map_err(|error| format!("the solver failed: {error}"))?;
         match answer {
             Answer::Unsat => {}
             Answer::Sat => {
-                let mut found = BTreeMap::new();
+                if shown.len() < texts.len() {
+                    return Err("a counterexample in a text too long to show".into());
+                }
+                let mut found = chosen.clone();
+                for (name, bytes) in &shown {
+                    let text: Vec<u8> = bytes
+                        .iter()
+                        .map(|byte| model.get(byte).map_or(b'?', |value| *value as u8))
+                        .collect();
+                    found.insert(
+                        (*name).clone(),
+                        Value::Str(String::from_utf8_lossy(&text).into_owned()),
+                    );
+                }
                 for (name, number) in &numbers {
                     let value = model
                         .get(&number.term)
                         .copied()
                         .ok_or("a counterexample without values")?;
-                    found.insert(name.clone(), i128::from_ne_bytes(value.to_ne_bytes()));
+                    found.insert(
+                        name.clone(),
+                        Value::Int(i128::from_ne_bytes(value.to_ne_bytes())),
+                    );
                 }
                 return Err(Stop::Counterexample(found));
             }
@@ -697,7 +976,12 @@ pub fn agrees(machine: &Machine, cases: &[crate::testfile::Case]) -> Result<(), 
             .map(|arg| exec::bytes(&mut pool, arg.as_bytes()))
             .collect();
         let stdin = exec::bytes(&mut pool, case.stdin.as_bytes());
-        let start = State::start(&image, &mut pool, &args, stdin);
+        let files = case
+            .files
+            .iter()
+            .map(|(name, contents)| (name.clone(), exec::bytes(&mut pool, contents.as_bytes())))
+            .collect();
+        let start = State::start(&image, &mut pool, &args, stdin).with_files(files);
         let mut runs = exec::explore(&image, start, &mut pool, &mut exec::Concrete, 2)?;
         let run = runs.pop().ok_or("the model didn't run")?;
         let text = |bytes: &[Term]| -> Option<Vec<u8>> {
@@ -714,9 +998,13 @@ pub fn agrees(machine: &Machine, cases: &[crate::testfile::Case]) -> Result<(), 
             Some(End::Unsupported(reason)) => return Err(reason.clone()),
             _ => None,
         };
+        let files_match = case.files_after.iter().all(|(name, contents)| {
+            run.file(name).and_then(text).as_deref() == Some(contents.as_bytes())
+        });
         let same = text(&run.stdout).as_deref() == Some(case.stdout.as_bytes())
             && text(&run.stderr).as_deref() == Some(case.stderr.as_bytes())
-            && status == Some(u128::from(case.exit_code));
+            && status == Some(u128::from(case.exit_code))
+            && files_match;
         if !same {
             return Err(format!(
                 "the prover's model of the code disagreed with the real program on {}",

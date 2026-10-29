@@ -815,9 +815,9 @@ impl LenguaServer {
         title = "Prove for every input",
         description = "Proves that the checked program in <path> prints exactly what its tests' \
             formulas say for every input in range, not only the sampled ones: for each generated \
-            test that draws whole numbers with int(lo, hi) and computes whole-number output, it \
-            runs the machine code on symbols and asks two independent SMT solvers, z3 and cvc5, \
-            whether any input could make the output differ. Call it after check_code passes. It \
+            test whose inputs are whole numbers, decimals, choices or short texts, and whose \
+            outputs are text, numbers or files, it runs the machine code on symbols and asks two \
+            independent SMT solvers, z3 and cvc5, whether any input could make the output differ. Call it after check_code passes. It \
             can take a few minutes. A counterexample is confirmed with a real run and reported \
             as a failure. lengua.lock records what was proven, and status shows it until the \
             spec, tests or code change. path: absolute path of the program folder.",
@@ -944,10 +944,7 @@ impl LenguaServer {
                     (false, format!("tested, not proven: {reason}"))
                 }
                 Ok(prove::Verdict::Counterexample(values)) => {
-                    let inputs: expr::Env = values
-                        .iter()
-                        .map(|(name, value)| (name.clone(), expr::Value::Int(*value)))
-                        .collect();
+                    let inputs: expr::Env = values.into_iter().collect();
                     let described = testfile::describe_inputs(&inputs);
                     match block.case(inputs) {
                         Ok(case) => match testrun::check_case(

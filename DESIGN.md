@@ -291,9 +291,19 @@ Trust:
     around them and from print loops shaped like the template's, must be accepted exactly when
     the bytes are the formula's text, never for leading zeros, a lost sign or a wrong digit.
 
-The first milestone covers whole-number inputs and formulas (`+ - * / %`, `abs`, `min`, `max`,
-`if`) with at most one computed value per output. Text, decimals, files and threads stay tested,
-not proven.
+What it covers:
+- Inputs: `int(lo, hi)`, and `decimal(lo, hi)` as digits around a point. Each value of a
+  `choice(…)` is proven in turn. `string(min, max, "chars")` runs over at most 4,096 lengths,
+  with a variable for each byte, held to the characters.
+- Formulas: whole numbers (`+ - * / %`, `abs`, `min`, `max`, `if`, and `scaled(x, places)` for a
+  decimal's digits), printed plainly or with `places(x, k)`. Any placeholder whose variables
+  all have fixed values in a shape is computed outright, so messages that quote an argument
+  prove. A placeholder that's just a drawn text compares byte for byte.
+- Files: `openat`, `read`, `write` and `close` on the test's files. A missing input file gives
+  `ENOENT`, and the checks on the files left after the run are the runner's.
+
+Not yet: formulas on text such as `upper(text)`, SSE and AVX instructions in the model,
+floating point, and threads. Those blocks are tested, not proven, and the report says why.
 
 ## Resources, threads and capabilities
 
