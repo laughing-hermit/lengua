@@ -116,6 +116,10 @@ pub struct State {
     overflow: Term,
     parity: Term,
     memory: BTreeMap<u64, Term>,
+    /// The value last stored whole at an address, while none of its bytes has changed since:
+    /// loading those bytes gives it back as it was, not rebuilt from bytes the simplifier may
+    /// have rewritten.
+    stored: BTreeMap<u64, Term>,
     rip: u64,
     /// The conditions the inputs meet on this run.
     pub path: Vec<Term>,
@@ -159,6 +163,7 @@ impl State {
             overflow: no,
             parity: no,
             memory: BTreeMap::new(),
+            stored: BTreeMap::new(),
             rip: image.entry,
             path: Vec::new(),
             stdin: Rc::new(stdin),
@@ -200,6 +205,20 @@ impl State {
     /// Writes `value` little-endian at `address`, which must be known to be writable.
     fn store(&mut self, pool: &mut Pool, address: u64, value: Term) {
         let bytes = pool.width(value) / 8;
+        // A whole value any of these bytes belonged to is gone; values are at most 8 bytes.
+        let end = address + u64::from(bytes);
+        let overlapping: Vec<u64> = self
+            .stored
+            .range(address.saturating_sub(7)..end)
+            .filter(|(start, old)| **start + u64::from(pool.width(**old) / 8) > address)
+            .map(|(start, _)| *start)
+            .collect();
+        for start in overlapping {
+            self.stored.remove(&start);
+        }
+        if bytes > 1 {
+            self.stored.insert(address, value);
+        }
         for byte in 0..bytes {
             let part = pool.extract(value, byte * 8 + 7, byte * 8);
             self.memory.insert(address + u64::from(byte), part);
@@ -327,6 +346,13 @@ impl<'a> Cpu<'a> {
     }
 
     fn load(&mut self, address: u64, bytes: u32) -> Result<Term, Stop> {
+        if let Some(whole) = self.state.stored.get(&address).copied()
+            && self.pool.width(whole) == bytes * 8
+            && self.image.region(address).is_some()
+            && self.image.region(address + u64::from(bytes) - 1).is_some()
+        {
+            return Ok(whole);
+        }
         let mut value: Option<Term> = None;
         for offset in 0..u64::from(bytes) {
             let at = address.wrapping_add(offset);

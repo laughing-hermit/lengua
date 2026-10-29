@@ -231,10 +231,19 @@ How `prove` works (`src/prove/`):
   two's-complement arithmetic and the formula's exact 128-bit arithmetic come out the same term
   where neither can overflow. Printed digits are matched through their common root, the value
   divided by powers of ten. So "prints the formula's value" usually reduces to identical terms,
-  and the solver is asked only what remains.
+  and the solver is asked only what remains. The same idea reaches the program's own choices:
+  - a comparison of values whose widening simplifies all the way is made on the wide values, so
+    a flag test on the program's 64-bit `a - b` and the formula's `a - b < 0` meet as one term;
+  - a sign-bit test is `v < 0`, and `-x < 0` is `0 < x`;
+  - a choice widens branch by branch, and its condition settles each branch's sign and range;
+  - `ite(0 < x, x, -x)` and `ite(x < 0, -x, x)` are one term, the size of `x`;
+  - a value stored to memory and loaded back is the value, not its bytes rebuilt.
+
+  With these, the absolute difference Claude Code wrote with `cmovs` and its own parser, which
+  timed out before, proves in about ten seconds, and the template in under a second.
 - **The solvers.** It asks z3 in SMT-LIB 2, and cvc5 confirms, with one fresh pair of processes
-  per shape and every core in use. `examples/add` takes about a minute and a half for 4×10^18
-  input pairs; the template takes about ten seconds. Every question has a time limit, cut to what
+  per shape and every core in use. `examples/add` takes about a minute for 4×10^18 input pairs,
+  `examples/absdiff` about ten seconds, and the template under a second. Every question has a time limit, cut to what
   is left of the proof's five minutes.
 
 Trust:

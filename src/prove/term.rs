@@ -277,7 +277,18 @@ impl Pool {
                 let (low, high) = self.range(*a);
                 i128::try_from(low).ok().zip(i128::try_from(high).ok())
             }
-            Node::Ite(_, a, b) => Some((s(a).0.min(s(b).0), s(a).1.max(s(b).1))),
+            Node::Ite(condition, a, b) => {
+                let given = |value: Term, holds: bool| {
+                    let (low, high) = self.signed_range(value);
+                    if self.non_negative_when(*condition, holds, value) {
+                        (low.max(0), high.max(0))
+                    } else {
+                        (low, high)
+                    }
+                };
+                let (then, otherwise) = (given(*a, true), given(*b, false));
+                Some((then.0.min(otherwise.0), then.1.max(otherwise.1)))
+            }
             _ => None,
         };
         match (computed, from_unsigned) {
@@ -425,9 +436,65 @@ impl Pool {
                     (r(high).1 << shift) | r(low).1,
                 )
             }
-            Node::Ite(_, a, b) => (r(a).0.min(r(b).0), r(a).1.max(r(b).1)),
+            Node::Ite(condition, a, b) => {
+                let (then, otherwise) = (
+                    self.range_given(*condition, true, *a),
+                    self.range_given(*condition, false, *b),
+                );
+                (then.0.min(otherwise.0), then.1.max(otherwise.1))
+            }
             _ => full,
         }
+    }
+
+    /// Whether `condition` being `holds` settles that `value`, read as signed, is at least zero:
+    /// `0 < v` or `not v < 0` for `v` itself, `v < 0` or `not 0 < v` for `-v`.
+    fn non_negative_when(&self, condition: Term, holds: bool, value: Term) -> bool {
+        let (condition, holds) = match *self.node(condition) {
+            Node::BoolNot(inner) => (inner, !holds),
+            _ => (condition, holds),
+        };
+        let Node::Slt(left, right) = *self.node(condition) else {
+            return false;
+        };
+        let width = self.width(left);
+        if self.width(value) != width {
+            return false;
+        }
+        let smallest = if width >= 128 {
+            i128::MIN
+        } else {
+            -(1_i128 << (width - 1))
+        };
+        let negation_of = |other: Term| {
+            matches!(*self.node(value), Node::Neg(inner) if inner == other)
+                && self.signed_range(other).0 > smallest
+        };
+        match (self.constant(left), self.constant(right), holds) {
+            (Some(0), None, true) | (None, Some(0), false) => {
+                value
+                    == if self.constant(left) == Some(0) {
+                        right
+                    } else {
+                        left
+                    }
+            }
+            (Some(0), None, false) => negation_of(right),
+            (None, Some(0), true) => negation_of(left),
+            _ => false,
+        }
+    }
+
+    /// The range of `value` where `condition` is `holds`.
+    fn range_given(&self, condition: Term, holds: bool, value: Term) -> (u128, u128) {
+        let (low, high) = self.range(value);
+        if self.non_negative_when(condition, holds, value) {
+            let (_, signed_high) = self.signed_range(value);
+            if let Ok(signed_high) = u128::try_from(signed_high) {
+                return (low.min(signed_high), signed_high.min(high));
+            }
+        }
+        (low, high)
     }
 
     /// A new bit-vector variable named `name` that only takes values from `low` to `high`.
@@ -880,10 +947,69 @@ impl Pool {
                 let (x, y) = (self.zero_extend(x, by), self.zero_extend(y, by));
                 return self.mul(x, y);
             }
+            // A choice widens branch by branch, each knowing which way the choice went.
+            Node::Ite(condition, then, otherwise) => {
+                let then = self.zero_extend_given(condition, true, then, by);
+                let otherwise = self.zero_extend_given(condition, false, otherwise, by);
+                return self.ite(condition, then, otherwise);
+            }
             _ => {}
         }
 
         self.make(Node::ZeroExtend(a, by), Sort::Bv(width))
+    }
+
+    /// `value` zero-extended by `by`, where `condition` is `holds`. When that makes `value` never
+    /// negative, as `0 < x` does for `x` and `x <= 0` does for `-x`, widening with zeros is
+    /// widening with the sign, which simplifies the way signed arithmetic does.
+    fn zero_extend_given(&mut self, condition: Term, holds: bool, value: Term, by: u32) -> Term {
+        if self.non_negative_given(condition, holds, value) {
+            self.sign_extend(value, by)
+        } else {
+            self.zero_extend(value, by)
+        }
+    }
+
+    /// Whether `condition` being `holds` makes `value`, read as signed, at least zero.
+    fn non_negative_given(&mut self, condition: Term, holds: bool, value: Term) -> bool {
+        let (condition, holds) = match *self.node(condition) {
+            Node::BoolNot(inner) => (inner, !holds),
+            _ => (condition, holds),
+        };
+        let Node::Slt(left, right) = *self.node(condition) else {
+            return false;
+        };
+        let width = self.width(value);
+        let wide = if width < self.width(left) {
+            self.sign_extend(value, self.width(left) - width)
+        } else {
+            value
+        };
+        if self.width(wide) != self.width(left) {
+            return false;
+        }
+        let smallest = if self.width(left) >= 128 {
+            i128::MIN
+        } else {
+            -(1_i128 << (self.width(left) - 1))
+        };
+        // The value itself, or the negation of a value that isn't the most negative one.
+        let compared = |pool: &mut Self, other: Term, negated: bool| {
+            if negated {
+                pool.signed_range(other).0 > smallest && pool.neg(other) == wide
+            } else {
+                other == wide
+            }
+        };
+        match (self.constant(left), self.constant(right), holds) {
+            // 0 < v makes v positive; not 0 < v makes v at most zero, so -v at least zero.
+            (Some(0), None, true) => compared(self, right, false),
+            (Some(0), None, false) => compared(self, right, true),
+            // not v < 0 makes v at least zero; v < 0 makes -v positive.
+            (None, Some(0), false) => compared(self, left, false),
+            (None, Some(0), true) => compared(self, left, true),
+            _ => false,
+        }
     }
 
     /// `a` widened by `by` copies of its sign bit.
@@ -903,10 +1029,53 @@ impl Pool {
         if let Some(x) = self.constant(a) {
             return self.bv_signed(width, signed(x, narrow));
         }
-        if let Node::SignExtend(inner, inner_by) = *self.node(a) {
-            return self.sign_extend(inner, inner_by + by);
+        match *self.node(a) {
+            Node::SignExtend(inner, inner_by) => return self.sign_extend(inner, inner_by + by),
+            // A choice widens branch by branch.
+            Node::Ite(condition, then, otherwise) => {
+                let (then, otherwise) =
+                    (self.sign_extend(then, by), self.sign_extend(otherwise, by));
+                return self.ite(condition, then, otherwise);
+            }
+            _ => {}
         }
         self.make(Node::SignExtend(a, by), Sort::Bv(width))
+    }
+
+    /// `a` widened to 128 bits, when widening undoes the narrow arithmetic all the way down: a
+    /// sum, product or negation pushed to widened leaves, a constant, or a choice between such.
+    /// The program's 64-bit arithmetic and the formula's 128-bit arithmetic then meet as one term.
+    fn lifted(&mut self, a: Term, signed: bool) -> Option<Term> {
+        let width = self.width(a);
+        if width >= 128 {
+            return None;
+        }
+        let wide = if signed {
+            self.sign_extend(a, 128 - width)
+        } else {
+            self.zero_extend(a, 128 - width)
+        };
+        let extended = |pool: &Self, term: Term| {
+            matches!(pool.node(term), Node::SignExtend(..) | Node::ZeroExtend(..))
+        };
+        match *self.node(wide) {
+            Node::SignExtend(..) | Node::ZeroExtend(..) => None,
+            Node::Ite(_, then, otherwise) if extended(self, then) || extended(self, otherwise) => {
+                None
+            }
+            _ => Some(wide),
+        }
+    }
+
+    /// Both of `a` and `b` lifted to 128 bits, when both lift and neither is a constant: then a
+    /// comparison of them is the same comparison of the wide values.
+    fn lifted_pair(&mut self, a: Term, b: Term, signed: bool) -> Option<(Term, Term)> {
+        if self.sort(a) == Sort::Bool || self.constant(a).is_some() && self.constant(b).is_some() {
+            return None;
+        }
+        let wide_a = self.lifted(a, signed)?;
+        let wide_b = self.lifted(b, signed)?;
+        Some((wide_a, wide_b))
     }
 
     /// `a` sign-extended part by part, when it's a sum, negation or product that never
@@ -982,6 +1151,27 @@ impl Pool {
         {
             return self.extract(upper, upper_high, lower_low);
         }
+        // A constant that the term's range fixes those bits to, next to one of the term's
+        // parts, is that part too: a value saved to memory and loaded back is the value, even
+        // where its range had made some of its bytes constants.
+        if let (Some(c), Node::Extract(inner, lower_high, lower_low)) =
+            (self.constant(high), self.node(low).clone())
+            && lower_high + high_width < self.width(inner)
+        {
+            let fixed = self.extract(inner, lower_high + high_width, lower_high + 1);
+            if self.constant(fixed) == Some(c) {
+                return self.extract(inner, lower_high + high_width, lower_low);
+            }
+        }
+        if let (Node::Extract(inner, upper_high, upper_low), Some(c)) =
+            (self.node(high).clone(), self.constant(low))
+            && upper_low >= low_width
+        {
+            let fixed = self.extract(inner, upper_low - 1, upper_low - low_width);
+            if self.constant(fixed) == Some(c) {
+                return self.extract(inner, upper_high, upper_low - low_width);
+            }
+        }
         self.make(Node::Concat(high, low), Sort::Bv(width))
     }
 
@@ -994,6 +1184,20 @@ impl Pool {
         }
         if then == otherwise {
             return then;
+        }
+        // A negated choice is the choice the other way round.
+        if let Node::BoolNot(inner) = *self.node(condition) {
+            return self.ite(inner, otherwise, then);
+        }
+        // The size of x has one form however it was chosen: ite(0 < x, x, -x) is
+        // ite(x < 0, -x, x), even for the most negative x, which both leave as it is.
+        if let Node::Slt(left, right) = *self.node(condition)
+            && self.constant(left) == Some(0)
+            && then == right
+            && matches!(*self.node(otherwise), Node::Neg(inner) if inner == right)
+        {
+            let negative = self.slt(right, left);
+            return self.ite(negative, otherwise, then);
         }
         let sort = self.sort(then);
         if sort == Sort::Bool {
@@ -1017,6 +1221,22 @@ impl Pool {
         if ah < bl || bh < al {
             return self.boolean(false);
         }
+        // The top bit of v set is v < 0, which comparisons below can lift.
+        for (bit, other) in [(a, b), (b, a)] {
+            if let (Node::Extract(v, high, low), Some(c)) =
+                (self.node(bit).clone(), self.constant(other))
+                && high == low
+                && high + 1 == self.width(v)
+            {
+                let zero = self.bv(high + 1, 0);
+                let negative = self.slt(v, zero);
+                return if c == 1 {
+                    negative
+                } else {
+                    self.bool_not(negative)
+                };
+            }
+        }
         // -x = c is x = -c.
         if let (Node::Neg(x), Some(c)) = (self.node(a).clone(), self.constant(b)) {
             let width = self.width(b);
@@ -1035,6 +1255,9 @@ impl Pool {
         }
         if let (Some(x), Some(y)) = (self.truth(a), self.truth(b)) {
             return self.boolean(x == y);
+        }
+        if let Some((a, b)) = self.lifted_pair(a, b, true) {
+            return self.eq(a, b);
         }
         self.make(Node::Eq(a, b), Sort::Bool)
     }
@@ -1055,6 +1278,9 @@ impl Pool {
             (Some(x), Some(y)) => return self.boolean(x < y),
             (_, Some(0)) => return self.boolean(false),
             _ => {}
+        }
+        if let Some((a, b)) = self.lifted_pair(a, b, false) {
+            return self.ult(a, b);
         }
         self.make(Node::Ult(a, b), Sort::Bool)
     }
@@ -1077,6 +1303,32 @@ impl Pool {
         }
         if let (Some(x), Some(y)) = (self.constant(a), self.constant(b)) {
             return self.boolean(signed(x, width) < signed(y, width));
+        }
+        let ((al, ah), (bl, bh)) = (self.signed_range(a), self.signed_range(b));
+        if ah < bl {
+            return self.boolean(true);
+        }
+        if al >= bh {
+            return self.boolean(false);
+        }
+        // -x < c is -c < x, and c < -x is x < -c, when neither x nor c is the most negative
+        // value, which negating leaves as it is.
+        let minimum = -(1_i128 << (width - 1));
+        for (negated, other, flipped) in [(a, b, false), (b, a, true)] {
+            if let (Node::Neg(x), Some(c)) = (self.node(negated).clone(), self.constant(other))
+                && self.signed_range(x).0 > minimum
+                && signed(c, width) > minimum
+            {
+                let minus_c = self.bv_signed(width, -signed(c, width));
+                return if flipped {
+                    self.slt(x, minus_c)
+                } else {
+                    self.slt(minus_c, x)
+                };
+            }
+        }
+        if let Some((a, b)) = self.lifted_pair(a, b, true) {
+            return self.slt(a, b);
         }
         self.make(Node::Slt(a, b), Sort::Bool)
     }

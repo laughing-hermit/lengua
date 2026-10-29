@@ -377,7 +377,7 @@ impl Writer<'_> {
             };
         }
         let deeper = depth - 1;
-        match self.rng.random_range(0..12) {
+        match self.rng.random_range(0..14) {
             0..=3 => {
                 let ops = [
                     Op::Add,
@@ -451,6 +451,40 @@ impl Writer<'_> {
                 Box::new(self.number(width, deeper)),
                 Box::new(self.number(width, deeper)),
             ),
+            12 | 13 if width > 8 => {
+                // An absolute value, widened with zeros, choosing by the sign of the widened
+                // value: as a program prints what cmov picked.
+                let narrower: Vec<u32> = self
+                    .widths
+                    .iter()
+                    .copied()
+                    .filter(|candidate| *candidate < width && *candidate >= 8)
+                    .collect();
+                let from = narrower[self.rng.random_range(0..narrower.len())];
+                let x = self.number(from, deeper);
+                let wide = Expr::SignExtend(Box::new(x.clone()), width - from);
+                let zero = Expr::Const(width, 0);
+                let comparison = [Comparison::Slt, Comparison::Sle][self.rng.random_range(0..2)];
+                let condition = if self.rng.random_bool(0.5) {
+                    Expr::Compare(comparison, Box::new(zero), Box::new(wide))
+                } else {
+                    Expr::Compare(comparison, Box::new(wide), Box::new(zero))
+                };
+                let negated = Expr::Neg(Box::new(x.clone()));
+                let (then, otherwise) = if self.rng.random_bool(0.5) {
+                    (x, negated)
+                } else {
+                    (negated, x)
+                };
+                Expr::ZeroExtend(
+                    Box::new(Expr::Ite(
+                        Box::new(condition),
+                        Box::new(then),
+                        Box::new(otherwise),
+                    )),
+                    width - from,
+                )
+            }
             11 if width >= 8 => {
                 // A sum of a digit chain's kind: x * 10 + (zext(d) - 48), widened.
                 let d = self.variable(8);
@@ -480,7 +514,41 @@ impl Writer<'_> {
             return Expr::Bool(self.rng.random_bool(0.5));
         }
         let deeper = depth - 1;
-        match self.rng.random_range(0..6) {
+        match self.rng.random_range(0..9) {
+            // The sign bit of a value, as flags read it.
+            6 => {
+                let width = self.widths[self.rng.random_range(1..self.widths.len())];
+                let value = self.number(width, deeper);
+                Expr::Compare(
+                    Comparison::Eq,
+                    Box::new(Expr::Extract(Box::new(value), width - 1, width - 1)),
+                    Box::new(Expr::Const(1, u128::from(self.rng.random_bool(0.5)))),
+                )
+            }
+            // A negation against a constant, or a narrow sum against one, both of which the
+            // pool rewrites.
+            7 | 8 => {
+                let width = [8, 16, 32, 64][self.rng.random_range(0..4)];
+                let inner = self.number(width, deeper);
+                let value = if self.rng.random_bool(0.5) {
+                    Expr::Neg(Box::new(inner))
+                } else {
+                    inner
+                };
+                let comparisons = [
+                    Comparison::Slt,
+                    Comparison::Sle,
+                    Comparison::Ult,
+                    Comparison::Eq,
+                ];
+                let comparison = comparisons[self.rng.random_range(0..comparisons.len())];
+                let constant = Expr::Const(width, self.constant(width));
+                if self.rng.random_bool(0.5) {
+                    Expr::Compare(comparison, Box::new(value), Box::new(constant))
+                } else {
+                    Expr::Compare(comparison, Box::new(constant), Box::new(value))
+                }
+            }
             0..=3 => {
                 let width = self.widths[self.rng.random_range(1..self.widths.len())];
                 let comparisons = [

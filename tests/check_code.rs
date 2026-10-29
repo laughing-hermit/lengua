@@ -522,3 +522,31 @@ async fn the_template_is_proven_for_every_input() {
     );
     session.service.cancel().await.expect("close the session");
 }
+
+#[tokio::test]
+async fn the_absolute_difference_example_is_proven() {
+    // Claude Code wrote this one through lengua; it picks the size of a - b with cmovs, which
+    // the prover settles by writing both the program's choice and abs(a - b) as one term.
+    if std::process::Command::new("z3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("z3 isn't installed");
+        return;
+    }
+    let session = session().await;
+    let folder = Program::new();
+    for name in ["spec.md", "tests.toml", "main.s"] {
+        folder.write(name, &example("absdiff", name));
+    }
+    session.approve(&folder).await;
+    let tests = session.call_ok("check_tests", folder.arguments()).await;
+    assert_eq!(tests["checked"], true, "{tests}");
+    let report = session.call_ok("check_code", folder.arguments()).await;
+    assert_eq!(report["stamped"], true, "{report}");
+    let proof = session.call_ok("prove", folder.arguments()).await;
+    assert_eq!(proof["proofs"][0]["test"], "generated B1", "{proof}");
+    assert_eq!(proof["proofs"][0]["proven"], true, "{proof}");
+    session.service.cancel().await.expect("close the session");
+}
