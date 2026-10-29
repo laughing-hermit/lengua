@@ -24,6 +24,10 @@ const ARGUMENT_ROOM: u64 = 1024 * 1024;
 /// The most instructions one run may take before the prover gives up on it.
 pub const MAX_STEPS: u64 = 5_000_000;
 
+/// The most places an address that depends on the input may be, such as a table's entries for
+/// each value of an input byte.
+const MAX_PLACES: u128 = 256;
+
 /// The bytes of a vector register: a zmm register's 512 bits.
 const VECTOR_BYTES: usize = 64;
 
@@ -553,6 +557,71 @@ impl<'a> Cpu<'a> {
         Ok(())
     }
 
+    /// The places an address that depends on the input can be: every value its range allows,
+    /// when there are few and each holds `bytes` bytes the access may use.
+    fn places(&self, address: Term, bytes: u32, writing: bool) -> Result<Vec<u64>, Stop> {
+        let (low, high) = self.pool.range(address);
+        if high - low >= MAX_PLACES {
+            return Err(unsupported(
+                "an address that depends on the input in more than 256 ways",
+            ));
+        }
+        let mut places = Vec::new();
+        for place in low..=high {
+            let place = u64::try_from(place).map_err(|_| unsupported("an address past 64 bits"))?;
+            for offset in 0..u64::from(bytes) {
+                match self.image.region(place.wrapping_add(offset)) {
+                    Some(region) if region.writable || !writing => {}
+                    _ => {
+                        return Err(unsupported(
+                            "an address the input chooses that may be outside the program's \
+                             memory",
+                        ));
+                    }
+                }
+            }
+            places.push(place);
+        }
+        Ok(places)
+    }
+
+    /// A load from an address the input chooses: the value at each place it can be, chosen by
+    /// the address, so a table indexed by an input byte is a function of the byte.
+    fn load_anywhere(&mut self, address: Term, bytes: u32) -> Result<Term, Stop> {
+        let places = self.places(address, bytes, false)?;
+        let mut value: Option<Term> = None;
+        for place in places.into_iter().rev() {
+            let here = self.load(place, bytes)?;
+            value = Some(match value {
+                None => here,
+                Some(other) => {
+                    let constant = self.pool.bv(64, u128::from(place));
+                    let chosen = self.pool.eq(address, constant);
+                    self.pool.ite(chosen, here, other)
+                }
+            });
+        }
+        value.ok_or_else(|| unsupported("an address with no place"))
+    }
+
+    /// A store to an address the input chooses: each place it can be keeps what it held unless
+    /// the address is that place.
+    fn save_anywhere(&mut self, address: Term, value: Term) -> Result<(), Stop> {
+        let bytes = self.pool.width(value) / 8;
+        for place in self.places(address, bytes, true)? {
+            let constant = self.pool.bv(64, u128::from(place));
+            let chosen = self.pool.eq(address, constant);
+            for offset in 0..bytes {
+                let at = place + u64::from(offset);
+                let old = self.load(at, 1)?;
+                let new = self.pool.extract(value, offset * 8 + 7, offset * 8);
+                let byte = self.pool.ite(chosen, new, old);
+                self.state.store(self.pool, at, byte);
+            }
+        }
+        Ok(())
+    }
+
     /// The width in bits of operand `index`.
     fn width(&self, index: u32) -> u32 {
         let instruction = self.instruction;
@@ -579,8 +648,14 @@ impl<'a> Cpu<'a> {
                     unsupported(format!("register {:?}", instruction.op_register(index)))
                 }),
             OpKind::Memory => {
-                let address = self.address()?;
-                self.load(address, self.width(index) / 8)
+                let bytes = self.width(index) / 8;
+                match self.address() {
+                    Ok(address) => self.load(address, bytes),
+                    Err(_) => {
+                        let address = self.effective_address()?;
+                        self.load_anywhere(address, bytes)
+                    }
+                }
             }
             OpKind::Immediate8
             | OpKind::Immediate16
@@ -603,10 +678,13 @@ impl<'a> Cpu<'a> {
                 .state
                 .set_register(self.pool, instruction.op_register(index), value)
                 .ok_or_else(|| unsupported("writing an unusual register")),
-            OpKind::Memory => {
-                let address = self.address()?;
-                self.save(address, value)
-            }
+            OpKind::Memory => match self.address() {
+                Ok(address) => self.save(address, value),
+                Err(_) => {
+                    let address = self.effective_address()?;
+                    self.save_anywhere(address, value)
+                }
+            },
             _ => Err(unsupported(
                 "writing an operand that isn't a register or memory",
             )),

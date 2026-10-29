@@ -821,7 +821,7 @@ async fn the_echo_server_answers_the_tests_client() {
     let report = session.call_ok("check_code", folder.arguments()).await;
     assert_eq!(report["stamped"], true, "{report}");
     let proof = session.call_ok("prove", folder.arguments()).await;
-    assert_eq!(proof["proofs"][0]["proven"], false, "{proof}");
+    assert_eq!(proof["proofs"][0]["proven"], true, "{proof}");
 
     // run serves in the background on the spec's port until it's stopped.
     let serving = session.call_ok("run", folder.arguments()).await;
@@ -1026,6 +1026,80 @@ async fn long_text_is_proven_up_to_the_bound() {
         status["program"]["proven_up_to"],
         serde_json::json!(["B1: up to 4096 bytes"]),
         "{status}"
+    );
+    session.service.cancel().await.expect("close the session");
+}
+
+#[tokio::test]
+async fn programs_on_the_network_are_proven() {
+    if std::process::Command::new("z3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("z3 isn't installed");
+        return;
+    }
+    let session = session().await;
+    // A server: the echo server, as it is.
+    let echo = Program::new();
+    for name in ["spec.md", "tests.toml", "main.s"] {
+        echo.write(name, &example("echo", name));
+    }
+    session.record(&echo).await;
+    let tests = session.call_ok("check_tests", echo.arguments()).await;
+    assert_eq!(tests["checked"], true, "{tests}");
+    let report = session.call_ok("check_code", echo.arguments()).await;
+    assert_eq!(report["stamped"], true, "{report}");
+    let proof = session.call_ok("prove", echo.arguments()).await;
+    assert_eq!(
+        proof["message"],
+        "Every generated test is proven for every input in its range. lengua.lock records it.",
+        "{proof}"
+    );
+    assert!(
+        proof["proofs"][0]["detail"]
+            .as_str()
+            .is_some_and(|detail| detail
+                .ends_with("arriving whole or cut after its first byte, at its middle, or both")),
+        "{proof}"
+    );
+    // A client: fetch, with short paths and bodies so the proof covers them all.
+    let fetch = Program::new();
+    let spec = example("fetch", "spec.md").replacen(
+        "path holds `1` to `100` characters",
+        "path holds `1` to `100` characters (tests: `6` and `11`)",
+        1,
+    );
+    fetch.write("spec.md", &spec);
+    session.record(&fetch).await;
+    let label = common::label(&spec);
+    let tests = example("fetch", "tests.toml");
+    let old_label = tests
+        .lines()
+        .find(|line| line.starts_with("spec = "))
+        .expect("a label")
+        .to_owned();
+    let tests = tests
+        .replacen(&old_label, &format!("spec = \"{label}\""), 1)
+        .replacen("path = 'string(1, 100, ", "path = 'string(1, 6, ", 1)
+        .replacen("body = 'string(0, 65000, ", "body = 'string(0, 11, ", 1);
+    fetch.write("tests.toml", &tests);
+    let code = example("fetch", "main.s");
+    let old_header = code.lines().next().expect("a header").to_owned();
+    fetch.write(
+        "main.s",
+        &code.replacen(&old_header, &format!("# lengua: spec {label}"), 1),
+    );
+    let checked = session.call_ok("check_tests", fetch.arguments()).await;
+    assert_eq!(checked["checked"], true, "{checked}");
+    let report = session.call_ok("check_code", fetch.arguments()).await;
+    assert_eq!(report["stamped"], true, "{report}");
+    let proof = session.call_ok("prove", fetch.arguments()).await;
+    assert_eq!(
+        proof["message"],
+        "Every generated test is proven for every input in its range. lengua.lock records it.",
+        "{proof}"
     );
     session.service.cancel().await.expect("close the session");
 }

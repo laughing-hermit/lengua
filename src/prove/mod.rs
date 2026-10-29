@@ -388,6 +388,9 @@ enum Part {
     Delivery(Delivery),
 }
 
+/// The test server's port in the samples the model is checked against.
+const SAMPLE_PORT: &str = "40000";
+
 /// The name a counterexample gives the delivery it was found with.
 pub const DELIVERY: &str = "(delivery)";
 
@@ -2129,21 +2132,54 @@ fn prove_shape(
 /// # Errors
 ///
 /// Describes the first disagreement, or what the model can't run.
-pub fn agrees(machine: &Machine, cases: &[crate::testfile::Case]) -> Result<(), String> {
+pub fn agrees(
+    machine: &Machine,
+    cases: &[crate::testfile::Case],
+    listens: bool,
+) -> Result<(), String> {
     let image = Image::new(machine).ok_or("the program has no _start")?;
     for case in cases {
         let mut pool = Pool::default();
+        // The test server's port, which a real run's kernel chooses: one for the samples.
+        let fill = |text: &str| text.replace(crate::testfile::PORT_TEXT, SAMPLE_PORT);
         let args: Vec<Vec<Term>> = case
             .args
             .iter()
-            .map(|arg| exec::bytes(&mut pool, arg.as_bytes()))
+            .map(|arg| exec::bytes(&mut pool, fill(arg).as_bytes()))
             .collect();
-        let stdin = exec::bytes(&mut pool, case.stdin.as_bytes());
+        let stdin = exec::bytes(&mut pool, fill(&case.stdin).as_bytes());
         let files = case
             .files
             .iter()
-            .map(|(name, contents)| (name.clone(), exec::bytes(&mut pool, contents.as_bytes())))
+            .map(|(name, contents)| {
+                (
+                    name.clone(),
+                    exec::bytes(&mut pool, fill(contents).as_bytes()),
+                )
+            })
             .collect();
+        let server = case
+            .server
+            .iter()
+            .map(|reply| {
+                (
+                    exec::bytes(&mut pool, fill(&reply.receives).as_bytes()),
+                    vec![exec::bytes(&mut pool, fill(&reply.replies).as_bytes())],
+                )
+            })
+            .collect();
+        let client = case
+            .client
+            .iter()
+            .map(|exchange| vec![exec::bytes(&mut pool, fill(&exchange.sends).as_bytes())])
+            .collect();
+        let network = exec::net::Network {
+            port: (!case.server.is_empty())
+                .then(|| pool.bv(WIDTH, SAMPLE_PORT.parse().unwrap_or(40000))),
+            server,
+            client,
+            listening: listens,
+        };
         let supply = case.supply();
         let random = supply
             .random
@@ -2161,7 +2197,8 @@ pub fn agrees(machine: &Machine, cases: &[crate::testfile::Case]) -> Result<(), 
             .collect();
         let start = State::start(&image, &mut pool, &args, stdin)
             .with_files(files)
-            .with_supply(random, clock);
+            .with_supply(random, clock)
+            .with_network(network);
         let mut runs = exec::explore(&image, start, &mut pool, &mut exec::Concrete, 2)?;
         let run = runs.pop().ok_or("the model didn't run")?;
         let text = |bytes: &[Term]| -> Option<Vec<u8>> {
@@ -2204,9 +2241,31 @@ pub fn agrees(machine: &Machine, cases: &[crate::testfile::Case]) -> Result<(), 
             .files_after
             .iter()
             .all(|(name, contents)| agrees_with(run.file(name), contents));
-        let same = agrees_with(Some(&run.stdout), &case.stdout)
-            && agrees_with(Some(&run.stderr), &case.stderr)
-            && status == Some(u128::from(case.exit_code))
+        // The network as the test's peers saw it: what the server received, what the client
+        // was answered, and a server still serving when it should be.
+        let made: Vec<_> = run.connections.iter().filter(|c| !c.accepted).collect();
+        let taken: Vec<_> = run.connections.iter().filter(|c| c.accepted).collect();
+        let talked = made.len() == case.server.len()
+            && taken.len() == case.client.len()
+            && made.iter().zip(&case.server).all(|(connection, reply)| {
+                text(&connection.sent).is_some_and(|sent| sent == fill(&reply.receives).as_bytes())
+            })
+            && taken
+                .iter()
+                .zip(&case.client)
+                .all(|(connection, exchange)| {
+                    agrees_with(Some(&connection.sent), &fill(&exchange.receives))
+                });
+        let serving = matches!(run.end, Some(End::Serving));
+        let ended = if case.serves {
+            serving
+        } else {
+            status == Some(u128::from(case.exit_code))
+        };
+        let same = agrees_with(Some(&run.stdout), &fill(&case.stdout))
+            && agrees_with(Some(&run.stderr), &fill(&case.stderr))
+            && ended
+            && talked
             && files_match;
         if !same {
             return Err(format!(

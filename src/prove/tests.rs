@@ -315,7 +315,7 @@ random:
     let samples: Vec<crate::testfile::Case> =
         block.cases(1).take(4).filter_map(Result::ok).collect();
     let right = machine(&program(6)).await;
-    agrees(&right, &samples).expect("the model agrees with the samples");
+    agrees(&right, &samples, false).expect("the model agrees with the samples");
     let verdict = prove(&right, &block, budget(120));
     assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
     let wrong = machine(&program(7)).await;
@@ -396,7 +396,7 @@ time:
     let samples: Vec<crate::testfile::Case> =
         block.cases(1).take(4).filter_map(Result::ok).collect();
     let right = machine(&program(7)).await;
-    agrees(&right, &samples).expect("the model agrees with the samples");
+    agrees(&right, &samples, false).expect("the model agrees with the samples");
     let verdict = prove(&right, &block, budget(120));
     assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
     let wrong = machine(&program(6)).await;
@@ -659,7 +659,7 @@ time:
     let samples: Vec<crate::testfile::Case> =
         block.cases(1).take(4).filter_map(Result::ok).collect();
     let right = machine(&program(4)).await;
-    agrees(&right, &samples).expect("the model agrees with the samples");
+    agrees(&right, &samples, false).expect("the model agrees with the samples");
     let verdict = prove(&right, &block, budget(120));
     assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
     let wrong = machine(&program(3)).await;

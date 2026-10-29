@@ -20,8 +20,8 @@ don't ask them to approve it. They read it in your final report, which says what
    user and stop.
 3. Write `<path>/spec.md` in the shape of [the template](assets/spec-template.md), by the rules
    below. Ask the user only what their request leaves open and only they can decide, such as what
-   the program computes; choose the rest yourself: messages, exit codes 1, 2, 3… and ranges. To
-   change a spec, edit it in place.
+   the program computes; choose the rest yourself: messages, exit codes 1, 2, 3… and ranges, and
+   the ports a program on the network may use. To change a spec, edit it in place.
 4. Call `status` with `path` again. If its `next_step` lists problems in the spec, fix them.
 5. Call `record_spec` with `path` and, as `request`, the user's words that asked for this program
    or this change, quoted exactly from their message. Never make words up or put them in the
@@ -95,7 +95,11 @@ of the same rule.
   connect, accept4, shutdown and sendto. `exit` is always needed, and files need openat and
   close. lengua programs can't allocate memory, start processes or handle signals. The kernel
   enforces this list when the program runs, so it's a promise the user can rely on.
-- **Network:** plain TCP, on ports the spec names. A program that opens connections says
+- **Network:** plain TCP, on ports the spec names. Choose them yourself, without asking: the
+  kernel can hold a program only to ports a spec lists, never to "any port", so when the user's
+  request leaves the port to them, as "given a port" does, list the ports such programs usually
+  use, such as 80, 3000, 5000, 8000, 8080 and 8888 for local web servers, and name them in your
+  final report with an offer to change them. A program that opens connections says
   `- Network: connects to TCP port 8080` (or `ports 80 and 8080`) and allows socket and connect;
   the address and port it reaches come from its arguments or input, as numbers (`127.0.0.1`),
   since lengua programs don't look up names. Don't have the program refuse other ports itself:
