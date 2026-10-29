@@ -1,0 +1,16 @@
+[meta]
+spec = "sha256:2742e137916fbf898ea3f10281152e3637cf5f71ba1163aae07b0cd7351f6e3b"
+
+[[example]]
+id = "B1"
+stdin = "hello world\nfoo  bar\n"
+stdout = "2 4\n"
+exit_code = 0
+
+[[generated]]
+id = "B1"
+runs = 200
+vars = { text = "string(0, 1048576, \"abdefhlorwxyz \\n\\t\r\u000b\u000c\")" }
+stdin = "{text}"
+stdout = "{count(text, \"\n\")} {words(text)}\n"
+exit_code = 0

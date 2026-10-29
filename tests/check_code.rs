@@ -863,3 +863,35 @@ async fn the_fetch_client_talks_to_the_tests_server() {
     }
     session.service.cancel().await.expect("close the session");
 }
+
+#[tokio::test]
+async fn the_benchmarks_own_programs_pass_their_checks() {
+    // The skill's fast programs, which the benchmark measures on 64 MiB, each with its own spec
+    // and tests.
+    if !lengua::platform::Machine::detect().features.avx512bw {
+        eprintln!("this CPU has no AVX-512BW");
+        return;
+    }
+    for workload in ["wc", "crc32c", "histogram"] {
+        let session = session().await;
+        let folder = Program::new();
+        let source = |name: &str| {
+            std::fs::read_to_string(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("plugin/skills/write-assembly/assets/fast")
+                    .join(workload)
+                    .join(name),
+            )
+            .unwrap_or_else(|error| panic!("{workload}/{name}: {error}"))
+        };
+        folder.write("spec.md", &source("spec.md"));
+        folder.write("tests.toml", &source("tests.toml"));
+        folder.write("main.s", &source("main.s"));
+        session.approve(&folder).await;
+        let tests = session.call_ok("check_tests", folder.arguments()).await;
+        assert_eq!(tests["checked"], true, "{workload}: {tests}");
+        let report = session.call_ok("check_code", folder.arguments()).await;
+        assert_eq!(report["stamped"], true, "{workload}: {report}");
+        session.service.cancel().await.expect("close the session");
+    }
+}

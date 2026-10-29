@@ -94,21 +94,28 @@ Their `lengua.lock` files aren't committed, because a lock is signed with each m
 Ask the agent to run one with lengua: after you approve its spec, the agent checks the tests and
 the code, which creates the lock.
 
-## Against Rust and C
+## Against C, C++ and Rust
 
-[BENCHMARKS.md](BENCHMARKS.md) measures lengua programs against the same programs in Rust and C,
-built with every optimization for this CPU (`cargo bench --bench against_rust_and_c` measures
-again). On this machine:
+[BENCHMARKS.md](BENCHMARKS.md) measures lengua programs against the same programs in C, C++ and
+Rust, built with every optimization for this CPU (`cargo bench --bench against_rust_and_c`
+measures again). On this machine, lengua's best version is ahead or level on every workload and
+every measure, and uses less than half the memory:
 
-- A short program, `add`, runs 441 instructions where C runs about 100,000 and Rust about
-  260,000, finishing in about half the wall time, with a third of the memory and a quarter of C's
-  file size (Rust's is 1,500 times larger), because lengua's programs need no C library and no
-  dynamic loader.
-- Capitalizing a 1 MiB file 64 bytes at a time with AVX-512 takes 1.4 times fewer instructions and
-  4 times fewer cycles than `gcc -O3 -march=native`.
-- Not yet ahead: the 16-byte SSE2 versions run more instructions than compilers' AVX-512 code,
-  and the threaded template touches twice the memory, so C spends a little less CPU time. The
-  write-assembly skill now asks for the widest vectors the CPU has.
+| Workload | Cycles | CPU time | Wall time |
+|---|---|---|---|
+| `add`, mostly starting and exiting | 104× fewer | 1.8× less | 1.4× less |
+| Capitalize a 1 MiB file | 4.4× fewer | 1.2× less | 1.2× less |
+| Capitalize 1 MiB of standard input | 4.8× fewer | 1.6× less | 1.3× less |
+| Count lines and words of 64 MiB | 11.9× fewer | 1.8× less | 1.1× less |
+| CRC-32C of 64 MiB | 2.9× fewer | 1.1× less | 1.1× less |
+| Byte histogram of 64 MiB | level | level | level |
+
+The baselines are written the way a performance-minded programmer would: the CRC uses the
+`crc32` instruction, the histogram four tables, and the word count a loop compilers vectorize.
+lengua wins by using the CPU fully: 64 bytes a step with AVX-512, three `crc32` chains side by
+side, no C library and no runtime. The histogram is limited by one memory update per byte in
+every language. On 64 MiB through a pipe, the kernel's copying is most of the wall time, so a 3×
+lead in the program's own cycles shows as 1.1× on the clock.
 
 ## Develop
 

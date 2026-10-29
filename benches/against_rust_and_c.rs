@@ -1,10 +1,10 @@
-//! Measures lengua programs against the same programs written in Rust and in C, on this machine,
-//! and writes BENCHMARKS.md: `cargo bench --bench against_rust_and_c`.
+//! Measures lengua programs against the same programs written in C, C++ and Rust, on this
+//! machine, and writes BENCHMARKS.md: `cargo bench --bench against_rust_and_c`.
 //!
 //! Every version of a program gets the same arguments, input and files, must give the same output,
 //! and is measured the same way: user-space instructions and cycles and CPU time from the CPU's
 //! counters, started at the program's own exec, plus wall-clock time, peak memory and file size.
-//! Rust and C are built with every optimization for this CPU, and linked the way they ship.
+//! C, C++ and Rust are built with every optimization for this CPU, and linked the way they ship.
 
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -37,6 +37,9 @@ const RUSTC_FLAGS: [&str; 12] = [
     "panic=abort",
 ];
 const GCC_FLAGS: [&str; 4] = ["-O3", "-march=native", "-flto", "-s"];
+
+/// The large workloads' input: 64 MiB, so the work outweighs starting and ending a process.
+const LARGE: usize = 64 * 1024 * 1024;
 
 /// One program and what to run it on.
 struct Workload {
@@ -104,13 +107,14 @@ fn text(bytes: usize) -> Vec<u8> {
 
 fn workloads() -> Vec<Workload> {
     let mebibyte = text(1_048_576);
+    let large = text(LARGE);
     vec![
         Workload {
             name: "add",
             about: "Parses two numbers from its arguments and prints their sum: almost all of \
                     it is starting up and exiting.",
             lengua: &[("lengua", "examples/add/main.s")],
-            others: &[("Rust", "main.rs"), ("C", "main.c")],
+            others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
             args: vec!["123456789".into(), "-987654".into()],
             stdin: Vec::new(),
             files: Vec::new(),
@@ -126,7 +130,7 @@ fn workloads() -> Vec<Workload> {
                 ("lengua", "examples/upcase/main.s"),
                 ("lengua, AVX-512", "benches/programs/upcase/avx512.s"),
             ],
-            others: &[("Rust", "main.rs"), ("C", "main.c")],
+            others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
             args: vec!["in.txt".into(), "out.txt".into()],
             stdin: Vec::new(),
             files: vec![("in.txt", mebibyte.clone())],
@@ -153,9 +157,55 @@ fn workloads() -> Vec<Workload> {
                 ("Rust", "main.rs"),
                 ("Rust, threads", "threads.rs"),
                 ("C", "main.c"),
+                ("C++", "main.cpp"),
             ],
             args: Vec::new(),
             stdin: mebibyte,
+            files: Vec::new(),
+            output_file: None,
+        },
+        Workload {
+            name: "wc",
+            about: "Counts the lines and words of 64 MiB on standard input, as `wc -lw` does. \
+                    C, C++ and Rust compare each byte with the one before it, which compilers \
+                    can vectorize; lengua's version takes 64 bytes a step with AVX-512 masks.",
+            lengua: &[(
+                "lengua",
+                "plugin/skills/write-assembly/assets/fast/wc/main.s",
+            )],
+            others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
+            args: Vec::new(),
+            stdin: large.clone(),
+            files: Vec::new(),
+            output_file: None,
+        },
+        Workload {
+            name: "histogram",
+            about: "Counts each byte value of 64 MiB on standard input. Every version spreads \
+                    neighboring bytes over four tables.",
+            lengua: &[(
+                "lengua",
+                "plugin/skills/write-assembly/assets/fast/histogram/main.s",
+            )],
+            others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
+            args: Vec::new(),
+            stdin: large.clone(),
+            files: Vec::new(),
+            output_file: None,
+        },
+        Workload {
+            name: "crc32c",
+            about: "The CRC-32C of 64 MiB on standard input. C, C++ and Rust use the CPU's \
+                    `crc32` instruction 8 bytes at a time, one chain that waits on itself; \
+                    lengua's version runs three chains side by side and joins them with \
+                    carry-less multiplies.",
+            lengua: &[(
+                "lengua",
+                "plugin/skills/write-assembly/assets/fast/crc32c/main.s",
+            )],
+            others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
+            args: Vec::new(),
+            stdin: large,
             files: Vec::new(),
             output_file: None,
         },
@@ -221,6 +271,8 @@ async fn build(workload: &Workload, toolchain: &Toolchain, folder: &Path) -> Vec
         let executable = folder.join(format!("{}-{}", workload.name, file.replace('.', "-")));
         if file.ends_with(".rs") {
             compile("rustc", &RUSTC_FLAGS, &source, &executable);
+        } else if file.ends_with(".cpp") {
+            compile("g++", &GCC_FLAGS, &source, &executable);
         } else {
             compile("gcc", &GCC_FLAGS, &source, &executable);
         }
@@ -390,10 +442,41 @@ fn measure(version: &Version, workload: &Workload, folder: &Path, expected: &[u8
     }
 }
 
-/// The output every version must give: lengua's.
+/// The output every version must give, computed here.
 fn expected_output(workload: &Workload) -> Vec<u8> {
+    let space = |byte: &u8| matches!(byte, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r');
     match workload.name {
         "add" => b"122469135\n".to_vec(),
+        "wc" => {
+            let lines = workload.stdin.iter().filter(|byte| **byte == b'\n').count();
+            let words = workload
+                .stdin
+                .split(space)
+                .filter(|word| !word.is_empty())
+                .count();
+            format!("{lines} {words}\n").into_bytes()
+        }
+        "histogram" => {
+            let mut counts = [0_u64; 256];
+            for byte in &workload.stdin {
+                counts[usize::from(*byte)] += 1;
+            }
+            let mut out = String::new();
+            for (value, count) in counts.iter().enumerate().filter(|(_, count)| **count > 0) {
+                let _ = writeln!(out, "{value} {count}");
+            }
+            out.into_bytes()
+        }
+        "crc32c" => {
+            let mut crc: u32 = 0xFFFF_FFFF;
+            for byte in &workload.stdin {
+                crc ^= u32::from(*byte);
+                for _ in 0..8 {
+                    crc = (crc >> 1) ^ (0x82F6_3B78 & 0_u32.wrapping_sub(crc & 1));
+                }
+            }
+            format!("{}\n", !crc).into_bytes()
+        }
         _ => {
             let input = workload
                 .files
@@ -451,7 +534,7 @@ async fn main() {
     let machine = Machine::detect();
     let folder = tempfile::tempdir().expect("a folder");
     let mut report = String::from(
-        "# lengua against Rust and C\n\nMeasured by `cargo bench --bench against_rust_and_c`, \
+        "# lengua against C, C++ and Rust\n\nMeasured by `cargo bench --bench against_rust_and_c`, \
          which writes this file. Every version of a program gets the same arguments, input and \
          files and must give the same output. Instructions and cycles are user-space counts \
          from the CPU's counters, starting at the program's own exec, so a dynamically linked \
@@ -461,11 +544,11 @@ async fn main() {
     let _ = write!(
         report,
         "{RUNS} runs after {WARM_UP} to warm up; peak memory is the median of 5 runs of GNU \
-         time. \"Best other ÷ best lengua\" is how many times more the best Rust or C version \
-         takes than the best lengua version.\n\n\
+         time. \"Best other ÷ best lengua\" is how many times more the best C, C++ or Rust \
+         version takes than the best lengua version.\n\n\
          - CPU: {} ({} cores)\n- lengua: `llvm-mc {}, ld.lld {}`\n- Rust: `{}`, `rustc {}`\n\
-         - C: `{}`, `gcc {}`\n\
-         - Rust and C link the system's C library dynamically, as they ship by default; \
+         - C and C++: `{}`, `gcc {}` and `g++ {}`\n\
+         - C, C++ and Rust link the system's C library dynamically, as they ship by default; \
          lengua's programs are static and use no library.\n",
         machine.cpu_model.as_deref().unwrap_or("unknown"),
         machine.cores,
@@ -474,6 +557,7 @@ async fn main() {
         first_line("rustc", &["--version"]),
         RUSTC_FLAGS.join(" "),
         first_line("gcc", &["--version"]),
+        GCC_FLAGS.join(" "),
         GCC_FLAGS.join(" "),
     );
     for workload in workloads() {

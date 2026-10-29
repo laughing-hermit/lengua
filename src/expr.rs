@@ -473,6 +473,9 @@ pub enum Function {
     /// `any(lo, hi)`, in expected output only: any whole number from `lo` to `hi`, written
     /// plainly, for output the test can't know exactly, such as a roll of the real dice.
     Any,
+    /// `words(s)`: how many words `s` has, runs of bytes other than ASCII whitespace (space,
+    /// tab, newline, vertical tab, form feed, carriage return), as `wc -w` counts them.
+    Words,
     /// `hex(x, n)`, in a test's `random` bytes only: `x` as `n` bytes, least significant first,
     /// in hex; `hex(258, 2)` is "0201". Eight bytes take any 64-bit value, negatives as two's
     /// complement.
@@ -480,7 +483,7 @@ pub enum Function {
 }
 
 impl Function {
-    const ALL: [Self; 26] = [
+    const ALL: [Self; 27] = [
         Self::Len,
         Self::Abs,
         Self::Min,
@@ -507,6 +510,7 @@ impl Function {
         Self::Places,
         Self::Any,
         Self::Hex,
+        Self::Words,
     ];
 
     fn name(self) -> &'static str {
@@ -537,6 +541,7 @@ impl Function {
             Self::Places => "places",
             Self::Any => "any",
             Self::Hex => "hex",
+            Self::Words => "words",
         }
     }
 
@@ -549,6 +554,7 @@ impl Function {
                 (2, 2)
             }
             Self::Len
+            | Self::Words
             | Self::Abs
             | Self::Upper
             | Self::Lower
@@ -1057,6 +1063,10 @@ fn binary(op: BinaryOp, left: &Expr, right: &Expr, env: &Env) -> Result<Value, E
         }
         BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
             let (a, b) = (eval(left, env)?, eval(right, env)?);
+            // `+` joins two strings.
+            if let (BinaryOp::Add, Value::Str(a), Value::Str(b)) = (op, &a, &b) {
+                return Ok(Value::Str(format!("{a}{b}")));
+            }
             if !matches!((&a, &b), (Value::Int(_), Value::Int(_))) && is_number(&a) && is_number(&b)
             {
                 return decimal_arithmetic(op, symbol, a, b);
@@ -1134,6 +1144,16 @@ fn call(function: Function, arguments: &[Expr], env: &Env) -> Result<Value, Eval
         Function::Len => {
             let text = string(argument(0)?, name)?;
             Ok(Value::Int(i128::try_from(text.len()).unwrap_or(i128::MAX)))
+        }
+        Function::Words => {
+            let text = string(argument(0)?, name)?;
+            let space = |byte: &u8| matches!(byte, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r');
+            let words = text
+                .as_bytes()
+                .split(space)
+                .filter(|word| !word.is_empty())
+                .count();
+            Ok(Value::Int(i128::try_from(words).unwrap_or(i128::MAX)))
         }
         Function::Abs => match argument(0)? {
             Value::Dec { m, p } => Ok(Value::Dec { m: m.abs(), p }),
@@ -2353,6 +2373,22 @@ mod tests {
 
     fn value(text: &str, env: &Env) -> Result<Value, EvalError> {
         eval(&parse(text).expect("valid expression"), env)
+    }
+
+    #[test]
+    fn counts_words_and_joins_strings() {
+        let none = Env::new();
+        assert_eq!(
+            value("words(\" hello  world\\n\\tfoo\")", &none),
+            Ok(Value::Int(3))
+        );
+        assert_eq!(value("words(\"\")", &none), Ok(Value::Int(0)));
+        assert_eq!(value("words(\"\\n \")", &none), Ok(Value::Int(0)));
+        assert_eq!(
+            value("\"a\" + upper(\"b\")", &none),
+            Ok(Value::Str("aB".into()))
+        );
+        assert!(value("\"a\" + 1", &none).is_err());
     }
 
     fn number(text: &str) -> i128 {

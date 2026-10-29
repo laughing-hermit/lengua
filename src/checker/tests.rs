@@ -899,20 +899,19 @@ async fn threads_need_the_spec_and_the_canonical_code() {
 
 #[tokio::test]
 async fn workers_write_only_their_stack_and_their_slot() {
-    let loop_end = "    add rcx, VECTOR\n    add r9, VECTOR\n    dec r8\n    jnz .Lworker_loop\n";
+    let loop_end = "    add r9, VECTOR\n    dec r8\n    jnz .Lworker_loop\n";
     for (old, new, rule, needle, message) in [
         (
             loop_end,
-            "    mov qword ptr [rip + input_size], rcx\n    add rcx, VECTOR\n    add r9, VECTOR\n    \
-             dec r8\n    jnz .Lworker_loop\n",
+            "    mov qword ptr [rip + input_size], rcx\n    add r9, VECTOR\n    dec r8\n    \
+             jnz .Lworker_loop\n",
             Rule::Scope,
             "    mov qword ptr [rip + input_size], rcx",
             "writes input_size on a worker thread",
         ),
         (
             loop_end,
-            "    mov byte ptr [rsi], al\n    add rcx, VECTOR\n    add r9, VECTOR\n    dec r8\n    \
-             jnz .Lworker_loop\n",
+            "    mov byte ptr [rsi], al\n    add r9, VECTOR\n    dec r8\n    jnz .Lworker_loop\n",
             Rule::Scope,
             "    mov byte ptr [rsi], al",
             "writes through rsi on a worker thread",
@@ -926,8 +925,7 @@ async fn workers_write_only_their_stack_and_their_slot() {
         ),
         (
             loop_end,
-            "    add rbx, VECTOR\n    add rcx, VECTOR\n    add r9, VECTOR\n    dec r8\n    \
-             jnz .Lworker_loop\n",
+            "    add rbx, VECTOR\n    add r9, VECTOR\n    dec r8\n    jnz .Lworker_loop\n",
             Rule::Scope,
             "    add rbx, VECTOR",
             "changes rbx, which holds the worker's slot",

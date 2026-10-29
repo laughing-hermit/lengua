@@ -167,6 +167,27 @@ proven for every input in range, and the solvers that checked them. `status` sho
 spec, tests and code are all the checked ones. Checking tests again drops them; checking code
 again keeps them only when the build is byte for byte the same.
 
+## Performance
+
+The bar is that a program the agent writes through lengua runs in fewer cycles, less CPU and wall
+time and less memory than the best of C, C++ and Rust built with every optimization for the CPU.
+`cargo bench --bench against_rust_and_c` measures it on six workloads, from a program that is
+mostly starting up to 64 MiB streams, and writes BENCHMARKS.md.
+
+Speed comes from the agent, guided by the write-assembly skill, which makes it a step of the
+normal flow: once the tests are green, one pass for the widest vectors the CPU has (with masked
+loads for tails), independent chains where each step would wait on the last, large reads and
+writes, and streaming for input of any length. `assets/fast` holds checked programs for each
+pattern, which the benchmark measures: a word count 64 bytes a step with AVX-512 masks, a CRC-32C
+that runs three `crc32` chains and joins them with `pclmulqdq`, and a four-table histogram. The
+fork-join template works in place: input lands straight in the workers' slots, which halves the
+memory a threaded program touches. Each program processes what each `read` returns as it comes,
+so its work overlaps the writer filling the pipe.
+
+What lengua doesn't do for speed is give up a check: bounds checks stay unless a reported
+`# unsafe:` block shows they can't fail, every loop is bounded, and vector code is tested
+exhaustively at its edges by the generated tests (the prover doesn't model vectors yet).
+
 ## What lengua does, and what it leaves to the agent
 
 lengua is an agent plugin: skills plus an MCP server, nothing else. The server does only what the

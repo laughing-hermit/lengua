@@ -26,23 +26,42 @@ Nothing runs before every rule passes.
    its `parse_i64`, `write_i64` and `write_all` can be reused as they are.
 4. Write the code by [the rules](references/power-of-10.md), with
    [the Linux x86-64 reference](references/linux-x86_64.md) for system calls, the program's start
-   and the calling convention. lengua aims for programs faster and leaner than Rust and C, so a
-   loop over text or an array goes a vector at a time, as wide as `machine.features` in `status`
-   allows (AVX-512: 64 bytes): `gcc -O3 -march=native` vectorizes such loops that wide, and only
-   then does assembly beat it.
+   and the calling convention. Write it correct first; speed comes in step 6.
 5. Call `check_code` with `path`. It checks the rules first and lists each violation as
    `rule N (name) main.s:LINE: problem. Fix: …`. Then it runs every test: the examples, and the
    generated tests with fresh random inputs (boundary values first). A failure shows the inputs,
    the seed, what was expected and what happened, and `assertion N failed at main.s:LINE` when an
    assertion fires. Fix everything and call it again until it passes; then `lengua.lock` records
    the code.
-6. Call `prove` with `path`. For each generated test it can, it proves for every input rather
+6. **Make it fast.** lengua aims for programs faster than C, C++ and Rust built with every
+   optimization. When the program loops over its input (text, numbers, files, a stream), make one
+   pass for speed now that the tests are green, then call `check_code` again: the tests must stay
+   green, and the median `cycles` of the test with the largest input should drop.
+   - **Vectors as wide as the CPU allows:** a loop over bytes takes 64 at a time with AVX-512
+     when `machine.features` lists it (32 with AVX2), and the last partial vector with a masked
+     load (`vmovdqu8 zmm0 {k1}{z}`), never byte by byte. `gcc -O3 -march=native` vectorizes too,
+     so only the widest loop beats it.
+   - **Break dependency chains:** when each step waits on the one before, as in a checksum or a
+     running sum, run two to four independent chains side by side and join them at the end.
+   - **Large pieces:** read and write a megabyte at a time, never a line or a byte per call.
+   - **Input of any length streams:** read a piece, process it, keep only what crosses into the
+     next piece (such as whether the last byte ended a word), and repeat until `read` returns 0.
+   - **Threads** only when each gets at least a few hundred kilobytes of work (see below).
+
+   `assets/fast` holds three checked programs to learn from and copy from, each with its spec and
+   tests: [wc](assets/fast/wc/main.s) counts lines and words 64 bytes a step with
+   AVX-512 masks; [crc32c](assets/fast/crc32c/main.s) runs three `crc32` chains side by side and
+   joins them with `pclmulqdq`; [histogram](assets/fast/histogram/main.s) spreads its counts over
+   four tables. Their `fill` (read until a buffer is full or the input ends) and `digits` (write
+   a number's decimal digits) can be copied as they are.
+7. Call `prove` with `path`. For each generated test it can, it proves for every input rather
    than a sample that the program prints what the formulas say: whole numbers, decimals, each
    value of a `choice(…)`, short texts, and files. It can take a minute or two. If it finds
    inputs where the program is wrong, fix `main.s` and call `check_code` and `prove` again.
-   "Tested, not proven" is fine: say why in one line. Programs that read and print numbers with
-   the template's `parse_i64` and `write_i64` prove best.
-7. Run the program once with `run`, using the spec's first example: `path`, plus `args` and
+   "Tested, not proven" is fine: say why in one line. Vector code and programs on the network
+   are tested, not proven, for now; programs that read and print numbers with the template's
+   `parse_i64` and `write_i64` prove best.
+8. Run the program once with `run`, using the spec's first example: `path`, plus `args` and
    `stdin` when it reads them. A program that works on files runs in a folder holding the
    example's input files: create `<path>/demo/` with them, pass it as `folder`, and name the
    files in `args` relative to it. Later, to work on the user's own files, pass the folder that
@@ -50,7 +69,7 @@ Nothing runs before every rule passes.
    on its spec's port and `run` returns its address: try it with your own tools, such as `curl`
    or `nc`, then call `run` with `stop: true` to stop it and see what it printed. A program
    that connects reaches only the ports its spec names.
-8. Tell the user in a few short lines and plain words: where the program is, that it follows
+9. Tell the user in a few short lines and plain words: where the program is, that it follows
    every rule and passed all its test runs, which behaviors are proven for every input (and, if
    the proof says one solver answered alone, which one to install for a second check), what
    `run` printed (and the files it wrote, if any),

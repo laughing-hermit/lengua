@@ -18,10 +18,9 @@
 .equ ERROR_TOO_LONG, -7
 # Sizes and limits
 .equ INPUT_MAX, 1048576
-.equ READ_MAX, INPUT_MAX + 1
-.equ MAX_READS, READ_MAX
+.equ MAX_READS, INPUT_MAX + 1
+.equ PROBE_BYTES, 1
 .equ VECTOR, 16
-.equ INPUT_LEN, INPUT_MAX + VECTOR
 .equ QWORD, 8
 .equ CHUNK, 65536
 .equ CHUNK_VECTORS, CHUNK / VECTOR
@@ -62,12 +61,11 @@ assert_message:
 
 .section .bss
 
-# The input and VECTOR bytes more, so a 16-byte load at its end stays inside.
-# shared: read_input fills it, then the workers read their parts
-.type input, @object
-input:
-    .zero INPUT_LEN
-.size input, . - input
+# Room for one byte past the input's end, to tell whether there is more.
+.type probe, @object
+probe:
+    .zero QWORD
+.size probe, . - probe
 
 # shared: _start records the input's length, then the workers read it
 .type input_size, @object
@@ -96,7 +94,8 @@ results:
     .zero RESULTS_LEN
 .size results, . - results
 
-# shared: each worker's output slot, filled by its worker through rbx, read by the program
+# shared: each worker's slot, filled with its part of the input by read_input, capitalized in
+# place by its worker through rbx, and printed by _start
 .type slots, @object
 .balign 64
 slots:
@@ -166,7 +165,8 @@ _start:
     call assert_fail
 .size _start, . - _start
 
-# Reads standard input into input until it ends or READ_MAX bytes are in.
+# Reads standard input straight into the threads' slots, which lie end to end, until it ends or
+# they're full; then one byte more tells whether the input is too long.
 # Out: rax = the input's length, ERROR_TOO_LONG when it's longer than INPUT_MAX, or ERROR_IO
 # when reading fails.
 # returns: result
@@ -178,12 +178,12 @@ read_input:
     xor ebx, ebx
     mov r12, MAX_READS
 .Lread_loop:  # bound: 1048577
-    cmp rbx, READ_MAX
-    jae .Lread_too_long
+    cmp rbx, INPUT_MAX
+    jae .Lread_full
     mov edi, STDIN
-    lea rsi, [rip + input]
+    lea rsi, [rip + slots]
     add rsi, rbx
-    mov edx, READ_MAX
+    mov edx, INPUT_MAX
     sub rdx, rbx
     mov eax, SYS_READ
     syscall
@@ -191,11 +191,20 @@ read_input:
     js .Lread_failed
     jz .Lread_ended
     add rbx, rax
-    cmp rbx, READ_MAX
+    cmp rbx, INPUT_MAX
     ja .Lread_assert_count
     dec r12
     jnz .Lread_loop
     jmp .Lread_assert_reads
+.Lread_full:
+    mov edi, STDIN
+    lea rsi, [rip + probe]
+    mov edx, PROBE_BYTES
+    mov eax, SYS_READ
+    syscall
+    test rax, rax
+    js .Lread_failed
+    jnz .Lread_too_long
 .Lread_ended:
     mov rax, rbx
     jmp .Lread_return
@@ -217,9 +226,9 @@ read_input:
     call assert_fail
 .size read_input, . - read_input
 
-# The work of one thread: capitalizes its CHUNK of the input into its slot, 16 bytes at a time:
-# a to z become A to Z, other bytes stay. A last, partial chunk may fill bytes of the slot past
-# its end, which is harmless: only the input's length is printed.
+# The work of one thread: capitalizes its CHUNK of the input in place, in its own slot, 16 bytes
+# at a time: a to z become A to Z, other bytes stay. A last, partial chunk may change bytes of
+# the slot past its end, which is harmless: only the input's length is printed.
 # In: rdi = the worker's index, below THREADS; rsi = its slot, SLOT_SIZE bytes.
 # Out: rax = how many bytes of the input it capitalized.
 .type worker, @function
@@ -238,7 +247,6 @@ worker:
     jbe .Lworker_sized
     mov edx, CHUNK
 .Lworker_sized:
-    lea rsi, [rip + input]
     mov eax, BELOW_A_X4
     movd xmm1, eax
     pshufd xmm1, xmm1, 0
@@ -253,9 +261,9 @@ worker:
 .Lworker_loop:  # bound: 4096
     cmp r9, rdx
     jae .Lworker_done
-    cmp rcx, INPUT_LEN - VECTOR + 1
-    jae .Lworker_assert_input
-    movdqu xmm0, xmmword ptr [rsi + rcx]
+    cmp r9, SLOT_SIZE - VECTOR + 1
+    jae .Lworker_assert_slot
+    movdqu xmm0, xmmword ptr [rbx + r9]
     movdqu xmm4, xmm0
     pcmpgtb xmm4, xmm1
     movdqu xmm5, xmm2
@@ -263,10 +271,7 @@ worker:
     pand xmm4, xmm5
     pand xmm4, xmm3
     psubb xmm0, xmm4
-    cmp r9, SLOT_SIZE - VECTOR + 1
-    jae .Lworker_assert_slot
     movdqu xmmword ptr [rbx + r9], xmm0
-    add rcx, VECTOR
     add r9, VECTOR
     dec r8
     jnz .Lworker_loop
@@ -282,9 +287,6 @@ worker:
     call assert_fail
 .Lworker_assert_start:
     mov edi, 7
-    call assert_fail
-.Lworker_assert_input:
-    mov edi, 8
     call assert_fail
 .Lworker_assert_slot:
     mov edi, 9

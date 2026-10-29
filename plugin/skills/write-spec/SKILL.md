@@ -111,6 +111,9 @@ of the same rule.
   those bytes and readings, and the proof covers every value they could take. When the user
   only cares that output falls in a range, the behavior can say that instead, both ends in
   backticks: ``- Then it prints `rolled ` and a number from `1` to `6` ``.
+- **Large inputs:** a program for data of any size says so in Purpose, such as "it reads standard
+  input of any length, a piece at a time", and still gives the largest input the tests use in
+  backticks (`1048576`): tests stay within a megabyte, and the program streams beyond it.
 - **Threads:** when the user wants a program that does heavy work on large inputs as fast as
   possible, add `- Threads: up to N` under `# Constraints`, with N up to the machine's cores
   (`status` reports them; at most 64). The program may then split its work across that many

@@ -190,7 +190,8 @@ to choose text.
   computes. `a * b + c` rounds twice, so the formula says which of the two the program does.
 - **Whole numbers and decimals don't mix** in arithmetic: write `2.0`, not `2`, or `double(n)`.
   Comparisons may mix them (`x > 0`), and `12.5 == 12.50`.
-- **Strings** are written `"text"`, with the escapes `\"`, `\\`, `\n` and `\t`.
+- **Strings** are written `"text"`, with the escapes `\"`, `\\`, `\n` and `\t`; `+` joins two
+  strings: `"rolled " + upper(s)`.
 - **True and false** come from comparisons, or from `true` and `false`.
 - **Operators**, from lowest precedence to highest: `||`, then `&&`, then the comparisons
   `== != < <= > >=` (one per comparison; strings compare only with `==` and `!=`), then `+ -`,
@@ -210,6 +211,7 @@ to choose text.
 | `reverse(s)` | The characters in reverse order |
 | `tr(s, from, to)` | Each character of `s` listed in `from` becomes the one at the same place in `to`, as Unix `tr` does; `a-z` is a range. ROT13 is `tr(s, "A-Za-z", "N-ZA-Mn-za-m")` |
 | `count(s, part)` | How many times `part` appears in `s`, without overlaps: `count(line, "e")` |
+| `words(s)` | How many words `s` has: runs of bytes other than spaces, tabs, newlines, vertical tabs, form feeds and carriage returns, as `wc -w` counts them |
 | `fixed(x, places)` | `x` printed with exactly `places` decimals (0 to 15): x·10^places rounded to the nearest whole number, ties to even, like `mulsd` then `cvtsd2si`. `fixed(2.5, 0)` is "2", `fixed(-0.004, 2)` is "0.00". A single widens exactly first (`cvtss2sd`), then prints as a double does |
 | `double(x)` | `x` as a double: a whole number exactly (up to 2^53), a single exactly (like `cvtss2sd`) |
 | `single(x)` | `x` as a single: a whole number exactly (up to 2^24), a double to the nearest single (like `cvtsd2ss`), an exact decimal to the nearest single (up to 7 digits and 10 places, like `cvtsi2ss` then `divss`) |

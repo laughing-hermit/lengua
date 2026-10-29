@@ -1,0 +1,16 @@
+[meta]
+spec = "sha256:51f6ce69592c9964db7f83e4029fa6a30f2b472c1934d3308700918d7c96549b"
+
+[[example]]
+id = "B1"
+stdin = "abba\n"
+stdout = "10 1\n97 2\n98 2\n"
+exit_code = 0
+
+[[generated]]
+id = "B1"
+runs = 200
+vars = { text = 'string(0, 1048576, "ab\n")' }
+stdin = "{text}"
+stdout = "{if(count(text, \"\\n\") > 0, \"10 \", \"\")}{if(count(text, \"\\n\") > 0, count(text, \"\\n\"), \"\")}{if(count(text, \"\\n\") > 0, \"\\n\", \"\")}{if(count(text, \"a\") > 0, \"97 \", \"\")}{if(count(text, \"a\") > 0, count(text, \"a\"), \"\")}{if(count(text, \"a\") > 0, \"\\n\", \"\")}{if(count(text, \"b\") > 0, \"98 \", \"\")}{if(count(text, \"b\") > 0, count(text, \"b\"), \"\")}{if(count(text, \"b\") > 0, \"\\n\", \"\")}"
+exit_code = 0

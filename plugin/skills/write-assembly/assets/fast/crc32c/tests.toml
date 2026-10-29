@@ -1,0 +1,16 @@
+[meta]
+spec = "sha256:5394dd1da500c3578f5a51068251af31f90d972dd817fd0fa051e929ebe57dfb"
+
+[[example]]
+id = "B1"
+stdin = "123456789"
+stdout = "3808858755\n"
+exit_code = 0
+
+[[generated]]
+id = "B1"
+runs = 200
+vars = { text = 'string(0, 1048576, "0123456789abcdefghijklmnopqrstuvwxyz \n")' }
+stdin = "{text}"
+stdout = "{crc32c(text)}\n"
+exit_code = 0
