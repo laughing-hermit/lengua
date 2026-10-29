@@ -828,9 +828,18 @@ impl LenguaServer {
         let mut proven_ids = Vec::new();
         let mut solved = 0;
         let mut alone_reason: Option<String> = None;
+        // Every value of a block's variables is every input only when the program reads nothing
+        // else: no random bytes, no clock, and no `now` in the expected results.
+        let kernel_values = spec
+            .syscalls
+            .iter()
+            .any(|call| matches!(call, spec::Syscall::Getrandom | spec::Syscall::ClockGettime));
         for block in &suite.generated {
             let test = format!("generated {}", block.id);
-            if let Some(every) = block.every_value_text() {
+            if let Some(every) = block
+                .every_value_text()
+                .filter(|_| !kernel_values && !block.uses_now())
+            {
                 proven_ids.push(block.id.to_string());
                 proofs.push(ProofReport {
                     test,
@@ -895,7 +904,7 @@ impl LenguaServer {
                 Ok(prove::Verdict::Counterexample(values)) => {
                     let inputs: expr::Env = values.into_iter().collect();
                     let described = testfile::describe_inputs(&inputs);
-                    match block.case(inputs) {
+                    match block.case(inputs, crate::expect::now()) {
                         Ok(case) => match testrun::check_case(
                             &self.launcher,
                             &built.executable,
@@ -916,6 +925,17 @@ impl LenguaServer {
                                     ),
                                 )
                             }
+                            // A real run draws its own random bytes and reads its own
+                            // clock, so it can't replay what the proof found.
+                            None if kernel_values => (
+                                false,
+                                format!(
+                                    "tested, not proven: with {described}, the prover \
+                                         found random bytes or a clock reading for which \
+                                         main.s's output breaks the test, which a real run \
+                                         can't replay; check how main.s turns them into output"
+                                ),
+                            ),
                             None => (
                                 false,
                                 format!(

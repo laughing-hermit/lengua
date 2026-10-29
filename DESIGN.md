@@ -96,7 +96,11 @@ in doubles exactly as `addsd`, `mulsd`, `divsd` and `sqrtsd` do, or in singles w
 says `single(x)`, with `fma(a, b, c)` for a fused multiply-add, and printed with `fixed` (x·10^d
 rounded ties to even, like `cvtsd2si`); whole numbers and decimals, and singles and doubles, never
 mix silently in arithmetic.
-It has no loops, so every formula finishes.
+It has no loops, so every formula finishes. Where the program chooses part of its output, such as
+a random roll or the time, a rule stands for it: `{any(lo, hi)}` is any whole number in that
+range, written plainly, and `now` (the second a run starts) may bound one. Inside lengua a rule
+travels in the expected text as a marker between Unicode noncharacters, which tests.toml can't
+hold, so expected output stays text everywhere and only matching reads the markers.
 
 `check_tests` ties the tests to the approved spec: example exit codes equal the spec's, generator
 limits are numbers the spec states, and args and stdin hold bare variables so each example can be
@@ -325,7 +329,7 @@ Rust share: everything a program may touch must be something the checker can acc
 | Memory | `malloc`/`free`, `new`/`delete`: leaks, double frees, use after free | Ownership frees memory automatically; arenas without the standard library | Reserved up front: static buffers sized from the spec's limits, plus the stack. Nothing is allocated or freed while running (rule 3), and `.bss` costs nothing until touched |
 | Threads | pthreads: any thread may write anything, and data races are undefined behavior | `Send`/`Sync`, scoped threads and rayon: no data races, checked at compile time | Fork-join only, when the spec allows threads. A canonical `parallel_for` (copied word for word, like `assert_fail`) starts workers with `clone` on static stacks and waits on `futex` for them all. Each worker owns its stack and one output slot, like Rust's `chunks_mut`: the checker proves it writes nothing else (JPL: one owner per shared object). No locks, atomics or shared mutation, so results stay deterministic and testable |
 | System access | Any system call | The standard library, within the OS's permissions | Capabilities: the spec lists the system calls the person approves, and the kernel enforces the list (seccomp) and keeps files inside the program's working folder (Landlock) |
-| Clock, random | `time()`, `rand()` | `Instant`, `SystemTime`, `rand` | Approved system calls, `clock_gettime` and `getrandom`, enforced by the kernel like the rest. The prover treats what they return as any value. Tests can't yet describe an output that depends on them: that waits on a choice between rules (a range such as "a number from 1 to 6") and runs where the test supplies the bytes and the time |
+| Clock, random | `time()`, `rand()` | `Instant`, `SystemTime`, `rand` | Approved system calls, `clock_gettime` and `getrandom`, enforced by the kernel like the rest. The prover treats what they return as any value. Tests describe output that depends on them with rules, such as "a number from 1 to 6" (`{any(1, 6)}`), which the prover covers for every value they could return |
 | Network | Sockets | `std::net` | Later, as an approved capability: Landlock can limit a program to chosen TCP ports, and tests need a server of their own on the loopback |
 
 A worker gets its index and its slot. It and every function it calls write only their own stack
@@ -336,7 +340,7 @@ order makes reductions deterministic, and laying the slots end to end makes a ma
 thread with `exit_group`, so a failed check anywhere stops the whole program.
 
 Roadmap, in order:
-1. tests for outputs that depend on the clock or random bytes;
+1. tests that supply the random bytes and the clock, so such output is exact and provable;
 2. the network capability;
 3. proofs of text formulas, vector code and decimal arithmetic written in a different shape;
 4. the other platforms, toward the top 5–6 CPU and OS targets.

@@ -19,12 +19,13 @@ A test with fixed values, copied from the spec's behavior.
 | `args` | `[]` | Command-line arguments, without the program name |
 | `stdin` | `""` | Everything the program can read; then input ends |
 | `files` | `{}` | Files in the working folder before the run, by name: `{ "notes.txt" = "hello\n" }` |
-| `stdout` | `""` | Exact standard output |
-| `stderr` | `""` | Exact standard error |
-| `files_after` | `{}` | Files the program must leave, with their exact contents: `{ "loud.txt" = "HELLO\n" }` |
+| `stdout` | `""` | Exact standard output, or a rule: `{ matches = "rolled {any(1, 6)}\n" }` |
+| `stderr` | `""` | Exact standard error, or a rule |
+| `files_after` | `{}` | Files the program must leave, with their exact contents or a rule: `{ "loud.txt" = "HELLO\n" }` |
 | `exit_code` | required | 0 to 255, the code the spec states; never 134 |
 
-Example values are literal: braces in them are plain characters. A long value, such as a file one
+Example values are literal: braces in them are plain characters, except in a rule (see
+[Rules](#rules-output-the-program-chooses)). A long value, such as a file one
 byte over a limit, can be written as a list of strings and repeated runs instead of one string:
 `files = { "big.txt" = [{ repeat = "a", times = 1048576 }, "x"] }` is 1048576 `a`s and an `x`. It
 works for `args`, `stdin`, `files`, `stdout`, `stderr` and `files_after`, up to 8 MiB a value.
@@ -57,6 +58,25 @@ value in its range: for those inputs the program is checked, not sampled.
 Several blocks may share an `id` when one range can't cover the inputs, such as divisors on both
 sides of zero. Their `args`, `stdin`, `files`, `stdout`, `stderr`, `files_after` and `exit_code`
 must be identical; only `vars` and `runs` differ.
+
+## Rules: output the program chooses
+
+When the program chooses part of its output, such as a die's roll or the current time, a test
+can't know the exact text. A rule stands for that part: `{any(lo, hi)}` is any whole number from
+`lo` to `hi`, written plainly (an optional `-`, then digits with no leading zero).
+
+- **In an example,** the expected output is a table: `stdout = { matches = "rolled {any(1, 6)}\n" }`.
+  Its placeholders are `any(…)` only, with bounds that are whole numbers or `now` plus or minus a
+  whole number; `{{` and `}}` stand for braces.
+- **In a generated block,** `any(lo, hi)` is a function, and its bounds may be formulas:
+  `stdout = "rolled {any(1, sides)}\n"`.
+- **`now`** is when the run starts, in whole Unix seconds. No test knows that second exactly, so
+  `now` only bounds a rule: `{any(now - 2, now + 2)}`. A block that declares its own variable
+  named `now` draws it like any other.
+- **Only expected output holds rules,** in `stdout`, `stderr` and `files_after`: a test's inputs
+  are exact. Text functions such as `len` and `upper` can't look inside a rule.
+- **Proofs cover rules:** `prove` shows the printed number is in range for every input and for
+  every value the clock or `getrandom` could give, unless the block uses `now`.
 
 ## Files
 
@@ -124,7 +144,7 @@ to choose text.
 - **Division** truncates toward zero and `%` keeps the sign of the dividend, like the CPU's
   `idiv`: `-7 / 2` is `-3` and `-7 % 2` is `-1`. Dividing by zero is an error.
 - **Variable names** use lowercase letters, digits and `_`, start with a letter or `_`, and aren't
-  function or generator names.
+  function or generator names. `now` is built in unless a block declares it.
 
 | Function | Result |
 |---|---|
@@ -147,6 +167,7 @@ to choose text.
 | `sha256(s)` | The SHA-256 of `s`'s bytes, in lowercase hex |
 | `crc32(s)` | The CRC-32 of `s`'s bytes, as zlib, gzip and PNG compute it |
 | `crc32c(s)` | The CRC-32C (Castagnoli) of `s`'s bytes, as the `crc32` instruction computes it |
+| `any(lo, hi)` | In expected output only: any whole number from `lo` to `hi`, written plainly. See [Rules](#rules-output-the-program-chooses) |
 
 Exact decimals such as money stay exact in whole units: `{places((scaled(a, 2) + scaled(b, 2)), 2)}`
 adds two prices in cents, and any rounding rule the spec states is whole-number arithmetic with
@@ -161,7 +182,8 @@ adds two prices in cents, and any rounding rule the spec states is whole-number 
 
 ## What check_tests checks
 
-1. The file is valid TOML and uses only the fields above.
+1. The file is valid TOML and uses only the fields above. Its text never holds the characters
+   U+FDD0, U+FDD1 and U+FDD2, which mark rules inside lengua.
 2. `[meta].spec` is the approved spec's label.
 3. There is exactly one example per behavior, and no unknown IDs.
 4. Each example has its behavior's exit code and contains every backtick value of the behavior.
@@ -171,8 +193,10 @@ adds two prices in cents, and any rounding rule the spec states is whole-number 
 8. A dry run computes every run's expected results: no overflow, no division by zero, and exit
    codes from 0 to 255 that are never 134.
 9. Output with placeholders differs between runs, so a program that prints a constant can't pass.
+   Output with a rule may stay the same, since the rule stands for what the program chooses.
 10. Blocks of one behavior share their templates.
-11. Given each example's inputs, the formulas produce the example's results.
+11. Given each example's inputs, the formulas produce the example's results. Where the example
+    has a rule, the block's output must have the same rule, or exact text the rule allows.
 
 When everything passes, `lengua.lock` records the tests and the server keeps a copy. Until
 `check_code` first runs them, a fixed `tests.toml` can be checked again; from then on the tests
@@ -298,4 +322,45 @@ vars = { a = "int(-1000000, 1000000)", b = "choice(0)" }
 args = ["{a}", "{b}"]
 stderr = "error: division by zero\n"
 exit_code = 2
+```
+
+### Output the program chooses
+
+```markdown
+---
+type: lengua/program-spec
+title: roll
+description: Rolls a six-sided die for a player and prints the roll.
+---
+# Purpose
+Rolls a fair six-sided die for a player numbered from `1` to `9`, given as an argument. If
+writing the output fails, the program exits with code 2.
+
+# Behaviors
+## B1: Rolls a die
+- Given the argument `3`
+- When the program runs
+- Then it prints `player 3 rolled ` and a number from `1` to `6`, followed by a newline
+- And it exits with code `0`
+
+# Constraints
+- Allowed system calls: write, getrandom, exit
+```
+
+```toml
+[meta]
+spec = "sha256:<from status>"
+
+[[example]]
+id = "B1"
+args = ["3"]
+stdout = { matches = "player 3 rolled {any(1, 6)}\n" }
+exit_code = 0
+
+[[generated]]
+id = "B1"
+vars = { player = "int(1, 9)" }
+args = ["{player}"]
+stdout = "player {player} rolled {any(1, 6)}\n"
+exit_code = 0
 ```

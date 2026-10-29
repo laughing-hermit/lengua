@@ -134,6 +134,9 @@ impl fmt::Display for Value {
             Self::Float(bits) => write!(f, "{}", bits.value()),
             Self::Single(bits) => write!(f, "{}", bits.value()),
             // Messages quote text, shortened when it's long.
+            Self::Str(text) if crate::expect::has_holes(text) => {
+                write!(f, "{:?}", crate::expect::show(text))
+            }
             Self::Str(text) if text.chars().count() > SHOWN_CHARS => {
                 let start: String = text.chars().take(SHOWN_CHARS).collect();
                 write!(f, "{start:?}… ({} bytes)", text.len())
@@ -467,10 +470,13 @@ pub enum Function {
     /// `places(n, places)`: a whole number of units printed as a decimal: 1250 with 2 places is
     /// "12.50".
     Places,
+    /// `any(lo, hi)`, in expected output only: any whole number from `lo` to `hi`, written
+    /// plainly, for output the test can't know exactly, such as a roll of the real dice.
+    Any,
 }
 
 impl Function {
-    const ALL: [Self; 24] = [
+    const ALL: [Self; 25] = [
         Self::Len,
         Self::Abs,
         Self::Min,
@@ -495,6 +501,7 @@ impl Function {
         Self::Fixed,
         Self::Scaled,
         Self::Places,
+        Self::Any,
     ];
 
     fn name(self) -> &'static str {
@@ -523,6 +530,7 @@ impl Function {
             Self::Fixed => "fixed",
             Self::Scaled => "scaled",
             Self::Places => "places",
+            Self::Any => "any",
         }
     }
 
@@ -531,7 +539,7 @@ impl Function {
         match self {
             Self::Min | Self::Max => (2, usize::MAX),
             Self::If | Self::Fma | Self::Tr => (3, 3),
-            Self::Count | Self::Fixed | Self::Scaled | Self::Places => (2, 2),
+            Self::Count | Self::Fixed | Self::Scaled | Self::Places | Self::Any => (2, 2),
             Self::Len
             | Self::Abs
             | Self::Upper
@@ -550,6 +558,10 @@ impl Function {
         }
     }
 }
+
+/// Why a rule can't be followed by a digit or another rule.
+pub const CROWDED: &str = "an any(…) is followed directly by a digit or another any(…), so the \
+     output couldn't show where its number ends; put other text between them";
 
 /// Names that can't be used as variables.
 const RESERVED: &[&str] = &[
@@ -844,6 +856,9 @@ impl Parser {
                     "two arguments: a whole number and how many places, such as places(cents, 2)"
                         .into()
                 }
+                (2, 2) if function == Function::Any => {
+                    "two whole numbers, the smallest and the largest, such as any(1, 6)".into()
+                }
                 (2, 2) => "two arguments: a string and the part to count".into(),
                 (3, 3) if function == Function::Tr => {
                     "three strings: the text, the characters to replace and their replacements, \
@@ -905,6 +920,14 @@ fn int(value: Value, operation: &str) -> Result<i128, EvalError> {
     }
 }
 
+/// Why `operation` can't read text holding a rule such as `any(1, 6)`.
+fn hole_inside(operation: &str) -> EvalError {
+    EvalError::Type(format!(
+        "{operation} can't look inside any(…), which stands for a number the program chooses; \
+         use any(…) only to print that number"
+    ))
+}
+
 fn boolean(value: Value, operation: &str) -> Result<bool, EvalError> {
     match value {
         Value::Bool(value) => Ok(value),
@@ -917,6 +940,7 @@ fn boolean(value: Value, operation: &str) -> Result<bool, EvalError> {
 
 fn string(value: Value, operation: &str) -> Result<String, EvalError> {
     match value {
+        Value::Str(text) if crate::expect::has_holes(&text) => Err(hole_inside(operation)),
         Value::Str(text) => Ok(text),
         other => Err(EvalError::Type(format!(
             "{operation} needs a string, not {}",
@@ -977,6 +1001,12 @@ fn binary(op: BinaryOp, left: &Expr, right: &Expr, env: &Env) -> Result<Value, E
                     a.kind(),
                     b.kind()
                 )));
+            }
+            if [&a, &b]
+                .iter()
+                .any(|value| matches!(value, Value::Str(text) if crate::expect::has_holes(text)))
+            {
+                return Err(hole_inside(symbol));
             }
             Ok(Value::Bool((a == b) == (op == BinaryOp::Eq)))
         }
@@ -1249,6 +1279,18 @@ fn call(function: Function, arguments: &[Expr], env: &Env) -> Result<Value, Eval
             let places = places_argument(argument(1)?, name)?;
             Ok(Value::Str(decimal_text(number, places)))
         }
+        Function::Any => {
+            let (low, high) = (int(argument(0)?, name)?, int(argument(1)?, name)?);
+            if low > high {
+                return Err(EvalError::Type(format!(
+                    "any({low}, {high}) has its smallest number after its largest"
+                )));
+            }
+            Ok(Value::Str(crate::expect::hole(
+                crate::expect::Bound::Number(low),
+                crate::expect::Bound::Number(high),
+            )))
+        }
         Function::Upper => Ok(Value::Str(string(argument(0)?, name)?.to_ascii_uppercase())),
         Function::Lower => Ok(Value::Str(string(argument(0)?, name)?.to_ascii_lowercase())),
         Function::Tr => {
@@ -1495,6 +1537,98 @@ impl Template {
                 Part::Placeholder(_) => None,
             })
             .collect()
+    }
+
+    /// Whether a placeholder uses the variable `name` other than in the bounds of `any(…)`.
+    #[must_use]
+    pub fn uses_outside_any(&self, name: &str) -> bool {
+        fn outside(expr: &Expr, name: &str) -> bool {
+            match expr {
+                Expr::Literal(_) | Expr::Call(Function::Any, _) => false,
+                Expr::Var(var) => var == name,
+                Expr::Neg(inner) | Expr::Not(inner) => outside(inner, name),
+                Expr::Binary(_, left, right) => outside(left, name) || outside(right, name),
+                Expr::Call(_, arguments) => {
+                    arguments.iter().any(|argument| outside(argument, name))
+                }
+            }
+        }
+        self.parts
+            .iter()
+            .any(|part| matches!(part, Part::Placeholder(expr) if outside(expr, name)))
+    }
+
+    /// The expected text of a rule such as `"rolled {any(1, 6)}\n"`: its text, with each
+    /// `{any(lo, hi)}` as a hole. Each bound is a whole number, `now`, or `now` plus or minus a
+    /// whole number.
+    ///
+    /// # Errors
+    ///
+    /// Fails on any other placeholder.
+    pub fn rule(&self) -> Result<String, String> {
+        use crate::expect::Bound;
+        fn bound(expr: &Expr) -> Option<Bound> {
+            let number = |expr: &Expr| match expr {
+                Expr::Literal(Value::Int(number)) => Some(*number),
+                Expr::Neg(inner) => match inner.as_ref() {
+                    Expr::Literal(Value::Int(number)) => Some(-number),
+                    _ => None,
+                },
+                _ => None,
+            };
+            let now = |expr: &Expr| matches!(expr, Expr::Var(name) if name == "now");
+            match expr {
+                _ if now(expr) => Some(Bound::Now(0)),
+                Expr::Binary(BinaryOp::Add, left, right) if now(left) => {
+                    number(right).map(Bound::Now)
+                }
+                Expr::Binary(BinaryOp::Add, left, right) if now(right) => {
+                    number(left).map(Bound::Now)
+                }
+                Expr::Binary(BinaryOp::Sub, left, right) if now(left) => {
+                    number(right).and_then(i128::checked_neg).map(Bound::Now)
+                }
+                _ => number(expr).map(Bound::Number),
+            }
+        }
+        let mut text = String::new();
+        for part in &self.parts {
+            let bounds = match part {
+                Part::Text(literal) => {
+                    text.push_str(literal);
+                    continue;
+                }
+                Part::Placeholder(Expr::Call(Function::Any, arguments)) => {
+                    arguments.iter().map(bound).collect::<Option<Vec<_>>>()
+                }
+                Part::Placeholder(_) => None,
+            };
+            let Some(&[low, high]) = bounds.as_deref() else {
+                return Err(format!(
+                    "{:?}: a rule's placeholders are any(lo, hi) only, with whole numbers, now, \
+                     or now plus or minus a whole number, such as {{any(1, 6)}} or \
+                     {{any(now - 2, now + 2)}}; write {{{{ and }}}} for braces",
+                    self.source
+                ));
+            };
+            let backwards = match (low, high) {
+                (Bound::Number(low), Bound::Number(high)) | (Bound::Now(low), Bound::Now(high)) => {
+                    low > high
+                }
+                _ => false,
+            };
+            if backwards {
+                return Err(format!(
+                    "{:?}: an any(lo, hi) has its smallest number after its largest",
+                    self.source
+                ));
+            }
+            text.push_str(&crate::expect::hole(low, high));
+        }
+        if crate::expect::crowded(&text) {
+            return Err(format!("{:?}: {CROWDED}", self.source));
+        }
+        Ok(text)
     }
 
     /// Fills in the placeholders.

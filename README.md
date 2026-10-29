@@ -12,12 +12,13 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 
 > Status: dialect 2 on Linux x86-64. It covers whole numbers, exact decimals, floating point in
 > double and single precision with fused multiply-add, vectors from SSE2 to AVX-512, hashing and
-> checksums, files, fork-join threads, the clock and random bytes, and inputs up to 1 MiB. The
+> checksums, files, fork-join threads, the clock and random bytes (tested with rules such as
+> `{any(1, 6)}` for output the program chooses), and inputs up to 1 MiB. The
 > kernel holds every run to what its spec approves. `prove` proves programs right for every
 > input, not just the tested ones, over whole numbers, decimals, choices, short texts and files,
 > with each step confirmed by two independent solvers, z3 and cvc5; `lengua.lock` records what's
 > proven. Next:
-> - tests for output that depends on the clock or random bytes, then the network;
+> - tests that supply the random bytes and the clock, so such output is exact, then the network;
 > - proofs of text formulas, vector code and decimal arithmetic written in another shape;
 > - more of the top CPU and OS targets, which LLVM already supports.
 

@@ -20,6 +20,10 @@ pub const DEFAULT_RUNS: u32 = 100;
 /// At most this many problems are reported at once.
 const MAX_PROBLEMS: usize = 20;
 
+/// The built-in variable for the time a run starts, in Unix seconds, when a block declares no
+/// variable of that name.
+const NOW: &str = "now";
+
 /// A checked tests.toml.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TestSuite {
@@ -118,13 +122,35 @@ pub struct Case {
 }
 
 impl Generated {
-    /// The expected results for `inputs`.
+    /// Whether the block uses `now`, the time a run starts, which it may when it declares no
+    /// variable of that name.
+    #[must_use]
+    pub fn uses_now(&self) -> bool {
+        !self.vars.iter().any(|(name, _)| name == NOW)
+            && self
+                .outputs()
+                .any(|template| template.variables().contains(NOW))
+    }
+
+    /// The templates of the expected results.
+    fn outputs(&self) -> impl Iterator<Item = &Template> {
+        let formula = match &self.exit_code {
+            ExitCode::Formula(template) => Some(template),
+            ExitCode::Fixed(_) => None,
+        };
+        [&self.stdout, &self.stderr]
+            .into_iter()
+            .chain(self.files_after.values())
+            .chain(formula)
+    }
+
+    /// The expected results for `inputs`, for a run that starts at `now` (Unix seconds).
     ///
     /// # Errors
     ///
     /// Fails when a formula can't be evaluated or gives an impossible exit code.
-    pub fn case(&self, inputs: Env) -> Result<Case, (Env, &'static str, EvalError)> {
-        match self.results(&inputs) {
+    pub fn case(&self, inputs: Env, now: i128) -> Result<Case, (Env, &'static str, EvalError)> {
+        match self.results(&inputs, now) {
             Ok(case) => Ok(Case { inputs, ..case }),
             Err((field, error)) => Err((inputs, field, error)),
         }
@@ -132,7 +158,15 @@ impl Generated {
 
     /// The rendered args, stdin, files, expected outputs and exit code for `inputs`, with no
     /// inputs recorded.
-    fn results(&self, inputs: &Env) -> Result<Case, (&'static str, EvalError)> {
+    fn results(&self, inputs: &Env, now: i128) -> Result<Case, (&'static str, EvalError)> {
+        let mut with_now;
+        let inputs = if inputs.contains_key(NOW) {
+            inputs
+        } else {
+            with_now = inputs.clone();
+            with_now.insert(NOW.to_owned(), Value::Int(now));
+            &with_now
+        };
         let render_files = |files: &BTreeMap<String, Template>, field| {
             files
                 .iter()
@@ -160,6 +194,13 @@ impl Generated {
             .render(inputs)
             .map_err(|error| ("stderr", error))?;
         let files_after = render_files(&self.files_after, "files_after")?;
+        let crowded = [("stdout", &stdout), ("stderr", &stderr)]
+            .into_iter()
+            .chain(files_after.values().map(|text| ("files_after", text)))
+            .find(|(_, text)| crate::expect::crowded(text));
+        if let Some((field, _)) = crowded {
+            return Err((field, EvalError::Type(expr::CROWDED.into())));
+        }
         let exit_code = match &self.exit_code {
             ExitCode::Fixed(code) => *code,
             ExitCode::Formula(template) => {
@@ -192,7 +233,7 @@ impl Generated {
         } else {
             expr::cases(&self.vars, self.run_count(), seed)
         };
-        inputs.map(|inputs| self.case(inputs))
+        inputs.map(|inputs| self.case(inputs, crate::expect::now()))
     }
 
     /// How many runs the block makes: every combination when [`Self::every_value`], otherwise
@@ -434,12 +475,20 @@ struct ExampleTable {
 
 /// An example's literal text: a string, or a list of strings and repeated runs, so a long input
 /// such as a file one byte over a limit stays short to write: `[{ repeat = "a", times = 1048576
-/// }, "x"]`.
+/// }, "x"]`. An expected output may instead be a rule, `{ matches = "rolled {any(1, 6)}\n" }`.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum Text {
     Plain(String),
     Parts(Vec<TextPart>),
+    Rule(Rule),
+}
+
+/// Expected output that allows a range of numbers where the program chooses one.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Rule {
+    matches: String,
 }
 
 impl Default for Text {
@@ -463,11 +512,28 @@ struct Repeat {
 }
 
 impl Text {
+    /// Expected output: the text written out, or a rule's text with its holes.
+    fn expected(self) -> Result<String, String> {
+        match self {
+            Self::Rule(Rule { matches }) => Template::parse(&matches)
+                .map_err(|error| format!("matches = {matches:?}: {error}"))?
+                .rule(),
+            text => text.expand(),
+        }
+    }
+
     /// The text written out, up to [`MAX_FILE_BYTES`].
     fn expand(self) -> Result<String, String> {
         let parts = match self {
             Self::Plain(text) => return Ok(text),
             Self::Parts(parts) => parts,
+            Self::Rule(_) => {
+                return Err(
+                    "a rule such as { matches = \"{any(1, 6)}\" } goes only in stdout, stderr \
+                     and files_after; the test's inputs are exact"
+                        .into(),
+                );
+            }
         };
         let mut text = String::new();
         for part in parts {
@@ -547,6 +613,16 @@ pub fn check(text: &str, spec: &Spec, spec_label: &str) -> Result<TestSuite, Vec
             return Err(checker.problems);
         }
     };
+    if let Ok(table) = toml::from_str::<toml::Table>(text)
+        && holds_markers(&toml::Value::Table(table))
+    {
+        checker.problem(
+            None,
+            "tests.toml holds one of the characters U+FDD0, U+FDD1 and U+FDD2, which lengua \
+             reserves for marking rules such as {any(1, 6)}; remove them",
+        );
+        return Err(checker.problems);
+    }
     let meta_line = checker.line(file.meta.span().start);
     if file.meta.get_ref().spec != spec_label {
         checker.problem(
@@ -576,6 +652,18 @@ pub fn check(text: &str, spec: &Spec, spec_label: &str) -> Result<TestSuite, Vec
             });
         }
         Err(checker.problems)
+    }
+}
+
+/// Whether any string in `value`, or any key, holds a character lengua uses to mark holes.
+fn holds_markers(value: &toml::Value) -> bool {
+    match value {
+        toml::Value::String(text) => crate::expect::has_holes(text),
+        toml::Value::Array(values) => values.iter().any(holds_markers),
+        toml::Value::Table(table) => table
+            .iter()
+            .any(|(key, value)| crate::expect::has_holes(key) || holds_markers(value)),
+        _ => false,
     }
 }
 
@@ -652,8 +740,13 @@ impl<'a> Checker<'a> {
                 );
                 continue;
             }
-            let mut expand = |field: &str, text: Text| {
-                text.expand().unwrap_or_else(|problem| {
+            let mut expand = |field: &str, text: Text, output: bool| {
+                let text = if output {
+                    text.expected()
+                } else {
+                    text.expand()
+                };
+                text.unwrap_or_else(|problem| {
                     self.problem(Some(line), format!("example {id}: {field}: {problem}"));
                     String::new()
                 })
@@ -661,16 +754,16 @@ impl<'a> Checker<'a> {
             let args: Vec<String> = table
                 .args
                 .into_iter()
-                .map(|arg| expand("args", arg))
+                .map(|arg| expand("args", arg, false))
                 .collect();
-            let stdin = expand("stdin", table.stdin);
-            let stdout = expand("stdout", table.stdout);
-            let stderr = expand("stderr", table.stderr);
+            let stdin = expand("stdin", table.stdin, false);
+            let stdout = expand("stdout", table.stdout, true);
+            let stderr = expand("stderr", table.stderr, true);
             let files: BTreeMap<String, String> = table
                 .files
                 .into_iter()
                 .map(|(name, contents)| {
-                    let contents = expand(&format!("files.{name}"), contents);
+                    let contents = expand(&format!("files.{name}"), contents, false);
                     (name, contents)
                 })
                 .collect();
@@ -678,7 +771,7 @@ impl<'a> Checker<'a> {
                 .files_after
                 .into_iter()
                 .map(|(name, contents)| {
-                    let contents = expand(&format!("files_after.{name}"), contents);
+                    let contents = expand(&format!("files_after.{name}"), contents, true);
                     (name, contents)
                 })
                 .collect();
@@ -1029,7 +1122,33 @@ impl<'a> Checker<'a> {
         if let ExitCode::Formula(template) = &block.exit_code {
             used.extend(template.variables());
         }
+        let now_built_in = !declared.contains(NOW);
+        if now_built_in && inputs.contains(NOW) {
+            self.problem(
+                Some(block.line),
+                format!(
+                    "{name}: args, stdin and files can't hold now, the time the run starts; the \
+                     program reads the time itself"
+                ),
+            );
+        }
+        if now_built_in
+            && block
+                .outputs()
+                .any(|template| template.uses_outside_any(NOW))
+        {
+            self.problem(
+                Some(block.line),
+                format!(
+                    "{name}: now is the second the run starts, which no test can know exactly, \
+                     so it may only bound a rule such as {{any(now - 2, now + 2)}}"
+                ),
+            );
+        }
         for var in used.difference(&declared) {
+            if now_built_in && var == NOW {
+                continue;
+            }
             self.problem(
                 Some(block.line),
                 format!("{name} uses `{var}`, which isn't declared in vars"),
@@ -1101,7 +1220,15 @@ impl<'a> Checker<'a> {
                 outputs.push((case.stdout, case.stderr, case.files_after));
             }
         }
-        if varies && outputs.len() < 2 {
+        // A rule such as {any(1, 6)} stands for what the program chooses, not for the inputs.
+        let rule = outputs.iter().any(|(stdout, stderr, files)| {
+            crate::expect::has_holes(stdout)
+                || crate::expect::has_holes(stderr)
+                || files
+                    .values()
+                    .any(|contents| crate::expect::has_holes(contents))
+        });
+        if varies && outputs.len() < 2 && !rule {
             self.problem(
                 Some(block.line),
                 format!(
@@ -1199,7 +1326,8 @@ impl<'a> Checker<'a> {
                 );
                 continue;
             };
-            let case = match block.case(inputs) {
+            let now = crate::expect::now();
+            let case = match block.case(inputs, now) {
                 Ok(case) => case,
                 Err((inputs, field, error)) => {
                     self.problem(
@@ -1212,23 +1340,38 @@ impl<'a> Checker<'a> {
                     continue;
                 }
             };
-            let mismatch = if case.stdout != example.stdout {
+            let agree =
+                |computed: &str, example: &str| crate::expect::agrees(computed, example, now);
+            let shown = |files: &BTreeMap<String, String>| {
+                let files: BTreeMap<&str, String> = files
+                    .iter()
+                    .map(|(name, contents)| (name.as_str(), crate::expect::show(contents)))
+                    .collect();
+                format!("{files:?}")
+            };
+            let mismatch = if !agree(&case.stdout, &example.stdout) {
                 Some((
                     "stdout",
-                    format!("{:?}", case.stdout),
-                    format!("{:?}", example.stdout),
+                    format!("{:?}", crate::expect::show(&case.stdout)),
+                    format!("{:?}", crate::expect::show(&example.stdout)),
                 ))
-            } else if case.stderr != example.stderr {
+            } else if !agree(&case.stderr, &example.stderr) {
                 Some((
                     "stderr",
-                    format!("{:?}", case.stderr),
-                    format!("{:?}", example.stderr),
+                    format!("{:?}", crate::expect::show(&case.stderr)),
+                    format!("{:?}", crate::expect::show(&example.stderr)),
                 ))
-            } else if case.files_after != example.files_after {
+            } else if !case.files_after.keys().eq(example.files_after.keys())
+                || case
+                    .files_after
+                    .values()
+                    .zip(example.files_after.values())
+                    .any(|(computed, example)| !agree(computed, example))
+            {
                 Some((
                     "files_after",
-                    format!("{:?}", case.files_after),
-                    format!("{:?}", example.files_after),
+                    shown(&case.files_after),
+                    shown(&example.files_after),
                 ))
             } else if case.exit_code != example.exit_code {
                 Some((
@@ -1524,6 +1667,184 @@ exit_code = 0
         assert_eq!(first.args, ["-1000000000", "-1000000000"]);
         assert_eq!(first.stdout, "-2000000000\n");
         assert_eq!(first.exit_code, 0);
+    }
+
+    const DICE: &str = "---
+type: lengua/program-spec
+title: roll
+---
+# Purpose
+Rolls a die for a player numbered from `1` to `9`.
+
+# Behaviors
+## B1: Rolls a die
+- Given the argument `1`
+- When the program runs
+- Then it prints `rolled ` and a number from `1` to `6`, followed by a newline
+- And it exits with code `0`
+
+# Constraints
+- Allowed system calls: write, getrandom, exit
+";
+
+    const ROLLS: &str = r#"
+[[example]]
+id = "B1"
+args = ["1"]
+stdout = { matches = "rolled {any(1, 6)}\n" }
+exit_code = 0
+
+[[generated]]
+id = "B1"
+vars = { player = "int(1, 9)" }
+args = ["{player}"]
+stdout = "rolled {any(1, 6)}\n"
+exit_code = 0
+"#;
+
+    fn dice(body: &str) -> Result<TestSuite, Vec<String>> {
+        let spec = spec::parse(DICE).expect("valid spec");
+        check(&tests(body), &spec, LABEL)
+            .map_err(|problems| problems.iter().map(ToString::to_string).collect())
+    }
+
+    fn assert_dice_problem(body: &str, needle: &str) {
+        let problems = dice(body).expect_err("problems");
+        assert!(
+            problems.iter().any(|problem| problem.contains(needle)),
+            "no problem containing {needle:?} in {problems:#?}"
+        );
+    }
+
+    #[test]
+    fn rules_allow_any_number_in_a_range() {
+        let suite = dice(ROLLS).expect("valid tests");
+        let example = &suite.examples[0];
+        assert!(crate::expect::matches(&example.stdout, b"rolled 6\n", 0));
+        assert!(!crate::expect::matches(&example.stdout, b"rolled 7\n", 0));
+        assert_eq!(crate::expect::show(&example.stdout), "rolled {any(1, 6)}\n");
+        let case = suite.generated[0]
+            .cases(1)
+            .next()
+            .expect("a run")
+            .expect("computable");
+        assert_eq!(case.stdout, example.stdout);
+    }
+
+    #[test]
+    fn rules_bound_only_expected_output() {
+        assert_dice_problem(
+            &ROLLS.replace(r#"args = ["1"]"#, r#"args = [{ matches = "{any(1, 9)}" }]"#),
+            "goes only in stdout, stderr and files_after",
+        );
+        assert_dice_problem(
+            &ROLLS.replace("rolled {any(1, 6)}\\n\" }", "rolled {player}\\n\" }"),
+            "a rule's placeholders are any(lo, hi) only",
+        );
+        assert_dice_problem(
+            &ROLLS.replace("{any(1, 6)}\\n\" }", "{any(6, 1)}\\n\" }"),
+            "smallest number after its largest",
+        );
+        assert_dice_problem(
+            &ROLLS.replace(
+                "rolled {any(1, 6)}\\n\"\nexit",
+                "rolled {any(1, 7)}\\n\"\nexit",
+            ),
+            "generated B1's formula disagrees with the spec",
+        );
+        assert_dice_problem(
+            &ROLLS.replace(
+                "rolled {any(1, 6)}\\n\"\nexit",
+                "rolled {len(any(1, 6))}\\n\"\nexit",
+            ),
+            "len can't look inside any(…)",
+        );
+        assert_dice_problem(
+            &ROLLS.replace(r#"args = ["1"]"#, r#"args = ["1\uFDD1"]"#),
+            "U+FDD0, U+FDD1 and U+FDD2",
+        );
+        // Where the number ends must be clear: "30" isn't a 3 and a 0.
+        assert_dice_problem(
+            &ROLLS.replace("rolled {any(1, 6)}\\n\" }", "rolled {any(1, 6)}0\\n\" }"),
+            "followed directly by a digit",
+        );
+        assert_dice_problem(
+            &ROLLS.replace(
+                "rolled {any(1, 6)}\\n\"\nexit",
+                "rolled {any(1, 6)}{player}\\n\"\nexit",
+            ),
+            "followed directly by a digit",
+        );
+    }
+
+    #[test]
+    fn now_only_bounds_a_rule() {
+        const CLOCK: &str = "---
+type: lengua/program-spec
+title: clock
+---
+# Purpose
+Prints the time in Unix seconds for a player numbered from `1` to `9`.
+
+# Behaviors
+## B1: Prints the time
+- Given the argument `1`
+- When the program runs
+- Then it prints the current Unix time followed by a newline
+- And it exits with code `0`
+
+# Constraints
+- Allowed system calls: write, clock_gettime, exit
+";
+        let body = r#"
+[[example]]
+id = "B1"
+args = ["1"]
+stdout = { matches = "{any(now - 2, now + 2)}\n" }
+exit_code = 0
+
+[[generated]]
+id = "B1"
+vars = { player = "int(1, 9)" }
+args = ["{player}"]
+stdout = "{any(now - 2, now + 2)}\n"
+exit_code = 0
+"#;
+        let spec = spec::parse(CLOCK).expect("valid spec");
+        let suite = check(&tests(body), &spec, LABEL).expect("valid tests");
+        assert!(suite.generated[0].uses_now());
+        let now = crate::expect::now();
+        let case = suite.generated[0]
+            .case(BTreeMap::from([("player".to_owned(), Value::Int(1))]), now)
+            .expect("computable");
+        assert!(crate::expect::matches(
+            &case.stdout,
+            format!("{}\n", now - 2).as_bytes(),
+            0
+        ));
+        let problems = |body: &str| {
+            check(&tests(body), &spec, LABEL)
+                .expect_err("problems")
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let exact =
+            problems(&body.replace("\"{any(now - 2, now + 2)}\\n\"\nexit", "\"{now}\\n\"\nexit"));
+        assert!(exact.contains("may only bound a rule"), "{exact}");
+        let input =
+            problems(&body.replace(r#"args = ["{player}"]"#, r#"args = ["{player}", "{now}"]"#));
+        assert!(input.contains("can't hold now"), "{input}");
+        // A block that declares now draws it like any variable.
+        let declared = problems(&body.replace(
+            r#"vars = { player = "int(1, 9)" }"#,
+            r#"vars = { player = "int(1, 9)", now = "int(1, 9)" }"#,
+        ));
+        assert!(
+            declared.contains("`now` never reaches the program"),
+            "{declared}"
+        );
     }
 
     #[test]

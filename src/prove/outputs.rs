@@ -10,7 +10,7 @@ use rand::{RngExt, SeedableRng};
 
 use super::formula::{Number, WIDTH};
 use super::term::{Pool, Term};
-use super::{number_is, text_is};
+use super::{number_in, number_is, text_is};
 use crate::expr::Template;
 
 fn seed() -> u64 {
@@ -262,6 +262,122 @@ fn printed_decimals_match_exactly_their_formula() {
                 holds(&pool, condition, &[("F", bits(candidate))]),
                 text == crate::expr::decimal_text(candidate, places),
                 "seed {seed}: \"{text}\" against {candidate} with {places} places"
+            );
+        }
+    }
+}
+
+/// A range around `target`: often one that just holds it or just misses it.
+fn range_near(rng: &mut ChaCha8Rng, target: i128) -> (i128, i128) {
+    let (a, b) = match rng.random_range(0..4) {
+        0 => (target, target),
+        1 => (target - 1, target + 1),
+        2 => (target + 1, target + 9),
+        _ => (number(rng), number(rng)),
+    };
+    (a.min(b), a.max(b))
+}
+
+#[test]
+fn any_takes_exactly_the_plain_numbers_in_range() {
+    // As the runner reads it: an optional minus, digits with no leading zero, never -0.
+    let seed = seed();
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    let template = Template::parse("got {any(lo, hi)}.").expect("a template");
+    for _ in 0..3000 {
+        let mut pool = Pool::default();
+        let numbers = BTreeMap::from([
+            ("lo".to_owned(), formula(&mut pool, "lo")),
+            ("hi".to_owned(), formula(&mut pool, "hi")),
+        ]);
+        let target = number(&mut rng);
+        let (lo, hi) = range_near(&mut rng, target);
+        let printed = near(&mut rng, target);
+        let text = match rng.random_range(0..5) {
+            0 => format!("got {printed}"),
+            1 => format!("got {printed}.."),
+            2 => format!("got{printed}."),
+            _ => format!("got {printed}."),
+        };
+        let bytes = bytes_of(&mut pool, &text);
+        let known = super::Known {
+            numbers: &numbers,
+            fixed: &BTreeMap::new(),
+            texts: &BTreeMap::new(),
+        };
+        let condition = text_is(&mut pool, &bytes, &template, &known).expect("a condition");
+        let rule = format!(
+            "got {}.",
+            crate::expect::hole(
+                crate::expect::Bound::Number(lo),
+                crate::expect::Bound::Number(hi)
+            )
+        );
+        assert_eq!(
+            holds(&pool, condition, &[("lo", bits(lo)), ("hi", bits(hi))]),
+            crate::expect::matches(&rule, text.as_bytes(), 0),
+            "seed {seed}: \"{text}\" against any({lo}, {hi})"
+        );
+    }
+}
+
+#[test]
+fn printed_digits_fit_any_only_in_range() {
+    // The shortcut through the digits' common root must never accept what reading the digits
+    // back would refuse.
+    let seed = seed();
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    for _ in 0..300 {
+        let mut pool = Pool::default();
+        let count = rng.random_range(1..=19_u32);
+        let negative = rng.random_bool(0.3);
+        let v = pool.var(64, "v");
+        let bytes = if negative {
+            let size = pool.neg(v);
+            let mut bytes = bytes_of(&mut pool, "-");
+            bytes.extend(printed(&mut pool, size, count));
+            bytes
+        } else {
+            printed(&mut pool, v, count)
+        };
+        let (low, high) = (formula(&mut pool, "lo"), formula(&mut pool, "hi"));
+        let condition = number_in(&mut pool, &bytes, low, high);
+        for _ in 0..20 {
+            let fitting = 10_i128.pow(count - 1) + rng.random_range(0..10_i128.pow(count) * 9 / 10);
+            let fitting = fitting.min(i128::from(i64::MAX));
+            let program = match rng.random_range(0..3) {
+                0 if negative => -fitting,
+                0 => fitting,
+                1 => number(&mut rng),
+                _ => i128::from(rng.random::<i64>()),
+            };
+            let Ok(program) = i64::try_from(program) else {
+                continue;
+            };
+            let v_bits = u128::from(program.cast_unsigned());
+            let text: Vec<u8> = bytes
+                .iter()
+                .map(|byte| {
+                    let byte = pool
+                        .evaluate(*byte, &HashMap::from([("v".to_owned(), v_bits)]))
+                        .expect("a byte");
+                    u8::try_from(byte).expect("a byte")
+                })
+                .collect();
+            let (lo, hi) = range_near(&mut rng, i128::from(program));
+            let rule = crate::expect::hole(
+                crate::expect::Bound::Number(lo),
+                crate::expect::Bound::Number(hi),
+            );
+            assert_eq!(
+                holds(
+                    &pool,
+                    condition,
+                    &[("v", v_bits), ("lo", bits(lo)), ("hi", bits(hi))]
+                ),
+                crate::expect::matches(&rule, &text, 0),
+                "seed {seed}: {:?} (v = {program}) against any({lo}, {hi})",
+                String::from_utf8_lossy(&text)
             );
         }
     }

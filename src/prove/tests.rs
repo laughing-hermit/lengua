@@ -226,3 +226,98 @@ async fn proves_decimal_inputs_where_the_output_is_fixed() {
         );
     }
 }
+
+/// A die: one random byte from the kernel, printed as 1 to 6. The kernel's byte is any value, so
+/// the proof covers all 256; the rule `{any(1, 6)}` holds for each, and `% 7` breaks it.
+#[tokio::test]
+async fn proves_a_roll_stays_in_its_range() {
+    if std::process::Command::new("z3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    const SPEC: &str = "---
+type: lengua/program-spec
+title: roll
+---
+# Purpose
+Rolls a die for a player numbered from `1` to `9`.
+
+# Behaviors
+## B1: Rolls a die
+- Given the argument `1`
+- When the program runs
+- Then it prints `rolled ` and a number from `1` to `6`, followed by a newline
+- And it exits with code `0`
+
+# Constraints
+- Allowed system calls: write, getrandom, exit
+";
+    const TESTS: &str = r#"[meta]
+spec = "sha256:0"
+
+[[example]]
+id = "B1"
+args = ["1"]
+stdout = { matches = "rolled {any(1, 6)}\n" }
+exit_code = 0
+
+[[generated]]
+id = "B1"
+vars = { player = "int(1, 9)" }
+args = ["{player}"]
+stdout = "rolled {any(1, 6)}\n"
+exit_code = 0
+"#;
+    let program = |faces: u8| {
+        format!(
+            "    .intel_syntax noprefix
+    .globl _start
+    .text
+    .type _start, @function
+_start:
+    mov eax, 318
+    lea rdi, [rip + random]
+    mov esi, 1
+    xor edx, edx
+    syscall
+    movzx eax, byte ptr [rip + random]
+    xor edx, edx
+    mov ecx, {faces}
+    div ecx
+    add edx, 49
+    mov byte ptr [rip + line + 7], dl
+    mov eax, 1
+    mov edi, 1
+    lea rsi, [rip + line]
+    mov edx, 9
+    syscall
+    mov eax, 60
+    xor edi, edi
+    syscall
+    .size _start, . - _start
+    .data
+    .type line, @object
+line:
+    .ascii \"rolled ?\\n\"
+    .size line, 9
+    .type random, @object
+random:
+    .byte 0
+    .size random, 1
+"
+        )
+    };
+    let block = block(SPEC, TESTS, 0);
+    let samples: Vec<crate::testfile::Case> =
+        block.cases(1).take(4).filter_map(Result::ok).collect();
+    let right = machine(&program(6)).await;
+    agrees(&right, &samples).expect("the model agrees with the samples");
+    let verdict = prove(&right, &block, budget(120));
+    assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
+    let wrong = machine(&program(7)).await;
+    let verdict = prove(&wrong, &block, budget(120));
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+}

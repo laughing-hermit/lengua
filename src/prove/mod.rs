@@ -545,15 +545,17 @@ struct Known<'a> {
 }
 
 /// A run of a template once what's known in this shape is filled in: bytes, or a number's
-/// formula, printed with this many decimal places (`places(x, 2)`), or none.
+/// formula, printed with this many decimal places (`places(x, 2)`), or none, or any whole number
+/// from one formula's value to another's (`any(lo, hi)`).
 enum Segment<'a> {
     Bytes(Vec<Term>),
     Number(&'a crate::expr::Expr, u8),
+    Any(&'a crate::expr::Expr, &'a crate::expr::Expr),
 }
 
 /// What must hold for `bytes` to be exactly `template`'s text for these inputs. Literal text, a
 /// placeholder whose variables all have fixed values, and a placeholder that's just a drawn text
-/// are known bytes; at most one placeholder may compute a number.
+/// are known bytes; at most one placeholder may compute a number or allow a range of them.
 fn text_is(
     pool: &mut Pool,
     bytes: &[Term],
@@ -564,6 +566,12 @@ fn text_is(
     for piece in template.pieces() {
         let segment = match piece {
             Piece::Text(text) => Segment::Bytes(exec::bytes(pool, text.as_bytes())),
+            Piece::Expr(crate::expr::Expr::Call(crate::expr::Function::Any, arguments)) => {
+                match arguments.as_slice() {
+                    [low, high] => Segment::Any(low, high),
+                    _ => return Err("any(…) without its two bounds".into()),
+                }
+            }
             Piece::Expr(crate::expr::Expr::Var(name)) if known.texts.contains_key(name) => {
                 Segment::Bytes(known.texts[name].clone())
             }
@@ -600,25 +608,31 @@ fn text_is(
         }
     }
     let empty = Vec::new();
-    let (prefix, number, suffix) = match segments.as_slice() {
+    // Neighboring bytes joined, so a computed segment stands between bytes or the ends.
+    let (prefix, middle, suffix) = match segments.as_slice() {
         [] => (&empty, None, &empty),
         [Segment::Bytes(all)] => (all, None, &empty),
-        [Segment::Number(expr, places)] => (&empty, Some((*expr, *places)), &empty),
-        [Segment::Bytes(before), Segment::Number(expr, places)] => {
-            (before, Some((*expr, *places)), &empty)
-        }
-        [Segment::Number(expr, places), Segment::Bytes(after)] => {
-            (&empty, Some((*expr, *places)), after)
-        }
-        [
-            Segment::Bytes(before),
-            Segment::Number(expr, places),
-            Segment::Bytes(after),
-        ] => (before, Some((*expr, *places)), after),
+        [middle] => (&empty, Some(middle), &empty),
+        [Segment::Bytes(before), middle] => (before, Some(middle), &empty),
+        [middle, Segment::Bytes(after)] => (&empty, Some(middle), after),
+        [Segment::Bytes(before), middle, Segment::Bytes(after)] => (before, Some(middle), after),
         _ => return Err("a test output with more than one computed value".into()),
     };
-    let Some((expr, places)) = number else {
-        return Ok(same_terms(pool, bytes, prefix));
+    let (expr, places) = match middle {
+        None => return Ok(same_terms(pool, bytes, prefix)),
+        Some(Segment::Number(expr, places)) => (*expr, *places),
+        Some(Segment::Any(low, high)) => {
+            let (low, high) = (bound(pool, low, known)?, bound(pool, high, known)?);
+            if bytes.len() < prefix.len() + suffix.len() + 1 {
+                return Ok(pool.boolean(false));
+            }
+            let end = bytes.len() - suffix.len();
+            let starts = same_terms(pool, &bytes[..prefix.len()], prefix);
+            let ends = same_terms(pool, &bytes[end..], suffix);
+            let middle = number_in(pool, &bytes[prefix.len()..end], low, high);
+            return Ok(pool.all(&[starts, ends, middle]));
+        }
+        Some(Segment::Bytes(_)) => return Err("bytes next to bytes in a test output".into()),
     };
     let number = match formula::translate(pool, expr, known.numbers)? {
         Formula::Number(number) => number,
@@ -638,6 +652,79 @@ fn text_is(
     let ends = same_terms(pool, &bytes[end..], suffix);
     let middle = number_is(pool, &bytes[prefix.len()..end], number, places);
     Ok(pool.all(&[starts, ends, middle]))
+}
+
+/// A bound of `any(lo, hi)` as a whole number: a formula, or a fixed value in this shape.
+fn bound(pool: &mut Pool, expr: &crate::expr::Expr, known: &Known<'_>) -> Result<Number, String> {
+    let fixed = crate::expr::variables_of(expr)
+        .iter()
+        .all(|name| known.fixed.contains_key(name));
+    if fixed {
+        return match crate::expr::eval(expr, known.fixed) {
+            Ok(Value::Int(value)) => Ok(Number::whole(pool.bv_signed(WIDTH, value), value, value)),
+            _ => Err("an any(…) bound that isn't a whole number".into()),
+        };
+    }
+    match formula::translate(pool, expr, known.numbers)? {
+        Formula::Number(number) if number.places == 0 => Ok(number),
+        _ => Err("an any(…) bound that isn't a whole number".into()),
+    }
+}
+
+/// What must hold for `bytes` to be a whole number written plainly (an optional `-`, then digits
+/// with no leading zero, and never `-0`) from `low` to `high`, as `any(low, high)` allows. The
+/// value is read back from the bytes digit by digit, so the question has no quantifier.
+fn number_in(pool: &mut Pool, bytes: &[Term], low: Number, high: Number) -> Term {
+    let (zero_char, nine_char) = (pool.bv(8, u128::from(b'0')), pool.bv(8, u128::from(b'9')));
+    let minus = pool.bv(8, u128::from(b'-'));
+    let mut cases = Vec::new();
+    for negative in [false, true] {
+        let digits = &bytes[usize::from(negative)..];
+        // Up to 38 digits, as the runner reads them: any more could leave 128 bits.
+        if digits.is_empty() || digits.len() > 38 {
+            continue;
+        }
+        let mut checks = Vec::new();
+        if negative {
+            checks.push(pool.eq(bytes[0], minus));
+        }
+        let (mut value, ten) = (pool.bv(WIDTH, 0), pool.bv(WIDTH, 10));
+        for (index, byte) in digits.iter().enumerate() {
+            let at_least = pool.ule(zero_char, *byte);
+            let at_most = pool.ule(*byte, nine_char);
+            checks.extend([at_least, at_most]);
+            // No leading zero, and no -0.
+            if index == 0 && (digits.len() > 1 || negative) {
+                let zero = pool.eq(*byte, zero_char);
+                checks.push(pool.bool_not(zero));
+            }
+            let digit = pool.sub(*byte, zero_char);
+            let digit = pool.zero_extend(digit, WIDTH - 8);
+            let shifted = pool.mul(value, ten);
+            value = pool.add(shifted, digit);
+        }
+        if negative {
+            value = pool.neg(value);
+        }
+        let above = pool.sle(low.term, value);
+        let below = pool.sle(value, high.term);
+        checks.extend([above, below]);
+        cases.push(pool.all(&checks));
+    }
+    let exact = pool.any(&cases);
+    // When the code printed the digits of one computed value, saying the bytes are that value
+    // in range settles most runs without reading the digits back. It's only a shortcut: it
+    // implies `exact`.
+    let Some(root) = common_root(pool, bytes) else {
+        return exact;
+    };
+    let width = pool.width(root);
+    let value = pool.sign_extend(root, WIDTH - width);
+    let printed = number_is(pool, bytes, Number::whole(value, i128::MIN, i128::MAX), 0);
+    let above = pool.sle(low.term, value);
+    let below = pool.sle(value, high.term);
+    let shortcut = pool.all(&[printed, above, below]);
+    pool.any(&[shortcut, exact])
 }
 
 /// What must hold for a run that exited with `status` to pass the block.
@@ -725,6 +812,9 @@ pub fn prove(machine: &Machine, block: &Generated, budget: Budget) -> Verdict {
 }
 
 fn attempt(machine: &Machine, block: &Generated, budget: Budget) -> Result<Verdict, String> {
+    if block.uses_now() {
+        return Err("it uses now, the second a run starts, which a proof can't fix".into());
+    }
     let mut each = Vec::new();
     for (name, generator) in &block.vars {
         each.push((name.clone(), parts(name, generator)?));
@@ -998,19 +1088,34 @@ pub fn agrees(machine: &Machine, cases: &[crate::testfile::Case]) -> Result<(), 
             Some(End::Unsupported(reason)) => return Err(reason.clone()),
             _ => None,
         };
-        let files_match = case.files_after.iter().all(|(name, contents)| {
-            run.file(name).and_then(text).as_deref() == Some(contents.as_bytes())
-        });
-        // Output from the clock or random bytes is any value; a real run can't be compared.
-        let fixed = |bytes: &[Term]| bytes.iter().all(|byte| pool.constant(*byte).is_some());
-        if !fixed(&run.stdout)
-            || !fixed(&run.stderr)
-            || run.written.values().any(|bytes| !fixed(bytes))
+        // Output from the clock or random bytes is any value, which a real run can't be
+        // compared with; only a rule such as any(1, 6) allows it, and the proof checks the rule.
+        let now = crate::expect::now();
+        let agrees_with = |bytes: Option<&[Term]>, expected: &str| match bytes {
+            None => false,
+            Some(bytes) => match text(bytes) {
+                Some(text) => crate::expect::matches(expected, &text, now),
+                None => crate::expect::has_holes(expected),
+            },
+        };
+        let open = |bytes: Option<&[Term]>, expected: &str| {
+            bytes.is_some_and(|bytes| text(bytes).is_none()) && !crate::expect::has_holes(expected)
+        };
+        if open(Some(&run.stdout), &case.stdout)
+            || open(Some(&run.stderr), &case.stderr)
+            || case
+                .files_after
+                .iter()
+                .any(|(name, contents)| open(run.file(name), contents))
         {
             return Err("the output depends on the clock or random bytes".into());
         }
-        let same = text(&run.stdout).as_deref() == Some(case.stdout.as_bytes())
-            && text(&run.stderr).as_deref() == Some(case.stderr.as_bytes())
+        let files_match = case
+            .files_after
+            .iter()
+            .all(|(name, contents)| agrees_with(run.file(name), contents));
+        let same = agrees_with(Some(&run.stdout), &case.stdout)
+            && agrees_with(Some(&run.stderr), &case.stderr)
             && status == Some(u128::from(case.exit_code))
             && files_match;
         if !same {

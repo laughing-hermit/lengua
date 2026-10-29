@@ -92,8 +92,11 @@ of the same rule.
   (reading the time) and getrandom (random bytes from the kernel). `exit` is always needed, and
   files need openat and close. lengua programs can't allocate memory, start processes, handle
   signals or use the network. The kernel enforces this list when the program runs, so it's a
-  promise the user can rely on. Tests compare exact output, so a behavior whose output depends
-  on the time or on random bytes can't be tested yet: tell the user so before writing one.
+  promise the user can rely on.
+- **Output the program chooses:** when output depends on the time or on random bytes, the
+  behavior says the range it falls in, both ends in backticks: ``- Then it prints `rolled ` and
+  a number from `1` to `6` ``. The tests check that the number is in range, and the proof covers
+  every value the clock or the random bytes could give.
 - **Threads:** when the user wants a program that does heavy work on large inputs as fast as
   possible, add `- Threads: up to N` under `# Constraints`, with N up to the machine's cores
   (`status` reports them; at most 64). The program may then split its work across that many

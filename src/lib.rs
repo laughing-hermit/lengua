@@ -6,6 +6,7 @@
 
 pub mod checker;
 pub mod data_dir;
+pub mod expect;
 pub mod expr;
 pub mod hash;
 pub mod lock;

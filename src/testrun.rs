@@ -147,6 +147,11 @@ pub fn assertion_lines(source: &Source) -> BTreeMap<i64, usize> {
     lines
 }
 
+/// Shows expected text as a quoted string, with its rules written as `{any(lo, hi)}`.
+fn show_expected(text: &str) -> String {
+    show(crate::expect::show(text).as_bytes())
+}
+
 /// Shows bytes as a quoted string, shortened when long.
 fn show(bytes: &[u8]) -> String {
     const LIMIT: usize = 200;
@@ -171,6 +176,7 @@ pub fn explain_end(run: &Run, assertions: &BTreeMap<i64, usize>, limits: Limits)
                 exit_code: 0,
                 files: &none,
                 files_after: &none,
+                now: 0,
             };
             compare(run, &expected, assertions).unwrap_or_else(|| run.end.describe(limits))
         }
@@ -185,8 +191,10 @@ struct Expected<'a> {
     exit_code: u8,
     /// The files given before the run: each must stay as it was unless `files_after` names it.
     files: &'a BTreeMap<String, String>,
-    /// The files expected after the run, with their exact contents.
+    /// The files expected after the run, with their exact contents or rules.
     files_after: &'a BTreeMap<String, String>,
+    /// When the run started, in Unix seconds, which a rule's `now` stands for.
+    now: i128,
 }
 
 /// Why a run's files don't match, if they don't.
@@ -202,13 +210,14 @@ fn compare_files(run: &Run, expected: &Expected<'_>, problems: &mut Vec<String>)
         match found.get(name) {
             None => problems.push(format!(
                 "{name} should hold {}, but it wasn't written",
-                show(contents.as_bytes())
+                show_expected(contents)
             )),
-            Some(actual) if actual != contents.as_bytes() => problems.push(format!(
-                "{name} should hold {}, but held {}",
-                show(contents.as_bytes()),
-                show(actual)
-            )),
+            Some(actual) if !crate::expect::matches(contents, actual, expected.now) => problems
+                .push(format!(
+                    "{name} should hold {}, but held {}",
+                    show_expected(contents),
+                    show(actual)
+                )),
             Some(_) => {}
         }
     }
@@ -251,6 +260,7 @@ fn compare(
         stdout,
         stderr,
         exit_code,
+        now,
         ..
     } = *expected;
     let code = match run.end {
@@ -279,17 +289,17 @@ fn compare(
         });
     }
     let mut problems = Vec::new();
-    if run.stdout != stdout.as_bytes() {
+    if !crate::expect::matches(stdout, &run.stdout, now) {
         problems.push(format!(
             "stdout should be {}, but was {}",
-            show(stdout.as_bytes()),
+            show_expected(stdout),
             show(&run.stdout)
         ));
     }
-    if run.stderr != stderr.as_bytes() {
+    if !crate::expect::matches(stderr, &run.stderr, now) {
         problems.push(format!(
             "stderr should be {}, but was {}",
-            show(stderr.as_bytes()),
+            show_expected(stderr),
             show(&run.stderr)
         ));
     }
@@ -318,6 +328,7 @@ pub async fn check_case(
         files: &case.files,
         ..Job::new(program, &case.args, case.stdin.as_bytes(), syscalls)
     };
+    let now = crate::expect::now();
     let run = runner::run(launcher, job, Limits::default()).await?;
     let expected = Expected {
         stdout: &case.stdout,
@@ -325,6 +336,7 @@ pub async fn check_case(
         exit_code: case.exit_code,
         files: &case.files,
         files_after: &case.files_after,
+        now,
     };
     Ok(compare(&run, &expected, &assertion_lines(source)))
 }
@@ -365,6 +377,7 @@ pub async fn run_tests(
             files: &example.files,
             ..Job::new(program, &example.args, example.stdin.as_bytes(), syscalls)
         };
+        let now = crate::expect::now();
         let run = runner::run(launcher, job, limits).await?;
         outcome.runs += 1;
         let name = format!("example {}", example.id);
@@ -374,6 +387,7 @@ pub async fn run_tests(
             exit_code: example.exit_code,
             files: &example.files,
             files_after: &example.files_after,
+            now,
         };
         match compare(&run, &expected, &assertions) {
             Some(problem) => {
@@ -423,6 +437,7 @@ pub async fn run_tests(
                 files: &case.files,
                 ..Job::new(program, &case.args, case.stdin.as_bytes(), syscalls)
             };
+            let now = crate::expect::now();
             let run = runner::run(launcher, job, limits).await?;
             outcome.runs += 1;
             let expected = Expected {
@@ -431,6 +446,7 @@ pub async fn run_tests(
                 exit_code: case.exit_code,
                 files: &case.files,
                 files_after: &case.files_after,
+                now,
             };
             if let Some(problem) = compare(&run, &expected, &assertions) {
                 record(
@@ -484,7 +500,34 @@ mod tests {
             exit_code,
             files,
             files_after,
+            now: 1_735_689_600,
         }
+    }
+
+    #[test]
+    fn rules_take_any_number_in_range_and_show_as_written() {
+        let none = BTreeMap::new();
+        let no_files = BTreeMap::new();
+        let rolled = format!(
+            "rolled {}\n",
+            crate::expect::hole(
+                crate::expect::Bound::Number(1),
+                crate::expect::Bound::Number(6)
+            )
+        );
+        let rule = expect(&rolled, 0, &no_files, &no_files);
+        assert_eq!(compare(&finished("rolled 6\n", "", 0), &rule, &none), None);
+        let wrong = compare(&finished("rolled 7\n", "", 0), &rule, &none).expect("differs");
+        assert!(
+            wrong.contains("stdout should be \"rolled {any(1, 6)}\\n\", but was \"rolled 7\\n\""),
+            "{wrong}"
+        );
+        // now is when the run started.
+        let clock =
+            crate::expect::hole(crate::expect::Bound::Now(-2), crate::expect::Bound::Now(2));
+        let rule = expect(&clock, 0, &no_files, &no_files);
+        assert_eq!(compare(&finished("1735689601", "", 0), &rule, &none), None);
+        assert!(compare(&finished("1735689603", "", 0), &rule, &none).is_some());
     }
 
     #[test]

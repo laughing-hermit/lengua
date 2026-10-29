@@ -30,6 +30,10 @@ the tests come before the code, and they decide whether the code is right.
   `exit_code`. Every backtick value of the behavior must appear in its example.
 - **Output is exact,** including the final newline (`"5\n"`). Leave out a stream the program
   doesn't write; it must then stay empty.
+- **Output the program chooses,** such as a random roll or the time, is a rule: in the example,
+  `stdout = { matches = "rolled {any(1, 6)}\n" }`, and in the generated block,
+  `stdout = "rolled {any(1, 6)}\n"`. `now` is when the run starts in Unix seconds, and only
+  bounds a rule: `{any(now - 2, now + 2)}`.
 - **`exit_code` is required** and equals the code the spec states. 134 is reserved for failed
   assertions.
 - **A `[[generated]]` block for every behavior whose example has args, stdin or files,** with the
