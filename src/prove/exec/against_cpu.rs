@@ -10,6 +10,8 @@ use rand::rngs::ChaCha8Rng;
 use rand::{RngExt, SeedableRng};
 
 use super::{Image, Last, State, Step, step};
+
+mod vectors;
 use crate::checker::decode::Machine;
 use crate::platform::Profile;
 use crate::prove::term::Pool;

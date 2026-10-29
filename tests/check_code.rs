@@ -714,17 +714,20 @@ async fn the_file_example_proves_its_file_handling() {
     assert_eq!(report["stamped"], true, "{report}");
     let proof = session.call_ok("prove", folder.arguments()).await;
     // Usage (B2), a missing input (B3) and a file over the limit (B4, a mebibyte of any of its
-    // characters) are proven; capitalizing any text (B1) is only tested: its loop is SSE.
+    // characters) are proven; capitalizing a file (B1), with SSE2, is proven for every file up
+    // to the length a proof covers.
     assert_eq!(
         proof["message"],
-        "Proven for every input in range: generated B2, generated B3, generated B4. lengua.lock \
-         records it.",
+        "Proven for every input in range: generated B2, generated B3, generated B4. Proven for \
+         every input with texts up to a length, and tested beyond it: generated B1 (up to 4096 \
+         bytes). lengua.lock records it.",
         "{proof}"
     );
+    assert_eq!(proof["proofs"][0]["proven_up_to"], 4096, "{proof}");
     assert!(
-        proof["proofs"][0]["detail"]
+        proof["proofs"][3]["detail"]
             .as_str()
-            .is_some_and(|detail| detail.contains("the instruction Movd")),
+            .is_some_and(|detail| detail.contains("(1 input combination, 1 path through")),
         "{proof}"
     );
     session.service.cancel().await.expect("close the session");

@@ -1013,5 +1013,161 @@ async fn proves_text_up_to_where_the_model_stops() {
     assert_eq!(shapes, 10);
     let bound = bound.expect("a bound");
     assert_eq!(bound.bytes, 9);
-    assert!(bound.why.contains("Cpuid"), "{}", bound.why);
+    assert!(bound.why.contains("cpuid"), "{}", bound.why);
+}
+
+/// Prints each generated block's verdict for a program's three files, for exploring.
+#[tokio::test]
+#[ignore = "explores a program's proofs"]
+async fn explores_a_program() {
+    let folder = std::env::var("LENGUA_EXPLORE").expect("LENGUA_EXPLORE names a folder");
+    let read = |name: &str| {
+        std::fs::read_to_string(std::path::Path::new(&folder).join(name)).expect("a file")
+    };
+    let machine = machine(&read("main.s")).await;
+    let (spec, tests) = (read("spec.md"), read("tests.toml"));
+    let spec_parsed = crate::spec::parse(&spec).expect("valid spec");
+    let label = crate::hash::Sha256Hex::of(b"").label();
+    let line = tests
+        .lines()
+        .find(|line| line.starts_with("spec = "))
+        .expect("a label")
+        .to_owned();
+    let tests = tests.replacen(&line, &format!("spec = \"{label}\""), 1);
+    let suite = crate::testfile::check(&tests, &spec_parsed, &label).expect("valid tests");
+    for block in &suite.generated {
+        let began = Instant::now();
+        let verdict = prove(
+            &machine,
+            block,
+            Budget {
+                max_shapes: 2_000_000,
+                ..budget(120)
+            },
+        );
+        eprintln!("{}: {:?} in {:?}", block.id, verdict, began.elapsed());
+    }
+}
+
+/// A file of a program in this repository, by its path from the top.
+fn repository_file(path: &str) -> String {
+    std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path))
+        .unwrap_or_else(|error| panic!("{path}: {error}"))
+}
+
+fn text_budget() -> Budget {
+    Budget {
+        max_shapes: 100_000,
+        ..budget(120)
+    }
+}
+
+/// Vector code, SSE2: the vector template capitalizes every line it's given, proven with no
+/// solver question; its too-long lines are proven up to one pipe write; and capitals that stop
+/// at `y` are found.
+#[tokio::test]
+async fn proves_the_vector_template() {
+    let (spec, tests) = (
+        asset("vector-template-spec.md"),
+        asset("vector-template-tests.toml"),
+    );
+    let source = asset("vector-template.s");
+    let right = machine(&source).await;
+    let shout = block(&spec, &tests, 0);
+    let verdict = prove(&right, &shout, budget(60));
+    assert!(
+        matches!(
+            verdict,
+            Verdict::Proven {
+                bound: None,
+                questions: 0,
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
+    let too_long = block(&spec, &tests, 1);
+    let verdict = prove(&right, &too_long, text_budget());
+    let Verdict::Proven {
+        bound: Some(bound), ..
+    } = &verdict
+    else {
+        panic!("{verdict:?}");
+    };
+    assert_eq!(bound.bytes, TEXT_BOUND - 1);
+    let wrong =
+        machine(&source.replace(".equ ABOVE_Z_X4, 0x7b7b7b7b", ".equ ABOVE_Z_X4, 0x7a7a7a7a"))
+            .await;
+    let verdict = prove(&wrong, &shout, budget(60));
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+}
+
+/// Vector code, AVX-512 with masks: the fast word count's lines and words, its popcounts of
+/// masks meeting the formulas' counts as one term; a count that misses carriage returns is
+/// found. Texts up to 300 bytes keep the test quick; up to 4096 prove the same way.
+#[tokio::test]
+async fn proves_the_avx512_word_count() {
+    if !crate::platform::Machine::detect().features.avx512bw {
+        eprintln!("this CPU has no AVX-512BW");
+        return;
+    }
+    let folder = "plugin/skills/write-assembly/assets/fast/wc/";
+    let spec = repository_file(&format!("{folder}spec.md")).replace(
+        "Tests give it up to `1048576` bytes.",
+        "Tests give it up to `300` bytes.",
+    );
+    let tests = repository_file(&format!("{folder}tests.toml"))
+        .replace("string(0, 1048576,", "string(0, 300,");
+    let source = repository_file(&format!("{folder}main.s"));
+    let block = block(&spec, &tests, 0);
+    let right = machine(&source).await;
+    let verdict = prove(&right, &block, text_budget());
+    assert!(
+        matches!(
+            verdict,
+            Verdict::Proven {
+                bound: None,
+                questions: 0,
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
+    let wrong = machine(&source.replace(".equ TAB_TO_CR, 4", ".equ TAB_TO_CR, 3")).await;
+    let verdict = prove(&wrong, &block, text_budget());
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+}
+
+/// Vector code on files: upcase, which Claude Code wrote through lengua with SSE2's signed
+/// compare trick, capitalizes any file of text; a bound that leaves `z` small is found.
+#[tokio::test]
+async fn proves_upcase_on_files() {
+    let spec = repository_file("examples/upcase/spec.md").replacen(
+        "# Behaviors",
+        "Tests also give it files of `0` to `300` bytes.\n\n# Behaviors",
+        1,
+    );
+    let tests = repository_file("examples/upcase/tests.toml").replacen(
+        "string(0, 1048576,",
+        "string(0, 300,",
+        1,
+    );
+    let source = repository_file("examples/upcase/main.s");
+    let block = block(&spec, &tests, 0);
+    let right = machine(&source).await;
+    let verdict = prove(&right, &block, text_budget());
+    assert!(
+        matches!(
+            verdict,
+            Verdict::Proven {
+                bound: None,
+                questions: 0,
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
+    let wrong = machine(&source.replace("mov eax, 0x9a9a9a9a", "mov eax, 0x99999999")).await;
+    let verdict = prove(&wrong, &block, text_budget());
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
 }

@@ -553,6 +553,30 @@ impl Solver {
                     ));
                     self.counts.insert(current);
                 }
+                // A count adds its ones and zeros in the bits its length needs.
+                &Node::Count(number, _) => {
+                    let parts = pool.count_parts(number);
+                    let width = pool.width(current);
+                    let narrow = (128 - (parts.len() as u128).leading_zeros()).clamp(1, width);
+                    let (one, zero) = (literal(1, narrow), literal(0, narrow));
+                    let ones: Vec<String> = parts
+                        .iter()
+                        .map(|part| format!("(ite t{} {one} {zero})", part.index()))
+                        .collect();
+                    let sum = match ones.as_slice() {
+                        [only] => only.clone(),
+                        _ => format!("(bvadd {})", ones.join(" ")),
+                    };
+                    let value = if narrow < width {
+                        format!("((_ zero_extend {}) {sum})", width - narrow)
+                    } else {
+                        sum
+                    };
+                    text.push_str(&format!(
+                        "(define-fun t{} () {sort} {value})\n",
+                        current.index()
+                    ));
+                }
                 &Node::Mul(factor, by) if pool.constant(by).is_some() => {
                     let constant = pool.constant(by).unwrap_or(0);
                     let width = pool.width(current);

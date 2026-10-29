@@ -106,12 +106,6 @@ fn space(pool: &mut Pool, byte: Term) -> Term {
     pool.bool_or(control, is_blank)
 }
 
-/// 1 where `condition` holds, else 0, as a formula's whole number.
-fn indicator(pool: &mut Pool, condition: Term) -> Term {
-    let (one, zero) = (pool.bv(WIDTH, 1), pool.bv(WIDTH, 0));
-    pool.ite(condition, one, zero)
-}
-
 /// The smallest and largest of `values`.
 fn span(values: &[Option<i128>]) -> Result<(i128, i128), String> {
     let values: Vec<i128> = values
@@ -317,16 +311,15 @@ fn call(
             let mut starts = Vec::with_capacity(bytes.len());
             for index in 0..bytes.len() {
                 let word = pool.bool_not(spaces[index]);
-                let start = if index == 0 {
+                starts.push(if index == 0 {
                     word
                 } else {
                     pool.bool_and(word, spaces[index - 1])
-                };
-                starts.push(indicator(pool, start));
+                });
             }
             let high = i128::try_from(bytes.len().div_ceil(2)).map_err(|_| overflow())?;
             Ok(Formula::Number(Number::whole(
-                pool.sum(WIDTH, &starts),
+                pool.count(WIDTH, &starts),
                 0,
                 high,
             )))
@@ -477,15 +470,28 @@ fn call(
 
 /// Each byte with `pairs` applied: a byte equal to a pair's first character becomes its second.
 fn translate_bytes(pool: &mut Pool, bytes: &[Term], pairs: &[(char, char)]) -> Vec<Term> {
+    // Later pairs win; then the bytes that move by the same amount move together: upper is
+    // a to z moving down 32, one choice per byte.
+    let mapping: BTreeMap<u8, u8> = pairs
+        .iter()
+        .map(|(source, target)| (*source as u8, *target as u8))
+        .collect();
+    let mut moves: BTreeMap<u8, Vec<u8>> = BTreeMap::new();
+    for (source, target) in mapping {
+        let by = target.wrapping_sub(source);
+        if by != 0 {
+            moves.entry(by).or_default().push(source);
+        }
+    }
     bytes
         .iter()
         .map(|byte| {
             let mut result = *byte;
-            for (source, target) in pairs {
-                let source = pool.bv(8, u128::from(*source as u8));
-                let target = pool.bv(8, u128::from(*target as u8));
-                let matched = pool.eq(*byte, source);
-                result = pool.ite(matched, target, result);
+            for (by, sources) in &moves {
+                let moved = pool.bv(8, u128::from(*by));
+                let moved = pool.add(*byte, moved);
+                let matched = pool.is_one_of(*byte, sources);
+                result = pool.ite(matched, moved, result);
             }
             result
         })
@@ -523,13 +529,9 @@ fn count(pool: &mut Pool, bytes: &[Term], part: &[u8]) -> Result<Formula, String
         }
         counted.push(counts);
     }
-    let ones: Vec<Term> = counted
-        .iter()
-        .map(|counts| indicator(pool, *counts))
-        .collect();
     let high = i128::try_from(bytes.len() / length).map_err(|_| overflow())?;
     Ok(Formula::Number(Number::whole(
-        pool.sum(WIDTH, &ones),
+        pool.count(WIDTH, &counted),
         0,
         high,
     )))

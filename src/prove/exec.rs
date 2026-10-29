@@ -24,6 +24,9 @@ const ARGUMENT_ROOM: u64 = 1024 * 1024;
 /// The most instructions one run may take before the prover gives up on it.
 pub const MAX_STEPS: u64 = 5_000_000;
 
+/// The bytes of a vector register: a zmm register's 512 bits.
+const VECTOR_BYTES: usize = 64;
+
 /// A range of addresses the program may use.
 #[derive(Debug, Clone, Copy)]
 struct Region {
@@ -38,6 +41,8 @@ pub struct Image {
     regions: Vec<Region>,
     initial: HashMap<u64, u8>,
     entry: u64,
+    /// Each function's name, by the address range of its code.
+    functions: Vec<(u64, u64, String)>,
 }
 
 impl Image {
@@ -46,10 +51,16 @@ impl Image {
     pub fn new(machine: &Machine) -> Option<Self> {
         let entry = machine.functions.get("_start")?.address;
         let mut instructions = HashMap::new();
-        for function in machine.functions.values() {
+        let mut functions = Vec::new();
+        for (name, function) in &machine.functions {
             for instruction in &function.instructions {
                 instructions.insert(instruction.ip(), *instruction);
             }
+            functions.push((
+                function.address,
+                function.address + function.size,
+                name.clone(),
+            ));
         }
         let mut regions = vec![Region {
             start: STACK_TOP - STACK_SIZE,
@@ -72,7 +83,16 @@ impl Image {
             regions,
             initial,
             entry,
+            functions,
         })
+    }
+
+    /// The name of the function whose code holds `address`.
+    fn function_at(&self, address: u64) -> &str {
+        self.functions
+            .iter()
+            .find(|(start, end, _)| (*start..*end).contains(&address))
+            .map_or("its code", |(_, _, name)| name.as_str())
     }
 
     fn region(&self, address: u64) -> Option<Region> {
@@ -92,6 +112,8 @@ pub enum End {
     Signal(&'static str),
     /// Something the prover doesn't model, so this run proves nothing.
     Unsupported(String),
+    /// The paths through the code ran past the limit before this one was followed.
+    TooManyPaths,
 }
 
 /// What last set the flags, when a branch can read it as a plain comparison.
@@ -143,6 +165,11 @@ pub struct State {
     sign: Term,
     overflow: Term,
     parity: Term,
+    /// The vector registers xmm, ymm and zmm 0 to 31, each its 64 bytes from the lowest,
+    /// shared with the runs a fork made until one writes it.
+    vectors: Vec<Rc<[Term; VECTOR_BYTES]>>,
+    /// The mask registers k0 to k7, 64 bits each.
+    masks: [Term; 8],
     /// The bytes written or read so far.
     pub memory: Memory,
     /// The value last stored whole at an address, while none of its bytes has changed since:
@@ -219,6 +246,7 @@ impl State {
     /// The state `_start` begins in: `args` and `stdin` as byte terms, laid out as Linux does.
     pub fn start(image: &Image, pool: &mut Pool, args: &[Vec<Term>], stdin: Vec<Term>) -> Self {
         let zero = pool.bv(64, 0);
+        let zero_byte = pool.bv(8, 0);
         let no = pool.boolean(false);
         let mut state = Self {
             registers: [zero; 16],
@@ -228,6 +256,12 @@ impl State {
             sign: no,
             overflow: no,
             parity: no,
+            // One page of zeros, shared by every register until one is written.
+            vectors: {
+                let zeros = Rc::new([zero_byte; VECTOR_BYTES]);
+                (0..32).map(|_| Rc::clone(&zeros)).collect()
+            },
+            masks: [zero; 8],
             memory: Memory::default(),
             stored: BTreeMap::new(),
             rip: image.entry,
@@ -467,12 +501,14 @@ impl<'a> Cpu<'a> {
                 Some(byte) => byte,
                 None => match self.image.initial.get(&at) {
                     Some(byte) => self.pool.bv(8, u128::from(*byte)),
-                    None if at < STACK_TOP - 8 => {
+                    None if (STACK_TOP - STACK_SIZE..STACK_TOP - 8).contains(&at) => {
                         // Stack the program never wrote: whatever was there.
                         let unknown = self.pool.var(8, &format!("stack{at:x}"));
                         self.state.memory.insert(at, unknown);
                         unknown
                     }
+                    // Zero-filled data (.bss) and the arguments' padding, as the kernel
+                    // leaves them.
                     None => self.pool.bv(8, 0),
                 },
             };
@@ -972,7 +1008,7 @@ impl<'a> Cpu<'a> {
                 self.set_carry(mnemonic);
                 Ok(Step::Next)
             }
-            other => Err(unsupported(format!("the instruction {other:?}"))),
+            other => self.vector(other),
         }
     }
 
@@ -1560,9 +1596,7 @@ pub fn explore(
     let mut finished = Vec::new();
     while let Some(mut state) = pending.pop() {
         if finished.len() + pending.len() > max_runs {
-            state.end = Some(unsupported(format!(
-                "more than {max_runs} paths through the code"
-            )));
+            state.end = Some(End::TooManyPaths);
             finished.push(state);
             break;
         }
@@ -1619,6 +1653,7 @@ pub fn bytes(pool: &mut Pool, text: &[u8]) -> Vec<Term> {
 }
 
 mod bits;
+mod vector;
 
 #[cfg(test)]
 mod against_cpu;

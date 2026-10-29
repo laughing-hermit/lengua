@@ -108,7 +108,33 @@ pub enum Node {
     BoolOr(Term, Term),
     /// `not`
     BoolNot(Term),
+    /// Whether a byte variable's value is in a set: a table of 256 bits, by number. Every
+    /// condition on one byte alone becomes one, so two ways of writing the same test of a byte,
+    /// a program's and a formula's, are one term.
+    Lookup(Term, u32),
+    /// How many of a list of conditions hold, by the list's number, as a number this many bits
+    /// wide: a sum of ones and zeros in any order and grouping, so a popcount of a mask and a
+    /// formula's count of the same tests are one term.
+    Count(u32, u32),
 }
+
+/// A set of byte values: bit `v` of word `v / 64` is set for each value `v` in it.
+pub type Table = [u64; 4];
+
+/// The one byte variable a term is computed from, when there is exactly one: its value is then
+/// a function of at most 256 values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Sole {
+    /// No variable: a constant.
+    Constant,
+    /// One 8-bit variable.
+    Byte(Term),
+    /// Several variables, or one that isn't a byte.
+    Many,
+}
+
+/// Marks a shape's number where a term would be, in a node that stands for a shape.
+const SHAPE: u32 = 1 << 31;
 
 /// Every term made so far, each made once, with the unsigned range of values each can take.
 #[derive(Debug, Default)]
@@ -120,6 +146,23 @@ pub struct Pool {
     index: HashMap<Node, Term>,
     /// Variables known to stay in a range, by name: digits are '0' to '9'.
     declared: HashMap<String, (u128, u128)>,
+    /// Each term's one byte variable, if it has exactly one.
+    soles: Vec<Sole>,
+    /// Each one-byte term's shape: the term with its byte's identity left out, so tests of
+    /// different bytes that compute the same thing share one. `u32::MAX` for other terms.
+    shapes: Vec<u32>,
+    shape_index: HashMap<Node, u32>,
+    /// The table each one-byte condition's shape computes, worked out once per shape.
+    shape_tables: HashMap<u32, Table>,
+    /// The sets lookups test, by number.
+    tables: Vec<Table>,
+    table_index: HashMap<Table, u32>,
+    /// The conditions each count counts, sorted, by number.
+    counts: Vec<Vec<Term>>,
+    count_index: HashMap<Vec<Term>, u32>,
+    /// The values a byte variable is held to by the conditions it's drawn with, such as a
+    /// text's characters, for drawing inputs that meet them.
+    allowed: HashMap<Term, Vec<u8>>,
 }
 
 /// The smallest all-ones number at least `value`: the range an or or xor stays in.
@@ -153,6 +196,80 @@ fn signed(value: u128, width: u32) -> i128 {
 /// A signed number as a constant of `width` bits.
 fn unsigned(value: i128, width: u32) -> u128 {
     u128::from_ne_bytes(value.to_ne_bytes()) & mask(width)
+}
+
+/// The terms a node is made of; none for a count, whose parts its pool keeps.
+fn node_operands(node: &Node) -> Vec<Term> {
+    match *node {
+        Node::Const { .. }
+        | Node::Var { .. }
+        | Node::Bool(_)
+        | Node::BoolVar(_)
+        | Node::Count(..) => Vec::new(),
+        Node::Not(a)
+        | Node::Neg(a)
+        | Node::Extract(a, _, _)
+        | Node::ZeroExtend(a, _)
+        | Node::SignExtend(a, _)
+        | Node::BoolNot(a)
+        | Node::Lookup(a, _) => vec![a],
+        Node::Ite(c, a, b) => vec![c, a, b],
+        Node::Add(a, b)
+        | Node::Mul(a, b)
+        | Node::Udiv(a, b)
+        | Node::Urem(a, b)
+        | Node::Sdiv(a, b)
+        | Node::Srem(a, b)
+        | Node::And(a, b)
+        | Node::Or(a, b)
+        | Node::Xor(a, b)
+        | Node::Shl(a, b)
+        | Node::Lshr(a, b)
+        | Node::Ashr(a, b)
+        | Node::Concat(a, b)
+        | Node::Eq(a, b)
+        | Node::Ult(a, b)
+        | Node::Slt(a, b)
+        | Node::BoolAnd(a, b)
+        | Node::BoolOr(a, b) => vec![a, b],
+    }
+}
+
+/// The node's operands, to change in place.
+fn node_operands_mut(node: &mut Node) -> Vec<&mut Term> {
+    match node {
+        Node::Const { .. }
+        | Node::Var { .. }
+        | Node::Bool(_)
+        | Node::BoolVar(_)
+        | Node::Count(..) => Vec::new(),
+        Node::Not(a)
+        | Node::Neg(a)
+        | Node::Extract(a, _, _)
+        | Node::ZeroExtend(a, _)
+        | Node::SignExtend(a, _)
+        | Node::BoolNot(a)
+        | Node::Lookup(a, _) => vec![a],
+        Node::Ite(c, a, b) => vec![c, a, b],
+        Node::Add(a, b)
+        | Node::Mul(a, b)
+        | Node::Udiv(a, b)
+        | Node::Urem(a, b)
+        | Node::Sdiv(a, b)
+        | Node::Srem(a, b)
+        | Node::And(a, b)
+        | Node::Or(a, b)
+        | Node::Xor(a, b)
+        | Node::Shl(a, b)
+        | Node::Lshr(a, b)
+        | Node::Ashr(a, b)
+        | Node::Concat(a, b)
+        | Node::Eq(a, b)
+        | Node::Ult(a, b)
+        | Node::Slt(a, b)
+        | Node::BoolAnd(a, b)
+        | Node::BoolOr(a, b) => vec![a, b],
+    }
 }
 
 impl Pool {
@@ -322,12 +439,241 @@ impl Pool {
             Sort::Bv(width) => self.signed_range_of(&node, width, range),
             Sort::Bool => (0, 1),
         };
+        let sole = self.sole_of(&node, term);
+        let shape = match sole {
+            Sole::Byte(_) => self.shape_of(&node, term),
+            _ => u32::MAX,
+        };
         self.nodes.push(node.clone());
         self.sorts.push(sort);
         self.ranges.push(range);
         self.signed_ranges.push(signed_range);
+        self.soles.push(sole);
+        self.shapes.push(shape);
+        // A condition on one byte is the set of the byte's values where it holds.
+        if let (Sort::Bool, Sole::Byte(byte)) = (sort, sole)
+            && !matches!(node, Node::Lookup(..))
+            && let Some(table) = self.table_of(term, byte, shape)
+        {
+            let lookup = self.lookup(byte, table);
+            self.index.insert(node, lookup);
+            return lookup;
+        }
         self.index.insert(node, term);
         term
+    }
+
+    /// The one byte variable `node`, about to be `term`, is computed from, if any.
+    fn sole_of(&self, node: &Node, term: Term) -> Sole {
+        match node {
+            Node::Const { .. } | Node::Bool(_) => Sole::Constant,
+            Node::Var { width: 8, .. } => Sole::Byte(term),
+            Node::Var { .. } | Node::BoolVar(_) | Node::Count(..) => Sole::Many,
+            Node::Lookup(byte, _) => Sole::Byte(*byte),
+            _ => {
+                let mut sole = Sole::Constant;
+                for operand in node_operands(node) {
+                    sole = match (sole, self.soles[operand.index()]) {
+                        (Sole::Many, _) | (_, Sole::Many) => return Sole::Many,
+                        (Sole::Constant, other) | (other, Sole::Constant) => other,
+                        (Sole::Byte(a), Sole::Byte(b)) if a == b => Sole::Byte(a),
+                        _ => return Sole::Many,
+                    };
+                }
+                sole
+            }
+        }
+    }
+
+    /// The shape of `node`, about to be `term`, which is computed from one byte: the node with
+    /// each operand computed from the byte replaced by that operand's shape.
+    fn shape_of(&mut self, node: &Node, term: Term) -> u32 {
+        let shaped = match node {
+            // A byte is known only by its range.
+            Node::Var { width: 8, .. } => {
+                let (low, high) = self.declared_range(node);
+                Node::Const {
+                    width: 0,
+                    value: low << 8 | high,
+                }
+            }
+            _ => {
+                let mut shaped = node.clone();
+                for operand in node_operands_mut(&mut shaped) {
+                    let shape = self.shapes[operand.index()];
+                    if shape != u32::MAX {
+                        *operand = Term(SHAPE | shape);
+                    }
+                }
+                shaped
+            }
+        };
+        let next = u32::try_from(self.shape_index.len()).unwrap_or(u32::MAX);
+        let _ = term;
+        *self.shape_index.entry(shaped).or_insert(next)
+    }
+
+    /// The range a byte variable's node declares.
+    fn declared_range(&self, node: &Node) -> (u128, u128) {
+        match node {
+            Node::Var { name, .. } => self.declared.get(name).copied().unwrap_or((0, 255)),
+            _ => (0, 255),
+        }
+    }
+
+    /// The values of `byte` where the condition `term` holds, worked out once per shape.
+    fn table_of(&mut self, term: Term, byte: Term, shape: u32) -> Option<Table> {
+        if let Some(table) = self.shape_tables.get(&shape) {
+            return Some(*table);
+        }
+        let (low, high) = self.range(byte);
+        let mut table = [0_u64; 4];
+        for value in low..=high.min(255) {
+            let holds =
+                self.evaluate_with(term, &mut |_, variable| (variable == byte).then_some(value))?;
+            if holds == 1 {
+                table[(value / 64) as usize] |= 1 << (value % 64);
+            }
+        }
+        self.shape_tables.insert(shape, table);
+        Some(table)
+    }
+
+    /// The condition that `byte` is one of `table`'s values: true or false when its range
+    /// settles that.
+    fn lookup(&mut self, byte: Term, table: Table) -> Term {
+        let (low, high) = self.range(byte);
+        let mut inside = [0_u64; 4];
+        for value in low..=high.min(255) {
+            inside[(value / 64) as usize] |= 1 << (value % 64);
+        }
+        let held: Table = std::array::from_fn(|word| table[word] & inside[word]);
+        if held == [0; 4] {
+            return self.boolean(false);
+        }
+        if held == inside {
+            return self.boolean(true);
+        }
+        let next = u32::try_from(self.tables.len()).unwrap_or(u32::MAX);
+        let number = *self.table_index.entry(held).or_insert(next);
+        if number == next {
+            self.tables.push(held);
+        }
+        self.make(Node::Lookup(byte, number), Sort::Bool)
+    }
+
+    /// The condition that `byte`, an 8-bit term of one variable, is one of `values`.
+    pub fn is_one_of(&mut self, byte: Term, values: &[u8]) -> Term {
+        let mut table = [0_u64; 4];
+        for value in values {
+            table[usize::from(*value / 64)] |= 1 << (value % 64);
+        }
+        match self.node(byte) {
+            Node::Var { width: 8, .. } => self.lookup(byte, table),
+            _ => {
+                let choices: Vec<Term> = values
+                    .iter()
+                    .map(|value| {
+                        let value = self.bv(8, u128::from(*value));
+                        self.eq(byte, value)
+                    })
+                    .collect();
+                self.any(&choices)
+            }
+        }
+    }
+
+    /// Notes that conditions hold the byte variable `variable` to `values`, sorted.
+    pub fn allow(&mut self, variable: Term, values: &[u8]) {
+        let mut values = values.to_vec();
+        values.sort_unstable();
+        values.dedup();
+        self.allowed.insert(variable, values);
+    }
+
+    /// The values conditions hold `variable` to, when they're noted.
+    #[must_use]
+    pub fn allowed(&self, variable: Term) -> Option<&[u8]> {
+        self.allowed.get(&variable).map(Vec::as_slice)
+    }
+
+    /// The set a lookup tests.
+    #[must_use]
+    pub fn table(&self, number: u32) -> Table {
+        self.tables[number as usize]
+    }
+
+    /// The conditions a count counts.
+    #[must_use]
+    pub fn count_parts(&self, number: u32) -> &[Term] {
+        &self.counts[number as usize]
+    }
+
+    /// How many of `parts`, true/false terms, hold, as a `width`-bit number: a count, the same
+    /// term whatever order the parts come in.
+    pub fn count(&mut self, width: u32, parts: &[Term]) -> Term {
+        let mut parts: Vec<Term> = parts
+            .iter()
+            .copied()
+            .filter(|part| self.truth(*part) != Some(false))
+            .collect();
+        if parts.len() as u128 > mask(width) {
+            // It would wrap: add it up instead.
+            let (one, zero) = (self.bv(width, 1), self.bv(width, 0));
+            let ones: Vec<Term> = parts
+                .iter()
+                .map(|part| self.ite(*part, one, zero))
+                .collect();
+            return self.sum(width, &ones);
+        }
+        parts.sort_unstable();
+        if parts.is_empty() {
+            return self.bv(width, 0);
+        }
+        if parts.iter().all(|part| self.truth(*part) == Some(true)) {
+            return self.bv(width, parts.len() as u128);
+        }
+        let next = u32::try_from(self.counts.len()).unwrap_or(u32::MAX);
+        let number = *self.count_index.entry(parts.clone()).or_insert(next);
+        if number == next {
+            self.counts.push(parts);
+        }
+        self.make(Node::Count(number, width), Sort::Bv(width))
+    }
+
+    /// Whether [`Self::counted`] finds conditions in `term`, without making any terms.
+    fn is_counted(&self, term: Term) -> bool {
+        match *self.node(term) {
+            Node::Count(..) => true,
+            Node::Ite(_, then, otherwise) => matches!(
+                (self.constant(then), self.constant(otherwise)),
+                (Some(1), Some(0)) | (Some(0), Some(1))
+            ),
+            Node::ZeroExtend(inner, _) => self.width(inner) == 1 || self.is_counted(inner),
+            _ => false,
+        }
+    }
+
+    /// The conditions `term` counts, when it's a count or a 0 or 1: a count, a choice of 1 or 0,
+    /// or one of those widened.
+    fn counted(&mut self, term: Term) -> Option<Vec<Term>> {
+        match *self.node(term) {
+            Node::Count(number, _) => Some(self.counts[number as usize].clone()),
+            Node::Const { value: 0, .. } => Some(Vec::new()),
+            Node::Ite(condition, then, otherwise) => {
+                match (self.constant(then), self.constant(otherwise)) {
+                    (Some(1), Some(0)) => Some(vec![condition]),
+                    (Some(0), Some(1)) => Some(vec![self.bool_not(condition)]),
+                    _ => None,
+                }
+            }
+            Node::ZeroExtend(inner, _) if self.width(inner) == 1 => {
+                let one = self.bv(1, 1);
+                Some(vec![self.eq(inner, one)])
+            }
+            Node::ZeroExtend(inner, _) => self.counted(inner),
+            _ => None,
+        }
     }
 
     /// The range of a node's values, from its operands' ranges.
@@ -347,6 +693,14 @@ impl Pool {
         match node {
             Node::Const { value, .. } => (*value, *value),
             Node::Var { name, .. } => self.declared.get(name).copied().unwrap_or(full),
+            Node::Count(number, _) => {
+                let parts = &self.counts[*number as usize];
+                let sure = parts
+                    .iter()
+                    .filter(|part| matches!(self.node(**part), Node::Bool(true)))
+                    .count();
+                (sure as u128, parts.len() as u128)
+            }
             Node::Add(a, b) => {
                 // Each end's sum, and whether it wrapped past the width.
                 let wrap = |x: u128, y: u128| {
@@ -574,6 +928,15 @@ impl Pool {
                 }
             }
             _ => {}
+        }
+        // Two counts, or a count and a 1-or-0, are one count of all their conditions.
+        if self.is_counted(a)
+            && self.is_counted(b)
+            && let (Some(mut left), Some(right)) = (self.counted(a), self.counted(b))
+            && (left.len() + right.len()) as u128 <= mask(width)
+        {
+            left.extend(right);
+            return self.count(width, &left);
         }
         // x - (x / c) × c is x % c, the remainder however it was written.
         for (x, other) in [(a, b), (b, a)] {
@@ -929,6 +1292,18 @@ impl Pool {
             Node::Extract(inner, _, inner_low) => {
                 return self.extract(inner, high + inner_low, low + inner_low);
             }
+            // A count's low bits are the count when it fits them.
+            Node::Count(number, _)
+                if low == 0 && self.counts[number as usize].len() as u128 <= mask(out) =>
+            {
+                return self.make(Node::Count(number, out), Sort::Bv(out));
+            }
+            // x + x is x shifted left once: its bits are x's, one place up.
+            Node::Add(x, y) if x == y => {
+                let one = self.bv(width, 1);
+                let shifted = self.shl(x, one);
+                return self.extract(shifted, high, low);
+            }
             Node::Concat(upper, lower) => {
                 let lower_width = self.width(lower);
                 if high < lower_width {
@@ -1048,6 +1423,9 @@ impl Pool {
         }
         match *self.node(a) {
             Node::ZeroExtend(inner, inner_by) => return self.zero_extend(inner, inner_by + by),
+            Node::Count(number, _) => {
+                return self.make(Node::Count(number, width), Sort::Bv(width));
+            }
             // The low bits of a value that fits in them, widened back, are the value.
             Node::Extract(inner, high, 0)
                 if self.width(inner) == width && self.range(inner).1 <= mask(high + 1) =>
@@ -1382,6 +1760,43 @@ impl Pool {
                 };
             }
         }
+        // Joined parts equal a constant when each equals its own bits of it: a mask of byte
+        // tests is 0 when none of the tests holds.
+        for (joined, other) in [(a, b), (b, a)] {
+            if let (Node::Concat(high, low), Some(k)) =
+                (self.node(joined).clone(), self.constant(other))
+            {
+                let low_width = self.width(low);
+                let (high_value, low_value) = (k >> low_width, k & mask(low_width));
+                let high_constant = self.bv(self.width(high), high_value);
+                let low_constant = self.bv(low_width, low_value);
+                let (high_same, low_same) =
+                    (self.eq(high, high_constant), self.eq(low, low_constant));
+                return self.bool_and(high_same, low_same);
+            }
+        }
+        // A choice between constants, compared with one, is the condition that picks it.
+        for (choice, other) in [(a, b), (b, a)] {
+            if let (Node::Ite(condition, then, otherwise), Some(k)) =
+                (self.node(choice).clone(), self.constant(other))
+                && let (Some(x), Some(y)) = (self.constant(then), self.constant(otherwise))
+            {
+                return match (x == k, y == k) {
+                    (true, true) => self.boolean(true),
+                    (true, false) => condition,
+                    (false, true) => self.bool_not(condition),
+                    (false, false) => self.boolean(false),
+                };
+            }
+        }
+        // A 1-bit and, or or not of bits is 1 where the and, or or not of their conditions
+        // holds: a mask's bit is the test that made it.
+        if self.width(a) == 1
+            && let Some(k) = self.constant(b)
+            && let Some(truth) = self.bit_truth(a)
+        {
+            return if k == 1 { truth } else { self.bool_not(truth) };
+        }
         // -x = c is x = -c.
         if let (Node::Neg(x), Some(c)) = (self.node(a).clone(), self.constant(b)) {
             let width = self.width(b);
@@ -1420,6 +1835,32 @@ impl Pool {
             return self.eq(a, b);
         }
         self.make(Node::Eq(a, b), Sort::Bool)
+    }
+
+    /// The condition that the 1-bit `bit` is 1, when it's an and, or or not of bits.
+    fn bit_truth(&mut self, bit: Term) -> Option<Term> {
+        Some(match *self.node(bit) {
+            Node::And(x, y) => {
+                let (x, y) = (self.bit_is_set(x, 0), self.bit_is_set(y, 0));
+                self.bool_and(x, y)
+            }
+            Node::Or(x, y) => {
+                let (x, y) = (self.bit_is_set(x, 0), self.bit_is_set(y, 0));
+                self.bool_or(x, y)
+            }
+            Node::Not(x) => {
+                let x = self.bit_is_set(x, 0);
+                self.bool_not(x)
+            }
+            _ => return None,
+        })
+    }
+
+    /// The condition that bit `bit` of `value` is 1.
+    pub fn bit_is_set(&mut self, value: Term, bit: u32) -> Term {
+        let part = self.extract(value, bit, bit);
+        let one = self.bv(1, 1);
+        self.eq(part, one)
     }
 
     /// Unsigned `a < b`.
@@ -1628,7 +2069,9 @@ impl Pool {
                     (Node::Const { .. }, _)
                     | (Node::Var { .. }, _)
                     | (Node::Bool(_), _)
-                    | (Node::BoolVar(_), _) => false,
+                    | (Node::BoolVar(_), _)
+                    | (Node::Lookup(..), _)
+                    | (Node::Count(..), _) => false,
                     _ => true,
                 };
                 let (left, right) = (self.operands(a), self.operands(b));
@@ -1885,6 +2328,18 @@ impl Pool {
             Node::BoolAnd(a, b) => u128::from(get(a)? == 1 && get(b)? == 1),
             Node::BoolOr(a, b) => u128::from(get(a)? == 1 || get(b)? == 1),
             Node::BoolNot(a) => u128::from(get(a)? == 0),
+            Node::Lookup(byte, number) => {
+                let value = get(byte)?;
+                let table = self.tables[number as usize];
+                u128::from(value < 256 && table[(value / 64) as usize] >> (value % 64) & 1 == 1)
+            }
+            Node::Count(number, _) => {
+                let mut held = 0_u128;
+                for part in &self.counts[number as usize] {
+                    held += u128::from(get(*part)? == 1);
+                }
+                held
+            }
         })
     }
 
@@ -1960,6 +2415,59 @@ impl Pool {
             Node::BoolAnd(a, b) => format!("(and {} {})", name(a), name(b)),
             Node::BoolOr(a, b) => format!("(or {} {})", name(a), name(b)),
             Node::BoolNot(a) => format!("(not {})", name(a)),
+            Node::Lookup(byte, number) => {
+                // The set as runs of values: a byte in one of them.
+                let table = self.tables[*number as usize];
+                let has = |value: u32| table[(value / 64) as usize] >> (value % 64) & 1 == 1;
+                let byte = name(byte);
+                let mut runs = Vec::new();
+                let mut value = 0;
+                while value < 256 {
+                    if !has(value) {
+                        value += 1;
+                        continue;
+                    }
+                    let start = value;
+                    while value < 256 && has(value) {
+                        value += 1;
+                    }
+                    runs.push(if value - start == 1 {
+                        format!("(= {byte} #x{start:02x})")
+                    } else {
+                        format!(
+                            "(and (bvule #x{start:02x} {byte}) (bvule {byte} #x{:02x}))",
+                            value - 1
+                        )
+                    });
+                }
+                match runs.len() {
+                    0 => "false".to_owned(),
+                    1 => runs.remove(0),
+                    _ => format!("(or {})", runs.join(" ")),
+                }
+            }
+            Node::Count(number, _) => {
+                let width = self.width(term);
+                let (one, zero) = if width.is_multiple_of(4) {
+                    (
+                        format!("#x{:0digits$x}", 1, digits = (width / 4) as usize),
+                        format!("#x{:0digits$x}", 0, digits = (width / 4) as usize),
+                    )
+                } else {
+                    (
+                        format!("#b{:0digits$b}", 1, digits = width as usize),
+                        format!("#b{:0digits$b}", 0, digits = width as usize),
+                    )
+                };
+                let ones: Vec<String> = self.counts[*number as usize]
+                    .iter()
+                    .map(|part| format!("(ite {} {one} {zero})", name(part)))
+                    .collect();
+                match ones.len() {
+                    1 => ones[0].clone(),
+                    _ => format!("(bvadd {})", ones.join(" ")),
+                }
+            }
         }
     }
 
@@ -1994,32 +2502,8 @@ impl Pool {
     #[must_use]
     pub fn operands(&self, term: Term) -> Vec<Term> {
         match *self.node(term) {
-            Node::Const { .. } | Node::Var { .. } | Node::Bool(_) | Node::BoolVar(_) => Vec::new(),
-            Node::Not(a)
-            | Node::Neg(a)
-            | Node::Extract(a, _, _)
-            | Node::ZeroExtend(a, _)
-            | Node::SignExtend(a, _)
-            | Node::BoolNot(a) => vec![a],
-            Node::Ite(c, a, b) => vec![c, a, b],
-            Node::Add(a, b)
-            | Node::Mul(a, b)
-            | Node::Udiv(a, b)
-            | Node::Urem(a, b)
-            | Node::Sdiv(a, b)
-            | Node::Srem(a, b)
-            | Node::And(a, b)
-            | Node::Or(a, b)
-            | Node::Xor(a, b)
-            | Node::Shl(a, b)
-            | Node::Lshr(a, b)
-            | Node::Ashr(a, b)
-            | Node::Concat(a, b)
-            | Node::Eq(a, b)
-            | Node::Ult(a, b)
-            | Node::Slt(a, b)
-            | Node::BoolAnd(a, b)
-            | Node::BoolOr(a, b) => vec![a, b],
+            Node::Count(number, _) => self.counts[number as usize].clone(),
+            ref node => node_operands(node),
         }
     }
 }

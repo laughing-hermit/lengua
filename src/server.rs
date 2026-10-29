@@ -330,6 +330,15 @@ pub struct ProveReport {
     pub next_step: String,
 }
 
+/// `count` things, in the plural unless there's one.
+fn counted(count: usize, thing: &str) -> String {
+    if count == 1 {
+        format!("1 {thing}")
+    } else {
+        format!("{count} {thing}s")
+    }
+}
+
 /// The longest one `prove` call may take.
 const PROOF_TIME: std::time::Duration = std::time::Duration::from_secs(300);
 
@@ -1201,12 +1210,13 @@ impl LenguaServer {
                         bound.is_none()
                     },
                     format!(
-                        "proven for every input {} ({shapes} input combinations, {paths} paths \
-                         through the machine code), {}{}",
+                        "proven for every input {} ({}, {} through the machine code), {}{}",
                         bound.as_ref().map_or_else(
                             || "in range".to_owned(),
                             |bound| format!("with text up to {} bytes", bound.bytes)
                         ),
+                        counted(shapes, "input combination"),
+                        counted(paths, "path"),
                         match (questions, alone) {
                             (0, _) => "every step settled by the terms themselves, so no solver \
                                        was needed"

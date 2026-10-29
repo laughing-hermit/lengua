@@ -144,13 +144,20 @@ struct Witnessed<'a> {
     /// Each witness's variable values, and every term value computed from them.
     witnesses: Vec<HashMap<Term, u128>>,
     rng: ChaCha8Rng,
+    /// Whether a branch no witness reaches is followed without asking whether it can happen:
+    /// the run's own end settles that, as its output check or one question about its path.
+    lazy: bool,
+    /// Whether some branch was followed that way.
+    guessed: bool,
 }
 
 impl<'a> Witnessed<'a> {
-    fn new(solvers: &'a mut Solvers, deadline: Instant, seed: u64) -> Self {
+    fn new(solvers: &'a mut Solvers, deadline: Instant, seed: u64, lazy: bool) -> Self {
         Self {
             solvers,
             deadline,
+            lazy,
+            guessed: false,
             // Every variable at the low end of its range, every one at the high end, and two
             // drawn at random: a branch on a large or a small value finds one of them.
             witnesses: vec![
@@ -167,6 +174,15 @@ impl<'a> Witnessed<'a> {
 /// A value for `variable` from its declared range: its low end for a witness marked
 /// [`Term::LOW`], its high end for one marked [`Term::HIGH`], otherwise drawn at random.
 fn random_in(pool: &Pool, variable: Term, rng: &mut ChaCha8Rng, end: Option<bool>) -> u128 {
+    // A text's byte from its characters, which a draw from its range would mostly miss.
+    if let Some(values) = pool.allowed(variable).filter(|values| !values.is_empty()) {
+        let at = match end {
+            Some(false) => 0,
+            Some(true) => values.len() - 1,
+            None => rng.random_range(0..values.len()),
+        };
+        return u128::from(values[at]);
+    }
     let (low, high) = pool.range(variable);
     match (pool.node(variable), end) {
         (_, Some(false)) => low,
@@ -219,6 +235,13 @@ impl Oracle for Witnessed<'_> {
             .any(|witness| meets(pool, &conditions, witness, rng))
         {
             return Ok(true);
+        }
+        if self.lazy {
+            self.guessed = true;
+            return Ok(true);
+        }
+        if std::env::var_os("LENGUA_PROVE_EXPLAIN").is_some() {
+            eprintln!("a branch asks: {}", pool.sketch(condition, 6));
         }
         let solver = self.solvers.get(self.deadline)?;
         let (answer, model) = solver
@@ -577,14 +600,8 @@ fn text_input(pool: &mut Pool, name: &str, length: usize, characters: &[u8]) -> 
             u128::from(highest),
         );
         if length <= MAX_CHECKED_TEXT {
-            let choices: Vec<Term> = characters
-                .iter()
-                .map(|character| {
-                    let character = pool.bv(8, u128::from(*character));
-                    pool.eq(byte, character)
-                })
-                .collect();
-            constraints.push(pool.any(&choices));
+            pool.allow(byte, characters);
+            constraints.push(pool.is_one_of(byte, characters));
         }
         text.push(byte);
     }
@@ -899,6 +916,22 @@ struct Known<'a> {
     numbers: &'a BTreeMap<String, Number>,
     fixed: &'a crate::expr::Env,
     texts: &'a BTreeMap<String, Vec<Term>>,
+    /// Formulas translated in this shape, by expression: every run of a shape asks for the
+    /// same ones, and a text formula over thousands of bytes is worth translating once.
+    translated: std::cell::RefCell<HashMap<*const crate::expr::Expr, Result<Formula, String>>>,
+}
+
+impl Known<'_> {
+    /// `expr` as terms in this shape, translated once.
+    fn translate(&self, pool: &mut Pool, expr: &crate::expr::Expr) -> Result<Formula, String> {
+        let key = std::ptr::from_ref(expr);
+        if let Some(found) = self.translated.borrow().get(&key) {
+            return found.clone();
+        }
+        let result = formula::translate(pool, expr, self.numbers, self.texts);
+        self.translated.borrow_mut().insert(key, result.clone());
+        result
+    }
 }
 
 /// A run of a template once what's known in this shape is filled in: bytes, or a number's
@@ -976,7 +1009,7 @@ fn text_is(
                 }
             }
             // A placeholder whose value is text, such as upper(text), is its bytes.
-            Piece::Expr(expr) => match formula::translate(pool, expr, known.numbers, known.texts) {
+            Piece::Expr(expr) => match known.translate(pool, expr) {
                 Ok(Formula::Text(bytes)) => Segment::Bytes(bytes),
                 _ => Segment::Number(expr, 0),
             },
@@ -1006,13 +1039,12 @@ fn text_is(
                 literals.push(Vec::new());
             }
             Segment::Either(condition, then, otherwise) => {
-                let condition =
-                    match formula::translate(pool, condition, known.numbers, known.texts)? {
-                        Formula::Truth(condition) => condition,
-                        Formula::Number(_) | Formula::Text(_) => {
-                            return Err("an if(…) whose condition isn't true or false".into());
-                        }
-                    };
+                let condition = match known.translate(pool, condition)? {
+                    Formula::Truth(condition) => condition,
+                    Formula::Number(_) | Formula::Text(_) => {
+                        return Err("an if(…) whose condition isn't true or false".into());
+                    }
+                };
                 computed.push(Computed::Either(condition, then, otherwise));
                 literals.push(Vec::new());
             }
@@ -1106,7 +1138,7 @@ fn printed(
     places: u8,
     known: &Known<'_>,
 ) -> Result<Computed, String> {
-    let number = match formula::translate(pool, expr, known.numbers, known.texts)? {
+    let number = match known.translate(pool, expr)? {
         Formula::Number(number) => number,
         Formula::Truth(_) => return Err("a placeholder that prints true or false".into()),
         Formula::Text(_) => return Err("a text placeholder where a number goes".into()),
@@ -1178,7 +1210,7 @@ fn bound(pool: &mut Pool, expr: &crate::expr::Expr, known: &Known<'_>) -> Result
             _ => Err("an any(…) bound that isn't a whole number".into()),
         };
     }
-    match formula::translate(pool, expr, known.numbers, known.texts)? {
+    match known.translate(pool, expr)? {
         Formula::Number(number) if number.places == 0 => Ok(number),
         _ => Err("an any(…) bound that isn't a whole number".into()),
     }
@@ -1248,7 +1280,7 @@ fn passes(
     run: &State,
     status: Term,
 ) -> Result<Term, String> {
-    let (numbers, fixed, texts) = (known.numbers, known.fixed, known.texts);
+    let fixed = known.fixed;
     let stdout = text_is(pool, &run.stdout, &block.stdout, known)?;
     let stderr = text_is(pool, &run.stderr, &block.stderr, known)?;
     let exit = match &block.exit_code {
@@ -1261,16 +1293,16 @@ fn passes(
                 return Err("an exit code template with text around its formula".into());
             };
             // With every variable fixed, the formula is just a number.
-            let known = crate::expr::variables_of(expr)
+            let all_fixed = crate::expr::variables_of(expr)
                 .iter()
                 .all(|name| fixed.contains_key(name));
-            let number = if known {
+            let number = if all_fixed {
                 match crate::expr::eval(expr, fixed) {
                     Ok(Value::Int(code)) => Number::whole(pool.bv_signed(WIDTH, code), code, code),
                     _ => return Err("an exit code that isn't a whole number".into()),
                 }
             } else {
-                match formula::translate(pool, expr, numbers, texts)? {
+                match known.translate(pool, expr)? {
                     Formula::Number(number) => number,
                     Formula::Truth(_) | Formula::Text(_) => {
                         return Err("an exit code that isn't a whole number".into());
@@ -1531,6 +1563,19 @@ fn attempt(machine: &Machine, block: &Generated, budget: Budget) -> Result<Verdi
     })
 }
 
+/// The conditions `condition` is the conjunction of.
+fn conjuncts(pool: &Pool, condition: Term) -> Vec<Term> {
+    let mut parts = Vec::new();
+    let mut pending = vec![condition];
+    while let Some(current) = pending.pop() {
+        match *pool.node(current) {
+            Node::BoolAnd(a, b) => pending.extend([a, b]),
+            _ => parts.push(current),
+        }
+    }
+    parts
+}
+
 /// The length of the longest text in `combination`, 0 when it has none.
 fn longest_text(each: &[(String, Vec<Part>)], combination: usize) -> usize {
     let mut rest = combination;
@@ -1668,38 +1713,68 @@ fn prove_shape(
     start.path = constraints;
     let began = Instant::now();
     let questions_before = solvers.solver.as_ref().map_or(0, |solver| solver.questions);
-    let runs = {
-        let mut oracle = Witnessed::new(solvers, budget.deadline, combination as u64);
-        exec::explore(image, start, &mut pool, &mut oracle, budget.max_paths)?
+    // Branches no witness reaches are followed without asking first; a run that can't
+    // happen is then settled where it ends. If that makes too many runs, the branches are
+    // asked about after all.
+    let careful = start.clone();
+    let (runs, guessed) = {
+        let mut oracle = Witnessed::new(solvers, budget.deadline, combination as u64, true);
+        let runs = exec::explore(image, start, &mut pool, &mut oracle, budget.max_paths)?;
+        (runs, oracle.guessed)
+    };
+    let (runs, guessed) = if guessed && runs.iter().any(|run| run.end == Some(End::TooManyPaths)) {
+        let mut oracle = Witnessed::new(solvers, budget.deadline, combination as u64, false);
+        let runs = exec::explore(image, careful, &mut pool, &mut oracle, budget.max_paths)?;
+        (runs, false)
+    } else {
+        (runs, guessed)
     };
     let explored = began.elapsed();
     let count = runs.len();
     let asked = |solvers: &Solvers| solvers.solver.as_ref().map_or(0, |solver| solver.questions);
     let questions = asked(solvers);
     let trace = std::env::var_os("LENGUA_PROVE_TRACE").is_some();
+    let known = Known {
+        numbers: &numbers,
+        fixed: &chosen,
+        texts: &texts,
+        translated: std::cell::RefCell::new(HashMap::new()),
+    };
     for run in runs {
         let holds = match &run.end {
-            Some(End::Exit(status)) => {
-                let known = Known {
-                    numbers: &numbers,
-                    fixed: &chosen,
-                    texts: &texts,
-                };
-                passes(&mut pool, block, &known, &run, *status)?
-            }
+            Some(End::Exit(status)) => passes(&mut pool, block, &known, &run, *status)?,
             Some(End::Signal(_)) => pool.boolean(false),
-            Some(End::Unsupported(reason)) => return Err(Stop::Unproven(reason.clone())),
+            Some(End::Unsupported(reason)) => {
+                // A run followed without asking may be one that can't happen.
+                if guessed {
+                    let solver = solvers.get(budget.deadline)?;
+                    let (answer, _) = solver
+                        .check(&pool, &run.path, &[])
+                        .map_err(|error| format!("the solver failed: {error}"))?;
+                    if answer == Answer::Unsat {
+                        continue;
+                    }
+                }
+                return Err(Stop::Unproven(reason.clone()));
+            }
+            Some(End::TooManyPaths) => {
+                return Err(
+                    format!("more than {} paths through the code", budget.max_paths).into(),
+                );
+            }
             None => return Err("a run that didn't end".into()),
         };
         let broken = pool.bool_not(holds);
         // Output whose terms are the formulas' own can't break: nothing to ask. Nor can output
-        // that breaks only where the run's own branch says it doesn't.
+        // whose every condition is one of the run's own branches, as a printed number's digit
+        // count is the print loop's.
         let holding = pool.bool_not(broken);
         if pool.truth(broken) == Some(false)
-            || run
-                .path
-                .iter()
-                .any(|condition| pool.equivalent(*condition, holding))
+            || conjuncts(&pool, holding).iter().all(|part| {
+                run.path
+                    .iter()
+                    .any(|condition| pool.equivalent(*condition, *part))
+            })
         {
             continue;
         }

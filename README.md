@@ -18,10 +18,10 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 > 1 MiB. The
 > kernel holds every run to what its spec allows. `prove` proves programs right for every
 > input, not just the tested ones, over whole numbers, decimals, choices, texts and text
-> formulas, and files, and over long texts up to a stated length (4,096 bytes of standard
-> input), with each step confirmed by two independent solvers, z3 and cvc5; `lengua.lock`
-> records what's proven. Next:
-> - proofs of vector code and of programs on the network;
+> formulas, and files, in integer, bit and vector code from SSE2 to AVX-512, and over long texts
+> up to a stated length (4,096 bytes of standard input), with each step confirmed by two
+> independent solvers, z3 and cvc5; `lengua.lock` records what's proven. Next:
+> - proofs of programs on the network;
 > - proofs of decimal arithmetic written in another shape;
 > - more of the top CPU and OS targets, which LLVM already supports.
 
@@ -71,9 +71,10 @@ the program goes in a new folder inside the current one.
 Every run is confined by the kernel: the program can make only the system calls its spec allows,
 and touch files only in the folder it runs in.
 
-Your harness asks permission the first time each lengua tool runs. To be asked nothing more, allow
-them all once: in Claude Code, `/permissions` and add `mcp__plugin_lengua_lengua__*` to the allowed
-tools. The first record creates a signing key in `~/.local/share/lengua`.
+lengua relies on nothing from your harness's permission prompts, so it is as safe with every tool
+allowed or in an auto mode: what a program may touch is its spec's list, which the kernel enforces
+on every run, and lengua runs no build its checks didn't pass. The first record creates a signing
+key in `~/.local/share/lengua`.
 
 ## Examples
 
@@ -85,7 +86,7 @@ Complete programs, each with its spec, tests and assembly:
 - [`examples/hypotenuse`](examples/hypotenuse) computes a square root in double-precision floating
   point and prints it with three decimals;
 - [`examples/upcase`](examples/upcase) writes a copy of a text file in capitals, 16 bytes at a
-  time;
+  time with SSE2, and `prove` proves it for every file up to 4096 bytes;
 - [`examples/absdiff`](examples/absdiff) prints how far apart two numbers are. Claude Code wrote
   it through lengua, and `prove` proves it for every pair of inputs;
 - [`examples/dice`](examples/dice) rolls a fair die from the kernel's random bytes. Its tests
@@ -97,7 +98,7 @@ Complete programs, each with its spec, tests and assembly:
 - [`examples/count`](examples/count) counts lines and words like `wc -lw`. Claude Code wrote it
   through lengua from one plain request in an interactive session; on a 4 GiB file it ran at
   15.8 GB/s, ahead of hand-written AVX-512 C, 12 times faster than plain C and 25 times faster
-  than GNU `wc`.
+  than GNU `wc`. `prove` proves its AVX-512 counting right for every input up to 4096 bytes.
 
 Their `lengua.lock` files aren't committed, because a lock is signed with each machine's own key.
 Ask the agent to run one with lengua: it records the spec, then checks the tests and the code,

@@ -60,16 +60,15 @@ impl Cpu<'_> {
         self.state.parity = self.unknown();
     }
 
-    /// `popcnt`: the number of set bits, as their sum.
+    /// `popcnt`: the number of set bits, as a count of them, so a mask's popcount is the count
+    /// of the tests that made its bits.
     pub(super) fn popcnt(&mut self) -> Result<Step, Stop> {
         let width = self.width(0);
         let source = self.read(1, width)?;
-        let mut bits = Vec::with_capacity(width as usize);
-        for bit in 0..width {
-            let part = self.pool.extract(source, bit, bit);
-            bits.push(self.pool.zero_extend(part, width - 1));
-        }
-        let count = self.pool.sum(width, &bits);
+        let bits: Vec<Term> = (0..width)
+            .map(|bit| self.pool.bit_is_set(source, bit))
+            .collect();
+        let count = self.pool.count(width, &bits);
         let zero = self.pool.bv(width, 0);
         let no = self.pool.boolean(false);
         self.state.last = Last::Other;
@@ -122,7 +121,10 @@ impl Cpu<'_> {
             self.state.zero = self.bit(source, first);
         }
         self.write(0, result)?;
-        if scans {
+        // A run that has already found the source isn't zero, as a test and branch before a
+        // scan do, has no undefined case.
+        let nonzero = self.pool.bool_not(empty);
+        if scans && !self.state.path.contains(&nonzero) {
             // AMD documents the destination as kept, Intel as undefined: a proof holds for any.
             let index = slot(self.instruction.op_register(0))
                 .ok_or_else(|| unsupported("a bit scan into an unusual register"))?;

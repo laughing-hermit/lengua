@@ -328,6 +328,28 @@ How `prove` works (`src/prove/`):
   `count(text, "a")` makes. A printed number's first digit takes no remainder, since the same
   check bounds the value below ten to the number of digits: a count printed as one digit is
   the count plus `'0'`, the program's own term.
+- **A test of one byte is a table.** Any true/false term computed from one byte alone becomes
+  the set of that byte's values where it holds, worked out once per shape of term. So a
+  program's `b == ' ' || b - 9 <= 4`, a vector compare's lanes and a formula's six-byte set of
+  blanks are one term; an output byte that equals the formula's at every value of its input byte
+  folds to true with no solver; and a text's characters are one condition per byte.
+- **A count is a set of tests.** A sum of ones and zeros becomes the list of conditions it counts,
+  in any order and grouping: `popcnt` of a mask built from byte tests, chunk by chunk, and a
+  formula's `count` or `words` over the whole text are one term. Two different groupings of one
+  count would otherwise ask SAT to prove additions equal, which it does badly.
+- **Branches no witness reaches are followed without asking.** Whether such a branch can happen
+  is settled where its run ends: by the output check, which a branch that can't happen passes,
+  or by one question about the run's whole path before a run that ends badly counts against the
+  proof. A print loop's branches on how many digits a count has are both followed, and the
+  output's digit count is the same conditions, so no question is asked. If that makes too many
+  runs, the shape is explored again asking at each branch. Witnesses draw a text's bytes from its
+  characters.
+- **Vector registers are bytes.** xmm, ymm and zmm 0 to 31 are each 64 byte terms, so an
+  instruction works lane by lane on the input bytes themselves; AVX-512's k0 to k7 are 64-bit
+  terms whose bits are a compare's tests. Legacy SSE writes keep a register's upper bytes, VEX
+  and EVEX writes clear them, masked elements are zeroed or kept, and a masked load doesn't read
+  an element known to be masked out, as the CPU doesn't fault on it. Data in .bss reads as zeros
+  until written, as the kernel leaves it.
 - **Contradictions need no solver.** A question that holds a condition and its negation, compared
   by their structure with sums as sets of parts whatever their grouping, is impossible on its face:
   a run's own branch and the check that its output breaks often come to exactly that.
@@ -382,6 +404,12 @@ Trust:
     leaves a flag or a register undefined, the CPU's value must be one the model allows, and
     `bsf` of zero, which AMD keeps and Intel leaves undefined, may leave anything. Its first run
     found a real bug: a 32-bit shift by zero still clears the register's upper half.
+  - *Each vector instruction against this CPU* (`src/prove/exec/against_cpu/vectors.rs`): a
+    second harness records zmm0 to zmm7, k0 to k7 and a 128-byte memory cell as well, and runs
+    about 530 probes, legacy SSE, VEX and EVEX forms with register and memory operands and merge
+    and zero masks, on about 6,300 runs whose bytes lean to the ones vector code tests (controls,
+    blanks, digits, letter bounds, the top bit). Its first run found a masked `vpandq` whose
+    memory source the model read by byte instead of by quadword.
   - *The simplifier against plain arithmetic* (`src/prove/term/random.rs`): 4,000 random
     expressions shaped like the prover's are built through the simplifying pool and evaluated at
     random inputs. They must equal SMT-LIB's arithmetic as written, and every term's range must
@@ -415,13 +443,24 @@ What it covers:
   `!=`. Any placeholder whose variables all have fixed values in a shape is computed outright,
   so messages that quote an argument prove. A placeholder that's a text, drawn or computed,
   compares byte for byte.
-- Instructions: the integer instructions, and the bit instructions listed above.
+- Instructions: the integer instructions, the bit instructions listed above, and the vector
+  instructions programs use most:
+  - moves of whole and partial registers, `movd` and `movq`, broadcasts, `vzeroupper`;
+  - `pshufd` and `pshufb`; byte shifts and shifts by an immediate;
+  - compares into vectors or masks, every `vpcmp` predicate, `vptestm` and `vptestnm`, `ptest`;
+  - and, or, xor, and-not, `vpternlog`; adds and subtracts, saturating bytes, `pminub`, `pmaxub`;
+  - `pmovmskb`, `vpmovm2*` and `vpmov*2m`, and every mask register instruction (`kmov`, `kor`,
+    `kand`, `kandn`, `kxor`, `kxnor`, `knot`, `kshift`, `kortest`, `ktest`).
+
+  The vector template, upcase and the word counts Claude Code wrote are proven for every input
+  up to 4096 bytes, with no solver question. An instruction the proof doesn't model yet is named
+  with its function: "main.s's count uses vpermb, which the proof doesn't model yet".
 - Files: `openat`, `read`, `write` and `close` on the test's files. A missing input file gives
   `ENOENT`, and the checks on the files left after the run are the runner's.
 
-Not yet: SSE and AVX instructions in the model, programs on the network, `sha256`, `crc32` and
-`crc32c` formulas, floating point, and threads. Those blocks are tested, not proven, and the
-report says why.
+Not yet: programs on the network; shuffles across lanes (`vpermb`, `vpermd`), compress and
+gather instructions; `sha256`, `crc32` and `crc32c` formulas and the instructions behind them;
+floating point; and threads. Those blocks are tested, not proven, and the report says why.
 
 ## Resources, threads and capabilities
 
@@ -482,8 +521,9 @@ decides.
   an agent made up, so it shows instead of gating: every request of a build stays in the lock
   until its code passes, every change to the spec after the build's first request and to the
   tests after code first ran is shown as a diff, and lengua itself marks test changes that test
-  less. The harness's own permission prompts remain the person's control over what the agent
-  does, and the person can ask to see the spec before the build.
+  less. lengua relies on nothing from the harness, such as its permission prompts, so a
+  harness in an auto mode is as safe: what a program may touch is the spec's list, which the
+  kernel enforces on every run. The person can ask to see the spec before the build.
 - Rule 9 checks the shape of each bounds check (`cmp` and an unsigned `jae` before the access)
   and, for the program's own data symbols, that the limit fits the buffer. Moving a pointer
   instead of indexing isn't checked, nor is pointer depth, and compare-chain detection is
@@ -511,7 +551,8 @@ Dialect 2 followed:
 - fork-join threads, with each worker proven to write only its own stack and slot;
 - `prove`, which proves programs right for every input in range over whole numbers, decimals,
   choices, texts and text formulas, files, and random bytes and clock readings the tests supply,
-  with every step confirmed by a second solver, and over long texts up to a stated length;
+  in integer, bit and vector code from SSE2 to AVX-512, with every step confirmed by a second
+  solver, and over long texts up to a stated length;
 - the clock and random bytes, which tests supply through a ptrace supervisor, and rules such as
   `{any(1, 6)}` where they don't;
 - plain TCP clients and servers on the ports a spec names, tested against their own loopback
@@ -519,5 +560,5 @@ Dialect 2 followed:
 
 All of it is checked on this machine (x86-64 Linux). The long-term goal is the top 5 or 6 CPU and
 OS targets, through LLVM and one profile per target. Next, in order:
-1. proofs of vector code and of programs on the network;
+1. proofs of programs on the network;
 2. the other targets.
