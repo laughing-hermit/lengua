@@ -1016,6 +1016,7 @@ impl LenguaServer {
         // The ports the spec names, and for a server, its own port on the loopback.
         let net = Net {
             connect: spec.network.connects.clone(),
+            anywhere: spec.network.anywhere,
             listen: spec.network.listens,
         };
         let job = Job {

@@ -93,7 +93,8 @@ Complete programs, each with its spec, tests and assembly:
   bytes;
 - [`examples/fetch`](examples/fetch) fetches a page from a web server on this computer over
   HTTP/1.0, and [`examples/echo`](examples/echo) is a line-echo server. Their tests bring their
-  own server and client, and the kernel keeps each to the ports its spec names; `prove` proves
+  own server and client, and lengua keeps each to the ports its spec names and to this computer;
+  `prove` proves
   the echo server for every line, however the network cuts it;
 - [`examples/count`](examples/count) counts lines and words like `wc -lw`. Claude Code wrote it
   through lengua from one plain request in an interactive session; on a 4 GiB file it ran at

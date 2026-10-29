@@ -92,9 +92,20 @@ impl Cpu<'_> {
         }
         let (high, low) = (self.load(address + 2, 1)?, self.load(address + 3, 1)?);
         let port = self.pool.concat(high, low);
+        // A test's program reaches this computer only: lengua refuses any other, and the test's
+        // server is at 127.0.0.1.
         let host = self.load(address + 4, 4)?;
-        if self.pool.constant(host) != Some(0x0100_007f) {
-            return Err(unsupported("connecting to a computer other than this one"));
+        match self.pool.constant(host) {
+            Some(0x0100_007f) => {}
+            Some(other) if other & 0xff == 127 => {
+                let result = returning(-ECONNREFUSED);
+                return self.finish_call(result);
+            }
+            Some(_) => {
+                let result = returning(-EACCES);
+                return self.finish_call(result);
+            }
+            None => return Err(unsupported("connecting to a computer the input chooses")),
         }
         let connected = self
             .state

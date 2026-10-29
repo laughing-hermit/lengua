@@ -534,8 +534,11 @@ async fn check_one(
             .collect()
     };
     let (files, files_after) = (fill_files(test.files), fill_files(test.files_after));
+    // A test's program reaches only the test's own server, on this computer, whatever its spec
+    // allows a real run.
     let net = Net {
         connect: port.into_iter().collect(),
+        anywhere: false,
         listen: network.listens.map(|_| 0),
     };
     let job = Job {

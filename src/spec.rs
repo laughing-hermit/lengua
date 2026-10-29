@@ -41,8 +41,12 @@ pub struct Spec {
 /// What a spec lets a program do on the network: plain TCP, on the ports it names.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Network {
-    /// The ports it may connect to, on any computer, by number address.
+    /// The ports it may connect to, by number address: on this computer only, unless
+    /// `anywhere`.
     pub connects: Vec<u16>,
+    /// Whether it may connect to other computers too, which its spec says with `on any
+    /// computer`.
+    pub anywhere: bool,
     /// The port it serves on. lengua binds it on the loopback and hands the program the
     /// listening socket as file descriptor 3, so the program never binds or listens itself.
     pub listens: Option<u16>,
@@ -906,6 +910,24 @@ impl Parser {
             self.problem(Some(number), usage);
             return;
         };
+        // Connections reach this computer unless the line says any computer.
+        let numbers = numbers.trim();
+        let (numbers, anywhere) = match numbers.strip_suffix("on any computer") {
+            Some(ports) => (ports, true),
+            None => (
+                numbers.strip_suffix("on this computer").unwrap_or(numbers),
+                false,
+            ),
+        };
+        if listens && anywhere {
+            self.problem(
+                Some(number),
+                "a server listens on this computer, where lengua listens for it; drop `on any \
+                 computer`",
+            );
+            return;
+        }
+        self.network.anywhere |= anywhere;
         let ports: Option<Vec<u16>> = numbers
             .split(',')
             .flat_map(|part| part.split(" and "))
@@ -1349,6 +1371,16 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
         let spec = parse(&client).expect("valid spec");
         assert_eq!(spec.network.connects, [80, 8080]);
         assert_eq!(spec.network.listens, None);
+        assert!(
+            !spec.network.anywhere,
+            "this computer, unless the spec says otherwise"
+        );
+        let anywhere =
+            parse(&client.replace("8080.", "8080 on any computer.")).expect("valid spec");
+        assert_eq!(anywhere.network.connects, [80, 8080]);
+        assert!(anywhere.network.anywhere);
+        let here = parse(&client.replace("8080.", "8080 on this computer.")).expect("valid spec");
+        assert!(!here.network.anywhere);
         let server = ADD
             .replace(
                 "- Allowed system calls: read, write, exit",

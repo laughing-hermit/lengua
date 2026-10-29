@@ -95,12 +95,15 @@ of the same rule.
   connect, accept4, shutdown and sendto. `exit` is always needed, and files need openat and
   close. lengua programs can't allocate memory, start processes or handle signals. The kernel
   enforces this list when the program runs, so it's a promise the user can rely on.
-- **Network:** plain TCP, on ports the spec names. Choose them yourself, without asking: the
-  kernel can hold a program only to ports a spec lists, never to "any port", so when the user's
-  request leaves the port to them, as "given a port" does, list the ports such programs usually
-  use, such as 80, 3000, 5000, 8000, 8080 and 8888 for local web servers, and name them in your
-  final report with an offer to change them. A program that opens connections says
-  `- Network: connects to TCP port 8080` (or `ports 80 and 8080`) and allows socket and connect;
+- **Network:** plain TCP, on ports the spec names, to this computer only unless the line ends
+  with `on any computer`. lengua refuses every other port and every other computer when the
+  program runs. Choose the ports yourself, without asking: a spec can't allow "any port", so
+  when the request leaves the port to the user, as "given a port" does, list the ports such
+  programs usually use, such as 80, 3000, 5000, 8000, 8080 and 8888 for local web servers, and
+  name them in your final report with an offer to change them. Write `on any computer` only when
+  the user asks to reach other computers, and say so in your report. A program that opens
+  connections says `- Network: connects to TCP port 8080` (or `ports 80 and 8080`) and allows
+  socket and connect;
   the address and port it reaches come from its arguments or input, as numbers (`127.0.0.1`),
   since lengua programs don't look up names. Don't have the program refuse other ports itself:
   the kernel holds it to the spec's ports when it runs, and its tests talk over a free port of
@@ -110,8 +113,8 @@ of the same rule.
   can't stop it (with write, the kernel would end it with SIGPIPE); and its behaviors may end
   with `- And it keeps serving` instead of an exit code. Write a protocol's line breaks as they
   are sent, such as `GET / HTTP/1.0\r\n`. In the final report, tell the user in plain words what the program may reach, such
-  as "it can open TCP connections to port 8080 on any computer; the kernel refuses every other
-  port."
+  as "it can open TCP connections to port 8080 on this computer; lengua refuses every other port
+  and every other computer."
 - **Websites and APIs:** lengua programs speak plain TCP, not HTTPS. A program that needs a
   website's data reads it from standard input or a file; you fetch it with your own tools and
   pass it in, and tell the user the line for their shell, such as `curl -s URL | ./program`.

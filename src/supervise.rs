@@ -7,16 +7,20 @@
 //! Bytes asked for past the end of the supply are zeros, so a program may draw in batches of any
 //! size: only the bytes it uses decide its output. The last clock reading repeats.
 //!
-//! It reads the launcher's process id and the supply on standard input, says `attached` once it
-//! traces the launcher, and when the program ends says `ok` and how many random bytes the
-//! program asked for, or what went wrong.
+//! For a program that may reach only this computer, it also reads where each `connect` goes and
+//! refuses any other computer with `EACCES`, as the kernel refuses a port the spec doesn't name:
+//! the kernel's network rules know ports, not computers.
+//!
+//! It reads the launcher's process id, `local` or `any`, and the supply on standard input, says
+//! `attached` once it traces the launcher, and when the program ends says `ok` and how many
+//! random bytes the program asked for, or what went wrong.
 
 use std::io::{IoSlice, Read as _, Write as _};
 use std::process::ExitCode;
 
 use nix::errno::Errno;
 use nix::sys::ptrace::{self, Event, Options};
-use nix::sys::uio::{RemoteIoVec, process_vm_writev};
+use nix::sys::uio::{RemoteIoVec, process_vm_readv, process_vm_writev};
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::Pid;
 
@@ -29,6 +33,9 @@ pub const SUPERVISE_FLAG: &str = "--supervise";
 pub const GETRANDOM: i64 = 318;
 /// See [`GETRANDOM`].
 pub const CLOCK_GETTIME: i64 = 228;
+/// `connect`, whose address the supervisor checks when the program may reach only this
+/// computer.
+pub const CONNECT: i64 = 42;
 
 fn say(line: &str) {
     let mut stdout = std::io::stdout().lock();
@@ -47,13 +54,19 @@ pub fn supervise() -> ExitCode {
     let parsed = input
         .split_once('\n')
         .ok_or_else(|| "no process id".to_owned())
-        .and_then(|(pid, supply)| {
+        .and_then(|(pid, rest)| {
             let pid = pid
                 .parse()
                 .map_err(|_| format!("{pid:?} isn't a process id"))?;
-            Ok((Pid::from_raw(pid), Supply::decode(supply)?))
+            let (reach, supply) = rest.split_once('\n').ok_or("no reach")?;
+            let local = match reach {
+                "local" => true,
+                "any" => false,
+                other => return Err(format!("{other:?} isn't a reach")),
+            };
+            Ok((Pid::from_raw(pid), local, Supply::decode(supply)?))
         });
-    let (leader, supply) = match parsed {
+    let (leader, local, supply) = match parsed {
         Ok(parsed) => parsed,
         Err(problem) => {
             say(&format!("error: {problem}"));
@@ -74,6 +87,7 @@ pub fn supervise() -> ExitCode {
     say("attached");
     let mut supervisor = Supervisor {
         leader,
+        local,
         supply,
         random_used: 0,
         readings_used: 0,
@@ -85,6 +99,8 @@ pub fn supervise() -> ExitCode {
 
 struct Supervisor {
     leader: Pid,
+    /// Whether the program may connect only to this computer.
+    local: bool,
     supply: Supply,
     /// Random bytes the program has asked for, supplied or past the supply.
     random_used: usize,
@@ -133,7 +149,7 @@ impl Supervisor {
         format!("ok {}", self.random_used)
     }
 
-    /// Answers the call `task` is stopped at, skipping the kernel's.
+    /// Answers the call `task` is stopped at, skipping the kernel's, or lets the kernel make it.
     fn answer(&mut self, task: Pid) {
         let Ok(mut registers) = ptrace::getregs(task) else {
             return;
@@ -141,6 +157,10 @@ impl Supervisor {
         let result = match i64::try_from(registers.orig_rax) {
             Ok(GETRANDOM) => self.random(task, registers.rdi, registers.rsi, registers.rdx),
             Ok(CLOCK_GETTIME) => self.clock(task, registers.rsi),
+            Ok(CONNECT) if self.local => match reaches_this_computer(task, registers.rsi) {
+                true => return,
+                false => -(Errno::EACCES as i64),
+            },
             _ => -(Errno::ENOSYS as i64),
         };
         // A call number of -1 skips the call; the program sees `result` as what it returned.
@@ -193,6 +213,35 @@ impl Supervisor {
             }
             Err(errno) => -(errno as i64),
         }
+    }
+}
+
+/// Whether the socket address at `address` in `task`'s memory is this computer: 127.0.0.0/8 in
+/// IPv4, and `::1` or an IPv4 one mapped into IPv6. An address that can't be read isn't.
+fn reaches_this_computer(task: Pid, address: u64) -> bool {
+    let mut bytes = [0_u8; 24];
+    let Ok(base) = usize::try_from(address) else {
+        return false;
+    };
+    let remote = [RemoteIoVec {
+        base,
+        len: bytes.len(),
+    }];
+    // An IPv4 address is 16 bytes, an IPv6 one 28; the first 24 hold every byte checked.
+    let read =
+        process_vm_readv(task, &mut [std::io::IoSliceMut::new(&mut bytes)], &remote).unwrap_or(0);
+    let family = u16::from_le_bytes([bytes[0], bytes[1]]);
+    match family {
+        2 if read >= 8 => bytes[4] == 127,
+        10 if read >= 24 => {
+            let host = &bytes[8..24];
+            let loopback = host[..15].iter().all(|byte| *byte == 0) && host[15] == 1;
+            let mapped = host[..10].iter().all(|byte| *byte == 0)
+                && host[10..12] == [0xff, 0xff]
+                && host[12] == 127;
+            loopback || mapped
+        }
+        _ => false,
     }
 }
 

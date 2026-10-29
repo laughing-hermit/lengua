@@ -138,7 +138,13 @@ one, or for `run` a folder of the user's files), a time limit (2 s per test, 10 
 Before it becomes the program, the launcher confines itself, so the kernel enforces what the
 spec allows:
 - Landlock lets the program touch files only inside its working folder, execute only itself, use
-  no network and signal no other process;
+  no network but the ports its spec names, and signal no other process;
+- Landlock's network rules know ports, not computers, so for a program that may reach only this
+  computer, which is every program whose spec doesn't say `on any computer`, lengua's supervisor
+  stops each `connect`, reads where it goes, and refuses any computer but this one with
+  `EACCES`, as Landlock refuses a port. The port list is then never a way off this computer.
+  Workers make no system calls and write only their own slots, so no other thread can change the
+  address between the check and the call;
 - seccomp kills it at any system call its spec doesn't list (plus `write` and `exit`, which
   `assert_fail` may always make);
 - resource limits cap the files it writes (64 MiB in tests) and leave no core files.
@@ -356,7 +362,7 @@ How `prove` works (`src/prove/`):
   unless the address is that slot's.
 - **The network is the tests' own peers.** A program that connects reaches only the test
   server's port, an input from 1 to 65535 since the kernel chooses it; any other port is
-  refused, as the test's rules refuse it. The server waits for exactly what it must receive, so
+  refused, as the test's rules refuse it, and so is any other computer. The server waits for exactly what it must receive, so
   a read before the program has sent all of it waits forever: the run fails, as a real one times
   out. A server program takes the test client's connections on its listener in order; taking
   the next before closing the last waits forever too, and with none left the program is serving.
@@ -496,7 +502,7 @@ Rust share: everything a program may touch must be something the checker can acc
 | Threads | pthreads: any thread may write anything, and data races are undefined behavior | `Send`/`Sync`, scoped threads and rayon: no data races, checked at compile time | Fork-join only, when the spec allows threads. A canonical `parallel_for` (copied word for word, like `assert_fail`) starts workers with `clone` on static stacks and waits on `futex` for them all. Each worker owns its stack and one output slot, like Rust's `chunks_mut`: the checker proves it writes nothing else (JPL: one owner per shared object). No locks, atomics or shared mutation, so results stay deterministic and testable |
 | System access | Any system call | The standard library, within the OS's permissions | Capabilities: the spec lists the system calls the program may make, and the kernel enforces the list (seccomp) and keeps files inside the program's working folder (Landlock) |
 | Clock, random | `time()`, `rand()` | `Instant`, `SystemTime`, `rand` | System calls the spec lists, `clock_gettime` and `getrandom`, enforced by the kernel like the rest. Tests supply the bytes and readings, so output that depends on them is exact, and the prover covers every value the test's variables can take; without a supply, a rule such as "a number from 1 to 6" (`{any(1, 6)}`) checks the output, and the prover treats the kernel's values as any value |
-| Network | Sockets | `std::net` | Plain TCP on the ports the spec names. seccomp allows only TCP sockets (no UDP, raw or local ones), `sendto` without an address, and `accept4` on descriptor 3; Landlock lets `connect` reach only the spec's ports. A server never binds: the launcher listens on its port and hands it the socket as descriptor 3, and only its accept loop may run forever (`# bound: forever`, NASA's exception). Tests bring their own server or client on a free loopback port; websites and APIs go through the agent's own tools, which pass the data in |
+| Network | Sockets | `std::net` | Plain TCP on the ports the spec names, to this computer unless the spec says `on any computer`. seccomp allows only TCP sockets (no UDP, raw or local ones), `sendto` without an address, and `accept4` on descriptor 3; Landlock lets `connect` reach only the spec's ports, and lengua's supervisor only this computer. A server never binds: the launcher listens on its port and hands it the socket as descriptor 3, and only its accept loop may run forever (`# bound: forever`, NASA's exception). Tests bring their own server or client on a free loopback port; websites and APIs go through the agent's own tools, which pass the data in |
 
 A worker gets its index and its slot. It and every function it calls write only their own stack
 frames and the slot, which it keeps in `rbx`, inside bounds checks; they make no system calls; and

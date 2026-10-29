@@ -38,7 +38,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 
 use crate::platform::{Allowed, Pin};
-use crate::supervise::{CLOCK_GETTIME, GETRANDOM, SUPERVISE_FLAG};
+use crate::supervise::{CLOCK_GETTIME, CONNECT, GETRANDOM, SUPERVISE_FLAG};
 use crate::supply::Supply;
 
 /// The command-line flag that starts the binary as a launcher.
@@ -223,6 +223,10 @@ fn exact_count(counter: &mut Counter) -> Option<u64> {
 pub struct Net {
     /// TCP ports the program may connect to.
     pub connect: Vec<u16>,
+    /// Whether it may connect to other computers on them: otherwise lengua's supervisor reads
+    /// each connection's address and refuses any computer but this one, which the kernel's
+    /// port rules can't.
+    pub anywhere: bool,
     /// The loopback port lengua listens on for the program and hands it as file descriptor 3,
     /// or 0 for any free one; `None` for a program that doesn't serve.
     pub listen: Option<u16>,
@@ -420,7 +424,7 @@ pub async fn start(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<
     let supply = job.supply.filter(|supply| !supply.is_empty());
     let net = job.net.cloned().unwrap_or_default();
     // The calls the supply answers stop for the supervisor; the rest run as in any test.
-    let traced = supply.map_or_else(Vec::new, |supply| {
+    let mut traced = supply.map_or_else(Vec::new, |supply| {
         let mut traced = Vec::new();
         if supply.random.is_some() {
             traced.push(GETRANDOM);
@@ -430,6 +434,15 @@ pub async fn start(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<
         }
         traced
     });
+    // A program may reach only this computer unless its spec says any computer: the
+    // supervisor reads where each connection goes, since the kernel's rules are by port alone.
+    let local = !net.connect.is_empty() && !net.anywhere;
+    if local {
+        traced.push(CONNECT);
+    }
+    let watched = supply.is_some() || local;
+    let nothing_supplied = Supply::default();
+    let supply = supply.or_else(|| local.then_some(&nothing_supplied));
     let syscalls: Vec<String> = job
         .syscalls
         .iter()
@@ -439,7 +452,7 @@ pub async fn start(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<
     let file_limit = limits
         .max_file_size
         .map_or_else(|| "none".to_owned(), |bytes| bytes.to_string());
-    let mut supervisor = match supply {
+    let mut supervisor = match supply.filter(|_| watched) {
         None => None,
         Some(_) => Some(
             Command::new(launcher)
@@ -505,7 +518,7 @@ pub async fn start(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<
     // The launcher has let the supervisor trace it; now it may, before the program starts.
     let supervisor = match (supervisor.take(), supply) {
         (Some(mut supervisor), Some(supply)) => {
-            let lines = attach_supervisor(&mut supervisor, pid, supply).await?;
+            let lines = attach_supervisor(&mut supervisor, pid, supply, local).await?;
             Some((supervisor, lines))
         }
         _ => None,
@@ -564,14 +577,16 @@ async fn attach_supervisor(
     supervisor: &mut tokio::process::Child,
     launcher: i32,
     supply: &Supply,
+    local: bool,
 ) -> io::Result<SupervisorLines> {
     use tokio::io::AsyncBufReadExt as _;
     let mut input = supervisor
         .stdin
         .take()
         .ok_or_else(|| io::Error::other("no supervisor stdin"))?;
+    let reach = if local { "local" } else { "any" };
     input
-        .write_all(format!("{launcher}\n{}", supply.encode()).as_bytes())
+        .write_all(format!("{launcher}\n{reach}\n{}", supply.encode()).as_bytes())
         .await?;
     drop(input);
     let output = supervisor
