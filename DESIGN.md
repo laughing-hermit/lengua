@@ -350,6 +350,10 @@ How `prove` works (`src/prove/`):
   and EVEX writes clear them, masked elements are zeroed or kept, and a masked load doesn't read
   an element known to be masked out, as the CPU doesn't fault on it. Data in .bss reads as zeros
   until written, as the kernel leaves it.
+- **Addresses the input chooses.** A load or a store at an address with at most 256 places,
+  all in memory the access may use, is a choice among the places: a table indexed by an input
+  byte, or by a month, is a function of it, and a table of counters keeps each slot's value
+  unless the address is that slot's.
 - **The network is the tests' own peers.** A program that connects reaches only the test
   server's port, an input from 1 to 65535 since the kernel chooses it; any other port is
   refused, as the test's rules refuse it. The server waits for exactly what it must receive, so
@@ -388,7 +392,8 @@ Trust:
 - **Counterexamples are confirmed.** A counterexample is re-run for real before it's reported as
   a failure. If the real program passes, the result is "not proven".
 - **The model is checked against the CPU.** Before a proof, the model runs concretely on sample
-  inputs the real program has already passed, and must agree.
+  inputs the real program has already passed, and must agree, with the test's server or client
+  and a sample port in place of the one the kernel chooses.
 - **Models are checked.** Every satisfying model a solver returns is checked against the
   assertions by lengua's own evaluator.
 - **Only z3's bit-blaster and SAT core.** z3 4.16 (Fedora's) got bit-vector formulas wrong in both
