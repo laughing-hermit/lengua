@@ -14,8 +14,10 @@ test it right away with `test rax, rax` and `js`.
 | `close` | 3 | `edi` fd | 0 or an error |
 | `lseek` | 8 | `edi` fd, `rsi` offset, `edx` whence (0 start, 1 current, 2 end) | the new offset or an error |
 | `exit` | 60 | `edi` status | doesn't return |
+| `clock_gettime` | 228 | `edi` clock (0 the time of day, 1 a clock that only moves forward), `rsi` 16 bytes for seconds then nanoseconds | 0 or an error |
 | `exit_group` | 231 | `edi` status | doesn't return |
 | `openat` | 257 | `edi` -100 (the current folder), `rsi` NUL-terminated path, `edx` flags, `r10d` mode | a file descriptor or an error |
+| `getrandom` | 318 | `rdi` buffer, `rsi` count, `edx` flags (0) | bytes filled, all of them for up to 256, or an error |
 
 File descriptors 0, 1 and 2 are standard input, output and error. `openat` flags: `O_RDONLY` 0,
 `O_WRONLY` 1, `O_RDWR` 2, `O_CREAT` 0x40, `O_TRUNC` 0x200, `O_APPEND` 0x400; a mode such as 0o644

@@ -378,3 +378,38 @@ async fn threads_start_only_with_the_canonical_flags() {
         "only parallel_for's flags pass"
     );
 }
+
+#[tokio::test]
+async fn the_clock_and_random_bytes_need_the_specs_approval() {
+    let folder = tempfile::tempdir().expect("temporary folder");
+    // 16 random bytes, then the time of day: exits with how many bytes it got, plus the clock's
+    // result (0).
+    let reader = build(
+        folder.path(),
+        "reader",
+        &program(
+            "    mov eax, 318\n    lea rdi, [rip + buffer]\n    mov esi, 16\n    xor edx, edx\n    \
+             syscall\n    mov ebx, eax\n    mov eax, 228\n    xor edi, edi\n    \
+             lea rsi, [rip + time]\n    syscall\n    add ebx, eax\n    mov edi, ebx\n    \
+             mov eax, 60\n    syscall",
+            ".bss\nbuffer:\n    .zero 16\ntime:\n    .zero 16",
+        ),
+    )
+    .await;
+    let approved = Profile::LinuxX86_64.allowed_syscalls(
+        &[Syscall::Getrandom, Syscall::ClockGettime, Syscall::Exit],
+        false,
+    );
+    let result = run_with(
+        &reader,
+        &[],
+        b"",
+        &BTreeMap::new(),
+        &approved,
+        Limits::default(),
+    )
+    .await;
+    assert_eq!(result.end, End::Exited(16), "16 bytes, and the clock read");
+    let result = run_simply(&reader, &[], b"").await;
+    assert_eq!(result.end, End::Signaled(31), "not approved: stopped");
+}

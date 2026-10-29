@@ -50,6 +50,8 @@ impl Profile {
             (Self::LinuxX86_64, Syscall::Lseek) => 8,
             (Self::LinuxX86_64, Syscall::Exit) => 60,
             (Self::LinuxX86_64, Syscall::ExitGroup) => 231,
+            (Self::LinuxX86_64, Syscall::ClockGettime) => 228,
+            (Self::LinuxX86_64, Syscall::Getrandom) => 318,
             (Self::LinuxX86_64, Syscall::Openat) => 257,
         }
     }

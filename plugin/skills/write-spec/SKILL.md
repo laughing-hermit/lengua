@@ -88,10 +88,12 @@ of the same rule.
 - **Errors are behaviors too:** missing or extra arguments, numbers out of range, text that
   isn't a number. Give each one its own exit code other than 0.
 - **System calls:** under `# Constraints`, write `- Allowed system calls: …` with only what the
-  program needs, chosen from read, write, openat, close, lseek, exit and exit_group. `exit` is
-  always needed, and files need openat and close. lengua programs can't allocate memory, start
-  processes, handle signals or use the network. The kernel enforces this list when the program
-  runs, so it's a promise the user can rely on.
+  program needs, chosen from read, write, openat, close, lseek, exit, exit_group, clock_gettime
+  (reading the time) and getrandom (random bytes from the kernel). `exit` is always needed, and
+  files need openat and close. lengua programs can't allocate memory, start processes, handle
+  signals or use the network. The kernel enforces this list when the program runs, so it's a
+  promise the user can rely on. Tests compare exact output, so a behavior whose output depends
+  on the time or on random bytes can't be tested yet: tell the user so before writing one.
 - **Threads:** when the user wants a program that does heavy work on large inputs as fast as
   possible, add `- Threads: up to N` under `# Constraints`, with N up to the machine's cores
   (`status` reports them; at most 64). The program may then split its work across that many

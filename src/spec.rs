@@ -157,11 +157,15 @@ pub enum Syscall {
     Exit,
     /// End the program (all threads; lengua programs have one).
     ExitGroup,
+    /// Read a clock: the time of day, or a clock that only moves forward.
+    ClockGettime,
+    /// Fill a buffer with random bytes from the kernel.
+    Getrandom,
 }
 
 impl Syscall {
     /// Every system call a spec may allow.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 9] = [
         Self::Read,
         Self::Write,
         Self::Openat,
@@ -169,6 +173,8 @@ impl Syscall {
         Self::Lseek,
         Self::Exit,
         Self::ExitGroup,
+        Self::ClockGettime,
+        Self::Getrandom,
     ];
 
     /// The Linux name, as written in specs.
@@ -182,6 +188,8 @@ impl Syscall {
             Self::Lseek => "lseek",
             Self::Exit => "exit",
             Self::ExitGroup => "exit_group",
+            Self::ClockGettime => "clock_gettime",
+            Self::Getrandom => "getrandom",
         }
     }
 

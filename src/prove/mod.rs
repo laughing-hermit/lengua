@@ -1001,6 +1001,14 @@ pub fn agrees(machine: &Machine, cases: &[crate::testfile::Case]) -> Result<(), 
         let files_match = case.files_after.iter().all(|(name, contents)| {
             run.file(name).and_then(text).as_deref() == Some(contents.as_bytes())
         });
+        // Output from the clock or random bytes is any value; a real run can't be compared.
+        let fixed = |bytes: &[Term]| bytes.iter().all(|byte| pool.constant(*byte).is_some());
+        if !fixed(&run.stdout)
+            || !fixed(&run.stderr)
+            || run.written.values().any(|bytes| !fixed(bytes))
+        {
+            return Err("the output depends on the clock or random bytes".into());
+        }
         let same = text(&run.stdout).as_deref() == Some(case.stdout.as_bytes())
             && text(&run.stderr).as_deref() == Some(case.stderr.as_bytes())
             && status == Some(u128::from(case.exit_code))

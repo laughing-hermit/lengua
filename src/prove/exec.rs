@@ -1388,6 +1388,37 @@ impl<'a> Cpu<'a> {
                 }
             }
             257 => self.open_at()?,
+            // Values the kernel chooses: any at all, a fresh variable for each.
+            228 => {
+                let clock = self.constant(rdi)? & 0xffff_ffff;
+                if !matches!(clock, 0 | 1) {
+                    return Err(unsupported(format!("reading clock {clock}")));
+                }
+                let buffer = self.constant(rsi)?;
+                let fresh = self.pool.len();
+                let seconds =
+                    self.pool
+                        .var_in(64, &format!("clock{fresh}.seconds"), 0, (1 << 62) - 1);
+                let nanoseconds =
+                    self.pool
+                        .var_in(64, &format!("clock{fresh}.nanoseconds"), 0, 999_999_999);
+                self.save(buffer, seconds)?;
+                self.save(buffer + 8, nanoseconds)?;
+                0
+            }
+            318 => {
+                let buffer = self.constant(rdi)?;
+                let count = self.constant(rsi)?;
+                if count > 256 {
+                    return Err(unsupported("getrandom for more than 256 bytes at once"));
+                }
+                let fresh = self.pool.len();
+                for offset in 0..count {
+                    let byte = self.pool.var(8, &format!("random{fresh}.{offset}"));
+                    self.save(buffer + offset, byte)?;
+                }
+                count
+            }
             60 | 231 => {
                 let status = self.pool.extract(rdi, 7, 0);
                 return Err(End::Exit(status));
