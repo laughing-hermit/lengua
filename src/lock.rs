@@ -106,6 +106,9 @@ pub struct ProofStamp {
     pub executable_sha256: Sha256Hex,
     /// The ids of the generated tests proven for every input in range, in tests.toml's order.
     pub proven: Vec<String>,
+    /// The generated tests proven only for texts up to a length: each id with that length in
+    /// bytes. Never also in `proven`.
+    pub bounded: Vec<(String, usize)>,
     /// Which solvers checked them: `z3 and cvc5`, or one of them alone.
     pub solvers: String,
 }
@@ -209,11 +212,19 @@ impl Lock {
             let proven: Vec<String> = proofs.proven.iter().map(|id| toml_string(id)).collect();
             let _ = write!(
                 text,
-                "\n[proofs]\nexecutable_sha256 = \"{}\"\nproven = [{}]\nsolvers = {}\n",
+                "\n[proofs]\nexecutable_sha256 = \"{}\"\nproven = [{}]\n",
                 proofs.executable_sha256,
                 proven.join(", "),
-                toml_string(&proofs.solvers)
             );
+            if !proofs.bounded.is_empty() {
+                let bounded: Vec<String> = proofs
+                    .bounded
+                    .iter()
+                    .map(|(id, bytes)| format!("{{ id = {}, bytes = {bytes} }}", toml_string(id)))
+                    .collect();
+                let _ = writeln!(text, "bounded = [{}]", bounded.join(", "));
+            }
+            let _ = writeln!(text, "solvers = {}", toml_string(&proofs.solvers));
         }
         text
     }
@@ -248,7 +259,16 @@ struct LockFile {
 struct ProofsTable {
     executable_sha256: String,
     proven: Vec<String>,
+    #[serde(default)]
+    bounded: Vec<BoundedTable>,
     solvers: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BoundedTable {
+    id: String,
+    bytes: usize,
 }
 
 #[derive(Deserialize)]
@@ -331,6 +351,11 @@ fn parse_body(body: &str) -> Result<Lock, LockError> {
                 Ok::<_, LockError>(Box::new(ProofStamp {
                     executable_sha256: digest(&proofs.executable_sha256)?,
                     proven: proofs.proven,
+                    bounded: proofs
+                        .bounded
+                        .into_iter()
+                        .map(|bounded| (bounded.id, bounded.bytes))
+                        .collect(),
                     solvers: proofs.solvers,
                 }))
             })
@@ -682,11 +707,24 @@ mod tests {
         lock.proofs = Some(Box::new(ProofStamp {
             executable_sha256: Sha256Hex::of(b"executable"),
             proven: vec!["B1".into(), "B\"2".into()],
+            bounded: Vec::new(),
             solvers: "z3 and cvc5".into(),
         }));
         let text = lock.to_signed_text(&key(1));
         assert!(text.contains("proven = [\"B1\", \"B\\\"2\"]\n"), "{text}");
+        assert!(!text.contains("bounded"), "{text}");
         assert_eq!(Lock::from_signed_text(&text, &key(1)), Ok(lock.clone()));
+        // A proof that holds only up to a length is recorded with it, apart from full ones.
+        let mut bounded = lock.clone();
+        if let Some(proofs) = &mut bounded.proofs {
+            proofs.bounded = vec![("B3".into(), 4096)];
+        }
+        let bounded_text = bounded.to_signed_text(&key(1));
+        assert!(
+            bounded_text.contains("bounded = [{ id = \"B3\", bytes = 4096 }]\n"),
+            "{bounded_text}"
+        );
+        assert_eq!(Lock::from_signed_text(&bounded_text, &key(1)), Ok(bounded));
         // Proofs about some other build can't be in a lock lengua wrote.
         let other = text
             .split("\n[signature]")

@@ -488,7 +488,8 @@ async fn a_shape_its_terms_settle_starts_no_solver() {
             shapes: 3,
             paths: 3,
             questions: 0,
-            alone: None
+            alone: None,
+            bound: None,
         }
     );
 }
@@ -576,7 +577,7 @@ async fn traces_a_few_csv_total_combinations() {
         let questions = solvers.solver.as_ref().map_or(0, |solver| solver.questions) - before;
         let outcome = match result {
             Ok((paths, _, _)) => format!("{paths} paths"),
-            Err(Stop::Unproven(reason)) => reason,
+            Err(Stop::Unproven(reason) | Stop::Beyond(reason)) => reason,
             Err(Stop::Counterexample(values)) => format!("counterexample {values:?}"),
         };
         times.push((began.elapsed(), combination, questions, outcome));
@@ -684,4 +685,333 @@ async fn proves_the_hh_mm_ss_clock() {
             .await;
     let verdict = prove(&wrong, &block, budget(120));
     assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+}
+
+/// A text formula proven against a program: standard input capitalized byte by byte without
+/// branches, against `upper(text)`, for every text up to 16 characters.
+#[tokio::test]
+async fn proves_a_text_formula() {
+    const SPEC: &str = "---
+type: lengua/program-spec
+title: shout
+---
+# Purpose
+Capitalizes standard input of `0` to `16` characters.
+
+# Behaviors
+## B1: Capitalizes its input
+- Given standard input holding `ab`
+- When the program runs
+- Then it prints `AB`
+- And it exits with code `0`
+
+# Constraints
+- Allowed system calls: read, write, exit
+";
+    const TESTS: &str = r#"[meta]
+spec = "sha256:0"
+
+[[example]]
+id = "B1"
+stdin = "ab"
+stdout = "AB"
+exit_code = 0
+
+[[generated]]
+id = "B1"
+vars = { text = 'string(0, 16, "aAzZ09 b{`")' }
+stdin = "{text}"
+stdout = "{upper(text)}"
+exit_code = 0
+"#;
+    let program = |limit: u32| {
+        format!(
+            "    .intel_syntax noprefix
+    .globl _start
+    .text
+    .type _start, @function
+_start:
+    xor edi, edi
+    lea rsi, [rip + buffer]
+    mov edx, 64
+    xor eax, eax
+    syscall
+    mov rcx, rax
+    xor edx, edx
+.Lloop:
+    cmp rdx, rcx
+    jae .Ldone
+    movzx eax, byte ptr [rsi + rdx]
+    lea r8d, [rax - 97]
+    cmp r8d, {limit}
+    setb r9b
+    movzx r9d, r9b
+    shl r9d, 5
+    sub eax, r9d
+    mov byte ptr [rsi + rdx], al
+    inc rdx
+    jmp .Lloop
+.Ldone:
+    mov edi, 1
+    mov rdx, rcx
+    mov eax, 1
+    syscall
+    xor edi, edi
+    mov eax, 60
+    syscall
+    .size _start, . - _start
+    .data
+    .type buffer, @object
+buffer:
+    .zero 64
+    .size buffer, 64
+"
+        )
+    };
+    let block = block(SPEC, TESTS, 0);
+    let right = machine(&program(26)).await;
+    let verdict = prove(&right, &block, budget(120));
+    assert!(
+        matches!(verdict, Verdict::Proven { shapes: 17, .. }),
+        "{verdict:?}"
+    );
+    // Leaves `z` small.
+    let wrong = machine(&program(25)).await;
+    let verdict = prove(&wrong, &block, budget(120));
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+}
+
+/// Bit instructions against a text formula: a mask of the bytes that are `a`, built without
+/// branches by `shlx`, counted by `popcnt`, against `count(text, "a")`.
+#[tokio::test]
+async fn proves_a_count_made_of_bit_instructions() {
+    const SPEC: &str = "---
+type: lengua/program-spec
+title: count a
+---
+# Purpose
+Counts the `a` bytes in standard input of `0` to `16` characters.
+
+# Behaviors
+## B1: Counts them
+- Given standard input holding `aba`
+- When the program runs
+- Then it prints `2` and a newline
+- And it exits with code `0`
+
+# Constraints
+- Allowed system calls: read, write, exit
+";
+    const TESTS: &str = r#"[meta]
+spec = "sha256:0"
+
+[[example]]
+id = "B1"
+stdin = "aba"
+stdout = "2\n"
+exit_code = 0
+
+[[generated]]
+id = "B1"
+vars = { text = 'string(0, 16, "ab")' }
+stdin = "{text}"
+stdout = "{count(text, \"a\")}\n"
+exit_code = 0
+"#;
+    let program = |byte: u32| {
+        format!(
+            "    .intel_syntax noprefix
+    .globl _start
+    .text
+    .type _start, @function
+_start:
+    xor edi, edi
+    lea rsi, [rip + buffer]
+    mov edx, 64
+    xor eax, eax
+    syscall
+    mov rcx, rax
+    xor edx, edx
+    xor r10d, r10d
+.Lloop:
+    cmp rdx, rcx
+    jae .Ldone
+    movzx eax, byte ptr [rsi + rdx]
+    cmp eax, {byte}
+    sete al
+    movzx eax, al
+    shlx rax, rax, rdx
+    or r10, rax
+    inc rdx
+    jmp .Lloop
+.Ldone:
+    popcnt r8, r10
+    lea rdi, [rip + out]
+    xor r9d, r9d
+    cmp r8, 10
+    jb .Lone
+    mov byte ptr [rdi], 49
+    sub r8, 10
+    mov r9d, 1
+.Lone:
+    add r8d, 48
+    mov byte ptr [rdi + r9], r8b
+    inc r9
+    mov byte ptr [rdi + r9], 10
+    inc r9
+    mov edi, 1
+    lea rsi, [rip + out]
+    mov rdx, r9
+    mov eax, 1
+    syscall
+    xor edi, edi
+    mov eax, 60
+    syscall
+    .size _start, . - _start
+    .data
+    .type buffer, @object
+buffer:
+    .zero 64
+    .size buffer, 64
+    .type out, @object
+out:
+    .zero 8
+    .size out, 8
+"
+        )
+    };
+    let block = block(SPEC, TESTS, 0);
+    let right = machine(&program(97)).await;
+    let verdict = prove(&right, &block, budget(120));
+    assert!(
+        matches!(verdict, Verdict::Proven { shapes: 17, .. }),
+        "{verdict:?}"
+    );
+    // Counts the `b` bytes instead.
+    let wrong = machine(&program(98)).await;
+    let verdict = prove(&wrong, &block, budget(120));
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+}
+
+/// An echo of standard input, with `extra` run first once the input is at least 10 bytes.
+fn echo(extra: &str) -> String {
+    format!(
+        "    .intel_syntax noprefix
+    .globl _start
+    .text
+    .type _start, @function
+_start:
+    xor edi, edi
+    lea rsi, [rip + buffer]
+    mov edx, 8192
+    xor eax, eax
+    syscall
+    mov r12, rax
+    cmp rax, 10
+    jb .Lprint
+{extra}
+.Lprint:
+    mov edi, 1
+    lea rsi, [rip + buffer]
+    mov rdx, r12
+    mov eax, 1
+    syscall
+    xor edi, edi
+    mov eax, 60
+    syscall
+    .size _start, . - _start
+    .bss
+    .type buffer, @object
+buffer:
+    .zero 8192
+    .size buffer, 8192
+"
+    )
+}
+
+fn echo_block(stdout: &str, example: &str) -> Generated {
+    const SPEC: &str = "---
+type: lengua/program-spec
+title: echo
+---
+# Purpose
+Prints standard input of `0` to `5000` characters back.
+
+# Behaviors
+## B1: Prints it back
+- Given standard input holding `ab`
+- When the program runs
+- Then it prints `ab`
+- And it exits with code `0`
+
+# Constraints
+- Allowed system calls: read, write, exit
+";
+    let tests = format!(
+        r#"[meta]
+spec = "sha256:0"
+
+[[example]]
+id = "B1"
+stdin = "{example}"
+stdout = "{example}"
+exit_code = 0
+
+[[generated]]
+id = "B1"
+vars = {{ text = 'string(0, 5000, "ab")' }}
+stdin = "{stdout}"
+stdout = "{stdout}"
+exit_code = 0
+"#
+    );
+    block(SPEC, &tests, 0)
+}
+
+fn long_budget() -> Budget {
+    Budget {
+        max_shapes: 100_000,
+        ..budget(240)
+    }
+}
+
+/// Text longer than the proof covers: every length up to the bound is proven, and the verdict
+/// says where it stops and why.
+#[tokio::test]
+async fn proves_long_text_up_to_the_bound() {
+    let machine = machine(&echo("")).await;
+    let verdict = prove(&machine, &echo_block("{text}", "ab"), long_budget());
+    let Verdict::Proven { shapes, bound, .. } = verdict else {
+        panic!("{verdict:?}");
+    };
+    assert_eq!(shapes, TEXT_BOUND + 1);
+    assert_eq!(
+        bound,
+        Some(Bound {
+            bytes: TEXT_BOUND,
+            why: PAST_THE_BOUND.into()
+        })
+    );
+    // With a newline after the text, the longest text no longer fits one pipe write.
+    let verdict = prove(&machine, &echo_block("{text}\\n", "ab\\n"), long_budget());
+    let Verdict::Proven { bound, .. } = verdict else {
+        panic!("{verdict:?}");
+    };
+    let bound = bound.expect("a bound");
+    assert_eq!(bound.bytes, TEXT_BOUND - 1);
+    assert!(bound.why.contains("one pipe write"), "{}", bound.why);
+}
+
+/// Where the model stops following the program at some length, the proof holds below it.
+#[tokio::test]
+async fn proves_text_up_to_where_the_model_stops() {
+    let machine = machine(&echo("    xor eax, eax\n    cpuid")).await;
+    let verdict = prove(&machine, &echo_block("{text}", "ab"), long_budget());
+    let Verdict::Proven { shapes, bound, .. } = verdict else {
+        panic!("{verdict:?}");
+    };
+    assert_eq!(shapes, 10);
+    let bound = bound.expect("a bound");
+    assert_eq!(bound.bytes, 9);
+    assert!(bound.why.contains("Cpuid"), "{}", bound.why);
 }

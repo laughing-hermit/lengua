@@ -58,11 +58,12 @@ Nothing runs before every rule passes.
    a number's decimal digits) can be copied as they are.
 7. Call `prove` with `path`. For each generated test it can, it proves for every input rather
    than a sample that the program prints what the formulas say: whole numbers, decimals, each
-   value of a `choice(…)`, short texts, and files. It can take a minute or two. If it finds
-   inputs where the program is wrong, fix `main.s` and call `check_code` and `prove` again.
-   "Tested, not proven" is fine: say why in one line. Vector code and programs on the network
-   are tested, not proven, for now; programs that read and print numbers with the template's
-   `parse_i64` and `write_i64` prove best.
+   value of a `choice(…)`, texts and text formulas such as `upper` and `count`, and files. Long
+   texts are proven up to a length, such as 4096 bytes, and tested beyond it: `proven_up_to`
+   says how far. It can take a minute or two. If it finds inputs where the program is wrong, fix
+   `main.s` and call `check_code` and `prove` again. "Tested, not proven" is fine: say why in
+   one line. Vector code and programs on the network are tested, not proven, for now; programs
+   that read and print numbers with the template's `parse_i64` and `write_i64` prove best.
 8. Run the program once with `run`, using the spec's first example: `path`, plus `args` and
    `stdin` when it reads them. A program that works on files runs in a folder holding the
    example's input files: create `<path>/demo/` with them, pass it as `folder`, and name the
@@ -74,8 +75,9 @@ Nothing runs before every rule passes.
 9. Tell the user in a few short lines and plain words: where the program is; what its spec
    promises, in two or three lines (its behaviors, its limits such as input sizes and ranges, and
    what it may touch: files, ports); that it follows every rule and passed all its test runs;
-   which behaviors are proven for every input (and, if the proof says one solver answered alone,
-   which one to install for a second check); what `run` printed (and the files it wrote, if any);
+   which behaviors are proven for every input, and which up to a length, such as "proven for
+   every input up to 4096 bytes, tested beyond" (and, if the proof says one solver answered
+   alone, which one to install for a second check); what `run` printed (and the files it wrote, if any);
    and that they can ask you to run it with other inputs or to change what it does. If
    `check_code` listed `spec_changed`, `tests_changed` or `tests_less`, say in a line each what
    changed after their request and why, and name every change that tests less. If `requests`

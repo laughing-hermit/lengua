@@ -274,7 +274,7 @@ it produces, the idea behind translation validation (Pnueli, Siegel and Singerma
 | spec → `tests.toml` | the AI | Structure and coverage; each behavior's spec values appear in its example; each formula reproduces its example; generator ranges are numbers that the spec's Purpose states (not an example's own values) |
 | spec + tests → `main.s` | the AI | The rules, then every example plus fresh random tests on every check |
 | `main.s` → machine code | LLVM | The checker reads the linked executable back and matches it to `main.s` instruction by instruction, operands included; the lock records the executable's hash, and `run` refuses any other build |
-| machine code, every input | — | `prove`: for generated tests over whole-number ranges, the output equals the formulas for every input in range, not only the sampled ones |
+| machine code, every input | — | `prove`: for generated tests over numbers, choices and texts, the output equals the formulas for every input in range, not only the sampled ones; for long texts, every input up to a stated length |
 
 Tests sample inputs, so on their own they are strong evidence, not proof. The `prove` tool turns
 them into a proof where it can, as Alive2 does for LLVM. The Power of 10 rules make that possible:
@@ -321,6 +321,13 @@ How `prove` works (`src/prove/`):
 
   So the hh:mm:ss clock Claude Code wrote, six divisions that timed out in the solvers, and a day
   of the week with a second division of the first's quotient, prove in well under a second.
+- **Bits meet as one term too.** A shift by a constant is the shifted value's bits with zeros
+  beside them, as an extract and a concatenation, and an extract passes through and, or, xor,
+  not and choices. So the bits of a mask a program builds with `sete` and `shlx` are each byte's
+  own test, and `popcnt` of the mask, a sum of its bits, is the same sum of tests that
+  `count(text, "a")` makes. A printed number's first digit takes no remainder, since the same
+  check bounds the value below ten to the number of digits: a count printed as one digit is
+  the count plus `'0'`, the program's own term.
 - **Contradictions need no solver.** A question that holds a condition and its negation, compared
   by their structure with sums as sets of parts whatever their grouping, is impossible on its face:
   a run's own branch and the check that its output breaks often come to exactly that.
@@ -332,9 +339,15 @@ How `prove` works (`src/prove/`):
   so a counterexample anywhere turns up early and the pace of the first ones shows whether the rest
   fit: a block that can't finish says how long it would take. A block may have up to 2,000,000
   combinations, and each gets its share of the proof's five minutes, the time it doesn't use
-  passing on. `examples/add` takes about 40 seconds for 4×10^18 input pairs, the CSV total Claude
-  Code wrote, 24,696 combinations, about ten seconds with no solver question, and the template
-  under a second.
+  passing on. `examples/add` takes about 30 seconds for 4×10^18 input pairs, the CSV total Claude
+  Code wrote, 24,696 combinations, about four seconds, and the template under a second.
+- **Small values in few bits.** A division by a constant is sent to the solvers in the bits its
+  dividend's range needs, and so is a count, a sum whose parts are each 0 or 1: a count of 16
+  bytes divides and adds as 5 bits whatever width the program and the formula wrote it in, so
+  its two widths are one small circuit. Other sums keep their width, where bit-blasting does
+  best with them. cvc5 bit-blasts each question whole, which takes it milliseconds where its lazy
+  default took minutes. When z3 gives up on a question, inputs cvc5 finds still show a branch can
+  be taken; only "impossible" needs both.
 
 Trust:
 
@@ -359,36 +372,56 @@ Trust:
   lengua's own code builds, so a mistake there could make them agree on a wrong answer. Four
   tests draw fresh random values on every run (`LENGUA_RANDOM_SEED` repeats one):
   - *Each instruction against this CPU* (`src/prove/exec/against_cpu.rs`): a harness runs about
-    1,200 probes, every instruction form the model runs in every width and operand kind, plus
-    each condition after each flag-setting instruction, on about 28,000 register, flag and
-    memory values. The model must end with the same registers, flags and memory; where Intel
-    leaves a flag undefined, the CPU's value must be one the model allows. Its first run found
-    a real bug: a 32-bit shift by zero still clears the register's upper half.
+    1,440 probes, every instruction form the model runs in every width and operand kind, plus
+    each condition after each flag-setting instruction, on about 34,500 register, flag and
+    memory values. The bit instructions are among them: `popcnt`, `lzcnt`, `tzcnt`, `bsf` and
+    `bsr` (with a zero source too), BMI1 and BMI2 (`andn`, `blsr`, `blsi`, `blsmsk`, `bzhi`,
+    `bextr`, `shlx`, `shrx`, `sarx`, `rorx`, `mulx`, `pdep` and `pext`), `adcx` and `adox`,
+    `bt`, `bts`, `btr` and `btc` (in memory too), `shld` and `shrd`, `movbe`, and `stc`, `clc`
+    and `cmc`. The model must end with the same registers, flags and memory; where the CPU
+    leaves a flag or a register undefined, the CPU's value must be one the model allows, and
+    `bsf` of zero, which AMD keeps and Intel leaves undefined, may leave anything. Its first run
+    found a real bug: a 32-bit shift by zero still clears the register's upper half.
   - *The simplifier against plain arithmetic* (`src/prove/term/random.rs`): 4,000 random
     expressions shaped like the prover's are built through the simplifying pool and evaluated at
     random inputs. They must equal SMT-LIB's arithmetic as written, and every term's range must
     hold its value. It found dividing by a constant zero simplified wrongly.
   - *The solvers against the pool*: with every input fixed, both solvers must find any other
-    value of a random term impossible, so the SMT-LIB text means what the pool evaluates. It
-    found that z3's bit-blaster can't divide by a non-constant; every division is now a
-    quotient and remainder that multiply back.
+    value of a random term impossible, and its own value possible, so the SMT-LIB text means
+    what the pool evaluates and never rules out the right answer, which would make every proof
+    false. Counts and their divisions by 10 are among the terms. It found that z3's bit-blaster
+    can't divide by a non-constant; every division is now a quotient and remainder that
+    multiply back.
   - *Output conditions* (`src/prove/outputs.rs`): printed numbers, with and without text
     around them and from print loops shaped like the template's, must be accepted exactly when
     the bytes are the formula's text, never for leading zeros, a lost sign or a wrong digit.
 
 What it covers:
 - Inputs: `int(lo, hi)`, and `decimal(lo, hi)` as digits around a point. Each value of a
-  `choice(…)` is proven in turn. `string(min, max, "chars")` runs over at most 4,096 lengths,
-  with a variable for each byte, held to the characters.
+  `choice(…)` is proven in turn. `string(min, max, "chars")` has a variable for each byte, held
+  to the characters (past 4,096 bytes, to the range they span), and its lengths go shortest
+  first: up to 4,096 bytes, or for a text that starts longer, such as a mebibyte file a program
+  only measures, up to 4,096 of its lengths.
+- Long text, up to a stated length. Standard input is proven up to what one pipe write holds,
+  4,096 bytes, which the model reads whole. Where a block's texts run longer, or its time or the
+  model runs out at some length, the proof holds for every input with texts up to the last
+  length fully proven: "proven for every input with text up to 4096 bytes; longer texts are
+  tested, not proven", with the reason. lengua.lock records such a proof under `bounded`, with
+  its length, never as a full one, and `status` shows it.
 - Formulas: whole numbers (`+ - * / %` including chains of divisions, `abs`, `min`, `max`, `if`,
-  and `scaled(x, places)` for a decimal's digits), printed plainly or with `places(x, k)`. Any placeholder whose variables
-  all have fixed values in a shape is computed outright, so messages that quote an argument
-  prove. A placeholder that's just a drawn text compares byte for byte.
+  and `scaled(x, places)` for a decimal's digits), printed plainly or with `places(x, k)`; and
+  text: `len`, `count` (non-overlapping, leftmost first, as the test language counts), `words`,
+  `upper`, `lower`, `tr`, `reverse`, joining texts with `+`, and comparing them with `==` and
+  `!=`. Any placeholder whose variables all have fixed values in a shape is computed outright,
+  so messages that quote an argument prove. A placeholder that's a text, drawn or computed,
+  compares byte for byte.
+- Instructions: the integer instructions, and the bit instructions listed above.
 - Files: `openat`, `read`, `write` and `close` on the test's files. A missing input file gives
   `ENOENT`, and the checks on the files left after the run are the runner's.
 
-Not yet: formulas on text such as `upper(text)`, SSE and AVX instructions in the model,
-floating point, and threads. Those blocks are tested, not proven, and the report says why.
+Not yet: SSE and AVX instructions in the model, programs on the network, `sha256`, `crc32` and
+`crc32c` formulas, floating point, and threads. Those blocks are tested, not proven, and the
+report says why.
 
 ## Resources, threads and capabilities
 
@@ -477,8 +510,8 @@ Dialect 2 followed:
 - files in tests, and the kernel confining every run to what the spec allows;
 - fork-join threads, with each worker proven to write only its own stack and slot;
 - `prove`, which proves programs right for every input in range over whole numbers, decimals,
-  choices, short texts, files, and random bytes and clock readings the tests supply, with every
-  step confirmed by a second solver;
+  choices, texts and text formulas, files, and random bytes and clock readings the tests supply,
+  with every step confirmed by a second solver, and over long texts up to a stated length;
 - the clock and random bytes, which tests supply through a ptrace supervisor, and rules such as
   `{any(1, 6)}` where they don't;
 - plain TCP clients and servers on the ports a spec names, tested against their own loopback
@@ -486,5 +519,5 @@ Dialect 2 followed:
 
 All of it is checked on this machine (x86-64 Linux). The long-term goal is the top 5 or 6 CPU and
 OS targets, through LLVM and one profile per target. Next, in order:
-1. proofs of programs on the network, text formulas and vector code;
+1. proofs of vector code and of programs on the network;
 2. the other targets.

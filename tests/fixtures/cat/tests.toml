@@ -1,0 +1,15 @@
+[meta]
+spec = "{label}"
+
+[[example]]
+id = "B1"
+stdin = "hello"
+stdout = "hello"
+exit_code = 0
+
+[[generated]]
+id = "B1"
+vars = { text = 'string(0, 5000, "abehlo \n")' }
+stdin = "{text}"
+stdout = "{text}"
+exit_code = 0

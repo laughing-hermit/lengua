@@ -17,11 +17,12 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 > output is exact), plain TCP clients and servers on the ports a spec names, and inputs up to
 > 1 MiB. The
 > kernel holds every run to what its spec allows. `prove` proves programs right for every
-> input, not just the tested ones, over whole numbers, decimals, choices, short texts and files,
-> with each step confirmed by two independent solvers, z3 and cvc5; `lengua.lock` records what's
-> proven. Next:
-> - proofs of programs on the network;
-> - proofs of text formulas, vector code and decimal arithmetic written in another shape;
+> input, not just the tested ones, over whole numbers, decimals, choices, texts and text
+> formulas, and files, and over long texts up to a stated length (4,096 bytes of standard
+> input), with each step confirmed by two independent solvers, z3 and cvc5; `lengua.lock`
+> records what's proven. Next:
+> - proofs of vector code and of programs on the network;
+> - proofs of decimal arithmetic written in another shape;
 > - more of the top CPU and OS targets, which LLVM already supports.
 
 ## Requirements

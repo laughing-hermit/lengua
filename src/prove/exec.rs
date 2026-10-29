@@ -750,18 +750,12 @@ impl<'a> Cpu<'a> {
                 self.write(1, a)?;
                 Ok(Step::Next)
             }
-            Mnemonic::Bswap => {
+            Mnemonic::Bswap | Mnemonic::Movbe => {
                 let width = self.width(0);
-                let value = self.read(0, width)?;
-                let mut swapped: Option<Term> = None;
-                for byte in 0..width / 8 {
-                    let part = self.pool.extract(value, byte * 8 + 7, byte * 8);
-                    swapped = Some(match swapped {
-                        None => part,
-                        Some(high) => self.pool.concat(high, part),
-                    });
-                }
-                let swapped = swapped.ok_or_else(|| unsupported("bswap of nothing"))?;
+                // movbe reads its second operand, bswap its only one.
+                let from = u32::from(mnemonic == Mnemonic::Movbe);
+                let value = self.read(from, width)?;
+                let swapped = self.swap_bytes(value)?;
                 self.write(0, swapped)?;
                 Ok(Step::Next)
             }
@@ -956,6 +950,28 @@ impl<'a> Cpu<'a> {
                 Ok(Step::Next)
             }
             Mnemonic::Syscall => self.syscall(),
+            Mnemonic::Popcnt => self.popcnt(),
+            Mnemonic::Tzcnt | Mnemonic::Lzcnt | Mnemonic::Bsf | Mnemonic::Bsr => {
+                self.find_bit(mnemonic)
+            }
+            Mnemonic::Andn
+            | Mnemonic::Blsr
+            | Mnemonic::Blsi
+            | Mnemonic::Blsmsk
+            | Mnemonic::Bzhi
+            | Mnemonic::Bextr => self.bmi(mnemonic),
+            Mnemonic::Shlx | Mnemonic::Shrx | Mnemonic::Sarx | Mnemonic::Rorx => {
+                self.shift_keeping_flags(mnemonic)
+            }
+            Mnemonic::Mulx => self.mulx(),
+            Mnemonic::Adcx | Mnemonic::Adox => self.add_with_flag(mnemonic),
+            Mnemonic::Bt | Mnemonic::Bts | Mnemonic::Btr | Mnemonic::Btc => self.bit_test(mnemonic),
+            Mnemonic::Shld | Mnemonic::Shrd => self.double_shift(mnemonic),
+            Mnemonic::Pdep | Mnemonic::Pext => self.deposit(mnemonic),
+            Mnemonic::Stc | Mnemonic::Clc | Mnemonic::Cmc => {
+                self.set_carry(mnemonic);
+                Ok(Step::Next)
+            }
             other => Err(unsupported(format!("the instruction {other:?}"))),
         }
     }
@@ -1602,6 +1618,8 @@ pub fn bytes(pool: &mut Pool, text: &[u8]) -> Vec<Term> {
         .collect()
 }
 
+mod bits;
+
 #[cfg(test)]
 mod against_cpu;
 
@@ -1669,10 +1687,12 @@ mod tests {
         let image = image(source).await;
         let mut pool = Pool::default();
         let start = State::start(&image, &mut pool, &[], Vec::new());
-        let runs = explore(&image, start, &mut pool, &mut Concrete, 2);
-        // stc isn't modeled: the run says so rather than guessing.
-        let run = &runs.expect("runs")[0];
-        assert!(matches!(&run.end, Some(End::Unsupported(reason)) if reason.contains("Stc")));
+        let runs = explore(&image, start, &mut pool, &mut Concrete, 2).expect("runs");
+        let status = match &runs[0].end {
+            Some(End::Exit(status)) => pool.constant(*status),
+            other => panic!("ended with {other:?}"),
+        };
+        assert_eq!(status, Some(1));
     }
 
     #[tokio::test]

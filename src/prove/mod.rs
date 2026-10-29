@@ -42,11 +42,23 @@ pub enum Verdict {
         questions: usize,
         /// Why one solver answered alone, when no second solver confirmed what it ruled out.
         alone: Option<String>,
+        /// Where a proof over text stops, when it doesn't cover every length in range.
+        bound: Option<Bound>,
     },
     /// Inputs where the program, as the prover reads it, disagrees with the formulas.
     Counterexample(BTreeMap<String, Value>),
     /// The proof couldn't be finished, and why.
     NotProven(String),
+}
+
+/// How far a proof over text reaches: every input whose texts are at most `bytes` long, every
+/// combination of the other values included. Longer texts are tested, not proven, for `why`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bound {
+    /// The longest text proven, with every shorter one.
+    pub bytes: usize,
+    /// What stopped the proof at the next length.
+    pub why: String,
 }
 
 /// How much one proof may take.
@@ -347,8 +359,31 @@ enum Part {
     Plain(i128, i128, u8),
 }
 
-/// The most lengths of text one variable may be proven over, one shape each.
-const MAX_LENGTHS: usize = 4096;
+/// The longest text a proof covers from the shortest: standard input up to what one pipe write
+/// holds, which the model reads whole, and other texts as long. Longer texts are tested, not
+/// proven.
+pub const TEXT_BOUND: usize = 4096;
+
+/// What a proof that covered every length up to [`TEXT_BOUND`] says about longer texts.
+const PAST_THE_BOUND: &str = "a proof covers texts up to 4096 bytes";
+
+/// The most lengths a text that starts past [`TEXT_BOUND`] is proven over, shortest first: a
+/// mebibyte-long file the program only measures, say.
+const LONG_LENGTHS: usize = 4096;
+
+/// The longest length of `generator`'s text a proof covers, and what it says past it, when that
+/// stops short of the generator's own longest.
+fn text_cap(min: usize, max: usize) -> Option<(usize, &'static str)> {
+    let cap = if min <= TEXT_BOUND {
+        (TEXT_BOUND, PAST_THE_BOUND)
+    } else {
+        (
+            min + LONG_LENGTHS - 1,
+            "a proof covers 4096 lengths of a long text, from the shortest",
+        )
+    };
+    (max > cap.0).then_some(cap)
+}
 
 /// Texts this long or shorter have each byte held to the generator's characters; longer ones
 /// only to the range the characters span, which proves more than needed but nothing false.
@@ -379,13 +414,9 @@ fn parts(name: &str, generator: &Generator) -> Result<Vec<Part>, String> {
             if !charset.iter().all(char::is_ascii) {
                 return Err(format!("{name} is drawn from characters beyond ASCII"));
             }
-            if max - min >= MAX_LENGTHS {
-                return Err(format!(
-                    "{name} is text of more than {MAX_LENGTHS} lengths, each a shape of its own"
-                ));
-            }
             let bytes: Vec<u8> = charset.iter().map(|character| *character as u8).collect();
-            Ok((*min..=*max)
+            let longest = text_cap(*min, *max).map_or(*max, |(cap, _)| cap);
+            Ok((*min..=longest)
                 .map(|length| Part::Text(length, bytes.clone()))
                 .collect())
         }
@@ -783,7 +814,10 @@ fn digits_are(
     pool.all(&checks)
 }
 
-/// What must hold for `bytes` to be the last decimal digits of `base`, one byte each.
+/// What must hold for `bytes` to be the decimal digits of `base`, one byte each, where the
+/// caller also requires `base` to be below 10 to the number of bytes: then the first digit is the
+/// quotient itself, and one digit is the value. Where the program computed its first digit as a
+/// remainder too, that form meets the program's and is kept.
 fn bytes_are_digits(pool: &mut Pool, bytes: &[Term], base: Term) -> Term {
     let count = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
     let width = pool.width(base);
@@ -794,9 +828,17 @@ fn bytes_are_digits(pool: &mut Pool, bytes: &[Term], base: Term) -> Term {
         let power = pool.bv(width, power);
         let quotient = pool.udiv(base, power);
         let digit = pool.urem(quotient, ten);
-        let low = pool.extract(digit, 7, 0);
-        let character = pool.add(low, zero_char);
-        checks.push(pool.eq(*byte, character));
+        let is = |pool: &mut Pool, digit: Term| {
+            let low = pool.extract(digit, 7, 0);
+            let character = pool.add(low, zero_char);
+            pool.eq(*byte, character)
+        };
+        let check = is(pool, digit);
+        checks.push(if index == 0 && pool.truth(check).is_none() {
+            is(pool, quotient)
+        } else {
+            check
+        });
     }
     pool.all(&checks)
 }
@@ -933,7 +975,11 @@ fn text_is(
                     _ => return Err("places with its places given by a formula".into()),
                 }
             }
-            Piece::Expr(expr) => Segment::Number(expr, 0),
+            // A placeholder whose value is text, such as upper(text), is its bytes.
+            Piece::Expr(expr) => match formula::translate(pool, expr, known.numbers, known.texts) {
+                Ok(Formula::Text(bytes)) => Segment::Bytes(bytes),
+                _ => Segment::Number(expr, 0),
+            },
         };
         // Neighboring bytes join, so a template is at most bytes, a number, bytes.
         match (segments.last_mut(), segment) {
@@ -960,10 +1006,13 @@ fn text_is(
                 literals.push(Vec::new());
             }
             Segment::Either(condition, then, otherwise) => {
-                let condition = match formula::translate(pool, condition, known.numbers)? {
-                    Formula::Truth(condition) => condition,
-                    Formula::Number(_) => return Err("an if(…) whose condition is a number".into()),
-                };
+                let condition =
+                    match formula::translate(pool, condition, known.numbers, known.texts)? {
+                        Formula::Truth(condition) => condition,
+                        Formula::Number(_) | Formula::Text(_) => {
+                            return Err("an if(…) whose condition isn't true or false".into());
+                        }
+                    };
                 computed.push(Computed::Either(condition, then, otherwise));
                 literals.push(Vec::new());
             }
@@ -1057,9 +1106,10 @@ fn printed(
     places: u8,
     known: &Known<'_>,
 ) -> Result<Computed, String> {
-    let number = match formula::translate(pool, expr, known.numbers)? {
+    let number = match formula::translate(pool, expr, known.numbers, known.texts)? {
         Formula::Number(number) => number,
         Formula::Truth(_) => return Err("a placeholder that prints true or false".into()),
+        Formula::Text(_) => return Err("a text placeholder where a number goes".into()),
     };
     // places(x, k) prints a whole number with k places; a decimal itself prints with its own.
     let places = match (places, number.places) {
@@ -1128,7 +1178,7 @@ fn bound(pool: &mut Pool, expr: &crate::expr::Expr, known: &Known<'_>) -> Result
             _ => Err("an any(…) bound that isn't a whole number".into()),
         };
     }
-    match formula::translate(pool, expr, known.numbers)? {
+    match formula::translate(pool, expr, known.numbers, known.texts)? {
         Formula::Number(number) if number.places == 0 => Ok(number),
         _ => Err("an any(…) bound that isn't a whole number".into()),
     }
@@ -1198,7 +1248,7 @@ fn passes(
     run: &State,
     status: Term,
 ) -> Result<Term, String> {
-    let (numbers, fixed) = (known.numbers, known.fixed);
+    let (numbers, fixed, texts) = (known.numbers, known.fixed, known.texts);
     let stdout = text_is(pool, &run.stdout, &block.stdout, known)?;
     let stderr = text_is(pool, &run.stderr, &block.stderr, known)?;
     let exit = match &block.exit_code {
@@ -1220,9 +1270,11 @@ fn passes(
                     _ => return Err("an exit code that isn't a whole number".into()),
                 }
             } else {
-                match formula::translate(pool, expr, numbers)? {
+                match formula::translate(pool, expr, numbers, texts)? {
                     Formula::Number(number) => number,
-                    Formula::Truth(_) => return Err("an exit code that's true or false".into()),
+                    Formula::Truth(_) | Formula::Text(_) => {
+                        return Err("an exit code that isn't a whole number".into());
+                    }
                 }
             };
             let (zero, top) = (pool.bv(WIDTH, 0), pool.bv(WIDTH, 255));
@@ -1301,6 +1353,29 @@ fn attempt(machine: &Machine, block: &Generated, budget: Budget) -> Result<Verdi
         .filter(|total| *total <= budget.max_shapes)
         .ok_or_else(|| format!("more than {} input shapes", budget.max_shapes))?;
     let image = Image::new(machine).ok_or("the program has no _start")?;
+    // Texts of many lengths go shortest first, so where time or the model runs out the proof
+    // still holds for every input up to some length; everything else goes in a scattered order,
+    // so the pace of the first combinations shows the pace of all, and a counterexample anywhere
+    // turns up early.
+    let stride = stride(total);
+    let scattered = |turn: usize| (turn as u128 * stride as u128 % total as u128) as usize;
+    let by_length = each.iter().any(|(_, parts)| {
+        parts
+            .iter()
+            .filter(|part| matches!(part, Part::Text(..)))
+            .count()
+            > 1
+    });
+    let order: Vec<usize> = if by_length {
+        let mut order: Vec<usize> = (0..total).map(scattered).collect();
+        order.sort_by_key(|combination| longest_text(&each, *combination));
+        order
+    } else {
+        Vec::new()
+    };
+    let shortest = order
+        .first()
+        .map_or(0, |combination| longest_text(&each, *combination));
     // The shapes are independent: every core takes the next one until all are done, a
     // counterexample turns up, or something can't be proven.
     let next = AtomicUsize::new(0);
@@ -1311,13 +1386,22 @@ fn attempt(machine: &Machine, block: &Generated, budget: Budget) -> Result<Verdi
     let stop = AtomicBool::new(false);
     let found: Mutex<Option<BTreeMap<String, Value>>> = Mutex::new(None);
     let failure: Mutex<Option<String>> = Mutex::new(None);
+    // In length order, the shortest text length something couldn't be proven at, and why:
+    // nothing that long or longer can extend the proof.
+    let gap: Mutex<Option<(usize, String)>> = Mutex::new(None);
+    let gap_at = AtomicUsize::new(usize::MAX);
+    let note_gap = |length: usize, why: String| {
+        if let Ok(mut gap) = gap.lock()
+            && gap.as_ref().is_none_or(|(at, _)| length < *at)
+        {
+            *gap = Some((length, why));
+            gap_at.store(length, Ordering::Relaxed);
+        }
+    };
     let workers = std::thread::available_parallelism()
         .map_or(1, std::num::NonZero::get)
         .min(total.max(1));
     let began = Instant::now();
-    // The combinations go in a scattered order, so the pace of the first ones shows the pace of
-    // all of them, and a counterexample anywhere turns up early.
-    let stride = stride(total);
     std::thread::scope(|scope| {
         for _ in 0..workers {
             scope.spawn(|| {
@@ -1327,7 +1411,15 @@ fn attempt(machine: &Machine, block: &Generated, budget: Budget) -> Result<Verdi
                     if turn >= total {
                         break;
                     }
-                    let combination = (turn as u128 * stride as u128 % total as u128) as usize;
+                    let (combination, length) = if by_length {
+                        let combination = order[turn];
+                        (combination, longest_text(&each, combination))
+                    } else {
+                        (scattered(turn), 0)
+                    };
+                    if by_length && length >= gap_at.load(Ordering::Relaxed) {
+                        break;
+                    }
                     solvers.next();
                     let result = if Instant::now() > budget.deadline {
                         Err(Stop::Unproven(OUT_OF_TIME.into()))
@@ -1343,12 +1435,16 @@ fn attempt(machine: &Machine, block: &Generated, budget: Budget) -> Result<Verdi
                             }
                             // Once every worker has done two, and again at four times as many
                             // each time, the pace shows whether the rest fits the time left; if
-                            // it can't, stop now and say so.
+                            // it can't, stop now and say so. In length order the proof instead
+                            // goes as far as its time allows.
                             let finished = done.fetch_add(1, Ordering::Relaxed) + 1;
-                            let checkpoint = finished >= 2 * workers
+                            let checkpoint = !by_length
+                                && finished >= 2 * workers
                                 && (finished / (2 * workers)).is_power_of_two()
                                 && finished.is_multiple_of(2 * workers)
-                                && (finished / (2 * workers)).trailing_zeros().is_multiple_of(2);
+                                && (finished / (2 * workers))
+                                    .trailing_zeros()
+                                    .is_multiple_of(2);
                             if checkpoint && finished < total {
                                 let pace = began.elapsed().as_secs_f64() / finished as f64;
                                 let needed = Duration::from_secs_f64(pace * total as f64);
@@ -1373,7 +1469,10 @@ fn attempt(machine: &Machine, block: &Generated, budget: Budget) -> Result<Verdi
                             }
                             stop.store(true, Ordering::Relaxed);
                         }
-                        Err(Stop::Unproven(reason)) => {
+                        Err(Stop::Unproven(reason) | Stop::Beyond(reason)) if by_length => {
+                            note_gap(length, reason);
+                        }
+                        Err(Stop::Unproven(reason) | Stop::Beyond(reason)) => {
                             if let Ok(mut failure) = failure.lock() {
                                 failure.get_or_insert(reason);
                             }
@@ -1387,21 +1486,63 @@ fn attempt(machine: &Machine, block: &Generated, budget: Budget) -> Result<Verdi
     if let Some(values) = found.into_inner().ok().flatten() {
         return Ok(Verdict::Counterexample(values));
     }
-    if let Some(reason) = failure.into_inner().ok().flatten() {
+    let done = done.into_inner();
+    let out_of_time = |reason: String| {
         if reason == OUT_OF_TIME {
-            return Err(format!(
-                "ran out of time after {} of {total} input combinations",
-                done.into_inner()
-            ));
+            format!("ran out of time after {done} of {total} input combinations")
+        } else {
+            reason
         }
-        return Err(reason);
+    };
+    if let Some(reason) = failure.into_inner().ok().flatten() {
+        return Err(out_of_time(reason));
     }
+    let bound = match gap.into_inner().ok().flatten() {
+        // Not even the shortest texts were all proven.
+        Some((length, why)) if length <= shortest => return Err(out_of_time(why)),
+        Some((length, why)) => Some(Bound {
+            bytes: length - 1,
+            why: if why == OUT_OF_TIME {
+                format!("the proof ran out of time at {length} bytes")
+            } else {
+                why
+            },
+        }),
+        // Every length was proven, up to where the proof stops.
+        None => block
+            .vars
+            .iter()
+            .filter_map(|(_, generator)| match generator {
+                Generator::Str { min, max, .. } => text_cap(*min, *max),
+                _ => None,
+            })
+            .min_by_key(|(cap, _)| *cap)
+            .map(|(cap, why)| Bound {
+                bytes: cap,
+                why: why.into(),
+            }),
+    };
     Ok(Verdict::Proven {
-        shapes: total,
+        shapes: done,
         paths: paths.into_inner(),
         questions: questions.into_inner(),
         alone: alone.into_inner().ok().flatten(),
+        bound,
     })
+}
+
+/// The length of the longest text in `combination`, 0 when it has none.
+fn longest_text(each: &[(String, Vec<Part>)], combination: usize) -> usize {
+    let mut rest = combination;
+    let mut longest = 0;
+    for (_, parts) in each {
+        let number = rest % parts.len();
+        rest /= parts.len();
+        if let Part::Text(length, _) = parts[number] {
+            longest = longest.max(length);
+        }
+    }
+    longest
 }
 
 /// A step through `0..total` that visits every combination once in a scattered order: an odd
@@ -1442,6 +1583,8 @@ enum Stop {
     Counterexample(BTreeMap<String, Value>),
     /// Something the proof can't settle.
     Unproven(String),
+    /// Inputs past what a proof covers, and why.
+    Beyond(String),
 }
 
 impl From<String> for Stop {
@@ -1507,8 +1650,11 @@ fn prove_shape(
     let stdin = pattern_bytes(&mut pool, &block.stdin, &inputs)?;
     // The model has one read return everything that's there, which a pipe guarantees only for
     // what one write of at most 4096 bytes put in it.
-    if stdin.len() > 4096 {
-        return Err("standard input over 4096 bytes".into());
+    if stdin.len() > TEXT_BOUND {
+        return Err(Stop::Beyond(format!(
+            "standard input past {TEXT_BOUND} bytes is more than one pipe write, which the proof \
+             reads whole"
+        )));
     }
     let mut files = BTreeMap::new();
     for (name, template) in &block.files {

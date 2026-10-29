@@ -3,7 +3,7 @@
 //! well, so one solver's bug can't make a false proof. Terms are defined once, and each question
 //! is asked inside its own `push`/`pop`, so the definitions stay and the assertions go.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead as _, BufReader, Write as _};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -79,8 +79,15 @@ impl Process {
         let mut command = Command::new(program);
         match kind {
             Kind::Z3 => command.args(["-in", "-smt2", "-memory:4096"]),
+            // Bit-blasting each question whole: lazily, cvc5 can take minutes over two copies
+            // of one small sum that eagerly take it milliseconds.
             Kind::Cvc5 => command
-                .args(["--lang=smt2", "--incremental", "--produce-models"])
+                .args([
+                    "--lang=smt2",
+                    "--incremental",
+                    "--produce-models",
+                    "--bitblast=eager",
+                ])
                 .arg(format!("--tlimit-per={timeout_ms}")),
         };
         let mut child = command
@@ -259,6 +266,8 @@ pub struct Solver {
     deadline: Option<std::time::Instant>,
     /// The quotient and remainder variables standing for each division.
     divisions: HashMap<Division, (String, String)>,
+    /// The sums defined as counts, in the bits their range needs.
+    counts: HashSet<Term>,
 }
 
 fn sort_text(sort: Sort) -> String {
@@ -284,6 +293,13 @@ fn literal(value: u128, width: u32) -> String {
     } else {
         format!("#b{value:0digits$b}", digits = width as usize)
     }
+}
+
+/// The bits `term`'s range needs, when that's fewer than its width.
+fn narrow_width(pool: &Pool, term: Term) -> Option<u32> {
+    let width = pool.width(term);
+    let needed = (128 - pool.range(term).1.leading_zeros()).max(1);
+    (needed < width).then_some(needed)
 }
 
 /// Every bit of `width` set.
@@ -363,6 +379,7 @@ impl Solver {
             timeout_ms,
             deadline: None,
             divisions: HashMap::new(),
+            counts: HashSet::new(),
         })
     }
 
@@ -385,6 +402,7 @@ impl Solver {
         }
         self.defined.clear();
         self.divisions.clear();
+        self.counts.clear();
         self.why_unknown.clear();
         Ok(())
     }
@@ -510,6 +528,31 @@ impl Solver {
                         current.index()
                     ));
                 }
+                // A count, a sum of values that are each 0 or 1 or counts themselves, adds in the
+                // few bits its range needs, which depend only on its parts' same bits: the same
+                // count at two widths is then one small circuit. Other sums keep their width,
+                // where bit-blasting does best with them.
+                &Node::Add(x, y)
+                    if [x, y]
+                        .iter()
+                        .all(|part| pool.range(*part).1 <= 1 || self.counts.contains(part))
+                        && narrow_width(pool, current).is_some() =>
+                {
+                    let (narrow, width) = (
+                        narrow_width(pool, current).unwrap_or(1),
+                        pool.width(current),
+                    );
+                    let low =
+                        |term: Term| format!("((_ extract {} 0) t{})", narrow - 1, term.index());
+                    text.push_str(&format!(
+                        "(define-fun t{} () {sort} ((_ zero_extend {}) (bvadd {} {})))\n",
+                        current.index(),
+                        width - narrow,
+                        low(x),
+                        low(y),
+                    ));
+                    self.counts.insert(current);
+                }
                 &Node::Mul(factor, by) if pool.constant(by).is_some() => {
                     let constant = pool.constant(by).unwrap_or(0);
                     let width = pool.width(current);
@@ -543,6 +586,39 @@ impl Solver {
         | Division::ByTerm(dividend, _)
         | Division::Signed(dividend, _)) = division;
         let width = pool.width(dividend);
+        if let Division::ByConstant(dividend, divisor) = division {
+            // At the width the dividend's range needs, which is often far below its own: a
+            // count of a few bytes divides as a few bits, not as 64.
+            let needed = |value: u128| 128 - value.leading_zeros();
+            let narrow = needed(pool.range(dividend).1)
+                .max(needed(divisor))
+                .clamp(1, width);
+            let low = if narrow < width {
+                format!("((_ extract {} 0) t{})", narrow - 1, dividend.index())
+            } else {
+                format!("t{}", dividend.index())
+            };
+            let wide = |name: &str| format!("((_ zero_extend {narrow}) {name})");
+            text.push_str(&format!(
+                "(declare-const {quotient} (_ BitVec {narrow}))\n(declare-const {remainder} (_ \
+                 BitVec {narrow}))\n(assert (= {} (bvadd {} {})))\n(assert (bvult {remainder} \
+                 {}))\n",
+                wide(&low),
+                shifted_sum(&wide(&quotient), divisor, 2 * narrow),
+                wide(&remainder),
+                literal(divisor, narrow),
+            ));
+            let back = |name: String| {
+                if narrow < width {
+                    format!("((_ zero_extend {}) {name})", width - narrow)
+                } else {
+                    name
+                }
+            };
+            let names = (back(quotient), back(remainder));
+            self.divisions.insert(division, names.clone());
+            return names;
+        }
         let wide = |name: &str| format!("((_ zero_extend {width}) {name})");
         let size = |term: Term| {
             format!(
@@ -557,13 +633,7 @@ impl Solver {
              {width}))\n"
         ));
         match division {
-            Division::ByConstant(dividend, divisor) => text.push_str(&format!(
-                "(assert (= {} (bvadd {} {})))\n(assert (bvult {remainder} {}))\n",
-                wide(&format!("t{}", dividend.index())),
-                shifted_sum(&wide(&quotient), divisor, 2 * width),
-                wide(&remainder),
-                literal(divisor, width),
-            )),
+            Division::ByConstant(..) => {}
             Division::ByTerm(dividend, divisor) | Division::Signed(dividend, divisor) => {
                 let (dividend, divisor) = if matches!(division, Division::Signed(..)) {
                     let (a, b) = (format!("a{index}"), format!("b{index}"));
@@ -699,8 +769,14 @@ impl Solver {
             }
             Answer::Unsat => self.confirm(pool, conditions, values, &mut model)?,
             Answer::Unknown => {
-                self.why_unknown = format!("{name} {}", self.first.reason()?);
-                Answer::Unknown
+                let why = format!("{name} {}", self.first.reason()?);
+                let wanted = model_wanted || !values.is_empty();
+                if self.rescue(pool, conditions, values, wanted, &mut model)? {
+                    Answer::Sat
+                } else {
+                    self.why_unknown = why;
+                    Answer::Unknown
+                }
             }
         };
         self.send("(pop 1)\n")?;
@@ -711,6 +787,43 @@ impl Solver {
             second.sync()?;
         }
         Ok((answer, model))
+    }
+
+    /// The second solver's try at conditions the first couldn't settle: inputs that meet them
+    /// show they're possible, which a second solver alone can show. Its impossible alone shows
+    /// nothing. With `wanted`, the inputs are checked against the conditions and kept in `model`.
+    fn rescue(
+        &mut self,
+        pool: &Pool,
+        conditions: &[Term],
+        values: &[Term],
+        wanted: bool,
+        model: &mut HashMap<Term, u128>,
+    ) -> io::Result<bool> {
+        let limit = self.limit(self.timeout_ms * CONFIRM_FACTOR);
+        let Some(second) = &mut self.second else {
+            return Ok(false);
+        };
+        if limit == 0 {
+            return Ok(false);
+        }
+        let name = second.kind.name();
+        let asked = std::time::Instant::now();
+        let answer = second.check_sat(limit)?;
+        let elapsed = asked.elapsed();
+        let possible = match answer {
+            Answer::Sat if !wanted => true,
+            Answer::Sat => match second.model(pool, conditions, values)? {
+                Some(found) => {
+                    *model = found;
+                    true
+                }
+                None => false,
+            },
+            _ => false,
+        };
+        self.note(&format!("; {name}: {answer:?} in {elapsed:?}\n"));
+        Ok(possible)
     }
 
     /// The second solver's view of conditions the first found impossible: impossible when it

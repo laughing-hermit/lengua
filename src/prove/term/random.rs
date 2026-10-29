@@ -377,7 +377,7 @@ impl Writer<'_> {
             };
         }
         let deeper = depth - 1;
-        match self.rng.random_range(0..18) {
+        match self.rng.random_range(0..19) {
             0..=3 => {
                 let ops = [
                     Op::Add,
@@ -551,6 +551,35 @@ impl Writer<'_> {
                 let op = [Op::Udiv, Op::Urem, Op::Sdiv, Op::Srem][self.rng.random_range(0..4)];
                 let divisor = [3, 7, 10, 60, 3600, 86400][self.rng.random_range(0..6)];
                 Expr::Binary(op, Box::new(sum), Box::new(Expr::Const(width, divisor)))
+            }
+            // A count, as popcnt and count() make one: values that are each 0 or 1, added up,
+            // and often divided by 10 as its digits are printed.
+            17 if width >= 8 => {
+                let mut count = Expr::Const(width, 0);
+                for _ in 0..self.rng.random_range(2..7) {
+                    let one = if self.rng.random_bool(0.5) {
+                        Expr::Ite(
+                            Box::new(self.truth(deeper.min(1))),
+                            Box::new(Expr::Const(width, 1)),
+                            Box::new(Expr::Const(width, 0)),
+                        )
+                    } else {
+                        let bit = self.rng.random_range(0..width);
+                        let value = self.number(width, deeper.min(1));
+                        Expr::ZeroExtend(
+                            Box::new(Expr::Extract(Box::new(value), bit, bit)),
+                            width - 1,
+                        )
+                    };
+                    count = Expr::Binary(Op::Add, Box::new(count), Box::new(one));
+                }
+                if self.rng.random_bool(0.5) {
+                    let op = [Op::Udiv, Op::Urem][self.rng.random_range(0..2)];
+                    let divisor = [3, 10][self.rng.random_range(0..2)];
+                    Expr::Binary(op, Box::new(count), Box::new(Expr::Const(width, divisor)))
+                } else {
+                    count
+                }
             }
             _ => Expr::Binary(
                 Op::Add,
@@ -774,7 +803,7 @@ fn the_solvers_read_terms_as_the_pool_evaluates_them() {
     let seed = seed();
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
     let mut problems = Vec::new();
-    let mut slow = 0;
+    let (mut slow, mut unfound) = (0, 0);
     let mut pool = Pool::default();
     for round in 0..150 {
         let mut writer = Writer {
@@ -830,20 +859,38 @@ fn the_solvers_read_terms_as_the_pool_evaluates_them() {
             let same = pool.eq(term, constant);
             pool.bool_not(same)
         };
+        let same = pool.bool_not(other);
+        let mut exact = fixed.clone();
         fixed.push(other);
-        let (answer, _) = solver
-            .check(&pool, &fixed, &[])
-            .expect("the solver answers");
-        // Out of time is no answer, which a proof reports as not proven; any other answer but
-        // impossible is a mistake.
-        if answer == Answer::Unknown && solver.why_unknown.ends_with("ran out of time") {
-            slow += 1;
-        } else if answer != Answer::Unsat {
-            problems.push(format!(
-                "{expr:?} at {values:?}: the pool says {value:#x}, but the solvers answer \
-                 {answer:?} ({})",
-                solver.why_unknown
-            ));
+        exact.push(same);
+        // The term can't be anything else, and it can be that: an encoding that ruled the
+        // right value out would make every question impossible, and every proof false. That
+        // shows as a quick impossible, so finding the inputs gets only a moment.
+        for (conditions, expected) in [(&fixed, Answer::Unsat), (&exact, Answer::Sat)] {
+            let moment = std::time::Instant::now() + std::time::Duration::from_millis(300);
+            solver.until(if expected == Answer::Sat {
+                moment
+            } else {
+                moment + std::time::Duration::from_secs(3600)
+            });
+            let (answer, _) = solver
+                .check(&pool, conditions, &[])
+                .expect("the solver answers");
+            // Out of time is no answer, which a proof reports as not proven; any other answer
+            // but the expected one is a mistake.
+            if answer == Answer::Unknown && solver.why_unknown.ends_with("ran out of time") {
+                if expected == Answer::Unsat {
+                    slow += 1;
+                } else {
+                    unfound += 1;
+                }
+            } else if answer != expected {
+                problems.push(format!(
+                    "{expr:?} at {values:?}: the pool says {value:#x}, but the solvers answer \
+                     {answer:?} where {expected:?} is right ({})",
+                    solver.why_unknown
+                ));
+            }
         }
     }
     problems.truncate(10);
@@ -851,5 +898,10 @@ fn the_solvers_read_terms_as_the_pool_evaluates_them() {
     assert!(
         slow < 15,
         "seed {seed}: {slow} of 150 questions ran out of time"
+    );
+    assert!(
+        unfound < 50,
+        "seed {seed}: the solvers found the inputs for only {} of 150 terms' values",
+        150 - unfound
     );
 }

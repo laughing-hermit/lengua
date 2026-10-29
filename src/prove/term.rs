@@ -879,8 +879,19 @@ impl Pool {
         self.make(kind(a, b), Sort::Bv(width))
     }
 
-    /// Shift left.
+    /// Shift left. By a constant it's the lower bits with zeros below them, one form however a
+    /// program shifts, whose single bits are the operand's own.
     pub fn shl(&mut self, a: Term, b: Term) -> Term {
+        let width = self.width(a);
+        if let Some(by) = self.constant(b)
+            && by > 0
+            && by < u128::from(width)
+        {
+            let by = u32::try_from(by).unwrap_or(width);
+            let lower = self.extract(a, width - 1 - by, 0);
+            let zeros = self.bv(by, 0);
+            return self.concat(lower, zeros);
+        }
         self.shift(a, b, Node::Shl)
     }
 

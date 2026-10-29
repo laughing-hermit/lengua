@@ -161,6 +161,10 @@ pub struct ProgramReport {
     /// The ids of the generated tests proven for every input in range on the checked build:
     /// empty until `prove` runs on it, and whenever spec.md, tests.toml or main.s changed since.
     pub proven: Vec<String>,
+    /// The generated tests proven only for texts up to a length, as `id: up to N bytes`;
+    /// longer texts are tested, not proven.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub proven_up_to: Vec<String>,
     /// Which solvers checked those proofs.
     pub proven_by: Option<String>,
     /// The user's requests in this build, as recorded, oldest first.
@@ -307,6 +311,10 @@ pub struct ProofReport {
     /// Whether the program is right for every input in the test's ranges, not just the
     /// sampled ones.
     pub proven: bool,
+    /// When the proof holds only for texts up to a length: that length in bytes. Inputs with
+    /// longer texts are tested, not proven.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proven_up_to: Option<usize>,
     /// What was proven, or why it wasn't.
     pub detail: String,
 }
@@ -1103,6 +1111,7 @@ impl LenguaServer {
         let mut wrong = false;
         // The ids proven, how many the solvers proved, and why any rested on one solver.
         let mut proven_ids = Vec::new();
+        let mut bounded_ids = Vec::new();
         let mut solved = 0;
         let mut alone_reason: Option<String> = None;
         let allows = |call: spec::Syscall| spec.syscalls.contains(&call);
@@ -1124,6 +1133,7 @@ impl LenguaServer {
                 proofs.push(ProofReport {
                     test,
                     proven: false,
+                    proven_up_to: None,
                     detail: "tested, not proven: the proof doesn't follow a program over the \
                              network yet"
                         .into(),
@@ -1138,6 +1148,7 @@ impl LenguaServer {
                 proofs.push(ProofReport {
                     test,
                     proven: true,
+                    proven_up_to: None,
                     detail: format!("check_code tried {every}"),
                 });
                 continue;
@@ -1163,6 +1174,7 @@ impl LenguaServer {
             })
             .await
             .map_err(|error| format!("the proof stopped: {error}"))?;
+            let mut proven_up_to = None;
             let (proven, detail) = match verdict {
                 Err(reason) => (false, format!("tested, not proven: {reason}")),
                 Ok(prove::Verdict::Proven {
@@ -1170,20 +1182,31 @@ impl LenguaServer {
                     paths,
                     questions,
                     alone,
+                    bound,
                 }) => (
                     {
-                        proven_ids.push(block.id.to_string());
+                        match &bound {
+                            Some(bound) => {
+                                bounded_ids.push((block.id.to_string(), bound.bytes));
+                                proven_up_to = Some(bound.bytes);
+                            }
+                            None => proven_ids.push(block.id.to_string()),
+                        }
                         if questions > 0 {
                             solved += 1;
                             if alone_reason.is_none() {
                                 alone_reason.clone_from(&alone);
                             }
                         }
-                        true
+                        bound.is_none()
                     },
                     format!(
-                        "proven for every input in range ({shapes} input combinations, {paths} \
-                         paths through the machine code), {}",
+                        "proven for every input {} ({shapes} input combinations, {paths} paths \
+                         through the machine code), {}{}",
+                        bound.as_ref().map_or_else(
+                            || "in range".to_owned(),
+                            |bound| format!("with text up to {} bytes", bound.bytes)
+                        ),
                         match (questions, alone) {
                             (0, _) => "every step settled by the terms themselves, so no solver \
                                        was needed"
@@ -1195,7 +1218,11 @@ impl LenguaServer {
                                 "by one solver alone ({reason}; with both z3 and cvc5 installed, \
                                  each step is confirmed twice)"
                             ),
-                        }
+                        },
+                        bound.as_ref().map_or_else(String::new, |bound| format!(
+                            "; longer texts are tested, not proven: {}",
+                            bound.why
+                        ))
                     ),
                 ),
                 Ok(prove::Verdict::NotProven(reason)) => {
@@ -1255,6 +1282,7 @@ impl LenguaServer {
             proofs.push(ProofReport {
                 test,
                 proven,
+                proven_up_to,
                 detail,
             });
         }
@@ -1266,21 +1294,49 @@ impl LenguaServer {
             (_, Some(reason)) => format!("one solver alone: {reason}"),
         };
         let recorded = self
-            .stamp_proofs(&folder, &stamp.executable_sha256, proven_ids, solvers)
+            .stamp_proofs(
+                &folder,
+                &stamp.executable_sha256,
+                proven_ids,
+                bounded_ids,
+                solvers,
+            )
             .await;
         let proven: Vec<&str> = proofs
             .iter()
             .filter(|proof| proof.proven)
             .map(|proof| proof.test.as_str())
             .collect();
+        let up_to: Vec<String> = proofs
+            .iter()
+            .filter_map(|proof| {
+                proof
+                    .proven_up_to
+                    .map(|bytes| format!("{} (up to {bytes} bytes)", proof.test))
+            })
+            .collect();
         let message = if wrong {
             "The proof found inputs where main.s is wrong; see proofs.".to_owned()
         } else if proven.len() == proofs.len() && !proofs.is_empty() {
             "Every generated test is proven for every input in its range.".to_owned()
-        } else if proven.is_empty() {
+        } else if proven.is_empty() && up_to.is_empty() {
             "Nothing could be proven; the tests still pass. See proofs for why.".to_owned()
         } else {
-            format!("Proven for every input in range: {}.", proven.join(", "))
+            let mut parts = Vec::new();
+            if !proven.is_empty() {
+                parts.push(format!(
+                    "Proven for every input in range: {}.",
+                    proven.join(", ")
+                ));
+            }
+            if !up_to.is_empty() {
+                parts.push(format!(
+                    "Proven for every input with texts up to a length, and tested beyond it: \
+                     {}.",
+                    up_to.join(", ")
+                ));
+            }
+            parts.join(" ")
         };
         let message = if recorded {
             format!("{message} lengua.lock records it.")
@@ -1509,6 +1565,7 @@ impl LenguaServer {
         folder: &ProgramFolder,
         executable: &Sha256Hex,
         proven: Vec<String>,
+        bounded: Vec<(String, usize)>,
         solvers: String,
     ) -> bool {
         let _writing = self.lock_writes.lock().await;
@@ -1529,6 +1586,7 @@ impl LenguaServer {
             proofs: Some(Box::new(ProofStamp {
                 executable_sha256: executable.clone(),
                 proven,
+                bounded,
                 solvers,
             })),
             ..lock
@@ -1587,6 +1645,15 @@ impl LenguaServer {
             },
             proven: proofs
                 .map(|proofs| proofs.proven.clone())
+                .unwrap_or_default(),
+            proven_up_to: proofs
+                .map(|proofs| {
+                    proofs
+                        .bounded
+                        .iter()
+                        .map(|(id, bytes)| format!("{id}: up to {bytes} bytes"))
+                        .collect()
+                })
                 .unwrap_or_default(),
             proven_by: proofs.map(|proofs| proofs.solvers.clone()),
             requests: changes.requests,

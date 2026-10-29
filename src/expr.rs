@@ -1445,7 +1445,7 @@ fn call(function: Function, arguments: &[Expr], env: &Env) -> Result<Value, Eval
 
 /// The characters a `tr` set lists, with `a-z` standing for a range; a `-` first or last is
 /// itself.
-fn tr_set(set: &str) -> Vec<char> {
+pub(crate) fn tr_set(set: &str) -> Vec<char> {
     let characters: Vec<char> = set.chars().collect();
     let mut listed = Vec::new();
     let mut index = 0;

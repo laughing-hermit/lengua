@@ -961,3 +961,68 @@ async fn the_word_count_claude_code_wrote_passes_its_checks() {
     assert_eq!(report["stamped"], true, "{report}");
     session.service.cancel().await.expect("close the session");
 }
+
+fn fixture(program: &str, name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(program)
+        .join(name);
+    std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+}
+
+#[tokio::test]
+async fn long_text_is_proven_up_to_the_bound() {
+    if std::process::Command::new("z3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("z3 isn't installed");
+        return;
+    }
+    let session = session().await;
+    let program = Program::new();
+    let spec = fixture("cat", "spec.md");
+    program.write("spec.md", &spec);
+    session.record(&program).await;
+    let label = common::label(&spec);
+    for name in ["tests.toml", "main.s"] {
+        program.write(name, &fixture("cat", name).replacen("{label}", &label, 1));
+    }
+    let tests = session.call_ok("check_tests", program.arguments()).await;
+    assert_eq!(tests["checked"], true, "{tests}");
+    let report = session.call_ok("check_code", program.arguments()).await;
+    assert_eq!(report["stamped"], true, "{report}");
+    let proof = session.call_ok("prove", program.arguments()).await;
+    let only = &proof["proofs"][0];
+    // Texts run to 5000 bytes, and the proof covers them to 4096: not every input in range.
+    assert_eq!(only["proven"], false, "{proof}");
+    assert_eq!(only["proven_up_to"], 4096, "{proof}");
+    let detail = only["detail"].as_str().unwrap_or_default();
+    assert!(
+        detail.starts_with("proven for every input with text up to 4096 bytes (")
+            && detail.ends_with(
+                "; longer texts are tested, not proven: a proof covers texts up to 4096 bytes"
+            ),
+        "{detail}"
+    );
+    assert_eq!(
+        proof["message"],
+        "Proven for every input with texts up to a length, and tested beyond it: generated B1 \
+         (up to 4096 bytes). lengua.lock records it.",
+        "{proof}"
+    );
+    // The lock records it apart from full proofs, and status shows it.
+    let status = session.call_ok("status", program.arguments()).await;
+    assert_eq!(
+        status["program"]["proven"],
+        serde_json::json!([]),
+        "{status}"
+    );
+    assert_eq!(
+        status["program"]["proven_up_to"],
+        serde_json::json!(["B1: up to 4096 bytes"]),
+        "{status}"
+    );
+    session.service.cancel().await.expect("close the session");
+}

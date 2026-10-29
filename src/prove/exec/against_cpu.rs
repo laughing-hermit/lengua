@@ -351,7 +351,199 @@ fn probes(rng: &mut ChaCha8Rng) -> Vec<Probe> {
     )));
     list.push(one(format!("mov {}, rsp", register(rng, 64))));
     list.push(one("add rsp, 16".to_owned()));
+    bit_probes(rng, &mut list);
     list
+}
+
+/// Two instructions, then a third that reads a condition: a flag-setting comparison first shows
+/// whether the middle one leaves the comparison's shortcut behind.
+fn after_compare(rng: &mut ChaCha8Rng, middle: String) -> Probe {
+    let (a, b) = (register(rng, 64), register(rng, 64));
+    let condition = CONDITIONS[rng.random_range(0..CONDITIONS.len())];
+    Probe {
+        code: vec![
+            format!("cmp {a}, {b}"),
+            middle,
+            format!("set{condition} {}", register(rng, 8)),
+        ],
+        values: Values::Any,
+    }
+}
+
+/// A mask for pdep and pext: random bits, or an edge.
+fn mask(rng: &mut ChaCha8Rng, width: u32) -> i64 {
+    let all = if width == 64 { u64::MAX } else { 0xffff_ffff };
+    let bits = match rng.random_range(0..6) {
+        0 => 0,
+        1 => all,
+        2 => 0x0f0f_0f0f_0f0f_0f0f,
+        3 => 0x8000_0000_0000_0001,
+        _ => rng.random(),
+    } & all;
+    // As the assembler reads a 32-bit immediate: one that fits a signed int.
+    if width == 32 {
+        i64::from(bits as u32 as i32)
+    } else {
+        bits as i64
+    }
+}
+
+/// The bit instructions: counts, BMI1 and BMI2, bit tests, double shifts, movbe and the carry
+/// flag's own.
+fn bit_probes(rng: &mut ChaCha8Rng, list: &mut Vec<Probe>) {
+    for width in [16_u32, 32, 64] {
+        for op in ["popcnt", "lzcnt", "tzcnt", "bsf", "bsr"] {
+            for _ in 0..2 {
+                let (a, b) = (register(rng, width), register(rng, width));
+                list.push(one(format!("{op} {a}, {b}")));
+            }
+            list.push(one(format!(
+                "{op} {}, {}",
+                register(rng, width),
+                memory(width)
+            )));
+            // A source of zero, the case each treats on its own.
+            let a = register(rng, width);
+            list.push(Probe {
+                code: vec![
+                    format!("xor {a}, {a}"),
+                    format!("{op} {}, {a}", register(rng, width)),
+                ],
+                values: Values::Any,
+            });
+            let (a, b) = (register(rng, width), register(rng, width));
+            list.push(after_compare(rng, format!("{op} {a}, {b}")));
+        }
+        for op in ["bt", "bts", "btr", "btc"] {
+            let (a, b) = (register(rng, width), register(rng, width));
+            list.push(one(format!("{op} {a}, {b}")));
+            list.push(one(format!("{op} {a}, {}", rng.random_range(0..256))));
+            list.push(one(format!(
+                "{op} {}, {}",
+                memory(width),
+                rng.random_range(0..256)
+            )));
+            // A register's offset reaches past a memory operand: kept to the cell here.
+            let offset = register(rng, width);
+            list.push(Probe {
+                code: vec![
+                    format!("and {offset}, 63"),
+                    format!("{op} {}, {offset}", memory(width)),
+                ],
+                values: Values::Any,
+            });
+            list.push(after_compare(rng, format!("{op} {a}, {b}")));
+        }
+        for op in ["shld", "shrd"] {
+            let (a, b) = (register(rng, width), register(rng, width));
+            list.push(one(format!(
+                "{op} {a}, {b}, {}",
+                rng.random_range(0..2 * width)
+            )));
+            list.push(one(format!("{op} {a}, {b}, 1")));
+            list.push(one(format!("{op} {a}, {b}, cl")));
+            list.push(one(format!(
+                "{op} {}, {b}, {}",
+                memory(width),
+                rng.random_range(0..width)
+            )));
+        }
+        let a = register(rng, width);
+        list.push(one(format!("movbe {a}, {}", memory(width))));
+        list.push(one(format!("movbe {}, {a}", memory(width))));
+    }
+    for width in [32_u32, 64] {
+        for op in ["andn", "bzhi", "shlx", "shrx", "sarx", "bextr", "mulx"] {
+            for _ in 0..2 {
+                let (a, b, c) = (
+                    register(rng, width),
+                    register(rng, width),
+                    register(rng, width),
+                );
+                list.push(one(format!("{op} {a}, {b}, {c}")));
+            }
+            let (a, b) = (register(rng, width), register(rng, width));
+            list.push(one(if matches!(op, "andn" | "mulx") {
+                format!("{op} {a}, {b}, {}", memory(width))
+            } else {
+                format!("{op} {a}, {}, {b}", memory(width))
+            }));
+        }
+        // An index or a start and length in range, which random values rarely are.
+        for op in ["bzhi", "bextr"] {
+            let control = register(rng, width);
+            let value = match op {
+                "bzhi" => rng.random_range(0..width + 8),
+                _ => rng.random_range(0..width + 8) | rng.random_range(0..width + 8) << 8,
+            };
+            let (a, b) = (register(rng, width), register(rng, width));
+            list.push(Probe {
+                code: vec![
+                    format!("mov {control}, {value}"),
+                    format!("{op} {a}, {b}, {control}"),
+                ],
+                values: Values::Any,
+            });
+        }
+        for op in ["blsr", "blsi", "blsmsk"] {
+            for _ in 0..2 {
+                let (a, b) = (register(rng, width), register(rng, width));
+                list.push(one(format!("{op} {a}, {b}")));
+            }
+            list.push(one(format!(
+                "{op} {}, {}",
+                register(rng, width),
+                memory(width)
+            )));
+        }
+        for _ in 0..2 {
+            let (a, b) = (register(rng, width), register(rng, width));
+            list.push(one(format!("rorx {a}, {b}, {}", rng.random_range(0..256))));
+        }
+        list.push(one(format!(
+            "rorx {}, {}, {}",
+            register(rng, width),
+            memory(width),
+            rng.random_range(0..256)
+        )));
+        for op in ["pdep", "pext"] {
+            for _ in 0..3 {
+                let held = register(rng, width);
+                let load = if width == 64 { "movabs" } else { "mov" };
+                let (a, b) = (register(rng, width), register(rng, width));
+                list.push(Probe {
+                    code: vec![
+                        format!("{load} {held}, {}", mask(rng, width)),
+                        format!("{op} {a}, {b}, {held}"),
+                    ],
+                    values: Values::Any,
+                });
+            }
+        }
+        for op in ["adcx", "adox"] {
+            let (a, b) = (register(rng, width), register(rng, width));
+            list.push(one(format!("{op} {a}, {b}")));
+            list.push(one(format!("{op} {a}, {}", memory(width))));
+            list.push(after_compare(rng, format!("{op} {a}, {b}")));
+        }
+    }
+    // After andn every condition reads as after `and`.
+    for condition in CONDITIONS {
+        let (a, b, c) = (register(rng, 64), register(rng, 64), register(rng, 64));
+        list.push(Probe {
+            code: vec![
+                format!("andn {a}, {b}, {c}"),
+                format!("set{condition} {}", register(rng, 8)),
+            ],
+            values: Values::Any,
+        });
+    }
+    for op in ["stc", "clc", "cmc"] {
+        list.push(one(op.to_owned()));
+        for _ in 0..3 {
+            list.push(after_compare(rng, op.to_owned()));
+        }
+    }
 }
 
 /// The harness: reads vectors from standard input, runs each one's probe with its registers,
@@ -646,10 +838,11 @@ async fn build(source: &str, folder: &std::path::Path) -> (std::path::PathBuf, M
 }
 
 /// The values `term` can take: one when it's known, and every value the flags the CPU leaves
-/// undefined allow when it depends on them. Anything else it depends on is a mistake.
-fn possible(pool: &Pool, term: crate::prove::term::Term) -> Result<Vec<u128>, String> {
+/// undefined allow when it depends on them; `None` when it depends on a value the CPU leaves
+/// undefined, so it may be anything. Anything else it depends on is a mistake.
+fn possible(pool: &Pool, term: crate::prove::term::Term) -> Result<Option<Vec<u128>>, String> {
     if let Some(value) = pool.constant(term) {
-        return Ok(vec![value]);
+        return Ok(Some(vec![value]));
     }
     let variables = pool.variables(&[term]);
     let names: Vec<String> = variables
@@ -658,6 +851,9 @@ fn possible(pool: &Pool, term: crate::prove::term::Term) -> Result<Vec<u128>, St
         .collect();
     if let Some(other) = names.iter().find(|name| !name.starts_with("undefined")) {
         return Err(format!("depends on {other}"));
+    }
+    if variables.iter().any(|variable| pool.width(*variable) > 0) {
+        return Ok(None);
     }
     if names.len() > 6 {
         return Err("depends on too many undefined flags".into());
@@ -674,14 +870,20 @@ fn possible(pool: &Pool, term: crate::prove::term::Term) -> Result<Vec<u128>, St
             values.push(value);
         }
     }
-    Ok(values)
+    Ok(Some(values))
 }
 
-/// Where the model ends: the values each register, flag and the memory cell can take.
+/// Whether the CPU's `value` is one the model allows.
+fn allows(allowed: Option<&Vec<u128>>, value: u128) -> bool {
+    allowed.is_none_or(|values| values.contains(&value))
+}
+
+/// Where the model ends: the values each register, flag and the memory cell can take, `None`
+/// for any.
 struct Ended {
-    registers: Vec<Vec<u128>>,
-    flags: Vec<Vec<u128>>,
-    cell: Vec<u128>,
+    registers: Vec<Option<Vec<u128>>>,
+    flags: Vec<Option<Vec<u128>>>,
+    cell: Option<Vec<u128>>,
 }
 
 /// Runs `probe` in the model on one vector's values; an error when it doesn't run it through.
@@ -832,7 +1034,7 @@ async fn every_instruction_matches_this_cpu() {
         };
         for (slot, values) in ended.registers.iter().enumerate() {
             let expected = word(real, slot);
-            if !values.contains(&u128::from(expected)) {
+            if !allows(values.as_ref(), u128::from(expected)) {
                 problems.push(format!(
                     "{}: {} is {values:x?}, the CPU says {expected:#x}",
                     describe(),
@@ -843,14 +1045,14 @@ async fn every_instruction_matches_this_cpu() {
         let real_flags = word(real, 16);
         for ((mask, name), values) in FLAGS.iter().zip(&ended.flags) {
             let expected = u128::from(real_flags & mask != 0);
-            if !values.contains(&expected) {
+            if !allows(values.as_ref(), expected) {
                 problems.push(format!(
                     "{}: {name} is {values:?}, the CPU says {expected}",
                     describe()
                 ));
             }
         }
-        if !ended.cell.contains(&u128::from(word(real, 17))) {
+        if !allows(ended.cell.as_ref(), u128::from(word(real, 17))) {
             problems.push(format!(
                 "{}: the cell holds {:x?}, the CPU says {:#x}",
                 describe(),
