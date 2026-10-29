@@ -44,6 +44,8 @@ the tests come before the code, and they decide whether the code is right.
   For a server: `client = [{ sends = "hello\n", receives = "hello\n" }]`, plus
   `serves = true` and no `exit_code` when the spec says it keeps serving. The server reads
   exactly `receives`; the client reads all the program answers until it closes the connection.
+  Draw messages that keep their shape: a header line drawn as text can come out empty and end
+  the headers early, so start it with fixed text, such as `"X-{name}: {value}\r\n"`.
 - **Output the program chooses** without the test supplying it is a rule: in the example,
   `stdout = { matches = "rolled {any(1, 6)}\n" }`, and in the generated block,
   `stdout = "rolled {any(1, 6)}\n"`. `now` is when the run starts in Unix seconds, and only

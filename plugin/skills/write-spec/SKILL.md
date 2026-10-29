@@ -99,7 +99,9 @@ of the same rule.
 - **Network:** plain TCP, on ports the spec names. A program that opens connections says
   `- Network: connects to TCP port 8080` (or `ports 80 and 8080`) and allows socket and connect;
   the address and port it reaches come from its arguments or input, as numbers (`127.0.0.1`),
-  since lengua programs don't look up names. A server says `- Network: listens on TCP port 8080`
+  since lengua programs don't look up names. Don't have the program refuse other ports itself:
+  the kernel holds it to the spec's ports when it runs, and its tests talk over a free port of
+  their own, so a program that checks for 8080 can't be tested. A server says `- Network: listens on TCP port 8080`
   and allows accept4 and sendto: lengua listens on that port of this computer and hands the
   program the socket as file descriptor 3; it answers with sendto, so a client that hangs up early
   can't stop it (with write, the kernel would end it with SIGPIPE); and its behaviors may end
