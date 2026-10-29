@@ -715,3 +715,122 @@ async fn servers_take_connections_on_descriptor_3() {
     assert!(started.port().is_some());
     assert_eq!(started.stop().await.expect("stop").end, End::Stopped);
 }
+
+/// Runs the template's tests, with `edit` applied to them, `workers` at a time.
+async fn template_tests(edit: impl Fn(&str) -> String, workers: usize) -> lengua::testrun::Outcome {
+    let assets =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugin/skills/write-assembly/assets");
+    let read = |name: &str| std::fs::read_to_string(assets.join(name)).expect("an asset");
+    let spec = lengua::spec::parse(&read("template-spec.md")).expect("the template's spec");
+    let label = lengua::hash::Sha256Hex::of(read("template-spec.md").as_bytes()).label();
+    let suite = lengua::testfile::check(&edit(&read("template-tests.toml")), &spec, &label)
+        .expect("the tests check");
+    let (source, _) = lengua::checker::source::parse(&read("main-template.s"));
+    let folder = tempfile::tempdir().expect("a folder");
+    let executable = template(folder.path()).await;
+    let syscalls = Profile::LinuxX86_64.allowed_syscalls(&spec.syscalls, false);
+    lengua::testrun::run_tests(
+        &suite,
+        launcher(),
+        &executable,
+        &source,
+        7,
+        &syscalls,
+        &spec.network,
+        workers,
+    )
+    .await
+    .expect("the tests run")
+}
+
+#[tokio::test]
+async fn runs_at_once_report_what_runs_one_at_a_time_do() {
+    // Passing tests: the same runs, and each test timed alone on its largest input.
+    let alone = template_tests(str::to_owned, 1).await;
+    let together = template_tests(str::to_owned, 8).await;
+    assert!(
+        alone.passed() && together.passed(),
+        "{alone:?} {together:?}"
+    );
+    assert_eq!(alone.runs, 3 + 200 + 50);
+    assert_eq!(together.runs, alone.runs);
+    let shape = |outcome: &lengua::testrun::Outcome| -> Vec<(String, usize, String)> {
+        outcome
+            .costs
+            .iter()
+            .map(|cost| (cost.test.clone(), cost.runs, cost.timed.clone()))
+            .collect()
+    };
+    assert_eq!(shape(&together), shape(&alone));
+    assert!(
+        together.costs[3].timed.starts_with("its largest input, "),
+        "{:?}",
+        together.costs[3]
+    );
+    assert!(together.costs[3].timed.ends_with("run alone 5 times"));
+
+    // A wrong formula for large numbers and a wrong example: the same failures, in the same
+    // order, naming the block's first failing run.
+    let wrong = |text: &str| {
+        text.replace(
+            "stderr = \"usage: negate <n>\\n\"",
+            "stderr = \"usage: negate <n>\\n\\n\"",
+        )
+        .replace(
+            "stdout = \"{-n}\\n\"",
+            "stdout = \"{if(n > 1000, n, -n)}\\n\"",
+        )
+    };
+    let alone = template_tests(wrong, 1).await;
+    let together = template_tests(wrong, 8).await;
+    assert_eq!(alone.failures.len(), 2, "{:?}", alone.failures);
+    assert_eq!(together.failures, alone.failures);
+    assert!(
+        alone.failures[0].starts_with("example B2"),
+        "{:?}",
+        alone.failures
+    );
+    assert!(
+        alone.failures[1].contains("(seed 7)"),
+        "{:?}",
+        alone.failures
+    );
+    assert!(together.costs.is_empty(), "{:?}", together.costs);
+}
+
+/// How much sooner `examples/count`'s 924 runs finish with every core: run with
+/// `cargo test --release --test runner -- --ignored --nocapture speedup`.
+#[tokio::test]
+#[ignore = "a measurement, not a check"]
+async fn speedup_of_runs_at_once_on_the_word_count() {
+    let example = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/count");
+    let read = |name: &str| std::fs::read_to_string(example.join(name)).expect("the example");
+    let spec = lengua::spec::parse(&read("spec.md")).expect("the spec");
+    let label = lengua::hash::Sha256Hex::of(read("spec.md").as_bytes()).label();
+    let suite = lengua::testfile::check(&read("tests.toml"), &spec, &label).expect("the tests");
+    let (source, _) = lengua::checker::source::parse(&read("main.s"));
+    let folder = tempfile::tempdir().expect("a folder");
+    let executable = build(folder.path(), "count", &read("main.s")).await;
+    let syscalls = Profile::LinuxX86_64.allowed_syscalls(&spec.syscalls, false);
+    for workers in [1, lengua::testrun::workers(None)] {
+        let began = Instant::now();
+        let outcome = lengua::testrun::run_tests(
+            &suite,
+            launcher(),
+            &executable,
+            &source,
+            7,
+            &syscalls,
+            &spec.network,
+            workers,
+        )
+        .await
+        .expect("the tests run");
+        assert!(outcome.passed(), "{:?}", outcome.failures);
+        println!(
+            "{workers} at once: {} runs in {:.2} s",
+            outcome.runs,
+            began.elapsed().as_secs_f64()
+        );
+    }
+}

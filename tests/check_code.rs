@@ -64,7 +64,16 @@ async fn the_template_passes_its_tests_and_is_stamped() {
         "3 examples and 2 generated blocks: {report}"
     );
     assert_eq!(costs[0]["test"], "example B1", "{report}");
+    assert_eq!(
+        costs[0]["timed"], "its input, run alone 5 times",
+        "{report}"
+    );
     assert_eq!(costs[3]["runs"], 200, "{report}");
+    // The times come from the block's largest input, run alone: the minus sign and 19 digits.
+    assert_eq!(
+        costs[3]["timed"], "its largest input, 20 bytes, run alone 5 times",
+        "{report}"
+    );
     for measure in ["instructions", "cycles", "cpu_time_us"] {
         let spread = &costs[3][measure];
         if !spread.is_null() {

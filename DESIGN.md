@@ -162,7 +162,14 @@ its system calls (fewer instructions isn't always faster: a program that writes 
 can execute fewer instructions yet spend far more time in the kernel).
 
 `check_code` draws a new seed on every call, runs boundary values first, and reports the seed and
-inputs with any failure, down to the line of a failed assertion. Only when the rules and every
+inputs with any failure, down to the line of a failed assertion. Runs go as many at once as the
+machine has cores (fewer for a program that starts threads), and each draws its own inputs from
+its own stream of the seed and computes what it should produce as it starts, so that work is
+spread over the cores too; the failures reported are the ones running the tests one at a time
+would give, each block's lowest-numbered failing run. On the 924 runs of `examples/count`, that
+takes 0.74 s instead of 4.2 s. Instruction counts come from every run, since other runs don't
+change them; once every test passes, each test's largest input runs again alone five times for
+its cycles, CPU time and wall time, which other runs would disturb. Only when the rules and every
 test pass does it stamp `[code]`, including the executable's SHA-256 and the toolchain versions.
 `run` rebuilds `main.s` and runs it only if the build is byte for byte that executable.
 

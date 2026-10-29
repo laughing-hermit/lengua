@@ -1,11 +1,13 @@
 //! Runs a program's tests: every example, then every generated block with fresh inputs from a
-//! new seed, boundary values first. Failures say what was expected and what happened, down to
-//! the line of a failed assertion.
+//! new seed, boundary values first, as many at once as the machine has cores. Failures say what
+//! was expected and what happened, down to the line of a failed assertion. Once everything
+//! passes, each test's largest input runs again alone, for times the other runs can't disturb.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tokio::io::AsyncWriteExt as _;
@@ -17,7 +19,7 @@ use crate::platform::Allowed;
 use crate::runner::{self, End, Job, Limits, Net, Run};
 use crate::spec::ASSERTION_EXIT_CODE;
 use crate::spec::Network;
-use crate::testfile::{Exchange, PORT_TEXT, Reply};
+use crate::testfile::{Case, Example, Exchange, PORT_TEXT, Reply};
 use crate::testfile::{TestSuite, describe_inputs};
 
 /// The longest a program's tests may take together.
@@ -25,6 +27,18 @@ pub const TOTAL_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// At most this many failures are reported.
 pub const MAX_FAILURES: usize = 10;
+
+/// How many times each test's largest input runs alone for its times.
+pub const TIMED_RUNS: usize = 5;
+
+/// How many runs go at once for a program that may start `threads` threads: as many as keep
+/// every core busy, and at least one.
+#[must_use]
+pub fn workers(threads: Option<u32>) -> usize {
+    let cores = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    let each = threads.map_or(1, |threads| usize::try_from(threads).unwrap_or(1).max(1));
+    (cores / each).max(1)
+}
 
 /// The smallest, middle and largest of a measurement over runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
@@ -54,10 +68,14 @@ impl Spread {
 pub struct Cost {
     /// The test, such as `example B1` or `generated B1`.
     pub test: String,
-    /// Runs measured.
+    /// Runs made, with other tests running at the same time.
     pub runs: usize,
-    /// Instructions executed in the program's own code: the steadiest measure of its work.
+    /// Instructions executed in the program's own code over those runs: the steadiest measure of
+    /// its work, which other runs don't change.
     pub instructions: Option<Spread>,
+    /// What the times below measured, such as "its largest input, 1048576 bytes, run alone 5
+    /// times".
+    pub timed: String,
     /// CPU cycles in the program's own code: its time, with slow instructions such as division
     /// weighing more.
     pub cycles: Option<Spread>,
@@ -89,14 +107,16 @@ impl Samples {
         self.wall_time_us.push(run.wall_time_ns / 1000);
     }
 
-    fn cost(self, test: String) -> Cost {
+    /// The cost of a test: instructions from every run, times from the runs made alone.
+    fn cost(self, test: String, timed: Self, what: &str) -> Cost {
         Cost {
             test,
             runs: self.runs,
             instructions: Spread::of(self.instructions),
-            cycles: Spread::of(self.cycles),
-            cpu_time_us: Spread::of(self.cpu_time_us),
-            wall_time_us: Spread::of(self.wall_time_us),
+            timed: format!("{what}, run alone {} times", timed.runs),
+            cycles: Spread::of(timed.cycles),
+            cpu_time_us: Spread::of(timed.cpu_time_us),
+            wall_time_us: Spread::of(timed.wall_time_us),
         }
     }
 }
@@ -695,12 +715,88 @@ fn record(outcome: &mut Outcome, message: String) {
     }
 }
 
-/// Runs every test of `suite` against `program`, drawing generated inputs from `seed`. The
-/// kernel lets the program make only the system calls in `syscalls`.
+/// What every run of a check shares.
+struct Shared {
+    launcher: PathBuf,
+    program: PathBuf,
+    syscalls: Vec<Allowed>,
+    network: Network,
+    assertions: BTreeMap<i64, usize>,
+}
+
+/// A test a run owns, so runs can go at once.
+enum Owned {
+    Example(Example),
+    Case(Case),
+}
+
+impl Owned {
+    fn test(&self) -> Test<'_> {
+        match self {
+            Self::Example(example) => Test::of_example(example),
+            Self::Case(case) => Test::of_case(case),
+        }
+    }
+}
+
+async fn run_one(shared: &Shared, test: &Owned, pieces: bool) -> io::Result<(Run, Option<String>)> {
+    check_one(
+        &shared.launcher,
+        &shared.program,
+        &test.test(),
+        &shared.syscalls,
+        &shared.network,
+        pieces,
+        &shared.assertions,
+    )
+    .await
+}
+
+/// The bytes a case gives the program: arguments, standard input, files and what the test's
+/// own server or client sends.
+fn input_bytes(case: &Case) -> usize {
+    case.args.iter().map(String::len).sum::<usize>()
+        + case.stdin.len()
+        + case.files.values().map(String::len).sum::<usize>()
+        + case
+            .server
+            .iter()
+            .map(|reply| reply.replies.len())
+            .sum::<usize>()
+        + case
+            .client
+            .iter()
+            .map(|exchange| exchange.sends.len())
+            .sum::<usize>()
+}
+
+/// What a generated run came to: inputs whose results can't be computed, or a run.
+enum Drawn {
+    Unfit((crate::expr::Env, &'static str, crate::expr::EvalError)),
+    Ran(Box<(Owned, Run, Option<String>)>),
+}
+
+/// A test whose times are taken once everything has passed.
+struct Timing {
+    name: String,
+    test: Owned,
+    what: String,
+    samples: Samples,
+}
+
+fn timed_out() -> String {
+    format!("the tests took longer than {TOTAL_TIMEOUT:?}")
+}
+
+/// Runs every test of `suite` against `program`, drawing generated inputs from `seed`, up to
+/// `workers` runs at once. The kernel lets the program make only the system calls in
+/// `syscalls`. The failures reported are the ones running the tests one at a time would give:
+/// every failing example, and each block's lowest-numbered failing run.
 ///
 /// # Errors
 ///
 /// Fails when the program can't be started at all.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_tests(
     suite: &TestSuite,
     launcher: &Path,
@@ -709,28 +805,48 @@ pub async fn run_tests(
     seed: u64,
     syscalls: &[Allowed],
     network: &Network,
+    workers: usize,
 ) -> io::Result<Outcome> {
-    let assertions = assertion_lines(source);
+    let shared = Arc::new(Shared {
+        launcher: launcher.to_owned(),
+        program: program.to_owned(),
+        syscalls: syscalls.to_vec(),
+        network: network.clone(),
+        assertions: assertion_lines(source),
+    });
+    let workers = workers.max(1);
     let deadline = Instant::now() + TOTAL_TIMEOUT;
     let mut outcome = Outcome::default();
-    for example in &suite.examples {
-        if Instant::now() > deadline {
-            record(
-                &mut outcome,
-                format!("the tests took longer than {TOTAL_TIMEOUT:?}"),
-            );
-            return Ok(outcome);
+    let mut timings = Vec::new();
+
+    // Every example, at once.
+    let mut running = tokio::task::JoinSet::new();
+    let mut results = BTreeMap::new();
+    let mut next = 0;
+    while next < suite.examples.len() || !running.is_empty() {
+        while running.len() < workers && next < suite.examples.len() {
+            if Instant::now() > deadline {
+                record(&mut outcome, timed_out());
+                return Ok(outcome);
+            }
+            let test = Owned::Example(suite.examples[next].clone());
+            let shared = Arc::clone(&shared);
+            let index = next;
+            running.spawn(async move {
+                let result = run_one(&shared, &test, false).await;
+                (index, test, result)
+            });
+            next += 1;
         }
-        let (run, problem) = check_one(
-            launcher,
-            program,
-            &Test::of_example(example),
-            syscalls,
-            network,
-            false,
-            &assertions,
-        )
-        .await?;
+        if let Some(joined) = running.join_next().await {
+            let (index, test, result) = joined.map_err(io::Error::other)?;
+            results.insert(index, (test, result?));
+        }
+    }
+    for (index, example) in suite.examples.iter().enumerate() {
+        let Some((test, (run, problem))) = results.remove(&index) else {
+            continue;
+        };
         outcome.runs += 1;
         let name = format!("example {}", example.id);
         match problem {
@@ -744,70 +860,134 @@ pub async fn run_tests(
             None => {
                 let mut samples = Samples::default();
                 samples.add(&run);
-                outcome.costs.push(samples.cost(name));
+                timings.push(Timing {
+                    name,
+                    test,
+                    what: "its input".to_owned(),
+                    samples,
+                });
             }
         }
     }
+
+    // Each generated block's runs, at once: each run draws its own inputs from the seed and
+    // computes what it should produce as it starts, so `now` is fresh and that work is spread
+    // over the cores too. Once run k fails, no later run starts, and the earlier ones finish, so
+    // the failure reported is the block's lowest-numbered one.
     for block in &suite.generated {
         let name = format!("generated {}", block.id);
         let total = block.run_count();
+        let shared_block = Arc::new(block.clone());
         let mut samples = Samples::default();
-        let mut failed = false;
-        for (number, case) in block.cases(seed).enumerate() {
-            let case = match case {
-                Ok(case) => case,
-                Err((inputs, field, error)) => {
-                    record(
-                        &mut outcome,
-                        format!(
-                            "{name} (tests.toml line {}, seed {seed}): with {}, the expected \
-                             {field} {error}",
+        let mut failure: Option<(usize, String)> = None;
+        let mut largest: Option<(usize, Case)> = None;
+        let mut running = tokio::task::JoinSet::new();
+        let mut number = 0;
+        loop {
+            while running.len() < workers && number < total && failure.is_none() {
+                if Instant::now() > deadline {
+                    record(&mut outcome, timed_out());
+                    return Ok(outcome);
+                }
+                let shared = Arc::clone(&shared);
+                let block = Arc::clone(&shared_block);
+                let this = number;
+                running.spawn(async move {
+                    let drawn = tokio::task::spawn_blocking(move || {
+                        let inputs = block.inputs(seed).at(this);
+                        block.case(inputs, crate::expect::now())
+                    })
+                    .await
+                    .map_err(io::Error::other)?;
+                    let case = match drawn {
+                        Ok(case) => case,
+                        Err(unfit) => return Ok((this, Drawn::Unfit(unfit))),
+                    };
+                    let test = Owned::Case(case);
+                    // Every other run, the test's server and client send in pieces.
+                    let (run, problem) = run_one(&shared, &test, this % 2 == 1).await?;
+                    Ok::<_, io::Error>((this, Drawn::Ran(Box::new((test, run, problem)))))
+                });
+                number += 1;
+            }
+            let Some(joined) = running.join_next().await else {
+                break;
+            };
+            let (this, drawn) = joined.map_err(io::Error::other)??;
+            let message = match drawn {
+                Drawn::Unfit((inputs, field, error)) => Some(format!(
+                    "{name} (tests.toml line {}, seed {seed}): with {}, the expected {field} \
+                     {error}",
+                    block.line,
+                    describe_inputs(&inputs)
+                )),
+                Drawn::Ran(ran) => {
+                    let (Owned::Case(case), run, problem) = *ran else {
+                        continue;
+                    };
+                    outcome.runs += 1;
+                    match problem {
+                        Some(problem) => Some(format!(
+                            "{name} (tests.toml line {}), run {} of {total} (seed {seed}): with \
+                             {}: {problem}",
                             block.line,
-                            describe_inputs(&inputs)
-                        ),
-                    );
-                    failed = true;
-                    break;
+                            this + 1,
+                            describe_inputs(&case.inputs)
+                        )),
+                        None => {
+                            samples.add(&run);
+                            let size = input_bytes(&case);
+                            if largest.as_ref().is_none_or(|(most, _)| size > *most) {
+                                largest = Some((size, case));
+                            }
+                            None
+                        }
+                    }
                 }
             };
-            if Instant::now() > deadline {
-                record(
-                    &mut outcome,
-                    format!("the tests took longer than {TOTAL_TIMEOUT:?}"),
-                );
-                return Ok(outcome);
+            if let Some(message) = message
+                && failure.as_ref().is_none_or(|(first, _)| this < *first)
+            {
+                failure = Some((this, message));
             }
-            // Every other run, the test's server and client send in pieces.
-            let (run, problem) = check_one(
-                launcher,
-                program,
-                &Test::of_case(&case),
-                syscalls,
-                network,
-                number % 2 == 1,
-                &assertions,
-            )
-            .await?;
-            outcome.runs += 1;
+        }
+        match (failure, largest) {
+            (Some((_, message)), _) => record(&mut outcome, message),
+            (None, Some((size, case))) => timings.push(Timing {
+                name,
+                test: Owned::Case(case),
+                what: format!("its largest input, {size} bytes"),
+                samples,
+            }),
+            (None, None) => {}
+        }
+    }
+    if !outcome.passed() {
+        return Ok(outcome);
+    }
+
+    // Times from runs made alone, which nothing else disturbs.
+    for timing in timings {
+        let mut timed = Samples::default();
+        for _ in 0..TIMED_RUNS {
+            let (run, problem) = run_one(&shared, &timing.test, false).await?;
             if let Some(problem) = problem {
                 record(
                     &mut outcome,
                     format!(
-                        "{name} (tests.toml line {}), run {} of {total} (seed {seed}): with {}: \
-                         {problem}",
-                        block.line,
-                        number + 1,
-                        describe_inputs(&case.inputs)
+                        "{} passed with the other tests running, but failed run again alone on \
+                         {}: {problem}",
+                        timing.name, timing.what
                     ),
                 );
-                failed = true;
-                break;
+                outcome.costs.clear();
+                return Ok(outcome);
             }
-            samples.add(&run);
+            timed.add(&run);
         }
-        if !failed {
-            outcome.costs.push(samples.cost(name));
-        }
+        outcome
+            .costs
+            .push(timing.samples.cost(timing.name, timed, &timing.what));
     }
     Ok(outcome)
 }
@@ -997,9 +1177,17 @@ mod tests {
             instructions: None,
             ..finished("", "", 0)
         });
-        let cost = samples.cost("generated B1".into());
+        let mut timed = Samples::default();
+        timed.add(&Run {
+            cycles: Some(250),
+            ..finished("", "", 0)
+        });
+        let cost = samples.cost("generated B1".into(), timed, "its largest input, 3 bytes");
         assert_eq!(cost.runs, 2);
         assert_eq!(cost.instructions.map(|spread| spread.median), Some(100));
+        // Times come from the runs made alone.
+        assert_eq!(cost.cycles.map(|spread| spread.max), Some(250));
         assert_eq!(cost.cpu_time_us.map(|spread| spread.max), Some(1));
+        assert_eq!(cost.timed, "its largest input, 3 bytes, run alone 1 times");
     }
 }

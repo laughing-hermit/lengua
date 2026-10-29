@@ -2321,7 +2321,9 @@ pub fn combinations(vars: &[(String, Generator)]) -> Option<u128> {
 
 /// Every run's variable values: boundary values first (every combination when there are at most
 /// 64, otherwise each boundary value once), then values drawn from a ChaCha8 generator seeded with
-/// `seed`. Runs are made one at a time, so long strings don't pile up in memory.
+/// `seed`, each run from a stream of its own, so any run's values can be made on their own and
+/// runs can be drawn at once. Runs are made one at a time, so long strings don't pile up in
+/// memory.
 pub fn cases(vars: &[(String, Generator)], runs: usize, seed: u64) -> Cases<'_> {
     let boundaries: Vec<Vec<Value>> = vars
         .iter()
@@ -2340,7 +2342,7 @@ pub fn cases(vars: &[(String, Generator)], runs: usize, seed: u64) -> Cases<'_> 
             boundaries,
             boundary_runs: boundary_runs.min(runs),
             every_combination,
-            rng: Box::new(ChaCha8Rng::seed_from_u64(seed)),
+            seed,
         },
         runs,
         index: 0,
@@ -2363,10 +2365,61 @@ enum Mode {
         boundaries: Vec<Vec<Value>>,
         boundary_runs: usize,
         every_combination: bool,
-        rng: Box<ChaCha8Rng>,
+        seed: u64,
     },
     /// Every combination; each variable's domain size.
     Every { sizes: Vec<u128> },
+}
+
+impl Cases<'_> {
+    /// The values of run `index`, below the number of runs, made on their own.
+    #[must_use]
+    pub fn at(&self, index: usize) -> Env {
+        match &self.mode {
+            Mode::Every { sizes } => {
+                let mut rest = index as u128;
+                self.vars
+                    .iter()
+                    .zip(sizes.iter())
+                    .map(|((name, generator), size)| {
+                        let value = generator.nth(rest % size);
+                        rest /= size;
+                        (name.clone(), value)
+                    })
+                    .collect()
+            }
+            Mode::Sampled {
+                boundaries,
+                boundary_runs,
+                every_combination,
+                ..
+            } if index < *boundary_runs => {
+                let mut rest = index;
+                self.vars
+                    .iter()
+                    .zip(boundaries.iter())
+                    .map(|((name, _), values)| {
+                        let value = if *every_combination {
+                            let value = values[rest % values.len()].clone();
+                            rest /= values.len();
+                            value
+                        } else {
+                            values[index % values.len()].clone()
+                        };
+                        (name.clone(), value)
+                    })
+                    .collect()
+            }
+            Mode::Sampled { seed, .. } => {
+                let mut rng = ChaCha8Rng::seed_from_u64(*seed);
+                rng.set_stream(index as u64);
+                self.vars
+                    .iter()
+                    .map(|(name, generator)| (name.clone(), generator.sample(&mut rng)))
+                    .collect()
+            }
+        }
+    }
 }
 
 impl Iterator for Cases<'_> {
@@ -2378,53 +2431,7 @@ impl Iterator for Cases<'_> {
         }
         let index = self.index;
         self.index += 1;
-        match &mut self.mode {
-            Mode::Every { sizes } => {
-                let mut rest = index as u128;
-                Some(
-                    self.vars
-                        .iter()
-                        .zip(sizes.iter())
-                        .map(|((name, generator), size)| {
-                            let value = generator.nth(rest % size);
-                            rest /= size;
-                            (name.clone(), value)
-                        })
-                        .collect(),
-                )
-            }
-            Mode::Sampled {
-                boundaries,
-                boundary_runs,
-                every_combination,
-                ..
-            } if index < *boundary_runs => {
-                let mut rest = index;
-                let every_combination = *every_combination;
-                Some(
-                    self.vars
-                        .iter()
-                        .zip(boundaries.iter())
-                        .map(|((name, _), values)| {
-                            let value = if every_combination {
-                                let value = values[rest % values.len()].clone();
-                                rest /= values.len();
-                                value
-                            } else {
-                                values[index % values.len()].clone()
-                            };
-                            (name.clone(), value)
-                        })
-                        .collect(),
-                )
-            }
-            Mode::Sampled { rng, .. } => Some(
-                self.vars
-                    .iter()
-                    .map(|(name, generator)| (name.clone(), generator.sample(rng)))
-                    .collect(),
-            ),
-        }
+        Some(self.at(index))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {

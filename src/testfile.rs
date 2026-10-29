@@ -409,12 +409,19 @@ impl Generated {
         &self,
         seed: u64,
     ) -> impl ExactSizeIterator<Item = Result<Case, (Env, &'static str, EvalError)>> + '_ {
-        let inputs = if self.every_value {
+        self.inputs(seed)
+            .map(|inputs| self.case(inputs, crate::expect::now()))
+    }
+
+    /// Every run's inputs for `seed`, in the order [`Self::cases`] makes them, without their
+    /// expected results, so each can be computed when its run starts.
+    #[must_use]
+    pub fn inputs(&self, seed: u64) -> expr::Cases<'_> {
+        if self.every_value {
             expr::every_case(&self.vars)
         } else {
             expr::cases(&self.vars, self.run_count(), seed)
-        };
-        inputs.map(|inputs| self.case(inputs, crate::expect::now()))
+        }
     }
 
     /// How many runs the block makes: every combination when [`Self::every_value`], otherwise

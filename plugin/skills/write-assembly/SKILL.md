@@ -38,7 +38,7 @@ Nothing runs before every rule passes.
 6. **Make it fast.** lengua aims for programs faster than C, C++ and Rust built with every
    optimization. When the program loops over its input (text, numbers, files, a stream), make one
    pass for speed now that the tests are green, then call `check_code` again: the tests must stay
-   green, and the median `cycles` of the test with the largest input should drop.
+   green, and the `cycles` of the tests with the largest inputs should drop.
    - **Vectors as wide as the CPU allows:** a loop over bytes takes 64 at a time with AVX-512
      when `machine.features` lists it (32 with AVX2), and the last partial vector with a masked
      load (`vmovdqu8 zmm0 {k1}{z}`), never byte by byte. `gcc -O3 -march=native` vectorizes too,
@@ -88,16 +88,16 @@ Nothing runs before every rule passes.
 ## Making it faster
 
 Only when the user asks for a faster program: read `performance` in the `check_code` report. For
-each test it gives the instructions executed (the steadiest measure of work), the CPU cycles in
-the program's own code (its time, where slow instructions such as division weigh more), and the
+each test it gives the instructions executed over all its runs (the steadiest measure of work),
+and, from the test's largest input run alone five times (`timed` says which), the CPU cycles in
+the program's own code (its time, where slow instructions such as division weigh more) and the
 CPU time in microseconds (which also counts the kernel's work for system calls, so many small
 writes show up there; for a short run it's mostly the kernel starting and ending the process).
 Change `main.s` and call `check_code` again: the tests must stay green, and the median cycles and
 CPU time should drop. Every measure varies a little between runs, so compare medians. Starting and
 ending a process costs about 100 microseconds whatever the program does, so speed work shows on
-large inputs: compare cycles on the tests with the longest input (generated tests try the longest
-text first). For a program with threads, the measures cover every thread, and `wall_time_us`
-says how long it took on the clock.
+large inputs: compare cycles on the tests with the largest inputs. For a program with threads,
+the measures cover every thread, and `wall_time_us` says how long it took on the clock.
 
 The biggest win on text and arrays is usually vector instructions: one `pcmpeqb` compares 16 bytes,
 and AVX2 and AVX-512 do 32 and 64. [The vector template](assets/vector-template.s) (with

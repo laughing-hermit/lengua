@@ -824,6 +824,7 @@ impl LenguaServer {
             seed,
             &syscalls,
             &spec.network,
+            testrun::workers(spec.threads),
         )
         .await
         .map_err(|error| format!("couldn't run the program: {error}"))?;
