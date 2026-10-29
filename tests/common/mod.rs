@@ -42,11 +42,8 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
 - Allowed system calls: read, write, exit
 ";
 
-/// Valid tests for the add spec, with `{label}` standing for the spec's label.
-pub const ADD_TESTS: &str = r#"[meta]
-spec = "{label}"
-
-[[example]]
+/// Valid tests for the add spec.
+pub const ADD_TESTS: &str = r#"[[example]]
 id = "B1"
 args = ["2", "3"]
 stdout = "5\n"
@@ -68,16 +65,6 @@ exit_code = 0
 
 /// What a user says to ask for a program.
 pub const REQUEST: &str = "Make me a program that adds two numbers";
-
-/// The label tests and code carry for a spec: `sha256:<hex>`.
-pub fn label(spec: &str) -> String {
-    lengua::hash::Sha256Hex::of(spec.as_bytes()).label()
-}
-
-/// The add tests, labeled for `spec`.
-pub fn add_tests(spec: &str) -> String {
-    ADD_TESTS.replacen("{label}", &label(spec), 1)
-}
 
 /// Which MCP protocol generation the client speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,15 +99,72 @@ pub struct Session {
     pub service: RunningService<RoleClient, TestClient>,
     /// The server's data folder; deleted when the session is dropped.
     pub data_dir: TempDir,
+    protocol: Protocol,
+    proof_seconds: Option<u64>,
+    wait_ms: Option<u64>,
 }
 
 impl Session {
-    /// Starts `lengua-mcp` and connects a client to it using `protocol`.
+    /// Starts `lengua-mcp` and connects a client to it using `protocol`. Its proofs get no time,
+    /// so tests about other things don't share the cores with them.
     pub async fn start(protocol: Protocol) -> Self {
+        Self::start_with(protocol, Some(0), None).await
+    }
+
+    /// Starts `lengua-mcp` with its full time for proofs.
+    pub async fn proving(protocol: Protocol) -> Self {
+        Self::start_with(protocol, None, None).await
+    }
+
+    /// Starts `lengua-mcp` with its full time for proofs and `check` waiting at most
+    /// `milliseconds` for them.
+    pub async fn proving_waiting(protocol: Protocol, milliseconds: u64) -> Self {
+        Self::start_with(protocol, None, Some(milliseconds)).await
+    }
+
+    /// Starts `lengua-mcp` with `check` waiting at most `milliseconds` for the tests and proof.
+    pub async fn start_waiting(protocol: Protocol, milliseconds: u64) -> Self {
+        Self::start_with(protocol, Some(0), Some(milliseconds)).await
+    }
+
+    async fn start_with(
+        protocol: Protocol,
+        proof_seconds: Option<u64>,
+        wait_ms: Option<u64>,
+    ) -> Self {
         let data_dir = tempfile::tempdir().expect("create a temporary data folder");
+        Self::connect(protocol, data_dir, proof_seconds, wait_ms).await
+    }
+
+    /// Ends this server and starts a new one on the same data folder, as when a harness restarts
+    /// it: whatever the old one kept in memory is gone.
+    pub async fn restart(self) -> Self {
+        let Self {
+            service,
+            data_dir,
+            protocol,
+            proof_seconds,
+            wait_ms,
+        } = self;
+        service.cancel().await.expect("close the session");
+        Self::connect(protocol, data_dir, proof_seconds, wait_ms).await
+    }
+
+    async fn connect(
+        protocol: Protocol,
+        data_dir: TempDir,
+        proof_seconds: Option<u64>,
+        wait_ms: Option<u64>,
+    ) -> Self {
         let command =
             tokio::process::Command::new(env!("CARGO_BIN_EXE_lengua-mcp")).configure(|command| {
                 command.arg("--data-dir").arg(data_dir.path());
+                if let Some(seconds) = proof_seconds {
+                    command.env("LENGUA_PROOF_SECONDS", seconds.to_string());
+                }
+                if let Some(milliseconds) = wait_ms {
+                    command.env("LENGUA_CHECK_WAIT_MS", milliseconds.to_string());
+                }
             });
         let transport = TokioChildProcess::new(command).expect("spawn lengua-mcp");
         let service = match protocol {
@@ -137,7 +181,13 @@ impl Session {
             }
         }
         .expect("connect to lengua-mcp");
-        Self { service, data_dir }
+        Self {
+            service,
+            data_dir,
+            protocol,
+            proof_seconds,
+            wait_ms,
+        }
     }
 
     /// Calls a tool with JSON object arguments and returns its result.
@@ -196,10 +246,26 @@ impl Session {
             .join("\n")
     }
 
-    /// Records the program's spec.md the way an agent does after writing it from the user's
-    /// request.
+    /// Checks the program the way an agent does after writing its spec from the user's
+    /// request: with their words.
     pub async fn record(&self, program: &Program) -> Value {
-        self.call_ok("record_spec", program.request(REQUEST)).await
+        self.call_ok("check", program.request(REQUEST)).await
+    }
+
+    /// Checks the program once.
+    pub async fn check(&self, program: &Program) -> Value {
+        self.call_ok("check", program.arguments()).await
+    }
+
+    /// Checks the program until its tests and proof have ended, as an agent keeps calling while
+    /// check says they're running, and returns the last reply.
+    pub async fn settle(&self, program: &Program) -> Value {
+        loop {
+            let reply = self.check(program).await;
+            if !matches!(reply["state"].as_str(), Some("testing" | "proving")) {
+                return reply;
+            }
+        }
     }
 }
 
@@ -241,7 +307,8 @@ impl Program {
         serde_json::json!({ "path": self.path().to_str().expect("UTF-8 path") })
     }
 
-    /// Arguments for `record_spec`: the folder and the user's words asking for the program.
+    /// Arguments for `check` the first time: the folder and the user's words asking for the
+    /// program.
     pub fn request(&self, words: &str) -> Value {
         serde_json::json!({
             "path": self.path().to_str().expect("UTF-8 path"),

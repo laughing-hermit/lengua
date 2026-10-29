@@ -53,7 +53,7 @@ pub struct Lock {
 /// The user's requests for the build in progress, and the versions every later change is shown
 /// against.
 ///
-/// A build starts with the first request and lasts until its code passes `check_code`. Words
+/// A build starts with the first request and lasts until its code passes its tests. Words
 /// recorded in the middle of a build join it rather than start over, so no change can drop out
 /// of what is shown.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -175,8 +175,6 @@ pub struct UnsafeBlock {
 /// A parsed main.s.
 #[derive(Debug, Default)]
 pub struct Source {
-    /// The hex digits of the first line's spec label.
-    pub label: Option<String>,
     /// The constants, by name.
     pub constants: BTreeMap<String, Constant>,
     /// The data symbols, in order.
@@ -837,20 +835,20 @@ impl Parser {
             );
             return;
         }
-        if number == 1 {
-            self.header_label(raw);
-            return;
-        }
-        if number == 2 {
+        // Comments may come first; the first statement sets Intel syntax.
+        if !self.seen_intel_syntax && !code.is_empty() {
+            self.seen_intel_syntax = true;
             if code != ".intel_syntax noprefix" {
                 self.dialect(
                     number,
-                    "the second line must be .intel_syntax noprefix",
-                    "make line 2 exactly `.intel_syntax noprefix`",
+                    "main.s must start with .intel_syntax noprefix",
+                    "make `.intel_syntax noprefix` the first line, before any directive or \
+                     instruction",
                 );
             }
-            self.seen_intel_syntax = true;
-            return;
+            if code.starts_with(".intel_syntax") {
+                return;
+            }
         }
         if code.is_empty() {
             if let Some(comment) = comment {
@@ -878,21 +876,6 @@ impl Parser {
             return;
         }
         self.instruction(number, code);
-    }
-
-    fn header_label(&mut self, raw: &str) {
-        let label = raw
-            .trim()
-            .strip_prefix("# lengua: spec sha256:")
-            .filter(|hex| hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()));
-        match label {
-            Some(hex) => self.source.label = Some(hex.to_owned()),
-            None => self.dialect(
-                1,
-                "the first line must be the spec label",
-                "make line 1 `# lengua: spec sha256:…` with the label from the status tool",
-            ),
-        }
     }
 
     fn comment(&mut self, number: usize, comment: &str) {
@@ -1123,7 +1106,7 @@ impl Parser {
             ".intel_syntax" => self.dialect(
                 number,
                 ".intel_syntax appears again",
-                "write it once, on line 2",
+                "write it once, at the top",
             ),
             ".macro" | ".endm" | ".rept" | ".irp" | ".irpc" | ".endr" | ".if" | ".ifdef"
             | ".ifndef" | ".else" | ".endif" | ".include" | ".incbin" | ".set" => self.violation(
@@ -1573,7 +1556,6 @@ mod tests {
     fn reads_the_template() {
         let (source, violations) = parse(TEMPLATE);
         assert!(violations.is_empty(), "{violations:#?}");
-        assert_eq!(source.label.as_deref().map(str::len), Some(64));
         assert_eq!(source.constants["SYS_EXIT"].value, 60);
         assert_eq!(source.constants["ERROR_INVALID"].value, -22);
         let names: Vec<&str> = source.functions.iter().map(|f| f.name.as_str()).collect();
@@ -1785,12 +1767,16 @@ mod tests {
     #[test]
     fn checks_the_header_and_structure() {
         assert_violation(
-            &TEMPLATE.replacen("# lengua: spec sha256:", "# spec ", 1),
-            "first line must be the spec label",
+            &TEMPLATE.replacen(".intel_syntax noprefix", ".intel_syntax", 1),
+            "must start with .intel_syntax noprefix",
         );
         assert_violation(
-            &TEMPLATE.replacen(".intel_syntax noprefix", ".intel_syntax", 1),
-            "second line must be .intel_syntax noprefix",
+            &format!(".equ ONE, 1\n{TEMPLATE}"),
+            "must start with .intel_syntax noprefix",
+        );
+        assert!(
+            violations(&format!("# A comment first.\n\n{TEMPLATE}")).is_empty(),
+            "comments may come before .intel_syntax"
         );
         assert_violation(
             &TEMPLATE.replacen(".size nan_msg, . - nan_msg", ".size nan_msg, 20", 1),

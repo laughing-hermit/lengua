@@ -43,26 +43,35 @@ titles); the write-spec skill teaches the style.
 
 | What changed | Result |
 |---|---|
-| `spec.md` | Tests and code are stale; record it again, then re-check tests and code. Changes since the build's first request are shown |
-| `tests.toml` only | Checked against the spec again. After code has run, the changes since the tests it first ran against are shown, with lengua's own marks on those that test less |
-| `main.s` only | Re-run `check_code`; if everything passes, the new code is stamped |
-| nothing | `run` works |
+| `spec.md` | The next `check` records it under the request's words and checks the tests and code against it again. Changes since the build's first request are shown |
+| `tests.toml` only | Checked against the spec again, then the code is tested and proven again. After code has run, the changes since the tests it first ran against are shown, with lengua's own marks on those that test less |
+| `main.s` only | The next `check` checks the rules, runs every test and proves it again; once the tests pass, the new code is stamped |
+| nothing | `run` works, and `check` answers from what it found |
 
 ## What ships
 
 The plugin folder `plugin/` contains:
 
 - **Skills:** `write-spec`, `write-tests`, `write-assembly`. Each teaches one file and ends with
-  that file's check tool.
-- **MCP server** `lengua-mcp` (Rust, official `rmcp` SDK) with five tools:
+  `check`.
+- **MCP server** `lengua-mcp` (Rust, official `rmcp` SDK) with two tools:
 
 | Tool | Does |
 |---|---|
-| `status` | What the checker allows here (CPU extensions, cores), a program's state, problems in an unrecorded spec, what's proven, the person's requests and what changed since them, and the next step. Nothing the agent can find out itself |
-| `record_spec` | Validates `spec.md` and records it with the person's words asking for it |
-| `check_tests` | Validates `tests.toml` (coverage, cross-checks, red check) and stamps it, showing changes after code ran |
-| `check_code` | Assembles, links, checks the rules, runs every test and counts the instructions executed, then stamps and signs |
+| `check` | Every stage, stopping at the first that needs work: validates `spec.md` and records it with the person's words; validates `tests.toml` (coverage, cross-checks, red check) and stamps it; assembles, links and checks the rules; then, in the background, runs every test, counts the instructions executed, stamps and signs, and proves the program. Each reply has one `next_step` |
 | `run` | Verifies the lock against every file, rebuilds, confirms the build is byte-identical to the checked one, then runs it |
+
+The agent's loop is one call: edit a file, call `check`, follow `next_step`. The person's words go
+with the first call, and with a new request; an edited spec is recorded under the words already
+recorded. Nothing has to be copied between files: the lock already records which spec the tests
+were checked against and which tests the code passed. `check` replies within about 40 seconds,
+because other agent harnesses cut off long tool calls (many stop waiting at 60 s). The tests and
+the proof run in a background job per program folder, keyed by the hashes of its three files: a
+`check` with the same files waits on the same job, a `check` with new files cancels it and starts
+another, and a server restart starts it again, keeping the proofs the lock records about the same
+build. Replies carry each fact once, where the next step needs it: the machine's cores and CPU
+extensions while `main.s` is unwritten, the changes after the request and the cost of each test
+only once done, and the spec's first example as the tests ran it, so the report needs no demo run.
 
 Only open standards are used: MCP (tools and server instructions), Agent Skills and Agent Plugins. No hooks and no subagents, so the plugin works the same in Claude Code, Codex, Cursor and
 other harnesses. Every guarantee lives in the server, which detects changes and refuses to stamp
@@ -107,7 +116,7 @@ range, written plainly, and `now` (the second a run starts) may bound one. Insid
 travels in the expected text as a marker between Unicode noncharacters, which tests.toml can't
 hold, so expected output stays text everywhere and only matching reads the markers.
 
-`check_tests` ties the tests to the recorded spec: example exit codes equal the spec's, generator
+`check` ties the tests to the recorded spec: example exit codes equal the spec's, generator
 limits are numbers the spec states, and args and stdin hold bare variables so each example can be
 read back into variable values and every formula must reproduce it. A dry run evaluates every
 run's expected results, so overflow and division by zero are caught before any code exists, and
@@ -167,7 +176,7 @@ where slow instructions such as division weigh more), and CPU time including the
 its system calls (fewer instructions isn't always faster: a program that writes one byte at a time
 can execute fewer instructions yet spend far more time in the kernel).
 
-`check_code` draws a new seed on every call, runs boundary values first, and reports the seed and
+`check` draws a new seed for every test run, runs boundary values first, and reports the seed and
 inputs with any failure, down to the line of a failed assertion. Runs go as many at once as the
 machine has cores (fewer for a program that starts threads), and each draws its own inputs from
 its own stream of the seed and computes what it should produce as it starts, so that work is
@@ -179,10 +188,10 @@ its cycles, CPU time and wall time, which other runs would disturb. Only when th
 test pass does it stamp `[code]`, including the executable's SHA-256 and the toolchain versions.
 `run` rebuilds `main.s` and runs it only if the build is byte for byte that executable.
 
-`prove` records its results in a `[proofs]` table: the executable it's about, the generated tests
-proven for every input in range, and the solvers that checked them. `status` shows them while
-spec, tests and code are all the checked ones. Checking tests again drops them; checking code
-again keeps them only when the build is byte for byte the same.
+The proof records its results in a `[proofs]` table: the executable it's about, the generated
+tests proven for every input in range or up to a length, and the solvers that checked them.
+Checking tests again drops them; a build that is byte for byte the same keeps them, and any other
+build is proven again by itself.
 
 ## Performance
 
@@ -280,13 +289,13 @@ it produces, the idea behind translation validation (Pnueli, Siegel and Singerma
 | spec → `tests.toml` | the AI | Structure and coverage; each behavior's spec values appear in its example; each formula reproduces its example; generator ranges are numbers that the spec's Purpose states (not an example's own values) |
 | spec + tests → `main.s` | the AI | The rules, then every example plus fresh random tests on every check |
 | `main.s` → machine code | LLVM | The checker reads the linked executable back and matches it to `main.s` instruction by instruction, operands included; the lock records the executable's hash, and `run` refuses any other build |
-| machine code, every input | — | `prove`: for generated tests over numbers, choices and texts, the output equals the formulas for every input in range, not only the sampled ones; for long texts, every input up to a stated length |
+| machine code, every input | — | The proof: for generated tests over numbers, choices and texts, the output equals the formulas for every input in range, not only the sampled ones; for long texts, every input up to a stated length |
 
-Tests sample inputs, so on their own they are strong evidence, not proof. The `prove` tool turns
+Tests sample inputs, so on their own they are strong evidence, not proof. The proof turns
 them into a proof where it can, as Alive2 does for LLVM. The Power of 10 rules make that possible:
 without recursion and with a fixed maximum for every loop, every path through a program is finite.
 
-How `prove` works (`src/prove/`):
+How the proof works (`src/prove/`):
 
 - **Input shapes.** It splits each `int(lo, hi)` variable into shapes: a sign and a range for each
   digit, like a regular expression for a number range, so that every number a shape allows is in
@@ -458,7 +467,7 @@ What it covers:
   model runs out at some length, the proof holds for every input with texts up to the last
   length fully proven: "proven for every input with text up to 4096 bytes; longer texts are
   tested, not proven", with the reason. lengua.lock records such a proof under `bounded`, with
-  its length, never as a full one, and `status` shows it.
+  its length, never as a full one, and the done reply says so.
 - Formulas: whole numbers (`+ - * / %` including chains of divisions, `abs`, `min`, `max`, `if`,
   and `scaled(x, places)` for a decimal's digits), printed plainly or with `places(x, k)`; and
   text: `len`, `count` (non-overlapping, leftmost first, as the test language counts), `words`,
@@ -580,7 +589,7 @@ Dialect 2 followed:
 - every value tried when a range is small;
 - files in tests, and the kernel confining every run to what the spec allows;
 - fork-join threads, with each worker proven to write only its own stack and slot;
-- `prove`, which proves programs right for every input in range over whole numbers, decimals,
+- proofs of programs for every input in range over whole numbers, decimals,
   choices, texts and text formulas, files, the network, and random bytes and clock readings the
   tests supply, in integer, bit and vector code from SSE2 to AVX-512, with every step confirmed
   by a second solver, and over long texts up to a stated length;

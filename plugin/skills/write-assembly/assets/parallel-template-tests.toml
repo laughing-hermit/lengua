@@ -1,6 +1,3 @@
-[meta]
-spec = "sha256:5e8481da31a6756ba6b2eab7257bd845a9bc3f3f361260fe7419a830101c669d"
-
 [[example]]
 id = "B1"
 stdin = "Hello, World!\n"

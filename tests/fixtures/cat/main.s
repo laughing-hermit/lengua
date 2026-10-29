@@ -1,4 +1,3 @@
-# lengua: spec {label}
 .intel_syntax noprefix
 
 # System calls (Linux x86-64)

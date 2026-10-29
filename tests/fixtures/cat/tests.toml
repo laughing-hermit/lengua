@@ -1,6 +1,3 @@
-[meta]
-spec = "{label}"
-
 [[example]]
 id = "B1"
 stdin = "hello"

@@ -3,7 +3,8 @@
 
 mod common;
 
-use common::{ADD_SPEC, Program, Protocol, Session, add_tests, label};
+use common::{ADD_SPEC, ADD_TESTS, Program, Protocol, Session};
+use lengua::hash::Sha256Hex;
 use serde_json::Value;
 
 fn text(value: &Value) -> &str {
@@ -13,13 +14,8 @@ fn text(value: &Value) -> &str {
 async fn recorded_program(session: &Session) -> Program {
     let program = Program::with_add_spec();
     let report = session.record(&program).await;
-    assert_eq!(report["recorded"], true, "{report}");
+    assert_eq!(report["state"], "write_tests", "{report}");
     program
-}
-
-async fn state(session: &Session, program: &Program) -> Value {
-    let status = session.call_ok("status", program.arguments()).await;
-    status["program"]["state"].clone()
 }
 
 #[tokio::test]
@@ -27,45 +23,37 @@ async fn checks_and_records_valid_tests() {
     for protocol in Protocol::ALL {
         let session = Session::start(protocol).await;
         let program = recorded_program(&session).await;
-        let tests = add_tests(ADD_SPEC);
-        program.write("tests.toml", &tests);
+        program.write("tests.toml", ADD_TESTS);
 
-        let report = session.call_ok("check_tests", program.arguments()).await;
-        assert_eq!(report["checked"], true, "{protocol:?}: {report}");
-        assert_eq!(report["examples"], 2, "{report}");
-        assert_eq!(report["generated_blocks"], 1, "{report}");
-        assert_eq!(report["generated_runs"], 200, "{report}");
+        let report = session.check(&program).await;
+        assert_eq!(report["state"], "write_code", "{protocol:?}: {report}");
         assert!(
-            text(&report["message"]).contains("covers every behavior"),
+            text(&report["next_step"]).contains("write-assembly skill"),
             "{report}"
         );
-        assert!(report.get("tests_changed").is_none(), "{report}");
         assert!(
-            text(&report["next_step"]).contains(&format!("# lengua: spec {}", label(ADD_SPEC))),
-            "{report}"
+            !text(&report["next_step"]).contains("sha256"),
+            "no label to copy: {report}"
         );
-
-        let status = session.call_ok("status", program.arguments()).await;
-        assert_eq!(status["program"]["state"], "code_missing", "{status}");
-        assert_eq!(
-            status["program"]["files"]["tests"]["stamped"], true,
-            "{status}"
+        assert!(
+            text(&report["machine"]).contains("core"),
+            "the machine shows while main.s is missing: {report}"
         );
-        let stored = session
-            .data_dir
-            .path()
-            .join("stamped")
-            .join(text(&report["tests_sha256"]));
+        let lock = program.read("lengua.lock").expect("the lock");
+        let hash = Sha256Hex::of(ADD_TESTS.as_bytes()).to_string();
+        assert!(
+            lock.contains(&format!("[tests]\nsha256 = \"{hash}\"")),
+            "{lock}"
+        );
+        let stored = session.data_dir.path().join("stamped").join(&hash);
         assert_eq!(
             std::fs::read_to_string(&stored).expect("the checked tests are kept"),
-            tests
+            ADD_TESTS
         );
 
-        let again = session.call_ok("check_tests", program.arguments()).await;
-        assert!(
-            text(&again["message"]).contains("already checked"),
-            "{again}"
-        );
+        let again = session.check(&program).await;
+        assert_eq!(again["state"], "write_code", "{again}");
+        assert_eq!(program.read("lengua.lock").as_deref(), Some(lock.as_str()));
         session.service.cancel().await.expect("close the session");
     }
 }
@@ -74,19 +62,21 @@ async fn checks_and_records_valid_tests() {
 async fn tests_can_be_fixed_before_code_runs() {
     let session = Session::start(Protocol::Discover).await;
     let program = recorded_program(&session).await;
-    let tests = add_tests(ADD_SPEC);
-    program.write("tests.toml", &tests);
-    session.call_ok("check_tests", program.arguments()).await;
+    program.write("tests.toml", ADD_TESTS);
+    session.check(&program).await;
 
     // No code has run against them yet, so a fix is simply checked again.
-    let fixed = tests.replace("runs = 200", "runs = 300");
+    let fixed = ADD_TESTS.replace("runs = 200", "runs = 300");
     program.write("tests.toml", &fixed);
-    assert_eq!(state(&session, &program).await, "tests_unchecked");
-    let report = session.call_ok("check_tests", program.arguments()).await;
-    assert_eq!(report["generated_runs"], 300, "{report}");
+    let report = session.check(&program).await;
+    assert_eq!(report["state"], "write_code", "{report}");
+    let lock = program.read("lengua.lock").expect("the lock");
+    assert!(
+        lock.contains(&Sha256Hex::of(fixed.as_bytes()).to_string()),
+        "{lock}"
+    );
     // Before code runs, nothing is counted as a change after it.
-    assert!(report.get("tests_changed").is_none(), "{report}");
-    assert_eq!(state(&session, &program).await, "code_missing");
+    assert!(!lock.contains("\ntests = "), "{lock}");
     session.service.cancel().await.expect("close the session");
 }
 
@@ -94,67 +84,82 @@ async fn tests_can_be_fixed_before_code_runs() {
 async fn problems_are_reported_and_nothing_is_recorded() {
     let session = Session::start(Protocol::Discover).await;
     let program = recorded_program(&session).await;
-    program.write(
-        "tests.toml",
-        &add_tests(ADD_SPEC).replace("{a + b}", "{a - b}"),
-    );
-    let error = session.call_error("check_tests", program.arguments()).await;
+    program.write("tests.toml", &ADD_TESTS.replace("{a + b}", "{a - b}"));
+    let report = session.check(&program).await;
+    assert_eq!(report["state"], "test_problems", "{report}");
     assert!(
-        error.contains("has 1 problem, so it wasn't checked"),
-        "{error}"
+        report["problems"].as_array().is_some_and(|problems| {
+            problems.len() == 1 && text(&problems[0]).contains("formula disagrees with the spec")
+        }),
+        "{report}"
     );
-    assert!(error.contains("formula disagrees with the spec"), "{error}");
     assert!(
-        error.contains("Fix them with the write-tests skill"),
-        "{error}"
+        text(&report["next_step"]).contains("write-tests skill"),
+        "{report}"
     );
     let lock = program.read("lengua.lock").expect("the lock exists");
     assert!(!lock.contains("[tests]"), "{lock}");
-    assert_eq!(state(&session, &program).await, "tests_unchecked");
     session.service.cancel().await.expect("close the session");
 }
 
 #[tokio::test]
-async fn tests_need_a_recorded_spec_and_a_file() {
-    let session = Session::start(Protocol::Discover).await;
-    let unrecorded = Program::with_add_spec();
-    unrecorded.write("tests.toml", &add_tests(ADD_SPEC));
-    let error = session
-        .call_error("check_tests", unrecorded.arguments())
-        .await;
-    assert!(error.contains("recorded spec"), "{error}");
-    assert!(error.contains("call record_spec"), "{error}");
-
-    let without_tests = recorded_program(&session).await;
-    let error = session
-        .call_error("check_tests", without_tests.arguments())
-        .await;
-    assert!(error.contains("There's no tests.toml"), "{error}");
-    session.service.cancel().await.expect("close the session");
-}
-
-#[tokio::test]
-async fn a_changed_spec_needs_its_tests_checked_again() {
+async fn a_leftover_spec_label_is_refused() {
     let session = Session::start(Protocol::Discover).await;
     let program = recorded_program(&session).await;
-    program.write("tests.toml", &add_tests(ADD_SPEC));
-    session.call_ok("check_tests", program.arguments()).await;
+    program.write(
+        "tests.toml",
+        &format!("[meta]\nspec = \"sha256:1111\"\n\n{ADD_TESTS}"),
+    );
+    let report = session.check(&program).await;
+    assert_eq!(report["state"], "test_problems", "{report}");
+    assert!(
+        text(&report["problems"][0]).contains("delete the [meta] table"),
+        "{report}"
+    );
+    session.service.cancel().await.expect("close the session");
+}
 
+#[tokio::test]
+async fn tests_wait_for_a_recorded_spec() {
+    let session = Session::start(Protocol::Discover).await;
+    let unrecorded = Program::with_add_spec();
+    unrecorded.write("tests.toml", ADD_TESTS);
+    let report = session.check(&unrecorded).await;
+    assert_eq!(report["state"], "needs_request", "{report}");
+    let lock = unrecorded.read("lengua.lock");
+    assert!(lock.is_none(), "{lock:?}");
+    // With the user's words, the spec is recorded and the tests are checked in the same call.
+    let report = session.record(&unrecorded).await;
+    assert_eq!(report["state"], "write_code", "{report}");
+    session.service.cancel().await.expect("close the session");
+}
+
+#[tokio::test]
+async fn a_changed_spec_checks_its_tests_again() {
+    let session = Session::start(Protocol::Discover).await;
+    let program = recorded_program(&session).await;
+    program.write("tests.toml", ADD_TESTS);
+    session.check(&program).await;
+
+    // The tests still fit the edited spec, so the one call records the spec and checks them
+    // again: nothing in tests.toml had to change.
     let edited = ADD_SPEC.replace("Adds two numbers", "Adds two integers");
     program.write("spec.md", &edited);
-    let record = session.record(&program).await;
-    assert_eq!(record["recorded"], true, "{record}");
-    // Recorded again under the same request, the change is shown.
+    let report = session.check(&program).await;
+    assert_eq!(report["state"], "write_code", "{report}");
+    let lock = program.read("lengua.lock").expect("the lock");
     assert!(
-        text(&record["spec_changed"]).contains("Adds two integers"),
-        "{record}"
+        lock.contains(&format!(
+            "[spec]\nsha256 = \"{}\"\n\n[tests]",
+            Sha256Hex::of(edited.as_bytes())
+        )),
+        "{lock}"
     );
-    assert_eq!(state(&session, &program).await, "tests_unchecked");
 
-    let error = session.call_error("check_tests", program.arguments()).await;
-    assert!(error.contains("[meta] says spec"), "{error}");
-    program.write("tests.toml", &add_tests(&edited));
-    let report = session.call_ok("check_tests", program.arguments()).await;
-    assert_eq!(report["checked"], true, "{report}");
+    // When they don't fit, they're the next thing to fix.
+    let narrower = edited.replace("`-1000000000`", "`-1000`");
+    program.write("spec.md", &narrower);
+    let report = session.check(&program).await;
+    assert_eq!(report["state"], "test_problems", "{report}");
     session.service.cancel().await.expect("close the session");
 }

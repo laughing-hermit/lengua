@@ -121,8 +121,8 @@ pub fn check(
             Rule::Resources,
             line,
             "main.s starts threads with parallel_for, but spec.md doesn't allow threads",
-            "add `- Threads: up to N` under `# Constraints` in spec.md and call record_spec \
-             again, or do the work on one thread",
+            "add `- Threads: up to N` under `# Constraints` in spec.md and call check again, \
+             or do the work on one thread",
         );
         return;
     };

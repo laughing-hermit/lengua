@@ -1,6 +1,6 @@
 ---
 name: write-tests
-description: Writes a lengua program's tests.toml from its recorded spec.md, with one example per behavior holding the spec's own values plus generated tests whose formulas compute the expected results for fresh random inputs on every run. Use after a spec is recorded or changed, when the lengua status tool says to write tests.toml, when check_tests reports problems, or when a test turns out wrong. Ends with check_tests, which checks the tests against the spec and records them.
+description: Writes a lengua program's tests.toml from its recorded spec.md, with one example per behavior holding the spec's own values plus generated tests whose formulas compute the expected results for fresh random inputs on every run. Use after a spec is recorded or changed, when the lengua check tool says to write tests.toml or reports problems in it, or when a test turns out wrong. Ends when check moves on from the tests.
 license: Apache-2.0
 compatibility: Needs the lengua MCP server from the lengua plugin.
 ---
@@ -12,19 +12,16 @@ the tests come before the code, and they decide whether the code is right.
 
 ## Steps
 
-1. Take the spec label (`sha256:…`) from the last `next_step`, which names it. If you don't have
-   it, call the lengua `status` tool with `path` and read `program.spec_label`.
-2. Read `<path>/spec.md`.
-3. Write `<path>/tests.toml` by the rules below.
+1. Read `<path>/spec.md`.
+2. Write `<path>/tests.toml` by the rules below.
    [The format reference](references/test-format.md) lists every field and function, with more
    examples.
-4. Call `check_tests` with `path`. It lists every problem at once; fix them all and call it again
-   until it passes.
-5. Follow the `next_step` it returns. Next comes `main.s`, with the write-assembly skill.
+3. Call `check` with `path`. It lists every problem at once; fix them all and call it again
+   until it moves on.
+4. Follow the `next_step` it returns. Next comes `main.s`, with the write-assembly skill.
 
 ## Rules
 
-- **`[meta]`** holds `spec = "<spec_label>"`, the label from step 1.
 - **One `[[example]]` per behavior,** with `id` set to the behavior's ID and the behavior's
   values copied exactly into `args`, `stdin`, `files`, `stdout`, `stderr`, `files_after` and
   `exit_code`. Every backtick value of the behavior must appear in its example.
@@ -61,8 +58,8 @@ the tests come before the code, and they decide whether the code is right.
   exactly those files, so leave out nothing the program writes.
 - **Ranges come from Purpose.** `int(lo, hi)` and `string(min, max, "chars")` may only use
   numbers that the spec's `# Purpose` writes in backticks; numbers from behaviors don't count.
-  If Purpose doesn't state a range you need, add it to Purpose in `spec.md`, call `record_spec`
-  again with the same words, and go on; the change shows in the final report.
+  If Purpose doesn't state a range you need, add it to Purpose in `spec.md` and go on: the next
+  `check` records it under the same words, and the change shows in the final report.
 - **Long literal inputs,** such as a line or a file just over a limit, are written as repeats
   in the example: `files = { "big.txt" = [{ repeat = "a", times = 1048576 }, "x"] }`. Never
   generate a huge string into tests.toml.
@@ -92,12 +89,12 @@ the tests come before the code, and they decide whether the code is right.
 - **Lengths count characters.** `string(0, 1048576, "aé€")` can reach 3 MiB, since `é` takes 2
   bytes and `€` 3, while specs and programs count bytes. Draw long text from 1-byte (ASCII)
   characters, and test other characters in short strings.
-- **Fix a wrong test any time.** When `check_code` fails, decide from `spec.md` whether the test
-  or `main.s` is wrong. If the test is, fix `tests.toml` and call `check_tests`: it checks the fix
-  against the spec again and records it, with no one to ask. After code has run, its reply shows
-  what changed (`tests_changed`) and lengua's own marks on the changes that test less
-  (`tests_less`). Tell the user each in your final report, with why the new test matches the
-  spec. Never weaken a test to make code pass: fix the code.
+- **Fix a wrong test any time.** When `check` reports a failing test, decide from `spec.md`
+  whether the test or `main.s` is wrong. If the test is, fix `tests.toml` and call `check`: it
+  checks the fix against the spec again and records it, with no one to ask. After code has run,
+  its final reply shows what changed (`changes.tests_changed`) and lengua's own marks on the
+  changes that test less (`changes.tests_less`). Tell the user each in your final report, with why
+  the new test matches the spec. Never weaken a test to make code pass: fix the code.
 
 ## Example
 
@@ -133,9 +130,6 @@ and `1000000000`, given as arguments. If writing the output fails, the program e
 the tests are:
 
 ```toml
-[meta]
-spec = "sha256:<from status>"
-
 [[example]]
 id = "B1"
 args = ["2", "3"]

@@ -120,16 +120,15 @@ fn the_assembly_template_is_a_complete_lengua_program() {
     let spec_text = read(&assets.join("template-spec.md"));
     let spec = lengua::spec::parse(&spec_text)
         .unwrap_or_else(|problems| panic!("the template's spec has problems: {problems:#?}"));
-    let label = lengua::hash::Sha256Hex::of(spec_text.as_bytes()).label();
     let tests = read(&assets.join("template-tests.toml"));
-    if let Err(problems) = lengua::testfile::check(&tests, &spec, &label) {
-        panic!("the template's tests fail check_tests: {problems:#?}");
+    if let Err(problems) = lengua::testfile::check(&tests, &spec) {
+        panic!("the template's tests fail check: {problems:#?}");
     }
     let code = read(&assets.join("main-template.s"));
     assert_eq!(
         code.lines().next(),
-        Some(format!("# lengua: spec {label}").as_str()),
-        "main-template.s carries its spec's label"
+        Some(".intel_syntax noprefix"),
+        "main-template.s starts with its syntax, with no label to copy"
     );
 }
 
@@ -187,7 +186,7 @@ fn code_blocks(text: &str) -> Vec<(String, String)> {
     blocks
 }
 
-/// Each spec the skills show is valid, and each tests.toml they show passes check_tests
+/// Each spec the skills show is valid, and each tests.toml they show passes check
 /// against the spec shown before it in the same file.
 #[test]
 fn examples_in_the_skills_pass_lenguas_own_checks() {
@@ -199,16 +198,14 @@ fn examples_in_the_skills_pass_lenguas_own_checks() {
                 let parsed = lengua::spec::parse(&block).unwrap_or_else(|problems| {
                     panic!("{document} shows an invalid spec: {problems:#?}")
                 });
-                let label = lengua::hash::Sha256Hex::of(block.as_bytes()).label();
-                spec = Some((parsed, label));
+                spec = Some(parsed);
                 specs += 1;
-            } else if language == "toml" && block.starts_with("[meta]") {
-                let (parsed, label) = spec
+            } else if language == "toml" && block.starts_with("[[example]]") {
+                let parsed = spec
                     .as_ref()
                     .unwrap_or_else(|| panic!("{document} shows tests before any spec"));
-                let filled = block.replace("sha256:<from status>", label);
-                if let Err(problems) = lengua::testfile::check(&filled, parsed, label) {
-                    panic!("{document} shows tests that fail check_tests: {problems:#?}");
+                if let Err(problems) = lengua::testfile::check(&block, parsed) {
+                    panic!("{document} shows tests that fail check: {problems:#?}");
                 }
                 tests += 1;
             }

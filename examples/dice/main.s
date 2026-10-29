@@ -1,4 +1,3 @@
-# lengua: spec sha256:721c17ef6bd6170dd13d9304a98c0aef298603a55f4f3b1eb3960572593eeac9
 .intel_syntax noprefix
 
 # System calls (Linux x86-64)

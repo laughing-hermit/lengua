@@ -4,43 +4,77 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::{Implementation, ServerCapabilities, ServerConfig};
 use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use serde::{Deserialize, Serialize};
+use tokio::sync::watch;
 
-use crate::checker;
+use crate::checker::{self, source::Source};
 use crate::data_dir::DataDir;
 use crate::expr;
 use crate::hash::Sha256Hex;
 use crate::lock::{self, CodeStamp, Key, Lock, ProofStamp, SpecStamp, TestsStamp};
-use crate::platform::{CpuFeatures, Machine, Profile};
+use crate::platform::{Machine, Profile};
 use crate::prove;
 use crate::runner::{self, End, Job, Limits, Net, Started};
-use crate::spec;
+use crate::spec::{self, Spec};
 use crate::state::{
-    CODE_FILE, LockStatus, ProgramFolder, SPEC_FILE, Snapshot, State, StepContext, TESTS_FILE,
-    stamped_copy,
+    CODE_FILE, ProgramFolder, SPEC_FILE, Snapshot, State, TESTS_FILE, stamped_copy,
 };
 use crate::testdiff;
-use crate::testfile;
+use crate::testfile::{self, TestSuite};
 use crate::testrun;
 use crate::toolchain::Toolchain;
 
 /// Server-wide guidance sent to every client at startup.
 ///
 /// Kept under 512 characters and self-contained: some harnesses only show the beginning.
-pub const INSTRUCTIONS: &str = "lengua builds programs as folders holding spec.md (the source \
-of truth), tests.toml, main.s and lengua.lock. Order: spec, then tests, then code. Write spec.md \
-from the user's request and record it with record_spec and their words; don't wait for an \
-approval. Never edit lengua.lock. Run programs only with the run tool. Pass absolute folder \
-paths. When unsure, call status and follow its next step; the write-spec, write-tests and \
-write-assembly skills explain each file.";
+pub const INSTRUCTIONS: &str = "lengua turns a request into a checked x86-64 program: a folder \
+holding spec.md, tests.toml and main.s, written with the write-spec, write-tests and \
+write-assembly skills. After writing or changing any of them, call check with the folder's \
+absolute path, the first time with the user's words as request, and follow its next_step until \
+it says Done: the tests and the proof run in the background, so call check again while it says \
+testing or proving. Never edit lengua.lock. Run programs only with run.";
 
 /// The longest request the lock records: the user's words, not a whole conversation.
 const MAX_REQUEST_CHARS: usize = 2000;
+
+/// The longest a `check` call waits for the tests and the proof before it replies. They go on
+/// in the background, and the next call picks them up, so no call outlasts an agent harness's
+/// patience.
+const CHECK_WAIT: Duration = Duration::from_secs(40);
+
+/// Once the tests pass, how long a `check` call still waits for the proof before it says so,
+/// so a quick proof comes back in the same reply and a long one doesn't hold up the news.
+const GREEN_GRACE: Duration = Duration::from_secs(10);
+
+/// The longest the proof of one version of a program may take, over every call.
+const PROOF_TIME: Duration = Duration::from_secs(300);
+
+/// The longest `run` lets a program run, within one call.
+const RUN_SECONDS: u64 = 40;
+
+/// How long a `check` call waits: [`CHECK_WAIT`], or `LENGUA_CHECK_WAIT_MS` for tests.
+fn check_wait() -> Duration {
+    std::env::var("LENGUA_CHECK_WAIT_MS")
+        .ok()
+        .and_then(|milliseconds| milliseconds.parse().ok())
+        .map_or(CHECK_WAIT, Duration::from_millis)
+}
+
+/// How long the proof of one version may take: [`PROOF_TIME`], or `LENGUA_PROOF_SECONDS` for
+/// tests that aren't about proofs.
+fn proof_time() -> Duration {
+    std::env::var("LENGUA_PROOF_SECONDS")
+        .ok()
+        .and_then(|seconds| seconds.parse().ok())
+        .map_or(PROOF_TIME, Duration::from_secs)
+}
 
 /// The lengua MCP server.
 #[derive(Debug, Clone)]
@@ -54,6 +88,8 @@ pub struct LenguaServer {
     /// Servers that `run` started, by program folder, until `run` stops them, ten minutes
     /// pass, or the session ends and drops them.
     background: Arc<tokio::sync::Mutex<BTreeMap<PathBuf, Background>>>,
+    /// The tests and proof of each program folder's latest files, running or ended.
+    checks: Arc<tokio::sync::Mutex<BTreeMap<PathBuf, Arc<Checking>>>>,
 }
 
 /// A server `run` started in the background.
@@ -64,7 +100,6 @@ struct Background {
     /// Which start this is, so an old timer never stops a newer one.
     id: u64,
     assertions: BTreeMap<i64, usize>,
-    fingerprint: String,
 }
 
 impl std::fmt::Debug for Background {
@@ -77,7 +112,103 @@ impl std::fmt::Debug for Background {
 }
 
 /// How long a server `run` started keeps serving at most.
-const BACKGROUND_LIMIT: std::time::Duration = std::time::Duration::from_secs(600);
+const BACKGROUND_LIMIT: Duration = Duration::from_secs(600);
+
+/// The tests and then the proof of one version of a program, in the background.
+struct Checking {
+    /// spec.md, tests.toml and main.s, by hash.
+    files: [Sha256Hex; 3],
+    /// The executable built from main.s, by hash.
+    executable: Sha256Hex,
+    /// Set once the files change, which stops the proof.
+    cancel: Arc<AtomicBool>,
+    /// What it has found so far.
+    found: std::sync::Mutex<Found>,
+    /// How far it has got, for whoever waits on it.
+    stage: watch::Sender<Stage>,
+    /// Whether a reply has said the tests pass yet.
+    green_told: AtomicBool,
+}
+
+impl std::fmt::Debug for Checking {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Checking")
+            .field("stage", &*self.stage.borrow())
+            .finish_non_exhaustive()
+    }
+}
+
+/// How far a checking job has got.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stage {
+    /// The tests are running.
+    Testing,
+    /// Every test passed at this time, and the proof is running.
+    Proving(Instant),
+    /// Nothing more will happen.
+    Ended,
+}
+
+/// What a checking job has found.
+#[derive(Debug, Default)]
+struct Found {
+    /// Why the tests failed, one line each, when they did.
+    failures: Vec<String>,
+    /// What the tests showed, once every one passed.
+    passed: Option<Passed>,
+    /// Each generated test's proof, in order.
+    proofs: Vec<BlockProof>,
+    /// Whether the proof found inputs where main.s is wrong.
+    wrong: bool,
+}
+
+/// What passing tests showed.
+#[derive(Debug)]
+struct Passed {
+    /// Runs made.
+    runs: usize,
+    /// The generated tests that tried every value in their ranges.
+    every_value: Vec<String>,
+    /// What each test cost, one line each.
+    performance: Vec<String>,
+    /// The first example as it ran.
+    shown: Option<String>,
+}
+
+/// One generated test's proof.
+#[derive(Debug)]
+struct BlockProof {
+    /// The test, such as `generated B1`.
+    test: String,
+    /// How far it has got, while it runs.
+    progress: Option<Arc<prove::Progress>>,
+    /// What was proven, or why not, once it ended.
+    detail: Option<String>,
+    /// Whether it found inputs where main.s is wrong.
+    wrong: bool,
+}
+
+impl BlockProof {
+    /// One line for a reply: what was proven, or how far the proof has got.
+    fn line(&self) -> String {
+        let test = &self.test;
+        if let Some(detail) = &self.detail {
+            return format!("{test}: {detail}");
+        }
+        let Some(progress) = &self.progress else {
+            return format!("{test}: waiting for its turn");
+        };
+        let done = progress.done.load(Ordering::Relaxed);
+        let total = progress.total.load(Ordering::Relaxed);
+        match progress.proven_below.load(Ordering::Relaxed) {
+            0 => format!("{test}: proving, {done} of {total} input combinations so far"),
+            below => format!(
+                "{test}: proving, every input with text up to {} bytes proven so far",
+                below - 1
+            ),
+        }
+    }
+}
 
 impl LenguaServer {
     /// Creates a server that keeps its private data in `data_dir`.
@@ -89,203 +220,79 @@ impl LenguaServer {
             lock_writes: Arc::default(),
             launcher: Arc::new(std::env::current_exe().unwrap_or_default()),
             background: Arc::default(),
+            checks: Arc::default(),
         }
     }
 }
 
-/// Input for `status`.
-#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
-pub struct StatusParams {
-    /// Absolute path of a program folder, to report that program's state. Leave it out to check
-    /// only the machine.
-    #[serde(default)]
-    pub path: Option<String>,
-}
-
-/// Input for tools that work on one program folder.
+/// Input for `check`.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct ProgramParams {
+pub struct CheckParams {
     /// Absolute path of the program folder, the folder that holds spec.md.
     pub path: String,
-}
-
-/// Input for `record_spec`.
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct RecordParams {
-    /// Absolute path of the program folder, or of its spec.md.
-    pub path: String,
     /// The user's own words that asked for this program or this change, quoted exactly, such as
-    /// "Make me a program that adds two numbers".
-    pub request: String,
+    /// "Make me a program that adds two numbers". Needed the first time, and whenever the user
+    /// asks for something new; without it, an edited spec is recorded under the words already
+    /// recorded.
+    #[serde(default)]
+    pub request: Option<String>,
 }
 
-/// Everything `status` reports: only what the agent can't find out for itself.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct StatusReport {
-    /// The lengua server version.
-    pub server_version: String,
-    /// What the checker allows on this machine.
-    pub machine: MachineReport,
-    /// The program's state, when a path was given.
-    pub program: Option<ProgramReport>,
-    /// The single next thing to do. It starts with "Blocked" when lengua can't build programs
-    /// here, such as when llvm-mc or ld.lld is missing.
-    pub next_step: String,
-}
-
-/// What the checker allows on this machine.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct MachineReport {
-    /// The platform profile, e.g. `linux-x86_64`, or null when unsupported.
-    pub profile: Option<String>,
-    /// How many threads can run at once; a spec allows at most this many.
-    pub cores: usize,
-    /// The CPU extensions main.s may use: the checker refuses instructions from any other.
-    pub features: CpuFeatures,
-}
-
-/// Program part of the status report.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct ProgramReport {
-    /// The program folder.
-    pub path: String,
-    /// Workflow state: no_spec, lock_invalid, spec_unrecorded, tests_missing,
-    /// tests_unchecked, code_missing, code_unchecked or ready.
+/// What `check` reports: where the program stands, and the one thing to do next.
+#[derive(Debug, Default, Serialize, schemars::JsonSchema)]
+pub struct CheckReport {
+    /// Where the program stands: blocked, write_spec, spec_problems, needs_request,
+    /// write_tests, test_problems, write_code, code_problems, testing, tests_failed, proving or
+    /// done.
     pub state: String,
-    /// The label tests.toml and main.s must carry: `sha256:<hex>` of the current spec.md.
-    pub spec_label: Option<String>,
-    /// The program's files.
-    pub files: FilesReport,
-    /// Whether lengua.lock can be trusted.
-    pub lock: LockReport,
-    /// The ids of the generated tests proven for every input in range on the checked build:
-    /// empty until `prove` runs on it, and whenever spec.md, tests.toml or main.s changed since.
-    pub proven: Vec<String>,
-    /// The generated tests proven only for texts up to a length, as `id: up to N bytes`;
-    /// longer texts are tested, not proven.
+    /// Every problem to fix before going on, each saying where it is and how to fix it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub proven_up_to: Vec<String>,
-    /// Which solvers checked those proofs.
-    pub proven_by: Option<String>,
-    /// The user's requests in this build, as recorded, oldest first.
+    pub problems: Vec<String>,
+    /// The machine main.s runs on, while main.s isn't written yet: its cores, which a spec's
+    /// threads may use, and the CPU extensions main.s may use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
+    /// What the tests found, once they pass.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub requests: Vec<String>,
-    /// How spec.md changed since the build's first request, as `-`/`+` lines.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub spec_changed: Option<String>,
-    /// How tests.toml changed since code first ran in this build, as `-`/`+` lines.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tests_changed: Option<String>,
-    /// lengua's own list of the test changes that test less than before.
+    pub tests: Vec<String>,
+    /// Each generated test's proof: what's proven for every input, how far, or why not; while
+    /// proving, how far it has got.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tests_less: Vec<String>,
-}
-
-/// The three files of a program.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct FilesReport {
-    /// spec.md.
-    pub spec: FileReport,
-    /// tests.toml.
-    pub tests: FileReport,
-    /// main.s.
-    pub code: FileReport,
-}
-
-/// One program file.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct FileReport {
-    /// Whether the file exists.
-    pub exists: bool,
-    /// SHA-256 of its bytes.
-    pub sha256: Option<String>,
-    /// Whether lengua.lock records exactly this version as recorded or checked.
-    pub stamped: bool,
-}
-
-/// The lock part of a program report.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct LockReport {
-    /// `missing`, `valid` or `invalid`.
-    pub state: String,
-    /// Why the lock can't be trusted, when it's invalid.
-    pub problem: Option<String>,
-    /// One hash over spec, tests and code, once all three are checked.
-    pub fingerprint: Option<String>,
-}
-
-/// What `record_spec` reports.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct RecordReport {
-    /// Whether spec.md is recorded now.
-    pub recorded: bool,
-    /// The label tests.toml and main.s must carry: `sha256:<hex>` of spec.md.
-    pub spec_label: String,
-    /// The user's requests in this build, as recorded, oldest first.
-    pub requests: Vec<String>,
-    /// How spec.md changed since the build's first request, as `-`/`+` lines.
+    pub proofs: Vec<String>,
+    /// The spec's first example as the tests ran it: what to show the user it does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub spec_changed: Option<String>,
-    /// What happened.
-    pub message: String,
+    pub example: Option<String>,
+    /// What each test cost, once done: instructions a run over all its runs, and from its
+    /// largest input run alone, CPU cycles and times (lower is faster).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub performance: Vec<String>,
+    /// What changed after the user's request, once done.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changes: Option<ChangesReport>,
     /// The single next thing to do.
     pub next_step: String,
 }
 
-/// What `check_tests` reports.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct TestsReport {
-    /// Whether tests.toml is checked and recorded now.
-    pub checked: bool,
-    /// SHA-256 of the checked tests.toml.
-    pub tests_sha256: String,
-    /// Number of examples.
-    pub examples: usize,
-    /// Number of generated blocks.
-    pub generated_blocks: usize,
-    /// Runs of all generated blocks together, each with fresh inputs.
-    pub generated_runs: u64,
-    /// How tests.toml changed since code first ran in this build, as `-`/`+` lines.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tests_changed: Option<String>,
-    /// lengua's own list of the test changes that test less than before.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tests_less: Vec<String>,
-    /// What happened.
-    pub message: String,
-    /// The single next thing to do.
-    pub next_step: String,
+impl CheckReport {
+    fn new(state: &str, next_step: String) -> Self {
+        Self {
+            state: state.to_owned(),
+            next_step,
+            ..Self::default()
+        }
+    }
+
+    fn problems(state: &str, problems: Vec<String>, next_step: String) -> Self {
+        Self {
+            problems,
+            ..Self::new(state, next_step)
+        }
+    }
 }
 
-/// What `check_code` reports when main.s follows every rule and passes every test.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct CodeReport {
-    /// Whether main.s follows every rule of the dialect.
-    pub rules_passed: bool,
-    /// Whether every test passed.
-    pub tests_passed: bool,
-    /// Whether lengua.lock now records this main.s.
-    pub stamped: bool,
-    /// Functions, assert_fail excluded.
-    pub functions: usize,
-    /// Assertions in the program.
-    pub assertions: usize,
-    /// The deepest the stack can get over every call path, in bytes.
-    pub max_stack_bytes: u64,
-    /// Every `# unsafe:` block, as `main.s:START-END: reason`.
-    pub unsafe_blocks: Vec<String>,
-    /// Program runs made by the tests.
-    pub test_runs: usize,
-    /// The generated tests that ran every value in their ranges, not a sample, such as
-    /// "generated B1: every value of n in its range (all 201)".
-    pub every_value: Vec<String>,
-    /// The seed that drew this check's random inputs.
-    pub seed: String,
-    /// What each test cost: instructions, cycles and CPU time (lower is faster), when the CPU's
-    /// counters are available.
-    pub performance: Vec<testrun::Cost>,
-    /// One hash over spec, tests and code.
-    pub fingerprint: String,
+/// What changed after the user's request.
+#[derive(Debug, Default, Serialize, schemars::JsonSchema)]
+pub struct ChangesReport {
     /// The user's requests in this build, as recorded, oldest first.
     pub requests: Vec<String>,
     /// How spec.md changed since the build's first request, as `-`/`+` lines.
@@ -297,37 +304,6 @@ pub struct CodeReport {
     /// lengua's own list of the test changes that test less than before.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tests_less: Vec<String>,
-    /// What happened.
-    pub message: String,
-    /// The single next thing to do.
-    pub next_step: String,
-}
-
-/// One generated test's proof.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct ProofReport {
-    /// The test, such as `generated B1`.
-    pub test: String,
-    /// Whether the program is right for every input in the test's ranges, not just the
-    /// sampled ones.
-    pub proven: bool,
-    /// When the proof holds only for texts up to a length: that length in bytes. Inputs with
-    /// longer texts are tested, not proven.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub proven_up_to: Option<usize>,
-    /// What was proven, or why it wasn't.
-    pub detail: String,
-}
-
-/// What `prove` reports.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct ProveReport {
-    /// Each generated test's proof.
-    pub proofs: Vec<ProofReport>,
-    /// What happened.
-    pub message: String,
-    /// The single next thing to do.
-    pub next_step: String,
 }
 
 /// `count` things, in the plural unless there's one.
@@ -338,9 +314,6 @@ fn counted(count: usize, thing: &str) -> String {
         format!("{count} {thing}s")
     }
 }
-
-/// The longest one `prove` call may take.
-const PROOF_TIME: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// Input for `run`.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -365,7 +338,7 @@ pub struct RunParams {
     /// `stdin`, read by the program itself however large it is.
     #[serde(default)]
     pub stdin_file: Option<String>,
-    /// How many seconds the program may run, 1 to 600; 10 when not given.
+    /// How many seconds the program may run, 1 to 40; 10 when not given.
     #[serde(default)]
     pub timeout_seconds: Option<u64>,
 }
@@ -389,8 +362,6 @@ pub struct RunReport {
     pub cpu_time_us: Option<u64>,
     /// Time on the clock in microseconds, from start to end.
     pub wall_time_us: u64,
-    /// The fingerprint of the spec, tests and code that ran.
-    pub fingerprint: String,
     /// Where a server is taking connections, while it runs in the background.
     pub serving: Option<String>,
 }
@@ -400,7 +371,6 @@ fn ended_report(
     result: &runner::Run,
     assertions: &BTreeMap<i64, usize>,
     limits: Limits,
-    fingerprint: String,
 ) -> RunReport {
     RunReport {
         stdout: String::from_utf8_lossy(&result.stdout).into_owned(),
@@ -414,7 +384,6 @@ fn ended_report(
         cycles: result.cycles,
         cpu_time_us: result.cpu_time_ns.map(|nanoseconds| nanoseconds / 1000),
         wall_time_us: result.wall_time_ns / 1000,
-        fingerprint,
         serving: None,
     }
 }
@@ -428,7 +397,6 @@ impl LenguaServer {
         job: Job<'_>,
         build: Arc<tempfile::TempDir>,
         assertions: BTreeMap<i64, usize>,
-        fingerprint: String,
     ) -> Result<RunReport, String> {
         static STARTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let mut background = self.background.lock().await;
@@ -447,7 +415,7 @@ impl LenguaServer {
             .await
             .map_err(|error| format!("couldn't start the server: {error}"))?;
         let address = format!("127.0.0.1:{}", started.port().unwrap_or(0));
-        let id = STARTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let id = STARTS.fetch_add(1, Ordering::Relaxed);
         background.insert(
             folder.path().to_path_buf(),
             Background {
@@ -455,7 +423,6 @@ impl LenguaServer {
                 _build: build,
                 id,
                 assertions,
-                fingerprint: fingerprint.clone(),
             },
         );
         let (servers, key) = (Arc::clone(&self.background), folder.path().to_path_buf());
@@ -482,7 +449,6 @@ impl LenguaServer {
             cycles: None,
             cpu_time_us: None,
             wall_time_us: 0,
-            fingerprint,
             serving: Some(address),
         })
     }
@@ -491,416 +457,162 @@ impl LenguaServer {
 #[tool_router]
 impl LenguaServer {
     #[tool(
-        name = "status",
-        title = "Status",
-        description = "Shows what lengua allows on this machine (the CPU extensions main.s may \
-            use and the cores a spec may ask for) and, given a program folder, what that program \
-            needs next: each file's hash, whether lengua.lock records it, the label tests.toml \
-            and main.s must carry, any problems in an unrecorded spec.md, which tests prove has \
-            proven for every input, the user's requests, and what changed in spec.md and \
-            tests.toml since them. Ends with the single next step to take, or why lengua can't \
-            build programs here. path: absolute path of a program folder (optional).",
-        annotations(title = "Status", read_only_hint = true, open_world_hint = false)
+        name = "check",
+        title = "Check",
+        description = "Checks the lengua program in <path> stage by stage, records each stage in \
+            lengua.lock, and stops at the first that needs work: it records spec.md as the \
+            source of truth with the user's words that asked for it, checks tests.toml against \
+            the spec, checks main.s against lengua's rules, runs every test with fresh random \
+            inputs, and proves the program for every input it can. Call it after every edit to \
+            spec.md, tests.toml or main.s. It replies within about 40 seconds; the tests and the \
+            proof go on in the background, so while it says testing or proving, call it again \
+            to wait. path: absolute path of the program folder; request: the user's words that \
+            asked for this program or this change, quoted exactly and never made up, needed the \
+            first time and whenever they ask for something new.",
+        annotations(
+            title = "Check",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
-    async fn status(
+    async fn check(
         &self,
-        Parameters(params): Parameters<StatusParams>,
-    ) -> Result<Json<StatusReport>, String> {
+        Parameters(params): Parameters<CheckParams>,
+    ) -> Result<Json<CheckReport>, String> {
+        let began = Instant::now();
+        let folder = folder_of(&params.path)?;
         let machine = Machine::detect();
         let toolchain = Toolchain::discover().await;
-        let program = match params.path.as_deref() {
-            Some(path) => Some(self.program_report(&ProgramFolder::new(path)?)?),
-            None => None,
-        };
-        let next_step = match (
-            machine_blocker(&machine, toolchain.as_ref().err()),
-            &program,
-        ) {
-            (Some(blocker), _) => blocker,
-            (None, Some((_, step))) => step.clone(),
-            (None, None) => READY_STEP.to_owned(),
-        };
-        Ok(Json(StatusReport {
-            server_version: env!("CARGO_PKG_VERSION").to_owned(),
-            machine: MachineReport {
-                profile: machine.profile.map(|profile| profile.name().to_owned()),
-                cores: machine.cores,
-                features: machine.features,
-            },
-            program: program.map(|(report, _)| report),
-            next_step,
-        }))
-    }
-
-    #[tool(
-        name = "record_spec",
-        title = "Record spec",
-        description = "Records <path>/spec.md in lengua.lock as the source of truth, with the \
-            user's words that asked for this program or this change. Call it right after writing \
-            or changing spec.md; don't wait for an approval. It first checks the spec's format \
-            and returns any problems. A changed spec makes the tests and code be checked again, \
-            and every change after the build's first request is shown, never hidden. path: \
-            absolute path of the program folder or of its spec.md; request: the user's words, \
-            quoted exactly, never made up.",
-        annotations(
-            title = "Record spec",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn record_spec(
-        &self,
-        Parameters(params): Parameters<RecordParams>,
-    ) -> Result<Json<RecordReport>, String> {
-        let folder = folder_of(&params.path)?;
-        let words = params.request.trim();
-        if words.is_empty() {
-            return Err(
-                "request must quote the user's own words that asked for this program or this \
-                 change, exactly as they wrote them. Never make them up: if the user hasn't asked \
-                 for a program yet, ask them what it should do."
-                    .to_owned(),
-            );
+        if let Some(blocked) = machine_blocker(&machine, toolchain.as_ref().err()) {
+            return Ok(Json(CheckReport::new("blocked", blocked)));
         }
-        if words.chars().count() > MAX_REQUEST_CHARS {
-            return Err(format!(
-                "request holds more than {MAX_REQUEST_CHARS} characters; quote only the user's \
-                 words that ask for the program or the change."
-            ));
-        }
-        let _writing = self.lock_writes.lock().await;
-        let text = read_spec(&folder)?;
-        let spec = spec::parse(&text).map_err(|problems| spec_problems(&folder, &problems))?;
-        let current = Sha256Hex::of(text.as_bytes());
-        let key = Key::load_or_create(&self.data_dir).map_err(|error| error.to_string())?;
-        // Every recorded version is kept by its hash, so later changes can be shown.
-        write_stamped_copy(&self.data_dir, &current, &text)?;
-        let previous = lock::read(folder.path(), Some(&key)).ok().flatten();
-        let fresh = || {
-            format!(
-                "lengua recorded {SPEC_FILE} for \"{}\" with the user's request. It's the source \
-                 of truth the tests and code are checked against.",
-                spec.title
-            )
-        };
-        let (lock, message) = match previous {
-            Some(lock)
-                if lock.request.words.iter().any(|known| known == words)
-                    && lock.spec.sha256 == current =>
-            {
-                (
-                    lock,
-                    format!("{SPEC_FILE} was already recorded for this request; nothing changed."),
-                )
-            }
-            // The spec was revised under a request it already has: it's checked again, and
-            // the change is shown.
-            Some(lock) if lock.request.words.iter().any(|known| known == words) => (
-                Lock {
-                    spec: SpecStamp {
-                        sha256: current.clone(),
-                    },
-                    tests: None,
-                    code: None,
-                    proofs: None,
-                    ..lock
-                },
-                format!(
-                    "{SPEC_FILE} changed under the same request, so lengua records it; the tests \
-                     and code are checked against it again. spec_changed shows every change \
-                     since the build's first request: tell the user each, and why, in your final \
-                     report."
-                ),
-            ),
-            // New words in the middle of a build join it, so nothing changed before them drops
-            // out of what is shown.
-            Some(lock) if lock.code.is_none() => {
-                let unchanged = lock.spec.sha256 == current;
-                let mut request = lock.request;
-                if request.words.len() >= lock::MAX_REQUESTS {
-                    request.words.remove(1);
-                }
-                request.words.push(words.to_owned());
-                (
-                    Lock {
-                        request,
-                        spec: SpecStamp {
-                            sha256: current.clone(),
-                        },
-                        tests: if unchanged { lock.tests } else { None },
-                        code: None,
-                        proofs: None,
-                    },
-                    format!(
-                        "lengua recorded {SPEC_FILE} with the user's new words. The build they \
-                         join isn't finished, so changes are still shown from the spec it started \
-                         with, and requests lists every request in it."
-                    ),
-                )
-            }
-            // A new request after a finished build starts a new build.
-            // With the spec unchanged, its checked tests and code stay, and the tests the code
-            // ran against are where test changes are counted from.
-            Some(lock) if lock.spec.sha256 == current => {
-                let mut request = Lock::requested(current.clone(), words.to_owned()).request;
-                request.tests = lock.tests.as_ref().map(|tests| tests.sha256.clone());
-                (Lock { request, ..lock }, fresh())
-            }
-            _ => (Lock::requested(current.clone(), words.to_owned()), fresh()),
-        };
-        lock::write(folder.path(), &lock, &key)
-            .map_err(|error| format!("couldn't write {folder}/{}: {error}", lock::LOCK_FILE))?;
-        let changes = self.changes(&folder, &lock);
-        Ok(Json(RecordReport {
-            recorded: true,
-            spec_label: current.label(),
-            requests: lock.request.words.clone(),
-            spec_changed: changes.spec,
-            message,
-            next_step: self.program_state(&folder)?.1,
-        }))
-    }
-
-    #[tool(
-        name = "check_tests",
-        title = "Check tests",
-        description = "Checks <path>/tests.toml against the recorded spec and records it in \
-            lengua.lock. A wrong test can be fixed at any time: each version is checked against \
-            the spec again, and after code has run, the reply shows what changed and which \
-            changes test less. It checks the [meta] spec label, one example per behavior holding the spec's values, a [[generated]] block \
-            for every behavior with inputs, generator ranges taken from the spec's Purpose, \
-            formulas that reproduce each example without overflow or division by zero, and \
-            output that depends on the inputs. Returns every problem at once. path: absolute path \
-            of the program folder.",
-        annotations(
-            title = "Check tests",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn check_tests(
-        &self,
-        Parameters(params): Parameters<ProgramParams>,
-    ) -> Result<Json<TestsReport>, String> {
-        let folder = ProgramFolder::new(&params.path)?;
-        let (state, next_step) = self.program_state(&folder)?;
-        let already_checked = match state {
-            State::TestsUnchecked => false,
-            State::CodeMissing | State::CodeUnchecked | State::Ready => true,
-            State::TestsMissing => {
-                return Err(format!(
-                    "There's no {TESTS_FILE} in {folder} yet. {next_step}"
-                ));
-            }
-            State::NoSpec | State::SpecUnrecorded | State::LockInvalid(_) => {
-                return Err(format!(
-                    "Tests are checked against a recorded spec, and {folder} has none yet. \
-                     {next_step}"
-                ));
-            }
-        };
-        let spec_text = read_spec(&folder)?;
-        let spec = spec::parse(&spec_text).map_err(|problems| spec_problems(&folder, &problems))?;
-        let spec_hash = Sha256Hex::of(spec_text.as_bytes());
-        let tests_text = read_tests(&folder)?;
-        let tests_hash = Sha256Hex::of(tests_text.as_bytes());
-        let suite = testfile::check(&tests_text, &spec, &spec_hash.label())
-            .map_err(|problems| tests_problems(&folder, &problems))?;
-        if !already_checked {
-            self.stamp_tests(&folder, &spec_hash, &tests_hash, &tests_text)
-                .await?;
-        }
-        let changes = self.current_changes(&folder);
-        let message = if already_checked {
-            format!("{TESTS_FILE} was already checked; nothing changed.")
-        } else if changes.tests.is_some() || !changes.tests_less.is_empty() {
-            format!(
-                "{TESTS_FILE} changed after code ran against it. It still matches {SPEC_FILE}, so \
-                 lengua records it, and the code is checked against it again. tests_changed \
-                 shows the changes since code first ran, and tests_less the ones that test less: \
-                 tell the user each, and why it's right, in your final report."
-            )
-        } else {
-            format!("{TESTS_FILE} covers every behavior in {SPEC_FILE}, so lengua records it.")
-        };
-        Ok(Json(TestsReport {
-            checked: true,
-            tests_sha256: tests_hash.to_string(),
-            examples: suite.examples.len(),
-            generated_blocks: suite.generated.len(),
-            generated_runs: suite
-                .generated
-                .iter()
-                .map(|block| u64::try_from(block.run_count()).unwrap_or(u64::MAX))
-                .sum(),
-            tests_changed: changes.tests,
-            tests_less: changes.tests_less,
-            message,
-            next_step: self.program_state(&folder)?.1,
-        }))
-    }
-
-    #[tool(
-        name = "check_code",
-        title = "Check code",
-        description = "Checks <path>/main.s against lengua's rules and every test, then records \
-            it in lengua.lock. It assembles and links the program, reads the machine code back \
-            and matches it to main.s line by line, and checks every lengua Power of 10 rule; \
-            nothing runs before the rules pass. Then it runs every test, generated tests with \
-            fresh random inputs, and reports what each test cost. Needs a recorded spec and \
-            checked tests, and main.s's first line must be the spec label. Returns every \
-            violation or failed test with its line. path: absolute path of the program folder.",
-        annotations(
-            title = "Check code",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn check_code(
-        &self,
-        Parameters(params): Parameters<ProgramParams>,
-    ) -> Result<Json<CodeReport>, String> {
-        let folder = ProgramFolder::new(&params.path)?;
-        let (state, next_step) = self.program_state(&folder)?;
-        match state {
-            State::CodeUnchecked | State::Ready => {}
-            State::CodeMissing => {
-                return Err(format!(
-                    "There's no {CODE_FILE} in {folder} yet. {next_step}"
-                ));
-            }
-            _ => {
-                return Err(format!(
-                    "Code is checked against a recorded spec and checked tests, which {folder} \
-                     doesn't have yet. {next_step}"
-                ));
-            }
-        }
-        let spec_text = read_spec(&folder)?;
-        let spec = spec::parse(&spec_text).map_err(|problems| spec_problems(&folder, &problems))?;
-        let spec_hash = Sha256Hex::of(spec_text.as_bytes());
-        let label = spec_hash.label();
-        let tests_text = read_tests(&folder)?;
-        let tests_hash = Sha256Hex::of(tests_text.as_bytes());
-        let code = read_code(&folder)?;
-        let header = format!("# lengua: spec {label}");
-        let first_line = code.lines().next().unwrap_or_default();
-        if first_line != header {
-            return Err(format!(
-                "{CODE_FILE}'s first line must be `{header}`, the label of the recorded spec, but \
-                 it's `{first_line}`. Set it, after making sure the code implements the current \
-                 spec."
-            ));
-        }
-        let (source, layout) = checker::check_layout(&code);
-        if !layout.passed() {
-            return Err(violations_text(&folder, &layout));
-        }
-        let machine = Machine::detect();
         let profile = supported(&machine)?;
-        let built = build(&code, profile).await?;
-        let report = checker::check_program(
-            &source,
-            &built.bytes,
-            checker::Context {
-                syscalls: &spec.syscalls,
-                threads: spec.threads,
-                features: machine.features,
-                profile,
-            },
-        );
-        if !report.passed() {
-            return Err(violations_text(&folder, &report));
-        }
-        let facts = report.facts.clone().unwrap_or_default();
-        let suite = testfile::check(&tests_text, &spec, &label)
-            .map_err(|problems| tests_problems(&folder, &problems))?;
-        let seed = random_seed()?;
-        let every_value: Vec<(String, String)> = suite
-            .generated
-            .iter()
-            .filter_map(|block| {
-                block
-                    .every_value_text()
-                    .map(|text| (block.id.to_string(), text))
-            })
-            .collect();
-        self.note_first_run(&folder, &tests_hash).await?;
-        let syscalls = profile.allowed_syscalls(&spec.syscalls, spec.threads.is_some());
-        let outcome = testrun::run_tests(
-            &suite,
-            &self.launcher,
-            &built.executable,
-            &source,
-            seed,
-            &syscalls,
-            &spec.network,
-            testrun::workers(spec.threads),
-        )
-        .await
-        .map_err(|error| format!("couldn't run the program: {error}"))?;
-        if !outcome.passed() {
-            return Err(failures_text(&folder, &outcome));
-        }
-        let stamp = CodeStamp {
-            sha256: Sha256Hex::of(code.as_bytes()),
-            executable_sha256: Sha256Hex::of(&built.bytes),
-            toolchain: built.toolchain.clone(),
-            max_stack_bytes: facts.max_stack_bytes,
-            unsafe_blocks: u32::try_from(report.unsafe_blocks.len()).unwrap_or(u32::MAX),
+        let machine_line = || machine_line(&machine);
+
+        // spec.md, recorded once it parses.
+        let Some(spec_text) = read_optional(&folder, SPEC_FILE)? else {
+            return Ok(Json(CheckReport {
+                machine: Some(machine_line()),
+                ..CheckReport::new("write_spec", State::NoSpec.next_step(&folder))
+            }));
         };
-        let fingerprint = self
-            .stamp_code(&folder, &spec_hash, &tests_hash, stamp)
+        let spec = match spec::parse(&spec_text) {
+            Ok(spec) => spec,
+            Err(problems) => {
+                return Ok(Json(CheckReport::problems(
+                    "spec_problems",
+                    problems.iter().map(ToString::to_string).collect(),
+                    format!(
+                        "Next: fix {folder}/{SPEC_FILE} with the write-spec skill, then call check \
+                         with path {folder}."
+                    ),
+                )));
+            }
+        };
+        if let Some(next_step) = self
+            .record(&folder, &spec_text, params.request.as_deref())
+            .await?
+        {
+            return Ok(Json(CheckReport::new("needs_request", next_step)));
+        }
+        let spec_hash = Sha256Hex::of(spec_text.as_bytes());
+
+        // tests.toml, checked against the spec.
+        let Some(tests_text) = read_optional(&folder, TESTS_FILE)? else {
+            return Ok(Json(CheckReport {
+                machine: Some(machine_line()),
+                ..CheckReport::new("write_tests", State::TestsMissing.next_step(&folder))
+            }));
+        };
+        let suite = match testfile::check(&tests_text, &spec) {
+            Ok(suite) => suite,
+            Err(problems) => {
+                return Ok(Json(CheckReport::problems(
+                    "test_problems",
+                    problems.iter().map(ToString::to_string).collect(),
+                    format!(
+                        "Next: fix {folder}/{TESTS_FILE} with the write-tests skill, then call \
+                         check with path {folder}."
+                    ),
+                )));
+            }
+        };
+        let tests_hash = Sha256Hex::of(tests_text.as_bytes());
+        self.note_tests(&folder, &spec_hash, &tests_hash, &tests_text)
             .await?;
-        let changes = self.current_changes(&folder);
-        let shown = if changes.spec.is_some() || changes.tests.is_some() {
-            " spec_changed and tests_changed show what changed after the user's request, and \
-             tests_less the test changes that test less: tell the user each, and why, in your \
-             final report."
-        } else {
-            ""
+
+        // main.s, checked against the rules, then tested and proven in the background.
+        let Some(code) = read_optional(&folder, CODE_FILE)? else {
+            return Ok(Json(CheckReport {
+                machine: Some(machine_line()),
+                ..CheckReport::new("write_code", State::CodeMissing.next_step(&folder))
+            }));
         };
-        Ok(Json(CodeReport {
-            rules_passed: true,
-            tests_passed: true,
-            stamped: true,
-            functions: facts.functions,
-            assertions: facts.assertions,
-            max_stack_bytes: facts.max_stack_bytes,
-            unsafe_blocks: report
-                .unsafe_blocks
-                .iter()
-                .map(|block| format!("main.s:{}-{}: {}", block.start, block.end, block.reason))
-                .collect(),
-            test_runs: outcome.runs,
-            every_value: every_value
-                .iter()
-                .map(|(id, text)| format!("generated {id}: {text}"))
-                .collect(),
-            seed: seed.to_string(),
-            performance: outcome.costs,
-            fingerprint: fingerprint.to_string(),
-            requests: changes.requests,
-            spec_changed: changes.spec,
-            tests_changed: changes.tests,
-            tests_less: changes.tests_less,
-            message: format!(
-                "{CODE_FILE} follows every rule and passed all {} test runs.{} lengua.lock now \
-                 records spec, tests and code together, so the program can run.{shown}",
-                outcome.runs,
-                every_value
-                    .iter()
-                    .map(|(id, text)| format!(" Generated {id} tried {text}."))
-                    .collect::<String>()
-            ),
-            next_step: self.program_state(&folder)?.1,
-        }))
+        let files = [spec_hash, tests_hash, Sha256Hex::of(code.as_bytes())];
+        let checking = match self.current_checking(&folder, &files).await {
+            Some(checking) => checking,
+            None => {
+                let fix = || {
+                    format!(
+                        "Next: fix {folder}/{CODE_FILE} with the write-assembly skill (the full \
+                         rules are in its references/power-of-10.md), then call check with path \
+                         {folder}."
+                    )
+                };
+                let (source, layout) = checker::check_layout(&code);
+                if !layout.passed() {
+                    return Ok(Json(CheckReport::problems(
+                        "code_problems",
+                        violation_lines(&layout),
+                        fix(),
+                    )));
+                }
+                let built = match build(&code, profile).await {
+                    Ok(built) => built,
+                    Err(error) => {
+                        return Ok(Json(CheckReport::problems(
+                            "code_problems",
+                            vec![error],
+                            fix(),
+                        )));
+                    }
+                };
+                let report = checker::check_program(
+                    &source,
+                    &built.bytes,
+                    checker::Context {
+                        syscalls: &spec.syscalls,
+                        threads: spec.threads,
+                        features: machine.features,
+                        profile,
+                    },
+                );
+                if !report.passed() {
+                    return Ok(Json(CheckReport::problems(
+                        "code_problems",
+                        violation_lines(&report),
+                        fix(),
+                    )));
+                }
+                self.start_checking(
+                    &folder,
+                    files,
+                    Code {
+                        spec,
+                        suite,
+                        source,
+                        built,
+                        report,
+                        profile,
+                    },
+                )
+                .await
+            }
+        };
+        wait_for(&checking, began + check_wait()).await;
+        Ok(Json(self.checking_report(&folder, &checking)))
     }
 
     #[tool(
@@ -909,7 +621,7 @@ impl LenguaServer {
         description = "Runs the checked program in <path> with args and stdin. It runs only \
             when lengua.lock shows that spec.md, tests.toml and main.s are exactly the versions \
             that were recorded and checked, and a fresh build of main.s is byte for byte the \
-            executable check_code tested. The program gets an empty environment, 10 seconds and \
+            executable check tested. The program gets an empty environment, 10 seconds and \
             8 MiB of output, and the kernel lets it make only the system calls its spec allows, \
             connect only to the ports it names, and touch files only inside its working folder: \
             an empty temporary folder, or `folder`. A server starts in the background on its \
@@ -919,8 +631,8 @@ impl LenguaServer {
             its standard input; folder: absolute path of a folder of the user's files to run in, \
             naming the files in args relative to it (\"notes.txt\", not \"/home/me/notes.txt\"); \
             stdin_file: a file in folder to read as standard input instead of stdin, however \
-            large; timeout_seconds: up to 600 for long runs on large data (10 by default); stop: \
-            true to stop the server run started.",
+            large; timeout_seconds: up to 40 (10 by default); stop: true to stop the server run \
+            started.",
         annotations(title = "Run program", read_only_hint = false, open_world_hint = false)
     )]
     async fn run(
@@ -944,28 +656,26 @@ impl LenguaServer {
                 timeout: BACKGROUND_LIMIT,
                 ..Limits::default()
             };
-            return Ok(Json(ended_report(
-                &result,
-                &entry.assertions,
-                limits,
-                entry.fingerprint,
-            )));
+            return Ok(Json(ended_report(&result, &entry.assertions, limits)));
         }
-        let (state, next_step) = self.program_state(&folder)?;
+        let state = self.program_state(&folder)?;
         if state != State::Ready {
             return Err(format!(
                 "lengua runs a program only when its spec, tests and code all match \
-                 lengua.lock, and {folder} doesn't. {next_step}"
+                 lengua.lock, and {folder} doesn't. {}",
+                state.next_step(&folder)
             ));
         }
         let key = Key::load(&self.data_dir)
             .map_err(|error| error.to_string())?
-            .ok_or("lengua's signing key is missing; call status")?;
+            .ok_or("lengua's signing key is missing; call check")?;
         let lock = lock::read(folder.path(), Some(&key))
             .map_err(|error| format!("lengua.lock can't be trusted: {error}"))?
-            .ok_or("lengua.lock is missing; call status")?;
-        let (Some(stamp), Some(fingerprint)) = (lock.code.as_ref(), lock.fingerprint()) else {
-            return Err(format!("{CODE_FILE} isn't checked; call check_code first."));
+            .ok_or("lengua.lock is missing; call check")?;
+        let Some(stamp) = lock.code.as_ref() else {
+            return Err(format!(
+                "{CODE_FILE} isn't checked; call check with path {folder} first."
+            ));
         };
         let code = read_code(&folder)?;
         let source = checker::check_layout(&code).0;
@@ -981,17 +691,17 @@ impl LenguaServer {
         let built = build(&code, profile).await?;
         if Sha256Hex::of(&built.bytes) != stamp.executable_sha256 {
             return Err(format!(
-                "This build of {CODE_FILE} differs from the one check_code tested (built with {}; \
-                 now {}), so it won't run. Call check_code with path {folder} to test this build.",
+                "This build of {CODE_FILE} differs from the one check tested (built with {}; \
+                 now {}), so it won't run. Call check with path {folder} to test this build.",
                 stamp.toolchain, built.toolchain
             ));
         }
         let seconds = params.timeout_seconds.unwrap_or(10);
-        if !(1..=600).contains(&seconds) {
-            return Err("timeout_seconds goes from 1 to 600".into());
+        if !(1..=RUN_SECONDS).contains(&seconds) {
+            return Err(format!("timeout_seconds goes from 1 to {RUN_SECONDS}"));
         }
         let limits = Limits {
-            timeout: std::time::Duration::from_secs(seconds),
+            timeout: Duration::from_secs(seconds),
             max_file_size: None,
             ..Limits::default()
         };
@@ -1033,92 +743,388 @@ impl LenguaServer {
         let assertions = testrun::assertion_lines(&source);
         if spec.network.listens.is_some() {
             return self
-                .serve_in_background(
-                    &folder,
-                    job,
-                    Arc::clone(&built.folder),
-                    assertions,
-                    fingerprint.to_string(),
-                )
+                .serve_in_background(&folder, job, Arc::clone(&built.folder), assertions)
                 .await
                 .map(Json);
         }
         let result = runner::run(&self.launcher, job, limits)
             .await
             .map_err(|error| format!("couldn't run the program: {error}"))?;
-        Ok(Json(ended_report(
-            &result,
-            &assertions,
-            limits,
-            fingerprint.to_string(),
-        )))
+        Ok(Json(ended_report(&result, &assertions, limits)))
+    }
+}
+
+/// Everything a checking job needs about the code it checks.
+struct Code {
+    spec: Spec,
+    suite: TestSuite,
+    source: Source,
+    built: Build,
+    report: checker::Report,
+    profile: Profile,
+}
+
+/// Waits until `checking` ends or `until`, whichever comes first; once its tests pass, at most
+/// [`GREEN_GRACE`] more, unless a reply has already said so.
+async fn wait_for(checking: &Checking, until: Instant) {
+    let mut stage = checking.stage.subscribe();
+    loop {
+        let deadline = match *stage.borrow_and_update() {
+            Stage::Ended => return,
+            Stage::Proving(since) if !checking.green_told.load(Ordering::Relaxed) => {
+                until.min(since + GREEN_GRACE)
+            }
+            Stage::Testing | Stage::Proving(_) => until,
+        };
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() || tokio::time::timeout(left, stage.changed()).await.is_err() {
+            return;
+        }
+    }
+}
+
+impl LenguaServer {
+    /// The program's state.
+    fn program_state(&self, folder: &ProgramFolder) -> Result<State, String> {
+        let key = Key::load(&self.data_dir).map_err(|error| error.to_string())?;
+        let snapshot = Snapshot::read(folder, key.as_ref())
+            .map_err(|error| format!("can't read {folder}: {error}"))?;
+        Ok(State::of(&snapshot))
     }
 
-    #[tool(
-        name = "prove",
-        title = "Prove for every input",
-        description = "Proves that the checked program in <path> prints exactly what its tests' \
-            formulas say for every input in range, not only the sampled ones: for each generated \
-            test whose inputs are whole numbers, decimals, choices or short texts, and whose \
-            outputs are text, numbers or files, it runs the machine code on symbols and asks two \
-            independent SMT solvers, z3 and cvc5, whether any input could make the output differ. Call it after check_code passes. It \
-            can take a few minutes. A counterexample is confirmed with a real run and reported \
-            as a failure. lengua.lock records what was proven, and status shows it until the \
-            spec, tests or code change. path: absolute path of the program folder.",
-        annotations(
-            title = "Prove for every input",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn prove(
+    /// Records spec.md, unless the lock already records it as it is, with the user's words when
+    /// given. Returns the next step instead when it can't be recorded without their words.
+    async fn record(
         &self,
-        Parameters(params): Parameters<ProgramParams>,
-    ) -> Result<Json<ProveReport>, String> {
-        let folder = ProgramFolder::new(&params.path)?;
-        let (state, next_step) = self.program_state(&folder)?;
-        if state != State::Ready {
+        folder: &ProgramFolder,
+        text: &str,
+        request: Option<&str>,
+    ) -> Result<Option<String>, String> {
+        let words = request.map(str::trim).filter(|words| !words.is_empty());
+        if words.is_some_and(|words| words.chars().count() > MAX_REQUEST_CHARS) {
             return Err(format!(
-                "lengua proves a program after check_code has recorded it, and {folder} isn't \
-                 ready. {next_step}"
+                "request holds more than {MAX_REQUEST_CHARS} characters; quote only the user's \
+                 words that ask for the program or the change."
             ));
         }
-        let key = Key::load(&self.data_dir)
-            .map_err(|error| error.to_string())?
-            .ok_or("lengua's signing key is missing; call status")?;
-        let lock = lock::read(folder.path(), Some(&key))
-            .map_err(|error| format!("lengua.lock can't be trusted: {error}"))?
-            .ok_or("lengua.lock is missing; call status")?;
-        let stamp = lock
-            .code
-            .as_ref()
-            .ok_or("main.s isn't checked; call check_code first.")?;
-        let spec_text = read_spec(&folder)?;
-        let spec = spec::parse(&spec_text).map_err(|problems| spec_problems(&folder, &problems))?;
-        let suite = testfile::check(
-            &read_tests(&folder)?,
-            &spec,
-            &Sha256Hex::of(spec_text.as_bytes()).label(),
+        let current = Sha256Hex::of(text.as_bytes());
+        let _writing = self.lock_writes.lock().await;
+        let key = Key::load_or_create(&self.data_dir).map_err(|error| error.to_string())?;
+        let previous = match lock::read(folder.path(), Some(&key)) {
+            Ok(previous) => previous,
+            Err(error) if words.is_none() => {
+                return Ok(Some(State::LockInvalid(error).next_step(folder)));
+            }
+            Err(_) => None,
+        };
+        // Words the build already has, or none, mean the same request.
+        let new_words = words.filter(|words| {
+            previous
+                .as_ref()
+                .is_none_or(|lock| !lock.request.words.iter().any(|known| known == words))
+        });
+        let lock = match (previous, new_words) {
+            (None, None) => return Ok(Some(State::SpecUnrecorded.next_step(folder))),
+            (Some(lock), None) => {
+                if lock.spec.sha256 == current {
+                    return Ok(None);
+                }
+                // The spec was revised under a request it already has: it's checked again, and
+                // the change is shown.
+                Lock {
+                    spec: SpecStamp {
+                        sha256: current.clone(),
+                    },
+                    tests: None,
+                    code: None,
+                    proofs: None,
+                    ..lock
+                }
+            }
+            // New words in the middle of a build join it, so nothing changed before them drops
+            // out of what is shown.
+            (Some(lock), Some(words)) if lock.code.is_none() => {
+                let unchanged = lock.spec.sha256 == current;
+                let mut request = lock.request;
+                if request.words.len() >= lock::MAX_REQUESTS {
+                    request.words.remove(1);
+                }
+                request.words.push(words.to_owned());
+                Lock {
+                    request,
+                    spec: SpecStamp {
+                        sha256: current.clone(),
+                    },
+                    tests: if unchanged { lock.tests } else { None },
+                    code: None,
+                    proofs: None,
+                }
+            }
+            // A new request after a finished build starts a new build. With the spec unchanged,
+            // its checked tests and code stay, and the tests the code ran against are where test
+            // changes are counted from.
+            (Some(lock), Some(words)) if lock.spec.sha256 == current => {
+                let mut request = Lock::requested(current.clone(), words.to_owned()).request;
+                request.tests = lock.tests.as_ref().map(|tests| tests.sha256.clone());
+                Lock { request, ..lock }
+            }
+            (_, Some(words)) => Lock::requested(current.clone(), words.to_owned()),
+        };
+        // Every recorded version is kept by its hash, so later changes can be shown.
+        write_stamped_copy(&self.data_dir, &current, text)?;
+        lock::write(folder.path(), &lock, &key)
+            .map_err(|error| format!("couldn't write {folder}/{}: {error}", lock::LOCK_FILE))?;
+        Ok(None)
+    }
+
+    /// Records checked tests in the lock, unless it already records them.
+    async fn note_tests(
+        &self,
+        folder: &ProgramFolder,
+        spec: &Sha256Hex,
+        tests: &Sha256Hex,
+        text: &str,
+    ) -> Result<(), String> {
+        let recorded = Key::load(&self.data_dir)
+            .ok()
+            .flatten()
+            .and_then(|key| lock::read(folder.path(), Some(&key)).ok().flatten())
+            .is_some_and(|lock| {
+                lock.spec.sha256 == *spec
+                    && lock
+                        .tests
+                        .as_ref()
+                        .is_some_and(|stamp| stamp.sha256 == *tests)
+            });
+        if recorded {
+            return Ok(());
+        }
+        self.stamp_tests(folder, spec, tests, text).await
+    }
+
+    /// The checking job for these files, running or ended, unless it ended with failed tests,
+    /// which run again, or passed them but lengua.lock no longer records the code it checked.
+    async fn current_checking(
+        &self,
+        folder: &ProgramFolder,
+        files: &[Sha256Hex; 3],
+    ) -> Option<Arc<Checking>> {
+        let checks = self.checks.lock().await;
+        let checking = checks.get(folder.path())?;
+        if checking.files != *files {
+            return None;
+        }
+        let (failed, passed) = checking.found.lock().map_or((true, false), |found| {
+            (!found.failures.is_empty(), found.passed.is_some())
+        });
+        let ended = *checking.stage.borrow() == Stage::Ended;
+        if ended && failed {
+            return None;
+        }
+        if passed {
+            let recorded = Key::load(&self.data_dir)
+                .ok()
+                .flatten()
+                .and_then(|key| lock::read(folder.path(), Some(&key)).ok().flatten())
+                .and_then(|lock| lock.code)
+                .is_some_and(|code| {
+                    code.sha256 == files[2] && code.executable_sha256 == checking.executable
+                });
+            if !recorded {
+                return None;
+            }
+        }
+        Some(Arc::clone(checking))
+    }
+
+    /// Starts testing and proving `code` in the background, stopping any job on older files.
+    async fn start_checking(
+        &self,
+        folder: &ProgramFolder,
+        files: [Sha256Hex; 3],
+        code: Code,
+    ) -> Arc<Checking> {
+        let proofs = code
+            .suite
+            .generated
+            .iter()
+            .map(|block| BlockProof {
+                test: format!("generated {}", block.id),
+                progress: None,
+                detail: None,
+                wrong: false,
+            })
+            .collect();
+        let checking = Arc::new(Checking {
+            files,
+            executable: Sha256Hex::of(&code.built.bytes),
+            cancel: Arc::default(),
+            found: std::sync::Mutex::new(Found {
+                proofs,
+                ..Found::default()
+            }),
+            stage: watch::Sender::new(Stage::Testing),
+            green_told: AtomicBool::new(false),
+        });
+        if let Some(old) = self
+            .checks
+            .lock()
+            .await
+            .insert(folder.path().to_path_buf(), Arc::clone(&checking))
+        {
+            old.cancel.store(true, Ordering::Relaxed);
+        }
+        let (server, folder, job) = (self.clone(), folder.clone(), Arc::clone(&checking));
+        tokio::spawn(async move {
+            server.test_and_prove(&folder, &job, code).await;
+            job.stage.send_replace(Stage::Ended);
+        });
+        checking
+    }
+
+    /// The job itself: every test, then, once they all pass, the proof.
+    async fn test_and_prove(&self, folder: &ProgramFolder, checking: &Checking, code: Code) {
+        let fail = |failures: Vec<String>| {
+            if let Ok(mut found) = checking.found.lock() {
+                found.failures = failures;
+            }
+        };
+        let [spec_hash, tests_hash, code_hash] = checking.files.clone();
+        if let Err(error) = self.note_first_run(folder, &tests_hash).await {
+            return fail(vec![error]);
+        }
+        let seed = match random_seed() {
+            Ok(seed) => seed,
+            Err(error) => return fail(vec![error]),
+        };
+        let syscalls = code
+            .profile
+            .allowed_syscalls(&code.spec.syscalls, code.spec.threads.is_some());
+        let outcome = match testrun::run_tests(
+            &code.suite,
+            &self.launcher,
+            &code.built.executable,
+            &code.source,
+            seed,
+            &syscalls,
+            &code.spec.network,
+            testrun::workers(code.spec.threads),
         )
-        .map_err(|problems| tests_problems(&folder, &problems))?;
-        let code = read_code(&folder)?;
-        let source = checker::check_layout(&code).0;
-        let machine_info = Machine::detect();
-        let profile = supported(&machine_info)?;
-        let built = build(&code, profile).await?;
-        if Sha256Hex::of(&built.bytes) != stamp.executable_sha256 {
-            return Err(format!(
-                "This build of {CODE_FILE} differs from the one check_code tested, so lengua \
-                 won't prove it. Call check_code with path {folder} first."
-            ));
+        .await
+        {
+            Ok(outcome) => outcome,
+            Err(error) => return fail(vec![format!("couldn't run the program: {error}")]),
+        };
+        if !outcome.passed() {
+            return fail(outcome.failures);
         }
-        let decoded = checker::decode::read(&built.bytes)?;
-        let syscalls = profile.allowed_syscalls(&spec.syscalls, spec.threads.is_some());
-        let deadline = std::time::Instant::now() + PROOF_TIME;
-        let mut proofs = Vec::new();
-        let mut wrong = false;
+        let facts = code.report.facts.clone().unwrap_or_default();
+        let executable = checking.executable.clone();
+        let stamp = CodeStamp {
+            sha256: code_hash,
+            executable_sha256: executable.clone(),
+            toolchain: code.built.toolchain.clone(),
+            max_stack_bytes: facts.max_stack_bytes,
+            unsafe_blocks: u32::try_from(code.report.unsafe_blocks.len()).unwrap_or(u32::MAX),
+        };
+        if let Err(error) = self
+            .stamp_code(folder, &spec_hash, &tests_hash, stamp)
+            .await
+        {
+            return fail(vec![error]);
+        }
+        if let Ok(mut found) = checking.found.lock() {
+            found.passed = Some(Passed {
+                runs: outcome.runs,
+                every_value: code
+                    .suite
+                    .generated
+                    .iter()
+                    .filter_map(|block| {
+                        block
+                            .every_value_text()
+                            .map(|text| format!("generated {} tried {text}", block.id))
+                    })
+                    .collect(),
+                performance: outcome.costs.iter().map(cost_line).collect(),
+                shown: outcome.shown,
+            });
+        }
+        checking.stage.send_replace(Stage::Proving(Instant::now()));
+        if !self.recorded_proofs(folder, checking, &code.suite, &executable) {
+            self.prove_all(folder, checking, &code, &syscalls, &executable)
+                .await;
+        }
+    }
+
+    /// Takes the proofs lengua.lock records about this very build, after a restart lost the job
+    /// that made them. Returns whether it has any.
+    fn recorded_proofs(
+        &self,
+        folder: &ProgramFolder,
+        checking: &Checking,
+        suite: &TestSuite,
+        executable: &Sha256Hex,
+    ) -> bool {
+        let Some(stamp) = Key::load(&self.data_dir)
+            .ok()
+            .flatten()
+            .and_then(|key| lock::read(folder.path(), Some(&key)).ok().flatten())
+            .and_then(|lock| lock.proofs)
+            .filter(|proofs| proofs.executable_sha256 == *executable)
+        else {
+            return false;
+        };
+        let Ok(mut found) = checking.found.lock() else {
+            return false;
+        };
+        for (block, proof) in suite.generated.iter().zip(&mut found.proofs) {
+            let id = block.id.to_string();
+            proof.detail = Some(if stamp.proven.contains(&id) {
+                "proven for every input in range, as lengua.lock records".to_owned()
+            } else if let Some((_, bytes)) = stamp.bounded.iter().find(|(known, _)| *known == id) {
+                format!(
+                    "proven for every input with text up to {bytes} bytes, as lengua.lock \
+                         records; longer texts are tested, not proven"
+                )
+            } else {
+                "tested, not proven".to_owned()
+            });
+        }
+        true
+    }
+
+    /// Proves each generated test in turn, each with its share of [`PROOF_TIME`], and records
+    /// what was proven.
+    async fn prove_all(
+        &self,
+        folder: &ProgramFolder,
+        checking: &Checking,
+        code: &Code,
+        syscalls: &[crate::platform::Allowed],
+        executable: &Sha256Hex,
+    ) {
+        let set = |index: usize, detail: String, wrong: bool| {
+            if let Ok(mut found) = checking.found.lock() {
+                found.wrong |= wrong;
+                if let Some(proof) = found.proofs.get_mut(index) {
+                    proof.progress = None;
+                    proof.detail = Some(detail);
+                    proof.wrong = wrong;
+                }
+            }
+        };
+        let decoded = match checker::decode::read(&code.built.bytes) {
+            Ok(decoded) => decoded,
+            Err(error) => {
+                for index in 0..code.suite.generated.len() {
+                    set(index, format!("tested, not proven: {error}"), false);
+                }
+                return;
+            }
+        };
+        let spec = &code.spec;
+        let deadline = Instant::now() + proof_time();
         // The ids proven, how many the solvers proved, and why any rested on one solver.
         let mut proven_ids = Vec::new();
         let mut bounded_ids = Vec::new();
@@ -1126,15 +1132,16 @@ impl LenguaServer {
         let mut alone_reason: Option<String> = None;
         let allows = |call: spec::Syscall| spec.syscalls.contains(&call);
         let listens = spec.network.listens.is_some();
-        let blocks = suite.generated.len();
-        for (index, block) in suite.generated.iter().enumerate() {
-            let test = format!("generated {}", block.id);
+        let blocks = code.suite.generated.len();
+        for (index, block) in code.suite.generated.iter().enumerate() {
+            if checking.cancel.load(Ordering::Relaxed) {
+                return;
+            }
             // Each block gets its share of the time left, so one big block can't starve the
             // rest; time a block doesn't use passes on to the next.
-            let now = std::time::Instant::now();
+            let now = Instant::now();
             let share = deadline.saturating_duration_since(now)
                 / u32::try_from(blocks - index).unwrap_or(u32::MAX).max(1);
-            let block_deadline = now + share;
             // Every value of a block's variables is every input only when the program reads
             // nothing else: no random bytes or clock readings the test doesn't supply, and no
             // `now` in the expected results.
@@ -1145,13 +1152,17 @@ impl LenguaServer {
                 .filter(|_| !kernel_values && !block.uses_now())
             {
                 proven_ids.push(block.id.to_string());
-                proofs.push(ProofReport {
-                    test,
-                    proven: true,
-                    proven_up_to: None,
-                    detail: format!("check_code tried {every}"),
-                });
+                set(index, format!("proven: the tests tried {every}"), false);
                 continue;
+            }
+            let budget = prove::Budget {
+                cancel: Arc::clone(&checking.cancel),
+                ..prove::Budget::until(now + share, listens)
+            };
+            if let Ok(mut found) = checking.found.lock()
+                && let Some(proof) = found.proofs.get_mut(index)
+            {
+                proof.progress = Some(Arc::clone(&budget.progress));
             }
             // The model must agree with the real program on inputs it passed before it's
             // trusted to cover the rest.
@@ -1159,264 +1170,239 @@ impl LenguaServer {
                 block.cases(1).take(24).filter_map(Result::ok).collect();
             let (machine, owned) = (decoded.clone(), block.clone());
             let verdict = tokio::task::spawn_blocking(move || {
-                prove::agrees(&machine, &samples, listens).map(|()| {
-                    prove::prove(
-                        &machine,
-                        &owned,
-                        prove::Budget {
-                            deadline: block_deadline,
-                            max_paths: 256,
-                            max_shapes: 2_000_000,
-                            question_ms: 20_000,
-                            listens,
-                        },
-                    )
-                })
+                prove::agrees(&machine, &samples, listens)
+                    .map(|()| prove::prove(&machine, &owned, &budget))
             })
             .await
-            .map_err(|error| format!("the proof stopped: {error}"))?;
-            let mut proven_up_to = None;
-            let (proven, detail) = match verdict {
-                Err(reason) => (false, format!("tested, not proven: {reason}")),
+            .unwrap_or_else(|error| Err(format!("the proof stopped: {error}")));
+            if checking.cancel.load(Ordering::Relaxed) {
+                return;
+            }
+            let (detail, wrong) = match verdict {
+                Err(reason) | Ok(prove::Verdict::NotProven(reason)) => {
+                    (format!("tested, not proven: {reason}"), false)
+                }
                 Ok(prove::Verdict::Proven {
                     shapes,
                     paths,
                     questions,
                     alone,
                     bound,
-                }) => (
-                    {
-                        match &bound {
-                            Some(bound) => {
-                                bounded_ids.push((block.id.to_string(), bound.bytes));
-                                proven_up_to = Some(bound.bytes);
-                            }
-                            None => proven_ids.push(block.id.to_string()),
+                }) => {
+                    match &bound {
+                        Some(bound) => bounded_ids.push((block.id.to_string(), bound.bytes)),
+                        None => proven_ids.push(block.id.to_string()),
+                    }
+                    if questions > 0 {
+                        solved += 1;
+                        if alone_reason.is_none() {
+                            alone_reason.clone_from(&alone);
                         }
-                        if questions > 0 {
-                            solved += 1;
-                            if alone_reason.is_none() {
-                                alone_reason.clone_from(&alone);
-                            }
-                        }
-                        bound.is_none()
-                    },
-                    format!(
-                        "proven for every input {} ({}, {} through the machine code), {}{}",
-                        bound.as_ref().map_or_else(
-                            || "in range".to_owned(),
-                            |bound| format!("with text up to {} bytes", bound.bytes)
-                        ),
-                        counted(shapes, "input combination"),
-                        counted(paths, "path"),
-                        match (questions, alone) {
-                            (0, _) => "every step settled by the terms themselves, so no solver \
-                                       was needed"
-                                .to_owned(),
-                            (_, None) => "with each solver question confirmed by two independent \
-                                          solvers, z3 and cvc5"
-                                .to_owned(),
-                            (_, Some(reason)) => format!(
-                                "by one solver alone ({reason}; with both z3 and cvc5 installed, \
-                                 each step is confirmed twice)"
-                            ),
-                        },
-                        bound.as_ref().map_or_else(String::new, |bound| format!(
-                            "; longer texts are tested, not proven: {}",
-                            bound.why
-                        ))
-                    ) + if block.server.is_empty() && block.client.is_empty() {
-                        ""
-                    } else {
-                        "; what the test's peer sends arriving whole or cut after its first \
-                         byte, at its middle, or both"
-                    },
-                ),
-                Ok(prove::Verdict::NotProven(reason)) => {
-                    (false, format!("tested, not proven: {reason}"))
+                    }
+                    (
+                        proven_detail(block, shapes, paths, questions, alone, bound),
+                        false,
+                    )
                 }
-                Ok(prove::Verdict::Counterexample(mut values)) => {
-                    // The delivery it was found with, and the port the kernel chooses, aren't
-                    // the test's inputs: a real run is given the delivery and picks its port.
-                    let delivery = match values.remove(prove::DELIVERY) {
-                        Some(expr::Value::Str(found)) => testrun::Delivery::ALL
-                            .into_iter()
-                            .find(|delivery| delivery.describe() == found)
-                            .unwrap_or(testrun::Delivery::Whole),
-                        _ => testrun::Delivery::Whole,
-                    };
-                    if !block.server.is_empty()
-                        && !block.vars.iter().any(|(name, _)| name == "port")
-                    {
-                        values.remove("port");
-                    }
-                    let networked = !block.server.is_empty() || !block.client.is_empty();
-                    let inputs: expr::Env = values.into_iter().collect();
-                    let described = if networked {
-                        format!(
-                            "{}, what the test's peer sends arriving {}",
-                            testfile::describe_inputs(&inputs),
-                            delivery.describe()
-                        )
-                    } else {
-                        testfile::describe_inputs(&inputs)
-                    };
-                    match block.case(inputs, crate::expect::now()) {
-                        Ok(case) => match testrun::check_case(
-                            &self.launcher,
-                            &built.executable,
-                            &source,
-                            &case,
-                            &syscalls,
-                            &spec.network,
-                            delivery,
-                        )
+                Ok(prove::Verdict::Counterexample(values)) => {
+                    self.replay(code, syscalls, block, values, kernel_values)
                         .await
-                        .map_err(|error| format!("couldn't run the program: {error}"))?
-                        {
-                            Some(problem) => {
-                                wrong = true;
-                                (
-                                    false,
-                                    format!(
-                                        "the proof found inputs the tests didn't try where main.s \
-                                         is wrong: with {described}: {problem}"
-                                    ),
-                                )
-                            }
-                            // A real run draws its own random bytes and reads its own
-                            // clock, so it can't replay what the proof found.
-                            None if kernel_values => (
-                                false,
-                                format!(
-                                    "tested, not proven: with {described}, the prover \
-                                         found random bytes or a clock reading for which \
-                                         main.s's output breaks the test, which a real run \
-                                         can't replay; check how main.s turns them into output"
-                                ),
-                            ),
-                            None => (
-                                false,
-                                format!(
-                                    "tested, not proven: the prover's model disagreed with a \
-                                     real run on {described}"
-                                ),
-                            ),
-                        },
-                        Err((_, field, error)) => (
-                            false,
-                            format!("tested, not proven: with {described}, {field} {error}"),
-                        ),
-                    }
                 }
             };
-            proofs.push(ProofReport {
-                test,
-                proven,
-                proven_up_to,
-                detail,
-            });
+            set(index, detail, wrong);
+        }
+        if proven_ids.is_empty() && bounded_ids.is_empty() {
+            return;
         }
         let solvers = match (solved, alone_reason) {
             (0, _) => {
-                "none: check_code tried every value, or the terms settled every step".to_owned()
+                "none: the tests tried every value, or the terms settled every step".to_owned()
             }
             (_, None) => "z3 and cvc5".to_owned(),
             (_, Some(reason)) => format!("one solver alone: {reason}"),
         };
-        let recorded = self
-            .stamp_proofs(
-                &folder,
-                &stamp.executable_sha256,
-                proven_ids,
-                bounded_ids,
-                solvers,
-            )
+        self.stamp_proofs(folder, executable, proven_ids, bounded_ids, solvers)
             .await;
-        let proven: Vec<&str> = proofs
-            .iter()
-            .filter(|proof| proof.proven)
-            .map(|proof| proof.test.as_str())
-            .collect();
-        let up_to: Vec<String> = proofs
-            .iter()
-            .filter_map(|proof| {
-                proof
-                    .proven_up_to
-                    .map(|bytes| format!("{} (up to {bytes} bytes)", proof.test))
-            })
-            .collect();
-        let message = if wrong {
-            "The proof found inputs where main.s is wrong; see proofs.".to_owned()
-        } else if proven.len() == proofs.len() && !proofs.is_empty() {
-            "Every generated test is proven for every input in its range.".to_owned()
-        } else if proven.is_empty() && up_to.is_empty() {
-            "Nothing could be proven; the tests still pass. See proofs for why.".to_owned()
-        } else {
-            let mut parts = Vec::new();
-            if !proven.is_empty() {
-                parts.push(format!(
-                    "Proven for every input in range: {}.",
-                    proven.join(", ")
-                ));
-            }
-            if !up_to.is_empty() {
-                parts.push(format!(
-                    "Proven for every input with texts up to a length, and tested beyond it: \
-                     {}.",
-                    up_to.join(", ")
-                ));
-            }
-            parts.join(" ")
-        };
-        let message = if recorded {
-            format!("{message} lengua.lock records it.")
-        } else {
-            message
-        };
-        Ok(Json(ProveReport {
-            proofs,
-            message,
-            next_step: if wrong {
-                format!(
-                    "Next: fix {folder}/{CODE_FILE} with the write-assembly skill so it handles \
-                     those inputs, then call check_code and prove again."
-                )
-            } else {
-                next_step
-            },
-        }))
-    }
-}
-
-impl LenguaServer {
-    /// The program's state and its next step.
-    fn program_state(&self, folder: &ProgramFolder) -> Result<(State, String), String> {
-        let key = Key::load(&self.data_dir).map_err(|error| error.to_string())?;
-        let snapshot = Snapshot::read(folder, key.as_ref())
-            .map_err(|error| format!("can't read {folder}: {error}"))?;
-        let state = State::of(&snapshot);
-        let step = self.next_step(folder, &snapshot, &state);
-        Ok((state, step))
     }
 
-    /// The state's next step. An unrecorded spec.md is checked first, so only a spec lengua
-    /// accepts is recorded.
-    fn next_step(&self, folder: &ProgramFolder, snapshot: &Snapshot, state: &State) -> String {
-        if *state == State::SpecUnrecorded
-            && let Ok(text) = read_spec(folder)
-            && let Err(problems) = spec::parse(&text)
+    /// Runs inputs the proof found for real, so a counterexample is reported only when the
+    /// program really is wrong on it. Returns the detail and whether main.s is wrong.
+    async fn replay(
+        &self,
+        code: &Code,
+        syscalls: &[crate::platform::Allowed],
+        block: &testfile::Generated,
+        mut values: BTreeMap<String, expr::Value>,
+        kernel_values: bool,
+    ) -> (String, bool) {
+        // The delivery it was found with, and the port the kernel chooses, aren't the test's
+        // inputs: a real run is given the delivery and picks its port.
+        let delivery = match values.remove(prove::DELIVERY) {
+            Some(expr::Value::Str(found)) => testrun::Delivery::ALL
+                .into_iter()
+                .find(|delivery| delivery.describe() == found)
+                .unwrap_or(testrun::Delivery::Whole),
+            _ => testrun::Delivery::Whole,
+        };
+        if !block.server.is_empty() && !block.vars.iter().any(|(name, _)| name == "port") {
+            values.remove("port");
+        }
+        let networked = !block.server.is_empty() || !block.client.is_empty();
+        let inputs: expr::Env = values.into_iter().collect();
+        let described = if networked {
+            format!(
+                "{}, what the test's peer sends arriving {}",
+                testfile::describe_inputs(&inputs),
+                delivery.describe()
+            )
+        } else {
+            testfile::describe_inputs(&inputs)
+        };
+        let case = match block.case(inputs, crate::expect::now()) {
+            Ok(case) => case,
+            Err((_, field, error)) => {
+                return (
+                    format!("tested, not proven: with {described}, {field} {error}"),
+                    false,
+                );
+            }
+        };
+        match testrun::check_case(
+            &self.launcher,
+            &code.built.executable,
+            &code.source,
+            &case,
+            syscalls,
+            &code.spec.network,
+            delivery,
+        )
+        .await
         {
-            return format!(
-                "Next: fix {folder}/{SPEC_FILE}:\n{}Fix them with the write-spec skill, then call \
-                 record_spec.",
-                problem_list(&problems)
+            Err(error) => (
+                format!("tested, not proven: couldn't run the program: {error}"),
+                false,
+            ),
+            Ok(Some(problem)) => (
+                format!(
+                    "the proof found inputs the tests didn't try where main.s is wrong: with \
+                     {described}: {problem}"
+                ),
+                true,
+            ),
+            // A real run draws its own random bytes and reads its own clock, so it can't replay
+            // what the proof found.
+            Ok(None) if kernel_values => (
+                format!(
+                    "tested, not proven: with {described}, the prover found random bytes or a \
+                     clock reading for which main.s's output breaks the test, which a real run \
+                     can't replay; check how main.s turns them into output"
+                ),
+                false,
+            ),
+            Ok(None) => (
+                format!(
+                    "tested, not proven: the prover's model disagreed with a real run on \
+                     {described}"
+                ),
+                false,
+            ),
+        }
+    }
+
+    /// What `check` replies about a checking job.
+    fn checking_report(&self, folder: &ProgramFolder, checking: &Checking) -> CheckReport {
+        let stage = *checking.stage.borrow();
+        let Ok(found) = checking.found.lock() else {
+            return CheckReport::new("testing", again(folder));
+        };
+        let proofs: Vec<String> = found.proofs.iter().map(BlockProof::line).collect();
+        if !found.failures.is_empty() {
+            return CheckReport::problems(
+                "tests_failed",
+                found.failures.clone(),
+                format!(
+                    "Next: decide from {SPEC_FILE} whether {CODE_FILE} or the test is wrong, fix \
+                     {CODE_FILE} with the write-assembly skill or {TESTS_FILE} with the \
+                     write-tests skill, then call check with path {folder}. Boundary values run \
+                     first every time; the other generated inputs are new on every check."
+                ),
             );
         }
-        state.next_step(&StepContext {
-            folder,
-            spec: snapshot.spec.as_ref(),
-        })
+        let Some(passed) = &found.passed else {
+            return CheckReport::new(
+                "testing",
+                format!("The tests are running. {}", again(folder)),
+            );
+        };
+        checking.green_told.store(true, Ordering::Relaxed);
+        let mut tests = vec![format!(
+            "{CODE_FILE} follows every rule and passed all {} test runs",
+            passed.runs
+        )];
+        tests.extend(passed.every_value.iter().cloned());
+        if found.wrong {
+            return CheckReport {
+                tests,
+                proofs,
+                ..CheckReport::problems(
+                    "tests_failed",
+                    found
+                        .proofs
+                        .iter()
+                        .filter(|proof| proof.wrong)
+                        .map(BlockProof::line)
+                        .collect(),
+                    format!(
+                        "Next: fix {folder}/{CODE_FILE} with the write-assembly skill so it handles \
+                         those inputs, then call check with path {folder}."
+                    ),
+                )
+            };
+        }
+        if stage != Stage::Ended {
+            return CheckReport {
+                tests,
+                proofs,
+                ..CheckReport::new(
+                    "proving",
+                    format!(
+                        "Every test passes, and the proof is running in the background. {}",
+                        again(folder)
+                    ),
+                )
+            };
+        }
+        let changes = self.current_changes(folder);
+        let changes = (changes.requests.len() > 1
+            || changes.spec.is_some()
+            || changes.tests.is_some()
+            || !changes.tests_less.is_empty())
+        .then_some(ChangesReport {
+            requests: changes.requests,
+            spec_changed: changes.spec,
+            tests_changed: changes.tests,
+            tests_less: changes.tests_less,
+        });
+        let shown = if changes.is_some() {
+            " changes lists what changed after the user's request: tell them each change, and why."
+        } else {
+            ""
+        };
+        CheckReport {
+            tests,
+            proofs,
+            example: passed.shown.clone(),
+            performance: passed.performance.clone(),
+            changes,
+            ..CheckReport::new(
+                "done",
+                format!(
+                    "Done: tell the user where the program is, what its spec promises, that it \
+                     passed every test, and what's proven.{shown} run runs it on their own \
+                     inputs."
+                ),
+            )
+        }
     }
 
     /// What changed after the user's request, by the program's current lock; nothing when it
@@ -1454,7 +1440,7 @@ impl LenguaServer {
             (Some(first), Ok(now)) if Sha256Hex::of(now.as_bytes()) != *first => {
                 match kept(first) {
                     Some(before) => (
-                        Some(testdiff::tests_diff(&before, &now)),
+                        Some(testdiff::line_diff(&before, &now)),
                         testdiff::tests_less(&before, &now),
                     ),
                     None => (Some(format!("{TESTS_FILE} changed; {unseen}")), Vec::new()),
@@ -1483,7 +1469,7 @@ impl LenguaServer {
         let changed = || {
             format!(
                 "{SPEC_FILE} or {TESTS_FILE} changed while the tests were being checked, so \
-                 nothing was recorded; call check_tests again."
+                 nothing was recorded; call check again."
             )
         };
         let key = Key::load(&self.data_dir)
@@ -1521,10 +1507,10 @@ impl LenguaServer {
         let _writing = self.lock_writes.lock().await;
         let key = Key::load(&self.data_dir)
             .map_err(|error| error.to_string())?
-            .ok_or("lengua's signing key is missing; call status")?;
+            .ok_or("lengua's signing key is missing; call check again")?;
         let lock = lock::read(folder.path(), Some(&key))
             .map_err(|error| format!("lengua.lock can't be trusted: {error}"))?
-            .ok_or("lengua.lock is missing; call status")?;
+            .ok_or("lengua.lock is missing; call check again")?;
         match &lock.tests {
             Some(stamp) if stamp.sha256 == *tests => {
                 if lock.request.tests.is_some() {
@@ -1537,26 +1523,25 @@ impl LenguaServer {
                 })
             }
             _ => Err(format!(
-                "{TESTS_FILE} changed while the code was being checked; call check_tests, then \
-                 check_code again."
+                "{TESTS_FILE} changed while the code was being checked; call check again."
             )),
         }
     }
 
     /// Records checked code in the lock, provided spec, tests and code didn't change while being
-    /// checked. Returns the new fingerprint.
+    /// checked.
     async fn stamp_code(
         &self,
         folder: &ProgramFolder,
         spec: &Sha256Hex,
         tests: &Sha256Hex,
         code: CodeStamp,
-    ) -> Result<Sha256Hex, String> {
+    ) -> Result<(), String> {
         let _writing = self.lock_writes.lock().await;
         let changed = || {
             format!(
                 "{SPEC_FILE}, {TESTS_FILE} or {CODE_FILE} changed while the code was being \
-                 checked, so nothing was recorded; call check_code again."
+                 checked, so nothing was recorded; call check again."
             )
         };
         let key = Key::load(&self.data_dir)
@@ -1583,13 +1568,11 @@ impl LenguaServer {
             proofs,
             ..lock
         };
-        let fingerprint = lock.fingerprint().ok_or_else(changed)?;
         lock::write(folder.path(), &lock, &key)
-            .map_err(|error| format!("couldn't write {folder}/{}: {error}", lock::LOCK_FILE))?;
-        Ok(fingerprint)
+            .map_err(|error| format!("couldn't write {folder}/{}: {error}", lock::LOCK_FILE))
     }
 
-    /// Records in the lock what `prove` proved about the build `executable`, provided the lock
+    /// Records in the lock what the proof proved about the build `executable`, provided the lock
     /// still records that build as the checked code. Returns whether it did.
     async fn stamp_proofs(
         &self,
@@ -1624,76 +1607,6 @@ impl LenguaServer {
         };
         lock::write(folder.path(), &lock, &key).is_ok()
     }
-
-    fn program_report(&self, folder: &ProgramFolder) -> Result<(ProgramReport, String), String> {
-        let key = Key::load(&self.data_dir).map_err(|error| error.to_string())?;
-        let snapshot = Snapshot::read(folder, key.as_ref())
-            .map_err(|error| format!("can't read {folder}: {error}"))?;
-        let state = State::of(&snapshot);
-        let step = self.next_step(folder, &snapshot, &state);
-        let lock = snapshot.valid_lock();
-        let changes = lock.map_or_else(Changes::default, |lock| self.changes(folder, lock));
-        // Proofs speak for the files only while all three are the ones checked.
-        let proofs = lock
-            .and_then(|lock| lock.proofs.as_ref())
-            .filter(|_| state == State::Ready);
-        let file = |current: &Option<Sha256Hex>, stamp: Option<&Sha256Hex>| FileReport {
-            exists: current.is_some(),
-            sha256: current.as_ref().map(ToString::to_string),
-            stamped: current.is_some() && current.as_ref() == stamp,
-        };
-        let report = ProgramReport {
-            path: folder.to_string(),
-            state: state.name().to_owned(),
-            spec_label: snapshot.spec.as_ref().map(Sha256Hex::label),
-            files: FilesReport {
-                spec: file(&snapshot.spec, lock.map(|lock| &lock.spec.sha256)),
-                tests: file(
-                    &snapshot.tests,
-                    lock.and_then(|lock| lock.tests.as_ref())
-                        .map(|tests| &tests.sha256),
-                ),
-                code: file(
-                    &snapshot.code,
-                    lock.and_then(|lock| lock.code.as_ref())
-                        .map(|code| &code.sha256),
-                ),
-            },
-            lock: LockReport {
-                state: match &snapshot.lock {
-                    LockStatus::Missing => "missing",
-                    LockStatus::Valid(_) => "valid",
-                    LockStatus::Invalid(_) => "invalid",
-                }
-                .to_owned(),
-                problem: match &snapshot.lock {
-                    LockStatus::Invalid(error) => Some(error.to_string()),
-                    LockStatus::Missing | LockStatus::Valid(_) => None,
-                },
-                fingerprint: lock
-                    .and_then(Lock::fingerprint)
-                    .map(|fingerprint| fingerprint.to_string()),
-            },
-            proven: proofs
-                .map(|proofs| proofs.proven.clone())
-                .unwrap_or_default(),
-            proven_up_to: proofs
-                .map(|proofs| {
-                    proofs
-                        .bounded
-                        .iter()
-                        .map(|(id, bytes)| format!("{id}: up to {bytes} bytes"))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            proven_by: proofs.map(|proofs| proofs.solvers.clone()),
-            requests: changes.requests,
-            spec_changed: changes.spec,
-            tests_changed: changes.tests,
-            tests_less: changes.tests_less,
-        };
-        Ok((report, step))
-    }
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -1718,6 +1631,102 @@ struct Changes {
     tests_less: Vec<String>,
 }
 
+/// The next step while a job runs: call again.
+fn again(folder: &ProgramFolder) -> String {
+    format!("Call check again with path {folder} to wait for it; nothing needs to change.")
+}
+
+/// What a proven block's proof covered, in a line.
+fn proven_detail(
+    block: &testfile::Generated,
+    shapes: usize,
+    paths: usize,
+    questions: usize,
+    alone: Option<String>,
+    bound: Option<prove::Bound>,
+) -> String {
+    let mut detail = format!(
+        "proven for every input {} ({}, {} through the machine code), {}",
+        bound.as_ref().map_or_else(
+            || "in range".to_owned(),
+            |bound| format!("with text up to {} bytes", bound.bytes)
+        ),
+        counted(shapes, "input combination"),
+        counted(paths, "path"),
+        match (questions, alone) {
+            (0, _) =>
+                "every step settled by the terms themselves, so no solver was needed".to_owned(),
+            (_, None) => {
+                "with each solver question confirmed by two independent solvers, z3 and cvc5"
+                    .to_owned()
+            }
+            (_, Some(reason)) => format!(
+                "by one solver alone ({reason}; with both z3 and cvc5 installed, each step is \
+                 confirmed twice)"
+            ),
+        }
+    );
+    if let Some(bound) = &bound {
+        let _ = write!(
+            detail,
+            "; longer texts are tested, not proven: {}",
+            bound.why
+        );
+    }
+    if !block.server.is_empty() || !block.client.is_empty() {
+        detail.push_str(
+            "; what the test's peer sends arriving whole or cut after its first byte, at its \
+             middle, or both",
+        );
+    }
+    detail
+}
+
+/// A test's cost in one line: medians only.
+fn cost_line(cost: &testrun::Cost) -> String {
+    let mut line = format!("{}: {}", cost.test, counted(cost.runs, "run"));
+    if let Some(instructions) = cost.instructions {
+        let _ = write!(line, ", {} instructions each", instructions.median);
+    }
+    let mut times = Vec::new();
+    if let Some(cycles) = cost.cycles {
+        times.push(format!("{} cycles", cycles.median));
+    }
+    if let Some(cpu) = cost.cpu_time_us {
+        times.push(format!("{} µs of CPU", cpu.median));
+    }
+    if let Some(wall) = cost.wall_time_us {
+        times.push(format!("{} µs on the clock", wall.median));
+    }
+    if !times.is_empty() {
+        let _ = write!(line, "; {}: median {}", cost.timed, times.join(", "));
+    }
+    line
+}
+
+/// The machine in one line: its cores, and the CPU extensions main.s may use.
+fn machine_line(machine: &Machine) -> String {
+    let features = match serde_json::to_value(machine.features) {
+        Ok(serde_json::Value::Object(features)) => features
+            .into_iter()
+            .filter(|(_, present)| *present == serde_json::Value::Bool(true))
+            .map(|(name, _)| name.replace("sse4_", "sse4."))
+            .collect::<Vec<_>>(),
+        _ => Vec::new(),
+    };
+    format!(
+        "{}-{}, {}; main.s may use the base instructions{}",
+        machine.os,
+        machine.arch,
+        counted(machine.cores, "core"),
+        if features.is_empty() {
+            String::new()
+        } else {
+            format!(" and {}", features.join(", "))
+        }
+    )
+}
+
 /// The program folder `path` names: the folder itself or its spec.md.
 fn folder_of(path: &str) -> Result<ProgramFolder, String> {
     let path = path.trim();
@@ -1732,14 +1741,31 @@ fn folder_of(path: &str) -> Result<ProgramFolder, String> {
     }
 }
 
-fn read_spec(folder: &ProgramFolder) -> Result<String, String> {
-    match std::fs::read_to_string(folder.file(SPEC_FILE)) {
-        Ok(text) => Ok(text),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(format!(
-            "There's no {SPEC_FILE} in {folder}. Write it with the write-spec skill first."
-        )),
-        Err(error) => Err(format!("couldn't read {folder}/{SPEC_FILE}: {error}")),
+/// A program file, or `None` when it doesn't exist yet.
+fn read_optional(folder: &ProgramFolder, name: &str) -> Result<Option<String>, String> {
+    match std::fs::read_to_string(folder.file(name)) {
+        Ok(text) => Ok(Some(text)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("couldn't read {folder}/{name}: {error}")),
     }
+}
+
+fn read_spec(folder: &ProgramFolder) -> Result<String, String> {
+    read_optional(folder, SPEC_FILE)?.ok_or_else(|| {
+        format!("There's no {SPEC_FILE} in {folder}. Write it with the write-spec skill first.")
+    })
+}
+
+fn read_tests(folder: &ProgramFolder) -> Result<String, String> {
+    read_optional(folder, TESTS_FILE)?.ok_or_else(|| {
+        format!("There's no {TESTS_FILE} in {folder}. Write it with the write-tests skill.")
+    })
+}
+
+fn read_code(folder: &ProgramFolder) -> Result<String, String> {
+    read_optional(folder, CODE_FILE)?.ok_or_else(|| {
+        format!("There's no {CODE_FILE} in {folder}. Write it with the write-assembly skill.")
+    })
 }
 
 /// A built program, in a temporary folder that lives as long as this value.
@@ -1767,12 +1793,7 @@ async fn build(code: &str, profile: Profile) -> Result<Build, String> {
         Ok(()) => toolchain.link(&object, &executable).await,
         Err(error) => Err(error),
     };
-    built.map_err(|error| {
-        format!(
-            "{CODE_FILE} doesn't build: {error}\nFix it with the write-assembly skill, then call \
-             check_code again."
-        )
-    })?;
+    built.map_err(|error| format!("{CODE_FILE} doesn't build: {error}"))?;
     let bytes = std::fs::read(&executable)
         .map_err(|error| format!("couldn't read the built program: {error}"))?;
     Ok(Build {
@@ -1823,64 +1844,13 @@ fn random_seed() -> Result<u64, String> {
     Ok(u64::from_le_bytes(bytes))
 }
 
-/// Failed tests as a message for the AI.
-fn failures_text(folder: &ProgramFolder, outcome: &testrun::Outcome) -> String {
-    let count = outcome.failures.len();
-    let mut text = format!(
-        "{folder}/{CODE_FILE} follows every rule but fails {count} test{}, so lengua.lock \
-         doesn't record it:\n",
-        if count == 1 { "" } else { "s" }
-    );
-    for failure in &outcome.failures {
-        let _ = writeln!(text, "- {failure}");
-    }
-    text.push_str(
-        "Fix main.s with the write-assembly skill, then call check_code again. Boundary values \
-         run first every time; the other generated inputs are new on every call.",
-    );
-    text
-}
-
-fn read_code(folder: &ProgramFolder) -> Result<String, String> {
-    match std::fs::read_to_string(folder.file(CODE_FILE)) {
-        Ok(text) => Ok(text),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(format!(
-            "There's no {CODE_FILE} in {folder}. Write it with the write-assembly skill, then call \
-             check_code."
-        )),
-        Err(error) => Err(format!("couldn't read {folder}/{CODE_FILE}: {error}")),
-    }
-}
-
-/// The checker's findings as a message for the AI.
-fn violations_text(folder: &ProgramFolder, report: &checker::Report) -> String {
-    let total = report.violations.len() + report.hidden;
-    let mut text = format!(
-        "{folder}/{CODE_FILE} has {total} rule violation{}, so nothing ran:\n",
-        if total == 1 { "" } else { "s" }
-    );
-    for violation in &report.violations {
-        let _ = writeln!(text, "- {violation}");
-    }
+/// The checker's findings, one line each.
+fn violation_lines(report: &checker::Report) -> Vec<String> {
+    let mut lines: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
     if report.hidden > 0 {
-        let _ = writeln!(text, "- …and {} more", report.hidden);
+        lines.push(format!("…and {} more", report.hidden));
     }
-    text.push_str(
-        "Fix them with the write-assembly skill (the full rules are in its \
-         references/power-of-10.md), then call check_code again.",
-    );
-    text
-}
-
-fn read_tests(folder: &ProgramFolder) -> Result<String, String> {
-    match std::fs::read_to_string(folder.file(TESTS_FILE)) {
-        Ok(text) => Ok(text),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(format!(
-            "There's no {TESTS_FILE} in {folder}. Write it with the write-tests skill, then call \
-             check_tests."
-        )),
-        Err(error) => Err(format!("couldn't read {folder}/{TESTS_FILE}: {error}")),
-    }
+    lines
 }
 
 /// Saves a recorded spec.md or tests.toml under its hash, written atomically.
@@ -1905,32 +1875,8 @@ fn write_stamped_copy(data_dir: &DataDir, file: &Sha256Hex, text: &str) -> Resul
     Ok(())
 }
 
-fn tests_problems(folder: &ProgramFolder, problems: &[testfile::Problem]) -> String {
-    let count = problems.len();
-    let mut text = format!(
-        "{folder}/{TESTS_FILE} has {count} problem{}, so it wasn't checked:\n",
-        if count == 1 { "" } else { "s" }
-    );
-    for problem in problems {
-        let _ = writeln!(text, "- {problem}");
-    }
-    text.push_str("Fix them with the write-tests skill, then call check_tests again.");
-    text
-}
-
 fn spec_problems(folder: &ProgramFolder, problems: &[spec::Problem]) -> String {
-    let count = problems.len();
-    format!(
-        "{folder}/{SPEC_FILE} has {count} problem{} to fix before lengua can record it:\n{}Fix \
-         them with the write-spec skill, then call record_spec again.",
-        if count == 1 { "" } else { "s" },
-        problem_list(problems)
-    )
-}
-
-/// Problems as a bulleted list, one per line.
-fn problem_list(problems: &[spec::Problem]) -> String {
-    let mut text = String::new();
+    let mut text = format!("{folder}/{SPEC_FILE} has problems; call check:\n");
     for problem in problems {
         let _ = writeln!(text, "- {problem}");
     }
@@ -1950,9 +1896,6 @@ fn machine_blocker(
     }
     toolchain_error.map(|error| format!("Blocked: {error}"))
 }
-
-/// The next step when no program was named and the machine can build programs.
-const READY_STEP: &str = "Ready: write a program's spec.md with the write-spec skill.";
 
 #[cfg(test)]
 mod tests {
@@ -1977,11 +1920,19 @@ mod tests {
     }
 
     #[test]
-    fn a_record_may_name_the_folder_or_its_spec() {
+    fn a_check_may_name_the_folder_or_its_spec() {
         let folder = folder_of("/home/you/add/spec.md").expect("a spec path");
         assert_eq!(folder.to_string(), "/home/you/add");
         let folder = folder_of(" /home/you/add ").expect("a folder path");
         assert_eq!(folder.to_string(), "/home/you/add");
         assert!(folder_of("add/spec.md").is_err());
+    }
+
+    #[test]
+    fn the_machine_fits_in_a_line() {
+        let line = machine_line(&Machine::detect());
+        assert!(line.contains("core"), "{line}");
+        assert!(!line.contains('\n'), "{line}");
+        assert!(!line.contains("sse4_"), "{line}");
     }
 }

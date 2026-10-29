@@ -1,13 +1,8 @@
 # tests.toml format
 
-`tests.toml` has one `[meta]` table, one `[[example]]` table per behavior, and `[[generated]]`
-tables for every behavior whose example has inputs.
-
-## [meta]
-
-| Field | Meaning |
-|---|---|
-| `spec` | The recorded spec's label from the `status` tool: `"sha256:<64 hex digits>"` |
+`tests.toml` has one `[[example]]` table per behavior, and `[[generated]]` tables for every
+behavior whose example has inputs. lengua.lock records which spec they were checked against, so
+the file carries no label.
 
 ## [[example]]
 
@@ -62,7 +57,7 @@ and the seed that drew them.
 
 Small ranges run in full instead: when a block's generators are all ranges (`int`, `string`, no
 `choice`) with at most 5000 combinations, every combination runs and `runs` is ignored, as long as
-the whole file stays within 20000 runs. `check_code` then reports that the block tried every
+the whole file stays within 20000 runs. `check` then reports that the block tried every
 value in its range: for those inputs the program is checked, not sampled.
 
 Several blocks may share an `id` when one range can't cover the inputs, such as divisors on both
@@ -129,7 +124,7 @@ can't know the exact text. A rule stands for that part: `{any(lo, hi)}` is any w
   named `now` draws it like any other.
 - **Only expected output holds rules,** in `stdout`, `stderr` and `files_after`: a test's inputs
   are exact. Text functions such as `len` and `upper` can't look inside a rule.
-- **Proofs cover rules:** `prove` shows the printed number is in range for every input and for
+- **Proofs cover rules:** the proof shows the printed number is in range for every input and for
   every value the clock or `getrandom` could give, unless the block uses `now`.
 
 ## Files
@@ -154,7 +149,7 @@ working folder at all: the kernel stops it.
 | `choice(a, b, …)` | One of the values: all whole numbers, all decimals or all strings | Every value (the first and last when there are more than 16) |
 | `string(min, max, "chars")` | `min` to `max` characters (at most 1048576) drawn from `chars` | The shortest string of the first character, the longest of the last |
 
-Linux limits each argument to 131072 bytes, so `check_tests` refuses a run whose argument is
+Linux limits each argument to 131072 bytes, so `check` refuses a run whose argument is
 longer; long text belongs on standard input.
 
 Arguments must be literal values. The limits of `int` and `decimal` and the lengths of `string`
@@ -237,11 +232,11 @@ adds two prices in cents, and any rounding rule the spec states is whole-number 
   `vars = { s = 'string(1, 10, "abc")' }`.
 - Multi-line strings `"""…"""` keep their newlines, except one right after the opening `"""`.
 
-## What check_tests checks
+## What check checks in tests.toml
 
 1. The file is valid TOML and uses only the fields above. Its text never holds the characters
    U+FDD0, U+FDD1 and U+FDD2, which mark rules inside lengua.
-2. `[meta].spec` is the recorded spec's label.
+2. There is no `[meta]` table: labels from older versions of lengua are refused.
 3. There is exactly one example per behavior, and no unknown IDs.
 4. Each example has its behavior's exit code and contains every backtick value of the behavior.
 5. Each behavior whose example has inputs has a generated block.
@@ -295,9 +290,6 @@ capital letters.
 ```
 
 ```toml
-[meta]
-spec = "sha256:<from status>"
-
 [[example]]
 id = "B1"
 stdin = "hello world\n"
@@ -347,9 +339,6 @@ Divides a whole number between `-1000000` and `1000000` by a whole number betwee
 ```
 
 ```toml
-[meta]
-spec = "sha256:<from status>"
-
 [[example]]
 id = "B1"
 args = ["7", "2"]
@@ -413,9 +402,6 @@ output fails, it exits with code 2.
 ```
 
 ```toml
-[meta]
-spec = "sha256:<from status>"
-
 [[example]]
 id = "B1"
 random = "fc2a"
@@ -458,9 +444,6 @@ writing the output fails, the program exits with code 2.
 ```
 
 ```toml
-[meta]
-spec = "sha256:<from status>"
-
 [[example]]
 id = "B1"
 args = ["3"]

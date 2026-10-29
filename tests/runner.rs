@@ -763,8 +763,7 @@ async fn template_tests(edit: impl Fn(&str) -> String, workers: usize) -> lengua
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugin/skills/write-assembly/assets");
     let read = |name: &str| std::fs::read_to_string(assets.join(name)).expect("an asset");
     let spec = lengua::spec::parse(&read("template-spec.md")).expect("the template's spec");
-    let label = lengua::hash::Sha256Hex::of(read("template-spec.md").as_bytes()).label();
-    let suite = lengua::testfile::check(&edit(&read("template-tests.toml")), &spec, &label)
+    let suite = lengua::testfile::check(&edit(&read("template-tests.toml")), &spec)
         .expect("the tests check");
     let (source, _) = lengua::checker::source::parse(&read("main-template.s"));
     let folder = tempfile::tempdir().expect("a folder");
@@ -847,8 +846,7 @@ async fn speedup_of_runs_at_once_on_the_word_count() {
     let example = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/count");
     let read = |name: &str| std::fs::read_to_string(example.join(name)).expect("the example");
     let spec = lengua::spec::parse(&read("spec.md")).expect("the spec");
-    let label = lengua::hash::Sha256Hex::of(read("spec.md").as_bytes()).label();
-    let suite = lengua::testfile::check(&read("tests.toml"), &spec, &label).expect("the tests");
+    let suite = lengua::testfile::check(&read("tests.toml"), &spec).expect("the tests");
     let (source, _) = lengua::checker::source::parse(&read("main.s"));
     let folder = tempfile::tempdir().expect("a folder");
     let executable = build(folder.path(), "count", &read("main.s")).await;

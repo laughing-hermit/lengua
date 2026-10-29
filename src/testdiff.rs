@@ -91,26 +91,6 @@ pub fn line_diff(before: &str, after: &str) -> String {
     text
 }
 
-/// The diff of two tests.toml versions, without the spec label in `[meta]`, which changes with
-/// every change to the spec.
-#[must_use]
-pub fn tests_diff(before: &str, after: &str) -> String {
-    line_diff(&unlabeled(before), &unlabeled(after))
-}
-
-fn unlabeled(text: &str) -> String {
-    text.lines()
-        .map(|line| {
-            if line.trim_start().starts_with("spec = \"sha256:") {
-                "spec = \"sha256:…\""
-            } else {
-                line
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 /// The changes from `before` to `after` that test less, one line each: fewer runs, a generator
 /// that draws fewer values, exact output that became a rule, and removed blocks, variables or
 /// expected files. Empty when none does, or when either version isn't TOML.
@@ -367,17 +347,7 @@ mod tests {
         assert!(diff.contains('…'), "{diff}");
     }
 
-    #[test]
-    fn test_diffs_leave_out_the_spec_label() {
-        let before = "[meta]\nspec = \"sha256:aaa\"\n\n[[example]]\nid = \"B1\"\n";
-        let after = "[meta]\nspec = \"sha256:bbb\"\n\n[[example]]\nid = \"B1\"\n";
-        assert_eq!(tests_diff(before, after), "");
-    }
-
-    const TESTS: &str = r#"[meta]
-spec = "sha256:aaa"
-
-[[example]]
+    const TESTS: &str = r#"[[example]]
 id = "B1"
 args = ["2"]
 stdout = "rolled 4\n"

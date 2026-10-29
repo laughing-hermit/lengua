@@ -92,7 +92,7 @@ the program on their files. `_start` has no return address: it ends with `exit`.
 
 - Every x86-64 CPU has SSE2: 16 `xmm` registers of 16 bytes. AVX2 adds 32-byte `ymm` forms
   (`vpaddb ymm0, ymm1, ymm2`) and AVX-512 64-byte `zmm` forms, 32 vector registers and the mask
-  registers `k0` to `k7`; `status` lists which this CPU has.
+  registers `k0` to `k7`; a `check` reply's `machine` lists which this CPU has.
 - No vector or mask register is callee-saved: after a `call` they hold anything. System calls keep
   them.
 - Spread a byte over a register without data: `mov eax, 0x0a0a0a0a`, `movd xmm1, eax`,

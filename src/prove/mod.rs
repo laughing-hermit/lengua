@@ -13,8 +13,8 @@ pub mod smt;
 pub mod term;
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use rand::rngs::ChaCha8Rng;
@@ -63,7 +63,7 @@ pub struct Bound {
 }
 
 /// How much one proof may take.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Budget {
     /// When to give up.
     pub deadline: Instant,
@@ -76,6 +76,42 @@ pub struct Budget {
     /// Whether the program has its listener at file descriptor 3, as a spec that listens gives
     /// it.
     pub listens: bool,
+    /// Once set, the proof stops at its next input combination: the code it proves changed.
+    pub cancel: Arc<AtomicBool>,
+    /// How far the proof has got, for whoever waits on it.
+    pub progress: Arc<Progress>,
+}
+
+impl Budget {
+    /// The usual budget for a proof that must end by `deadline`.
+    #[must_use]
+    pub fn until(deadline: Instant, listens: bool) -> Self {
+        Self {
+            deadline,
+            max_paths: 256,
+            max_shapes: 2_000_000,
+            question_ms: 20_000,
+            listens,
+            cancel: Arc::default(),
+            progress: Arc::default(),
+        }
+    }
+
+    fn stopped(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed) || Instant::now() > self.deadline
+    }
+}
+
+/// How far a running proof has got.
+#[derive(Debug, Default)]
+pub struct Progress {
+    /// Input combinations finished.
+    pub done: AtomicUsize,
+    /// Input combinations in all, once counted.
+    pub total: AtomicUsize,
+    /// When the proof goes through text lengths in order: one more than the longest length
+    /// proven so far for every input up to it, or 0 before the first.
+    pub proven_below: AtomicUsize,
 }
 
 /// How many combinations one pair of solver processes serves before it's started afresh.
@@ -1415,11 +1451,11 @@ fn same_terms(pool: &mut Pool, a: &[Term], b: &[Term]) -> Term {
 
 /// Proves `block` about the program `machine` holds, within `budget`.
 #[must_use]
-pub fn prove(machine: &Machine, block: &Generated, budget: Budget) -> Verdict {
+pub fn prove(machine: &Machine, block: &Generated, budget: &Budget) -> Verdict {
     attempt(machine, block, budget).unwrap_or_else(Verdict::NotProven)
 }
 
-fn attempt(machine: &Machine, block: &Generated, budget: Budget) -> Result<Verdict, String> {
+fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verdict, String> {
     if block.uses_now() {
         return Err("it uses now, the second a run starts, which a proof can't fix".into());
     }
@@ -1457,6 +1493,7 @@ fn attempt(machine: &Machine, block: &Generated, budget: Budget) -> Result<Verdi
             total.checked_mul(shapes.len())
         })
         .ok_or("too many input shapes to count")?;
+    budget.progress.total.store(total, Ordering::Relaxed);
     let image = Image::new(machine).ok_or("the program has no _start")?;
     // Texts of many lengths go shortest first, so where time or the model runs out the proof
     // still holds for every input up to some length; everything else goes in a scattered order,
@@ -1502,6 +1539,29 @@ fn attempt(machine: &Machine, block: &Generated, budget: Budget) -> Result<Verdi
             gap_at.store(length, Ordering::Relaxed);
         }
     };
+    // In length order, each length's combinations handed out and finished: every length
+    // below one with a longer length handed out after it, and all its own finished, is proven.
+    let tally: Mutex<BTreeMap<usize, (usize, usize)>> = Mutex::new(BTreeMap::new());
+    let count_finished = |length: usize| {
+        let Ok(mut tally) = tally.lock() else {
+            return;
+        };
+        if let Some((_, finished)) = tally.get_mut(&length) {
+            *finished += 1;
+        }
+        let mut lengths = tally.iter().peekable();
+        let mut proven_below = 0;
+        while let Some((&length, &(handed, finished))) = lengths.next() {
+            if handed != finished || lengths.peek().is_none() {
+                break;
+            }
+            proven_below = length + 1;
+        }
+        budget
+            .progress
+            .proven_below
+            .fetch_max(proven_below, Ordering::Relaxed);
+    };
     let workers = std::thread::available_parallelism()
         .map_or(1, std::num::NonZero::get)
         .min(total.max(1));
@@ -1513,8 +1573,13 @@ fn attempt(machine: &Machine, block: &Generated, budget: Budget) -> Result<Verdi
                 while !stop.load(Ordering::Relaxed) {
                     let turn = next.fetch_add(1, Ordering::Relaxed);
                     let (combination, length) = if by_length {
-                        let Some(next) = levels.lock().ok().and_then(|mut levels| levels.next())
-                        else {
+                        let Some(next) = levels.lock().ok().and_then(|mut levels| {
+                            let next = levels.next()?;
+                            if let Ok(mut tally) = tally.lock() {
+                                tally.entry(next.1).or_default().0 += 1;
+                            }
+                            Some(next)
+                        }) else {
                             break;
                         };
                         next
@@ -1537,13 +1602,17 @@ fn attempt(machine: &Machine, block: &Generated, budget: Budget) -> Result<Verdi
                         break;
                     }
                     solvers.next();
-                    let result = if Instant::now() > budget.deadline {
+                    let result = if budget.stopped() {
                         Err(Stop::Unproven(OUT_OF_TIME.into()))
                     } else {
                         prove_shape(&image, block, &each, combination, budget, &mut solvers)
                     };
                     match result {
                         Ok((count, asked, reason)) => {
+                            budget.progress.done.fetch_add(1, Ordering::Relaxed);
+                            if by_length {
+                                count_finished(length);
+                            }
                             paths.fetch_add(count, Ordering::Relaxed);
                             questions.fetch_add(asked, Ordering::Relaxed);
                             if let (Some(reason), Ok(mut alone)) = (reason, alone.lock()) {
@@ -1944,7 +2013,7 @@ fn prove_shape(
     block: &Generated,
     each: &[(String, Vec<Part>)],
     combination: usize,
-    budget: Budget,
+    budget: &Budget,
     solvers: &mut Solvers,
 ) -> Result<(usize, usize, Option<String>), Stop> {
     let mut pool = Pool::default();

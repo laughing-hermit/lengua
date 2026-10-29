@@ -1,6 +1,6 @@
 ---
 name: write-spec
-description: Writes or updates a lengua program's spec.md from the user's request. spec.md is the natural-language source of truth that lengua turns into tests and checked x86-64 assembly. Use when the user wants a new lengua program, wants to change what one does, or when the lengua status tool says to write or fix spec.md. Ends when you record the spec with the record_spec tool and the user's own words, without waiting for an approval.
+description: Writes or updates a lengua program's spec.md from the user's request. spec.md is the natural-language source of truth that lengua turns into tests and checked x86-64 assembly. Use when the user wants a new lengua program, wants to change what one does, or when the lengua check tool says to write or fix spec.md. Ends when the check tool records the spec with the user's own words, without waiting for an approval.
 license: Apache-2.0
 compatibility: Needs the lengua MCP server from the lengua plugin.
 ---
@@ -16,19 +16,18 @@ don't ask them to approve it. They read it in your final report, which says what
 
 1. Use the folder the user names. If they name none, use a new folder named after the program in
    the current working directory, such as `<cwd>/add`. Tools take its absolute path.
-2. Call the lengua `status` tool with `path`. If its `next_step` starts with "Blocked", tell the
-   user and stop.
-3. Write `<path>/spec.md` in the shape of [the template](assets/spec-template.md), by the rules
+2. Write `<path>/spec.md` in the shape of [the template](assets/spec-template.md), by the rules
    below. Ask the user only what their request leaves open and only they can decide, such as what
    the program computes; choose the rest yourself: messages, exit codes 1, 2, 3… and ranges, and
    the ports a program on the network may use. To change a spec, edit it in place.
-4. Call `status` with `path` again. If its `next_step` lists problems in the spec, fix them.
-5. Call `record_spec` with `path` and, as `request`, the user's words that asked for this program
-   or this change, quoted exactly from their message. Never make words up or put them in the
-   user's mouth. Don't wait for an approval: go straight on. Only if the user asked to see the
-   spec before you build, tell them in a line where it is, wait for their go-ahead, and record it
-   with their words then.
-6. Follow the `next_step` it returns. Next comes `tests.toml`, with the write-tests skill.
+3. Call the lengua `check` tool with `path` and, as `request`, the user's words that asked for
+   this program or this change, quoted exactly from their message. Never make words up or put
+   them in the user's mouth. Don't wait for an approval: go straight on. Only if the user asked to
+   see the spec before you build, tell them in a line where it is, wait for their go-ahead, and
+   call `check` then.
+4. If `check` lists problems in the spec, fix them and call it again; if its `next_step` starts
+   with "Blocked", tell the user and stop. Then follow its `next_step`: next comes `tests.toml`,
+   with the write-tests skill.
 
 ## Rules
 
@@ -130,7 +129,7 @@ of the same rule.
   backticks (`1048576`): tests stay within a megabyte, and the program streams beyond it.
 - **Threads:** when the user wants a program that does heavy work on large inputs as fast as
   possible, add `- Threads: up to N` under `# Constraints`, with N up to the machine's cores
-  (`status` reports them; at most 64). The program may then split its work across that many
+  (`check` reports them in `machine`; at most 64). The program may then split its work across that many
   cores. Behaviors don't change: the output is the same as on one thread.
 
 ## Example
@@ -164,9 +163,9 @@ and `1000000000`, given as arguments. If writing the output fails, the program e
 
 ## After recording
 
-Every edit to `spec.md` makes `tests.toml` and `main.s` stale: call `record_spec` again, with the
-same words when the edit carries out the same request (such as adding a range the tests need) or
-with the user's new words when they asked for a change, then check the tests and the code again.
-lengua shows every change after the user's request in its replies (`spec_changed`), and keeps
-every request of a build until its code passes, so nothing drops out: tell the user each change,
-and why, in your final report. Never change the spec to make code pass; fix the code.
+Every edit to `spec.md` is recorded by the next `check` under the words already recorded, and
+the tests and code are checked against it again: pass `request` again only with the user's new
+words, when they ask for something new. lengua shows every change after the user's request in its
+final reply (`changes`), and keeps every request of a build until its code passes, so nothing
+drops out: tell the user each change, and why, in your final report. Never change the spec to
+make code pass; fix the code.

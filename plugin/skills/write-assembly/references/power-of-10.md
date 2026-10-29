@@ -1,6 +1,6 @@
 # The lengua Power of 10 (dialect 2)
 
-`main.s` is x86-64 assembly for Linux in Intel syntax. `check_code` builds it, reads the machine
+`main.s` is x86-64 assembly for Linux in Intel syntax. `check` builds it, reads the machine
 code back, matches it to `main.s` line by line (operands included), and checks the rules below.
 Nothing runs before every rule passes. Each violation names its rule, its line and a fix.
 
@@ -9,8 +9,7 @@ assembly and combined with ideas from C, C++ and Rust.
 
 ## Layout
 
-- **Line 1** is the spec label from the `status` tool: `# lengua: spec sha256:<64 hex digits>`.
-- **Line 2** is `.intel_syntax noprefix`.
+- **The first line** is `.intel_syntax noprefix`; only comments may come before it.
 - **Constants come next**, as `.equ NAME, value` lines with comments between them. Names are
   `UPPER_CASE`. A value is a number (decimal, `0x` hex, or a character such as `'0'`) or earlier
   constants combined with `+ - * /` and parentheses. Constants never hold addresses (`.`) or text.
@@ -74,14 +73,14 @@ and single precision:
   `setCC`
 - `jmp`, every `jCC`, `call ret syscall nop`
 
-When the CPU has them (the `status` tool lists its features): BMI1 (`andn bextr blsi blsmsk blsr
+When the CPU has them (the `machine` line of a `check` reply lists its features): BMI1 (`andn bextr blsi blsmsk blsr
 tzcnt`), BMI2 (`bzhi mulx pdep pext rorx sarx shlx shrx`), POPCNT (`popcnt`), LZCNT (`lzcnt`),
 ADX (`adcx adox`) and MOVBE (`movbe`).
 
 ### Vectors
 
 Integer vector instructions on `xmm` (16 bytes), `ymm` (32) and `zmm` (64) registers. SSE2 is in
-every x86-64 CPU; the rest only when `status` lists them: SSE3, SSSE3, SSE4.1, SSE4.2, AVX, AVX2
+every x86-64 CPU; the rest only when `check`'s `machine` lists them: SSE3, SSSE3, SSE4.1, SSE4.2, AVX, AVX2
 and AVX-512 (F, BW, CD, DQ, VL, VBMI, VBMI2, VNNI, BITALG, VPOPCNTDQ):
 
 - loads and stores: `movdqu`, `vmovdqu` (and `vmovdqu8` … `vmovdqu64`), `lddqu`; between
@@ -187,11 +186,11 @@ When the spec allows threads (`- Threads: up to N` under Constraints), a program
 work across cores with fork-join: `parallel_for` starts the threads and waits for all of them,
 like Rust's scoped threads. Copy `parallel_for`, `start_worker`, `join_worker`, the constants
 from `SYS_CLONE` to `MAX_WAITS`, and the data `stacks`, `tids`, `results` and `slots` word for
-word from [the parallel template](../assets/parallel-template.s); `check_code` compares them. Then
+word from [the parallel template](../assets/parallel-template.s); `check` compares them. Then
 choose three constants:
 - `THREADS`, at most the spec's N;
 - `STACK_SIZE`, each thread's stack: a multiple of 64 that holds the worker's deepest call path,
-  which `check_code` computes;
+  which `check` computes;
 - `SLOT_SIZE`, each worker's output: a multiple of 64.
 
 Write a function named `worker`. `call parallel_for` with `rdi` = how many workers to run, from 1
@@ -213,8 +212,8 @@ only with `parallel_for`'s flags.
 
 Threads pay off when each worker has real work: starting one costs about 10 to 20 microseconds,
 and splitting a fast vector loop over a megabyte saves little. Pick the worker count from the
-input's size, as the template does, and compare `wall_time_us` (time on the clock) in the
-`check_code` report: threads lower it while `cpu_time_us`, the total over all threads, stays or
+input's size, as the template does, and compare the time on the clock in the
+`check` report: threads lower it while the CPU time, the total over all threads, stays or
 rises.
 
 ## The rules
@@ -277,7 +276,7 @@ starts them only through the canonical `parallel_for` (see "Threads" below). It 
 system calls its spec allows, which are the capabilities the program is granted, and each `syscall`
 is chosen by `mov eax, SYS_NAME` in the same straight-line code (no label or call between). The stack changes only through 64-bit `push` and
 `pop`, `call`, `ret`, and `sub rsp, N` / `add rsp, N`; every path into a line has the same depth,
-and nothing reads or writes below `rsp` (no red zone). `check_code` reports the deepest stack
+and nothing reads or writes below `rsp` (no red zone). `check` checks the deepest stack
 over all call paths.
 
 ### 4. Small functions
@@ -304,7 +303,7 @@ An assertion is exactly a label, `mov edi, <number from 1 to 999>` and `call ass
 reached by one jump only: a conditional jump, or a `jmp` right after one (the end of a comparison
 chain, or a loop that ran out). Numbers are unique in the program, and functions average at least
 2 assertions. `assert_fail` prints `lengua: assertion NNN failed` to standard error and exits with
-code 134, which `check_code` reports as the assertion's line. Copy `assert_fail` and
+code 134, which `check` reports as the assertion's line. Copy `assert_fail` and
 `assert_message` from `assets/main-template.s` word for word.
 
 ### 6. Smallest scope
@@ -362,7 +361,7 @@ symbol. For a 16-byte load from an 80-byte buffer, the largest index is 64:
 
 An access through `[rip + name]` must fit inside `name` in the same way. Where a
 check is provably unnecessary, wrap the access in `# unsafe: <reason>` … `# end unsafe`. Only
-bounds checks can be skipped this way, and `check_code` reports every unsafe block.
+bounds checks can be skipped this way, and `check` finds every unsafe block.
 
 This rule checks the shape of each bounds check, and the limit against data symbols. It doesn't
 check moving a pointer (`add rsi, rcx`) instead of indexing: the tests guard that until the proof
@@ -370,5 +369,5 @@ step after the MVP.
 
 ### 10. Checked by tools
 
-The assembler and linker treat warnings as errors. `check_code` runs on every change, and nothing
+The assembler and linker treat warnings as errors. `check` runs on every change, and nothing
 runs or is stamped before every rule passes. The lock records `dialect = 2`.

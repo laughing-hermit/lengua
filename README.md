@@ -16,7 +16,7 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 > checksums, files, fork-join threads, the clock and random bytes (which tests supply, so such
 > output is exact), plain TCP clients and servers on the ports a spec names, and inputs up to
 > 1 MiB. The
-> kernel holds every run to what its spec allows. `prove` proves programs right for every
+> kernel holds every run to what its spec allows. lengua proves programs right for every
 > input, not just the tested ones, over whole numbers, decimals, choices, texts and text
 > formulas, files and the network, in integer, bit and vector code from SSE2 to AVX-512, and
 > over long texts up to a stated length (4,096 bytes of standard input), with each step
@@ -53,14 +53,18 @@ claude --plugin-dir /absolute/path/to/lengua/plugin
 Then describe a program, for example: "Use lengua to write a program that adds two whole numbers
 given as arguments and prints the sum." That request is all it takes:
 
-1. The agent writes `spec.md` from your request and records it with your words in `lengua.lock`.
-   It asks you something only when your request leaves open what only you can decide.
-2. It writes the tests and the assembly, and lengua checks both. When a test fails, the agent
+1. The agent writes `spec.md` from your request, and lengua records it with your words in
+   `lengua.lock`. The agent asks you something only when your request leaves open what only you
+   can decide.
+2. It writes the tests and the assembly, calling lengua's one tool, `check`, after each file:
+   lengua checks the tests against the spec and the code against its rules, runs every test, and
+   proves the program for every input it can, in the background. When a test fails, the agent
    decides from the spec whether the test or the code is wrong and fixes it, until everything
-   passes, then proves what it can and runs the program once.
+   passes. No call takes more than about 40 seconds, in any harness.
 3. Its report says where the program is, what the spec promises (behaviors, limits, and the files
-   and ports it may touch), what's proven, and every change made to the spec or the tests after
-   your request, with lengua's own marks on any test change that tests less.
+   and ports it may touch), what's proven, what its first example printed, and every change made
+   to the spec or the tests after your request, with lengua's own marks on any test change that
+   tests less.
 
 If you'd rather read the spec before the agent builds, say "show me the spec first", and it
 waits for your go-ahead. Later, ask the agent to run the program with other inputs, or on your
@@ -72,8 +76,8 @@ and touch files only in the folder it runs in.
 
 lengua relies on nothing from your harness's permission prompts, so it is as safe with every tool
 allowed or in an auto mode: what a program may touch is its spec's list, which the kernel enforces
-on every run, and lengua runs no build its checks didn't pass. The first record creates a signing
-key in `~/.local/share/lengua`.
+on every run, and lengua runs no build its checks didn't pass. The first `check` creates a
+signing key in `~/.local/share/lengua`.
 
 ## Examples
 
@@ -85,25 +89,24 @@ Complete programs, each with its spec, tests and assembly:
 - [`examples/hypotenuse`](examples/hypotenuse) computes a square root in double-precision floating
   point and prints it with three decimals;
 - [`examples/upcase`](examples/upcase) writes a copy of a text file in capitals, 16 bytes at a
-  time with SSE2, and `prove` proves it for every file up to 4096 bytes;
+  time with SSE2, proven for every file up to 4096 bytes;
 - [`examples/absdiff`](examples/absdiff) prints how far apart two numbers are. Claude Code wrote
-  it through lengua, and `prove` proves it for every pair of inputs;
+  it through lengua, proven for every pair of inputs;
 - [`examples/dice`](examples/dice) rolls a fair die from the kernel's random bytes. Its tests
-  supply the bytes, so every roll is checked exactly, and `prove` covers every pair of first
+  supply the bytes, so every roll is checked exactly, and the proof covers every pair of first
   bytes;
 - [`examples/fetch`](examples/fetch) fetches a page from a web server on this computer over
   HTTP/1.0, and [`examples/echo`](examples/echo) is a line-echo server. Their tests bring their
   own server and client, and lengua keeps each to the ports its spec names and to this computer;
-  `prove` proves
-  the echo server for every line, however the network cuts it;
+  the echo server is proven for every line, however the network cuts it;
 - [`examples/count`](examples/count) counts lines and words like `wc -lw`. Claude Code wrote it
   through lengua from one plain request in an interactive session; on a 4 GiB file it ran at
   15.8 GB/s, ahead of hand-written AVX-512 C, 12 times faster than plain C and 25 times faster
-  than GNU `wc`. `prove` proves its AVX-512 counting right for every input up to 4096 bytes.
+  than GNU `wc`. Its AVX-512 counting is proven right for every input up to 4096 bytes.
 
 Their `lengua.lock` files aren't committed, because a lock is signed with each machine's own key.
-Ask the agent to run one with lengua: it records the spec, then checks the tests and the code,
-which creates the lock.
+Ask the agent to check one with lengua: one `check` records the spec, checks the tests and the
+code, and creates the lock.
 
 ## Against C, C++ and Rust
 

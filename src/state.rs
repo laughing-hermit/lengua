@@ -149,15 +149,6 @@ pub enum State {
     Ready,
 }
 
-/// What the next-step sentence needs besides the state.
-#[derive(Debug, Clone, Copy)]
-pub struct StepContext<'a> {
-    /// The program folder.
-    pub folder: &'a ProgramFolder,
-    /// SHA-256 of the current spec.md, when it exists.
-    pub spec: Option<&'a Sha256Hex>,
-}
-
 impl State {
     /// Evaluates the state table, top row first.
     #[must_use]
@@ -204,43 +195,33 @@ impl State {
 
     /// The single next thing to do, as one sentence an agent can follow.
     #[must_use]
-    pub fn next_step(&self, context: &StepContext<'_>) -> String {
-        let folder = context.folder;
-        let label = context
-            .spec
-            .map_or_else(|| "sha256:…".to_owned(), Sha256Hex::label);
+    pub fn next_step(&self, folder: &ProgramFolder) -> String {
         match self {
-            Self::NoSpec => format!("Next: write {folder}/{SPEC_FILE} with the write-spec skill."),
+            Self::NoSpec => format!(
+                "Next: write {folder}/{SPEC_FILE} with the write-spec skill, then call check with \
+                 path {folder} and, as request, the user's words that asked for the program."
+            ),
             Self::LockInvalid(error) => format!(
-                "Next: {folder}/{} can't be used: {error}. Call record_spec with path {folder} \
-                 and the user's words that asked for this program; the tests and code are then \
-                 checked again.",
+                "Next: {folder}/{} can't be used: {error}. Call check with path {folder} and, as \
+                 request, the user's words that asked for this program; the tests and code are \
+                 then checked again.",
                 lock::LOCK_FILE
             ),
             Self::SpecUnrecorded => format!(
-                "Next: call record_spec with path {folder} and the user's words that asked for \
-                 this program or this change, quoted exactly."
+                "Next: call check with path {folder} and, as request, the user's words that asked \
+                 for this program or this change, quoted exactly."
             ),
             Self::TestsMissing => format!(
-                "Next: write {folder}/{TESTS_FILE} with the write-tests skill; its [meta] table \
-                 must contain spec = \"{label}\". Then call check_tests with path {folder}."
-            ),
-            Self::TestsUnchecked => format!(
-                "Next: call check_tests with path {folder}; if it reports problems, fix \
-                 {TESTS_FILE} with the write-tests skill."
+                "Next: write {folder}/{TESTS_FILE} with the write-tests skill, then call check \
+                 with path {folder}."
             ),
             Self::CodeMissing => format!(
-                "Next: write {folder}/{CODE_FILE} with the write-assembly skill (first line: \
-                 # lengua: spec {label}), then call check_code with path {folder}."
+                "Next: write {folder}/{CODE_FILE} with the write-assembly skill, then call check \
+                 with path {folder}."
             ),
-            Self::CodeUnchecked => format!(
-                "Next: call check_code with path {folder}; if it reports problems, fix \
-                 {CODE_FILE} with the write-assembly skill."
-            ),
-            Self::Ready => format!(
-                "Ready: call run with path {folder}, adding args or stdin if the program reads \
-                 them."
-            ),
+            Self::TestsUnchecked | Self::CodeUnchecked | Self::Ready => {
+                format!("Next: call check with path {folder}.")
+            }
         }
     }
 }
@@ -292,20 +273,19 @@ mod tests {
 
     fn next_step(state: &State) -> String {
         let folder = ProgramFolder::new("/projects/add").expect("absolute path");
-        let spec = digest("spec");
-        state.next_step(&StepContext {
-            folder: &folder,
-            spec: Some(&spec),
-        })
+        state.next_step(&folder)
     }
 
     #[test]
     fn row_no_spec() {
         let state = state([None, Some("tests"), None], LockStatus::Valid(recorded()));
         assert_eq!(state, State::NoSpec);
-        assert_eq!(
-            next_step(&state),
-            "Next: write /projects/add/spec.md with the write-spec skill."
+        assert!(
+            next_step(&state).starts_with(
+                "Next: write /projects/add/spec.md with the write-spec skill, then call check"
+            ),
+            "{}",
+            next_step(&state)
         );
     }
 
@@ -324,7 +304,7 @@ mod tests {
             "{step}"
         );
         assert!(
-            step.contains("Call record_spec with path /projects/add"),
+            step.contains("Call check with path /projects/add and, as request"),
             "{step}"
         );
     }
@@ -340,7 +320,7 @@ mod tests {
         assert_eq!(changed, State::SpecUnrecorded);
         let step = next_step(&missing);
         assert!(
-            step.contains("call record_spec with path /projects/add and the user's words"),
+            step.contains("call check with path /projects/add and, as request, the user's words"),
             "{step}"
         );
         assert!(!step.contains("approve"), "{step}");
@@ -351,11 +331,8 @@ mod tests {
         let state = state([Some("spec"), None, None], LockStatus::Valid(recorded()));
         assert_eq!(state, State::TestsMissing);
         let step = next_step(&state);
-        assert!(
-            step.contains(&format!("spec = \"{}\"", digest("spec").label())),
-            "{step}"
-        );
         assert!(step.contains("write-tests skill"), "{step}");
+        assert!(!step.contains("sha256"), "no label to copy: {step}");
     }
 
     #[test]
@@ -365,7 +342,10 @@ mod tests {
             LockStatus::Valid(recorded()),
         );
         assert_eq!(state, State::TestsUnchecked);
-        assert!(next_step(&state).starts_with("Next: call check_tests"));
+        assert_eq!(
+            next_step(&state),
+            "Next: call check with path /projects/add."
+        );
     }
 
     #[test]
@@ -389,10 +369,8 @@ mod tests {
         );
         assert_eq!(state, State::CodeMissing);
         let step = next_step(&state);
-        assert!(
-            step.contains(&format!("# lengua: spec {}", digest("spec").label())),
-            "{step}"
-        );
+        assert!(step.contains("write-assembly skill"), "{step}");
+        assert!(!step.contains("sha256"), "no label to copy: {step}");
     }
 
     #[test]
@@ -407,7 +385,10 @@ mod tests {
         );
         assert_eq!(unchecked, State::CodeUnchecked);
         assert_eq!(edited, State::CodeUnchecked);
-        assert!(next_step(&edited).starts_with("Next: call check_code"));
+        assert_eq!(
+            next_step(&edited),
+            "Next: call check with path /projects/add."
+        );
     }
 
     #[test]
@@ -417,7 +398,10 @@ mod tests {
             LockStatus::Valid(with_code()),
         );
         assert_eq!(state, State::Ready);
-        assert!(next_step(&state).starts_with("Ready: call run with path /projects/add"));
+        assert_eq!(
+            next_step(&state),
+            "Next: call check with path /projects/add."
+        );
     }
 
     #[test]

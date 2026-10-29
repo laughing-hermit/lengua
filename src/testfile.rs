@@ -629,17 +629,13 @@ impl fmt::Display for Problem {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TestsFile {
-    meta: Spanned<Meta>,
+    /// Older tests carried a spec label here; lengua.lock records the spec instead.
+    #[serde(default)]
+    meta: Option<Spanned<toml::Value>>,
     #[serde(default)]
     example: Vec<Spanned<ExampleTable>>,
     #[serde(default)]
     generated: Vec<Spanned<GeneratedTable>>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Meta {
-    spec: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -836,12 +832,10 @@ enum ExitCodeField {
 
 /// Checks tests.toml against the recorded spec, reporting every problem found (up to 20).
 ///
-/// `spec_label` is `sha256:<hex>` of the recorded spec.md.
-///
 /// # Errors
 ///
 /// Returns the problems when the tests aren't valid.
-pub fn check(text: &str, spec: &Spec, spec_label: &str) -> Result<TestSuite, Vec<Problem>> {
+pub fn check(text: &str, spec: &Spec) -> Result<TestSuite, Vec<Problem>> {
     let mut checker = Checker {
         text,
         spec,
@@ -868,15 +862,12 @@ pub fn check(text: &str, spec: &Spec, spec_label: &str) -> Result<TestSuite, Vec
         );
         return Err(checker.problems);
     }
-    let meta_line = checker.line(file.meta.span().start);
-    if file.meta.get_ref().spec != spec_label {
+    if let Some(meta) = &file.meta {
+        let line = checker.line(meta.span().start);
         checker.problem(
-            Some(meta_line),
-            format!(
-                "[meta] says spec = {:?}, but the recorded spec is {spec_label:?}. Write the \
-                 tests from the current spec.md, then set spec = {spec_label:?}",
-                file.meta.get_ref().spec
-            ),
+            Some(line),
+            "delete the [meta] table: lengua.lock records which spec the tests were checked \
+             against",
         );
     }
     let examples = checker.examples(file.example);
@@ -1615,7 +1606,7 @@ impl<'a> Checker<'a> {
                         "{name}: vars.{var} = {generator} uses {limit}, which spec.md's Purpose \
                          doesn't state. Generators take their ranges from Purpose: use the \
                          numbers it gives in backticks, or add the range to Purpose in spec.md \
-                         and call record_spec again{hint}"
+                         and call check again{hint}"
                     ),
                 );
             }
@@ -2434,10 +2425,8 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
 - Allowed system calls: read, write, exit
 ";
 
-    const LABEL: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
-
     fn tests(body: &str) -> String {
-        format!("[meta]\nspec = \"{LABEL}\"\n{body}")
+        body.to_owned()
     }
 
     const EXAMPLES: &str = r#"
@@ -2472,7 +2461,7 @@ exit_code = 0
     }
 
     fn problems(text: &str) -> Vec<String> {
-        match check(text, &spec(), LABEL) {
+        match check(text, &spec()) {
             Ok(suite) => panic!("expected problems, got {suite:#?}"),
             Err(problems) => problems.iter().map(ToString::to_string).collect(),
         }
@@ -2488,13 +2477,13 @@ exit_code = 0
 
     #[test]
     fn accepts_valid_tests() {
-        let suite = check(&valid(), &spec(), LABEL).expect("valid tests");
+        let suite = check(&valid(), &spec()).expect("valid tests");
         assert_eq!(suite.examples.len(), 2);
         assert_eq!(suite.examples[0].args, ["2", "3"]);
-        assert_eq!(suite.examples[1].line, 10);
+        assert_eq!(suite.examples[1].line, 8);
         let block = &suite.generated[0];
         assert_eq!(block.runs, 200);
-        assert_eq!(block.line, 15);
+        assert_eq!(block.line, 13);
         let cases: Vec<Case> = block
             .cases(42)
             .collect::<Result<_, _>>()
@@ -2541,7 +2530,7 @@ exit_code = 0
 
     fn dice(body: &str) -> Result<TestSuite, Vec<String>> {
         let spec = spec::parse(DICE).expect("valid spec");
-        check(&tests(body), &spec, LABEL)
+        check(&tests(body), &spec)
             .map_err(|problems| problems.iter().map(ToString::to_string).collect())
     }
 
@@ -2648,7 +2637,7 @@ stdout = "{any(now - 2, now + 2)}\n"
 exit_code = 0
 "#;
         let spec = spec::parse(CLOCK).expect("valid spec");
-        let suite = check(&tests(body), &spec, LABEL).expect("valid tests");
+        let suite = check(&tests(body), &spec).expect("valid tests");
         assert!(suite.generated[0].uses_now());
         let now = crate::expect::now();
         let case = suite.generated[0]
@@ -2660,7 +2649,7 @@ exit_code = 0
             0
         ));
         let problems = |body: &str| {
-            check(&tests(body), &spec, LABEL)
+            check(&tests(body), &spec)
                 .expect_err("problems")
                 .iter()
                 .map(ToString::to_string)
@@ -2711,7 +2700,7 @@ exit_code = 0
 
     fn supplied(body: &str) -> Result<TestSuite, Vec<String>> {
         let spec = spec::parse(&spec_text("dice")).expect("valid spec");
-        check(&tests(body), &spec, LABEL)
+        check(&tests(body), &spec)
             .map_err(|problems| problems.iter().map(ToString::to_string).collect())
     }
 
@@ -2813,7 +2802,7 @@ exit_code = 0
 "#;
         let spec = spec::parse(HOUR).expect("valid spec");
         let problems = |body: &str| {
-            check(&tests(body), &spec, LABEL)
+            check(&tests(body), &spec)
                 .err()
                 .unwrap_or_default()
                 .iter()
@@ -2821,7 +2810,7 @@ exit_code = 0
                 .collect::<Vec<_>>()
                 .join("\n")
         };
-        let suite = check(&tests(body), &spec, LABEL).expect("valid tests");
+        let suite = check(&tests(body), &spec).expect("valid tests");
         let reading = suite.examples[0].supply().clock[0];
         assert_eq!(
             (reading.seconds, reading.nanoseconds),
@@ -2846,24 +2835,23 @@ exit_code = 0
             "Given a client that sends `hello\\r\\n`",
         ))
         .expect("valid spec");
-        let label = LABEL;
         let body = |example: &str| {
             format!(
-                "[meta]\nspec = \"{label}\"\n\n[[example]]\nid = \"B1\"\n{example}\nserves = true\n\n\
+                "[[example]]\nid = \"B1\"\n{example}\nserves = true\n\n\
                  [[generated]]\nid = \"B1\"\nvars = {{ line = 'string(0, 1023, \"ehlo\")' }}\n\
                  client = [{{ sends = \"{{line}}\\r\\n\", receives = \"{{line}}\\r\\n\" }}]\n\
                  serves = true\n"
             )
         };
         let crlf = body(r#"client = [{ sends = "hello\r\n", receives = "hello\r\n" }]"#);
-        check(&crlf, &spec, label).expect("`hello\\r\\n` is in the example");
+        check(&crlf, &spec).expect("`hello\\r\\n` is in the example");
         let repeated = body(
             r#"client = [{ sends = [{ repeat = "hel", times = 1 }, "lo\r\n"], receives = "hello\r\n" }]"#,
         );
-        check(&repeated, &spec, label).expect("repeats work in network fields");
+        check(&repeated, &spec).expect("repeats work in network fields");
         // When the block can't produce the example, the message names what doesn't fit.
         let misfit = crlf.replace("sends = \"{line}\\r\\n\"", "sends = \"{line}!\\r\\n\"");
-        let problems: Vec<String> = check(&misfit, &spec, label)
+        let problems: Vec<String> = check(&misfit, &spec)
             .expect_err("a misfit")
             .iter()
             .map(ToString::to_string)
@@ -2877,14 +2865,14 @@ exit_code = 0
     }
 
     #[test]
-    fn requires_the_current_spec_label() {
-        let text = valid().replace(LABEL, "sha256:1111");
-        assert_problem(&text, "[meta] says spec = \"sha256:1111\"");
+    fn refuses_a_leftover_spec_label() {
+        let text = format!("[meta]\nspec = \"sha256:1111\"\n{}", valid());
+        assert_problem(&text, "line 1: delete the [meta] table");
     }
 
     #[test]
     fn reports_toml_errors() {
-        assert_problem("[meta]\nspec = ", "tests.toml isn't valid");
+        assert_problem("[[example]]\nid = ", "tests.toml isn't valid");
         assert_problem(
             &valid().replace("exit_code = 1", "exit_code = 1\ncolour = \"red\""),
             "unknown field `colour`",
@@ -2906,7 +2894,7 @@ exit_code = 0
         ));
         assert_problem(&without_b2, "B2 has no [[example]]");
         let twice = valid().replace("id = \"B2\"", "id = \"B1\"");
-        assert_problem(&twice, "B1 has two examples (also on line 4)");
+        assert_problem(&twice, "B1 has two examples (also on line 2)");
         let unknown = valid().replace("id = \"B2\"", "id = \"B7\"");
         assert_problem(
             &unknown,
@@ -3097,7 +3085,7 @@ Counts the lines of at most `1048576` bytes of text.
              [[generated]]\nid = \"B1\"\nvars = { text = 'string(0, 1048576, \"a\\n\")' }\n\
              stdin = \"{text}\"\nstdout = \"{count(text, \\\"\\\\n\\\")}\\n\"\nexit_code = 0\n",
         );
-        let result = check(&tests, &spec, LABEL);
+        let result = check(&tests, &spec);
         assert!(result.is_ok(), "{result:#?}");
     }
 
@@ -3133,8 +3121,8 @@ Halves a price between {purpose}.
             ))
         };
         let plain = spec("`0.00` and `100.00`");
-        assert!(check(&tests("decimal(0.00, 100.00)"), &plain, LABEL).is_ok());
-        let problems = |text: &str, spec: &Spec| match check(text, spec, LABEL) {
+        assert!(check(&tests("decimal(0.00, 100.00)"), &plain).is_ok());
+        let problems = |text: &str, spec: &Spec| match check(text, spec) {
             Ok(_) => panic!("accepted {text}"),
             Err(problems) => problems.iter().map(ToString::to_string).collect::<Vec<_>>(),
         };
@@ -3162,7 +3150,6 @@ Halves a price between {purpose}.
         let suite = check(
             &negate_tests(&[r#"n = "int(-100, 100)""#]),
             &negate_spec(-100, 100),
-            LABEL,
         )
         .expect("valid tests");
         let block = &suite.generated[0];
@@ -3179,13 +3166,12 @@ Halves a price between {purpose}.
         assert_eq!(values.len(), 201);
 
         // A large range is sampled, as are hand-picked values.
-        let suite = check(&valid(), &spec(), LABEL).expect("valid tests");
+        let suite = check(&valid(), &spec()).expect("valid tests");
         assert!(!suite.generated[0].every_value);
         assert_eq!(suite.generated[0].run_count(), 200);
         let suite = check(
             &negate_tests(&[r#"n = "choice(-100, 7, 100)""#]),
             &negate_spec(-100, 100),
-            LABEL,
         )
         .expect("valid tests");
         assert!(
@@ -3197,8 +3183,8 @@ Halves a price between {purpose}.
     #[test]
     fn every_value_stays_within_the_suite_budget() {
         let block = r#"n = "int(-2500, 2499)""#;
-        let suite = check(&negate_tests(&[block; 5]), &negate_spec(-2500, 2499), LABEL)
-            .expect("valid tests");
+        let suite =
+            check(&negate_tests(&[block; 5]), &negate_spec(-2500, 2499)).expect("valid tests");
         let full = suite
             .generated
             .iter()
@@ -3241,7 +3227,7 @@ Prints the length of a word of `1` to `200000` letters.
                  stdout = \"{{len(w)}}\\n\"\nexit_code = 0\n"
             ))
         };
-        let problems = match check(&tests(r#"string(1, 200000, "abc")"#), &spec, LABEL) {
+        let problems = match check(&tests(r#"string(1, 200000, "abc")"#), &spec) {
             Ok(_) => panic!("a 200000-byte argument was accepted"),
             Err(problems) => problems.iter().map(ToString::to_string).collect::<Vec<_>>(),
         };
@@ -3295,7 +3281,7 @@ Prints the length of a word of `1` to `200000` letters.
         );
         let narrower = GENERATED.replace("runs = 200", "runs = 50");
         let ok = tests(&format!("{EXAMPLES}{GENERATED}{narrower}"));
-        assert!(check(&ok, &spec(), LABEL).is_ok());
+        assert!(check(&ok, &spec()).is_ok());
     }
 
     #[test]
@@ -3353,7 +3339,7 @@ files_after = { "loud.txt" = "{upper(s)}" }
 exit_code = 0
 "#,
         );
-        let suite = check(&valid, &spec, LABEL).expect("valid tests");
+        let suite = check(&valid, &spec).expect("valid tests");
         let case = suite.generated[0]
             .cases(7)
             .next()
@@ -3363,7 +3349,7 @@ exit_code = 0
             case.files_after["loud.txt"],
             case.files["notes.txt"].to_ascii_uppercase()
         );
-        let problems = |text: &str| match check(text, &spec, LABEL) {
+        let problems = |text: &str| match check(text, &spec) {
             Ok(_) => panic!("expected problems in {text}"),
             Err(problems) => problems.iter().map(ToString::to_string).collect::<Vec<_>>(),
         };
@@ -3427,17 +3413,17 @@ stdout = "{a + b}\n"
 exit_code = 0
 "#,
         );
-        let suite = check(&text, &spec, LABEL).expect("valid tests");
+        let suite = check(&text, &spec).expect("valid tests");
         assert_eq!(suite.generated[0].runs, DEFAULT_RUNS);
         let wrong = text.replace("{a + b}", "{a * b}");
-        assert!(check(&wrong, &spec, LABEL).is_err());
+        assert!(check(&wrong, &spec).is_err());
     }
 
     #[test]
     fn dry_runs_are_deterministic() {
         let text = valid();
-        let first = check(&text, &spec(), LABEL);
-        assert_eq!(first, check(&text, &spec(), LABEL));
+        let first = check(&text, &spec());
+        assert_eq!(first, check(&text, &spec()));
         assert_eq!(dry_run_seed(&text), dry_run_seed(&text));
     }
 }

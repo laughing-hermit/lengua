@@ -25,27 +25,16 @@ async fn machine(source: &str) -> Machine {
 
 fn block(spec: &str, tests: &str, index: usize) -> Generated {
     let spec = crate::spec::parse(spec).expect("valid spec");
-    let label = crate::hash::Sha256Hex::of(b"").label();
-    let tests = tests.replacen(
-        &tests
-            .lines()
-            .find(|line| line.starts_with("spec = "))
-            .expect("a label")
-            .to_owned(),
-        &format!("spec = \"{label}\""),
-        1,
-    );
-    let suite = crate::testfile::check(&tests, &spec, &label).expect("valid tests");
+    let suite = crate::testfile::check(tests, &spec).expect("valid tests");
     suite.generated[index].clone()
 }
 
 fn budget(seconds: u64) -> Budget {
     Budget {
-        deadline: Instant::now() + Duration::from_secs(seconds),
         max_paths: 64,
         max_shapes: 2000,
         question_ms: 10_000,
-        listens: false,
+        ..Budget::until(Instant::now() + Duration::from_secs(seconds), false)
     }
 }
 
@@ -71,7 +60,7 @@ async fn proves_the_template_for_every_input() {
     let machine = machine(crate::checker::TEMPLATE).await;
     let block = block(&asset("template-spec.md"), &asset("template-tests.toml"), 0);
     let started = Instant::now();
-    let verdict = prove(&machine, &block, budget(120));
+    let verdict = prove(&machine, &block, &budget(120));
     eprintln!("{verdict:?} in {:?}", started.elapsed());
     assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
 }
@@ -126,7 +115,7 @@ async fn proves_add_for_every_pair_of_inputs() {
     let machine = machine(&example("add", "main.s")).await;
     let block = block(&example("add", "spec.md"), &example("add", "tests.toml"), 0);
     let started = Instant::now();
-    let verdict = prove(&machine, &block, budget(300));
+    let verdict = prove(&machine, &block, &budget(300));
     eprintln!("add: {verdict:?} in {:?}", started.elapsed());
     assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
 }
@@ -152,7 +141,7 @@ async fn finds_a_bug_the_samples_miss() {
     assert_ne!(buggy, crate::checker::TEMPLATE);
     let machine = machine(&buggy).await;
     let block = block(&asset("template-spec.md"), &asset("template-tests.toml"), 0);
-    let verdict = prove(&machine, &block, budget(120));
+    let verdict = prove(&machine, &block, &budget(120));
     assert_eq!(
         verdict,
         Verdict::Counterexample(BTreeMap::from([("n".to_owned(), Value::Int(1_234_567))]))
@@ -177,7 +166,7 @@ async fn proves_absolute_difference() {
         0,
     );
     let started = Instant::now();
-    let verdict = prove(&machine, &block, budget(300));
+    let verdict = prove(&machine, &block, &budget(300));
     eprintln!("absdiff: {verdict:?} in {:?}", started.elapsed());
     assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
 }
@@ -196,7 +185,7 @@ async fn proves_the_mean_of_two_prices() {
         0,
     );
     let started = Instant::now();
-    let verdict = prove(&machine, &block, budget(300));
+    let verdict = prove(&machine, &block, &budget(300));
     eprintln!("mean: {verdict:?} in {:?}", started.elapsed());
     assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
 }
@@ -219,7 +208,7 @@ async fn proves_decimal_inputs_where_the_output_is_fixed() {
             &example("mean", "tests.toml"),
             index,
         );
-        let verdict = prove(&machine, &block, budget(120));
+        let verdict = prove(&machine, &block, &budget(120));
         assert!(
             matches!(verdict, Verdict::Proven { .. }),
             "{}: {verdict:?}",
@@ -256,10 +245,7 @@ Rolls a die for a player numbered from `1` to `9`.
 # Constraints
 - Allowed system calls: write, getrandom, exit
 ";
-    const TESTS: &str = r#"[meta]
-spec = "sha256:0"
-
-[[example]]
+    const TESTS: &str = r#"[[example]]
 id = "B1"
 args = ["1"]
 stdout = { matches = "rolled {any(1, 6)}\n" }
@@ -316,10 +302,10 @@ random:
         block.cases(1).take(4).filter_map(Result::ok).collect();
     let right = machine(&program(6)).await;
     agrees(&right, &samples, false).expect("the model agrees with the samples");
-    let verdict = prove(&right, &block, budget(120));
+    let verdict = prove(&right, &block, &budget(120));
     assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
     let wrong = machine(&program(7)).await;
-    let verdict = prove(&wrong, &block, budget(120));
+    let verdict = prove(&wrong, &block, &budget(120));
     assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
 }
 
@@ -351,10 +337,7 @@ Exits with the clock's seconds since 1970 modulo 7, from `0` to `6`.
 # Constraints
 - Allowed system calls: clock_gettime, exit
 ";
-    const TESTS: &str = r#"[meta]
-spec = "sha256:0"
-
-[[example]]
+    const TESTS: &str = r#"[[example]]
 id = "B1"
 clock = ["1735689600"]
 exit_code = 1
@@ -397,10 +380,10 @@ time:
         block.cases(1).take(4).filter_map(Result::ok).collect();
     let right = machine(&program(7)).await;
     agrees(&right, &samples, false).expect("the model agrees with the samples");
-    let verdict = prove(&right, &block, budget(120));
+    let verdict = prove(&right, &block, &budget(120));
     assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
     let wrong = machine(&program(6)).await;
-    let verdict = prove(&wrong, &block, budget(120));
+    let verdict = prove(&wrong, &block, &budget(120));
     assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
 }
 
@@ -423,10 +406,7 @@ Prints its argument, `1` to `3` letters.
 - Allowed system calls: write, exit
 ";
 
-const ECHO_TESTS: &str = r#"[meta]
-spec = "sha256:x"
-
-[[example]]
+const ECHO_TESTS: &str = r#"[[example]]
 id = "B1"
 args = ["ab"]
 stdout = "ab"
@@ -473,7 +453,14 @@ async fn a_shape_its_terms_settle_starts_no_solver() {
     let mut solvers = Solvers::new(10_000);
     for combination in 0..3 {
         solvers.next();
-        let result = prove_shape(&image, &block, &each, combination, budget(60), &mut solvers);
+        let result = prove_shape(
+            &image,
+            &block,
+            &each,
+            combination,
+            &budget(60),
+            &mut solvers,
+        );
         assert!(
             matches!(result, Ok((1, 0, None))),
             "combination {combination}"
@@ -484,7 +471,7 @@ async fn a_shape_its_terms_settle_starts_no_solver() {
         "no question, so no solver started"
     );
     assert_eq!(
-        prove(&machine, &block, budget(60)),
+        prove(&machine, &block, &budget(60)),
         Verdict::Proven {
             shapes: 3,
             paths: 3,
@@ -520,7 +507,7 @@ async fn proves_the_csv_totals_24696_combinations() {
     let verdict = prove(
         &machine,
         &block,
-        Budget {
+        &Budget {
             max_shapes: 2_000_000,
             max_paths: 256,
             ..budget(600)
@@ -572,7 +559,7 @@ async fn traces_a_few_csv_total_combinations() {
             &block,
             &each,
             combination,
-            budget(120),
+            &budget(120),
             &mut solvers,
         );
         let questions = solvers.solver.as_ref().map_or(0, |solver| solver.questions) - before;
@@ -610,10 +597,7 @@ Exits with the day of the week of the clock's seconds since 1970, from `0` (Sund
 # Constraints
 - Allowed system calls: clock_gettime, exit
 ";
-    const TESTS: &str = r#"[meta]
-spec = "sha256:0"
-
-[[example]]
+    const TESTS: &str = r#"[[example]]
 id = "B1"
 clock = ["1735689600"]
 exit_code = 3
@@ -660,10 +644,10 @@ time:
         block.cases(1).take(4).filter_map(Result::ok).collect();
     let right = machine(&program(4)).await;
     agrees(&right, &samples, false).expect("the model agrees with the samples");
-    let verdict = prove(&right, &block, budget(120));
+    let verdict = prove(&right, &block, &budget(120));
     assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
     let wrong = machine(&program(3)).await;
-    let verdict = prove(&wrong, &block, budget(120));
+    let verdict = prove(&wrong, &block, &budget(120));
     assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
 }
 
@@ -678,13 +662,13 @@ async fn proves_the_hh_mm_ss_clock() {
     );
     let source = fixture("clock", "main.s");
     let right = machine(&source).await;
-    let verdict = prove(&right, &block, budget(120));
+    let verdict = prove(&right, &block, &budget(120));
     assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
     // An hour one second short.
     let wrong =
         machine(&source.replace(".equ SECONDS_PER_HOUR, 3600", ".equ SECONDS_PER_HOUR, 3599"))
             .await;
-    let verdict = prove(&wrong, &block, budget(120));
+    let verdict = prove(&wrong, &block, &budget(120));
     assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
 }
 
@@ -709,10 +693,7 @@ Capitalizes standard input of `0` to `16` characters.
 # Constraints
 - Allowed system calls: read, write, exit
 ";
-    const TESTS: &str = r#"[meta]
-spec = "sha256:0"
-
-[[example]]
+    const TESTS: &str = r#"[[example]]
 id = "B1"
 stdin = "ab"
 stdout = "AB"
@@ -771,14 +752,14 @@ buffer:
     };
     let block = block(SPEC, TESTS, 0);
     let right = machine(&program(26)).await;
-    let verdict = prove(&right, &block, budget(120));
+    let verdict = prove(&right, &block, &budget(120));
     assert!(
         matches!(verdict, Verdict::Proven { shapes: 17, .. }),
         "{verdict:?}"
     );
     // Leaves `z` small.
     let wrong = machine(&program(25)).await;
-    let verdict = prove(&wrong, &block, budget(120));
+    let verdict = prove(&wrong, &block, &budget(120));
     assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
 }
 
@@ -803,10 +784,7 @@ Counts the `a` bytes in standard input of `0` to `16` characters.
 # Constraints
 - Allowed system calls: read, write, exit
 ";
-    const TESTS: &str = r#"[meta]
-spec = "sha256:0"
-
-[[example]]
+    const TESTS: &str = r#"[[example]]
 id = "B1"
 stdin = "aba"
 stdout = "2\n"
@@ -883,14 +861,14 @@ out:
     };
     let block = block(SPEC, TESTS, 0);
     let right = machine(&program(97)).await;
-    let verdict = prove(&right, &block, budget(120));
+    let verdict = prove(&right, &block, &budget(120));
     assert!(
         matches!(verdict, Verdict::Proven { shapes: 17, .. }),
         "{verdict:?}"
     );
     // Counts the `b` bytes instead.
     let wrong = machine(&program(98)).await;
-    let verdict = prove(&wrong, &block, budget(120));
+    let verdict = prove(&wrong, &block, &budget(120));
     assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
 }
 
@@ -949,10 +927,7 @@ Prints standard input of `0` to `5000` characters back.
 - Allowed system calls: read, write, exit
 ";
     let tests = format!(
-        r#"[meta]
-spec = "sha256:0"
-
-[[example]]
+        r#"[[example]]
 id = "B1"
 stdin = "{example}"
 stdout = "{example}"
@@ -981,7 +956,7 @@ fn long_budget() -> Budget {
 #[tokio::test]
 async fn proves_long_text_up_to_the_bound() {
     let machine = machine(&echo("")).await;
-    let verdict = prove(&machine, &echo_block("{text}", "ab"), long_budget());
+    let verdict = prove(&machine, &echo_block("{text}", "ab"), &long_budget());
     let Verdict::Proven { shapes, bound, .. } = verdict else {
         panic!("{verdict:?}");
     };
@@ -994,7 +969,7 @@ async fn proves_long_text_up_to_the_bound() {
         })
     );
     // With a newline after the text, the longest text no longer fits one pipe write.
-    let verdict = prove(&machine, &echo_block("{text}\\n", "ab\\n"), long_budget());
+    let verdict = prove(&machine, &echo_block("{text}\\n", "ab\\n"), &long_budget());
     let Verdict::Proven { bound, .. } = verdict else {
         panic!("{verdict:?}");
     };
@@ -1007,7 +982,7 @@ async fn proves_long_text_up_to_the_bound() {
 #[tokio::test]
 async fn proves_text_up_to_where_the_model_stops() {
     let machine = machine(&echo("    xor eax, eax\n    cpuid")).await;
-    let verdict = prove(&machine, &echo_block("{text}", "ab"), long_budget());
+    let verdict = prove(&machine, &echo_block("{text}", "ab"), &long_budget());
     let Verdict::Proven { shapes, bound, .. } = verdict else {
         panic!("{verdict:?}");
     };
@@ -1028,20 +1003,13 @@ async fn explores_a_program() {
     let machine = machine(&read("main.s")).await;
     let (spec, tests) = (read("spec.md"), read("tests.toml"));
     let spec_parsed = crate::spec::parse(&spec).expect("valid spec");
-    let label = crate::hash::Sha256Hex::of(b"").label();
-    let line = tests
-        .lines()
-        .find(|line| line.starts_with("spec = "))
-        .expect("a label")
-        .to_owned();
-    let tests = tests.replacen(&line, &format!("spec = \"{label}\""), 1);
-    let suite = crate::testfile::check(&tests, &spec_parsed, &label).expect("valid tests");
+    let suite = crate::testfile::check(&tests, &spec_parsed).expect("valid tests");
     for block in &suite.generated {
         let began = Instant::now();
         let verdict = prove(
             &machine,
             block,
-            Budget {
+            &Budget {
                 max_shapes: 2_000_000,
                 listens: spec_parsed.network.listens.is_some(),
                 ..budget(120)
@@ -1076,7 +1044,7 @@ async fn proves_the_vector_template() {
     let source = asset("vector-template.s");
     let right = machine(&source).await;
     let shout = block(&spec, &tests, 0);
-    let verdict = prove(&right, &shout, budget(60));
+    let verdict = prove(&right, &shout, &budget(60));
     assert!(
         matches!(
             verdict,
@@ -1089,7 +1057,7 @@ async fn proves_the_vector_template() {
         "{verdict:?}"
     );
     let too_long = block(&spec, &tests, 1);
-    let verdict = prove(&right, &too_long, text_budget());
+    let verdict = prove(&right, &too_long, &text_budget());
     let Verdict::Proven {
         bound: Some(bound), ..
     } = &verdict
@@ -1100,7 +1068,7 @@ async fn proves_the_vector_template() {
     let wrong =
         machine(&source.replace(".equ ABOVE_Z_X4, 0x7b7b7b7b", ".equ ABOVE_Z_X4, 0x7a7a7a7a"))
             .await;
-    let verdict = prove(&wrong, &shout, budget(60));
+    let verdict = prove(&wrong, &shout, &budget(60));
     assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
 }
 
@@ -1123,7 +1091,7 @@ async fn proves_the_avx512_word_count() {
     let source = repository_file(&format!("{folder}main.s"));
     let block = block(&spec, &tests, 0);
     let right = machine(&source).await;
-    let verdict = prove(&right, &block, text_budget());
+    let verdict = prove(&right, &block, &text_budget());
     assert!(
         matches!(
             verdict,
@@ -1136,7 +1104,7 @@ async fn proves_the_avx512_word_count() {
         "{verdict:?}"
     );
     let wrong = machine(&source.replace(".equ TAB_TO_CR, 4", ".equ TAB_TO_CR, 3")).await;
-    let verdict = prove(&wrong, &block, text_budget());
+    let verdict = prove(&wrong, &block, &text_budget());
     assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
 }
 
@@ -1157,7 +1125,7 @@ async fn proves_upcase_on_files() {
     let source = repository_file("examples/upcase/main.s");
     let block = block(&spec, &tests, 0);
     let right = machine(&source).await;
-    let verdict = prove(&right, &block, text_budget());
+    let verdict = prove(&right, &block, &text_budget());
     assert!(
         matches!(
             verdict,
@@ -1170,7 +1138,7 @@ async fn proves_upcase_on_files() {
         "{verdict:?}"
     );
     let wrong = machine(&source.replace("mov eax, 0x9a9a9a9a", "mov eax, 0x99999999")).await;
-    let verdict = prove(&wrong, &block, text_budget());
+    let verdict = prove(&wrong, &block, &text_budget());
     assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
 }
 
@@ -1245,7 +1213,7 @@ async fn proves_the_echo_server() {
     let source = repository_file("examples/echo/main.s");
     let block = block(&spec, &tests, 0);
     let right = machine(&source).await;
-    let verdict = prove(&right, &block, network_budget(true));
+    let verdict = prove(&right, &block, &network_budget(true));
     assert!(
         matches!(
             verdict,
@@ -1263,7 +1231,7 @@ async fn proves_the_echo_server() {
         1,
     );
     assert_ne!(once, source);
-    let verdict = prove(&machine(&once).await, &block, network_budget(true));
+    let verdict = prove(&machine(&once).await, &block, &network_budget(true));
     let Verdict::Counterexample(found) = &verdict else {
         panic!("{verdict:?}");
     };
@@ -1278,7 +1246,7 @@ async fn proves_the_echo_server() {
         1,
     );
     assert_ne!(open, source);
-    let verdict = prove(&machine(&open).await, &block, network_budget(true));
+    let verdict = prove(&machine(&open).await, &block, &network_budget(true));
     assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
 }
 
@@ -1298,7 +1266,7 @@ async fn proves_the_fetch_client() {
     let source = repository_file("examples/fetch/main.s");
     let right = machine(&source).await;
     for index in 0..3 {
-        let verdict = prove(&right, &block(&spec, &tests, index), network_budget(false));
+        let verdict = prove(&right, &block(&spec, &tests, index), &network_budget(false));
         assert!(
             matches!(
                 verdict,
@@ -1321,7 +1289,7 @@ async fn proves_the_fetch_client() {
         source.replacen(".equ VERSION_LEN, 13", ".equ VERSION_LEN, 11", 1),
     ] {
         assert_ne!(wrong, source);
-        let verdict = prove(&machine(&wrong).await, &fetch, network_budget(false));
+        let verdict = prove(&machine(&wrong).await, &fetch, &network_budget(false));
         assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
     }
 }
@@ -1342,7 +1310,7 @@ async fn proves_counts_padded_to_a_column() {
     );
     let tests = fixture("padded", "tests.toml").replacen("string(0, 1048576,", "string(0, 120,", 1);
     let machine = machine(&fixture("padded", "main.s")).await;
-    let verdict = prove(&machine, &block(&spec, &tests, 0), text_budget());
+    let verdict = prove(&machine, &block(&spec, &tests, 0), &text_budget());
     assert!(
         matches!(verdict, Verdict::Proven { bound: None, .. }),
         "{verdict:?}"

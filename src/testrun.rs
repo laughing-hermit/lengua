@@ -130,6 +130,8 @@ pub struct Outcome {
     pub failures: Vec<String>,
     /// Instruction counts per test, when the CPU's counters are available.
     pub costs: Vec<Cost>,
+    /// The first example as it ran, in one line, for a report to show.
+    pub shown: Option<String>,
 }
 
 impl Outcome {
@@ -766,6 +768,83 @@ async fn waiting_for_connections(pid: i32) -> bool {
     false
 }
 
+/// How long a shown text may be.
+const SHOWN_CHARS: usize = 500;
+
+/// `text` as a quoted string, cut to [`SHOWN_CHARS`].
+fn quoted(text: &str) -> String {
+    let mut shown: String = text.chars().take(SHOWN_CHARS).collect();
+    if shown.len() < text.len() {
+        shown.push('…');
+    }
+    format!("{shown:?}")
+}
+
+/// An example's run in one line: what it was given, and what it did.
+fn shown(example: &Example, run: &Run) -> String {
+    let mut given = Vec::new();
+    if !example.args.is_empty() {
+        given.push(format!("arguments {:?}", example.args));
+    }
+    if !example.stdin.is_empty() {
+        given.push(format!("standard input {}", quoted(&example.stdin)));
+    }
+    for (name, contents) in &example.files {
+        given.push(format!("a file {name} holding {}", quoted(contents)));
+    }
+    for reply in &example.server {
+        given.push(format!(
+            "a server that received {} and replied {}",
+            quoted(&reply.receives),
+            quoted(&reply.replies)
+        ));
+    }
+    for exchange in &example.client {
+        given.push(format!(
+            "a client that sent {} and received {}",
+            quoted(&exchange.sends),
+            quoted(&exchange.receives)
+        ));
+    }
+    let mut did = Vec::new();
+    if !run.stdout.is_empty() {
+        did.push(format!(
+            "printed {}",
+            quoted(&String::from_utf8_lossy(&run.stdout))
+        ));
+    }
+    if !run.stderr.is_empty() {
+        did.push(format!(
+            "printed {} to standard error",
+            quoted(&String::from_utf8_lossy(&run.stderr))
+        ));
+    }
+    for (name, contents) in &example.files_after {
+        if !example
+            .files
+            .get(name)
+            .is_some_and(|before| before == contents)
+        {
+            did.push(format!("left {name} holding {}", quoted(contents)));
+        }
+    }
+    did.push(match run.end {
+        End::Exited(code) => format!("exited with code {code}"),
+        _ if example.serves => "kept serving".to_owned(),
+        _ => "ended".to_owned(),
+    });
+    let given = if given.is_empty() {
+        "nothing".to_owned()
+    } else {
+        given.join(", ")
+    };
+    format!(
+        "example {}: given {given}, the program {}",
+        example.id,
+        did.join(", ")
+    )
+}
+
 fn record(outcome: &mut Outcome, message: String) {
     if outcome.failures.len() < MAX_FAILURES {
         outcome.failures.push(message);
@@ -910,6 +989,9 @@ pub async fn run_tests(
         };
         outcome.runs += 1;
         let name = format!("example {}", example.id);
+        if index == 0 && problem.is_none() {
+            outcome.shown = Some(shown(example, &run));
+        }
         match problem {
             Some(problem) => {
                 let mut message = format!("{name} (tests.toml line {}): {problem}", example.line);
