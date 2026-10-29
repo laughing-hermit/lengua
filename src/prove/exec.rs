@@ -105,6 +105,34 @@ enum Last {
     Other,
 }
 
+/// Bytes of memory by address, in pages that the runs a fork makes share until one of them
+/// writes to a page: a fork copies the page table, never the bytes.
+#[derive(Debug, Clone, Default)]
+pub struct Memory {
+    pages: BTreeMap<u64, Rc<[Option<Term>; PAGE]>>,
+}
+
+/// The bytes in one page of [`Memory`].
+const PAGE: usize = 256;
+
+impl Memory {
+    /// The byte at `address`, if anything was stored there.
+    #[must_use]
+    pub fn get(&self, address: u64) -> Option<Term> {
+        let page = self.pages.get(&(address / PAGE as u64))?;
+        page[(address % PAGE as u64) as usize]
+    }
+
+    /// Stores `byte` at `address`.
+    pub fn insert(&mut self, address: u64, byte: Term) {
+        let page = self
+            .pages
+            .entry(address / PAGE as u64)
+            .or_insert_with(|| Rc::new([None; PAGE]));
+        Rc::make_mut(page)[(address % PAGE as u64) as usize] = Some(byte);
+    }
+}
+
 /// One run's state.
 #[derive(Debug, Clone)]
 pub struct State {
@@ -115,7 +143,8 @@ pub struct State {
     sign: Term,
     overflow: Term,
     parity: Term,
-    memory: BTreeMap<u64, Term>,
+    /// The bytes written or read so far.
+    pub memory: Memory,
     /// The value last stored whole at an address, while none of its bytes has changed since:
     /// loading those bytes gives it back as it was, not rebuilt from bytes the simplifier may
     /// have rewritten.
@@ -131,10 +160,10 @@ pub struct State {
     pub written: BTreeMap<String, Vec<Term>>,
     /// The files open, by descriptor.
     open: BTreeMap<u64, Open>,
-    /// Bytes written to standard output.
-    pub stdout: Vec<Term>,
-    /// Bytes written to standard error.
-    pub stderr: Vec<Term>,
+    /// Bytes written to standard output, shared with the runs a fork made until one writes.
+    pub stdout: Rc<Vec<Term>>,
+    /// Bytes written to standard error, shared the same way.
+    pub stderr: Rc<Vec<Term>>,
     steps: u64,
     /// How the run ended, once it has.
     pub end: Option<End>,
@@ -199,7 +228,7 @@ impl State {
             sign: no,
             overflow: no,
             parity: no,
-            memory: BTreeMap::new(),
+            memory: Memory::default(),
             stored: BTreeMap::new(),
             rip: image.entry,
             path: Vec::new(),
@@ -208,8 +237,8 @@ impl State {
             files: Rc::new(BTreeMap::new()),
             written: BTreeMap::new(),
             open: BTreeMap::new(),
-            stdout: Vec::new(),
-            stderr: Vec::new(),
+            stdout: Rc::new(Vec::new()),
+            stderr: Rc::new(Vec::new()),
             steps: 0,
             end: None,
             random: None,
@@ -434,8 +463,8 @@ impl<'a> Cpu<'a> {
             if self.image.region(at).is_none() {
                 return Err(End::Signal("SIGSEGV"));
             }
-            let byte = match self.state.memory.get(&at) {
-                Some(byte) => *byte,
+            let byte = match self.state.memory.get(at) {
+                Some(byte) => byte,
                 None => match self.image.initial.get(&at) {
                     Some(byte) => self.pool.bv(8, u128::from(*byte)),
                     None if at < STACK_TOP - 8 => {
@@ -1392,8 +1421,8 @@ impl<'a> Cpu<'a> {
                                         .or_default()
                                         .push(byte);
                                 }
-                                (None, 1) => self.state.stdout.push(byte),
-                                (None, _) => self.state.stderr.push(byte),
+                                (None, 1) => Rc::make_mut(&mut self.state.stdout).push(byte),
+                                (None, _) => Rc::make_mut(&mut self.state.stderr).push(byte),
                             }
                         }
                         count

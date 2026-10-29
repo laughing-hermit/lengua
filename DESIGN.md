@@ -306,10 +306,35 @@ How `prove` works (`src/prove/`):
 
   With these, the absolute difference Claude Code wrote with `cmovs` and its own parser, which
   timed out before, proves in about ten seconds, and the template in under a second.
-- **The solvers.** It asks z3 in SMT-LIB 2, and cvc5 confirms, with one fresh pair of processes
-  per shape and every core in use. `examples/add` takes about a minute for 4×10^18 input pairs,
-  `examples/absdiff` about ten seconds, and the template under a second. Every question has a time limit, cut to what
-  is left of the proof's five minutes.
+- **Divisions meet as one term.** A program divides with 64-bit `div` on 128-bit dividends and a
+  formula divides in signed 128 bits, so the same division reaches the pool in different forms.
+  The pool gives each one form:
+  - a signed quotient or remainder of a value that's never negative is the unsigned one;
+  - a division of a value that fits in 64 bits is done at 64 bits;
+  - `(x % a) % b` is `x % b` when `b` divides `a`, and a remainder of a value below the divisor
+    is the value;
+  - `x / c < k` is `x < c·k`, and `x / c = k` is `c·k ≤ x < c·(k + 1)`;
+  - comparisons of zero-extended values are made at the narrow width;
+  - a compiler's reciprocal, the top bits of `x` times a magic number, is `x / c` when the
+    rounding provably never reaches the next whole number;
+  - `x - (x / c) × c` is `x % c`.
+
+  So the hh:mm:ss clock Claude Code wrote, six divisions that timed out in the solvers, and a day
+  of the week with a second division of the first's quotient, prove in well under a second.
+- **Contradictions need no solver.** A question that holds a condition and its negation, compared
+  by their structure with sums as sets of parts whatever their grouping, is impossible on its face:
+  a run's own branch and the check that its output breaks often come to exactly that.
+- **The solvers.** It asks z3 in SMT-LIB 2, and cvc5 confirms. Each worker thread keeps one pair
+  of processes from one input combination to the next, reset in between, and starts them only at
+  its first question the terms don't settle. Inputs already known to reach a branch are tried
+  first: one that meets the branch's condition shows it can be taken, with no question, so only a
+  branch that may be impossible costs one. Combinations go in a scattered order over every core,
+  so a counterexample anywhere turns up early and the pace of the first ones shows whether the rest
+  fit: a block that can't finish says how long it would take. A block may have up to 2,000,000
+  combinations, and each gets its share of the proof's five minutes, the time it doesn't use
+  passing on. `examples/add` takes about 40 seconds for 4×10^18 input pairs, the CSV total Claude
+  Code wrote, 24,696 combinations, about ten seconds with no solver question, and the template
+  under a second.
 
 Trust:
 
@@ -355,8 +380,8 @@ What it covers:
 - Inputs: `int(lo, hi)`, and `decimal(lo, hi)` as digits around a point. Each value of a
   `choice(…)` is proven in turn. `string(min, max, "chars")` runs over at most 4,096 lengths,
   with a variable for each byte, held to the characters.
-- Formulas: whole numbers (`+ - * / %`, `abs`, `min`, `max`, `if`, and `scaled(x, places)` for a
-  decimal's digits), printed plainly or with `places(x, k)`. Any placeholder whose variables
+- Formulas: whole numbers (`+ - * / %` including chains of divisions, `abs`, `min`, `max`, `if`,
+  and `scaled(x, places)` for a decimal's digits), printed plainly or with `places(x, k)`. Any placeholder whose variables
   all have fixed values in a shape is computed outright, so messages that quote an argument
   prove. A placeholder that's just a drawn text compares byte for byte.
 - Files: `openat`, `read`, `write` and `close` on the test's files. A missing input file gives

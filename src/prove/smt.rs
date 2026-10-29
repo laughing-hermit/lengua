@@ -62,6 +62,8 @@ struct Process {
     output: BufReader<ChildStdout>,
     /// The time limit the solver was last given, in milliseconds.
     limit_ms: u64,
+    /// The time limit it started with, which a reset returns to.
+    start_ms: u64,
 }
 
 impl Drop for Process {
@@ -102,16 +104,31 @@ impl Process {
             input,
             output,
             limit_ms: timeout_ms,
+            start_ms: timeout_ms,
         };
-        process.send(match kind {
+        process.prepare()?;
+        Ok(process)
+    }
+
+    /// Sets the options and logic every session starts with.
+    fn prepare(&mut self) -> io::Result<()> {
+        self.send(match self.kind {
             Kind::Z3 => {
                 "(set-option :print-success false)\n(set-option :produce-models true)\n\
                  (set-logic QF_BV)\n"
             }
             Kind::Cvc5 => "(set-logic QF_BV)\n",
         })?;
-        process.sync()?;
-        Ok(process)
+        self.sync()?;
+        Ok(())
+    }
+
+    /// Forgets every definition and assertion, as if just started: the same process serves the
+    /// next question set. Options given on the command line stay.
+    fn reset(&mut self) -> io::Result<()> {
+        self.send("(reset)\n")?;
+        self.limit_ms = self.start_ms;
+        self.prepare()
     }
 
     fn send(&mut self, text: &str) -> io::Result<()> {
@@ -354,6 +371,24 @@ impl Solver {
         self.deadline = Some(deadline);
     }
 
+    /// Forgets every term and division defined so far, so the processes can serve terms from a
+    /// new pool without being started again.
+    ///
+    /// # Errors
+    ///
+    /// Fails when a solver stops responding.
+    pub fn reset(&mut self) -> io::Result<()> {
+        self.note("(reset)\n(set-logic QF_BV)\n");
+        self.first.reset()?;
+        if let Some(second) = &mut self.second {
+            second.reset()?;
+        }
+        self.defined.clear();
+        self.divisions.clear();
+        self.why_unknown.clear();
+        Ok(())
+    }
+
     /// Whether the deadline has passed.
     #[must_use]
     pub fn out_of_time(&self) -> bool {
@@ -583,6 +618,52 @@ impl Solver {
         conditions: &[Term],
         values: &[Term],
     ) -> io::Result<(Answer, HashMap<Term, u128>)> {
+        self.ask(pool, conditions, values, false)
+    }
+
+    /// Whether some input meets every condition in `conditions`, and when the solver found one,
+    /// every variable's value in it, checked against the conditions.
+    ///
+    /// # Errors
+    ///
+    /// Fails when a solver stops responding or rejects a question.
+    pub fn witness(
+        &mut self,
+        pool: &Pool,
+        conditions: &[Term],
+    ) -> io::Result<(Answer, HashMap<Term, u128>)> {
+        self.ask(pool, conditions, &[], true)
+    }
+
+    fn ask(
+        &mut self,
+        pool: &Pool,
+        conditions: &[Term],
+        values: &[Term],
+        model_wanted: bool,
+    ) -> io::Result<(Answer, HashMap<Term, u128>)> {
+        // A condition the terms already settle as false needs no solver, and one they settle
+        // as true says nothing.
+        if conditions
+            .iter()
+            .any(|condition| pool.truth(*condition) == Some(false))
+        {
+            return Ok((Answer::Unsat, HashMap::new()));
+        }
+        let unsettled: Vec<Term> = conditions
+            .iter()
+            .copied()
+            .filter(|condition| pool.truth(*condition).is_none())
+            .collect();
+        let conditions = unsettled.as_slice();
+        // A condition and its negation can't both hold, whatever they say: a run's own branch
+        // and the check that its output breaks come to that when both sides are one term.
+        if conditions.iter().any(|condition| {
+            matches!(*pool.node(*condition), Node::BoolNot(inner)
+                if conditions.iter().any(|other| pool.equivalent(*other, inner)))
+        }) {
+            return Ok((Answer::Unsat, HashMap::new()));
+        }
         self.questions += 1;
         if self.out_of_time() {
             self.why_unknown = "the proof ran out of time".into();
@@ -605,7 +686,7 @@ impl Solver {
         ));
         let mut model = HashMap::new();
         let answer = match first {
-            Answer::Sat if values.is_empty() => Answer::Sat,
+            Answer::Sat if values.is_empty() && !model_wanted => Answer::Sat,
             Answer::Sat => {
                 if let Some(found) = self.first.model(pool, conditions, values)? {
                     model = found;
@@ -917,6 +998,51 @@ mod tests {
         assert_eq!(answer, Answer::Unknown);
         assert!(solver.out_of_time());
         assert_eq!(solver.why_unknown, "the proof ran out of time");
+    }
+
+    #[test]
+    fn a_reset_solver_answers_new_terms() {
+        for mut solver in solvers() {
+            let mut pool = Pool::default();
+            let (x, wraps) = wraps(&mut pool);
+            let (answer, model) = solver.witness(&pool, &[wraps]).expect("answers");
+            assert_eq!((answer, model.get(&x)), (Answer::Sat, Some(&255)));
+            // A division leaves its quotient and remainder behind.
+            let ten = pool.bv(8, 10);
+            let quotient = pool.udiv(x, ten);
+            let thirty = pool.bv(8, 30);
+            let over = pool.ult(thirty, quotient);
+            let (answer, _) = solver.check(&pool, &[over], &[]).expect("answers");
+            assert_eq!(answer, Answer::Unsat);
+            solver.reset().expect("resets");
+            // A new pool's terms reuse the same names, and its division the same quotient.
+            let mut pool = Pool::default();
+            let y = pool.var(8, "y");
+            let ten = pool.bv(8, 10);
+            let quotient = pool.udiv(y, ten);
+            let twenty = pool.bv(8, 20);
+            let is_twenty = pool.eq(quotient, twenty);
+            let (answer, model) = solver.witness(&pool, &[is_twenty]).expect("answers");
+            assert_eq!(answer, Answer::Sat);
+            assert_eq!(model.get(&y).map(|y| y / 10), Some(20));
+            let fifty = pool.bv(8, 50);
+            let never = pool.eq(quotient, fifty);
+            let (answer, _) = solver.check(&pool, &[never], &[]).expect("answers");
+            assert_eq!(answer, Answer::Unsat);
+        }
+    }
+
+    #[test]
+    fn settled_conditions_need_no_solver() {
+        let Ok(mut solver) = Solver::start(5000) else {
+            return;
+        };
+        let mut pool = Pool::default();
+        let (_, wraps) = wraps(&mut pool);
+        let never = pool.boolean(false);
+        let (answer, _) = solver.check(&pool, &[wraps, never], &[]).expect("answers");
+        assert_eq!(answer, Answer::Unsat);
+        assert_eq!(solver.questions, 0);
     }
 
     #[test]

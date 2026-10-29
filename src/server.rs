@@ -1106,8 +1106,15 @@ impl LenguaServer {
         let mut solved = 0;
         let mut alone_reason: Option<String> = None;
         let allows = |call: spec::Syscall| spec.syscalls.contains(&call);
-        for block in &suite.generated {
+        let blocks = suite.generated.len();
+        for (index, block) in suite.generated.iter().enumerate() {
             let test = format!("generated {}", block.id);
+            // Each block gets its share of the time left, so one big block can't starve the
+            // rest; time a block doesn't use passes on to the next.
+            let now = std::time::Instant::now();
+            let share = deadline.saturating_duration_since(now)
+                / u32::try_from(blocks - index).unwrap_or(u32::MAX).max(1);
+            let block_deadline = now + share;
             // Every value of a block's variables is every input only when the program reads
             // nothing else: no random bytes or clock readings the test doesn't supply, and no
             // `now` in the expected results.
@@ -1146,9 +1153,9 @@ impl LenguaServer {
                         &machine,
                         &owned,
                         prove::Budget {
-                            deadline,
+                            deadline: block_deadline,
                             max_paths: 256,
-                            max_shapes: 20_000,
+                            max_shapes: 2_000_000,
                             question_ms: 20_000,
                         },
                     )
@@ -1161,28 +1168,34 @@ impl LenguaServer {
                 Ok(prove::Verdict::Proven {
                     shapes,
                     paths,
+                    questions,
                     alone,
                 }) => (
                     {
                         proven_ids.push(block.id.to_string());
-                        solved += 1;
-                        if alone_reason.is_none() {
-                            alone_reason.clone_from(&alone);
+                        if questions > 0 {
+                            solved += 1;
+                            if alone_reason.is_none() {
+                                alone_reason.clone_from(&alone);
+                            }
                         }
                         true
                     },
                     format!(
-                        "proven for every input in range ({shapes} input shapes, {paths} paths \
-                         through the machine code), {}",
-                        alone.map_or_else(
-                            || "with each step confirmed by two independent solvers, z3 and \
-                                cvc5"
+                        "proven for every input in range ({shapes} input combinations, {paths} \
+                         paths through the machine code), {}",
+                        match (questions, alone) {
+                            (0, _) => "every step settled by the terms themselves, so no solver \
+                                       was needed"
                                 .to_owned(),
-                            |reason| format!(
-                                "by one solver alone ({reason}; with both z3 and cvc5 \
-                                 installed, each step is confirmed twice)"
-                            )
-                        )
+                            (_, None) => "with each solver question confirmed by two independent \
+                                          solvers, z3 and cvc5"
+                                .to_owned(),
+                            (_, Some(reason)) => format!(
+                                "by one solver alone ({reason}; with both z3 and cvc5 installed, \
+                                 each step is confirmed twice)"
+                            ),
+                        }
                     ),
                 ),
                 Ok(prove::Verdict::NotProven(reason)) => {
@@ -1246,7 +1259,9 @@ impl LenguaServer {
             });
         }
         let solvers = match (solved, alone_reason) {
-            (0, _) => "none: check_code tried every value".to_owned(),
+            (0, _) => {
+                "none: check_code tried every value, or the terms settled every step".to_owned()
+            }
             (_, None) => "z3 and cvc5".to_owned(),
             (_, Some(reason)) => format!("one solver alone: {reason}"),
         };

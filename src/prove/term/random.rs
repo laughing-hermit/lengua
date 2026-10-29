@@ -377,7 +377,7 @@ impl Writer<'_> {
             };
         }
         let deeper = depth - 1;
-        match self.rng.random_range(0..14) {
+        match self.rng.random_range(0..18) {
             0..=3 => {
                 let ops = [
                     Op::Add,
@@ -511,6 +511,46 @@ impl Writer<'_> {
                     Box::new(Expr::Const(width, 10 & mask(width))),
                 );
                 Expr::Binary(Op::Add, Box::new(times_ten), Box::new(digit))
+            }
+            // A compiler's division by a constant: the top bits of x times a magic number,
+            // as `mul` and `shr` leave them, or a near miss that isn't a division.
+            14 | 15 if width >= 16 && width.is_multiple_of(2) => {
+                let half = width / 2;
+                let x = self.variable(half);
+                let largest = 1_u128 << half.min(20);
+                let divisor = self.rng.random_range(2..=largest);
+                let shift = 128 - (divisor - 1).leading_zeros();
+                let low = (half + shift).min(width - 1);
+                let mut multiplier = (1_u128 << low).div_ceil(divisor);
+                match self.rng.random_range(0..4) {
+                    0 => multiplier += 1,
+                    1 => multiplier -= 1,
+                    _ => {}
+                }
+                let product = Expr::Binary(
+                    Op::Mul,
+                    Box::new(Expr::ZeroExtend(Box::new(x), half)),
+                    Box::new(Expr::Const(width, multiplier & mask(width))),
+                );
+                // The top bits, widened back to the width asked for, as `shr` leaves them.
+                Expr::ZeroExtend(
+                    Box::new(Expr::Extract(Box::new(product), width - 1, low)),
+                    low,
+                )
+            }
+            // A remainder, quotient or comparison of a sum of widened narrow values by a
+            // constant: a formula's 128-bit arithmetic on a program's 64-bit values.
+            16 if width > 64 => {
+                let narrow = [8, 32, 64][self.rng.random_range(0..3)];
+                let wide = Expr::ZeroExtend(Box::new(self.variable(narrow)), width - narrow);
+                let sum = Expr::Binary(
+                    Op::Add,
+                    Box::new(wide),
+                    Box::new(Expr::Const(width, self.rng.random_range(0..10))),
+                );
+                let op = [Op::Udiv, Op::Urem, Op::Sdiv, Op::Srem][self.rng.random_range(0..4)];
+                let divisor = [3, 7, 10, 60, 3600, 86400][self.rng.random_range(0..6)];
+                Expr::Binary(op, Box::new(sum), Box::new(Expr::Const(width, divisor)))
             }
             _ => Expr::Binary(
                 Op::Add,

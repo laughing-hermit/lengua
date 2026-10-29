@@ -12,10 +12,13 @@ pub mod formula;
 pub mod smt;
 pub mod term;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+use rand::rngs::ChaCha8Rng;
+use rand::{RngExt, SeedableRng};
 
 use crate::checker::decode::Machine;
 use crate::expr::{Generator, HexPart, PatternPart, Piece, Template, Value};
@@ -35,6 +38,8 @@ pub enum Verdict {
         shapes: usize,
         /// Paths through the code followed.
         paths: usize,
+        /// Questions the solvers answered: none when the terms themselves settled every step.
+        questions: usize,
         /// Why one solver answered alone, when no second solver confirmed what it ruled out.
         alone: Option<String>,
     },
@@ -57,15 +62,164 @@ pub struct Budget {
     pub question_ms: u64,
 }
 
-impl Oracle for Solver {
+/// How many combinations one pair of solver processes serves before it's started afresh.
+const RESTART_AFTER: usize = 500;
+
+/// The solvers one worker thread asks: started at its first question the terms don't settle,
+/// and kept from one input combination to the next, reset in between.
+struct Solvers {
+    solver: Option<Solver>,
+    question_ms: u64,
+    /// Combinations since the processes started.
+    served: usize,
+    /// Whether the current combination asked anything.
+    used: bool,
+}
+
+impl Solvers {
+    const fn new(question_ms: u64) -> Self {
+        Self {
+            solver: None,
+            question_ms,
+            served: 0,
+            used: false,
+        }
+    }
+
+    /// Starts the next combination: the solvers forget the last one's terms.
+    fn next(&mut self) {
+        if std::mem::take(&mut self.used) {
+            self.served += 1;
+            let reset = self.served < RESTART_AFTER
+                && self
+                    .solver
+                    .as_mut()
+                    .is_some_and(|solver| solver.reset().is_ok());
+            if !reset {
+                self.solver = None;
+                self.served = 0;
+            }
+        }
+    }
+
+    /// The solvers, started if they aren't yet, asking until `deadline`.
+    fn get(&mut self, deadline: Instant) -> Result<&mut Solver, String> {
+        if self.solver.is_none() {
+            let solver = Solver::start(self.question_ms)
+                .map_err(|error| format!("no SMT solver could start: {error}"))?;
+            self.solver = Some(solver);
+        }
+        self.used = true;
+        let solver = self.solver.as_mut().ok_or("no SMT solver could start")?;
+        solver.until(deadline);
+        Ok(solver)
+    }
+}
+
+/// How many inputs a combination keeps that are known to reach a branch.
+const WITNESSES: usize = 8;
+
+/// Past this many term values, a witness forgets all but its variables' values.
+const MAX_KNOWN: usize = 200_000;
+
+/// Answers whether a branch can be taken by trying inputs known to meet a run's conditions
+/// first: one that also meets the branch's condition shows the branch can be taken, so only a
+/// branch that may be impossible costs a solver question. Witnesses are checked by evaluation,
+/// never trusted, and a variable they don't fix yet gets a value from its declared range.
+struct Witnessed<'a> {
+    solvers: &'a mut Solvers,
+    deadline: Instant,
+    /// Each witness's variable values, and every term value computed from them.
+    witnesses: Vec<HashMap<Term, u128>>,
+    rng: ChaCha8Rng,
+}
+
+impl<'a> Witnessed<'a> {
+    fn new(solvers: &'a mut Solvers, deadline: Instant, seed: u64) -> Self {
+        Self {
+            solvers,
+            deadline,
+            // Every variable at the low end of its range, every one at the high end, and two
+            // drawn at random: a branch on a large or a small value finds one of them.
+            witnesses: vec![
+                HashMap::from([(Term::LOW, 0)]),
+                HashMap::from([(Term::HIGH, 0)]),
+                HashMap::new(),
+                HashMap::new(),
+            ],
+            rng: ChaCha8Rng::seed_from_u64(seed),
+        }
+    }
+}
+
+/// A value for `variable` from its declared range: its low end for a witness marked
+/// [`Term::LOW`], its high end for one marked [`Term::HIGH`], otherwise drawn at random.
+fn random_in(pool: &Pool, variable: Term, rng: &mut ChaCha8Rng, end: Option<bool>) -> u128 {
+    let (low, high) = pool.range(variable);
+    match (pool.node(variable), end) {
+        (_, Some(false)) => low,
+        (_, Some(true)) => high,
+        (Node::BoolVar(_), None) => u128::from(rng.random::<bool>()),
+        _ => rng.random_range(low..=high),
+    }
+}
+
+/// Whether `witness` meets every one of `conditions`, giving variables it doesn't fix yet
+/// values from their declared ranges.
+fn meets(
+    pool: &Pool,
+    conditions: &[Term],
+    witness: &mut HashMap<Term, u128>,
+    rng: &mut ChaCha8Rng,
+) -> bool {
+    let end = if witness.contains_key(&Term::LOW) {
+        Some(false)
+    } else if witness.contains_key(&Term::HIGH) {
+        Some(true)
+    } else {
+        None
+    };
+    if witness.len() > MAX_KNOWN {
+        witness.retain(|term, _| {
+            *term == Term::LOW
+                || *term == Term::HIGH
+                || matches!(pool.node(*term), Node::Var { .. } | Node::BoolVar(_))
+        });
+    }
+    // The newest condition first: it's the one most likely to fail.
+    conditions.iter().rev().all(|condition| {
+        pool.evaluate_cached(
+            *condition,
+            &mut |pool, variable| Some(random_in(pool, variable, rng, end)),
+            witness,
+        ) == Some(1)
+    })
+}
+
+impl Oracle for Witnessed<'_> {
     fn possible(&mut self, pool: &Pool, path: &[Term], condition: Term) -> Result<bool, String> {
         let mut conditions = path.to_vec();
         conditions.push(condition);
-        let (answer, _) = self
-            .check(pool, &conditions, &[])
+        let rng = &mut self.rng;
+        if self
+            .witnesses
+            .iter_mut()
+            .any(|witness| meets(pool, &conditions, witness, rng))
+        {
+            return Ok(true);
+        }
+        let solver = self.solvers.get(self.deadline)?;
+        let (answer, model) = solver
+            .witness(pool, &conditions)
             .map_err(|error| format!("the solver failed: {error}"))?;
-        if self.out_of_time() {
+        if solver.out_of_time() {
             return Err("the proof ran out of time".into());
+        }
+        if answer == Answer::Sat && !model.is_empty() {
+            if self.witnesses.len() >= WITNESSES {
+                self.witnesses.remove(0);
+            }
+            self.witnesses.push(model);
         }
         Ok(answer != Answer::Unsat)
     }
@@ -211,7 +365,16 @@ fn parts(name: &str, generator: &Generator) -> Result<Vec<Part>, String> {
             .into_iter()
             .map(|shape| Part::Number(shape, *places))
             .collect()),
-        Generator::Choice(values) => Ok(values.iter().cloned().map(Part::Fixed).collect()),
+        Generator::Choice(values) => {
+            // A value listed twice is proven once.
+            let mut distinct: Vec<Value> = Vec::new();
+            for value in values {
+                if !distinct.contains(value) {
+                    distinct.push(value.clone());
+                }
+            }
+            Ok(distinct.into_iter().map(Part::Fixed).collect())
+        }
         Generator::Str { min, max, charset } => {
             if !charset.iter().all(char::is_ascii) {
                 return Err(format!("{name} is drawn from characters beyond ASCII"));
@@ -577,6 +740,12 @@ fn digits_are(
     let at_least = pool.ule(bottom, magnitude);
     let below = pool.ult(magnitude, top);
     let mut checks = vec![at_least, below];
+    // When every byte is already the magnitude's own digit, as when the program and the
+    // formula compute the value the same way, nothing more needs saying.
+    let by_magnitude = bytes_are_digits(pool, bytes, magnitude);
+    if pool.truth(by_magnitude) == Some(true) {
+        return pool.all(&checks);
+    }
     // With a root, the printed value must be the magnitude, and each byte is checked against
     // the root's own digit: the same computation is the same term, and a fixed digit is settled
     // by the root's range. Without one, each byte is checked against the magnitude's digit.
@@ -605,10 +774,21 @@ fn digits_are(
             checks.push(check);
             root
         }
-        None => magnitude,
+        None => {
+            checks.push(by_magnitude);
+            return pool.all(&checks);
+        }
     };
+    checks.push(bytes_are_digits(pool, bytes, base));
+    pool.all(&checks)
+}
+
+/// What must hold for `bytes` to be the last decimal digits of `base`, one byte each.
+fn bytes_are_digits(pool: &mut Pool, bytes: &[Term], base: Term) -> Term {
+    let count = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
     let width = pool.width(base);
     let (ten, zero_char) = (pool.bv(width, 10), pool.bv(8, u128::from(b'0')));
+    let mut checks = Vec::new();
     for (index, byte) in bytes.iter().enumerate() {
         let power = 10_u128.pow(count - 1 - u32::try_from(index).unwrap_or(0));
         let power = pool.bv(width, power);
@@ -1124,7 +1304,9 @@ fn attempt(machine: &Machine, block: &Generated, budget: Budget) -> Result<Verdi
     // The shapes are independent: every core takes the next one until all are done, a
     // counterexample turns up, or something can't be proven.
     let next = AtomicUsize::new(0);
+    let done = AtomicUsize::new(0);
     let paths = AtomicUsize::new(0);
+    let questions = AtomicUsize::new(0);
     let alone: Mutex<Option<String>> = Mutex::new(None);
     let stop = AtomicBool::new(false);
     let found: Mutex<Option<BTreeMap<String, Value>>> = Mutex::new(None);
@@ -1132,24 +1314,57 @@ fn attempt(machine: &Machine, block: &Generated, budget: Budget) -> Result<Verdi
     let workers = std::thread::available_parallelism()
         .map_or(1, std::num::NonZero::get)
         .min(total.max(1));
+    let began = Instant::now();
+    // The combinations go in a scattered order, so the pace of the first ones shows the pace of
+    // all of them, and a counterexample anywhere turns up early.
+    let stride = stride(total);
     std::thread::scope(|scope| {
         for _ in 0..workers {
             scope.spawn(|| {
+                let mut solvers = Solvers::new(budget.question_ms);
                 while !stop.load(Ordering::Relaxed) {
-                    let combination = next.fetch_add(1, Ordering::Relaxed);
-                    if combination >= total {
+                    let turn = next.fetch_add(1, Ordering::Relaxed);
+                    if turn >= total {
                         break;
                     }
+                    let combination = (turn as u128 * stride as u128 % total as u128) as usize;
+                    solvers.next();
                     let result = if Instant::now() > budget.deadline {
-                        Err(Stop::Unproven("the proof ran out of time".into()))
+                        Err(Stop::Unproven(OUT_OF_TIME.into()))
                     } else {
-                        prove_shape(&image, block, &each, combination, budget)
+                        prove_shape(&image, block, &each, combination, budget, &mut solvers)
                     };
                     match result {
-                        Ok((count, reason)) => {
+                        Ok((count, asked, reason)) => {
                             paths.fetch_add(count, Ordering::Relaxed);
+                            questions.fetch_add(asked, Ordering::Relaxed);
                             if let (Some(reason), Ok(mut alone)) = (reason, alone.lock()) {
                                 alone.get_or_insert(reason);
+                            }
+                            // Once every worker has done two, and again at four times as many
+                            // each time, the pace shows whether the rest fits the time left; if
+                            // it can't, stop now and say so.
+                            let finished = done.fetch_add(1, Ordering::Relaxed) + 1;
+                            let checkpoint = finished >= 2 * workers
+                                && (finished / (2 * workers)).is_power_of_two()
+                                && finished.is_multiple_of(2 * workers)
+                                && (finished / (2 * workers)).trailing_zeros().is_multiple_of(2);
+                            if checkpoint && finished < total {
+                                let pace = began.elapsed().as_secs_f64() / finished as f64;
+                                let needed = Duration::from_secs_f64(pace * total as f64);
+                                if began + needed > budget.deadline {
+                                    if let Ok(mut failure) = failure.lock() {
+                                        failure.get_or_insert(format!(
+                                            "its {total} input combinations would take about \
+                                             {}; the proof has {}",
+                                            minutes(needed),
+                                            minutes(
+                                                budget.deadline.saturating_duration_since(began)
+                                            )
+                                        ));
+                                    }
+                                    stop.store(true, Ordering::Relaxed);
+                                }
                             }
                         }
                         Err(Stop::Counterexample(values)) => {
@@ -1173,13 +1388,52 @@ fn attempt(machine: &Machine, block: &Generated, budget: Budget) -> Result<Verdi
         return Ok(Verdict::Counterexample(values));
     }
     if let Some(reason) = failure.into_inner().ok().flatten() {
+        if reason == OUT_OF_TIME {
+            return Err(format!(
+                "ran out of time after {} of {total} input combinations",
+                done.into_inner()
+            ));
+        }
         return Err(reason);
     }
     Ok(Verdict::Proven {
         shapes: total,
         paths: paths.into_inner(),
+        questions: questions.into_inner(),
         alone: alone.into_inner().ok().flatten(),
     })
+}
+
+/// A step through `0..total` that visits every combination once in a scattered order: an odd
+/// number near the golden section of `total` with no factor in common with it.
+fn stride(total: usize) -> usize {
+    if total < 3 {
+        return 1;
+    }
+    let gcd = |mut a: usize, mut b: usize| {
+        while b != 0 {
+            (a, b) = (b, a % b);
+        }
+        a
+    };
+    let mut step = (total as f64 * 0.618_034) as usize | 1;
+    while gcd(step, total) != 1 {
+        step += 2;
+    }
+    step
+}
+
+/// What a proof says when its time is up.
+const OUT_OF_TIME: &str = "the proof ran out of time";
+
+/// A duration in whole minutes, or seconds when under two minutes.
+fn minutes(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    if seconds < 120 {
+        format!("{seconds} seconds")
+    } else {
+        format!("{} minutes", seconds.div_ceil(60))
+    }
 }
 
 /// Why proving one shape stopped short.
@@ -1211,10 +1465,8 @@ fn prove_shape(
     each: &[(String, Vec<Part>)],
     combination: usize,
     budget: Budget,
-) -> Result<(usize, Option<String>), Stop> {
-    let mut solver = Solver::start(budget.question_ms)
-        .map_err(|error| format!("no SMT solver could start: {error}"))?;
-    solver.until(budget.deadline);
+    solvers: &mut Solvers,
+) -> Result<(usize, usize, Option<String>), Stop> {
     let mut pool = Pool::default();
     let mut rest = combination;
     let mut inputs = BTreeMap::new();
@@ -1269,10 +1521,15 @@ fn prove_shape(
         .with_supply(random, clock);
     start.path = constraints;
     let began = Instant::now();
-    let runs = exec::explore(image, start, &mut pool, &mut solver, budget.max_paths)?;
+    let questions_before = solvers.solver.as_ref().map_or(0, |solver| solver.questions);
+    let runs = {
+        let mut oracle = Witnessed::new(solvers, budget.deadline, combination as u64);
+        exec::explore(image, start, &mut pool, &mut oracle, budget.max_paths)?
+    };
     let explored = began.elapsed();
     let count = runs.len();
-    let questions = solver.questions;
+    let asked = |solvers: &Solvers| solvers.solver.as_ref().map_or(0, |solver| solver.questions);
+    let questions = asked(solvers);
     let trace = std::env::var_os("LENGUA_PROVE_TRACE").is_some();
     for run in runs {
         let holds = match &run.end {
@@ -1289,6 +1546,20 @@ fn prove_shape(
             None => return Err("a run that didn't end".into()),
         };
         let broken = pool.bool_not(holds);
+        // Output whose terms are the formulas' own can't break: nothing to ask. Nor can output
+        // that breaks only where the run's own branch says it doesn't.
+        let holding = pool.bool_not(broken);
+        if pool.truth(broken) == Some(false)
+            || run
+                .path
+                .iter()
+                .any(|condition| pool.equivalent(*condition, holding))
+        {
+            continue;
+        }
+        if std::env::var_os("LENGUA_PROVE_EXPLAIN").is_some() {
+            eprintln!("combination {combination} asks: {}", pool.sketch(broken, 9));
+        }
         let mut conditions = run.path.clone();
         conditions.push(broken);
         // A counterexample shows each number, and each text short enough to show.
@@ -1301,6 +1572,7 @@ fn prove_shape(
             .map(|number| number.term)
             .chain(shown.iter().flat_map(|(_, bytes)| bytes.iter().copied()))
             .collect();
+        let solver = solvers.get(budget.deadline)?;
         let (answer, model) = solver
             .check(&pool, &conditions, &values)
             .map_err(|error| format!("the solver failed: {error}"))?;
@@ -1334,6 +1606,9 @@ fn prove_shape(
                 return Err(Stop::Counterexample(found));
             }
             Answer::Unknown => {
+                if solver.out_of_time() {
+                    return Err(OUT_OF_TIME.into());
+                }
                 return Err(format!("a path couldn't be settled: {}", solver.why_unknown).into());
             }
         }
@@ -1341,13 +1616,17 @@ fn prove_shape(
     if trace {
         eprintln!(
             "shape {combination}: {count} runs, {questions} questions exploring in {explored:?}, \
-             {} checking, {} terms, {} overruled",
-            solver.questions - questions,
+             {} checking, {} terms",
+            asked(solvers) - questions,
             pool.len(),
-            solver.overruled
         );
     }
-    Ok((count, solver.alone.take()))
+    let alone = solvers
+        .solver
+        .as_ref()
+        .filter(|_| solvers.used)
+        .and_then(|solver| solver.alone.clone());
+    Ok((count, asked(solvers) - questions_before, alone))
 }
 
 /// Runs the prover's model of the code on concrete inputs that the real program has passed, and

@@ -736,9 +736,9 @@ fn model(
     for byte in 0..8 {
         let term = state
             .memory
-            .get(&(cell_address + byte))
+            .get(cell_address + byte)
             .ok_or("the memory cell is gone")?;
-        bytes.push(*term);
+        bytes.push(term);
     }
     let mut whole = bytes[0];
     for byte in &bytes[1..] {

@@ -9,6 +9,13 @@ use std::collections::HashMap;
 pub struct Term(u32);
 
 impl Term {
+    /// Never a term of any pool: marks a witness whose unset variables take their low ends.
+    pub const LOW: Self = Self(u32::MAX);
+    /// Never a term of any pool: marks a witness whose unset variables take their high ends.
+    pub const HIGH: Self = Self(u32::MAX - 1);
+}
+
+impl Term {
     /// The term's number in its pool, which names it for the solver.
     #[must_use]
     pub fn index(self) -> usize {
@@ -392,7 +399,7 @@ impl Pool {
             }
             Node::Neg(a) => {
                 let (low, high) = r(a);
-                if low > 0 && width < 128 {
+                if low > 0 {
                     (mask(width) - high + 1, mask(width) - low + 1)
                 } else {
                     full
@@ -568,7 +575,28 @@ impl Pool {
             }
             _ => {}
         }
+        // x - (x / c) × c is x % c, the remainder however it was written.
+        for (x, other) in [(a, b), (b, a)] {
+            if let Node::Neg(product) = *self.node(other)
+                && let Node::Mul(quotient, by) = *self.node(product)
+                && let Node::Udiv(dividend, divisor) = *self.node(quotient)
+                && dividend == x
+                && self.constant(by).is_some()
+                && self.constant(by) == self.constant(divisor)
+            {
+                return self.urem(x, divisor);
+            }
+        }
         self.make(Node::Add(a, b), Sort::Bv(width))
+    }
+
+    /// The sum of every term in `terms`, all one width, added left to right.
+    pub fn sum(&mut self, width: u32, terms: &[Term]) -> Term {
+        let mut total = self.bv(width, 0);
+        for term in terms {
+            total = self.add(total, *term);
+        }
+        total
     }
 
     /// `a - b`, as `a + -b`, the form solvers handle best.
@@ -620,6 +648,9 @@ impl Pool {
                         return self.zero_extend(quotient, by);
                     }
                 }
+                if let Some(narrowed) = self.narrowed(a, y, Self::udiv) {
+                    return narrowed;
+                }
             }
             _ => {}
         }
@@ -634,6 +665,19 @@ impl Pool {
             (Some(x), Some(y)) => return self.bv(width, x % y),
             (_, Some(1)) => return self.bv(width, 0),
             (_, Some(y)) => {
+                // A value below the divisor is its own remainder.
+                if self.range(a).1 < y {
+                    return a;
+                }
+                // (x % a) % b is x % b when b divides a: seconds past the minute, however many
+                // remainders a program takes on the way.
+                if let Node::Urem(inner, first) = *self.node(a)
+                    && let Some(c1) = self.constant(first)
+                    && c1 > 0
+                    && c1 % y == 0
+                {
+                    return self.urem(inner, b);
+                }
                 if let Node::ZeroExtend(inner, by) = *self.node(a) {
                     let narrow = width - by;
                     if y <= mask(narrow) {
@@ -642,10 +686,33 @@ impl Pool {
                         return self.zero_extend(remainder, by);
                     }
                 }
+                if let Some(narrowed) = self.narrowed(a, y, Self::urem) {
+                    return narrowed;
+                }
             }
             _ => {}
         }
         self.make(Node::Urem(a, b), Sort::Bv(width))
+    }
+
+    /// A division or remainder by `divisor` of a dividend wider than 64 bits that fits in 64,
+    /// done at 64 bits and widened back: the same division a program does with 64-bit `div`
+    /// and a formula does in 128 bits then meet as one term. Always 64 bits, never the
+    /// smallest width that fits, so both sides narrow the same way.
+    fn narrowed(
+        &mut self,
+        dividend: Term,
+        divisor: u128,
+        operation: fn(&mut Self, Term, Term) -> Term,
+    ) -> Option<Term> {
+        let width = self.width(dividend);
+        if width <= 64 || divisor > mask(64) || self.range(dividend).1 > mask(64) {
+            return None;
+        }
+        let low = self.extract(dividend, 63, 0);
+        let divisor = self.bv(64, divisor);
+        let result = operation(self, low, divisor);
+        Some(self.zero_extend(result, width - 64))
     }
 
     /// Signed `a / b`, toward zero, as SMT-LIB defines it (also for zero and overflow).
@@ -675,6 +742,10 @@ impl Pool {
             && c > 0
             && c <= mask(width - 1)
         {
+            // A dividend that's never negative divides as unsigned.
+            if self.signed_range(a).0 >= 0 {
+                return self.udiv(a, b);
+            }
             let zero = self.bv(width, 0);
             let negative = self.slt(a, zero);
             let negated = self.neg(a);
@@ -703,6 +774,11 @@ impl Pool {
             && c > 0
             && c <= mask(width - 1)
         {
+            // A dividend that's never negative has the unsigned remainder, the one a
+            // program's `div` gives.
+            if self.signed_range(a).0 >= 0 {
+                return self.urem(a, b);
+            }
             let quotient = self.sdiv(a, b);
             let product = self.mul(quotient, b);
             return self.sub(a, product);
@@ -808,8 +884,18 @@ impl Pool {
         self.shift(a, b, Node::Shl)
     }
 
-    /// Logical shift right.
+    /// Logical shift right. By a constant it's the upper bits widened back, one form however a
+    /// program shifts.
     pub fn lshr(&mut self, a: Term, b: Term) -> Term {
+        let width = self.width(a);
+        if let Some(by) = self.constant(b)
+            && by > 0
+            && by < u128::from(width)
+        {
+            let by = u32::try_from(by).unwrap_or(width);
+            let upper = self.extract(a, width - 1, by);
+            return self.zero_extend(upper, by);
+        }
         self.shift(a, b, Node::Lshr)
     }
 
@@ -894,9 +980,49 @@ impl Pool {
                 );
                 return self.ite(condition, then, otherwise);
             }
+            Node::Mul(factor, by) if high + 1 == width => {
+                if let Some(quotient) = self.reciprocal(factor, by, low, out) {
+                    return quotient;
+                }
+            }
             _ => {}
         }
         self.make(Node::Extract(a, high, low), Sort::Bv(out))
+    }
+
+    /// The top bits of `zext(x) × m` from bit `shift` up, as a compiler divides by a constant:
+    /// they're `x / c` for `c = ⌈2^shift / m⌉` when, with `e = m·c − 2^shift`, every x the range
+    /// allows has `x·e < 2^shift`, so the rounding never reaches the next whole number. `out` is
+    /// the width wanted.
+    fn reciprocal(&mut self, factor: Term, by: Term, shift: u32, out: u32) -> Option<Term> {
+        let Node::ZeroExtend(x, _) = *self.node(factor) else {
+            return None;
+        };
+        let multiplier = self.constant(by).filter(|m| *m > 0)?;
+        let width = self.width(factor);
+        let largest = self.range(x).1;
+        // The product must never wrap, or its top bits aren't the quotient.
+        if largest.checked_mul(multiplier)? > mask(width) || shift >= 127 {
+            return None;
+        }
+        let power = 1_u128 << shift;
+        let divisor = power.div_ceil(multiplier);
+        let excess = multiplier.checked_mul(divisor)? - power;
+        if largest.checked_mul(excess)? >= power {
+            return None;
+        }
+        let narrow = self.width(x);
+        let quotient = if divisor > mask(narrow) {
+            self.bv(narrow, 0)
+        } else {
+            let divisor = self.bv(narrow, divisor);
+            self.udiv(x, divisor)
+        };
+        Some(if out >= narrow {
+            self.zero_extend(quotient, out - narrow)
+        } else {
+            self.extract(quotient, out - 1, 0)
+        })
     }
 
     /// `a` widened by `by` zero bits.
@@ -1251,12 +1377,27 @@ impl Pool {
             let negated = self.bv(width, c.wrapping_neg());
             return self.eq(x, negated);
         }
-        // x / c = 0 is x < c: what a digit loop's end comes down to.
-        if self.constant(b) == Some(0)
-            && let Node::Udiv(x, divisor) = *self.node(a)
-            && self.constant(divisor).is_some_and(|c| c > 0)
+        // x / c = k is c·k ≤ x < c·(k + 1): what a digit loop's end comes down to.
+        if let (Node::Udiv(x, divisor), Some(k)) = (self.node(a).clone(), self.constant(b))
+            && let Some(c) = self.constant(divisor).filter(|c| *c > 0)
         {
-            return self.ult(x, divisor);
+            let width = self.width(x);
+            let Some(from) = c.checked_mul(k).filter(|from| *from <= mask(width)) else {
+                return self.boolean(false);
+            };
+            let from = self.bv(width, from);
+            let at_least = self.ule(from, x);
+            return match c.checked_mul(k + 1).filter(|to| *to <= mask(width)) {
+                Some(to) => {
+                    let to = self.bv(width, to);
+                    let below = self.ult(x, to);
+                    self.bool_and(at_least, below)
+                }
+                None => at_least,
+            };
+        }
+        if let Some((a, b)) = self.narrow_pair(a, b) {
+            return self.eq(a, b);
         }
         if let (Some(x), Some(y)) = (self.constant(a), self.constant(b)) {
             return self.boolean(x == y);
@@ -1287,10 +1428,70 @@ impl Pool {
             (_, Some(0)) => return self.boolean(false),
             _ => {}
         }
+        // x / c < k is x < c·k, and k < x / c is c·(k + 1) ≤ x.
+        if let (Node::Udiv(x, divisor), Some(k)) = (self.node(a).clone(), self.constant(b))
+            && let Some(c) = self.constant(divisor).filter(|c| *c > 0)
+        {
+            let width = self.width(x);
+            return match c.checked_mul(k).filter(|bound| *bound <= mask(width)) {
+                Some(bound) => {
+                    let bound = self.bv(width, bound);
+                    self.ult(x, bound)
+                }
+                None => self.boolean(true),
+            };
+        }
+        if let (Some(k), Node::Udiv(x, divisor)) = (self.constant(a), self.node(b).clone())
+            && let Some(c) = self.constant(divisor).filter(|c| *c > 0)
+        {
+            let width = self.width(x);
+            return match k
+                .checked_add(1)
+                .and_then(|next| c.checked_mul(next))
+                .filter(|bound| *bound <= mask(width))
+            {
+                Some(bound) => {
+                    let bound = self.bv(width, bound);
+                    self.ule(bound, x)
+                }
+                None => self.boolean(false),
+            };
+        }
+        if let Some((a, b)) = self.narrow_pair(a, b) {
+            return self.ult(a, b);
+        }
         if let Some((a, b)) = self.lifted_pair(a, b, false) {
             return self.ult(a, b);
         }
         self.make(Node::Ult(a, b), Sort::Bool)
+    }
+
+    /// `a` and `b` at a narrower width, when one is a zero-extended value and the other a
+    /// constant that fits it or another zero-extended value: comparing them there is the same
+    /// comparison, and the program's and the formula's widths then meet.
+    fn narrow_pair(&mut self, a: Term, b: Term) -> Option<(Term, Term)> {
+        let width = self.width(a);
+        let inner = |pool: &Self, term: Term| match *pool.node(term) {
+            Node::ZeroExtend(x, by) => Some((x, width - by)),
+            _ => None,
+        };
+        match (inner(self, a), inner(self, b)) {
+            (Some((x, narrow)), None) => {
+                let c = self.constant(b).filter(|c| *c <= mask(narrow))?;
+                Some((x, self.bv(narrow, c)))
+            }
+            (None, Some((y, narrow))) => {
+                let c = self.constant(a).filter(|c| *c <= mask(narrow))?;
+                Some((self.bv(narrow, c), y))
+            }
+            (Some((x, from)), Some((y, to))) => {
+                let narrow = from.max(to);
+                let x = self.zero_extend(x, narrow - from);
+                let y = self.zero_extend(y, narrow - to);
+                Some((x, y))
+            }
+            (None, None) => None,
+        }
     }
 
     /// Unsigned `a <= b`.
@@ -1358,8 +1559,100 @@ impl Pool {
         if a == b {
             return a;
         }
+        // x and not x.
+        if self.negates(a, b) {
+            return self.boolean(false);
+        }
         let (a, b) = self.ordered(a, b);
         self.make(Node::BoolAnd(a, b), Sort::Bool)
+    }
+
+    /// Whether `a` and `b` are the same value by their structure alone, sums compared as sets
+    /// of parts whatever their grouping and order: the same arithmetic built by a program and by
+    /// a formula in different steps. Never true for terms that could differ; false when unsure.
+    #[must_use]
+    pub fn equivalent(&self, a: Term, b: Term) -> bool {
+        self.equivalent_in(a, b, &mut HashMap::new())
+    }
+
+    fn equivalent_in(&self, a: Term, b: Term, known: &mut HashMap<(Term, Term), bool>) -> bool {
+        if a == b {
+            return true;
+        }
+        if self.sort(a) != self.sort(b) {
+            return false;
+        }
+        if let Some(answer) = known.get(&(a, b)) {
+            return *answer;
+        }
+        known.insert((a, b), false);
+        let answer = match (self.node(a), self.node(b)) {
+            (Node::Add(..), Node::Add(..)) => {
+                let parts = |term: Term| {
+                    let (mut parts, mut constant, mut pending) = (Vec::new(), 0_u128, vec![term]);
+                    while let Some(current) = pending.pop() {
+                        match *self.node(current) {
+                            Node::Add(x, y) => pending.extend([x, y]),
+                            Node::Const { value, .. } => constant = constant.wrapping_add(value),
+                            _ => parts.push(current),
+                        }
+                    }
+                    (parts, constant & mask(self.width(term)))
+                };
+                let ((left, c1), (mut right, c2)) = (parts(a), parts(b));
+                c1 == c2
+                    && left.len() == right.len()
+                    && left.iter().all(|part| {
+                        let found = right
+                            .iter()
+                            .position(|other| self.equivalent_in(*part, *other, known));
+                        found.map(|index| right.swap_remove(index)).is_some()
+                    })
+            }
+            (x, y) if std::mem::discriminant(x) == std::mem::discriminant(y) => {
+                let same_parameters = match (x, y) {
+                    (Node::Extract(_, h1, l1), Node::Extract(_, h2, l2)) => (h1, l1) == (h2, l2),
+                    (Node::ZeroExtend(_, b1), Node::ZeroExtend(_, b2))
+                    | (Node::SignExtend(_, b1), Node::SignExtend(_, b2)) => b1 == b2,
+                    (Node::Const { .. }, _)
+                    | (Node::Var { .. }, _)
+                    | (Node::Bool(_), _)
+                    | (Node::BoolVar(_), _) => false,
+                    _ => true,
+                };
+                let (left, right) = (self.operands(a), self.operands(b));
+                let in_order = left
+                    .iter()
+                    .zip(&right)
+                    .all(|(x, y)| self.equivalent_in(*x, *y, known));
+                let commutative = matches!(
+                    x,
+                    Node::Mul(..)
+                        | Node::And(..)
+                        | Node::Or(..)
+                        | Node::Xor(..)
+                        | Node::Eq(..)
+                        | Node::BoolAnd(..)
+                        | Node::BoolOr(..)
+                );
+                same_parameters
+                    && left.len() == right.len()
+                    && (in_order
+                        || commutative
+                            && left.len() == 2
+                            && self.equivalent_in(left[0], right[1], known)
+                            && self.equivalent_in(left[1], right[0], known))
+            }
+            _ => false,
+        };
+        known.insert((a, b), answer);
+        answer
+    }
+
+    /// Whether one of `a` and `b` is the other negated.
+    fn negates(&self, a: Term, b: Term) -> bool {
+        matches!(*self.node(a), Node::BoolNot(inner) if inner == b)
+            || matches!(*self.node(b), Node::BoolNot(inner) if inner == a)
     }
 
     /// Either true.
@@ -1381,6 +1674,10 @@ impl Pool {
         }
         if a == b {
             return a;
+        }
+        // x or not x.
+        if self.negates(a, b) {
+            return self.boolean(true);
         }
         let (a, b) = self.ordered(a, b);
         self.make(Node::BoolOr(a, b), Sort::Bool)
@@ -1418,39 +1715,109 @@ impl Pool {
     /// The term's value when every variable has the value `values` gives it (by name), or
     /// `None` when a variable has none. True is 1 and false 0.
     pub fn evaluate(&self, term: Term, values: &HashMap<String, u128>) -> Option<u128> {
-        let mut known: HashMap<Term, u128> = HashMap::new();
-        self.evaluate_into(term, values, &mut known)
+        self.evaluate_with(term, &mut |pool, variable| {
+            values.get(pool.name(variable)?).copied()
+        })
     }
 
-    fn evaluate_into(
+    /// The term's value with each variable's value from `value_of`, or `None` when it gives
+    /// none. Only the chosen side of an `ite` is evaluated. Iterative, so terms of any depth
+    /// evaluate on a small stack.
+    pub fn evaluate_with(
         &self,
         term: Term,
-        values: &HashMap<String, u128>,
+        value_of: &mut dyn FnMut(&Self, Term) -> Option<u128>,
+    ) -> Option<u128> {
+        self.evaluate_cached(term, value_of, &mut HashMap::new())
+    }
+
+    /// [`Self::evaluate_with`], keeping every value it computes in `known`, which may hold
+    /// values from earlier calls with the same variables' values.
+    pub fn evaluate_cached(
+        &self,
+        term: Term,
+        value_of: &mut dyn FnMut(&Self, Term) -> Option<u128>,
         known: &mut HashMap<Term, u128>,
     ) -> Option<u128> {
-        if let Some(value) = known.get(&term) {
-            return Some(*value);
+        enum Frame {
+            /// Evaluate the term's operands, then the term.
+            Enter(Term),
+            /// The operands are known: compute the term.
+            Exit(Term),
+            /// An `ite`'s condition is known: evaluate the chosen side, then the term.
+            Choose(Term),
         }
+        let mut frames = vec![Frame::Enter(term)];
+        while let Some(frame) = frames.pop() {
+            match frame {
+                Frame::Enter(current) => {
+                    if known.contains_key(&current) {
+                        continue;
+                    }
+                    match self.node(current) {
+                        Node::Const { value, .. } => {
+                            known.insert(current, *value);
+                        }
+                        Node::Bool(value) => {
+                            known.insert(current, u128::from(*value));
+                        }
+                        Node::Var { .. } | Node::BoolVar(_) => {
+                            let value = value_of(self, current)?;
+                            known.insert(current, value);
+                        }
+                        Node::Ite(condition, ..) => {
+                            frames.push(Frame::Choose(current));
+                            frames.push(Frame::Enter(*condition));
+                        }
+                        _ => {
+                            frames.push(Frame::Exit(current));
+                            for operand in self.operands(current) {
+                                frames.push(Frame::Enter(operand));
+                            }
+                        }
+                    }
+                }
+                Frame::Choose(current) => {
+                    let Node::Ite(condition, then, otherwise) = *self.node(current) else {
+                        return None;
+                    };
+                    let chosen = if known.get(&condition)? == &1 {
+                        then
+                    } else {
+                        otherwise
+                    };
+                    frames.push(Frame::Exit(current));
+                    frames.push(Frame::Enter(chosen));
+                }
+                Frame::Exit(current) => {
+                    let value = self.compute(current, known)?;
+                    known.insert(current, value);
+                }
+            }
+        }
+        known.get(&term).copied()
+    }
+
+    /// A term's value from its operands' values in `known`; an `ite` reads its chosen side.
+    fn compute(&self, term: Term, known: &HashMap<Term, u128>) -> Option<u128> {
         let width = self.width(term);
-        let get = |operand: Term, known: &mut HashMap<Term, u128>| {
-            self.evaluate_into(operand, values, known)
-        };
-        let value = match self.node(term).clone() {
+        let get = |operand: Term| known.get(&operand).copied();
+        Some(match self.node(term).clone() {
             Node::Const { value, .. } => value,
-            Node::Var { name, .. } | Node::BoolVar(name) => *values.get(&name)?,
+            Node::Var { .. } | Node::BoolVar(_) => get(term)?,
             Node::Bool(value) => u128::from(value),
-            Node::Add(a, b) => get(a, known)?.wrapping_add(get(b, known)?) & mask(width),
-            Node::Mul(a, b) => get(a, known)?.wrapping_mul(get(b, known)?) & mask(width),
-            Node::Udiv(a, b) => match get(b, known)? {
+            Node::Add(a, b) => get(a)?.wrapping_add(get(b)?) & mask(width),
+            Node::Mul(a, b) => get(a)?.wrapping_mul(get(b)?) & mask(width),
+            Node::Udiv(a, b) => match get(b)? {
                 0 => mask(width),
-                y => get(a, known)? / y,
+                y => get(a)? / y,
             },
-            Node::Urem(a, b) => match get(b, known)? {
-                0 => get(a, known)?,
-                y => get(a, known)? % y,
+            Node::Urem(a, b) => match get(b)? {
+                0 => get(a)?,
+                y => get(a)? % y,
             },
             Node::Sdiv(a, b) => {
-                let (x, y) = (signed(get(a, known)?, width), signed(get(b, known)?, width));
+                let (x, y) = (signed(get(a)?, width), signed(get(b)?, width));
                 let quotient = if y == 0 {
                     if x < 0 { 1 } else { -1 }
                 } else {
@@ -1459,60 +1826,78 @@ impl Pool {
                 unsigned(quotient, width)
             }
             Node::Srem(a, b) => {
-                let x = get(a, known)?;
-                let (sx, sy) = (signed(x, width), signed(get(b, known)?, width));
+                let x = get(a)?;
+                let (sx, sy) = (signed(x, width), signed(get(b)?, width));
                 if sy == 0 {
                     x
                 } else {
                     unsigned(sx.wrapping_rem(sy), width)
                 }
             }
-            Node::And(a, b) => get(a, known)? & get(b, known)?,
-            Node::Or(a, b) => get(a, known)? | get(b, known)?,
-            Node::Xor(a, b) => get(a, known)? ^ get(b, known)?,
-            Node::Not(a) => !get(a, known)? & mask(width),
-            Node::Neg(a) => get(a, known)?.wrapping_neg() & mask(width),
-            Node::Shl(a, b) => match get(b, known)? {
+            Node::And(a, b) => get(a)? & get(b)?,
+            Node::Or(a, b) => get(a)? | get(b)?,
+            Node::Xor(a, b) => get(a)? ^ get(b)?,
+            Node::Not(a) => !get(a)? & mask(width),
+            Node::Neg(a) => get(a)?.wrapping_neg() & mask(width),
+            Node::Shl(a, b) => match get(b)? {
                 y if y >= u128::from(width) => 0,
-                y => (get(a, known)? << y) & mask(width),
+                y => (get(a)? << y) & mask(width),
             },
-            Node::Lshr(a, b) => match get(b, known)? {
+            Node::Lshr(a, b) => match get(b)? {
                 y if y >= u128::from(width) => 0,
-                y => get(a, known)? >> y,
+                y => get(a)? >> y,
             },
             Node::Ashr(a, b) => {
-                let shift =
-                    u32::try_from(get(b, known)?.min(u128::from(width - 1))).unwrap_or(width - 1);
-                unsigned(signed(get(a, known)?, width) >> shift, width)
+                let shift = u32::try_from(get(b)?.min(u128::from(width - 1))).unwrap_or(width - 1);
+                unsigned(signed(get(a)?, width) >> shift, width)
             }
-            Node::Extract(a, high, low) => (get(a, known)? >> low) & mask(high - low + 1),
-            Node::ZeroExtend(a, _) => get(a, known)?,
+            Node::Extract(a, high, low) => (get(a)? >> low) & mask(high - low + 1),
+            Node::ZeroExtend(a, _) => get(a)?,
             Node::SignExtend(a, _) => {
                 let narrow = self.width(a);
-                unsigned(signed(get(a, known)?, narrow), width)
+                unsigned(signed(get(a)?, narrow), width)
             }
-            Node::Concat(high, low) => (get(high, known)? << self.width(low)) | get(low, known)?,
+            Node::Concat(high, low) => (get(high)? << self.width(low)) | get(low)?,
             Node::Ite(condition, then, otherwise) => {
-                if get(condition, known)? == 1 {
-                    get(then, known)?
+                if get(condition)? == 1 {
+                    get(then)?
                 } else {
-                    get(otherwise, known)?
+                    get(otherwise)?
                 }
             }
-            Node::Eq(a, b) => u128::from(get(a, known)? == get(b, known)?),
-            Node::Ult(a, b) => u128::from(get(a, known)? < get(b, known)?),
+            Node::Eq(a, b) => u128::from(get(a)? == get(b)?),
+            Node::Ult(a, b) => u128::from(get(a)? < get(b)?),
             Node::Slt(a, b) => {
                 let operand_width = self.width(a);
-                u128::from(
-                    signed(get(a, known)?, operand_width) < signed(get(b, known)?, operand_width),
-                )
+                u128::from(signed(get(a)?, operand_width) < signed(get(b)?, operand_width))
             }
-            Node::BoolAnd(a, b) => u128::from(get(a, known)? == 1 && get(b, known)? == 1),
-            Node::BoolOr(a, b) => u128::from(get(a, known)? == 1 || get(b, known)? == 1),
-            Node::BoolNot(a) => u128::from(get(a, known)? == 0),
-        };
-        known.insert(term, value);
-        Some(value)
+            Node::BoolAnd(a, b) => u128::from(get(a)? == 1 && get(b)? == 1),
+            Node::BoolOr(a, b) => u128::from(get(a)? == 1 || get(b)? == 1),
+            Node::BoolNot(a) => u128::from(get(a)? == 0),
+        })
+    }
+
+    /// A term written out as an expression, `depth` levels deep, for finding where two terms
+    /// that should be one differ.
+    #[must_use]
+    pub fn sketch(&self, term: Term, depth: u32) -> String {
+        let operands = self.operands(term);
+        let own = self.smt_node(term);
+        if depth == 0 || operands.is_empty() {
+            return format!("t{}", term.index()).replace(&format!("t{}", term.index()), &own);
+        }
+        let mut text = own;
+        for operand in operands {
+            text = text.replace(
+                &format!("t{} ", operand.index()),
+                &format!("{} ", self.sketch(operand, depth - 1)),
+            );
+            text = text.replace(
+                &format!("t{})", operand.index()),
+                &format!("{})", self.sketch(operand, depth - 1)),
+            );
+        }
+        text
     }
 
     /// The SMT-LIB text of `term`'s own operation, naming its operands `t<index>`.
@@ -1710,5 +2095,100 @@ mod tests {
         let one = pool.bv(8, 1);
         let shifted = pool.ashr(a, one);
         assert_eq!(pool.evaluate(shifted, &values), Some(0xfc));
+    }
+    #[test]
+    fn a_programs_divisions_and_a_formulas_meet_as_one_term() {
+        // (t / 86400 + 4) % 7: the program divides with 64-bit `div` (128-bit dividends),
+        // the formula in signed 128 bits.
+        let mut pool = Pool::default();
+        let t = pool.var_in(64, "t", 0, 4_102_444_799);
+        let (day, four, seven) = (86_400, 4, 7);
+        let program = {
+            let wide = pool.zero_extend(t, 64);
+            let divisor = pool.bv(128, day);
+            let quotient = pool.udiv(wide, divisor);
+            let low = pool.extract(quotient, 63, 0);
+            let four = pool.bv(64, four);
+            let shifted = pool.add(low, four);
+            let wide = pool.zero_extend(shifted, 64);
+            let divisor = pool.bv(128, seven);
+            let remainder = pool.urem(wide, divisor);
+            pool.extract(remainder, 63, 0)
+        };
+        let formula = {
+            let wide = pool.zero_extend(t, 64);
+            let divisor = pool.bv(128, day);
+            let quotient = pool.sdiv(wide, divisor);
+            let four = pool.bv(128, four);
+            let shifted = pool.add(quotient, four);
+            let divisor = pool.bv(128, seven);
+            let remainder = pool.srem(shifted, divisor);
+            pool.extract(remainder, 63, 0)
+        };
+        assert_eq!(program, formula);
+        // hh:mm:ss: t % 86400 / 3600 both ways.
+        let program_hours = {
+            let wide = pool.zero_extend(t, 64);
+            let divisor = pool.bv(128, day);
+            let remainder = pool.urem(wide, divisor);
+            let low = pool.extract(remainder, 63, 0);
+            let wide = pool.zero_extend(low, 64);
+            let divisor = pool.bv(128, 3600);
+            let quotient = pool.udiv(wide, divisor);
+            pool.extract(quotient, 63, 0)
+        };
+        let formula_hours = {
+            let wide = pool.zero_extend(t, 64);
+            let divisor = pool.bv(128, day);
+            let remainder = pool.srem(wide, divisor);
+            let divisor = pool.bv(128, 3600);
+            let quotient = pool.sdiv(remainder, divisor);
+            pool.extract(quotient, 63, 0)
+        };
+        assert_eq!(program_hours, formula_hours);
+    }
+
+    #[test]
+    fn reciprocal_multiplies_are_divisions() {
+        let mut pool = Pool::default();
+        let x = pool.var(64, "x");
+        let wide = pool.zero_extend(x, 64);
+        for divisor in [3_u128, 7, 10, 60, 1000, 3600, 86_400, 146_097] {
+            // Granlund and Montgomery's round-up multiplier for 64-bit dividends.
+            let shift = 128 - (divisor - 1).leading_zeros();
+            let low = 64 + shift;
+            let multiplier = (1_u128 << low).div_ceil(divisor);
+            if multiplier > u128::from(u64::MAX) {
+                // Needs 65 bits: the add-back form, left to the solver.
+                continue;
+            }
+            let m = pool.bv(128, multiplier);
+            let product = pool.mul(wide, m);
+            let top = pool.extract(product, 127, low);
+            let expected = {
+                let divisor = pool.bv(64, divisor);
+                let quotient = pool.udiv(x, divisor);
+                let width = pool.width(top);
+                if width >= 64 {
+                    pool.zero_extend(quotient, width - 64)
+                } else {
+                    pool.extract(quotient, width - 1, 0)
+                }
+            };
+            assert_eq!(top, expected, "dividing by {divisor}");
+            // `shr` after the high half of `mul` is the same division.
+            let high = pool.extract(product, 127, 64);
+            let shifted = {
+                let by = pool.bv(64, u128::from(shift));
+                pool.lshr(high, by)
+            };
+            let narrow = pool.extract(shifted, 63 - shift, 0);
+            let quotient = {
+                let divisor = pool.bv(64, divisor);
+                pool.udiv(x, divisor)
+            };
+            let fits = pool.extract(quotient, 63 - shift, 0);
+            assert_eq!(narrow, fits, "dividing by {divisor} with shr");
+        }
     }
 }
