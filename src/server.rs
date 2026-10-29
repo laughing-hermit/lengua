@@ -7,8 +7,7 @@ use std::sync::Arc;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::{Implementation, ServerCapabilities, ServerConfig};
-use rmcp::service::RequestContext;
-use rmcp::{RoleServer, ServerHandler, tool, tool_handler, tool_router};
+use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use serde::{Deserialize, Serialize};
 
 use crate::checker;
@@ -91,69 +90,29 @@ pub struct ApprovalParams {
     pub approval: String,
 }
 
-/// Everything `status` reports.
+/// Everything `status` reports: only what the agent can't find out for itself.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct StatusReport {
     /// The lengua server version.
     pub server_version: String,
-    /// The machine lengua is running on.
+    /// What the checker allows on this machine.
     pub machine: MachineReport,
-    /// The LLVM tools lengua builds with.
-    pub toolchain: ToolchainReport,
-    /// What the connected agent harness supports.
-    pub client: ClientReport,
-    /// The server's private data folder (signing key, stamped test copies).
-    pub data_dir: String,
     /// The program's state, when a path was given.
     pub program: Option<ProgramReport>,
-    /// The single next thing to do.
+    /// The single next thing to do. It starts with "Blocked" when lengua can't build programs
+    /// here, such as when llvm-mc or ld.lld is missing.
     pub next_step: String,
 }
 
-/// Machine part of the status report.
+/// What the checker allows on this machine.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct MachineReport {
-    /// Operating system, e.g. `linux`.
-    pub os: String,
-    /// CPU architecture, e.g. `x86_64`.
-    pub arch: String,
-    /// CPU model, when the OS reports one.
-    pub cpu_model: Option<String>,
-    /// How many threads can run at once; a spec allows at most this many.
-    pub cores: usize,
-    /// CPU extensions the optimize step may use.
-    pub features: CpuFeatures,
     /// The platform profile, e.g. `linux-x86_64`, or null when unsupported.
     pub profile: Option<String>,
-    /// Whether lengua can build programs on this platform.
-    pub supported: bool,
-}
-
-/// Toolchain part of the status report.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct ToolchainReport {
-    /// `llvm-mc`, when found.
-    pub assembler: Option<ToolReport>,
-    /// `ld.lld`, when found.
-    pub linker: Option<ToolReport>,
-    /// What's wrong, when the toolchain can't be used.
-    pub problem: Option<String>,
-}
-
-/// One external tool.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct ToolReport {
-    /// Absolute path of the executable.
-    pub path: String,
-    /// Reported version.
-    pub version: String,
-}
-
-/// Client part of the status report.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct ClientReport {
-    /// The negotiated MCP protocol version.
-    pub protocol_version: Option<String>,
+    /// How many threads can run at once; a spec allows at most this many.
+    pub cores: usize,
+    /// The CPU extensions main.s may use: the checker refuses instructions from any other.
+    pub features: CpuFeatures,
 }
 
 /// Program part of the status report.
@@ -353,23 +312,20 @@ impl LenguaServer {
     #[tool(
         name = "status",
         title = "Status",
-        description = "Shows whether lengua can build programs on this machine and, given a \
-            program folder, what that program needs next. It reports the OS, CPU and its \
-            features, the LLVM tools (llvm-mc, ld.lld) and the MCP protocol in use; for a \
-            program, each file's hash, whether lengua.lock records it, the label tests.toml and \
-            main.s must carry, any problems in an unapproved spec.md, and which tests prove has \
-            proven for every input. Ends with the single next step to take. path: absolute path \
-            of a program folder (optional).",
+        description = "Shows what lengua allows on this machine (the CPU extensions main.s may \
+            use and the cores a spec may ask for) and, given a program folder, what that program \
+            needs next: each file's hash, whether lengua.lock records it, the label tests.toml \
+            and main.s must carry, any problems in an unapproved spec.md, and which tests prove \
+            has proven for every input. Ends with the single next step to take, or why lengua \
+            can't build programs here. path: absolute path of a program folder (optional).",
         annotations(title = "Status", read_only_hint = true, open_world_hint = false)
     )]
     async fn status(
         &self,
         Parameters(params): Parameters<StatusParams>,
-        ctx: RequestContext<RoleServer>,
     ) -> Result<Json<StatusReport>, String> {
         let machine = Machine::detect();
         let toolchain = Toolchain::discover().await;
-        let client = client_report(&ctx);
         let program = match params.path.as_deref() {
             Some(path) => Some(self.program_report(&ProgramFolder::new(path)?)?),
             None => None,
@@ -385,17 +341,10 @@ impl LenguaServer {
         Ok(Json(StatusReport {
             server_version: env!("CARGO_PKG_VERSION").to_owned(),
             machine: MachineReport {
-                os: machine.os.to_owned(),
-                arch: machine.arch.to_owned(),
-                cpu_model: machine.cpu_model.clone(),
+                profile: machine.profile.map(|profile| profile.name().to_owned()),
                 cores: machine.cores,
                 features: machine.features,
-                profile: machine.profile.map(|profile| profile.name().to_owned()),
-                supported: machine.profile.is_some(),
             },
-            toolchain: toolchain_report(&toolchain),
-            client,
-            data_dir: self.data_dir.path().display().to_string(),
             program: program.map(|(report, _)| report),
             next_step,
         }))
@@ -1281,12 +1230,6 @@ impl ServerHandler for LenguaServer {
     }
 }
 
-fn client_report(ctx: &RequestContext<RoleServer>) -> ClientReport {
-    ClientReport {
-        protocol_version: ctx.protocol_version().map(|version| version.to_string()),
-    }
-}
-
 /// The program folder `path` names: the folder itself or its spec.md.
 fn folder_of(path: &str) -> Result<ProgramFolder, String> {
     let path = path.trim();
@@ -1500,30 +1443,6 @@ fn problem_list(problems: &[spec::Problem]) -> String {
         let _ = writeln!(text, "- {problem}");
     }
     text
-}
-
-fn toolchain_report(
-    toolchain: &Result<Toolchain, crate::toolchain::ToolchainError>,
-) -> ToolchainReport {
-    match toolchain {
-        Ok(toolchain) => ToolchainReport {
-            assembler: Some(tool_report(&toolchain.assembler)),
-            linker: Some(tool_report(&toolchain.linker)),
-            problem: None,
-        },
-        Err(error) => ToolchainReport {
-            assembler: None,
-            linker: None,
-            problem: Some(error.to_string()),
-        },
-    }
-}
-
-fn tool_report(tool: &crate::toolchain::Tool) -> ToolReport {
-    ToolReport {
-        path: tool.path.display().to_string(),
-        version: tool.version.clone(),
-    }
 }
 
 /// Why lengua can't build programs on this machine, if it can't.

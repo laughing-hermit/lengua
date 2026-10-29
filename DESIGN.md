@@ -57,7 +57,7 @@ The plugin folder `plugin/` contains:
 
 | Tool | Does |
 |---|---|
-| `status` | Machine (OS, CPU, features, LLVM tools), a program's state, problems in an unapproved spec, and the next step |
+| `status` | What the checker allows here (CPU extensions, cores), a program's state, problems in an unapproved spec, what's proven, and the next step. Nothing the agent can find out itself |
 | `approve_spec` | Validates `spec.md` and records the person's words approving it |
 | `check_tests` | Validates `tests.toml` (coverage, cross-checks, red check, freeze) and stamps it |
 | `check_code` | Assembles, links, checks the rules, runs every test and counts the instructions executed, then stamps and signs |
@@ -149,6 +149,16 @@ test pass does it stamp `[code]`, including the executable's SHA-256 and the too
 proven for every input in range, and the solvers that checked them. `status` shows them while
 spec, tests and code are all the checked ones. Checking tests again drops them; checking code
 again keeps them only when the build is byte for byte the same.
+
+## What lengua does, and what it leaves to the agent
+
+lengua is an agent plugin: skills plus an MCP server, nothing else. The server does only what the
+agent can't be trusted or equipped to do: approval and the signed lock, the checks that keep tests
+and code true to the approved spec, building, running under the kernel's confinement, measuring,
+supervising test runs and proving. Everything generative or advisory is the agent's, guided by the
+skills: specs, tests, code, optimization, explanations, fetching from the web, and comparisons with
+other languages. Style rules, such as the order of Given, When and Then, live in the skills; the
+server checks only what it parses and relies on.
 
 ## The lengua dialect
 

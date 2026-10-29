@@ -66,10 +66,10 @@ of the same rule.
   The title names the rule in the user's words, such as `Adds two numbers` or `Rejects a line
   that is too long`, and no two titles are the same. Don't add a behavior that only repeats
   another with other values: adding negative numbers is still adding.
-- **Given, When, Then:** Given steps set the scene (the arguments, the input, the files), the one
-  When is the event (`- When the program runs`), and Then steps say only what the user can
-  observe: the output, the files written and the exit code. `- And …` or `- But …` continue the
-  step before. Keep each behavior to these few steps.
+- **Given, When, Then, in that order:** Given steps first set the scene (the arguments, the input,
+  the files), then the one When is the event (`- When the program runs`), then Then steps say only
+  what the user can observe: the output, the files written and the exit code. The first step is a
+  Given; `- And …` or `- But …` continue the step before. Keep each behavior to these few steps.
 - **Files:** name them and quote their contents: ``- Given a file named `notes.txt` holding
   `hello` `` and ``- Then `loud.txt` holds `HELLO` ``. A program works only on files in the folder
   it runs in, named relative to it; it can't reach other files at all. Purpose states the largest

@@ -8,7 +8,6 @@
 use std::fmt;
 
 use serde::Deserialize;
-use serde::de::IgnoredAny;
 
 /// The OKF `type` that every lengua spec declares.
 pub const SPEC_TYPE: &str = "lengua/program-spec";
@@ -329,7 +328,6 @@ struct Frontmatter {
     kind: Option<String>,
     title: Option<String>,
     description: Option<String>,
-    status: Option<IgnoredAny>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -415,7 +413,6 @@ impl Parser {
                 kind: None,
                 title: None,
                 description: None,
-                status: None,
             })
         } else {
             serde_saphyr::from_str::<Frontmatter>(yaml)
@@ -444,13 +441,6 @@ impl Parser {
                 Some(1),
                 format!("the frontmatter has no `type`; add `type: {SPEC_TYPE}`"),
             ),
-        }
-        if frontmatter.status.is_some() {
-            self.problem(
-                Some(1),
-                "remove `status` from the frontmatter: approval is recorded in lengua.lock, and \
-                 any edit to spec.md, even to a status field, needs a new approval",
-            );
         }
         let title = frontmatter
             .title
@@ -645,7 +635,8 @@ impl Parser {
         }
     }
 
-    /// Checks the Given → When → Then order and returns the stated exit code.
+    /// Finds the stated exit code, in a step after the When. The order of Given, When and Then is
+    /// the write-spec skill's to keep; lengua only needs one When, since an example is one run.
     fn check_steps(&mut self, id: BehaviorId, line: usize, steps: &[Step]) -> Option<u8> {
         if steps.is_empty() {
             self.problem(
@@ -658,15 +649,7 @@ impl Parser {
         let mut exit_steps = Vec::new();
         for step in steps {
             match step.keyword {
-                Keyword::Given => {
-                    if phase.is_some_and(|phase| phase != Keyword::Given) {
-                        self.problem(
-                            Some(step.line),
-                            format!("{id}: Given steps come before When and Then"),
-                        );
-                    }
-                    phase = Some(Keyword::Given);
-                }
+                Keyword::Given => phase = Some(Keyword::Given),
                 Keyword::When => {
                     if phase.is_some_and(|phase| phase != Keyword::Given) {
                         self.problem(
@@ -679,23 +662,8 @@ impl Parser {
                     }
                     phase = Some(Keyword::When);
                 }
-                Keyword::Then => {
-                    if phase.is_some_and(|phase| phase == Keyword::Given) {
-                        self.problem(
-                            Some(step.line),
-                            format!("{id}: Then comes after a When step"),
-                        );
-                    }
-                    phase = Some(Keyword::Then);
-                }
-                Keyword::And | Keyword::But => {
-                    if phase.is_none() {
-                        self.problem(
-                            Some(step.line),
-                            format!("{id}: the first step must be Given, not And or But"),
-                        );
-                    }
-                }
+                Keyword::Then => phase = Some(Keyword::Then),
+                Keyword::And | Keyword::But => {}
             }
             if phase == Some(Keyword::Then) && states_exit_code(&step.text) {
                 exit_steps.push(step);
@@ -1161,11 +1129,9 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
     }
 
     #[test]
-    fn rejects_a_status_field() {
-        assert_problem(
-            &ADD.replace("title: add\n", "title: add\nstatus: approved\n"),
-            "remove `status`",
-        );
+    fn ignores_other_frontmatter_fields() {
+        // Approval lives in lengua.lock; keeping it out of the frontmatter is the skill's job.
+        assert!(parse(&ADD.replace("title: add\n", "title: add\nstatus: approved\n")).is_ok());
     }
 
     #[test]
@@ -1215,7 +1181,7 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
                 "- When the program runs\n- Then it prints `5`",
                 "- Then it prints `5`",
             ),
-            "Then comes after a When step",
+            "it has no When",
         );
     }
 
@@ -1228,16 +1194,13 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
             ),
             "a behavior has one When",
         );
-        assert_problem(
-            &ADD.replace("- Given the arguments", "- And the arguments"),
-            "the first step must be Given",
-        );
-        assert_problem(
-            &ADD.replace(
+        // The order of the other steps is style, the write-spec skill's to keep.
+        assert!(
+            parse(&ADD.replace(
                 "- When the program runs\n- Then it prints `5`",
                 "- When the program runs\n- Given more\n- Then it prints `5`",
-            ),
-            "Given steps come before When and Then",
+            ))
+            .is_ok()
         );
         assert_problem(
             &ADD.replace(

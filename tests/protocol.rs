@@ -38,43 +38,23 @@ async fn handshake_reports_server_name_version_and_instructions() {
 }
 
 #[tokio::test]
-async fn status_reports_machine_toolchain_and_client() {
+async fn status_reports_what_the_checker_allows() {
     for protocol in Protocol::ALL {
         let session = Session::start(protocol).await;
         let report = session.call_ok("status", json!({})).await;
-        assert_eq!(
-            report["machine"]["os"],
-            std::env::consts::OS,
-            "{protocol:?}"
-        );
-        assert_eq!(
-            report["machine"]["arch"],
-            std::env::consts::ARCH,
-            "{protocol:?}"
-        );
-        assert_eq!(report["machine"]["supported"], true, "{protocol:?}");
         assert_eq!(report["machine"]["profile"], "linux-x86_64", "{protocol:?}");
         assert!(
-            report["toolchain"]["assembler"]["version"].is_string(),
+            report["machine"]["cores"]
+                .as_u64()
+                .is_some_and(|cores| cores >= 1),
             "{report}"
         );
-        assert!(
-            report["toolchain"]["linker"]["version"].is_string(),
-            "{report}"
-        );
-        let expected_protocol = match protocol {
-            Protocol::Handshake => "2025-11-25",
-            Protocol::Discover => "2026-07-28",
-        };
-        assert_eq!(
-            report["client"]["protocol_version"], expected_protocol,
-            "{report}"
-        );
-        assert_eq!(
-            report["data_dir"],
-            session.data_dir.path().display().to_string(),
-            "{protocol:?}"
-        );
+        assert!(report["machine"]["features"].is_object(), "{report}");
+        // What the agent can find out itself isn't repeated: tool versions, the protocol, the
+        // data folder.
+        for gone in ["toolchain", "client", "data_dir"] {
+            assert!(report.get(gone).is_none(), "{gone}: {report}");
+        }
         assert!(
             report["next_step"]
                 .as_str()
