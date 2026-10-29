@@ -18,10 +18,9 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 > 1 MiB. The
 > kernel holds every run to what its spec allows. `prove` proves programs right for every
 > input, not just the tested ones, over whole numbers, decimals, choices, texts and text
-> formulas, and files, in integer, bit and vector code from SSE2 to AVX-512, and over long texts
-> up to a stated length (4,096 bytes of standard input), with each step confirmed by two
-> independent solvers, z3 and cvc5; `lengua.lock` records what's proven. Next:
-> - proofs of programs on the network;
+> formulas, files and the network, in integer, bit and vector code from SSE2 to AVX-512, and
+> over long texts up to a stated length (4,096 bytes of standard input), with each step
+> confirmed by two independent solvers, z3 and cvc5; `lengua.lock` records what's proven. Next:
 > - proofs of decimal arithmetic written in another shape;
 > - more of the top CPU and OS targets, which LLVM already supports.
 
@@ -94,7 +93,8 @@ Complete programs, each with its spec, tests and assembly:
   bytes;
 - [`examples/fetch`](examples/fetch) fetches a page from a web server on this computer over
   HTTP/1.0, and [`examples/echo`](examples/echo) is a line-echo server. Their tests bring their
-  own server and client, and the kernel keeps each to the ports its spec names;
+  own server and client, and the kernel keeps each to the ports its spec names; `prove` proves
+  the echo server for every line, however the network cuts it;
 - [`examples/count`](examples/count) counts lines and words like `wc -lw`. Claude Code wrote it
   through lengua from one plain request in an interactive session; on a 4 GiB file it ran at
   15.8 GB/s, ahead of hand-written AVX-512 C, 12 times faster than plain C and 25 times faster

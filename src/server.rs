@@ -1124,6 +1124,7 @@ impl LenguaServer {
         let mut solved = 0;
         let mut alone_reason: Option<String> = None;
         let allows = |call: spec::Syscall| spec.syscalls.contains(&call);
+        let listens = spec.network.listens.is_some();
         let blocks = suite.generated.len();
         for (index, block) in suite.generated.iter().enumerate() {
             let test = format!("generated {}", block.id);
@@ -1138,17 +1139,6 @@ impl LenguaServer {
             // `now` in the expected results.
             let kernel_values = (allows(spec::Syscall::Getrandom) && block.random.is_none())
                 || (allows(spec::Syscall::ClockGettime) && block.clock.is_empty());
-            if spec.network.is_used() {
-                proofs.push(ProofReport {
-                    test,
-                    proven: false,
-                    proven_up_to: None,
-                    detail: "tested, not proven: the proof doesn't follow a program over the \
-                             network yet"
-                        .into(),
-                });
-                continue;
-            }
             if let Some(every) = block
                 .every_value_text()
                 .filter(|_| !kernel_values && !block.uses_now())
@@ -1177,6 +1167,7 @@ impl LenguaServer {
                             max_paths: 256,
                             max_shapes: 2_000_000,
                             question_ms: 20_000,
+                            listens,
                         },
                     )
                 })
@@ -1233,14 +1224,42 @@ impl LenguaServer {
                             "; longer texts are tested, not proven: {}",
                             bound.why
                         ))
-                    ),
+                    ) + if block.server.is_empty() && block.client.is_empty() {
+                        ""
+                    } else {
+                        "; what the test's peer sends arriving whole or cut after its first \
+                         byte, at its middle, or both"
+                    },
                 ),
                 Ok(prove::Verdict::NotProven(reason)) => {
                     (false, format!("tested, not proven: {reason}"))
                 }
-                Ok(prove::Verdict::Counterexample(values)) => {
+                Ok(prove::Verdict::Counterexample(mut values)) => {
+                    // The delivery it was found with, and the port the kernel chooses, aren't
+                    // the test's inputs: a real run is given the delivery and picks its port.
+                    let delivery = match values.remove(prove::DELIVERY) {
+                        Some(expr::Value::Str(found)) => testrun::Delivery::ALL
+                            .into_iter()
+                            .find(|delivery| delivery.describe() == found)
+                            .unwrap_or(testrun::Delivery::Whole),
+                        _ => testrun::Delivery::Whole,
+                    };
+                    if !block.server.is_empty()
+                        && !block.vars.iter().any(|(name, _)| name == "port")
+                    {
+                        values.remove("port");
+                    }
+                    let networked = !block.server.is_empty() || !block.client.is_empty();
                     let inputs: expr::Env = values.into_iter().collect();
-                    let described = testfile::describe_inputs(&inputs);
+                    let described = if networked {
+                        format!(
+                            "{}, what the test's peer sends arriving {}",
+                            testfile::describe_inputs(&inputs),
+                            delivery.describe()
+                        )
+                    } else {
+                        testfile::describe_inputs(&inputs)
+                    };
                     match block.case(inputs, crate::expect::now()) {
                         Ok(case) => match testrun::check_case(
                             &self.launcher,
@@ -1249,6 +1268,7 @@ impl LenguaServer {
                             &case,
                             &syscalls,
                             &spec.network,
+                            delivery,
                         )
                         .await
                         .map_err(|error| format!("couldn't run the program: {error}"))?

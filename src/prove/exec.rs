@@ -114,6 +114,11 @@ pub enum End {
     Unsupported(String),
     /// The paths through the code ran past the limit before this one was followed.
     TooManyPaths,
+    /// Waiting for the test client's next connection after the last one, as a server that
+    /// keeps serving does.
+    Serving,
+    /// Waiting for something the test's peer never sends, which a real run gives up on: why.
+    Stuck(String),
 }
 
 /// What last set the flags, when a branch can read it as a plain comparison.
@@ -187,6 +192,12 @@ pub struct State {
     pub written: BTreeMap<String, Vec<Term>>,
     /// The files open, by descriptor.
     open: BTreeMap<u64, Open>,
+    /// The test's network.
+    network: Rc<net::Network>,
+    /// The sockets open, by descriptor, with their connection's number once they have one.
+    sockets: BTreeMap<u64, Option<usize>>,
+    /// Every connection the run made or took, in order.
+    pub connections: Vec<net::Connection>,
     /// Bytes written to standard output, shared with the runs a fork made until one writes.
     pub stdout: Rc<Vec<Term>>,
     /// Bytes written to standard error, shared the same way.
@@ -271,6 +282,9 @@ impl State {
             files: Rc::new(BTreeMap::new()),
             written: BTreeMap::new(),
             open: BTreeMap::new(),
+            network: Rc::new(net::Network::default()),
+            sockets: BTreeMap::new(),
+            connections: Vec::new(),
             stdout: Rc::new(Vec::new()),
             stderr: Rc::new(Vec::new()),
             steps: 0,
@@ -313,6 +327,13 @@ impl State {
     #[must_use]
     pub fn with_files(mut self, files: BTreeMap<String, Vec<Term>>) -> Self {
         self.files = Rc::new(files);
+        self
+    }
+
+    /// The same state with the test's network: its server or client, as `network` says.
+    #[must_use]
+    pub fn with_network(mut self, network: net::Network) -> Self {
+        self.network = Rc::new(network);
         self
     }
 
@@ -1392,9 +1413,7 @@ impl<'a> Cpu<'a> {
         } else if !self.state.files.contains_key(&name) {
             return Ok((-ENOENT).cast_unsigned());
         }
-        let fd = (3..)
-            .find(|fd| !self.state.open.contains_key(fd))
-            .unwrap_or(3);
+        let fd = self.free_descriptor();
         self.state.open.insert(
             fd,
             Open {
@@ -1428,6 +1447,11 @@ impl<'a> Cpu<'a> {
                     }
                     self.state.stdin_read += taken as usize;
                     taken
+                } else if let Ok(socket) = self.connection_of(fd) {
+                    match socket {
+                        Some(number) => self.receive(number, buffer, count)?,
+                        None => self.not_connected(),
+                    }
                 } else if let Some(open) = self.state.open.get(&fd).cloned()
                     && !open.writing
                 {
@@ -1446,6 +1470,17 @@ impl<'a> Cpu<'a> {
                     taken
                 } else {
                     (-EBADF).cast_unsigned()
+                }
+            }
+            1 if self
+                .connection_of(self.constant(rdi)? & 0xffff_ffff)
+                .is_ok() =>
+            {
+                let fd = self.constant(rdi)? & 0xffff_ffff;
+                let (buffer, count) = (self.constant(rsi)?, self.constant(rdx)?);
+                match self.connection_of(fd) {
+                    Ok(Some(number)) => self.send(number, buffer, count, 0)?,
+                    _ => self.not_connected(),
                 }
             }
             1 => {
@@ -1483,11 +1518,60 @@ impl<'a> Cpu<'a> {
             }
             3 => {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
-                if self.state.open.remove(&fd).is_some() {
+                if self.state.open.remove(&fd).is_some() || self.close_socket(fd) {
                     0
                 } else {
                     (-EBADF).cast_unsigned()
                 }
+            }
+            41 => {
+                let (domain, kind, protocol) = (
+                    self.constant(rdi)? & 0xffff_ffff,
+                    self.constant(rsi)? & 0xffff_ffff,
+                    self.constant(rdx)? & 0xffff_ffff,
+                );
+                self.socket(domain, kind, protocol)?
+            }
+            42 => {
+                let fd = self.constant(rdi)? & 0xffff_ffff;
+                let address = self.constant(rsi)?;
+                return self.connect(fd, address);
+            }
+            43 | 288 => {
+                let fd = self.constant(rdi)? & 0xffff_ffff;
+                let (address, length) = (self.constant(rsi)?, self.constant(rdx)?);
+                if number == 288 && self.constant(registers[10])? & !0o2_000_000 != 0 {
+                    return Err(unsupported(
+                        "accepting a connection with flags beyond close-on-exec",
+                    ));
+                }
+                self.accept(fd, address, length)?
+            }
+            44 | 45 => {
+                let fd = self.constant(rdi)? & 0xffff_ffff;
+                let (buffer, count) = (self.constant(rsi)?, self.constant(rdx)?);
+                let flags = self.constant(registers[10])? & 0xffff_ffff;
+                if self.constant(registers[8])? != 0 {
+                    return Err(unsupported("sending to or receiving from a named address"));
+                }
+                match self.connection_of(fd) {
+                    Err(()) => (-EBADF).cast_unsigned(),
+                    Ok(None) => self.not_connected(),
+                    Ok(Some(connection)) if number == 44 => {
+                        self.send(connection, buffer, count, flags)?
+                    }
+                    Ok(Some(connection)) => {
+                        if flags != 0 {
+                            return Err(unsupported(format!("receiving with flags {flags:#x}")));
+                        }
+                        self.receive(connection, buffer, count)?
+                    }
+                }
+            }
+            48 => {
+                let fd = self.constant(rdi)? & 0xffff_ffff;
+                let how = self.constant(rsi)? & 0xffff_ffff;
+                self.shutdown(fd, how)?
             }
             257 => self.open_at()?,
             // The test's readings, as the supervisor gives them, the last one repeating.
@@ -1653,6 +1737,7 @@ pub fn bytes(pool: &mut Pool, text: &[u8]) -> Vec<Term> {
 }
 
 mod bits;
+pub mod net;
 mod vector;
 
 #[cfg(test)]

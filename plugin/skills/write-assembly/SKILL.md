@@ -62,9 +62,9 @@ Nothing runs before every rule passes.
    texts are proven up to a length, such as 4096 bytes, and tested beyond it: `proven_up_to`
    says how far. It can take a minute or two. If it finds inputs where the program is wrong, fix
    `main.s` and call `check_code` and `prove` again. "Tested, not proven" is fine: say why in
-   one line. Vector code proves too, from SSE2 to AVX-512 with masks; programs on the network are
-   tested, not proven, for now. Programs that read and print numbers with the template's
-   `parse_i64` and `write_i64` prove best.
+   one line. Vector code proves too, from SSE2 to AVX-512 with masks, and so do clients and
+   servers on the network, with what the test's peer sends arriving whole or cut. Programs that
+   read and print numbers with the template's `parse_i64` and `write_i64` prove best.
 8. Run the program once with `run`, using the spec's first example: `path`, plus `args` and
    `stdin` when it reads them. A program that works on files runs in a folder holding the
    example's input files: create `<path>/demo/` with them, pass it as `folder`, and name the

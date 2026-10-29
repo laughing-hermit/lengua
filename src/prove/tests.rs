@@ -45,6 +45,7 @@ fn budget(seconds: u64) -> Budget {
         max_paths: 64,
         max_shapes: 2000,
         question_ms: 10_000,
+        listens: false,
     }
 }
 
@@ -1042,6 +1043,7 @@ async fn explores_a_program() {
             block,
             Budget {
                 max_shapes: 2_000_000,
+                listens: spec_parsed.network.listens.is_some(),
                 ..budget(120)
             },
         );
@@ -1170,4 +1172,156 @@ async fn proves_upcase_on_files() {
     let wrong = machine(&source.replace("mov eax, 0x9a9a9a9a", "mov eax, 0x99999999")).await;
     let verdict = prove(&wrong, &block, text_budget());
     assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+}
+
+#[test]
+fn goes_through_every_combination_once_by_its_longest_text() {
+    let text = |lengths: &[usize]| -> Vec<Part> {
+        lengths
+            .iter()
+            .map(|length| Part::Text(*length, b"ab".to_vec()))
+            .collect()
+    };
+    let cases: Vec<Vec<(String, Vec<Part>)>> = vec![
+        vec![
+            ("a".into(), text(&[0, 1, 2])),
+            ("b".into(), text(&[1, 2])),
+            (
+                "c".into(),
+                vec![
+                    Part::Delivery(Delivery::Whole),
+                    Part::Delivery(Delivery::Pieces),
+                ],
+            ),
+        ],
+        vec![("a".into(), text(&[3, 1, 2]))],
+        vec![
+            ("c".into(), vec![Part::Delivery(Delivery::Whole)]),
+            ("a".into(), text(&[5, 0])),
+            ("b".into(), text(&[2, 5, 7])),
+        ],
+    ];
+    for each in cases {
+        let total: usize = each.iter().map(|(_, parts)| parts.len()).product();
+        let mut levels = Levels::new(&each);
+        let mut seen = Vec::new();
+        let mut last = 0;
+        while let Some((combination, length)) = levels.next() {
+            assert!(length >= last, "longer first: {length} after {last}");
+            last = length;
+            // The length given is the combination's longest text.
+            let mut rest = combination;
+            let mut longest = 0;
+            for (_, parts) in &each {
+                longest = longest.max(part_length(&parts[rest % parts.len()]));
+                rest /= parts.len();
+            }
+            assert_eq!(length, longest, "combination {combination}");
+            seen.push(combination);
+        }
+        seen.sort_unstable();
+        assert_eq!(
+            seen,
+            (0..total).collect::<Vec<_>>(),
+            "every combination once"
+        );
+    }
+}
+
+fn network_budget(listens: bool) -> Budget {
+    Budget {
+        listens,
+        ..text_budget()
+    }
+}
+
+/// A server on the network: the line-echo server answers every client's line, delivered whole
+/// or cut as the network may cut it; one that answers after its first read, or never closes a
+/// connection and so waits on a client that waits for it, is found.
+#[tokio::test]
+async fn proves_the_echo_server() {
+    let spec = repository_file("examples/echo/spec.md");
+    let tests = repository_file("examples/echo/tests.toml");
+    let source = repository_file("examples/echo/main.s");
+    let block = block(&spec, &tests, 0);
+    let right = machine(&source).await;
+    let verdict = prove(&right, &block, network_budget(true));
+    assert!(
+        matches!(
+            verdict,
+            Verdict::Proven {
+                bound: None,
+                questions: 0,
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
+    let once = source.replacen(
+        "    cmp eax, NEWLINE\n    je .Lecho_line_send",
+        "    cmp eax, NEWLINE\n    jmp .Lecho_line_send",
+        1,
+    );
+    assert_ne!(once, source);
+    let verdict = prove(&machine(&once).await, &block, network_budget(true));
+    let Verdict::Counterexample(found) = &verdict else {
+        panic!("{verdict:?}");
+    };
+    assert_ne!(
+        found.get(DELIVERY),
+        Some(&Value::Str(Delivery::Whole.describe().into())),
+        "{found:?}"
+    );
+    let open = source.replacen(
+        "    mov eax, SYS_CLOSE\n    mov edi, ebx\n    syscall\n",
+        "    xor eax, eax\n",
+        1,
+    );
+    assert_ne!(open, source);
+    let verdict = prove(&machine(&open).await, &block, network_budget(true));
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+}
+
+/// A client on the network: fetch's argument errors are proven for every port, and its fetch for
+/// every path and body, port and delivery; a request with the wrong version, or one cut short
+/// before reading the reply, is found.
+#[tokio::test]
+async fn proves_the_fetch_client() {
+    let spec = repository_file("examples/fetch/spec.md").replacen(
+        "path holds `1` to `100` characters",
+        "path holds `1` to `100` characters (tests: `6` and `11`)",
+        1,
+    );
+    let tests = repository_file("examples/fetch/tests.toml")
+        .replacen("path = 'string(1, 100, ", "path = 'string(1, 6, ", 1)
+        .replacen("body = 'string(0, 65000, ", "body = 'string(0, 11, ", 1);
+    let source = repository_file("examples/fetch/main.s");
+    let right = machine(&source).await;
+    for index in 0..3 {
+        let verdict = prove(&right, &block(&spec, &tests, index), network_budget(false));
+        assert!(
+            matches!(
+                verdict,
+                Verdict::Proven {
+                    bound: None,
+                    questions: 0,
+                    ..
+                }
+            ),
+            "block {index}: {verdict:?}"
+        );
+    }
+    let fetch = block(&spec, &tests, 0);
+    for wrong in [
+        source.replacen(
+            ".ascii \" HTTP/1.0\\r\\n\\r\\n\"",
+            ".ascii \" HTTP/1.1\\r\\n\\r\\n\"",
+            1,
+        ),
+        source.replacen(".equ VERSION_LEN, 13", ".equ VERSION_LEN, 11", 1),
+    ] {
+        assert_ne!(wrong, source);
+        let verdict = prove(&machine(&wrong).await, &fetch, network_budget(false));
+        assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+    }
 }

@@ -1760,18 +1760,17 @@ impl Pool {
                 };
             }
         }
-        // Joined parts equal a constant when each equals its own bits of it: a mask of byte
-        // tests is 0 when none of the tests holds.
+        // Joined parts equal a value when each equals its own bits of it: a mask of byte tests
+        // is 0 when none of the tests holds, and a port the program put together byte by byte
+        // is the number it came from when each byte is that number's.
         for (joined, other) in [(a, b), (b, a)] {
-            if let (Node::Concat(high, low), Some(k)) =
-                (self.node(joined).clone(), self.constant(other))
+            if let Node::Concat(high, low) = *self.node(joined)
+                && !matches!(self.node(other), Node::Concat(..))
             {
-                let low_width = self.width(low);
-                let (high_value, low_value) = (k >> low_width, k & mask(low_width));
-                let high_constant = self.bv(self.width(high), high_value);
-                let low_constant = self.bv(low_width, low_value);
-                let (high_same, low_same) =
-                    (self.eq(high, high_constant), self.eq(low, low_constant));
+                let (width, low_width) = (self.width(joined), self.width(low));
+                let other_high = self.extract(other, width - 1, low_width);
+                let other_low = self.extract(other, low_width - 1, 0);
+                let (high_same, low_same) = (self.eq(high, other_high), self.eq(low, other_low));
                 return self.bool_and(high_same, low_same);
             }
         }

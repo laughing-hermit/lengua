@@ -378,6 +378,7 @@ pub async fn check_case(
     case: &crate::testfile::Case,
     syscalls: &[Allowed],
     network: &Network,
+    delivery: Delivery,
 ) -> io::Result<Option<String>> {
     let (_, problem) = check_one(
         launcher,
@@ -385,11 +386,57 @@ pub async fn check_case(
         &Test::of_case(case),
         syscalls,
         network,
-        false,
+        delivery,
         &assertion_lines(source),
     )
     .await?;
     Ok(problem)
+}
+
+/// How a test's server or client sends what it sends, as a network may deliver it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delivery {
+    /// All at once.
+    Whole,
+    /// In three pieces: the first byte, up to the middle, and the rest.
+    Pieces,
+    /// The first two of those pieces together, then the third.
+    FirstTwo,
+    /// The first piece, then the other two together.
+    LastTwo,
+}
+
+impl Delivery {
+    /// Every delivery a proof covers.
+    pub const ALL: [Self; 4] = [Self::Whole, Self::Pieces, Self::FirstTwo, Self::LastTwo];
+
+    /// The lengths of the pieces `length` bytes arrive in. Fewer than three bytes arrive whole.
+    #[must_use]
+    pub fn cuts(self, length: usize) -> Vec<usize> {
+        if length < 3 {
+            return vec![length];
+        }
+        let middle = length / 2;
+        let cuts = match self {
+            Self::Whole => vec![length],
+            Self::Pieces => vec![1, middle - 1, length - middle],
+            Self::FirstTwo => vec![middle, length - middle],
+            Self::LastTwo => vec![1, length - 1],
+        };
+        // A piece of nothing sends nothing: three bytes arrive as one and two.
+        cuts.into_iter().filter(|cut| *cut > 0).collect()
+    }
+
+    /// The delivery in words, for a report.
+    #[must_use]
+    pub const fn describe(self) -> &'static str {
+        match self {
+            Self::Whole => "all at once",
+            Self::Pieces => "in three pieces: the first byte, up to the middle, and the rest",
+            Self::FirstTwo => "in two pieces, cut at the middle",
+            Self::LastTwo => "in two pieces: the first byte, and the rest",
+        }
+    }
 }
 
 /// A test's inputs and what it expects, from an example or a generated run.
@@ -451,7 +498,7 @@ const PEER_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_ANSWER: u64 = 8 * 1024 * 1024;
 
 /// Runs one test, with the test's own server or client when it has one, and says what went
-/// wrong, if anything. `pieces` makes the test's server and client send in small pieces, as a
+/// wrong, if anything. `delivery` cuts what the test's server and client send into pieces, as a
 /// network may deliver them.
 async fn check_one(
     launcher: &Path,
@@ -459,7 +506,7 @@ async fn check_one(
     test: &Test<'_>,
     syscalls: &[Allowed],
     network: &Network,
-    pieces: bool,
+    delivery: Delivery,
     assertions: &BTreeMap<i64, usize>,
 ) -> io::Result<(Run, Option<String>)> {
     let supply = crate::supply::Supply::parse(test.random, test.clock).unwrap_or_default();
@@ -509,7 +556,7 @@ async fn check_one(
                 replies: fill(&reply.replies),
             })
             .collect();
-        let peer = tokio::spawn(serve(listener, replies, pieces));
+        let peer = tokio::spawn(serve(listener, replies, delivery));
         let run = started.wait().await?;
         problem = match tokio::time::timeout(PEER_TIMEOUT, peer).await {
             Ok(Ok(result)) => result.err(),
@@ -521,7 +568,7 @@ async fn check_one(
         .port()
         .filter(|_| !test.client.is_empty() || test.serves)
     {
-        problem = talk(port, test.client, pieces, now).await.err();
+        problem = talk(port, test.client, delivery, now).await.err();
         if test.serves {
             if problem.is_none() && !waiting_for_connections(started.pid()).await {
                 problem = Some(
@@ -555,20 +602,22 @@ async fn check_one(
     Ok((run, problem))
 }
 
-/// Sends `bytes`, in three pieces with short pauses when `pieces`, as a network may deliver
-/// them: a program that expects one `read` to get everything fails.
+/// Sends `bytes` in the pieces `delivery` cuts, with short pauses between, as a network may
+/// deliver them: a program that expects one `read` to get everything fails.
 async fn send(
     writer: &mut (impl tokio::io::AsyncWrite + Unpin),
     bytes: &[u8],
-    pieces: bool,
+    delivery: Delivery,
 ) -> io::Result<()> {
-    if !pieces || bytes.len() < 3 {
+    let cuts = delivery.cuts(bytes.len());
+    if cuts.len() == 1 {
         return writer.write_all(bytes).await;
     }
-    let middle = bytes.len() / 2;
-    for piece in [&bytes[..1], &bytes[1..middle], &bytes[middle..]] {
-        writer.write_all(piece).await?;
+    let mut start = 0;
+    for length in cuts {
+        writer.write_all(&bytes[start..start + length]).await?;
         writer.flush().await?;
+        start += length;
         tokio::time::sleep(Duration::from_millis(2)).await;
     }
     Ok(())
@@ -579,7 +628,7 @@ async fn send(
 async fn serve(
     listener: tokio::net::TcpListener,
     replies: Vec<Reply>,
-    pieces: bool,
+    delivery: Delivery,
 ) -> Result<(), String> {
     use tokio::io::AsyncReadExt as _;
     let many = replies.len() > 1;
@@ -628,7 +677,7 @@ async fn serve(
         }
         let (mut reader, mut writer) = stream.into_split();
         // The program may close as soon as it has its answer, so a failed send is its doing.
-        let _ = send(&mut writer, reply.replies.as_bytes(), pieces).await;
+        let _ = send(&mut writer, reply.replies.as_bytes(), delivery).await;
         let _ = writer.shutdown().await;
         let mut extra = Vec::new();
         let _ = tokio::time::timeout(
@@ -648,7 +697,12 @@ async fn serve(
 
 /// The test's own client: for each connection, sends, closes its side, and reads everything
 /// the program answers until it closes the connection.
-async fn talk(port: u16, exchanges: &[Exchange], pieces: bool, now: i128) -> Result<(), String> {
+async fn talk(
+    port: u16,
+    exchanges: &[Exchange],
+    delivery: Delivery,
+    now: i128,
+) -> Result<(), String> {
     use tokio::io::AsyncReadExt as _;
     let many = exchanges.len() > 1;
     for (index, exchange) in exchanges.iter().enumerate() {
@@ -667,7 +721,7 @@ async fn talk(port: u16, exchanges: &[Exchange], pieces: bool, now: i128) -> Res
         let (mut reader, mut writer) = stream.into_split();
         let sends = exchange.sends.clone().into_bytes();
         let sending = tokio::spawn(async move {
-            let _ = send(&mut writer, &sends, pieces).await;
+            let _ = send(&mut writer, &sends, delivery).await;
             let _ = writer.shutdown().await;
         });
         let mut answer = Vec::new();
@@ -739,14 +793,18 @@ impl Owned {
     }
 }
 
-async fn run_one(shared: &Shared, test: &Owned, pieces: bool) -> io::Result<(Run, Option<String>)> {
+async fn run_one(
+    shared: &Shared,
+    test: &Owned,
+    delivery: Delivery,
+) -> io::Result<(Run, Option<String>)> {
     check_one(
         &shared.launcher,
         &shared.program,
         &test.test(),
         &shared.syscalls,
         &shared.network,
-        pieces,
+        delivery,
         &shared.assertions,
     )
     .await
@@ -833,7 +891,7 @@ pub async fn run_tests(
             let shared = Arc::clone(&shared);
             let index = next;
             running.spawn(async move {
-                let result = run_one(&shared, &test, false).await;
+                let result = run_one(&shared, &test, Delivery::Whole).await;
                 (index, test, result)
             });
             next += 1;
@@ -905,7 +963,12 @@ pub async fn run_tests(
                     };
                     let test = Owned::Case(case);
                     // Every other run, the test's server and client send in pieces.
-                    let (run, problem) = run_one(&shared, &test, this % 2 == 1).await?;
+                    let delivery = if this % 2 == 1 {
+                        Delivery::Pieces
+                    } else {
+                        Delivery::Whole
+                    };
+                    let (run, problem) = run_one(&shared, &test, delivery).await?;
                     Ok::<_, io::Error>((this, Drawn::Ran(Box::new((test, run, problem)))))
                 });
                 number += 1;
@@ -970,7 +1033,7 @@ pub async fn run_tests(
     for timing in timings {
         let mut timed = Samples::default();
         for _ in 0..TIMED_RUNS {
-            let (run, problem) = run_one(&shared, &timing.test, false).await?;
+            let (run, problem) = run_one(&shared, &timing.test, Delivery::Whole).await?;
             if let Some(problem) = problem {
                 record(
                     &mut outcome,

@@ -23,6 +23,7 @@ use rand::{RngExt, SeedableRng};
 use crate::checker::decode::Machine;
 use crate::expr::{Generator, HexPart, PatternPart, Piece, Template, Value};
 use crate::testfile::{ExitCode, Generated};
+use crate::testrun::Delivery;
 
 use exec::{End, Image, Oracle, State};
 use formula::{Formula, Number, WIDTH};
@@ -72,6 +73,9 @@ pub struct Budget {
     pub max_shapes: usize,
     /// Each solver question's time limit, in milliseconds.
     pub question_ms: u64,
+    /// Whether the program has its listener at file descriptor 3, as a spec that listens gives
+    /// it.
+    pub listens: bool,
 }
 
 /// How many combinations one pair of solver processes serves before it's started afresh.
@@ -380,7 +384,12 @@ enum Part {
     /// A number the program reads only as a clock reading, from the first to the second, with
     /// this many decimal places: one shape, since its digits are never read.
     Plain(i128, i128, u8),
+    /// How what the test's peer sends arrives: whole, or cut as a run of the tests may cut it.
+    Delivery(Delivery),
 }
+
+/// The name a counterexample gives the delivery it was found with.
+pub const DELIVERY: &str = "(delivery)";
 
 /// The longest text a proof covers from the shortest: standard input up to what one pipe write
 /// holds, which the model reads whole, and other texts as long. Longer texts are tested, not
@@ -1377,20 +1386,30 @@ fn attempt(machine: &Machine, block: &Generated, budget: Budget) -> Result<Verdi
         };
         each.push((name.clone(), these));
     }
+    // The test server's port, which the kernel chooses: any port at all.
+    if !block.server.is_empty() && !block.vars.iter().any(|(name, _)| name == "port") {
+        let any = Generator::Int { lo: 1, hi: 65535 };
+        each.push(("port".to_owned(), parts("port", &any)?));
+    }
+    // What a test's peer sends arrives whole or cut, each way the tests' runs and the merges of
+    // their pieces cut it.
+    if !block.server.is_empty() || !block.client.is_empty() {
+        let deliveries = Delivery::ALL
+            .iter()
+            .map(|delivery| Part::Delivery(*delivery));
+        each.push((DELIVERY.to_owned(), deliveries.collect()));
+    }
     let total = each
         .iter()
         .try_fold(1_usize, |total, (_, shapes)| {
             total.checked_mul(shapes.len())
         })
-        .filter(|total| *total <= budget.max_shapes)
-        .ok_or_else(|| format!("more than {} input shapes", budget.max_shapes))?;
+        .ok_or("too many input shapes to count")?;
     let image = Image::new(machine).ok_or("the program has no _start")?;
     // Texts of many lengths go shortest first, so where time or the model runs out the proof
     // still holds for every input up to some length; everything else goes in a scattered order,
     // so the pace of the first combinations shows the pace of all, and a counterexample anywhere
     // turns up early.
-    let stride = stride(total);
-    let scattered = |turn: usize| (turn as u128 * stride as u128 % total as u128) as usize;
     let by_length = each.iter().any(|(_, parts)| {
         parts
             .iter()
@@ -1398,16 +1417,17 @@ fn attempt(machine: &Machine, block: &Generated, budget: Budget) -> Result<Verdi
             .count()
             > 1
     });
-    let order: Vec<usize> = if by_length {
-        let mut order: Vec<usize> = (0..total).map(scattered).collect();
-        order.sort_by_key(|combination| longest_text(&each, *combination));
-        order
-    } else {
-        Vec::new()
-    };
-    let shortest = order
-        .first()
-        .map_or(0, |combination| longest_text(&each, *combination));
+    if !by_length && total > budget.max_shapes {
+        return Err(format!("more than {} input shapes", budget.max_shapes));
+    }
+    let stride = stride(total);
+    let scattered = |turn: usize| (turn as u128 * stride as u128 % total as u128) as usize;
+    let levels = Mutex::new(Levels::new(&each));
+    let shortest = each
+        .iter()
+        .map(|(_, parts)| parts.iter().map(part_length).min().unwrap_or(0))
+        .max()
+        .unwrap_or(0);
     // The shapes are independent: every core takes the next one until all are done, a
     // counterexample turns up, or something can't be proven.
     let next = AtomicUsize::new(0);
@@ -1440,16 +1460,28 @@ fn attempt(machine: &Machine, block: &Generated, budget: Budget) -> Result<Verdi
                 let mut solvers = Solvers::new(budget.question_ms);
                 while !stop.load(Ordering::Relaxed) {
                     let turn = next.fetch_add(1, Ordering::Relaxed);
-                    if turn >= total {
-                        break;
-                    }
                     let (combination, length) = if by_length {
-                        let combination = order[turn];
-                        (combination, longest_text(&each, combination))
-                    } else {
+                        let Some(next) = levels.lock().ok().and_then(|mut levels| levels.next())
+                        else {
+                            break;
+                        };
+                        next
+                    } else if turn < total {
                         (scattered(turn), 0)
+                    } else {
+                        break;
                     };
                     if by_length && length >= gap_at.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    if by_length && turn >= budget.max_shapes {
+                        note_gap(
+                            length,
+                            format!(
+                                "the proof covers at most {} input combinations",
+                                budget.max_shapes
+                            ),
+                        );
                         break;
                     }
                     solvers.next();
@@ -1563,6 +1595,75 @@ fn attempt(machine: &Machine, block: &Generated, budget: Budget) -> Result<Verdi
     })
 }
 
+/// `bytes` in the pieces `delivery` cuts them into.
+fn cut(bytes: &[Term], delivery: Delivery) -> Vec<Vec<Term>> {
+    let mut pieces = Vec::new();
+    let mut start = 0;
+    for length in delivery.cuts(bytes.len()) {
+        pieces.push(bytes[start..start + length].to_vec());
+        start += length;
+    }
+    pieces
+}
+
+/// What must hold for a run to have used the network as the test's peers expect: exactly their
+/// connections, the server's each sent exactly what the server waits for, the client's each
+/// answered as the test says, and the program still serving at the end when it must be.
+fn talks(
+    pool: &mut Pool,
+    block: &Generated,
+    known: &Known<'_>,
+    run: &State,
+    receives: &[Vec<Term>],
+) -> Result<Term, String> {
+    let ended_serving = matches!(run.end, Some(End::Serving));
+    let made: Vec<_> = run
+        .connections
+        .iter()
+        .filter(|connection| !connection.accepted)
+        .collect();
+    let taken: Vec<_> = run
+        .connections
+        .iter()
+        .filter(|connection| connection.accepted)
+        .collect();
+    if made.len() != block.server.len()
+        || taken.len() != block.client.len()
+        || block.serves != ended_serving
+    {
+        return Ok(pool.boolean(false));
+    }
+    let mut checks = Vec::new();
+    for (connection, wanted) in made.iter().zip(receives) {
+        if connection.sent.len() != wanted.len() {
+            return Ok(pool.boolean(false));
+        }
+        for (sent, byte) in connection.sent.iter().zip(wanted) {
+            checks.push(pool.eq(*sent, *byte));
+        }
+    }
+    for (connection, (_, answer)) in taken.iter().zip(&block.client) {
+        checks.push(text_is(pool, &connection.sent, answer, known)?);
+    }
+    Ok(pool.all(&checks))
+}
+
+/// What must hold for a server that is still serving at the end: its output so far is what the
+/// test says. Its exit code is never seen.
+fn serving(
+    pool: &mut Pool,
+    block: &Generated,
+    known: &Known<'_>,
+    run: &State,
+) -> Result<Term, String> {
+    if !block.files_after.is_empty() {
+        return Err("a server's files after its run".into());
+    }
+    let stdout = text_is(pool, &run.stdout, &block.stdout, known)?;
+    let stderr = text_is(pool, &run.stderr, &block.stderr, known)?;
+    Ok(pool.bool_and(stdout, stderr))
+}
+
 /// The conditions `condition` is the conjunction of.
 fn conjuncts(pool: &Pool, condition: Term) -> Vec<Term> {
     let mut parts = Vec::new();
@@ -1576,18 +1677,144 @@ fn conjuncts(pool: &Pool, condition: Term) -> Vec<Term> {
     parts
 }
 
-/// The length of the longest text in `combination`, 0 when it has none.
-fn longest_text(each: &[(String, Vec<Part>)], combination: usize) -> usize {
-    let mut rest = combination;
-    let mut longest = 0;
-    for (_, parts) in each {
-        let number = rest % parts.len();
-        rest /= parts.len();
-        if let Part::Text(length, _) = parts[number] {
-            longest = longest.max(length);
+/// A part's text length: 0 for a part that isn't text.
+fn part_length(part: &Part) -> usize {
+    match part {
+        Part::Text(length, _) => *length,
+        _ => 0,
+    }
+}
+
+/// The combinations of the variables' parts in order of their longest text, one length at a
+/// time: every combination whose longest text is `L` long before any longer one, without
+/// listing them all first. At each length, a combination belongs to the first variable whose
+/// text is that long, so none comes twice.
+struct Levels {
+    /// Each variable's parts as (text length, part number), shortest first.
+    sorted: Vec<Vec<(usize, usize)>>,
+    /// The combination number's place value of each variable.
+    places: Vec<usize>,
+    /// The lengths left to go through, longest last.
+    lengths: Vec<usize>,
+    /// The length being gone through, the variable first at it, and for each variable the
+    /// range of its sorted parts allowed and where it is in it.
+    at: Option<(usize, usize)>,
+    ranges: Vec<(usize, usize)>,
+    counter: Vec<usize>,
+}
+
+impl Levels {
+    fn new(each: &[(String, Vec<Part>)]) -> Self {
+        let sorted: Vec<Vec<(usize, usize)>> = each
+            .iter()
+            .map(|(_, parts)| {
+                let mut sorted: Vec<(usize, usize)> = parts
+                    .iter()
+                    .enumerate()
+                    .map(|(number, part)| (part_length(part), number))
+                    .collect();
+                sorted.sort_unstable();
+                sorted
+            })
+            .collect();
+        let mut places = Vec::with_capacity(each.len());
+        let mut place = 1_usize;
+        for (_, parts) in each {
+            places.push(place);
+            place = place.saturating_mul(parts.len());
+        }
+        let mut lengths: Vec<usize> = sorted.iter().flatten().map(|(length, _)| *length).collect();
+        lengths.sort_unstable();
+        lengths.dedup();
+        lengths.reverse();
+        Self {
+            sorted,
+            places,
+            lengths,
+            at: None,
+            ranges: Vec::new(),
+            counter: Vec::new(),
         }
     }
-    longest
+
+    /// Sets up the combinations at `length` whose first variable that long is `first`; false
+    /// when there are none.
+    fn start(&mut self, length: usize, first: usize) -> bool {
+        self.ranges = self
+            .sorted
+            .iter()
+            .enumerate()
+            .map(|(variable, parts)| {
+                let below = parts.partition_point(|(part, _)| *part < length);
+                let through = parts.partition_point(|(part, _)| *part <= length);
+                match variable.cmp(&first) {
+                    std::cmp::Ordering::Less => (0, below),
+                    std::cmp::Ordering::Equal => (below, through),
+                    std::cmp::Ordering::Greater => (0, through),
+                }
+            })
+            .collect();
+        self.counter = self.ranges.iter().map(|(from, _)| *from).collect();
+        self.at = Some((length, first));
+        self.ranges.iter().all(|(from, to)| from < to)
+    }
+
+    /// The next combination's number and its longest text's length.
+    fn next(&mut self) -> Option<(usize, usize)> {
+        loop {
+            if let Some((length, first)) = self.at {
+                if self
+                    .counter
+                    .iter()
+                    .zip(&self.ranges)
+                    .all(|(at, (_, to))| at < to)
+                {
+                    let combination = self
+                        .counter
+                        .iter()
+                        .zip(&self.sorted)
+                        .zip(&self.places)
+                        .map(|((at, parts), place)| parts[*at].1 * place)
+                        .sum();
+                    // Count up, the first variable fastest.
+                    for (at, (from, to)) in self.counter.iter_mut().zip(&self.ranges) {
+                        *at += 1;
+                        if *at < *to {
+                            break;
+                        }
+                        *at = *from;
+                    }
+                    if self
+                        .counter
+                        .iter()
+                        .zip(&self.ranges)
+                        .all(|(at, (from, _))| at == from)
+                    {
+                        // Wrapped around: this group is done.
+                        let done = self.ranges.iter().map(|(_, to)| *to).collect();
+                        self.counter = done;
+                    }
+                    return Some((combination, length));
+                }
+                if first + 1 < self.sorted.len() && self.start(length, first + 1) {
+                    continue;
+                }
+                if first + 1 < self.sorted.len() {
+                    // An empty group: try the next first variable.
+                    self.at = Some((length, first + 1));
+                    let to: Vec<usize> = self.ranges.iter().map(|(_, to)| *to).collect();
+                    self.counter = to;
+                    continue;
+                }
+                self.at = None;
+            }
+            let length = self.lengths.pop()?;
+            if !self.start(length, 0) {
+                let to: Vec<usize> = self.ranges.iter().map(|(_, to)| *to).collect();
+                self.counter = to;
+            }
+        }
+    }
 }
 
 /// A step through `0..total` that visits every combination once in a scattered order: an odd
@@ -1664,9 +1891,14 @@ fn prove_shape(
     // texts drawn, byte by byte.
     let mut chosen = BTreeMap::new();
     let mut texts: BTreeMap<String, Vec<Term>> = BTreeMap::new();
+    let mut delivery = Delivery::Whole;
     for (name, parts) in each {
         let number = rest % parts.len();
         rest /= parts.len();
+        if let Part::Delivery(chosen) = parts[number] {
+            delivery = chosen;
+            continue;
+        }
         let input = match &parts[number] {
             Part::Number(shape, places) => input(&mut pool, name, number, shape, *places),
             Part::Fixed(value) => {
@@ -1680,6 +1912,7 @@ fn prove_shape(
             }
             Part::Bytes(count) => bytes_input(&mut pool, name, *count),
             Part::Plain(low, high, places) => plain_input(&mut pool, name, *low, *high, *places),
+            Part::Delivery(_) => continue,
         };
         constraints.extend(&input.constraints);
         if let Some(number) = input.number {
@@ -1707,9 +1940,36 @@ fn prove_shape(
     }
     let random = random_stream(&mut pool, block, &inputs)?;
     let clock = clock_readings(&mut pool, block, &inputs)?;
+    // The test's server waits for exactly what it must receive; what it and the test's client
+    // send arrives cut as this shape's delivery cuts it.
+    let receives: Vec<Vec<Term>> = block
+        .server
+        .iter()
+        .map(|(wanted, _)| pattern_bytes(&mut pool, wanted, &inputs))
+        .collect::<Result<_, _>>()?;
+    let mut server = Vec::new();
+    for ((_, replies), wanted) in block.server.iter().zip(&receives) {
+        let reply = pattern_bytes(&mut pool, replies, &inputs)?;
+        server.push((wanted.clone(), cut(&reply, delivery)));
+    }
+    let client = block
+        .client
+        .iter()
+        .map(|(sends, _)| Ok(cut(&pattern_bytes(&mut pool, sends, &inputs)?, delivery)))
+        .collect::<Result<Vec<_>, String>>()?;
+    let network = exec::net::Network {
+        port: numbers
+            .get("port")
+            .filter(|_| !block.server.is_empty())
+            .map(|number| number.term),
+        server,
+        client,
+        listening: budget.listens,
+    };
     let mut start = State::start(image, &mut pool, &args, stdin)
         .with_files(files)
-        .with_supply(random, clock);
+        .with_supply(random, clock)
+        .with_network(network);
     start.path = constraints;
     let began = Instant::now();
     let questions_before = solvers.solver.as_ref().map_or(0, |solver| solver.questions);
@@ -1742,7 +2002,17 @@ fn prove_shape(
     };
     for run in runs {
         let holds = match &run.end {
-            Some(End::Exit(status)) => passes(&mut pool, block, &known, &run, *status)?,
+            Some(End::Exit(status)) => {
+                let output = passes(&mut pool, block, &known, &run, *status)?;
+                let talked = talks(&mut pool, block, &known, &run, &receives)?;
+                pool.bool_and(output, talked)
+            }
+            Some(End::Serving) if block.serves => {
+                let output = serving(&mut pool, block, &known, &run)?;
+                let talked = talks(&mut pool, block, &known, &run, &receives)?;
+                pool.bool_and(output, talked)
+            }
+            Some(End::Serving | End::Stuck(_)) => pool.boolean(false),
             Some(End::Signal(_)) => pool.boolean(false),
             Some(End::Unsupported(reason)) => {
                 // A run followed without asking may be one that can't happen.
@@ -1804,6 +2074,9 @@ fn prove_shape(
                     return Err("a counterexample in a text too long to show".into());
                 }
                 let mut found = chosen.clone();
+                if !block.server.is_empty() || !block.client.is_empty() {
+                    found.insert(DELIVERY.to_owned(), Value::Str(delivery.describe().into()));
+                }
                 for (name, bytes) in &shown {
                     let text: Vec<u8> = bytes
                         .iter()
