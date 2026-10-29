@@ -15,7 +15,7 @@ use crate::checker;
 use crate::data_dir::DataDir;
 use crate::expr;
 use crate::hash::Sha256Hex;
-use crate::lock::{self, CodeStamp, Key, Lock, TestsStamp};
+use crate::lock::{self, CodeStamp, Key, Lock, ProofStamp, TestsStamp};
 use crate::platform::{CpuFeatures, Machine, Profile};
 use crate::prove;
 use crate::runner::{self, End, Job, Limits};
@@ -170,6 +170,11 @@ pub struct ProgramReport {
     pub files: FilesReport,
     /// Whether lengua.lock can be trusted.
     pub lock: LockReport,
+    /// The ids of the generated tests proven for every input in range on the checked build:
+    /// empty until `prove` runs on it, and whenever spec.md, tests.toml or main.s changed since.
+    pub proven: Vec<String>,
+    /// Which solvers checked those proofs.
+    pub proven_by: Option<String>,
 }
 
 /// The three files of a program.
@@ -352,8 +357,9 @@ impl LenguaServer {
             program folder, what that program needs next. It reports the OS, CPU and its \
             features, the LLVM tools (llvm-mc, ld.lld) and the MCP protocol in use; for a \
             program, each file's hash, whether lengua.lock records it, the label tests.toml and \
-            main.s must carry, and any problems in an unapproved spec.md. Ends with the single \
-            next step to take. path: absolute path of a program folder (optional).",
+            main.s must carry, any problems in an unapproved spec.md, and which tests prove has \
+            proven for every input. Ends with the single next step to take. path: absolute path \
+            of a program folder (optional).",
         annotations(title = "Status", read_only_hint = true, open_world_hint = false)
     )]
     async fn status(
@@ -813,10 +819,13 @@ impl LenguaServer {
             runs the machine code on symbols and asks two independent SMT solvers, z3 and cvc5, \
             whether any input could make the output differ. Call it after check_code passes. It \
             can take a few minutes. A counterexample is confirmed with a real run and reported \
-            as a failure. path: absolute path of the program folder.",
+            as a failure. lengua.lock records what was proven, and status shows it until the \
+            spec, tests or code change. path: absolute path of the program folder.",
         annotations(
             title = "Prove for every input",
-            read_only_hint = true,
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
             open_world_hint = false
         )
     )]
@@ -866,9 +875,14 @@ impl LenguaServer {
         let deadline = std::time::Instant::now() + PROOF_TIME;
         let mut proofs = Vec::new();
         let mut wrong = false;
+        // The ids proven, how many the solvers proved, and why any rested on one solver.
+        let mut proven_ids = Vec::new();
+        let mut solved = 0;
+        let mut alone_reason: Option<String> = None;
         for block in &suite.generated {
             let test = format!("generated {}", block.id);
             if let Some(every) = block.every_value_text() {
+                proven_ids.push(block.id.to_string());
                 proofs.push(ProofReport {
                     test,
                     proven: true,
@@ -904,7 +918,14 @@ impl LenguaServer {
                     paths,
                     alone,
                 }) => (
-                    true,
+                    {
+                        proven_ids.push(block.id.to_string());
+                        solved += 1;
+                        if alone_reason.is_none() {
+                            alone_reason.clone_from(&alone);
+                        }
+                        true
+                    },
                     format!(
                         "proven for every input in range ({shapes} input shapes, {paths} paths \
                          through the machine code), {}",
@@ -970,6 +991,14 @@ impl LenguaServer {
                 detail,
             });
         }
+        let solvers = match (solved, alone_reason) {
+            (0, _) => "none: check_code tried every value".to_owned(),
+            (_, None) => "z3 and cvc5".to_owned(),
+            (_, Some(reason)) => format!("one solver alone: {reason}"),
+        };
+        let recorded = self
+            .stamp_proofs(&folder, &stamp.executable_sha256, proven_ids, solvers)
+            .await;
         let proven: Vec<&str> = proofs
             .iter()
             .filter(|proof| proof.proven)
@@ -983,6 +1012,11 @@ impl LenguaServer {
             "Nothing could be proven; the tests still pass. See proofs for why.".to_owned()
         } else {
             format!("Proven for every input in range: {}.", proven.join(", "))
+        };
+        let message = if recorded {
+            format!("{message} lengua.lock records it.")
+        } else {
+            message
         };
         Ok(Json(ProveReport {
             proofs,
@@ -1065,6 +1099,7 @@ impl LenguaServer {
                 frozen: false,
             }),
             code: None,
+            proofs: None,
             ..lock
         };
         lock::write(folder.path(), &lock, &key)
@@ -1133,14 +1168,53 @@ impl LenguaServer {
         if !unchanged {
             return Err(changed());
         }
+        // Proofs about this very build still hold; about any other, they're gone.
+        let proofs = lock
+            .proofs
+            .filter(|proofs| proofs.executable_sha256 == code.executable_sha256);
         let lock = Lock {
             code: Some(code),
+            proofs,
             ..lock
         };
         let fingerprint = lock.fingerprint().ok_or_else(changed)?;
         lock::write(folder.path(), &lock, &key)
             .map_err(|error| format!("couldn't write {folder}/{}: {error}", lock::LOCK_FILE))?;
         Ok(fingerprint)
+    }
+
+    /// Records in the lock what `prove` proved about the build `executable`, provided the lock
+    /// still records that build as the checked code. Returns whether it did.
+    async fn stamp_proofs(
+        &self,
+        folder: &ProgramFolder,
+        executable: &Sha256Hex,
+        proven: Vec<String>,
+        solvers: String,
+    ) -> bool {
+        let _writing = self.lock_writes.lock().await;
+        let Ok(Some(key)) = Key::load(&self.data_dir) else {
+            return false;
+        };
+        let Ok(Some(lock)) = lock::read(folder.path(), Some(&key)) else {
+            return false;
+        };
+        if lock
+            .code
+            .as_ref()
+            .is_none_or(|code| code.executable_sha256 != *executable)
+        {
+            return false;
+        }
+        let lock = Lock {
+            proofs: Some(Box::new(ProofStamp {
+                executable_sha256: executable.clone(),
+                proven,
+                solvers,
+            })),
+            ..lock
+        };
+        lock::write(folder.path(), &lock, &key).is_ok()
     }
 
     fn program_report(&self, folder: &ProgramFolder) -> Result<(ProgramReport, String), String> {
@@ -1150,6 +1224,10 @@ impl LenguaServer {
         let state = State::of(&snapshot);
         let step = self.next_step(folder, &snapshot, &state);
         let lock = snapshot.valid_lock();
+        // Proofs speak for the files only while all three are the ones checked.
+        let proofs = lock
+            .and_then(|lock| lock.proofs.as_ref())
+            .filter(|_| state == State::Ready);
         let file = |current: &Option<Sha256Hex>, stamp: Option<&Sha256Hex>| FileReport {
             exists: current.is_some(),
             sha256: current.as_ref().map(ToString::to_string),
@@ -1188,6 +1266,10 @@ impl LenguaServer {
                     .and_then(Lock::fingerprint)
                     .map(|fingerprint| fingerprint.to_string()),
             },
+            proven: proofs
+                .map(|proofs| proofs.proven.clone())
+                .unwrap_or_default(),
+            proven_by: proofs.map(|proofs| proofs.solvers.clone()),
         };
         Ok((report, step))
     }

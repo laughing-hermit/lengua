@@ -511,7 +511,7 @@ async fn the_template_is_proven_for_every_input() {
     let proof = session.call_ok("prove", program.arguments()).await;
     assert_eq!(proof["proofs"][0]["proven"], true, "{proof}");
     assert_eq!(
-        proof["message"], "Proven for every input in range: generated B1.",
+        proof["message"], "Proven for every input in range: generated B1. lengua.lock records it.",
         "{proof}"
     );
     assert!(
@@ -519,6 +519,41 @@ async fn the_template_is_proven_for_every_input() {
             .as_str()
             .is_some_and(|detail| detail.contains("isn't drawn by int(lo, hi)")),
         "text inputs aren't proven yet: {proof}"
+    );
+    // The lock records the proof, and status shows it.
+    let status = session.call_ok("status", program.arguments()).await;
+    assert_eq!(
+        status["program"]["proven"],
+        serde_json::json!(["B1"]),
+        "{status}"
+    );
+    assert_eq!(status["program"]["proven_by"], "z3 and cvc5", "{status}");
+    // Checking the same build again keeps it; a different build drops it.
+    let report = session.call_ok("check_code", program.arguments()).await;
+    assert_eq!(report["stamped"], true, "{report}");
+    let status = session.call_ok("status", program.arguments()).await;
+    assert_eq!(
+        status["program"]["proven"],
+        serde_json::json!(["B1"]),
+        "{status}"
+    );
+    program.write(
+        "main.s",
+        &asset("main-template.s").replacen("_start:\n", "_start:\n    nop\n", 1),
+    );
+    let status = session.call_ok("status", program.arguments()).await;
+    assert_eq!(
+        status["program"]["proven"],
+        serde_json::json!([]),
+        "a changed main.s: {status}"
+    );
+    let report = session.call_ok("check_code", program.arguments()).await;
+    assert_eq!(report["stamped"], true, "{report}");
+    let status = session.call_ok("status", program.arguments()).await;
+    assert_eq!(
+        status["program"]["proven"],
+        serde_json::json!([]),
+        "a new build: {status}"
     );
     session.service.cancel().await.expect("close the session");
 }

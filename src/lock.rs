@@ -44,6 +44,8 @@ pub struct Lock {
     pub tests: Option<TestsStamp>,
     /// The checked code, once stamped. Requires `tests`.
     pub code: Option<CodeStamp>,
+    /// What `prove` proved about that code's build, once it has run. Requires `code`.
+    pub proofs: Option<Box<ProofStamp>>,
 }
 
 /// The approved spec.
@@ -80,6 +82,17 @@ pub struct CodeStamp {
     pub unsafe_blocks: u32,
 }
 
+/// What `prove` proved about one build of the code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProofStamp {
+    /// SHA-256 of the executable the proofs are about, which must be the checked code's.
+    pub executable_sha256: Sha256Hex,
+    /// The ids of the generated tests proven for every input in range, in tests.toml's order.
+    pub proven: Vec<String>,
+    /// Which solvers checked them: `z3 and cvc5`, or one of them alone.
+    pub solvers: String,
+}
+
 impl Lock {
     /// A lock that records only an approved spec; tests and code must be checked again.
     #[must_use]
@@ -91,6 +104,7 @@ impl Lock {
             },
             tests: None,
             code: None,
+            proofs: None,
         }
     }
 
@@ -165,6 +179,16 @@ impl Lock {
                 code.unsafe_blocks
             );
         }
+        if let Some(proofs) = &self.proofs {
+            let proven: Vec<String> = proofs.proven.iter().map(|id| toml_string(id)).collect();
+            let _ = write!(
+                text,
+                "\n[proofs]\nexecutable_sha256 = \"{}\"\nproven = [{}]\nsolvers = {}\n",
+                proofs.executable_sha256,
+                proven.join(", "),
+                toml_string(&proofs.solvers)
+            );
+        }
         text
     }
 }
@@ -189,6 +213,15 @@ struct LockFile {
     spec: SpecTable,
     tests: Option<TestsTable>,
     code: Option<CodeTable>,
+    proofs: Option<ProofsTable>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProofsTable {
+    executable_sha256: String,
+    proven: Vec<String>,
+    solvers: String,
 }
 
 #[derive(Deserialize)]
@@ -258,9 +291,27 @@ fn parse_body(body: &str) -> Result<Lock, LockError> {
                 })
             })
             .transpose()?,
+        proofs: file
+            .proofs
+            .map(|proofs| {
+                Ok::<_, LockError>(Box::new(ProofStamp {
+                    executable_sha256: digest(&proofs.executable_sha256)?,
+                    proven: proofs.proven,
+                    solvers: proofs.solvers,
+                }))
+            })
+            .transpose()?,
     };
     if lock.code.is_some() && lock.tests.is_none() {
         return Err(malformed("it stamps code without stamping tests"));
+    }
+    if let Some(proofs) = &lock.proofs
+        && lock
+            .code
+            .as_ref()
+            .is_none_or(|code| code.executable_sha256 != proofs.executable_sha256)
+    {
+        return Err(malformed("its proofs are about a build it doesn't record"));
     }
     let fingerprint = file.fingerprint.as_deref().map(digest).transpose()?;
     if fingerprint != lock.fingerprint() {
@@ -560,6 +611,7 @@ mod tests {
                 max_stack_bytes: 96,
                 unsafe_blocks: 1,
             }),
+            proofs: None,
         }
     }
 
@@ -583,6 +635,39 @@ mod tests {
         );
         assert!(text.ends_with("\"\n"), "{text}");
         assert_eq!(Lock::from_signed_text(&text, &key(1)), Ok(lock));
+    }
+
+    #[test]
+    fn round_trips_proofs_about_the_checked_build() {
+        let mut lock = full_lock();
+        lock.proofs = Some(Box::new(ProofStamp {
+            executable_sha256: Sha256Hex::of(b"executable"),
+            proven: vec!["B1".into(), "B\"2".into()],
+            solvers: "z3 and cvc5".into(),
+        }));
+        let text = lock.to_signed_text(&key(1));
+        assert!(text.contains("proven = [\"B1\", \"B\\\"2\"]\n"), "{text}");
+        assert_eq!(Lock::from_signed_text(&text, &key(1)), Ok(lock.clone()));
+        // Proofs about some other build can't be in a lock lengua wrote.
+        let other = text
+            .split("\n[signature]")
+            .next()
+            .expect("a body")
+            .replacen(
+                &format!(
+                    "executable_sha256 = \"{}\"\nproven",
+                    Sha256Hex::of(b"executable")
+                ),
+                &format!(
+                    "executable_sha256 = \"{}\"\nproven",
+                    Sha256Hex::of(b"other")
+                ),
+                1,
+            );
+        assert!(matches!(
+            Lock::from_signed_text(&forge(&other, &key(1)), &key(1)),
+            Err(LockError::Malformed(_))
+        ));
     }
 
     #[test]

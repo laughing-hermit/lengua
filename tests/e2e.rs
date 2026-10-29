@@ -77,7 +77,7 @@ async fn the_server_offers_exactly_six_tools() {
                 tool.name
             );
             match tool.name.as_ref() {
-                "status" | "prove" => assert_eq!(hints.read_only_hint, Some(true)),
+                "status" => assert_eq!(hints.read_only_hint, Some(true)),
                 "run" => assert_eq!(hints.read_only_hint, Some(false)),
                 _ => {
                     assert_eq!(hints.read_only_hint, Some(false), "{}", tool.name);

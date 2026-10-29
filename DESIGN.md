@@ -24,7 +24,7 @@ A program is a folder with four files, created in this order:
 | `spec.md` | the AI, approved by the person | The single source of truth: natural language, Given/When/Then behaviors with IDs, in [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) (OKF) |
 | `tests.toml` | the AI, from the spec only | One example test per behavior, plus generated tests with fresh random inputs on every run |
 | `main.s` | the AI | x86-64 assembly in the lengua dialect |
-| `lengua.lock` | only the lengua server | SHA-256 of all three files and of the checked executable, a combined fingerprint, and a signature |
+| `lengua.lock` | only the lengua server | SHA-256 of all three files and of the checked executable, a combined fingerprint, which tests are proven for every input on that executable, and a signature |
 
 **Workflow:** spec → approve (the person reads `spec.md` in their editor and says, in their own
 words, that they approve it) → tests (stamped) → code (stamped once every rule and test passes) →
@@ -144,6 +144,11 @@ can execute fewer instructions yet spend far more time in the kernel).
 inputs with any failure, down to the line of a failed assertion. Only when the rules and every
 test pass does it stamp `[code]`, including the executable's SHA-256 and the toolchain versions.
 `run` rebuilds `main.s` and runs it only if the build is byte for byte that executable.
+
+`prove` records its results in a `[proofs]` table: the executable it's about, the generated tests
+proven for every input in range, and the solvers that checked them. `status` shows them while
+spec, tests and code are all the checked ones. Checking tests again drops them; checking code
+again keeps them only when the build is byte for byte the same.
 
 ## The lengua dialect
 
