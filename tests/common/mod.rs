@@ -91,38 +91,46 @@ pub struct Session {
     protocol: Protocol,
     proof_seconds: Option<u64>,
     wait_ms: Option<u64>,
+    grace_ms: Option<u64>,
 }
 
 impl Session {
     /// Starts `lengua-mcp` and connects a client to it using `protocol`. Its proofs get no time,
     /// so tests about other things don't share the cores with them.
     pub async fn start(protocol: Protocol) -> Self {
-        Self::start_with(protocol, Some(0), None).await
+        Self::start_with(protocol, Some(0), None, None).await
     }
 
     /// Starts `lengua-mcp` with its full time for proofs.
     pub async fn proving(protocol: Protocol) -> Self {
-        Self::start_with(protocol, None, None).await
+        Self::start_with(protocol, None, None, None).await
     }
 
     /// Starts `lengua-mcp` with its full time for proofs and `check` waiting at most
     /// `milliseconds` for them.
     pub async fn proving_waiting(protocol: Protocol, milliseconds: u64) -> Self {
-        Self::start_with(protocol, None, Some(milliseconds)).await
+        Self::start_with(protocol, None, Some(milliseconds), None).await
+    }
+
+    /// Starts `lengua-mcp` with its full time for proofs, saying done `milliseconds` after the
+    /// tests pass while the proofs go on.
+    pub async fn proving_with_grace(protocol: Protocol, milliseconds: u64) -> Self {
+        Self::start_with(protocol, None, None, Some(milliseconds)).await
     }
 
     /// Starts `lengua-mcp` with `check` waiting at most `milliseconds` for the tests and proof.
     pub async fn start_waiting(protocol: Protocol, milliseconds: u64) -> Self {
-        Self::start_with(protocol, Some(0), Some(milliseconds)).await
+        Self::start_with(protocol, Some(0), Some(milliseconds), None).await
     }
 
     async fn start_with(
         protocol: Protocol,
         proof_seconds: Option<u64>,
         wait_ms: Option<u64>,
+        grace_ms: Option<u64>,
     ) -> Self {
         let data_dir = tempfile::tempdir().expect("create a temporary data folder");
-        Self::connect(protocol, data_dir, proof_seconds, wait_ms).await
+        Self::connect(protocol, data_dir, proof_seconds, wait_ms, grace_ms).await
     }
 
     /// Ends this server and starts a new one on the same data folder, as when a harness restarts
@@ -134,9 +142,10 @@ impl Session {
             protocol,
             proof_seconds,
             wait_ms,
+            grace_ms,
         } = self;
         service.cancel().await.expect("close the session");
-        Self::connect(protocol, data_dir, proof_seconds, wait_ms).await
+        Self::connect(protocol, data_dir, proof_seconds, wait_ms, grace_ms).await
     }
 
     async fn connect(
@@ -144,6 +153,7 @@ impl Session {
         data_dir: TempDir,
         proof_seconds: Option<u64>,
         wait_ms: Option<u64>,
+        grace_ms: Option<u64>,
     ) -> Self {
         let command =
             tokio::process::Command::new(env!("CARGO_BIN_EXE_lengua-mcp")).configure(|command| {
@@ -153,6 +163,9 @@ impl Session {
                 }
                 if let Some(milliseconds) = wait_ms {
                     command.env("LENGUA_CHECK_WAIT_MS", milliseconds.to_string());
+                }
+                if let Some(milliseconds) = grace_ms {
+                    command.env("LENGUA_GREEN_GRACE_MS", milliseconds.to_string());
                 }
             });
         let transport = TokioChildProcess::new(command).expect("spawn lengua-mcp");
@@ -176,6 +189,7 @@ impl Session {
             protocol,
             proof_seconds,
             wait_ms,
+            grace_ms,
         }
     }
 
@@ -246,12 +260,17 @@ impl Session {
         self.call_ok("check", program.arguments()).await
     }
 
-    /// Checks the program until its tests and proof have ended, as an agent keeps calling while
-    /// check says they're running, and returns the last reply.
+    /// Checks the program until its tests and proofs have ended, as an agent that wants the
+    /// final proofs keeps calling while check says they're running, and returns the last reply.
     pub async fn settle(&self, program: &Program) -> Value {
         loop {
             let reply = self.check(program).await;
-            if !matches!(reply["state"].as_str(), Some("testing" | "proving")) {
+            let running = reply["proofs"].as_array().is_some_and(|proofs| {
+                proofs.iter().filter_map(Value::as_str).any(|line| {
+                    line.contains(": proving") || line.ends_with("waiting for its turn")
+                })
+            });
+            if !running && !matches!(reply["state"].as_str(), Some("testing" | "proving")) {
                 return reply;
             }
         }

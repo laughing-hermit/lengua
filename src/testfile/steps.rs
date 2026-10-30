@@ -695,13 +695,7 @@ fn rewrite(step: &Step, phase: Keyword) -> String {
         .map(|value| format!("`{value}`"))
         .collect();
     let first = values.first().cloned().unwrap_or_else(|| "`…`".into());
-    let keyword = match step.keyword {
-        Keyword::Given => "Given",
-        Keyword::When => "When",
-        Keyword::Then => "Then",
-        Keyword::And => "And",
-        Keyword::But => "But",
-    };
+    let keyword = step.keyword.name();
     let suggestion = match phase {
         Keyword::When => Some("the program runs".to_owned()),
         Keyword::Then if has("exit") => Some(format!("it exits with code {first}")),

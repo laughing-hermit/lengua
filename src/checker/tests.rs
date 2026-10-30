@@ -561,6 +561,24 @@ async fn functions_stay_small_and_save_what_they_change() {
     );
 }
 
+#[tokio::test]
+async fn a_long_function_gets_a_place_to_split() {
+    let text = with(
+        "    jo .Lparse_invalid\n    inc rcx\n    dec r8\n",
+        &format!(
+            "    jo .Lparse_invalid\n    inc rcx\n{}    dec r8\n",
+            "    nop\n".repeat(25)
+        ),
+    );
+    let report = check(&text).await;
+    assert_violation(
+        &report,
+        Rule::Functions,
+        line_of(&text, "parse_i64:"),
+        "the loop `.Lparse_loop` (40 instructions), can be a function of its own",
+    );
+}
+
 #[test]
 fn reports_have_a_fixed_format() {
     let violation = Violation {

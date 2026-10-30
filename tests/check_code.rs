@@ -640,6 +640,40 @@ async fn a_bug_the_samples_miss_is_found_by_the_proof_and_run_for_real() {
         ),
         "{problems}"
     );
+    // The tests passed, but a build the proof found wrong doesn't run.
+    let refused = session
+        .call_error("run", with_args(&program, &["1234567"]))
+        .await;
+    assert!(
+        refused.contains("The proof found inputs where main.s is wrong"),
+        "{refused}"
+    );
+    session.service.cancel().await.expect("close the session");
+}
+
+#[tokio::test]
+async fn done_comes_once_the_tests_pass_while_the_proofs_go_on() {
+    if !solvers_installed() {
+        return;
+    }
+    // add's proof takes most of a minute, so done comes first, with the proofs still running.
+    let session = Session::proving_with_grace(Protocol::Discover, 0).await;
+    let program = Program::new();
+    for (name, text) in example_files("add") {
+        program.write(name, &text);
+    }
+    let report = session.record(&program).await;
+    assert_eq!(report["state"], "done", "{report}");
+    assert!(any_line(&report["proofs"], ": proving"), "{report}");
+    assert!(
+        text(&report["next_step"]).contains("still running"),
+        "{report}"
+    );
+    // The program runs while its proofs go on.
+    let run = session
+        .call_ok("run", with_args(&program, &["2", "3"]))
+        .await;
+    assert_eq!(run["stdout"], "5\n", "{run}");
     session.service.cancel().await.expect("close the session");
 }
 

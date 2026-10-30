@@ -9,7 +9,7 @@ use crate::expr::{
     self, Env, EvalError, Function, Generator, HexPart, Limit, PatternPart, Template, Value,
 };
 use crate::hash::Sha256Hex;
-use crate::spec::{ASSERTION_EXIT_CODE, Behavior, BehaviorId, Spec, Syscall};
+use crate::spec::{ASSERTION_EXIT_CODE, Behavior, BehaviorId, Keyword, Spec, Step, Syscall};
 use crate::supply::Supply;
 
 mod steps;
@@ -934,6 +934,61 @@ fn unescape(written: &str) -> String {
     text
 }
 
+/// Who a test talks to over the network, and the port its server step names.
+struct Peers<'p> {
+    server: bool,
+    client: bool,
+    port: Option<&'p str>,
+}
+
+/// The port a server step names, such as the `8080` of ``a server on port `8080` that …``.
+fn server_port(steps: &[Step]) -> Option<&str> {
+    steps
+        .iter()
+        .find(|step| step.text.contains("server on port"))
+        .and_then(|step| step.values.first())
+        .map(String::as_str)
+}
+
+/// Generated tests to start from for `behavior`: its own steps again, with each value it's given
+/// a variable, each value it gives back but its exit code a formula to write, and a table of the
+/// variables.
+fn skeleton(behavior: &Behavior) -> String {
+    let mut names = Vec::new();
+    let mut lines = vec!["### For any …".to_owned()];
+    let mut phase = Keyword::Given;
+    for step in &behavior.steps {
+        phase = match step.keyword {
+            Keyword::And | Keyword::But => phase,
+            keyword => keyword,
+        };
+        let ending = step.text.contains("exits with code");
+        let mut text = step.text.clone();
+        for value in &step.values {
+            let written = match phase {
+                Keyword::Given => {
+                    let name = format!("{}", char::from(b'a' + (names.len() % 26) as u8));
+                    let placeholder = format!("{{{name}}}");
+                    names.push(name);
+                    placeholder
+                }
+                Keyword::Then if !ending => "{…}".to_owned(),
+                _ => continue,
+            };
+            text = text.replacen(&format!("`{value}`"), &format!("`{written}`"), 1);
+        }
+        lines.push(format!("- {} {text}", step.keyword.name()));
+    }
+    if names.is_empty() {
+        names.push("a".to_owned());
+    }
+    lines.push(String::new());
+    lines.push(format!("| {} |", names.join(" | ")));
+    lines.push(format!("|{}", "---|".repeat(names.len())));
+    lines.push(format!("|{}", " `…` |".repeat(names.len())));
+    lines.join("\n")
+}
+
 /// A generated test's field, in the words its steps write it with.
 fn words(field: &str) -> String {
     match field {
@@ -1058,8 +1113,11 @@ impl<'a> Checker<'a> {
             self.check_peers(
                 line,
                 &name,
-                !server.is_empty(),
-                !client.is_empty() || behavior.serves,
+                Peers {
+                    server: !server.is_empty(),
+                    client: !client.is_empty() || behavior.serves,
+                    port: server_port(&behavior.steps),
+                },
             );
             let uses_port = args
                 .iter()
@@ -1300,8 +1358,14 @@ impl<'a> Checker<'a> {
         self.check_peers(
             line,
             name,
-            !steps.server.is_empty(),
-            !steps.client.is_empty() || steps.serves,
+            Peers {
+                server: !steps.server.is_empty(),
+                client: !steps.client.is_empty() || steps.serves,
+                port: behavior
+                    .outline
+                    .as_ref()
+                    .and_then(|outline| server_port(&outline.steps)),
+            },
         );
         self.check_ending(line, name, behavior, exit_code.is_some(), steps.serves)?;
         let exit_code = exit_code.unwrap_or(ExitCode::Fixed(behavior_exit));
@@ -1328,22 +1392,25 @@ impl<'a> Checker<'a> {
 
     /// A test has its own server only for a program that connects, and its own client, or
     /// expects the program to keep serving, only for one that serves.
-    fn check_peers(&mut self, line: usize, name: &str, server: bool, client: bool) {
-        if server && self.spec.network.connects.is_empty() {
+    fn check_peers(&mut self, line: usize, name: &str, peers: Peers<'_>) {
+        if peers.server && self.spec.network.connects.is_empty() {
             self.problem(
                 Some(line),
                 format!(
                     "{name} has a server for the program to connect to, but spec.md doesn't say \
-                     `- Network: connects to TCP port N`"
+                     where it may connect: add `- Network: connects to TCP port {}` under \
+                     `# Constraints`",
+                    peers.port.unwrap_or("N")
                 ),
             );
         }
-        if client && self.spec.network.listens.is_none() {
+        if peers.client && self.spec.network.listens.is_none() {
             self.problem(
                 Some(line),
                 format!(
-                    "{name} has a client or keeps serving, but spec.md doesn't say `- Network: \
-                     listens on TCP port N`"
+                    "{name} has a client or keeps serving, but spec.md doesn't say where it \
+                     serves: add `- Network: listens on TCP port N` under `# Constraints`, with \
+                     the port it serves on"
                 ),
             );
         }
@@ -1841,8 +1908,11 @@ impl<'a> Checker<'a> {
                     Some(example.line),
                     format!(
                         "{id} has inputs, so it needs generated tests that try fresh inputs on \
-                         every run: under a `###` heading after its steps, the same steps with \
-                         `{{placeholders}}`, then a table of where each variable comes from",
+                         every run. Write them under its steps, starting from this, with a \
+                         formula where `{{…}}` stands and a generator in each cell:\n\n{}",
+                        self.spec
+                            .behavior(example.id)
+                            .map_or_else(String::new, skeleton),
                         id = example.id
                     ),
                 );
@@ -2692,7 +2762,37 @@ Prints the hour of the day in UTC, from `0` to `23`, for a reader numbered from 
 
     #[test]
     fn requires_generated_tests_for_behaviors_with_inputs() {
-        assert_problem(&add(""), "B1 has inputs, so it needs generated tests");
+        // The problem holds the generated tests to start from: the behavior's own steps.
+        assert_problem(
+            &add(""),
+            "B1 has inputs, so it needs generated tests that try fresh inputs on every run. \
+             Write them under its steps, starting from this, with a formula where `{…}` stands \
+             and a generator in each cell:\n\n### For any …\n- Given the arguments `{a}` and \
+             `{b}`\n- When the program runs\n- Then it prints `{…}` followed by a newline\n- And \
+             it exits with code `0`\n\n| a | b |\n|---|---|\n| `…` | `…` |",
+        );
+    }
+
+    #[test]
+    fn a_missing_network_line_comes_with_its_port() {
+        let fetch = spec_text("fetch");
+        let line = fetch
+            .lines()
+            .find(|line| line.starts_with("- Network:"))
+            .expect("the network line");
+        let without = edit(&fetch, line, "- Uses: nothing");
+        let spec = spec::parse(&without).expect("valid spec");
+        let problems: Vec<String> = check(&spec)
+            .expect_err("problems")
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains("add `- Network: connects to TCP port 8080`")),
+            "{problems:#?}"
+        );
     }
 
     #[test]

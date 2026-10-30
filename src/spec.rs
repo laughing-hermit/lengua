@@ -211,6 +211,18 @@ pub enum Keyword {
 }
 
 impl Keyword {
+    /// The keyword as a spec writes it.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Given => "Given",
+            Self::When => "When",
+            Self::Then => "Then",
+            Self::And => "And",
+            Self::But => "But",
+        }
+    }
+
     fn parse(word: &str) -> Option<Self> {
         let word = word.trim_matches(|c: char| matches!(c, '*' | '_' | ':' | ','));
         match word.to_ascii_lowercase().as_str() {

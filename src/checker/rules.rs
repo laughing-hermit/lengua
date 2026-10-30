@@ -137,16 +137,60 @@ pub fn check(
     }
 }
 
+/// Where a function over the limit can be split: the smallest loop that, called instead, brings
+/// it within the limit, or failing that the smallest run of code from one label to the next.
+fn split_point(function: &MappedFunction<'_>, flow: &Flow) -> Option<String> {
+    let count = function.steps.len();
+    // Taking `size` instructions out for one call leaves `count - size + 1`.
+    let needed = count.saturating_sub(MAX_INSTRUCTIONS) + 1;
+    let mut candidates = Vec::new();
+    for (place, label) in function.labels.iter().enumerate() {
+        let start = label.index;
+        if start >= count {
+            continue;
+        }
+        let back = (start..count)
+            .rev()
+            .find(|&from| flow.successors[from].contains(&start));
+        if let (Some(end), Some(_)) = (back, label.label.bound) {
+            candidates.push((true, start, end, label));
+        }
+        let next = function
+            .labels
+            .get(place + 1)
+            .map_or(count, |next| next.index);
+        if next > start {
+            candidates.push((false, start, next - 1, label));
+        }
+    }
+    let (is_loop, start, end, label) = candidates
+        .into_iter()
+        .filter(|(_, start, end, _)| (needed..=MAX_INSTRUCTIONS).contains(&(end - start + 1)))
+        .min_by_key(|(is_loop, start, end, _)| (!is_loop, end - start))?;
+    let what = if is_loop { "the loop" } else { "the code from" };
+    Some(format!(
+        "lines {}–{}, {what} `{}` ({} instructions), can be a function of its own",
+        label.label.line,
+        function.steps[end].source.line,
+        label.label.name,
+        end - start + 1
+    ))
+}
+
 impl Checker<'_, '_> {
     /// Rule 4: at most 60 instructions, one ret (none in _start).
     fn size_and_returns(&mut self, function: &MappedFunction<'_>, flow: &Flow) {
         let name = function.name();
         if function.steps.len() > MAX_INSTRUCTIONS {
+            let point =
+                split_point(function, flow).map_or_else(String::new, |point| format!(": {point}"));
             self.violation(
                 Rule::Functions,
                 function.source.line,
                 format!("{name} has {} instructions", function.steps.len()),
-                format!("split it into functions of at most {MAX_INSTRUCTIONS} instructions"),
+                format!(
+                    "split it into functions of at most {MAX_INSTRUCTIONS} instructions{point}"
+                ),
             );
         }
         let returns: Vec<usize> = flow

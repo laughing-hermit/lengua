@@ -50,9 +50,10 @@ const MAX_REQUEST_CHARS: usize = 2000;
 /// patience.
 const CHECK_WAIT: Duration = Duration::from_secs(40);
 
-/// Once the tests pass, how long a `check` call still waits for the proof before it says so,
-/// so a quick proof comes back in the same reply and a long one doesn't hold up the news.
-const GREEN_GRACE: Duration = Duration::from_secs(10);
+/// Once the tests pass, how long `check` still waits for the proofs before it says done: quick
+/// proofs come back in the same reply, and the rest go on in the background, listed with how far
+/// each has got, so a long proof never holds up the news.
+const GREEN_GRACE: Duration = Duration::from_secs(20);
 
 /// The longest the proof of one version of a program may take, over every call.
 const PROOF_TIME: Duration = Duration::from_secs(300);
@@ -66,6 +67,15 @@ fn check_wait() -> Duration {
         .ok()
         .and_then(|milliseconds| milliseconds.parse().ok())
         .map_or(CHECK_WAIT, Duration::from_millis)
+}
+
+/// How long `check` waits for the proofs once the tests pass: [`GREEN_GRACE`], or
+/// `LENGUA_GREEN_GRACE_MS` for tests.
+fn green_grace() -> Duration {
+    std::env::var("LENGUA_GREEN_GRACE_MS")
+        .ok()
+        .and_then(|milliseconds| milliseconds.parse().ok())
+        .map_or(GREEN_GRACE, Duration::from_millis)
 }
 
 /// How long the proof of one version may take: [`PROOF_TIME`], or `LENGUA_PROOF_SECONDS` for
@@ -248,9 +258,8 @@ pub struct CheckParams {
 /// What `check` reports: where the program stands, and the one thing to do next.
 #[derive(Debug, Default, Serialize, schemars::JsonSchema)]
 pub struct CheckReport {
-    /// Where the program stands: blocked, write_spec, spec_problems, needs_request,
-    /// write_tests, test_problems, write_code, code_problems, testing, tests_failed, proving or
-    /// done.
+    /// Where the program stands: blocked, write_spec, spec_problems, needs_request, write_code,
+    /// code_problems, testing, tests_failed, proving or done.
     pub state: String,
     /// Every problem to fix before going on, each saying where it is and how to fix it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -690,6 +699,12 @@ impl LenguaServer {
                 state.next_step(&folder)
             ));
         }
+        if let Some(wrong) = self.proven_wrong(&folder).await {
+            return Err(format!(
+                "The proof found inputs where {CODE_FILE} is wrong, so it won't run: {wrong}. \
+                 Call check with path {folder} to see them, then fix {CODE_FILE}."
+            ));
+        }
         let key = Key::load(&self.data_dir)
             .map_err(|error| error.to_string())?
             .ok_or("lengua's signing key is missing; call check")?;
@@ -789,14 +804,14 @@ struct Code {
 }
 
 /// Waits until `checking` ends or `until`, whichever comes first; once its tests pass, at most
-/// [`GREEN_GRACE`] more, unless a reply has already said so.
+/// the grace more, unless a reply has already said so.
 async fn wait_for(checking: &Checking, until: Instant) {
     let mut stage = checking.stage.subscribe();
     loop {
         let deadline = match *stage.borrow_and_update() {
             Stage::Ended => return,
             Stage::Proving(since) if !checking.green_told.load(Ordering::Relaxed) => {
-                until.min(since + GREEN_GRACE)
+                until.min(since + green_grace())
             }
             Stage::Testing | Stage::Proving(_) => until,
         };
@@ -814,6 +829,26 @@ impl LenguaServer {
         let snapshot = Snapshot::read(folder, key.as_ref())
             .map_err(|error| format!("can't read {folder}: {error}"))?;
         Ok(State::of(&snapshot))
+    }
+
+    /// What the proof found wrong in the code now in `folder`, when its job confirmed a
+    /// counterexample: the tests passed, but these inputs, run for real, show main.s is wrong.
+    async fn proven_wrong(&self, folder: &ProgramFolder) -> Option<String> {
+        let checking = self.checks.lock().await.get(folder.path()).cloned()?;
+        let code = std::fs::read(folder.file(CODE_FILE)).ok()?;
+        if header::code_hash(&code) != checking.files[1] {
+            return None;
+        }
+        let found = checking.found.lock().ok()?;
+        found.wrong.then(|| {
+            found
+                .proofs
+                .iter()
+                .filter(|proof| proof.wrong)
+                .map(BlockProof::line)
+                .collect::<Vec<_>>()
+                .join("; ")
+        })
     }
 
     /// Records spec.md, unless the lock already records it as it is, with the user's words when
@@ -1419,19 +1454,25 @@ impl LenguaServer {
                 )
             };
         }
-        if stage != Stage::Ended {
-            return CheckReport {
-                tests,
-                proofs,
-                ..CheckReport::new(
-                    "proving",
-                    format!(
-                        "Every test passes, and the proof is running in the background. {}",
-                        again(folder)
-                    ),
-                )
-            };
-        }
+        // Done once the tests pass and the grace is over: proofs still running go on, and a
+        // later check shows them.
+        let still_proving = match stage {
+            Stage::Proving(since) if since.elapsed() < green_grace() => {
+                return CheckReport {
+                    tests,
+                    proofs,
+                    ..CheckReport::new(
+                        "proving",
+                        format!(
+                            "Every test passes, and the proof is running in the background. {}",
+                            again(folder)
+                        ),
+                    )
+                };
+            }
+            Stage::Proving(_) => true,
+            Stage::Testing | Stage::Ended => false,
+        };
         let changes = self.current_changes(folder);
         let changes = (changes.requests.len() > 1
             || changes.spec.is_some()
@@ -1446,6 +1487,12 @@ impl LenguaServer {
         } else {
             ""
         };
+        let running = if still_proving {
+            " The proofs that say proving go on in the background for up to five minutes: tell \
+             the user they're still running, and that checking again later shows them."
+        } else {
+            ""
+        };
         CheckReport {
             tests,
             proofs,
@@ -1456,8 +1503,8 @@ impl LenguaServer {
                 "done",
                 format!(
                     "Done: tell the user where the program is, what its spec promises, that it \
-                     passed every test, and what's proven.{shown} run runs it on their own \
-                     inputs."
+                     passed every test, and what's proven.{running}{shown} run runs it on their \
+                     own inputs."
                 ),
             )
         }

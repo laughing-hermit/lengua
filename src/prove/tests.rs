@@ -1278,7 +1278,8 @@ async fn proves_the_vector_template() {
 
 /// Vector code, AVX-512 with masks: the fast word count's lines and words, its popcounts of
 /// masks meeting the formulas' counts as one term; a count that misses carriage returns is
-/// found. Texts up to 300 bytes keep the test quick; up to 4096 prove the same way.
+/// found. Texts up to 200 bytes, past three whole vectors and a tail, keep the test quick even
+/// beside the others; up to 4096 prove the same way.
 #[tokio::test]
 async fn proves_the_avx512_word_count() {
     if !crate::platform::Machine::detect().features.avx512bw {
@@ -1289,9 +1290,10 @@ async fn proves_the_avx512_word_count() {
     let spec = repository_file(&format!("{folder}spec.md"))
         .replace(
             "Tests give it up to `1048576` bytes.",
-            "Tests give it up to `300` bytes.",
+            "Tests give it up to `200` bytes.",
         )
-        .replace("string(0, 1048576,", "string(0, 300,");
+        .replace("string(0, 1048576,", "string(0, 200,");
+    assert!(spec.contains("string(0, 200,"), "{spec}");
     let source = repository_file(&format!("{folder}main.s"));
     let block = block(&spec, 0);
     let right = machine(&source).await;

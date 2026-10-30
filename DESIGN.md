@@ -83,12 +83,18 @@ because other agent harnesses cut off long tool calls (many stop waiting at 60 s
 the proof run in a background job per program folder, keyed by the hashes of its two files: a
 `check` with the same files waits on the same job, a `check` with new files cancels it and starts
 another, and a server restart starts it again, keeping the proofs the lock records about the same
-build. Replies carry each fact once, where the next step needs it: the machine's cores and CPU
+build. `check` says done once the tests pass and 20 seconds more have gone by: proofs still
+running are listed with how far each has got, go on for up to five minutes, and are recorded as
+they end, so a long proof never holds up the report, and `run` refuses a build that a proof has
+found wrong. Problems come with their fixes worked out: the phrasing to write a step in, the line
+a network needs with its port, generated tests to start from, and for a function over the limit,
+the loop or run of code to make a function of its own. Replies carry each fact once, where the next step needs it: the machine's cores and CPU
 extensions while `main.s` is unwritten, the changes after the request and the cost of each test
 only once done, and the spec's first example as the tests ran it, so the report needs no demo run.
 
-Only open standards are used: MCP (tools and server instructions), Agent Skills and Agent Plugins. No hooks and no subagents, so the plugin works the same in Claude Code, Codex, Cursor and
-other harnesses. Every guarantee lives in the server, which detects changes and refuses to stamp
+Only open standards are used: MCP (tools and server instructions), Agent Skills and Agent
+Plugins. No hooks and no subagents, so the plugin works the same in Claude Code, Codex, Cursor
+and other harnesses. Every guarantee lives in the server, which detects changes and refuses to stamp
 or run.
 
 ## Packaging
