@@ -231,6 +231,61 @@ fn probes(rng: &mut ChaCha8Rng) -> Vec<Vec<String>> {
         list.push(one(format!("vpbroadcastq {a}, {}", register(rng, 64))));
         list.push(one(format!("vpbroadcastb {a}, {}", x(rng))));
     }
+    // Across lanes: permutes by indices or an immediate, one table or two, and compress and
+    // expand, each where this CPU has it.
+    let features = crate::platform::Machine::detect().features;
+    let mut permutes = vec![
+        "vpermd", "vpermw", "vpermq", "vpermt2w", "vpermt2d", "vpermt2q",
+    ];
+    permutes.extend(["vpermi2w", "vpermi2d", "vpermi2q"]);
+    if features.avx512vbmi {
+        permutes.extend(["vpermb", "vpermt2b", "vpermi2b"]);
+    }
+    for op in permutes {
+        for _ in 0..2 {
+            let (a, b, c) = (z(rng), z(rng), z(rng));
+            let destination = with_mask(rng, &a);
+            list.push(one(format!("{op} {destination}, {b}, {c}")));
+        }
+        let (a, b) = (z(rng), z(rng));
+        let destination = with_mask(rng, &a);
+        list.push(one(format!("{op} {destination}, {b}, {}", cell(64))));
+    }
+    for _ in 0..3 {
+        let (a, b) = (z(rng), z(rng));
+        let destination = with_mask(rng, &a);
+        list.push(one(format!(
+            "vpermq {destination}, {b}, {}",
+            rng.random::<u8>()
+        )));
+        let y = |rng: &mut ChaCha8Rng| vector_register(rng, 32);
+        let (a, b, c) = (y(rng), y(rng), y(rng));
+        list.push(one(format!(
+            "vperm2i128 {a}, {b}, {c}, {}",
+            rng.random::<u8>()
+        )));
+        list.push(one(format!("vpermd {a}, {b}, {c}")));
+        list.push(one(format!("vpermq {a}, {b}, {}", rng.random::<u8>())));
+    }
+    let mut packs = vec!["vpcompressd", "vpcompressq", "vpexpandd", "vpexpandq"];
+    if features.avx512vbmi2 {
+        packs.extend(["vpcompressb", "vpcompressw", "vpexpandb", "vpexpandw"]);
+    }
+    for op in packs {
+        for _ in 0..2 {
+            let (a, b) = (z(rng), z(rng));
+            let destination = with_mask(rng, &a);
+            list.push(one(format!("{op} {destination}, {b}")));
+        }
+        if op.contains("compress") {
+            let a = z(rng);
+            list.push(one(format!(
+                "{op} {} {{{}}}, {a}",
+                cell(64),
+                mask_register(rng)
+            )));
+        }
+    }
     // Compares and tests into masks, under a mask or not.
     let k = |rng: &mut ChaCha8Rng| format!("k{}", rng.random_range(0..8));
     for op in [

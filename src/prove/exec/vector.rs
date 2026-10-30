@@ -122,6 +122,7 @@ impl Cpu<'_> {
                     return Err(unsupported("an embedded broadcast from memory"));
                 }
                 let address = self.address()?;
+                self.reach_operand(address, bytes as u64, false)?;
                 (0..bytes)
                     .map(|offset| self.load(address.wrapping_add(offset as u64), 1))
                     .collect()
@@ -156,6 +157,7 @@ impl Cpu<'_> {
             }
             OpKind::Memory => {
                 let address = self.address()?;
+                self.reach_operand(address, value.len() as u64, true)?;
                 for (offset, byte) in value.iter().enumerate() {
                     self.save(address.wrapping_add(offset as u64), *byte)?;
                 }
@@ -183,6 +185,8 @@ impl Cpu<'_> {
         };
         if self.instruction.op_kind(0) == OpKind::Memory {
             let address = self.address()?;
+            // A masked access counts its full width, as the rules hold it.
+            self.reach_operand(address, result.len() as u64, true)?;
             for (offset, byte) in result.iter().enumerate() {
                 let lane = u32::try_from(offset / element).unwrap_or(u32::MAX);
                 let on = self.pool.bit_is_set(mask, lane);
@@ -226,6 +230,7 @@ impl Cpu<'_> {
             return self.bytes_in(index, bytes);
         };
         let address = self.address()?;
+        self.reach_operand(address, bytes as u64, false)?;
         let zero = self.pool.bv(8, 0);
         let mut out = Vec::with_capacity(bytes);
         for offset in 0..bytes {
@@ -984,6 +989,129 @@ impl Cpu<'_> {
                 self.state.overflow = no;
                 self.state.parity = no;
             }
+            // Across lanes, by indices in a vector: each element of the result is the table's
+            // element the index's low bits name, or, for the two-table forms, the table the
+            // next bit picks.
+            Mnemonic::Vpermb
+            | Mnemonic::Vpermw
+            | Mnemonic::Vpermd
+            | Mnemonic::Vpermps
+            | Mnemonic::Vpermt2b
+            | Mnemonic::Vpermt2w
+            | Mnemonic::Vpermt2d
+            | Mnemonic::Vpermt2q
+            | Mnemonic::Vpermi2b
+            | Mnemonic::Vpermi2w
+            | Mnemonic::Vpermi2d
+            | Mnemonic::Vpermi2q => {
+                let element = match mnemonic {
+                    Mnemonic::Vpermb | Mnemonic::Vpermt2b | Mnemonic::Vpermi2b => 1,
+                    Mnemonic::Vpermw | Mnemonic::Vpermt2w | Mnemonic::Vpermi2w => 2,
+                    Mnemonic::Vpermt2q | Mnemonic::Vpermi2q => 8,
+                    _ => 4,
+                };
+                let two = matches!(
+                    mnemonic,
+                    Mnemonic::Vpermt2b
+                        | Mnemonic::Vpermt2w
+                        | Mnemonic::Vpermt2d
+                        | Mnemonic::Vpermt2q
+                        | Mnemonic::Vpermi2b
+                        | Mnemonic::Vpermi2w
+                        | Mnemonic::Vpermi2d
+                        | Mnemonic::Vpermi2q
+                );
+                let first = self.bytes_in(0, size)?;
+                let (one, other) = (self.bytes_in(1, size)?, self.bytes_in(2, size)?);
+                // vpermt2: indices in operand 1, tables the destination and operand 2; vpermi2:
+                // indices in the destination, tables operands 1 and 2; vperm: indices in
+                // operand 1, the table operand 2.
+                let (indices, low_table, high_table) = match mnemonic {
+                    Mnemonic::Vpermt2b
+                    | Mnemonic::Vpermt2w
+                    | Mnemonic::Vpermt2d
+                    | Mnemonic::Vpermt2q => (one, first, other),
+                    Mnemonic::Vpermi2b
+                    | Mnemonic::Vpermi2w
+                    | Mnemonic::Vpermi2d
+                    | Mnemonic::Vpermi2q => (first, one, other),
+                    _ => (one, other.clone(), other),
+                };
+                let count = size / element;
+                let indices = self.elements(&indices, element);
+                let (low_table, high_table) = (
+                    self.elements(&low_table, element),
+                    self.elements(&high_table, element),
+                );
+                let bits = count.trailing_zeros();
+                let mut result = Vec::with_capacity(count);
+                for index in indices {
+                    let low = self.pool.extract(index, bits - 1, 0);
+                    let mut picked = self.pick(&low_table, low);
+                    if two {
+                        let from_high = self.pick(&high_table, low);
+                        let high = self.pool.bit_is_set(index, bits);
+                        picked = self.pool.ite(high, from_high, picked);
+                    }
+                    result.push(picked);
+                }
+                let bytes = self.unelements(&result);
+                self.masked_out(&bytes, element)?;
+            }
+            // Quadwords by an immediate, within each 256 bits, or by indices across the vector.
+            Mnemonic::Vpermq | Mnemonic::Vpermpd => {
+                if instruction.op_count() == 3 && instruction.op_kind(2) == OpKind::Immediate8 {
+                    let source = self.bytes_in(1, size)?;
+                    let order = instruction.immediate8();
+                    let mut result = Vec::with_capacity(size);
+                    for half in 0..size / 32 {
+                        for quad in 0..4 {
+                            let from = half * 32 + usize::from(order >> (2 * quad) & 3) * 8;
+                            result.extend_from_slice(&source[from..from + 8]);
+                        }
+                    }
+                    self.masked_out(&result, 8)?;
+                } else {
+                    let (indices, table) = (self.bytes_in(1, size)?, self.bytes_in(2, size)?);
+                    let count = size / 8;
+                    let (indices, table) = (self.elements(&indices, 8), self.elements(&table, 8));
+                    let bits = count.trailing_zeros();
+                    let mut result = Vec::with_capacity(count);
+                    for index in indices {
+                        let low = self.pool.extract(index, bits - 1, 0);
+                        result.push(self.pick(&table, low));
+                    }
+                    let bytes = self.unelements(&result);
+                    self.masked_out(&bytes, 8)?;
+                }
+            }
+            // Each 128-bit half from one of four, or zero.
+            Mnemonic::Vperm2i128 | Mnemonic::Vperm2f128 => {
+                let (a, b) = (self.bytes_in(1, 32)?, self.bytes_in(2, 32)?);
+                let order = instruction.immediate8();
+                let zero = self.pool.bv(8, 0);
+                let mut result = Vec::with_capacity(32);
+                for half in 0..2 {
+                    let control = order >> (4 * half) & 0xf;
+                    if control & 8 != 0 {
+                        result.extend(std::iter::repeat_n(zero, 16));
+                        continue;
+                    }
+                    let source = if control & 2 == 0 { &a } else { &b };
+                    let from = usize::from(control & 1) * 16;
+                    result.extend_from_slice(&source[from..from + 16]);
+                }
+                self.bytes_out(0, &result)?;
+            }
+            // The elements a mask picks, packed to the bottom, and the reverse.
+            Mnemonic::Vpcompressb
+            | Mnemonic::Vpcompressw
+            | Mnemonic::Vpcompressd
+            | Mnemonic::Vpcompressq
+            | Mnemonic::Vpexpandb
+            | Mnemonic::Vpexpandw
+            | Mnemonic::Vpexpandd
+            | Mnemonic::Vpexpandq => self.compress(mnemonic)?,
             other => {
                 let function = self.image.function_at(instruction.ip());
                 let name = format!("{other:?}").to_lowercase();
@@ -993,5 +1121,124 @@ impl Cpu<'_> {
             }
         }
         Ok(Step::Next)
+    }
+
+    /// The element of `table` that `index` names: a choice among them where the index is open.
+    fn pick(&mut self, table: &[Term], index: Term) -> Term {
+        if let Some(known) = self.pool.constant(index) {
+            return table[known as usize % table.len()];
+        }
+        let width = self.pool.width(index);
+        let mut picked = table[0];
+        for (value, element) in table.iter().enumerate().skip(1) {
+            let constant = self.pool.bv(width, value as u128);
+            let chosen = self.pool.eq(index, constant);
+            picked = self.pool.ite(chosen, *element, picked);
+        }
+        picked
+    }
+
+    /// `vpcompress` and `vpexpand`, element by element under the write mask: compress packs
+    /// the elements the mask picks to the bottom of the destination, or of memory, where only
+    /// they are stored; expand puts the bottom elements, in order, where the mask's bits are
+    /// set. An element a mask leaves is zeroed with `{z}` and kept otherwise.
+    fn compress(&mut self, mnemonic: Mnemonic) -> Result<(), Stop> {
+        let instruction = self.instruction;
+        let element = match mnemonic {
+            Mnemonic::Vpcompressb | Mnemonic::Vpexpandb => 1,
+            Mnemonic::Vpcompressw | Mnemonic::Vpexpandw => 2,
+            Mnemonic::Vpcompressd | Mnemonic::Vpexpandd => 4,
+            _ => 8,
+        };
+        let compressing = matches!(
+            mnemonic,
+            Mnemonic::Vpcompressb
+                | Mnemonic::Vpcompressw
+                | Mnemonic::Vpcompressd
+                | Mnemonic::Vpcompressq
+        );
+        let size = self.operand_bytes(1).max(self.operand_bytes(0));
+        let count = size / element;
+        let all = self.pool.bv(64, u128::from(u64::MAX));
+        let mask = self.write_mask().unwrap_or(all);
+        let source = self.bytes_in(1, size)?;
+        let source = self.elements(&source, element);
+        let zero = self.pool.bv(u32::try_from(element * 8).unwrap_or(8), 0);
+        // How many of the mask's bits below each place are set.
+        let mut below = Vec::with_capacity(count + 1);
+        let mut total = self.pool.bv(8, 0);
+        let one = self.pool.bv(8, 1);
+        for place in 0..count {
+            below.push(total);
+            let set = self
+                .pool
+                .bit_is_set(mask, u32::try_from(place).unwrap_or(0));
+            let added = self.pool.add(total, one);
+            total = self.pool.ite(set, added, total);
+        }
+        let mut result = Vec::with_capacity(count);
+        if compressing {
+            // Place j holds the element whose mask bit is set with j set below it.
+            for place in 0..count {
+                let mut value: Option<Term> = None;
+                for (from, item) in source.iter().enumerate().skip(place) {
+                    let set = self.pool.bit_is_set(mask, u32::try_from(from).unwrap_or(0));
+                    let wanted = self.pool.bv(8, place as u128);
+                    let at = self.pool.eq(below[from], wanted);
+                    let here = self.pool.bool_and(set, at);
+                    value = Some(match value {
+                        None => self.pool.ite(here, *item, zero),
+                        Some(other) => self.pool.ite(here, *item, other),
+                    });
+                }
+                result.push(value.unwrap_or(zero));
+            }
+        } else {
+            // Place j, where the mask's bit is set, holds the element numbered by the bits
+            // set below it.
+            for set_below in below.iter().take(count) {
+                let picked = self.pick(&source, *set_below);
+                result.push(picked);
+            }
+        }
+        let bytes = self.unelements(&result);
+        if compressing && instruction.op_kind(0) == OpKind::Memory {
+            // Only the packed elements are stored: element j where j is below the count.
+            let address = self.address()?;
+            self.reach_operand(address, size as u64, true)?;
+            for (place, chunk) in bytes.chunks(element).enumerate() {
+                let wanted = self.pool.bv(8, place as u128);
+                let stored = self.pool.ult(wanted, total);
+                for (offset, byte) in chunk.iter().enumerate() {
+                    let at = address.wrapping_add((place * element + offset) as u64);
+                    match self.pool.truth(stored) {
+                        Some(false) => {}
+                        Some(true) => self.save(at, *byte)?,
+                        None => {
+                            let old = self.peek(at);
+                            let value = self.pool.ite(stored, *byte, old);
+                            self.save(at, value)?;
+                        }
+                    }
+                }
+            }
+            return Ok(());
+        }
+        if compressing {
+            // The packed elements, and above them the destination's own or zero: compress
+            // writes every element below the count, and leaves or zeroes the rest.
+            let zeroing = instruction.zeroing_masking();
+            let kept = self.bytes_in(0, size)?;
+            let byte_zero = self.pool.bv(8, 0);
+            let mut out = Vec::with_capacity(size);
+            for (at, byte) in bytes.iter().enumerate() {
+                let place = self.pool.bv(8, (at / element) as u128);
+                let packed = self.pool.ult(place, total);
+                let other = if zeroing { byte_zero } else { kept[at] };
+                out.push(self.pool.ite(packed, *byte, other));
+            }
+            return self.bytes_out(0, &out);
+        }
+        self.masked_out(&bytes, element)
     }
 }

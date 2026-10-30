@@ -298,7 +298,9 @@ instruction needs. Vectors follow four extra rules:
   not read 16 bytes of memory, since it would need alignment);
 - AVX-512 write masks, zeroing and broadcasts are allowed, but masked accesses count their full
   width; rounding overrides aren't allowed;
-- no gathers, scatters or non-temporal moves (floating point arrives with its own rules);
+- no gathers, scatters or non-temporal moves: each element of a gather or scatter has its own
+  address, which no bounds check can hold to its buffer (floating point arrives with its own
+  rules);
 - every byte of an access counts: rule 9's bounds checks and `[rip + name]` accesses must keep
   the full 16 to 64 bytes inside their data symbol.
 
@@ -589,6 +591,10 @@ What it covers:
   instructions programs use most:
   - moves of whole and partial registers, `movd` and `movq`, broadcasts, `vzeroupper`;
   - `pshufd` and `pshufb`; byte shifts and shifts by an immediate;
+  - across lanes: `vpermb`, `vpermw`, `vpermd`, `vpermq` (by an immediate or by indices),
+    `vperm2i128`, and the two-table `vpermt2*` and `vpermi2*`, as choices where the input picks
+    the index; `vpcompress*` and `vpexpand*`, to a register or, for compress, to memory, as
+    choices on the mask;
   - compares into vectors or masks, every `vpcmp` predicate, `vptestm` and `vptestnm`, `ptest`;
   - and, or, xor, and-not, `vpternlog`; adds and subtracts, saturating bytes, `pminub`, `pmaxub`;
   - `pmovmskb`, `vpmovm2*` and `vpmov*2m`, and every mask register instruction (`kmov`, `kor`,
@@ -616,8 +622,7 @@ What it covers:
   port, and its fetch for every path with every body up to about 140 bytes in its share of the
   time.
 
-Not yet: shuffles across lanes (`vpermb`, `vpermd`), compress and gather instructions;
-`sha256`, `crc32` and `crc32c` formulas and the instructions behind them; floating point;
+Not yet: `sha256`, `crc32` and `crc32c` formulas and the instructions behind them; floating point;
 threads; and `tr` that changes a character's width in bytes (`tr` beyond ASCII is proven
 character by character, each keeping its width). Those blocks are tested, not proven, and the
 report says why. A stream read both with `read` and with `fill` is proven for the four
