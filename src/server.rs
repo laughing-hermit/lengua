@@ -1650,7 +1650,12 @@ struct Changes {
 
 /// The next step while a job runs: call again.
 fn again(folder: &ProgramFolder) -> String {
-    format!("Call check again with path {folder} to wait for it; nothing needs to change.")
+    // Calls a harness runs one after another each wait their own window: one at a time keeps
+    // every call short.
+    format!(
+        "Call check again with path {folder}, one call at a time, to wait for it; nothing needs \
+         to change."
+    )
 }
 
 /// What a proven block's proof covered, in a line.
