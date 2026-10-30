@@ -38,7 +38,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 
 use crate::platform::{Allowed, Pin};
-use crate::supervise::{CLOCK_GETTIME, CONNECT, GETRANDOM, SUPERVISE_FLAG};
+use crate::supervise::{CLOCK_GETTIME, CLOCK_NANOSLEEP, CONNECT, GETRANDOM, SUPERVISE_FLAG};
 use crate::supply::Supply;
 
 /// The command-line flag that starts the binary as a launcher.
@@ -454,9 +454,18 @@ pub async fn start(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<
     if local {
         traced.push(CONNECT);
     }
-    let watched = supply.is_some() || local;
+    // A test's sleeps end at once; a real run's take as long as they say.
+    let sleeps = job.supply.is_some()
+        && job
+            .syscalls
+            .iter()
+            .any(|allowed| allowed.number == CLOCK_NANOSLEEP);
+    if sleeps {
+        traced.push(CLOCK_NANOSLEEP);
+    }
+    let watched = supply.is_some() || local || sleeps;
     let nothing_supplied = Supply::default();
-    let supply = supply.or_else(|| local.then_some(&nothing_supplied));
+    let supply = supply.or_else(|| (local || sleeps).then_some(&nothing_supplied));
     let syscalls: Vec<String> = job
         .syscalls
         .iter()

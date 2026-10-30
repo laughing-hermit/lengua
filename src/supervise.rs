@@ -33,6 +33,9 @@ pub const SUPERVISE_FLAG: &str = "--supervise";
 pub const GETRANDOM: i64 = 318;
 /// See [`GETRANDOM`].
 pub const CLOCK_GETTIME: i64 = 228;
+/// `clock_nanosleep`, which a test answers at once: what a program does after a sleep doesn't
+/// depend on how long it slept, and a test shouldn't wait.
+pub const CLOCK_NANOSLEEP: i64 = 230;
 /// `connect`, whose address the supervisor checks when the program may reach only this
 /// computer.
 pub const CONNECT: i64 = 42;
@@ -157,6 +160,7 @@ impl Supervisor {
         let result = match i64::try_from(registers.orig_rax) {
             Ok(GETRANDOM) => self.random(task, registers.rdi, registers.rsi, registers.rdx),
             Ok(CLOCK_GETTIME) => self.clock(task, registers.rsi),
+            Ok(CLOCK_NANOSLEEP) => 0,
             Ok(CONNECT) if self.local => match reaches_this_computer(task, registers.rsi) {
                 true => return,
                 false => -(Errno::EACCES as i64),

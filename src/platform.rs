@@ -51,6 +51,7 @@ impl Profile {
             (Self::LinuxX86_64, Syscall::Exit) => 60,
             (Self::LinuxX86_64, Syscall::ExitGroup) => 231,
             (Self::LinuxX86_64, Syscall::ClockGettime) => 228,
+            (Self::LinuxX86_64, Syscall::ClockNanosleep) => 230,
             (Self::LinuxX86_64, Syscall::Getrandom) => 318,
             (Self::LinuxX86_64, Syscall::Openat) => 257,
             (Self::LinuxX86_64, Syscall::Socket) => 41,

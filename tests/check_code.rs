@@ -698,6 +698,22 @@ async fn proofs_survive_a_server_restart() {
 }
 
 #[tokio::test]
+async fn a_test_answers_a_sleep_at_once() {
+    // nap sleeps 30 seconds, more than a test may run: the test's supervisor ends the sleep at
+    // once, so the test passes in a moment.
+    let session = session().await;
+    let files = ["spec.md", "main.s"].map(|file| (file, fixture("nap", file)));
+    let program = written(&session, files).await;
+    let started = std::time::Instant::now();
+    let report = done(&session, &program).await;
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "{report}"
+    );
+    session.service.cancel().await.expect("close the session");
+}
+
+#[tokio::test]
 async fn a_program_gets_only_the_environment_its_test_or_run_gives() {
     if !solvers_installed() {
         return;

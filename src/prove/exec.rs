@@ -2208,6 +2208,18 @@ impl<'a> Cpu<'a> {
                 }
                 count
             }
+            // A sleep ends at once: what the program does next doesn't depend on how long it
+            // slept. It reads the time it's given, and may write what's left of it.
+            230 => {
+                let request = self.constant(rdx)?;
+                self.lent(request, 16, false, "clock_nanosleep")?;
+                self.load(request, 16)?;
+                let left = self.constant(registers[10])?;
+                if left != 0 {
+                    self.lent(left, 16, true, "clock_nanosleep")?;
+                }
+                0
+            }
             60 | 231 => {
                 let status = self.pool.extract(rdi, 7, 0);
                 return Err(End::Exit(status));
@@ -2558,6 +2570,19 @@ mod tests {
         for (index, (name, ..)) in mutants.iter().enumerate() {
             assert!(caught[index], "a fill that {name} went unnoticed");
         }
+    }
+
+    #[tokio::test]
+    async fn a_sleep_ends_at_once() {
+        let source = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/nap/main.s"),
+        )
+        .expect("the nap fixture");
+        let image = image(&source).await;
+        assert_eq!(
+            run(&image, &[], ""),
+            ("awake\n".into(), String::new(), Some(0))
+        );
     }
 
     #[tokio::test]

@@ -324,7 +324,7 @@ impl Use {
                 Syscall::Close,
                 Syscall::Lseek,
             ],
-            Self::Clock => &[Syscall::ClockGettime],
+            Self::Clock => &[Syscall::ClockGettime, Syscall::ClockNanosleep],
             Self::RandomBytes => &[Syscall::Getrandom],
             // The kernel lays them out above the arguments: no call reads them.
             Self::Environment => &[],
@@ -338,7 +338,7 @@ impl Use {
         match syscall {
             Syscall::Read => Some(Self::StandardInput),
             Syscall::Openat | Syscall::Close | Syscall::Lseek => Some(Self::Files),
-            Syscall::ClockGettime => Some(Self::Clock),
+            Syscall::ClockGettime | Syscall::ClockNanosleep => Some(Self::Clock),
             Syscall::Getrandom => Some(Self::RandomBytes),
             _ => None,
         }
@@ -370,6 +370,8 @@ pub enum Syscall {
     ExitGroup,
     /// Read a clock: the time of day, or a clock that only moves forward.
     ClockGettime,
+    /// Sleep for a time, or until a time, on either clock.
+    ClockNanosleep,
     /// Fill a buffer with random bytes from the kernel.
     Getrandom,
     /// Open a TCP socket, for a program that connects.
@@ -386,7 +388,7 @@ pub enum Syscall {
 
 impl Syscall {
     /// Every system call a spec may allow.
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::Read,
         Self::Write,
         Self::Openat,
@@ -395,6 +397,7 @@ impl Syscall {
         Self::Exit,
         Self::ExitGroup,
         Self::ClockGettime,
+        Self::ClockNanosleep,
         Self::Getrandom,
         Self::Socket,
         Self::Connect,
@@ -424,6 +427,7 @@ impl Syscall {
             Self::Exit => "exit",
             Self::ExitGroup => "exit_group",
             Self::ClockGettime => "clock_gettime",
+            Self::ClockNanosleep => "clock_nanosleep",
             Self::Getrandom => "getrandom",
             Self::Socket => "socket",
             Self::Connect => "connect",

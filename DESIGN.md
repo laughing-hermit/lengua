@@ -189,9 +189,12 @@ When a test supplies random bytes or clock readings, a second process of the ser
 supervisor, traces the launcher with ptrace before it becomes the program. The launcher installs
 one more seccomp filter first, which stops only `getrandom` and `clock_gettime` for the
 supervisor; the supervisor writes the test's bytes or reading into the program's memory with
-`process_vm_writev` and skips the kernel's call, so the program sees the test's values. Signals,
-threads, the exit status, the counters and the time limit work as in any run, and runs that
-supply nothing have no supervisor at all. Each supplied call adds a few microseconds of wall
+`process_vm_writev` and skips the kernel's call, so the program sees the test's values. A test
+of a program that may sleep has the supervisor too: it ends each `clock_nanosleep` at once,
+since what the program does next can't depend on how long it slept, and a test shouldn't wait
+for it; a real `run` sleeps as long as the program asks. Signals, threads, the exit status, the
+counters and the time limit work as in any run, and runs that need none of this have no
+supervisor at all. Each supplied call adds a few microseconds of wall
 time, never instructions or cycles. The counters report three
 measures, which the optimize step compares by their medians: instructions executed in the
 program's own code (the steadiest measure of work, though a count can be one higher now and then,

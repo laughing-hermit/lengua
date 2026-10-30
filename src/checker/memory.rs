@@ -197,6 +197,8 @@ impl Summary {
         });
         let (uses, writes): (&[Register], &[Register]) = match known {
             Some(Syscall::Read | Syscall::ClockGettime) => (&[Register::RSI], &[Register::RSI]),
+            // The time to sleep, and what's left of it when a signal wakes it.
+            Some(Syscall::ClockNanosleep) => (&[Register::RDX, Register::R10], &[Register::R10]),
             Some(Syscall::Getrandom) => (&[Register::RDI], &[Register::RDI]),
             Some(Syscall::Accept4) => (
                 &[Register::RSI, Register::RDX],

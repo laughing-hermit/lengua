@@ -99,7 +99,8 @@ its range: for those inputs the program is checked, not sampled.
 
 A test can give the program its random bytes and clock readings, so output that depends on them
 is exact and the proof covers every value they could take. The spec's `- Uses:` line names
-`random bytes` or `the clock`.
+`random bytes` or `the clock`. `the clock` also lets the program wait: in a test, each wait ends
+at once, so a test never waits for it, and a real run waits as long as it asks.
 
 In a generated test, ``the random bytes `{hex(first, 1)}` and `{hex(second, 1)}` `` writes each
 variable as bytes, and ``the clock at `{t}` `` reads a variable.
