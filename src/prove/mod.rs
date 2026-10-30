@@ -920,6 +920,10 @@ const SAMPLE_PORT: &str = "40000";
 /// The name a counterexample gives the delivery it was found with.
 pub const DELIVERY: &str = "(delivery)";
 
+/// The name a counterexample gives the memory rule it breaks, when it breaks one rather than a
+/// formula.
+pub const UNSAFE: &str = "(unsafe)";
+
 /// The longest text a proof covers from the shortest: standard input up to what one pipe write
 /// holds, which the model reads whole, and other texts as long. Longer texts are tested, not
 /// proven.
@@ -2923,7 +2927,84 @@ fn check_runs(
     delivery: Option<Delivery>,
 ) -> Result<(), Stop> {
     let (numbers, chosen, texts) = (known.numbers, known.fixed, known.texts);
+    // A counterexample shows each number, and each text short enough to show.
+    let shown: Vec<(&String, &Vec<Term>)> = texts
+        .iter()
+        .filter(|(_, bytes)| bytes.len() <= MAX_CHECKED_TEXT)
+        .collect();
+    let values: Vec<Term> = numbers
+        .values()
+        .map(|number| number.term)
+        .chain(shown.iter().flat_map(|(_, bytes)| bytes.iter().copied()))
+        .collect();
+    // The inputs a model gives, with how what the program read arrived.
+    let found =
+        |model: &HashMap<Term, u128>, run: &State| -> Result<BTreeMap<String, Value>, Stop> {
+            if shown.len() < texts.len() {
+                return Err("a counterexample in a text too long to show".into());
+            }
+            let mut found = chosen.clone();
+            // Cut where fill stopped short, or as the test's peer delivered it.
+            let arrived = run.fill_cut.map(Delivery::At).or(delivery);
+            if let Some(arrived) = arrived {
+                found.insert(DELIVERY.to_owned(), Value::Str(arrived.describe()));
+            }
+            for (name, bytes) in &shown {
+                let text: Vec<u8> = bytes
+                    .iter()
+                    .map(|byte| model.get(byte).map_or(b'?', |value| *value as u8))
+                    .collect();
+                found.insert(
+                    (*name).clone(),
+                    Value::Str(String::from_utf8_lossy(&text).into_owned()),
+                );
+            }
+            for (name, number) in numbers {
+                let value = model
+                    .get(&number.term)
+                    .copied()
+                    .ok_or("a counterexample without values")?;
+                found.insert(
+                    name.clone(),
+                    Value::Int(i128::from_ne_bytes(value.to_ne_bytes())),
+                );
+            }
+            Ok(found)
+        };
     for run in runs {
+        // The memory rules first: a run that broke one, or an access whose place the input
+        // chooses that some input pushes out of its object.
+        let mut broken_rules = run.obligations.clone();
+        if let Some(End::Unsafe(problem)) = &run.end {
+            broken_rules.insert(0, (pool.boolean(true), problem.clone()));
+        }
+        for (condition, problem) in broken_rules {
+            if pool.truth(condition) == Some(false) {
+                continue;
+            }
+            let mut conditions = run.path.clone();
+            conditions.push(condition);
+            let solver = solvers.get(budget.deadline)?;
+            let (answer, model) = solver
+                .check(pool, &conditions, &values)
+                .map_err(|error| format!("the solver failed: {error}"))?;
+            match answer {
+                Answer::Unsat => {}
+                Answer::Sat => {
+                    let mut values = found(&model, &run)?;
+                    values.insert(UNSAFE.to_owned(), Value::Str(problem));
+                    return Err(Stop::Counterexample(values));
+                }
+                Answer::Unknown => {
+                    if solver.out_of_time() {
+                        return Err(OUT_OF_TIME.into());
+                    }
+                    return Err(
+                        format!("a path couldn't be settled: {}", solver.why_unknown).into(),
+                    );
+                }
+            }
+        }
         let holds = match &run.end {
             Some(End::Exit(status)) => {
                 let output = passes(pool, block, known, &run, *status)?;
@@ -2937,6 +3018,8 @@ fn check_runs(
             }
             Some(End::Serving | End::Stuck(_)) => pool.boolean(false),
             Some(End::Signal(_)) => pool.boolean(false),
+            // No input takes this run: the memory rules found none.
+            Some(End::Unsafe(_)) => continue,
             Some(End::Unsupported(reason)) => {
                 // A run followed without asking may be one that can't happen.
                 if guessed {
@@ -2983,55 +3066,13 @@ fn check_runs(
         }
         let mut conditions = run.path.clone();
         conditions.push(broken);
-        // A counterexample shows each number, and each text short enough to show.
-        let shown: Vec<(&String, &Vec<Term>)> = texts
-            .iter()
-            .filter(|(_, bytes)| bytes.len() <= MAX_CHECKED_TEXT)
-            .collect();
-        let values: Vec<Term> = numbers
-            .values()
-            .map(|number| number.term)
-            .chain(shown.iter().flat_map(|(_, bytes)| bytes.iter().copied()))
-            .collect();
         let solver = solvers.get(budget.deadline)?;
         let (answer, model) = solver
             .check(pool, &conditions, &values)
             .map_err(|error| format!("the solver failed: {error}"))?;
         match answer {
             Answer::Unsat => {}
-            Answer::Sat => {
-                if shown.len() < texts.len() {
-                    return Err("a counterexample in a text too long to show".into());
-                }
-                let mut found = chosen.clone();
-                // How what the program read arrived: cut where fill stopped short, or as the
-                // test's peer delivered it.
-                let arrived = run.fill_cut.map(Delivery::At).or(delivery);
-                if let Some(arrived) = arrived {
-                    found.insert(DELIVERY.to_owned(), Value::Str(arrived.describe()));
-                }
-                for (name, bytes) in &shown {
-                    let text: Vec<u8> = bytes
-                        .iter()
-                        .map(|byte| model.get(byte).map_or(b'?', |value| *value as u8))
-                        .collect();
-                    found.insert(
-                        (*name).clone(),
-                        Value::Str(String::from_utf8_lossy(&text).into_owned()),
-                    );
-                }
-                for (name, number) in numbers {
-                    let value = model
-                        .get(&number.term)
-                        .copied()
-                        .ok_or("a counterexample without values")?;
-                    found.insert(
-                        name.clone(),
-                        Value::Int(i128::from_ne_bytes(value.to_ne_bytes())),
-                    );
-                }
-                return Err(Stop::Counterexample(found));
-            }
+            Answer::Sat => return Err(Stop::Counterexample(found(&model, &run)?)),
             Answer::Unknown => {
                 if solver.out_of_time() {
                     return Err(OUT_OF_TIME.into());
@@ -3044,7 +3085,9 @@ fn check_runs(
 }
 
 /// Runs the prover's model of the code on concrete inputs that the real program has passed, and
-/// says where the model disagrees: then the model can't be trusted for a proof.
+/// says where the model disagrees: then the model can't be trusted for a proof. A sample on
+/// which the program breaks a memory rule, which a real run can pass without showing it, is the
+/// verdict already: its inputs, with what broke.
 ///
 /// # Errors
 ///
@@ -3053,7 +3096,7 @@ pub fn agrees(
     machine: &Machine,
     cases: &[crate::testfile::Case],
     listens: bool,
-) -> Result<(), String> {
+) -> Result<Option<Verdict>, String> {
     let image = Image::new(machine).ok_or("the program has no _start")?;
     for case in cases {
         let mut pool = Pool::default();
@@ -3121,6 +3164,11 @@ pub fn agrees(
             .with_network(network);
         let mut runs = exec::explore(&image, start, &mut pool, &mut exec::Concrete, 2)?;
         let run = runs.pop().ok_or("the model didn't run")?;
+        if let Some(End::Unsafe(problem)) = &run.end {
+            let mut values = case.inputs.clone();
+            values.insert(UNSAFE.to_owned(), Value::Str(problem.clone()));
+            return Ok(Some(Verdict::Counterexample(values)));
+        }
         let text = |bytes: &[Term]| -> Option<Vec<u8>> {
             bytes
                 .iter()
@@ -3194,7 +3242,7 @@ pub fn agrees(
             ));
         }
     }
-    Ok(())
+    Ok(None)
 }
 
 #[cfg(test)]

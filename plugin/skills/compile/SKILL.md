@@ -67,20 +67,23 @@ and the CPU features the code needs; never write that line yourself.
    test it can, it proves for every input rather than a sample that the program prints what the
    formulas say: whole numbers, decimals, each value of a `choice(…)`, texts and text formulas such
    as `upper` and `count`, and files. Long texts are proven up to a length, such as 4096 bytes, and
-   tested beyond it: each line of `proofs` says how far. If the proof finds inputs where the program
-   is wrong, `check` reports them like a failing test, and `run` won't run that build: fix `main.s`
-   and call `check` again. "Tested, not proven" is fine: say why in one line. Vector code proves
-   too, from SSE2 to AVX-512 with masks, and so do clients and servers on the network: what the
-   test's peer sends arrives whole or cut, and in any pieces at all where the program reads it with
-   `fill`. Programs that read and print numbers with the template's `parse_i64` and `write_i64`
-   prove best.
+   tested beyond it: each line of `proofs` says how far. Every run a proof covers is also held to
+   the memory rules: each access stays inside its own buffer, frame or argument, no return address
+   is written, and no stack is read before it's written. If the proof finds inputs where the
+   program is wrong, or breaks a memory rule, `check` reports them like a failing test, and `run`
+   won't run that build: fix `main.s` and call `check` again. "Tested, not proven" is fine: say
+   why in one line. Vector code proves too, from SSE2 to AVX-512 with masks, and so do clients and
+   servers on the network: what the test's peer sends arrives whole or cut, and in any pieces at
+   all where the program reads it with `fill`. Programs that read and print numbers with the
+   template's `parse_i64` and `write_i64` prove best.
 8. Tell the user, from the `done` reply, in a few short lines and plain words: where the program
    is; what its spec promises, in two or three lines (its behaviors, its limits such as input
    sizes and ranges, and what it may touch: files, ports); that it follows every rule and passed
    all its test runs; which behaviors are proven for every input, and which up to a length, such
    as "proven for every input up to 4096 bytes, tested beyond" (and, if the proof says one solver
    answered alone, which one to install for a second check), and which proofs are still running,
-   which checking again later shows; what the spec's first example did
+   which checking again later shows; what `memory` says, in one line; what the spec's first
+   example did
    (`example`); and that they can ask you to run it on their own inputs or files with `run`, or to
    change what it does. A server isn't running after `check`: offer to start it with `run`, which
    returns its address. If the reply has `changes`, say in a line each what changed after their

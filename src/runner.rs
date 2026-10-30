@@ -71,8 +71,12 @@ impl Default for Limits {
     }
 }
 
-/// How long standard input written in pieces waits between them.
-const STDIN_PAUSE: std::time::Duration = std::time::Duration::from_millis(20);
+/// The longest standard input written in pieces waits for the program to read a piece before
+/// writing the next.
+const STDIN_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// How often it looks whether the program has read it.
+const STDIN_POLL: std::time::Duration = std::time::Duration::from_millis(1);
 
 /// What to run, with what, and where.
 #[derive(Debug, Clone, Copy)]
@@ -83,8 +87,8 @@ pub struct Job<'a> {
     pub args: &'a [String],
     /// Its standard input, closed after these bytes.
     pub stdin: &'a [u8],
-    /// The pieces its standard input is written in, by length, a moment apart; empty, it's
-    /// written whole.
+    /// The pieces its standard input is written in, by length, each once the program has read
+    /// the last; empty, it's written whole.
     pub stdin_pieces: &'a [usize],
     /// A file to be its standard input instead, read by the program itself, however large.
     pub stdin_file: Option<&'a Path>,
@@ -562,16 +566,24 @@ pub async fn start(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<
             let _ = input.write_all(&bytes).await;
             return;
         }
-        // Each piece its own write, a moment after the last, so a read can end where it does.
+        // Each piece its own write, once the program has read all of the last, so a read ends
+        // where a piece does however busy the computer is.
         let mut start = 0;
-        for length in pieces {
+        let last = pieces.len() - 1;
+        for (index, length) in pieces.into_iter().enumerate() {
             let end = (start + length).min(bytes.len());
             if input.write_all(&bytes[start..end]).await.is_err() {
                 return;
             }
             let _ = input.flush().await;
             start = end;
-            tokio::time::sleep(STDIN_PAUSE).await;
+            let waited = tokio::time::Instant::now();
+            while index < last
+                && rustix::io::ioctl_fionread(&input).is_ok_and(|unread| unread > 0)
+                && waited.elapsed() < STDIN_WAIT
+            {
+                tokio::time::sleep(STDIN_POLL).await;
+            }
         }
     });
     let (overflow, overflowed) = mpsc::channel::<()>(2);

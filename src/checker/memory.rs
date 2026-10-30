@@ -471,19 +471,28 @@ fn transfer(
     let mut after = before.clone();
     let depth = flow.depth[at];
     let base = frame_base(function);
-    // Frame bytes this instruction writes.
+    // Frame bytes this instruction writes: by push, at a constant offset from rsp, or through a
+    // pointer to a known place in the frame.
     if let Some(depth) = depth {
         if name == "push" {
             let top = depth + 8 - base;
             after.written.extend((top - 7)..=top);
         } else if writes_memory(instruction, factory)
-            && instruction.memory_base() == Register::RSP
             && instruction.memory_index() == Register::None
         {
-            let displacement = displacement(instruction);
-            let width = width(instruction);
-            let first = depth - base - displacement;
-            after.written.extend((first - width + 1)..=first);
+            let first = match (
+                instruction.memory_base(),
+                before.get(instruction.memory_base()),
+            ) {
+                (Register::RSP, _) => Some(depth - base - displacement(instruction)),
+                (_, Owner::Frame { key: Some(key) }) => Some(key - displacement(instruction)),
+                _ => None,
+            };
+            if let Some(first) = first {
+                after
+                    .written
+                    .extend((first - width(instruction) + 1)..=first);
+            }
         }
     }
     if let Some(summary) = &lent[at] {
@@ -951,16 +960,26 @@ fn access(
     if instruction.is_ip_rel_memory_operand() {
         return found;
     }
-    // M3: constant offsets from rsp stay inside the function's own frame.
-    if base == Register::RSP && index == Register::None {
-        if let Some(depth) = depth {
-            let displacement = displacement(instruction);
+    // M3: constant offsets from rsp, or from a pointer to a known place in the frame, stay
+    // inside the function's own frame. `first` is how far below the frame's top the access's
+    // first byte is.
+    let first = match (index, base, before.get(base)) {
+        (Register::None, Register::RSP, _) => {
+            Some(depth.map(|depth| depth - frame_base(function) - displacement(instruction)))
+        }
+        (Register::None, _, Owner::Frame { key: Some(key) }) => {
+            Some(depth.map(|_| key - displacement(instruction)))
+        }
+        _ => None,
+    };
+    if let Some(first) = first {
+        if let (Some(depth), Some(first)) = (depth, first) {
             let width = width(instruction);
             let own = depth - frame_base(function);
             let start = function.name() == "_start";
-            let inside = displacement >= 0 && displacement + width <= own;
+            let inside = first <= own && first - width + 1 >= 1;
             // _start reads the argument count and strings above its frame.
-            let reads_arguments = start && !writes && displacement >= 0;
+            let reads_arguments = start && !writes && first <= own;
             if !inside && !reads_arguments {
                 found.push((
                     Rule::Lifetimes,
@@ -978,7 +997,6 @@ fn access(
                 ));
             } else if inside && name != "pop" && reads_memory(instruction, factory) {
                 // M5: what's read was written first, on every path.
-                let first = own - displacement;
                 let unwritten = ((first - width + 1)..=first)
                     .rev()
                     .find(|key| !before.written.contains(key));

@@ -714,6 +714,11 @@ async fn the_absolute_difference_example_is_proven() {
             .all(|proof| text(proof).contains("proven for every input in range"))),
         "{report}"
     );
+    // Memory too, on every run those proofs cover.
+    assert!(
+        text(&report["memory"]).contains("on every run the proofs of B1, B2, B3 and B4 cover"),
+        "{report}"
+    );
     session.service.cancel().await.expect("close the session");
 }
 

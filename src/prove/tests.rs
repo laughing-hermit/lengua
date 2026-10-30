@@ -156,6 +156,55 @@ async fn finds_a_bug_the_samples_miss() {
     );
 }
 
+/// Memory bugs the checker's rules can't see, planted in the template: each run of the model
+/// holds every access to its object, and the proof reports what broke.
+#[tokio::test]
+async fn finds_memory_bugs_the_rules_cannot_see() {
+    if std::process::Command::new("z3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let cases = [
+        // Digits written from 8 bytes into out_buf run past its end.
+        (
+            "    lea rsi, [rip + out_buf]\n    mov ecx, OUT_BUF_LEN - 1\n",
+            "    lea rsi, [rip + out_buf + 8]\n    mov ecx, OUT_BUF_LEN - 1\n",
+            "writes 1 byte at byte 27 of out_buf, which has 21 bytes",
+        ),
+        // write_all is lent write_i64's frame, which nothing wrote.
+        (
+            "    mov edi, STDOUT\n    call write_all\n",
+            "    mov edi, STDOUT\n    mov rsi, rsp\n    mov edx, 8\n    call write_all\n",
+            "reads byte 0 of write_i64's frame, which has 8 bytes, which nothing wrote",
+        ),
+        // A pointer just past write_i64's frame writes its return address.
+        (
+            ".Lwrite_i64_return:\n    add rsp, 8\n",
+            ".Lwrite_i64_return:\n    lea rcx, [rsp + 8]\n    mov byte ptr [rcx], 0\n    add \
+             rsp, 8\n",
+            "so it reaches the return address of write_i64",
+        ),
+    ];
+    for (from, to, needle) in cases {
+        let buggy = crate::checker::TEMPLATE.replacen(from, to, 1);
+        assert_ne!(buggy, crate::checker::TEMPLATE, "{from:?}");
+        let machine = machine(&buggy).await;
+        let block = block(&asset("template-spec.md"), 0);
+        let verdict = prove(&machine, &block, &budget(120));
+        let Verdict::Counterexample(values) = &verdict else {
+            panic!("{needle:?}: {verdict:?}");
+        };
+        let Some(Value::Str(problem)) = values.get(UNSAFE) else {
+            panic!("{needle:?}: {values:?}");
+        };
+        eprintln!("{problem}");
+        assert!(problem.contains(needle), "{problem}");
+    }
+}
+
 /// The absolute difference, which branches on the sign of a - b where the formula has abs: the
 /// path's own condition must settle the formula's if.
 #[tokio::test]
@@ -293,7 +342,8 @@ random:
     let samples: Vec<crate::testfile::Case> =
         block.cases(1).take(4).filter_map(Result::ok).collect();
     let right = machine(&program(6)).await;
-    agrees(&right, &samples, false).expect("the model agrees with the samples");
+    let found = agrees(&right, &samples, false).expect("the model agrees with the samples");
+    assert!(found.is_none(), "{found:?}");
     let verdict = prove(&right, &block, &budget(120));
     assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
     let wrong = machine(&program(7)).await;
@@ -370,7 +420,8 @@ time:
     let samples: Vec<crate::testfile::Case> =
         block.cases(1).take(4).filter_map(Result::ok).collect();
     let right = machine(&program(7)).await;
-    agrees(&right, &samples, false).expect("the model agrees with the samples");
+    let found = agrees(&right, &samples, false).expect("the model agrees with the samples");
+    assert!(found.is_none(), "{found:?}");
     let verdict = prove(&right, &block, &budget(120));
     assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
     let wrong = machine(&program(6)).await;
@@ -864,7 +915,8 @@ time:
     let samples: Vec<crate::testfile::Case> =
         block.cases(1).take(4).filter_map(Result::ok).collect();
     let right = machine(&program(4)).await;
-    agrees(&right, &samples, false).expect("the model agrees with the samples");
+    let found = agrees(&right, &samples, false).expect("the model agrees with the samples");
+    assert!(found.is_none(), "{found:?}");
     let verdict = prove(&right, &block, &budget(120));
     assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
     let wrong = machine(&program(3)).await;
@@ -1409,6 +1461,61 @@ fn network_budget(listens: bool) -> Budget {
 /// A server on the network: the line-echo server reads its line with fill, so it answers every
 /// client's line however the network cuts it; one that reads once in place of fill, or never
 /// closes a connection and so waits on a client that waits for it, is found.
+/// A buffer lent to the kernel must hold every byte the call may touch, however little arrives:
+/// a raw read, and fill's reads.
+#[tokio::test]
+async fn buffers_lent_to_the_kernel_hold_every_byte_it_may_touch() {
+    if std::process::Command::new("z3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let read = echo("").replacen("    mov edx, 8192\n", "    mov edx, 8200\n", 1);
+    let verdict = prove(
+        &machine(&read).await,
+        &echo_block("{text}", "ab"),
+        &budget(60),
+    );
+    let Verdict::Counterexample(found) = &verdict else {
+        panic!("{verdict:?}");
+    };
+    let Some(Value::Str(problem)) = found.get(UNSAFE) else {
+        panic!("{found:?}");
+    };
+    assert!(
+        problem.starts_with(
+            "in _start, the read system call writes 8200 bytes at byte 0 of buffer, which has \
+             8192 bytes, so it reaches"
+        ),
+        "{problem}"
+    );
+    let spec = repository_file("examples/echo/spec.md");
+    let source = repository_file("examples/echo/main.s");
+    let fill = source.replacen(
+        "    mov edx, LINE_MAX\n    mov ecx, NEWLINE\n    call fill\n",
+        "    mov edx, LINE_MAX + 8\n    mov ecx, NEWLINE\n    call fill\n",
+        1,
+    );
+    assert_ne!(fill, source);
+    let verdict = prove(
+        &machine(&fill).await,
+        &block(&spec, 0),
+        &network_budget(true),
+    );
+    let Verdict::Counterexample(found) = &verdict else {
+        panic!("{verdict:?}");
+    };
+    let Some(Value::Str(problem)) = found.get(UNSAFE) else {
+        panic!("{found:?}");
+    };
+    assert!(
+        problem.starts_with("in fill, the read system call writes") && problem.contains("of line"),
+        "{problem}"
+    );
+}
+
 #[tokio::test]
 async fn proves_the_echo_server() {
     let spec = repository_file("examples/echo/spec.md");

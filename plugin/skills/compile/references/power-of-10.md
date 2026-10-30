@@ -377,7 +377,10 @@ name]`), an address in the function's own frame (from rsp), a pointer the caller
 register, the program's arguments (which `_start` finds above its stack), a plain number, or a
 value it doesn't follow, such as a pointer loaded from memory. Adding a number to an address
 keeps its owner, and so does a call that returns a pointer it was lent. What the rules can't
-settle, the proof settles for every input.
+settle, the proof checks on every run it covers. Each access must stay inside the buffer, frame
+or argument its pointer points into, even where the CPU would let it into a neighbour. A buffer
+lent to a system call must hold every byte the call may touch. No return address may be
+written, and no stack may be read before something wrote it.
 
 - **M1, owners.** An address is never made from a plain number: no fixed addresses, and no
   `mov esi, 64` then `[rsi]`.

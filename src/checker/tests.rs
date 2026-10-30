@@ -676,7 +676,7 @@ async fn workers_never_race() {
 /// Memory safety: a bug planted for each memory rule is found, on its line.
 #[tokio::test]
 async fn memory_rules_find_each_planted_bug() {
-    let cases: [(&str, &str, &str, Rule, &str); 14] = [
+    let cases: [(&str, &str, &str, Rule, &str); 15] = [
         // M2: a bounds check of part of the index, and one with a negative limit.
         (
             ".Lparse_loop:  # bound: 20\n    cmp rcx, MAX_CHARS\n",
@@ -741,6 +741,15 @@ async fn memory_rules_find_each_planted_bug() {
             "    mov r10, qword ptr [rsp + 8]",
             Rule::Lifetimes,
             "into its return address or its caller's frame",
+        ),
+        // M3: a pointer to a known place in the frame, written past the frame.
+        (
+            ".Lwrite_i64_return:\n    add rsp, 8\n",
+            ".Lwrite_i64_return:\n    lea rcx, [rsp + 8]\n    mov byte ptr [rcx], 0\n    add \
+             rsp, 8\n",
+            "    mov byte ptr [rcx], 0",
+            Rule::Lifetimes,
+            "reaches past this function's frame of 8 bytes, into its return address",
         ),
         // M5: a frame slot read before anything writes it.
         (

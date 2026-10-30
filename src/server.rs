@@ -204,6 +204,40 @@ struct BlockProof {
     wrong: bool,
 }
 
+/// What a reply says of memory safety: the rules always; the runs the model's proofs covered,
+/// on each of which every access stayed inside its own object.
+fn memory_line(proofs: &[BlockProof]) -> String {
+    let rules = "the rules (M1 to M8) hold every address they can follow to its owner";
+    let proven: Vec<&str> = proofs
+        .iter()
+        .filter(|proof| {
+            proof
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.starts_with("proven for every input"))
+        })
+        .map(|proof| proof.test.trim_start_matches("generated "))
+        .collect();
+    if let Some((last, rest)) = proven.split_last() {
+        let tests = if rest.is_empty() {
+            (*last).to_owned()
+        } else {
+            format!("{} and {last}", rest.join(", "))
+        };
+        return format!(
+            "{rules}; on every run the proofs of {tests} cover, every access also stays inside its \
+             own object, with no return address overwritten and no stack read before it's written"
+        );
+    }
+    if proofs.iter().any(|proof| proof.detail.is_none()) {
+        return format!("{rules}; the proofs check the rest on every run they cover");
+    }
+    format!(
+        "{rules}; accesses through pointers they can't follow, such as ones loaded from memory, \
+         are tested, not proven"
+    )
+}
+
 impl BlockProof {
     /// One line for a reply: what was proven, or how far the proof has got.
     fn line(&self) -> String {
@@ -275,6 +309,10 @@ pub struct CheckReport {
     /// proving, how far it has got.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub proofs: Vec<String>,
+    /// What's known of memory safety, once the tests pass: what the rules settle, and the runs
+    /// the proofs hold to the rest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<String>,
     /// The spec's first example as the tests ran it: what to show the user it does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub example: Option<String>,
@@ -1253,7 +1291,7 @@ impl LenguaServer {
             let (machine, owned) = (decoded.clone(), block.clone());
             let verdict = tokio::task::spawn_blocking(move || {
                 prove::agrees(&machine, &samples, listens)
-                    .map(|()| prove::prove(&machine, &owned, &budget))
+                    .map(|found| found.unwrap_or_else(|| prove::prove(&machine, &owned, &budget)))
             })
             .await
             .unwrap_or_else(|error| Err(format!("the proof stopped: {error}")));
@@ -1337,6 +1375,10 @@ impl LenguaServer {
             values.remove("port");
         }
         let networked = !block.server.is_empty() || !block.client.is_empty();
+        let broken_rule = match values.remove(prove::UNSAFE) {
+            Some(expr::Value::Str(problem)) => Some(problem),
+            _ => None,
+        };
         let inputs: expr::Env = values.into_iter().collect();
         let described = if networked {
             format!(
@@ -1353,6 +1395,16 @@ impl LenguaServer {
                 delivery.describe()
             )
         };
+        // A real run can pass without showing it, so the proof's model is the witness.
+        if let Some(problem) = broken_rule {
+            return (
+                format!(
+                    "the proof found inputs where main.s breaks the memory rules: with \
+                     {described}, {problem}"
+                ),
+                true,
+            );
+        }
         let case = match block.case(inputs, crate::expect::now()) {
             Ok(case) => case,
             Err((_, field, error)) => {
@@ -1461,6 +1513,7 @@ impl LenguaServer {
                 return CheckReport {
                     tests,
                     proofs,
+                    memory: Some(memory_line(&found.proofs)),
                     ..CheckReport::new(
                         "proving",
                         format!(
@@ -1496,6 +1549,7 @@ impl LenguaServer {
         CheckReport {
             tests,
             proofs,
+            memory: Some(memory_line(&found.proofs)),
             example: passed.shown.clone(),
             performance: passed.performance.clone(),
             changes,
@@ -1503,8 +1557,8 @@ impl LenguaServer {
                 "done",
                 format!(
                     "Done: tell the user where the program is, what its spec promises, that it \
-                     passed every test, and what's proven.{running}{shown} run runs it on their \
-                     own inputs."
+                     passed every test, and what's proven, memory included.{running}{shown} run \
+                     runs it on their own inputs."
                 ),
             )
         }

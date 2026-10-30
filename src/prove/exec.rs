@@ -3,6 +3,12 @@
 //! its condition, so the finished runs cover every input of a shape. With concrete inputs every
 //! term is a number, and the same code is a plain emulator, which the prover checks against real
 //! runs.
+//!
+//! Every run is held to the memory rules where the checker can't settle them, as a borrow
+//! checker would at run time: each access stays inside the object its pointer points into (a
+//! data symbol, a live frame, the program's arguments), even where the CPU would let it through
+//! into a neighbour; no return address is written, and each `ret` goes back where its call came
+//! from; and no stack byte is read before something wrote it.
 
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
@@ -47,6 +53,8 @@ pub struct Image {
     entry: u64,
     /// Each function's name, by the address range of its code.
     functions: Vec<(u64, u64, String)>,
+    /// Each data symbol's name, by its address range, in address order.
+    symbols: Vec<(u64, u64, String)>,
     /// The canonical fill's places, when the program has it.
     fill: Option<fill::Fill>,
 }
@@ -74,7 +82,11 @@ impl Image {
             writable: true,
         }];
         let mut initial = HashMap::new();
-        for data in machine.data.values() {
+        let mut symbols = Vec::new();
+        for (name, data) in &machine.data {
+            if data.size > 0 {
+                symbols.push((data.address, data.address + data.size, name.clone()));
+            }
             regions.push(Region {
                 start: data.address,
                 end: data.address + data.size,
@@ -84,12 +96,14 @@ impl Image {
                 initial.insert(data.address + offset as u64, *byte);
             }
         }
+        symbols.sort_unstable();
         let mut image = Self {
             instructions,
             regions,
             initial,
             entry,
             functions,
+            symbols,
             fill: None,
         };
         image.fill = fill::Fill::find(&image, machine);
@@ -135,6 +149,8 @@ pub enum End {
     Serving,
     /// Waiting for something the test's peer never sends, which a real run gives up on: why.
     Stuck(String),
+    /// An access the memory rules forbid, which the CPU might let through: what it did.
+    Unsafe(String),
 }
 
 /// What last set the flags, when a branch can read it as a plain comparison.
@@ -174,6 +190,34 @@ impl Memory {
             .or_insert_with(|| Rc::new([None; PAGE]));
         Rc::make_mut(page)[(address % PAGE as u64) as usize] = Some(byte);
     }
+
+    /// Forgets the bytes from `start` up to `end`, as if never written.
+    fn forget(&mut self, start: u64, end: u64) {
+        for address in start..end {
+            if let Some(page) = self.pages.get_mut(&(address / PAGE as u64))
+                && page[(address % PAGE as u64) as usize].is_some()
+            {
+                Rc::make_mut(page)[(address % PAGE as u64) as usize] = None;
+            }
+        }
+    }
+}
+
+/// Memory an access through a pointer is held to: a data symbol, a live frame, or one of the
+/// program's arguments.
+#[derive(Debug, Clone)]
+struct Object {
+    start: u64,
+    end: u64,
+    name: String,
+}
+
+/// A return address on the stack: where it is, where it returns to, and the function called.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Return {
+    slot: u64,
+    back: u64,
+    callee: u64,
 }
 
 /// One run's state.
@@ -241,6 +285,14 @@ pub struct State {
     /// Whether fill takes every way its input can be cut, as a proof does, or what one read
     /// gives, as a run of a test's sample does.
     every_cut: bool,
+    /// The return addresses on the stack, the newest last.
+    returns: Vec<Return>,
+    /// The program's arguments as the run began, each from its start to its end: the array of
+    /// pointers, then each string with its NUL.
+    arguments: Rc<Vec<(u64, u64)>>,
+    /// Accesses at addresses the input chooses that may leave their object: each the condition
+    /// under which one does, and what it does then. The proof asks whether any can hold.
+    pub obligations: Vec<(Term, String)>,
 }
 
 /// A file the program has open.
@@ -325,6 +377,9 @@ impl State {
             raw_reads: false,
             fill_cut: None,
             every_cut: false,
+            returns: Vec::new(),
+            arguments: Rc::new(Vec::new()),
+            obligations: Vec::new(),
         };
         // The strings above the pointers: the program's path, then each argument.
         let program_name: Vec<Term> = b"/lengua/main"
@@ -332,9 +387,11 @@ impl State {
             .map(|byte| pool.bv(8, u128::from(*byte)))
             .collect();
         let mut strings = Vec::new();
+        let mut objects = Vec::new();
         let mut cursor = STACK_TOP + 4096;
         for text in std::iter::once(&program_name).chain(args) {
             strings.push(cursor);
+            let start = cursor;
             for byte in text {
                 state.memory.insert(cursor, *byte);
                 cursor += 1;
@@ -342,11 +399,14 @@ impl State {
             let nul = pool.bv(8, 0);
             state.memory.insert(cursor, nul);
             cursor += 1;
+            objects.push((start, cursor));
         }
         // argc, then argv's pointers and a null, then an empty environment's null.
         let mut words = vec![strings.len() as u64];
         words.extend(&strings);
         words.extend([0, 0]);
+        objects.insert(0, (STACK_TOP, STACK_TOP + 8 * words.len() as u64));
+        state.arguments = Rc::new(objects);
         for (index, word) in words.iter().enumerate() {
             let value = pool.bv(64, u128::from(*word));
             state.store(pool, STACK_TOP + 8 * index as u64, value);
@@ -498,8 +558,23 @@ fn step(image: &Image, state: &mut State, pool: &mut Pool) -> Result<Step, Stop>
     }
     let next = instruction.next_ip();
     state.rip = next;
+    let below = pool.constant(state.registers[4]);
     let mut cpu = Cpu::new(image, state, pool, &instruction);
-    cpu.execute()
+    let step = cpu.execute();
+    // Stack the instruction released, by pop, ret or add rsp, is gone: reading it again before
+    // writing it reads nothing written.
+    if let (Some(below), Some(above)) = (below, pool.constant(state.registers[4]))
+        && let (Ok(below), Ok(above)) = (u64::try_from(below), u64::try_from(above))
+        && let (below, above) = (below.max(STACK_TOP - STACK_SIZE), above.min(STACK_TOP))
+        && below < above
+    {
+        state.memory.forget(below, above);
+        // A whole value is at most 8 bytes.
+        state
+            .stored
+            .retain(|start, _| start.saturating_add(8) <= below || *start >= above);
+    }
+    step
 }
 
 /// One instruction being executed on a state.
@@ -573,18 +648,14 @@ impl<'a> Cpu<'a> {
             }
             let byte = match self.state.memory.get(at) {
                 Some(byte) => byte,
-                None => match self.image.initial.get(&at) {
-                    Some(byte) => self.pool.bv(8, u128::from(*byte)),
-                    None if (STACK_TOP - STACK_SIZE..STACK_TOP - 8).contains(&at) => {
-                        // Stack the program never wrote: whatever was there.
-                        let unknown = self.pool.var(8, &format!("stack{at:x}"));
-                        self.state.memory.insert(at, unknown);
-                        unknown
-                    }
-                    // Zero-filled data (.bss) and the arguments' padding, as the kernel
-                    // leaves them.
-                    None => self.pool.bv(8, 0),
-                },
+                None if unwritten_stack(at) => {
+                    return Err(End::Unsafe(format!(
+                        "{} reads {}, which nothing wrote",
+                        self.doing(),
+                        self.describe(at)
+                    )));
+                }
+                None => self.peek(at),
             };
             value = Some(match value {
                 None => byte,
@@ -592,6 +663,239 @@ impl<'a> Cpu<'a> {
             });
         }
         value.ok_or_else(|| unsupported("an empty memory access"))
+    }
+
+    /// The byte at `at` as it stands, to merge with: never-written stack is whatever was there.
+    fn peek(&mut self, at: u64) -> Term {
+        if let Some(byte) = self.state.memory.get(at) {
+            return byte;
+        }
+        match self.image.initial.get(&at) {
+            Some(byte) => self.pool.bv(8, u128::from(*byte)),
+            None if unwritten_stack(at) => {
+                let unknown = self.pool.var(8, &format!("stack{at:x}"));
+                self.state.memory.insert(at, unknown);
+                unknown
+            }
+            // Zero-filled data (.bss) and the arguments' padding, as the kernel leaves them.
+            None => self.pool.bv(8, 0),
+        }
+    }
+
+    /// What the instruction running does, for a report: the function and the instruction.
+    fn doing(&self) -> String {
+        format!(
+            "in {}, `{}`",
+            self.image.function_at(self.instruction.ip()),
+            self.instruction
+        )
+    }
+
+    /// The live frames, the newest first, each from its lowest byte to just below its return
+    /// address, with an address in the function it belongs to; `_start`'s reaches over the
+    /// array of the program's arguments above it, which it reads through rsp.
+    fn frames(&self) -> Vec<(u64, u64, u64)> {
+        let Some(mut low) = self
+            .pool
+            .constant(self.state.registers[4])
+            .and_then(|rsp| u64::try_from(rsp).ok())
+        else {
+            return Vec::new();
+        };
+        let mut frames = Vec::new();
+        let mut running = self.instruction.ip();
+        for back in self.state.returns.iter().rev() {
+            frames.push((low, back.slot, running));
+            low = back.slot + 8;
+            running = back.back;
+        }
+        let top = self
+            .state
+            .arguments
+            .first()
+            .map_or(STACK_TOP, |array| array.1);
+        frames.push((low, top, running));
+        frames
+    }
+
+    /// The objects an access can be held to, with their names: data symbols, live frames, and
+    /// the program's arguments, which only stack addresses can be in.
+    fn objects(&self, stack: bool) -> Vec<Object> {
+        let mut objects: Vec<Object> = self
+            .image
+            .symbols
+            .iter()
+            .map(|(start, end, name)| Object {
+                start: *start,
+                end: *end,
+                name: name.clone(),
+            })
+            .collect();
+        if stack {
+            for (index, (start, end, running)) in self.frames().into_iter().enumerate() {
+                let function = self.image.function_at(running);
+                objects.push(Object {
+                    start,
+                    end,
+                    name: if index == 0 {
+                        format!("{function}'s own frame")
+                    } else {
+                        format!("{function}'s frame")
+                    },
+                });
+            }
+            for (index, (start, end)) in self.state.arguments.iter().enumerate() {
+                objects.push(Object {
+                    start: *start,
+                    end: *end,
+                    name: if index == 0 {
+                        "the array of the program's arguments".into()
+                    } else {
+                        format!("the program's argument {}", index - 1)
+                    },
+                });
+            }
+        }
+        objects
+    }
+
+    /// The object an access at `address` through `pointer` is held to: the one holding the
+    /// pointer, or, for an access below a pointer just past an object's end, that object.
+    fn object(&self, pointer: u64, address: u64) -> Option<Object> {
+        let stack = (STACK_TOP - STACK_SIZE..=STACK_TOP + ARGUMENT_ROOM).contains(&pointer);
+        let objects = self.objects(stack);
+        let holding = objects
+            .iter()
+            .find(|object| (object.start..object.end).contains(&pointer));
+        let ending = objects
+            .iter()
+            .find(|object| object.end == pointer && object.start < object.end);
+        match (holding, ending) {
+            (Some(held), Some(ended)) if address < pointer && held.start == pointer => {
+                Some(ended.clone())
+            }
+            (Some(held), _) => Some(held.clone()),
+            (None, ended) => ended.cloned(),
+        }
+    }
+
+    /// Where `address` is, for a report: in a data symbol, a frame, a return address, or the
+    /// program's arguments.
+    fn describe(&self, address: u64) -> String {
+        if let Some(back) = self
+            .state
+            .returns
+            .iter()
+            .find(|back| (back.slot..back.slot + 8).contains(&address))
+        {
+            return format!(
+                "the return address of {}",
+                self.image.function_at(back.callee)
+            );
+        }
+        match self
+            .objects(true)
+            .into_iter()
+            .find(|object| (object.start..object.end).contains(&address))
+        {
+            Some(object) => format!(
+                "byte {} of {}, which has {} bytes",
+                address - object.start,
+                object.name,
+                object.end - object.start
+            ),
+            None => format!("address {address:#x}, outside every object"),
+        }
+    }
+
+    /// Checks that `bytes` bytes at `address`, reached through `pointer` by `what`, stay inside
+    /// the object the pointer points into.
+    fn reach(
+        &mut self,
+        pointer: u64,
+        address: u64,
+        bytes: u64,
+        writing: bool,
+        what: &dyn Fn(&Self) -> String,
+    ) -> Result<(), Stop> {
+        let Some(object) = self.object(pointer, address) else {
+            return Ok(());
+        };
+        let last = address.wrapping_add(bytes);
+        if address >= object.start && last <= object.end && last >= address {
+            return Ok(());
+        }
+        // The first byte outside the object, and what holds it.
+        let outside = if address < object.start {
+            address
+        } else {
+            address.max(object.end)
+        };
+        let offset = i128::from(address) - i128::from(object.start);
+        Err(End::Unsafe(format!(
+            "{} {} {bytes} byte{} at byte {offset} of {}, which has {} bytes, so it reaches {}",
+            what(self),
+            if writing { "writes" } else { "reads" },
+            if bytes == 1 { "" } else { "s" },
+            object.name,
+            object.end - object.start,
+            self.describe(outside)
+        )))
+    }
+
+    /// The register the memory operand's address comes from: its base, or its index where the
+    /// base holds no address. `None` for `[rip + name]`, which rule 6 holds to its symbol, and
+    /// for constant offsets from rsp, which M3 holds to the frame.
+    fn pointer(&mut self) -> Option<u64> {
+        let instruction = self.instruction;
+        if instruction.is_ip_rel_memory_operand()
+            || (instruction.memory_base() == Register::RSP
+                && instruction.memory_index() == Register::None)
+        {
+            return None;
+        }
+        let base = self.value_of(instruction.memory_base());
+        let index = if instruction.memory_index_scale() == 1 {
+            self.value_of(instruction.memory_index())
+        } else {
+            None
+        };
+        let points = |cpu: &Self, pointer: u64| cpu.object(pointer, pointer).is_some();
+        base.filter(|pointer| points(self, *pointer))
+            .or_else(|| index.filter(|pointer| points(self, *pointer)))
+    }
+
+    /// A general register's value, when it's a known number.
+    fn value_of(&mut self, register: Register) -> Option<u64> {
+        if register == Register::None {
+            return None;
+        }
+        let term = self.state.register(self.pool, register)?;
+        self.pool
+            .constant(term)
+            .and_then(|value| u64::try_from(value).ok())
+    }
+
+    /// Checks the memory operand's access of `bytes` bytes at `address` against its pointer.
+    fn reach_operand(&mut self, address: u64, bytes: u64, writing: bool) -> Result<(), Stop> {
+        match self.pointer() {
+            Some(pointer) => self.reach(pointer, address, bytes, writing, &Self::doing),
+            None => Ok(()),
+        }
+    }
+
+    /// Checks a buffer of `count` bytes lent to the kernel by the system call `call`.
+    fn lent(&mut self, buffer: u64, count: u64, writing: bool, call: &str) -> Result<(), Stop> {
+        if count == 0 {
+            return Ok(());
+        }
+        let what = |cpu: &Self| {
+            format!(
+                "in {}, the {call} system call",
+                cpu.image.function_at(cpu.instruction.ip())
+            )
+        };
+        self.reach(buffer, buffer, count, writing, &what)
     }
 
     fn save(&mut self, address: u64, value: Term) -> Result<(), Stop> {
@@ -602,20 +906,37 @@ impl<'a> Cpu<'a> {
                 _ => return Err(End::Signal("SIGSEGV")),
             }
         }
+        let end = address.wrapping_add(u64::from(bytes));
+        if let Some(back) = self
+            .state
+            .returns
+            .iter()
+            .find(|back| address < back.slot + 8 && back.slot < end)
+        {
+            return Err(End::Unsafe(format!(
+                "{} writes over the return address of {}",
+                self.doing(),
+                self.image.function_at(back.callee)
+            )));
+        }
         self.state.store(self.pool, address, value);
         Ok(())
     }
 
     /// The places an address that depends on the input can be: every value its range allows,
-    /// when there are few and each holds `bytes` bytes the access may use.
-    fn places(&self, address: Term, bytes: u32, writing: bool) -> Result<Vec<u64>, Stop> {
+    /// when there are few and each holds `bytes` bytes the access may use. A place outside the
+    /// object the operand's pointer points into is an obligation: the proof asks whether the
+    /// input can choose it.
+    fn places(&mut self, address: Term, bytes: u32, writing: bool) -> Result<Vec<u64>, Stop> {
         let (low, high) = self.pool.range(address);
         if high - low >= MAX_PLACES {
             return Err(unsupported(
                 "an address that depends on the input in more than 256 ways",
             ));
         }
+        let pointer = self.pointer();
         let mut places = Vec::new();
+        let mut outside = Vec::new();
         for place in low..=high {
             let place = u64::try_from(place).map_err(|_| unsupported("an address past 64 bits"))?;
             for offset in 0..u64::from(bytes) {
@@ -629,7 +950,23 @@ impl<'a> Cpu<'a> {
                     }
                 }
             }
+            if let Some(pointer) = pointer
+                && let Err(End::Unsafe(problem)) =
+                    self.reach(pointer, place, u64::from(bytes), writing, &Self::doing)
+            {
+                outside.push((place, problem));
+            }
             places.push(place);
+        }
+        if let Some((_, problem)) = outside.first() {
+            let mut chosen = self.pool.boolean(false);
+            for (place, _) in &outside {
+                let constant = self.pool.bv(64, u128::from(*place));
+                let here = self.pool.eq(address, constant);
+                chosen = self.pool.bool_or(chosen, here);
+            }
+            let problem = format!("for some input, {problem}");
+            self.state.obligations.push((chosen, problem));
         }
         Ok(places)
     }
@@ -662,7 +999,7 @@ impl<'a> Cpu<'a> {
             let chosen = self.pool.eq(address, constant);
             for offset in 0..bytes {
                 let at = place + u64::from(offset);
-                let old = self.load(at, 1)?;
+                let old = self.peek(at);
                 let new = self.pool.extract(value, offset * 8 + 7, offset * 8);
                 let byte = self.pool.ite(chosen, new, old);
                 self.state.store(self.pool, at, byte);
@@ -699,7 +1036,10 @@ impl<'a> Cpu<'a> {
             OpKind::Memory => {
                 let bytes = self.width(index) / 8;
                 match self.address() {
-                    Ok(address) => self.load(address, bytes),
+                    Ok(address) => {
+                        self.reach_operand(address, u64::from(bytes), false)?;
+                        self.load(address, bytes)
+                    }
                     Err(_) => {
                         let address = self.effective_address()?;
                         self.load_anywhere(address, bytes)
@@ -728,7 +1068,11 @@ impl<'a> Cpu<'a> {
                 .set_register(self.pool, instruction.op_register(index), value)
                 .ok_or_else(|| unsupported("writing an unusual register")),
             OpKind::Memory => match self.address() {
-                Ok(address) => self.save(address, value),
+                Ok(address) => {
+                    let bytes = self.pool.width(value) / 8;
+                    self.reach_operand(address, u64::from(bytes), true)?;
+                    self.save(address, value)
+                }
                 Err(_) => {
                     let address = self.effective_address()?;
                     self.save_anywhere(address, value)
@@ -1125,12 +1469,29 @@ impl<'a> Cpu<'a> {
             Mnemonic::Call => {
                 let back = self.pool.bv(64, u128::from(instruction.next_ip()));
                 self.push(back)?;
+                let slot = self.constant(self.state.registers[4])?;
+                self.state.returns.push(Return {
+                    slot,
+                    back: instruction.next_ip(),
+                    callee: instruction.near_branch_target(),
+                });
                 self.state.rip = instruction.near_branch_target();
                 Ok(Step::Next)
             }
             Mnemonic::Ret => {
+                let slot = self.constant(self.state.registers[4])?;
                 let target = self.pop()?;
-                self.state.rip = self.constant(target)?;
+                let target = self.constant(target)?;
+                match self.state.returns.pop() {
+                    Some(back) if back.slot == slot && back.back == target => {}
+                    _ => {
+                        return Err(End::Unsafe(format!(
+                            "{} returns somewhere its caller didn't call it from",
+                            self.doing()
+                        )));
+                    }
+                }
+                self.state.rip = target;
                 Ok(Step::Next)
             }
             Mnemonic::Syscall => self.syscall(),
@@ -1520,7 +1881,8 @@ impl<'a> Cpu<'a> {
                 "opening a file other than in the working folder",
             ));
         }
-        let mut address = self.constant(path)?;
+        let start = self.constant(path)?;
+        let mut address = start;
         let mut name = Vec::new();
         loop {
             let byte = self.load(address, 1)?;
@@ -1537,6 +1899,7 @@ impl<'a> Cpu<'a> {
             }
             address += 1;
         }
+        self.lent(start, name.len() as u64 + 1, false, "openat")?;
         let name =
             String::from_utf8(name).map_err(|_| unsupported("a file name that isn't UTF-8"))?;
         // Only the test's folder is modeled: no absolute paths and no way out of it.
@@ -1588,6 +1951,7 @@ impl<'a> Cpu<'a> {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 let buffer = self.constant(rsi)?;
                 let count = self.constant(rdx)?;
+                self.lent(buffer, count, true, "read")?;
                 if fd == 0 {
                     self.state.raw_reads = true;
                     // A pipe hands over at most 4096 bytes whole; past that, how the input
@@ -1650,6 +2014,7 @@ impl<'a> Cpu<'a> {
             {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 let (buffer, count) = (self.constant(rsi)?, self.constant(rdx)?);
+                self.lent(buffer, count, false, "write")?;
                 match self.connection_of(fd) {
                     Ok(Some(number)) => self.send(number, buffer, count, 0)?,
                     _ => self.not_connected(),
@@ -1659,6 +2024,7 @@ impl<'a> Cpu<'a> {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 let buffer = self.constant(rsi)?;
                 let count = self.constant(rdx)?;
+                self.lent(buffer, count, false, "write")?;
                 // Standard output or error, a file open for writing, or nothing that can be.
                 let target = match fd {
                     1 | 2 => Some(None),
@@ -1707,6 +2073,7 @@ impl<'a> Cpu<'a> {
             42 => {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 let address = self.constant(rsi)?;
+                self.lent(address, self.constant(rdx)? & 0xffff_ffff, false, "connect")?;
                 return self.connect(fd, address);
             }
             43 | 288 => {
@@ -1717,6 +2084,10 @@ impl<'a> Cpu<'a> {
                         "accepting a connection with flags beyond close-on-exec",
                     ));
                 }
+                if address != 0 {
+                    self.lent(address, 16, true, "accept")?;
+                    self.lent(length, 4, true, "accept")?;
+                }
                 self.accept(fd, address, length)?
             }
             44 | 45 => {
@@ -1726,6 +2097,8 @@ impl<'a> Cpu<'a> {
                 if self.constant(registers[8])? != 0 {
                     return Err(unsupported("sending to or receiving from a named address"));
                 }
+                let call = if number == 44 { "sendto" } else { "recvfrom" };
+                self.lent(buffer, count, number == 45, call)?;
                 match self.connection_of(fd) {
                     Err(()) => (-EBADF).cast_unsigned(),
                     Ok(None) => self.not_connected(),
@@ -1749,6 +2122,7 @@ impl<'a> Cpu<'a> {
             // The test's readings, as the supervisor gives them, the last one repeating.
             228 if !self.state.clock.is_empty() => {
                 let buffer = self.constant(rsi)?;
+                self.lent(buffer, 16, true, "clock_gettime")?;
                 let readings = Rc::clone(&self.state.clock);
                 let index = self.state.readings_used.min(readings.len() - 1);
                 let (seconds, nanoseconds) = readings[index];
@@ -1761,6 +2135,7 @@ impl<'a> Cpu<'a> {
             318 if self.state.random.is_some() => {
                 let buffer = self.constant(rdi)?;
                 let count = self.constant(rsi)?;
+                self.lent(buffer, count, true, "getrandom")?;
                 let flags = self.constant(rdx)?;
                 if flags & !7 != 0 || flags & 6 == 6 {
                     (-EINVAL).cast_unsigned()
@@ -1789,6 +2164,7 @@ impl<'a> Cpu<'a> {
                     return Err(unsupported(format!("reading clock {clock}")));
                 }
                 let buffer = self.constant(rsi)?;
+                self.lent(buffer, 16, true, "clock_gettime")?;
                 let fresh = self.pool.len();
                 let seconds =
                     self.pool
@@ -1803,6 +2179,7 @@ impl<'a> Cpu<'a> {
             318 => {
                 let buffer = self.constant(rdi)?;
                 let count = self.constant(rsi)?;
+                self.lent(buffer, count, true, "getrandom")?;
                 if count > 256 {
                     return Err(unsupported("getrandom for more than 256 bytes at once"));
                 }
@@ -1918,6 +2295,12 @@ pub fn bytes(pool: &mut Pool, text: &[u8]) -> Vec<Term> {
     text.iter()
         .map(|byte| pool.bv(8, u128::from(*byte)))
         .collect()
+}
+
+/// Whether `at` is stack below the program's arguments, which holds what the program wrote
+/// there and nothing before.
+fn unwritten_stack(at: u64) -> bool {
+    (STACK_TOP - STACK_SIZE..STACK_TOP - 8).contains(&at)
 }
 
 mod bits;

@@ -209,9 +209,10 @@ test pass does it stamp `[code]`, including the executable's SHA-256 and the too
 `run` rebuilds `main.s` and runs it only if the build is byte for byte that executable.
 
 The proof records its results in a `[proofs]` table: the executable it's about, the generated
-tests proven for every input in range or up to a length, and the solvers that checked them.
-Checking tests again drops them; a build that is byte for byte the same keeps them, and any other
-build is proven again by itself.
+tests proven for every input in range or up to a length, and the solvers that checked them. A
+test proven there is proven memory-safe on the same runs, so the table says that too, with no
+field of its own. Checking tests again drops them; a build that is byte for byte the same keeps
+them, and any other build is proven again by itself.
 
 ## Performance
 
@@ -322,9 +323,26 @@ declare them. Then the M rules hold:
 
 The rules stop where a general-purpose program would. Separate parts of one buffer, such as
 objects carved from an arena (the dialect's dynamic memory), may be lent together, and pointers
-loaded from memory, as lists and trees need, are allowed. What no rule settles, such as those
-pointers or an index checked against a length in a register, the proof settles for every input.
-Every program in the repository passes, and a planted bug for each rule is found on its line.
+loaded from memory, as lists and trees need, are allowed. Every program in the repository
+passes, and a planted bug for each rule is found on its line.
+
+What no rule settles, such as those pointers or an index checked against a length in a
+register, the proof settles on every run it covers. The prover's model holds each run to the
+memory rules, as a borrow checker would at run time:
+- Each access stays inside the object its pointer points into: a data symbol, a live frame, or
+  one of the program's arguments. A pointer just past an object's end still belongs to it for
+  accesses below. So does each buffer lent to the kernel, for as many bytes as the call may
+  touch.
+- No return address is written, and each `ret` goes back where its call came from.
+- No stack byte is read before something wrote it. Stack a function released is gone.
+- An address the input chooses that could leave its object becomes an obligation, which the
+  solvers check against the run's conditions.
+
+A broken rule is a counterexample with the inputs and what broke, such as "in write_i64, `mov
+byte ptr [rcx],0` writes 1 byte at byte 8 of write_i64's own frame, which has 8 bytes, so it
+reaches the return address of write_i64". A real run can pass without showing it, so the model
+is the witness, and no replay is needed. The done reply's `memory` line says what the rules
+settle, and which proofs held their runs to the rest.
 
 ## Translation validation
 

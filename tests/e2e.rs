@@ -75,6 +75,12 @@ async fn add_goes_from_request_to_done_in_both_protocols() {
             done["tests"][0], "main.s follows every rule and passed all 253 test runs",
             "{done}"
         );
+        assert!(
+            done["memory"]
+                .as_str()
+                .is_some_and(|memory| memory.starts_with("the rules (M1 to M8) hold")),
+            "{done}"
+        );
         assert_eq!(
             done["example"],
             "example B1: given arguments [\"2\", \"3\"], the program printed \"5\\n\", exited \
