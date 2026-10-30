@@ -63,7 +63,9 @@ and the CPU features the code needs; never write that line yourself.
 7. Once every test passes, `check` proves the program in the background, and within about 20 seconds
    it says `done`. Each line of `proofs` says what's proven, how far, or why not, and a proof still
    running says how far it has got: the proofs go on for up to five minutes, lengua records each in
-   lengua.lock as it ends, and any later `check` shows them. Don't wait for them. For each generated
+   lengua.lock as it ends, and any later `check` shows them. Don't wait for them, but call `check`
+   again before the user relies on the program: a proof that finds it wrong shows there, and `run`
+   refuses that build from then on, even after lengua restarts. For each generated
    test it can, it proves for every input rather than a sample that the program prints what the
    formulas say: whole numbers, decimals, each value of a `choice(…)`, texts and text formulas such
    as `upper` and `count`, and files. Long texts are proven up to a length, such as 4096 bytes, and

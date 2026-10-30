@@ -648,7 +648,19 @@ async fn a_bug_the_samples_miss_is_found_by_the_proof_and_run_for_real() {
         refused.contains("The proof found inputs where main.s is wrong"),
         "{refused}"
     );
-    session.service.cancel().await.expect("close the session");
+    // Nor after lengua restarts: lengua.lock records what the proof found, and check shows it.
+    let restarted = session.restart().await;
+    let refused = restarted
+        .call_error("run", with_args(&program, &["1234567"]))
+        .await;
+    assert!(
+        refused.contains("The proof found inputs where main.s is wrong")
+            && refused.contains("n = 1234567"),
+        "{refused}"
+    );
+    let problems = failed(&restarted, &program).await;
+    assert!(problems.contains("with n = 1234567"), "{problems}");
+    restarted.service.cancel().await.expect("close the session");
 }
 
 #[tokio::test]

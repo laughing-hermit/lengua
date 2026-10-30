@@ -758,6 +758,22 @@ impl LenguaServer {
                 "{CODE_FILE} isn't checked; call check with path {folder} first."
             ));
         };
+        // What a proof found wrong outlasts lengua's restarts: lengua.lock records it.
+        if let Some(proofs) = &lock.proofs
+            && proofs.executable_sha256 == stamp.executable_sha256
+            && !proofs.wrong.is_empty()
+        {
+            let wrong: Vec<String> = proofs
+                .wrong
+                .iter()
+                .map(|(id, found)| format!("generated {id}: {found}"))
+                .collect();
+            return Err(format!(
+                "The proof found inputs where {CODE_FILE} is wrong, so it won't run: {}. Call \
+                 check with path {folder} to see them, then fix {CODE_FILE}.",
+                wrong.join("; ")
+            ));
+        }
         let code = read_code(&folder)?;
         let source = checker::check_layout(&code).0;
         let spec = read_spec(&folder).and_then(|text| {
@@ -1205,8 +1221,15 @@ impl LenguaServer {
         let Ok(mut found) = checking.found.lock() else {
             return false;
         };
+        let mut any_wrong = false;
         for (block, proof) in suite.generated.iter().zip(&mut found.proofs) {
             let id = block.id.to_string();
+            if let Some((_, what)) = stamp.wrong.iter().find(|(known, _)| *known == id) {
+                proof.detail = Some(what.clone());
+                proof.wrong = true;
+                any_wrong = true;
+                continue;
+            }
             proof.detail = Some(if stamp.proven.contains(&id) {
                 "proven for every input in range, as lengua.lock records".to_owned()
             } else if let Some((_, bytes)) = stamp.bounded.iter().find(|(known, _)| *known == id) {
@@ -1218,6 +1241,7 @@ impl LenguaServer {
                 "tested, not proven".to_owned()
             });
         }
+        found.wrong |= any_wrong;
         true
     }
 
@@ -1252,9 +1276,11 @@ impl LenguaServer {
         };
         let spec = &code.spec;
         let deadline = Instant::now() + proof_time();
-        // The ids proven, how many the solvers proved, and why any rested on one solver.
+        // The ids proven, those found wrong, how many the solvers proved, and why any rested on
+        // one solver.
         let mut proven_ids = Vec::new();
         let mut bounded_ids = Vec::new();
+        let mut wrong_ids: Vec<(String, String)> = Vec::new();
         let mut solved = 0;
         let mut alone_reason: Option<String> = None;
         let allows = |call: spec::Syscall| spec.syscalls.contains(&call);
@@ -1343,9 +1369,25 @@ impl LenguaServer {
                         .await
                 }
             };
+            if wrong {
+                // At once, so the finding outlasts this job: run refuses the build from now on.
+                wrong_ids.push((block.id.to_string(), detail.clone()));
+                let ids =
+                    |list: &[(usize, String)]| list.iter().map(|(_, id)| id.clone()).collect();
+                let bounds = bounded_ids.iter().map(|(_, bound)| bound.clone()).collect();
+                self.stamp_proofs(
+                    folder,
+                    executable,
+                    ids(&proven_ids),
+                    bounds,
+                    wrong_ids.clone(),
+                    "z3 and cvc5".to_owned(),
+                )
+                .await;
+            }
             set(index, detail, wrong);
         }
-        if proven_ids.is_empty() && bounded_ids.is_empty() {
+        if proven_ids.is_empty() && bounded_ids.is_empty() && wrong_ids.is_empty() {
             return;
         }
         let solvers = match (solved, alone_reason) {
@@ -1360,8 +1402,15 @@ impl LenguaServer {
         bounded_ids.sort_unstable();
         let proven_ids = proven_ids.into_iter().map(|(_, id)| id).collect();
         let bounded_ids = bounded_ids.into_iter().map(|(_, bound)| bound).collect();
-        self.stamp_proofs(folder, executable, proven_ids, bounded_ids, solvers)
-            .await;
+        self.stamp_proofs(
+            folder,
+            executable,
+            proven_ids,
+            bounded_ids,
+            wrong_ids,
+            solvers,
+        )
+        .await;
     }
 
     /// Runs inputs the proof found for real, so a counterexample is reported only when the
@@ -1553,7 +1602,9 @@ impl LenguaServer {
         };
         let running = if still_proving {
             " The proofs that say proving go on in the background for up to five minutes: tell \
-             the user they're still running, and that checking again later shows them."
+             the user they're still running, and call check again before they rely on the \
+             program: a proof that finds inputs where it's wrong shows there, and run refuses \
+             that build from then on."
         } else {
             ""
         };
@@ -1666,6 +1717,7 @@ impl LenguaServer {
         executable: &Sha256Hex,
         proven: Vec<String>,
         bounded: Vec<(String, usize)>,
+        wrong: Vec<(String, String)>,
         solvers: String,
     ) -> bool {
         let _writing = self.lock_writes.lock().await;
@@ -1688,6 +1740,7 @@ impl LenguaServer {
                 proven,
                 bounded,
                 solvers,
+                wrong,
             })),
             ..lock
         };

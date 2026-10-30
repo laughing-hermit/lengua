@@ -477,7 +477,6 @@ fn call(
     }
 }
 
-/// Each byte with `pairs` applied: a byte equal to a pair's first character becomes its second.
 /// A text's characters, each its bytes: a byte that can only continue a character, 0x80 to
 /// 0xbf, stays with the byte before it. `None` when a byte could be either kind.
 fn characters(pool: &Pool, bytes: &[Term]) -> Option<Vec<Vec<Term>>> {
@@ -547,6 +546,7 @@ fn translate_characters(
     Ok(out)
 }
 
+/// Each byte with `pairs` applied: a byte equal to a pair's first character becomes its second.
 fn translate_bytes(pool: &mut Pool, bytes: &[Term], pairs: &[(char, char)]) -> Vec<Term> {
     // Later pairs win; then the bytes that move by the same amount move together: upper is
     // a to z moving down 32, one choice per byte.

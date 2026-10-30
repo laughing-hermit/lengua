@@ -104,6 +104,9 @@ pub struct ProofStamp {
     pub bounded: Vec<(String, usize)>,
     /// Which solvers checked them: `z3 and cvc5`, or one of them alone.
     pub solvers: String,
+    /// The generated tests a proof found wrong, each id with what it found: `run` refuses this
+    /// build for them however often lengua has restarted since.
+    pub wrong: Vec<(String, String)>,
 }
 
 impl Lock {
@@ -213,6 +216,20 @@ impl Lock {
                 let _ = writeln!(text, "bounded = [{}]", bounded.join(", "));
             }
             let _ = writeln!(text, "solvers = {}", toml_string(&proofs.solvers));
+            if !proofs.wrong.is_empty() {
+                let wrong: Vec<String> = proofs
+                    .wrong
+                    .iter()
+                    .map(|(id, found)| {
+                        format!(
+                            "{{ id = {}, found = {} }}",
+                            toml_string(id),
+                            toml_string(found)
+                        )
+                    })
+                    .collect();
+                let _ = writeln!(text, "wrong = [{}]", wrong.join(", "));
+            }
         }
         text
     }
@@ -249,6 +266,15 @@ struct ProofsTable {
     #[serde(default)]
     bounded: Vec<BoundedTable>,
     solvers: String,
+    #[serde(default)]
+    wrong: Vec<WrongTable>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WrongTable {
+    id: String,
+    found: String,
 }
 
 #[derive(Deserialize)]
@@ -336,6 +362,11 @@ fn parse_body(body: &str) -> Result<Lock, LockError> {
                         .map(|bounded| (bounded.id, bounded.bytes))
                         .collect(),
                     solvers: proofs.solvers,
+                    wrong: proofs
+                        .wrong
+                        .into_iter()
+                        .map(|wrong| (wrong.id, wrong.found))
+                        .collect(),
                 }))
             })
             .transpose()?,
@@ -683,6 +714,7 @@ mod tests {
             proven: vec!["B1".into(), "B\"2".into()],
             bounded: Vec::new(),
             solvers: "z3 and cvc5".into(),
+            wrong: Vec::new(),
         }));
         let text = lock.to_signed_text(&key(1));
         assert!(text.contains("proven = [\"B1\", \"B\\\"2\"]\n"), "{text}");
@@ -699,6 +731,22 @@ mod tests {
             "{bounded_text}"
         );
         assert_eq!(Lock::from_signed_text(&bounded_text, &key(1)), Ok(bounded));
+        // What a proof found wrong is recorded with what it found, so it outlasts restarts.
+        let mut wrong = lock.clone();
+        if let Some(proofs) = &mut wrong.proofs {
+            proofs.wrong = vec![(
+                "B2".into(),
+                "with n = 1234567: it printed \"-1234566\"".into(),
+            )];
+        }
+        let wrong_text = wrong.to_signed_text(&key(1));
+        assert!(
+            wrong_text.contains(
+                "wrong = [{ id = \"B2\", found = \"with n = 1234567: it printed \\\"-1234566\\\"\" }]\n"
+            ),
+            "{wrong_text}"
+        );
+        assert_eq!(Lock::from_signed_text(&wrong_text, &key(1)), Ok(wrong));
         // Proofs about some other build can't be in a lock lengua wrote.
         let other = text
             .split("\n[signature]")

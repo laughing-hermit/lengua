@@ -216,7 +216,9 @@ test pass does it stamp `[code]`, including the executable's SHA-256 and the too
 `run` rebuilds `main.s` and runs it only if the build is byte for byte that executable.
 
 The proof records its results in a `[proofs]` table: the executable it's about, the generated
-tests proven for every input in range or up to a length, and the solvers that checked them. A
+tests proven for every input in range or up to a length, the solvers that checked them, and the
+tests it found wrong, with what it found, the moment it finds them. `run` refuses a build that
+table finds wrong, however often lengua restarts, and a later `check` shows what was found. A
 test proven there is proven memory-safe on the same runs, so the table says that too, with no
 field of its own. Checking tests again drops them; a build that is byte for byte the same keeps
 them, and any other build is proven again by itself.
