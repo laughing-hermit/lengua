@@ -45,6 +45,9 @@ pub enum Verdict {
         alone: Option<String>,
         /// Where a proof over text stops, when it doesn't cover every length in range.
         bound: Option<Bound>,
+        /// Whether the program reads standard input and its connections only through fill, so
+        /// the proof covers each message cut into pieces any way, not only the tests' cuts.
+        cut_any_way: bool,
     },
     /// Inputs where the program, as the prover reads it, disagrees with the formulas.
     Counterexample(BTreeMap<String, Value>),
@@ -1956,9 +1959,10 @@ fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verd
         let any = Generator::Int { lo: 1, hi: 65535 };
         each.push(("port".to_owned(), parts("port", &any)?));
     }
+    let image = Image::new(machine).ok_or("the program has no _start")?;
     // What a test's peer sends arrives whole or cut, each way the tests' runs and the merges of
-    // their pieces cut it.
-    if !block.server.is_empty() || !block.client.is_empty() {
+    // their pieces cut it; through fill, every way at once.
+    if (!block.server.is_empty() || !block.client.is_empty()) && !image.has_fill() {
         let deliveries = Delivery::ALL
             .iter()
             .map(|delivery| Part::Delivery(*delivery));
@@ -1971,7 +1975,6 @@ fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verd
         })
         .ok_or("too many input shapes to count")?;
     budget.progress.total.store(total, Ordering::Relaxed);
-    let image = Image::new(machine).ok_or("the program has no _start")?;
     // Texts of many lengths go shortest first, so where time or the model runs out the proof
     // still holds for every input up to some length; everything else goes in a scattered order,
     // so the pace of the first combinations shows the pace of all, and a counterexample anywhere
@@ -2002,6 +2005,7 @@ fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verd
     let questions = AtomicUsize::new(0);
     let alone: Mutex<Option<String>> = Mutex::new(None);
     let stop = AtomicBool::new(false);
+    let cut_any_way = AtomicBool::new(image.has_fill());
     let found: Mutex<Option<BTreeMap<String, Value>>> = Mutex::new(None);
     let failure: Mutex<Option<String>> = Mutex::new(None);
     // In length order, the shortest text length something couldn't be proven at, and why:
@@ -2085,7 +2089,10 @@ fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verd
                         prove_shape(&image, block, &each, combination, budget, &mut solvers)
                     };
                     match result {
-                        Ok((count, asked, reason)) => {
+                        Ok((count, asked, reason, any_cut)) => {
+                            if !any_cut {
+                                cut_any_way.store(false, Ordering::Relaxed);
+                            }
                             budget.progress.done.fetch_add(1, Ordering::Relaxed);
                             if by_length {
                                 count_finished(length);
@@ -2190,6 +2197,7 @@ fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verd
         questions: questions.into_inner(),
         alone: alone.into_inner().ok().flatten(),
         bound,
+        cut_any_way: cut_any_way.into_inner(),
     })
 }
 
@@ -2492,7 +2500,7 @@ fn prove_shape(
     combination: usize,
     budget: &Budget,
     solvers: &mut Solvers,
-) -> Result<(usize, usize, Option<String>), Stop> {
+) -> Result<(usize, usize, Option<String>, bool), Stop> {
     let mut pool = Pool::default();
     let mut rest = combination;
     let mut inputs = BTreeMap::new();
@@ -2538,8 +2546,8 @@ fn prove_shape(
         .collect::<Result<Vec<_>, _>>()?;
     let stdin = pattern_bytes(&mut pool, &block.stdin, &inputs)?;
     // The model has one read return everything that's there, which a pipe guarantees only for
-    // what one write of at most 4096 bytes put in it.
-    if stdin.len() > TEXT_BOUND {
+    // what one write of at most 4096 bytes put in it; fill reads any length cut any way.
+    if stdin.len() > TEXT_BOUND && !image.has_fill() {
         return Err(Stop::Beyond(format!(
             "standard input past {TEXT_BOUND} bytes is more than one pipe write, which the proof \
              reads whole"
@@ -2552,80 +2560,159 @@ fn prove_shape(
     let random = random_stream(&mut pool, block, &inputs)?;
     let clock = clock_readings(&mut pool, block, &inputs)?;
     // The test's server waits for exactly what it must receive; what it and the test's client
-    // send arrives cut as this shape's delivery cuts it.
+    // send arrives cut as a delivery cuts it.
     let receives: Vec<Vec<Term>> = block
         .server
         .iter()
         .map(|(wanted, _)| pattern_bytes(&mut pool, wanted, &inputs))
         .collect::<Result<_, _>>()?;
-    let mut server = Vec::new();
-    for ((_, replies), wanted) in block.server.iter().zip(&receives) {
-        let reply = pattern_bytes(&mut pool, replies, &inputs)?;
-        server.push((wanted.clone(), cut(&reply, delivery)));
-    }
-    let client = block
+    let replies: Vec<Vec<Term>> = block
+        .server
+        .iter()
+        .map(|(_, reply)| pattern_bytes(&mut pool, reply, &inputs))
+        .collect::<Result<_, _>>()?;
+    let sends: Vec<(Vec<Term>, bool)> = block
         .client
         .iter()
         .map(|(sends, receives)| {
-            Ok(exec::net::Client {
-                pieces: cut(&pattern_bytes(&mut pool, sends, &inputs)?, delivery),
-                waits: !receives.is_empty(),
-            })
+            Ok((
+                pattern_bytes(&mut pool, sends, &inputs)?,
+                !receives.is_empty(),
+            ))
         })
-        .collect::<Result<Vec<_>, String>>()?;
-    let network = exec::net::Network {
-        port: numbers
-            .get("port")
-            .filter(|_| !block.server.is_empty())
-            .map(|number| number.term),
-        server,
-        client,
+        .collect::<Result<_, String>>()?;
+    let port = numbers
+        .get("port")
+        .filter(|_| !block.server.is_empty())
+        .map(|number| number.term);
+    let network_for = |delivery: Delivery| exec::net::Network {
+        port,
+        server: receives
+            .iter()
+            .zip(&replies)
+            .map(|(wanted, reply)| (wanted.clone(), cut(reply, delivery)))
+            .collect(),
+        client: sends
+            .iter()
+            .map(|(bytes, waits)| exec::net::Client {
+                pieces: cut(bytes, delivery),
+                waits: *waits,
+            })
+            .collect(),
         listening: budget.listens,
     };
-    let mut start = State::start(image, &mut pool, &args, stdin)
+    // fill, where the program has it, is read as a whole for every way its input can be cut.
+    let every_cut = image.has_fill();
+    let mut base = State::start(image, &mut pool, &args, stdin)
         .with_files(files)
-        .with_supply(random, clock)
-        .with_network(network);
-    start.path = constraints;
+        .with_supply(random, clock);
+    if every_cut {
+        base = base.for_every_cut();
+    }
+    base.path = constraints;
+    let networked = !block.server.is_empty() || !block.client.is_empty();
     let began = Instant::now();
     let questions_before = solvers.solver.as_ref().map_or(0, |solver| solver.questions);
-    // Branches no witness reaches are followed without asking first; a run that can't
-    // happen is then settled where it ends. If that makes too many runs, the branches are
-    // asked about after all.
-    let careful = start.clone();
-    let (runs, guessed) = {
-        let mut oracle = Witnessed::new(solvers, budget.deadline, combination as u64, true);
-        let runs = exec::explore(image, start, &mut pool, &mut oracle, budget.max_paths)?;
-        (runs, oracle.guessed)
-    };
-    let (runs, guessed) = if guessed && runs.iter().any(|run| run.end == Some(End::TooManyPaths)) {
-        let mut oracle = Witnessed::new(solvers, budget.deadline, combination as u64, false);
-        let runs = exec::explore(image, careful, &mut pool, &mut oracle, budget.max_paths)?;
-        (runs, false)
-    } else {
-        (runs, guessed)
-    };
-    let explored = began.elapsed();
-    let count = runs.len();
-    let asked = |solvers: &Solvers| solvers.solver.as_ref().map_or(0, |solver| solver.questions);
-    let questions = asked(solvers);
-    let trace = std::env::var_os("LENGUA_PROVE_TRACE").is_some();
-    let known = Known {
-        numbers: &numbers,
-        fixed: &chosen,
-        texts: &texts,
-        translated: std::cell::RefCell::new(HashMap::new()),
-    };
+    let mut deliveries = vec![delivery];
+    let mut any_cut = every_cut;
+    let mut count = 0;
+    let mut turn = 0;
+    while let Some(&delivery) = deliveries.get(turn) {
+        turn += 1;
+        let start = base.clone().with_network(network_for(delivery));
+        // Branches no witness reaches are followed without asking first; a run that can't
+        // happen is then settled where it ends. If that makes too many runs, the branches are
+        // asked about after all.
+        let careful = start.clone();
+        let (runs, guessed) = {
+            let mut oracle = Witnessed::new(solvers, budget.deadline, combination as u64, true);
+            let runs = exec::explore(image, start, &mut pool, &mut oracle, budget.max_paths)?;
+            (runs, oracle.guessed)
+        };
+        let (runs, guessed) = if guessed
+            && runs.iter().any(|run| run.end == Some(End::TooManyPaths))
+        {
+            let mut oracle = Witnessed::new(solvers, budget.deadline, combination as u64, false);
+            let runs = exec::explore(image, careful, &mut pool, &mut oracle, budget.max_paths)?;
+            (runs, false)
+        } else {
+            (runs, guessed)
+        };
+        // A run that reads a stream with read itself sees the pieces it arrives in: what a
+        // test's peer sends is then proven as each of the tests' cuts delivers it.
+        if runs.iter().any(|run| run.raw_reads) {
+            if any_cut && networked {
+                deliveries.extend(Delivery::ALL.into_iter().filter(|other| *other != delivery));
+            }
+            any_cut = false;
+        }
+        count += runs.len();
+        let explored = began.elapsed();
+        let asked =
+            |solvers: &Solvers| solvers.solver.as_ref().map_or(0, |solver| solver.questions);
+        let questions = asked(solvers);
+        let known = Known {
+            numbers: &numbers,
+            fixed: &chosen,
+            texts: &texts,
+            translated: std::cell::RefCell::new(HashMap::new()),
+        };
+        check_runs(
+            &mut pool,
+            block,
+            &known,
+            runs,
+            &receives,
+            guessed,
+            budget,
+            solvers,
+            combination,
+            networked.then_some(delivery),
+        )?;
+        if std::env::var_os("LENGUA_PROVE_TRACE").is_some() {
+            eprintln!(
+                "shape {combination}: {count} runs, {questions} questions exploring in \
+                 {explored:?}, {} checking, {} terms",
+                asked(solvers) - questions,
+                pool.len(),
+            );
+        }
+    }
+    let alone = solvers
+        .solver
+        .as_ref()
+        .filter(|_| solvers.used)
+        .and_then(|solver| solver.alone.clone());
+    let questions = solvers.solver.as_ref().map_or(0, |solver| solver.questions);
+    Ok((count, questions - questions_before, alone, any_cut))
+}
+
+/// Checks each of `runs` against the test's formulas: where the terms don't settle it, the
+/// solvers look for inputs that take the run and break the check.
+#[allow(clippy::too_many_arguments)]
+fn check_runs(
+    pool: &mut Pool,
+    block: &Generated,
+    known: &Known<'_>,
+    runs: Vec<State>,
+    receives: &[Vec<Term>],
+    guessed: bool,
+    budget: &Budget,
+    solvers: &mut Solvers,
+    combination: usize,
+    delivery: Option<Delivery>,
+) -> Result<(), Stop> {
+    let (numbers, chosen, texts) = (known.numbers, known.fixed, known.texts);
     for run in runs {
         let holds = match &run.end {
             Some(End::Exit(status)) => {
-                let output = passes(&mut pool, block, &known, &run, *status)?;
-                let talked = talks(&mut pool, block, &known, &run, &receives)?;
+                let output = passes(pool, block, known, &run, *status)?;
+                let talked = talks(pool, block, known, &run, receives)?;
                 pool.bool_and(output, talked)
             }
             Some(End::Serving) if block.serves => {
-                let output = serving(&mut pool, block, &known, &run)?;
-                let talked = talks(&mut pool, block, &known, &run, &receives)?;
+                let output = serving(pool, block, known, &run)?;
+                let talked = talks(pool, block, known, &run, receives)?;
                 pool.bool_and(output, talked)
             }
             Some(End::Serving | End::Stuck(_)) => pool.boolean(false),
@@ -2635,7 +2722,7 @@ fn prove_shape(
                 if guessed {
                     let solver = solvers.get(budget.deadline)?;
                     let (answer, _) = solver
-                        .check(&pool, &run.path, &[])
+                        .check(pool, &run.path, &[])
                         .map_err(|error| format!("the solver failed: {error}"))?;
                     if answer == Answer::Unsat {
                         continue;
@@ -2651,7 +2738,7 @@ fn prove_shape(
             None => return Err("a run that didn't end".into()),
         };
         // What the output check comes to where the run's own branches went as they did.
-        let holds = settled(&mut pool, &run.path, holds, MAX_CHOICES);
+        let holds = settled(pool, &run.path, holds, MAX_CHOICES);
         let broken = pool.bool_not(holds);
         // Output whose terms are the formulas' own can't break: nothing to ask. Nor can output
         // whose every condition is one of the run's own branches, as a printed number's digit
@@ -2665,9 +2752,9 @@ fn prove_shape(
                     .any(|condition| pool.equivalent(*condition, *part))
         };
         if pool.truth(broken) == Some(false)
-            || disjuncts(&pool, holding)
+            || disjuncts(pool, holding)
                 .iter()
-                .any(|case| conjuncts(&pool, *case).iter().all(branched))
+                .any(|case| conjuncts(pool, *case).iter().all(branched))
         {
             continue;
         }
@@ -2688,7 +2775,7 @@ fn prove_shape(
             .collect();
         let solver = solvers.get(budget.deadline)?;
         let (answer, model) = solver
-            .check(&pool, &conditions, &values)
+            .check(pool, &conditions, &values)
             .map_err(|error| format!("the solver failed: {error}"))?;
         match answer {
             Answer::Unsat => {}
@@ -2697,8 +2784,11 @@ fn prove_shape(
                     return Err("a counterexample in a text too long to show".into());
                 }
                 let mut found = chosen.clone();
-                if !block.server.is_empty() || !block.client.is_empty() {
-                    found.insert(DELIVERY.to_owned(), Value::Str(delivery.describe().into()));
+                // How what the program read arrived: cut where fill stopped short, or as the
+                // test's peer delivered it.
+                let arrived = run.fill_cut.map(Delivery::At).or(delivery);
+                if let Some(arrived) = arrived {
+                    found.insert(DELIVERY.to_owned(), Value::Str(arrived.describe()));
                 }
                 for (name, bytes) in &shown {
                     let text: Vec<u8> = bytes
@@ -2710,7 +2800,7 @@ fn prove_shape(
                         Value::Str(String::from_utf8_lossy(&text).into_owned()),
                     );
                 }
-                for (name, number) in &numbers {
+                for (name, number) in numbers {
                     let value = model
                         .get(&number.term)
                         .copied()
@@ -2730,20 +2820,7 @@ fn prove_shape(
             }
         }
     }
-    if trace {
-        eprintln!(
-            "shape {combination}: {count} runs, {questions} questions exploring in {explored:?}, \
-             {} checking, {} terms",
-            asked(solvers) - questions,
-            pool.len(),
-        );
-    }
-    let alone = solvers
-        .solver
-        .as_ref()
-        .filter(|_| solvers.used)
-        .and_then(|solver| solver.alone.clone());
-    Ok((count, asked(solvers) - questions_before, alone))
+    Ok(())
 }
 
 /// Runs the prover's model of the code on concrete inputs that the real program has passed, and

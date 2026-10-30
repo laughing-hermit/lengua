@@ -71,6 +71,9 @@ impl Default for Limits {
     }
 }
 
+/// How long standard input written in pieces waits between them.
+const STDIN_PAUSE: std::time::Duration = std::time::Duration::from_millis(20);
+
 /// What to run, with what, and where.
 #[derive(Debug, Clone, Copy)]
 pub struct Job<'a> {
@@ -80,6 +83,9 @@ pub struct Job<'a> {
     pub args: &'a [String],
     /// Its standard input, closed after these bytes.
     pub stdin: &'a [u8],
+    /// The pieces its standard input is written in, by length, a moment apart; empty, it's
+    /// written whole.
+    pub stdin_pieces: &'a [usize],
     /// A file to be its standard input instead, read by the program itself, however large.
     pub stdin_file: Option<&'a Path>,
     /// Files put in its fresh working folder before it starts, by name relative to the folder.
@@ -108,6 +114,7 @@ impl<'a> Job<'a> {
             program,
             args,
             stdin,
+            stdin_pieces: &[],
             files: &NO_FILES,
             folder: None,
             syscalls,
@@ -545,10 +552,26 @@ pub async fn start(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<
         .take()
         .ok_or_else(|| io::Error::other("no stderr pipe"))?;
     let bytes = job.stdin.to_vec();
+    let pieces = job.stdin_pieces.to_vec();
     let writer = tokio::spawn(async move {
         // A program may exit without reading its input; that's not an error.
-        if let Some(mut input) = input {
+        let Some(mut input) = input else {
+            return;
+        };
+        if pieces.len() < 2 {
             let _ = input.write_all(&bytes).await;
+            return;
+        }
+        // Each piece its own write, a moment after the last, so a read can end where it does.
+        let mut start = 0;
+        for length in pieces {
+            let end = (start + length).min(bytes.len());
+            if input.write_all(&bytes[start..end]).await.is_err() {
+                return;
+            }
+            let _ = input.flush().await;
+            start = end;
+            tokio::time::sleep(STDIN_PAUSE).await;
         }
     });
     let (overflow, overflowed) = mpsc::channel::<()>(2);

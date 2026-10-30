@@ -111,7 +111,10 @@ of the same rule.
   program the socket as file descriptor 3; it answers with sendto, so a client that hangs up early
   can't stop it (with write, the kernel would end it with SIGPIPE); and its behaviors may end
   with `- And it keeps serving` instead of an exit code. Write a protocol's line breaks as they
-  are sent, such as `GET / HTTP/1.0\r\n`. In the final report, tell the user in plain words what the program may reach, such
+  are sent, such as `GET / HTTP/1.0\r\n`. A request ends with something the server can see,
+  such as its newline, its blank line or a stated length: clients such as curl and browsers keep
+  their side of the connection open until they have the answer, so a server that waits for them
+  to close waits forever. In the final report, tell the user in plain words what the program may reach, such
   as "it can open TCP connections to port 8080 on this computer; lengua refuses every other port
   and every other computer."
 - **Websites and APIs:** lengua programs speak plain TCP, not HTTPS. A program that needs a

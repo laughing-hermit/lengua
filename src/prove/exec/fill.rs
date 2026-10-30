@@ -53,6 +53,7 @@ impl Fill {
 }
 
 /// Where the bytes fill reads come from.
+#[derive(Clone, Copy)]
 enum Stream {
     /// Standard input.
     Stdin,
@@ -99,9 +100,11 @@ impl Cpu<'_> {
             .unwrap_or(usize::MAX)
             .min(available.len());
         let mut outcomes: Vec<(Term, usize, bool)> = Vec::new();
-        // A read can end right after any end byte that has arrived: fill stops there.
+        // A read of standard input or a connection can end right after any end byte that has
+        // arrived: fill stops there. A file's read gives everything asked for.
         if let Some(end) = end
             && self.state.every_cut
+            && !matches!(stream, Stream::File(_))
         {
             let wanted = self.pool.bv(8, u128::from(end));
             for taken in 1..last {
@@ -127,6 +130,11 @@ impl Cpu<'_> {
                 _ => outcomes.push((yes, last, true)),
             }
         }
+        let before = match stream {
+            Stream::Stdin => self.state.stdin_read,
+            Stream::Connection(number) => self.consumed(number),
+            Stream::File(_) => 0,
+        };
         let original = self.state.clone();
         let mut choices = Vec::new();
         for (condition, taken, at_end) in outcomes {
@@ -142,7 +150,7 @@ impl Cpu<'_> {
                 self.state.end = Some(End::Stuck(why.clone()));
             }
             if taken < last {
-                self.state.fill_cut.get_or_insert(taken);
+                self.state.fill_cut.get_or_insert(before + taken);
             }
             std::mem::swap(self.state, &mut outcome);
             choices.push((condition, outcome));

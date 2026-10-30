@@ -1028,3 +1028,48 @@ async fn only_a_server_takes_connections_forever() {
         "closes with an unconditional `jmp`",
     );
 }
+
+/// A program that reads with fill, in tests/fixtures.
+fn with_fill() -> String {
+    std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/second/main.s"),
+    )
+    .expect("the fixture")
+}
+
+#[tokio::test]
+async fn fill_is_copied_word_for_word_with_its_constants() {
+    let syscalls = [Syscall::Read, Syscall::Write, Syscall::Exit];
+    let text = with_fill();
+    let report = check_full(&text, CpuFeatures::all(), &syscalls, None).await;
+    assert!(report.passed(), "{:?}", report.violations);
+
+    // fill read as a whole for every cut is only as right as its code is the template's.
+    let changed = text.replacen(
+        "    sub rdx, rax\n    jz .Lfill_done\n",
+        "    sub rdx, rax\n    cmp rdx, 1\n    jbe .Lfill_done\n",
+        1,
+    );
+    assert_ne!(changed, text);
+    let report = check_full(&changed, CpuFeatures::all(), &syscalls, None).await;
+    assert_violation(
+        &report,
+        Rule::Assertions,
+        line_of(&changed, "fill:"),
+        "fill differs from the template",
+    );
+
+    let fewer = text.replacen(
+        ".equ MAX_FILL_READS, 1099511627776\n",
+        ".equ MAX_FILL_READS, 64\n",
+        1,
+    );
+    assert_ne!(fewer, text);
+    let report = check_full(&fewer, CpuFeatures::all(), &syscalls, None).await;
+    assert_violation(
+        &report,
+        Rule::Constants,
+        line_of(&fewer, ".equ MAX_FILL_READS"),
+        "MAX_FILL_READS must be 1099511627776",
+    );
+}

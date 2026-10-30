@@ -23,7 +23,10 @@ Nothing runs before every rule passes.
    the rest is the program. The template is a complete, checked program that prints the negative
    of a number (its spec and tests are [template-spec.md](assets/template-spec.md) and
    [template-tests.toml](assets/template-tests.toml)); its `parse_i64`, `write_i64` and
-   `write_all` can be reused as they are.
+   `write_all` can be reused as they are. To read a whole input, a reply, or a request up to the
+   byte that ends it (such as a newline), call `fill` from [fill.s](assets/fill.s), copied word for
+   word with its three constants: the proof then covers every way the input can arrive, cut into
+   any pieces. Write your own read loop only to stream input larger than a buffer.
 4. Write the code by [the rules](references/power-of-10.md), with
    [the Linux x86-64 reference](references/linux-x86_64.md) for system calls, the program's start
    and the calling convention. Write it correct first; speed comes in step 6.
@@ -64,8 +67,9 @@ Nothing runs before every rule passes.
    of `proofs` says how far. If the proof finds inputs where the program is wrong, `check` reports
    them like a failing test: fix `main.s` and call `check` again. "Tested, not proven" is fine: say
    why in one line. Vector code proves too, from SSE2 to AVX-512 with masks, and so do clients and
-   servers on the network, with what the test's peer sends arriving whole or cut. Programs that
-   read and print numbers with the template's `parse_i64` and `write_i64` prove best.
+   servers on the network: what the test's peer sends arrives whole or cut, and in any pieces at
+   all where the program reads it with `fill`. Programs that read and print numbers with the
+   template's `parse_i64` and `write_i64` prove best.
 8. Tell the user, from the `done` reply, in a few short lines and plain words: where the program
    is; what its spec promises, in two or three lines (its behaviors, its limits such as input
    sizes and ranges, and what it may touch: files, ports); that it follows every rule and passed

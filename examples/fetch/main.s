@@ -34,7 +34,8 @@
 .equ VERSION_LEN, 13
 .equ REQUEST_LEN, 117
 .equ RESPONSE_LEN, 65536
-.equ MAX_READS, 65536
+# fill's limit on reads, as assets/fill.s has it
+.equ MAX_FILL_READS, 1099511627776
 .equ ADDRESS_LEN, 16
 .equ ADDRESS_PAD, 8
 # The blank line ending a response's headers, "\r\n\r\n", read as one 32-bit word.
@@ -425,43 +426,75 @@ receive:
     push rbx
     test rsi, rsi
     jz .Lreceive_assert_buffer
-    mov r9d, edi
-    mov r10, rsi
-    xor r8d, r8d
-    mov rbx, MAX_READS
-.Lreceive_loop:  # bound: 65536
-    cmp r8, RESPONSE_LEN
-    jae .Lreceive_too_long
-    mov eax, SYS_READ
-    mov edi, r9d
-    lea rsi, [r10 + r8]
     mov edx, RESPONSE_LEN
-    sub edx, r8d
-    syscall
+    mov ecx, -1
+    call fill
     test rax, rax
     js .Lreceive_return
-    jz .Lreceive_done
-    add r8, rax
-    cmp r8, RESPONSE_LEN
-    ja .Lreceive_assert_count
-    dec rbx
-    jnz .Lreceive_loop
+    cmp rax, RESPONSE_LEN
+    jae .Lreceive_too_long
+    mov rdx, rax
+    xor eax, eax
+    jmp .Lreceive_return
 .Lreceive_too_long:
     mov rax, ERROR_IO
-    jmp .Lreceive_return
-.Lreceive_done:
-    mov rdx, r8
-    xor eax, eax
 .Lreceive_return:
     pop rbx
     ret
 .Lreceive_assert_buffer:
     mov edi, 11
     call assert_fail
-.Lreceive_assert_count:
-    mov edi, 12
-    call assert_fail
 .size receive, . - receive
+
+# Reads from file descriptor edi into the rdx bytes at rsi until they're full, the input ends,
+# or, when ecx is a byte (0 to 255), the last byte read is ecx; with ecx = -1 it reads to the
+# end. However the input arrives, it reads the same.
+# In: edi = the file descriptor, rsi = the buffer, rdx = its size, at least 1, ecx = the end
+# byte or -1.
+# Out: rax = how many bytes it read, or a negative error code.
+# returns: result
+.type fill, @function
+fill:
+    test rsi, rsi
+    jz .Lfill_assert_null
+    test rdx, rdx
+    jz .Lfill_assert_empty
+    mov r8, rdx
+    mov r10d, ecx
+    mov r9, MAX_FILL_READS
+.Lfill_loop:  # bound: 1099511627776
+    mov eax, SYS_READ
+    syscall
+    test rax, rax
+    js .Lfill_return
+    jz .Lfill_done
+    cmp rax, rdx
+    ja .Lfill_assert_count
+    add rsi, rax
+    sub rdx, rax
+    jz .Lfill_done
+    movzx eax, byte ptr [rsi - 1]
+    cmp eax, r10d
+    je .Lfill_done
+    dec r9
+    jnz .Lfill_loop
+    mov rax, ERROR_IO
+    jmp .Lfill_return
+.Lfill_done:
+    mov rax, r8
+    sub rax, rdx
+.Lfill_return:
+    ret
+.Lfill_assert_null:
+    mov edi, 990
+    call assert_fail
+.Lfill_assert_empty:
+    mov edi, 991
+    call assert_fail
+.Lfill_assert_count:
+    mov edi, 992
+    call assert_fail
+.size fill, . - fill
 
 # Finds where a response's body starts: just after the first blank line.
 # In: rdi = the response; rsi = its length, at most RESPONSE_LEN.

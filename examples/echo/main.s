@@ -13,8 +13,9 @@
 .equ ERROR_IO, -5
 # Sizes and limits
 .equ LINE_MAX, 1024
-.equ MAX_READS, 1024
 .equ NEWLINE, 10
+# fill's limit on reads, as assets/fill.s has it
+.equ MAX_FILL_READS, 1099511627776
 
 .section .rodata
 
@@ -75,42 +76,20 @@ _start:
 # returns: result
 .type echo_line, @function
 echo_line:
-    mov r9d, edi
-    xor r8d, r8d
-    mov r10, MAX_READS
-.Lecho_line_read:  # bound: 1024
-    cmp r8, LINE_MAX
-    jae .Lecho_line_send
-    mov eax, SYS_READ
-    mov edi, r9d
+    push rbx
+    mov ebx, edi
     lea rsi, [rip + line]
-    add rsi, r8
     mov edx, LINE_MAX
-    sub edx, r8d
-    syscall
+    mov ecx, NEWLINE
+    call fill
     test rax, rax
-    js .Lecho_line_return
-    jz .Lecho_line_send
-    add r8, rax
-    cmp r8, LINE_MAX
+    jle .Lecho_line_return
+    cmp rax, LINE_MAX
     ja .Lecho_line_assert_count
-    lea rdx, [r8 - 1]
-    cmp rdx, LINE_MAX
-    jae .Lecho_line_assert_index
-    lea rcx, [rip + line]
-    movzx eax, byte ptr [rcx + rdx]
-    cmp eax, NEWLINE
-    je .Lecho_line_send
-    dec r10
-    jnz .Lecho_line_read
-.Lecho_line_send:
-    xor eax, eax
-    test r8, r8
-    jz .Lecho_line_return
+    mov rdx, rax
     mov eax, SYS_SENDTO
-    mov edi, r9d
+    mov edi, ebx
     lea rsi, [rip + line]
-    mov rdx, r8
     mov r10d, MSG_NOSIGNAL
     xor r8d, r8d
     xor r9d, r9d
@@ -124,14 +103,62 @@ echo_line:
 .Lecho_line_short:
     mov rax, ERROR_IO
 .Lecho_line_return:
+    pop rbx
     ret
 .Lecho_line_assert_count:
     mov edi, 3
     call assert_fail
-.Lecho_line_assert_index:
-    mov edi, 4
-    call assert_fail
 .size echo_line, . - echo_line
+
+# Reads from file descriptor edi into the rdx bytes at rsi until they're full, the input ends,
+# or, when ecx is a byte (0 to 255), the last byte read is ecx; with ecx = -1 it reads to the
+# end. However the input arrives, it reads the same.
+# In: edi = the file descriptor, rsi = the buffer, rdx = its size, at least 1, ecx = the end
+# byte or -1.
+# Out: rax = how many bytes it read, or a negative error code.
+# returns: result
+.type fill, @function
+fill:
+    test rsi, rsi
+    jz .Lfill_assert_null
+    test rdx, rdx
+    jz .Lfill_assert_empty
+    mov r8, rdx
+    mov r10d, ecx
+    mov r9, MAX_FILL_READS
+.Lfill_loop:  # bound: 1099511627776
+    mov eax, SYS_READ
+    syscall
+    test rax, rax
+    js .Lfill_return
+    jz .Lfill_done
+    cmp rax, rdx
+    ja .Lfill_assert_count
+    add rsi, rax
+    sub rdx, rax
+    jz .Lfill_done
+    movzx eax, byte ptr [rsi - 1]
+    cmp eax, r10d
+    je .Lfill_done
+    dec r9
+    jnz .Lfill_loop
+    mov rax, ERROR_IO
+    jmp .Lfill_return
+.Lfill_done:
+    mov rax, r8
+    sub rax, rdx
+.Lfill_return:
+    ret
+.Lfill_assert_null:
+    mov edi, 990
+    call assert_fail
+.Lfill_assert_empty:
+    mov edi, 991
+    call assert_fail
+.Lfill_assert_count:
+    mov edi, 992
+    call assert_fail
+.size fill, . - fill
 
 # lengua's assertion handler. check_code compares it word for word: copy it exactly.
 # In: edi = the assertion's number, 1 to 999. Prints "lengua: assertion NNN failed" to

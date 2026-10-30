@@ -406,6 +406,8 @@ pub enum Delivery {
     FirstTwo,
     /// The first piece, then the other two together.
     LastTwo,
+    /// In two pieces, cut after this many bytes: where a proof found a read can stop.
+    At(usize),
 }
 
 impl Delivery {
@@ -415,6 +417,13 @@ impl Delivery {
     /// The lengths of the pieces `length` bytes arrive in. Fewer than three bytes arrive whole.
     #[must_use]
     pub fn cuts(self, length: usize) -> Vec<usize> {
+        if let Self::At(first) = self {
+            return if first == 0 || first >= length {
+                vec![length]
+            } else {
+                vec![first, length - first]
+            };
+        }
         if length < 3 {
             return vec![length];
         }
@@ -423,7 +432,7 @@ impl Delivery {
             Self::Whole => vec![length],
             Self::Pieces => vec![1, middle - 1, length - middle],
             Self::FirstTwo => vec![middle, length - middle],
-            Self::LastTwo => vec![1, length - 1],
+            Self::LastTwo | Self::At(_) => vec![1, length - 1],
         };
         // A piece of nothing sends nothing: three bytes arrive as one and two.
         cuts.into_iter().filter(|cut| *cut > 0).collect()
@@ -431,13 +440,27 @@ impl Delivery {
 
     /// The delivery in words, for a report.
     #[must_use]
-    pub const fn describe(self) -> &'static str {
+    pub fn describe(self) -> String {
         match self {
-            Self::Whole => "all at once",
-            Self::Pieces => "in three pieces: the first byte, up to the middle, and the rest",
-            Self::FirstTwo => "in two pieces, cut at the middle",
-            Self::LastTwo => "in two pieces: the first byte, and the rest",
+            Self::Whole => "all at once".into(),
+            Self::Pieces => {
+                "in three pieces: the first byte, up to the middle, and the rest".into()
+            }
+            Self::FirstTwo => "in two pieces, cut at the middle".into(),
+            Self::LastTwo => "in two pieces: the first byte, and the rest".into(),
+            Self::At(first) => format!("in two pieces, cut after byte {first}"),
         }
+    }
+
+    /// The delivery `describe` gave these words for.
+    #[must_use]
+    pub fn described(words: &str) -> Option<Self> {
+        if let Some(first) = words.strip_prefix("in two pieces, cut after byte ") {
+            return first.parse().ok().map(Self::At);
+        }
+        Self::ALL
+            .into_iter()
+            .find(|delivery| delivery.describe() == words)
     }
 }
 
@@ -543,10 +566,16 @@ async fn check_one(
         anywhere: false,
         listen: network.listens.map(|_| 0),
     };
+    // Standard input arrives whole, except where a proof found a cut that matters.
+    let stdin_pieces = match delivery {
+        Delivery::At(_) => delivery.cuts(stdin.len()),
+        _ => Vec::new(),
+    };
     let job = Job {
         files: &files,
         supply: Some(&supply),
         net: Some(&net),
+        stdin_pieces: &stdin_pieces,
         ..Job::new(program, &args, stdin.as_bytes(), syscalls)
     };
     let now = crate::expect::now();

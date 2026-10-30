@@ -339,6 +339,23 @@ impl Cpu<'_> {
         Ok((left, waits))
     }
 
+    /// How many bytes of what the peer sends on a connection the program has read so far.
+    pub(super) fn consumed(&self, number: usize) -> usize {
+        let connection = &self.state.connections[number];
+        let network = &self.state.network;
+        let pieces = if connection.accepted {
+            &network.client[connection.exchange].pieces
+        } else {
+            &network.server[connection.exchange].1
+        };
+        pieces
+            .iter()
+            .take(connection.piece)
+            .map(Vec::len)
+            .sum::<usize>()
+            + connection.taken
+    }
+
     /// Marks `count` more bytes of a connection read, across its pieces.
     pub(super) fn consume(&mut self, number: usize, mut count: usize) {
         let network = std::rc::Rc::clone(&self.state.network);

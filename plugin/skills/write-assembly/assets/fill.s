@@ -26,7 +26,7 @@ fill:
     mov r8, rdx
     mov r10d, ecx
     mov r9, MAX_FILL_READS
-.Lfill_loop:  # bound: MAX_FILL_READS
+.Lfill_loop:  # bound: 1099511627776
     mov eax, SYS_READ
     syscall
     test rax, rax

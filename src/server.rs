@@ -1188,6 +1188,7 @@ impl LenguaServer {
                     questions,
                     alone,
                     bound,
+                    cut_any_way,
                 }) => {
                     match &bound {
                         Some(bound) => bounded_ids.push((block.id.to_string(), bound.bytes)),
@@ -1200,7 +1201,7 @@ impl LenguaServer {
                         }
                     }
                     (
-                        proven_detail(block, shapes, paths, questions, alone, bound),
+                        proven_detail(block, shapes, paths, questions, alone, bound, cut_any_way),
                         false,
                     )
                 }
@@ -1238,10 +1239,9 @@ impl LenguaServer {
         // The delivery it was found with, and the port the kernel chooses, aren't the test's
         // inputs: a real run is given the delivery and picks its port.
         let delivery = match values.remove(prove::DELIVERY) {
-            Some(expr::Value::Str(found)) => testrun::Delivery::ALL
-                .into_iter()
-                .find(|delivery| delivery.describe() == found)
-                .unwrap_or(testrun::Delivery::Whole),
+            Some(expr::Value::Str(found)) => {
+                testrun::Delivery::described(&found).unwrap_or(testrun::Delivery::Whole)
+            }
             _ => testrun::Delivery::Whole,
         };
         if !block.server.is_empty() && !block.vars.iter().any(|(name, _)| name == "port") {
@@ -1255,8 +1255,14 @@ impl LenguaServer {
                 testfile::describe_inputs(&inputs),
                 delivery.describe()
             )
-        } else {
+        } else if delivery == testrun::Delivery::Whole {
             testfile::describe_inputs(&inputs)
+        } else {
+            format!(
+                "{}, standard input arriving {}",
+                testfile::describe_inputs(&inputs),
+                delivery.describe()
+            )
         };
         let case = match block.case(inputs, crate::expect::now()) {
             Ok(case) => case,
@@ -1644,6 +1650,7 @@ fn proven_detail(
     questions: usize,
     alone: Option<String>,
     bound: Option<prove::Bound>,
+    cut_any_way: bool,
 ) -> String {
     let mut detail = format!(
         "proven for every input {} ({}, {} through the machine code), {}",
@@ -1673,11 +1680,16 @@ fn proven_detail(
             bound.why
         );
     }
-    if !block.server.is_empty() || !block.client.is_empty() {
+    let networked = !block.server.is_empty() || !block.client.is_empty();
+    if networked && cut_any_way {
+        detail.push_str("; what the test's peer sends arriving cut into pieces any way");
+    } else if networked {
         detail.push_str(
             "; what the test's peer sends arriving whole or cut after its first byte, at its \
              middle, or both",
         );
+    } else if cut_any_way && !block.stdin.is_empty() {
+        detail.push_str("; standard input arriving cut into pieces any way");
     }
     detail
 }

@@ -96,6 +96,13 @@ impl Image {
         Some(image)
     }
 
+    /// Whether the program has the canonical fill, which proofs read as a whole for every way
+    /// its input can be cut.
+    #[must_use]
+    pub fn has_fill(&self) -> bool {
+        self.fill.is_some()
+    }
+
     /// The name of the function whose code holds `address`.
     fn function_at(&self, address: u64) -> &str {
         self.functions
@@ -195,6 +202,9 @@ pub struct State {
     pub path: Vec<Term>,
     stdin: Rc<Vec<Term>>,
     stdin_read: usize,
+    /// The pieces standard input arrives in, by length, when it doesn't arrive whole: each read
+    /// gets at most what its piece has left.
+    stdin_pieces: Rc<Vec<usize>>,
     /// The files in the working folder before the run, by name.
     files: Rc<BTreeMap<String, Vec<Term>>>,
     /// The files the run created or replaced, by name, with everything written to them.
@@ -297,6 +307,7 @@ impl State {
             path: Vec::new(),
             stdin: Rc::new(stdin),
             stdin_read: 0,
+            stdin_pieces: Rc::new(Vec::new()),
             files: Rc::new(BTreeMap::new()),
             written: BTreeMap::new(),
             open: BTreeMap::new(),
@@ -348,6 +359,13 @@ impl State {
     #[must_use]
     pub fn with_files(mut self, files: BTreeMap<String, Vec<Term>>) -> Self {
         self.files = Rc::new(files);
+        self
+    }
+
+    /// The same state with standard input arriving in pieces of these lengths.
+    #[must_use]
+    pub fn with_stdin_pieces(mut self, pieces: Vec<usize>) -> Self {
+        self.stdin_pieces = Rc::new(pieces);
         self
     }
 
@@ -1583,7 +1601,17 @@ impl<'a> Cpu<'a> {
                         )));
                     }
                     let available = (self.state.stdin.len() - self.state.stdin_read) as u64;
-                    let taken = count.min(available);
+                    let mut taken = count.min(available);
+                    if !self.state.stdin_pieces.is_empty() {
+                        let mut boundary = 0;
+                        for piece in self.state.stdin_pieces.iter() {
+                            boundary += piece;
+                            if boundary > self.state.stdin_read {
+                                break;
+                            }
+                        }
+                        taken = taken.min(boundary.saturating_sub(self.state.stdin_read) as u64);
+                    }
                     for offset in 0..taken {
                         let byte = self.state.stdin[self.state.stdin_read + offset as usize];
                         self.save(buffer + offset, byte)?;
@@ -1970,6 +1998,165 @@ mod tests {
             other => panic!("ended with {other:?}"),
         };
         assert_eq!(status, Some(1));
+    }
+
+    /// fill's function from assets/fill.s, as main.s copies it.
+    fn fill_function(asset: &str) -> &str {
+        let start = asset.find(".type fill, @function").expect("fill's start");
+        let end = asset.find(".size fill, . - fill").expect("fill's end");
+        &asset[start..end + ".size fill, . - fill".len()]
+    }
+
+    /// A program that calls `fill` on standard input with a buffer of `capacity` bytes and the
+    /// end byte `end` (-1 for none), prints what it read and exits with fill's result.
+    fn fill_program(fill: &str, capacity: u32, end: i32) -> String {
+        format!(
+            ".intel_syntax noprefix\n.equ SYS_READ, 0\n.equ ERROR_IO, -5\n\
+             .equ MAX_FILL_READS, 1099511627776\n.globl _start\n.text\n\
+             .type _start, @function\n_start:\n    xor edi, edi\n    lea rsi, [rip + buffer]\n    \
+             mov edx, {capacity}\n    mov ecx, {end}\n    call fill\n    mov rbx, rax\n    \
+             test rax, rax\n    js .Lstart_exit\n    mov rdx, rax\n    mov eax, 1\n    \
+             mov edi, 1\n    lea rsi, [rip + buffer]\n    syscall\n.Lstart_exit:\n    \
+             mov rdi, rbx\n    mov eax, 60\n    syscall\n.size _start, . - _start\n{fill}\n\
+             .type assert_fail, @function\nassert_fail:\n    mov edi, 134\n    mov eax, 60\n    \
+             syscall\n.size assert_fail, . - assert_fail\n.bss\n.type buffer, @object\n\
+             buffer:\n    .zero 16\n.size buffer, 16\n"
+        )
+    }
+
+    /// Every way `length` bytes can arrive: each list of piece lengths that adds up to it.
+    fn every_cut_of(length: usize) -> Vec<Vec<usize>> {
+        if length == 0 {
+            return vec![Vec::new()];
+        }
+        (0..1_u32 << (length - 1))
+            .map(|cuts| {
+                let mut pieces = Vec::new();
+                let mut size = 1;
+                for position in 0..length - 1 {
+                    if cuts >> position & 1 == 1 {
+                        pieces.push(size);
+                        size = 1;
+                    } else {
+                        size += 1;
+                    }
+                }
+                pieces.push(size);
+                pieces
+            })
+            .collect()
+    }
+
+    /// What `image` prints and exits with given `input` on standard input: run as its code
+    /// runs, with the input arriving in `pieces`, or, without pieces, with fill read as a whole
+    /// for every way the input can be cut. Each outcome once.
+    fn outcomes(
+        image: &Image,
+        input: &[u8],
+        pieces: Option<&[usize]>,
+    ) -> std::collections::BTreeSet<(Vec<u8>, String)> {
+        let mut pool = Pool::default();
+        let stdin = bytes(&mut pool, input);
+        let start = State::start(image, &mut pool, &[], stdin);
+        let start = match pieces {
+            Some(pieces) => start.with_stdin_pieces(pieces.to_vec()),
+            None => start.for_every_cut(),
+        };
+        let runs = explore(image, start, &mut pool, &mut Concrete, 64).expect("concrete runs");
+        runs.iter()
+            .map(|run| {
+                let printed = run
+                    .stdout
+                    .iter()
+                    .map(|byte| pool.constant(*byte).expect("a byte") as u8)
+                    .collect();
+                let ended = match run.end {
+                    Some(End::Exit(status)) => {
+                        format!("exit {}", pool.constant(status).expect("a status"))
+                    }
+                    ref other => format!("{other:?}"),
+                };
+                (printed, ended)
+            })
+            .collect()
+    }
+
+    /// fill read as a whole gives exactly what its code gives, over every way its input can be
+    /// cut: every input of up to 5 bytes of `a` and newlines, every capacity up to 7, with a
+    /// newline as the end byte and with none. Bugs planted in its code each give something the
+    /// whole doesn't.
+    #[tokio::test]
+    async fn fill_read_whole_is_its_code_for_every_cut() {
+        let canonical = fill_function(crate::checker::FILL_TEMPLATE);
+        let mutants = [
+            (
+                "reads every piece at the buffer's start",
+                "    add rsi, rax\n",
+                "",
+            ),
+            (
+                "stops a byte short of full",
+                "    sub rdx, rax\n    jz .Lfill_done\n",
+                "    sub rdx, rax\n    cmp rdx, 1\n    jbe .Lfill_done\n",
+            ),
+            (
+                "checks the byte after the last",
+                "byte ptr [rsi - 1]",
+                "byte ptr [rsi]",
+            ),
+            (
+                "counts one byte too many",
+                "    mov rax, r8\n    sub rax, rdx\n",
+                "    lea rax, [r8 + 1]\n    sub rax, rdx\n",
+            ),
+        ];
+        let inputs: Vec<Vec<u8>> = (0..=5_u32)
+            .flat_map(|length| {
+                (0..1_u32 << length).map(move |bits| {
+                    (0..length)
+                        .map(|at| if bits >> at & 1 == 1 { b'\n' } else { b'a' })
+                        .collect()
+                })
+            })
+            .collect();
+        let mut caught = [false; 4];
+        for capacity in 1..=7 {
+            for end in [i32::from(b'\n'), -1] {
+                let whole = image(&fill_program(canonical, capacity, end)).await;
+                assert!(whole.has_fill(), "the canonical fill is found");
+                let mut planted = Vec::new();
+                for (_, from, to) in mutants {
+                    let mutant = canonical.replacen(from, to, 1);
+                    assert_ne!(mutant, canonical);
+                    planted.push(image(&fill_program(&mutant, capacity, end)).await);
+                }
+                for input in &inputs {
+                    let summary = outcomes(&whole, input, None);
+                    let cuts = every_cut_of(input.len());
+                    let code: std::collections::BTreeSet<_> = cuts
+                        .iter()
+                        .flat_map(|pieces| outcomes(&whole, input, Some(pieces)))
+                        .collect();
+                    assert_eq!(
+                        summary, code,
+                        "capacity {capacity}, end {end}, input {input:?}"
+                    );
+                    for (index, mutant) in planted.iter().enumerate() {
+                        if caught[index] {
+                            continue;
+                        }
+                        let code: std::collections::BTreeSet<_> = cuts
+                            .iter()
+                            .flat_map(|pieces| outcomes(mutant, input, Some(pieces)))
+                            .collect();
+                        caught[index] = code != summary;
+                    }
+                }
+            }
+        }
+        for (index, (name, ..)) in mutants.iter().enumerate() {
+            assert!(caught[index], "a fill that {name} went unnoticed");
+        }
     }
 
     #[tokio::test]

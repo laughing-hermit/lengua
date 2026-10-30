@@ -1,0 +1,13 @@
+[[example]]
+id = "B1"
+stdin = "ab\ncd\n"
+stdout = "cd\n"
+exit_code = 0
+
+[[generated]]
+id = "B1"
+runs = 100
+vars = { first = 'string(1, 20, "abcdefghijklmnopqrstuvwxyz")', second = 'string(1, 20, "abcdefghijklmnopqrstuvwxyz")' }
+stdin = "{first}\n{second}\n"
+stdout = "{second}\n"
+exit_code = 0

@@ -9,9 +9,12 @@ sessions' transcripts, which the prover's tests prove:
 - `amounts` (interactive round 2): the total of a CSV file's amount column, three rows of
   signed amounts with free text in the other fields.
 
-And one written for the tests themselves:
+And written for the tests themselves:
 
 - `cat`: standard input of up to 5,000 bytes printed back, whose proof covers texts up to the
   4,096 bytes a proof reaches.
 - `padded`: an AVX-512 `wc -lw` from interactive round 2, which pads its counts to seven
   columns with a chain of `if(…)`s choosing among texts of different lengths.
+- `second`: two lines from standard input, read with one `fill` to the first newline a read
+  ends with, so it's right only when both lines arrive together, as they do in the tests: the
+  proof, which takes every way standard input can be cut, finds the cut after the first line.

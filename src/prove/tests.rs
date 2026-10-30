@@ -469,7 +469,7 @@ async fn a_shape_its_terms_settle_starts_no_solver() {
             &mut solvers,
         );
         assert!(
-            matches!(result, Ok((1, 0, None))),
+            matches!(result, Ok((1, 0, None, false))),
             "combination {combination}"
         );
     }
@@ -485,6 +485,7 @@ async fn a_shape_its_terms_settle_starts_no_solver() {
             questions: 0,
             alone: None,
             bound: None,
+            cut_any_way: false,
         }
     );
 }
@@ -577,7 +578,7 @@ async fn traces_a_few_csv_total_combinations() {
         );
         let questions = solvers.solver.as_ref().map_or(0, |solver| solver.questions) - before;
         let outcome = match result {
-            Ok((paths, _, _)) => format!("{paths} paths"),
+            Ok((paths, ..)) => format!("{paths} paths"),
             Err(Stop::Unproven(reason) | Stop::Beyond(reason)) => reason,
             Err(Stop::Counterexample(values)) => format!("counterexample {values:?}"),
         };
@@ -1402,9 +1403,9 @@ fn network_budget(listens: bool) -> Budget {
     }
 }
 
-/// A server on the network: the line-echo server answers every client's line, delivered whole
-/// or cut as the network may cut it; one that answers after its first read, or never closes a
-/// connection and so waits on a client that waits for it, is found.
+/// A server on the network: the line-echo server reads its line with fill, so it answers every
+/// client's line however the network cuts it; one that reads once in place of fill, or never
+/// closes a connection and so waits on a client that waits for it, is found.
 #[tokio::test]
 async fn proves_the_echo_server() {
     let spec = repository_file("examples/echo/spec.md");
@@ -1419,14 +1420,16 @@ async fn proves_the_echo_server() {
             Verdict::Proven {
                 bound: None,
                 questions: 0,
+                cut_any_way: true,
                 ..
             }
         ),
         "{verdict:?}"
     );
+    // One read in place of fill: a line cut short by the network is found.
     let once = source.replacen(
-        "    cmp eax, NEWLINE\n    je .Lecho_line_send",
-        "    cmp eax, NEWLINE\n    jmp .Lecho_line_send",
+        "    mov ecx, NEWLINE\n    call fill\n",
+        "    mov eax, SYS_READ\n    mov edi, ebx\n    syscall\n",
         1,
     );
     assert_ne!(once, source);
@@ -1436,9 +1439,19 @@ async fn proves_the_echo_server() {
     };
     assert_ne!(
         found.get(DELIVERY),
-        Some(&Value::Str(Delivery::Whole.describe().into())),
+        Some(&Value::Str(Delivery::Whole.describe())),
         "{found:?}"
     );
+    // Reading to the end of the request: the client, as curl does, keeps its side open while
+    // it waits for the answer, so the server waits forever.
+    let to_the_end = source.replacen(
+        "    mov ecx, NEWLINE\n    call fill\n",
+        "    mov ecx, -1\n    call fill\n",
+        1,
+    );
+    assert_ne!(to_the_end, source);
+    let verdict = prove(&machine(&to_the_end).await, &block, &network_budget(true));
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
     let open = source.replacen(
         "    mov eax, SYS_CLOSE\n    mov edi, ebx\n    syscall\n",
         "    xor eax, eax\n",
@@ -1466,12 +1479,14 @@ async fn proves_the_fetch_client() {
     let right = machine(&source).await;
     for index in 0..3 {
         let verdict = prove(&right, &block(&spec, &tests, index), &network_budget(false));
+        // The reply is read with fill: proven however the network cuts it.
         assert!(
             matches!(
                 verdict,
                 Verdict::Proven {
                     bound: None,
                     questions: 0,
+                    cut_any_way: true,
                     ..
                 }
             ),
@@ -1486,6 +1501,12 @@ async fn proves_the_fetch_client() {
             1,
         ),
         source.replacen(".equ VERSION_LEN, 13", ".equ VERSION_LEN, 11", 1),
+        // One read in place of fill: a reply cut by the network comes up short.
+        source.replacen(
+            "    mov ecx, -1\n    call fill\n",
+            "    mov eax, SYS_READ\n    syscall\n",
+            1,
+        ),
     ] {
         assert_ne!(wrong, source);
         let verdict = prove(&machine(&wrong).await, &fetch, &network_budget(false));

@@ -970,6 +970,71 @@ async fn long_text_is_proven_up_to_the_bound() {
 }
 
 #[tokio::test]
+async fn a_cut_only_the_proof_tries_is_found_and_run_for_real() {
+    // second reads both lines with one fill, which stops at the first newline a read ends
+    // with: right whenever both lines arrive together, as they do in the tests. The proof takes
+    // every cut and finds the one after the first line, and a real run with standard input cut
+    // there confirms it.
+    if !solvers_installed() {
+        return;
+    }
+    let session = Session::proving(Protocol::Discover).await;
+    let files = ["spec.md", "tests.toml", "main.s"].map(|file| (file, fixture("second", file)));
+    let program = written(&session, files).await;
+    let problems = failed(&session, &program).await;
+    assert!(
+        problems.contains("the proof found inputs the tests didn't try where main.s is wrong"),
+        "{problems}"
+    );
+    assert!(
+        problems.contains("standard input arriving in two pieces, cut after byte"),
+        "{problems}"
+    );
+    // Reading to the end instead: proven however standard input arrives.
+    let whole = fixture("second", "main.s").replacen(
+        "    mov ecx, NEWLINE\n    call fill\n",
+        "    mov ecx, -1\n    call fill\n",
+        1,
+    );
+    program.write("main.s", &whole);
+    let report = done(&session, &program).await;
+    assert!(
+        text(&report["proofs"][0]).ends_with("standard input arriving cut into pieces any way"),
+        "{report}"
+    );
+    session.service.cancel().await.expect("close the session");
+}
+
+#[tokio::test]
+async fn a_server_that_waits_for_its_client_to_close_fails_as_with_curl() {
+    // curl and browsers keep their side of the connection open until they have the answer: a
+    // server that reads to the end of the request before answering waits on a client that
+    // waits for it, and the test's client does as they do.
+    let session = session().await;
+    let waits = example("echo", "main.s").replacen(
+        "    mov ecx, NEWLINE\n    call fill\n",
+        "    mov ecx, -1\n    call fill\n",
+        1,
+    );
+    assert_ne!(waits, example("echo", "main.s"));
+    let program = written(
+        &session,
+        [
+            ("spec.md", example("echo", "spec.md")),
+            ("tests.toml", example("echo", "tests.toml")),
+            ("main.s", waits),
+        ],
+    )
+    .await;
+    let problems = failed(&session, &program).await;
+    assert!(
+        problems.contains("curl and browsers keep it open until they have the whole answer"),
+        "{problems}"
+    );
+    session.service.cancel().await.expect("close the session");
+}
+
+#[tokio::test]
 async fn programs_on_the_network_are_proven() {
     if !solvers_installed() {
         return;
@@ -984,9 +1049,9 @@ async fn programs_on_the_network_are_proven() {
             .all(|proof| text(proof).contains("proven for every input in range"))),
         "{report}"
     );
+    // It reads its line with fill, so the proof covers every way the line can be cut.
     assert!(
-        text(&report["proofs"][0])
-            .ends_with("arriving whole or cut after its first byte, at its middle, or both"),
+        text(&report["proofs"][0]).ends_with("arriving cut into pieces any way"),
         "{report}"
     );
     // A client: fetch, with short paths and bodies so the proof covers them all.

@@ -40,7 +40,10 @@ the tests come before the code, and they decide whether the code is right.
   server's port: the test's server listens on a free port of its own and lengua writes it in.
   For a server: `client = [{ sends = "hello\n", receives = "hello\n" }]`, plus
   `serves = true` and no `exit_code` when the spec says it keeps serving. The server reads
-  exactly `receives`; the client reads all the program answers until it closes the connection.
+  exactly `receives`; the client, as curl and browsers do, keeps its side open until the program
+  starts answering, then reads all it answers until it closes the connection. So `sends` is what
+  real clients send: for HTTP, curl's request line and headers, such as
+  `"GET /{path} HTTP/1.1\r\nHost: localhost\r\nUser-Agent: curl/8.0\r\nAccept: */*\r\n\r\n"`.
   Draw messages that keep their shape: a header line drawn as text can come out empty and end
   the headers early, so start it with fixed text, such as `"X-{name}: {value}\r\n"`.
 - **Output the program chooses** without the test supplying it is a rule: in the example,
