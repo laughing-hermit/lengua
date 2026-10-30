@@ -2997,7 +2997,11 @@ fn check_runs(
             }
             let mut found = chosen.clone();
             // Cut where fill stopped short, or as the test's peer delivered it.
-            let arrived = run.fill_cut.map(Delivery::At).or(delivery);
+            let arrived = run
+                .fill_cut
+                .map(Delivery::At)
+                .or((run.raw_cuts != 0).then_some(Delivery::Cuts(run.raw_cuts)))
+                .or(delivery);
             if let Some(arrived) = arrived {
                 found.insert(DELIVERY.to_owned(), Value::Str(arrived.describe()));
             }

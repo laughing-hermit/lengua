@@ -620,8 +620,9 @@ Not yet: shuffles across lanes (`vpermb`, `vpermd`), compress and gather instruc
 `sha256`, `crc32` and `crc32c` formulas and the instructions behind them; floating point;
 threads; and `tr` that changes a character's width in bytes (`tr` beyond ASCII is proven
 character by character, each keeping its width). Those blocks are tested, not proven, and the
-report says why. A stream read both with `read` and with `fill` is proven for the four deliveries, not
-every cut.
+report says why. A stream read both with `read` and with `fill` is proven for the four
+deliveries, and, for standard input with at most 8 bytes left at a read, for every count the read
+can return: a counterexample then replays with standard input cut where the proof found it.
 
 ## Resources, threads and capabilities
 

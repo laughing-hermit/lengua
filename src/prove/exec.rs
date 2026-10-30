@@ -30,6 +30,10 @@ const ARGUMENT_ROOM: u64 = 1024 * 1024;
 /// The most instructions one run may take before the prover gives up on it.
 pub const MAX_STEPS: u64 = 5_000_000;
 
+/// The most bytes of standard input left for which a proof takes every count a read can
+/// return: every way 8 bytes can be cut is 128 runs.
+const RAW_CUT_BYTES: u64 = 8;
+
 /// The most places an address that depends on the input may be, such as a table's entries for
 /// each value of an input byte.
 const MAX_PLACES: u128 = 256;
@@ -295,8 +299,12 @@ pub struct State {
     /// real run needs to stop there too.
     pub fill_cut: Option<usize>,
     /// Whether fill takes every way its input can be cut, as a proof does, or what one read
-    /// gives, as a run of a test's sample does.
+    /// gives, as a run of a test's sample does. Where it does, a read of standard input with
+    /// at most [`RAW_CUT_BYTES`] left takes every count too.
     every_cut: bool,
+    /// Where this run's reads of standard input stopped short of what had arrived: bit `i`
+    /// after byte `i + 1`.
+    pub raw_cuts: u16,
     /// The return addresses on the stack, the newest last.
     returns: Vec<Return>,
     /// The program's arguments and environment as the run began, each from its start to its
@@ -411,6 +419,7 @@ impl State {
             raw_reads: false,
             fill_cut: None,
             every_cut: false,
+            raw_cuts: 0,
             returns: Vec::new(),
             arguments: Rc::new(Vec::new()),
             obligations: Vec::new(),
@@ -2093,6 +2102,40 @@ impl<'a> Cpu<'a> {
         Ok(Name::Known(name.trim_end_matches('/').to_owned()))
     }
 
+    /// A read of standard input that may return any count from 1 to `most`: a run for each,
+    /// each noting where it stopped short.
+    fn read_every_count(&mut self, buffer: u64, most: u64) -> Result<Step, Stop> {
+        let original = self.state.clone();
+        let next = self.instruction.next_ip();
+        let yes = self.pool.boolean(true);
+        let mut choices = Vec::new();
+        for taken in 1..=most {
+            let mut outcome = original.clone();
+            std::mem::swap(self.state, &mut outcome);
+            let mut saved = Ok(());
+            for offset in 0..taken {
+                let byte = self.state.stdin[self.state.stdin_read + offset as usize];
+                saved = saved.and_then(|()| self.save(buffer + offset, byte));
+            }
+            match saved {
+                Ok(()) => {
+                    self.state.stdin_read += taken as usize;
+                    if self.state.stdin_read < self.state.stdin.len() && self.state.stdin_read <= 16
+                    {
+                        self.state.raw_cuts |= 1 << (self.state.stdin_read - 1);
+                    }
+                    self.state.registers[0] = self.pool.bv(64, u128::from(taken));
+                    self.state.registers[1] = self.pool.bv(64, u128::from(next));
+                    self.state.registers[11] = self.pool.bv(64, 0x202);
+                }
+                Err(stop) => self.state.end = Some(stop),
+            }
+            std::mem::swap(self.state, &mut outcome);
+            choices.push((yes, outcome));
+        }
+        Ok(Step::Choose(choices))
+    }
+
     /// `openat` with `flags` on a name the input chooses: a run for each file or folder of the
     /// test's the name can be, with its bytes those on the run's path, and one where it's none
     /// of them, each as the system call leaves it. Where it's none of them, the name must be
@@ -2288,6 +2331,15 @@ impl<'a> Cpu<'a> {
                         )));
                     }
                     let available = (self.state.stdin.len() - self.state.stdin_read) as u64;
+                    // Short input read with read itself may arrive in any pieces: each count
+                    // a read can return is its own run.
+                    if self.state.every_cut
+                        && self.state.stdin_pieces.is_empty()
+                        && available <= RAW_CUT_BYTES
+                        && count.min(available) > 1
+                    {
+                        return self.read_every_count(buffer, count.min(available));
+                    }
                     let mut taken = count.min(available);
                     if !self.state.stdin_pieces.is_empty() {
                         let mut boundary = 0;

@@ -460,6 +460,9 @@ pub enum Delivery {
     LastTwo,
     /// In two pieces, cut after this many bytes: where a proof found a read can stop.
     At(usize),
+    /// In pieces cut after each byte whose bit is set, the lowest bit for the first byte: where
+    /// a proof found reads of standard input can stop.
+    Cuts(u16),
 }
 
 impl Delivery {
@@ -469,6 +472,18 @@ impl Delivery {
     /// The lengths of the pieces `length` bytes arrive in. Fewer than three bytes arrive whole.
     #[must_use]
     pub fn cuts(self, length: usize) -> Vec<usize> {
+        if let Self::Cuts(mask) = self {
+            let mut pieces = Vec::new();
+            let mut start = 0;
+            for after in 1..length.min(17) {
+                if mask >> (after - 1) & 1 == 1 {
+                    pieces.push(after - start);
+                    start = after;
+                }
+            }
+            pieces.push(length - start);
+            return pieces.into_iter().filter(|piece| *piece > 0).collect();
+        }
         if let Self::At(first) = self {
             return if first == 0 || first >= length {
                 vec![length]
@@ -484,7 +499,7 @@ impl Delivery {
             Self::Whole => vec![length],
             Self::Pieces => vec![1, middle - 1, length - middle],
             Self::FirstTwo => vec![middle, length - middle],
-            Self::LastTwo | Self::At(_) => vec![1, length - 1],
+            Self::LastTwo | Self::At(_) | Self::Cuts(_) => vec![1, length - 1],
         };
         // A piece of nothing sends nothing: three bytes arrive as one and two.
         cuts.into_iter().filter(|cut| *cut > 0).collect()
@@ -501,6 +516,19 @@ impl Delivery {
             Self::FirstTwo => "in two pieces, cut at the middle".into(),
             Self::LastTwo => "in two pieces: the first byte, and the rest".into(),
             Self::At(first) => format!("in two pieces, cut after byte {first}"),
+            Self::Cuts(mask) => {
+                let after: Vec<String> = (1..=16)
+                    .filter(|after| mask >> (after - 1) & 1 == 1)
+                    .map(|after: u32| after.to_string())
+                    .collect();
+                match after.split_last() {
+                    Some((last, [])) => format!("in pieces, cut after byte {last}"),
+                    Some((last, rest)) => {
+                        format!("in pieces, cut after bytes {} and {last}", rest.join(", "))
+                    }
+                    None => "all at once".into(),
+                }
+            }
         }
     }
 
@@ -509,6 +537,20 @@ impl Delivery {
     pub fn described(words: &str) -> Option<Self> {
         if let Some(first) = words.strip_prefix("in two pieces, cut after byte ") {
             return first.parse().ok().map(Self::At);
+        }
+        let after = words
+            .strip_prefix("in pieces, cut after bytes ")
+            .or_else(|| words.strip_prefix("in pieces, cut after byte "));
+        if let Some(after) = after {
+            let mut mask = 0_u16;
+            for place in after
+                .split([',', ' '])
+                .filter(|word| !word.is_empty() && *word != "and")
+            {
+                let place: u32 = place.parse().ok()?;
+                mask |= 1 << place.checked_sub(1).filter(|bit| *bit < 16)?;
+            }
+            return Some(Self::Cuts(mask));
         }
         Self::ALL
             .into_iter()
@@ -632,7 +674,7 @@ async fn check_one(
     };
     // Standard input arrives whole, except where a proof found a cut that matters.
     let stdin_pieces = match delivery {
-        Delivery::At(_) => delivery.cuts(stdin.len()),
+        Delivery::At(_) | Delivery::Cuts(_) => delivery.cuts(stdin.len()),
         _ => Vec::new(),
     };
     let job = Job {

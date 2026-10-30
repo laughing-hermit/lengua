@@ -1149,6 +1149,38 @@ async fn a_cut_only_the_proof_tries_is_found_and_run_for_real() {
 }
 
 #[tokio::test]
+async fn a_raw_read_of_short_input_is_proven_for_every_count() {
+    // second with one read of its own in place of fill: right only when both lines arrive in
+    // one read. With at most 8 bytes left, the proof takes every count a read can return,
+    // finds a short one, and a real run with standard input cut there confirms it.
+    if !solvers_installed() {
+        return;
+    }
+    let session = Session::proving(Protocol::Discover).await;
+    let raw = fixture("second", "main.s").replacen(
+        "    mov ecx, NEWLINE\n    call fill\n",
+        "    mov eax, SYS_READ\n    syscall\n",
+        1,
+    );
+    assert_ne!(raw, fixture("second", "main.s"));
+    let program = written(
+        &session,
+        [("spec.md", fixture("second", "spec.md")), ("main.s", raw)],
+    )
+    .await;
+    let problems = failed(&session, &program).await;
+    assert!(
+        problems.contains("the proof found inputs the tests didn't try where main.s is wrong"),
+        "{problems}"
+    );
+    assert!(
+        problems.contains("standard input arriving in pieces, cut after byte"),
+        "{problems}"
+    );
+    session.service.cancel().await.expect("close the session");
+}
+
+#[tokio::test]
 async fn a_server_that_waits_for_its_client_to_close_fails_as_with_curl() {
     // curl and browsers keep their side of the connection open until they have the answer: a
     // server that reads to the end of the request before answering waits on a client that
