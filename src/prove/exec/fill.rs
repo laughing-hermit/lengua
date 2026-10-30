@@ -93,7 +93,7 @@ impl Cpu<'_> {
             return Ok(None);
         }
         // Its reads may fill all the space it's given, whatever arrives.
-        self.lent(cursor, space, true, "read")?;
+        self.lent(iced_x86::Register::RSI, cursor, space, true, "read")?;
         let end = u8::try_from(end).ok();
         let Some((stream, available, after)) = self.stream(fd)? else {
             return Ok(None);

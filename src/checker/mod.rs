@@ -289,6 +289,7 @@ pub fn check_program(source: &Source, executable: &[u8], context: Context<'_>) -
         &mut violations,
     );
     facts.features = decode::features_needed(&machine);
+    facts.named = program.named_symbols();
     memory::check(
         &program,
         &flows,

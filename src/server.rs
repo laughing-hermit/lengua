@@ -205,7 +205,7 @@ struct BlockProof {
 }
 
 /// What a reply says of memory safety: the rules always; the runs the model's proofs covered,
-/// on each of which every access stayed inside its own object.
+/// on each of which every access stayed inside the object its pointer was made from.
 fn memory_line(proofs: &[BlockProof]) -> String {
     let rules = "the rules (M1 to M8) hold every address they can follow to its owner";
     let proven: Vec<&str> = proofs
@@ -225,8 +225,10 @@ fn memory_line(proofs: &[BlockProof]) -> String {
             format!("{} and {last}", rest.join(", "))
         };
         return format!(
-            "{rules}; on every run the proofs of {tests} cover, every access also stays inside its \
-             own object, with no return address overwritten and no stack read before it's written"
+            "{rules}; on every run the proofs of {tests} cover, every access also stays inside the \
+             object its pointer was made from (or, where a run loses a pointer's origin, as through \
+             a vector register, the object it points into), with no return address overwritten \
+             and no stack read before it's written"
         );
     }
     if proofs.iter().any(|proof| proof.detail.is_none()) {
@@ -1265,7 +1267,7 @@ impl LenguaServer {
                 }
             }
         };
-        let decoded = match checker::decode::read(&code.built.bytes) {
+        let mut decoded = match checker::decode::read(&code.built.bytes) {
             Ok(decoded) => decoded,
             Err(error) => {
                 for index in 0..code.suite.generated.len() {
@@ -1274,6 +1276,11 @@ impl LenguaServer {
                 return;
             }
         };
+        // Which symbol each [rip + name] names, so proofs hold a pointer just past one
+        // symbol's end to that symbol, not to the one starting there.
+        if let Some(facts) = &code.report.facts {
+            decoded.named.clone_from(&facts.named);
+        }
         let spec = &code.spec;
         let deadline = Instant::now() + proof_time();
         // The ids proven, those found wrong, how many the solvers proved, and why any rested on

@@ -5,10 +5,10 @@
 //! runs.
 //!
 //! Every run is held to the memory rules where the checker can't settle them, as a borrow
-//! checker would at run time: each access stays inside the object its pointer points into (a
+//! checker would at run time: each access stays inside the object its pointer was made from (a
 //! data symbol, a live frame, the program's arguments), even where the CPU would let it through
-//! into a neighbour; no return address is written, and each `ret` goes back where its call came
-//! from; and no stack byte is read before something wrote it.
+//! into a neighbour that starts just past its end; no return address is written, and each `ret`
+//! goes back where its call came from; and no stack byte is read before something wrote it.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
@@ -59,6 +59,9 @@ pub struct Image {
     functions: Vec<(u64, u64, String)>,
     /// Each data symbol's name, by its address range, in address order.
     symbols: Vec<(u64, u64, String)>,
+    /// The symbol each `[rip + name]` names in main.s, by instruction address, as a place in
+    /// `symbols`.
+    named: HashMap<u64, usize>,
     /// The canonical fill's places, when the program has it.
     fill: Option<fill::Fill>,
 }
@@ -101,6 +104,14 @@ impl Image {
             }
         }
         symbols.sort_unstable();
+        let named = machine
+            .named
+            .iter()
+            .filter_map(|(ip, name)| {
+                let place = symbols.iter().position(|(_, _, known)| known == name)?;
+                Some((*ip, place))
+            })
+            .collect();
         let mut image = Self {
             instructions,
             regions,
@@ -108,6 +119,7 @@ impl Image {
             entry,
             functions,
             symbols,
+            named,
             fill: None,
         };
         image.fill = fill::Fill::find(&image, machine);
@@ -119,6 +131,24 @@ impl Image {
     #[must_use]
     pub fn has_fill(&self) -> bool {
         self.fill.is_some()
+    }
+
+    /// The owner of the address `[rip + name]` computes at `ip`: the symbol main.s names there,
+    /// or, without main.s, the symbol the address is in or just past the end of, where only one
+    /// can be meant.
+    fn symbol_owner(&self, ip: u64, address: u64) -> Option<Owner> {
+        if let Some(place) = self.named.get(&ip) {
+            return Some(Owner::Symbol(*place));
+        }
+        let holding = self
+            .symbols
+            .iter()
+            .position(|(start, end, _)| (*start..*end).contains(&address));
+        let ending = self.symbols.iter().position(|(_, end, _)| *end == address);
+        match (holding, ending) {
+            (Some(place), None) | (None, Some(place)) => Some(Owner::Symbol(place)),
+            _ => None,
+        }
     }
 
     /// The name of the function whose code holds `address`.
@@ -216,18 +246,111 @@ struct Object {
     name: String,
 }
 
+/// What a pointer was made from, as the run followed it: an access through it is held to that
+/// object alone, even where another starts just past its end, as symbols, strings and frames
+/// often do, so a pointer one step too far is caught rather than taken for the next object's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Owner {
+    /// A data symbol, by its place in the image's symbols.
+    Symbol(usize),
+    /// A call's frame, by the call's number: 0 for `_start`'s, then one more for each call.
+    Frame(u64),
+    /// The array of the program's arguments, or one of its strings, by its place in the run's
+    /// arguments.
+    Argument(usize),
+}
+
+/// What an access is held to: the owner of the pointer it was made from, where the run followed
+/// it, or else the object a pointer's value points into.
+#[derive(Debug, Clone, Copy)]
+enum Held {
+    Owner(Owner),
+    Pointer(u64),
+}
+
+/// How an instruction passes owners on: the registers it sets, each with its value's owner, at
+/// most two as `xchg` sets, and the pointer it stores whole, if any. Every other register it
+/// changes holds no pointer the run follows.
+#[derive(Debug, Default)]
+struct Plan {
+    registers: [Option<(usize, Option<Owner>)>; 2],
+    store: Option<(u64, Term, Owner)>,
+}
+
+impl Plan {
+    /// Sets `register`'s owner, for a general register other than rsp, whose owner is always
+    /// the running call's frame.
+    fn set(&mut self, register: Register, owner: Option<Owner>) {
+        if register.size() == 8
+            && let Some(index) = slot(register)
+            && index != 4
+            && let Some(free) = self.registers.iter_mut().find(|set| set.is_none())
+        {
+            *free = Some((index, owner));
+        }
+    }
+
+    /// Brings `state`'s owners up to date, after the instruction left it, from `before`, its
+    /// registers before.
+    fn apply(&self, state: &mut State, before: &[Term; 16]) {
+        for (owner, (now, then)) in state
+            .owners
+            .iter_mut()
+            .zip(state.registers.iter().zip(before))
+        {
+            if now != then {
+                *owner = None;
+            }
+        }
+        for (index, owner) in self.registers.iter().flatten() {
+            state.owners[*index] = *owner;
+        }
+        if let Some((address, value, owner)) = self.store
+            && state.stored.get(&address) == Some(&value)
+        {
+            state.pointers.insert(address, owner);
+        }
+    }
+
+    /// The same for every state `step` leaves.
+    fn apply_all(&self, state: &mut State, step: &mut Step, before: &[Term; 16]) {
+        self.apply(state, before);
+        match step {
+            Step::Next => {}
+            Step::Split(_, other) => self.apply(other, before),
+            Step::Choose(choices) => {
+                for (_, choice) in choices {
+                    self.apply(choice, before);
+                }
+            }
+        }
+    }
+}
+
 /// A name a call is given: known, or chosen by the input, byte by byte.
 enum Name {
     Known(String),
     Chosen(Vec<Term>),
 }
 
-/// A return address on the stack: where it is, where it returns to, and the function called.
+/// A return address on the stack: where it is, where it returns to, the function called, and
+/// the call's number, which names the callee's frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Return {
     slot: u64,
     back: u64,
     callee: u64,
+    frame: u64,
+}
+
+/// A live frame: from its lowest byte to just below its return address, with an address in the
+/// function it belongs to and its call's number.
+#[derive(Debug, Clone, Copy)]
+struct Frame {
+    low: u64,
+    top: u64,
+    running: u64,
+    number: u64,
 }
 
 /// One run's state.
@@ -307,6 +430,15 @@ pub struct State {
     pub raw_cuts: u16,
     /// The return addresses on the stack, the newest last.
     returns: Vec<Return>,
+    /// How many calls the run has made: the newest frame's number.
+    calls: u64,
+    /// Where each general register's pointer was made, while it holds a pointer the run
+    /// followed there: through lea, moves, pushes and pops, and adding numbers to it. rsp's is
+    /// always the running call's frame.
+    owners: [Option<Owner>; 16],
+    /// The owner of the pointer last stored whole at an address, while none of its bytes has
+    /// changed since.
+    pointers: BTreeMap<u64, Owner>,
     /// The program's arguments and environment as the run began, each from its start to its
     /// end with its name: the array of pointers first, then each string with its NUL.
     arguments: Rc<Vec<(u64, u64, String)>>,
@@ -421,6 +553,9 @@ impl State {
             every_cut: false,
             raw_cuts: 0,
             returns: Vec::new(),
+            calls: 0,
+            owners: [None; 16],
+            pointers: BTreeMap::new(),
             arguments: Rc::new(Vec::new()),
             obligations: Vec::new(),
         };
@@ -448,6 +583,9 @@ impl State {
                 Some(variable) => format!("environment variable {variable}"),
             };
             objects.push((start, cursor, name));
+            // A byte between strings, in neither: a read past one string's end through a
+            // pointer the run didn't follow isn't taken for a read of the next.
+            cursor += 1;
         }
         // argc, then argv's pointers and a null, then the environment's pointers and a null.
         let argc = args.len() + 1;
@@ -467,7 +605,14 @@ impl State {
         state.arguments = Rc::new(objects);
         for (index, word) in words.iter().enumerate() {
             let value = pool.bv(64, u128::from(*word));
-            state.store(pool, STACK_TOP + 8 * index as u64, value);
+            let address = STACK_TOP + 8 * index as u64;
+            state.store(pool, address, value);
+            // Each pointer to a string is owned by that string.
+            if index > 0
+                && let Some(string) = strings.iter().position(|start| start == word)
+            {
+                state.pointers.insert(address, Owner::Argument(string + 1));
+            }
         }
         state.registers[4] = pool.bv(64, u128::from(STACK_TOP));
         state
@@ -582,6 +727,14 @@ impl State {
         for start in overlapping {
             self.stored.remove(&start);
         }
+        let pointing: Vec<u64> = self
+            .pointers
+            .range(address.saturating_sub(7)..end)
+            .map(|(start, _)| *start)
+            .collect();
+        for start in pointing {
+            self.pointers.remove(&start);
+        }
         if bytes > 1 {
             self.stored.insert(address, value);
         }
@@ -589,6 +742,23 @@ impl State {
             let part = pool.extract(value, byte * 8 + 7, byte * 8);
             self.memory.insert(address + u64::from(byte), part);
         }
+    }
+
+    /// The owner of the pointer in `register`, a 64-bit general register, where the run
+    /// followed it.
+    fn owner(&self, register: Register) -> Option<Owner> {
+        if register.size() != 8 {
+            return None;
+        }
+        match slot(register)? {
+            4 => Some(Owner::Frame(self.frame())),
+            index => self.owners[index],
+        }
+    }
+
+    /// The running call's number, which names its frame.
+    fn frame(&self) -> u64 {
+        self.returns.last().map_or(0, |back| back.frame)
     }
 
     fn register(&self, pool: &mut Pool, register: Register) -> Option<Term> {
@@ -653,14 +823,21 @@ fn step(image: &Image, state: &mut State, pool: &mut Pool) -> Result<Step, Stop>
     if state.steps > MAX_STEPS {
         return Err(unsupported("a run took too many instructions to follow"));
     }
+    let before = state.registers;
     // fill read as a whole, where the proof takes every way its input can be cut; elsewhere,
     // as for a test's sample, its code runs as it is.
     if let Some(fill) = image.fill
         && state.every_cut
         && fill.at_head(state.rip)
     {
+        // fill moves rsi through the buffer it was lent.
+        let plan = Plan {
+            registers: [Some((6, state.owners[6])), None],
+            store: None,
+        };
         let mut cpu = Cpu::new(image, state, pool, &instruction);
-        if let Some(step) = cpu.fill(fill)? {
+        if let Some(mut step) = cpu.fill(fill)? {
+            plan.apply_all(state, &mut step, &before);
             return Ok(step);
         }
     }
@@ -668,7 +845,11 @@ fn step(image: &Image, state: &mut State, pool: &mut Pool) -> Result<Step, Stop>
     state.rip = next;
     let below = pool.constant(state.registers[4]);
     let mut cpu = Cpu::new(image, state, pool, &instruction);
-    let step = cpu.execute();
+    let plan = cpu.plan();
+    let mut step = cpu.execute();
+    if let Ok(step) = &mut step {
+        plan.apply_all(state, step, &before);
+    }
     // Stack the instruction released, by pop, ret or add rsp, is gone: reading it again before
     // writing it reads nothing written.
     if let (Some(below), Some(above)) = (below, pool.constant(state.registers[4]))
@@ -680,6 +861,9 @@ fn step(image: &Image, state: &mut State, pool: &mut Pool) -> Result<Step, Stop>
         // A whole value is at most 8 bytes.
         state
             .stored
+            .retain(|start, _| start.saturating_add(8) <= below || *start >= above);
+        state
+            .pointers
             .retain(|start, _| start.saturating_add(8) <= below || *start >= above);
     }
     step
@@ -799,10 +983,9 @@ impl<'a> Cpu<'a> {
         )
     }
 
-    /// The live frames, the newest first, each from its lowest byte to just below its return
-    /// address, with an address in the function it belongs to; `_start`'s reaches over the
-    /// array of the program's arguments above it, which it reads through rsp.
-    fn frames(&self) -> Vec<(u64, u64, u64)> {
+    /// The live frames, the newest first; `_start`'s reaches over the array of the program's
+    /// arguments above it, which it reads through rsp.
+    fn frames(&self) -> Vec<Frame> {
         let Some(mut low) = self
             .pool
             .constant(self.state.registers[4])
@@ -813,7 +996,12 @@ impl<'a> Cpu<'a> {
         let mut frames = Vec::new();
         let mut running = self.instruction.ip();
         for back in self.state.returns.iter().rev() {
-            frames.push((low, back.slot, running));
+            frames.push(Frame {
+                low,
+                top: back.slot,
+                running,
+                number: back.frame,
+            });
             low = back.slot + 8;
             running = back.back;
         }
@@ -822,8 +1010,46 @@ impl<'a> Cpu<'a> {
             .arguments
             .first()
             .map_or(STACK_TOP, |(_, end, _)| *end);
-        frames.push((low, top, running));
+        frames.push(Frame {
+            low,
+            top,
+            running,
+            number: 0,
+        });
         frames
+    }
+
+    /// A frame as an object: the running call's is its own.
+    fn frame_object(&self, frame: Frame, own: bool) -> Object {
+        let function = self.image.function_at(frame.running);
+        Object {
+            start: frame.low,
+            end: frame.top,
+            name: if own {
+                format!("{function}'s own frame")
+            } else {
+                format!("{function}'s frame")
+            },
+        }
+    }
+
+    /// The object `owner` names, while it lives: a frame lives until its call returns.
+    fn owned(&self, owner: Owner) -> Option<Object> {
+        let object = |(start, end, name): &(u64, u64, String)| Object {
+            start: *start,
+            end: *end,
+            name: name.clone(),
+        };
+        match owner {
+            Owner::Symbol(place) => self.image.symbols.get(place).map(object),
+            Owner::Argument(place) => self.state.arguments.get(place).map(object),
+            Owner::Frame(number) => self
+                .frames()
+                .into_iter()
+                .enumerate()
+                .find(|(_, frame)| frame.number == number)
+                .map(|(index, frame)| self.frame_object(frame, index == 0)),
+        }
     }
 
     /// The objects an access can be held to, with their names: data symbols, live frames, and
@@ -840,17 +1066,8 @@ impl<'a> Cpu<'a> {
             })
             .collect();
         if stack {
-            for (index, (start, end, running)) in self.frames().into_iter().enumerate() {
-                let function = self.image.function_at(running);
-                objects.push(Object {
-                    start,
-                    end,
-                    name: if index == 0 {
-                        format!("{function}'s own frame")
-                    } else {
-                        format!("{function}'s frame")
-                    },
-                });
+            for (index, frame) in self.frames().into_iter().enumerate() {
+                objects.push(self.frame_object(frame, index == 0));
             }
             for (start, end, name) in self.state.arguments.iter() {
                 objects.push(Object {
@@ -912,18 +1129,31 @@ impl<'a> Cpu<'a> {
         }
     }
 
-    /// Checks that `bytes` bytes at `address`, reached through `pointer` by `what`, stay inside
-    /// the object the pointer points into.
+    /// Checks that `bytes` bytes at `address`, reached by `what`, stay inside the object they're
+    /// held to.
     fn reach(
         &mut self,
-        pointer: u64,
+        held: Held,
         address: u64,
         bytes: u64,
         writing: bool,
         what: &dyn Fn(&Self) -> String,
     ) -> Result<(), Stop> {
-        let Some(object) = self.object(pointer, address) else {
-            return Ok(());
+        let object = match held {
+            Held::Owner(owner) => match self.owned(owner) {
+                Some(object) => object,
+                None => {
+                    return Err(End::Unsafe(format!(
+                        "{} {} through a pointer into the frame of a call that has returned",
+                        what(self),
+                        if writing { "writes" } else { "reads" }
+                    )));
+                }
+            },
+            Held::Pointer(pointer) => match self.object(pointer, address) {
+                Some(object) => object,
+                None => return Ok(()),
+            },
         };
         let last = address.wrapping_add(bytes);
         if address >= object.start && last <= object.end && last >= address {
@@ -947,16 +1177,20 @@ impl<'a> Cpu<'a> {
         )))
     }
 
-    /// The register the memory operand's address comes from: its base, or its index where the
-    /// base holds no address. `None` for `[rip + name]`, which rule 6 holds to its symbol, and
-    /// for constant offsets from rsp, which M3 holds to the frame.
-    fn pointer(&mut self) -> Option<u64> {
+    /// What the memory operand's access is held to: the owner of the pointer its address was
+    /// made from, or else the object its base, or its index where the base holds no address,
+    /// points into. `None` for `[rip + name]`, which rule 6 holds to the symbol main.s names,
+    /// and for constant offsets from rsp, which M3 holds to the frame.
+    fn held(&mut self) -> Option<Held> {
         let instruction = self.instruction;
         if instruction.is_ip_rel_memory_operand()
             || (instruction.memory_base() == Register::RSP
                 && instruction.memory_index() == Register::None)
         {
             return None;
+        }
+        if let Some(owner) = self.address_owner() {
+            return Some(Held::Owner(owner));
         }
         let base = self.value_of(instruction.memory_base());
         let index = if instruction.memory_index_scale() == 1 {
@@ -967,6 +1201,114 @@ impl<'a> Cpu<'a> {
         let points = |cpu: &Self, pointer: u64| cpu.object(pointer, pointer).is_some();
         base.filter(|pointer| points(self, *pointer))
             .or_else(|| index.filter(|pointer| points(self, *pointer)))
+            .map(Held::Pointer)
+    }
+
+    /// The owner of the address the memory operand computes: for `[rip + name]`, that symbol;
+    /// otherwise the owner of its base or of its unscaled index, whichever alone holds a pointer
+    /// the run followed.
+    fn address_owner(&self) -> Option<Owner> {
+        let instruction = self.instruction;
+        if instruction.is_ip_rel_memory_operand() {
+            return self
+                .image
+                .symbol_owner(instruction.ip(), instruction.ip_rel_memory_address());
+        }
+        let base = self.state.owner(instruction.memory_base());
+        let index = if instruction.memory_index_scale() == 1 {
+            self.state.owner(instruction.memory_index())
+        } else {
+            None
+        };
+        match (base, index) {
+            (Some(owner), None) | (None, Some(owner)) => Some(owner),
+            _ => None,
+        }
+    }
+
+    /// How the instruction about to run passes owners on, from the state before it.
+    fn plan(&mut self) -> Plan {
+        let instruction = self.instruction;
+        let mut plan = Plan::default();
+        let register = |operand: u32| {
+            (instruction.op_count() > operand && instruction.op_kind(operand) == OpKind::Register)
+                .then(|| instruction.op_register(operand))
+        };
+        let (first, second) = (register(0), register(1));
+        let owner = |cpu: &Self, register: Option<Register>| cpu.state.owner(register?);
+        let (mine, theirs) = (owner(self, first), owner(self, second));
+        // The pointer a store keeps whole, at its address, while its bytes stay as they are.
+        let store = |cpu: &Self, plan: &mut Plan, address: Option<u64>, from: Option<Register>| {
+            if let (Some(address), Some(from)) = (address, from)
+                && let (Some(owner), Some(index)) = (cpu.state.owner(from), slot(from))
+            {
+                plan.store = Some((address, cpu.state.registers[index], owner));
+            }
+        };
+        let rsp = self.value_of(Register::RSP);
+        let (Some(to), mnemonic) = (first, instruction.mnemonic()) else {
+            // A store of a pointer: `mov [m], r64`.
+            if instruction.mnemonic() == Mnemonic::Mov {
+                let address = self.address().ok();
+                store(self, &mut plan, address, second);
+            }
+            return plan;
+        };
+        match mnemonic {
+            Mnemonic::Lea => plan.set(to, self.address_owner()),
+            Mnemonic::Mov if second.is_some() => plan.set(to, theirs),
+            Mnemonic::Mov if instruction.op_kind(1) == OpKind::Memory => {
+                let address = self.address().ok();
+                plan.set(
+                    to,
+                    address.and_then(|address| self.state.pointers.get(&address).copied()),
+                );
+            }
+            Mnemonic::Push => store(self, &mut plan, rsp.map(|rsp| rsp.wrapping_sub(8)), first),
+            Mnemonic::Pop => plan.set(
+                to,
+                rsp.and_then(|rsp| self.state.pointers.get(&rsp).copied()),
+            ),
+            // A pointer plus or minus a number points into the same object; the distance
+            // between two pointers is a number.
+            Mnemonic::Add | Mnemonic::Sub => plan.set(
+                to,
+                match (mine, theirs) {
+                    (Some(owner), None) => Some(owner),
+                    (None, Some(owner)) if mnemonic == Mnemonic::Add => Some(owner),
+                    _ => None,
+                },
+            ),
+            Mnemonic::Inc | Mnemonic::Dec => plan.set(to, mine),
+            // Rounding a pointer to a boundary keeps its object: an access that leaves it is
+            // caught.
+            Mnemonic::And if second.is_none() => plan.set(to, mine),
+            Mnemonic::Xchg => {
+                if let Some(other) = second {
+                    plan.set(to, theirs);
+                    plan.set(other, mine);
+                }
+            }
+            // A conditional move: the owner both values share, or that of the one it picks
+            // where the condition is known.
+            _ if instruction.condition_code() != ConditionCode::None
+                && instruction.op_count() == 2 =>
+            {
+                let picked = if mine == theirs {
+                    mine
+                } else {
+                    let condition = self.condition(instruction.condition_code()).ok();
+                    match condition.and_then(|condition| self.pool.truth(condition)) {
+                        Some(true) => theirs,
+                        Some(false) => mine,
+                        None => None,
+                    }
+                };
+                plan.set(to, picked);
+            }
+            _ => {}
+        }
+        plan
     }
 
     /// A general register's value, when it's a known number.
@@ -980,16 +1322,25 @@ impl<'a> Cpu<'a> {
             .and_then(|value| u64::try_from(value).ok())
     }
 
-    /// Checks the memory operand's access of `bytes` bytes at `address` against its pointer.
+    /// Checks the memory operand's access of `bytes` bytes at `address` against what it's
+    /// held to.
     fn reach_operand(&mut self, address: u64, bytes: u64, writing: bool) -> Result<(), Stop> {
-        match self.pointer() {
-            Some(pointer) => self.reach(pointer, address, bytes, writing, &Self::doing),
+        match self.held() {
+            Some(held) => self.reach(held, address, bytes, writing, &Self::doing),
             None => Ok(()),
         }
     }
 
-    /// Checks a buffer of `count` bytes lent to the kernel by the system call `call`.
-    fn lent(&mut self, buffer: u64, count: u64, writing: bool, call: &str) -> Result<(), Stop> {
+    /// Checks a buffer of `count` bytes at `buffer`, lent to the kernel in `register` by the
+    /// system call `call`.
+    fn lent(
+        &mut self,
+        register: Register,
+        buffer: u64,
+        count: u64,
+        writing: bool,
+        call: &str,
+    ) -> Result<(), Stop> {
         if count == 0 {
             return Ok(());
         }
@@ -999,7 +1350,11 @@ impl<'a> Cpu<'a> {
                 cpu.image.function_at(cpu.instruction.ip())
             )
         };
-        self.reach(buffer, buffer, count, writing, &what)
+        let held = self
+            .state
+            .owner(register)
+            .map_or(Held::Pointer(buffer), Held::Owner);
+        self.reach(held, buffer, count, writing, &what)
     }
 
     fn save(&mut self, address: u64, value: Term) -> Result<(), Stop> {
@@ -1038,7 +1393,7 @@ impl<'a> Cpu<'a> {
                 "an address that depends on the input in more than 256 ways",
             ));
         }
-        let pointer = self.pointer();
+        let held = self.held();
         let mut places = Vec::new();
         let mut outside = Vec::new();
         for place in low..=high {
@@ -1054,9 +1409,9 @@ impl<'a> Cpu<'a> {
                     }
                 }
             }
-            if let Some(pointer) = pointer
+            if let Some(held) = held
                 && let Err(End::Unsafe(problem)) =
-                    self.reach(pointer, place, u64::from(bytes), writing, &Self::doing)
+                    self.reach(held, place, u64::from(bytes), writing, &Self::doing)
             {
                 outside.push((place, problem));
             }
@@ -1574,10 +1929,12 @@ impl<'a> Cpu<'a> {
                 let back = self.pool.bv(64, u128::from(instruction.next_ip()));
                 self.push(back)?;
                 let slot = self.constant(self.state.registers[4])?;
+                self.state.calls += 1;
                 self.state.returns.push(Return {
                     slot,
                     back: instruction.next_ip(),
                     callee: instruction.near_branch_target(),
+                    frame: self.state.calls,
                 });
                 self.state.rip = instruction.near_branch_target();
                 Ok(Step::Next)
@@ -1977,14 +2334,14 @@ impl<'a> Cpu<'a> {
     /// `openat` on a name the input may choose: each test file it can be, or none.
     fn open_chosen(&mut self) -> Result<Step, Stop> {
         let registers = self.state.registers;
-        let (folder, path, flags) = (registers[7], registers[6], registers[2]);
+        let (folder, flags) = (registers[7], registers[2]);
         let flags = self.constant(flags)? & 0xffff_ffff;
         if flags & O_DIRECTORY != 0 {
             return Err(unsupported(
                 "listing a folder, whose entries the kernel gives in an order of its own",
             ));
         }
-        let bytes = match self.name_or_choice(folder, path, "openat")? {
+        let bytes = match self.name_or_choice(folder, Register::RSI, "openat")? {
             Name::Known(name) => {
                 let result = self.open_name(name, flags)?;
                 self.state.registers[0] = self.pool.bv(64, u128::from(result));
@@ -2035,7 +2392,7 @@ impl<'a> Cpu<'a> {
 
     /// The name a call is given in the working folder: a NUL-terminated path relative to it,
     /// which the model follows only inside it.
-    fn name_at(&mut self, folder: Term, path: Term, call: &str) -> Result<String, Stop> {
+    fn name_at(&mut self, folder: Term, path: Register, call: &str) -> Result<String, Stop> {
         match self.name_or_choice(folder, path, call)? {
             Name::Known(name) => Ok(name),
             Name::Chosen(_) => Err(unsupported(format!(
@@ -2046,13 +2403,19 @@ impl<'a> Cpu<'a> {
 
     /// The name a call is given, or, where the input chooses its bytes, those bytes: the
     /// length is the shape's, so only which bytes is open.
-    fn name_or_choice(&mut self, folder: Term, path: Term, call: &str) -> Result<Name, Stop> {
+    fn name_or_choice(
+        &mut self,
+        folder: Term,
+        register: Register,
+        call: &str,
+    ) -> Result<Name, Stop> {
         // The kernel reads the folder as an int.
         if self.constant(folder)? & 0xffff_ffff != AT_FDCWD {
             return Err(unsupported(format!(
                 "{call} other than in the working folder"
             )));
         }
+        let path = self.state.registers[slot(register).unwrap_or(6)];
         let start = self.constant(path)?;
         let mut address = start;
         let mut bytes = Vec::new();
@@ -2075,7 +2438,7 @@ impl<'a> Cpu<'a> {
             }
             address += 1;
         }
-        self.lent(start, bytes.len() as u64 + 1, false, call)?;
+        self.lent(register, start, bytes.len() as u64 + 1, false, call)?;
         let known: Option<Vec<u8>> = bytes
             .iter()
             .map(|byte| {
@@ -2210,7 +2573,7 @@ impl<'a> Cpu<'a> {
     /// `fstat(fd, details)`: an open file's kind and size, the file's own; the kernel's other
     /// numbers, such as its device, owner and times, are any value.
     fn file_details(&mut self, fd: u64, buffer: u64) -> Result<u64, Stop> {
-        self.lent(buffer, STAT_LEN, true, "fstat")?;
+        self.lent(Register::RSI, buffer, STAT_LEN, true, "fstat")?;
         let Some(open) = self.state.open.get(&fd).cloned() else {
             if fd <= 2 {
                 return Err(unsupported("the details of standard input or output"));
@@ -2317,7 +2680,7 @@ impl<'a> Cpu<'a> {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 let buffer = self.constant(rsi)?;
                 let count = self.constant(rdx)?;
-                self.lent(buffer, count, true, "read")?;
+                self.lent(Register::RSI, buffer, count, true, "read")?;
                 if fd == 0 {
                     self.state.raw_reads = true;
                     // A pipe hands over at most 4096 bytes whole; past that, how the input
@@ -2389,7 +2752,7 @@ impl<'a> Cpu<'a> {
             {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 let (buffer, count) = (self.constant(rsi)?, self.constant(rdx)?);
-                self.lent(buffer, count, false, "write")?;
+                self.lent(Register::RSI, buffer, count, false, "write")?;
                 match self.connection_of(fd) {
                     Ok(Some(number)) => self.send(number, buffer, count, 0)?,
                     _ => self.not_connected(),
@@ -2399,7 +2762,7 @@ impl<'a> Cpu<'a> {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 let buffer = self.constant(rsi)?;
                 let count = self.constant(rdx)?;
-                self.lent(buffer, count, false, "write")?;
+                self.lent(Register::RSI, buffer, count, false, "write")?;
                 // Standard output or error, a file open for writing, or nothing that can be.
                 let target = match fd {
                     1 | 2 => Some(None),
@@ -2448,7 +2811,13 @@ impl<'a> Cpu<'a> {
             42 => {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 let address = self.constant(rsi)?;
-                self.lent(address, self.constant(rdx)? & 0xffff_ffff, false, "connect")?;
+                self.lent(
+                    Register::RSI,
+                    address,
+                    self.constant(rdx)? & 0xffff_ffff,
+                    false,
+                    "connect",
+                )?;
                 return self.connect(fd, address);
             }
             43 | 288 => {
@@ -2460,8 +2829,8 @@ impl<'a> Cpu<'a> {
                     ));
                 }
                 if address != 0 {
-                    self.lent(address, 16, true, "accept")?;
-                    self.lent(length, 4, true, "accept")?;
+                    self.lent(Register::RSI, address, 16, true, "accept")?;
+                    self.lent(Register::RDX, length, 4, true, "accept")?;
                 }
                 self.accept(fd, address, length)?
             }
@@ -2473,7 +2842,7 @@ impl<'a> Cpu<'a> {
                     return Err(unsupported("sending to or receiving from a named address"));
                 }
                 let call = if number == 44 { "sendto" } else { "recvfrom" };
-                self.lent(buffer, count, number == 45, call)?;
+                self.lent(Register::RSI, buffer, count, number == 45, call)?;
                 match self.connection_of(fd) {
                     Err(()) => (-EBADF).cast_unsigned(),
                     Ok(None) => self.not_connected(),
@@ -2505,23 +2874,23 @@ impl<'a> Cpu<'a> {
                 ));
             }
             258 => {
-                let name = self.name_at(rdi, rsi, "mkdirat")?;
+                let name = self.name_at(rdi, Register::RSI, "mkdirat")?;
                 self.make_folder(name)
             }
             263 => {
-                let name = self.name_at(rdi, rsi, "unlinkat")?;
+                let name = self.name_at(rdi, Register::RSI, "unlinkat")?;
                 let flags = self.constant(rdx)? & 0xffff_ffff;
                 self.remove(name, flags)?
             }
             264 => {
-                let from = self.name_at(rdi, rsi, "renameat")?;
-                let to = self.name_at(rdx, registers[10], "renameat")?;
+                let from = self.name_at(rdi, Register::RSI, "renameat")?;
+                let to = self.name_at(rdx, Register::R10, "renameat")?;
                 self.rename(from, to)?
             }
             // The test's readings, as the supervisor gives them, the last one repeating.
             228 if !self.state.clock.is_empty() => {
                 let buffer = self.constant(rsi)?;
-                self.lent(buffer, 16, true, "clock_gettime")?;
+                self.lent(Register::RSI, buffer, 16, true, "clock_gettime")?;
                 let readings = Rc::clone(&self.state.clock);
                 let index = self.state.readings_used.min(readings.len() - 1);
                 let (seconds, nanoseconds) = readings[index];
@@ -2534,7 +2903,7 @@ impl<'a> Cpu<'a> {
             318 if self.state.random.is_some() => {
                 let buffer = self.constant(rdi)?;
                 let count = self.constant(rsi)?;
-                self.lent(buffer, count, true, "getrandom")?;
+                self.lent(Register::RDI, buffer, count, true, "getrandom")?;
                 let flags = self.constant(rdx)?;
                 if flags & !7 != 0 || flags & 6 == 6 {
                     (-EINVAL).cast_unsigned()
@@ -2563,7 +2932,7 @@ impl<'a> Cpu<'a> {
                     return Err(unsupported(format!("reading clock {clock}")));
                 }
                 let buffer = self.constant(rsi)?;
-                self.lent(buffer, 16, true, "clock_gettime")?;
+                self.lent(Register::RSI, buffer, 16, true, "clock_gettime")?;
                 let fresh = self.pool.len();
                 let seconds =
                     self.pool
@@ -2578,7 +2947,7 @@ impl<'a> Cpu<'a> {
             318 => {
                 let buffer = self.constant(rdi)?;
                 let count = self.constant(rsi)?;
-                self.lent(buffer, count, true, "getrandom")?;
+                self.lent(Register::RDI, buffer, count, true, "getrandom")?;
                 if count > 256 {
                     return Err(unsupported("getrandom for more than 256 bytes at once"));
                 }
@@ -2593,11 +2962,11 @@ impl<'a> Cpu<'a> {
             // slept. It reads the time it's given, and may write what's left of it.
             230 => {
                 let request = self.constant(rdx)?;
-                self.lent(request, 16, false, "clock_nanosleep")?;
+                self.lent(Register::RDX, request, 16, false, "clock_nanosleep")?;
                 self.load(request, 16)?;
                 let left = self.constant(registers[10])?;
                 if left != 0 {
-                    self.lent(left, 16, true, "clock_nanosleep")?;
+                    self.lent(Register::R10, left, 16, true, "clock_nanosleep")?;
                 }
                 0
             }

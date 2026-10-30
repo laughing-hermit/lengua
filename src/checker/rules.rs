@@ -32,6 +32,8 @@ pub struct Facts {
     pub functions: usize,
     /// The CPU features beyond the x86-64 baseline its instructions need.
     pub features: Vec<&'static str>,
+    /// The data symbol each `[rip + name]` operand names, by its instruction's address.
+    pub named: BTreeMap<u64, String>,
 }
 
 struct Checker<'a, 'p> {
@@ -134,6 +136,7 @@ pub fn check(
         assertions,
         functions,
         features: Vec::new(),
+        named: BTreeMap::new(),
     }
 }
 
@@ -699,9 +702,7 @@ impl Checker<'_, '_> {
             if !loads_address {
                 return None;
             }
-            let target = instruction.memory_displacement64();
-            let (name, data) = self.program.data_at(target)?;
-            let offset = i64::try_from(target - data.address).ok()?;
+            let (name, _, offset) = self.program.named(&function.steps[position])?;
             match &found {
                 Some(known) if *known != (name.to_owned(), offset) => return None,
                 Some(_) => {}
@@ -723,8 +724,7 @@ impl Checker<'_, '_> {
             if !instruction.is_ip_rel_memory_operand() {
                 continue;
             }
-            let address = instruction.memory_displacement64();
-            let Some((name, data)) = self.program.data_at(address) else {
+            let Some((name, data, offset)) = self.program.named(step) else {
                 self.violation(
                     Rule::Scope,
                     step.source.line,
@@ -736,20 +736,46 @@ impl Checker<'_, '_> {
                 );
                 continue;
             };
-            // Every byte of the access stays inside the symbol, vector widths included.
-            let width = u64::try_from(instruction.memory_size().size()).unwrap_or(0);
-            let end = data.address + data.size;
-            if mnemonic(instruction) != "lea" && address.saturating_add(width) > end {
+            // Every byte of the access stays inside the symbol it names, vector widths included,
+            // even where the next symbol starts just past its end; lea may point just past the
+            // end, as a limit does.
+            let lea = mnemonic(instruction) == "lea";
+            let width = if lea {
+                0
+            } else {
+                i64::try_from(instruction.memory_size().size()).unwrap_or(0)
+            };
+            let size = i64::try_from(data.size).unwrap_or(i64::MAX);
+            let (reaches, fix) = if lea {
+                (
+                    "points",
+                    format!("point inside {name}, or just past its end"),
+                )
+            } else {
+                ("reaches", format!("keep the whole access inside {name}"))
+            };
+            let bytes = |count: i64| format!("{count} byte{}", if count == 1 { "" } else { "s" });
+            if offset < 0 {
                 self.violation(
                     Rule::Scope,
                     step.source.line,
                     format!(
-                        "`{}` reaches {} bytes past the end of {name}, which has {} bytes",
+                        "`{}` {reaches} {} before the start of {name}",
                         step.source.text,
-                        address.saturating_add(width) - end,
-                        data.size
+                        bytes(-offset)
                     ),
-                    format!("keep the whole access inside {name}"),
+                    fix,
+                );
+            } else if offset + width > size {
+                self.violation(
+                    Rule::Scope,
+                    step.source.line,
+                    format!(
+                        "`{}` {reaches} {} past the end of {name}, which has {size} bytes",
+                        step.source.text,
+                        bytes(offset + width - size)
+                    ),
+                    fix,
                 );
             }
             let (name, writable) = (name.to_owned(), data.writable);

@@ -20,7 +20,16 @@ async fn machine(source: &str) -> Machine {
         .await
         .expect("assemble");
     toolchain.link(&object, &executable).await.expect("link");
-    crate::checker::decode::read(&std::fs::read(&executable).expect("read")).expect("decode")
+    let mut machine =
+        crate::checker::decode::read(&std::fs::read(&executable).expect("read")).expect("decode");
+    // Which symbol each [rip + name] names, as the server passes it on.
+    let (parsed, _) = crate::checker::check_layout(source);
+    let features = crate::platform::Machine::detect().features;
+    if let Some(program) = crate::checker::decode::map(&parsed, &machine, features, &mut Vec::new())
+    {
+        machine.named = program.named_symbols();
+    }
+    machine
 }
 
 fn block(spec: &str, index: usize) -> Generated {
@@ -167,30 +176,83 @@ async fn finds_memory_bugs_the_rules_cannot_see() {
     {
         return;
     }
+    // spare sits right after out_buf, so a byte past out_buf's end is spare's first.
+    let spare = (
+        ".size out_buf, . - out_buf\n",
+        ".size out_buf, . - out_buf\n\n.type spare, @object\nspare:\n    .zero 8\n.size spare, . \
+         - spare\n",
+    );
     let cases = [
         // Digits written from 8 bytes into out_buf run past its end.
         (
-            "    lea rsi, [rip + out_buf]\n    mov ecx, OUT_BUF_LEN - 1\n",
-            "    lea rsi, [rip + out_buf + 8]\n    mov ecx, OUT_BUF_LEN - 1\n",
+            vec![(
+                "    lea rsi, [rip + out_buf]\n    mov ecx, OUT_BUF_LEN - 1\n",
+                "    lea rsi, [rip + out_buf + 8]\n    mov ecx, OUT_BUF_LEN - 1\n",
+            )],
             "writes 1 byte at byte 27 of out_buf, which has 21 bytes",
         ),
         // write_all is lent write_i64's frame, which nothing wrote.
         (
-            "    mov edi, STDOUT\n    call write_all\n",
-            "    mov edi, STDOUT\n    mov rsi, rsp\n    mov edx, 8\n    call write_all\n",
+            vec![(
+                "    mov edi, STDOUT\n    call write_all\n",
+                "    mov edi, STDOUT\n    mov rsi, rsp\n    mov edx, 8\n    call write_all\n",
+            )],
             "reads byte 0 of write_i64's frame, which has 8 bytes, which nothing wrote",
         ),
         // A pointer just past write_i64's frame writes its return address.
         (
-            ".Lwrite_i64_return:\n    add rsp, 8\n",
-            ".Lwrite_i64_return:\n    lea rcx, [rsp + 8]\n    mov byte ptr [rcx], 0\n    add \
-             rsp, 8\n",
+            vec![(
+                ".Lwrite_i64_return:\n    add rsp, 8\n",
+                ".Lwrite_i64_return:\n    lea rcx, [rsp + 8]\n    mov byte ptr [rcx], 0\n    \
+                 add rsp, 8\n",
+            )],
             "so it reaches the return address of write_i64",
         ),
+        // A loop that clears one byte too many: its pointer, one step past out_buf, writes
+        // spare's first byte, which nothing prints.
+        (
+            vec![
+                spare,
+                (
+                    ".Lwrite_i64_digits:\n",
+                    ".Lwrite_i64_digits:\n    lea rsi, [rip + out_buf]\n    mov ecx, OUT_BUF_LEN + \
+                     1\n.Lwrite_i64_clear:  # bound: 22\n    mov byte ptr [rsi], 0\n    inc rsi\n    \
+                     dec ecx\n    jnz .Lwrite_i64_clear\n",
+                ),
+            ],
+            "writes 1 byte at byte 21 of out_buf, which has 21 bytes, so it reaches byte 0 of \
+             spare, which has 8 bytes",
+        ),
+        // A pointer to out_buf's end, as main.s names it, is out_buf's, not spare's.
+        (
+            vec![
+                spare,
+                (
+                    ".Lwrite_i64_digits:\n",
+                    ".Lwrite_i64_digits:\n    lea rsi, [rip + out_buf + OUT_BUF_LEN]\n    mov byte \
+                     ptr [rsi], 0\n",
+                ),
+            ],
+            "writes 1 byte at byte 21 of out_buf, which has 21 bytes, so it reaches byte 0 of \
+             spare",
+        ),
+        // A pointer stepped past the program's path, the first argument string, reads the
+        // next.
+        (
+            vec![(
+                "    mov rdi, qword ptr [rsp + 16]\n",
+                "    mov rdi, qword ptr [rsp + 8]\n    add rdi, 13\n    movzx ecx, byte ptr \
+                 [rdi]\n    mov rdi, qword ptr [rsp + 16]\n",
+            )],
+            "reads 1 byte at byte 13 of the program's argument 0, which has 13 bytes",
+        ),
     ];
-    for (from, to, needle) in cases {
-        let buggy = crate::checker::TEMPLATE.replacen(from, to, 1);
-        assert_ne!(buggy, crate::checker::TEMPLATE, "{from:?}");
+    for (changes, needle) in cases {
+        let mut buggy = crate::checker::TEMPLATE.to_owned();
+        for (from, to) in changes {
+            assert!(buggy.contains(from), "{from:?}");
+            buggy = buggy.replacen(from, to, 1);
+        }
         let machine = machine(&buggy).await;
         let block = block(&asset("template-spec.md"), 0);
         let verdict = prove(&machine, &block, &budget(120));

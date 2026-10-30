@@ -361,7 +361,9 @@ symbol. For a 16-byte load from an 80-byte buffer, the largest index is 64:
     movdqu xmm0, xmmword ptr [rsi + rcx]
 ```
 
-An access through `[rip + name]` must fit inside `name` in the same way. Where a
+An access through `[rip + name]` must fit inside `name` in the same way, even where another
+symbol starts just past its end: `[rip + out_buf + OUT_BUF_LEN]` is past out_buf, not the next
+symbol's first byte. `lea` may point just past the end, as a limit does. Where a
 check is provably unnecessary, wrap the access in `# unsafe: <reason>` … `# end unsafe`. Only
 bounds checks can be skipped this way, and `check` finds every unsafe block.
 
@@ -378,8 +380,9 @@ register, the program's arguments (which `_start` finds above its stack), a plai
 value it doesn't follow, such as a pointer loaded from memory. Adding a number to an address
 keeps its owner, and so does a call that returns a pointer it was lent. What the rules can't
 settle, the proof checks on every run it covers. Each access must stay inside the buffer, frame
-or argument its pointer points into, even where the CPU would let it into a neighbour. A buffer
-lent to a system call must hold every byte the call may touch. No return address may be
+or argument its pointer was made from, even where the CPU would let it into a neighbour: a
+pointer one step past a buffer's end still belongs to that buffer, even where the next buffer
+starts there. A buffer lent to a system call must hold every byte the call may touch. No return address may be
 written, and no stack may be read before something wrote it.
 
 - **M1, owners.** An address is never made from a plain number: no fixed addresses, and no

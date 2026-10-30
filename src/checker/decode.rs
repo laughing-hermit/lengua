@@ -51,6 +51,10 @@ pub struct Machine {
     pub data: BTreeMap<String, MachineData>,
     /// Whether a loaded segment is both writable and executable.
     pub writable_executable: bool,
+    /// The data symbol each `[rip + name]` operand names in main.s, by its instruction's
+    /// address, once the checker has matched main.s to the executable (see
+    /// [`Program::named_symbols`]); empty until then.
+    pub named: BTreeMap<u64, String>,
 }
 
 /// Reads the functions and data symbols of a linked ELF executable and decodes the functions.
@@ -233,13 +237,37 @@ impl Program<'_> {
             .find(|function| function.address == address)
     }
 
-    /// The data symbol containing `address`.
+    /// The data symbol a step's `[rip + name]` operand names in main.s, with the offset main.s
+    /// writes after the name, which may reach past the symbol's end. The name decides, never the
+    /// address: where one symbol ends just as the next starts, `[rip + a + 8]` and `[rip + b]`
+    /// are one address, but only one of them is an access to b.
     #[must_use]
-    pub fn data_at(&self, address: u64) -> Option<(&str, &MachineData)> {
-        self.data
+    pub fn named(&self, step: &Step<'_>) -> Option<(&str, &MachineData, i64)> {
+        step.source
+            .operands
             .iter()
-            .find(|(_, data)| address >= data.address && address < data.address + data.size)
-            .map(|(name, data)| (name.as_str(), data))
+            .find_map(|operand| match operand {
+                Operand::Memory(Memory {
+                    symbol: Some(symbol),
+                    displacement,
+                    ..
+                }) => self
+                    .data
+                    .get_key_value(symbol)
+                    .map(|(name, data)| (name.as_str(), data, *displacement)),
+                _ => None,
+            })
+    }
+
+    /// The data symbol each `[rip + name]` operand names, by its instruction's address, for
+    /// proofs, which run the machine code and so see only addresses.
+    #[must_use]
+    pub fn named_symbols(&self) -> BTreeMap<u64, String> {
+        self.functions
+            .iter()
+            .flat_map(|function| &function.steps)
+            .filter_map(|step| Some((step.machine.ip(), self.named(step)?.0.to_owned())))
+            .collect()
     }
 }
 

@@ -3,8 +3,9 @@
 //! - **M1, owners.** Every address comes from a pointer with an owner: a data symbol, the current
 //!   frame, a pointer the caller lent in a register, or the program's arguments. None is made
 //!   from a plain number.
-//! - **M2, bounds.** An access at a constant offset from a symbol's address stays inside it.
-//!   Indexed accesses keep rule 9's checks, which the checker holds to the owner's size.
+//! - **M2, bounds.** An access at a constant offset from a symbol's address stays inside it: the
+//!   symbol main.s names, even where the next one starts just past its end. Indexed accesses
+//!   keep rule 9's checks, which the checker holds to the owner's size.
 //! - **M3, lifetimes.** An address in the current frame is never stored outside it or returned,
 //!   and every access at a constant offset from rsp stays inside the function's own frame: never
 //!   its return address or its caller's frame.
@@ -823,16 +824,12 @@ fn address_owner(
     let base = instruction.memory_base();
     let index = instruction.memory_index();
     if base == Register::RIP {
-        let target = instruction.memory_displacement64();
         return program
-            .data_at(target)
-            .and_then(|(symbol, data)| {
-                Some(Owner::Data {
-                    symbol: symbol.to_owned(),
-                    offset: Some(i64::try_from(target.checked_sub(data.address)?).ok()?),
-                })
-            })
-            .unwrap_or(Owner::Unknown);
+            .named(&function.steps[at])
+            .map_or(Owner::Unknown, |(symbol, _, offset)| Owner::Data {
+                symbol: symbol.to_owned(),
+                offset: Some(offset),
+            });
     }
     let displacement = displacement(instruction);
     if base == Register::RSP {

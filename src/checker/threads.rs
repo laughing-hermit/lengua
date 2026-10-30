@@ -432,7 +432,7 @@ impl Checker<'_, '_> {
             // M7: other threads write the per-thread data, so a worker reaches only its own part,
             // through rbx: never through the symbol's address.
             if instruction.memory_base() == Register::RIP
-                && let Some((name, _)) = self.program.data_at(instruction.memory_displacement64())
+                && let Some((name, ..)) = self.program.named(step)
                 && DATA.iter().any(|(known, ..)| *known == name)
             {
                 let name = name.to_owned();
@@ -478,8 +478,8 @@ impl Checker<'_, '_> {
                 Register::RIP if written => {
                     let name = self
                         .program
-                        .data_at(instruction.memory_displacement64())
-                        .map_or_else(|| "data".to_owned(), |(name, _)| name.to_owned());
+                        .named(step)
+                        .map_or_else(|| "data".to_owned(), |(name, ..)| name.to_owned());
                     self.violation(
                         Rule::Scope,
                         line,

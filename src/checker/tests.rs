@@ -676,7 +676,7 @@ async fn workers_never_race() {
 /// Memory safety: a bug planted for each memory rule is found, on its line.
 #[tokio::test]
 async fn memory_rules_find_each_planted_bug() {
-    let cases: [(&str, &str, &str, Rule, &str); 15] = [
+    let cases: [(&str, &str, &str, Rule, &str); 17] = [
         // M2: a bounds check of part of the index, and one with a negative limit.
         (
             ".Lparse_loop:  # bound: 20\n    cmp rcx, MAX_CHARS\n",
@@ -716,6 +716,23 @@ async fn memory_rules_find_each_planted_bug() {
             "    mov byte ptr [rsi + OUT_BUF_LEN], 0",
             Rule::Bounds,
             "reaches byte 21 of out_buf, which has 21 bytes",
+        ),
+        // M2: one byte past usage_msg is nan_msg's first, but main.s names usage_msg.
+        (
+            ".Lstart_write_failed:\n",
+            ".Lstart_write_failed:\n    movzx eax, byte ptr [rip + usage_msg + USAGE_MSG_LEN]\n",
+            "    movzx eax, byte ptr [rip + usage_msg + USAGE_MSG_LEN]",
+            Rule::Scope,
+            "reaches 1 byte past the end of usage_msg, which has 18 bytes",
+        ),
+        // M2: so is a pointer just past usage_msg's end, as main.s makes it.
+        (
+            ".Lstart_write_failed:\n",
+            ".Lstart_write_failed:\n    lea rsi, [rip + usage_msg + USAGE_MSG_LEN]\n    movzx \
+             eax, byte ptr [rsi]\n",
+            "    movzx eax, byte ptr [rsi]",
+            Rule::Bounds,
+            "reaches byte 18 of usage_msg, which has 18 bytes",
         ),
         // M3: an address in the frame, returned.
         (
@@ -821,6 +838,40 @@ async fn memory_rules_find_each_planted_bug() {
             "no {rule:?} violation containing {needle:?} in {all:#?}"
         );
     }
+}
+
+/// A pointer just past a symbol's end belongs to the symbol main.s names, whatever starts there:
+/// walking back from it stays inside, whether the next symbol is right after or there's none.
+#[tokio::test]
+async fn a_pointer_past_a_symbol_s_end_is_that_symbol_s() {
+    let allowed = [
+        // nan_msg starts where usage_msg ends.
+        (
+            ".Lstart_write_failed:\n",
+            "    lea rsi, [rip + usage_msg + USAGE_MSG_LEN]\n    movzx eax, byte ptr [rsi - 1]\n",
+        ),
+        // Nothing comes after out_buf.
+        (
+            ".Lwrite_i64_digits:\n",
+            "    lea rsi, [rip + out_buf + OUT_BUF_LEN]\n    dec rsi\n    mov byte ptr [rsi], 0\n",
+        ),
+    ];
+    for (label, lines) in allowed {
+        let text = with(label, &format!("{label}{lines}"));
+        let report = check(&text).await;
+        let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+        assert!(report.passed(), "{lines:?}: {all:#?}");
+    }
+    let text = with(
+        ".Lstart_write_failed:\n",
+        ".Lstart_write_failed:\n    lea rsi, [rip + usage_msg + USAGE_MSG_LEN + 1]\n",
+    );
+    assert_violation(
+        &check(&text).await,
+        Rule::Scope,
+        line_of(&text, "    lea rsi, [rip + usage_msg + USAGE_MSG_LEN + 1]"),
+        "points 1 byte past the end of usage_msg, which has 18 bytes",
+    );
 }
 
 /// Two functions that write through rdi and read through rsi: `fill` with a `read` system call,

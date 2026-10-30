@@ -319,8 +319,9 @@ each one's summary (the registers it reads and writes through, itself and in wha
 system calls included, and what it returns) carries owners across calls, so no header has to
 declare them. Then the M rules hold:
 - no address is made from a plain number (M1);
-- constant offsets stay inside their symbol, bounds checks bound the whole index, and bit tests
-  take constant offsets (M2);
+- constant offsets stay inside their symbol, the one main.s names even where the next symbol
+  starts just past its end, bounds checks bound the whole index, and bit tests take constant
+  offsets (M2);
 - a frame address is never stored outside the frame or returned, and constant offsets from rsp
   stay inside the function's own frame (M3);
 - an address a function writes through is lent to it once, never in a second register as well,
@@ -340,10 +341,14 @@ passes, and a planted bug for each rule is found on its line.
 What no rule settles, such as those pointers or an index checked against a length in a
 register, the proof settles on every run it covers. The prover's model holds each run to the
 memory rules, as a borrow checker would at run time:
-- Each access stays inside the object its pointer points into: a data symbol, a live frame, or
-  one of the program's arguments. A pointer just past an object's end still belongs to it for
-  accesses below. So does each buffer lent to the kernel, for as many bytes as the call may
-  touch.
+- Each access stays inside the object its pointer was made from: a data symbol, a live frame,
+  or one of the program's arguments. The run follows each pointer from where it's made, through
+  moves, adding numbers, and storing and loading it whole, so a pointer one step past an
+  object's end is still that object's, even where the next object starts right there, as
+  symbols, strings and frames often do; for `[rip + name]`, the symbol main.s names decides,
+  not the address. A pointer whose origin a run loses, as through a vector register, is held to
+  the object it points into, and the argument strings sit a byte apart for it. Each buffer lent
+  to the kernel is held the same way, for as many bytes as the call may touch.
 - No return address is written, and each `ret` goes back where its call came from.
 - No stack byte is read before something wrote it. Stack a function released is gone.
 - An address the input chooses that could leave its object becomes an obligation, which the
