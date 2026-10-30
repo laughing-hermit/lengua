@@ -557,7 +557,14 @@ async fn the_template_is_proven_for_every_input() {
     );
     let lock = program.read("lengua.lock").expect("the lock");
     assert!(lock.contains("proven = [\"B1\", \"B3\"]"), "{lock}");
-    assert!(lock.contains("solvers = \"z3 and cvc5\""), "{lock}");
+    // Every step settles by the terms alone: the program's parse and the formula's number are
+    // one sum.
+    assert!(
+        lock.contains(
+            "solvers = \"none: the tests tried every value, or the terms settled every step\""
+        ),
+        "{lock}"
+    );
     // Checking the same files again answers at once from what was found.
     let again = session.check(&program).await;
     assert_eq!(again["state"], "done", "{again}");
@@ -575,6 +582,39 @@ async fn the_template_is_proven_for_every_input() {
     let relocked = program.read("lengua.lock").expect("the lock");
     assert_ne!(lock, relocked);
     assert!(relocked.contains("proven = [\"B1\", \"B3\"]"), "{relocked}");
+    session.service.cancel().await.expect("close the session");
+}
+
+#[tokio::test]
+async fn a_bug_the_samples_miss_is_found_by_the_proof_and_run_for_real() {
+    // The negative of 1234567 comes out one too big: one input in 18 quintillion, which the
+    // tests' samples miss and the proof finds; a real run with that input confirms it.
+    if !solvers_installed() {
+        return;
+    }
+    let session = Session::proving(Protocol::Discover).await;
+    let program = checked_template(&session).await;
+    let buggy = asset("main-template.s")
+        .replacen(
+            ".equ OUT_BUF_LEN, 21\n",
+            ".equ OUT_BUF_LEN, 21\n.equ UNLUCKY, -1234567\n",
+            1,
+        )
+        .replacen(
+            "    neg rdx\n    jo .Lstart_assert_negate\n",
+            "    neg rdx\n    jo .Lstart_assert_negate\n    cmp rdx, UNLUCKY\n    jne \
+             .Lstart_lucky\n    inc rdx\n.Lstart_lucky:\n",
+            1,
+        );
+    assert_ne!(buggy, asset("main-template.s"));
+    program.write("main.s", &buggy);
+    let problems = failed(&session, &program).await;
+    assert!(
+        problems.contains(
+            "the proof found inputs the tests didn't try where main.s is wrong: with n = 1234567"
+        ),
+        "{problems}"
+    );
     session.service.cancel().await.expect("close the session");
 }
 
@@ -708,9 +748,10 @@ async fn the_file_example_proves_its_file_handling() {
     session.service.cancel().await.expect("close the session");
 }
 
-/// Three minutes: mean's arithmetic isn't proven yet, so three blocks run to the time limit.
+/// Five minutes: mean's two blocks of decimals take a minute each, and its block of whole
+/// numbers runs to the proof's time limit.
 #[tokio::test]
-#[ignore = "slow: three of mean's blocks run to the proof's time limit"]
+#[ignore = "slow: the proof takes its five minutes"]
 async fn the_decimal_example_is_proven() {
     // mean takes decimals and prints exact cents: scaled(a, 2) and places(x, 2) in its tests.
     if !solvers_installed() {
@@ -719,9 +760,8 @@ async fn the_decimal_example_is_proven() {
     let session = Session::proving(Protocol::Discover).await;
     let program = written(&session, example_files("mean")).await;
     let report = done(&session, &program).await;
-    // Decimal inputs prove where the output is fixed text: usage (B4), a bad argument (B5) and
-    // an argument out of range (B6).
-    for index in 3..6 {
+    // Every block but B2's whole numbers, halved at 64 bits where the formula multiplies at 128.
+    for index in [0, 2, 3, 4, 5] {
         assert!(
             text(&report["proofs"][index]).contains("proven for every input in range"),
             "{report}"

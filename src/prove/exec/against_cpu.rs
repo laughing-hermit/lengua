@@ -914,7 +914,9 @@ fn model(
     for _ in &probe.code {
         match step(image, &mut state, &mut pool) {
             Ok(Step::Next) => {}
-            Ok(Step::Split(..)) => return Err("the model split a run with known values".into()),
+            Ok(Step::Split(..) | Step::Choose(_)) => {
+                return Err("the model split a run with known values".into());
+            }
             Err(end) => return Err(format!("the model stopped: {end:?}")),
         }
     }

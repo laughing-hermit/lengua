@@ -75,6 +75,11 @@ the tests come before the code, and they decide whether the code is right.
   one `vfmadd` instruction. Write `2.0`, not `2`, next to decimals.
 - **Inputs are bare variables.** In `args` and `stdin`, a placeholder holds just a variable
   (`{a}`); computations belong in `stdout`, `stderr` and `exit_code` (`{a + b}`).
+- **A computing behavior gets a block of its numbers alone.** The proof goes through text
+  lengths one by one, so a block with several free texts proves only short ones. When a
+  behavior computes with numbers among other text (a total of amounts between other fields, a
+  date, a count), add a block where only the numbers vary: the same templates, with each other
+  variable a `choice(…)` of one or a few values. The proof then covers every number.
 - **Small ranges are checked in full.** A block whose ranges hold at most 5000 combinations (and
   no `choice`) runs every one of them, so a range the spec states exactly is worth more than a
   wide one.

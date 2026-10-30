@@ -12,7 +12,7 @@ pub mod formula;
 pub mod smt;
 pub mod term;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -264,8 +264,478 @@ fn meets(
     })
 }
 
+/// What a comparison with a constant says of a term: it lies from `low` to `high`, read signed
+/// or unsigned.
+#[derive(Debug, Clone, Copy)]
+struct Bounds {
+    signed: bool,
+    low: i128,
+    high: i128,
+}
+
+/// The term a condition compares with a constant, and what the condition says of it.
+fn bounds_of(pool: &Pool, condition: Term) -> Option<(Term, Bounds)> {
+    let (inner, holds) = match *pool.node(condition) {
+        Node::BoolNot(inner) => (inner, false),
+        _ => (condition, true),
+    };
+    let width = pool.width(pool.operands(inner).first().copied()?);
+    if width == 0 || width > 128 {
+        return None;
+    }
+    let (signed_min, signed_max) = if width == 128 {
+        (i128::MIN, i128::MAX)
+    } else {
+        (-(1_i128 << (width - 1)), (1_i128 << (width - 1)) - 1)
+    };
+    // Unsigned values of 127 bits and more don't fit an i128: their top stands for every value
+    // above, which is all a bound from below needs, since the values compared with it are
+    // whole numbers that do fit.
+    let unsigned_max = if width >= 127 {
+        i128::MAX
+    } else {
+        (1_i128 << width) - 1
+    };
+    let constant = |term: Term, signed: bool| {
+        pool.constant(term).and_then(|value| {
+            let value = i128::try_from(value).ok()?;
+            Some(if signed && value > signed_max {
+                value - (1 << width)
+            } else {
+                value
+            })
+        })
+    };
+    let (term, signed, low, high) = match *pool.node(inner) {
+        Node::Ult(a, b) | Node::Slt(a, b) => {
+            let signed = matches!(pool.node(inner), Node::Slt(..));
+            let (min, max) = if signed {
+                (signed_min, signed_max)
+            } else {
+                (0, unsigned_max)
+            };
+            match (constant(a, signed), constant(b, signed), holds) {
+                (None, Some(k), true) => (a, signed, min, k - 1),
+                (None, Some(k), false) => (a, signed, k, max),
+                (Some(k), None, true) => (b, signed, k + 1, max),
+                (Some(k), None, false) => (b, signed, min, k),
+                _ => return None,
+            }
+        }
+        Node::Eq(a, b) if holds && pool.width(a) > 0 && width < 127 => {
+            match (constant(a, false), constant(b, false)) {
+                (None, Some(k)) => (a, false, k, k),
+                (Some(k), None) => (b, false, k, k),
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    Some((term, Bounds { signed, low, high }))
+}
+
+/// Whole numbers, as intervals.
+type Values = Vec<(i128, i128)>;
+
+/// The numbers in both `a` and `b`.
+fn both(a: &Values, b: &Values) -> Values {
+    let mut found = Vec::new();
+    for (low, high) in a {
+        for (from, to) in b {
+            let (start, end) = (*low.max(from), *high.min(to));
+            if start <= end {
+                found.push((start, end));
+            }
+        }
+    }
+    found
+}
+
+/// What `bounds` say of a `width`-bit value read signed: one interval, or two when unsigned
+/// bounds reach past the sign bit. `None` where the reading doesn't fit.
+fn reading(bounds: Bounds, width: u32) -> Option<Values> {
+    if bounds.signed {
+        return Some(vec![(bounds.low, bounds.high)]);
+    }
+    match width {
+        // An unsigned top of i128::MAX stands for every value above: the negatives too.
+        128 => Some(if bounds.high == i128::MAX {
+            vec![(bounds.low, i128::MAX), (i128::MIN, -1)]
+        } else {
+            vec![(bounds.low, bounds.high)]
+        }),
+        ..=126 => {
+            let (span, half) = (1_i128 << width, 1_i128 << (width - 1));
+            let mut values = Vec::new();
+            if bounds.low < half {
+                values.push((bounds.low.max(0), bounds.high.min(half - 1)));
+            }
+            if bounds.high >= half {
+                values.push((bounds.low.max(half) - span, bounds.high - span));
+            }
+            Some(values)
+        }
+        _ => None,
+    }
+}
+
+/// `values` as few intervals as cover the same numbers, in order.
+fn merged(mut values: Values) -> Values {
+    values.sort_unstable();
+    let mut found: Values = Vec::with_capacity(values.len());
+    for (low, high) in values {
+        match found.last_mut() {
+            Some((_, end)) if low <= end.saturating_add(1) => *end = (*end).max(high),
+            _ => found.push((low, high)),
+        }
+    }
+    found
+}
+
+/// The numbers from `min` to `max` not in `values`.
+fn complement(values: &Values, min: i128, max: i128) -> Values {
+    let mut found = Vec::new();
+    // The least number not yet covered: none once every number up to i128::MAX is.
+    let mut start = Some(min);
+    for (low, high) in merged(values.clone()) {
+        let Some(from) = start else {
+            break;
+        };
+        if low > from {
+            found.push((from, (low - 1).min(max)));
+        }
+        if high >= from {
+            start = high.checked_add(1);
+        }
+    }
+    if let Some(from) = start {
+        found.push((from, max));
+    }
+    found.retain(|(low, high)| low <= high);
+    found
+}
+
+/// The term `condition` compares, and the numbers it allows, read signed at the term's width: a
+/// comparison with a constant, or comparisons of one term joined by and, or and not, as a byte's
+/// character set is.
+fn values_of(pool: &Pool, condition: Term) -> Option<(Term, Values)> {
+    values_within(pool, condition, 8)
+}
+
+fn values_within(pool: &Pool, condition: Term, depth: u32) -> Option<(Term, Values)> {
+    if let Some((x, bounds)) = bounds_of(pool, condition) {
+        return Some((x, reading(bounds, pool.width(x))?));
+    }
+    if depth == 0 {
+        return None;
+    }
+    match *pool.node(condition) {
+        Node::Lookup(byte, number) => {
+            let table = pool.table(number);
+            let values = (0..256_i128)
+                .filter(|value| table[(value / 64) as usize] >> (value % 64) & 1 == 1)
+                .map(|value| {
+                    let read = if value >= 128 { value - 256 } else { value };
+                    (read, read)
+                })
+                .collect();
+            Some((byte, merged(values)))
+        }
+        Node::BoolOr(a, b) | Node::BoolAnd(a, b) => {
+            let (x, left) = values_within(pool, a, depth - 1)?;
+            let (y, right) = values_within(pool, b, depth - 1)?;
+            if x != y {
+                return None;
+            }
+            let values = if matches!(pool.node(condition), Node::BoolOr(..)) {
+                merged([left, right].concat())
+            } else {
+                both(&left, &right)
+            };
+            Some((x, values))
+        }
+        Node::BoolNot(inner) => {
+            let (x, values) = values_within(pool, inner, depth - 1)?;
+            let (min, max) = match pool.width(x) {
+                128 => (i128::MIN, i128::MAX),
+                width @ 1..128 => (-(1_i128 << (width - 1)), (1_i128 << (width - 1)) - 1),
+                _ => return None,
+            };
+            Some((x, complement(&values, min, max)))
+        }
+        _ => None,
+    }
+}
+
+/// `values` of y moved to x: `x = -y + offset` when `negated`, else `x = y + offset`, as whole
+/// numbers.
+fn moved(values: &Values, negated: bool, offset: i128) -> Option<Values> {
+    values
+        .iter()
+        .map(|(low, high)| {
+            if negated {
+                Some((offset.checked_sub(*high)?, offset.checked_sub(*low)?))
+            } else {
+                Some((low.checked_add(offset)?, high.checked_add(offset)?))
+            }
+        })
+        .collect()
+}
+
+/// Whether the path's comparisons rule `condition` out: comparisons of the same sum, its
+/// negation, or either plus a constant, at the condition's width or another, taken together. A
+/// program that took a sign's branch then compares the number's size: `-x < 10^7` can't fail
+/// where `x < 0` and `x` is at least `-3000000`.
+fn refuted(pool: &Pool, path: &[Term], condition: Term) -> bool {
+    let Some((x, wanted)) = values_of(pool, condition) else {
+        return false;
+    };
+    let width = pool.width(x);
+    let mut known: Values = vec![pool.signed_range(x)];
+    for path_condition in path {
+        let Some((y, held)) = values_of(pool, *path_condition) else {
+            continue;
+        };
+        let values = both(&held, &vec![pool.signed_range(y)]);
+        let moved = if let Some((negated, delta)) = pool.related_wider(x, y) {
+            moved(&values, negated, delta)
+        } else if width <= 126
+            && let Some((negated, offset)) = pool.related(x, y)
+        {
+            // Modulo 2^width: each interval moved, then into the window the bits read signed.
+            let span = 1_i128 << width;
+            let offset = i128::try_from(offset).unwrap_or(0);
+            let offset = if offset >= span / 2 {
+                offset - span
+            } else {
+                offset
+            };
+            moved(&values, negated, offset).and_then(|values| {
+                values
+                    .into_iter()
+                    .map(|(low, high)| {
+                        let window = (low + span / 2).div_euclid(span);
+                        ((high + span / 2).div_euclid(span) == window)
+                            .then(|| (low - window * span, high - window * span))
+                    })
+                    .collect::<Option<Values>>()
+            })
+        } else {
+            continue;
+        };
+        let Some(moved) = moved else {
+            continue;
+        };
+        known = both(&known, &moved);
+        if known.is_empty() {
+            return true;
+        }
+    }
+    both(&known, &wanted).is_empty()
+}
+
+/// The most times [`settled`] splits an output check on a condition the path leaves open.
+const MAX_CHOICES: u32 = 2;
+
+/// What `holds` comes to where `path` holds: comparisons the path's own comparisons settle, as
+/// the formula's sign of the same number the program tested, written at another width, a few
+/// rounds since settling a sign turns a size into the number itself. Where a condition the path
+/// speaks of but leaves open still chooses, as the sign of a total that may be 0 chooses its size,
+/// each choice is settled on its own, with the condition on the path.
+fn settled(pool: &mut Pool, path: &[Term], holds: Term, splits: u32) -> Term {
+    if pool.truth(holds).is_some() {
+        return holds;
+    }
+    let mut facts = HashMap::new();
+    let mut pending = path.to_vec();
+    while let Some(condition) = pending.pop() {
+        match *pool.node(condition) {
+            Node::BoolAnd(a, b) => pending.extend([a, b]),
+            Node::BoolNot(inner) => {
+                facts.insert(inner, false);
+            }
+            Node::Bool(_) => {}
+            _ => {
+                facts.insert(condition, true);
+                // A test of one byte has its complement as its own table.
+                let complement = pool.bool_not(condition);
+                facts.entry(complement).or_insert(false);
+            }
+        }
+    }
+    let mut holds = holds;
+    for _ in 0..4 {
+        let before = holds;
+        let mut seen = HashSet::new();
+        let mut pending = vec![holds];
+        while let Some(term) = pending.pop() {
+            if !seen.insert(term) || seen.len() > 20_000 {
+                continue;
+            }
+            if pool.sort(term) == term::Sort::Bool
+                && !facts.contains_key(&term)
+                && values_of(pool, term).is_some()
+            {
+                let negated = pool.bool_not(term);
+                if refuted(pool, path, term) {
+                    facts.insert(term, false);
+                } else if refuted(pool, path, negated) {
+                    facts.insert(term, true);
+                }
+            }
+            pending.extend(pool.operands(term));
+        }
+        holds = pool.assuming(holds, &facts);
+        if holds == before {
+            break;
+        }
+    }
+    if splits == 0 || pool.truth(holds).is_some() {
+        return holds;
+    }
+    let Some(open) = open_choice(pool, path, holds) else {
+        return holds;
+    };
+    let side = |pool: &mut Pool, truth: bool| {
+        let condition = if truth { open } else { pool.bool_not(open) };
+        let mut path = path.to_vec();
+        path.push(condition);
+        settled(pool, &path, holds, splits - 1)
+    };
+    let (when, otherwise) = (side(pool, true), side(pool, false));
+    if when == otherwise {
+        return when;
+    }
+    let not_open = pool.bool_not(open);
+    let when = pool.bool_and(open, when);
+    let otherwise = pool.bool_and(not_open, otherwise);
+    pool.bool_or(when, otherwise)
+}
+
+/// A condition in `holds` that chooses between values, and that compares a number one of the
+/// path's comparisons speaks of: the first such, nearest the top.
+fn open_choice(pool: &Pool, path: &[Term], holds: Term) -> Option<Term> {
+    let spoken: Vec<Term> = path
+        .iter()
+        .filter_map(|known| values_of(pool, *known).map(|(y, _)| y))
+        .collect();
+    let mut seen = HashSet::new();
+    let mut pending = std::collections::VecDeque::from([holds]);
+    while let Some(term) = pending.pop_front() {
+        if !seen.insert(term) || seen.len() > 20_000 {
+            continue;
+        }
+        if let Node::Ite(condition, ..) = *pool.node(term)
+            && let Some((x, _)) = values_of(pool, condition)
+            && spoken
+                .iter()
+                .any(|y| pool.related_wider(x, *y).is_some() || pool.related(x, *y).is_some())
+        {
+            return Some(condition);
+        }
+        pending.extend(pool.operands(term));
+    }
+    None
+}
+
+/// The most evaluations [`search`] makes for one condition.
+const MAX_SEARCH: usize = 400;
+
+/// Inputs that meet every one of `conditions`, found by moving one variable of the newest of
+/// them in `witness`: to its range's ends and middle, and to the edge where the newest condition
+/// turns true, found by halving. A sum or a division compared with a constant turns at one
+/// place, which inputs drawn at random seldom land on, as when a number of days must come out
+/// below 10.
+fn search(
+    pool: &Pool,
+    conditions: &[Term],
+    witness: &HashMap<Term, u128>,
+    rng: &mut ChaCha8Rng,
+) -> Option<HashMap<Term, u128>> {
+    let newest = *conditions.last()?;
+    // Every variable fixed once, so each evaluation sees the same inputs but the one moved.
+    let mut base: HashMap<Term, u128> = pool
+        .variables(conditions)
+        .into_iter()
+        .map(|variable| {
+            let value = witness
+                .get(&variable)
+                .copied()
+                .unwrap_or_else(|| random_in(pool, variable, rng, None));
+            (variable, value)
+        })
+        .collect();
+    let mut left = MAX_SEARCH;
+    let truth = |values: &HashMap<Term, u128>, terms: &[Term], left: &mut usize| {
+        *left = left.saturating_sub(1);
+        let mut known = values.clone();
+        terms
+            .iter()
+            .rev()
+            .all(|term| pool.evaluate_cached(*term, &mut |_, _| Some(0), &mut known) == Some(1))
+    };
+    let moving: Vec<Term> = pool
+        .variables(&[newest])
+        .into_iter()
+        .filter(|variable| matches!(pool.node(*variable), Node::Var { .. }))
+        .collect();
+    for variable in moving {
+        let (low, high) = pool.range(variable);
+        let current = base.get(&variable).copied().unwrap_or(low);
+        let mut tried: Vec<(u128, bool)> = Vec::new();
+        for value in [low, high, low + (high - low) / 2, current] {
+            if left == 0 {
+                return None;
+            }
+            base.insert(variable, value);
+            let newest_holds = truth(&base, &[newest], &mut left);
+            if newest_holds && truth(&base, conditions, &mut left) {
+                return Some(base);
+            }
+            tried.push((value, newest_holds));
+        }
+        tried.sort_unstable();
+        // Halve between two values the newest condition disagrees on, down to the edge.
+        let Some(pair) = tried.windows(2).find(|pair| pair[0].1 != pair[1].1) else {
+            base.insert(variable, current);
+            continue;
+        };
+        let (mut below, mut above) = ((pair[0].0, pair[0].1), (pair[1].0, pair[1].1));
+        while above.0 - below.0 > 1 && left > 0 {
+            let middle = below.0 + (above.0 - below.0) / 2;
+            base.insert(variable, middle);
+            let holds = truth(&base, &[newest], &mut left);
+            if holds == below.1 {
+                below = (middle, holds);
+            } else {
+                above = (middle, holds);
+            }
+        }
+        let edge = if below.1 { below.0 } else { above.0 };
+        // The edge, and a few values past it on the side where the condition holds.
+        let step: i128 = if below.1 { -1 } else { 1 };
+        for offset in 0..4_i128 {
+            let Some(value) = u128::try_from(i128::try_from(edge).ok()? + step * offset)
+                .ok()
+                .filter(|value| (low..=high).contains(value))
+            else {
+                break;
+            };
+            base.insert(variable, value);
+            if truth(&base, conditions, &mut left) {
+                return Some(base);
+            }
+        }
+        base.insert(variable, current);
+    }
+    None
+}
+
 impl Oracle for Witnessed<'_> {
     fn possible(&mut self, pool: &Pool, path: &[Term], condition: Term) -> Result<bool, String> {
+        if refuted(pool, path, condition) {
+            return Ok(false);
+        }
         let mut conditions = path.to_vec();
         conditions.push(condition);
         let rng = &mut self.rng;
@@ -274,6 +744,17 @@ impl Oracle for Witnessed<'_> {
             .iter_mut()
             .any(|witness| meets(pool, &conditions, witness, rng))
         {
+            return Ok(true);
+        }
+        if let Some(found) = self
+            .witnesses
+            .first()
+            .and_then(|witness| search(pool, &conditions, witness, rng))
+        {
+            if self.witnesses.len() >= WITNESSES {
+                self.witnesses.remove(0);
+            }
+            self.witnesses.push(found);
             return Ok(true);
         }
         if self.lazy {
@@ -850,22 +1331,18 @@ fn digits_are(
             // The program's value read as a signed number must be the formula's: then the
             // digits of root, its size, are the digits of the formula's size. Signed, the
             // program's arithmetic and the formula's come out the same term.
-            let check = match (negative, pool.node(root).clone()) {
-                (true, Node::Neg(signed)) => {
-                    let width = pool.width(signed);
-                    let wide = pool.sign_extend(signed, WIDTH - width);
-                    pool.eq(wide, value)
-                }
-                (false, _) => {
-                    let width = pool.width(root);
-                    let wide = pool.sign_extend(root, WIDTH - width);
-                    pool.eq(wide, value)
-                }
-                (true, _) => {
-                    let width = pool.width(root);
-                    let wide = pool.zero_extend(root, WIDTH - width);
-                    pool.eq(wide, magnitude)
-                }
+            // A negative value's root is its size: the program's value is the root negated.
+            let width = pool.width(root);
+            let signed = if negative { pool.neg(root) } else { root };
+            let check = if negative && pool.signed_range(signed).0 > -(1_i128 << (width - 1)) {
+                let wide = pool.sign_extend(signed, WIDTH - width);
+                pool.eq(wide, value)
+            } else if negative {
+                let wide = pool.zero_extend(root, WIDTH - width);
+                pool.eq(wide, magnitude)
+            } else {
+                let wide = pool.sign_extend(root, WIDTH - width);
+                pool.eq(wide, value)
             };
             checks.push(check);
             root
@@ -2089,7 +2566,12 @@ fn prove_shape(
     let client = block
         .client
         .iter()
-        .map(|(sends, _)| Ok(cut(&pattern_bytes(&mut pool, sends, &inputs)?, delivery)))
+        .map(|(sends, receives)| {
+            Ok(exec::net::Client {
+                pieces: cut(&pattern_bytes(&mut pool, sends, &inputs)?, delivery),
+                waits: !receives.is_empty(),
+            })
+        })
         .collect::<Result<Vec<_>, String>>()?;
     let network = exec::net::Network {
         port: numbers
@@ -2168,6 +2650,8 @@ fn prove_shape(
             }
             None => return Err("a run that didn't end".into()),
         };
+        // What the output check comes to where the run's own branches went as they did.
+        let holds = settled(&mut pool, &run.path, holds, MAX_CHOICES);
         let broken = pool.bool_not(holds);
         // Output whose terms are the formulas' own can't break: nothing to ask. Nor can output
         // whose every condition is one of the run's own branches, as a printed number's digit
@@ -2307,7 +2791,10 @@ pub fn agrees(
         let client = case
             .client
             .iter()
-            .map(|exchange| vec![exec::bytes(&mut pool, fill(&exchange.sends).as_bytes())])
+            .map(|exchange| exec::net::Client {
+                pieces: vec![exec::bytes(&mut pool, fill(&exchange.sends).as_bytes())],
+                waits: !exchange.receives.is_empty(),
+            })
             .collect();
         let network = exec::net::Network {
             port: (!case.server.is_empty())

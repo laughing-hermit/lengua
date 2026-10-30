@@ -907,3 +907,169 @@ fn the_solvers_read_terms_as_the_pool_evaluates_them() {
         150 - unfound
     );
 }
+
+/// One of the ways a program or a formula writes `variable × times`: a product, a shift, a
+/// negation, or the multiple split in two.
+fn multiple(
+    pool: &mut Pool,
+    rng: &mut ChaCha8Rng,
+    variable: Term,
+    times: u128,
+    width: u32,
+) -> Term {
+    let constant = |pool: &mut Pool, value: u128| pool.bv(width, value & mask(width));
+    match rng.random_range(0..4) {
+        0 if times.is_power_of_two() && times.trailing_zeros() < width => {
+            let shift = constant(pool, u128::from(times.trailing_zeros()));
+            pool.shl(variable, shift)
+        }
+        1 => {
+            let negated = constant(pool, negate(times, width));
+            let product = pool.mul(negated, variable);
+            pool.neg(product)
+        }
+        2 => {
+            let first = rng.random::<u128>() & mask(width);
+            let rest = times.wrapping_sub(first) & mask(width);
+            let (first, rest) = (constant(pool, first), constant(pool, rest));
+            let (a, b) = (pool.mul(variable, first), pool.mul(rest, variable));
+            pool.add(a, b)
+        }
+        _ => {
+            let times = constant(pool, times);
+            pool.mul(variable, times)
+        }
+    }
+}
+
+/// A sum of `parts` and `constant`, written one random way: its parts shuffled, each a random
+/// way, grouped to the left, to the right, or subtracted.
+fn written(
+    pool: &mut Pool,
+    rng: &mut ChaCha8Rng,
+    parts: &[(Term, u128)],
+    constant: u128,
+    width: u32,
+) -> Term {
+    let mut order: Vec<usize> = (0..parts.len()).collect();
+    for index in (1..order.len()).rev() {
+        order.swap(index, rng.random_range(0..=index));
+    }
+    let mut terms: Vec<Term> = order
+        .iter()
+        .map(|&index| multiple(pool, rng, parts[index].0, parts[index].1, width))
+        .collect();
+    terms.push(pool.bv(width, constant));
+    if rng.random_bool(0.5) {
+        let mut total = terms[0];
+        for term in &terms[1..] {
+            total = if rng.random_bool(0.3) {
+                let negated = pool.neg(*term);
+                pool.sub(total, negated)
+            } else {
+                pool.add(total, *term)
+            };
+        }
+        total
+    } else {
+        let mut total = *terms.last().unwrap_or(&terms[0]);
+        for term in terms.iter().rev().skip(1) {
+            total = pool.add(*term, total);
+        }
+        total
+    }
+}
+
+/// A sum is one term however it's written: parts in any order and grouping, each as a product,
+/// a shift, a negation or a split multiple, and its value is the plain arithmetic's.
+#[test]
+fn a_sum_is_one_term_however_it_is_written() {
+    let seed = seed();
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    for round in 0..400 {
+        let mut pool = Pool::default();
+        let width = [8, 16, 32, 64, 128][rng.random_range(0..5)];
+        let parts: Vec<(Term, u128)> = (0..rng.random_range(1..6))
+            .map(|index| {
+                let variable = pool.var(width, &format!("v{index}"));
+                let times = match rng.random_range(0..4) {
+                    0 => 1 << rng.random_range(0..width.min(8)),
+                    1 => negate(rng.random_range(1..20), width),
+                    _ => rng.random::<u128>() & mask(width),
+                };
+                (variable, times)
+            })
+            .collect();
+        let constant = rng.random::<u128>() & mask(width);
+        let first = written(&mut pool, &mut rng, &parts, constant, width);
+        let second = written(&mut pool, &mut rng, &parts, constant, width);
+        assert_eq!(
+            first,
+            second,
+            "seed {seed}, round {round}: {} and {} are the same sum",
+            pool.sketch(first, 6),
+            pool.sketch(second, 6)
+        );
+        let values: HashMap<String, u128> = (0..parts.len())
+            .map(|index| (format!("v{index}"), rng.random::<u128>() & mask(width)))
+            .collect();
+        let expected = parts
+            .iter()
+            .enumerate()
+            .fold(constant, |total, (index, (_, times))| {
+                total.wrapping_add(values[&format!("v{index}")].wrapping_mul(*times)) & mask(width)
+            });
+        assert_eq!(
+            pool.evaluate(first, &values),
+            Some(expected),
+            "seed {seed}, round {round}"
+        );
+    }
+}
+
+/// Widening a sum part by part is right only when the sum never wraps: in range it's one term
+/// with the wide arithmetic, out of range it stays apart and keeps its value.
+#[test]
+fn a_sum_widens_part_by_part_only_when_it_fits() {
+    let mut pool = Pool::default();
+    let (x, y) = (pool.var_in(8, "x", 0, 100), pool.var_in(8, "y", 0, 100));
+    let sum = pool.add(x, y);
+    let widened = pool.zero_extend(sum, 8);
+    let (wide_x, wide_y) = (pool.zero_extend(x, 8), pool.zero_extend(y, 8));
+    assert_eq!(widened, pool.add(wide_x, wide_y), "200 fits in 8 bits");
+    let difference = pool.sub(x, y);
+    let signed_wide = pool.sign_extend(difference, 8);
+    assert_eq!(
+        signed_wide,
+        pool.sub(wide_x, wide_y),
+        "-100..100 fits signed"
+    );
+
+    let (a, b) = (pool.var(8, "a"), pool.var(8, "b"));
+    let wraps = pool.add(a, b);
+    let widened = pool.zero_extend(wraps, 8);
+    let (wide_a, wide_b) = (pool.zero_extend(a, 8), pool.zero_extend(b, 8));
+    assert_ne!(
+        widened,
+        pool.add(wide_a, wide_b),
+        "255 + 255 wraps in 8 bits"
+    );
+    let values = HashMap::from([("a".to_owned(), 200), ("b".to_owned(), 100)]);
+    assert_eq!(pool.evaluate(widened, &values), Some(44));
+}
+
+/// A shift right and a division by a power of two, or a remainder and the low bits, are one
+/// term.
+#[test]
+fn a_power_of_two_divides_as_a_shift() {
+    let mut pool = Pool::default();
+    let x = pool.var(64, "x");
+    for shift in [1_u32, 3, 12, 63] {
+        let by = pool.bv(64, u128::from(shift));
+        let power = pool.bv(64, 1 << shift);
+        assert_eq!(pool.lshr(x, by), pool.udiv(x, power), "x >> {shift}");
+        let low = pool.extract(x, shift - 1, 0);
+        let kept = pool.zero_extend(low, 64 - shift);
+        assert_eq!(kept, pool.urem(x, power), "x % 2^{shift}");
+    }
+}

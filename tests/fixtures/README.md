@@ -3,7 +3,11 @@ sessions' transcripts, which the prover's tests prove:
 
 - `total`: the total of a CSV file's amounts, whose valid-input block has 24,696 input
   combinations;
-- `clock`: the time of day from the clock, in hours, minutes and seconds, with six divisions.
+- `clock`: the time of day from the clock, in hours, minutes and seconds, with six divisions;
+- `days` (interactive round 2): that clock plus the days from today to a date, Hinnant's
+  days_from_civil in the program and in the tests' formula, written in different orders;
+- `amounts` (interactive round 2): the total of a CSV file's amount column, three rows of
+  signed amounts with free text in the other fields.
 
 And one written for the tests themselves:
 

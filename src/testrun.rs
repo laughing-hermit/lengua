@@ -700,15 +700,17 @@ async fn serve(
     Ok(())
 }
 
-/// The test's own client: for each connection, sends, closes its side, and reads everything
-/// the program answers until it closes the connection.
+/// The test's own client, as curl and browsers behave: for each connection, it sends and keeps
+/// its side open while it waits for the answer. Once the program has started answering (or at
+/// once, when the test expects no answer) it closes its side, then reads everything the program
+/// answers until it closes the connection.
 async fn talk(
     port: u16,
     exchanges: &[Exchange],
     delivery: Delivery,
     now: i128,
 ) -> Result<(), String> {
-    use tokio::io::AsyncReadExt as _;
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     let many = exchanges.len() > 1;
     for (index, exchange) in exchanges.iter().enumerate() {
         let on = if many {
@@ -727,21 +729,47 @@ async fn talk(
         let sends = exchange.sends.clone().into_bytes();
         let sending = tokio::spawn(async move {
             let _ = send(&mut writer, &sends, delivery).await;
-            let _ = writer.shutdown().await;
+            writer
         });
         let mut answer = Vec::new();
-        let read = tokio::time::timeout(
-            PEER_TIMEOUT,
-            (&mut reader).take(MAX_ANSWER).read_to_end(&mut answer),
-        )
-        .await;
-        sending.abort();
-        if read.is_err() {
-            return Err(format!(
-                "the program answered {}{on} and then kept the connection open; close it after \
-                 answering",
-                show(&answer)
-            ));
+        let mut closed = false;
+        if !exchange.receives.is_empty() {
+            let mut chunk = vec![0_u8; 65536];
+            let first = tokio::time::timeout(PEER_TIMEOUT, reader.read(&mut chunk)).await;
+            match first {
+                Ok(Ok(0)) => closed = true,
+                Ok(Ok(read)) => answer.extend_from_slice(&chunk[..read]),
+                Ok(Err(_)) => closed = true,
+                Err(_) => {
+                    sending.abort();
+                    return Err(format!(
+                        "the program answered nothing{on} while the test's client waited with \
+                         its side of the connection open. curl and browsers keep it open until \
+                         they have the whole answer, so answer once the request is complete \
+                         (its newline or blank line), without waiting for the client to close \
+                         its side"
+                    ));
+                }
+            }
+        }
+        // The answer has begun: the client has nothing more to send, and says so.
+        if let Ok(mut writer) = sending.await {
+            let _ = writer.shutdown().await;
+        }
+        if !closed {
+            let left = MAX_ANSWER.saturating_sub(answer.len() as u64);
+            let read = tokio::time::timeout(
+                PEER_TIMEOUT,
+                (&mut reader).take(left).read_to_end(&mut answer),
+            )
+            .await;
+            if read.is_err() {
+                return Err(format!(
+                    "the program answered {}{on} and then kept the connection open; close it \
+                     after answering",
+                    show(&answer)
+                ));
+            }
         }
         if !crate::expect::matches(&exchange.receives, &answer, now) {
             return Err(format!(

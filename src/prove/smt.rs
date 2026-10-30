@@ -64,6 +64,9 @@ struct Process {
     limit_ms: u64,
     /// The time limit it started with, which a reset returns to.
     start_ms: u64,
+    /// Whether its last answer came only as its time limit ran out, which a solver cancelled
+    /// mid-step may give another reason for.
+    ran_out: bool,
 }
 
 impl Drop for Process {
@@ -112,6 +115,7 @@ impl Process {
             output,
             limit_ms: timeout_ms,
             start_ms: timeout_ms,
+            ran_out: false,
         };
         process.prepare()?;
         Ok(process)
@@ -179,19 +183,22 @@ impl Process {
             Kind::Cvc5 => format!("(set-option :tlimit-per {limit_ms})\n(check-sat)\n"),
         };
         self.limit_ms = limit_ms;
+        let asked = std::time::Instant::now();
         self.send(&command)?;
         let lines = self.sync()?;
-        Ok(
-            match lines
-                .iter()
-                .find(|line| !line.is_empty())
-                .map(String::as_str)
-            {
-                Some("sat") => Answer::Sat,
-                Some("unsat") => Answer::Unsat,
-                _ => Answer::Unknown,
-            },
-        )
+        let answer = match lines
+            .iter()
+            .find(|line| !line.is_empty())
+            .map(String::as_str)
+        {
+            Some("sat") => Answer::Sat,
+            Some("unsat") => Answer::Unsat,
+            _ => Answer::Unknown,
+        };
+        self.ran_out = answer == Answer::Unknown
+            && asked.elapsed()
+                >= std::time::Duration::from_millis(limit_ms.saturating_sub(limit_ms / 20));
+        Ok(answer)
     }
 
     /// Why the solver's last answer was unknown, in its own words: "ran out of time" for a
@@ -206,7 +213,11 @@ impl Process {
             .trim_matches('"')
             .to_owned();
         Ok(
-            if reason.contains("timeout") || reason.contains("canceled") || reason.is_empty() {
+            if self.ran_out
+                || reason.contains("timeout")
+                || reason.contains("canceled")
+                || reason.is_empty()
+            {
                 "ran out of time".to_owned()
             } else {
                 format!("couldn't decide ({reason})")

@@ -32,6 +32,10 @@ pub const TEMPLATE: &str =
 pub const PARALLEL_TEMPLATE: &str =
     include_str!("../../plugin/skills/write-assembly/assets/parallel-template.s");
 
+/// fill, which reads until a buffer is full, the input ends or an end byte arrives; its body
+/// and constants are canonical, so the proof can cover every way the input arrives.
+pub const FILL_TEMPLATE: &str = include_str!("../../plugin/skills/write-assembly/assets/fill.s");
+
 /// At most this many violations are reported at once.
 pub const MAX_VIOLATIONS: usize = 20;
 
@@ -223,12 +227,13 @@ pub fn check_program(source: &Source, executable: &[u8], context: Context<'_>) -
         })
         .collect();
     let template = source::parse(TEMPLATE).0;
+    let fill_template = source::parse(FILL_TEMPLATE).0;
     let facts = rules::check(
         &program,
         &flows,
         context.syscalls,
         context.profile,
-        &template,
+        [&template, &fill_template],
         &mut violations,
     );
     let parallel_template = source::parse(PARALLEL_TEMPLATE).0;

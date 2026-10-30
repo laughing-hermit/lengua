@@ -47,6 +47,8 @@ pub struct Image {
     entry: u64,
     /// Each function's name, by the address range of its code.
     functions: Vec<(u64, u64, String)>,
+    /// The canonical fill's places, when the program has it.
+    fill: Option<fill::Fill>,
 }
 
 impl Image {
@@ -82,13 +84,16 @@ impl Image {
                 initial.insert(data.address + offset as u64, *byte);
             }
         }
-        Some(Self {
+        let mut image = Self {
             instructions,
             regions,
             initial,
             entry,
             functions,
-        })
+            fill: None,
+        };
+        image.fill = fill::Fill::find(&image, machine);
+        Some(image)
     }
 
     /// The name of the function whose code holds `address`.
@@ -217,6 +222,15 @@ pub struct State {
     /// the last one repeats. Empty, the kernel's are any time.
     clock: Rc<Vec<(Term, Term)>>,
     readings_used: usize,
+    /// Whether the run read standard input or a connection with `read` itself rather than
+    /// through fill, so how its input was cut matters.
+    pub raw_reads: bool,
+    /// Where fill stopped short of everything that had arrived, after an end byte: the cut a
+    /// real run needs to stop there too.
+    pub fill_cut: Option<usize>,
+    /// Whether fill takes every way its input can be cut, as a proof does, or what one read
+    /// gives, as a run of a test's sample does.
+    every_cut: bool,
 }
 
 /// A file the program has open.
@@ -297,6 +311,9 @@ impl State {
             random_used: 0,
             clock: Rc::new(Vec::new()),
             readings_used: 0,
+            raw_reads: false,
+            fill_cut: None,
+            every_cut: false,
         };
         // The strings above the pointers: the program's path, then each argument.
         let program_name: Vec<Term> = b"/lengua/main"
@@ -430,6 +447,9 @@ enum Step {
     Next,
     /// Split: the state continues where `condition` holds, and `other` where it doesn't.
     Split(Term, Box<State>),
+    /// Several ways the run can go for the same inputs, as a read can be cut, each where its
+    /// condition holds: the state lives on as all of them.
+    Choose(Vec<(Term, State)>),
 }
 
 type Stop = End;
@@ -446,6 +466,17 @@ fn step(image: &Image, state: &mut State, pool: &mut Pool) -> Result<Step, Stop>
     state.steps += 1;
     if state.steps > MAX_STEPS {
         return Err(unsupported("a run took too many instructions to follow"));
+    }
+    // fill read as a whole, where the proof takes every way its input can be cut; elsewhere,
+    // as for a test's sample, its code runs as it is.
+    if let Some(fill) = image.fill
+        && state.every_cut
+        && fill.at_head(state.rip)
+    {
+        let mut cpu = Cpu::new(image, state, pool, &instruction);
+        if let Some(step) = cpu.fill(fill)? {
+            return Ok(step);
+        }
     }
     let next = instruction.next_ip();
     state.rip = next;
@@ -1181,7 +1212,30 @@ impl<'a> Cpu<'a> {
         let operands_differ = self.pool.bool_not(operands_agree);
         let result_kept = self.pool.eq(sign_result, sign_a);
         let result_flipped = self.pool.bool_not(result_kept);
-        self.state.overflow = if adding {
+        // Signed operands whose ranges keep the exact result in range never overflow, however
+        // their signs fall: the sums and differences of parsed numbers.
+        let ((a_low, a_high), (b_low, b_high)) =
+            (self.pool.signed_range(a), self.pool.signed_range(b));
+        let (minimum, maximum) = (-(1_i128 << (width - 1)), (1_i128 << (width - 1)) - 1);
+        let carry_most = i128::from(with_carry);
+        let fits = if adding {
+            a_low.checked_add(b_low).is_some_and(|low| low >= minimum)
+                && a_high
+                    .checked_add(b_high)
+                    .and_then(|high| high.checked_add(carry_most))
+                    .is_some_and(|high| high <= maximum)
+        } else {
+            a_low
+                .checked_sub(b_high)
+                .and_then(|low| low.checked_sub(carry_most))
+                .is_some_and(|low| low >= minimum)
+                && a_high
+                    .checked_sub(b_low)
+                    .is_some_and(|high| high <= maximum)
+        };
+        self.state.overflow = if width <= 64 && fits {
+            self.pool.boolean(false)
+        } else if adding {
             self.pool.bool_and(operands_agree, result_flipped)
         } else {
             self.pool.bool_and(operands_differ, result_flipped)
@@ -1517,6 +1571,17 @@ impl<'a> Cpu<'a> {
                 let buffer = self.constant(rsi)?;
                 let count = self.constant(rdx)?;
                 if fd == 0 {
+                    self.state.raw_reads = true;
+                    // A pipe hands over at most 4096 bytes whole; past that, how the input
+                    // arrives matters, which only fill makes not matter. A test's sample is run
+                    // as one read gives it.
+                    if self.state.every_cut && self.state.stdin.len() > super::TEXT_BOUND {
+                        return Err(End::Unsupported(format!(
+                            "standard input past {} bytes is more than one pipe write, which the \
+                             proof reads whole; read it with fill to be proven for any length",
+                            super::TEXT_BOUND
+                        )));
+                    }
                     let available = (self.state.stdin.len() - self.state.stdin_read) as u64;
                     let taken = count.min(available);
                     for offset in 0..taken {
@@ -1526,6 +1591,7 @@ impl<'a> Cpu<'a> {
                     self.state.stdin_read += taken as usize;
                     taken
                 } else if let Ok(socket) = self.connection_of(fd) {
+                    self.state.raw_reads = true;
                     match socket {
                         Some(number) => self.receive(number, buffer, count)?,
                         None => self.not_connected(),
@@ -1786,6 +1852,18 @@ pub fn explore(
                         break;
                     }
                 }
+                Ok(Step::Choose(choices)) => {
+                    for (condition, mut choice) in choices {
+                        let certain = pool.truth(condition) == Some(true);
+                        if certain || oracle.possible(pool, &choice.path, condition)? {
+                            if !certain {
+                                choice.path.push(condition);
+                            }
+                            pending.push(choice);
+                        }
+                    }
+                    break;
+                }
                 Err(end) => {
                     state.end = Some(end);
                     finished.push(state);
@@ -1815,6 +1893,7 @@ pub fn bytes(pool: &mut Pool, text: &[u8]) -> Vec<Term> {
 }
 
 mod bits;
+mod fill;
 pub mod net;
 mod vector;
 

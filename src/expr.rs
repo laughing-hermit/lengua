@@ -1548,6 +1548,14 @@ pub enum HexPart {
 }
 
 impl Template {
+    /// Whether it produces no text at all.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.parts
+            .iter()
+            .all(|part| matches!(part, Part::Text(text) if text.is_empty()))
+    }
+
     /// The template's literal text and placeholders, in order.
     #[must_use]
     pub fn pieces(&self) -> Vec<Piece<'_>> {

@@ -1,0 +1,69 @@
+[[example]]
+id = "B1"
+stdin = "date,amount,note\n2026-01-05,12.50,lunch\n2026-01-06,-2.25,refund\n2026-01-07,100.00,rent\n"
+stdout = "110.25\n"
+exit_code = 0
+
+[[example]]
+id = "B2"
+stdin = "amount\n"
+stdout = "0.00\n"
+exit_code = 0
+
+[[example]]
+id = "B3"
+stdin = "date,price\n2026-01-05,12.50\n"
+stderr = "total: no amount column\n"
+exit_code = 1
+
+[[example]]
+id = "B4"
+stdin = "amount,note\n12.50,lunch\n7.5,coffee\n"
+stderr = "total: bad amount on line 3\n"
+exit_code = 2
+
+[[example]]
+id = "B5"
+stdin = "note,amount\nlunch,12.50\ncoffee\n"
+stderr = "total: missing amount on line 3\n"
+exit_code = 3
+
+[[generated]]
+id = "B1"
+runs = 500
+vars = { h1 = 'choice("date", "", "id", "2026 Q1", "amounts", "Amount", "x-y/z.w")', h2 = 'string(0, 20, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -./")', p1 = 'string(0, 20, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -./")', q1 = 'string(0, 20, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -./")', p2 = 'string(0, 20, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -./")', q2 = 'string(0, 20, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -./")', p3 = 'string(0, 20, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -./")', q3 = 'string(0, 20, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -./")', a1 = "decimal(-999999.99, 999999.99)", a2 = "decimal(-999999.99, 999999.99)", a3 = "decimal(-999999.99, 999999.99)" }
+stdin = "{h1},amount,{h2}\n{p1},{a1},{q1}\n{p2},{a2},{q2}\n{p3},{a3},{q3}\n"
+stdout = "{places(scaled(a1, 2) + scaled(a2, 2) + scaled(a3, 2), 2)}\n"
+exit_code = 0
+
+[[generated]]
+id = "B2"
+runs = 20
+vars = { h = 'choice("amount", "amount,note", "date,amount", "id,amount,x y")' }
+stdin = "{h}\n"
+stdout = "0.00\n"
+exit_code = 0
+
+[[generated]]
+id = "B3"
+runs = 100
+vars = { h = 'choice("date", "amounts", "Amount", "amoun", " amount", "amount ", "xamount", "")', d = 'string(0, 20, "abcdefghijklmnopqrstuvwxyz0123456789 -./")', a = "decimal(-999999.99, 999999.99)" }
+stdin = "{h},price\n{d},{a}\n"
+stderr = "total: no amount column\n"
+exit_code = 1
+
+[[generated]]
+id = "B4"
+runs = 100
+vars = { h = 'string(0, 20, "abcdefghijklmnopqrstuvwxyz0123456789 -./")', a = "decimal(-999999.99, 999999.99)", n1 = 'string(0, 20, "abcdefghijklmnopqrstuvwxyz0123456789 -./")', bad = 'choice("7.5", "12.505", "12", "12.", ".50", "1.5x", "-", "--1.00", "+1.00", "01.00", "-01.00", "1000000.00", "1.5 ", " 1.50", "a.bc", "1.-5")', n2 = 'string(0, 20, "abcdefghijklmnopqrstuvwxyz0123456789 -./")' }
+stdin = "amount,{h}\n{a},{n1}\n{bad},{n2}\n"
+stderr = "total: bad amount on line 3\n"
+exit_code = 2
+
+[[generated]]
+id = "B5"
+runs = 100
+vars = { h = 'choice("note", "", "date", "x y", "amounts", "amoun", "2026-01-05")', p = 'string(0, 20, "abcdefghijklmnopqrstuvwxyz0123456789 -./")', a = "decimal(-999999.99, 999999.99)", short = 'string(0, 20, "abcdefghijklmnopqrstuvwxyz0123456789 -./")' }
+stdin = "{h},amount\n{p},{a}\n{short}\n"
+stderr = "total: missing amount on line 3\n"
+exit_code = 3

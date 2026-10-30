@@ -141,7 +141,15 @@ async fn finds_a_bug_the_samples_miss() {
     assert_ne!(buggy, crate::checker::TEMPLATE);
     let machine = machine(&buggy).await;
     let block = block(&asset("template-spec.md"), &asset("template-tests.toml"), 0);
-    let verdict = prove(&machine, &block, &budget(120));
+    // Seconds alone; minutes when every test runs at once, with each question slower too.
+    let verdict = prove(
+        &machine,
+        &block,
+        &Budget {
+            question_ms: 60_000,
+            ..budget(600)
+        },
+    );
     assert_eq!(
         verdict,
         Verdict::Counterexample(BTreeMap::from([("n".to_owned(), Value::Int(1_234_567))]))
@@ -171,12 +179,11 @@ async fn proves_absolute_difference() {
     assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
 }
 
-/// The mean of two prices in cents, rounded half away from zero: decimals in, decimals out. Not
-/// proven yet: mean adds whole × 100 + cents, the input is one chain of digits, and the solver
-/// can't settle that the two are equal in time. A linear normal form for sums would make them
-/// one term.
+/// The mean of two prices in cents, rounded half away from zero: decimals in, decimals out. The
+/// parse and the input are one sum, but the formula halves at 128 bits and the program at 64, so
+/// the solvers still compare the digits.
 #[tokio::test]
-#[ignore = "not proven yet: the parse and the input differ in shape"]
+#[ignore = "slow: a minute or more"]
 async fn proves_the_mean_of_two_prices() {
     let machine = machine(&example("mean", "main.s")).await;
     let block = block(
@@ -493,9 +500,8 @@ fn fixture(name: &str, file: &str) -> String {
 }
 
 /// The CSV total Claude Code wrote: its first block has 24,696 input combinations, more than
-/// the old cap of 20,000, which each started their own solvers.
+/// the old cap of 20,000, which each started their own solvers; the terms now settle every one.
 #[tokio::test]
-#[ignore = "takes a minute or more"]
 async fn proves_the_csv_totals_24696_combinations() {
     let machine = machine(&fixture("total", "main.s")).await;
     let block = block(
@@ -515,7 +521,14 @@ async fn proves_the_csv_totals_24696_combinations() {
     );
     eprintln!("{verdict:?} in {:?}", began.elapsed());
     assert!(
-        matches!(verdict, Verdict::Proven { shapes: 24_696, .. }),
+        matches!(
+            verdict,
+            Verdict::Proven {
+                shapes: 24_696,
+                questions: 0,
+                ..
+            }
+        ),
         "{verdict:?}"
     );
 }
@@ -575,6 +588,193 @@ async fn traces_a_few_csv_total_combinations() {
     for (time, combination, questions, outcome) in times.iter().take(8) {
         eprintln!("  {combination}: {time:?}, {questions} questions, {outcome}");
     }
+}
+
+/// A budget for a fixture's block, which may have many input combinations and paths.
+fn fixture_budget(seconds: u64) -> Budget {
+    Budget {
+        max_shapes: 2_000_000,
+        max_paths: 256,
+        ..budget(seconds)
+    }
+}
+
+fn solvers_installed() -> bool {
+    std::process::Command::new("z3")
+        .arg("--version")
+        .output()
+        .is_ok()
+}
+
+/// The clock Claude Code wrote in interactive round 2, with the days from today to a date: the
+/// program and the tests compute Hinnant's days_from_civil in different orders, and their sums
+/// come out as one term, so every block is proven, the seven day counts' with no solver.
+#[tokio::test]
+async fn proves_every_block_of_the_day_count() {
+    if !solvers_installed() {
+        return;
+    }
+    let (spec, tests) = (fixture("days", "spec.md"), fixture("days", "tests.toml"));
+    let machine = machine(&fixture("days", "main.s")).await;
+    for index in 0..11 {
+        let block = block(&spec, &tests, index);
+        let verdict = prove(&machine, &block, &fixture_budget(120));
+        assert!(
+            matches!(verdict, Verdict::Proven { bound: None, .. }),
+            "{} ({index}): {verdict:?}",
+            block.id
+        );
+        if (1..8).contains(&index) {
+            assert!(
+                matches!(verdict, Verdict::Proven { questions: 0, .. }),
+                "{verdict:?}"
+            );
+        }
+    }
+}
+
+/// `tests` with one more block: a copy of its `index`th generated block whose variables are
+/// `vars`.
+fn with_block(tests: &str, index: usize, vars: &str) -> String {
+    let copied = tests
+        .split("[[generated]]\n")
+        .nth(index + 1)
+        .expect("the block")
+        .split("\n[[")
+        .next()
+        .expect("its fields")
+        .lines()
+        .map(|line| {
+            if line.starts_with("vars = ") {
+                format!("vars = {vars}")
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("{}\n[[generated]]\n{copied}\n", tests.trim_end())
+}
+
+/// February 29 of the years 2000 to 9600 that are multiples of 400, a day the clock's own tests
+/// never draw: leap only by the 400-year rule.
+const CENTURY_LEAP_DAYS: &str = r#"{ y = "choice(2000, 2400, 2800, 3200, 3600, 4000, 4400, 4800, 5200, 5600, 6000, 6400, 6800, 7200, 7600, 8000, 8400, 8800, 9200, 9600)", m1 = "int(0, 0)", m2 = "int(2, 2)", d1 = "int(2, 2)", d2 = "int(9, 9)", t = "int(0, 253402300799)" }"#;
+
+/// Bugs planted in the day count: an epoch a day off, and leap years without the 400-year rule.
+#[tokio::test]
+async fn finds_bugs_planted_in_the_day_count() {
+    if !solvers_installed() {
+        return;
+    }
+    let spec = fixture("days", "spec.md");
+    let tests = with_block(&fixture("days", "tests.toml"), 1, CENTURY_LEAP_DAYS);
+    let source = fixture("days", "main.s");
+    let leap_days = block(&spec, &tests, 11);
+    let verdict = prove(&machine(&source).await, &leap_days, &fixture_budget(120));
+    assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
+
+    let shifted = source.replacen(
+        ".equ EPOCH_SHIFT, 719468\n",
+        ".equ EPOCH_SHIFT, 719469\n",
+        1,
+    );
+    assert_ne!(shifted, source);
+    let verdict = prove(
+        &machine(&shifted).await,
+        &block(&spec, &tests, 1),
+        &fixture_budget(120),
+    );
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+
+    let no_400 = source.replacen(
+        "    mov rax, rdi\n    xor edx, edx\n    mov ecx, YEARS_PER_ERA\n    div rcx\n    \
+         test rdx, rdx\n    jnz .Ldays_from_date_check_day\n.Ldays_from_date_leap:\n",
+        "    jmp .Ldays_from_date_check_day\n.Ldays_from_date_leap:\n",
+        1,
+    );
+    assert_ne!(no_400, source);
+    let verdict = prove(&machine(&no_400).await, &leap_days, &fixture_budget(120));
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+}
+
+/// The CSV total's first block with its text fields fixed: three signed amounts summed in cents
+/// and printed with their sign, for every amount in range.
+const FIXED_FIELDS: &str = r#"{ h1 = 'choice("date")', h2 = 'choice("note")', p1 = 'choice("2026-01-05")', q1 = 'choice("lunch")', p2 = 'choice("2026-01-06")', q2 = 'choice("refund")', p3 = 'choice("2026-01-07")', q3 = 'choice("rent")', a1 = "decimal(-999999.99, 999999.99)", a2 = "decimal(-999999.99, 999999.99)", a3 = "decimal(-999999.99, 999999.99)" }"#;
+
+/// The CSV total Claude Code wrote in interactive round 2: every amount proven where the text
+/// fields are fixed, and a negative amount's cents dropped caught; B2 and B3 proven.
+#[tokio::test]
+async fn proves_the_csv_total_for_every_amount() {
+    if !solvers_installed() {
+        return;
+    }
+    let spec = fixture("amounts", "spec.md");
+    let tests = with_block(&fixture("amounts", "tests.toml"), 0, FIXED_FIELDS);
+    let source = fixture("amounts", "main.s");
+    let machine_of = machine(&source).await;
+    for index in [1, 2] {
+        let verdict = prove(
+            &machine_of,
+            &block(&spec, &tests, index),
+            &fixture_budget(120),
+        );
+        assert!(
+            matches!(verdict, Verdict::Proven { bound: None, .. }),
+            "{index}: {verdict:?}"
+        );
+    }
+    let fixed = block(&spec, &tests, 5);
+    let verdict = prove(&machine_of, &fixed, &fixture_budget(300));
+    assert!(
+        matches!(
+            verdict,
+            Verdict::Proven {
+                shapes: 4096,
+                questions: 0,
+                bound: None,
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
+
+    let dropped = source.replacen(
+        "    neg rdx\n.Lparse_return:\n",
+        "    mov rax, rdx\n    xor edx, edx\n    mov r8d, 100\n    div r8\n    \
+         imul rdx, rax, -100\n    xor eax, eax\n.Lparse_return:\n",
+        1,
+    );
+    assert_ne!(dropped, source);
+    let verdict = prove(&machine(&dropped).await, &fixed, &fixture_budget(120));
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+}
+
+/// The CSV total's blocks with free text in several fields: B5 proven for every length its
+/// texts have, B4 past the 6 bytes it reached before sums had one form, and B1, which proved
+/// nothing then, up to a bound.
+#[tokio::test]
+#[ignore = "takes two minutes"]
+async fn proves_the_csv_totals_free_text_blocks() {
+    let (spec, tests) = (
+        fixture("amounts", "spec.md"),
+        fixture("amounts", "tests.toml"),
+    );
+    let machine = machine(&fixture("amounts", "main.s")).await;
+    let verdict = prove(&machine, &block(&spec, &tests, 4), &fixture_budget(120));
+    assert!(
+        matches!(verdict, Verdict::Proven { bound: None, .. }),
+        "B5: {verdict:?}"
+    );
+    let verdict = prove(&machine, &block(&spec, &tests, 3), &fixture_budget(60));
+    assert!(
+        matches!(&verdict, Verdict::Proven { bound: Some(bound), .. } if bound.bytes >= 7),
+        "B4: {verdict:?}"
+    );
+    let verdict = prove(&machine, &block(&spec, &tests, 0), &fixture_budget(30));
+    assert!(
+        matches!(verdict, Verdict::Proven { bound: Some(_), .. }),
+        "B1: {verdict:?}"
+    );
 }
 
 /// The day of the week from the clock: a second 64-bit division of the first's quotient, which
@@ -1009,11 +1209,10 @@ async fn explores_a_program() {
         let verdict = prove(
             &machine,
             block,
-            &Budget {
-                max_shapes: 2_000_000,
-                listens: spec_parsed.network.listens.is_some(),
-                ..budget(120)
-            },
+            &Budget::until(
+                Instant::now() + Duration::from_secs(120),
+                spec_parsed.network.listens.is_some(),
+            ),
         );
         eprintln!("{}: {:?} in {:?}", block.id, verdict, began.elapsed());
     }
@@ -1314,5 +1513,180 @@ async fn proves_counts_padded_to_a_column() {
     assert!(
         matches!(verdict, Verdict::Proven { bound: None, .. }),
         "{verdict:?}"
+    );
+}
+
+/// One block of a program in tests/fixtures, for exploring: `LENGUA_FIXTURE` names it and
+/// `LENGUA_BLOCK` the block's place among the generated ones.
+#[tokio::test]
+#[ignore = "explores one block of a fixture"]
+async fn explores_a_fixture_block() {
+    let name = std::env::var("LENGUA_FIXTURE").expect("LENGUA_FIXTURE names a fixture");
+    let index: usize = std::env::var("LENGUA_BLOCK")
+        .ok()
+        .and_then(|block| block.parse().ok())
+        .unwrap_or(0);
+    let seconds: u64 = std::env::var("LENGUA_SECONDS")
+        .ok()
+        .and_then(|seconds| seconds.parse().ok())
+        .unwrap_or(60);
+    let machine = machine(&fixture(&name, "main.s")).await;
+    let block = block(
+        &fixture(&name, "spec.md"),
+        &fixture(&name, "tests.toml"),
+        index,
+    );
+    let began = Instant::now();
+    let verdict = prove(
+        &machine,
+        &block,
+        &Budget {
+            max_shapes: 2_000_000,
+            max_paths: 256,
+            ..budget(seconds)
+        },
+    );
+    eprintln!("{name} block {index}: {verdict:?} in {:?}", began.elapsed());
+}
+
+fn seed() -> u64 {
+    std::env::var("LENGUA_RANDOM_SEED")
+        .ok()
+        .and_then(|seed| seed.parse().ok())
+        .unwrap_or_else(|| {
+            let mut bytes = [0; 8];
+            getrandom::fill(&mut bytes).expect("a seed");
+            u64::from_le_bytes(bytes)
+        })
+}
+
+/// A random condition on `x`: comparisons with constants of `x`, `x` plus a constant, `-x`, `x`
+/// widened or a choice between two of them, joined by and, or and not.
+fn random_condition(pool: &mut Pool, rng: &mut ChaCha8Rng, x: Term, depth: u32) -> Term {
+    if depth == 0 || rng.random_range(0..3) == 0 {
+        let width = pool.width(x);
+        let subject = |pool: &mut Pool, rng: &mut ChaCha8Rng| match rng.random_range(0..4) {
+            0 => x,
+            1 => {
+                let constant = pool.bv(width, rng.random_range(0..1_u128 << width));
+                pool.add(x, constant)
+            }
+            2 => pool.neg(x),
+            _ => pool.zero_extend(x, 6),
+        };
+        let mut compared = subject(pool, rng);
+        if rng.random_range(0..4) == 0 {
+            let other = subject(pool, rng);
+            if pool.width(other) == pool.width(compared) {
+                let choice = random_condition(pool, rng, x, 0);
+                compared = pool.ite(choice, compared, other);
+            }
+        }
+        let width = pool.width(compared);
+        let constant = pool.bv(width, rng.random_range(0..1_u128 << width));
+        return match rng.random_range(0..5) {
+            0 => pool.ult(compared, constant),
+            1 => pool.ult(constant, compared),
+            2 => pool.slt(compared, constant),
+            3 => pool.slt(constant, compared),
+            _ => pool.eq(compared, constant),
+        };
+    }
+    let a = random_condition(pool, rng, x, depth - 1);
+    match rng.random_range(0..3) {
+        0 => {
+            let b = random_condition(pool, rng, x, depth - 1);
+            pool.bool_and(a, b)
+        }
+        1 => {
+            let b = random_condition(pool, rng, x, depth - 1);
+            pool.bool_or(a, b)
+        }
+        _ => pool.bool_not(a),
+    }
+}
+
+/// `term`'s value where `x` is `value`, read signed at its width.
+fn signed_value(pool: &Pool, term: Term, x: Term, value: u128) -> i128 {
+    let width = pool.width(term);
+    let bits = pool
+        .evaluate_with(term, &mut |_, variable| (variable == x).then_some(value))
+        .expect("a value");
+    let bits = i128::try_from(bits).expect("fits");
+    if width < 128 && bits >= 1 << (width - 1) {
+        bits - (1 << width)
+    } else {
+        bits
+    }
+}
+
+/// The values a condition allows, read as intervals, are exactly where it holds; the path's
+/// comparisons rule a condition out only where no value meets them all; and an output check
+/// settled under a path, split on what the path leaves open, agrees with the check wherever the
+/// path holds.
+#[test]
+fn reads_conditions_as_intervals_and_settles_only_what_holds() {
+    let seed = seed();
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    let (mut read, mut ruled_out, mut settled_some) = (0, 0, 0);
+    for round in 0..1500 {
+        let mut pool = Pool::default();
+        let width = if round % 2 == 0 { 8 } else { 10 };
+        let x = pool.var(width, "x");
+        let every = 0..1_u128 << width;
+        let holds = |pool: &Pool, condition: Term, value: u128| {
+            pool.evaluate_with(condition, &mut |_, variable| {
+                (variable == x).then_some(value)
+            }) == Some(1)
+        };
+        let condition = random_condition(&mut pool, &mut rng, x, 3);
+        if let Some((term, values)) = values_of(&pool, condition) {
+            read += 1;
+            for value in every.clone() {
+                let at = signed_value(&pool, term, x, value);
+                let inside = values.iter().any(|(low, high)| *low <= at && at <= *high);
+                assert_eq!(
+                    holds(&pool, condition, value),
+                    inside,
+                    "seed {seed}, round {round}: {} at x = {value}: {values:?}",
+                    pool.sketch(condition, 8)
+                );
+            }
+        }
+        let path: Vec<Term> = (0..rng.random_range(1..4))
+            .map(|_| random_condition(&mut pool, &mut rng, x, 2))
+            .collect();
+        let on_path =
+            |pool: &Pool, value: u128| path.iter().all(|known| holds(pool, *known, value));
+        if refuted(&pool, &path, condition) {
+            ruled_out += 1;
+            for value in every.clone() {
+                assert!(
+                    !(on_path(&pool, value) && holds(&pool, condition, value)),
+                    "seed {seed}, round {round}: x = {value} meets the path and {}",
+                    pool.sketch(condition, 8)
+                );
+            }
+        }
+        let check = random_condition(&mut pool, &mut rng, x, 3);
+        let simpler = settled(&mut pool, &path, check, MAX_CHOICES);
+        if simpler != check {
+            settled_some += 1;
+        }
+        for value in every.clone() {
+            if on_path(&pool, value) {
+                assert_eq!(
+                    holds(&pool, simpler, value),
+                    holds(&pool, check, value),
+                    "seed {seed}, round {round}: at x = {value}, {} settled as {}",
+                    pool.sketch(check, 8),
+                    pool.sketch(simpler, 8)
+                );
+            }
+        }
+    }
+    assert!(
+        read > 300 && ruled_out > 50 && settled_some > 50,
+        "seed {seed}: {read} read, {ruled_out} ruled out, {settled_some} settled"
     );
 }

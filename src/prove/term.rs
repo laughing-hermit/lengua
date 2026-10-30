@@ -2,7 +2,7 @@
 //! as they're built, so the same computation is always the same term. A solver then proves two
 //! terms equal at once when they are the same, which keeps proofs fast.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// A term in a [`Pool`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -131,6 +131,39 @@ enum Sole {
     Byte(Term),
     /// Several variables, or one that isn't a byte.
     Many,
+}
+
+/// A sum as each of its parts times a constant multiple, plus a constant: the one form of a sum
+/// however a program or a formula grouped, ordered or scaled it, so the same arithmetic is the
+/// same term.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Linear {
+    /// Each part, a term that isn't itself a sum, with its multiple: never 0, below 2^width.
+    parts: BTreeMap<Term, u128>,
+    /// The constant, below 2^width.
+    constant: u128,
+}
+
+impl Linear {
+    /// Adds `other` times `scale`, all `width` bits wide.
+    fn add(&mut self, other: &Self, scale: u128, width: u32) {
+        for (part, times) in &other.parts {
+            self.add_part(*part, times.wrapping_mul(scale), width);
+        }
+        self.constant = self
+            .constant
+            .wrapping_add(other.constant.wrapping_mul(scale))
+            & mask(width);
+    }
+
+    /// Adds `part` times `times`.
+    fn add_part(&mut self, part: Term, times: u128, width: u32) {
+        let entry = self.parts.entry(part).or_insert(0);
+        *entry = entry.wrapping_add(times) & mask(width);
+        if *entry == 0 {
+            self.parts.remove(&part);
+        }
+    }
 }
 
 /// Marks a shape's number where a term would be, in a node that stands for a shape.
@@ -827,10 +860,8 @@ impl Pool {
         } else {
             -(1_i128 << (width - 1))
         };
-        let negation_of = |other: Term| {
-            matches!(*self.node(value), Node::Neg(inner) if inner == other)
-                && self.signed_range(other).0 > smallest
-        };
+        let negation_of =
+            |other: Term| self.negates_value(value, other) && self.signed_range(other).0 > smallest;
         match (self.constant(left), self.constant(right), holds) {
             (Some(0), None, true) | (None, Some(0), false) => {
                 value
@@ -844,6 +875,130 @@ impl Pool {
             (None, Some(0), true) => negation_of(left),
             _ => false,
         }
+    }
+
+    /// How `x` is made from `y`, modulo 2^width of `x`: `x = y + offset` (`false`) or
+    /// `x = -y + offset` (`true`), when their sums have the same parts. `y` may be wider, as a
+    /// comparison lifted to 128 bits is: a part widened from a value counts as that value.
+    #[must_use]
+    pub fn related(&self, x: Term, y: Term) -> Option<(bool, u128)> {
+        let width = self.width(x);
+        if width == 0 || self.width(y) < width {
+            return None;
+        }
+        let reduced = |term: Term| {
+            let linear = self.linear_view(term);
+            let mut parts: BTreeMap<(Term, bool), u128> = BTreeMap::new();
+            for (part, times) in linear.parts {
+                let key = self.widened_from(part);
+                if self.width(key.0) > width {
+                    return None;
+                }
+                let entry = parts.entry(key).or_insert(0);
+                *entry = entry.wrapping_add(times) & mask(width);
+            }
+            parts.retain(|_, times| *times != 0);
+            Some((parts, linear.constant & mask(width)))
+        };
+        let ((left, left_constant), (right, right_constant)) = (reduced(x)?, reduced(y)?);
+        if left == right {
+            return Some((
+                false,
+                left_constant.wrapping_sub(right_constant) & mask(width),
+            ));
+        }
+        let negated: BTreeMap<(Term, bool), u128> = right
+            .iter()
+            .map(|(key, times)| (*key, times.wrapping_neg() & mask(width)))
+            .collect();
+        (left == negated).then(|| {
+            (
+                true,
+                left_constant.wrapping_add(right_constant) & mask(width),
+            )
+        })
+    }
+
+    /// How `x` is made from `y` when `x` is the wider, as whole numbers read signed: `x = y + d`
+    /// (`false`) or `x = -y + d` (`true`), when their sums have the same parts with the same
+    /// multiples and neither ever wraps, so each is exactly its parts' sum.
+    #[must_use]
+    pub fn related_wider(&self, x: Term, y: Term) -> Option<(bool, i128)> {
+        let (wide, narrow) = (self.width(x), self.width(y));
+        if narrow == 0 || wide < narrow || wide > 128 || (narrow > 126 && narrow != 128) {
+            return None;
+        }
+        let exact = |term: Term, width: u32| {
+            let linear = self.linear_view(term);
+            let mut parts: BTreeMap<(Term, bool), i128> = BTreeMap::new();
+            for (part, times) in &linear.parts {
+                *parts.entry(self.widened_from(*part)).or_insert(0) += signed(*times, width);
+            }
+            parts.retain(|_, times| *times != 0);
+            // Never wrapping: the exact value stays inside what the bits hold, read signed.
+            let (low, high) = self.exact_bounds(&linear, width, true)?;
+            Self::window(low, high, width, true).filter(|shift| *shift == 0)?;
+            Some((parts, signed(linear.constant, width)))
+        };
+        let ((left, left_constant), (right, right_constant)) = (exact(x, wide)?, exact(y, narrow)?);
+        if left == right {
+            return Some((false, left_constant.checked_sub(right_constant)?));
+        }
+        let negated: BTreeMap<(Term, bool), i128> =
+            right.iter().map(|(key, times)| (*key, -*times)).collect();
+        (left == negated).then_some((true, left_constant.checked_add(right_constant)?))
+    }
+
+    /// A sum's parts, as the value each is widened from and its multiple read signed, for
+    /// explaining why two sums differ.
+    #[must_use]
+    pub fn describe_parts(&self, term: Term) -> String {
+        let width = self.width(term);
+        let linear = self.linear_view(term);
+        let mut text: Vec<String> = linear
+            .parts
+            .iter()
+            .map(|(part, times)| {
+                let (from, signed_part) = self.widened_from(*part);
+                format!(
+                    "{} × t{}{} = {}",
+                    signed(*times, width),
+                    from.index(),
+                    if signed_part { "s" } else { "" },
+                    self.sketch(from, 3)
+                )
+            })
+            .collect();
+        text.push(format!("+ {}", signed(linear.constant, width)));
+        text.join("\n      ")
+    }
+
+    /// The value a term is widened from, and whether with its sign: a term not widened is its
+    /// own, and a sign-extended value that's never negative widens either way.
+    fn widened_from(&self, mut term: Term) -> (Term, bool) {
+        let mut signed = false;
+        loop {
+            match *self.node(term) {
+                Node::ZeroExtend(inner, _) if !signed => term = inner,
+                Node::SignExtend(inner, _) => {
+                    let width = self.width(inner);
+                    signed = self.range(inner).1 > mask(width - 1);
+                    term = inner;
+                }
+                _ => return (term, signed),
+            }
+        }
+    }
+
+    /// Whether `value` is `other` negated, as [`Self::neg`] builds it.
+    fn negates_value(&self, value: Term, other: Term) -> bool {
+        if self.width(value) != self.width(other) || self.width(value) == 0 {
+            return false;
+        }
+        let width = self.width(value);
+        let mut negated = Linear::default();
+        negated.add(&self.linear_view(other), mask(width), width);
+        negated == self.linear_view(value)
     }
 
     /// The range of `value` where `condition` is `holds`.
@@ -911,64 +1066,38 @@ impl Pool {
         }
     }
 
-    /// `a + b`.
+    /// `a + b`, as one [`Linear`] sum of both.
     pub fn add(&mut self, a: Term, b: Term) -> Term {
         let width = self.width(a);
-        let (a, b) = self.ordered(a, b);
         match (self.constant(a), self.constant(b)) {
             (Some(x), Some(y)) => return self.bv(width, x.wrapping_add(y)),
+            (Some(0), _) => return b,
             (_, Some(0)) => return a,
-            (None, Some(y)) => {
-                // (x + c1) + c2 is x + (c1 + c2).
-                if let Node::Add(inner, constant) = *self.node(a)
-                    && let Some(c1) = self.constant(constant)
-                {
-                    let sum = self.bv(width, c1.wrapping_add(y));
-                    return self.add(inner, sum);
-                }
-            }
             _ => {}
         }
-        // Two counts, or a count and a 1-or-0, are one count of all their conditions.
-        if self.is_counted(a)
-            && self.is_counted(b)
-            && let (Some(mut left), Some(right)) = (self.counted(a), self.counted(b))
-            && (left.len() + right.len()) as u128 <= mask(width)
-        {
-            left.extend(right);
-            return self.count(width, &left);
-        }
-        // x - (x / c) × c is x % c, the remainder however it was written.
-        for (x, other) in [(a, b), (b, a)] {
-            if let Node::Neg(product) = *self.node(other)
-                && let Node::Mul(quotient, by) = *self.node(product)
-                && let Node::Udiv(dividend, divisor) = *self.node(quotient)
-                && dividend == x
-                && self.constant(by).is_some()
-                && self.constant(by) == self.constant(divisor)
-            {
-                return self.urem(x, divisor);
-            }
-        }
-        self.make(Node::Add(a, b), Sort::Bv(width))
+        let mut linear = self.linear(a);
+        let other = self.linear(b);
+        linear.add(&other, 1, width);
+        self.linear_term(width, linear)
     }
 
-    /// The sum of every term in `terms`, all one width, added left to right.
+    /// The sum of every term in `terms`, all one width.
     pub fn sum(&mut self, width: u32, terms: &[Term]) -> Term {
-        let mut total = self.bv(width, 0);
+        let mut linear = Linear::default();
         for term in terms {
-            total = self.add(total, *term);
+            let part = self.linear(*term);
+            linear.add(&part, 1, width);
         }
-        total
+        self.linear_term(width, linear)
     }
 
-    /// `a - b`, as `a + -b`, the form solvers handle best.
+    /// `a - b`, as `a + -b`.
     pub fn sub(&mut self, a: Term, b: Term) -> Term {
         let negated = self.neg(b);
         self.add(a, negated)
     }
 
-    /// `a × b`, keeping the low bits.
+    /// `a × b`, keeping the low bits. A multiple of a sum is the sum of the parts' multiples.
     pub fn mul(&mut self, a: Term, b: Term) -> Term {
         let width = self.width(a);
         let (a, b) = self.ordered(a, b);
@@ -976,9 +1105,305 @@ impl Pool {
             (Some(x), Some(y)) => return self.bv(width, x.wrapping_mul(y)),
             (_, Some(0)) => return self.bv(width, 0),
             (_, Some(1)) => return a,
+            (None, Some(by)) => {
+                let mut linear = Linear::default();
+                let part = self.linear(a);
+                linear.add(&part, by, width);
+                return self.linear_term(width, linear);
+            }
             _ => {}
         }
         self.make(Node::Mul(a, b), Sort::Bv(width))
+    }
+
+    /// `term` as a sum of parts, each a term that isn't a sum, times a constant.
+    fn linear(&mut self, term: Term) -> Linear {
+        let width = self.width(term);
+        let mut linear = Linear::default();
+        let mut pending = vec![(term, 1_u128)];
+        while let Some((current, times)) = pending.pop() {
+            let times = times & mask(width);
+            if times == 0 {
+                continue;
+            }
+            match *self.node(current) {
+                Node::Const { value, .. } => {
+                    linear.constant =
+                        linear.constant.wrapping_add(value.wrapping_mul(times)) & mask(width);
+                }
+                Node::Add(x, y) => pending.extend([(x, times), (y, times)]),
+                Node::Neg(x) => pending.push((x, times.wrapping_neg())),
+                Node::Mul(x, by) if self.constant(by).is_some() => {
+                    let by = self.constant(by).unwrap_or(0);
+                    pending.push((x, times.wrapping_mul(by)));
+                }
+                // A value shifted left is the value times a power of two; the bits shifted out
+                // are ones the multiple drops anyway.
+                Node::Concat(high, low) if self.constant(low) == Some(0) => {
+                    let shift = self.width(low);
+                    let shifted = match *self.node(high) {
+                        Node::Extract(inner, top, 0)
+                            if top + 1 + shift == width && self.width(inner) == width =>
+                        {
+                            inner
+                        }
+                        _ => self.zero_extend(high, shift),
+                    };
+                    pending.push((shifted, times.wrapping_mul(1 << shift)));
+                }
+                _ => linear.add_part(current, times, width),
+            }
+        }
+        linear
+    }
+
+    /// [`Self::linear`] without making terms: a shift by a constant counts as a multiple only
+    /// when it shifts a whole value.
+    fn linear_view(&self, term: Term) -> Linear {
+        let width = self.width(term);
+        let mut linear = Linear::default();
+        let mut pending = vec![(term, 1_u128)];
+        while let Some((current, times)) = pending.pop() {
+            let times = times & mask(width);
+            if times == 0 {
+                continue;
+            }
+            match *self.node(current) {
+                Node::Const { value, .. } => {
+                    linear.constant =
+                        linear.constant.wrapping_add(value.wrapping_mul(times)) & mask(width);
+                }
+                Node::Add(x, y) => pending.extend([(x, times), (y, times)]),
+                Node::Neg(x) => pending.push((x, times.wrapping_neg())),
+                Node::Mul(x, by) if self.constant(by).is_some() => {
+                    let by = self.constant(by).unwrap_or(0);
+                    pending.push((x, times.wrapping_mul(by)));
+                }
+                Node::Concat(high, low)
+                    if self.constant(low) == Some(0)
+                        && matches!(*self.node(high), Node::Extract(inner, top, 0)
+                            if top + 1 + self.width(low) == width && self.width(inner) == width) =>
+                {
+                    let shift = self.width(low);
+                    let Node::Extract(inner, ..) = *self.node(high) else {
+                        continue;
+                    };
+                    pending.push((inner, times.wrapping_mul(1 << shift)));
+                }
+                _ => linear.add_part(current, times, width),
+            }
+        }
+        linear
+    }
+
+    /// The term for `linear`, `width` bits wide: its parts in order, each times its multiple,
+    /// then the constant.
+    fn linear_term(&mut self, width: u32, mut linear: Linear) -> Term {
+        self.fold_remainders(width, &mut linear);
+        self.fold_counts(width, &mut linear);
+        let parts: Vec<(Term, u128)> = linear
+            .parts
+            .iter()
+            .map(|(part, times)| (*part, *times))
+            .collect();
+        let mut total: Option<Term> = None;
+        for (part, times) in parts {
+            let term = self.times(part, times, width);
+            total = Some(match total {
+                None => term,
+                Some(sum) => self.make(Node::Add(sum, term), Sort::Bv(width)),
+            });
+        }
+        let total = match total {
+            None => return self.bv(width, linear.constant),
+            Some(sum) if linear.constant == 0 => sum,
+            Some(sum) => {
+                let constant = self.bv(width, linear.constant);
+                self.make(Node::Add(sum, constant), Sort::Bv(width))
+            }
+        };
+        if matches!(self.node(total), Node::Add(..)) {
+            self.narrow_ranges(total, &linear, width);
+        }
+        total
+    }
+
+    /// Narrows a sum's ranges to its exact values, which its chain of additions, where a part
+    /// may overflow what the whole never does, can't see.
+    fn narrow_ranges(&mut self, total: Term, linear: &Linear, width: u32) {
+        let index = total.index();
+        for signed_parts in [false, true] {
+            let Some((low, high)) = self.exact_bounds(linear, width, signed_parts) else {
+                continue;
+            };
+            if let Some(shift) = Self::window(low, high, width, false)
+                && let (Ok(low), Ok(high)) = (
+                    u128::try_from(low.saturating_add(shift)),
+                    u128::try_from(high.saturating_add(shift)),
+                )
+            {
+                let (from, to) = self.ranges[index];
+                if low.max(from) <= high.min(to) {
+                    self.ranges[index] = (low.max(from), high.min(to));
+                }
+            }
+            if let Some(shift) = Self::window(low, high, width, true) {
+                let (low, high) = (low.saturating_add(shift), high.saturating_add(shift));
+                let (from, to) = self.signed_ranges[index];
+                if low.max(from) <= high.min(to) {
+                    self.signed_ranges[index] = (low.max(from), high.min(to));
+                }
+            }
+        }
+    }
+
+    /// `part` times `times`: itself, its negation, shifted left for a power of two (the form a
+    /// shift by a constant takes), or a product.
+    fn times(&mut self, part: Term, times: u128, width: u32) -> Term {
+        if times == 1 {
+            return part;
+        }
+        if times == mask(width) {
+            return self.make(Node::Neg(part), Sort::Bv(width));
+        }
+        if times.is_power_of_two() {
+            let shift = times.trailing_zeros();
+            let lower = self.extract(part, width - 1 - shift, 0);
+            let zeros = self.bv(shift, 0);
+            return self.concat(lower, zeros);
+        }
+        let by = self.bv(width, times);
+        self.make(Node::Mul(part, by), Sort::Bv(width))
+    }
+
+    /// `x - (x / c) × c`, a sum holding `x` and `x / c` times `-c`, has `x % c` instead: the
+    /// remainder however it was written.
+    fn fold_remainders(&mut self, width: u32, linear: &mut Linear) {
+        let quotients: Vec<(Term, Term, u128)> = linear
+            .parts
+            .iter()
+            .filter_map(|(part, times)| {
+                let Node::Udiv(dividend, divisor) = *self.node(*part) else {
+                    return None;
+                };
+                let c = self.constant(divisor).filter(|c| *c > 0)?;
+                let held = linear
+                    .parts
+                    .get(&dividend)
+                    .is_some_and(|times| signed(*times, width) >= 1);
+                (held && *times == c.wrapping_neg() & mask(width)).then_some((*part, dividend, c))
+            })
+            .collect();
+        for (quotient, dividend, c) in quotients {
+            if !linear.parts.contains_key(&quotient) || !linear.parts.contains_key(&dividend) {
+                continue;
+            }
+            linear.parts.remove(&quotient);
+            linear.add_part(dividend, mask(width), width);
+            let divisor = self.bv(width, c);
+            let remainder = self.urem(dividend, divisor);
+            let remainder = self.linear(remainder);
+            linear.add(&remainder, 1, width);
+        }
+    }
+
+    /// Counts, and values that are each 0 or 1, added together are one count of all their
+    /// conditions.
+    fn fold_counts(&mut self, width: u32, linear: &mut Linear) {
+        let counted: Vec<Term> = linear
+            .parts
+            .iter()
+            .filter(|(part, times)| **times == 1 && self.is_counted(**part))
+            .map(|(part, _)| *part)
+            .collect();
+        if counted.len() < 2 {
+            return;
+        }
+        let mut conditions = Vec::new();
+        for term in &counted {
+            match self.counted(*term) {
+                Some(list) => conditions.extend(list),
+                None => return,
+            }
+        }
+        if conditions.len() as u128 > mask(width) {
+            return;
+        }
+        for term in &counted {
+            linear.parts.remove(term);
+        }
+        let count = self.count(width, &conditions);
+        let count = self.linear(count);
+        linear.add(&count, 1, width);
+    }
+
+    /// `sum` widened by `by` bits part by part, when it never wraps: its exact value, from its
+    /// parts' ranges, lies inside what its bits hold, read unsigned for zero-extension or signed
+    /// for sign-extension. Then the same arithmetic done at different widths, as a program's 32
+    /// bits and a formula's 64, ends up the same term.
+    /// The exact value of a sum as a whole number, from its parts' ranges: each part counts with
+    /// its multiple read as a signed number, and its own value read signed or unsigned as
+    /// `signed_parts` says. Any such reading is the sum modulo 2^width. `None` when the bounds
+    /// don't fit 128 bits.
+    fn exact_bounds(
+        &self,
+        linear: &Linear,
+        width: u32,
+        signed_parts: bool,
+    ) -> Option<(i128, i128)> {
+        let (mut low, mut high) = (0_i128, 0_i128);
+        for (part, times) in &linear.parts {
+            let times = signed(*times, width);
+            let (from, to) = if signed_parts {
+                self.signed_range(*part)
+            } else {
+                let (from, to) = self.range(*part);
+                (i128::try_from(from).ok()?, i128::try_from(to).ok()?)
+            };
+            let (p, q) = (times.checked_mul(from)?, times.checked_mul(to)?);
+            low = low.checked_add(p.min(q))?;
+            high = high.checked_add(p.max(q))?;
+        }
+        let constant = signed(linear.constant, width);
+        Some((low.checked_add(constant)?, high.checked_add(constant)?))
+    }
+
+    /// Where the bits of a `width`-bit value lie, read unsigned (`floor` 0) or signed (`floor`
+    /// -2^(width-1)), when its exact value runs from `low` to `high`: the multiple of 2^width to
+    /// add to it, or `None` when it crosses from one window of 2^width values into the next.
+    fn window(low: i128, high: i128, width: u32, signed_read: bool) -> Option<i128> {
+        if width > 126 {
+            // Every i128 is inside the signed window at 128 bits, and unsigned when not negative.
+            return (width == 128 && (signed_read || low >= 0)).then_some(0);
+        }
+        let span: i128 = 1 << width;
+        let floor = if signed_read { -(span / 2) } else { 0 };
+        let window = low.checked_sub(floor)?.div_euclid(span);
+        (high.checked_sub(floor)?.div_euclid(span) == window).then_some(-window * span)
+    }
+
+    fn widened_sum(&mut self, sum: Term, by: u32, signed_read: bool) -> Option<Term> {
+        let narrow = self.width(sum);
+        if narrow > 126 {
+            return None;
+        }
+        let linear = self.linear(sum);
+        let (low, high) = self.exact_bounds(&linear, narrow, signed_read)?;
+        let shift = Self::window(low, high, narrow, signed_read)?;
+        let constant = signed(linear.constant, narrow);
+        let wide = narrow + by;
+        let mut widened = Linear::default();
+        for (part, times) in linear.parts {
+            let extended = if signed_read {
+                self.sign_extend(part, by)
+            } else {
+                self.zero_extend(part, by)
+            };
+            let extended = self.linear(extended);
+            widened.add(&extended, unsigned(signed(times, narrow), wide), wide);
+        }
+        widened.constant = unsigned(constant.checked_add(shift)?, wide);
+        Some(self.linear_term(wide, widened))
     }
 
     /// Unsigned `a / b`; dividing by zero gives all ones, as in SMT-LIB.
@@ -988,6 +1413,11 @@ impl Pool {
             (_, Some(0)) => return self.bv(width, mask(width)),
             (Some(x), Some(y)) => return self.bv(width, x / y),
             (_, Some(1)) => return a,
+            // By a power of two it's a shift right: one form however it's written.
+            (_, Some(y)) if y.is_power_of_two() => {
+                let shift = self.bv(width, u128::from(y.trailing_zeros()));
+                return self.lshr(a, shift);
+            }
             (_, Some(y)) => {
                 // (x / c1) / c2 is x / (c1 × c2), and 0 once c1 × c2 passes every x.
                 if let Node::Udiv(inner, first) = *self.node(a)
@@ -1027,10 +1457,19 @@ impl Pool {
             (_, Some(0)) => return a,
             (Some(x), Some(y)) => return self.bv(width, x % y),
             (_, Some(1)) => return self.bv(width, 0),
+            // By a power of two it's the low bits: one form however it's written.
+            (_, Some(y)) if y.is_power_of_two() && self.range(a).1 >= y => {
+                let low = self.extract(a, y.trailing_zeros() - 1, 0);
+                return self.zero_extend(low, width - y.trailing_zeros());
+            }
             (_, Some(y)) => {
-                // A value below the divisor is its own remainder.
-                if self.range(a).1 < y {
-                    return a;
+                // A value below the divisor is its own remainder, and one whose range lies
+                // within one multiple of the divisor is the value less that multiple: the
+                // year of an era, once the year's range fixes the era.
+                let (low, high) = self.range(a);
+                if low / y == high / y {
+                    let multiple = self.bv(width, low / y * y);
+                    return self.sub(a, multiple);
                 }
                 // (x % a) % b is x % b when b divides a: seconds past the minute, however many
                 // remainders a program takes on the way.
@@ -1208,16 +1647,16 @@ impl Pool {
         self.make(Node::Not(a), Sort::Bv(width))
     }
 
-    /// Two's-complement negation.
+    /// Two's-complement negation: of a sum, the sum of its parts negated.
     pub fn neg(&mut self, a: Term) -> Term {
         let width = self.width(a);
         if let Some(x) = self.constant(a) {
             return self.bv(width, x.wrapping_neg());
         }
-        if let Node::Neg(inner) = *self.node(a) {
-            return inner;
-        }
-        self.make(Node::Neg(a), Sort::Bv(width))
+        let mut linear = Linear::default();
+        let part = self.linear(a);
+        linear.add(&part, mask(width), width);
+        self.linear_term(width, linear)
     }
 
     fn shift(&mut self, a: Term, b: Term, kind: fn(Term, Term) -> Node) -> Term {
@@ -1262,6 +1701,17 @@ impl Pool {
     /// program shifts.
     pub fn lshr(&mut self, a: Term, b: Term) -> Term {
         let width = self.width(a);
+        // A wide value that fits in 64 bits shifts at 64 bits, as a program's does, so a
+        // formula's 128-bit shift and the program's meet as one term.
+        if width > 64
+            && self.range(a).1 <= mask(64)
+            && let Some(by) = self.constant(b).filter(|by| *by > 0 && *by < 64)
+        {
+            let low = self.extract(a, 63, 0);
+            let by = self.bv(64, by);
+            let shifted = self.lshr(low, by);
+            return self.zero_extend(shifted, width - 64);
+        }
         if let Some(by) = self.constant(b)
             && by > 0
             && by < u128::from(width)
@@ -1434,22 +1884,14 @@ impl Pool {
             }
             // A sum or product that never wraps widens part by part, so the same arithmetic
             // done in different widths ends up the same term.
-            Node::Add(x, y) => {
-                let ((xl, xh), (_, yh)) = (self.range(x), self.range(y));
-                if xh.checked_add(yh).is_some_and(|high| high <= mask(narrow)) {
-                    let (x, y) = (self.zero_extend(x, by), self.zero_extend(y, by));
-                    return self.add(x, y);
+            Node::Add(..) | Node::Neg(_) => {
+                if let Some(widened) = self.widened_sum(a, by, false) {
+                    return widened;
                 }
-                if let Some(c) = self.constant(y)
-                    && narrow < 128
-                    && c > mask(narrow - 1)
-                    && xl > mask(narrow) - c
-                {
-                    // x + c wraps for every x: it's x - (2^narrow - c) without wrapping.
-                    let below = mask(narrow) - c + 1;
-                    let wide_x = self.zero_extend(x, by);
-                    let wide_c = self.bv(width, 0_u128.wrapping_sub(below));
-                    return self.add(wide_x, wide_c);
+            }
+            Node::Mul(_, factor) if self.constant(factor).is_some() => {
+                if let Some(widened) = self.widened_sum(a, by, false) {
+                    return widened;
                 }
             }
             Node::Mul(x, y)
@@ -1604,22 +2046,9 @@ impl Pool {
             low >= minimum && high < (1_i128 << (narrow - 1).min(126))
         };
         match *self.node(a) {
-            Node::Add(x, y)
-                if narrow < 128 && fits(self, a) && {
-                    let ((xl, xh), (yl, yh)) = (self.signed_range(x), self.signed_range(y));
-                    xl.checked_add(yl)
-                        .zip(xh.checked_add(yh))
-                        .is_some_and(|(low, high)| {
-                            low >= -(1_i128 << (narrow - 1)) && high < (1_i128 << (narrow - 1))
-                        })
-                } =>
-            {
-                let (x, y) = (self.sign_extend(x, by), self.sign_extend(y, by));
-                return Some(self.add(x, y));
-            }
-            Node::Neg(x) if narrow < 128 && self.signed_range(x).0 > -(1_i128 << (narrow - 1)) => {
-                let x = self.sign_extend(x, by);
-                return Some(self.neg(x));
+            Node::Add(..) | Node::Neg(_) => return self.widened_sum(a, by, true),
+            Node::Mul(_, factor) if self.constant(factor).is_some() => {
+                return self.widened_sum(a, by, true);
             }
             Node::Mul(x, y)
                 if narrow < 128 && fits(self, a) && {
@@ -1717,9 +2146,25 @@ impl Pool {
         if let Node::Slt(left, right) = *self.node(condition)
             && self.constant(left) == Some(0)
             && then == right
-            && matches!(*self.node(otherwise), Node::Neg(inner) if inner == right)
+            && self.negates_value(otherwise, right)
         {
             let negative = self.slt(right, left);
+            return self.ite(negative, otherwise, then);
+        }
+        // The size of x is the size of -x: of the two, the one whose first part counts
+        // positively is the one written, so |a - b| and |b - a| are one term.
+        if let Node::Slt(left, right) = *self.node(condition)
+            && self.constant(right) == Some(0)
+            && otherwise == left
+            && self.negates_value(then, left)
+            && self
+                .linear_view(left)
+                .parts
+                .first_key_value()
+                .is_some_and(|(_, times)| signed(*times, self.width(left)) < 0)
+        {
+            let zero = self.bv(self.width(then), 0);
+            let negative = self.slt(then, zero);
             return self.ite(negative, otherwise, then);
         }
         let sort = self.sort(then);
@@ -1743,6 +2188,13 @@ impl Pool {
         let ((al, ah), (bl, bh)) = (self.range(a), self.range(b));
         if ah < bl || bh < al {
             return self.boolean(false);
+        }
+        // Read signed, too: a small number below zero is never the most negative one.
+        if self.sort(a) != Sort::Bool {
+            let ((al, ah), (bl, bh)) = (self.signed_range(a), self.signed_range(b));
+            if ah < bl || bh < al {
+                return self.boolean(false);
+            }
         }
         // The top bit of v set is v < 0, which comparisons below can lift.
         for (bit, other) in [(a, b), (b, a)] {
@@ -2486,6 +2938,107 @@ impl Pool {
             }
         }
         found
+    }
+
+    /// `term` with each condition `facts` settles replaced by its truth, simplified again: what
+    /// it comes to on a run whose branches settled those conditions.
+    pub fn assuming(&mut self, term: Term, facts: &HashMap<Term, bool>) -> Term {
+        let mut done: HashMap<Term, Term> = HashMap::new();
+        let mut pending = vec![(term, false)];
+        while let Some((current, expanded)) = pending.pop() {
+            if done.contains_key(&current) {
+                continue;
+            }
+            if let Some(truth) = facts.get(&current) {
+                let value = self.boolean(*truth);
+                done.insert(current, value);
+                continue;
+            }
+            // A count's conditions are its operands here: they settle as any others do.
+            let operands = match *self.node(current) {
+                Node::Count(number, _) => self.counts[number as usize].clone(),
+                _ => node_operands(self.node(current)),
+            };
+            if operands.is_empty() {
+                done.insert(current, current);
+                continue;
+            }
+            if !expanded {
+                pending.push((current, true));
+                pending.extend(
+                    operands
+                        .iter()
+                        .filter(|operand| !done.contains_key(operand))
+                        .map(|operand| (*operand, false)),
+                );
+                continue;
+            }
+            let rebuilt: Vec<Term> = operands.iter().map(|operand| done[operand]).collect();
+            let result = if rebuilt == operands {
+                current
+            } else if let Node::Count(_, width) = *self.node(current) {
+                self.count(width, &rebuilt)
+            } else {
+                let node = self.node(current).clone();
+                self.rebuild(&node, &rebuilt)
+            };
+            done.insert(current, result);
+        }
+        done.get(&term).copied().unwrap_or(term)
+    }
+
+    /// `node` built again with `operands` in place of its own, through the builders.
+    fn rebuild(&mut self, node: &Node, operands: &[Term]) -> Term {
+        let (a, b, c) = (
+            operands.first().copied(),
+            operands.get(1).copied(),
+            operands.get(2).copied(),
+        );
+        let (Some(a), b) = (a, b) else {
+            return self.make(node.clone(), Sort::Bool);
+        };
+        let two = |pool: &mut Self, build: fn(&mut Self, Term, Term) -> Term| {
+            b.map_or(a, |b| build(pool, a, b))
+        };
+        match *node {
+            Node::Add(..) => two(self, Self::add),
+            Node::Mul(..) => two(self, Self::mul),
+            Node::Udiv(..) => two(self, Self::udiv),
+            Node::Urem(..) => two(self, Self::urem),
+            Node::Sdiv(..) => two(self, Self::sdiv),
+            Node::Srem(..) => two(self, Self::srem),
+            Node::And(..) => two(self, Self::and),
+            Node::Or(..) => two(self, Self::or),
+            Node::Xor(..) => two(self, Self::xor),
+            Node::Shl(..) => two(self, Self::shl),
+            Node::Lshr(..) => two(self, Self::lshr),
+            Node::Ashr(..) => two(self, Self::ashr),
+            Node::Concat(..) => two(self, Self::concat),
+            Node::Eq(..) => two(self, Self::eq),
+            Node::Ult(..) => two(self, Self::ult),
+            Node::Slt(..) => two(self, Self::slt),
+            Node::BoolAnd(..) => two(self, Self::bool_and),
+            Node::BoolOr(..) => two(self, Self::bool_or),
+            Node::Not(_) => self.not(a),
+            Node::Neg(_) => self.neg(a),
+            Node::BoolNot(_) => self.bool_not(a),
+            Node::Extract(_, high, low) => self.extract(a, high, low),
+            Node::ZeroExtend(_, by) => self.zero_extend(a, by),
+            Node::SignExtend(_, by) => self.sign_extend(a, by),
+            Node::Ite(..) => match (b, c) {
+                (Some(then), Some(otherwise)) => self.ite(a, then, otherwise),
+                _ => a,
+            },
+            Node::Lookup(_, table) => {
+                let table = self.tables[table as usize];
+                self.lookup(a, table)
+            }
+            Node::Const { .. }
+            | Node::Var { .. }
+            | Node::Bool(_)
+            | Node::BoolVar(_)
+            | Node::Count(..) => a,
+        }
     }
 
     /// The name of a variable term.

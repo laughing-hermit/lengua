@@ -15,10 +15,20 @@ pub struct Network {
     /// The test server's connections in order: what it must receive, and its reply in the
     /// pieces it arrives in.
     pub server: Vec<(Vec<Term>, Vec<Vec<Term>>)>,
-    /// The test client's connections in order: what it sends, in the pieces it arrives in.
-    pub client: Vec<Vec<Vec<Term>>>,
+    /// The test client's connections in order.
+    pub client: Vec<Client>,
     /// Whether the program has its listener at file descriptor 3.
     pub listening: bool,
+}
+
+/// One connection of the test's client, which behaves as curl and browsers do: it sends, keeps
+/// its side open until the program has started answering, then closes it and reads the rest.
+#[derive(Debug, Clone, Default)]
+pub struct Client {
+    /// What it sends, in the pieces it arrives in.
+    pub pieces: Vec<Vec<Term>>,
+    /// Whether it waits for an answer before closing its side: the test expects one.
+    pub waits: bool,
 }
 
 /// One connection as the program used it.
@@ -254,7 +264,19 @@ impl Cpu<'_> {
         let connection = self.state.connections[number].clone();
         let network = std::rc::Rc::clone(&self.state.network);
         let pieces = if connection.accepted {
-            &network.client[connection.exchange]
+            let client = &network.client[connection.exchange];
+            // Everything sent, and no answer yet: the client waits with its side open.
+            if connection.piece >= client.pieces.len() && client.waits && connection.sent.is_empty()
+            {
+                return Err(End::Stuck(
+                    "it reads again after the test's client sent its whole request, but the \
+                     client, as curl and browsers do, keeps the connection open while it waits \
+                     for the answer: answer once the request is complete (its newline or blank \
+                     line), without waiting for the client to close its side"
+                        .into(),
+                ));
+            }
+            &client.pieces
         } else {
             let (receives, reply) = &network.server[connection.exchange];
             if connection.sent.len() < receives.len() {
@@ -283,6 +305,62 @@ impl Cpu<'_> {
             connection.taken = 0;
         }
         Ok(taken)
+    }
+
+    /// Everything yet to arrive on a connection, and whether the peer then waits with its side
+    /// open: the test's client, before the program has answered anything.
+    pub(super) fn unread(&self, number: usize) -> Result<(Vec<Term>, bool), Stop> {
+        let connection = &self.state.connections[number];
+        let network = &self.state.network;
+        let (pieces, waits) = if connection.accepted {
+            let client = &network.client[connection.exchange];
+            (&client.pieces, client.waits && connection.sent.is_empty())
+        } else {
+            let (receives, reply) = &network.server[connection.exchange];
+            if connection.sent.len() < receives.len() {
+                return Err(End::Stuck(format!(
+                    "it reads the test server's reply after sending {} of the {} bytes the \
+                     server waits for",
+                    connection.sent.len(),
+                    receives.len()
+                )));
+            }
+            (reply, false)
+        };
+        let mut left = Vec::new();
+        for (index, piece) in pieces.iter().enumerate().skip(connection.piece) {
+            let start = if index == connection.piece {
+                connection.taken
+            } else {
+                0
+            };
+            left.extend_from_slice(&piece[start.min(piece.len())..]);
+        }
+        Ok((left, waits))
+    }
+
+    /// Marks `count` more bytes of a connection read, across its pieces.
+    pub(super) fn consume(&mut self, number: usize, mut count: usize) {
+        let network = std::rc::Rc::clone(&self.state.network);
+        let connection = &mut self.state.connections[number];
+        let pieces = if connection.accepted {
+            &network.client[connection.exchange].pieces
+        } else {
+            &network.server[connection.exchange].1
+        };
+        while count > 0 {
+            let Some(piece) = pieces.get(connection.piece) else {
+                break;
+            };
+            let left = piece.len() - connection.taken;
+            let taken = count.min(left);
+            connection.taken += taken;
+            count -= taken;
+            if connection.taken == piece.len() {
+                connection.piece += 1;
+                connection.taken = 0;
+            }
+        }
     }
 
     /// `shutdown`: the program's side of a connection is finished.

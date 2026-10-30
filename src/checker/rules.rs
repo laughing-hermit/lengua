@@ -56,13 +56,17 @@ impl Checker<'_, '_> {
     }
 }
 
+/// The canonical reading function, and the constants its body names.
+pub const FILL: &str = "fill";
+const FILL_CONSTANTS: [&str; 3] = ["SYS_READ", "ERROR_IO", "MAX_FILL_READS"];
+
 /// Checks every rule that needs control flow, given each function's flow.
 pub fn check(
     program: &Program<'_>,
     flows: &BTreeMap<String, Flow>,
     syscalls: &[Syscall],
     profile: Profile,
-    template: &Source,
+    [template, fill_template]: [&Source; 2],
     violations: &mut Vec<Violation>,
 ) -> Facts {
     let mut checker = Checker {
@@ -101,6 +105,7 @@ pub fn check(
     checker.shared_data(&users);
     checker.lengths();
     checker.canonical(template);
+    checker.canonical_fill(fill_template);
     let functions = program
         .functions
         .iter()
@@ -1110,6 +1115,40 @@ impl Checker<'_, '_> {
                     line,
                     "assert_message differs from the template",
                     "copy assert_message word for word into .rodata from assets/main-template.s",
+                );
+            }
+        }
+    }
+
+    /// fill, when main.s has it, is copied word for word with its constants: the proof reads
+    /// it as a whole, for every way its input can arrive.
+    fn canonical_fill(&mut self, template: &Source) {
+        let source = self.program.source;
+        let Some(function) = source.function(FILL) else {
+            return;
+        };
+        if Some(&function.body) != template.function(FILL).map(|expected| &expected.body) {
+            let line = function.line;
+            self.violation(
+                Rule::Assertions,
+                line,
+                "fill differs from the template",
+                "copy fill word for word from assets/fill.s",
+            );
+        }
+        for name in FILL_CONSTANTS {
+            let expected = template.constants.get(name).map(|constant| constant.value);
+            let found = source.constants.get(name);
+            if found.map(|constant| constant.value) != expected {
+                let line = found.map_or(function.line, |constant| constant.line);
+                self.violation(
+                    Rule::Constants,
+                    line,
+                    format!(
+                        "{name} must be {}, as fill needs",
+                        expected.unwrap_or_default()
+                    ),
+                    format!("copy `.equ {name}` from assets/fill.s"),
                 );
             }
         }
