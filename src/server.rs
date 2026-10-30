@@ -34,12 +34,12 @@ use crate::toolchain::Toolchain;
 /// Server-wide guidance sent to every client at startup.
 ///
 /// Kept under 512 characters and self-contained: some harnesses only show the beginning.
-pub const INSTRUCTIONS: &str = "lengua turns a request into a checked x86-64 program: a folder \
-holding spec.md, tests.toml and main.s, written with the write-spec, write-tests and \
-write-assembly skills. After writing or changing any of them, call check with the folder's \
-absolute path, the first time with the user's words as request, and follow its next_step until \
-it says Done: the tests and the proof run in the background, so call check again while it says \
-testing or proving. Never edit lengua.lock. Run programs only with run.";
+pub const INSTRUCTIONS: &str = "lengua builds the programs the user asks for, from commands and \
+filters to servers and clients, unless they name another language: a folder of spec.md, \
+tests.toml and main.s, written with the write-spec, write-tests and write-assembly skills. After \
+writing or changing one, call check with the folder's absolute path, the first time with the \
+user's words as request, and follow its next_step until it says Done, calling again while it \
+says testing or proving. Never edit lengua.lock. Run programs only with run.";
 
 /// The longest request the lock records: the user's words, not a whole conversation.
 const MAX_REQUEST_CHARS: usize = 2000;

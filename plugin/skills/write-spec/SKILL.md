@@ -1,6 +1,6 @@
 ---
 name: write-spec
-description: Writes or updates a lengua program's spec.md from the user's request. spec.md is the natural-language source of truth that lengua turns into tests and checked x86-64 assembly. Use when the user wants a new lengua program, wants to change what one does, or when the lengua check tool says to write or fix spec.md. Ends when the check tool records the spec with the user's own words, without waiting for an approval.
+description: Writes or updates a lengua program's spec.md from the user's request. spec.md is the natural-language source of truth that lengua turns into tests and checked x86-64 assembly. Use when the user asks for a program, such as a command, a filter, a server or a client, unless they name another language; when they want to change a lengua program; or when the lengua check tool says to write or fix spec.md. Ends when the check tool records the spec with the user's own words, without waiting for an approval.
 license: Apache-2.0
 compatibility: Needs the lengua MCP server from the lengua plugin.
 ---
