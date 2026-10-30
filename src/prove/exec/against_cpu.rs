@@ -897,7 +897,7 @@ fn model(
     cell_address: u64,
 ) -> Result<Ended, String> {
     let mut pool = Pool::default();
-    let mut state = State::start(image, &mut pool, &[], Vec::new());
+    let mut state = State::start(image, &mut pool, &[], &[], Vec::new());
     for (slot, value) in registers.iter().enumerate() {
         state.registers[slot] = pool.bv(64, u128::from(*value));
     }

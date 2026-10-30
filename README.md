@@ -17,10 +17,9 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 > Status: dialect 3 on Linux x86-64, with memory rules that check every address has an owner and
 > stays inside it. It covers whole numbers, exact decimals, floating point in double and single
 > precision with fused multiply-add, vectors from SSE2 to AVX-512, hashing and
-> checksums, files, fork-join threads, the clock and random bytes (which tests supply, so such
-> output is exact), plain TCP clients and servers on the ports a spec names, and inputs up to
-> 1 MiB. The
-> kernel holds every run to what its spec allows. lengua proves programs right for every
+> checksums, files, environment variables, fork-join threads, the clock and random bytes (which
+> tests supply, so such output is exact), plain TCP clients and servers on the ports a spec
+> names, and inputs up to 1 MiB. The kernel holds every run to what its spec allows. lengua proves programs right for every
 > input, not just the tested ones, over whole numbers, decimals, choices, texts beyond ASCII and
 > text formulas, files and the network, in integer, bit and vector code from SSE2 to AVX-512,
 > and over long texts up to a stated length (4,096 bytes of standard input). Programs that read
@@ -78,8 +77,8 @@ files ("run it on notes.txt in ~/docs"), or to change what it does. If you don't
 the program goes in a new folder inside the current one.
 
 Every run is confined by the kernel: the program can use only what its spec names (standard
-input, files, the clock, random bytes, the network ports it lists), and touch files only in the
-folder it runs in.
+input, files, the clock, random bytes, environment variables, the network ports it lists), and
+touch files only in the folder it runs in.
 
 Share a program by sharing its spec, the source of truth: anyone's agent compiles it for their own
 computer, and lengua checks that copy there. Each copy is compiled afresh, so copies pass the same
@@ -104,6 +103,8 @@ Complete programs, each with its spec, tests included, and its assembly:
   time with SSE2, proven for every file up to 4096 bytes;
 - [`examples/absdiff`](examples/absdiff) prints how far apart two numbers are. Claude Code wrote
   it through lengua, proven for every pair of inputs;
+- [`examples/greet`](examples/greet) greets whoever the `NAME` environment variable names. It
+  gets only the variables its tests, or your `run`, give it;
 - [`examples/dice`](examples/dice) rolls a fair die from the kernel's random bytes. Its tests
   supply the bytes, so every roll is checked exactly, and the proof covers every pair of first
   bytes;

@@ -5,7 +5,8 @@
 What the spec names under `# Constraints` decides the calls a program may make on this computer:
 `write`, `exit` and `exit_group` always; `read` for `standard input`; `openat`, `read`, `write`,
 `lseek` and `close` for `files`; `clock_gettime` for `the clock`; `getrandom` for
-`random bytes`; `socket` and `connect` for `- Network: connects to …`, `accept4` for
+`random bytes`; none for `the environment`, which is on the stack at the start;
+`socket` and `connect` for `- Network: connects to …`, `accept4` for
 `- Network: listens on …`, and `read`, `close`, `shutdown` and `sendto` for either. The kernel
 refuses any other.
 
@@ -66,9 +67,11 @@ At `_start` the stack holds the arguments, and `rsp` is 16-byte aligned:
 | `[rsp + 8]` | `argv[0]`, the program's path |
 | `[rsp + 16]` | `argv[1]`, the first argument, and so on |
 | `[rsp + 8 * (argc + 1)]` | 0, the end of the list |
+| `[rsp + 8 * (argc + 2)]` | the environment: a pointer to each variable's `NAME=value`, then 0 |
 
-Each argument is a NUL-terminated string. lengua runs programs with an empty environment, in a
-working folder of their own: an empty temporary folder, or the user's folder when they ask to run
+Each argument and variable is a NUL-terminated string, read-only. A program gets environment
+variables only when its spec uses `the environment`, and then only those its test or the user's
+run gives; otherwise the list is empty. lengua runs programs in a working folder of their own: an empty temporary folder, or the user's folder when they ask to run
 the program on their files. `_start` has no return address: it ends with `exit`.
 
 ## Calling convention (System V)

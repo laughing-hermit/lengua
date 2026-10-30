@@ -698,6 +698,33 @@ async fn proofs_survive_a_server_restart() {
 }
 
 #[tokio::test]
+async fn a_program_gets_only_the_environment_its_test_or_run_gives() {
+    if !solvers_installed() {
+        return;
+    }
+    let session = Session::proving(Protocol::Discover).await;
+    let program = written(&session, example_files("greet")).await;
+    let report = done(&session, &program).await;
+    assert_eq!(
+        report["tests"][0], "main.s follows every rule and passed all 203 test runs",
+        "{report}"
+    );
+    // Each name the proof can draw is greeted, and every run kept to the memory rules.
+    assert!(
+        text(&report["proofs"][0]).contains("proven for every input in range"),
+        "{report}"
+    );
+    let mut arguments = program.arguments();
+    arguments["env"] = json!({"NAME": "Grace Hopper"});
+    let run = session.call_ok("run", arguments).await;
+    assert_eq!(run["stdout"], "Hello, Grace Hopper!\n", "{run}");
+    // Nothing else reaches it: without NAME it shows how to use it.
+    let run = session.call_ok("run", program.arguments()).await;
+    assert_eq!(run["stderr"], "usage: NAME=<who> greet\n", "{run}");
+    session.service.cancel().await.expect("close the session");
+}
+
+#[tokio::test]
 async fn the_absolute_difference_example_is_proven() {
     // Claude Code wrote this one through lengua; it picks the size of a - b with cmovs, which
     // the prover settles by writing both the program's choice and abs(a - b) as one term.

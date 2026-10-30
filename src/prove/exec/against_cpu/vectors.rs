@@ -558,7 +558,7 @@ fn compare(
     cell_address: u64,
 ) -> Result<Vec<String>, String> {
     let mut pool = Pool::default();
-    let mut state = State::start(image, &mut pool, &[], Vec::new());
+    let mut state = State::start(image, &mut pool, &[], &[], Vec::new());
     for number in 0..16 {
         state.registers[number] = pool.bv(64, u128::from(word(input, GPRS + number * 8)));
     }

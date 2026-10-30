@@ -9,7 +9,7 @@ use crate::expr::{
     self, Env, EvalError, Function, Generator, HexPart, Limit, PatternPart, Template, Value,
 };
 use crate::hash::Sha256Hex;
-use crate::spec::{ASSERTION_EXIT_CODE, Behavior, BehaviorId, Keyword, Spec, Step, Syscall};
+use crate::spec::{ASSERTION_EXIT_CODE, Behavior, BehaviorId, Keyword, Spec, Step, Syscall, Use};
 use crate::supply::Supply;
 
 mod steps;
@@ -56,6 +56,8 @@ pub struct Example {
     pub stdin: String,
     /// Files in the working folder before the run, by name.
     pub files: BTreeMap<String, String>,
+    /// The environment variables the run gets, by name: no others.
+    pub env: BTreeMap<String, String>,
     /// Expected standard output.
     pub stdout: String,
     /// Expected standard error.
@@ -121,6 +123,8 @@ pub struct Generated {
     pub stdin: Template,
     /// Templates of the files in the working folder before the run, by name.
     pub files: BTreeMap<String, Template>,
+    /// Templates of the environment variables the run gets, by name.
+    pub env: BTreeMap<String, Template>,
     /// Expected standard output template.
     pub stdout: Template,
     /// Expected standard error template.
@@ -169,6 +173,8 @@ pub struct Case {
     pub stdin: String,
     /// Files in the working folder before the run.
     pub files: BTreeMap<String, String>,
+    /// The environment variables the run gets, by name.
+    pub env: BTreeMap<String, String>,
     /// Expected standard output.
     pub stdout: String,
     /// Expected standard error.
@@ -327,6 +333,7 @@ impl Generated {
             .render(inputs)
             .map_err(|error| ("stdin", error))?;
         let files = render_files(&self.files, "files")?;
+        let env = render_files(&self.env, "env")?;
         let stdout = self
             .stdout
             .render(inputs)
@@ -388,6 +395,7 @@ impl Generated {
             args,
             stdin,
             files,
+            env,
             stdout,
             stderr,
             files_after,
@@ -634,6 +642,7 @@ struct ExampleTable {
     args: Vec<Text>,
     stdin: Text,
     files: BTreeMap<String, Text>,
+    env: BTreeMap<String, Text>,
     stdout: Text,
     stderr: Text,
     files_after: BTreeMap<String, Text>,
@@ -756,6 +765,7 @@ struct OutlineSteps {
     args: Vec<Written>,
     stdin: Written,
     files: BTreeMap<String, Written>,
+    env: BTreeMap<String, Written>,
     stdout: Written,
     stderr: Written,
     files_after: BTreeMap<String, Written>,
@@ -995,6 +1005,7 @@ fn words(field: &str) -> String {
         "args" => "the arguments".into(),
         "stdin" => "standard input".into(),
         "files" => "its files".into(),
+        "env" => "its environment".into(),
         "stdout" => "what it prints".into(),
         "stderr" => "what it prints to standard error".into(),
         "files_after" => "the files it leaves".into(),
@@ -1008,9 +1019,11 @@ fn words(field: &str) -> String {
         other => match (
             other.strip_prefix("files."),
             other.strip_prefix("files_after."),
+            other.strip_prefix("env."),
         ) {
-            (Some(file), _) => format!("the file `{file}`"),
-            (_, Some(file)) => format!("what `{file}` holds after"),
+            (Some(file), ..) => format!("the file `{file}`"),
+            (_, Some(file), _) => format!("what `{file}` holds after"),
+            (.., Some(name)) => format!("the environment variable `{name}`"),
             _ => other.to_owned(),
         },
     }
@@ -1085,6 +1098,18 @@ impl<'a> Checker<'a> {
                     (file, contents)
                 })
                 .collect();
+            let env: BTreeMap<String, String> = table
+                .env
+                .into_iter()
+                .map(|(variable, value)| {
+                    let value = expand(
+                        &format!("the environment variable `{variable}`"),
+                        value,
+                        false,
+                    );
+                    (variable, value)
+                })
+                .collect();
             // What the test's server and client send is exact; what the program answers its client
             // may hold rules.
             let server: Vec<Reply> = table
@@ -1107,6 +1132,7 @@ impl<'a> Checker<'a> {
                 self.problem(Some(line), format!("{name}: {problem}"));
             }
             self.check_supply(line, &name, table.random.is_some(), !table.clock.is_empty());
+            self.check_environment(line, &name, &env);
             if let Err(problem) = Supply::parse(table.random.as_deref(), &table.clock) {
                 self.problem(Some(line), format!("{name}: {problem}"));
             }
@@ -1139,6 +1165,7 @@ impl<'a> Checker<'a> {
                 args,
                 stdin,
                 files,
+                env,
                 stdout,
                 stderr,
                 files_after,
@@ -1276,6 +1303,16 @@ impl<'a> Checker<'a> {
                 Some((file.clone(), template(&format!("files.{file}"), written)?))
             })
             .collect();
+        let env: Option<BTreeMap<String, Template>> = steps
+            .env
+            .iter()
+            .map(|(variable, written)| {
+                Some((
+                    variable.clone(),
+                    template(&format!("env.{variable}"), written)?,
+                ))
+            })
+            .collect();
         let stdout = template("stdout", &steps.stdout);
         let stderr = template("stderr", &steps.stderr);
         let files_after: Option<BTreeMap<String, Template>> = steps
@@ -1355,6 +1392,7 @@ impl<'a> Checker<'a> {
             self.problem(Some(line), format!("{name}: {problem}"));
         }
         self.check_supply(line, name, steps.random.is_some(), !steps.clock.is_empty());
+        self.check_environment(line, name, &steps.env);
         self.check_peers(
             line,
             name,
@@ -1377,6 +1415,7 @@ impl<'a> Checker<'a> {
             args: args?,
             stdin: stdin?,
             files: files?,
+            env: env?,
             stdout: stdout?,
             stderr: stderr?,
             files_after: files_after?,
@@ -1474,6 +1513,40 @@ impl<'a> Checker<'a> {
                      `the clock`; add it there, or drop the readings"
                 ),
             );
+        }
+    }
+
+    /// A test gives environment variables only to a program whose spec uses the environment, by
+    /// names a shell would take.
+    fn check_environment<T>(&mut self, line: usize, name: &str, env: &BTreeMap<String, T>) {
+        if env.is_empty() {
+            return;
+        }
+        if !self.spec.uses.contains(&Use::Environment) {
+            self.problem(
+                Some(line),
+                format!(
+                    "{name} sets environment variables, but spec.md's `- Uses:` line doesn't name \
+                     `the environment`; add it there, or drop the variables"
+                ),
+            );
+        }
+        for variable in env.keys() {
+            let mut characters = variable.chars();
+            let named = characters
+                .next()
+                .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+                && characters
+                    .all(|character| character.is_ascii_alphanumeric() || character == '_');
+            if !named {
+                self.problem(
+                    Some(line),
+                    format!(
+                        "{name} sets the environment variable `{variable}`, but a name holds \
+                         only letters, digits and `_`, and doesn't start with a digit"
+                    ),
+                );
+            }
         }
     }
 
@@ -1617,6 +1690,7 @@ impl<'a> Checker<'a> {
             .map(|arg| ("args", arg))
             .chain([("stdin", &block.stdin)])
             .chain(block.files.values().map(|file| ("files", file)))
+            .chain(block.env.values().map(|value| ("env", value)))
             .chain(block.clock.iter().map(|reading| ("clock", reading)))
             .chain(
                 block
@@ -1682,6 +1756,7 @@ impl<'a> Checker<'a> {
             .iter()
             .chain([&block.stdin])
             .chain(block.files.values())
+            .chain(block.env.values())
             .chain(block.clock.iter())
             .chain(block.outputs());
         if others
@@ -2079,6 +2154,13 @@ fn bind(block: &Generated, example: &Example) -> Result<Env, String> {
             example.files.keys().collect::<Vec<_>>()
         ));
     }
+    if !block.env.keys().eq(example.env.keys()) {
+        return Err(format!(
+            "it sets the environment variables {:?} and the steps set {:?}",
+            block.env.keys().collect::<Vec<_>>(),
+            example.env.keys().collect::<Vec<_>>()
+        ));
+    }
     if block.clock.len() != example.clock.len() {
         return Err(format!(
             "it gives {} clock readings and the steps give {}",
@@ -2103,6 +2185,7 @@ fn bind(block: &Generated, example: &Example) -> Result<Env, String> {
         .zip(&example.args)
         .chain([(&block.stdin, &example.stdin)])
         .chain(block.files.values().zip(example.files.values()))
+        .chain(block.env.values().zip(example.env.values()))
         .chain(block.clock.iter().zip(&example.clock))
         .chain(
             block
@@ -2853,6 +2936,30 @@ Prints the hour of the day in UTC, from `0` to `23`, for a reader numbered from 
                 "| `int(-1000000000, 1000000000)` | 200 |",
             ),
             "`c` never reaches the program",
+        );
+    }
+
+    #[test]
+    fn environment_variables_need_the_environment_and_names_a_shell_takes() {
+        let greet = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/greet/spec.md"),
+        )
+        .expect("the greet example");
+        let suite = tests_of(&greet).expect("valid tests");
+        assert_eq!(suite.examples[0].env["NAME"], "Ada");
+        let case = suite.generated[0]
+            .cases(7)
+            .next()
+            .expect("a case")
+            .expect("its values");
+        assert_eq!(case.env.keys().collect::<Vec<_>>(), ["NAME"]);
+        assert_problem(
+            &edit(&greet, "- Uses: the environment", "- Uses: standard input"),
+            "doesn't name `the environment`",
+        );
+        assert_problem(
+            &edit(&greet, "variable `HOME`", "variable `2HOME`"),
+            "a name holds only letters, digits and `_`",
         );
     }
 

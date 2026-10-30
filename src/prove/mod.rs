@@ -2768,6 +2768,16 @@ fn prove_shape(
         .iter()
         .map(|arg| pattern_bytes(&mut pool, arg, &inputs))
         .collect::<Result<Vec<_>, _>>()?;
+    // Each environment variable as the kernel gives it: `NAME=value`.
+    let env = block
+        .env
+        .iter()
+        .map(|(name, value)| {
+            let mut bytes = exec::bytes(&mut pool, format!("{name}=").as_bytes());
+            bytes.extend(pattern_bytes(&mut pool, value, &inputs)?);
+            Ok(bytes)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
     let stdin = pattern_bytes(&mut pool, &block.stdin, &inputs)?;
     // The model has one read return everything that's there, which a pipe guarantees only for
     // what one write of at most 4096 bytes put in it; fill reads any length cut any way.
@@ -2827,7 +2837,7 @@ fn prove_shape(
     };
     // fill, where the program has it, is read as a whole for every way its input can be cut.
     let every_cut = image.has_fill();
-    let mut base = State::start(image, &mut pool, &args, stdin)
+    let mut base = State::start(image, &mut pool, &args, &env, stdin)
         .with_files(files)
         .with_supply(random, clock);
     if every_cut {
@@ -3158,7 +3168,12 @@ pub fn agrees(
                 )
             })
             .collect();
-        let start = State::start(&image, &mut pool, &args, stdin)
+        let env: Vec<Vec<Term>> = case
+            .env
+            .iter()
+            .map(|(name, value)| exec::bytes(&mut pool, format!("{name}={value}").as_bytes()))
+            .collect();
+        let start = State::start(&image, &mut pool, &args, &env, stdin)
             .with_files(files)
             .with_supply(random, clock)
             .with_network(network);

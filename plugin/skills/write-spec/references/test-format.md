@@ -25,6 +25,7 @@ reported with the phrasing to write instead. Values go in backticks, with `\n`, 
 | `no standard input`, `empty standard input` | Input that ends at once |
 | ``a file `notes.txt` holding TEXT``, ``an empty file `notes.txt` `` | A file in its working folder |
 | ``no file `notes.txt` `` | Nothing: the folder starts empty, and the step says so |
+| ``the environment variable `NAME` set to TEXT`` | That variable, for a spec that uses `the environment`; it gets no others |
 | ``the clock at `1735689600` `` | What the program reads from the clock, in seconds since 1970; ``then `1735689601` `` adds a later reading |
 | ``the random bytes `fc` and `2a` `` | The random bytes the program asks the computer for, one byte of hex a value |
 | ``a server on port `8080` that receives TEXT and replies TEXT`` | The test's own server, one step a connection, for a program that connects; the port is the spec's |

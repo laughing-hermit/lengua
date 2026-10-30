@@ -94,6 +94,8 @@ pub struct Job<'a> {
     pub stdin_file: Option<&'a Path>,
     /// Files put in its fresh working folder before it starts, by name relative to the folder.
     pub files: &'a BTreeMap<String, String>,
+    /// Its environment variables, by name: no others reach it.
+    pub env: &'a BTreeMap<String, String>,
     /// A folder to run in instead of a fresh one; the program may read and write inside it.
     pub folder: Option<&'a Path>,
     /// The system calls it may make; any other stops it.
@@ -120,6 +122,7 @@ impl<'a> Job<'a> {
             stdin,
             stdin_pieces: &[],
             files: &NO_FILES,
+            env: &NO_FILES,
             folder: None,
             syscalls,
             supply: None,
@@ -491,6 +494,7 @@ pub async fn start(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<
         .arg(file_limit)
         .arg(tracer)
         .arg(net.encode())
+        .arg(encode_environment(job.env))
         .arg(job.program)
         .args(job.args)
         .current_dir(&folder)
@@ -660,6 +664,42 @@ async fn supervisor_verdict(
     }
 }
 
+/// A program's environment as the launcher's argument: each `NAME=value` in hex, joined by
+/// commas, or `none`. Only the program gets it, never the launcher, which runs before its
+/// confinement and would read variables such as `LD_PRELOAD`.
+fn encode_environment(env: &BTreeMap<String, String>) -> String {
+    if env.is_empty() {
+        return "none".into();
+    }
+    env.iter()
+        .map(|(name, value)| {
+            format!("{name}={value}")
+                .bytes()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// The variables [`encode_environment`] wrote, or `None` for anything it didn't.
+fn decode_environment(text: &str) -> Option<Vec<(String, String)>> {
+    if text == "none" {
+        return Some(Vec::new());
+    }
+    text.split(',')
+        .map(|hex| {
+            let bytes = (0..hex.len())
+                .step_by(2)
+                .map(|at| u8::from_str_radix(hex.get(at..at + 2)?, 16).ok())
+                .collect::<Option<Vec<u8>>>()?;
+            let pair = String::from_utf8(bytes).ok()?;
+            let (name, value) = pair.split_once('=')?;
+            Some((name.to_owned(), value.to_owned()))
+        })
+        .collect()
+}
+
 /// Puts `files` in `folder`, making the folders their names include.
 fn write_files(folder: &Path, files: &BTreeMap<String, String>) -> io::Result<()> {
     for (name, contents) in files {
@@ -745,8 +785,10 @@ pub fn launch(mut args: impl Iterator<Item = OsString>) -> ExitCode {
         Some(file_limit),
         Some(tracer),
         Some(network),
+        Some(environment),
         Some(program),
     ) = (
+        args.next(),
         args.next(),
         args.next(),
         args.next(),
@@ -757,11 +799,15 @@ pub fn launch(mut args: impl Iterator<Item = OsString>) -> ExitCode {
     else {
         eprintln!(
             "lengua-mcp: {LAUNCH_FLAG} needs a socket, system calls, a file limit, a supervisor, \
-             a network setting and a program"
+             a network setting, an environment and a program"
         );
         return ExitCode::from(127);
     };
     let rest: Vec<OsString> = args.collect();
+    let Some(environment) = decode_environment(&environment.to_string_lossy()) else {
+        eprintln!("lengua-mcp: the environment isn't one lengua wrote");
+        return ExitCode::from(127);
+    };
     let net = match Net::decode(&network.to_string_lossy()) {
         Ok(net) => net,
         Err(problem) => {
@@ -808,9 +854,11 @@ pub fn launch(mut args: impl Iterator<Item = OsString>) -> ExitCode {
         eprintln!("lengua-mcp: couldn't confine the program: {problem}");
         return ExitCode::from(127);
     }
+    // The program's own variables reach it only now: the launcher itself ran with none.
     let error = std::process::Command::new(&program)
         .args(&rest)
         .env_clear()
+        .envs(environment)
         .exec();
     eprintln!(
         "lengua-mcp: couldn't start {}: {error}",
@@ -1026,4 +1074,29 @@ fn confine(
         .try_into()
         .map_err(|error| format!("seccomp: {error}"))?;
     seccompiler::apply_filter(&filter).map_err(|error| format!("seccomp: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_environment_reaches_the_launcher_as_one_argument() {
+        let env = BTreeMap::from([
+            ("HOME".to_owned(), "/home/ada".to_owned()),
+            ("NAME".to_owned(), "Ada, Countess = Lovelace".to_owned()),
+        ]);
+        let encoded = encode_environment(&env);
+        assert!(!encoded.contains('='), "{encoded}");
+        let decoded: BTreeMap<String, String> = decode_environment(&encoded)
+            .expect("lengua's own encoding")
+            .into_iter()
+            .collect();
+        assert_eq!(decoded, env);
+        assert_eq!(encode_environment(&BTreeMap::new()), "none");
+        assert_eq!(decode_environment("none"), Some(Vec::new()));
+        // No `=`, and not hex: not what lengua writes.
+        assert_eq!(decode_environment("4e414d45"), None);
+        assert_eq!(decode_environment("zz"), None);
+    }
 }

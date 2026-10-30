@@ -8,6 +8,7 @@
 //! - ``the arguments `a` and `b` ``, ``the argument `a` ``, `no arguments`
 //! - ``standard input holding TEXT``, `no standard input` or `empty standard input`
 //! - ``a file `name` holding TEXT``, ``an empty file `name` ``, ``no file `name` ``
+//! - ``the environment variable `NAME` set to TEXT``
 //! - ``the clock at `seconds` ``, with ``then `seconds` `` for later readings
 //! - ``the random bytes `fc` and `2a` ``
 //! - ``a server on port `8080` that receives TEXT and replies TEXT``, ``no server on port `1` ``
@@ -42,7 +43,8 @@ const RUNS: &str = "runs";
 /// The phrasings lengua reads, for a step it can't.
 const GIVEN_PHRASES: &str = "`Given the arguments `…` and `…``, `Given no arguments`, `Given \
      standard input holding `…``, `Given a file `name` holding `…``, `Given no file `name``, \
-     `Given the clock at `…``, `Given the random bytes `…``, `Given a server on port \
+     `Given the environment variable `NAME` set to `…``, `Given the clock at `…``, `Given the \
+     random bytes `…``, `Given a server on port \
      `…` that receives `…` and replies `…``, `Given a client that sends `…``";
 const THEN_PHRASES: &str = "`Then it prints `…``, `Then it prints `…` to standard error`, \
      `Then it prints nothing`, `Then it prints text matching `rule``, `Then the file `name` \
@@ -206,6 +208,7 @@ struct Reading {
     args: Vec<Text>,
     stdin: Option<Text>,
     files: BTreeMap<String, Text>,
+    env: BTreeMap<String, Text>,
     stdout: Vec<Text>,
     stderr: Vec<Text>,
     files_after: BTreeMap<String, Text>,
@@ -257,6 +260,14 @@ impl Reading {
                         return Some(());
                     }
                 }
+            }
+            if at.words(&["environment", "variable"]) {
+                let name = at.value()?;
+                at.word("set")?;
+                at.word("to")?;
+                self.wrote(format!("env.{name}"));
+                self.env.insert(name, text(&mut at, mode)?);
+                return at.end();
             }
             if at.words(&["clock", "at"]) {
                 self.wrote("clock".into());
@@ -417,6 +428,7 @@ impl Reading {
             args,
             stdin: self.stdin.unwrap_or_default(),
             files: self.files,
+            env: self.env,
             stdout: joined(self.stdout),
             stderr: joined(self.stderr),
             files_after: self.files_after,
@@ -451,6 +463,7 @@ impl Reading {
             args: args.into_iter().map(|arg| written(arg, "args")).collect(),
             stdin: written(self.stdin.unwrap_or_default(), "stdin"),
             files: texts(self.files, "files"),
+            env: texts(self.env, "env"),
             stdout: written(joined(self.stdout), "stdout"),
             stderr: written(joined(self.stderr), "stderr"),
             files_after: texts(self.files_after, "files_after"),
@@ -860,6 +873,22 @@ mod tests {
         assert!(
             matches!(&read.stdout, Text::Rule(Rule { matches }) if matches == "rolled {any(1, 6)}\n")
         );
+    }
+
+    #[test]
+    fn reads_environment_variables() {
+        let read = table(
+            "- Given the environment variable `NAME` set to `Ada`\n- And the environment variable \
+             `HOME` set to `/home/ada`\n- When the program runs\n- Then it prints `Hello, Ada!` \
+             followed by a newline\n- And it exits with code `0`",
+            "- Uses: the environment",
+        );
+        let env: Vec<(&str, String)> = read
+            .env
+            .iter()
+            .map(|(name, value)| (name.as_str(), plain(value)))
+            .collect();
+        assert_eq!(env, [("HOME", "/home/ada".into()), ("NAME", "Ada".into())]);
     }
 
     #[test]

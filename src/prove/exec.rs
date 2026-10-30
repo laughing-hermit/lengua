@@ -287,9 +287,9 @@ pub struct State {
     every_cut: bool,
     /// The return addresses on the stack, the newest last.
     returns: Vec<Return>,
-    /// The program's arguments as the run began, each from its start to its end: the array of
-    /// pointers, then each string with its NUL.
-    arguments: Rc<Vec<(u64, u64)>>,
+    /// The program's arguments and environment as the run began, each from its start to its
+    /// end with its name: the array of pointers first, then each string with its NUL.
+    arguments: Rc<Vec<(u64, u64, String)>>,
     /// Accesses at addresses the input chooses that may leave their object: each the condition
     /// under which one does, and what it does then. The proof asks whether any can hold.
     pub obligations: Vec<(Term, String)>,
@@ -334,8 +334,15 @@ fn high_byte(register: Register) -> bool {
 }
 
 impl State {
-    /// The state `_start` begins in: `args` and `stdin` as byte terms, laid out as Linux does.
-    pub fn start(image: &Image, pool: &mut Pool, args: &[Vec<Term>], stdin: Vec<Term>) -> Self {
+    /// The state `_start` begins in: `args`, the environment's `NAME=value` strings and `stdin`
+    /// as byte terms, laid out as Linux does.
+    pub fn start(
+        image: &Image,
+        pool: &mut Pool,
+        args: &[Vec<Term>],
+        env: &[Vec<Term>],
+        stdin: Vec<Term>,
+    ) -> Self {
         let zero = pool.bv(64, 0);
         let zero_byte = pool.bv(8, 0);
         let no = pool.boolean(false);
@@ -389,7 +396,8 @@ impl State {
         let mut strings = Vec::new();
         let mut objects = Vec::new();
         let mut cursor = STACK_TOP + 4096;
-        for text in std::iter::once(&program_name).chain(args) {
+        let texts = std::iter::once(&program_name).chain(args).chain(env);
+        for (index, text) in texts.enumerate() {
             strings.push(cursor);
             let start = cursor;
             for byte in text {
@@ -399,13 +407,27 @@ impl State {
             let nul = pool.bv(8, 0);
             state.memory.insert(cursor, nul);
             cursor += 1;
-            objects.push((start, cursor));
+            let name = match index.checked_sub(args.len() + 1) {
+                None => format!("the program's argument {index}"),
+                Some(variable) => format!("environment variable {variable}"),
+            };
+            objects.push((start, cursor, name));
         }
-        // argc, then argv's pointers and a null, then an empty environment's null.
-        let mut words = vec![strings.len() as u64];
-        words.extend(&strings);
-        words.extend([0, 0]);
-        objects.insert(0, (STACK_TOP, STACK_TOP + 8 * words.len() as u64));
+        // argc, then argv's pointers and a null, then the environment's pointers and a null.
+        let argc = args.len() + 1;
+        let mut words = vec![argc as u64];
+        words.extend(&strings[..argc]);
+        words.push(0);
+        words.extend(&strings[argc..]);
+        words.push(0);
+        objects.insert(
+            0,
+            (
+                STACK_TOP,
+                STACK_TOP + 8 * words.len() as u64,
+                "the array of the program's arguments".into(),
+            ),
+        );
         state.arguments = Rc::new(objects);
         for (index, word) in words.iter().enumerate() {
             let value = pool.bv(64, u128::from(*word));
@@ -713,7 +735,7 @@ impl<'a> Cpu<'a> {
             .state
             .arguments
             .first()
-            .map_or(STACK_TOP, |array| array.1);
+            .map_or(STACK_TOP, |(_, end, _)| *end);
         frames.push((low, top, running));
         frames
     }
@@ -744,15 +766,11 @@ impl<'a> Cpu<'a> {
                     },
                 });
             }
-            for (index, (start, end)) in self.state.arguments.iter().enumerate() {
+            for (start, end, name) in self.state.arguments.iter() {
                 objects.push(Object {
                     start: *start,
                     end: *end,
-                    name: if index == 0 {
-                        "the array of the program's arguments".into()
-                    } else {
-                        format!("the program's argument {}", index - 1)
-                    },
+                    name: name.clone(),
                 });
             }
         }
@@ -2345,7 +2363,7 @@ mod tests {
             .map(|arg| bytes(&mut pool, arg.as_bytes()))
             .collect();
         let stdin = bytes(&mut pool, stdin.as_bytes());
-        let start = State::start(image, &mut pool, &args, stdin);
+        let start = State::start(image, &mut pool, &args, &[], stdin);
         let mut runs = explore(image, start, &mut pool, &mut Concrete, 4).expect("concrete");
         assert_eq!(runs.len(), 1);
         let state = runs.remove(0);
@@ -2374,7 +2392,7 @@ mod tests {
                       .size _start, . - _start\n";
         let image = image(source).await;
         let mut pool = Pool::default();
-        let start = State::start(&image, &mut pool, &[], Vec::new());
+        let start = State::start(&image, &mut pool, &[], &[], Vec::new());
         let runs = explore(&image, start, &mut pool, &mut Concrete, 2).expect("runs");
         let status = match &runs[0].end {
             Some(End::Exit(status)) => pool.constant(*status),
@@ -2440,7 +2458,7 @@ mod tests {
     ) -> std::collections::BTreeSet<(Vec<u8>, String)> {
         let mut pool = Pool::default();
         let stdin = bytes(&mut pool, input);
-        let start = State::start(image, &mut pool, &[], stdin);
+        let start = State::start(image, &mut pool, &[], &[], stdin);
         let start = match pieces {
             Some(pieces) => start.with_stdin_pieces(pieces.to_vec()),
             None => start.for_every_cut(),

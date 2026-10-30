@@ -50,9 +50,13 @@ only `- Uses:`, `- Network:` and `- Threads:` under Constraints); the write-spec
 style.
 
 **A spec names what the program uses, not system calls:** `- Uses:` lists `standard input`,
-`files`, `the clock` and `random bytes`, `- Network:` the ports it connects to or listens on, and
-`- Threads:` how many cores it may use. Each target maps them to its own system calls, so the
-same spec means the same on every computer.
+`files`, `the clock`, `random bytes` and `the environment`, `- Network:` the ports it connects to
+or listens on, and `- Threads:` how many cores it may use. Each target maps them to its own
+system calls, so the same spec means the same on every computer. A program gets environment
+variables only through `the environment`, and only those its test or the user's `run` names. They
+reach the program alone: lengua's launcher, which runs before the program's confinement, gets
+them as an argument and sets them only as it becomes the program, so a variable such as
+`LD_PRELOAD` can't reach lengua's own code.
 
 | What changed | Result |
 |---|---|

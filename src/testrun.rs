@@ -469,6 +469,7 @@ struct Test<'a> {
     args: &'a [String],
     stdin: &'a str,
     files: &'a BTreeMap<String, String>,
+    env: &'a BTreeMap<String, String>,
     stdout: &'a str,
     stderr: &'a str,
     files_after: &'a BTreeMap<String, String>,
@@ -486,6 +487,7 @@ impl<'a> Test<'a> {
             args: &example.args,
             stdin: &example.stdin,
             files: &example.files,
+            env: &example.env,
             stdout: &example.stdout,
             stderr: &example.stderr,
             files_after: &example.files_after,
@@ -503,6 +505,7 @@ impl<'a> Test<'a> {
             args: &case.args,
             stdin: &case.stdin,
             files: &case.files,
+            env: &case.env,
             stdout: &case.stdout,
             stderr: &case.stderr,
             files_after: &case.files_after,
@@ -573,6 +576,7 @@ async fn check_one(
     };
     let job = Job {
         files: &files,
+        env: test.env,
         supply: Some(&supply),
         net: Some(&net),
         stdin_pieces: &stdin_pieces,

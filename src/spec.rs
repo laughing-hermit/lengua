@@ -274,15 +274,18 @@ pub enum Use {
     Clock,
     /// Random bytes from the kernel.
     RandomBytes,
+    /// Environment variables: only those a test, or the user through `run`, gives it.
+    Environment,
 }
 
 impl Use {
     /// Every capability, in the order specs list them.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::StandardInput,
         Self::Files,
         Self::Clock,
         Self::RandomBytes,
+        Self::Environment,
     ];
 
     /// The words a spec names it with.
@@ -293,6 +296,7 @@ impl Use {
             Self::Files => "files",
             Self::Clock => "the clock",
             Self::RandomBytes => "random bytes",
+            Self::Environment => "the environment",
         }
     }
 
@@ -303,6 +307,7 @@ impl Use {
             "files" | "file" => Some(Self::Files),
             "clock" => Some(Self::Clock),
             "random bytes" | "random" => Some(Self::RandomBytes),
+            "environment" | "environment variables" => Some(Self::Environment),
             _ => None,
         }
     }
@@ -321,6 +326,8 @@ impl Use {
             ],
             Self::Clock => &[Syscall::ClockGettime],
             Self::RandomBytes => &[Syscall::Getrandom],
+            // The kernel lays them out above the arguments: no call reads them.
+            Self::Environment => &[],
         }
     }
 

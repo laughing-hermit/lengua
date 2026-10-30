@@ -99,9 +99,10 @@ by one concrete example in its steps, and its generated tests try that rule with
   can't reach other files at all. Purpose states the largest file it reads in backticks, like any
   other range, and what happens when a file is missing.
 - **What it uses:** under `# Constraints`, ``- Uses: …`` names what the program needs beyond
-  writing its output and exiting, from `standard input`, `files`, `the clock` and `random
-  bytes`, or `- Uses: nothing`. lengua programs can't allocate memory, start processes or handle
-  signals. lengua holds the program to this line when it runs, so it's a promise the user can rely
+  writing its output and exiting, from `standard input`, `files`, `the clock`, `random bytes` and
+  `the environment` (its environment variables: only those a test, or the user's run, gives it),
+  or `- Uses: nothing`. lengua programs can't start processes or handle signals, and their memory
+  is fixed by the spec's limits. lengua holds the program to this line when it runs, so it's a promise the user can rely
   on, and it means the same on every kind of computer. `# Constraints` holds only `- Uses:`,
   `- Network:` and `- Threads:` lines; anything else goes in Purpose.
 - **Network:** plain TCP, on ports the spec names, to this computer only unless the line ends

@@ -392,6 +392,10 @@ pub struct RunParams {
     /// How many seconds the program may run, 1 to 40; 10 when not given.
     #[serde(default)]
     pub timeout_seconds: Option<u64>,
+    /// Environment variables for a program whose spec uses the environment, by name: only
+    /// these reach it.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
 }
 
 /// What `run` reports.
@@ -702,8 +706,8 @@ impl LenguaServer {
             its standard input; folder: absolute path of a folder of the user's files to run in, \
             naming the files in args relative to it (\"notes.txt\", not \"/home/me/notes.txt\"); \
             stdin_file: a file in folder to read as standard input instead of stdin, however \
-            large; timeout_seconds: up to 40 (10 by default); stop: true to stop the server run \
-            started.",
+            large; timeout_seconds: up to 40 (10 by default); env: environment variables, for a \
+            spec that uses the environment; stop: true to stop the server run started.",
         annotations(title = "Run program", read_only_hint = false, open_world_hint = false)
     )]
     async fn run(
@@ -806,10 +810,17 @@ impl LenguaServer {
             anywhere: spec.network.anywhere,
             listen: spec.network.listens,
         };
+        if !params.env.is_empty() && !spec.uses.contains(&spec::Use::Environment) {
+            return Err(format!(
+                "{SPEC_FILE} doesn't use the environment, so the program gets no environment \
+                 variables; leave env out, or add `the environment` to its `- Uses:` line"
+            ));
+        }
         let job = Job {
             folder: workspace.as_deref(),
             net: Some(&net),
             stdin_file: stdin_file.as_deref(),
+            env: &params.env,
             ..Job::new(
                 &built.executable,
                 &params.args,
