@@ -2,6 +2,13 @@
 
 ## System calls
 
+What the spec names under `# Constraints` decides the calls a program may make on this computer:
+`write`, `exit` and `exit_group` always; `read` for `standard input`; `openat`, `read`, `write`,
+`lseek` and `close` for `files`; `clock_gettime` for `the clock`; `getrandom` for
+`random bytes`; `socket` and `connect` for `- Network: connects to …`, `accept4` for
+`- Network: listens on …`, and `read`, `close`, `shutdown` and `sendto` for either. The kernel
+refuses any other.
+
 `mov eax, SYS_NAME` picks the call, the arguments go in `rdi`, `rsi`, `rdx`, `r10`, `r8` and `r9`
 (`r10`, not `rcx`), and `syscall` runs it. It returns in `rax` and changes `rcx` and `r11`; every
 other register keeps its value. A result from -4095 to -1 is an error (the negative errno), so

@@ -11,22 +11,42 @@ the program exits with code 3. If writing the output fails, the program exits wi
 
 # Behaviors
 ## B1: Shouts a line
-- Given the input `hello world` followed by a newline
+- Given standard input holding `hello world` followed by a newline
 - When the program runs
 - Then it prints `HELLO WORLD` followed by a newline
 - And it exits with code `0`
 
+### For any `line`
+- Given standard input holding `{line}` followed by a newline
+- When the program runs
+- Then it prints `{upper(line)}` followed by a newline
+- And it exits with code `0`
+
+| line | runs |
+|---|---|
+| `string(1, 64, "abcdefghijklmnopqrstuvwxyz ")` | 200 |
+
 ## B2: Rejects empty input
-- Given no input
+- Given no arguments
 - When the program runs
 - Then it prints `error: no input` followed by a newline to standard error
 - And it exits with code `1`
 
 ## B3: Rejects a line that is too long
-- Given a line of 65 letters followed by a newline
+- Given standard input holding `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` followed by a newline
 - When the program runs
 - Then it prints `error: line too long` followed by a newline to standard error
 - And it exits with code `2`
 
+### For any `line`
+- Given standard input holding `{line}` followed by a newline
+- When the program runs
+- Then it prints `error: line too long` followed by a newline to standard error
+- And it exits with code `2`
+
+| line | runs |
+|---|---|
+| `string(65, 4096, "abcdefghijklmnopqrstuvwxyz ")` | 50 |
+
 # Constraints
-- Allowed system calls: read, write, exit
+- Uses: standard input

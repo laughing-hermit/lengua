@@ -17,15 +17,35 @@ no arguments and ignores any it is given. If reading the clock fails, the progra
 ## B1: Prints the UTC time of day
 - Given the clock at `1735735845`
 - When the program runs
-- Then it prints `12:50:45` followed by a newline to standard output
+- Then it prints `12:50:45` followed by a newline
 - And it exits with code `0`
+
+### For any `t`
+- Given the clock at `{t}`
+- When the program runs
+- Then it prints `{if(t % 86400 / 3600 < 10, "0", "")}{t % 86400 / 3600}:{if(t % 3600 / 60 < 10, "0", "")}{t % 3600 / 60}:{if(t % 60 < 10, "0", "")}{t % 60}` followed by a newline
+- And it exits with code `0`
+
+| t | runs |
+|---|---|
+| `int(0, 4102444799)` | 1000 |
 
 ## B2: Pads each part to two digits
 - Given the clock at `1735693509`
 - When the program runs
-- Then it prints `01:05:09` followed by a newline to standard output
+- Then it prints `01:05:09` followed by a newline
 - And it exits with code `0`
+
+### For any `t`
+- Given the clock at `{t}`
+- When the program runs
+- Then it prints `{if(t % 86400 / 3600 < 10, "0", "")}{t % 86400 / 3600}:{if(t % 3600 / 60 < 10, "0", "")}{t % 3600 / 60}:{if(t % 60 < 10, "0", "")}{t % 60}` followed by a newline
+- And it exits with code `0`
+
+| t | runs |
+|---|---|
+| `int(0, 4102444799)` | 1000 |
 
 # Constraints
 
-- Allowed system calls: clock_gettime, write, exit
+- Uses: the clock

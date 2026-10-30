@@ -2,7 +2,7 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "lengua",
   "version": "0.1.0",
-  "description": "Spec-driven programming in checked assembly: a natural-language spec, TOML tests and AI-written x86-64 assembly, kept in sync by a signed lock and checked against an adapted NASA Power of 10.",
+  "description": "An AI language: a behavior-driven spec in plain words, its tests inside, which the agent compiles into x86-64 assembly for this computer and lengua checks against those tests, proofs and an adapted NASA Power of 10.",
   "license": "Apache-2.0",
   "author": {
     "name": "lengua"
@@ -10,7 +10,7 @@
   "keywords": [
     "assembly",
     "spec-driven",
-    "tdd",
+    "bdd",
     "mcp",
     "agent-skills",
     "okf"

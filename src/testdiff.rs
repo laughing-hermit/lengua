@@ -1,7 +1,7 @@
-//! What changed after the user's request: a plain line diff of spec.md or tests.toml against the
-//! version lengua recorded first, and for tests, lengua's own marks on the changes that test
-//! less. The AI that writes the code also writes the tests, so that judgment stays here; the
-//! agent only explains each change.
+//! What changed after the user's request: a plain line diff of spec.md against the version
+//! lengua recorded first, and for the tests inside it, lengua's own marks on the changes that
+//! test less. The AI that writes the code also writes the tests, so that judgment stays here;
+//! the agent only explains each change.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -91,15 +91,13 @@ pub fn line_diff(before: &str, after: &str) -> String {
     text
 }
 
-/// The changes from `before` to `after` that test less, one line each: fewer runs, a generator
-/// that draws fewer values, exact output that became a rule, and removed blocks, variables or
-/// expected files. Empty when none does, or when either version isn't TOML.
+/// The changes from `before` to `after`, two versions of spec.md, that test less, one line each:
+/// fewer runs, a generator that draws fewer values, exact output that became a rule, and removed
+/// blocks, variables or expected files. Empty when none does, or when either version doesn't
+/// parse.
 #[must_use]
 pub fn tests_less(before: &str, after: &str) -> Vec<String> {
-    let (Ok(before), Ok(after)) = (
-        toml::from_str::<Table>(before),
-        toml::from_str::<Table>(after),
-    ) else {
+    let (Some(before), Some(after)) = (tests_of(before), tests_of(after)) else {
         return Vec::new();
     };
     let mut marks = Vec::new();
@@ -108,10 +106,10 @@ pub fn tests_less(before: &str, after: &str) -> Vec<String> {
     for (id, blocks) in &examples_before {
         let Some(old) = blocks.first() else { continue };
         let Some(new) = examples_after.get(id).and_then(|blocks| blocks.first()) else {
-            marks.push(format!("example {id} was removed"));
+            marks.push(format!("{id}'s example was removed"));
             continue;
         };
-        outputs_less(&format!("example {id}"), old, new, &mut marks);
+        outputs_less(&format!("{id}'s example"), old, new, &mut marks);
     }
     let generated_before = by_id(&before, "generated");
     let generated_after = by_id(&after, "generated");
@@ -145,6 +143,25 @@ pub fn tests_less(before: &str, after: &str) -> Vec<String> {
         }
     }
     marks
+}
+
+/// A spec's tests as one table: each behavior's example outputs under `example`, and its
+/// generated tests under `generated`, one table a row of its table, each with its behavior's `id`.
+fn tests_of(spec_text: &str) -> Option<Table> {
+    let spec = crate::spec::parse(spec_text).ok()?;
+    let mut examples = Vec::new();
+    for (id, mut outputs) in crate::testfile::example_outputs(&spec) {
+        outputs.insert("id".into(), Value::String(id));
+        examples.push(Value::Table(outputs));
+    }
+    let generated = crate::testfile::generated_tables(&spec)
+        .into_iter()
+        .map(Value::Table)
+        .collect();
+    let mut tests = Table::new();
+    tests.insert("example".into(), Value::Array(examples));
+    tests.insert("generated".into(), Value::Array(generated));
+    Some(tests)
 }
 
 /// Blocks of one kind (`example` or `generated`) by id, in file order.
@@ -298,8 +315,8 @@ fn outputs_less(name: &str, old: &Table, new: &Table, marks: &mut Vec<String>) {
     }
 }
 
-/// Whether an expected value is a rule: `{ matches = … }` in an example, or a template that calls
-/// `any(…)` in a generated block.
+/// Whether an expected value is a rule: `text matching` in a behavior's steps, which reads as
+/// `{ matches = … }`, or a template that calls `any(…)` in a generated block.
 fn is_rule(value: &Value) -> bool {
     match value {
         Value::Table(table) => table.contains_key("matches"),
@@ -347,37 +364,44 @@ mod tests {
         assert!(diff.contains('…'), "{diff}");
     }
 
-    const TESTS: &str = r#"[[example]]
-id = "B1"
-args = ["2"]
-stdout = "rolled 4\n"
-files_after = { "out.txt" = "4\n" }
-exit_code = 0
+    const SPEC: &str = r#"---
+type: lengua/program-spec
+title: roll
+---
+# Purpose
+Prints a number.
 
-[[generated]]
-id = "B1"
-runs = 200
-vars = { n = "int(0, 100)", s = 'string(0, 10, "abc")', c = 'choice("x", "y")', d = "decimal(0.00, 9.99)" }
-args = ["{n}"]
-stdout = "{n}\n"
-exit_code = 0
+# Behaviors
+## B1: Prints it
+- Given the argument `2`
+- When the program runs
+- Then it prints `rolled 4` followed by a newline
+- And the file `out.txt` holds `4` followed by a newline
+- And it exits with code `0`
 
-[[generated]]
-id = "B1"
-vars = { n = "int(-5, -1)" }
-args = ["{n}"]
-stdout = "{n}\n"
-exit_code = 0
+### For any `n`
+- Given the argument `{n}`
+- When the program runs
+- Then it prints `{n}` followed by a newline
+- And the file `out.txt` holds `{n}` followed by a newline
+- And it exits with code `0`
+
+| n | s | c | d | runs |
+|---|---|---|---|---|
+| `int(0, 100)` | `string(0, 10, "abc")` | `choice("x", "y")` | `decimal(0.00, 9.99)` | 200 |
+| `int(-5, -1)` | `string(0, 10, "abc")` | `choice("x", "y")` | `decimal(0.00, 9.99)` | |
 "#;
 
     fn marks(edit: impl Fn(&str) -> String) -> Vec<String> {
-        tests_less(TESTS, &edit(TESTS))
+        let edited = edit(SPEC);
+        assert!(crate::spec::parse(&edited).is_ok(), "{edited}");
+        tests_less(SPEC, &edited)
     }
 
     #[test]
     fn marks_each_change_that_tests_less() {
         assert_eq!(marks(str::to_owned), Vec::<String>::new());
-        let fewer_runs = marks(|text| text.replace("runs = 200", "runs = 50"));
+        let fewer_runs = marks(|text| text.replace("| 200 |", "| 50 |"));
         assert_eq!(
             fewer_runs,
             ["generated B1 (block 1): fewer runs, 50 instead of 200"]
@@ -400,28 +424,42 @@ exit_code = 0
         assert!(fewer_choices[0].contains("without"), "{fewer_choices:?}");
         let coarser = marks(|text| text.replace("decimal(0.00, 9.99)", "decimal(0.0, 9.9)"));
         assert!(!coarser.is_empty(), "{coarser:?}");
-        let dropped = marks(|text| text.replace(", d = \"decimal(0.00, 9.99)\"", ""));
+        let dropped = marks(|text| {
+            text.replace(
+                " d | runs |\n|---|---|---|---|---|",
+                " runs |\n|---|---|---|---|",
+            )
+            .replace(" | `decimal(0.00, 9.99)` |", " |")
+        });
         assert!(dropped[0].contains("no longer draws d"), "{dropped:?}");
         let rule = marks(|text| {
             text.replace(
-                "stdout = \"rolled 4\\n\"",
-                "stdout = { matches = \"rolled {any(1, 6)}\\n\" }",
+                "prints `rolled 4`",
+                "prints text matching `rolled {any(1, 6)}`",
             )
         });
         assert_eq!(
             rule,
-            ["example B1: stdout became a rule instead of exact text"]
+            ["B1's example: stdout became a rule instead of exact text"]
         );
         let generated_rule =
-            marks(|text| text.replacen("stdout = \"{n}\\n\"", "stdout = \"{any(0, 100)}\\n\"", 1));
+            marks(|text| text.replacen("prints `{n}`", "prints `{any(0, 100)}`", 1));
         assert!(
             generated_rule[0].contains("stdout became a rule"),
             "{generated_rule:?}"
         );
-        let no_file = marks(|text| text.replace("files_after = { \"out.txt\" = \"4\\n\" }\n", ""));
-        assert_eq!(no_file, ["example B1: no longer expects the file out.txt"]);
+        let no_file = marks(|text| {
+            text.replace(
+                "- And the file `out.txt` holds `4` followed by a newline\n",
+                "",
+            )
+        });
+        assert_eq!(
+            no_file,
+            ["B1's example: no longer expects the file out.txt"]
+        );
         let removed = marks(|text| {
-            let start = text.rfind("[[generated]]").expect("second block");
+            let start = text.rfind("| `int(-5, -1)`").expect("second row");
             text[..start].to_owned()
         });
         assert_eq!(removed, ["generated B1 (block 2) was removed"]);
@@ -431,27 +469,28 @@ exit_code = 0
     fn changes_that_test_as_much_or_more_get_no_mark() {
         let edits: [fn(&str) -> String; 4] = [
             // A corrected formula.
-            |text| text.replacen("stdout = \"{n}\\n\"", "stdout = \"{n + 0}\\n\"", 1),
+            |text| text.replacen("prints `{n}`", "prints `{n + 0}`", 1),
             // A wider range and more runs.
             |text| {
                 text.replace("int(0, 100)", "int(-10, 1000)")
-                    .replace("runs = 200", "runs = 400")
+                    .replace("| 200 |", "| 400 |")
             },
             // More characters and choices.
             |text| {
                 text.replace("string(0, 10, \"abc\")", "string(0, 20, \"abcd\")")
                     .replace("choice(\"x\", \"y\")", "choice(\"x\", \"y\", \"z\")")
             },
-            // One more block.
+            // One more row.
             |text| {
                 format!(
-                    "{text}\n[[generated]]\nid = \"B1\"\nvars = {{ n = \"int(7, 9)\" }}\nargs = [\"{{n}}\"]\nstdout = \"{{n}}\\n\"\nexit_code = 0\n"
+                    "{text}| `int(7, 9)` | `string(0, 10, \"abc\")` | `choice(\"x\", \"y\")` | \
+                     `decimal(0.00, 9.99)` | |\n"
                 )
             },
         ];
         for edit in edits {
-            assert_eq!(marks(edit), Vec::<String>::new(), "{}", edit(TESTS));
+            assert_eq!(marks(edit), Vec::<String>::new(), "{}", edit(SPEC));
         }
-        assert_eq!(tests_less("not toml [", TESTS), Vec::<String>::new());
+        assert_eq!(tests_less("not a spec", SPEC), Vec::<String>::new());
     }
 }

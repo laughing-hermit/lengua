@@ -143,10 +143,7 @@ fn workloads() -> Vec<Workload> {
                     program 64 bytes at a time with AVX-512, on 16 threads and on one; Rust is \
                     shown both plain and with scoped threads split the same way.",
             lengua: &[
-                (
-                    "lengua",
-                    "plugin/skills/write-assembly/assets/parallel-template.s",
-                ),
+                ("lengua", "plugin/skills/compile/assets/parallel-template.s"),
                 ("lengua, AVX-512", "benches/programs/shout/avx512.s"),
                 (
                     "lengua, AVX-512, one thread",
@@ -172,10 +169,7 @@ fn workloads() -> Vec<Workload> {
                     the skill's example, and the program Claude Code wrote through lengua from \
                     a plain request in an interactive session.",
             lengua: &[
-                (
-                    "lengua",
-                    "plugin/skills/write-assembly/assets/fast/wc/main.s",
-                ),
+                ("lengua", "plugin/skills/compile/assets/fast/wc/main.s"),
                 ("lengua, by Claude Code", "examples/count/main.s"),
             ],
             others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
@@ -190,7 +184,7 @@ fn workloads() -> Vec<Workload> {
                     neighboring bytes over four tables.",
             lengua: &[(
                 "lengua",
-                "plugin/skills/write-assembly/assets/fast/histogram/main.s",
+                "plugin/skills/compile/assets/fast/histogram/main.s",
             )],
             others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
             args: Vec::new(),
@@ -204,10 +198,7 @@ fn workloads() -> Vec<Workload> {
                     `crc32` instruction 8 bytes at a time, one chain that waits on itself; \
                     lengua's version runs three chains side by side and joins them with \
                     carry-less multiplies.",
-            lengua: &[(
-                "lengua",
-                "plugin/skills/write-assembly/assets/fast/crc32c/main.s",
-            )],
+            lengua: &[("lengua", "plugin/skills/compile/assets/fast/crc32c/main.s")],
             others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
             args: Vec::new(),
             stdin: large,

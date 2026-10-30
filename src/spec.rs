@@ -2,8 +2,9 @@
 //!
 //! The file starts with YAML frontmatter (`type: lengua/program-spec`, `title`, an optional
 //! `description`), followed by markdown sections: `# Purpose`, `# Behaviors` with one
-//! `## B<n>: <title>` heading per behavior written as Given/When/Then steps, and
-//! `# Constraints`, which lists the system calls the program may use.
+//! `## B<n>: <title>` heading per behavior written as Given/When/Then steps, each followed by its
+//! generated tests under a `###` heading, and `# Constraints`, which names what the program uses:
+//! `- Uses:`, `- Network:` and `- Threads:` lines. Nothing in it is particular to one computer.
 
 use std::fmt;
 
@@ -27,7 +28,10 @@ pub struct Spec {
     pub description: Option<String>,
     /// The behaviors, in file order.
     pub behaviors: Vec<Behavior>,
-    /// System calls the program may use, in the order the spec lists them.
+    /// What the program may use beyond its output, as the spec names it.
+    pub uses: Vec<Use>,
+    /// The system calls that allows on this target, worked out from `uses`, the network and the
+    /// output every program has.
     pub syscalls: Vec<Syscall>,
     /// How many threads the program may run at once, when the spec allows more than one.
     pub threads: Option<u32>,
@@ -83,6 +87,36 @@ pub struct Behavior {
     pub exit_code: u8,
     /// Whether the behavior ends with the program still serving, instead of an exit code.
     pub serves: bool,
+    /// Its generated tests, under its `###` heading.
+    pub outline: Option<Outline>,
+}
+
+/// A behavior's generated tests: the steps under its `###` heading, in its example's phrasings
+/// with `{placeholders}`, and the table of where their variables come from, one row a generated
+/// test, as a Gherkin Scenario Outline has its Examples table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Outline {
+    /// Line of the `###` heading.
+    pub line: usize,
+    /// The steps.
+    pub steps: Vec<Step>,
+    /// The table's column names: the variables, and `runs` where rows give their own count.
+    pub columns: Vec<String>,
+    /// Line of the table's header row.
+    pub columns_line: usize,
+    /// The rows, one generated test each.
+    pub rows: Vec<Row>,
+    /// The section as written, from its heading.
+    pub text: String,
+}
+
+/// A row of an outline's table: each column's cell, without its backticks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Row {
+    /// Line of the row.
+    pub line: usize,
+    /// The cells, one a column.
+    pub cells: Vec<String>,
 }
 
 impl Behavior {
@@ -105,6 +139,60 @@ pub struct Step {
     pub values: Vec<String>,
     /// Line of the step.
     pub line: usize,
+}
+
+/// A word of a step, or a value it gives in backticks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Token {
+    /// A word outside backticks, in lowercase and without the punctuation around it.
+    Word(String),
+    /// A value written in backticks, as written.
+    Value(String),
+}
+
+impl Step {
+    /// The step's words and values, in order.
+    #[must_use]
+    pub fn tokens(&self) -> Vec<Token> {
+        let mut tokens = Vec::new();
+        let mut rest = self.text.as_str();
+        let words = |text: &str, tokens: &mut Vec<Token>| {
+            for word in text.split_whitespace() {
+                let word = word
+                    .trim_matches(|c: char| matches!(c, ',' | '.' | ';' | ':' | '(' | ')' | '!'))
+                    .to_lowercase();
+                if !word.is_empty() {
+                    tokens.push(Token::Word(word));
+                }
+            }
+        };
+        while let Some(start) = rest.find('`') {
+            words(&rest[..start], &mut tokens);
+            let after = &rest[start..];
+            let run = after.bytes().take_while(|&byte| byte == b'`').count();
+            let body = &after[run..];
+            let Some(end) = find_exact_run(body, run) else {
+                rest = "";
+                break;
+            };
+            let value = &body[..end];
+            // A value in double backticks may start or end with one; markdown trims a space.
+            let value = if run > 1 {
+                value.strip_prefix(' ').unwrap_or(value)
+            } else {
+                value
+            };
+            let value = if run > 1 {
+                value.strip_suffix(' ').unwrap_or(value)
+            } else {
+                value
+            };
+            tokens.push(Token::Value(value.to_owned()));
+            rest = &body[end + run..];
+        }
+        words(rest, &mut tokens);
+        tokens
+    }
 }
 
 /// A Gherkin step keyword.
@@ -161,6 +249,85 @@ impl fmt::Display for BehaviorId {
         write!(f, "B{}", self.0)
     }
 }
+
+/// Something a program may use beyond its output, as a spec names it: the same on every target,
+/// which maps it to its own system calls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Use {
+    /// Standard input.
+    StandardInput,
+    /// Files in its working folder: open, read, write, seek and close them.
+    Files,
+    /// The clock.
+    Clock,
+    /// Random bytes from the kernel.
+    RandomBytes,
+}
+
+impl Use {
+    /// Every capability, in the order specs list them.
+    pub const ALL: [Self; 4] = [
+        Self::StandardInput,
+        Self::Files,
+        Self::Clock,
+        Self::RandomBytes,
+    ];
+
+    /// The words a spec names it with.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::StandardInput => "standard input",
+            Self::Files => "files",
+            Self::Clock => "the clock",
+            Self::RandomBytes => "random bytes",
+        }
+    }
+
+    fn from_name(name: &str) -> Option<Self> {
+        let name = name.trim().trim_start_matches("the ").trim();
+        match name {
+            "standard input" | "stdin" => Some(Self::StandardInput),
+            "files" | "file" => Some(Self::Files),
+            "clock" => Some(Self::Clock),
+            "random bytes" | "random" => Some(Self::RandomBytes),
+            _ => None,
+        }
+    }
+
+    /// The Linux system calls it allows.
+    #[must_use]
+    pub fn syscalls(self) -> &'static [Syscall] {
+        match self {
+            Self::StandardInput => &[Syscall::Read],
+            Self::Files => &[
+                Syscall::Openat,
+                Syscall::Read,
+                Syscall::Write,
+                Syscall::Close,
+                Syscall::Lseek,
+            ],
+            Self::Clock => &[Syscall::ClockGettime],
+            Self::RandomBytes => &[Syscall::Getrandom],
+        }
+    }
+
+    /// The capability a system call belongs to, for saying what a spec must name to allow it;
+    /// `None` for output, exit and the network's calls.
+    #[must_use]
+    pub fn of(syscall: Syscall) -> Option<Self> {
+        match syscall {
+            Syscall::Read => Some(Self::StandardInput),
+            Syscall::Openat | Syscall::Close | Syscall::Lseek => Some(Self::Files),
+            Syscall::ClockGettime => Some(Self::Clock),
+            Syscall::Getrandom => Some(Self::RandomBytes),
+            _ => None,
+        }
+    }
+}
+
+/// The system calls every program has: its output and its exit.
+const ALWAYS: [Syscall; 3] = [Syscall::Write, Syscall::Exit, Syscall::ExitGroup];
 
 /// The most threads a spec may allow: each needs its own stack.
 pub const MAX_THREADS: u32 = 64;
@@ -340,22 +507,29 @@ pub fn parse(text: &str) -> Result<Spec, Vec<Problem>> {
         return Err(parser.into_problems());
     };
     let header = parser.frontmatter(&lines[1..end].join("\n"));
-    let mut fence = None;
+    // An open code block: the line it starts on, its language, and its lines so far.
+    let mut fence: Option<(usize, String, Vec<&str>)> = None;
     for (index, line) in lines.iter().enumerate().skip(end + 1) {
         let number = index + 1;
-        if line.trim_start().starts_with("```") || line.trim_start().starts_with("~~~") {
-            fence = match fence {
-                Some(_) => None,
-                None => Some(number),
-            };
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            match fence.take() {
+                Some((start, language, body)) => parser.block(start, &language, &body),
+                None => {
+                    let language = trimmed.trim_start_matches(['`', '~']).trim();
+                    let language = language.split_whitespace().next().unwrap_or("");
+                    fence = Some((number, language.to_ascii_lowercase(), Vec::new()));
+                }
+            }
             continue;
         }
-        if fence.is_none() {
-            parser.line(number, line);
+        match fence.as_mut() {
+            Some((_, _, body)) => body.push(line),
+            None => parser.line(number, line),
         }
     }
     parser.finish_behavior();
-    if let Some(line) = fence {
+    if let Some((line, ..)) = fence {
         parser.problem(Some(line), "this ``` code block is never closed");
     }
     parser.finish(header)
@@ -395,6 +569,17 @@ struct Draft {
     title: String,
     line: usize,
     steps: Vec<Step>,
+    outline: Option<Outline>,
+    /// Where the outline's table is: not begun, its header read, or its rows.
+    table: Table,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum Table {
+    #[default]
+    Before,
+    Header,
+    Rows,
 }
 
 #[derive(Debug)]
@@ -408,7 +593,7 @@ struct Parser {
     /// Each behavior's title in lowercase, so no two behaviors name the same rule.
     titles: Vec<(String, BehaviorId)>,
     behaviors: Vec<Behavior>,
-    syscalls: Option<Vec<Syscall>>,
+    uses: Option<Vec<Use>>,
     threads: Option<u32>,
     network: Network,
     /// Whether `# Purpose` holds any text.
@@ -427,7 +612,7 @@ impl Default for Parser {
             started: Vec::new(),
             titles: Vec::new(),
             behaviors: Vec::new(),
-            syscalls: None,
+            uses: None,
             threads: None,
             network: Network::default(),
             purpose_written: false,
@@ -511,6 +696,26 @@ impl Parser {
         title.map(|title| (title, description))
     }
 
+    /// A code block: under a behavior, a ```toml block is its tests for every input; anywhere
+    /// else a block is the spec's own text.
+    /// A fenced block is the spec's own prose, unless it holds tests in TOML, which a spec
+    /// writes as steps instead.
+    fn block(&mut self, start: usize, language: &str, body: &[&str]) {
+        let holds_tests = body.iter().any(|line| {
+            let line = line.trim_start();
+            line.starts_with("[[generated]]") || line.starts_with("[[example]]")
+        });
+        if language == "toml" && holds_tests {
+            self.problem(
+                Some(start),
+                "tests aren't written in TOML: a behavior's steps are its example, and its \
+                 generated tests go under a `###` heading after them, as the same steps with \
+                 `{placeholders}` and a table of their variables, one row per variant; the \
+                 write-spec skill's references/test-format.md shows them",
+            );
+        }
+    }
+
     fn line(&mut self, number: usize, line: &str) {
         if let Some(name) = heading(line, 1) {
             self.finish_behavior();
@@ -523,6 +728,8 @@ impl Parser {
                 if let Some(text) = heading(line, 2) {
                     self.finish_behavior();
                     self.start_behavior(number, text);
+                } else if heading(line, 3).is_some() {
+                    self.start_outline(number, line);
                 } else if !is_heading(line) {
                     self.behavior_line(number, line);
                 }
@@ -577,6 +784,8 @@ impl Parser {
                 title: String::new(),
                 line: number,
                 steps: Vec::new(),
+                outline: None,
+                table: Table::Before,
             });
             return;
         };
@@ -614,6 +823,8 @@ impl Parser {
             title,
             line: number,
             steps: Vec::new(),
+            outline: None,
+            table: Table::Before,
         });
     }
 
@@ -634,39 +845,71 @@ impl Parser {
         let label = draft
             .id
             .map_or_else(|| "this behavior".to_owned(), |id| id.to_string());
-        if let Some(item) = item {
-            let (word, rest) = item
-                .trim()
-                .split_once(char::is_whitespace)
-                .unwrap_or((item.trim(), ""));
-            let (values, closed) = backtick_values(rest);
-            match Keyword::parse(word) {
-                Some(keyword) => draft.steps.push(Step {
-                    keyword,
-                    text: rest.trim().to_owned(),
-                    values,
-                    line: number,
-                }),
-                None => self.problem(
-                    Some(number),
-                    format!("{label}: each step starts with Given, When, Then, And or But"),
-                ),
+        let is_table = line.trim_start().starts_with('|');
+        let problems = match draft.outline.as_mut() {
+            Some(outline) => {
+                outline.text.push_str(line);
+                outline.text.push('\n');
+                if is_table {
+                    let problem = table_line(outline, draft.table, number, line)
+                        .map(|problem| format!("{label}'s table: {problem}"));
+                    draft.table = match draft.table {
+                        Table::Before => Table::Header,
+                        Table::Header | Table::Rows => Table::Rows,
+                    };
+                    problem.into_iter().collect()
+                } else if item.is_some() && draft.table != Table::Before {
+                    vec![format!(
+                        "{label}'s generated tests: their steps go before their table of \
+                         variables"
+                    )]
+                } else {
+                    step_line(&label, line, item, number, &mut outline.steps)
+                }
             }
-            if !closed {
-                self.problem(Some(number), format!("{label}: a backtick isn't closed"));
-            }
-        } else if line.starts_with([' ', '\t']) && !line.trim().is_empty() {
-            // An indented line continues the previous step.
-            let (values, closed) = backtick_values(line);
-            if let Some(step) = draft.steps.last_mut() {
-                step.text.push(' ');
-                step.text.push_str(line.trim());
-                step.values.extend(values);
-            }
-            if !closed {
-                self.problem(Some(number), format!("{label}: a backtick isn't closed"));
-            }
+            None if is_table => vec![format!(
+                "{label}: a table of variables goes under a `###` heading after the behavior's \
+                 steps, below the generated tests' own steps"
+            )],
+            None => step_line(&label, line, item, number, &mut draft.steps),
+        };
+        for problem in problems {
+            self.problem(Some(number), problem);
         }
+    }
+
+    /// A `###` heading under a behavior: its generated tests start.
+    fn start_outline(&mut self, number: usize, line: &str) {
+        let Some(draft) = self.current.as_mut() else {
+            self.problem(
+                Some(number),
+                "a `###` section of generated tests goes under the behavior it tests, after its \
+                 steps",
+            );
+            return;
+        };
+        if draft.outline.is_some() {
+            let label = draft
+                .id
+                .map_or_else(|| "this behavior".to_owned(), |id| id.to_string());
+            self.problem(
+                Some(number),
+                format!(
+                    "{label} has one `###` section of generated tests, since they share their \
+                     steps: give each variant a row of its table instead"
+                ),
+            );
+            return;
+        }
+        draft.outline = Some(Outline {
+            line: number,
+            steps: Vec::new(),
+            columns: Vec::new(),
+            columns_line: number,
+            rows: Vec::new(),
+            text: format!("{line}\n"),
+        });
+        draft.table = Table::Before;
     }
 
     fn finish_behavior(&mut self) {
@@ -676,6 +919,9 @@ impl Parser {
         let Some(id) = draft.id else {
             return;
         };
+        if let Some(outline) = &draft.outline {
+            self.check_outline(id, outline);
+        }
         if let Some(ending) = self.check_steps(id, draft.line, &draft.steps) {
             self.behaviors.push(Behavior {
                 id,
@@ -684,7 +930,68 @@ impl Parser {
                 steps: draft.steps,
                 exit_code: ending.unwrap_or(0),
                 serves: ending.is_none(),
+                outline: draft.outline,
             });
+        }
+    }
+
+    /// A behavior's generated tests need steps in its example's shape, and a table with rows.
+    fn check_outline(&mut self, id: BehaviorId, outline: &Outline) {
+        let missing: Vec<&str> = [
+            (Keyword::Given, "Given"),
+            (Keyword::When, "When"),
+            (Keyword::Then, "Then"),
+        ]
+        .into_iter()
+        .filter(|(keyword, _)| !outline.steps.iter().any(|step| step.keyword == *keyword))
+        .map(|(_, name)| name)
+        .collect();
+        if outline.steps.is_empty() {
+            self.problem(
+                Some(outline.line),
+                format!(
+                    "{id}'s generated tests have no steps: write {id}'s steps under the heading, \
+                     with `{{placeholders}}` where their table's variables go"
+                ),
+            );
+        } else if !missing.is_empty() {
+            self.problem(
+                Some(outline.line),
+                format!(
+                    "{id}'s generated tests need Given, When and Then steps, as {id} has; they \
+                     have no {}",
+                    missing.join(" and no ")
+                ),
+            );
+        }
+        if let Some(second) = outline
+            .steps
+            .iter()
+            .filter(|step| step.keyword == Keyword::When)
+            .nth(1)
+        {
+            self.problem(
+                Some(second.line),
+                format!("{id}'s generated tests have one When, as {id} does"),
+            );
+        }
+        if outline.columns.is_empty() {
+            self.problem(
+                Some(outline.line),
+                format!(
+                    "{id}'s generated tests need a table of their variables below their steps: a \
+                     header naming each variable, such as `| a | b |`, then `|---|---|`, then a \
+                     row of generators for each variant, such as ``| `int(1, 9)` | `int(1, 9)` |``"
+                ),
+            );
+        } else if outline.rows.is_empty() {
+            self.problem(
+                Some(outline.columns_line),
+                format!(
+                    "{id}'s table has no rows: give each variant a row of generators, such as \
+                     ``| `int(1, 9)` |``"
+                ),
+            );
         }
     }
 
@@ -836,60 +1143,59 @@ impl Parser {
             self.network_line(number, rest);
             return;
         }
-        let Some(rest) = strip_prefix_ignore_case(item, "allowed system calls:") else {
+        if let Some(rest) = strip_prefix_ignore_case(item, "allowed system calls:") {
+            self.problem(Some(number), allowed_calls_rewrite(rest));
             return;
-        };
-        if self.syscalls.is_some() {
+        }
+        let Some(rest) = strip_prefix_ignore_case(item, "uses:") else {
             self.problem(
                 Some(number),
-                "the allowed system calls are listed twice; keep one line",
+                "`# Constraints` lists only what the program uses, which means the same on every \
+                 computer: `- Uses: …`, `- Network: …` and `- Threads: …`; say anything else in \
+                 `# Purpose`",
+            );
+            return;
+        };
+        if self.uses.is_some() {
+            self.problem(
+                Some(number),
+                "what the program uses is listed twice; keep one `- Uses:` line",
             );
             return;
         }
-        let allowed = Syscall::ALL.map(Syscall::name).join(", ");
-        let mut syscalls = Vec::new();
+        let known = Use::ALL.map(Use::name).join(", ");
+        let mut uses = Vec::new();
         for name in rest.split(',').flat_map(|part| part.split(" and ")) {
             let name = name.trim().trim_end_matches('.').trim_matches('`').trim();
-            if name.is_empty() {
+            let lower = name.to_ascii_lowercase();
+            if lower.is_empty() || lower == "nothing" || lower == "nothing else" {
                 continue;
             }
-            match Syscall::from_name(name) {
-                Some(syscall) if !syscalls.contains(&syscall) => syscalls.push(syscall),
+            match Use::from_name(&lower) {
+                Some(found) if !uses.contains(&found) => uses.push(found),
                 Some(_) => {}
-                None if matches!(name, "clone" | "clone3" | "futex") => self.problem(
+                None if lower.contains("network") || lower.contains("port") => self.problem(
                     Some(number),
-                    "threads aren't a system call to allow: write `- Threads: up to N` instead, \
-                     and the program starts them with parallel_for",
+                    "the network has its own line: `- Network: connects to TCP port 8080` or \
+                     `- Network: listens on TCP port 8080`",
                 ),
-                None if matches!(name, "bind" | "listen" | "accept") => self.problem(
+                None if lower.contains("thread") => self.problem(
                     Some(number),
-                    format!(
-                        "`{name}` isn't allowed: a server gets its listening socket from lengua \
-                         as file descriptor 3, so write `- Network: listens on TCP port N` and \
-                         allow `accept4`"
-                    ),
-                ),
-                None if FORBIDDEN_SYSCALLS.contains(&name) => self.problem(
-                    Some(number),
-                    format!(
-                        "`{name}` isn't allowed: lengua programs can't allocate memory, start \
-                         processes, handle signals, change the file system, or use the network \
-                         beyond plain TCP. Allowed: {allowed}"
-                    ),
+                    "threads have their own line: `- Threads: up to N`",
                 ),
                 None => self.problem(
                     Some(number),
-                    format!("`{name}` isn't a system call lengua knows. Allowed: {allowed}"),
+                    format!(
+                        "`{name}` isn't something lengua lets a program use; it may use {known}, \
+                         the network and threads, besides writing its output. lengua programs \
+                         can't allocate memory, start processes, handle signals or change the \
+                         file system"
+                    ),
                 ),
             }
         }
-        if !syscalls.contains(&Syscall::Exit) {
-            self.problem(
-                Some(number),
-                "allow `exit`: every program ends with it, including after a failed assertion",
-            );
-        }
-        self.syscalls = Some(syscalls);
+        uses.sort_unstable();
+        self.uses = Some(uses);
     }
 
     /// `- Network: connects to TCP ports 80 and 8080` or `- Network: listens on TCP port 8080`.
@@ -1011,22 +1317,15 @@ impl Parser {
                 "`# Behaviors` has no behaviors; add one, such as `## B1: Adds two numbers`",
             );
         }
-        if self.syscalls.is_none() {
-            self.problem(
-                None,
-                "add `- Allowed system calls: …` under `# Constraints`, listing only what the \
-                 program uses, for example `- Allowed system calls: read, write, exit`",
-            );
-        }
-        if let Some(syscalls) = self.syscalls.take() {
-            self.check_network(&syscalls);
-            self.syscalls = Some(syscalls);
-        }
-        match (header, self.syscalls.take()) {
-            (Some((title, description)), Some(syscalls)) if self.problems.is_empty() => Ok(Spec {
+        let uses = self.uses.take().unwrap_or_default();
+        let syscalls = self.syscalls_for(&uses);
+        self.check_network();
+        match header {
+            Some((title, description)) if self.problems.is_empty() => Ok(Spec {
                 title,
                 description,
                 behaviors: self.behaviors,
+                uses,
                 syscalls,
                 threads: self.threads,
                 purpose_values: self.purpose_values,
@@ -1036,41 +1335,36 @@ impl Parser {
         }
     }
 
-    /// The network line and the network calls go together: connecting needs `socket` and
-    /// `connect`, serving needs `accept4`, and a behavior keeps serving only in a server.
-    fn check_network(&mut self, syscalls: &[Syscall]) {
-        let allows = |call: Syscall| syscalls.contains(&call);
-        let connects = !self.network.connects.is_empty();
+    /// The system calls `uses` and the network allow on this target, with the output and exit
+    /// every program has, each once in the order of [`Syscall::ALL`].
+    fn syscalls_for(&self, uses: &[Use]) -> Vec<Syscall> {
+        let mut allowed: Vec<Syscall> = ALWAYS.to_vec();
+        for found in uses {
+            allowed.extend(found.syscalls());
+        }
+        if !self.network.connects.is_empty() {
+            allowed.extend([Syscall::Socket, Syscall::Connect]);
+        }
+        if self.network.listens.is_some() {
+            allowed.push(Syscall::Accept4);
+        }
+        if self.network.is_used() {
+            allowed.extend([
+                Syscall::Read,
+                Syscall::Close,
+                Syscall::Shutdown,
+                Syscall::Sendto,
+            ]);
+        }
+        Syscall::ALL
+            .into_iter()
+            .filter(|syscall| allowed.contains(syscall))
+            .collect()
+    }
+
+    /// A behavior keeps serving only in a server.
+    fn check_network(&mut self) {
         let listens = self.network.listens.is_some();
-        if connects && !(allows(Syscall::Socket) && allows(Syscall::Connect)) {
-            self.problem(
-                None,
-                "a program that connects to a port needs `socket` and `connect` in its allowed \
-                 system calls",
-            );
-        }
-        if !connects && (allows(Syscall::Socket) || allows(Syscall::Connect)) {
-            self.problem(
-                None,
-                "`socket` and `connect` need the ports they reach: add `- Network: connects to \
-                 TCP port N` under `# Constraints`",
-            );
-        }
-        if listens != allows(Syscall::Accept4) {
-            self.problem(
-                None,
-                "a server needs both `- Network: listens on TCP port N` and `accept4` in its \
-                 allowed system calls: lengua binds the port and the program takes connections \
-                 on file descriptor 3",
-            );
-        }
-        if !connects && !listens && (allows(Syscall::Shutdown) || allows(Syscall::Sendto)) {
-            self.problem(
-                None,
-                "`shutdown` and `sendto` work on connections: add a `- Network:` line, or drop \
-                 them",
-            );
-        }
         let serving: Vec<String> = self
             .behaviors
             .iter()
@@ -1090,7 +1384,189 @@ impl Parser {
     }
 }
 
+/// The `- Uses:` line that says what an older spec's `- Allowed system calls:` line allowed: a
+/// spec names what a program uses, the same on every target, not one kernel's system calls.
+fn allowed_calls_rewrite(listed: &str) -> String {
+    let mut uses: Vec<Use> = Vec::new();
+    let mut refused = Vec::new();
+    let names = listed.split(',').flat_map(|part| part.split(" and "));
+    let calls: Vec<Syscall> = names
+        .filter_map(|name| {
+            let name = name.trim().trim_end_matches('.').trim_matches('`').trim();
+            let call = Syscall::from_name(name);
+            if call.is_none() && FORBIDDEN_SYSCALLS.contains(&name) {
+                refused.push(name.to_owned());
+            }
+            call
+        })
+        .collect();
+    let networked = calls.iter().any(|call| Syscall::NETWORK.contains(call));
+    let opens = calls.contains(&Syscall::Openat);
+    for call in calls {
+        match Use::of(call) {
+            // A network program reads and closes its connections: standard input and files are
+            // named only when the program opens files or reads input of its own.
+            Some(Use::StandardInput) if networked || opens => {}
+            Some(Use::Files) if networked && call == Syscall::Close => {}
+            Some(found) if !uses.contains(&found) => uses.push(found),
+            _ => {}
+        }
+    }
+    uses.sort_unstable();
+    let line = if uses.is_empty() {
+        "delete the line: writing output and exiting need nothing named".to_owned()
+    } else {
+        format!(
+            "write `- Uses: {}` instead",
+            uses.iter()
+                .map(|found| found.name())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    let refused = if refused.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " ({} can't be used: lengua programs can't allocate memory, start processes, handle \
+             signals or change the file system)",
+            refused.join(", ")
+        )
+    };
+    format!(
+        "spec.md names what the program uses, the same on every computer, not Linux system \
+         calls: {line}{refused}; the network and threads keep their own lines"
+    )
+}
+
 /// The heading text when `line` is a heading of exactly `level`.
+/// A line of a behavior's steps: a list item starts a step, an indented line continues the one
+/// before it, and any other line is the spec's own prose. Returns its problems.
+fn step_line(
+    label: &str,
+    line: &str,
+    item: Option<&str>,
+    number: usize,
+    steps: &mut Vec<Step>,
+) -> Vec<String> {
+    let mut problems = Vec::new();
+    if let Some(item) = item {
+        let (word, rest) = item
+            .trim()
+            .split_once(char::is_whitespace)
+            .unwrap_or((item.trim(), ""));
+        let (values, closed) = backtick_values(rest);
+        match Keyword::parse(word) {
+            Some(keyword) => steps.push(Step {
+                keyword,
+                text: rest.trim().to_owned(),
+                values,
+                line: number,
+            }),
+            None => {
+                problems.push(format!(
+                    "{label}: each step starts with Given, When, Then, And or But"
+                ));
+            }
+        }
+        if !closed {
+            problems.push(format!("{label}: a backtick isn't closed"));
+        }
+    } else if line.starts_with([' ', '\t']) && !line.trim().is_empty() {
+        // An indented line continues the previous step.
+        let (values, closed) = backtick_values(line);
+        if let Some(step) = steps.last_mut() {
+            step.text.push(' ');
+            step.text.push_str(line.trim());
+            step.values.extend(values);
+        }
+        if !closed {
+            problems.push(format!("{label}: a backtick isn't closed"));
+        }
+    }
+    problems
+}
+
+/// A line of an outline's table: the first names the columns, the second separates them from
+/// the rows, and each line after is a row. Returns its problem.
+fn table_line(outline: &mut Outline, table: Table, number: usize, line: &str) -> Option<String> {
+    let cells = table_cells(line);
+    match table {
+        Table::Before => {
+            outline.columns = cells;
+            outline.columns_line = number;
+            None
+        }
+        Table::Header => {
+            let separates = !cells.is_empty()
+                && cells.iter().all(|cell| {
+                    let dashes = cell.trim_matches(':');
+                    !dashes.is_empty() && dashes.bytes().all(|byte| byte == b'-')
+                });
+            (!separates).then(|| {
+                "its second line separates the column names from the rows, such as `|---|---|`"
+                    .to_owned()
+            })
+        }
+        Table::Rows => {
+            if cells.len() != outline.columns.len() {
+                return Some(format!(
+                    "this row has {} cells, but the table has {} columns ({})",
+                    cells.len(),
+                    outline.columns.len(),
+                    outline.columns.join(", ")
+                ));
+            }
+            outline.rows.push(Row {
+                line: number,
+                cells,
+            });
+            None
+        }
+    }
+}
+
+/// The cells of a markdown table's line, each trimmed and without its backticks, with `\|` read
+/// as `|`.
+fn table_cells(line: &str) -> Vec<String> {
+    let mut cells = Vec::new();
+    let mut cell = String::new();
+    let line = line.trim();
+    let mut characters = line.strip_prefix('|').unwrap_or(line).chars().peekable();
+    while let Some(character) = characters.next() {
+        match character {
+            '\\' if characters.peek() == Some(&'|') => {
+                characters.next();
+                cell.push('|');
+            }
+            '|' => cells.push(cell_text(&std::mem::take(&mut cell))),
+            other => cell.push(other),
+        }
+    }
+    if !cell.trim().is_empty() {
+        cells.push(cell_text(&cell));
+    }
+    cells
+}
+
+/// A table cell's text: a code span's content, as markdown reads it, or the text as written.
+fn cell_text(cell: &str) -> String {
+    let cell = cell.trim();
+    let ticks = cell.len() - cell.trim_start_matches('`').len();
+    let fence = "`".repeat(ticks);
+    if ticks > 0 && cell.len() >= 2 * ticks && cell.ends_with(&fence) {
+        let inner = &cell[ticks..cell.len() - ticks];
+        // Markdown drops one space from each end when both have one.
+        let spaced = inner.len() >= 2 && inner.starts_with(' ') && inner.ends_with(' ');
+        return if spaced {
+            inner[1..inner.len() - 1].to_owned()
+        } else {
+            inner.to_owned()
+        };
+    }
+    cell.to_owned()
+}
+
 fn heading(line: &str, level: usize) -> Option<&str> {
     let hashes = line.bytes().take_while(|&byte| byte == b'#').count();
     if hashes != level {
@@ -1210,7 +1686,7 @@ fn strip_prefix_ignore_case<'a>(text: &'a str, prefix: &str) -> Option<&'a str> 
 mod tests {
     use super::*;
 
-    const ADD: &str = "---
+    const ADD: &str = r#"---
 type: lengua/program-spec
 title: add
 description: Adds two whole numbers given as arguments and prints the sum.
@@ -1225,6 +1701,16 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
 - Then it prints `5` followed by a newline
 - And it exits with code `0`
 
+### For any `a` and `b`
+- Given the arguments `{a}` and `{b}`
+- When the program runs
+- Then it prints `{a + b}` followed by a newline
+- And it exits with code `0`
+
+| a | b |
+|---|---|
+| `int(-1000000000, 1000000000)` | `int(-1000000000, 1000000000)` |
+
 ## B2: Missing arguments
 - Given no arguments
 - When the program runs
@@ -1232,8 +1718,8 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
 - And it exits with code `1`
 
 # Constraints
-- Allowed system calls: read, write, exit
-";
+- Uses: nothing
+"#;
 
     fn problems(text: &str) -> Vec<String> {
         match parse(text) {
@@ -1265,14 +1751,31 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
         assert_eq!(first.line, 10);
         assert_eq!(first.exit_code, 0);
         assert_eq!(first.values().collect::<Vec<_>>(), ["2", "3", "5", "0"]);
+        let outline = first.outline.as_ref().expect("generated tests");
+        assert_eq!(outline.line, 16);
+        assert_eq!(outline.steps.len(), 4);
+        assert_eq!(outline.steps[0].values, ["{a}", "{b}"]);
+        assert_eq!(outline.columns, ["a", "b"]);
+        assert_eq!(outline.rows.len(), 1);
+        assert_eq!(outline.rows[0].line, 24);
+        assert_eq!(
+            outline.rows[0].cells,
+            [
+                "int(-1000000000, 1000000000)",
+                "int(-1000000000, 1000000000)"
+            ]
+        );
         assert_eq!(spec.behaviors[1].exit_code, 1);
         assert_eq!(
             spec.behaviors[1].values().collect::<Vec<_>>(),
             ["usage: add <a> <b>", "1"]
         );
+        assert!(spec.behaviors[1].outline.is_none());
+        // Writing its output and exiting need nothing named.
+        assert!(spec.uses.is_empty());
         assert_eq!(
             spec.syscalls,
-            [Syscall::Read, Syscall::Write, Syscall::Exit]
+            [Syscall::Write, Syscall::Exit, Syscall::ExitGroup]
         );
         // Only Purpose states ranges; the behaviors' values (2, 3, 5, 0, 1) aren't among them.
         assert_eq!(spec.purpose_values, ["-1000000000", "1000000000"]);
@@ -1286,12 +1789,8 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
     #[test]
     fn threads_are_allowed_in_plain_words() {
         assert_eq!(parse(ADD).expect("valid spec").threads, None);
-        let with = |line: &str| {
-            ADD.replace(
-                "- Allowed system calls: read, write, exit\n",
-                &format!("- Allowed system calls: read, write, exit\n{line}\n"),
-            )
-        };
+        let with =
+            |line: &str| ADD.replace("- Uses: nothing\n", &format!("- Uses: nothing\n{line}\n"));
         for line in [
             "- Threads: up to 16",
             "- Threads: 16",
@@ -1311,8 +1810,8 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
             "the threads are given twice",
         );
         assert_problem(
-            &ADD.replace("read, write, exit", "read, write, clone, exit"),
-            "threads aren't a system call to allow",
+            &ADD.replace("- Uses: nothing", "- Uses: threads"),
+            "threads have their own line",
         );
     }
 
@@ -1332,6 +1831,8 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
     fn accepts_windows_line_endings() {
         let spec = parse(&ADD.replace('\n', "\r\n")).expect("valid spec");
         assert_eq!(spec.behaviors.len(), 2);
+        let outline = spec.behaviors[0].outline.as_ref().expect("generated tests");
+        assert_eq!(outline.rows.len(), 1);
     }
 
     #[test]
@@ -1364,9 +1865,8 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
     #[test]
     fn network_lines_name_the_ports() {
         let client = ADD.replace(
-            "- Allowed system calls: read, write, exit",
-            "- Allowed system calls: read, write, socket, connect, close, exit\n\
-             - Network: connects to TCP ports `80` and 8080.",
+            "- Uses: nothing",
+            "- Network: connects to TCP ports `80` and 8080.",
         );
         let spec = parse(&client).expect("valid spec");
         assert_eq!(spec.network.connects, [80, 8080]);
@@ -1375,6 +1875,9 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
             !spec.network.anywhere,
             "this computer, unless the spec says otherwise"
         );
+        assert!(
+            spec.syscalls.contains(&Syscall::Connect) && !spec.syscalls.contains(&Syscall::Accept4)
+        );
         let anywhere =
             parse(&client.replace("8080.", "8080 on any computer.")).expect("valid spec");
         assert_eq!(anywhere.network.connects, [80, 8080]);
@@ -1382,26 +1885,15 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
         let here = parse(&client.replace("8080.", "8080 on this computer.")).expect("valid spec");
         assert!(!here.network.anywhere);
         let server = ADD
-            .replace(
-                "- Allowed system calls: read, write, exit",
-                "- Allowed system calls: read, accept4, sendto, close, exit\n\
-                 - Network: listens on TCP port 7007",
-            )
+            .replace("- Uses: nothing", "- Network: listens on TCP port 7007")
             .replace("- And it exits with code `0`", "- And it keeps serving");
         let spec = parse(&server).expect("valid spec");
         assert_eq!(spec.network.listens, Some(7007));
         assert!(spec.behaviors[0].serves);
         assert!(!spec.behaviors[1].serves);
-        // The calls and the lines go together.
-        assert_problem(
-            &ADD.replace("read, write, exit", "read, write, socket, connect, exit"),
-            "`socket` and `connect` need the ports they reach",
+        assert!(
+            spec.syscalls.contains(&Syscall::Accept4) && !spec.syscalls.contains(&Syscall::Connect)
         );
-        assert_problem(
-            &client.replace("socket, connect, ", ""),
-            "needs `socket` and `connect`",
-        );
-        assert_problem(&server.replace("accept4, ", ""), "a server needs both");
         assert_problem(
             &ADD.replace("- And it exits with code `0`", "- And it keeps serving"),
             "B1 keeps serving, which only a server does",
@@ -1410,9 +1902,10 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
             &client.replace("ports `80` and 8080", "port 0"),
             "ports go from 1 to 65535",
         );
+        // The network has its own line, with its ports.
         assert_problem(
-            &ADD.replace("read, write, exit", "read, write, bind, exit"),
-            "a server gets its listening socket from lengua",
+            &ADD.replace("- Uses: nothing", "- Uses: the network"),
+            "the network has its own line",
         );
     }
 
@@ -1537,29 +2030,61 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
     }
 
     #[test]
-    fn checks_system_calls() {
+    fn names_what_the_program_uses() {
+        let uses = |line: &str| ADD.replace("- Uses: nothing", line);
+        let spec =
+            parse(&uses("- Uses: standard input, files and the clock.")).expect("valid spec");
+        assert_eq!(spec.uses, [Use::StandardInput, Use::Files, Use::Clock]);
+        for call in [Syscall::Read, Syscall::Openat, Syscall::ClockGettime] {
+            assert!(spec.syscalls.contains(&call), "{call:?}");
+        }
+        assert!(!spec.syscalls.contains(&Syscall::Getrandom));
+        let spec = parse(&uses("- Uses: `random bytes`")).expect("valid spec");
+        assert_eq!(spec.uses, [Use::RandomBytes]);
+        // No Constraints at all is a program that needs nothing.
+        let end = ADD.find("# Constraints").expect("constraints");
+        assert!(parse(&ADD[..end]).expect("valid spec").uses.is_empty());
         assert_problem(
-            &ADD.replace("read, write, exit", "read, write, exit, mmap"),
-            "`mmap` isn't allowed",
+            &uses("- Uses: memory"),
+            "`memory` isn't something lengua lets a program use",
         );
         assert_problem(
-            &ADD.replace("read, write, exit", "read, frobnicate, exit"),
-            "`frobnicate` isn't a system call lengua knows",
+            &uses("- Uses: standard input\n- Uses: files"),
+            "listed twice",
         );
-        assert_problem(
-            &ADD.replace("read, write, exit", "read, write"),
-            "allow `exit`",
-        );
-        assert_problem(
-            &ADD.replace("- Allowed system calls: read, write, exit\n", ""),
-            "add `- Allowed system calls: …`",
-        );
-        let spec = parse(&ADD.replace("read, write, exit", "`read`, `write` and `exit`."))
-            .expect("valid spec");
-        assert_eq!(
-            spec.syscalls,
-            [Syscall::Read, Syscall::Write, Syscall::Exit]
-        );
+    }
+
+    #[test]
+    fn an_older_specs_system_calls_come_with_their_uses_line() {
+        let calls = |list: &str| {
+            ADD.replace(
+                "- Uses: nothing",
+                &format!("- Allowed system calls: {list}"),
+            )
+        };
+        for (list, needle) in [
+            (
+                "read, write, exit",
+                "write `- Uses: standard input` instead",
+            ),
+            ("write, exit", "delete the line"),
+            (
+                "openat, read, write, close, exit",
+                "write `- Uses: files` instead",
+            ),
+            (
+                "write, getrandom, clock_gettime, exit",
+                "write `- Uses: the clock, random bytes` instead",
+            ),
+            // A network program's reads and closes are its connections'.
+            (
+                "socket, connect, read, write, close, exit",
+                "delete the line",
+            ),
+            ("read, write, mmap, exit", "mmap can't be used"),
+        ] {
+            assert_problem(&calls(list), needle);
+        }
     }
 
     #[test]
@@ -1570,6 +2095,74 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
         assert_problem(&without, "needs a `# Behaviors` section");
         let empty = format!("{}# Behaviors\n\n{}", &ADD[..end], &ADD[constraints..]);
         assert_problem(&empty, "has no behaviors");
+    }
+
+    #[test]
+    fn reads_generated_tests_under_their_behaviors() {
+        // Prose under the heading, and code blocks that hold no tests, are the spec's own.
+        let prose = ADD.replace(
+            "### For any `a` and `b`\n",
+            "### For any `a` and `b`\nAny two numbers in range.\n\n```text\n| x |\n```\n",
+        );
+        let spec = parse(&prose).expect("valid spec");
+        assert_eq!(
+            spec.behaviors[0]
+                .outline
+                .as_ref()
+                .map(|outline| outline.rows.len()),
+            Some(1)
+        );
+        // A code span in a cell keeps its text whole, with `\|` for a pipe.
+        assert_eq!(
+            table_cells("| `a` | `` x`y `` | `a\\|b` | 50 |"),
+            ["a", "x`y", "a|b", "50"]
+        );
+        let gives = |from: &str, to: &str, needle: &str| {
+            assert!(ADD.contains(from), "{from:?}");
+            assert_problem(&ADD.replacen(from, to, 1), needle);
+        };
+        gives(
+            "# Constraints\n",
+            "```toml\n[[generated]]\nvars = { a = \"int(1, 9)\" }\n```\n\n# Constraints\n",
+            "tests aren't written in TOML",
+        );
+        gives(
+            "- And it exits with code `1`\n",
+            "- And it exits with code `1`\n\n| a |\n|---|\n| `int(1, 9)` |\n",
+            "a table of variables goes under a `###` heading",
+        );
+        gives(
+            "\n## B2:",
+            "\n### For any more\n- Given no arguments\n\n## B2:",
+            "has one `###` section of generated tests",
+        );
+        gives(
+            "| `int(-1000000000, 1000000000)` | `int(-1000000000, 1000000000)` |\n",
+            "| `int(-1000000000, 1000000000)` | `int(-1000000000, 1000000000)` |\n- And more\n",
+            "their steps go before their table",
+        );
+        gives(
+            "| a | b |\n|---|---|\n| `int(-1000000000, 1000000000)` | `int(-1000000000, \
+             1000000000)` |\n",
+            "",
+            "need a table of their variables",
+        );
+        gives(
+            "| `int(-1000000000, 1000000000)` | `int(-1000000000, 1000000000)` |",
+            "| `int(-1000000000, 1000000000)` |",
+            "this row has 1 cells, but the table has 2 columns (a, b)",
+        );
+        gives("|---|---|", "| x | y |", "its second line separates");
+        gives(
+            "# Behaviors\n",
+            "# Behaviors\n### For any inputs\n",
+            "goes under the behavior it tests",
+        );
+        gives(
+            "### For any `a` and `b`\n- Given",
+            "### For any `a` and `b`\n- Given more\n- When the program runs\n- Given",
+            "have one When",
+        );
     }
 
     #[test]
@@ -1611,7 +2204,7 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
         let text = ADD
             .replace("title: add\n", "")
             .replace("B2:", "B1:")
-            .replace("read, write, exit", "read, write");
+            .replace("- Uses: nothing", "- Uses: memory");
         assert_eq!(problems(&text).len(), 3, "{:#?}", problems(&text));
     }
 

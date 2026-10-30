@@ -273,7 +273,8 @@ is allocated or freed while the program runs, so there's no leak, double free or
 
 The program runs as one thread unless its spec allows threads (`- Threads: up to N`); then it
 starts them only through the canonical `parallel_for` (see "Threads" below). It uses only the
-system calls its spec allows, which are the capabilities the program is granted, and each `syscall`
+system calls of what its spec names (`- Uses:` and `- Network:`), which are the capabilities the
+program is granted, and each `syscall`
 is chosen by `mov eax, SYS_NAME` in the same straight-line code (no label or call between). The stack changes only through 64-bit `push` and
 `pop`, `call`, `ret`, and `sub rsp, N` / `add rsp, N`; every path into a line has the same depth,
 and nothing reads or writes below `rsp` (no red zone). `check` checks the deepest stack

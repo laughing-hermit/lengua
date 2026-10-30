@@ -18,21 +18,45 @@ exits with code 3.
 # Behaviors
 
 ## B1: Counts lines and words
-- Given standard input holding the line `hello world` followed by a newline and the line `foo` followed by a newline
+- Given standard input holding `hello world` followed by a newline then `foo` followed by a newline
 - When the program runs
-- Then it prints `2 3` followed by a newline to standard output
+- Then it prints `2 3` followed by a newline
 - And it exits with code `0`
 
-## B2: Any run of whitespace separates words
-- Given standard input holding `a`, two tabs, `b`, three spaces, a carriage return and `c`, with no newline
+### For any `text`
+The first row draws text with sparse whitespace, as in prose; the second, text dense with every
+kind of whitespace.
+
+- Given standard input holding `{text}`
 - When the program runs
-- Then it prints `0 3` followed by a newline to standard output
+- Then it prints `{count(text, "\n")} {words(text)}` followed by a newline
 - And it exits with code `0`
+
+| text | runs |
+|---|---|
+| `string(0, 1048576, "abcdefghijklmnopqrstuvwxyz0123456789 \n")` | 300 |
+| `string(0, 1048576, "x. \t\n\r")` | 300 |
+
+## B2: Any run of whitespace separates words
+- Given standard input holding `a\t\tb   \rc`
+- When the program runs
+- Then it prints `0 3` followed by a newline
+- And it exits with code `0`
+
+### For any `text`
+- Given standard input holding `{text}`
+- When the program runs
+- Then it prints `{count(text, "\n")} {words(text)}` followed by a newline
+- And it exits with code `0`
+
+| text | runs |
+|---|---|
+| `string(0, 1048576, "abc \t\r")` | 300 |
 
 ## B3: Counts empty input as nothing
 - Given empty standard input
 - When the program runs
-- Then it prints `0 0` followed by a newline to standard output
+- Then it prints `0 0` followed by a newline
 - And it exits with code `0`
 
 ## B4: Shows usage when given arguments
@@ -41,6 +65,16 @@ exits with code 3.
 - Then it prints `usage: count < input` followed by a newline to standard error
 - And it exits with code `1`
 
+### For any `a`
+- Given the argument `{a}`
+- When the program runs
+- Then it prints `usage: count < input` followed by a newline to standard error
+- And it exits with code `1`
+
+| a | runs |
+|---|---|
+| `choice("file.txt", "-l", "-", "", "--help")` | 20 |
+
 # Constraints
 
-- Allowed system calls: read, write, exit
+- Uses: standard input

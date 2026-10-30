@@ -1051,7 +1051,7 @@ pub async fn run_tests(
         }
         match problem {
             Some(problem) => {
-                let mut message = format!("{name} (tests.toml line {}): {problem}", example.line);
+                let mut message = format!("{name} (spec.md line {}): {problem}", example.line);
                 if !example.args.is_empty() {
                     let _ = write!(message, " (args {:?})", example.args);
                 }
@@ -1121,7 +1121,7 @@ pub async fn run_tests(
             let (this, drawn) = joined.map_err(io::Error::other)??;
             let message = match drawn {
                 Drawn::Unfit((inputs, field, error)) => Some(format!(
-                    "{name} (tests.toml line {}, seed {seed}): with {}, the expected {field} \
+                    "{name} (spec.md line {}, seed {seed}): with {}, the expected {field} \
                      {error}",
                     block.line,
                     describe_inputs(&inputs)
@@ -1133,7 +1133,7 @@ pub async fn run_tests(
                     outcome.runs += 1;
                     match problem {
                         Some(problem) => Some(format!(
-                            "{name} (tests.toml line {}), run {} of {total} (seed {seed}): with \
+                            "{name} (spec.md line {}), run {} of {total} (seed {seed}): with \
                              {}: {problem}",
                             block.line,
                             this + 1,

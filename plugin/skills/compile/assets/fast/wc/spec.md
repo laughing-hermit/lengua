@@ -12,10 +12,20 @@ returns. If reading the input or writing the output fails, the program exits wit
 
 # Behaviors
 ## B1: Counts lines and words
-- Given the input `hello world` followed by a newline and `foo  bar` followed by a newline
+- Given standard input holding `hello world\nfoo  bar\n`
 - When the program runs
 - Then it prints `2 4` followed by a newline
 - And it exits with code `0`
 
+### For any `text`
+- Given standard input holding `{text}`
+- When the program runs
+- Then it prints `{count(text, "\n")} {words(text)}` followed by a newline
+- And it exits with code `0`
+
+| text | runs |
+|---|---|
+| `string(0, 1048576, "abdefhlorwxyz \n\t\r")` | 200 |
+
 # Constraints
-- Allowed system calls: read, write, exit
+- Uses: standard input

@@ -31,7 +31,7 @@ impl Sha256Hex {
         &self.0
     }
 
-    /// The label form used in tests.toml and main.s: `sha256:<hex>`.
+    /// The label form main.s's header gives its spec in: `sha256:<hex>`.
     #[must_use]
     pub fn label(&self) -> String {
         format!("sha256:{}", self.0)

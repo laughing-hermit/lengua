@@ -18,13 +18,14 @@ use crate::checker::{self, source::Source};
 use crate::data_dir::DataDir;
 use crate::expr;
 use crate::hash::Sha256Hex;
-use crate::lock::{self, CodeStamp, Key, Lock, ProofStamp, SpecStamp, TestsStamp};
+use crate::header::{self, Header};
+use crate::lock::{self, CodeStamp, Key, Lock, ProofStamp, SpecStamp};
 use crate::platform::{Machine, Profile};
 use crate::prove;
 use crate::runner::{self, End, Job, Limits, Net, Started};
 use crate::spec::{self, Spec};
 use crate::state::{
-    CODE_FILE, ProgramFolder, SPEC_FILE, Snapshot, State, TESTS_FILE, stamped_copy,
+    CODE_FILE, LEGACY_TESTS_FILE, ProgramFolder, SPEC_FILE, Snapshot, State, stamped_copy,
 };
 use crate::testdiff;
 use crate::testfile::{self, TestSuite};
@@ -35,11 +36,11 @@ use crate::toolchain::Toolchain;
 ///
 /// Kept under 512 characters and self-contained: some harnesses only show the beginning.
 pub const INSTRUCTIONS: &str = "lengua builds the programs the user asks for, from commands and \
-filters to servers and clients, unless they name another language: a folder of spec.md, \
-tests.toml and main.s, written with the write-spec, write-tests and write-assembly skills. After \
-writing or changing one, call check with the folder's absolute path, the first time with the \
-user's words as request, and follow its next_step until it says Done, calling again while it \
-says testing or proving. Never edit lengua.lock. Run programs only with run.";
+filters to servers and clients, unless they name another language: you write spec.md, behaviors \
+and tests, with the write-spec skill, then compile it into main.s with the compile skill. After \
+each edit, call check with the folder's absolute path, the first time with the user's words as \
+request, and follow its next_step until it says Done. Never edit lengua.lock. Run programs only \
+with run.";
 
 /// The longest request the lock records: the user's words, not a whole conversation.
 const MAX_REQUEST_CHARS: usize = 2000;
@@ -90,6 +91,9 @@ pub struct LenguaServer {
     background: Arc<tokio::sync::Mutex<BTreeMap<PathBuf, Background>>>,
     /// The tests and proof of each program folder's latest files, running or ended.
     checks: Arc<tokio::sync::Mutex<BTreeMap<PathBuf, Arc<Checking>>>>,
+    /// The user's words given with a spec that still had problems, by program folder: recorded
+    /// once the spec is clean, so they're asked for once.
+    held: Arc<tokio::sync::Mutex<BTreeMap<PathBuf, String>>>,
 }
 
 /// A server `run` started in the background.
@@ -116,8 +120,8 @@ const BACKGROUND_LIMIT: Duration = Duration::from_secs(600);
 
 /// The tests and then the proof of one version of a program, in the background.
 struct Checking {
-    /// spec.md, tests.toml and main.s, by hash.
-    files: [Sha256Hex; 3],
+    /// spec.md and main.s, by hash.
+    files: [Sha256Hex; 2],
     /// The executable built from main.s, by hash.
     executable: Sha256Hex,
     /// Set once the files change, which stops the proof.
@@ -173,6 +177,8 @@ struct Passed {
     performance: Vec<String>,
     /// The first example as it ran.
     shown: Option<String>,
+    /// lengua's line for main.s, written once the job ends without the proof finding it wrong.
+    header: Header,
 }
 
 /// One generated test's proof.
@@ -221,6 +227,7 @@ impl LenguaServer {
             launcher: Arc::new(std::env::current_exe().unwrap_or_default()),
             background: Arc::default(),
             checks: Arc::default(),
+            held: Arc::default(),
         }
     }
 }
@@ -295,12 +302,9 @@ impl CheckReport {
 pub struct ChangesReport {
     /// The user's requests in this build, as recorded, oldest first.
     pub requests: Vec<String>,
-    /// How spec.md changed since the build's first request, as `-`/`+` lines.
+    /// How spec.md, tests included, changed since the build's first request, as `-`/`+` lines.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spec_changed: Option<String>,
-    /// How tests.toml changed since code first ran in this build, as `-`/`+` lines.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tests_changed: Option<String>,
     /// lengua's own list of the test changes that test less than before.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tests_less: Vec<String>,
@@ -460,13 +464,13 @@ impl LenguaServer {
         name = "check",
         title = "Check",
         description = "Checks the lengua program in <path> stage by stage, records each stage in \
-            lengua.lock, and stops at the first that needs work: it records spec.md as the \
-            source of truth with the user's words that asked for it, checks tests.toml against \
-            the spec, checks main.s against lengua's rules, runs every test with fresh random \
-            inputs, and proves the program for every input it can. Call it after every edit to \
-            spec.md, tests.toml or main.s. It replies within about 40 seconds; the tests and the \
-            proof go on in the background, so while it says testing or proving, call it again \
-            to wait. path: absolute path of the program folder; request: the user's words that \
+            lengua.lock, and stops at the first that needs work: it checks spec.md, the source \
+            of truth, and the tests in it, and records it with the user's words that asked for \
+            it; checks main.s against lengua's rules; runs every test with fresh random inputs; \
+            and proves the program for every input it can. Call it after every edit to spec.md \
+            or main.s. It replies within about 40 seconds; the tests and the proof go on in the \
+            background, so while it says testing or proving, call it again to wait. path: \
+            absolute path of the program folder; request: the user's words that \
             asked for this program or this change, quoted exactly and never made up, needed the \
             first time and whenever they ask for something new.",
         annotations(
@@ -491,57 +495,61 @@ impl LenguaServer {
         let profile = supported(&machine)?;
         let machine_line = || machine_line(&machine);
 
-        // spec.md, recorded once it parses.
+        // spec.md, tests included: recorded with the user's words once it parses and its tests
+        // check.
         let Some(spec_text) = read_optional(&folder, SPEC_FILE)? else {
             return Ok(Json(CheckReport {
                 machine: Some(machine_line()),
                 ..CheckReport::new("write_spec", State::NoSpec.next_step(&folder))
             }));
         };
-        let spec = match spec::parse(&spec_text) {
-            Ok(spec) => spec,
+        let request = match params.request.as_deref().map(str::trim) {
+            Some(words) if !words.is_empty() => Some(words.to_owned()),
+            _ => self.held.lock().await.get(folder.path()).cloned(),
+        };
+        let fix_spec = || {
+            format!(
+                "Next: fix {folder}/{SPEC_FILE} with the write-spec skill, then call check with \
+                 path {folder}."
+            )
+        };
+        let problems = if read_optional(&folder, LEGACY_TESTS_FILE)?.is_some() {
+            Err(vec![format!(
+                "{LEGACY_TESTS_FILE}: the tests live in {SPEC_FILE} now. Make each behavior's \
+                 steps say what its [[example]] said, write its [[generated]] tables as its \
+                 generated tests, a `###` section of the same steps with a table of their vars \
+                 and runs, as the write-spec skill shows, then delete {LEGACY_TESTS_FILE}."
+            )])
+        } else {
+            match spec::parse(&spec_text) {
+                Err(problems) => Err(problems.iter().map(ToString::to_string).collect()),
+                Ok(spec) => match testfile::check(&spec) {
+                    Err(problems) => Err(problems.iter().map(ToString::to_string).collect()),
+                    Ok(suite) => Ok((spec, suite)),
+                },
+            }
+        };
+        let (spec, suite) = match problems {
+            Ok(parsed) => parsed,
             Err(problems) => {
+                if let Some(words) = &request {
+                    self.held
+                        .lock()
+                        .await
+                        .insert(folder.path().to_path_buf(), words.clone());
+                }
                 return Ok(Json(CheckReport::problems(
                     "spec_problems",
-                    problems.iter().map(ToString::to_string).collect(),
-                    format!(
-                        "Next: fix {folder}/{SPEC_FILE} with the write-spec skill, then call check \
-                         with path {folder}."
-                    ),
+                    problems,
+                    fix_spec(),
                 )));
             }
         };
-        if let Some(next_step) = self
-            .record(&folder, &spec_text, params.request.as_deref())
-            .await?
-        {
+        if let Some(next_step) = self.record(&folder, &spec_text, request.as_deref()).await? {
             return Ok(Json(CheckReport::new("needs_request", next_step)));
         }
+        self.held.lock().await.remove(folder.path());
         let spec_hash = Sha256Hex::of(spec_text.as_bytes());
-
-        // tests.toml, checked against the spec.
-        let Some(tests_text) = read_optional(&folder, TESTS_FILE)? else {
-            return Ok(Json(CheckReport {
-                machine: Some(machine_line()),
-                ..CheckReport::new("write_tests", State::TestsMissing.next_step(&folder))
-            }));
-        };
-        let suite = match testfile::check(&tests_text, &spec) {
-            Ok(suite) => suite,
-            Err(problems) => {
-                return Ok(Json(CheckReport::problems(
-                    "test_problems",
-                    problems.iter().map(ToString::to_string).collect(),
-                    format!(
-                        "Next: fix {folder}/{TESTS_FILE} with the write-tests skill, then call \
-                         check with path {folder}."
-                    ),
-                )));
-            }
-        };
-        let tests_hash = Sha256Hex::of(tests_text.as_bytes());
-        self.note_tests(&folder, &spec_hash, &tests_hash, &tests_text)
-            .await?;
 
         // main.s, checked against the rules, then tested and proven in the background.
         let Some(code) = read_optional(&folder, CODE_FILE)? else {
@@ -550,14 +558,27 @@ impl LenguaServer {
                 ..CheckReport::new("write_code", State::CodeMissing.next_step(&folder))
             }));
         };
-        let files = [spec_hash, tests_hash, Sha256Hex::of(code.as_bytes())];
+        // Code compiled for another computer is compiled again for this one.
+        if let Some(elsewhere) =
+            Header::of(&code).and_then(|header| header.elsewhere(profile, &machine.features))
+        {
+            return Ok(Json(CheckReport::problems(
+                "code_problems",
+                vec![elsewhere],
+                format!(
+                    "Next: compile {folder}/{SPEC_FILE} into {folder}/{CODE_FILE} for this \
+                     computer with the compile skill, then call check with path {folder}."
+                ),
+            )));
+        }
+        let files = [spec_hash, header::code_hash(code.as_bytes())];
         let checking = match self.current_checking(&folder, &files).await {
             Some(checking) => checking,
             None => {
                 let fix = || {
                     format!(
-                        "Next: fix {folder}/{CODE_FILE} with the write-assembly skill (the full \
-                         rules are in its references/power-of-10.md), then call check with path \
+                        "Next: fix {folder}/{CODE_FILE} with the compile skill (the full rules \
+                         are in its references/power-of-10.md), then call check with path \
                          {folder}."
                     )
                 };
@@ -612,6 +633,9 @@ impl LenguaServer {
             }
         };
         wait_for(&checking, began + check_wait()).await;
+        if *checking.stage.borrow() == Stage::Ended {
+            self.write_header(&folder, &checking).await;
+        }
         Ok(Json(self.checking_report(&folder, &checking)))
     }
 
@@ -619,10 +643,10 @@ impl LenguaServer {
         name = "run",
         title = "Run program",
         description = "Runs the checked program in <path> with args and stdin. It runs only \
-            when lengua.lock shows that spec.md, tests.toml and main.s are exactly the versions \
-            that were recorded and checked, and a fresh build of main.s is byte for byte the \
+            when lengua.lock shows that spec.md and main.s are exactly the versions that were \
+            recorded and checked, and a fresh build of main.s is byte for byte the \
             executable check tested. The program gets an empty environment, 10 seconds and \
-            8 MiB of output, and the kernel lets it make only the system calls its spec allows, \
+            8 MiB of output, and lengua lets it use only what its spec names, \
             connect only to the ports it names, and touch files only inside its working folder: \
             an empty temporary folder, or `folder`. A server starts in the background on its \
             spec's port and run returns its address; call run with stop: true to stop it and get \
@@ -661,8 +685,8 @@ impl LenguaServer {
         let state = self.program_state(&folder)?;
         if state != State::Ready {
             return Err(format!(
-                "lengua runs a program only when its spec, tests and code all match \
-                 lengua.lock, and {folder} doesn't. {}",
+                "lengua runs a program only when its spec and code match lengua.lock, and \
+                 {folder} doesn't. {}",
                 state.next_step(&folder)
             ));
         }
@@ -835,7 +859,6 @@ impl LenguaServer {
                     spec: SpecStamp {
                         sha256: current.clone(),
                     },
-                    tests: None,
                     code: None,
                     proofs: None,
                     ..lock
@@ -844,7 +867,6 @@ impl LenguaServer {
             // New words in the middle of a build join it, so nothing changed before them drops
             // out of what is shown.
             (Some(lock), Some(words)) if lock.code.is_none() => {
-                let unchanged = lock.spec.sha256 == current;
                 let mut request = lock.request;
                 if request.words.len() >= lock::MAX_REQUESTS {
                     request.words.remove(1);
@@ -855,17 +877,14 @@ impl LenguaServer {
                     spec: SpecStamp {
                         sha256: current.clone(),
                     },
-                    tests: if unchanged { lock.tests } else { None },
                     code: None,
                     proofs: None,
                 }
             }
             // A new request after a finished build starts a new build. With the spec unchanged,
-            // its checked tests and code stay, and the tests the code ran against are where test
-            // changes are counted from.
+            // its checked code stays.
             (Some(lock), Some(words)) if lock.spec.sha256 == current => {
-                let mut request = Lock::requested(current.clone(), words.to_owned()).request;
-                request.tests = lock.tests.as_ref().map(|tests| tests.sha256.clone());
+                let request = Lock::requested(current.clone(), words.to_owned()).request;
                 Lock { request, ..lock }
             }
             (_, Some(words)) => Lock::requested(current.clone(), words.to_owned()),
@@ -877,37 +896,12 @@ impl LenguaServer {
         Ok(None)
     }
 
-    /// Records checked tests in the lock, unless it already records them.
-    async fn note_tests(
-        &self,
-        folder: &ProgramFolder,
-        spec: &Sha256Hex,
-        tests: &Sha256Hex,
-        text: &str,
-    ) -> Result<(), String> {
-        let recorded = Key::load(&self.data_dir)
-            .ok()
-            .flatten()
-            .and_then(|key| lock::read(folder.path(), Some(&key)).ok().flatten())
-            .is_some_and(|lock| {
-                lock.spec.sha256 == *spec
-                    && lock
-                        .tests
-                        .as_ref()
-                        .is_some_and(|stamp| stamp.sha256 == *tests)
-            });
-        if recorded {
-            return Ok(());
-        }
-        self.stamp_tests(folder, spec, tests, text).await
-    }
-
     /// The checking job for these files, running or ended, unless it ended with failed tests,
     /// which run again, or passed them but lengua.lock no longer records the code it checked.
     async fn current_checking(
         &self,
         folder: &ProgramFolder,
-        files: &[Sha256Hex; 3],
+        files: &[Sha256Hex; 2],
     ) -> Option<Arc<Checking>> {
         let checks = self.checks.lock().await;
         let checking = checks.get(folder.path())?;
@@ -928,7 +922,7 @@ impl LenguaServer {
                 .and_then(|key| lock::read(folder.path(), Some(&key)).ok().flatten())
                 .and_then(|lock| lock.code)
                 .is_some_and(|code| {
-                    code.sha256 == files[2] && code.executable_sha256 == checking.executable
+                    code.sha256 == files[1] && code.executable_sha256 == checking.executable
                 });
             if !recorded {
                 return None;
@@ -941,7 +935,7 @@ impl LenguaServer {
     async fn start_checking(
         &self,
         folder: &ProgramFolder,
-        files: [Sha256Hex; 3],
+        files: [Sha256Hex; 2],
         code: Code,
     ) -> Arc<Checking> {
         let proofs = code
@@ -989,10 +983,7 @@ impl LenguaServer {
                 found.failures = failures;
             }
         };
-        let [spec_hash, tests_hash, code_hash] = checking.files.clone();
-        if let Err(error) = self.note_first_run(folder, &tests_hash).await {
-            return fail(vec![error]);
-        }
+        let [spec_hash, code_hash] = checking.files.clone();
         let seed = match random_seed() {
             Ok(seed) => seed,
             Err(error) => return fail(vec![error]),
@@ -1026,11 +1017,19 @@ impl LenguaServer {
             toolchain: code.built.toolchain.clone(),
             max_stack_bytes: facts.max_stack_bytes,
             unsafe_blocks: u32::try_from(code.report.unsafe_blocks.len()).unwrap_or(u32::MAX),
+            target: code.profile.name().to_owned(),
+            features: facts
+                .features
+                .iter()
+                .map(|feature| (*feature).to_owned())
+                .collect(),
         };
-        if let Err(error) = self
-            .stamp_code(folder, &spec_hash, &tests_hash, stamp)
-            .await
-        {
+        let header = Header {
+            spec: spec_hash.to_string(),
+            target: stamp.target.clone(),
+            features: stamp.features.clone(),
+        };
+        if let Err(error) = self.stamp_code(folder, &spec_hash, stamp).await {
             return fail(vec![error]);
         }
         if let Ok(mut found) = checking.found.lock() {
@@ -1048,12 +1047,56 @@ impl LenguaServer {
                     .collect(),
                 performance: outcome.costs.iter().map(cost_line).collect(),
                 shown: outcome.shown,
+                header,
             });
         }
         checking.stage.send_replace(Stage::Proving(Instant::now()));
         if !self.recorded_proofs(folder, checking, &code.suite, &executable) {
             self.prove_all(folder, checking, &code, &syscalls, &executable)
                 .await;
+        }
+        if !checking.cancel.load(Ordering::Relaxed) {
+            self.write_header(folder, checking).await;
+        }
+    }
+
+    /// Writes lengua's line into main.s once `checking` has ended with its tests passed and no
+    /// input the proof found wrong, provided main.s is still the code it checked and its line
+    /// says something else. The code's hash leaves the line out, so the lock still holds.
+    async fn write_header(&self, folder: &ProgramFolder, checking: &Checking) {
+        let header = match checking.found.lock() {
+            Ok(found) if !found.wrong => found.passed.as_ref().map(|passed| passed.header.clone()),
+            _ => None,
+        };
+        let Some(header) = header else {
+            return;
+        };
+        let checked = &checking.files[1];
+        let _writing = self.lock_writes.lock().await;
+        let path = folder.file(CODE_FILE);
+        let Ok(code) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        if header::code_hash(code.as_bytes()) != *checked
+            || Header::of(&code).as_ref() == Some(&header)
+        {
+            return;
+        }
+        // Whole or not at all, with main.s's own permissions.
+        let written = (|| -> std::io::Result<()> {
+            let permissions = std::fs::metadata(&path)?.permissions();
+            let mut file = tempfile::NamedTempFile::new_in(folder.path())?;
+            std::io::Write::write_all(&mut file, header::with(&code, &header).as_bytes())?;
+            file.as_file().set_permissions(permissions)?;
+            file.as_file().sync_all()?;
+            file.persist(&path).map_err(|error| error.error)?;
+            Ok(())
+        })();
+        if let Err(error) = written {
+            eprintln!(
+                "lengua: couldn't write the header of {}: {error}",
+                path.display()
+            );
         }
     }
 
@@ -1339,8 +1382,8 @@ impl LenguaServer {
                 found.failures.clone(),
                 format!(
                     "Next: decide from {SPEC_FILE} whether {CODE_FILE} or the test is wrong, fix \
-                     {CODE_FILE} with the write-assembly skill or {TESTS_FILE} with the \
-                     write-tests skill, then call check with path {folder}. Boundary values run \
+                     {CODE_FILE} with the compile skill or the test in {SPEC_FILE} with the \
+                     write-spec skill, then call check with path {folder}. Boundary values run \
                      first every time; the other generated inputs are new on every check."
                 ),
             );
@@ -1370,7 +1413,7 @@ impl LenguaServer {
                         .map(BlockProof::line)
                         .collect(),
                     format!(
-                        "Next: fix {folder}/{CODE_FILE} with the write-assembly skill so it handles \
+                        "Next: fix {folder}/{CODE_FILE} with the compile skill so it handles \
                          those inputs, then call check with path {folder}."
                     ),
                 )
@@ -1392,12 +1435,10 @@ impl LenguaServer {
         let changes = self.current_changes(folder);
         let changes = (changes.requests.len() > 1
             || changes.spec.is_some()
-            || changes.tests.is_some()
             || !changes.tests_less.is_empty())
         .then_some(ChangesReport {
             requests: changes.requests,
             spec_changed: changes.spec,
-            tests_changed: changes.tests,
             tests_less: changes.tests_less,
         });
         let shown = if changes.is_some() {
@@ -1432,8 +1473,8 @@ impl LenguaServer {
         lock.map_or_else(Changes::default, |lock| self.changes(folder, &lock))
     }
 
-    /// What changed after the user's request: spec.md since the build's first request, and
-    /// tests.toml since code first ran in the build, each against the copy lengua kept.
+    /// What changed after the user's request: spec.md, tests included, since the build's first
+    /// request, against the copy lengua kept.
     fn changes(&self, folder: &ProgramFolder, lock: &Lock) -> Changes {
         let kept = |hash: &Sha256Hex| {
             std::fs::read_to_string(stamped_copy(self.data_dir.path(), hash))
@@ -1450,115 +1491,33 @@ impl LenguaServer {
             }
             _ => None,
         };
-        let (tests, tests_less) = match (
-            &lock.request.tests,
-            std::fs::read_to_string(folder.file(TESTS_FILE)),
-        ) {
-            (Some(first), Ok(now)) if Sha256Hex::of(now.as_bytes()) != *first => {
-                match kept(first) {
-                    Some(before) => (
-                        Some(testdiff::line_diff(&before, &now)),
-                        testdiff::tests_less(&before, &now),
-                    ),
-                    None => (Some(format!("{TESTS_FILE} changed; {unseen}")), Vec::new()),
-                }
-            }
-            _ => (None, Vec::new()),
+        // Tests that test less than the ones first recorded for the request.
+        let tests_less = match std::fs::read_to_string(folder.file(SPEC_FILE)) {
+            Ok(now) => kept(&lock.request.spec)
+                .map(|before| testdiff::tests_less(&before, &now))
+                .unwrap_or_default(),
+            Err(_) => Vec::new(),
         };
         Changes {
             requests: lock.request.words.clone(),
             spec: spec.filter(|diff| !diff.is_empty()),
-            tests: tests.filter(|diff| !diff.is_empty()),
             tests_less,
         }
     }
 
-    /// Records checked tests in the lock, provided neither file changed while being checked,
-    /// and keeps a copy so later changes can be shown against it.
-    async fn stamp_tests(
-        &self,
-        folder: &ProgramFolder,
-        spec: &Sha256Hex,
-        tests: &Sha256Hex,
-        text: &str,
-    ) -> Result<(), String> {
-        let _writing = self.lock_writes.lock().await;
-        let changed = || {
-            format!(
-                "{SPEC_FILE} or {TESTS_FILE} changed while the tests were being checked, so \
-                 nothing was recorded; call check again."
-            )
-        };
-        let key = Key::load(&self.data_dir)
-            .map_err(|error| error.to_string())?
-            .ok_or_else(changed)?;
-        let lock = lock::read(folder.path(), Some(&key))
-            .ok()
-            .flatten()
-            .ok_or_else(changed)?;
-        let current_spec = Sha256Hex::of(read_spec(folder)?.as_bytes());
-        let current_tests = Sha256Hex::of(read_tests(folder)?.as_bytes());
-        if lock.spec.sha256 != *spec || current_spec != *spec || current_tests != *tests {
-            return Err(changed());
-        }
-        write_stamped_copy(&self.data_dir, tests, text)?;
-        let lock = Lock {
-            tests: Some(TestsStamp {
-                sha256: tests.clone(),
-            }),
-            code: None,
-            proofs: None,
-            ..lock
-        };
-        lock::write(folder.path(), &lock, &key)
-            .map_err(|error| format!("couldn't write {folder}/{}: {error}", lock::LOCK_FILE))
-    }
-
-    /// Notes the tests code first runs against in this build, the version later test changes
-    /// are shown against.
-    async fn note_first_run(
-        &self,
-        folder: &ProgramFolder,
-        tests: &Sha256Hex,
-    ) -> Result<(), String> {
-        let _writing = self.lock_writes.lock().await;
-        let key = Key::load(&self.data_dir)
-            .map_err(|error| error.to_string())?
-            .ok_or("lengua's signing key is missing; call check again")?;
-        let lock = lock::read(folder.path(), Some(&key))
-            .map_err(|error| format!("lengua.lock can't be trusted: {error}"))?
-            .ok_or("lengua.lock is missing; call check again")?;
-        match &lock.tests {
-            Some(stamp) if stamp.sha256 == *tests => {
-                if lock.request.tests.is_some() {
-                    return Ok(());
-                }
-                let mut lock = lock;
-                lock.request.tests = Some(tests.clone());
-                lock::write(folder.path(), &lock, &key).map_err(|error| {
-                    format!("couldn't write {folder}/{}: {error}", lock::LOCK_FILE)
-                })
-            }
-            _ => Err(format!(
-                "{TESTS_FILE} changed while the code was being checked; call check again."
-            )),
-        }
-    }
-
-    /// Records checked code in the lock, provided spec, tests and code didn't change while being
-    /// checked.
+    /// Records checked code in the lock, provided neither the spec nor the code changed while
+    /// being checked.
     async fn stamp_code(
         &self,
         folder: &ProgramFolder,
         spec: &Sha256Hex,
-        tests: &Sha256Hex,
         code: CodeStamp,
     ) -> Result<(), String> {
         let _writing = self.lock_writes.lock().await;
         let changed = || {
             format!(
-                "{SPEC_FILE}, {TESTS_FILE} or {CODE_FILE} changed while the code was being \
-                 checked, so nothing was recorded; call check again."
+                "{SPEC_FILE} or {CODE_FILE} changed while the code was being checked, so nothing \
+                 was recorded; call check again."
             )
         };
         let key = Key::load(&self.data_dir)
@@ -1569,10 +1528,8 @@ impl LenguaServer {
             .flatten()
             .ok_or_else(changed)?;
         let unchanged = lock.spec.sha256 == *spec
-            && lock.tests.as_ref().map(|stamp| &stamp.sha256) == Some(tests)
             && Sha256Hex::of(read_spec(folder)?.as_bytes()) == *spec
-            && Sha256Hex::of(read_tests(folder)?.as_bytes()) == *tests
-            && Sha256Hex::of(read_code(folder)?.as_bytes()) == code.sha256;
+            && header::code_hash(read_code(folder)?.as_bytes()) == code.sha256;
         if !unchanged {
             return Err(changed());
         }
@@ -1642,8 +1599,6 @@ struct Changes {
     requests: Vec<String>,
     /// spec.md since the build's first request.
     spec: Option<String>,
-    /// tests.toml since code first ran in the build.
-    tests: Option<String>,
     /// The test changes that test less, by lengua's own comparison.
     tests_less: Vec<String>,
 }
@@ -1791,15 +1746,9 @@ fn read_spec(folder: &ProgramFolder) -> Result<String, String> {
     })
 }
 
-fn read_tests(folder: &ProgramFolder) -> Result<String, String> {
-    read_optional(folder, TESTS_FILE)?.ok_or_else(|| {
-        format!("There's no {TESTS_FILE} in {folder}. Write it with the write-tests skill.")
-    })
-}
-
 fn read_code(folder: &ProgramFolder) -> Result<String, String> {
     read_optional(folder, CODE_FILE)?.ok_or_else(|| {
-        format!("There's no {CODE_FILE} in {folder}. Write it with the write-assembly skill.")
+        format!("There's no {CODE_FILE} in {folder}. Write it with the compile skill.")
     })
 }
 
@@ -1888,7 +1837,7 @@ fn violation_lines(report: &checker::Report) -> Vec<String> {
     lines
 }
 
-/// Saves a recorded spec.md or tests.toml under its hash, written atomically.
+/// Saves a recorded spec.md under its hash, written atomically.
 fn write_stamped_copy(data_dir: &DataDir, file: &Sha256Hex, text: &str) -> Result<(), String> {
     use std::io::Write as _;
     let path = stamped_copy(data_dir.path(), file);

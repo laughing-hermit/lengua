@@ -23,9 +23,9 @@ async fn machine(source: &str) -> Machine {
     crate::checker::decode::read(&std::fs::read(&executable).expect("read")).expect("decode")
 }
 
-fn block(spec: &str, tests: &str, index: usize) -> Generated {
-    let spec = crate::spec::parse(spec).expect("valid spec");
-    let suite = crate::testfile::check(tests, &spec).expect("valid tests");
+fn block(spec: &str, index: usize) -> Generated {
+    let spec = crate::spec::parse(spec).unwrap_or_else(|problems| panic!("{problems:?}"));
+    let suite = crate::testfile::check(&spec).unwrap_or_else(|problems| panic!("{problems:?}"));
     suite.generated[index].clone()
 }
 
@@ -41,7 +41,7 @@ fn budget(seconds: u64) -> Budget {
 fn asset(name: &str) -> String {
     std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("plugin/skills/write-assembly/assets")
+            .join("plugin/skills/compile/assets")
             .join(name),
     )
     .expect("an asset")
@@ -58,7 +58,7 @@ async fn proves_the_template_for_every_input() {
         return;
     }
     let machine = machine(crate::checker::TEMPLATE).await;
-    let block = block(&asset("template-spec.md"), &asset("template-tests.toml"), 0);
+    let block = block(&asset("template-spec.md"), 0);
     let started = Instant::now();
     let verdict = prove(&machine, &block, &budget(120));
     eprintln!("{verdict:?} in {:?}", started.elapsed());
@@ -113,7 +113,7 @@ async fn proves_add_for_every_pair_of_inputs() {
         return;
     }
     let machine = machine(&example("add", "main.s")).await;
-    let block = block(&example("add", "spec.md"), &example("add", "tests.toml"), 0);
+    let block = block(&example("add", "spec.md"), 0);
     let started = Instant::now();
     let verdict = prove(&machine, &block, &budget(300));
     eprintln!("add: {verdict:?} in {:?}", started.elapsed());
@@ -140,7 +140,7 @@ async fn finds_a_bug_the_samples_miss() {
         );
     assert_ne!(buggy, crate::checker::TEMPLATE);
     let machine = machine(&buggy).await;
-    let block = block(&asset("template-spec.md"), &asset("template-tests.toml"), 0);
+    let block = block(&asset("template-spec.md"), 0);
     // Seconds alone; minutes when every test runs at once, with each question slower too.
     let verdict = prove(
         &machine,
@@ -168,11 +168,7 @@ async fn proves_absolute_difference() {
         return;
     }
     let machine = machine(&example("absdiff", "main.s")).await;
-    let block = block(
-        &example("absdiff", "spec.md"),
-        &example("absdiff", "tests.toml"),
-        0,
-    );
+    let block = block(&example("absdiff", "spec.md"), 0);
     let started = Instant::now();
     let verdict = prove(&machine, &block, &budget(300));
     eprintln!("absdiff: {verdict:?} in {:?}", started.elapsed());
@@ -186,11 +182,7 @@ async fn proves_absolute_difference() {
 #[ignore = "slow: a minute or more"]
 async fn proves_the_mean_of_two_prices() {
     let machine = machine(&example("mean", "main.s")).await;
-    let block = block(
-        &example("mean", "spec.md"),
-        &example("mean", "tests.toml"),
-        0,
-    );
+    let block = block(&example("mean", "spec.md"), 0);
     let started = Instant::now();
     let verdict = prove(&machine, &block, &budget(300));
     eprintln!("mean: {verdict:?} in {:?}", started.elapsed());
@@ -210,11 +202,7 @@ async fn proves_decimal_inputs_where_the_output_is_fixed() {
     }
     let machine = machine(&example("mean", "main.s")).await;
     for index in 3..6 {
-        let block = block(
-            &example("mean", "spec.md"),
-            &example("mean", "tests.toml"),
-            index,
-        );
+        let block = block(&example("mean", "spec.md"), index);
         let verdict = prove(&machine, &block, &budget(120));
         assert!(
             matches!(verdict, Verdict::Proven { .. }),
@@ -235,7 +223,7 @@ async fn proves_a_roll_stays_in_its_range() {
     {
         return;
     }
-    const SPEC: &str = "---
+    const SPEC: &str = r#"---
 type: lengua/program-spec
 title: roll
 ---
@@ -246,24 +234,21 @@ Rolls a die for a player numbered from `1` to `9`.
 ## B1: Rolls a die
 - Given the argument `1`
 - When the program runs
-- Then it prints `rolled ` and a number from `1` to `6`, followed by a newline
+- Then it prints text matching `rolled {any(1, 6)}` followed by a newline
 - And it exits with code `0`
 
-# Constraints
-- Allowed system calls: write, getrandom, exit
-";
-    const TESTS: &str = r#"[[example]]
-id = "B1"
-args = ["1"]
-stdout = { matches = "rolled {any(1, 6)}\n" }
-exit_code = 0
+### For any `player`
+- Given the argument `{player}`
+- When the program runs
+- Then it prints `rolled {any(1, 6)}` followed by a newline
+- And it exits with code `0`
 
-[[generated]]
-id = "B1"
-vars = { player = "int(1, 9)" }
-args = ["{player}"]
-stdout = "rolled {any(1, 6)}\n"
-exit_code = 0
+| player |
+|---|
+| `int(1, 9)` |
+
+# Constraints
+- Uses: random bytes
 "#;
     let program = |faces: u8| {
         format!(
@@ -304,7 +289,7 @@ random:
 "
         )
     };
-    let block = block(SPEC, TESTS, 0);
+    let block = block(SPEC, 0);
     let samples: Vec<crate::testfile::Case> =
         block.cases(1).take(4).filter_map(Result::ok).collect();
     let right = machine(&program(6)).await;
@@ -328,7 +313,7 @@ async fn proves_what_a_program_does_with_the_supplied_clock() {
     {
         return;
     }
-    const SPEC: &str = "---
+    const SPEC: &str = r#"---
 type: lengua/program-spec
 title: weekday
 ---
@@ -341,19 +326,18 @@ Exits with the clock's seconds since 1970 modulo 7, from `0` to `6`.
 - When the program runs
 - Then it exits with code `1`
 
-# Constraints
-- Allowed system calls: clock_gettime, exit
-";
-    const TESTS: &str = r#"[[example]]
-id = "B1"
-clock = ["1735689600"]
-exit_code = 1
+### For any `t`
+- Given the clock at `{t}`
+- When the program runs
+- Then it prints nothing
+- And it exits with code `{t % 7}`
 
-[[generated]]
-id = "B1"
-vars = { t = "int(0, 4102444800)" }
-clock = ["{t}"]
-exit_code = "{t % 7}"
+| t |
+|---|
+| `int(0, 4102444800)` |
+
+# Constraints
+- Uses: the clock
 "#;
     let program = |days: u32| {
         format!(
@@ -382,7 +366,7 @@ time:
 "
         )
     };
-    let block = block(SPEC, TESTS, 0);
+    let block = block(SPEC, 0);
     let samples: Vec<crate::testfile::Case> =
         block.cases(1).take(4).filter_map(Result::ok).collect();
     let right = machine(&program(7)).await;
@@ -394,7 +378,7 @@ time:
     assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
 }
 
-const ECHO_SPEC: &str = "---
+const ECHO_SPEC: &str = r#"---
 type: lengua/program-spec
 title: echo
 description: Prints its argument.
@@ -409,22 +393,15 @@ Prints its argument, `1` to `3` letters.
 - Then it prints `ab`
 - And it exits with code `0`
 
-# Constraints
-- Allowed system calls: write, exit
-";
+### For any `s`
+- Given the argument `{s}`
+- When the program runs
+- Then it prints `{s}`
+- And it exits with code `0`
 
-const ECHO_TESTS: &str = r#"[[example]]
-id = "B1"
-args = ["ab"]
-stdout = "ab"
-exit_code = 0
-
-[[generated]]
-id = "B1"
-vars = { s = 'string(1, 3, "abc")' }
-args = ["{s}"]
-stdout = "{s}"
-exit_code = 0
+| s |
+|---|
+| `string(1, 3, "abc")` |
 "#;
 
 /// Writes its argument: every branch is settled by the bytes' ranges, and the output is the
@@ -454,7 +431,7 @@ _start:
 #[tokio::test]
 async fn a_shape_its_terms_settle_starts_no_solver() {
     let machine = machine(ECHO).await;
-    let block = block(ECHO_SPEC, ECHO_TESTS, 0);
+    let block = block(ECHO_SPEC, 0);
     let image = Image::new(&machine).expect("an entry");
     let each = vec![("s".to_owned(), parts("s", &block.vars[0].1).expect("parts"))];
     let mut solvers = Solvers::new(10_000);
@@ -505,11 +482,7 @@ fn fixture(name: &str, file: &str) -> String {
 #[tokio::test]
 async fn proves_the_csv_totals_24696_combinations() {
     let machine = machine(&fixture("total", "main.s")).await;
-    let block = block(
-        &fixture("total", "spec.md"),
-        &fixture("total", "tests.toml"),
-        0,
-    );
+    let block = block(&fixture("total", "spec.md"), 0);
     let began = Instant::now();
     let verdict = prove(
         &machine,
@@ -540,11 +513,7 @@ async fn proves_the_csv_totals_24696_combinations() {
 #[ignore = "a measurement, not a check"]
 async fn traces_a_few_csv_total_combinations() {
     let machine = machine(&fixture("total", "main.s")).await;
-    let block = block(
-        &fixture("total", "spec.md"),
-        &fixture("total", "tests.toml"),
-        0,
-    );
+    let block = block(&fixture("total", "spec.md"), 0);
     let image = Image::new(&machine).expect("an entry");
     let random = block.random_only();
     let each: Vec<(String, Vec<Part>)> = block
@@ -615,10 +584,10 @@ async fn proves_every_block_of_the_day_count() {
     if !solvers_installed() {
         return;
     }
-    let (spec, tests) = (fixture("days", "spec.md"), fixture("days", "tests.toml"));
+    let spec = fixture("days", "spec.md");
     let machine = machine(&fixture("days", "main.s")).await;
     for index in 0..11 {
-        let block = block(&spec, &tests, index);
+        let block = block(&spec, index);
         let verdict = prove(&machine, &block, &fixture_budget(120));
         assert!(
             matches!(verdict, Verdict::Proven { bound: None, .. }),
@@ -634,27 +603,48 @@ async fn proves_every_block_of_the_day_count() {
     }
 }
 
-/// `tests` with one more block: a copy of its `index`th generated block whose variables are
-/// `vars`.
-fn with_block(tests: &str, index: usize, vars: &str) -> String {
-    let copied = tests
-        .split("[[generated]]\n")
-        .nth(index + 1)
-        .expect("the block")
-        .split("\n[[")
-        .next()
-        .expect("its fields")
-        .lines()
-        .map(|line| {
-            if line.starts_with("vars = ") {
-                format!("vars = {vars}")
-            } else {
-                line.to_owned()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!("{}\n[[generated]]\n{copied}\n", tests.trim_end())
+/// `spec` with one more generated test right after its `index`th, so at `index + 1`: a copy of
+/// that row of its table with the generators `cells` gives by column.
+fn with_row(spec: &str, index: usize, cells: &[(&str, &str)]) -> String {
+    let lines: Vec<&str> = spec.lines().collect();
+    let cells_of = |line: &str| -> Vec<String> {
+        line.trim_matches('|')
+            .split('|')
+            .map(|cell| cell.trim().to_owned())
+            .collect()
+    };
+    let mut rows = 0;
+    let mut header: Vec<String> = Vec::new();
+    for (at, line) in lines.iter().enumerate() {
+        if !line.starts_with('|') {
+            continue;
+        }
+        if !lines[at - 1].starts_with('|') {
+            header = cells_of(line);
+            continue;
+        }
+        if line.starts_with("|---") {
+            continue;
+        }
+        if rows == index {
+            let copied: Vec<String> = header
+                .iter()
+                .zip(cells_of(line))
+                .map(|(column, cell)| {
+                    cells
+                        .iter()
+                        .find(|(name, _)| name == column)
+                        .map_or(cell, |(_, generator)| format!("`{generator}`"))
+                })
+                .collect();
+            let mut out: Vec<String> = lines[..=at].iter().map(|line| (*line).to_owned()).collect();
+            out.push(format!("| {} |", copied.join(" | ")));
+            out.extend(lines[at + 1..].iter().map(|line| (*line).to_owned()));
+            return out.join("\n") + "\n";
+        }
+        rows += 1;
+    }
+    panic!("the spec has no generated test {index}");
 }
 
 /// The clock of interactive round 3, whose day count's block covers valid and invalid dates at
@@ -665,9 +655,9 @@ async fn proves_a_number_printed_only_where_the_input_is_valid() {
     if !solvers_installed() {
         return;
     }
-    let (spec, tests) = (fixture("dates", "spec.md"), fixture("dates", "tests.toml"));
+    let spec = fixture("dates", "spec.md");
     let machine = machine(&fixture("dates", "main.s")).await;
-    let verdict = prove(&machine, &block(&spec, &tests, 1), &fixture_budget(120));
+    let verdict = prove(&machine, &block(&spec, 1), &fixture_budget(120));
     assert!(
         matches!(verdict, Verdict::Proven { bound: None, .. }),
         "{verdict:?}"
@@ -676,7 +666,18 @@ async fn proves_a_number_printed_only_where_the_input_is_valid() {
 
 /// February 29 of the years 2000 to 9600 that are multiples of 400, a day the clock's own tests
 /// never draw: leap only by the 400-year rule.
-const CENTURY_LEAP_DAYS: &str = r#"{ y = "choice(2000, 2400, 2800, 3200, 3600, 4000, 4400, 4800, 5200, 5600, 6000, 6400, 6800, 7200, 7600, 8000, 8400, 8800, 9200, 9600)", m1 = "int(0, 0)", m2 = "int(2, 2)", d1 = "int(2, 2)", d2 = "int(9, 9)", t = "int(0, 253402300799)" }"#;
+const CENTURY_LEAP_DAYS: &[(&str, &str)] = &[
+    (
+        "y",
+        "choice(2000, 2400, 2800, 3200, 3600, 4000, 4400, 4800, 5200, 5600, 6000, 6400, 6800, 7200, \
+         7600, 8000, 8400, 8800, 9200, 9600)",
+    ),
+    ("m1", "int(0, 0)"),
+    ("m2", "int(2, 2)"),
+    ("d1", "int(2, 2)"),
+    ("d2", "int(9, 9)"),
+    ("t", "int(0, 253402300799)"),
+];
 
 /// Bugs planted in the day count: an epoch a day off, and leap years without the 400-year rule.
 #[tokio::test]
@@ -684,10 +685,9 @@ async fn finds_bugs_planted_in_the_day_count() {
     if !solvers_installed() {
         return;
     }
-    let spec = fixture("days", "spec.md");
-    let tests = with_block(&fixture("days", "tests.toml"), 1, CENTURY_LEAP_DAYS);
+    let spec = with_row(&fixture("days", "spec.md"), 1, CENTURY_LEAP_DAYS);
     let source = fixture("days", "main.s");
-    let leap_days = block(&spec, &tests, 11);
+    let leap_days = block(&spec, 2);
     let verdict = prove(&machine(&source).await, &leap_days, &fixture_budget(120));
     assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
 
@@ -699,7 +699,7 @@ async fn finds_bugs_planted_in_the_day_count() {
     assert_ne!(shifted, source);
     let verdict = prove(
         &machine(&shifted).await,
-        &block(&spec, &tests, 1),
+        &block(&spec, 1),
         &fixture_budget(120),
     );
     assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
@@ -715,9 +715,21 @@ async fn finds_bugs_planted_in_the_day_count() {
     assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
 }
 
-/// The CSV total's first block with its text fields fixed: three signed amounts summed in cents
-/// and printed with their sign, for every amount in range.
-const FIXED_FIELDS: &str = r#"{ h1 = 'choice("date")', h2 = 'choice("note")', p1 = 'choice("2026-01-05")', q1 = 'choice("lunch")', p2 = 'choice("2026-01-06")', q2 = 'choice("refund")', p3 = 'choice("2026-01-07")', q3 = 'choice("rent")', a1 = "decimal(-999999.99, 999999.99)", a2 = "decimal(-999999.99, 999999.99)", a3 = "decimal(-999999.99, 999999.99)" }"#;
+/// The CSV total's first generated test with its text fields fixed: three signed amounts summed
+/// in cents and printed with their sign, for every amount in range.
+const FIXED_FIELDS: &[(&str, &str)] = &[
+    ("h1", "choice(\"date\")"),
+    ("h2", "choice(\"note\")"),
+    ("p1", "choice(\"2026-01-05\")"),
+    ("q1", "choice(\"lunch\")"),
+    ("p2", "choice(\"2026-01-06\")"),
+    ("q2", "choice(\"refund\")"),
+    ("p3", "choice(\"2026-01-07\")"),
+    ("q3", "choice(\"rent\")"),
+    ("a1", "decimal(-999999.99, 999999.99)"),
+    ("a2", "decimal(-999999.99, 999999.99)"),
+    ("a3", "decimal(-999999.99, 999999.99)"),
+];
 
 /// The CSV total Claude Code wrote in interactive round 2: every amount proven where the text
 /// fields are fixed, and a negative amount's cents dropped caught; B2 and B3 proven.
@@ -726,22 +738,17 @@ async fn proves_the_csv_total_for_every_amount() {
     if !solvers_installed() {
         return;
     }
-    let spec = fixture("amounts", "spec.md");
-    let tests = with_block(&fixture("amounts", "tests.toml"), 0, FIXED_FIELDS);
+    let spec = with_row(&fixture("amounts", "spec.md"), 0, FIXED_FIELDS);
     let source = fixture("amounts", "main.s");
     let machine_of = machine(&source).await;
-    for index in [1, 2] {
-        let verdict = prove(
-            &machine_of,
-            &block(&spec, &tests, index),
-            &fixture_budget(120),
-        );
+    for index in [2, 3] {
+        let verdict = prove(&machine_of, &block(&spec, index), &fixture_budget(120));
         assert!(
             matches!(verdict, Verdict::Proven { bound: None, .. }),
             "{index}: {verdict:?}"
         );
     }
-    let fixed = block(&spec, &tests, 5);
+    let fixed = block(&spec, 1);
     let verdict = prove(&machine_of, &fixed, &fixture_budget(300));
     assert!(
         matches!(
@@ -773,22 +780,19 @@ async fn proves_the_csv_total_for_every_amount() {
 #[tokio::test]
 #[ignore = "takes two minutes"]
 async fn proves_the_csv_totals_free_text_blocks() {
-    let (spec, tests) = (
-        fixture("amounts", "spec.md"),
-        fixture("amounts", "tests.toml"),
-    );
+    let spec = fixture("amounts", "spec.md");
     let machine = machine(&fixture("amounts", "main.s")).await;
-    let verdict = prove(&machine, &block(&spec, &tests, 4), &fixture_budget(120));
+    let verdict = prove(&machine, &block(&spec, 4), &fixture_budget(120));
     assert!(
         matches!(verdict, Verdict::Proven { bound: None, .. }),
         "B5: {verdict:?}"
     );
-    let verdict = prove(&machine, &block(&spec, &tests, 3), &fixture_budget(60));
+    let verdict = prove(&machine, &block(&spec, 3), &fixture_budget(60));
     assert!(
         matches!(&verdict, Verdict::Proven { bound: Some(bound), .. } if bound.bytes >= 7),
         "B4: {verdict:?}"
     );
-    let verdict = prove(&machine, &block(&spec, &tests, 0), &fixture_budget(30));
+    let verdict = prove(&machine, &block(&spec, 0), &fixture_budget(30));
     assert!(
         matches!(verdict, Verdict::Proven { bound: Some(_), .. }),
         "B1: {verdict:?}"
@@ -799,7 +803,7 @@ async fn proves_the_csv_totals_free_text_blocks() {
 /// the term rules make the formula's own division, so the proof needs no solver to compare them.
 #[tokio::test]
 async fn proves_the_day_of_the_week_with_two_divisions() {
-    const SPEC: &str = "---
+    const SPEC: &str = r#"---
 type: lengua/program-spec
 title: weekday
 ---
@@ -812,19 +816,18 @@ Exits with the day of the week of the clock's seconds since 1970, from `0` (Sund
 - When the program runs
 - Then it exits with code `3`
 
-# Constraints
-- Allowed system calls: clock_gettime, exit
-";
-    const TESTS: &str = r#"[[example]]
-id = "B1"
-clock = ["1735689600"]
-exit_code = 3
+### For any `t`
+- Given the clock at `{t}`
+- When the program runs
+- Then it prints nothing
+- And it exits with code `{(t / 86400 + 4) % 7}`
 
-[[generated]]
-id = "B1"
-vars = { t = "int(0, 4102444800)" }
-clock = ["{t}"]
-exit_code = "{(t / 86400 + 4) % 7}"
+| t |
+|---|
+| `int(0, 4102444800)` |
+
+# Constraints
+- Uses: the clock
 "#;
     let program = |shift: u32| {
         format!(
@@ -857,7 +860,7 @@ time:
 "
         )
     };
-    let block = block(SPEC, TESTS, 0);
+    let block = block(SPEC, 0);
     let samples: Vec<crate::testfile::Case> =
         block.cases(1).take(4).filter_map(Result::ok).collect();
     let right = machine(&program(4)).await;
@@ -873,11 +876,7 @@ time:
 /// It timed out in the solvers before the division rules.
 #[tokio::test]
 async fn proves_the_hh_mm_ss_clock() {
-    let block = block(
-        &fixture("clock", "spec.md"),
-        &fixture("clock", "tests.toml"),
-        0,
-    );
+    let block = block(&fixture("clock", "spec.md"), 0);
     let source = fixture("clock", "main.s");
     let right = machine(&source).await;
     let verdict = prove(&right, &block, &budget(120));
@@ -894,7 +893,7 @@ async fn proves_the_hh_mm_ss_clock() {
 /// branches, against `upper(text)`, for every text up to 16 characters.
 #[tokio::test]
 async fn proves_a_text_formula() {
-    const SPEC: &str = "---
+    const SPEC: &str = r#"---
 type: lengua/program-spec
 title: shout
 ---
@@ -908,21 +907,18 @@ Capitalizes standard input of `0` to `16` characters.
 - Then it prints `AB`
 - And it exits with code `0`
 
-# Constraints
-- Allowed system calls: read, write, exit
-";
-    const TESTS: &str = r#"[[example]]
-id = "B1"
-stdin = "ab"
-stdout = "AB"
-exit_code = 0
+### For any `text`
+- Given standard input holding `{text}`
+- When the program runs
+- Then it prints `{upper(text)}`
+- And it exits with code `0`
 
-[[generated]]
-id = "B1"
-vars = { text = 'string(0, 16, "aAzZ09 b{`")' }
-stdin = "{text}"
-stdout = "{upper(text)}"
-exit_code = 0
+| text |
+|---|
+| `` string(0, 16, "aAzZ09 b{`") `` |
+
+# Constraints
+- Uses: standard input
 "#;
     let program = |limit: u32| {
         format!(
@@ -968,7 +964,7 @@ buffer:
 "
         )
     };
-    let block = block(SPEC, TESTS, 0);
+    let block = block(SPEC, 0);
     let right = machine(&program(26)).await;
     let verdict = prove(&right, &block, &budget(120));
     assert!(
@@ -985,7 +981,7 @@ buffer:
 /// branches by `shlx`, counted by `popcnt`, against `count(text, "a")`.
 #[tokio::test]
 async fn proves_a_count_made_of_bit_instructions() {
-    const SPEC: &str = "---
+    const SPEC: &str = r#"---
 type: lengua/program-spec
 title: count a
 ---
@@ -996,24 +992,21 @@ Counts the `a` bytes in standard input of `0` to `16` characters.
 ## B1: Counts them
 - Given standard input holding `aba`
 - When the program runs
-- Then it prints `2` and a newline
+- Then it prints `2` followed by a newline
 - And it exits with code `0`
 
-# Constraints
-- Allowed system calls: read, write, exit
-";
-    const TESTS: &str = r#"[[example]]
-id = "B1"
-stdin = "aba"
-stdout = "2\n"
-exit_code = 0
+### For any `text`
+- Given standard input holding `{text}`
+- When the program runs
+- Then it prints `{count(text, "a")}` followed by a newline
+- And it exits with code `0`
 
-[[generated]]
-id = "B1"
-vars = { text = 'string(0, 16, "ab")' }
-stdin = "{text}"
-stdout = "{count(text, \"a\")}\n"
-exit_code = 0
+| text |
+|---|
+| `string(0, 16, "ab")` |
+
+# Constraints
+- Uses: standard input
 "#;
     let program = |byte: u32| {
         format!(
@@ -1077,7 +1070,7 @@ out:
 "
         )
     };
-    let block = block(SPEC, TESTS, 0);
+    let block = block(SPEC, 0);
     let right = machine(&program(97)).await;
     let verdict = prove(&right, &block, &budget(120));
     assert!(
@@ -1127,7 +1120,8 @@ buffer:
 }
 
 fn echo_block(stdout: &str, example: &str) -> Generated {
-    const SPEC: &str = "---
+    let spec = format!(
+        r#"---
 type: lengua/program-spec
 title: echo
 ---
@@ -1136,30 +1130,26 @@ Prints standard input of `0` to `5000` characters back.
 
 # Behaviors
 ## B1: Prints it back
-- Given standard input holding `ab`
+- Given standard input holding `{example}`
 - When the program runs
-- Then it prints `ab`
+- Then it prints `{example}`
 - And it exits with code `0`
 
-# Constraints
-- Allowed system calls: read, write, exit
-";
-    let tests = format!(
-        r#"[[example]]
-id = "B1"
-stdin = "{example}"
-stdout = "{example}"
-exit_code = 0
+### For any `text`
+- Given standard input holding `{stdout}`
+- When the program runs
+- Then it prints `{stdout}`
+- And it exits with code `0`
 
-[[generated]]
-id = "B1"
-vars = {{ text = 'string(0, 5000, "ab")' }}
-stdin = "{stdout}"
-stdout = "{stdout}"
-exit_code = 0
+| text |
+|---|
+| `string(0, 5000, "ab")` |
+
+# Constraints
+- Uses: standard input
 "#
     );
-    block(SPEC, &tests, 0)
+    block(&spec, 0)
 }
 
 fn long_budget() -> Budget {
@@ -1211,7 +1201,7 @@ async fn proves_text_up_to_where_the_model_stops() {
     assert!(bound.why.contains("cpuid"), "{}", bound.why);
 }
 
-/// Prints each generated block's verdict for a program's three files, for exploring.
+/// Prints each generated block's verdict for a program's two files, for exploring.
 #[tokio::test]
 #[ignore = "explores a program's proofs"]
 async fn explores_a_program() {
@@ -1220,9 +1210,8 @@ async fn explores_a_program() {
         std::fs::read_to_string(std::path::Path::new(&folder).join(name)).expect("a file")
     };
     let machine = machine(&read("main.s")).await;
-    let (spec, tests) = (read("spec.md"), read("tests.toml"));
-    let spec_parsed = crate::spec::parse(&spec).expect("valid spec");
-    let suite = crate::testfile::check(&tests, &spec_parsed).expect("valid tests");
+    let spec_parsed = crate::spec::parse(&read("spec.md")).expect("valid spec");
+    let suite = crate::testfile::check(&spec_parsed).expect("valid tests");
     for block in &suite.generated {
         let began = Instant::now();
         let verdict = prove(
@@ -1255,13 +1244,10 @@ fn text_budget() -> Budget {
 /// at `y` are found.
 #[tokio::test]
 async fn proves_the_vector_template() {
-    let (spec, tests) = (
-        asset("vector-template-spec.md"),
-        asset("vector-template-tests.toml"),
-    );
+    let spec = asset("vector-template-spec.md");
     let source = asset("vector-template.s");
     let right = machine(&source).await;
-    let shout = block(&spec, &tests, 0);
+    let shout = block(&spec, 0);
     let verdict = prove(&right, &shout, &budget(60));
     assert!(
         matches!(
@@ -1274,7 +1260,7 @@ async fn proves_the_vector_template() {
         ),
         "{verdict:?}"
     );
-    let too_long = block(&spec, &tests, 1);
+    let too_long = block(&spec, 1);
     let verdict = prove(&right, &too_long, &text_budget());
     let Verdict::Proven {
         bound: Some(bound), ..
@@ -1299,15 +1285,15 @@ async fn proves_the_avx512_word_count() {
         eprintln!("this CPU has no AVX-512BW");
         return;
     }
-    let folder = "plugin/skills/write-assembly/assets/fast/wc/";
-    let spec = repository_file(&format!("{folder}spec.md")).replace(
-        "Tests give it up to `1048576` bytes.",
-        "Tests give it up to `300` bytes.",
-    );
-    let tests = repository_file(&format!("{folder}tests.toml"))
+    let folder = "plugin/skills/compile/assets/fast/wc/";
+    let spec = repository_file(&format!("{folder}spec.md"))
+        .replace(
+            "Tests give it up to `1048576` bytes.",
+            "Tests give it up to `300` bytes.",
+        )
         .replace("string(0, 1048576,", "string(0, 300,");
     let source = repository_file(&format!("{folder}main.s"));
-    let block = block(&spec, &tests, 0);
+    let block = block(&spec, 0);
     let right = machine(&source).await;
     let verdict = prove(&right, &block, &text_budget());
     assert!(
@@ -1330,18 +1316,15 @@ async fn proves_the_avx512_word_count() {
 /// compare trick, capitalizes any file of text; a bound that leaves `z` small is found.
 #[tokio::test]
 async fn proves_upcase_on_files() {
-    let spec = repository_file("examples/upcase/spec.md").replacen(
-        "# Behaviors",
-        "Tests also give it files of `0` to `300` bytes.\n\n# Behaviors",
-        1,
-    );
-    let tests = repository_file("examples/upcase/tests.toml").replacen(
-        "string(0, 1048576,",
-        "string(0, 300,",
-        1,
-    );
+    let spec = repository_file("examples/upcase/spec.md")
+        .replacen(
+            "# Behaviors",
+            "Tests also give it files of `0` to `300` bytes.\n\n# Behaviors",
+            1,
+        )
+        .replacen("string(0, 1048576,", "string(0, 300,", 1);
     let source = repository_file("examples/upcase/main.s");
-    let block = block(&spec, &tests, 0);
+    let block = block(&spec, 0);
     let right = machine(&source).await;
     let verdict = prove(&right, &block, &text_budget());
     assert!(
@@ -1427,9 +1410,8 @@ fn network_budget(listens: bool) -> Budget {
 #[tokio::test]
 async fn proves_the_echo_server() {
     let spec = repository_file("examples/echo/spec.md");
-    let tests = repository_file("examples/echo/tests.toml");
     let source = repository_file("examples/echo/main.s");
-    let block = block(&spec, &tests, 0);
+    let block = block(&spec, 0);
     let right = machine(&source).await;
     let verdict = prove(&right, &block, &network_budget(true));
     assert!(
@@ -1485,18 +1467,18 @@ async fn proves_the_echo_server() {
 /// before reading the reply, is found.
 #[tokio::test]
 async fn proves_the_fetch_client() {
-    let spec = repository_file("examples/fetch/spec.md").replacen(
-        "path holds `1` to `100` characters",
-        "path holds `1` to `100` characters (tests: `6` and `11`)",
-        1,
-    );
-    let tests = repository_file("examples/fetch/tests.toml")
-        .replacen("path = 'string(1, 100, ", "path = 'string(1, 6, ", 1)
-        .replacen("body = 'string(0, 65000, ", "body = 'string(0, 11, ", 1);
+    let spec = repository_file("examples/fetch/spec.md")
+        .replacen(
+            "path holds `1` to `100` characters",
+            "path holds `1` to `100` characters (tests: `6` and `11`)",
+            1,
+        )
+        .replacen("`string(1, 100, ", "`string(1, 6, ", 1)
+        .replacen("`string(0, 65000, ", "`string(0, 11, ", 1);
     let source = repository_file("examples/fetch/main.s");
     let right = machine(&source).await;
     for index in 0..3 {
-        let verdict = prove(&right, &block(&spec, &tests, index), &network_budget(false));
+        let verdict = prove(&right, &block(&spec, index), &network_budget(false));
         // The reply is read with fill: proven however the network cuts it.
         assert!(
             matches!(
@@ -1511,7 +1493,7 @@ async fn proves_the_fetch_client() {
             "block {index}: {verdict:?}"
         );
     }
-    let fetch = block(&spec, &tests, 0);
+    let fetch = block(&spec, 0);
     for wrong in [
         source.replacen(
             ".ascii \" HTTP/1.0\\r\\n\\r\\n\"",
@@ -1541,14 +1523,15 @@ async fn proves_counts_padded_to_a_column() {
         return;
     }
     // Texts up to 120 bytes, so counts of one, two and three digits each get their padding.
-    let spec = fixture("padded", "spec.md").replacen(
-        "of up to `1048576` bytes",
-        "of up to `1048576` bytes (tests: `120`)",
-        1,
-    );
-    let tests = fixture("padded", "tests.toml").replacen("string(0, 1048576,", "string(0, 120,", 1);
+    let spec = fixture("padded", "spec.md")
+        .replacen(
+            "of up to `1048576` bytes",
+            "of up to `1048576` bytes (tests: `120`)",
+            1,
+        )
+        .replacen("string(0, 1048576,", "string(0, 120,", 1);
     let machine = machine(&fixture("padded", "main.s")).await;
-    let verdict = prove(&machine, &block(&spec, &tests, 0), &text_budget());
+    let verdict = prove(&machine, &block(&spec, 0), &text_budget());
     assert!(
         matches!(verdict, Verdict::Proven { bound: None, .. }),
         "{verdict:?}"
@@ -1570,11 +1553,7 @@ async fn explores_a_fixture_block() {
         .and_then(|seconds| seconds.parse().ok())
         .unwrap_or(60);
     let machine = machine(&fixture(&name, "main.s")).await;
-    let block = block(
-        &fixture(&name, "spec.md"),
-        &fixture(&name, "tests.toml"),
-        index,
-    );
+    let block = block(&fixture(&name, "spec.md"), index);
     let began = Instant::now();
     let verdict = prove(
         &machine,
@@ -1783,7 +1762,7 @@ buffer:
 /// for a letter, and so take bytes up to it, are found.
 #[tokio::test]
 async fn proves_capitals_over_text_beyond_ascii() {
-    const SPEC: &str = "---
+    const SPEC: &str = r#"---
 type: lengua/program-spec
 title: capitals
 ---
@@ -1797,23 +1776,20 @@ Prints standard input of `0` to `8` characters back with each ASCII letter in ca
 - Then it prints `AB`
 - And it exits with code `0`
 
-# Constraints
-- Allowed system calls: read, write, exit
-";
-    const TESTS: &str = r#"[[example]]
-id = "B1"
-stdin = "ab"
-stdout = "AB"
-exit_code = 0
+### For any `text`
+- Given standard input holding `{text}`
+- When the program runs
+- Then it prints `{upper(text)}`
+- And it exits with code `0`
 
-[[generated]]
-id = "B1"
-vars = { text = 'string(0, 8, "abz é€")' }
-stdin = "{text}"
-stdout = "{upper(text)}"
-exit_code = 0
+| text |
+|---|
+| `string(0, 8, "abz é€")` |
+
+# Constraints
+- Uses: standard input
 "#;
-    let block = block(SPEC, TESTS, 0);
+    let block = block(SPEC, 0);
     // A path for each choice of letter or not at each ASCII place.
     let budget = || Budget {
         max_paths: 512,
@@ -1846,19 +1822,19 @@ exit_code = 0
 /// a character beyond ASCII belongs to a word.
 #[tokio::test]
 async fn proves_a_word_count_over_text_beyond_ascii() {
-    let spec = repository_file("examples/count/spec.md").replacen(
+    let purpose = repository_file("examples/count/spec.md").replacen(
         "The tests give it standard\ninput of up to `1048576` bytes",
         "The tests give it standard\ninput of up to `1048576` bytes (tests: `16`)",
         1,
     );
-    let tests = repository_file("examples/count/tests.toml").replacen(
+    let spec = purpose.replacen(
         "string(0, 1048576, \"abcdefghijklmnopqrstuvwxyz0123456789 \\n\")",
         "string(0, 16, \"abcdefghijklmnopqrstuvwxyz0123456789 \\né€\")",
         1,
     );
-    assert_ne!(tests, repository_file("examples/count/tests.toml"));
+    assert_ne!(spec, purpose);
     let machine = machine(&repository_file("examples/count/main.s")).await;
-    let verdict = prove(&machine, &block(&spec, &tests, 0), &text_budget());
+    let verdict = prove(&machine, &block(&spec, 0), &text_budget());
     // Characters of three widths in every order, up to 8 of them.
     let Verdict::Proven {
         bound: Some(bound), ..

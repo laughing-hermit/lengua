@@ -19,7 +19,7 @@ use crate::hash::{Sha256Hex, hex};
 pub const LOCK_FILE: &str = "lengua.lock";
 
 /// The lock format this server reads and writes.
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 
 /// The lengua dialect this server checks.
 pub const DIALECT: u32 = 2;
@@ -40,11 +40,9 @@ const MAX_LOCK_BYTES: u64 = 64 * 1024;
 pub struct Lock {
     /// The user's request the spec was written for, and what was first recorded under it.
     pub request: RequestStamp,
-    /// The recorded spec.
+    /// The recorded spec, tests included.
     pub spec: SpecStamp,
-    /// The checked tests, once stamped.
-    pub tests: Option<TestsStamp>,
-    /// The checked code, once stamped. Requires `tests`.
+    /// The checked code, once stamped.
     pub code: Option<CodeStamp>,
     /// What `prove` proved about that code's build, once it has run. Requires `code`.
     pub proofs: Option<Box<ProofStamp>>,
@@ -63,8 +61,6 @@ pub struct RequestStamp {
     pub words: Vec<String>,
     /// SHA-256 of spec.md when the build's first request was recorded.
     pub spec: Sha256Hex,
-    /// SHA-256 of the tests.toml code first ran against in this build, once it has.
-    pub tests: Option<Sha256Hex>,
 }
 
 /// The most request words a build keeps: its first and the latest ones.
@@ -74,13 +70,6 @@ pub const MAX_REQUESTS: usize = 6;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpecStamp {
     /// SHA-256 of spec.md.
-    pub sha256: Sha256Hex,
-}
-
-/// The checked tests.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TestsStamp {
-    /// SHA-256 of tests.toml.
     pub sha256: Sha256Hex,
 }
 
@@ -97,6 +86,10 @@ pub struct CodeStamp {
     pub max_stack_bytes: u64,
     /// How many `# unsafe:` blocks the code has.
     pub unsafe_blocks: u32,
+    /// The target it was compiled and checked for, such as `linux-x86_64`.
+    pub target: String,
+    /// The CPU features its instructions need beyond the target's baseline, in order.
+    pub features: Vec<String>,
 }
 
 /// What `prove` proved about one build of the code.
@@ -104,7 +97,7 @@ pub struct CodeStamp {
 pub struct ProofStamp {
     /// SHA-256 of the executable the proofs are about, which must be the checked code's.
     pub executable_sha256: Sha256Hex,
-    /// The ids of the generated tests proven for every input in range, in tests.toml's order.
+    /// The ids of the generated tests proven for every input in range, in the spec's order.
     pub proven: Vec<String>,
     /// The generated tests proven only for texts up to a length: each id with that length in
     /// bytes. Never also in `proven`.
@@ -122,23 +115,20 @@ impl Lock {
             request: RequestStamp {
                 words: vec![words],
                 spec: spec.clone(),
-                tests: None,
             },
             spec: SpecStamp { sha256: spec },
-            tests: None,
             code: None,
             proofs: None,
         }
     }
 
-    /// One hash over spec, tests and code, once all three are stamped.
+    /// One hash over the spec and the code, once both are stamped.
     #[must_use]
     pub fn fingerprint(&self) -> Option<Sha256Hex> {
-        let tests = self.tests.as_ref()?;
         let code = self.code.as_ref()?;
         let input = format!(
-            "{FINGERPRINT_DOMAIN}spec:{}\ntests:{}\ncode:{}\n",
-            self.spec.sha256, tests.sha256, code.sha256
+            "{FINGERPRINT_DOMAIN}spec:{}\ncode:{}\n",
+            self.spec.sha256, code.sha256
         );
         Some(Sha256Hex::of(input.as_bytes()))
     }
@@ -189,23 +179,21 @@ impl Lock {
             words.join(", "),
             self.request.spec
         );
-        if let Some(tests) = &self.request.tests {
-            let _ = writeln!(text, "tests = \"{tests}\"");
-        }
         let _ = write!(text, "\n[spec]\nsha256 = \"{}\"\n", self.spec.sha256);
-        if let Some(tests) = &self.tests {
-            let _ = write!(text, "\n[tests]\nsha256 = \"{}\"\n", tests.sha256);
-        }
         if let Some(code) = &self.code {
+            let features: Vec<String> =
+                code.features.iter().map(|name| toml_string(name)).collect();
             let _ = write!(
                 text,
                 "\n[code]\nsha256 = \"{}\"\nexecutable_sha256 = \"{}\"\ntoolchain = {}\n\
-                 max_stack_bytes = {}\nunsafe_blocks = {}\n",
+                 max_stack_bytes = {}\nunsafe_blocks = {}\ntarget = {}\nfeatures = [{}]\n",
                 code.sha256,
                 code.executable_sha256,
                 toml_string(&code.toolchain),
                 code.max_stack_bytes,
-                code.unsafe_blocks
+                code.unsafe_blocks,
+                toml_string(&code.target),
+                features.join(", ")
             );
         }
         if let Some(proofs) = &self.proofs {
@@ -249,7 +237,6 @@ struct LockFile {
     fingerprint: Option<String>,
     request: RequestTable,
     spec: SpecTable,
-    tests: Option<TestsTable>,
     code: Option<CodeTable>,
     proofs: Option<ProofsTable>,
 }
@@ -276,18 +263,11 @@ struct BoundedTable {
 struct RequestTable {
     words: Vec<String>,
     spec: String,
-    tests: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SpecTable {
-    sha256: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct TestsTable {
     sha256: String,
 }
 
@@ -299,6 +279,8 @@ struct CodeTable {
     toolchain: String,
     max_stack_bytes: u64,
     unsafe_blocks: u32,
+    target: String,
+    features: Vec<String>,
 }
 
 fn parse_body(body: &str) -> Result<Lock, LockError> {
@@ -324,15 +306,10 @@ fn parse_body(body: &str) -> Result<Lock, LockError> {
         request: RequestStamp {
             words: file.request.words,
             spec: digest(&file.request.spec)?,
-            tests: file.request.tests.as_deref().map(digest).transpose()?,
         },
         spec: SpecStamp {
             sha256: digest(&file.spec.sha256)?,
         },
-        tests: file
-            .tests
-            .map(|tests| digest(&tests.sha256).map(|sha256| TestsStamp { sha256 }))
-            .transpose()?,
         code: file
             .code
             .map(|code| {
@@ -342,6 +319,8 @@ fn parse_body(body: &str) -> Result<Lock, LockError> {
                     toolchain: code.toolchain,
                     max_stack_bytes: code.max_stack_bytes,
                     unsafe_blocks: code.unsafe_blocks,
+                    target: code.target,
+                    features: code.features,
                 })
             })
             .transpose()?,
@@ -361,9 +340,6 @@ fn parse_body(body: &str) -> Result<Lock, LockError> {
             })
             .transpose()?,
     };
-    if lock.code.is_some() && lock.tests.is_none() {
-        return Err(malformed("it stamps code without stamping tests"));
-    }
     if let Some(proofs) = &lock.proofs
         && lock
             .code
@@ -662,20 +638,18 @@ mod tests {
                     "Also take \"negative\" numbers".into(),
                 ],
                 spec: Sha256Hex::of(b"first spec"),
-                tests: Some(Sha256Hex::of(b"first tests")),
             },
             spec: SpecStamp {
                 sha256: Sha256Hex::of(b"spec"),
             },
-            tests: Some(TestsStamp {
-                sha256: Sha256Hex::of(b"tests"),
-            }),
             code: Some(CodeStamp {
                 sha256: Sha256Hex::of(b"code"),
                 executable_sha256: Sha256Hex::of(b"executable"),
                 toolchain: "llvm-mc 22.1.8, ld.lld 22.1.8 \"quoted\" \\ tab\t".into(),
                 max_stack_bytes: 96,
                 unsafe_blocks: 1,
+                target: "linux-x86_64".into(),
+                features: vec!["avx2".into(), "bmi2".into()],
             }),
             proofs: None,
         }
@@ -696,7 +670,7 @@ mod tests {
             text.contains("words = [\"Make it say \\\"hi\\\"\\nplease\"]\n"),
             "{text}"
         );
-        assert!(!text.contains("\ntests = "), "{text}");
+        assert!(!text.contains("[code]"), "{text}");
         assert!(text.ends_with("\"\n"), "{text}");
         assert_eq!(Lock::from_signed_text(&text, &key(1)), Ok(lock));
     }
@@ -751,16 +725,20 @@ mod tests {
     fn round_trips_a_full_lock_with_its_fingerprint() {
         let lock = full_lock();
         let text = lock.to_signed_text(&key(1));
-        let fingerprint = lock.fingerprint().expect("all three are stamped");
+        let fingerprint = lock.fingerprint().expect("both are stamped");
         assert!(
             text.contains(&format!("fingerprint = \"{fingerprint}\"\n")),
+            "{text}"
+        );
+        assert!(
+            text.contains("target = \"linux-x86_64\"\nfeatures = [\"avx2\", \"bmi2\"]\n"),
             "{text}"
         );
         assert_eq!(Lock::from_signed_text(&text, &key(1)), Ok(lock));
     }
 
     #[test]
-    fn fingerprint_needs_tests_and_code() {
+    fn fingerprint_needs_the_code() {
         let mut lock = full_lock();
         assert!(lock.fingerprint().is_some());
         lock.code = None;
@@ -814,10 +792,11 @@ mod tests {
     #[test]
     fn unknown_versions_and_dialects_are_reported() {
         let body = full_lock().body();
-        let older = forge(&body.replace("version = 3", "version = 2"), &key(1));
+        // Version 3 recorded tests.toml apart from the spec.
+        let older = forge(&body.replace("version = 4", "version = 3"), &key(1));
         assert_eq!(
             Lock::from_signed_text(&older, &key(1)),
-            Err(LockError::UnsupportedVersion("2".into()))
+            Err(LockError::UnsupportedVersion("3".into()))
         );
         let dialect = forge(&body.replace("dialect = 2", "dialect = 1"), &key(1));
         assert_eq!(
@@ -831,7 +810,7 @@ mod tests {
         let lock = full_lock();
         let body = lock.body();
         let cases = [
-            body.replace("[tests]", "[tests]\nextra = 1"),
+            body.replace("[spec]", "[spec]\nextra = 1"),
             body.replace("max_stack_bytes = 96", "max_stack_bytes = 96 # note"),
             body.replace("\n\n[spec]", "\n\n\n[spec]"),
             body.replace(
@@ -844,19 +823,23 @@ mod tests {
                 let end = body[start..].find('\n').expect("end of words") + start;
                 format!("{}words = []{}", &body[..start], &body[end..])
             },
-            body.replace("[tests]\nsha256", "[tests]\nfrozen = true\nsha256"),
-            {
-                let start = body.find("\n[tests]").expect("tests table");
-                let end = body.find("\n[code]").expect("code table");
-                let without_tests = format!("{}{}", &body[..start], &body[end..]);
-                without_tests.replace(
-                    &format!(
-                        "fingerprint = \"{}\"\n",
-                        lock.fingerprint().expect("fingerprint")
-                    ),
-                    "",
-                )
-            },
+            body.replace("[code]\nsha256", "[code]\nfrozen = true\nsha256"),
+            body.replace(
+                &format!(
+                    "fingerprint = \"{}\"\n",
+                    lock.fingerprint().expect("fingerprint")
+                ),
+                "",
+            ),
+            body.replace(
+                "\n[code]",
+                &format!(
+                    "\n[tests]\nsha256 = \"{}\"\n\n[code]",
+                    Sha256Hex::of(b"tests")
+                ),
+            ),
+            body.replace("[\"avx2\", \"bmi2\"]", "[\"avx2\",\"bmi2\"]"),
+            body.replace("target = \"linux-x86_64\"\n", ""),
         ];
         for body in cases {
             assert!(

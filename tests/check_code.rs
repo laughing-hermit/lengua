@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 fn asset(name: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("plugin/skills/write-assembly/assets")
+        .join("plugin/skills/compile/assets")
         .join(name);
     std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
@@ -63,18 +63,17 @@ fn has_avx512() -> bool {
     has
 }
 
-/// A program folder holding the template's spec (recorded) and tests (checked).
+/// A program folder holding the template's spec, its tests included, recorded.
 async fn checked_template(session: &Session) -> Program {
     let program = Program::new();
     program.write("spec.md", &asset("template-spec.md"));
-    program.write("tests.toml", &asset("template-tests.toml"));
     let report = session.record(&program).await;
     assert_eq!(report["state"], "write_code", "{report}");
     program
 }
 
-/// A program folder holding all three files of `files`.
-async fn written(session: &Session, files: [(&str, String); 3]) -> Program {
+/// A program folder holding both files of `files`.
+async fn written(session: &Session, files: [(&str, String); 2]) -> Program {
     let program = Program::new();
     for (name, text) in files {
         program.write(name, &text);
@@ -83,9 +82,9 @@ async fn written(session: &Session, files: [(&str, String); 3]) -> Program {
     program
 }
 
-/// An example's three files.
-fn example_files(name: &str) -> [(&'static str, String); 3] {
-    ["spec.md", "tests.toml", "main.s"].map(|file| (file, example(name, file)))
+/// An example's two files.
+fn example_files(name: &str) -> [(&'static str, String); 2] {
+    ["spec.md", "main.s"].map(|file| (file, example(name, file)))
 }
 
 /// Checks until the job ends, which must be done.
@@ -294,7 +293,7 @@ async fn violations_come_with_rule_line_and_fix() {
         "{report}"
     );
     assert!(
-        text(&report["next_step"]).contains("write-assembly skill"),
+        text(&report["next_step"]).contains("compile skill"),
         "{report}"
     );
     session.service.cancel().await.expect("close the session");
@@ -330,13 +329,44 @@ async fn main_s_needs_no_label_and_must_build() {
 }
 
 #[tokio::test]
-async fn code_waits_for_checked_tests() {
+async fn code_waits_for_a_spec_whose_tests_check() {
     let session = session().await;
     let program = Program::new();
-    program.write("spec.md", &asset("template-spec.md"));
+    program.write(
+        "spec.md",
+        &asset("template-spec.md").replace("| 50 |", "| 0 |"),
+    );
     program.write("main.s", &asset("main-template.s"));
     let report = session.record(&program).await;
-    assert_eq!(report["state"], "write_tests", "{report}");
+    assert_eq!(report["state"], "spec_problems", "{report}");
+    assert!(
+        any_line(&report["problems"], "runs must be from 1"),
+        "{report}"
+    );
+    assert!(program.read("lengua.lock").is_none());
+    session.service.cancel().await.expect("close the session");
+}
+
+#[tokio::test]
+async fn code_compiled_for_another_computer_is_compiled_again() {
+    let session = session().await;
+    let program = checked_template(&session).await;
+    let elsewhere = asset("main-template.s").replacen(
+        ".intel_syntax noprefix\n",
+        ".intel_syntax noprefix\n# lengua: compiled from spec.md sha256:00 for macos-arm64\n",
+        1,
+    );
+    program.write("main.s", &elsewhere);
+    let report = session.check(&program).await;
+    assert_eq!(report["state"], "code_problems", "{report}");
+    assert!(
+        any_line(&report["problems"], "compiled for macos-arm64"),
+        "{report}"
+    );
+    assert!(
+        text(&report["next_step"]).contains("for this computer with the compile skill"),
+        "{report}"
+    );
     session.service.cancel().await.expect("close the session");
 }
 
@@ -347,7 +377,6 @@ async fn the_vector_template_passes_its_tests() {
         &session,
         [
             ("spec.md", asset("vector-template-spec.md")),
-            ("tests.toml", asset("vector-template-tests.toml")),
             ("main.s", asset("vector-template.s")),
         ],
     )
@@ -368,22 +397,19 @@ async fn the_vector_template_passes_its_tests() {
 #[tokio::test]
 async fn small_ranges_run_every_value() {
     let session = session().await;
-    let spec = asset("template-spec.md").replace(
+    let purpose = asset("template-spec.md").replace(
         "between `-9223372036854775807`\nand `9223372036854775807`",
         "between `-100`\nand `100`",
     );
-    assert_ne!(spec, asset("template-spec.md"), "the range was narrowed");
-    let tests = asset("template-tests.toml").replace(
+    assert_ne!(purpose, asset("template-spec.md"), "the range was narrowed");
+    let spec = purpose.replace(
         "int(-9223372036854775807, 9223372036854775807)",
         "int(-100, 100)",
     );
+    assert_ne!(spec, purpose, "the tests draw from it");
     let program = written(
         &session,
-        [
-            ("spec.md", spec),
-            ("tests.toml", tests),
-            ("main.s", asset("main-template.s")),
-        ],
+        [("spec.md", spec), ("main.s", asset("main-template.s"))],
     )
     .await;
     let report = done(&session, &program).await;
@@ -455,7 +481,6 @@ async fn the_parallel_template_runs_on_several_cores() {
         &session,
         [
             ("spec.md", asset("parallel-template-spec.md")),
-            ("tests.toml", asset("parallel-template-tests.toml")),
             ("main.s", asset("parallel-template.s")),
         ],
     )
@@ -484,15 +509,15 @@ async fn tests_can_be_fixed_after_code_ran() {
     program.write("main.s", &asset("main-template.s"));
     let report = done(&session, &program).await;
     assert!(report.get("changes").is_none(), "{report}");
-    let tests = asset("template-tests.toml");
+    let spec = asset("template-spec.md");
 
-    // A fix after code ran is checked against the spec like any version, and shown with lengua's
+    // A fix after code ran is checked like any version of the spec, and shown with lengua's
     // own marks on what tests less; nobody has to approve anything.
-    program.write("tests.toml", &tests.replace("runs = 200", "runs = 10"));
+    program.write("spec.md", &spec.replace("| 200 |", "| 10 |"));
     let report = done(&session, &program).await;
-    let changed = text(&report["changes"]["tests_changed"]);
+    let changed = text(&report["changes"]["spec_changed"]);
     assert!(changed.contains("- ") && changed.contains("+ "), "{report}");
-    assert!(changed.contains("runs = 10"), "{report}");
+    assert!(changed.contains("| 10 |"), "{report}");
     assert_eq!(
         report["changes"]["tests_less"],
         json!(["generated B1: fewer runs, 10 instead of 200"]),
@@ -500,11 +525,11 @@ async fn tests_can_be_fixed_after_code_ran() {
     );
 
     // A change that tests more gets no mark, and going back to the first version shows nothing.
-    program.write("tests.toml", &tests.replace("runs = 200", "runs = 300"));
+    program.write("spec.md", &spec.replace("| 200 |", "| 300 |"));
     let report = done(&session, &program).await;
     assert!(report["changes"].get("tests_less").is_none(), "{report}");
-    assert!(report["changes"]["tests_changed"].is_string(), "{report}");
-    program.write("tests.toml", &tests);
+    assert!(report["changes"]["spec_changed"].is_string(), "{report}");
+    program.write("spec.md", &spec);
     let report = done(&session, &program).await;
     assert!(report.get("changes").is_none(), "{report}");
     session.service.cancel().await.expect("close the session");
@@ -676,7 +701,6 @@ async fn the_avx512_shouts_in_the_benchmark_pass_their_checks() {
             &session,
             [
                 ("spec.md", asset("parallel-template-spec.md")),
-                ("tests.toml", asset("parallel-template-tests.toml")),
                 ("main.s", code),
             ],
         )
@@ -700,11 +724,7 @@ async fn the_avx512_upcase_in_the_benchmark_passes_its_checks() {
     .expect("the AVX-512 upcase");
     let program = written(
         &session,
-        [
-            ("spec.md", example("upcase", "spec.md")),
-            ("tests.toml", example("upcase", "tests.toml")),
-            ("main.s", code),
-        ],
+        [("spec.md", example("upcase", "spec.md")), ("main.s", code)],
     )
     .await;
     done(&session, &program).await;
@@ -910,7 +930,7 @@ async fn the_benchmarks_own_programs_pass_their_checks() {
         let source = |name: &str| {
             std::fs::read_to_string(
                 PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("plugin/skills/write-assembly/assets/fast")
+                    .join("plugin/skills/compile/assets/fast")
                     .join(workload)
                     .join(name),
             )
@@ -918,7 +938,7 @@ async fn the_benchmarks_own_programs_pass_their_checks() {
         };
         let program = written(
             &session,
-            ["spec.md", "tests.toml", "main.s"].map(|name| (name, source(name))),
+            ["spec.md", "main.s"].map(|name| (name, source(name))),
         )
         .await;
         done(&session, &program).await;
@@ -946,7 +966,7 @@ async fn long_text_is_proven_up_to_the_bound() {
     let session = Session::proving(Protocol::Discover).await;
     let program = written(
         &session,
-        ["spec.md", "tests.toml", "main.s"].map(|name| (name, fixture("cat", name))),
+        ["spec.md", "main.s"].map(|name| (name, fixture("cat", name))),
     )
     .await;
     let report = done(&session, &program).await;
@@ -979,7 +999,7 @@ async fn a_cut_only_the_proof_tries_is_found_and_run_for_real() {
         return;
     }
     let session = Session::proving(Protocol::Discover).await;
-    let files = ["spec.md", "tests.toml", "main.s"].map(|file| (file, fixture("second", file)));
+    let files = ["spec.md", "main.s"].map(|file| (file, fixture("second", file)));
     let program = written(&session, files).await;
     let problems = failed(&session, &program).await;
     assert!(
@@ -1019,11 +1039,7 @@ async fn a_server_that_waits_for_its_client_to_close_fails_as_with_curl() {
     assert_ne!(waits, example("echo", "main.s"));
     let program = written(
         &session,
-        [
-            ("spec.md", example("echo", "spec.md")),
-            ("tests.toml", example("echo", "tests.toml")),
-            ("main.s", waits),
-        ],
+        [("spec.md", example("echo", "spec.md")), ("main.s", waits)],
     )
     .await;
     let problems = failed(&session, &program).await;
@@ -1055,21 +1071,17 @@ async fn programs_on_the_network_are_proven() {
         "{report}"
     );
     // A client: fetch, with short paths and bodies so the proof covers them all.
-    let spec = example("fetch", "spec.md").replacen(
-        "path holds `1` to `100` characters",
-        "path holds `1` to `100` characters (tests: `6` and `11`)",
-        1,
-    );
-    let tests = example("fetch", "tests.toml")
-        .replacen("path = 'string(1, 100, ", "path = 'string(1, 6, ", 1)
-        .replacen("body = 'string(0, 65000, ", "body = 'string(0, 11, ", 1);
+    let spec = example("fetch", "spec.md")
+        .replacen(
+            "path holds `1` to `100` characters",
+            "path holds `1` to `100` characters (tests: `6` and `11`)",
+            1,
+        )
+        .replacen("`string(1, 100, ", "`string(1, 6, ", 1)
+        .replacen("`string(0, 65000, ", "`string(0, 11, ", 1);
     let fetch = written(
         &session,
-        [
-            ("spec.md", spec),
-            ("tests.toml", tests),
-            ("main.s", example("fetch", "main.s")),
-        ],
+        [("spec.md", spec), ("main.s", example("fetch", "main.s"))],
     )
     .await;
     let report = done(&session, &fetch).await;

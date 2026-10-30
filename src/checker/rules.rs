@@ -30,6 +30,8 @@ pub struct Facts {
     pub assertions: usize,
     /// Functions, assert_fail excluded.
     pub functions: usize,
+    /// The CPU features beyond the x86-64 baseline its instructions need.
+    pub features: Vec<&'static str>,
 }
 
 struct Checker<'a, 'p> {
@@ -131,6 +133,7 @@ pub fn check(
         max_stack_bytes: checker.max_stack(),
         assertions,
         functions,
+        features: Vec::new(),
     }
 }
 
@@ -285,15 +288,37 @@ impl Checker<'_, '_> {
                 .iter()
                 .find(|syscall| profile.syscall_number(**syscall) == number)
             else {
-                self.violation(
-                    Rule::Resources,
-                    line,
-                    format!(
-                        "system call {number} isn't one the spec allows ({})",
-                        allowed_names.join(", ")
+                // What the spec would have to name for this call, when it's one lengua knows.
+                let known = Syscall::ALL
+                    .into_iter()
+                    .find(|syscall| profile.syscall_number(*syscall) == number);
+                let (problem, fix) = match known {
+                    Some(call) => {
+                        let needs = match crate::spec::Use::of(call) {
+                            Some(found) => format!("`{}` in its `- Uses:` line", found.name()),
+                            None => "a `- Network:` line".to_owned(),
+                        };
+                        (
+                            format!(
+                                "system call {} isn't one the spec allows: it needs {needs}, \
+                                 which spec.md doesn't name",
+                                call.name()
+                            ),
+                            format!(
+                                "use only what spec.md's Constraints name, or, when the program \
+                                 needs it, add {needs} to spec.md and tell the user"
+                            ),
+                        )
+                    }
+                    None => (
+                        format!(
+                            "system call {number} isn't one the spec allows (it allows {})",
+                            allowed_names.join(", ")
+                        ),
+                        "use only what spec.md's Constraints name".to_owned(),
                     ),
-                    "use only the system calls listed under Constraints in spec.md",
-                );
+                };
+                self.violation(Rule::Resources, line, problem, fix);
                 continue;
             };
             let expected = format!("SYS_{}", syscall.name().to_ascii_uppercase());

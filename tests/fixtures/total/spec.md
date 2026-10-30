@@ -18,18 +18,40 @@ exits with code 5.
 # Behaviors
 
 ## B1: Prints the total of all expenses
-- Given a file named `expenses.csv` holding `2026-10-01,12.50` and `2026-10-02,7.25` and `2026-10-03,100.00`, one per line
-- And the argument `expenses.csv`
+- Given the argument `expenses.csv`
+- And a file `expenses.csv` holding `2026-10-01,12.50\n2026-10-02,7.25\n2026-10-03,100.00\n`
 - When the program runs
 - Then it prints `119.75` followed by a newline
 - And it exits with code `0`
 
+### For any `d1`, `d2`, `d3`, `a`, `b`, `c` and `end`
+- Given the argument `expenses.csv`
+- And a file `expenses.csv` holding `{d1},{a}\n{d2},{b}\n{d3},{c}{end}`
+- When the program runs
+- Then it prints `{places(scaled(a, 2) + scaled(b, 2) + scaled(c, 2), 2)}` followed by a newline
+- And it exits with code `0`
+
+| d1 | d2 | d3 | a | b | c | end | runs |
+|---|---|---|---|---|---|---|---|
+| `choice("2026-10-01", "2025-12-31", "", "Jan 5")` | `choice("2026-10-02", "x", "2026/10/02")` | `choice("2026-10-03", "", "today")` | `decimal(0.00, 99999.99)` | `decimal(0.00, 99999.99)` | `decimal(0.00, 99999.99)` | `choice("\n", "")` | 300 |
+
 ## B2: Prints zero for an empty file
-- Given a file named `empty.csv` holding nothing
-- And the argument `empty.csv`
+- Given the argument `empty.csv`
+- And an empty file `empty.csv`
 - When the program runs
 - Then it prints `0.00` followed by a newline
 - And it exits with code `0`
+
+### For any `e`
+- Given the argument `empty.csv`
+- And a file `empty.csv` holding `{e}`
+- When the program runs
+- Then it prints `0.00` followed by a newline
+- And it exits with code `0`
+
+| e | runs |
+|---|---|
+| `choice("")` | 1 |
 
 ## B3: Shows usage when the file name is missing
 - Given no arguments
@@ -38,19 +60,40 @@ exits with code 5.
 - And it exits with code `1`
 
 ## B4: Reports a missing file
-- Given no file named `missing.csv`
-- And the argument `missing.csv`
+- Given the argument `missing.csv`
+- And no file `missing.csv`
 - When the program runs
 - Then it prints `total: cannot open file` followed by a newline to standard error
 - And it exits with code `2`
 
+### For any `name`
+- Given the argument `{name}`
+- When the program runs
+- Then it prints `total: cannot open file` followed by a newline to standard error
+- And it exits with code `2`
+
+| name | runs |
+|---|---|
+| `choice("missing.csv", "nope.csv", "expenses")` | 20 |
+
 ## B5: Rejects a line that is not a date and an amount
-- Given a file named `bad.csv` holding `2026-10-01,12.50` and `2026-10-02,lunch`, one per line
-- And the argument `bad.csv`
+- Given the argument `bad.csv`
+- And a file `bad.csv` holding `2026-10-01,12.50\n2026-10-02,lunch\n`
 - When the program runs
 - Then it prints `total: bad line 2` followed by a newline to standard error
 - And it exits with code `3`
 
+### For any `d1`, `a` and `bad`
+- Given the argument `bad.csv`
+- And a file `bad.csv` holding `{d1},{a}\n2026-10-02,{bad}\n`
+- When the program runs
+- Then it prints `total: bad line 2` followed by a newline to standard error
+- And it exits with code `3`
+
+| d1 | a | bad | runs |
+|---|---|---|---|
+| `choice("2026-10-01", "")` | `decimal(0.00, 99999.99)` | `choice("lunch", "12.5", "12.500", "1x.50", "", "-1.00", "100000.00", "12,50", "12.50x", ".50", "12.", "12 .50")` | 100 |
+
 # Constraints
 
-- Allowed system calls: openat, read, write, close, exit
+- Uses: files

@@ -1,11 +1,9 @@
-//! `tests.toml`: one example per behavior with the spec's own values, plus generated tests whose
-//! formulas compute the expected results for fresh random inputs on every run.
+//! A spec's tests: each behavior's steps, read as its example, plus the generated tests under its
+//! `###` heading, the same steps with formulas that compute the expected results for fresh inputs
+//! drawn on every run from the table below them.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-
-use serde::Deserialize;
-use toml::Spanned;
 
 use crate::expr::{
     self, Env, EvalError, Function, Generator, HexPart, Limit, PatternPart, Template, Value,
@@ -13,6 +11,8 @@ use crate::expr::{
 use crate::hash::Sha256Hex;
 use crate::spec::{ASSERTION_EXIT_CODE, Behavior, BehaviorId, Spec, Syscall};
 use crate::supply::Supply;
+
+mod steps;
 
 /// The most runs a generated block may ask for.
 pub const MAX_RUNS: u32 = 1000;
@@ -34,7 +34,7 @@ const PORT: &str = "port";
 /// Where a test names its own server's port: the runner writes the real one in its place.
 pub const PORT_TEXT: &str = "{port}";
 
-/// A checked tests.toml.
+/// A spec's checked tests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TestSuite {
     /// One example per behavior, in file order.
@@ -48,7 +48,7 @@ pub struct TestSuite {
 pub struct Example {
     /// The behavior it checks.
     pub id: BehaviorId,
-    /// Line of its `[[example]]` table.
+    /// Line of its behavior's heading in spec.md.
     pub line: usize,
     /// Command-line arguments.
     pub args: Vec<String>,
@@ -582,8 +582,9 @@ fn oversized_args(case: &Case) -> Option<String> {
         .find(|(_, arg)| arg.len() > MAX_ARG_BYTES)
     {
         return Some(format!(
-            "with {}, argument {} is {} bytes, but Linux limits each argument to {MAX_ARG_BYTES} \
-             bytes; narrow the range, or pass long text on standard input",
+            "with {}, argument {} is {} bytes, but an argument holds at most {MAX_ARG_BYTES} \
+             bytes on this computer; narrow the range, or pass long text on standard input or in \
+             a file",
             describe_inputs(&case.inputs),
             index + 1,
             arg.len()
@@ -608,7 +609,7 @@ pub fn describe_inputs(inputs: &Env) -> String {
         .join(", ")
 }
 
-/// A problem found in tests.toml.
+/// A problem found in a spec's tests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Problem {
     /// The line it's on, when it belongs to one.
@@ -626,91 +627,41 @@ impl fmt::Display for Problem {
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct TestsFile {
-    /// Older tests carried a spec label here; lengua.lock records the spec instead.
-    #[serde(default)]
-    meta: Option<Spanned<toml::Value>>,
-    #[serde(default)]
-    example: Vec<Spanned<ExampleTable>>,
-    #[serde(default)]
-    generated: Vec<Spanned<GeneratedTable>>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// What a behavior's steps give the program and expect it to print. How it ends is the
+/// behavior's own: its exit code, or that it keeps serving.
+#[derive(Debug)]
 struct ExampleTable {
-    id: String,
-    #[serde(default)]
     args: Vec<Text>,
-    #[serde(default)]
     stdin: Text,
-    #[serde(default)]
     files: BTreeMap<String, Text>,
-    #[serde(default)]
     stdout: Text,
-    #[serde(default)]
     stderr: Text,
-    #[serde(default)]
     files_after: BTreeMap<String, Text>,
-    exit_code: Option<i64>,
     random: Option<String>,
-    #[serde(default)]
     clock: Vec<String>,
-    server: Option<ServerField<Text>>,
-    #[serde(default)]
+    server: Vec<ServerTable<Text>>,
     client: Vec<ClientTable<Text>>,
-    #[serde(default)]
-    serves: bool,
 }
 
-/// The test's own server: one connection's script, or a list of them.
-#[derive(Debug, Deserialize)]
-#[serde(untagged, bound(deserialize = "T: Deserialize<'de> + Default"))]
-enum ServerField<T> {
-    One(ServerTable<T>),
-    Many(Vec<ServerTable<T>>),
-}
-
-impl<T> ServerField<T> {
-    fn into_vec(self) -> Vec<ServerTable<T>> {
-        match self {
-            Self::One(table) => vec![table],
-            Self::Many(tables) => tables,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(
-    deny_unknown_fields,
-    bound(deserialize = "T: Deserialize<'de> + Default")
-)]
+/// What the test's own server does on one connection: it receives exactly this, then replies.
+#[derive(Debug)]
 struct ServerTable<T> {
-    #[serde(default)]
     receives: T,
-    #[serde(default)]
     replies: T,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(
-    deny_unknown_fields,
-    bound(deserialize = "T: Deserialize<'de> + Default")
-)]
+/// What the test's own client does on one connection: it sends this, then reads the answer.
+#[derive(Debug)]
 struct ClientTable<T> {
-    #[serde(default)]
     sends: T,
-    #[serde(default)]
     receives: T,
 }
 
-/// An example's literal text: a string, or a list of strings and repeated runs, so a long input
-/// such as a file one byte over a limit stays short to write: `[{ repeat = "a", times = 1048576
-/// }, "x"]`. An expected output may instead be a rule, `{ matches = "rolled {any(1, 6)}\n" }`.
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
+/// A step's text: plain, or parts with repeated runs, so a long input such as a file one byte
+/// over a limit stays short to write: ``- Given a file `big.txt` holding `a` repeated `1048576`
+/// times followed by `x` ``. An expected output may instead be a rule, ``it prints text matching
+/// `rolled {any(1, 6)}` ``.
+#[derive(Debug)]
 enum Text {
     Plain(String),
     Parts(Vec<TextPart>),
@@ -718,8 +669,7 @@ enum Text {
 }
 
 /// Expected output that allows a range of numbers where the program chooses one.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug)]
 struct Rule {
     matches: String,
 }
@@ -730,15 +680,13 @@ impl Default for Text {
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug)]
 enum TextPart {
     Plain(String),
     Repeat(Repeat),
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug)]
 struct Repeat {
     repeat: String,
     times: u64,
@@ -749,7 +697,7 @@ impl Text {
     fn expected(self) -> Result<String, String> {
         match self {
             Self::Rule(Rule { matches }) => Template::parse(&matches)
-                .map_err(|error| format!("matches = {matches:?}: {error}"))?
+                .map_err(|error| format!("text matching {matches:?}: {error}"))?
                 .rule(),
             text => text.expand(),
         }
@@ -762,9 +710,7 @@ impl Text {
             Self::Parts(parts) => parts,
             Self::Rule(_) => {
                 return Err(
-                    "a rule such as { matches = \"{any(1, 6)}\" } goes only in stdout, stderr \
-                     and files_after; the test's inputs are exact"
-                        .into(),
+                    "a rule goes only in what the program prints; its inputs are exact".into(),
                 );
             }
         };
@@ -779,8 +725,8 @@ impl Text {
                         .filter(|bytes| text.len() + bytes <= MAX_FILE_BYTES);
                     if repeat.is_empty() || bytes.is_none() {
                         return Err(format!(
-                            "{{ repeat = {repeat:?}, times = {times} }} must repeat some text, \
-                             and the whole value must stay within {MAX_FILE_BYTES} bytes"
+                            "repeating {repeat:?} {times} times must repeat some text, and the \
+                             whole value must stay within {MAX_FILE_BYTES} bytes"
                         ));
                     }
                     text.push_str(&repeat.repeat(usize::try_from(times).unwrap_or(0)));
@@ -794,85 +740,84 @@ impl Text {
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct GeneratedTable {
-    id: String,
-    runs: Option<i64>,
-    vars: BTreeMap<String, String>,
-    #[serde(default)]
-    args: Vec<String>,
-    #[serde(default)]
-    stdin: String,
-    #[serde(default)]
-    files: BTreeMap<String, String>,
-    #[serde(default)]
-    stdout: String,
-    #[serde(default)]
-    stderr: String,
-    #[serde(default)]
-    files_after: BTreeMap<String, String>,
-    exit_code: Option<ExitCodeField>,
-    random: Option<String>,
-    #[serde(default)]
-    clock: Vec<String>,
-    server: Option<ServerField<String>>,
-    #[serde(default)]
-    client: Vec<ClientTable<String>>,
-    #[serde(default)]
+/// Text a step wrote, with the line of that step.
+#[derive(Debug, Clone, Default)]
+struct Written {
+    text: String,
+    line: usize,
+}
+
+/// A behavior's generated tests as the steps under its `###` heading write them: templates over
+/// the variables of its table, each with the line of its step.
+#[derive(Debug)]
+struct OutlineSteps {
+    /// Line of the heading.
+    line: usize,
+    args: Vec<Written>,
+    stdin: Written,
+    files: BTreeMap<String, Written>,
+    stdout: Written,
+    stderr: Written,
+    files_after: BTreeMap<String, Written>,
+    random: Option<Written>,
+    clock: Vec<Written>,
+    server: Vec<(Written, Written)>,
+    client: Vec<(Written, Written)>,
+    /// The exit code as written: a number or a formula.
+    exit_code: Option<Written>,
     serves: bool,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum ExitCodeField {
-    Number(i64),
-    Formula(String),
+/// One row of a behavior's table: one generated test's variables, and its runs when it gives
+/// them.
+#[derive(Debug)]
+struct OutlineRow {
+    line: usize,
+    runs: Option<String>,
+    vars: Vec<(String, String)>,
 }
 
-/// Checks tests.toml against the recorded spec, reporting every problem found (up to 20).
+/// The spec's tests: each behavior's steps, read as its example, and the generated tests under
+/// its `###` heading, checked against the spec. Every problem is reported (up to 20).
 ///
 /// # Errors
 ///
 /// Returns the problems when the tests aren't valid.
-pub fn check(text: &str, spec: &Spec) -> Result<TestSuite, Vec<Problem>> {
+pub fn check(spec: &Spec) -> Result<TestSuite, Vec<Problem>> {
     let mut checker = Checker {
-        text,
         spec,
         problems: Vec::new(),
         hidden: 0,
     };
-    let file: TestsFile = match toml::from_str(text) {
-        Ok(file) => file,
-        Err(error) => {
-            checker.problem(
-                None,
-                format!("tests.toml isn't valid: {}", error.to_string().trim()),
-            );
-            return Err(checker.problems);
+    let mut tables = Vec::new();
+    for behavior in &spec.behaviors {
+        match steps::example(behavior, spec) {
+            Ok(table) => tables.push((behavior, table)),
+            Err(problems) => {
+                for problem in problems {
+                    checker.problem(problem.line, problem.message);
+                }
+            }
         }
-    };
-    if let Ok(table) = toml::from_str::<toml::Table>(text)
-        && holds_markers(&toml::Value::Table(table))
-    {
-        checker.problem(
-            None,
-            "tests.toml holds one of the characters U+FDD0, U+FDD1 and U+FDD2, which lengua \
-             reserves for marking rules such as {any(1, 6)}; remove them",
-        );
-        return Err(checker.problems);
     }
-    if let Some(meta) = &file.meta {
-        let line = checker.line(meta.span().start);
-        checker.problem(
-            Some(line),
-            "delete the [meta] table: lengua.lock records which spec the tests were checked \
-             against",
-        );
+    let examples = checker.examples(tables);
+    let mut generated = Vec::new();
+    let mut written = String::new();
+    for behavior in &spec.behaviors {
+        let Some(outline) = &behavior.outline else {
+            continue;
+        };
+        written.push_str(&outline.text);
+        match steps::generated(behavior, outline, spec) {
+            Ok((steps, rows)) => generated.extend(checker.outline(behavior, &steps, rows)),
+            Err(problems) => {
+                for problem in problems {
+                    checker.problem(problem.line, problem.message);
+                }
+            }
+        }
     }
-    let examples = checker.examples(file.example);
-    let seed = dry_run_seed(text);
-    let generated = checker.generated_blocks(file.generated, seed);
+    let generated = checker.generated_blocks(generated, dry_run_seed(&written));
     checker.coverage(&examples, &generated);
     checker.formulas(&examples, &generated);
     if checker.problems.is_empty() {
@@ -889,6 +834,79 @@ pub fn check(text: &str, spec: &Spec) -> Result<TestSuite, Vec<Problem>> {
         }
         Err(checker.problems)
     }
+}
+
+/// Each behavior's example outputs as TOML (`stdout`, `stderr`, `files_after`), each exact text
+/// or `{ matches = … }`, for comparing two versions of a spec's tests.
+#[must_use]
+pub fn example_outputs(spec: &Spec) -> Vec<(String, toml::Table)> {
+    let value = |text: Text| match text {
+        Text::Rule(Rule { matches }) => {
+            let mut rule = toml::Table::new();
+            rule.insert("matches".into(), toml::Value::String(matches));
+            toml::Value::Table(rule)
+        }
+        other => toml::Value::String(other.expand().unwrap_or_default()),
+    };
+    spec.behaviors
+        .iter()
+        .filter_map(|behavior| {
+            let table = steps::example(behavior, spec).ok()?;
+            let mut outputs = toml::Table::new();
+            outputs.insert("stdout".into(), value(table.stdout));
+            outputs.insert("stderr".into(), value(table.stderr));
+            let files: toml::Table = table
+                .files_after
+                .into_iter()
+                .map(|(name, text)| (name, value(text)))
+                .collect();
+            outputs.insert("files_after".into(), toml::Value::Table(files));
+            Some((behavior.id.to_string(), outputs))
+        })
+        .collect()
+}
+
+/// Each behavior's generated tests as TOML, one table a row with its behavior's `id`: `runs`,
+/// `vars`, `stdout`, `stderr` and `files_after`, for comparing two versions of a spec's tests.
+#[must_use]
+pub fn generated_tables(spec: &Spec) -> Vec<toml::Table> {
+    let mut tables = Vec::new();
+    for behavior in &spec.behaviors {
+        let Some(outline) = &behavior.outline else {
+            continue;
+        };
+        let Ok((steps, rows)) = steps::generated(behavior, outline, spec) else {
+            continue;
+        };
+        let text = |written: &Written| toml::Value::String(written.text.clone());
+        for row in rows {
+            let mut table = toml::Table::new();
+            table.insert("id".into(), toml::Value::String(behavior.id.to_string()));
+            if let Some(runs) = row
+                .runs
+                .as_deref()
+                .and_then(|runs| runs.parse::<i64>().ok())
+            {
+                table.insert("runs".into(), toml::Value::Integer(runs));
+            }
+            let vars: toml::Table = row
+                .vars
+                .into_iter()
+                .map(|(name, source)| (name, toml::Value::String(source)))
+                .collect();
+            table.insert("vars".into(), toml::Value::Table(vars));
+            table.insert("stdout".into(), text(&steps.stdout));
+            table.insert("stderr".into(), text(&steps.stderr));
+            let files: toml::Table = steps
+                .files_after
+                .iter()
+                .map(|(name, written)| (name.clone(), text(written)))
+                .collect();
+            table.insert("files_after".into(), toml::Value::Table(files));
+            tables.push(table);
+        }
+    }
+    tables
 }
 
 /// A spec's backtick value with `\r`, `\n`, `\t` and `\\` read as the characters they name, as
@@ -916,26 +934,41 @@ fn unescape(written: &str) -> String {
     text
 }
 
-/// Whether any string in `value`, or any key, holds a character lengua uses to mark holes.
-fn holds_markers(value: &toml::Value) -> bool {
-    match value {
-        toml::Value::String(text) => crate::expect::has_holes(text),
-        toml::Value::Array(values) => values.iter().any(holds_markers),
-        toml::Value::Table(table) => table
-            .iter()
-            .any(|(key, value)| crate::expect::has_holes(key) || holds_markers(value)),
-        _ => false,
+/// A generated test's field, in the words its steps write it with.
+fn words(field: &str) -> String {
+    match field {
+        "args" => "the arguments".into(),
+        "stdin" => "standard input".into(),
+        "files" => "its files".into(),
+        "stdout" => "what it prints".into(),
+        "stderr" => "what it prints to standard error".into(),
+        "files_after" => "the files it leaves".into(),
+        "random" => "the random bytes".into(),
+        "clock" => "the clock".into(),
+        "exit_code" | "exit code" => "its exit code".into(),
+        "server" | "server.receives" => "what the server receives".into(),
+        "server.replies" => "what the server replies".into(),
+        "client" | "client.sends" => "what the client sends".into(),
+        "client.receives" => "what the client gets back".into(),
+        other => match (
+            other.strip_prefix("files."),
+            other.strip_prefix("files_after."),
+        ) {
+            (Some(file), _) => format!("the file `{file}`"),
+            (_, Some(file)) => format!("what `{file}` holds after"),
+            _ => other.to_owned(),
+        },
     }
 }
 
-/// The seed of the dry run, fixed by the file's content so `check` always gives the same verdict.
+/// The seed of the dry run, fixed by the tests as written so `check` always gives the same
+/// verdict.
 fn dry_run_seed(text: &str) -> u64 {
     let digest = Sha256Hex::of(text.as_bytes());
     u64::from_str_radix(&digest.as_str()[..16], 16).unwrap_or(0)
 }
 
 struct Checker<'a> {
-    text: &'a str,
     spec: &'a Spec,
     problems: Vec<Problem>,
     hidden: usize,
@@ -953,151 +986,70 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn line(&self, offset: usize) -> usize {
-        self.text[..offset.min(self.text.len())]
-            .bytes()
-            .filter(|&byte| byte == b'\n')
-            .count()
-            + 1
-    }
-
-    /// The behavior `id` names, reporting unknown IDs.
-    fn behavior(&mut self, id: &str, line: usize, table: &str) -> Option<&'a Behavior> {
-        let spec = self.spec;
-        let found = BehaviorId::parse(id).and_then(|id| spec.behavior(id));
-        if found.is_none() {
-            let known: Vec<String> = spec
-                .behaviors
-                .iter()
-                .map(|behavior| behavior.id.to_string())
-                .collect();
-            self.problem(
-                Some(line),
-                format!(
-                    "{table} has id = {id:?}, which isn't a behavior in spec.md (they are {})",
-                    known.join(", ")
-                ),
-            );
-        }
-        found
-    }
-
-    fn examples(&mut self, tables: Vec<Spanned<ExampleTable>>) -> Vec<Example> {
-        let mut examples: Vec<Example> = Vec::new();
-        for table in tables {
-            let line = self.line(table.span().start);
-            let table = table.into_inner();
-            let Some(behavior) = self.behavior(&table.id, line, "[[example]]") else {
-                continue;
-            };
+    /// Each behavior's example, as its steps describe it. The spec already holds each step to a
+    /// phrasing and each behavior to one ending, so what's left is what the steps' values make:
+    /// texts that fit, file names, and what the spec lets a test supply.
+    fn examples(&mut self, tables: Vec<(&'a Behavior, ExampleTable)>) -> Vec<Example> {
+        let mut examples = Vec::new();
+        for (behavior, table) in tables {
             let id = behavior.id;
-            let expected_exit = behavior.exit_code;
-            let values: Vec<String> = behavior.values().map(str::to_owned).collect();
-            if let Some(first) = examples.iter().find(|example| example.id == id) {
-                let first = first.line;
-                self.problem(
-                    Some(line),
-                    format!("{id} has two examples (also on line {first}); keep one per behavior"),
-                );
-                continue;
-            }
-            let mut expand = |field: &str, text: Text, output: bool| {
+            let line = behavior.line;
+            let name = format!("{id}'s example");
+            let mut expand = |what: &str, text: Text, output: bool| {
                 let text = if output {
                     text.expected()
                 } else {
                     text.expand()
                 };
                 text.unwrap_or_else(|problem| {
-                    self.problem(Some(line), format!("example {id}: {field}: {problem}"));
+                    self.problem(Some(line), format!("{name}: {what}: {problem}"));
                     String::new()
                 })
             };
             let args: Vec<String> = table
                 .args
                 .into_iter()
-                .map(|arg| expand("args", arg, false))
+                .map(|arg| expand("the arguments", arg, false))
                 .collect();
-            let stdin = expand("stdin", table.stdin, false);
-            let stdout = expand("stdout", table.stdout, true);
-            let stderr = expand("stderr", table.stderr, true);
+            let stdin = expand("standard input", table.stdin, false);
+            let stdout = expand("what it prints", table.stdout, true);
+            let stderr = expand("what it prints to standard error", table.stderr, true);
             let files: BTreeMap<String, String> = table
                 .files
                 .into_iter()
-                .map(|(name, contents)| {
-                    let contents = expand(&format!("files.{name}"), contents, false);
-                    (name, contents)
+                .map(|(file, contents)| {
+                    let contents = expand(&format!("the file `{file}`"), contents, false);
+                    (file, contents)
                 })
                 .collect();
             let files_after: BTreeMap<String, String> = table
                 .files_after
                 .into_iter()
-                .map(|(name, contents)| {
-                    let contents = expand(&format!("files_after.{name}"), contents, true);
-                    (name, contents)
+                .map(|(file, contents)| {
+                    let contents = expand(&format!("what `{file}` holds after"), contents, true);
+                    (file, contents)
                 })
                 .collect();
             // What the test's server and client send is exact; what the program answers its client
-            // may hold rules. Long ones may be written with repeats, like any example text.
+            // may hold rules.
             let server: Vec<Reply> = table
                 .server
-                .map(ServerField::into_vec)
-                .unwrap_or_default()
                 .into_iter()
                 .map(|table| Reply {
-                    receives: expand("server.receives", table.receives, false),
-                    replies: expand("server.replies", table.replies, false),
+                    receives: expand("what the server receives", table.receives, false),
+                    replies: expand("what the server replies", table.replies, false),
                 })
                 .collect();
             let client: Vec<Exchange> = table
                 .client
                 .into_iter()
                 .map(|table| Exchange {
-                    sends: expand("client.sends", table.sends, false),
-                    receives: expand("client.receives", table.receives, true),
+                    sends: expand("what the client sends", table.sends, false),
+                    receives: expand("what the client gets back", table.receives, true),
                 })
                 .collect();
-            let name = format!("example {id}");
-            let Some(written_exit) = self.check_ending(
-                line,
-                &name,
-                behavior,
-                table.exit_code.is_some(),
-                table.serves,
-            ) else {
-                continue;
-            };
-            let written_exit = table.exit_code.unwrap_or(written_exit);
-            let exit_code = match u8::try_from(written_exit) {
-                Ok(ASSERTION_EXIT_CODE) => {
-                    self.problem(
-                        Some(line),
-                        format!(
-                            "example {id} expects exit code {ASSERTION_EXIT_CODE}, which is \
-                             reserved for failed assertions"
-                        ),
-                    );
-                    continue;
-                }
-                Ok(code) => code,
-                Err(_) => {
-                    self.problem(
-                        Some(line),
-                        format!("example {id}: exit codes go from 0 to 255, not {written_exit}"),
-                    );
-                    continue;
-                }
-            };
-            if exit_code != expected_exit {
-                self.problem(
-                    Some(line),
-                    format!(
-                        "example {id} expects exit code {exit_code}, but the spec says {id} \
-                         exits with code {expected_exit}"
-                    ),
-                );
-            }
             for problem in file_set_problems(files.keys().chain(files_after.keys())) {
-                self.problem(Some(line), format!("example {id}: {problem}"));
+                self.problem(Some(line), format!("{name}: {problem}"));
             }
             self.check_supply(line, &name, table.random.is_some(), !table.clock.is_empty());
             if let Err(problem) = Supply::parse(table.random.as_deref(), &table.clock) {
@@ -1107,7 +1059,7 @@ impl<'a> Checker<'a> {
                 line,
                 &name,
                 !server.is_empty(),
-                !client.is_empty() || table.serves,
+                !client.is_empty() || behavior.serves,
             );
             let uses_port = args
                 .iter()
@@ -1119,11 +1071,11 @@ impl<'a> Checker<'a> {
                     Some(line),
                     format!(
                         "{name} names {PORT_TEXT}, the port of the test's own server, but has no \
-                         server; add server = {{ receives = \"…\", replies = \"…\" }}"
+                         server; add `- And a server that receives `…` and replies `…``"
                     ),
                 );
             }
-            let example = Example {
+            examples.push(Example {
                 id,
                 line,
                 args,
@@ -1132,92 +1084,18 @@ impl<'a> Checker<'a> {
                 stdout,
                 stderr,
                 files_after,
-                exit_code,
+                exit_code: behavior.exit_code,
                 random: table.random,
                 clock: table.clock,
                 server,
                 client,
-                serves: table.serves,
-            };
-            let network_test =
-                !example.server.is_empty() || !example.client.is_empty() || example.serves;
-            let network_ports: Vec<String> = self
-                .spec
-                .network
-                .connects
-                .iter()
-                .chain(&self.spec.network.listens)
-                .map(u16::to_string)
-                .collect();
-            for written in values {
-                // `\r\n` in a spec's backticks means the line break a protocol needs.
-                let value = unescape(&written);
-                let in_files = |files: &BTreeMap<String, String>| {
-                    files
-                        .iter()
-                        .any(|(name, contents)| name.contains(&value) || contents.contains(&value))
-                };
-                let present = example.args.contains(&value)
-                    || example.stdin.contains(&value)
-                    || example.stdout.contains(&value)
-                    || example.stderr.contains(&value)
-                    || in_files(&example.files)
-                    || in_files(&example.files_after)
-                    || example.exit_code.to_string() == value
-                    || example
-                        .random
-                        .as_deref()
-                        .is_some_and(|random| random.contains(&value))
-                    || example.clock.iter().any(|reading| reading.contains(&value))
-                    || example.server.iter().any(|reply| {
-                        reply.receives.contains(&value) || reply.replies.contains(&value)
-                    })
-                    || example.client.iter().any(|exchange| {
-                        exchange.sends.contains(&value) || exchange.receives.contains(&value)
-                    })
-                    // The spec's own ports: a test talks over a free port of its own instead.
-                    || (network_test && network_ports.contains(&value));
-                if !present {
-                    self.problem(
-                        Some(line),
-                        format!(
-                            "example {id} doesn't contain the spec's value `{written}`; copy every \
-                             backtick value of {id} into its args, stdin, files, stdout, stderr, \
-                             files_after, random, clock or exit_code"
-                        ),
-                    );
-                }
-            }
-            examples.push(example);
-        }
-        let missing: Vec<String> = self
-            .spec
-            .behaviors
-            .iter()
-            .filter(|behavior| !examples.iter().any(|example| example.id == behavior.id))
-            .map(|behavior| behavior.id.to_string())
-            .collect();
-        for id in missing {
-            self.problem(
-                None,
-                format!("{id} has no [[example]]; add one with the values from its spec steps"),
-            );
+                serves: behavior.serves,
+            });
         }
         examples
     }
 
-    fn generated_blocks(
-        &mut self,
-        tables: Vec<Spanned<GeneratedTable>>,
-        seed: u64,
-    ) -> Vec<Generated> {
-        let mut blocks = Vec::new();
-        for table in tables {
-            let line = self.line(table.span().start);
-            if let Some(block) = self.generated(line, table.into_inner()) {
-                blocks.push(block);
-            }
-        }
+    fn generated_blocks(&mut self, mut blocks: Vec<Generated>, seed: u64) -> Vec<Generated> {
         mark_every_value(&mut blocks);
         for block in &blocks {
             self.dry_run(block, seed);
@@ -1225,198 +1103,227 @@ impl<'a> Checker<'a> {
         blocks
     }
 
-    fn generated(&mut self, line: usize, table: GeneratedTable) -> Option<Generated> {
-        let behavior = self.behavior(&table.id, line, "[[generated]]")?;
+    /// A behavior's generated tests: its outline's templates, read once, with each row of its
+    /// table's variables. Nothing when any of it has a problem.
+    fn outline(
+        &mut self,
+        behavior: &'a Behavior,
+        steps: &OutlineSteps,
+        rows: Vec<OutlineRow>,
+    ) -> Vec<Generated> {
         let id = behavior.id;
-        let behavior_exit = behavior.exit_code;
         let name = format!("generated {id}");
         let before = self.problems.len() + self.hidden;
-        let runs = match table.runs.map(u32::try_from) {
-            None => DEFAULT_RUNS,
-            Some(Ok(runs)) if (1..=MAX_RUNS).contains(&runs) => runs,
-            Some(_) => {
-                self.problem(
-                    Some(line),
-                    format!("{name}: runs must be from 1 to {MAX_RUNS}"),
-                );
-                DEFAULT_RUNS
-            }
+        let Some(shared) = self.templates(behavior, steps, &name) else {
+            return Vec::new();
         };
-        if table.vars.is_empty() {
-            self.problem(
-                Some(line),
-                format!("{name} has no vars; declare the inputs it draws, such as vars = {{ a = \"int(-10, 10)\" }}"),
-            );
-        }
-        let mut vars = Vec::new();
-        for (var, source) in &table.vars {
-            if !expr::is_variable_name(var) {
+        let mut blocks = Vec::new();
+        for row in rows {
+            let line = row.line;
+            if row.vars.is_empty() {
                 self.problem(
                     Some(line),
                     format!(
-                        "{name}: `{var}` can't be a variable name; use lowercase letters, digits \
-                         and _, not a function name"
+                        "{name}'s table has no variables: give each one a column, such as \
+                         `| a |`, and its generator in each row, such as `` `int(-10, 10)` ``"
                     ),
                 );
-                continue;
             }
-            match Generator::parse(source) {
-                Ok(generator) => vars.push((var.clone(), generator)),
-                Err(error) => self.problem(Some(line), format!("{name}: vars.{var}: {error}")),
+            let runs = match row.runs.as_deref().map(str::parse::<u32>) {
+                None => DEFAULT_RUNS,
+                Some(Ok(runs)) if (1..=MAX_RUNS).contains(&runs) => runs,
+                Some(_) => {
+                    self.problem(
+                        Some(line),
+                        format!("{name}: runs must be from 1 to {MAX_RUNS}"),
+                    );
+                    DEFAULT_RUNS
+                }
+            };
+            let mut vars = Vec::new();
+            for (var, source) in &row.vars {
+                if !expr::is_variable_name(var) {
+                    self.problem(
+                        Some(line),
+                        format!(
+                            "{name}: `{var}` can't be a variable name; use lowercase letters, \
+                             digits and _, not a function name"
+                        ),
+                    );
+                    continue;
+                }
+                if crate::expect::has_holes(source) {
+                    self.problem(
+                        Some(line),
+                        format!(
+                            "{name}: {var}'s generator holds one of the characters U+FDD0, \
+                             U+FDD1 and U+FDD2, which lengua reserves for marking rules; remove \
+                             them"
+                        ),
+                    );
+                    continue;
+                }
+                match Generator::parse(source) {
+                    Ok(generator) => vars.push((var.clone(), generator)),
+                    Err(error) => self.problem(Some(line), format!("{name}: {var}: {error}")),
+                }
             }
+            let block = Generated {
+                line,
+                runs,
+                vars,
+                ..shared.clone()
+            };
+            self.check_ranges(&block, &name);
+            blocks.push(block);
         }
-        let mut template = |field: &str, source: &str| match Template::parse(source) {
+        // The rows share their steps and their columns, so the variables check once.
+        if let Some(first) = blocks.first() {
+            self.check_variables(first, &name, steps.line);
+        }
+        if self.problems.len() + self.hidden == before {
+            blocks
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// The templates an outline's steps write, each problem on the line of its step, as one
+    /// generated test with no variables yet.
+    fn templates(
+        &mut self,
+        behavior: &Behavior,
+        steps: &OutlineSteps,
+        name: &str,
+    ) -> Option<Generated> {
+        let id = behavior.id;
+        let behavior_exit = behavior.exit_code;
+        let mut template = |field: &str, written: &Written| match Template::parse(&written.text) {
             Ok(template) => Some(template),
             Err(error) => {
-                self.problem(Some(line), format!("{name}: {field}: {error}"));
+                self.problem(
+                    Some(written.line),
+                    format!("{name}: {}: {error}", words(field)),
+                );
                 None
             }
         };
-        let args: Vec<Option<Template>> =
-            table.args.iter().map(|arg| template("args", arg)).collect();
-        let stdin = template("stdin", &table.stdin);
-        let files: Option<BTreeMap<String, Template>> = table
+        let args: Option<Vec<Template>> =
+            steps.args.iter().map(|arg| template("args", arg)).collect();
+        let stdin = template("stdin", &steps.stdin);
+        let files: Option<BTreeMap<String, Template>> = steps
             .files
             .iter()
-            .map(|(file, source)| Some((file.clone(), template("files", source)?)))
+            .map(|(file, written)| {
+                Some((file.clone(), template(&format!("files.{file}"), written)?))
+            })
             .collect();
-        let stdout = template("stdout", &table.stdout);
-        let stderr = template("stderr", &table.stderr);
-        let files_after: Option<BTreeMap<String, Template>> = table
+        let stdout = template("stdout", &steps.stdout);
+        let stderr = template("stderr", &steps.stderr);
+        let files_after: Option<BTreeMap<String, Template>> = steps
             .files_after
             .iter()
-            .map(|(file, source)| Some((file.clone(), template("files_after", source)?)))
+            .map(|(file, written)| {
+                Some((
+                    file.clone(),
+                    template(&format!("files_after.{file}"), written)?,
+                ))
+            })
             .collect();
-        let random = match &table.random {
+        let random = match &steps.random {
             None => Some(None),
-            Some(source) => template("random", source).map(Some),
+            Some(written) => template("random", written).map(Some),
         };
-        let clock: Option<Vec<Template>> = table
+        let clock: Option<Vec<Template>> = steps
             .clock
             .iter()
-            .map(|source| template("clock", source))
+            .map(|reading| template("clock", reading))
             .collect();
-        let server: Option<Vec<(Template, Template)>> = table
+        let server: Option<Vec<(Template, Template)>> = steps
             .server
-            .map(ServerField::into_vec)
-            .unwrap_or_default()
             .iter()
-            .map(|reply| {
+            .map(|(receives, replies)| {
                 Some((
-                    template("server.receives", &reply.receives)?,
-                    template("server.replies", &reply.replies)?,
+                    template("server.receives", receives)?,
+                    template("server.replies", replies)?,
                 ))
             })
             .collect();
-        let client: Option<Vec<(Template, Template)>> = table
+        let client: Option<Vec<(Template, Template)>> = steps
             .client
             .iter()
-            .map(|exchange| {
+            .map(|(sends, receives)| {
                 Some((
-                    template("client.sends", &exchange.sends)?,
-                    template("client.receives", &exchange.receives)?,
+                    template("client.sends", sends)?,
+                    template("client.receives", receives)?,
                 ))
             })
             .collect();
-        for problem in file_set_problems(table.files.keys().chain(table.files_after.keys())) {
-            self.problem(Some(line), format!("{name}: {problem}"));
-        }
-        self.check_supply(line, &name, table.random.is_some(), !table.clock.is_empty());
-        self.check_peers(
-            line,
-            &name,
-            server.as_ref().is_some_and(|server| !server.is_empty()),
-            client.as_ref().is_some_and(|client| !client.is_empty()) || table.serves,
-        );
-        self.check_ending(
-            line,
-            &name,
-            behavior,
-            table.exit_code.is_some(),
-            table.serves,
-        )?;
-        let exit_field = table
-            .exit_code
-            .unwrap_or(ExitCodeField::Number(i64::from(behavior_exit)));
-        let exit_code = match &exit_field {
-            ExitCodeField::Number(code) => match u8::try_from(*code) {
+        let exit_code = match &steps.exit_code {
+            None => None,
+            Some(written) if written.text.contains('{') => match Template::parse(&written.text) {
+                Ok(template) => Some(ExitCode::Formula(template)),
+                Err(error) => {
+                    self.problem(
+                        Some(written.line),
+                        format!("{name}: its exit code: {error}"),
+                    );
+                    return None;
+                }
+            },
+            Some(written) => match written.text.parse::<u8>() {
                 Ok(code) if code == behavior_exit => Some(ExitCode::Fixed(code)),
                 Ok(code) => {
                     self.problem(
-                        Some(line),
+                        Some(written.line),
                         format!(
                             "{name} expects exit code {code}, but the spec says {id} exits with \
                              code {behavior_exit}"
                         ),
                     );
-                    None
+                    return None;
                 }
                 Err(_) => {
                     self.problem(
-                        Some(line),
-                        format!("{name}: exit codes go from 0 to 255, not {code}"),
+                        Some(written.line),
+                        format!("{name}: exit codes go from 0 to 255, not {}", written.text),
                     );
-                    None
-                }
-            },
-            ExitCodeField::Formula(source) => match Template::parse(source) {
-                Ok(template) => Some(ExitCode::Formula(template)),
-                Err(error) => {
-                    self.problem(Some(line), format!("{name}: exit_code: {error}"));
-                    None
+                    return None;
                 }
             },
         };
-        let (
-            Some(args),
-            Some(stdin),
-            Some(files),
-            Some(stdout),
-            Some(stderr),
-            Some(files_after),
-            Some(exit_code),
-            Some(random),
-            Some(clock),
-            Some(server),
-            Some(client),
-        ) = (
-            args.into_iter().collect::<Option<Vec<_>>>(),
-            stdin,
-            files,
-            stdout,
-            stderr,
-            files_after,
-            exit_code,
-            random,
-            clock,
-            server,
-            client,
-        )
-        else {
-            return None;
-        };
-        let block = Generated {
+        let line = steps.line;
+        for problem in file_set_problems(steps.files.keys().chain(steps.files_after.keys())) {
+            self.problem(Some(line), format!("{name}: {problem}"));
+        }
+        self.check_supply(line, name, steps.random.is_some(), !steps.clock.is_empty());
+        self.check_peers(
+            line,
+            name,
+            !steps.server.is_empty(),
+            !steps.client.is_empty() || steps.serves,
+        );
+        self.check_ending(line, name, behavior, exit_code.is_some(), steps.serves)?;
+        let exit_code = exit_code.unwrap_or(ExitCode::Fixed(behavior_exit));
+        Some(Generated {
             id,
             line,
-            runs,
-            vars,
-            args,
-            stdin,
-            files,
-            stdout,
-            stderr,
-            files_after,
+            runs: DEFAULT_RUNS,
+            vars: Vec::new(),
+            args: args?,
+            stdin: stdin?,
+            files: files?,
+            stdout: stdout?,
+            stderr: stderr?,
+            files_after: files_after?,
             exit_code,
             every_value: false,
-            random,
-            clock,
-            server,
-            client,
-            serves: table.serves,
-        };
-        self.check_variables(&block, &name);
-        self.check_ranges(&block, &name);
-        (self.problems.len() + self.hidden == before).then_some(block)
+            random: random?,
+            clock: clock?,
+            server: server?,
+            client: client?,
+            serves: steps.serves,
+        })
     }
 
     /// A test has its own server only for a program that connects, and its own client, or
@@ -1435,7 +1342,7 @@ impl<'a> Checker<'a> {
             self.problem(
                 Some(line),
                 format!(
-                    "{name} has a client or serves = true, but spec.md doesn't say `- Network: \
+                    "{name} has a client or keeps serving, but spec.md doesn't say `- Network: \
                      listens on TCP port N`"
                 ),
             );
@@ -1443,8 +1350,8 @@ impl<'a> Checker<'a> {
     }
 
     /// A test ends as its behavior does: with the exit code the spec states, or, for a behavior
-    /// that keeps serving, with `serves = true` and no exit code. Returns the exit code the test
-    /// needs when it gives none, or `None` after a problem.
+    /// that keeps serving, still serving. Returns the exit code the test needs when it gives
+    /// none, or `None` after a problem.
     fn check_ending(
         &mut self,
         line: usize,
@@ -1458,17 +1365,22 @@ impl<'a> Checker<'a> {
             (true, true, false) => return Some(0),
             (false, false, true) => return Some(i64::from(behavior.exit_code)),
             (true, false, _) => format!(
-                "{name}: the spec says {id} keeps serving, so write serves = true and no \
-                 exit_code"
+                "{name}: {id} keeps serving, so its generated tests end with `- And it keeps \
+                 serving` too"
             ),
             (false, true, _) => format!(
-                "{name} has serves = true, but the spec says {id} exits with code {}",
-                behavior.exit_code
+                "{name} keeps serving, but {id} exits with code {code}: end its generated tests \
+                 with `- And it exits with code `{code}``",
+                code = behavior.exit_code
             ),
             (true, true, true) => {
-                format!("{name} keeps serving, so it has no exit_code; remove it")
+                format!("{name} both exits and keeps serving; end it one way, as {id} does")
             }
-            (false, false, false) => format!("{name} needs exit_code, the code the spec states"),
+            (false, false, false) => format!(
+                "{name} needs its exit code, the one {id} states: end its generated tests with \
+                 `- And it exits with code `{code}``",
+                code = behavior.exit_code
+            ),
         };
         self.problem(Some(line), problem);
         None
@@ -1482,8 +1394,8 @@ impl<'a> Checker<'a> {
             self.problem(
                 Some(line),
                 format!(
-                    "{name} supplies random bytes, but spec.md doesn't allow getrandom; drop \
-                     random, or ask the user to allow getrandom"
+                    "{name} supplies random bytes, but spec.md's `- Uses:` line doesn't name \
+                     `random bytes`; add it there, or drop the random bytes"
                 ),
             );
         }
@@ -1491,8 +1403,8 @@ impl<'a> Checker<'a> {
             self.problem(
                 Some(line),
                 format!(
-                    "{name} supplies clock readings, but spec.md doesn't allow clock_gettime; \
-                     drop clock, or ask the user to allow clock_gettime"
+                    "{name} supplies clock readings, but spec.md's `- Uses:` line doesn't name \
+                     `the clock`; add it there, or drop the readings"
                 ),
             );
         }
@@ -1531,9 +1443,8 @@ impl<'a> Checker<'a> {
                     self.problem(
                         Some(line),
                         format!(
-                            "{name}: vars.{var} = {generator} fills {count} random byte(s), which \
-                             the kernel could give any value, so it draws them all: \
-                             {var} = \"{every}\""
+                            "{name}: {var} = {generator} fills {count} random byte(s), which the \
+                             computer could give any value, so it draws them all: `{every}`"
                         ),
                     );
                 }
@@ -1547,9 +1458,9 @@ impl<'a> Checker<'a> {
                     self.problem(
                         Some(line),
                         format!(
-                            "{name}: vars.{var} = {generator} is a clock reading; draw seconds \
-                             since 1970 with int(lo, hi), or decimal(lo, hi) with up to 9 \
-                             places, from 0 up"
+                            "{name}: {var} = {generator} is a clock reading; draw seconds since \
+                             1970 with int(lo, hi), or decimal(lo, hi) with up to 9 places, from \
+                             0 up"
                         ),
                     );
                 }
@@ -1603,7 +1514,7 @@ impl<'a> Checker<'a> {
                 self.problem(
                     Some(line),
                     format!(
-                        "{name}: vars.{var} = {generator} uses {limit}, which spec.md's Purpose \
+                        "{name}: {var} = {generator} uses {limit}, which spec.md's Purpose \
                          doesn't state. Generators take their ranges from Purpose: use the \
                          numbers it gives in backticks, or add the range to Purpose in spec.md \
                          and call check again{hint}"
@@ -1622,7 +1533,7 @@ impl<'a> Checker<'a> {
             self.problem(
                 Some(line),
                 format!(
-                    "{name}: vars.{var} = {generator} draws numbers with {places} decimal \
+                    "{name}: {var} = {generator} draws numbers with {places} decimal \
                      places, but Purpose writes them with {written}; write the bounds the way \
                      Purpose does"
                 ),
@@ -1630,7 +1541,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn check_variables(&mut self, block: &Generated, name: &str) {
+    fn check_variables(&mut self, block: &Generated, name: &str, line: usize) {
         let declared: BTreeSet<String> = block.vars.iter().map(|(var, _)| var.clone()).collect();
         let mut inputs = BTreeSet::new();
         for (field, template) in block
@@ -1655,11 +1566,13 @@ impl<'a> Checker<'a> {
         {
             if template.pattern().is_none() {
                 self.problem(
-                    Some(block.line),
+                    Some(line),
                     format!(
-                        "{name}: {field} {:?} computes a value; what a test gives the program \
-                         (args, stdin, files, clock, server.replies, client.sends) may only hold \
-                         bare variables like {{a}}, so move the computation to what it expects",
+                        "{name}: {} {:?} computes a value; what a test gives the program (its \
+                         arguments, standard input, files and clock, the server's replies and the \
+                         client's messages) may only hold bare variables like {{a}}, so move the \
+                         computation to what it expects",
+                        words(field),
                         template.source()
                     ),
                 );
@@ -1674,10 +1587,10 @@ impl<'a> Checker<'a> {
             .any(|template| template.variables().contains(PORT));
         if port_built_in && uses_port && block.server.is_empty() {
             self.problem(
-                Some(block.line),
+                Some(line),
                 format!(
                     "{name} uses port, the port of the test's own server, but has no server; \
-                     add server = {{ receives = \"…\", replies = \"…\" }}"
+                     add `- And a server on port `…` that receives `…` and replies `…``"
                 ),
             );
         }
@@ -1687,10 +1600,10 @@ impl<'a> Checker<'a> {
         if let Some(random) = &block.random {
             if random.hex_parts().is_none() {
                 self.problem(
-                    Some(block.line),
+                    Some(line),
                     format!(
-                        "{name}: random {:?} may only hold hex digits and hex(x, n), a variable \
-                         and 1 to 8 bytes, such as \"{{hex(roll, 1)}}\"",
+                        "{name}: the random bytes {:?} may only hold hex digits and hex(x, n), a \
+                         variable and 1 to 8 bytes, such as `{{hex(roll, 1)}}`",
                         random.source()
                     ),
                 );
@@ -1709,13 +1622,13 @@ impl<'a> Checker<'a> {
             .any(|template| template.calls(Function::Hex))
         {
             self.problem(
-                Some(block.line),
-                format!("{name}: hex(x, n) only fills random bytes, in random"),
+                Some(line),
+                format!("{name}: hex(x, n) only fills the random bytes"),
             );
         }
         if !block.clock.is_empty() && block.uses_now() {
             self.problem(
-                Some(block.line),
+                Some(line),
                 format!(
                     "{name} supplies the clock, so the time is known exactly: compute the output \
                      from the clock's variables instead of now"
@@ -1734,10 +1647,10 @@ impl<'a> Checker<'a> {
         let now_built_in = !declared.contains(NOW);
         if now_built_in && inputs.contains(NOW) {
             self.problem(
-                Some(block.line),
+                Some(line),
                 format!(
-                    "{name}: args, stdin and files can't hold now, the time the run starts; the \
-                     program reads the time itself"
+                    "{name}: what a test gives the program can't hold now, the time the run \
+                     starts; the program reads the time itself"
                 ),
             );
         }
@@ -1747,7 +1660,7 @@ impl<'a> Checker<'a> {
                 .any(|template| template.uses_outside_any(NOW))
         {
             self.problem(
-                Some(block.line),
+                Some(line),
                 format!(
                     "{name}: now is the second the run starts, which no test can know exactly, \
                      so it may only bound a rule such as {{any(now - 2, now + 2)}}"
@@ -1759,16 +1672,16 @@ impl<'a> Checker<'a> {
                 continue;
             }
             self.problem(
-                Some(block.line),
-                format!("{name} uses `{var}`, which isn't declared in vars"),
+                Some(line),
+                format!("{name} uses `{var}`, which isn't a column of its table"),
             );
         }
         for var in declared.difference(&inputs) {
             self.problem(
-                Some(block.line),
+                Some(line),
                 format!(
-                    "{name}: `{var}` never reaches the program; use it in args, stdin, files, \
-                     random or clock, or remove it"
+                    "{name}: `{var}` never reaches the program; use it in what the steps give \
+                     the program, or remove its column"
                 ),
             );
         }
@@ -1799,9 +1712,10 @@ impl<'a> Checker<'a> {
                     self.problem(
                         Some(block.line),
                         format!(
-                            "{name}: with {}, {field} {error}; narrow the generators or fix the \
+                            "{name}: with {}, {} {error}; narrow the generators or fix the \
                              formula",
-                            describe_inputs(&inputs)
+                            describe_inputs(&inputs),
+                            words(field)
                         ),
                     );
                     return;
@@ -1844,9 +1758,9 @@ impl<'a> Checker<'a> {
                 self.problem(
                     Some(block.line),
                     format!(
-                        "{name}: server.receives must be exact, since the test's server reads \
-                         exactly those bytes; a rule such as any(…) goes in what the program \
-                         prints or answers"
+                        "{name}: what the server receives must be exact, since the test's \
+                         server reads exactly those bytes; a rule such as any(…) goes in what \
+                         the program prints or answers"
                     ),
                 );
                 return;
@@ -1879,8 +1793,8 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// Every behavior whose example has inputs needs a generated block, and all blocks of a
-    /// behavior share their templates.
+    /// Every behavior whose example has inputs needs generated tests, which talk and supply as
+    /// its example does.
     fn coverage(&mut self, examples: &[Example], generated: &[Generated]) {
         for example in examples {
             let blocks: Vec<&Generated> = generated
@@ -1901,12 +1815,11 @@ impl<'a> Checker<'a> {
                     self.problem(
                         Some(block.line),
                         format!(
-                            "generated {} and its example must talk over the same number of \
-                             connections: {} with the test's server and {} with its client in \
-                             the example",
-                            block.id,
+                            "generated {id} must talk over as many connections as {id}'s \
+                             steps: {} with the test's server and {} with its client",
                             example.server.len(),
-                            example.client.len()
+                            example.client.len(),
+                            id = block.id,
                         ),
                     );
                 }
@@ -1916,9 +1829,9 @@ impl<'a> Checker<'a> {
                     self.problem(
                         Some(block.line),
                         format!(
-                            "generated {} and its example must supply the same things: random \
-                             bytes in both or neither, and clock readings in both or neither",
-                            block.id
+                            "generated {id} must supply what {id}'s steps do: random bytes in \
+                             both or neither, and clock readings in both or neither",
+                            id = block.id
                         ),
                     );
                 }
@@ -1927,26 +1840,12 @@ impl<'a> Checker<'a> {
                 self.problem(
                     Some(example.line),
                     format!(
-                        "{} has inputs, so it needs a [[generated]] block that tries fresh \
-                         inputs on every run",
-                        example.id
+                        "{id} has inputs, so it needs generated tests that try fresh inputs on \
+                         every run: under a `###` heading after its steps, the same steps with \
+                         `{{placeholders}}`, then a table of where each variable comes from",
+                        id = example.id
                     ),
                 );
-            }
-            if let [first, rest @ ..] = blocks.as_slice() {
-                for block in rest {
-                    if templates(block) != templates(first) {
-                        self.problem(
-                            Some(block.line),
-                            format!(
-                                "the [[generated]] blocks of {} must share args, stdin, files, \
-                                 random, clock, stdout, stderr, files_after and exit_code (as on \
-                                 line {}); only vars and runs may differ",
-                                block.id, first.line
-                            ),
-                        );
-                    }
-                }
             }
         }
     }
@@ -1968,7 +1867,7 @@ impl<'a> Checker<'a> {
                 Err(reason) => {
                     self.problem(
                         Some(first.line),
-                        format!("generated {id} can't be matched to example {id}: {reason}"),
+                        format!("generated {id} can't be matched to {id}'s steps: {reason}"),
                     );
                     continue;
                 }
@@ -1992,8 +1891,8 @@ impl<'a> Checker<'a> {
                 self.problem(
                     Some(first.line),
                     format!(
-                        "example {id}'s inputs aren't in the generated ranges ({}); the ranges \
-                         must include the spec's example",
+                        "the inputs of {id}'s steps aren't in the generated ranges ({}); the \
+                         ranges must include the spec's own example",
                         outside.join("; ")
                     ),
                 );
@@ -2006,8 +1905,9 @@ impl<'a> Checker<'a> {
                     self.problem(
                         Some(block.line),
                         format!(
-                            "generated {id}: with example {id}'s inputs ({}), {field} {error}",
-                            describe_inputs(&inputs)
+                            "generated {id}: with the inputs of {id}'s steps ({}), {} {error}",
+                            describe_inputs(&inputs),
+                            words(field)
                         ),
                     );
                     continue;
@@ -2081,10 +1981,11 @@ impl<'a> Checker<'a> {
                 self.problem(
                     Some(block.line),
                     format!(
-                        "generated {id}'s formula disagrees with the spec: with example {id}'s \
-                         inputs ({}) it expects {field} {formula}, but example {id} expects \
+                        "generated {id}'s formula disagrees with the spec: with the inputs of \
+                         {id}'s steps ({}) it expects {} {formula}, but the steps expect \
                          {spec}. Fix the formula",
-                        describe_inputs(&case.inputs)
+                        describe_inputs(&case.inputs),
+                        words(field)
                     ),
                 );
             }
@@ -2092,79 +1993,25 @@ impl<'a> Checker<'a> {
     }
 }
 
-/// A generated block's templates as written, to tell whether two blocks share them.
-#[derive(PartialEq, Eq)]
-struct TemplateSources<'a> {
-    args: Vec<&'a str>,
-    stdin: &'a str,
-    files: BTreeMap<&'a str, &'a str>,
-    stdout: &'a str,
-    stderr: &'a str,
-    files_after: BTreeMap<&'a str, &'a str>,
-    formula: Option<&'a str>,
-    fixed: Option<u8>,
-    random: Option<&'a str>,
-    clock: Vec<&'a str>,
-    server: Vec<(&'a str, &'a str)>,
-    client: Vec<(&'a str, &'a str)>,
-    serves: bool,
-}
-
-fn templates(block: &Generated) -> TemplateSources<'_> {
-    let (formula, fixed) = match &block.exit_code {
-        ExitCode::Fixed(code) => (None, Some(*code)),
-        ExitCode::Formula(template) => (Some(template.source()), None),
-    };
-    fn sources(files: &BTreeMap<String, Template>) -> BTreeMap<&str, &str> {
-        files
-            .iter()
-            .map(|(name, template)| (name.as_str(), template.source()))
-            .collect()
-    }
-    TemplateSources {
-        args: block.args.iter().map(Template::source).collect(),
-        stdin: block.stdin.source(),
-        files: sources(&block.files),
-        stdout: block.stdout.source(),
-        stderr: block.stderr.source(),
-        files_after: sources(&block.files_after),
-        formula,
-        fixed,
-        random: block.random.as_ref().map(Template::source),
-        clock: block.clock.iter().map(Template::source).collect(),
-        server: block
-            .server
-            .iter()
-            .map(|(receives, replies)| (receives.source(), replies.source()))
-            .collect(),
-        client: block
-            .client
-            .iter()
-            .map(|(sends, receives)| (sends.source(), receives.source()))
-            .collect(),
-        serves: block.serves,
-    }
-}
-
-/// Reads the variables' values back out of the example's args, stdin and files.
+/// Reads the variables' values back out of what the behavior's steps give the program.
 fn bind(block: &Generated, example: &Example) -> Result<Env, String> {
     if block.args.len() != example.args.len() {
         return Err(format!(
-            "it has {} args and the example has {}",
+            "it gives {} arguments and the steps give {}",
             block.args.len(),
             example.args.len()
         ));
     }
     if !block.files.keys().eq(example.files.keys()) {
         return Err(format!(
-            "it gives the files {:?} and the example gives {:?}",
+            "it gives the files {:?} and the steps give {:?}",
             block.files.keys().collect::<Vec<_>>(),
             example.files.keys().collect::<Vec<_>>()
         ));
     }
     if block.clock.len() != example.clock.len() {
         return Err(format!(
-            "it gives {} clock readings and the example gives {}",
+            "it gives {} clock readings and the steps give {}",
             block.clock.len(),
             example.clock.len()
         ));
@@ -2207,7 +2054,7 @@ fn bind(block: &Generated, example: &Example) -> Result<Env, String> {
         })?;
         pairs.push((pattern, text.as_str()));
     }
-    // The test server's port reads as its stand-in, just as the example writes it.
+    // The test server's port reads as its stand-in, as the steps' port argument does.
     let uses_port = block
         .given()
         .chain(block.outputs())
@@ -2248,31 +2095,31 @@ fn bind(block: &Generated, example: &Example) -> Result<Env, String> {
                 })
                 .collect();
             Err(if misfits.is_empty() {
-                "no values of its vars give all of what the example gives the program at once; \
+                "no values of its vars give all of what the steps give the program at once; \
                  check that a variable used twice holds the same text in both places"
                     .into()
             } else {
                 format!(
-                    "no values of its vars turn what it gives the program into what the example \
-                     gives it: {}",
+                    "no values of its vars turn what it gives the program into what the steps \
+                     give it: {}",
                     misfits.join("; ")
                 )
             })
         }
         1 => Ok(solutions.remove(0)),
         _ => Err(
-            "the example's inputs fit its placeholders in more than one way; separate \
-                  neighboring placeholders with fixed text"
+            "the steps' inputs fit its placeholders in more than one way; separate \
+             neighboring placeholders with fixed text"
                 .into(),
         ),
     }
 }
 
-/// Reads the variables of a block's `random` template out of an example's random bytes.
+/// Reads the variables of a block's `random` template out of the steps' random bytes.
 fn read_hex(template: &Template, bytes: &str, env: &mut Env) -> Result<(), String> {
     let misfit = || {
         format!(
-            "the example's random bytes {bytes:?} don't fit its random {:?}",
+            "the steps' random bytes {bytes:?} don't fit its random {:?}",
             template.source()
         )
     };
@@ -2401,7 +2248,10 @@ mod tests {
     use super::*;
     use crate::spec;
 
-    const SPEC: &str = "---
+    /// The add spec, with `outline` as B1's generated tests.
+    fn add(outline: &str) -> String {
+        format!(
+            "---
 type: lengua/program-spec
 title: add
 ---
@@ -2415,75 +2265,63 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
 - Then it prints `5` followed by a newline
 - And it exits with code `0`
 
+{outline}
 ## B2: Missing arguments
 - Given no arguments
 - When the program runs
 - Then it prints `usage: add <a> <b>` followed by a newline to standard error
 - And it exits with code `1`
+"
+        )
+    }
 
-# Constraints
-- Allowed system calls: read, write, exit
+    const GENERATED: &str = "### For any `a` and `b`
+- Given the arguments `{a}` and `{b}`
+- When the program runs
+- Then it prints `{a + b}` followed by a newline
+- And it exits with code `0`
+
+| a | b | runs |
+|---|---|---|
+| `int(-1000000000, 1000000000)` | `int(-1000000000, 1000000000)` | 200 |
 ";
 
-    fn tests(body: &str) -> String {
-        body.to_owned()
-    }
-
-    const EXAMPLES: &str = r#"
-[[example]]
-id = "B1"
-args = ["2", "3"]
-stdout = "5\n"
-exit_code = 0
-
-[[example]]
-id = "B2"
-stderr = "usage: add <a> <b>\n"
-exit_code = 1
-"#;
-
-    const GENERATED: &str = r#"
-[[generated]]
-id = "B1"
-runs = 200
-vars = { a = "int(-1000000000, 1000000000)", b = "int(-1000000000, 1000000000)" }
-args = ["{a}", "{b}"]
-stdout = "{a + b}\n"
-exit_code = 0
-"#;
-
-    fn spec() -> Spec {
-        spec::parse(SPEC).expect("valid spec")
-    }
-
     fn valid() -> String {
-        tests(&format!("{EXAMPLES}{GENERATED}"))
+        add(GENERATED)
     }
 
-    fn problems(text: &str) -> Vec<String> {
-        match check(text, &spec()) {
-            Ok(suite) => panic!("expected problems, got {suite:#?}"),
-            Err(problems) => problems.iter().map(ToString::to_string).collect(),
-        }
+    /// The tests of `spec_text`, a spec lengua accepts, or their problems with their lines.
+    fn tests_of(spec_text: &str) -> Result<TestSuite, Vec<String>> {
+        let spec = spec::parse(spec_text).unwrap_or_else(|problems| panic!("{problems:#?}"));
+        check(&spec).map_err(|problems| problems.iter().map(ToString::to_string).collect())
     }
 
-    fn assert_problem(text: &str, needle: &str) {
-        let problems = problems(text);
+    fn assert_problem(spec_text: &str, needle: &str) {
+        let problems = tests_of(spec_text).expect_err("problems");
         assert!(
             problems.iter().any(|problem| problem.contains(needle)),
             "no problem containing {needle:?} in {problems:#?}"
         );
     }
 
+    /// `text` with each `from` replaced by `to`; `from` must be there.
+    fn edit(text: &str, from: &str, to: &str) -> String {
+        assert!(text.contains(from), "{from:?} isn't in {text}");
+        text.replace(from, to)
+    }
+
     #[test]
     fn accepts_valid_tests() {
-        let suite = check(&valid(), &spec()).expect("valid tests");
+        let suite = tests_of(&valid()).expect("valid tests");
         assert_eq!(suite.examples.len(), 2);
         assert_eq!(suite.examples[0].args, ["2", "3"]);
-        assert_eq!(suite.examples[1].line, 8);
+        assert_eq!(suite.examples[0].stdout, "5\n");
+        assert_eq!(suite.examples[1].line, 25);
+        assert_eq!(suite.examples[1].stderr, "usage: add <a> <b>\n");
+        assert_eq!(suite.examples[1].exit_code, 1);
         let block = &suite.generated[0];
         assert_eq!(block.runs, 200);
-        assert_eq!(block.line, 13);
+        assert_eq!(block.line, 23, "a generated test's line is its row's");
         let cases: Vec<Case> = block
             .cases(42)
             .collect::<Result<_, _>>()
@@ -2493,6 +2331,40 @@ exit_code = 0
         assert_eq!(first.args, ["-1000000000", "-1000000000"]);
         assert_eq!(first.stdout, "-2000000000\n");
         assert_eq!(first.exit_code, 0);
+    }
+
+    #[test]
+    fn variants_are_rows_of_one_table() {
+        let two = edit(
+            &valid(),
+            "| 200 |\n",
+            "| 200 |\n| `int(-1000000000, 1000000000)` | `choice(0)` | |\n",
+        );
+        let suite = tests_of(&two).expect("valid tests");
+        assert_eq!(suite.generated.len(), 2);
+        assert_eq!(suite.generated[1].runs, DEFAULT_RUNS);
+        assert_eq!(suite.generated[1].line, 24);
+        assert_eq!(suite.generated[1].stdout, suite.generated[0].stdout);
+    }
+
+    #[test]
+    fn problems_point_at_their_step_or_their_row() {
+        let problems = tests_of(&edit(&valid(), "{a + b}", "{a +* b}")).expect_err("problems");
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.starts_with("line 18:")
+                    && problem.contains("generated B1: what it prints: in {a +* b}")),
+            "{problems:#?}"
+        );
+        let problems = tests_of(&edit(&valid(), "| 200 |", "| lots |")).expect_err("problems");
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.starts_with("line 23:")
+                    && problem.contains("runs must be from 1 to 1000")),
+            "{problems:#?}"
+        );
     }
 
     const DICE: &str = "---
@@ -2506,45 +2378,26 @@ Rolls a die for a player numbered from `1` to `9`.
 ## B1: Rolls a die
 - Given the argument `1`
 - When the program runs
-- Then it prints `rolled ` and a number from `1` to `6`, followed by a newline
+- Then it prints text matching `rolled {any(1, 6)}` followed by a newline
 - And it exits with code `0`
 
+### For any `player`
+- Given the argument `{player}`
+- When the program runs
+- Then it prints `rolled {any(1, 6)}` followed by a newline
+- And it exits with code `0`
+
+| player |
+|---|
+| `int(1, 9)` |
+
 # Constraints
-- Allowed system calls: write, getrandom, exit
+- Uses: random bytes
 ";
-
-    const ROLLS: &str = r#"
-[[example]]
-id = "B1"
-args = ["1"]
-stdout = { matches = "rolled {any(1, 6)}\n" }
-exit_code = 0
-
-[[generated]]
-id = "B1"
-vars = { player = "int(1, 9)" }
-args = ["{player}"]
-stdout = "rolled {any(1, 6)}\n"
-exit_code = 0
-"#;
-
-    fn dice(body: &str) -> Result<TestSuite, Vec<String>> {
-        let spec = spec::parse(DICE).expect("valid spec");
-        check(&tests(body), &spec)
-            .map_err(|problems| problems.iter().map(ToString::to_string).collect())
-    }
-
-    fn assert_dice_problem(body: &str, needle: &str) {
-        let problems = dice(body).expect_err("problems");
-        assert!(
-            problems.iter().any(|problem| problem.contains(needle)),
-            "no problem containing {needle:?} in {problems:#?}"
-        );
-    }
 
     #[test]
     fn rules_allow_any_number_in_a_range() {
-        let suite = dice(ROLLS).expect("valid tests");
+        let suite = tests_of(DICE).expect("valid tests");
         let example = &suite.examples[0];
         assert!(crate::expect::matches(&example.stdout, b"rolled 6\n", 0));
         assert!(!crate::expect::matches(&example.stdout, b"rolled 7\n", 0));
@@ -2559,48 +2412,53 @@ exit_code = 0
 
     #[test]
     fn rules_bound_only_expected_output() {
-        assert_dice_problem(
-            &ROLLS.replace(r#"args = ["1"]"#, r#"args = [{ matches = "{any(1, 9)}" }]"#),
-            "goes only in stdout, stderr and files_after",
-        );
-        assert_dice_problem(
-            &ROLLS.replace("rolled {any(1, 6)}\\n\" }", "rolled {player}\\n\" }"),
-            "a rule's placeholders are any(lo, hi) only",
-        );
-        assert_dice_problem(
-            &ROLLS.replace("{any(1, 6)}\\n\" }", "{any(6, 1)}\\n\" }"),
-            "smallest number after its largest",
-        );
-        assert_dice_problem(
-            &ROLLS.replace(
-                "rolled {any(1, 6)}\\n\"\nexit",
-                "rolled {any(1, 7)}\\n\"\nexit",
+        let rule = "matching `rolled {any(1, 6)}`";
+        let formula = "prints `rolled {any(1, 6)}`";
+        for (from, to, needle) in [
+            (
+                rule,
+                "matching `rolled {player}`",
+                "a rule's placeholders are any(lo, hi) only",
             ),
-            "generated B1's formula disagrees with the spec",
-        );
-        assert_dice_problem(
-            &ROLLS.replace(
-                "rolled {any(1, 6)}\\n\"\nexit",
-                "rolled {len(any(1, 6))}\\n\"\nexit",
+            (
+                rule,
+                "matching `rolled {any(6, 1)}`",
+                "smallest number after its largest",
             ),
-            "len can't look inside any(…)",
-        );
-        assert_dice_problem(
-            &ROLLS.replace(r#"args = ["1"]"#, r#"args = ["1\uFDD1"]"#),
-            "U+FDD0, U+FDD1 and U+FDD2",
-        );
-        // Where the number ends must be clear: "30" isn't a 3 and a 0.
-        assert_dice_problem(
-            &ROLLS.replace("rolled {any(1, 6)}\\n\" }", "rolled {any(1, 6)}0\\n\" }"),
-            "followed directly by a digit",
-        );
-        assert_dice_problem(
-            &ROLLS.replace(
-                "rolled {any(1, 6)}\\n\"\nexit",
-                "rolled {any(1, 6)}{player}\\n\"\nexit",
+            (
+                formula,
+                "prints `rolled {any(1, 7)}`",
+                "generated B1's formula disagrees with the spec",
             ),
-            "followed directly by a digit",
-        );
+            (
+                formula,
+                "prints `rolled {len(any(1, 6))}`",
+                "len can't look inside any(…)",
+            ),
+            (
+                "the argument `1`",
+                "the argument `1\u{FDD1}`",
+                "U+FDD0, U+FDD1 and U+FDD2",
+            ),
+            (
+                "`int(1, 9)`",
+                "`choice(\"1\u{FDD1}\")`",
+                "U+FDD0, U+FDD1 and U+FDD2",
+            ),
+            // Where the number ends must be clear: "30" isn't a 3 and a 0.
+            (
+                rule,
+                "matching `rolled {any(1, 6)}0`",
+                "followed directly by a digit",
+            ),
+            (
+                formula,
+                "prints `rolled {any(1, 6)}{player}`",
+                "followed directly by a digit",
+            ),
+        ] {
+            assert_problem(&edit(DICE, from, to), needle);
+        }
     }
 
     #[test]
@@ -2616,28 +2474,23 @@ Prints the time in Unix seconds for a player numbered from `1` to `9`.
 ## B1: Prints the time
 - Given the argument `1`
 - When the program runs
-- Then it prints the current Unix time followed by a newline
+- Then it prints text matching `{any(now - 2, now + 2)}` followed by a newline
 - And it exits with code `0`
 
-# Constraints
-- Allowed system calls: write, clock_gettime, exit
-";
-        let body = r#"
-[[example]]
-id = "B1"
-args = ["1"]
-stdout = { matches = "{any(now - 2, now + 2)}\n" }
-exit_code = 0
+### For any `player`
+- Given the argument `{player}`
+- When the program runs
+- Then it prints `{any(now - 2, now + 2)}` followed by a newline
+- And it exits with code `0`
 
-[[generated]]
-id = "B1"
-vars = { player = "int(1, 9)" }
-args = ["{player}"]
-stdout = "{any(now - 2, now + 2)}\n"
-exit_code = 0
-"#;
-        let spec = spec::parse(CLOCK).expect("valid spec");
-        let suite = check(&tests(body), &spec).expect("valid tests");
+| player |
+|---|
+| `int(1, 9)` |
+
+# Constraints
+- Uses: the clock
+";
+        let suite = tests_of(CLOCK).expect("valid tests");
         assert!(suite.generated[0].uses_now());
         let now = crate::expect::now();
         let case = suite.generated[0]
@@ -2648,25 +2501,20 @@ exit_code = 0
             format!("{}\n", now - 2).as_bytes(),
             0
         ));
-        let problems = |body: &str| {
-            check(&tests(body), &spec)
+        let problems = |from: &str, to: &str| {
+            tests_of(&edit(CLOCK, from, to))
                 .expect_err("problems")
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
                 .join("\n")
         };
-        let exact =
-            problems(&body.replace("\"{any(now - 2, now + 2)}\\n\"\nexit", "\"{now}\\n\"\nexit"));
+        let exact = problems("prints `{any(now - 2, now + 2)}`", "prints `{now}`");
         assert!(exact.contains("may only bound a rule"), "{exact}");
-        let input =
-            problems(&body.replace(r#"args = ["{player}"]"#, r#"args = ["{player}", "{now}"]"#));
+        let input = problems("argument `{player}`", "arguments `{player}` and `{now}`");
         assert!(input.contains("can't hold now"), "{input}");
-        // A block that declares now draws it like any variable.
-        let declared = problems(&body.replace(
-            r#"vars = { player = "int(1, 9)" }"#,
-            r#"vars = { player = "int(1, 9)", now = "int(1, 9)" }"#,
-        ));
+        // A table that names now draws it like any variable.
+        let declared = problems(
+            "| player |\n|---|\n| `int(1, 9)` |",
+            "| player | now |\n|---|---|\n| `int(1, 9)` | `int(1, 9)` |",
+        );
         assert!(
             declared.contains("`now` never reaches the program"),
             "{declared}"
@@ -2683,38 +2531,9 @@ exit_code = 0
         .expect("an example spec")
     }
 
-    const SUPPLIED: &str = r#"
-[[example]]
-id = "B1"
-random = "fc2a"
-stdout = "rolled 1\n"
-exit_code = 0
-
-[[generated]]
-id = "B1"
-vars = { first = "int(0, 255)", second = "int(0, 255)" }
-random = "{hex(first, 1)}{hex(second, 1)}"
-stdout = "rolled {if(first < 252, first % 6, if(second < 252, second % 6, 0)) + 1}\n"
-exit_code = 0
-"#;
-
-    fn supplied(body: &str) -> Result<TestSuite, Vec<String>> {
-        let spec = spec::parse(&spec_text("dice")).expect("valid spec");
-        check(&tests(body), &spec)
-            .map_err(|problems| problems.iter().map(ToString::to_string).collect())
-    }
-
-    fn assert_supplied_problem(body: &str, needle: &str) {
-        let problems = supplied(body).expect_err("problems");
-        assert!(
-            problems.iter().any(|problem| problem.contains(needle)),
-            "no problem containing {needle:?} in {problems:#?}"
-        );
-    }
-
     #[test]
     fn tests_supply_random_bytes_from_variables() {
-        let suite = supplied(SUPPLIED).expect("valid tests");
+        let suite = tests_of(&spec_text("dice")).expect("valid tests");
         assert_eq!(suite.examples[0].supply().random, Some(vec![0xfc, 0x2a]));
         let block = &suite.generated[0];
         let inputs = BTreeMap::from([
@@ -2729,39 +2548,42 @@ exit_code = 0
 
     #[test]
     fn supplied_values_follow_their_rules() {
-        // Random bytes take every value the kernel could give.
-        assert_supplied_problem(
-            &SUPPLIED.replace(r#"first = "int(0, 255)""#, r#"first = "int(0, 9)""#),
-            "first = \"int(0, 255)\"",
-        );
-        assert_supplied_problem(
-            &SUPPLIED.replace("rolled {if(", "rolled {hex(first, 1)}{if("),
-            "hex(x, n) only fills random bytes",
-        );
-        assert_supplied_problem(
-            &SUPPLIED.replace("{hex(first, 1)}{hex(second, 1)}", "{first}{second}"),
-            "may only hold hex digits and hex(x, n)",
-        );
-        assert_supplied_problem(
-            &SUPPLIED.replace(r#"random = "fc2a""#, r#"random = "fc2g""#),
-            "pairs of hex digits",
-        );
-        // The spec's bytes must be in the example, and the example and block supply alike.
-        assert_supplied_problem(
-            &SUPPLIED.replace(r#"random = "fc2a""#, r#"random = "fd2a""#),
-            "doesn't contain the spec's value `fc`",
-        );
-        assert_supplied_problem(
-            &SUPPLIED.replace("random = \"fc2a\"\n", ""),
-            "must supply the same things",
-        );
-        // A spec that doesn't allow getrandom gets no random bytes.
-        assert_problem(
-            &valid().replace(
-                "args = [\"2\", \"3\"]",
-                "args = [\"2\", \"3\"]\nrandom = \"00\"",
+        let dice = spec_text("dice");
+        for (from, to, needle) in [
+            // Random bytes take every value the computer could give.
+            (
+                "| `int(0, 255)` | `int(0, 255)` |",
+                "| `int(0, 9)` | `int(0, 255)` |",
+                "draws them all: `int(0, 255)`",
             ),
-            "spec.md doesn't allow getrandom",
+            (
+                "`rolled {if(",
+                "`rolled {hex(first, 1)}{if(",
+                "hex(x, n) only fills the random bytes",
+            ),
+            (
+                "`{hex(first, 1)}` and `{hex(second, 1)}`",
+                "`{first}` and `{second}`",
+                "may only hold hex digits and hex(x, n)",
+            ),
+            ("`fc` and `2a`", "`fc` and `2g`", "pairs of hex digits"),
+            // The steps and their generated tests supply alike.
+            (
+                "Given the random bytes `fc` and `2a`",
+                "Given no arguments",
+                "must supply what B1's steps do",
+            ),
+        ] {
+            assert_problem(&edit(&dice, from, to), needle);
+        }
+        // A program whose spec doesn't name random bytes gets none.
+        assert_problem(
+            &edit(
+                &valid(),
+                "`3`\n- When",
+                "`3`\n- And the random bytes `00`\n- When",
+            ),
+            "`- Uses:` line doesn't name `random bytes`",
         );
     }
 
@@ -2776,86 +2598,68 @@ Prints the hour of the day in UTC, from `0` to `23`, for a reader numbered from 
 
 # Behaviors
 ## B1: Prints the hour
-- Given the argument `1` and the clock at `1735693200.5`
+- Given the argument `1`
+- And the clock at `1735693200.5`
 - When the program runs
 - Then it prints `1` followed by a newline
 - And it exits with code `0`
 
-# Constraints
-- Allowed system calls: write, clock_gettime, exit
-";
-        let body = r#"
-[[example]]
-id = "B1"
-args = ["1"]
-clock = ["1735693200.5"]
-stdout = "1\n"
-exit_code = 0
+### For any `reader` and `t`
+- Given the argument `{reader}`
+- And the clock at `{t}`
+- When the program runs
+- Then it prints `{floor(t) % 86400 / 3600}` followed by a newline
+- And it exits with code `0`
 
-[[generated]]
-id = "B1"
-vars = { reader = "int(1, 9)", t = "decimal(0.0, 4102444800.0)" }
-args = ["{reader}"]
-clock = ["{t}"]
-stdout = "{floor(t) % 86400 / 3600}\n"
-exit_code = 0
-"#;
-        let spec = spec::parse(HOUR).expect("valid spec");
-        let problems = |body: &str| {
-            check(&tests(body), &spec)
-                .err()
-                .unwrap_or_default()
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-        let suite = check(&tests(body), &spec).expect("valid tests");
+| reader | t |
+|---|---|
+| `int(1, 9)` | `decimal(0.0, 4102444800.0)` |
+
+# Constraints
+- Uses: the clock
+";
+        let suite = tests_of(HOUR).expect("valid tests");
         let reading = suite.examples[0].supply().clock[0];
         assert_eq!(
             (reading.seconds, reading.nanoseconds),
             (1_735_693_200, 500_000_000)
         );
         assert!(suite.generated[0].clock_only().contains("t"));
-        let early = problems(&body.replace("decimal(0.0,", "decimal(-1.0,"));
+        let problems = |from: &str, to: &str| {
+            tests_of(&edit(HOUR, from, to))
+                .expect_err("problems")
+                .join("\n")
+        };
+        let early = problems("decimal(0.0,", "decimal(-1.0,");
         assert!(early.contains("is a clock reading"), "{early}");
-        let now = problems(&body.replace(
-            "stdout = \"{floor(t) % 86400 / 3600}\\n\"",
-            "stdout = \"{any(now - 1, now)}\\n\"",
-        ));
+        let now = problems("{floor(t) % 86400 / 3600}", "{any(now - 1, now)}");
         assert!(now.contains("supplies the clock"), "{now}");
     }
 
     #[test]
     fn network_tests_read_like_any_example() {
-        // A spec writes a protocol's line breaks as `\r\n`; the example holds the real ones, and
-        // long messages may be written with repeats.
-        let spec = spec::parse(&spec_text("echo").replace(
-            "Given a client that sends `hello` followed by a newline",
-            "Given a client that sends `hello\\r\\n`",
-        ))
-        .expect("valid spec");
-        let body = |example: &str| {
-            format!(
-                "[[example]]\nid = \"B1\"\n{example}\nserves = true\n\n\
-                 [[generated]]\nid = \"B1\"\nvars = {{ line = 'string(0, 1023, \"ehlo\")' }}\n\
-                 client = [{{ sends = \"{{line}}\\r\\n\", receives = \"{{line}}\\r\\n\" }}]\n\
-                 serves = true\n"
-            )
-        };
-        let crlf = body(r#"client = [{ sends = "hello\r\n", receives = "hello\r\n" }]"#);
-        check(&crlf, &spec).expect("`hello\\r\\n` is in the example");
-        let repeated = body(
-            r#"client = [{ sends = [{ repeat = "hel", times = 1 }, "lo\r\n"], receives = "hello\r\n" }]"#,
+        // A spec writes a protocol's line breaks as `\r\n`, and long messages may be written with
+        // repeats.
+        let crlf = edit(
+            &edit(
+                &spec_text("echo"),
+                "`hello` followed by a newline",
+                "`hello\\r\\n`",
+            ),
+            "`{line}` followed by a newline",
+            "`{line}\\r\\n`",
         );
-        check(&repeated, &spec).expect("repeats work in network fields");
-        // When the block can't produce the example, the message names what doesn't fit.
-        let misfit = crlf.replace("sends = \"{line}\\r\\n\"", "sends = \"{line}!\\r\\n\"");
-        let problems: Vec<String> = check(&misfit, &spec)
-            .expect_err("a misfit")
-            .iter()
-            .map(ToString::to_string)
-            .collect();
+        let suite = tests_of(&crlf).expect("`hello\\r\\n` is in the example");
+        assert_eq!(suite.examples[0].client[0].sends, "hello\r\n");
+        let repeated = edit(
+            &crlf,
+            "sends `hello\\r\\n`",
+            "sends `hel` repeated `1` times followed by `lo\\r\\n`",
+        );
+        tests_of(&repeated).expect("repeats work in network steps");
+        // When the generated tests can't produce the example, the message names what doesn't fit.
+        let misfit = edit(&crlf, "sends `{line}\\r\\n`", "sends `{line}!\\r\\n`");
+        let problems = tests_of(&misfit).expect_err("a misfit");
         assert!(
             problems
                 .iter()
@@ -2865,78 +2669,48 @@ exit_code = 0
     }
 
     #[test]
-    fn refuses_a_leftover_spec_label() {
-        let text = format!("[meta]\nspec = \"sha256:1111\"\n{}", valid());
-        assert_problem(&text, "line 1: delete the [meta] table");
-    }
-
-    #[test]
-    fn reports_toml_errors() {
-        assert_problem("[[example]]\nid = ", "tests.toml isn't valid");
-        assert_problem(
-            &valid().replace("exit_code = 1", "exit_code = 1\ncolour = \"red\""),
-            "unknown field `colour`",
+    fn reports_problems_in_generated_tests() {
+        let problem = |from: &str, to: &str, needle: &str| {
+            assert_problem(&edit(&valid(), from, to), needle);
+        };
+        problem(
+            "- Then it prints `{a + b}`",
+            "- Then the output is `{a + b}`",
+            "B1's generated tests: lengua reads each step as one of its phrasings",
         );
-        assert_problem(
-            &valid().replace("exit_code = 1\n", ""),
-            "needs exit_code, the code the spec states",
+        problem(
+            "`{a + b}` followed by a newline\n- And it exits with code `0`\n",
+            "`{a + b}` followed by a newline\n",
+            "needs its exit code, the one B1 states",
         );
-    }
-
-    #[test]
-    fn requires_one_example_per_behavior() {
-        let without_b2 = tests(&format!(
-            "{}{GENERATED}",
-            EXAMPLES
-                .split("\n[[example]]\nid = \"B2\"")
-                .next()
-                .expect("B1 part")
-        ));
-        assert_problem(&without_b2, "B2 has no [[example]]");
-        let twice = valid().replace("id = \"B2\"", "id = \"B1\"");
-        assert_problem(&twice, "B1 has two examples (also on line 2)");
-        let unknown = valid().replace("id = \"B2\"", "id = \"B7\"");
-        assert_problem(
-            &unknown,
-            "id = \"B7\", which isn't a behavior in spec.md (they are B1, B2)",
+        problem(
+            "| a | b | runs |",
+            "| a | a | runs |",
+            "B1's table names `a` twice",
         );
     }
 
     #[test]
     fn requires_generated_tests_for_behaviors_with_inputs() {
-        assert_problem(
-            &tests(EXAMPLES),
-            "B1 has inputs, so it needs a [[generated]] block",
-        );
-    }
-
-    #[test]
-    fn requires_every_spec_value_in_the_example() {
-        let text = valid().replace("stdout = \"5\\n\"", "stdout = \"6\\n\"");
-        assert_problem(&text, "example B1 doesn't contain the spec's value `5`");
+        assert_problem(&add(""), "B1 has inputs, so it needs generated tests");
     }
 
     #[test]
     fn checks_exit_codes() {
+        let ending = "`{a + b}` followed by a newline\n- And it exits with code `0`";
         assert_problem(
-            &valid().replace("exit_code = 1", "exit_code = 134"),
-            "expects exit code 134, which is reserved",
-        );
-        assert_problem(
-            &valid().replace("exit_code = 1", "exit_code = 2"),
-            "example B2 expects exit code 2, but the spec says B2 exits with code 1",
-        );
-        assert_problem(
-            &valid().replace(
-                "stdout = \"{a + b}\\n\"\nexit_code = 0",
-                "stdout = \"{a + b}\\n\"\nexit_code = 3",
+            &edit(
+                &valid(),
+                ending,
+                "`{a + b}` followed by a newline\n- And it exits with code `3`",
             ),
             "generated B1 expects exit code 3",
         );
         assert_problem(
-            &valid().replace(
-                "stdout = \"{a + b}\\n\"\nexit_code = 0",
-                "stdout = \"{a + b}\\n\"\nexit_code = \"{if(a > 0, 0, 134)}\"",
+            &edit(
+                &valid(),
+                ending,
+                "`{a + b}` followed by a newline\n- And it exits with code `{if(a > 0, 0, 134)}`",
             ),
             "reserved for failed assertions",
         );
@@ -2945,29 +2719,38 @@ exit_code = 0
     #[test]
     fn reports_bad_expressions() {
         assert_problem(
-            &valid().replace("{a + b}", "{a +* b}"),
-            "generated B1: stdout: in {a +* b}",
+            &edit(&valid(), "{a + b}", "{a +* b}"),
+            "generated B1: what it prints: in {a +* b}",
         );
         assert_problem(
-            &valid().replace("{a + b}", "{a + c}"),
-            "uses `c`, which isn't declared in vars",
+            &edit(&valid(), "{a + b}", "{a + c}"),
+            "uses `c`, which isn't a column of its table",
         );
         assert_problem(
-            &valid().replace("\"int(-1000000000, 1000000000)\" }", "\"float(0, 1)\" }"),
-            "vars.b: unknown generator `float`",
+            &edit(
+                &valid(),
+                "| `int(-1000000000, 1000000000)` | 200 |",
+                "| `float(0, 1)` | 200 |",
+            ),
+            "generated B1: b: unknown generator `float`",
         );
     }
 
     #[test]
     fn rejects_computed_inputs_and_unused_variables() {
         assert_problem(
-            &valid().replace("args = [\"{a}\", \"{b}\"]", "args = [\"{a}\", \"{b + 1}\"]"),
-            "args \"{b + 1}\" computes a value",
+            &edit(&valid(), "`{a}` and `{b}`", "`{a}` and `{b + 1}`"),
+            "the arguments \"{b + 1}\" computes a value",
         );
         assert_problem(
-            &valid().replace(
-                "b = \"int(-1000000000, 1000000000)\" }",
-                "b = \"int(-1000000000, 1000000000)\", c = \"int(-1000000000, 1000000000)\" }",
+            &edit(
+                &edit(
+                    &valid(),
+                    "| a | b | runs |\n|---|---|---|",
+                    "| a | b | c | runs |\n|---|---|---|---|",
+                ),
+                "| 200 |",
+                "| `int(-1000000000, 1000000000)` | 200 |",
             ),
             "`c` never reaches the program",
         );
@@ -2976,11 +2759,11 @@ exit_code = 0
     #[test]
     fn catches_formulas_that_fail_on_some_inputs() {
         assert_problem(
-            &valid().replace("{a + b}", "{a / b}"),
-            "stdout divides by zero",
+            &edit(&valid(), "{a + b}", "{a / b}"),
+            "what it prints divides by zero",
         );
         assert_problem(
-            &valid().replace("{a + b}", "{a * b * a * b * a * b * a * b}"),
+            &edit(&valid(), "{a + b}", "{a * b * a * b * a * b * a * b}"),
             "overflows",
         );
     }
@@ -2988,7 +2771,7 @@ exit_code = 0
     #[test]
     fn rejects_constant_output_despite_placeholders() {
         assert_problem(
-            &valid().replace("{a + b}", "{min(5, 5)}"),
+            &edit(&valid(), "{a + b}", "{min(5, 5)}"),
             "all 200 runs expect the same output",
         );
     }
@@ -2996,35 +2779,37 @@ exit_code = 0
     #[test]
     fn formulas_must_reproduce_the_example() {
         assert_problem(
-            &valid().replace("{a + b}", "{a - b}"),
-            "with example B1's inputs (a = 2, b = 3) it expects stdout \"-1\\n\", but example \
-             B1 expects \"5\\n\"",
+            &edit(&valid(), "{a + b}", "{a - b}"),
+            "with the inputs of B1's steps (a = 2, b = 3) it expects what it prints \"-1\\n\", \
+             but the steps expect \"5\\n\"",
         );
         assert_problem(
-            &valid().replace(
-                "int(-1000000000, 1000000000)\" }",
-                "int(-1000000000, -1000000000)\" }",
+            &edit(
+                &valid(),
+                "| `int(-1000000000, 1000000000)` | 200 |",
+                "| `int(-1000000000, -1000000000)` | 200 |",
             ),
             "b = 3 is outside int(-1000000000, -1000000000)",
         );
         assert_problem(
-            &valid().replace(
-                "args = [\"{a}\", \"{b}\"]",
-                "args = [\"{a}\", \"{b}\", \"x\"]",
-            ),
-            "it has 3 args and the example has 2",
+            &edit(&valid(), "`{a}` and `{b}`", "`{a}` and `{b}` and `x`"),
+            "it gives 3 arguments and the steps give 2",
         );
         assert_problem(
-            &valid()
-                .replace("args = [\"{a}\", \"{b}\"]", "args = [\"{a}{b}\"]")
-                .replace("args = [\"2\", \"3\"]", "args = [\"123\"]"),
+            &edit(
+                &edit(&valid(), "arguments `{a}` and `{b}`", "argument `{a}{b}`"),
+                "the arguments `2` and `3`",
+                "the argument `123`",
+            ),
             "more than one way",
         );
     }
 
-    /// A spec for negating whole numbers from `lo` to `hi`.
-    fn negate_spec(lo: i64, hi: i64) -> Spec {
-        spec::parse(&format!(
+    /// A spec for negating whole numbers from `lo` to `hi`, with a row of its table for each of
+    /// `rows`, the generators of `n`.
+    fn negate(lo: i64, hi: i64, rows: &[&str]) -> String {
+        let rows: String = rows.iter().map(|n| format!("| `{n}` |\n")).collect();
+        format!(
             "---
 type: lengua/program-spec
 title: negate
@@ -3039,29 +2824,21 @@ Negates a whole number between `{lo}` and `{hi}`.
 - Then it prints `-7` followed by a newline
 - And it exits with code `0`
 
-# Constraints
-- Allowed system calls: write, exit
-"
-        ))
-        .expect("valid spec")
-    }
+### For any `n`
+- Given the argument `{{n}}`
+- When the program runs
+- Then it prints `{{-n}}` followed by a newline
+- And it exits with code `0`
 
-    fn negate_tests(blocks: &[&str]) -> String {
-        let mut text =
-            tests("[[example]]\nid = \"B1\"\nargs = [\"7\"]\nstdout = \"-7\\n\"\nexit_code = 0\n");
-        for vars in blocks {
-            text.push_str(&format!(
-                "\n[[generated]]\nid = \"B1\"\nvars = {{ {vars} }}\nargs = [\"{{n}}\"]\n\
-                 stdout = \"{{-n}}\\n\"\nexit_code = 0\n"
-            ));
-        }
-        text
+| n |
+|---|
+{rows}"
+        )
     }
 
     #[test]
     fn text_may_start_empty_without_purpose_saying_so() {
-        let spec = spec::parse(
-            "---
+        const LINES: &str = "---
 type: lengua/program-spec
 title: lines
 ---
@@ -3070,29 +2847,44 @@ Counts the lines of at most `1048576` bytes of text.
 
 # Behaviors
 ## B1: Counts lines
-- Given the input `a` followed by a newline
+- Given standard input holding `a` followed by a newline
 - When the program runs
 - Then it prints `1` followed by a newline
 - And it exits with code `0`
 
+### For any `text`
+- Given standard input holding `{text}`
+- When the program runs
+- Then it prints `{count(text, \"\\n\")}` followed by a newline
+- And it exits with code `0`
+
+| text |
+|---|
+| `string(0, 1048576, \"a\\n\")` |
+
 # Constraints
-- Allowed system calls: read, write, exit
-",
-        )
-        .expect("valid spec");
-        let tests = tests(
-            "[[example]]\nid = \"B1\"\nstdin = \"a\\n\"\nstdout = \"1\\n\"\nexit_code = 0\n\n\
-             [[generated]]\nid = \"B1\"\nvars = { text = 'string(0, 1048576, \"a\\n\")' }\n\
-             stdin = \"{text}\"\nstdout = \"{count(text, \\\"\\\\n\\\")}\\n\"\nexit_code = 0\n",
+- Uses: standard input
+";
+        let suite = tests_of(LINES).expect("valid tests");
+        assert_eq!(suite.examples[0].stdin, "a\n");
+        // Long example text is written as repeats, up to the most a test may hold.
+        let long = edit(
+            LINES,
+            "holding `a` followed by a newline",
+            "holding `a` repeated `3` times followed by a newline",
         );
-        let result = check(&tests, &spec);
-        assert!(result.is_ok(), "{result:#?}");
+        let suite = tests_of(&long).expect("valid tests");
+        assert_eq!(suite.examples[0].stdin, "aaa\n");
+        assert_problem(
+            &edit(LINES, "holding `a`", "holding `a` repeated `9000000` times"),
+            "the whole value must stay within",
+        );
     }
 
     #[test]
     fn decimal_ranges_come_from_purpose_as_written() {
-        let spec = |purpose: &str| {
-            spec::parse(&format!(
+        let half = |purpose: &str, generator: &str| {
+            format!(
                 "---
 type: lengua/program-spec
 title: half
@@ -3107,35 +2899,25 @@ Halves a price between {purpose}.
 - Then it prints `1.50` followed by a newline
 - And it exits with code `0`
 
-# Constraints
-- Allowed system calls: write, exit
+### For any `x`
+- Given the argument `{{x}}`
+- When the program runs
+- Then it prints `{{fixed(x / 2.0, 2)}}` followed by a newline
+- And it exits with code `0`
+
+| x |
+|---|
+| `{generator}` |
 "
-            ))
-            .expect("valid spec")
+            )
         };
-        let tests = |generator: &str| {
-            tests(&format!(
-                "[[example]]\nid = \"B1\"\nargs = [\"3.00\"]\nstdout = \"1.50\\n\"\nexit_code = 0\n\n\
-                 [[generated]]\nid = \"B1\"\nvars = {{ x = \"{generator}\" }}\nargs = [\"{{x}}\"]\n\
-                 stdout = \"{{fixed(x / 2.0, 2)}}\\n\"\nexit_code = 0\n"
-            ))
-        };
-        let plain = spec("`0.00` and `100.00`");
-        assert!(check(&tests("decimal(0.00, 100.00)"), &plain).is_ok());
-        let problems = |text: &str, spec: &Spec| match check(text, spec) {
-            Ok(_) => panic!("accepted {text}"),
-            Err(problems) => problems.iter().map(ToString::to_string).collect::<Vec<_>>(),
-        };
-        let found = problems(&tests("decimal(0.000, 100.000)"), &plain);
-        assert!(
-            found.iter().any(|problem| problem
-                .contains("draws numbers with 3 decimal places, but Purpose writes them with 2")),
-            "{found:#?}"
+        assert!(tests_of(&half("`0.00` and `100.00`", "decimal(0.00, 100.00)")).is_ok());
+        assert_problem(
+            &half("`0.00` and `100.00`", "decimal(0.000, 100.000)"),
+            "draws numbers with 3 decimal places, but Purpose writes them with 2",
         );
-        let found = problems(
-            &tests("decimal(0.00, 100.00)"),
-            &spec("`0.00` and `$100.00`"),
-        );
+        let found =
+            tests_of(&half("`0.00` and `$100.00`", "decimal(0.00, 100.00)")).expect_err("problems");
         assert!(
             found.iter().any(
                 |problem| problem.contains("uses 100, which spec.md's Purpose")
@@ -3147,11 +2929,7 @@ Halves a price between {purpose}.
 
     #[test]
     fn small_ranges_run_every_value() {
-        let suite = check(
-            &negate_tests(&[r#"n = "int(-100, 100)""#]),
-            &negate_spec(-100, 100),
-        )
-        .expect("valid tests");
+        let suite = tests_of(&negate(-100, 100, &["int(-100, 100)"])).expect("valid tests");
         let block = &suite.generated[0];
         assert!(block.every_value);
         assert_eq!(block.run_count(), 201);
@@ -3166,14 +2944,10 @@ Halves a price between {purpose}.
         assert_eq!(values.len(), 201);
 
         // A large range is sampled, as are hand-picked values.
-        let suite = check(&valid(), &spec()).expect("valid tests");
+        let suite = tests_of(&valid()).expect("valid tests");
         assert!(!suite.generated[0].every_value);
         assert_eq!(suite.generated[0].run_count(), 200);
-        let suite = check(
-            &negate_tests(&[r#"n = "choice(-100, 7, 100)""#]),
-            &negate_spec(-100, 100),
-        )
-        .expect("valid tests");
+        let suite = tests_of(&negate(-100, 100, &["choice(-100, 7, 100)"])).expect("valid tests");
         assert!(
             !suite.generated[0].every_value,
             "choice values aren't a range"
@@ -3182,9 +2956,7 @@ Halves a price between {purpose}.
 
     #[test]
     fn every_value_stays_within_the_suite_budget() {
-        let block = r#"n = "int(-2500, 2499)""#;
-        let suite =
-            check(&negate_tests(&[block; 5]), &negate_spec(-2500, 2499)).expect("valid tests");
+        let suite = tests_of(&negate(-2500, 2499, &["int(-2500, 2499)"; 5])).expect("valid tests");
         let full = suite
             .generated
             .iter()
@@ -3199,9 +2971,10 @@ Halves a price between {purpose}.
     }
 
     #[test]
-    fn arguments_stay_within_linux_limits() {
-        let spec = spec::parse(
-            "---
+    fn arguments_stay_within_this_computers_limits() {
+        let spec = |generator: &str| {
+            format!(
+                "---
 type: lengua/program-spec
 title: len
 ---
@@ -3215,26 +2988,23 @@ Prints the length of a word of `1` to `200000` letters.
 - Then it prints `3` followed by a newline
 - And it exits with code `0`
 
-# Constraints
-- Allowed system calls: write, exit
-",
-        )
-        .expect("valid spec");
-        let tests = |generator: &str| {
-            tests(&format!(
-                "[[example]]\nid = \"B1\"\nargs = [\"abc\"]\nstdout = \"3\\n\"\nexit_code = 0\n\n\
-                 [[generated]]\nid = \"B1\"\nvars = {{ w = '{generator}' }}\nargs = [\"{{w}}\"]\n\
-                 stdout = \"{{len(w)}}\\n\"\nexit_code = 0\n"
-            ))
+### For any `w`
+- Given the argument `{{w}}`
+- When the program runs
+- Then it prints `{{len(w)}}` followed by a newline
+- And it exits with code `0`
+
+| w |
+|---|
+| `{generator}` |
+"
+            )
         };
-        let problems = match check(&tests(r#"string(1, 200000, "abc")"#), &spec) {
-            Ok(_) => panic!("a 200000-byte argument was accepted"),
-            Err(problems) => problems.iter().map(ToString::to_string).collect::<Vec<_>>(),
-        };
+        let problems = tests_of(&spec(r#"string(1, 200000, "abc")"#))
+            .expect_err("a 200000-byte argument was accepted");
         assert!(
-            problems
-                .iter()
-                .any(|problem| problem.contains("Linux limits each argument to 131072 bytes")),
+            problems.iter().any(|problem| problem
+                .contains("an argument holds at most 131072 bytes on this computer")),
             "{problems:#?}"
         );
         assert!(
@@ -3245,67 +3015,34 @@ Prints the length of a word of `1` to `200000` letters.
 
     #[test]
     fn generator_limits_come_from_purpose() {
+        let row = "| `int(-1000000000, 1000000000)` | `int(-1000000000, 1000000000)` | 200 |";
         assert_problem(
-            &valid().replace(
-                "b = \"int(-1000000000, 1000000000)\"",
-                "b = \"int(-1000, 1000000000)\"",
+            &edit(
+                &valid(),
+                row,
+                "| `int(-1000000000, 1000000000)` | `int(-1000, 1000000000)` | 200 |",
             ),
             "uses -1000, which spec.md's Purpose doesn't state",
         );
         // 2 and 3 are B1's example inputs, not a stated range: int(2, 3) would test almost nothing.
         assert_problem(
-            &valid().replace(
-                "vars = { a = \"int(-1000000000, 1000000000)\", b = \"int(-1000000000, \
-                 1000000000)\" }",
-                "vars = { a = \"int(2, 3)\", b = \"int(2, 3)\" }",
-            ),
+            &edit(&valid(), row, "| `int(2, 3)` | `int(2, 3)` | 200 |"),
             "uses 2, which spec.md's Purpose doesn't state",
         );
         // String lengths too: the spec has 1 and 3 only as an exit code and an argument.
         assert_problem(
-            &valid().replace(
-                "b = \"int(-1000000000, 1000000000)\"",
-                "b = 'string(1, 3, \"123\")'",
+            &edit(
+                &valid(),
+                row,
+                "| `int(-1000000000, 1000000000)` | `string(1, 3, \"123\")` | 200 |",
             ),
             "uses 1, which spec.md's Purpose doesn't state",
         );
     }
 
     #[test]
-    fn blocks_of_one_behavior_share_their_formulas() {
-        let second = GENERATED.replace("{a + b}", "{b + a}");
-        let text = tests(&format!("{EXAMPLES}{GENERATED}{second}"));
-        assert_problem(
-            &text,
-            "must share args, stdin, files, random, clock, stdout, stderr, files_after and exit_code",
-        );
-        let narrower = GENERATED.replace("runs = 200", "runs = 50");
-        let ok = tests(&format!("{EXAMPLES}{GENERATED}{narrower}"));
-        assert!(check(&ok, &spec()).is_ok());
-    }
-
-    #[test]
-    fn long_example_text_can_be_written_as_repeats() {
-        let parse = |toml_text: &str| {
-            let mut table: BTreeMap<String, Text> = toml::from_str(toml_text).expect("valid TOML");
-            table.remove("v").expect("the value").expand()
-        };
-        assert_eq!(parse(r#"v = "plain""#), Ok("plain".into()));
-        assert_eq!(
-            parse(r#"v = [{ repeat = "ab", times = 3 }, "x"]"#),
-            Ok("abababx".into())
-        );
-        assert!(parse(r#"v = [{ repeat = "", times = 3 }]"#).is_err());
-        assert!(parse(r#"v = [{ repeat = "a", times = 9000000 }]"#).is_err());
-        assert!(
-            toml::from_str::<BTreeMap<String, Text>>(r#"v = [{ repeat = "a", count = 3 }]"#)
-                .is_err()
-        );
-    }
-
-    #[test]
     fn files_go_in_before_the_run_and_are_checked_after() {
-        let spec_text = "---
+        const SHOUT: &str = "---
 type: lengua/program-spec
 title: shout-file
 ---
@@ -3316,30 +3053,23 @@ Uppercases a text file of at most `1000` bytes, `notes.txt`, into `loud.txt`.
 ## B1: Uppercases the file
 - Given a file named `notes.txt` holding `hello`
 - When the program runs
-- Then `loud.txt` holds `HELLO`
+- Then the file `loud.txt` holds `HELLO`
 - And it exits with code `0`
 
-# Constraints
-- Allowed system calls: openat, read, write, close, exit
-";
-        let spec = spec::parse(spec_text).expect("valid spec");
-        let valid = tests(
-            r#"
-[[example]]
-id = "B1"
-files = { "notes.txt" = "hello" }
-files_after = { "loud.txt" = "HELLO" }
-exit_code = 0
+### For any `s`
+- Given a file `notes.txt` holding `{s}`
+- When the program runs
+- Then the file `loud.txt` holds `{upper(s)}`
+- And it exits with code `0`
 
-[[generated]]
-id = "B1"
-vars = { s = 'string(0, 1000, "helo XYZ")' }
-files = { "notes.txt" = "{s}" }
-files_after = { "loud.txt" = "{upper(s)}" }
-exit_code = 0
-"#,
-        );
-        let suite = check(&valid, &spec).expect("valid tests");
+| s |
+|---|
+| `string(0, 1000, \"helo XYZ\")` |
+
+# Constraints
+- Uses: files
+";
+        let suite = tests_of(SHOUT).expect("valid tests");
         let case = suite.generated[0]
             .cases(7)
             .next()
@@ -3349,81 +3079,67 @@ exit_code = 0
             case.files_after["loud.txt"],
             case.files["notes.txt"].to_ascii_uppercase()
         );
-        let problems = |text: &str| match check(text, &spec) {
-            Ok(_) => panic!("expected problems in {text}"),
-            Err(problems) => problems.iter().map(ToString::to_string).collect::<Vec<_>>(),
-        };
         for (from, to, needle) in [
             (
-                r#"files = { "notes.txt" = "hello" }"#,
-                r#"files = { "/tmp/notes.txt" = "hello" }"#,
+                "file named `notes.txt`",
+                "file named `/tmp/notes.txt`",
                 "is an absolute path",
             ),
             (
-                r#"files = { "notes.txt" = "{s}" }"#,
-                r#"files = { "../notes.txt" = "{s}" }"#,
+                "a file `notes.txt` holding `{s}`",
+                "a file `../notes.txt` holding `{s}`",
                 "must stay inside the working folder",
             ),
             (
-                r#"files = { "notes.txt" = "{s}" }"#,
-                r#"files = { "notes.txt" = "{upper(s)}" }"#,
+                "holding `{s}`",
+                "holding `{upper(s)}`",
                 "may only hold bare variables",
             ),
             (
-                "{upper(s)}",
-                "{lower(s)}",
+                "holds `{upper(s)}`",
+                "holds `{lower(s)}`",
                 "formula disagrees with the spec",
             ),
             (
-                r#"files = { "notes.txt" = "hello" }"#,
-                "",
-                "the example gives []",
+                "Given a file named `notes.txt` holding `hello`",
+                "Given no arguments",
+                "the steps give []",
             ),
         ] {
-            let found = problems(&valid.replacen(from, to, 1));
-            assert!(
-                found.iter().any(|problem| problem.contains(needle)),
-                "no problem containing {needle:?} in {found:#?}"
-            );
+            assert_problem(&edit(SHOUT, from, to), needle);
         }
     }
 
     #[test]
     fn reads_inputs_from_stdin_and_text_around_placeholders() {
-        let spec_text = SPEC.replace("Given the arguments `2` and `3`", "Given the input `2 3`");
-        let spec = spec::parse(&spec_text).expect("valid spec");
-        let text = tests(
-            r#"
-[[example]]
-id = "B1"
-stdin = "2 3\n"
-stdout = "5\n"
-exit_code = 0
+        let spec = edit(
+            &edit(
+                &add("### For any `a` and `b`
+- Given standard input holding `{a} {b}` followed by a newline
+- When the program runs
+- Then it prints `{a + b}` followed by a newline
+- And it exits with code `0`
 
-[[example]]
-id = "B2"
-stderr = "usage: add <a> <b>\n"
-exit_code = 1
-
-[[generated]]
-id = "B1"
-vars = { a = "int(-1000000000, 1000000000)", b = "int(-1000000000, 1000000000)" }
-stdin = "{a} {b}\n"
-stdout = "{a + b}\n"
-exit_code = 0
-"#,
+| a | b |
+|---|---|
+| `int(-1000000000, 1000000000)` | `int(-1000000000, 1000000000)` |
+"),
+                "Given the arguments `2` and `3`",
+                "Given standard input holding `2 3` followed by a newline",
+            ),
+            "- And it exits with code `1`\n",
+            "- And it exits with code `1`\n\n# Constraints\n- Uses: standard input\n",
         );
-        let suite = check(&text, &spec).expect("valid tests");
+        let suite = tests_of(&spec).expect("valid tests");
+        assert_eq!(suite.examples[0].stdin, "2 3\n");
         assert_eq!(suite.generated[0].runs, DEFAULT_RUNS);
-        let wrong = text.replace("{a + b}", "{a * b}");
-        assert!(check(&wrong, &spec).is_err());
+        assert!(tests_of(&edit(&spec, "{a + b}", "{a * b}")).is_err());
     }
 
     #[test]
     fn dry_runs_are_deterministic() {
-        let text = valid();
-        let first = check(&text, &spec());
-        assert_eq!(first, check(&text, &spec()));
-        assert_eq!(dry_run_seed(&text), dry_run_seed(&text));
+        let spec = spec::parse(&valid()).expect("valid spec");
+        assert_eq!(check(&spec), check(&spec));
+        assert_eq!(dry_run_seed(GENERATED), dry_run_seed(GENERATED));
     }
 }

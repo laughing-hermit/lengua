@@ -1,28 +1,30 @@
 ---
-name: write-assembly
-description: Writes a lengua program's main.s, the x86-64 assembly (integer, vector and floating-point instructions) that implements its recorded spec and passes its tests, in lengua's dialect checked against the lengua Power of 10 (NASA's rules adapted for assembly). Use after check accepts the tests, when the lengua check tool says to write main.s or reports problems in it, or when the user asks for a faster program. Ends when check says done, with a short report to the user.
+name: compile
+description: Compiles a lengua program's spec.md into main.s, x86-64 assembly for this computer (integer, vector and floating-point instructions) that passes every test in the spec, in lengua's dialect checked against the lengua Power of 10 (NASA's rules adapted for assembly). Use after check records the spec, when the lengua check tool says to write main.s or reports problems in it, when someone shares a spec to build on this computer, or when the user asks for a faster program. Ends when check says done, with a short report to the user.
 license: Apache-2.0
 compatibility: Needs the lengua MCP server from the lengua plugin, on Linux x86-64 with LLVM (llvm-mc and ld.lld).
 ---
 
-# Write lengua assembly
+# Compile a lengua spec
 
-`main.s` is the program: x86-64 assembly for Linux that you write from the recorded spec and its
-tests. You are the compiler. lengua checks your translation: it assembles `main.s`, reads
-the machine code back, matches it to `main.s` line by line, and checks the lengua Power of 10.
-Nothing runs before every rule passes.
+`main.s` is the program: x86-64 assembly for Linux that you compile from `spec.md`. You are the
+compiler. lengua checks your translation: it assembles `main.s`, reads the machine code back,
+matches it to `main.s` line by line, checks the lengua Power of 10, then runs every test in the
+spec and proves what it can. Nothing runs before every rule passes. Once a check passes, lengua
+writes main.s's second line itself, naming the spec it was compiled from, this computer's target
+and the CPU features the code needs; never write that line yourself.
 
 ## Steps
 
-1. Read `<path>/spec.md` and `<path>/tests.toml`. The last `check` reply's `machine` lists the
-   CPU extensions main.s may use, such as BMI, POPCNT, LZCNT, ADX, MOVBE, AVX2 or AVX-512.
+1. Read `<path>/spec.md`: its behaviors, and the generated tests under them. The last `check`
+   reply's `machine` lists the CPU extensions main.s may use, such as BMI, POPCNT, LZCNT, ADX,
+   MOVBE, AVX2 or AVX-512.
 2. Plan the functions before writing them: at most 60 instructions each (rule 4), so `_start`
    checks the arguments and calls the functions that do the work.
 3. Write `<path>/main.s` in the shape of [the template](assets/main-template.s): its first line
    is `.intel_syntax noprefix`, and `assert_fail` and `assert_message` are copied word for word;
    the rest is the program. The template is a complete, checked program that prints the negative
-   of a number (its spec and tests are [template-spec.md](assets/template-spec.md) and
-   [template-tests.toml](assets/template-tests.toml)); its `parse_i64`, `write_i64` and
+   of a number ([its spec](assets/template-spec.md)); its `parse_i64`, `write_i64` and
    `write_all` can be reused as they are. To read a whole input, a reply, or a request up to the
    byte that ends it (such as a newline), call `fill` from [fill.s](assets/fill.s), copied word for
    word with its three constants: the proof then covers every way the input can arrive, cut into
@@ -31,12 +33,12 @@ Nothing runs before every rule passes.
    [the Linux x86-64 reference](references/linux-x86_64.md) for system calls, the program's start
    and the calling convention. Write it correct first; speed comes in step 6.
 5. Call `check` with `path`. It checks the rules first and lists each violation as
-   `rule N (name) main.s:LINE: problem. Fix: …`. Then it runs every test: the examples, and the
-   generated tests with fresh random inputs (boundary values first). A failure shows the inputs,
-   the seed, what was expected and what happened, and `assertion N failed at main.s:LINE` when an
-   assertion fires. When a test fails, decide from `spec.md` whether `main.s` or the test is wrong:
-   fix `main.s`, or fix `tests.toml` with the write-tests skill, and call `check` again. Keep going
-   until every test passes; never stop to ask the user.
+   `rule N (name) main.s:LINE: problem. Fix: …`. Then it runs every test: each behavior's example,
+   and the generated tests with fresh random inputs (boundary values first). A failure shows the
+   inputs, the seed, what was expected and what happened, and `assertion N failed at main.s:LINE`
+   when an assertion fires. When a test fails, decide from `spec.md` whether `main.s` or the test
+   is wrong: fix `main.s`, or fix the test in `spec.md` by the write-spec skill's rules, and call
+   `check` again. Keep going until every test passes; never stop to ask the user.
 6. **Make it fast.** lengua aims for programs faster than C, C++ and Rust built with every
    optimization. When the program loops over its input (text, numbers, files, a stream), make one
    pass for speed as soon as `check` says every test passes, then call `check` again: the tests
@@ -53,11 +55,11 @@ Nothing runs before every rule passes.
      next piece (such as whether the last byte ended a word), and repeat until `read` returns 0.
    - **Threads** only when each gets at least a few hundred kilobytes of work (see below).
 
-   `assets/fast` holds three checked programs to learn from and copy from, each with its spec and
-   tests: [wc](assets/fast/wc/main.s) counts lines and words 64 bytes a step with
-   AVX-512 masks; [crc32c](assets/fast/crc32c/main.s) runs three `crc32` chains side by side and
-   joins them with `pclmulqdq`; [histogram](assets/fast/histogram/main.s) spreads its counts over
-   four tables. Their `digits` (write a number's decimal digits) can be copied as it is.
+   `assets/fast` holds three checked programs to learn from and copy from, each with its spec:
+   [wc](assets/fast/wc/main.s) counts lines and words 64 bytes a step with AVX-512 masks;
+   [crc32c](assets/fast/crc32c/main.s) runs three `crc32` chains side by side and joins them with
+   `pclmulqdq`; [histogram](assets/fast/histogram/main.s) spreads its counts over four tables.
+   Their `digits` (write a number's decimal digits) can be copied as it is.
 7. Once every test passes, `check` proves the program in the background and says `proving`: call
    it again, with nothing to change, until it says `done`. Each call returns within about 40
    seconds, and a proof takes at most five minutes. For each generated test it can, it proves for
@@ -94,6 +96,18 @@ starts in the background on its spec's port and `run` returns its address: try i
 tools, such as `curl` or `nc`, then call `run` with `stop: true` to stop it and see what it
 printed. A program that connects reaches only the ports its spec names.
 
+### Shared specs
+
+People share specs, not code: the spec is the source of truth, and main.s is disposable. A spec
+someone shares compiles here like any other: write `main.s` for this computer. To share a program,
+the user shares `spec.md`, and anyone's agent compiles it for their own computer. Each compile is
+a new program that passes the same checks, so whatever must be the same everywhere belongs in the
+spec. A `main.s` that comes along in a copied folder is checked from scratch before `run` runs it;
+when its second line says it was compiled for another computer or a CPU feature this one lacks,
+`check` says so, and you compile the spec again for this one. lengua's line names the code, it
+doesn't protect it: anyone can build main.s outside lengua, so its guarantees hold only for
+programs that `run` runs after `check`.
+
 ## Making it faster
 
 Only when the user asks for a faster program: read `performance` in the `done` reply. For each
@@ -110,59 +124,22 @@ measures cover every thread, and the time on the clock says how long it took.
 
 The biggest win on text and arrays is usually vector instructions: one `pcmpeqb` compares 16 bytes,
 and AVX2 and AVX-512 do 32 and 64. [The vector template](assets/vector-template.s) (with
-[its spec](assets/vector-template-spec.md) and [tests](assets/vector-template-tests.toml)) is a
-checked SSE2 program that finds a newline and capitalizes a line 16 bytes at a time. Use AVX2 or
-AVX-512 when `machine` lists them, and keep every vector access inside its buffer: see "Vectors" in
-[the rules](references/power-of-10.md). With AVX-512BW, a byte test is one compare into a mask
-register and the change one masked instruction: `vpsubb zmm4, zmm0, zmm1` (subtract `'a'`),
-`vpcmpub k1, zmm4, zmm2, 1` (below 26), `vpsubb zmm0 {k1}, zmm0, zmm3` (subtract the case bit).
-Measured against Rust and C on a 1 MiB file, that loop takes 4 times fewer cycles than
-`gcc -O3 -march=native`, where the 16-byte one takes more instructions than C. Memory the program
-touches costs kernel time too, a page fault per 4 KiB: work in place where the rules allow it. For
-floating point, packed instructions do 2 to 8 doubles at once, or 4 to 16 singles, as long as each
-element's steps stay in the formula's order.
+[its spec](assets/vector-template-spec.md)) is a checked SSE2 program that finds a newline and
+capitalizes a line 16 bytes at a time. Use AVX2 or AVX-512 when `machine` lists them, and keep
+every vector access inside its buffer: see "Vectors" in [the rules](references/power-of-10.md).
+With AVX-512BW, a byte test is one compare into a mask register and the change one masked
+instruction: `vpsubb zmm4, zmm0, zmm1` (subtract `'a'`), `vpcmpub k1, zmm4, zmm2, 1` (below 26),
+`vpsubb zmm0 {k1}, zmm0, zmm3` (subtract the case bit). Measured against Rust and C on a 1 MiB
+file, that loop takes 4 times fewer cycles than `gcc -O3 -march=native`, where the 16-byte one
+takes more instructions than C. Memory the program touches costs kernel time too, a page fault
+per 4 KiB: work in place where the rules allow it. For floating point, packed instructions do 2
+to 8 doubles at once, or 4 to 16 singles, as long as each element's steps stay in the formula's
+order.
 
 When the spec allows threads (`- Threads: up to N`), split heavy work across cores with
 `parallel_for`: [the parallel template](assets/parallel-template.s) (with
-[its spec](assets/parallel-template-spec.md) and [tests](assets/parallel-template-tests.toml))
-capitalizes up to a megabyte on 16 threads, each worker filling its own slot. Copy its thread code
-word for word, follow "Threads" in [the rules](references/power-of-10.md), and compare
-the time on the clock, which threads shorten. Starting a thread costs tens of
-microseconds, so give each one at least a few hundred kilobytes of vector work: on a megabyte,
-one 64-byte loop is as fast as sixteen threads.
-
-## The rules in brief
-
-1. **Simple control flow:** jumps stay in their function, no recursion, every path ends, and a
-   chain of `cmp` + `je` ends in an assertion.
-2. **Bounded loops:** `mov R, NAME` before a head label with `# bound: N`, and `dec R` + `jnz`
-   back; nothing else changes `R`. A server's loop that takes connections may say
-   `# bound: forever` and close with `jmp`.
-3. **Fixed resources:** only the spec's system calls, each set up by `mov eax, SYS_NAME`; the stack
-   moves only by push, pop, call, ret and `add`/`sub rsp`; nothing below `rsp`.
-4. **Small functions:** at most 60 instructions, one `ret`, calls 16-byte aligned, and `rbx`,
-   `rbp`, `r12`–`r15` saved when changed.
-5. **Assertions:** `label: mov edi, <1-999>` + `call assert_fail`, reached by one conditional
-   jump; at least 2 per function on average.
-6. **Smallest scope:** only `_start` exported; writable data belongs to one function.
-7. **Checked results:** `test rax, rax` + a conditional jump right after every system call and
-   every call to a `# returns: result` function.
-8. **Named constants:** for system calls, exit codes, sizes and loop counts, all defined at the
-   top; `NAME_LEN` equals the size of `name`.
-9. **No indirection:** no jumps through registers; indexed accesses bounds-checked first over
-   their whole width (16 to 64 bytes for vectors), or inside `# unsafe: <reason>` … `# end unsafe`.
-10. **Checked by tools:** warnings are errors, and `check` runs on every change.
-
-## Never
-
-- `;`, `/* */`, a label and an instruction on one line, `rep` or `lock`
-- a constant defined after its use, `. - name` outside `.size`, `[name]` without `rip`, or `offset`
-- `leave`, `enter`, `loop`, string instructions, x87, half precision or `rcp`/`rsqrt`
-- floating-point steps in another order than the formula's, `* 0.1` for `/ 10.0`, or a fused
-  multiply-add where the formula doesn't say `fma`
-- `movdqa` or `vmovdqa` (use `movdqu`), an SSE instruction other than `movdqu` reading 16 bytes of
-  memory, rounding overrides (`{rn-sae}`), gathers or scatters
-- `and rsp`, `mov rsp`, or memory below `rsp`
-- a loop counter in `rax`, `rcx` or `r11` across a `syscall`, or in any caller-saved register
-  across a `call`
-- changes to `assert_fail` or `assert_message`
+[its spec](assets/parallel-template-spec.md)) capitalizes up to a megabyte on 16 threads, each
+worker filling its own slot. Copy its thread code word for word, follow "Threads" in
+[the rules](references/power-of-10.md), and compare the time on the clock, which threads
+shorten. Starting a thread costs tens of microseconds, so give each one at least a few hundred
+kilobytes of vector work: on a megabyte, one 64-byte loop is as fast as sixteen threads.

@@ -1,14 +1,17 @@
 # lengua
 
-Natural language in, checked machine code out. lengua makes your AI agent the compiler: you
-describe a program in plain words, and there's no programming language in between. The agent
-writes a spec from your request, tests from the spec, and then the fastest x86-64 assembly it
-can. That assembly must pass every test and an adapted NASA "Power of 10" rule set, and lengua
-validates each step of the translation; the one step no machine can check, your request to the
-spec, comes back to you in the agent's report. A signed lock keeps spec, tests and code in sync, and a
-program runs only while all three match. See [DESIGN.md](DESIGN.md) for how and why.
+Natural language in, checked machine code out. lengua is an AI language, not a programming
+language: you describe a program in plain words, and your AI agent is the compiler. A program is
+two files. `spec.md` is the source: what the program does, as behaviors shown by examples, with
+the tests that try each one, in plain markdown anyone can read and share. `main.s` is the fastest
+x86-64 assembly the agent can compile from it for your computer, and it's disposable: the spec is
+what you keep and share. That assembly must pass every
+test and an adapted NASA "Power of 10" rule set, and lengua validates each step of the
+translation; the one step no machine can check, your request to the spec, comes back to you in
+the agent's report. A signed lock keeps the two files in sync, and a program runs only while both
+match. See [DESIGN.md](DESIGN.md) for how and why.
 
-lengua is an [Agent Plugin](https://agent-plugins.org): three skills and an MCP server, using only
+lengua is an [Agent Plugin](https://agent-plugins.org): two skills and an MCP server, using only
 open standards, so it works in Claude Code, Codex, Cursor and other agent harnesses.
 
 > Status: dialect 2 on Linux x86-64. It covers whole numbers, exact decimals, floating point in
@@ -59,32 +62,37 @@ given as arguments and prints the sum." That request is all it takes:
 1. The agent writes `spec.md` from your request, and lengua records it with your words in
    `lengua.lock`. The agent asks you something only when your request leaves open what only you
    can decide.
-2. It writes the tests and the assembly, calling lengua's one tool, `check`, after each file:
-   lengua checks the tests against the spec and the code against its rules, runs every test, and
-   proves the program for every input it can, in the background. When a test fails, the agent
-   decides from the spec whether the test or the code is wrong and fixes it, until everything
-   passes. No call takes more than about 40 seconds, in any harness.
+2. It compiles the spec into assembly, calling lengua's one tool, `check`, after each file:
+   lengua checks the spec's tests against the spec and the code against its rules, runs every
+   test, and proves the program for every input it can, in the background. When a test fails,
+   the agent decides from the spec whether the test or the code is wrong and fixes it, until
+   everything passes. No call takes more than about 40 seconds, in any harness.
 3. Its report says where the program is, what the spec promises (behaviors, limits, and the files
    and ports it may touch), what's proven, what its first example printed, and every change made
-   to the spec or the tests after your request, with lengua's own marks on any test change that
-   tests less.
+   to the spec after your request, with lengua's own marks on any test change that tests less.
 
 If you'd rather read the spec before the agent builds, say "show me the spec first", and it
 waits for your go-ahead. Later, ask the agent to run the program with other inputs, or on your
 files ("run it on notes.txt in ~/docs"), or to change what it does. If you don't name a folder,
 the program goes in a new folder inside the current one.
 
-Every run is confined by the kernel: the program can make only the system calls its spec allows,
-and touch files only in the folder it runs in.
+Every run is confined by the kernel: the program can use only what its spec names (standard
+input, files, the clock, random bytes, the network ports it lists), and touch files only in the
+folder it runs in.
+
+Share a program by sharing its spec, the source of truth: anyone's agent compiles it for their own
+computer, and lengua checks that copy there. Each copy is compiled afresh, so copies pass the same
+checks but can differ wherever the spec leaves room: what must be the same everywhere belongs in
+its behaviors and ranges.
 
 lengua relies on nothing from your harness's permission prompts, so it is as safe with every tool
-allowed or in an auto mode: what a program may touch is its spec's list, which the kernel enforces
+allowed or in an auto mode: what a program may touch is what its spec names, which the kernel enforces
 on every run, and lengua runs no build its checks didn't pass. The first `check` creates a
 signing key in `~/.local/share/lengua`.
 
 ## Examples
 
-Complete programs, each with its spec, tests and assembly:
+Complete programs, each with its spec, tests included, and its assembly:
 
 - [`examples/add`](examples/add) adds two whole numbers;
 - [`examples/mean`](examples/mean) averages two prices exactly, in whole cents, rounding half a
@@ -108,7 +116,7 @@ Complete programs, each with its spec, tests and assembly:
   than GNU `wc`. Its AVX-512 counting is proven right for every input up to 4096 bytes.
 
 Their `lengua.lock` files aren't committed, because a lock is signed with each machine's own key.
-Ask the agent to check one with lengua: one `check` records the spec, checks the tests and the
+Ask the agent to check one with lengua: one `check` records the spec, checks its tests and the
 code, and creates the lock.
 
 ## Against C, C++ and Rust

@@ -14,5 +14,15 @@ lowercase letters followed by a newline. If reading or writing fails, it exits w
 - Then it prints `cd` followed by a newline
 - And it exits with code `0`
 
+### For any `first` and `second`
+- Given standard input holding `{first}\n{second}\n`
+- When the program runs
+- Then it prints `{second}` followed by a newline
+- And it exits with code `0`
+
+| first | second | runs |
+|---|---|---|
+| `string(1, 20, "abcdefghijklmnopqrstuvwxyz")` | `string(1, 20, "abcdefghijklmnopqrstuvwxyz")` | 100 |
+
 # Constraints
-- Allowed system calls: read, write, exit
+- Uses: standard input

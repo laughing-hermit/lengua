@@ -15,6 +15,16 @@ writing the output fails, the program exits with code 3.
 - Then it prints `5` followed by a newline
 - And it exits with code `0`
 
+### For any `a` and `b`
+- Given the arguments `{a}` and `{b}`
+- When the program runs
+- Then it prints `{a + b}` followed by a newline
+- And it exits with code `0`
+
+| a | b | runs |
+|---|---|---|
+| `int(-1000000000, 1000000000)` | `int(-1000000000, 1000000000)` | 200 |
+
 ## B2: Shows usage unless given two arguments
 - Given no arguments
 - When the program runs
@@ -27,5 +37,15 @@ writing the output fails, the program exits with code 3.
 - Then it prints `error: not a number` followed by a newline to standard error
 - And it exits with code `2`
 
+### For any `a` and `s`
+- Given the arguments `{a}` and `{s}`
+- When the program runs
+- Then it prints `error: not a number` followed by a newline to standard error
+- And it exits with code `2`
+
+| a | s | runs |
+|---|---|---|
+| `int(-1000000000, 1000000000)` | `choice("x", "", "-", "1.5", "1000000001", "-1000000001", "9223372036854775808")` | 50 |
+
 # Constraints
-- Allowed system calls: write, exit
+- Uses: nothing

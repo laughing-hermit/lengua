@@ -1170,56 +1170,122 @@ pub fn display(instruction: &Instruction) -> String {
     text
 }
 
+/// What one of an instruction's CPUID features asks of a CPU.
+enum Needs {
+    /// Every x86-64 CPU has it, SSE and SSE2 included.
+    Baseline,
+    /// A feature some CPUs lack: its name, and whether a CPU has it.
+    Feature(&'static str, fn(&CpuFeatures) -> bool),
+    /// An extension the dialect leaves out.
+    Outside,
+}
+
+/// A feature some CPUs lack: its name in reports, its CPUID feature, and whether a CPU has it.
+type Feature = (&'static str, CpuidFeature, fn(&CpuFeatures) -> bool);
+
+/// The features beyond the x86-64 baseline the dialect allows, in the order reports list them.
+const FEATURES: [Feature; 30] = [
+    ("BMI1", CpuidFeature::BMI1, |cpu| cpu.bmi1),
+    ("BMI2", CpuidFeature::BMI2, |cpu| cpu.bmi2),
+    ("POPCNT", CpuidFeature::POPCNT, |cpu| cpu.popcnt),
+    ("LZCNT", CpuidFeature::LZCNT, |cpu| cpu.lzcnt),
+    ("ADX", CpuidFeature::ADX, |cpu| cpu.adx),
+    ("MOVBE", CpuidFeature::MOVBE, |cpu| cpu.movbe),
+    ("SSE3", CpuidFeature::SSE3, |cpu| cpu.sse3),
+    ("SSSE3", CpuidFeature::SSSE3, |cpu| cpu.ssse3),
+    ("SSE4.1", CpuidFeature::SSE4_1, |cpu| cpu.sse4_1),
+    ("SSE4.2", CpuidFeature::SSE4_2, |cpu| cpu.sse4_2),
+    ("AVX", CpuidFeature::AVX, |cpu| cpu.avx),
+    ("AVX2", CpuidFeature::AVX2, |cpu| cpu.avx2),
+    ("FMA", CpuidFeature::FMA, |cpu| cpu.fma),
+    ("AVX-512F", CpuidFeature::AVX512F, |cpu| cpu.avx512f),
+    ("AVX-512BW", CpuidFeature::AVX512BW, |cpu| cpu.avx512bw),
+    ("AVX-512CD", CpuidFeature::AVX512CD, |cpu| cpu.avx512cd),
+    ("AVX-512DQ", CpuidFeature::AVX512DQ, |cpu| cpu.avx512dq),
+    ("AVX-512VL", CpuidFeature::AVX512VL, |cpu| cpu.avx512vl),
+    ("AVX-512 VBMI", CpuidFeature::AVX512_VBMI, |cpu| {
+        cpu.avx512vbmi
+    }),
+    ("AVX-512 VBMI2", CpuidFeature::AVX512_VBMI2, |cpu| {
+        cpu.avx512vbmi2
+    }),
+    ("AVX-512 VNNI", CpuidFeature::AVX512_VNNI, |cpu| {
+        cpu.avx512vnni
+    }),
+    ("AVX-512 BITALG", CpuidFeature::AVX512_BITALG, |cpu| {
+        cpu.avx512bitalg
+    }),
+    ("AVX-512 VPOPCNTDQ", CpuidFeature::AVX512_VPOPCNTDQ, |cpu| {
+        cpu.avx512vpopcntdq
+    }),
+    ("AVX-VNNI", CpuidFeature::AVX_VNNI, |cpu| cpu.avxvnni),
+    ("AES-NI", CpuidFeature::AES, |cpu| cpu.aes),
+    ("VAES", CpuidFeature::VAES, |cpu| cpu.vaes),
+    ("SHA", CpuidFeature::SHA, |cpu| cpu.sha),
+    ("PCLMULQDQ", CpuidFeature::PCLMULQDQ, |cpu| cpu.pclmulqdq),
+    ("VPCLMULQDQ", CpuidFeature::VPCLMULQDQ, |cpu| cpu.vpclmulqdq),
+    ("GFNI", CpuidFeature::GFNI, |cpu| cpu.gfni),
+];
+
+fn needs(feature: CpuidFeature) -> Needs {
+    match feature {
+        CpuidFeature::INTEL8086
+        | CpuidFeature::INTEL186
+        | CpuidFeature::INTEL286
+        | CpuidFeature::INTEL386
+        | CpuidFeature::INTEL486
+        | CpuidFeature::X64
+        | CpuidFeature::CMOV
+        | CpuidFeature::SYSCALL
+        | CpuidFeature::SSE
+        | CpuidFeature::SSE2 => Needs::Baseline,
+        _ => FEATURES
+            .iter()
+            .find(|(_, cpuid, _)| *cpuid == feature)
+            .map_or(Needs::Outside, |(name, _, has)| Needs::Feature(name, *has)),
+    }
+}
+
+/// Whether `cpu` has the feature called `name`, or `None` for a name lengua doesn't know.
+#[must_use]
+pub fn cpu_has(name: &str, cpu: &CpuFeatures) -> Option<bool> {
+    FEATURES
+        .iter()
+        .find(|(known, ..)| *known == name)
+        .map(|(_, _, has)| has(cpu))
+}
+
 /// The CPU features an instruction needs beyond the x86-64 baseline, checked against this CPU.
 fn missing_feature(instruction: &Instruction, features: CpuFeatures) -> Option<&'static str> {
-    let needs = |present: bool, name: &'static str| (!present).then_some(name);
     instruction
         .cpuid_features()
         .iter()
-        .find_map(|feature| match feature {
-            // Every x86-64 CPU has these, SSE and SSE2 included.
-            CpuidFeature::INTEL8086
-            | CpuidFeature::INTEL186
-            | CpuidFeature::INTEL286
-            | CpuidFeature::INTEL386
-            | CpuidFeature::INTEL486
-            | CpuidFeature::X64
-            | CpuidFeature::CMOV
-            | CpuidFeature::SYSCALL
-            | CpuidFeature::SSE
-            | CpuidFeature::SSE2 => None,
-            CpuidFeature::BMI1 => needs(features.bmi1, "BMI1"),
-            CpuidFeature::BMI2 => needs(features.bmi2, "BMI2"),
-            CpuidFeature::POPCNT => needs(features.popcnt, "POPCNT"),
-            CpuidFeature::LZCNT => needs(features.lzcnt, "LZCNT"),
-            CpuidFeature::ADX => needs(features.adx, "ADX"),
-            CpuidFeature::MOVBE => needs(features.movbe, "MOVBE"),
-            CpuidFeature::SSE3 => needs(features.sse3, "SSE3"),
-            CpuidFeature::SSSE3 => needs(features.ssse3, "SSSE3"),
-            CpuidFeature::SSE4_1 => needs(features.sse4_1, "SSE4.1"),
-            CpuidFeature::SSE4_2 => needs(features.sse4_2, "SSE4.2"),
-            CpuidFeature::AVX => needs(features.avx, "AVX"),
-            CpuidFeature::AVX2 => needs(features.avx2, "AVX2"),
-            CpuidFeature::FMA => needs(features.fma, "FMA"),
-            CpuidFeature::AVX512F => needs(features.avx512f, "AVX-512F"),
-            CpuidFeature::AVX512BW => needs(features.avx512bw, "AVX-512BW"),
-            CpuidFeature::AVX512CD => needs(features.avx512cd, "AVX-512CD"),
-            CpuidFeature::AVX512DQ => needs(features.avx512dq, "AVX-512DQ"),
-            CpuidFeature::AVX512VL => needs(features.avx512vl, "AVX-512VL"),
-            CpuidFeature::AVX512_VBMI => needs(features.avx512vbmi, "AVX-512 VBMI"),
-            CpuidFeature::AVX512_VBMI2 => needs(features.avx512vbmi2, "AVX-512 VBMI2"),
-            CpuidFeature::AVX512_VNNI => needs(features.avx512vnni, "AVX-512 VNNI"),
-            CpuidFeature::AVX512_BITALG => needs(features.avx512bitalg, "AVX-512 BITALG"),
-            CpuidFeature::AVX512_VPOPCNTDQ => needs(features.avx512vpopcntdq, "AVX-512 VPOPCNTDQ"),
-            CpuidFeature::AVX_VNNI => needs(features.avxvnni, "AVX-VNNI"),
-            CpuidFeature::AES => needs(features.aes, "AES-NI"),
-            CpuidFeature::VAES => needs(features.vaes, "VAES"),
-            CpuidFeature::SHA => needs(features.sha, "SHA"),
-            CpuidFeature::PCLMULQDQ => needs(features.pclmulqdq, "PCLMULQDQ"),
-            CpuidFeature::VPCLMULQDQ => needs(features.vpclmulqdq, "VPCLMULQDQ"),
-            CpuidFeature::GFNI => needs(features.gfni, "GFNI"),
-            _ => Some("an extension outside the dialect"),
+        .find_map(|feature| match needs(*feature) {
+            Needs::Baseline => None,
+            Needs::Feature(name, has) => (!has(&features)).then_some(name),
+            Needs::Outside => Some("an extension outside the dialect"),
         })
+}
+
+/// The CPU features beyond the x86-64 baseline that a program's instructions need, each once,
+/// in the order of the table above.
+#[must_use]
+pub fn features_needed(machine: &Machine) -> Vec<&'static str> {
+    let mut found: Vec<&'static str> = Vec::new();
+    for function in machine.functions.values() {
+        for instruction in &function.instructions {
+            for feature in instruction.cpuid_features() {
+                if let Needs::Feature(name, _) = needs(*feature)
+                    && !found.contains(&name)
+                {
+                    found.push(name);
+                }
+            }
+        }
+    }
+    let order = |name: &&str| FEATURES.iter().position(|(known, ..)| known == name);
+    found.sort_by_key(order);
+    found
 }
 
 /// Matches every source function to its machine code. Returns `None` when they don't match,
@@ -1546,8 +1612,8 @@ fn check_instruction(step: &Step<'_>, features: CpuFeatures, violations: &mut Ve
             rule: Rule::Dialect,
             line,
             problem: format!("`{name}` needs {feature}, which this CPU doesn't have"),
-            fix: "use instructions this CPU has (status lists its features); SSE2 vectors work \
-                  on every x86-64 CPU"
+            fix: "use instructions this CPU has (check lists its features while main.s is still \
+                  to write); SSE2 vectors work on every x86-64 CPU"
                 .into(),
         });
     }

@@ -106,7 +106,8 @@ fn skills_link_only_to_files_that_exist() {
             let end = after.find(')').expect("closed link");
             let target = &after[..end];
             if !target.contains("://") && !target.starts_with('#') {
-                let path = skills_dir().join(&folder).join(target);
+                let file = target.split('#').next().unwrap_or(target);
+                let path = skills_dir().join(&folder).join(file);
                 assert!(path.is_file(), "{folder} links to missing {target}");
             }
             rest = &after[end..];
@@ -116,12 +117,11 @@ fn skills_link_only_to_files_that_exist() {
 
 #[test]
 fn the_assembly_template_is_a_complete_lengua_program() {
-    let assets = skills_dir().join("write-assembly/assets");
+    let assets = skills_dir().join("compile/assets");
     let spec_text = read(&assets.join("template-spec.md"));
     let spec = lengua::spec::parse(&spec_text)
         .unwrap_or_else(|problems| panic!("the template's spec has problems: {problems:#?}"));
-    let tests = read(&assets.join("template-tests.toml"));
-    if let Err(problems) = lengua::testfile::check(&tests, &spec) {
+    if let Err(problems) = lengua::testfile::check(&spec) {
         panic!("the template's tests fail check: {problems:#?}");
     }
     let code = read(&assets.join("main-template.s"));
@@ -135,8 +135,10 @@ fn the_assembly_template_is_a_complete_lengua_program() {
 #[test]
 fn the_spec_template_is_a_valid_spec() {
     let text = read(&skills_dir().join("write-spec/assets/spec-template.md"));
-    if let Err(problems) = lengua::spec::parse(&text) {
-        panic!("the template has problems: {problems:#?}");
+    let spec = lengua::spec::parse(&text)
+        .unwrap_or_else(|problems| panic!("the template has problems: {problems:#?}"));
+    if let Err(problems) = lengua::testfile::check(&spec) {
+        panic!("the template's tests fail check: {problems:#?}");
     }
 }
 
@@ -168,49 +170,43 @@ fn documents() -> Vec<(String, String)> {
         .collect()
 }
 
-/// The fenced code blocks of a markdown text, as (language, content).
+/// The fenced code blocks of a markdown text, as (language, content). A block ends at a fence at
+/// least as long as the one that opened it, as markdown reads them.
 fn code_blocks(text: &str) -> Vec<(String, String)> {
     let mut blocks = Vec::new();
-    let mut open: Option<(String, Vec<&str>)> = None;
+    let mut open: Option<(usize, String, Vec<&str>)> = None;
     for line in text.lines() {
-        match (&mut open, line.strip_prefix("```")) {
-            (None, Some(language)) => open = Some((language.trim().to_owned(), Vec::new())),
-            (Some(_), Some("")) => {
-                let (language, lines) = open.take().expect("an open block");
+        let ticks = line.len() - line.trim_start_matches('`').len();
+        let rest = line[ticks..].trim();
+        match &mut open {
+            None if ticks >= 3 => open = Some((ticks, rest.to_owned(), Vec::new())),
+            Some((fence, ..)) if ticks >= *fence && rest.is_empty() => {
+                let (_, language, lines) = open.take().expect("an open block");
                 blocks.push((language, lines.join("\n") + "\n"));
             }
-            (Some((_, lines)), _) => lines.push(line),
-            (None, None) => {}
+            Some((_, _, lines)) => lines.push(line),
+            None => {}
         }
     }
     blocks
 }
 
-/// Each spec the skills show is valid, and each tests.toml they show passes check
-/// against the spec shown before it in the same file.
+/// Each spec the skills show whole is one lengua accepts, its tests included.
 #[test]
 fn examples_in_the_skills_pass_lenguas_own_checks() {
-    let (mut specs, mut tests) = (0, 0);
+    let mut specs = 0;
     for (document, text) in documents() {
-        let mut spec = None;
         for (language, block) in code_blocks(&text) {
             if language == "markdown" && block.contains("type: lengua/program-spec") {
-                let parsed = lengua::spec::parse(&block).unwrap_or_else(|problems| {
+                let spec = lengua::spec::parse(&block).unwrap_or_else(|problems| {
                     panic!("{document} shows an invalid spec: {problems:#?}")
                 });
-                spec = Some(parsed);
-                specs += 1;
-            } else if language == "toml" && block.starts_with("[[example]]") {
-                let parsed = spec
-                    .as_ref()
-                    .unwrap_or_else(|| panic!("{document} shows tests before any spec"));
-                if let Err(problems) = lengua::testfile::check(&block, parsed) {
-                    panic!("{document} shows tests that fail check: {problems:#?}");
+                if let Err(problems) = lengua::testfile::check(&spec) {
+                    panic!("{document} shows a spec whose tests fail check: {problems:#?}");
                 }
-                tests += 1;
+                specs += 1;
             }
         }
     }
     assert!(specs >= 4, "found only {specs} example specs");
-    assert!(tests >= 3, "found only {tests} example tests");
 }

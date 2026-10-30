@@ -42,9 +42,9 @@ async fn records_the_users_words_in_both_protocols() {
         let session = Session::start(protocol).await;
         let program = Program::with_add_spec();
         let report = session.record(&program).await;
-        assert_eq!(report["state"], "write_tests", "{protocol:?}: {report}");
+        assert_eq!(report["state"], "write_code", "{protocol:?}: {report}");
         assert!(
-            text(&report["next_step"]).contains("write-tests skill"),
+            text(&report["next_step"]).contains("compile skill"),
             "{report}"
         );
         assert!(
@@ -79,7 +79,7 @@ async fn the_path_may_name_the_spec_itself() {
             }),
         )
         .await;
-    assert_eq!(report["state"], "write_tests", "{report}");
+    assert_eq!(report["state"], "write_code", "{report}");
     assert!(program.read("lengua.lock").is_some());
     session.service.cancel().await.expect("close the session");
 }
@@ -112,7 +112,7 @@ async fn checking_the_same_spec_again_changes_nothing() {
     let lock = program.read("lengua.lock").expect("the lock");
     for arguments in [program.request(REQUEST), program.arguments()] {
         let again = session.call_ok("check", arguments).await;
-        assert_eq!(again["state"], "write_tests", "{again}");
+        assert_eq!(again["state"], "write_code", "{again}");
         assert_eq!(program.read("lengua.lock").as_deref(), Some(lock.as_str()));
     }
     session.service.cancel().await.expect("close the session");
@@ -167,7 +167,7 @@ async fn an_edited_spec_is_recorded_under_the_same_words() {
         let edited = ADD_SPEC.replace("Adds two numbers", "Adds two integers");
         program.write("spec.md", &edited);
         let report = session.check(&program).await;
-        assert_eq!(report["state"], "write_tests", "{protocol:?}: {report}");
+        assert_eq!(report["state"], "write_code", "{protocol:?}: {report}");
         let lock = program.read("lengua.lock").expect("the lock");
         assert!(
             lock.contains(&format!("words = [\"{REQUEST}\"]\n")),
@@ -191,7 +191,7 @@ async fn an_edited_spec_is_recorded_under_the_same_words() {
             "{report}"
         );
         let report = session.record(&program).await;
-        assert_eq!(report["state"], "write_tests", "{report}");
+        assert_eq!(report["state"], "write_code", "{report}");
         session.service.cancel().await.expect("close the session");
     }
 }

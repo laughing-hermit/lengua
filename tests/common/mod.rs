@@ -16,8 +16,8 @@ use rmcp::{ClientHandler, ClientLifecycleMode, ClientServiceExt, RoleClient, Ser
 use serde_json::{Map, Value};
 use tempfile::TempDir;
 
-/// A valid spec for a program that adds two numbers.
-pub const ADD_SPEC: &str = "---
+/// A valid spec, tests included, for a program that adds two numbers.
+pub const ADD_SPEC: &str = r#"---
 type: lengua/program-spec
 title: add
 description: Adds two whole numbers given as arguments and prints the sum.
@@ -32,6 +32,16 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
 - Then it prints `5` followed by a newline
 - And it exits with code `0`
 
+### For any `a` and `b`
+- Given the arguments `{a}` and `{b}`
+- When the program runs
+- Then it prints `{a + b}` followed by a newline
+- And it exits with code `0`
+
+| a | b | runs |
+|---|---|---|
+| `int(-1000000000, 1000000000)` | `int(-1000000000, 1000000000)` | 200 |
+
 ## B2: Missing arguments
 - Given no arguments
 - When the program runs
@@ -39,28 +49,7 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
 - And it exits with code `1`
 
 # Constraints
-- Allowed system calls: read, write, exit
-";
-
-/// Valid tests for the add spec.
-pub const ADD_TESTS: &str = r#"[[example]]
-id = "B1"
-args = ["2", "3"]
-stdout = "5\n"
-exit_code = 0
-
-[[example]]
-id = "B2"
-stderr = "usage: add <a> <b>\n"
-exit_code = 1
-
-[[generated]]
-id = "B1"
-runs = 200
-vars = { a = "int(-1000000000, 1000000000)", b = "int(-1000000000, 1000000000)" }
-args = ["{a}", "{b}"]
-stdout = "{a + b}\n"
-exit_code = 0
+- Uses: nothing
 "#;
 
 /// What a user says to ask for a program.
@@ -290,7 +279,7 @@ impl Program {
         }
     }
 
-    /// A program folder holding the add spec.
+    /// A program folder holding the add spec, its tests included.
     pub fn with_add_spec() -> Self {
         let program = Self::new();
         program.write("spec.md", ADD_SPEC);

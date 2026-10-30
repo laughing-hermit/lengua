@@ -7,6 +7,7 @@ mod common;
 use std::path::PathBuf;
 
 use common::{Program, Protocol, REQUEST, Session};
+use lengua::hash::Sha256Hex;
 use serde_json::{Value, json};
 
 fn example(name: &str) -> String {
@@ -27,13 +28,25 @@ fn run_arguments(program: &Program, args: &[&str]) -> Value {
     arguments
 }
 
+/// lengua's line in main.s once a check has passed: what it was compiled from and for.
+fn header_of(program: &Program) -> String {
+    let code = program.read("main.s").expect("main.s");
+    code.lines().nth(1).unwrap_or_default().to_owned()
+}
+
+fn compiled_from(spec: &str) -> String {
+    format!(
+        "# lengua: compiled from spec.md sha256:{} for linux-x86_64",
+        Sha256Hex::of(spec.as_bytes())
+    )
+}
+
 #[test]
-fn the_example_carries_no_spec_label() {
-    assert!(!example("tests.toml").contains("[meta]"));
-    assert_eq!(
-        example("main.s").lines().next(),
-        Some(".intel_syntax noprefix")
-    );
+fn the_example_is_plain_assembly() {
+    // lengua writes its line where main.s is checked; the example in the repository has none.
+    let code = example("main.s");
+    assert_eq!(code.lines().next(), Some(".intel_syntax noprefix"));
+    assert!(!code.contains("# lengua:"), "{code}");
 }
 
 #[tokio::test]
@@ -44,16 +57,20 @@ async fn add_goes_from_request_to_done_in_both_protocols() {
         let report = session.check(&program).await;
         assert_eq!(report["state"], "write_spec", "{protocol:?}: {report}");
 
-        // One call after each file: the spec with the user's words, the tests, the code.
+        // One call after each file: the spec, tests included, with the user's words, then the
+        // code.
         program.write("spec.md", &example("spec.md"));
         let report = session.record(&program).await;
-        assert_eq!(report["state"], "write_tests", "{report}");
-        program.write("tests.toml", &example("tests.toml"));
-        let report = session.check(&program).await;
         assert_eq!(report["state"], "write_code", "{report}");
         program.write("main.s", &example("main.s"));
         let done = session.settle(&program).await;
         assert_eq!(done["state"], "done", "{protocol:?}: {done}");
+        // Code that passed carries lengua's line, which leaves what was checked as it was.
+        assert_eq!(header_of(&program), compiled_from(&example("spec.md")));
+        assert_eq!(
+            program.read("main.s").expect("main.s").lines().count(),
+            example("main.s").lines().count() + 1
+        );
         assert_eq!(
             done["tests"][0], "main.s follows every rule and passed all 253 test runs",
             "{done}"
@@ -107,18 +124,20 @@ async fn add_goes_from_request_to_done_in_both_protocols() {
         program.write("main.s", &example("main.s"));
         assert_eq!(session.settle(&program).await["state"], "done");
 
-        // Tests can be fixed after code ran: the change is shown, and lengua marks what tests
-        // less.
-        program.write(
-            "tests.toml",
-            &example("tests.toml").replace("runs = 200", "runs = 20"),
-        );
+        // Without its line, the checked code is still the checked code, and gets it back.
+        assert_eq!(header_of(&program), compiled_from(&example("spec.md")));
+
+        // Tests can be fixed after code ran: the change is shown, lengua marks what tests less,
+        // and main.s's line names the spec it now passed.
+        let fewer = example("spec.md").replace("| 200 |", "| 20 |");
+        program.write("spec.md", &fewer);
         let done = session.settle(&program).await;
         assert_eq!(done["state"], "done", "{done}");
         assert!(
-            text(&done["changes"]["tests_changed"]).contains("runs = 20"),
+            text(&done["changes"]["spec_changed"]).contains("| 20 |"),
             "{done}"
         );
+        assert_eq!(header_of(&program), compiled_from(&fewer));
         assert!(
             done["changes"]["tests_less"][0]
                 .as_str()
@@ -126,7 +145,7 @@ async fn add_goes_from_request_to_done_in_both_protocols() {
             "{done}"
         );
         assert!(text(&done["next_step"]).contains("changes lists"), "{done}");
-        program.write("tests.toml", &example("tests.toml"));
+        program.write("spec.md", &example("spec.md"));
         let done = session.settle(&program).await;
         assert!(done.get("changes").is_none(), "{done}");
 
@@ -178,7 +197,6 @@ async fn code_that_breaks_a_rule_runs_no_tests() {
         let session = Session::start(protocol).await;
         let program = Program::new();
         program.write("spec.md", &example("spec.md"));
-        program.write("tests.toml", &example("tests.toml"));
         program.write(
             "main.s",
             &example("main.s").replacen(
@@ -198,7 +216,7 @@ async fn code_that_breaks_a_rule_runs_no_tests() {
             "{report}"
         );
         assert!(
-            text(&report["next_step"]).contains("write-assembly skill"),
+            text(&report["next_step"]).contains("compile skill"),
             "{report}"
         );
         let lock = program.read("lengua.lock").expect("the lock");
@@ -211,7 +229,7 @@ async fn code_that_breaks_a_rule_runs_no_tests() {
 async fn every_call_returns_within_the_window_and_the_job_goes_on() {
     let session = Session::start_waiting(Protocol::Discover, 1).await;
     let program = Program::new();
-    for name in ["spec.md", "tests.toml", "main.s"] {
+    for name in ["spec.md", "main.s"] {
         program.write(name, &example(name));
     }
     let began = std::time::Instant::now();
@@ -237,4 +255,37 @@ async fn every_call_returns_within_the_window_and_the_job_goes_on() {
         "{replies:?}"
     );
     session.service.cancel().await.expect("close the session");
+}
+
+#[tokio::test]
+async fn a_shared_program_is_checked_again_where_it_lands() {
+    // One user's lengua builds add; another user, with their own key, gets its two files.
+    let first = Session::start(Protocol::Discover).await;
+    let program = Program::new();
+    program.write("spec.md", &example("spec.md"));
+    program.write("main.s", &example("main.s"));
+    first.record(&program).await;
+    assert_eq!(first.settle(&program).await["state"], "done");
+    let shared = Program::new();
+    for name in ["spec.md", "main.s"] {
+        shared.write(name, &program.read(name).expect("a file"));
+    }
+    assert!(
+        shared.read("lengua.lock").is_none(),
+        "the lock stays behind"
+    );
+    let second = Session::start(Protocol::Discover).await;
+    let refused = second
+        .call_error("run", run_arguments(&shared, &["2", "3"]))
+        .await;
+    assert!(refused.contains("call check"), "{refused}");
+    // Checked from scratch there, with that user's words, it runs.
+    second.record(&shared).await;
+    assert_eq!(second.settle(&shared).await["state"], "done");
+    let sum = second
+        .call_ok("run", run_arguments(&shared, &["2", "3"]))
+        .await;
+    assert_eq!(sum["stdout"], "5\n", "{sum}");
+    first.service.cancel().await.expect("close the session");
+    second.service.cancel().await.expect("close the session");
 }

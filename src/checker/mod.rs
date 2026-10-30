@@ -24,17 +24,16 @@ pub use rules::Facts;
 pub use source::{Source, UnsafeBlock};
 
 /// The template program; its assert_fail and assert_message are the canonical ones.
-pub const TEMPLATE: &str =
-    include_str!("../../plugin/skills/write-assembly/assets/main-template.s");
+pub const TEMPLATE: &str = include_str!("../../plugin/skills/compile/assets/main-template.s");
 
 /// The parallel template; its parallel_for, start_worker and join_worker, their data and their
 /// constants are the canonical thread code.
 pub const PARALLEL_TEMPLATE: &str =
-    include_str!("../../plugin/skills/write-assembly/assets/parallel-template.s");
+    include_str!("../../plugin/skills/compile/assets/parallel-template.s");
 
 /// fill, which reads until a buffer is full, the input ends or an end byte arrives; its body
 /// and constants are canonical, so the proof can cover every way the input arrives.
-pub const FILL_TEMPLATE: &str = include_str!("../../plugin/skills/write-assembly/assets/fill.s");
+pub const FILL_TEMPLATE: &str = include_str!("../../plugin/skills/compile/assets/fill.s");
 
 /// At most this many violations are reported at once.
 pub const MAX_VIOLATIONS: usize = 20;
@@ -228,7 +227,7 @@ pub fn check_program(source: &Source, executable: &[u8], context: Context<'_>) -
         .collect();
     let template = source::parse(TEMPLATE).0;
     let fill_template = source::parse(FILL_TEMPLATE).0;
-    let facts = rules::check(
+    let mut facts = rules::check(
         &program,
         &flows,
         context.syscalls,
@@ -236,6 +235,7 @@ pub fn check_program(source: &Source, executable: &[u8], context: Context<'_>) -
         [&template, &fill_template],
         &mut violations,
     );
+    facts.features = decode::features_needed(&machine);
     let parallel_template = source::parse(PARALLEL_TEMPLATE).0;
     threads::check(
         &program,

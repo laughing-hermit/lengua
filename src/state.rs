@@ -1,4 +1,5 @@
-//! A program folder's state in the spec → tests → code workflow, and the single next step.
+//! A program folder's state in the spec → code workflow, and the single next step. The spec
+//! holds the tests: each behavior's steps are its example, and its generated tests sit under it.
 
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -9,14 +10,15 @@ use crate::lock::{self, Key, Lock, LockError};
 /// The spec's file name inside a program folder.
 pub const SPEC_FILE: &str = "spec.md";
 
-/// The tests' file name inside a program folder.
-pub const TESTS_FILE: &str = "tests.toml";
+/// Where tests lived before they moved into the spec: a folder that still has it is asked to
+/// move them.
+pub const LEGACY_TESTS_FILE: &str = "tests.toml";
 
 /// The code's file name inside a program folder.
 pub const CODE_FILE: &str = "main.s";
 
-/// Where the server keeps a copy of each spec.md and tests.toml it recorded, by hash, so later
-/// changes can be shown against them.
+/// Where the server keeps a copy of each spec.md it recorded, by hash, so later changes can be
+/// shown against them.
 #[must_use]
 pub fn stamped_copy(data_dir: &Path, file: &Sha256Hex) -> PathBuf {
     data_dir.join("stamped").join(file.as_str())
@@ -75,9 +77,7 @@ impl std::fmt::Display for ProgramFolder {
 pub struct Snapshot {
     /// SHA-256 of spec.md, when it exists.
     pub spec: Option<Sha256Hex>,
-    /// SHA-256 of tests.toml, when it exists.
-    pub tests: Option<Sha256Hex>,
-    /// SHA-256 of main.s, when it exists.
+    /// SHA-256 of main.s without lengua's line in it, when it exists.
     pub code: Option<Sha256Hex>,
     /// Whether lengua.lock exists and can be trusted.
     pub lock: LockStatus,
@@ -101,15 +101,14 @@ impl Snapshot {
     ///
     /// Fails when a file exists but can't be read.
     pub fn read(folder: &ProgramFolder, key: Option<&Key>) -> io::Result<Self> {
-        let hash = |name: &str| match std::fs::read(folder.file(name)) {
-            Ok(bytes) => Ok(Some(Sha256Hex::of(&bytes))),
+        let hash = |name: &str, of: fn(&[u8]) -> Sha256Hex| match std::fs::read(folder.file(name)) {
+            Ok(bytes) => Ok(Some(of(&bytes))),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error),
         };
         Ok(Self {
-            spec: hash(SPEC_FILE)?,
-            tests: hash(TESTS_FILE)?,
-            code: hash(CODE_FILE)?,
+            spec: hash(SPEC_FILE, Sha256Hex::of)?,
+            code: hash(CODE_FILE, crate::header::code_hash)?,
             lock: match lock::read(folder.path(), key) {
                 Ok(None) => LockStatus::Missing,
                 Ok(Some(lock)) => LockStatus::Valid(lock),
@@ -128,24 +127,20 @@ impl Snapshot {
     }
 }
 
-/// Where a program is in the spec → tests → code workflow.
+/// Where a program is in the spec → code workflow.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum State {
     /// spec.md doesn't exist.
     NoSpec,
     /// lengua.lock exists but can't be trusted.
     LockInvalid(LockError),
-    /// The spec was never recorded, or changed since.
+    /// The spec, tests included, was never recorded, or changed since.
     SpecUnrecorded,
-    /// The spec is recorded; tests.toml doesn't exist.
-    TestsMissing,
-    /// tests.toml exists but hasn't been checked, or changed since.
-    TestsUnchecked,
-    /// The tests are checked; main.s doesn't exist.
+    /// The spec is recorded; main.s doesn't exist.
     CodeMissing,
     /// main.s hasn't been checked, or changed since.
     CodeUnchecked,
-    /// Spec, tests and code all match the lock.
+    /// The spec and the code both match the lock.
     Ready,
 }
 
@@ -161,15 +156,10 @@ impl State {
             LockStatus::Invalid(error) => return Self::LockInvalid(error.clone()),
             LockStatus::Valid(lock) => lock,
         };
+        // The spec, tests included, can be fixed at any time: each version is checked again, and
+        // what changed after the request is shown, not refused.
         if lock.spec.sha256 != *spec {
             return Self::SpecUnrecorded;
-        }
-        // Tests can be fixed at any time: each version is checked against the spec again, and
-        // what changed after code ran is shown, not refused.
-        match (&lock.tests, &snapshot.tests) {
-            (_, None) => return Self::TestsMissing,
-            (Some(stamp), Some(current)) if stamp.sha256 == *current => {}
-            (_, Some(_)) => return Self::TestsUnchecked,
         }
         match (&lock.code, &snapshot.code) {
             (_, None) => Self::CodeMissing,
@@ -185,8 +175,6 @@ impl State {
             Self::NoSpec => "no_spec",
             Self::LockInvalid(_) => "lock_invalid",
             Self::SpecUnrecorded => "spec_unrecorded",
-            Self::TestsMissing => "tests_missing",
-            Self::TestsUnchecked => "tests_unchecked",
             Self::CodeMissing => "code_missing",
             Self::CodeUnchecked => "code_unchecked",
             Self::Ready => "ready",
@@ -198,8 +186,9 @@ impl State {
     pub fn next_step(&self, folder: &ProgramFolder) -> String {
         match self {
             Self::NoSpec => format!(
-                "Next: write {folder}/{SPEC_FILE} with the write-spec skill, then call check with \
-                 path {folder} and, as request, the user's words that asked for the program."
+                "Next: write {folder}/{SPEC_FILE}, its tests included, with the write-spec skill, \
+                 then call check with path {folder} and, as request, the user's words that asked \
+                 for the program."
             ),
             Self::LockInvalid(error) => format!(
                 "Next: {folder}/{} can't be used: {error}. Call check with path {folder} and, as \
@@ -211,15 +200,11 @@ impl State {
                 "Next: call check with path {folder} and, as request, the user's words that asked \
                  for this program or this change, quoted exactly."
             ),
-            Self::TestsMissing => format!(
-                "Next: write {folder}/{TESTS_FILE} with the write-tests skill, then call check \
-                 with path {folder}."
-            ),
             Self::CodeMissing => format!(
-                "Next: write {folder}/{CODE_FILE} with the write-assembly skill, then call check \
-                 with path {folder}."
+                "Next: compile {folder}/{SPEC_FILE} into {folder}/{CODE_FILE} with the compile \
+                 skill, then call check with path {folder}."
             ),
-            Self::TestsUnchecked | Self::CodeUnchecked | Self::Ready => {
+            Self::CodeUnchecked | Self::Ready => {
                 format!("Next: call check with path {folder}.")
             }
         }
@@ -229,7 +214,7 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lock::{CodeStamp, TestsStamp};
+    use crate::lock::CodeStamp;
 
     fn digest(name: &str) -> Sha256Hex {
         Sha256Hex::of(name.as_bytes())
@@ -237,15 +222,6 @@ mod tests {
 
     fn recorded() -> Lock {
         Lock::requested(digest("spec"), "Make me an adder".to_owned())
-    }
-
-    fn with_tests() -> Lock {
-        Lock {
-            tests: Some(TestsStamp {
-                sha256: digest("tests"),
-            }),
-            ..recorded()
-        }
     }
 
     fn with_code() -> Lock {
@@ -256,19 +232,16 @@ mod tests {
                 toolchain: "llvm-mc 22.1.8, ld.lld 22.1.8".into(),
                 max_stack_bytes: 16,
                 unsafe_blocks: 0,
+                target: "linux-x86_64".into(),
+                features: Vec::new(),
             }),
-            ..with_tests()
+            ..recorded()
         }
     }
 
-    fn state(files: [Option<&str>; 3], lock: LockStatus) -> State {
-        let [spec, tests, code] = files.map(|name| name.map(digest));
-        State::of(&Snapshot {
-            spec,
-            tests,
-            code,
-            lock,
-        })
+    fn state(files: [Option<&str>; 2], lock: LockStatus) -> State {
+        let [spec, code] = files.map(|name| name.map(digest));
+        State::of(&Snapshot { spec, code, lock })
     }
 
     fn next_step(state: &State) -> String {
@@ -278,11 +251,11 @@ mod tests {
 
     #[test]
     fn row_no_spec() {
-        let state = state([None, Some("tests"), None], LockStatus::Valid(recorded()));
+        let state = state([None, Some("code")], LockStatus::Valid(recorded()));
         assert_eq!(state, State::NoSpec);
         assert!(
             next_step(&state).starts_with(
-                "Next: write /projects/add/spec.md with the write-spec skill, then call check"
+                "Next: write /projects/add/spec.md, its tests included, with the write-spec skill"
             ),
             "{}",
             next_step(&state)
@@ -292,7 +265,7 @@ mod tests {
     #[test]
     fn row_lock_invalid() {
         let state = state(
-            [Some("spec"), None, None],
+            [Some("spec"), None],
             LockStatus::Invalid(LockError::BadSignature),
         );
         assert_eq!(state, State::LockInvalid(LockError::BadSignature));
@@ -311,9 +284,9 @@ mod tests {
 
     #[test]
     fn row_spec_unrecorded() {
-        let missing = state([Some("spec"), None, None], LockStatus::Missing);
+        let missing = state([Some("spec"), None], LockStatus::Missing);
         let changed = state(
-            [Some("edited spec"), Some("tests"), Some("code")],
+            [Some("edited spec"), Some("code")],
             LockStatus::Valid(with_code()),
         );
         assert_eq!(missing, State::SpecUnrecorded);
@@ -323,64 +296,22 @@ mod tests {
             step.contains("call check with path /projects/add and, as request, the user's words"),
             "{step}"
         );
-        assert!(!step.contains("approve"), "{step}");
-    }
-
-    #[test]
-    fn row_tests_missing() {
-        let state = state([Some("spec"), None, None], LockStatus::Valid(recorded()));
-        assert_eq!(state, State::TestsMissing);
-        let step = next_step(&state);
-        assert!(step.contains("write-tests skill"), "{step}");
-        assert!(!step.contains("sha256"), "no label to copy: {step}");
-    }
-
-    #[test]
-    fn row_tests_unchecked() {
-        let state = state(
-            [Some("spec"), Some("tests"), None],
-            LockStatus::Valid(recorded()),
-        );
-        assert_eq!(state, State::TestsUnchecked);
-        assert_eq!(
-            next_step(&state),
-            "Next: call check with path /projects/add."
-        );
-    }
-
-    #[test]
-    fn edited_tests_are_checked_again_even_after_code_ran() {
-        let mut ran = with_code();
-        ran.request.tests = Some(digest("tests"));
-        let edited = state(
-            [Some("spec"), Some("edited tests"), Some("code")],
-            LockStatus::Valid(ran.clone()),
-        );
-        assert_eq!(edited, State::TestsUnchecked);
-        let deleted = state([Some("spec"), None, Some("code")], LockStatus::Valid(ran));
-        assert_eq!(deleted, State::TestsMissing);
     }
 
     #[test]
     fn row_code_missing() {
-        let state = state(
-            [Some("spec"), Some("tests"), None],
-            LockStatus::Valid(with_tests()),
-        );
+        let state = state([Some("spec"), None], LockStatus::Valid(recorded()));
         assert_eq!(state, State::CodeMissing);
         let step = next_step(&state);
-        assert!(step.contains("write-assembly skill"), "{step}");
+        assert!(step.contains("with the compile skill"), "{step}");
         assert!(!step.contains("sha256"), "no label to copy: {step}");
     }
 
     #[test]
     fn row_code_unchecked() {
-        let unchecked = state(
-            [Some("spec"), Some("tests"), Some("code")],
-            LockStatus::Valid(with_tests()),
-        );
+        let unchecked = state([Some("spec"), Some("code")], LockStatus::Valid(recorded()));
         let edited = state(
-            [Some("spec"), Some("tests"), Some("edited code")],
+            [Some("spec"), Some("edited code")],
             LockStatus::Valid(with_code()),
         );
         assert_eq!(unchecked, State::CodeUnchecked);
@@ -393,10 +324,7 @@ mod tests {
 
     #[test]
     fn row_ready() {
-        let state = state(
-            [Some("spec"), Some("tests"), Some("code")],
-            LockStatus::Valid(with_code()),
-        );
+        let state = state([Some("spec"), Some("code")], LockStatus::Valid(with_code()));
         assert_eq!(state, State::Ready);
         assert_eq!(
             next_step(&state),
@@ -422,7 +350,7 @@ mod tests {
         std::fs::write(program.file(SPEC_FILE), "spec").expect("write spec.md");
         let snapshot = Snapshot::read(&program, None).expect("read the folder");
         assert_eq!(snapshot.spec, Some(digest("spec")));
-        assert_eq!(snapshot.tests, None);
+        assert_eq!(snapshot.code, None);
         assert_eq!(snapshot.lock, LockStatus::Missing);
         let missing = ProgramFolder::new("/nonexistent/lengua/program").expect("absolute path");
         assert_eq!(

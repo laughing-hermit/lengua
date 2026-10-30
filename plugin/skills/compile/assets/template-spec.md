@@ -15,6 +15,16 @@ negative. If writing the output fails, the program exits with code 3.
 - Then it prints `-7` followed by a newline
 - And it exits with code `0`
 
+### For any `n`
+- Given the argument `{n}`
+- When the program runs
+- Then it prints `{-n}` followed by a newline
+- And it exits with code `0`
+
+| n | runs |
+|---|---|
+| `int(-9223372036854775807, 9223372036854775807)` | 200 |
+
 ## B2: Shows usage unless given one argument
 - Given no arguments
 - When the program runs
@@ -27,5 +37,15 @@ negative. If writing the output fails, the program exits with code 3.
 - Then it prints `error: not a number` followed by a newline to standard error
 - And it exits with code `2`
 
+### For any `s`
+- Given the argument `{s}`
+- When the program runs
+- Then it prints `error: not a number` followed by a newline to standard error
+- And it exits with code `2`
+
+| s | runs |
+|---|---|
+| `choice("12x", "abc", "", "-", "--5", "+5", "1-2", "9223372036854775808", "-9223372036854775808")` | 50 |
+
 # Constraints
-- Allowed system calls: write, exit
+- Uses: nothing

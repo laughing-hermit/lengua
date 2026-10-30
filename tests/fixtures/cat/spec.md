@@ -14,5 +14,15 @@ fails, the program exits with code 3.
 - Then it prints `hello`
 - And it exits with code `0`
 
+### For any `text`
+- Given standard input holding `{text}`
+- When the program runs
+- Then it prints `{text}`
+- And it exits with code `0`
+
+| text |
+|---|
+| `string(0, 5000, "abehlo \n")` |
+
 # Constraints
-- Allowed system calls: read, write, exit
+- Uses: standard input

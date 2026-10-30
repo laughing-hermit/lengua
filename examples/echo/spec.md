@@ -17,6 +17,15 @@ computer.
 - Then the client gets back `hello` followed by a newline
 - And it keeps serving
 
+### For any `line`
+- Given a client that sends `{line}` followed by a newline
+- When the program runs
+- Then the client gets back `{line}` followed by a newline
+- And it keeps serving
+
+| line |
+|---|
+| `string(0, 1023, "abcdefghijklmnopqrstuvwxyz ")` |
+
 # Constraints
-- Allowed system calls: read, close, accept4, sendto, exit
 - Network: listens on TCP port 7007

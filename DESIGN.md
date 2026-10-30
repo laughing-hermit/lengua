@@ -17,56 +17,70 @@ own. The guarantees a compiler used to give come from rules and tests instead.
 
 ## A lengua program
 
-A program is a folder with four files, created in this order:
+A program is two files, plus lengua's own record of them:
 
 | File | Written by | Purpose |
 |---|---|---|
-| `spec.md` | the AI, from the person's request | The single source of truth: natural language, Given/When/Then behaviors with IDs, in [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) (OKF) |
-| `tests.toml` | the AI, from the spec only | One example test per behavior, plus generated tests with fresh random inputs on every run |
-| `main.s` | the AI | x86-64 assembly in the lengua dialect |
-| `lengua.lock` | only the lengua server | The person's requests for the build in progress, SHA-256 of all three files and of the checked executable, a combined fingerprint, which tests are proven for every input on that executable, and a signature |
+| `spec.md` | the AI, from the person's request | The source of truth, the mother of everything else, and the only file people share: natural language, Given/When/Then behaviors with IDs whose steps are their example tests, the generated tests under each behavior, and what the program uses. An [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) (OKF) concept document, the same on every target |
+| `main.s` | the AI, compiling the spec | x86-64 assembly in the lengua dialect for one target. It's disposable: each computer compiles its own from the spec. Once it passes, lengua writes its second line, naming the version of the spec it was compiled from, the target and the CPU features it needs |
+| `lengua.lock` | only the lengua server | This computer's record: the person's requests for the build in progress, SHA-256 of both files and of the checked executable, the target and features, a combined fingerprint, which tests are proven for every input on that executable, and a signature. It isn't shared |
 
-**Workflow:** request → spec (recorded with the person's words; nothing waits for an approval) →
-tests (stamped) → code (stamped once every rule and test passes) → proof → run, and optimize
-(tests stay green). A program only runs when the lock matches all three files, so documentation,
-tests and code can't drift from the spec. The person asks once; the agent's report then shows
-the spec and every change after the request.
+**Workflow:** request → spec, tests included (recorded with the person's words; nothing waits for
+an approval) → code (stamped once every rule and test passes) → proof → run, and optimize (tests
+stay green). A program only runs when the lock matches both files, so documentation, tests and
+code can't drift from the spec. The person asks once; the agent's report then shows the spec and
+every change after the request.
 
 **Specs follow behavior-driven development (BDD).** Purpose says what the program does, for whom
 and why. Each behavior is one rule, titled in the user's words and shown by one concrete example:
-Given sets the scene (arguments, input), the one When is the program running, and Then states only
-what the user observes (output and exit code). Steps describe behavior, never implementation.
-`spec.md` is the living documentation: tests.toml turns each example into an executable test and
-adds generated examples of the same rule, and the lock keeps the code in step with it. The parser
-enforces the structure (a Purpose, Given before one When before Then, one exit code, unique IDs and
-titles); the write-spec skill teaches the style.
+Given sets the scene (arguments, input, files, the clock), the one When is the program running,
+and Then states only what the user observes (output, files and the exit code). The steps use a
+fixed set of phrasings, as Gherkin's step definitions do, so lengua reads each behavior's steps as
+its example test and nothing is written twice; a step it can't read is a problem in the spec,
+reported with the phrasing to write. A behavior's generated tests, which try the same rule with
+fresh inputs on every run, are a Gherkin Scenario Outline: under a `###` heading after its steps,
+the same steps with `{placeholders}`, then a markdown table with a column for each variable's
+generator and a row for each variant. So the whole spec is plain markdown, headings, lists and
+tables, which OKF favors, with no other language inside. Steps describe behavior, never
+implementation, and a spec names no CPU, operating system or toolchain: it reads the same on
+every computer. `spec.md` is the living documentation, and the lock keeps the code in step with
+it. The parser enforces the structure (a Purpose, Given before one When before Then, one exit
+code, unique IDs and titles, generated tests under their behavior with a well-formed table, and
+only `- Uses:`, `- Network:` and `- Threads:` under Constraints); the write-spec skill teaches the
+style.
+
+**A spec names what the program uses, not system calls:** `- Uses:` lists `standard input`,
+`files`, `the clock` and `random bytes`, `- Network:` the ports it connects to or listens on, and
+`- Threads:` how many cores it may use. Each target maps them to its own system calls, so the
+same spec means the same on every computer.
 
 | What changed | Result |
 |---|---|
-| `spec.md` | The next `check` records it under the request's words and checks the tests and code against it again. Changes since the build's first request are shown |
-| `tests.toml` only | Checked against the spec again, then the code is tested and proven again. After code has run, the changes since the tests it first ran against are shown, with lengua's own marks on those that test less |
+| `spec.md` | The next `check` records it under the request's words and checks its tests and the code against it again. Changes since the build's first request are shown, with lengua's own marks on test changes that test less |
 | `main.s` only | The next `check` checks the rules, runs every test and proves it again; once the tests pass, the new code is stamped |
+| main.s's second line only | Nothing: lengua's hash of main.s leaves its own line out, and writes it back after the next pass |
 | nothing | `run` works, and `check` answers from what it found |
 
 ## What ships
 
 The plugin folder `plugin/` contains:
 
-- **Skills:** `write-spec`, `write-tests`, `write-assembly`. Each teaches one file and ends with
-  `check`.
+- **Skills:** `write-spec` writes the spec, its tests included, and `compile` compiles it into
+  `main.s` for this computer. Each teaches one file and ends with `check`.
 - **MCP server** `lengua-mcp` (Rust, official `rmcp` SDK) with two tools:
 
 | Tool | Does |
 |---|---|
-| `check` | Every stage, stopping at the first that needs work: validates `spec.md` and records it with the person's words; validates `tests.toml` (coverage, cross-checks, red check) and stamps it; assembles, links and checks the rules; then, in the background, runs every test, counts the instructions executed, stamps and signs, and proves the program. Each reply has one `next_step` |
+| `check` | Every stage, stopping at the first that needs work: validates `spec.md`, its tests included (coverage, cross-checks, red check), and records it with the person's words; assembles, links and checks the rules; then, in the background, runs every test, counts the instructions executed, stamps and signs, proves the program, and writes main.s's second line. Each reply has one `next_step` |
 | `run` | Verifies the lock against every file, rebuilds, confirms the build is byte-identical to the checked one, then runs it |
 
 The agent's loop is one call: edit a file, call `check`, follow `next_step`. The person's words go
 with the first call, and with a new request; an edited spec is recorded under the words already
-recorded. Nothing has to be copied between files: the lock already records which spec the tests
-were checked against and which tests the code passed. `check` replies within about 40 seconds,
+recorded. Words given with a spec that has problems are kept for that folder and recorded once it
+checks, so they're given once. Nothing has to be copied between files: the lock already records
+which spec the code passed. `check` replies within about 40 seconds,
 because other agent harnesses cut off long tool calls (many stop waiting at 60 s). The tests and
-the proof run in a background job per program folder, keyed by the hashes of its three files: a
+the proof run in a background job per program folder, keyed by the hashes of its two files: a
 `check` with the same files waits on the same job, a `check` with new files cancels it and starts
 another, and a server restart starts it again, keeping the proofs the lock records about the same
 build. Replies carry each fact once, where the next step needs it: the machine's cores and CPU
@@ -91,10 +105,10 @@ harness, so a lock recorded in one harness verifies in all of them.
 
 ## Tests
 
-`tests.toml` has one example per behavior, holding that behavior's backtick values, and generated
-blocks that draw new inputs on every run (boundary values first, then seeded random ones) and
-compute the expected results with formulas. A block whose ranges hold at most 5000 combinations runs
-every one of them instead, within 20000 runs per file: for those inputs the program is checked, not
+Each behavior's steps are its example, and its generated tests, one a row of its table, draw new
+inputs on every run (boundary values first, then seeded random ones) and compute the expected
+results with formulas. A row whose ranges hold at most 5000 combinations runs every one of them
+instead, within 20000 runs per spec: for those inputs the program is checked, not
 sampled, which is the first step toward the proof below. The formula language has checked 128-bit
 whole numbers, strings, comparisons, `&& || !` and the functions `len`, `abs`, `min`, `max`, `if`,
 `upper`, `lower`, `reverse`, `count`, `sha256`, `crc32` and `crc32c`. Tests can give a program
@@ -113,22 +127,22 @@ every value they can hold, as the kernel's could, and bytes asked for past the s
 so a program may draw in batches of any size. Where a test doesn't supply them, a rule stands for
 what the program chooses: `{any(lo, hi)}` is any whole number in that
 range, written plainly, and `now` (the second a run starts) may bound one. Inside lengua a rule
-travels in the expected text as a marker between Unicode noncharacters, which tests.toml can't
-hold, so expected output stays text everywhere and only matching reads the markers.
+travels in the expected text as a marker between Unicode noncharacters, which a spec can't hold,
+so expected output stays text everywhere and only matching reads the markers.
 
-`check` ties the tests to the recorded spec: example exit codes equal the spec's, generator
-limits are numbers the spec states, and args and stdin hold bare variables so each example can be
+`check` ties the generated tests to the behaviors above them: generator limits are numbers the
+spec's Purpose states, and args and stdin hold bare variables so each behavior's example can be
 read back into variable values and every formula must reproduce it. A dry run evaluates every
 run's expected results, so overflow and division by zero are caught before any code exists, and
-output with placeholders must vary, so a program that prints a constant can't pass. Several
-generated blocks may cover one behavior (divisors on both sides of zero, for example) when they
-share their templates. A wrong test can be fixed at any time: every version is checked against
-the spec again, so a fix can't drift from it. After code has run, the reply shows the line diff
-since the tests the code first ran against, and lengua's own marks on the changes that test less
+output with placeholders must vary, so a program that prints a constant can't pass. Several rows
+may cover one behavior (divisors on both sides of zero, for example), and they share its steps by
+construction. A wrong test can be fixed at any time: it's part of the spec, so every
+version is checked again, and a fix can't drift from it. The reply shows the line diff since the
+spec the build started from, and lengua's own marks on the changes that test less
 (fewer runs, a generator that draws fewer values, exact output turned into a rule, a removed
-block, variable or expected file). The same AI writes the code and the tests, so that judgment
+row, variable or expected file). The same AI writes the code and the tests, so that judgment
 stays in lengua; the agent only explains each change in its report. The server keeps a copy of
-every recorded spec and tests file by hash, so the changes can be shown.
+every recorded spec by hash, so the changes can be shown.
 
 The examples in the skills are checked by the test suite against lengua's own checks, so the
 documentation can't drift from the checker.
@@ -200,7 +214,7 @@ time and less memory than the best of C, C++ and Rust built with every optimizat
 `cargo bench --bench against_rust_and_c` measures it on six workloads, from a program that is
 mostly starting up to 64 MiB streams, and writes BENCHMARKS.md.
 
-Speed comes from the agent, guided by the write-assembly skill, which makes it a step of the
+Speed comes from the agent, guided by the compile skill, which makes it a step of the
 normal flow: once the tests are green, one pass for the widest vectors the CPU has (with masked
 loads for tails), independent chains where each step would wait on the last, large reads and
 writes, and streaming for input of any length. `assets/fast` holds checked programs for each
@@ -232,11 +246,11 @@ constants, local labels, specialized code instead of templates) and Rust (one ow
 allocation, single-threaded, pointer + length bounds checks, `Result`-style errors, exhaustive
 branches, marked `unsafe` blocks, dialect versions), checked against NASA's "Power of 10" rules
 adapted for assembly. The full rule text lives in
-`plugin/skills/write-assembly/references/power-of-10.md`. In short:
+`plugin/skills/compile/references/power-of-10.md`. In short:
 
 1. Simple control flow: jumps stay in their function, no recursion, compare chains end in an assertion.
 2. Every loop counts down from a named maximum.
-3. Resources reserved up front: memory is static (`.bss` sized from the spec's limits) plus the stack, nothing is allocated while running, one thread, and only the system calls the spec allows (read, write, exit by default), with a computed maximum stack size.
+3. Resources reserved up front: memory is static (`.bss` sized from the spec's limits) plus the stack, nothing is allocated while running, one thread, and only the system calls of what the spec names (write and exit by default), with a computed maximum stack size.
 4. Functions of at most 60 instructions, standard calling convention, one exit.
 5. At least two assertions per function on average; a failed assertion exits with code 134.
 6. Smallest scope: one owning function per buffer, only `_start` exported, read-only data stays read-only.
@@ -286,8 +300,8 @@ it produces, the idea behind translation validation (Pnueli, Siegel and Singerma
 | Step | Translated by | How lengua checks it |
 |---|---|---|
 | request → `spec.md` | the AI | No machine can check intent, so lengua shows it instead: the spec is recorded with the person's words, every change after them is kept as a diff, and the agent's report says what the spec promises and what changed. New words in the middle of a build join it rather than start over, so no change drops out |
-| spec → `tests.toml` | the AI | Structure and coverage; each behavior's spec values appear in its example; each formula reproduces its example; generator ranges are numbers that the spec's Purpose states (not an example's own values) |
-| spec + tests → `main.s` | the AI | The rules, then every example plus fresh random tests on every check |
+| behaviors → tests | the AI | Each behavior's steps, in lengua's phrasings, are its example, so the example can't disagree with the behavior; structure and coverage; each formula reproduces its example; generator ranges are numbers that the spec's Purpose states (not an example's own values) |
+| spec → `main.s` | the AI | The rules, then every example plus fresh random tests on every check |
 | `main.s` → machine code | LLVM | The checker reads the linked executable back and matches it to `main.s` instruction by instruction, operands included; the lock records the executable's hash, and `run` refuses any other build |
 | machine code, every input | — | The proof: for generated tests over numbers, choices and texts, the output equals the formulas for every input in range, not only the sampled ones; for long texts, every input up to a stated length |
 
@@ -548,8 +562,8 @@ Rust share: everything a program may touch must be something the checker can acc
 |---|---|---|---|
 | Memory | `malloc`/`free`, `new`/`delete`: leaks, double frees, use after free | Ownership frees memory automatically; arenas without the standard library | Reserved up front: static buffers sized from the spec's limits, plus the stack. Nothing is allocated or freed while running (rule 3), and `.bss` costs nothing until touched |
 | Threads | pthreads: any thread may write anything, and data races are undefined behavior | `Send`/`Sync`, scoped threads and rayon: no data races, checked at compile time | Fork-join only, when the spec allows threads. A canonical `parallel_for` (copied word for word, like `assert_fail`) starts workers with `clone` on static stacks and waits on `futex` for them all. Each worker owns its stack and one output slot, like Rust's `chunks_mut`: the checker proves it writes nothing else (JPL: one owner per shared object). No locks, atomics or shared mutation, so results stay deterministic and testable |
-| System access | Any system call | The standard library, within the OS's permissions | Capabilities: the spec lists the system calls the program may make, and the kernel enforces the list (seccomp) and keeps files inside the program's working folder (Landlock) |
-| Clock, random | `time()`, `rand()` | `Instant`, `SystemTime`, `rand` | System calls the spec lists, `clock_gettime` and `getrandom`, enforced by the kernel like the rest. Tests supply the bytes and readings, so output that depends on them is exact, and the prover covers every value the test's variables can take; without a supply, a rule such as "a number from 1 to 6" (`{any(1, 6)}`) checks the output, and the prover treats the kernel's values as any value |
+| System access | Any system call | The standard library, within the OS's permissions | Capabilities: the spec names what the program uses (standard input, files, the clock, random bytes, the network), each target allows only those calls, and the kernel enforces them (seccomp) and keeps files inside the program's working folder (Landlock) |
+| Clock, random | `time()`, `rand()` | `Instant`, `SystemTime`, `rand` | Capabilities the spec names, `the clock` and `random bytes` (on this target `clock_gettime` and `getrandom`), enforced by the kernel like the rest. Tests supply the bytes and readings, so output that depends on them is exact, and the prover covers every value the test's variables can take; without a supply, a rule such as "a number from 1 to 6" (`{any(1, 6)}`) checks the output, and the prover treats the kernel's values as any value |
 | Network | Sockets | `std::net` | Plain TCP on the ports the spec names, to this computer unless the spec says `on any computer`. seccomp allows only TCP sockets (no UDP, raw or local ones), `sendto` without an address, and `accept4` on descriptor 3; Landlock lets `connect` reach only the spec's ports, and lengua's supervisor only this computer. A server never binds: the launcher listens on its port and hands it the socket as descriptor 3, and only its accept loop may run forever (`# bound: forever`, NASA's exception). Tests bring their own server or client on a free loopback port; websites and APIs go through the agent's own tools, which pass the data in |
 
 A worker gets its index and its slot. It and every function it calls write only their own stack
@@ -587,21 +601,48 @@ decides.
 - No `unsafe`. `Result` for recoverable errors, `expect("why")` instead of `unwrap()`, newtypes for
   distinct values, doc comments on public items.
 
+## Sharing
+
+People share specs, never code. The spec is the source of truth: the same on every computer, and
+all anyone needs to have the program. main.s is disposable: each computer compiles its own from
+the spec, lengua checks it there, and it can always be compiled again. lengua.lock is that
+computer's own record and doesn't travel either.
+
+Because an AI compiles each copy afresh, two computers with one spec get two different programs.
+Every copy passes the same checks, the spec's tests, lengua's rules and the proofs, but outside
+what those cover copies may differ: inputs beyond the stated ranges, cases the spec doesn't
+mention, and speed. What's proven may differ too: "proven for every input" on one computer,
+"tested, not proven" on another. So whatever must be the same everywhere belongs in the spec's
+behaviors and ranges, and anything that shares lengua programs, such as a site for specs, promises
+"every copy passes the same checks", never "the same program". Each compile is a full agent
+session: minutes, and some cost.
+
+A main.s that arrives anyway, in a copied folder, is just code to check: lengua checks it from
+scratch before `run` runs it, and one whose second line says it was compiled for another target or
+for CPU features this computer lacks is refused before building, with the next step to compile the
+spec for this computer. A line naming another version of the spec is no problem: the tests decide,
+and the line is written again after the next pass.
+
+main.s's second line, `# lengua: compiled from spec.md sha256:… for linux-x86_64; needs AVX2`,
+ties the code to the version of the spec it was compiled from. It names the code; it doesn't
+protect it: main.s is plain text anyone can build outside lengua, past its checks and the kernel's
+limits, so lengua's guarantees hold only for a program that `run` runs after `check`.
+
 ## Threat model and known limits
 
 - The lock's signature detects edits not made by the server. It is not a security boundary: any
   process running as the user, including the AI's shell, can read the key.
-- Locks are machine-bound: on another machine the spec has to be recorded again.
+- Locks are machine-bound and code is disposable: on another machine the spec is recorded again
+  and compiled there. See [Sharing](#sharing).
 - Without hooks, the server detects and refuses rather than prevents. Someone could still assemble
   `main.s` by hand outside lengua, but that isn't a lengua run, and nothing lengua stamps or runs is
   affected.
 - There is no approval step: the person's request is the go-ahead, and the agent records the
   spec with their words (`words = ["…"]` in the lock). lengua can't tell real words from words
   an agent made up, so it shows instead of gating: every request of a build stays in the lock
-  until its code passes, every change to the spec after the build's first request and to the
-  tests after code first ran is shown as a diff, and lengua itself marks test changes that test
-  less. lengua relies on nothing from the harness, such as its permission prompts, so a
-  harness in an auto mode is as safe: what a program may touch is the spec's list, which the
+  until its code passes, every change to the spec after the build's first request is shown as a
+  diff, and lengua itself marks test changes that test less. lengua relies on nothing from the harness, such as its permission prompts, so a
+  harness in an auto mode is as safe: what a program may touch is what the spec names, which the
   kernel enforces on every run. The person can ask to see the spec before the build.
 - Rule 9 checks the shape of each bounds check (`cmp` and an unsigned `jae` before the access)
   and, for the program's own data symbols, that the limit fits the buffer. Moving a pointer
@@ -616,7 +657,8 @@ decides.
 ## Status
 
 The MVP is built: milestones 1 foundation, 2 spec and lock, 3 tests, 4 rule checker, 5 code and
-run, and 6 end to end, each committed after the project owner approved it. `tests/e2e.rs` runs the
+run, and 6 end to end, each committed after the project owner approved it. Since then a program is
+two files: the tests went into the spec, whose steps are its examples. `tests/e2e.rs` runs the
 whole workflow on `examples/add` in both MCP protocol generations.
 
 Dialect 2 followed:
@@ -642,3 +684,5 @@ Dialect 2 followed:
 
 All of it is checked on this machine (x86-64 Linux). The long-term goal is the top six CPU and OS
 targets, through LLVM and one profile per target; they come next, in the order Platforms gives.
+After them, a simple site where people share specs: the spec travels, each computer compiles it for
+itself, and code is checked again wherever it runs.

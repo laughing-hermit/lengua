@@ -11,10 +11,20 @@ bytes. If reading the input or writing the output fails, the program exits with 
 
 # Behaviors
 ## B1: Prints the checksum
-- Given the input `123456789`
+- Given standard input holding `123456789`
 - When the program runs
 - Then it prints `3808858755` followed by a newline
 - And it exits with code `0`
 
+### For any `text`
+- Given standard input holding `{text}`
+- When the program runs
+- Then it prints `{crc32c(text)}` followed by a newline
+- And it exits with code `0`
+
+| text | runs |
+|---|---|
+| `string(0, 1048576, "0123456789abcdefghijklmnopqrstuvwxyz \n")` | 200 |
+
 # Constraints
-- Allowed system calls: read, write, exit
+- Uses: standard input

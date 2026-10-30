@@ -22,11 +22,20 @@ the output fails, the program exits with code 4.
 
 # Behaviors
 ## B1: Prints the current time
-- Given no arguments
-- And the clock at `1793264707`
+- Given the clock at `1793264707`
 - When the program runs
 - Then it prints `09:05:07` followed by a newline
 - And it exits with code `0`
+
+### For any `t`
+- Given the clock at `{t}`
+- When the program runs
+- Then it prints `{if(t % 86400 / 3600 < 10, "0", "")}{t % 86400 / 3600}:{if(t % 3600 / 60 < 10, "0", "")}{t % 3600 / 60}:{if(t % 60 < 10, "0", "")}{t % 60}` followed by a newline
+- And it exits with code `0`
+
+| t | runs |
+|---|---|
+| `int(0, 253402300799)` | 300 |
 
 ## B2: Prints the days until a date
 - Given the argument `2026-12-25`
@@ -35,11 +44,38 @@ the output fails, the program exits with code 4.
 - Then it prints `57` followed by a newline
 - And it exits with code `0`
 
+### For any `y`, `m1`, `m2`, `d1`, `d2` and `t`
+- Given the argument `{y}-{m1}{m2}-{d1}{d2}`
+- And the clock at `{t}`
+- When the program runs
+- Then it prints `{(((y - if((m1 * 10 + m2) <= 2, 1, 0)) / 400) * 146097 + ((y - if((m1 * 10 + m2) <= 2, 1, 0)) % 400) * 365 + ((y - if((m1 * 10 + m2) <= 2, 1, 0)) % 400) / 4 - ((y - if((m1 * 10 + m2) <= 2, 1, 0)) % 400) / 100 + ((153 * (((m1 * 10 + m2) + 9) % 12) + 2) / 5 + (d1 * 10 + d2) - 1) - 719468) - t / 86400}` followed by a newline
+- And it exits with code `0`
+
+| y | m1 | m2 | d1 | d2 | t | runs |
+|---|---|---|---|---|---|---|
+| `int(1970, 9999)` | `int(0, 0)` | `int(1, 9)` | `int(0, 0)` | `int(1, 9)` | `int(0, 253402300799)` | 150 |
+| `int(1970, 9999)` | `int(0, 0)` | `int(1, 9)` | `int(1, 2)` | `int(0, 8)` | `int(0, 253402300799)` | 150 |
+| `int(1970, 9999)` | `int(1, 1)` | `int(0, 2)` | `int(0, 0)` | `int(1, 9)` | `int(0, 253402300799)` | 150 |
+| `int(1970, 9999)` | `int(1, 1)` | `int(0, 2)` | `int(1, 2)` | `int(0, 8)` | `int(0, 253402300799)` | 150 |
+| `int(1970, 9999)` | `int(0, 0)` | `int(1, 9)` | `int(1, 1)` | `int(9, 9)` | `int(0, 253402300799)` | 150 |
+| `int(1970, 9999)` | `int(1, 1)` | `int(2, 2)` | `int(3, 3)` | `int(0, 1)` | `int(0, 253402300799)` | 150 |
+| `int(1970, 9999)` | `int(0, 0)` | `int(1, 1)` | `int(3, 3)` | `int(0, 1)` | `int(0, 253402300799)` | 150 |
+
 ## B3: Rejects text that is not a date
 - Given the argument `christmas`
 - When the program runs
 - Then it prints `usage: clock [YYYY-MM-DD]` followed by a newline to standard error
 - And it exits with code `1`
+
+### For any `s`
+- Given the argument `{s}`
+- When the program runs
+- Then it prints `usage: clock [YYYY-MM-DD]` followed by a newline to standard error
+- And it exits with code `1`
+
+| s |
+|---|
+| `choice("christmas", "", "2026-12-2", "2026-12-255", "2026/12/25", "2026-1x-25", "20261225", "-2026-12-25", "2026-12-25 ", "202a-12-25", "12026-12-25", "2026-12-2x")` |
 
 ## B4: Rejects a day that does not exist
 - Given the argument `2026-02-29`
@@ -47,11 +83,31 @@ the output fails, the program exits with code 4.
 - Then it prints `clock: no such date: 2026-02-29` followed by a newline to standard error
 - And it exits with code `2`
 
+### For any `s`
+- Given the argument `{s}`
+- When the program runs
+- Then it prints `clock: no such date: {s}` followed by a newline to standard error
+- And it exits with code `2`
+
+| s |
+|---|
+| `choice("2026-02-29", "2100-02-29", "2026-04-31", "2026-06-31", "2026-00-10", "2026-13-01", "2026-01-00", "2026-01-32", "1969-12-31", "0000-01-01", "2026-99-99", "2026-12-32")` |
+
 ## B5: Rejects extra arguments
 - Given the arguments `2026-12-25` and `2027-01-01`
 - When the program runs
 - Then it prints `usage: clock [YYYY-MM-DD]` followed by a newline to standard error
 - And it exits with code `1`
 
+### For any `a` and `b`
+- Given the arguments `{a}` and `{b}`
+- When the program runs
+- Then it prints `usage: clock [YYYY-MM-DD]` followed by a newline to standard error
+- And it exits with code `1`
+
+| a | b |
+|---|---|
+| `choice("2026-12-25", "christmas", "")` | `choice("2027-01-01", "x", "")` |
+
 # Constraints
-- Allowed system calls: write, clock_gettime, exit
+- Uses: the clock

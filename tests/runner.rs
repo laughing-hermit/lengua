@@ -52,7 +52,7 @@ async fn build(folder: &Path, name: &str, source: &str) -> PathBuf {
 async fn template(folder: &Path) -> PathBuf {
     let source = std::fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("plugin/skills/write-assembly/assets/main-template.s"),
+            .join("plugin/skills/compile/assets/main-template.s"),
     )
     .expect("the template");
     build(folder, "main", &source).await
@@ -555,7 +555,7 @@ async fn the_supervisor_follows_threaded_programs() {
     let folder = tempfile::tempdir().expect("temporary folder");
     let source = std::fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("plugin/skills/write-assembly/assets/parallel-template.s"),
+            .join("plugin/skills/compile/assets/parallel-template.s"),
     )
     .expect("the parallel template");
     let program = build(folder.path(), "shout", &source).await;
@@ -757,14 +757,12 @@ async fn servers_take_connections_on_descriptor_3() {
     assert_eq!(started.stop().await.expect("stop").end, End::Stopped);
 }
 
-/// Runs the template's tests, with `edit` applied to them, `workers` at a time.
+/// Runs the template's tests, with `edit` applied to its spec, `workers` at a time.
 async fn template_tests(edit: impl Fn(&str) -> String, workers: usize) -> lengua::testrun::Outcome {
-    let assets =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugin/skills/write-assembly/assets");
+    let assets = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugin/skills/compile/assets");
     let read = |name: &str| std::fs::read_to_string(assets.join(name)).expect("an asset");
-    let spec = lengua::spec::parse(&read("template-spec.md")).expect("the template's spec");
-    let suite = lengua::testfile::check(&edit(&read("template-tests.toml")), &spec)
-        .expect("the tests check");
+    let spec = lengua::spec::parse(&edit(&read("template-spec.md"))).expect("the template's spec");
+    let suite = lengua::testfile::check(&spec).expect("the tests check");
     let (source, _) = lengua::checker::source::parse(&read("main-template.s"));
     let folder = tempfile::tempdir().expect("a folder");
     let executable = template(folder.path()).await;
@@ -813,14 +811,22 @@ async fn runs_at_once_report_what_runs_one_at_a_time_do() {
     // order, naming the block's first failing run.
     let wrong = |text: &str| {
         text.replace(
-            "stderr = \"usage: negate <n>\\n\"",
-            "stderr = \"usage: negate <n>\\n\\n\"",
+            "`usage: negate <n>` followed by a newline",
+            "`usage: negate <n>\\n` followed by a newline",
         )
         .replace(
-            "stdout = \"{-n}\\n\"",
-            "stdout = \"{if(n > 1000, n, -n)}\\n\"",
+            "prints `{-n}` followed by a newline",
+            "prints `{if(n > 1000, n, -n)}` followed by a newline",
         )
     };
+    let edited = wrong(
+        &std::fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("plugin/skills/compile/assets/template-spec.md"),
+        )
+        .expect("the template's spec"),
+    );
+    assert!(edited.contains("{if(n > 1000, n, -n)}") && edited.contains("<n>\\n`"));
     let alone = template_tests(wrong, 1).await;
     let together = template_tests(wrong, 8).await;
     assert_eq!(alone.failures.len(), 2, "{:?}", alone.failures);
@@ -846,7 +852,7 @@ async fn speedup_of_runs_at_once_on_the_word_count() {
     let example = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/count");
     let read = |name: &str| std::fs::read_to_string(example.join(name)).expect("the example");
     let spec = lengua::spec::parse(&read("spec.md")).expect("the spec");
-    let suite = lengua::testfile::check(&read("tests.toml"), &spec).expect("the tests");
+    let suite = lengua::testfile::check(&spec).expect("the tests");
     let (source, _) = lengua::checker::source::parse(&read("main.s"));
     let folder = tempfile::tempdir().expect("a folder");
     let executable = build(folder.path(), "count", &read("main.s")).await;

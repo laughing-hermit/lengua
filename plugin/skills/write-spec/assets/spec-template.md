@@ -19,6 +19,16 @@ code 2.
 - Then it prints `7` followed by a newline
 - And it exits with code `0`
 
+### For any number in range
+- Given the argument `{n}`
+- When the program runs
+- Then it prints `{n}` followed by a newline
+- And it exits with code `0`
+
+| n |
+|---|
+| `int(-1000, 1000)` |
+
 ## B2: An error rule, such as: Shows usage when the number is missing
 - Given no arguments
 - When the program runs
@@ -27,4 +37,4 @@ code 2.
 
 # Constraints
 
-- Allowed system calls: read, write, exit
+- Uses: nothing
