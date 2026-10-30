@@ -292,6 +292,7 @@ pub fn check_program(source: &Source, executable: &[u8], context: Context<'_>) -
     memory::check(
         &program,
         &flows,
+        context.profile,
         facts.max_stack_bytes,
         machine.writable_executable,
         &mut violations,

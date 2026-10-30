@@ -676,7 +676,7 @@ async fn workers_never_race() {
 /// Memory safety: a bug planted for each memory rule is found, on its line.
 #[tokio::test]
 async fn memory_rules_find_each_planted_bug() {
-    let cases: [(&str, &str, &str, Rule, &str); 11] = [
+    let cases: [(&str, &str, &str, Rule, &str); 14] = [
         // M2: a bounds check of part of the index, and one with a negative limit.
         (
             ".Lparse_loop:  # bound: 20\n    cmp rcx, MAX_CHARS\n",
@@ -750,6 +750,31 @@ async fn memory_rules_find_each_planted_bug() {
             Rule::Initialization,
             "reads the frame at rsp + 0, which some path reaches without writing",
         ),
+        // M1: what a function returns is followed through the call: parse_i64 returns a number.
+        (
+            "    call parse_i64\n    test rax, rax\n",
+            "    call parse_i64\n    mov byte ptr [rax], 0\n    test rax, rax\n",
+            "    mov byte ptr [rax], 0",
+            Rule::Owners,
+            "uses rax as an address, but it holds a plain number here",
+        ),
+        // M4: the program's arguments are only read.
+        (
+            "    mov rdi, qword ptr [rsp + 16]\n",
+            "    mov rdi, qword ptr [rsp + 16]\n    mov byte ptr [rdi], 0\n",
+            "    mov byte ptr [rdi], 0",
+            Rule::ExclusiveWrites,
+            "writes into the program's arguments, which it only reads",
+        ),
+        // M5: a frame lent to a function that only reads it is still unwritten.
+        (
+            ".Lwrite_i64_return:\n    add rsp, 8\n",
+            ".Lwrite_i64_return:\n    mov rdi, rsp\n    call parse_i64\n    mov r10, qword ptr \
+             [rsp]\n    add rsp, 8\n",
+            "    mov r10, qword ptr [rsp]",
+            Rule::Initialization,
+            "reads the frame at rsp + 0, which some path reaches without writing",
+        ),
         // M6: read-only data written through a register.
         (
             ".Lstart_usage:\n",
@@ -786,6 +811,114 @@ async fn memory_rules_find_each_planted_bug() {
             found,
             "no {rule:?} violation containing {needle:?} in {all:#?}"
         );
+    }
+}
+
+/// Two functions that write through rdi and read through rsi: `fill` with a `read` system call,
+/// `refill` by calling `fill`.
+const FILLERS: &str =
+    "# Reads up to rdx bytes of standard input into rdi, and returns the byte at rsi.
+# In: rdi = the buffer, rsi = a byte to look at, rdx = how many, at least 1.
+# Out: rax = the byte.
+# returns: result
+.type fill, @function
+fill:
+    push rbx
+    mov rbx, rsi
+    mov rsi, rdi
+    xor edi, edi
+    mov eax, SYS_READ
+    syscall
+    movzx eax, byte ptr [rbx]
+    pop rbx
+    ret
+.size fill, . - fill
+
+# Reads up to 8 bytes of standard input into rdi, and returns the byte at rsi.
+# In: rdi = the buffer, rsi = a byte to look at.
+# Out: rax = the byte.
+# returns: result
+.type refill, @function
+refill:
+    sub rsp, 8
+    mov edx, 8
+    call fill
+    add rsp, 8
+    ret
+.size refill, . - refill
+
+";
+
+#[tokio::test]
+async fn one_address_is_never_lent_twice_for_writing() {
+    let lend = |setup: &str, callee: &str| {
+        let text = with(
+            ".equ SYS_WRITE, 1\n",
+            ".equ SYS_READ, 0\n.equ SYS_WRITE, 1\n",
+        )
+        .replacen(
+            "# Writes rdx bytes from rsi to file descriptor edi",
+            &format!("{FILLERS}# Writes rdx bytes from rsi to file descriptor edi"),
+            1,
+        )
+        .replacen(
+            ".Lstart_usage:\n",
+            &format!(".Lstart_usage:\n{setup}    mov edx, 8\n    call {callee}\n"),
+            1,
+        );
+        assert!(text.contains(&format!("    call {callee}\n")));
+        text
+    };
+    let refused = [
+        (
+            "    lea rdi, [rip + out_buf]\n    lea rsi, [rip + out_buf]\n",
+            "fill",
+            "lends one address, out_buf, in both rdi and rsi, and fill writes through rdi",
+        ),
+        // A copy of the pointer is the same address.
+        (
+            "    lea rdi, [rip + out_buf + 4]\n    mov rsi, rdi\n",
+            "fill",
+            "lends one address, out_buf + 4, in both rdi and rsi",
+        ),
+        // refill writes through rdi because what it calls does.
+        (
+            "    lea rdi, [rip + out_buf]\n    lea rsi, [rip + out_buf]\n",
+            "refill",
+            "and refill writes through rdi",
+        ),
+    ];
+    for (setup, callee, needle) in refused {
+        let text = lend(setup, callee);
+        let report = check_full(&text, CpuFeatures::all(), &PARALLEL_SYSCALLS, None).await;
+        assert_violation(
+            &report,
+            Rule::ExclusiveWrites,
+            line_of(&text, &format!("    call {callee}\n")),
+            needle,
+        );
+    }
+    // Separate parts of one buffer may be lent together, as objects in an arena are, and a
+    // buffer only read may be lent twice.
+    let allowed = [
+        "    lea rdi, [rip + out_buf]\n    lea rsi, [rip + out_buf + 8]\n",
+        "    lea rdi, [rip + out_buf]\n    lea rsi, [rip + usage_msg]\n",
+    ];
+    for setup in allowed {
+        let report = check_full(
+            &lend(setup, "fill"),
+            CpuFeatures::all(),
+            &PARALLEL_SYSCALLS,
+            None,
+        )
+        .await;
+        let refused: Vec<String> = report
+            .violations
+            .iter()
+            .filter(|violation| violation.rule == Rule::ExclusiveWrites)
+            .map(ToString::to_string)
+            .collect();
+        assert!(refused.is_empty(), "{setup:?} was refused: {refused:#?}");
     }
 }
 

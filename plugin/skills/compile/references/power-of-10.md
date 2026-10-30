@@ -376,7 +376,8 @@ through each function: what it holds may be a data symbol's address (from `lea r
 name]`), an address in the function's own frame (from rsp), a pointer the caller lent in a
 register, the program's arguments (which `_start` finds above its stack), a plain number, or a
 value it doesn't follow, such as a pointer loaded from memory. Adding a number to an address
-keeps its owner. What the rules can't settle, the proof settles for every input.
+keeps its owner, and so does a call that returns a pointer it was lent. What the rules can't
+settle, the proof settles for every input.
 
 - **M1, owners.** An address is never made from a plain number: no fixed addresses, and no
   `mov esi, 64` then `[rsi]`.
@@ -389,14 +390,24 @@ keeps its owner. What the rules can't settle, the proof settles for every input.
   offset from rsp stays inside the frame the function made with `push` and `sub rsp`, never its
   return address or its caller's frame; only `_start` reads above its frame, where its arguments
   are.
+- **M4, exclusive writes.** An address a function writes through is lent to it once: at a call,
+  no other register the function uses holds the same address. `lea rdi, [rip + buf]`, then `mov
+  rsi, rdi`, then a call to a function that reads rsi and writes rdi, is refused. Separate parts
+  of one buffer, such as objects carved from an arena, may be lent together; keeping the parts
+  apart is the program's job. `check` works out which registers each function reads and writes
+  through, from its code and what it calls, system calls included. The program's arguments are
+  only read: copy one into a buffer before changing it.
 - **M5, initialization.** No frame byte is read before every path to the read has written it, by
-  a store, a `push`, or a call or system call that was lent the frame.
+  a store, a `push`, or a call or system call lent the frame in a register it writes through.
 - **M6, immutability.** Read-only data is never written, through any register, and no memory is
   both writable and executable.
+- **M7, threads.** A worker reaches the per-thread data (`stacks`, `tids`, `results`, `slots`) only
+  through `rbx`, its own slot, with every index bounded by a constant, so no thread writes a byte
+  another thread reads or writes.
 - **M8, stack size.** The deepest path through the program uses at most 1 MiB of stack. Large
   buffers go in `.bss`, sized from the spec's limits.
 
 ### 10. Checked by tools
 
 The assembler and linker treat warnings as errors. `check` runs on every change, and nothing
-runs or is stamped before every rule passes. The lock records `dialect = 2`.
+runs or is stamped before every rule passes. The lock records `dialect = 3`.

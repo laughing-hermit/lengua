@@ -302,16 +302,29 @@ dialect that checked the code, and a lock from another dialect has to be checked
 Memory safety: dialect 3 checks memory the way Rust's borrow checker checks references, on the
 assembly itself. A dataflow over each function gives every register an owner: a data symbol's
 address, the function's own frame, a pointer the caller lent in a register, the program's
-arguments, a plain number, or a value it doesn't follow. Then the M rules hold: no address is
-made from a plain number (M1); constant offsets stay inside their symbol, bounds checks bound the
-whole index, and bit tests take constant offsets (M2); a frame address is never stored outside
-the frame or returned, and constant offsets from rsp stay inside the function's own frame (M3);
-no frame byte is read before every path has written it (M5); read-only data is never written
-through any register, and no segment is both writable and executable (M6); and the deepest path
-uses at most 1 MiB of stack (M8). Exclusive writes (M4) and races between threads (M7) are checked
-apart. What no rule settles, such as a pointer loaded from memory or an index checked against a
-length in a register, the proof settles for every input. Every program in the repository passes,
-and a planted bug for each rule is found on its line.
+arguments, a plain number, or a value it doesn't follow. Functions are checked callees first, and
+each one's summary (the registers it reads and writes through, itself and in what it calls,
+system calls included, and what it returns) carries owners across calls, so no header has to
+declare them. Then the M rules hold:
+- no address is made from a plain number (M1);
+- constant offsets stay inside their symbol, bounds checks bound the whole index, and bit tests
+  take constant offsets (M2);
+- a frame address is never stored outside the frame or returned, and constant offsets from rsp
+  stay inside the function's own frame (M3);
+- an address a function writes through is lent to it once, never in a second register as well,
+  and the program's arguments are only read (M4);
+- no frame byte is read before every path has written it (M5);
+- read-only data is never written through any register, and no segment is both writable and
+  executable (M6);
+- a worker thread reaches the per-thread data only through its own slot, each index bounded by a
+  constant (M7);
+- the deepest path uses at most 1 MiB of stack (M8).
+
+The rules stop where a general-purpose program would. Separate parts of one buffer, such as
+objects carved from an arena (the dialect's dynamic memory), may be lent together, and pointers
+loaded from memory, as lists and trees need, are allowed. What no rule settles, such as those
+pointers or an index checked against a length in a register, the proof settles for every input.
+Every program in the repository passes, and a planted bug for each rule is found on its line.
 
 ## Translation validation
 
