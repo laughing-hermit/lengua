@@ -984,6 +984,17 @@ fn parts(name: &str, generator: &Generator) -> Result<Vec<Part>, String> {
     }
 }
 
+/// About how many input combinations a proof of `block` goes through, for proving small blocks
+/// first; a block whose inputs can't be split counts as huge.
+#[must_use]
+pub fn size(block: &Generated) -> usize {
+    block
+        .vars
+        .iter()
+        .map(|(name, generator)| parts(name, generator).map_or(usize::MAX, |parts| parts.len()))
+        .fold(1, usize::saturating_mul)
+}
+
 /// The most shapes a text beyond ASCII is proven over: one for each order of its characters'
 /// widths, so the longest text proven depends on how many widths its characters have.
 const MAX_UTF8_SHAPES: usize = 1 << 14;
@@ -1736,11 +1747,19 @@ fn text_is(
                 Computed::Range(low, high) => number_in(pool, piece, *low, *high),
                 Computed::Either(alternatives) => {
                     let mut chosen = Vec::new();
-                    for (condition, text) in alternatives {
-                        if text.len() == piece.len() {
-                            let same = same_terms(pool, piece, text);
-                            chosen.push(pool.bool_and(*condition, same));
-                        }
+                    for (condition, outcome) in alternatives {
+                        let same = match outcome {
+                            Outcome::Text(text) if text.len() == piece.len() => {
+                                same_terms(pool, piece, text)
+                            }
+                            Outcome::Printed(number, places, lengths)
+                                if lengths.contains(&piece.len()) =>
+                            {
+                                number_is(pool, piece, *number, *places)
+                            }
+                            _ => continue,
+                        };
+                        chosen.push(pool.bool_and(*condition, same));
                     }
                     pool.any(&chosen)
                 }
@@ -1755,12 +1774,19 @@ fn text_is(
 }
 
 /// A computed part of a test's output: a formula's value printed with this many decimal places,
-/// any whole number in a range, or one of several fixed texts, each where its condition holds.
+/// any whole number in a range, or one of several outcomes, each where its condition holds.
 enum Computed {
     /// A value printed with this many places, which can take these many bytes.
     Exact(Number, u8, Vec<usize>),
     Range(Number, Number),
-    Either(Vec<(Term, Vec<Term>)>),
+    Either(Vec<(Term, Outcome)>),
+}
+
+/// One outcome an `if(…)` chain in a test's output can give: text, or a value printed.
+enum Outcome {
+    Text(Vec<Term>),
+    /// A value printed with this many places, which can take these many bytes.
+    Printed(Number, u8, Vec<usize>),
 }
 
 impl Computed {
@@ -1770,8 +1796,13 @@ impl Computed {
             Self::Exact(_, _, lengths) => lengths.clone(),
             Self::Range(..) => (1..=MAX_PRINTED).collect(),
             Self::Either(alternatives) => {
-                let mut lengths: Vec<usize> =
-                    alternatives.iter().map(|(_, text)| text.len()).collect();
+                let mut lengths: Vec<usize> = alternatives
+                    .iter()
+                    .flat_map(|(_, outcome)| match outcome {
+                        Outcome::Text(text) => vec![text.len()],
+                        Outcome::Printed(_, _, lengths) => lengths.clone(),
+                    })
+                    .collect();
                 lengths.sort_unstable();
                 lengths.dedup();
                 lengths
@@ -1780,12 +1811,12 @@ impl Computed {
     }
 }
 
-/// Whether `expr` is an `if(…)` chain whose every outcome is a fixed text, such as padding
-/// that depends on a number's size.
+/// Whether `expr` is an `if(…)` chain with a fixed text among its outcomes, such as padding
+/// that depends on a number's size, or a value printed only where the input is valid.
 fn chooses_text(expr: &crate::expr::Expr, known: &Known<'_>) -> bool {
     match expr {
         crate::expr::Expr::Call(crate::expr::Function::If, arguments) if arguments.len() == 3 => {
-            chooses_text(&arguments[1], known) && chooses_text(&arguments[2], known)
+            chooses_text(&arguments[1], known) || chooses_text(&arguments[2], known)
         }
         leaf => fixed_text(leaf, known).is_some(),
     }
@@ -1798,7 +1829,7 @@ fn alternatives(
     expr: &crate::expr::Expr,
     known: &Known<'_>,
     guard: Term,
-) -> Result<Vec<(Term, Vec<Term>)>, String> {
+) -> Result<Vec<(Term, Outcome)>, String> {
     match expr {
         crate::expr::Expr::Call(crate::expr::Function::If, arguments) if arguments.len() == 3 => {
             let condition = match known.translate(pool, &arguments[0])? {
@@ -1815,9 +1846,38 @@ fn alternatives(
             Ok(found)
         }
         leaf => {
-            let text =
-                fixed_text(leaf, known).ok_or("an if(…) that chooses between text and a number")?;
-            Ok(vec![(guard, exec::bytes(pool, text.as_bytes()))])
+            if let Some(text) = fixed_text(leaf, known) {
+                return Ok(vec![(
+                    guard,
+                    Outcome::Text(exec::bytes(pool, text.as_bytes())),
+                )]);
+            }
+            let (value, places) = match leaf {
+                crate::expr::Expr::Call(crate::expr::Function::Places, arguments) => {
+                    match arguments.as_slice() {
+                        [value, crate::expr::Expr::Literal(Value::Int(places))] => (
+                            value,
+                            u8::try_from(*places)
+                                .ok()
+                                .filter(|places| (1..=30).contains(places))
+                                .ok_or("places with an unusual number of places")?,
+                        ),
+                        _ => return Err("places with its places given by a formula".into()),
+                    }
+                }
+                _ => (leaf, 0),
+            };
+            if places == 0
+                && let Formula::Text(bytes) = known.translate(pool, value)?
+            {
+                return Ok(vec![(guard, Outcome::Text(bytes))]);
+            }
+            match printed(pool, value, places, known)? {
+                Computed::Exact(number, places, lengths) => {
+                    Ok(vec![(guard, Outcome::Printed(number, places, lengths))])
+                }
+                _ => Err("an if(…) outcome that isn't text or a number".into()),
+            }
         }
     }
 }

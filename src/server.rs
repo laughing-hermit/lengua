@@ -1133,7 +1133,11 @@ impl LenguaServer {
         let allows = |call: spec::Syscall| spec.syscalls.contains(&call);
         let listens = spec.network.listens.is_some();
         let blocks = code.suite.generated.len();
-        for (index, block) in code.suite.generated.iter().enumerate() {
+        // Small blocks first: they finish in their share and pass the rest on to the big ones.
+        let mut order: Vec<usize> = (0..blocks).collect();
+        order.sort_by_key(|index| prove::size(&code.suite.generated[*index]));
+        for (turn, &index) in order.iter().enumerate() {
+            let block = &code.suite.generated[index];
             if checking.cancel.load(Ordering::Relaxed) {
                 return;
             }
@@ -1141,7 +1145,7 @@ impl LenguaServer {
             // rest; time a block doesn't use passes on to the next.
             let now = Instant::now();
             let share = deadline.saturating_duration_since(now)
-                / u32::try_from(blocks - index).unwrap_or(u32::MAX).max(1);
+                / u32::try_from(blocks - turn).unwrap_or(u32::MAX).max(1);
             // Every value of a block's variables is every input only when the program reads
             // nothing else: no random bytes or clock readings the test doesn't supply, and no
             // `now` in the expected results.
@@ -1151,7 +1155,7 @@ impl LenguaServer {
                 .every_value_text()
                 .filter(|_| !kernel_values && !block.uses_now())
             {
-                proven_ids.push(block.id.to_string());
+                proven_ids.push((index, block.id.to_string()));
                 set(index, format!("proven: the tests tried {every}"), false);
                 continue;
             }
@@ -1191,8 +1195,10 @@ impl LenguaServer {
                     cut_any_way,
                 }) => {
                     match &bound {
-                        Some(bound) => bounded_ids.push((block.id.to_string(), bound.bytes)),
-                        None => proven_ids.push(block.id.to_string()),
+                        Some(bound) => {
+                            bounded_ids.push((index, (block.id.to_string(), bound.bytes)));
+                        }
+                        None => proven_ids.push((index, block.id.to_string())),
                     }
                     if questions > 0 {
                         solved += 1;
@@ -1222,6 +1228,11 @@ impl LenguaServer {
             (_, None) => "z3 and cvc5".to_owned(),
             (_, Some(reason)) => format!("one solver alone: {reason}"),
         };
+        // In the tests' own order, however they were proven.
+        proven_ids.sort_unstable();
+        bounded_ids.sort_unstable();
+        let proven_ids = proven_ids.into_iter().map(|(_, id)| id).collect();
+        let bounded_ids = bounded_ids.into_iter().map(|(_, bound)| bound).collect();
         self.stamp_proofs(folder, executable, proven_ids, bounded_ids, solvers)
             .await;
     }

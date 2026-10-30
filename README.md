@@ -17,11 +17,14 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 > output is exact), plain TCP clients and servers on the ports a spec names, and inputs up to
 > 1 MiB. The
 > kernel holds every run to what its spec allows. lengua proves programs right for every
-> input, not just the tested ones, over whole numbers, decimals, choices, texts and text
-> formulas, files and the network, in integer, bit and vector code from SSE2 to AVX-512, and
-> over long texts up to a stated length (4,096 bytes of standard input), with each step
-> confirmed by two independent solvers, z3 and cvc5; `lengua.lock` records what's proven. Next:
-> - proofs of decimal arithmetic written in another shape;
+> input, not just the tested ones, over whole numbers, decimals, choices, texts beyond ASCII and
+> text formulas, files and the network, in integer, bit and vector code from SSE2 to AVX-512,
+> and over long texts up to a stated length (4,096 bytes of standard input). Programs that read
+> with the skill's `fill` are proven however their input arrives, cut into any pieces, and
+> servers are tested and proven with clients that keep the connection open, as curl does. Each
+> solver step is confirmed by two independent solvers, z3 and cvc5, and most proofs need none:
+> the terms settle every step. `lengua.lock` records what's proven. Next:
+> - proofs of arithmetic a formula writes at 128 bits and a program at 64, such as a halving;
 > - more of the top CPU and OS targets, which LLVM already supports.
 
 ## Requirements
@@ -98,7 +101,7 @@ Complete programs, each with its spec, tests and assembly:
 - [`examples/fetch`](examples/fetch) fetches a page from a web server on this computer over
   HTTP/1.0, and [`examples/echo`](examples/echo) is a line-echo server. Their tests bring their
   own server and client, and lengua keeps each to the ports its spec names and to this computer;
-  the echo server is proven for every line, however the network cuts it;
+  both read with `fill`, so each is proven however the network cuts what it reads;
 - [`examples/count`](examples/count) counts lines and words like `wc -lw`. Claude Code wrote it
   through lengua from one plain request in an interactive session; on a 4 GiB file it ran at
   15.8 GB/s, ahead of hand-written AVX-512 C, 12 times faster than plain C and 25 times faster

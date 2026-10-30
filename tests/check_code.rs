@@ -748,8 +748,8 @@ async fn the_file_example_proves_its_file_handling() {
     session.service.cancel().await.expect("close the session");
 }
 
-/// Five minutes: mean's two blocks of decimals take a minute each, and its block of whole
-/// numbers runs to the proof's time limit.
+/// Five minutes: mean's two blocks of decimals take a minute each with every core, and its block
+/// of whole numbers runs to the proof's time limit.
 #[tokio::test]
 #[ignore = "slow: the proof takes its five minutes"]
 async fn the_decimal_example_is_proven() {

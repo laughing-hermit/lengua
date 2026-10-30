@@ -7,7 +7,9 @@ sessions' transcripts, which the prover's tests prove:
 - `days` (interactive round 2): that clock plus the days from today to a date, Hinnant's
   days_from_civil in the program and in the tests' formula, written in different orders;
 - `amounts` (interactive round 2): the total of a CSV file's amount column, three rows of
-  signed amounts with free text in the other fields.
+  signed amounts with free text in the other fields;
+- `dates` (interactive round 3): the clock again, its day count's tests in one block for valid
+  and invalid dates, which prints `if(valid, days, "")` and the error otherwise.
 
 And written for the tests themselves:
 

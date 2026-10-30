@@ -657,6 +657,23 @@ fn with_block(tests: &str, index: usize, vars: &str) -> String {
     format!("{}\n[[generated]]\n{copied}\n", tests.trim_end())
 }
 
+/// The clock of interactive round 3, whose day count's block covers valid and invalid dates at
+/// once: it prints `if(valid, days, "")`, a number or nothing, and the error the other way, so
+/// one output piece is a printed number or a text as its condition says.
+#[tokio::test]
+async fn proves_a_number_printed_only_where_the_input_is_valid() {
+    if !solvers_installed() {
+        return;
+    }
+    let (spec, tests) = (fixture("dates", "spec.md"), fixture("dates", "tests.toml"));
+    let machine = machine(&fixture("dates", "main.s")).await;
+    let verdict = prove(&machine, &block(&spec, &tests, 1), &fixture_budget(120));
+    assert!(
+        matches!(verdict, Verdict::Proven { bound: None, .. }),
+        "{verdict:?}"
+    );
+}
+
 /// February 29 of the years 2000 to 9600 that are multiples of 400, a day the clock's own tests
 /// never draw: leap only by the 400-year rule.
 const CENTURY_LEAP_DAYS: &str = r#"{ y = "choice(2000, 2400, 2800, 3200, 3600, 4000, 4400, 4800, 5200, 5600, 6000, 6400, 6800, 7200, 7600, 8000, 8400, 8800, 9200, 9600)", m1 = "int(0, 0)", m2 = "int(2, 2)", d1 = "int(2, 2)", d2 = "int(9, 9)", t = "int(0, 253402300799)" }"#;
@@ -1763,7 +1780,7 @@ buffer:
 /// Text beyond ASCII: each character is one of those of its width, é and € among them, and
 /// every order of widths is a shape of its own, so capitals of ASCII letters are proven over
 /// text with accents and symbols, up to 8 characters; capitals that take 0xc3, é's first byte,
-/// for a letter are found.
+/// for a letter, and so take bytes up to it, are found.
 #[tokio::test]
 async fn proves_capitals_over_text_beyond_ascii() {
     const SPEC: &str = "---
@@ -1818,8 +1835,9 @@ exit_code = 0
     let Verdict::Counterexample(found) = &verdict else {
         panic!("{verdict:?}");
     };
+    // é's first byte, or €'s later ones, which fall in the same range.
     assert!(
-        matches!(found.get("text"), Some(Value::Str(text)) if text.contains('é')),
+        matches!(found.get("text"), Some(Value::Str(text)) if !text.is_ascii()),
         "{found:?}"
     );
 }

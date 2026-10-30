@@ -98,13 +98,17 @@ spec's port, which the kernel allows only for `run`.
   `{port}` there, in an example as in a generated block, and lengua writes in the test server's
   port. In tests, the kernel lets the program connect to that port alone.
 - **A program that serves** gets its listening socket from lengua as file descriptor 3, in every
-  test. `client` connects once per entry: it sends `sends`, closes its side, and reads everything
-  the program answers until it closes the connection, which must match `receives` (rules
-  allowed). With `serves = true`, the program must then be waiting for the next connection; lengua
+  test. `client` connects once per entry and behaves as curl and browsers do: it sends `sends`
+  and keeps its side of the connection open until the program starts answering (or closes it at
+  once when `receives` is empty), then reads everything the program answers until it closes the
+  connection, which must match `receives` (rules allowed). So a server must answer once the
+  request is complete, by its newline, blank line or length, never by waiting for the client to
+  close. With `serves = true`, the program must then be waiting for the next connection; lengua
   stops it, and the test has no `exit_code`.
 - **Pieces:** on every other generated run, the test's server and client send in three pieces
   with short pauses, as a network may deliver them, so a program must read until it has what it
-  needs.
+  needs. A program that reads with the write-assembly skill's `fill` is proven for every way a
+  message can be cut, not only these.
 - The spec's own port numbers count as present in a network test's example, since the test
   talks over its own port.
 

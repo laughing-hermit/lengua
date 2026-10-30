@@ -321,6 +321,21 @@ How the proof works (`src/prove/`):
 
   With these, the absolute difference Claude Code wrote with `cmovs` and its own parser, which
   timed out before, proves in about ten seconds, and the template in under a second.
+- **Sums have one form.** A sum is its parts, each with a constant multiple, sorted, plus a
+  constant: `add`, `sub`, `neg` and multiplying or shifting by a constant all build that form,
+  so a program's sum and a formula's are one term however each grouped, ordered or scaled it.
+  Zero- and sign-extension go inside a sum only where its exact range, from its parts' ranges,
+  never wraps; `x - (x / c) × c` folds to `x % c` inside it, and a count stays a count. The
+  clock Claude Code wrote computes Hinnant's days-from-civil in one order and its tests in
+  another: the seven day-count blocks prove with no solver.
+- **The output check settles under the run's path.** Before any question, each comparison in
+  the check is held against the path's own comparisons: of the same sum, its negation, or
+  either plus a constant, at its width or another up to 128 bits, as sets of intervals that
+  conditions joined by and, or and not, and a byte's table, add up to. Where a condition the
+  path speaks of but leaves open still chooses, as the sign of a total that may be 0 chooses its
+  size, each side is settled on its own with the condition added to the path. So the CSV total
+  Claude Code wrote proves every amount with no solver, and its other blocks prove their text
+  lengths with no solver either.
 - **Divisions meet as one term.** A program divides with 64-bit `div` on 128-bit dividends and a
   formula divides in signed 128 bits, so the same division reaches the pool in different forms.
   The pool gives each one form:
@@ -375,12 +390,27 @@ How the proof works (`src/prove/`):
   a read before the program has sent all of it waits forever: the run fails, as a real one times
   out. A server program takes the test client's connections on its listener in order; taking
   the next before closing the last waits forever too, and with none left the program is serving.
-  What a peer sends arrives whole, in the tests' three pieces (the first byte, up to the
-  middle, the rest), or with two of those pieces together, each a shape of its own. A run passes
-  when it made exactly the test's connections, sent each server exactly what it waits for,
-  answered each client as the test says, and is serving at the end when the test says so. A
-  counterexample is run for real with the same delivery. Two texts, a port and four deliveries
-  multiply, so combinations go by their longest text without being listed first.
+  The test's client behaves as curl and browsers do: it sends, keeps its side open until the
+  program starts answering, then closes it and reads the rest. So a server that reads to the end
+  of the request before answering waits forever, in the proof as in the tests. What a peer sends
+  arrives whole, in the tests' three pieces (the first byte, up to the middle, the rest), or with
+  two of those pieces together, each a shape of its own; through `fill`, every way at once (see
+  below). A run passes when it made exactly the test's connections, sent each server exactly
+  what it waits for, answered each client as the test says, and is serving at the end when the
+  test says so. A counterexample is run for real with the same delivery. Two texts, a port and
+  four deliveries multiply, so combinations go by their longest text without being listed first.
+- **fill is read as a whole.** `fill` (in the skill's `assets/fill.s`, copied word for word with
+  its constants, which the checker holds to) reads until its buffer is full, the input ends, or
+  the last byte read is its end byte. At its loop's head the proof takes at once each place a
+  read could stop: after any end byte that has arrived, or where the buffer fills or the input
+  ends, each a run of its own, with the counters the reads leave unknown. A block whose program
+  reads standard input and its connections only through `fill` is proven with each message cut
+  into pieces any way, and standard input isn't held to one pipe write; where the program also
+  reads with `read` itself, the four deliveries are proven as before. A counterexample at a cut
+  replays with that cut: standard input or the peer's message in two pieces, the second a moment
+  after the first. lengua's own tests run fill's code for every cut of every input up to 5
+  bytes, every capacity up to 7, with and without an end byte: it gives exactly what the whole
+  gives, and four bugs planted in it each show.
 - **Contradictions need no solver.** A question that holds a condition and its negation, compared
   by their structure with sums as sets of parts whatever their grouping, is impossible on its face:
   a run's own branch and the check that its output breaks often come to exactly that.
@@ -392,8 +422,9 @@ How the proof works (`src/prove/`):
   so a counterexample anywhere turns up early and the pace of the first ones shows whether the rest
   fit: a block that can't finish says how long it would take. A block may have up to 2,000,000
   combinations, and each gets its share of the proof's five minutes, the time it doesn't use
-  passing on. `examples/add` takes about 30 seconds for 4×10^18 input pairs, the CSV total Claude
-  Code wrote, 24,696 combinations, about four seconds, and the template under a second.
+  passing on. `examples/add` takes about 30 seconds for 4×10^18 input pairs, the first CSV total
+  Claude Code wrote, 24,696 combinations, about six seconds with no solver question, and the
+  template under a second.
 - **Small values in few bits.** A division by a constant is sent to the solvers in the bits its
   dividend's range needs, and so is a count, a sum whose parts are each 0 or 1: a count of 16
   bytes divides and adds as 5 bits whatever width the program and the formula wrote it in, so
@@ -461,7 +492,12 @@ What it covers:
   `choice(…)` is proven in turn. `string(min, max, "chars")` has a variable for each byte, held
   to the characters (past 4,096 bytes, to the range they span), and its lengths go shortest
   first: up to 4,096 bytes, or for a text that starts longer, such as a mebibyte file a program
-  only measures, up to 4,096 of its lengths.
+  only measures, up to 4,096 of its lengths. Text with characters beyond ASCII has a shape for
+  each order of its characters' widths in bytes: an ASCII character is a byte variable, and a
+  wider one a variable choosing among the characters of its width, each of its bytes that
+  choice's byte, so a program's test of a byte is a test of the choice. The shapes multiply with
+  the widths, so the proof reaches about 8 characters where three widths mix and 13 where two
+  do: "proven for every input with text up to 8 characters".
 - Long text, up to a stated length. Standard input is proven up to what one pipe write holds,
   4,096 bytes, which the model reads whole. Where a block's texts run longer, or its time or the
   model runs out at some length, the proof holds for every input with texts up to the last
@@ -472,7 +508,8 @@ What it covers:
   and `scaled(x, places)` for a decimal's digits), printed plainly or with `places(x, k)`; and
   text: `len`, `count` (non-overlapping, leftmost first, as the test language counts), `words`,
   `upper`, `lower`, `tr`, `reverse`, joining texts with `+`, and comparing them with `==` and
-  `!=`. Any placeholder whose variables all have fixed values in a shape is computed outright,
+  `!=`. All but `reverse` work byte by byte, which is exact on UTF-8; `reverse` goes by
+  characters, as the test language does, telling them apart by each byte's values. Any placeholder whose variables all have fixed values in a shape is computed outright,
   so messages that quote an argument prove. A placeholder that's a text, drawn or computed,
   compares byte for byte.
 - Instructions: the integer instructions, the bit instructions listed above, and the vector
@@ -497,8 +534,10 @@ What it covers:
 
 Not yet: shuffles across lanes (`vpermb`, `vpermd`), compress and gather instructions;
 `sha256`, `crc32` and `crc32c` formulas and the instructions behind them; floating point;
-threads; and every way a network may cut a message, beyond the four deliveries. Those blocks are
-tested, not proven, and the report says why.
+threads; `tr` with sets beyond ASCII; and halvings the formula writes at 128 bits and the program
+at 64, as in mean's block of whole numbers. Those blocks are tested, not proven, and the report
+says why. A stream read both with `read` and with `fill` is proven for the four deliveries, not
+every cut.
 
 ## Resources, threads and capabilities
 
@@ -590,13 +629,16 @@ Dialect 2 followed:
 - files in tests, and the kernel confining every run to what the spec allows;
 - fork-join threads, with each worker proven to write only its own stack and slot;
 - proofs of programs for every input in range over whole numbers, decimals,
-  choices, texts and text formulas, files, the network, and random bytes and clock readings the
-  tests supply, in integer, bit and vector code from SSE2 to AVX-512, with every step confirmed
-  by a second solver, and over long texts up to a stated length;
+  choices, texts (beyond ASCII too) and text formulas, files, the network, and random bytes and
+  clock readings the tests supply, in integer, bit and vector code from SSE2 to AVX-512, with
+  every step confirmed by a second solver, and over long texts up to a stated length; through
+  `fill`, for input cut into pieces any way;
 - the clock and random bytes, which tests supply through a ptrace supervisor, and rules such as
   `{any(1, 6)}` where they don't;
 - plain TCP clients and servers on the ports a spec names, tested against their own loopback
-  server or client.
+  server or client, whose client keeps the connection open as curl does;
+- one `check` tool for the whole loop, each call back within about 40 seconds while the tests
+  and the proof run in the background.
 
 All of it is checked on this machine (x86-64 Linux). The long-term goal is the top six CPU and OS
 targets, through LLVM and one profile per target; they come next, in the order Platforms gives.
