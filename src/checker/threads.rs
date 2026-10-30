@@ -1,7 +1,8 @@
 //! Fork-join threads: the canonical `parallel_for` code, the threads the spec allows, and what a
 //! worker may touch. A worker and every function it calls write only their own stack frames and
-//! the worker's slot, through `rbx`, so no two threads ever write the same byte: the same
-//! guarantee Rust's `&mut` slices give, checked on the machine code.
+//! the worker's slot, through `rbx`, each index bounded by a constant, and read the other
+//! threads' parts of the per-thread data never, so no thread writes a byte another thread reads
+//! or writes (M7): the guarantee Rust's `&mut` slices give, checked on the machine code.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -428,6 +429,25 @@ impl Checker<'_, '_> {
             else {
                 continue;
             };
+            // M7: other threads write the per-thread data, so a worker reaches only its own part,
+            // through rbx: never through the symbol's address.
+            if instruction.memory_base() == Register::RIP
+                && let Some((name, _)) = self.program.data_at(instruction.memory_displacement64())
+                && DATA.iter().any(|(known, ..)| *known == name)
+            {
+                let name = name.to_owned();
+                self.violation(
+                    Rule::Races,
+                    line,
+                    format!(
+                        "`{}` reaches {name} on a worker thread, where other threads write their \
+                         parts of it",
+                        step.source.text
+                    ),
+                    "a worker reaches only its own slot, through rbx, as worker sets it",
+                );
+                continue;
+            }
             if mnemonic(instruction) == "lea" {
                 continue;
             }
@@ -501,8 +521,21 @@ impl Checker<'_, '_> {
         } else {
             index_limit(function, index, instruction, &mut self.factory)
         };
-        // Without a bounds check, rule 9 has already reported the access.
+        // M7: an index bounded only by a register could reach another thread's part.
         let Some(largest_index) = largest_index else {
+            self.violation(
+                Rule::Races,
+                step.source.line,
+                format!(
+                    "`{}` indexes {what} with no constant limit, so it could reach another \
+                     thread's part",
+                    step.source.text
+                ),
+                format!(
+                    "since the last label, compare the index with a constant that keeps the \
+                     access inside {what} (cmp index, LIMIT; jae), right before the access"
+                ),
+            );
             return;
         };
         let last =

@@ -646,6 +646,33 @@ async fn every_program_in_the_repository_follows_every_rule() {
     assert!(failed.is_empty(), "{failed:#?}");
 }
 
+/// M7: a worker's index bounded only by a register, and a worker reading another thread's part,
+/// are found.
+#[tokio::test]
+async fn workers_never_race() {
+    let cases = [
+        (
+            "    cmp r9, SLOT_SIZE - VECTOR + 1\n    jae .Lworker_assert_slot\n    movdqu xmm0, \
+             xmmword ptr [rbx + r9]\n",
+            "    movdqu xmm0, xmmword ptr [rbx + r9]\n",
+            "    movdqu xmm0, xmmword ptr [rbx + r9]",
+            "indexes the worker's slot with no constant limit",
+        ),
+        (
+            "    mov rbx, rsi\n    cmp rdi, THREADS\n",
+            "    mov rbx, rsi\n    mov rax, qword ptr [rip + slots]\n    cmp rdi, THREADS\n",
+            "    mov rax, qword ptr [rip + slots]",
+            "reaches slots on a worker thread, where other threads write their parts of it",
+        ),
+    ];
+    for (from, to, at, needle) in cases {
+        assert!(PARALLEL_TEMPLATE.contains(from), "{from:?}");
+        let text = PARALLEL_TEMPLATE.replacen(from, to, 1);
+        let report = check_parallel(&text).await;
+        assert_violation(&report, Rule::Races, line_of(&text, at), needle);
+    }
+}
+
 /// Memory safety: a bug planted for each memory rule is found, on its line.
 #[tokio::test]
 async fn memory_rules_find_each_planted_bug() {
