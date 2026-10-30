@@ -56,6 +56,8 @@ pub struct Example {
     pub stdin: String,
     /// Files in the working folder before the run, by name.
     pub files: BTreeMap<String, String>,
+    /// Empty folders in the working folder before the run.
+    pub folders: BTreeSet<String>,
     /// The environment variables the run gets, by name: no others.
     pub env: BTreeMap<String, String>,
     /// Expected standard output.
@@ -64,6 +66,10 @@ pub struct Example {
     pub stderr: String,
     /// Files expected in the working folder after the run, by name, with their exact contents.
     pub files_after: BTreeMap<String, String>,
+    /// Files and folders expected gone after the run.
+    pub gone: BTreeSet<String>,
+    /// Folders expected after the run.
+    pub folders_after: BTreeSet<String>,
     /// Expected exit code.
     pub exit_code: u8,
     /// The bytes its `getrandom` calls receive, in hex, or `None` when the kernel draws them.
@@ -123,6 +129,8 @@ pub struct Generated {
     pub stdin: Template,
     /// Templates of the files in the working folder before the run, by name.
     pub files: BTreeMap<String, Template>,
+    /// Empty folders in the working folder before the run.
+    pub folders: BTreeSet<String>,
     /// Templates of the environment variables the run gets, by name.
     pub env: BTreeMap<String, Template>,
     /// Expected standard output template.
@@ -131,6 +139,10 @@ pub struct Generated {
     pub stderr: Template,
     /// Templates of the files expected after the run, by name.
     pub files_after: BTreeMap<String, Template>,
+    /// Files and folders expected gone after the run.
+    pub gone: BTreeSet<String>,
+    /// Folders expected after the run.
+    pub folders_after: BTreeSet<String>,
     /// Expected exit code.
     pub exit_code: ExitCode,
     /// Whether every combination of the variables' values runs, instead of a sample.
@@ -173,6 +185,8 @@ pub struct Case {
     pub stdin: String,
     /// Files in the working folder before the run.
     pub files: BTreeMap<String, String>,
+    /// Empty folders in the working folder before the run.
+    pub folders: BTreeSet<String>,
     /// The environment variables the run gets, by name.
     pub env: BTreeMap<String, String>,
     /// Expected standard output.
@@ -181,6 +195,10 @@ pub struct Case {
     pub stderr: String,
     /// Files expected after the run.
     pub files_after: BTreeMap<String, String>,
+    /// Files and folders expected gone after the run.
+    pub gone: BTreeSet<String>,
+    /// Folders expected after the run.
+    pub folders_after: BTreeSet<String>,
     /// Expected exit code.
     pub exit_code: u8,
     /// The bytes its `getrandom` calls receive, in hex, or `None` when the kernel draws them.
@@ -395,10 +413,13 @@ impl Generated {
             args,
             stdin,
             files,
+            folders: self.folders.clone(),
             env,
             stdout,
             stderr,
             files_after,
+            gone: self.gone.clone(),
+            folders_after: self.folders_after.clone(),
             exit_code,
             random,
             clock,
@@ -642,10 +663,13 @@ struct ExampleTable {
     args: Vec<Text>,
     stdin: Text,
     files: BTreeMap<String, Text>,
+    folders: BTreeSet<String>,
     env: BTreeMap<String, Text>,
     stdout: Text,
     stderr: Text,
     files_after: BTreeMap<String, Text>,
+    gone: BTreeSet<String>,
+    folders_after: BTreeSet<String>,
     random: Option<String>,
     clock: Vec<String>,
     server: Vec<ServerTable<Text>>,
@@ -765,10 +789,13 @@ struct OutlineSteps {
     args: Vec<Written>,
     stdin: Written,
     files: BTreeMap<String, Written>,
+    folders: BTreeSet<String>,
     env: BTreeMap<String, Written>,
     stdout: Written,
     stderr: Written,
     files_after: BTreeMap<String, Written>,
+    gone: BTreeSet<String>,
+    folders_after: BTreeSet<String>,
     random: Option<Written>,
     clock: Vec<Written>,
     server: Vec<(Written, Written)>,
@@ -1133,6 +1160,12 @@ impl<'a> Checker<'a> {
             }
             self.check_supply(line, &name, table.random.is_some(), !table.clock.is_empty());
             self.check_environment(line, &name, &env);
+            self.check_folders(
+                line,
+                &name,
+                [&table.folders, &table.gone, &table.folders_after],
+                files_after.keys(),
+            );
             if let Err(problem) = Supply::parse(table.random.as_deref(), &table.clock) {
                 self.problem(Some(line), format!("{name}: {problem}"));
             }
@@ -1165,10 +1198,13 @@ impl<'a> Checker<'a> {
                 args,
                 stdin,
                 files,
+                folders: table.folders,
                 env,
                 stdout,
                 stderr,
                 files_after,
+                gone: table.gone,
+                folders_after: table.folders_after,
                 exit_code: behavior.exit_code,
                 random: table.random,
                 clock: table.clock,
@@ -1393,6 +1429,12 @@ impl<'a> Checker<'a> {
         }
         self.check_supply(line, name, steps.random.is_some(), !steps.clock.is_empty());
         self.check_environment(line, name, &steps.env);
+        self.check_folders(
+            line,
+            name,
+            [&steps.folders, &steps.gone, &steps.folders_after],
+            steps.files_after.keys(),
+        );
         self.check_peers(
             line,
             name,
@@ -1415,10 +1457,13 @@ impl<'a> Checker<'a> {
             args: args?,
             stdin: stdin?,
             files: files?,
+            folders: steps.folders.clone(),
             env: env?,
             stdout: stdout?,
             stderr: stderr?,
             files_after: files_after?,
+            gone: steps.gone.clone(),
+            folders_after: steps.folders_after.clone(),
             exit_code,
             every_value: false,
             random: random?,
@@ -1512,6 +1557,46 @@ impl<'a> Checker<'a> {
                     "{name} supplies clock readings, but spec.md's `- Uses:` line doesn't name \
                      `the clock`; add it there, or drop the readings"
                 ),
+            );
+        }
+    }
+
+    /// Folders and gone files: names inside the working folder, for a program that uses files,
+    /// and never both expected and gone.
+    fn check_folders<'n>(
+        &mut self,
+        line: usize,
+        name: &str,
+        [folders, gone, folders_after]: [&'n BTreeSet<String>; 3],
+        files_after: impl Iterator<Item = &'n String>,
+    ) {
+        if folders.is_empty() && gone.is_empty() && folders_after.is_empty() {
+            return;
+        }
+        if !self.spec.uses.contains(&Use::Files) {
+            self.problem(
+                Some(line),
+                format!(
+                    "{name} works with folders or files that go, but spec.md's `- Uses:` line \
+                     doesn't name `files`; add it there"
+                ),
+            );
+        }
+        for problem in folders
+            .iter()
+            .chain(gone)
+            .chain(folders_after)
+            .filter_map(|folder| file_name_problem(folder))
+        {
+            self.problem(Some(line), format!("{name}: {problem}"));
+        }
+        for both in files_after
+            .chain(folders_after)
+            .filter(|kept| gone.contains(*kept))
+        {
+            self.problem(
+                Some(line),
+                format!("{name} expects `{both}` both there and gone; keep one step"),
             );
         }
     }
@@ -1946,6 +2031,8 @@ impl<'a> Checker<'a> {
             let has_inputs = !example.args.is_empty()
                 || !example.stdin.is_empty()
                 || !example.files.is_empty()
+                || !example.folders.is_empty()
+                || !example.env.is_empty()
                 || example.random.is_some()
                 || !example.clock.is_empty()
                 || !example.server.is_empty()
@@ -2960,6 +3047,38 @@ Prints the hour of the day in UTC, from `0` to `23`, for a reader numbered from 
         assert_problem(
             &edit(&greet, "variable `HOME`", "variable `2HOME`"),
             "a name holds only letters, digits and `_`",
+        );
+    }
+
+    #[test]
+    fn folder_steps_need_files_and_never_both_keep_and_drop() {
+        let archive = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/archive/spec.md"),
+        )
+        .expect("the archive example");
+        let suite = tests_of(&archive).expect("valid tests");
+        assert_eq!(
+            suite.examples[1].folders.iter().collect::<Vec<_>>(),
+            ["archive"]
+        );
+        assert_eq!(
+            suite.examples[0].gone.iter().collect::<Vec<_>>(),
+            ["notes.txt"]
+        );
+        assert_problem(
+            &edit(&archive, "- Uses: files", "- Uses: standard input"),
+            "works with folders or files that go, but spec.md's `- Uses:` line doesn't name \
+             `files`",
+        );
+        assert_problem(
+            &edit(
+                &archive,
+                "- And there is no file `notes.txt`\n- And it exits with code `0`\n\n### For any \
+                 `text`",
+                "- And there is no file `archive/notes.txt`\n- And it exits with code `0`\n\n### \
+                 For any `text`",
+            ),
+            "expects `archive/notes.txt` both there and gone",
         );
     }
 

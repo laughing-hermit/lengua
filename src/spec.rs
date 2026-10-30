@@ -268,7 +268,8 @@ impl fmt::Display for BehaviorId {
 pub enum Use {
     /// Standard input.
     StandardInput,
-    /// Files in its working folder: open, read, write, seek and close them.
+    /// Files and folders in its working folder: open, read, write, seek and close files, read
+    /// their sizes, list folders, make and remove folders, and delete and rename files.
     Files,
     /// The clock.
     Clock,
@@ -323,6 +324,11 @@ impl Use {
                 Syscall::Write,
                 Syscall::Close,
                 Syscall::Lseek,
+                Syscall::Fstat,
+                Syscall::Getdents64,
+                Syscall::Mkdirat,
+                Syscall::Unlinkat,
+                Syscall::Renameat,
             ],
             Self::Clock => &[Syscall::ClockGettime, Syscall::ClockNanosleep],
             Self::RandomBytes => &[Syscall::Getrandom],
@@ -337,7 +343,14 @@ impl Use {
     pub fn of(syscall: Syscall) -> Option<Self> {
         match syscall {
             Syscall::Read => Some(Self::StandardInput),
-            Syscall::Openat | Syscall::Close | Syscall::Lseek => Some(Self::Files),
+            Syscall::Openat
+            | Syscall::Close
+            | Syscall::Lseek
+            | Syscall::Fstat
+            | Syscall::Getdents64
+            | Syscall::Mkdirat
+            | Syscall::Unlinkat
+            | Syscall::Renameat => Some(Self::Files),
             Syscall::ClockGettime | Syscall::ClockNanosleep => Some(Self::Clock),
             Syscall::Getrandom => Some(Self::RandomBytes),
             _ => None,
@@ -364,6 +377,16 @@ pub enum Syscall {
     Close,
     /// Move a file offset.
     Lseek,
+    /// Read an open file's size and kind.
+    Fstat,
+    /// Read the entries of an open folder.
+    Getdents64,
+    /// Make a folder.
+    Mkdirat,
+    /// Delete a file, or an empty folder.
+    Unlinkat,
+    /// Rename or move a file or folder.
+    Renameat,
     /// End the program.
     Exit,
     /// End the program (all threads; lengua programs have one).
@@ -388,12 +411,17 @@ pub enum Syscall {
 
 impl Syscall {
     /// Every system call a spec may allow.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 20] = [
         Self::Read,
         Self::Write,
         Self::Openat,
         Self::Close,
         Self::Lseek,
+        Self::Fstat,
+        Self::Getdents64,
+        Self::Mkdirat,
+        Self::Unlinkat,
+        Self::Renameat,
         Self::Exit,
         Self::ExitGroup,
         Self::ClockGettime,
@@ -424,6 +452,11 @@ impl Syscall {
             Self::Openat => "openat",
             Self::Close => "close",
             Self::Lseek => "lseek",
+            Self::Fstat => "fstat",
+            Self::Getdents64 => "getdents64",
+            Self::Mkdirat => "mkdirat",
+            Self::Unlinkat => "unlinkat",
+            Self::Renameat => "renameat",
             Self::Exit => "exit",
             Self::ExitGroup => "exit_group",
             Self::ClockGettime => "clock_gettime",
@@ -467,7 +500,6 @@ const FORBIDDEN_SYSCALLS: &[&str] = &[
     "listen",
     "madvise",
     "mkdir",
-    "mkdirat",
     "mmap",
     "mprotect",
     "mremap",
@@ -480,7 +512,6 @@ const FORBIDDEN_SYSCALLS: &[&str] = &[
     "recvfrom",
     "recvmsg",
     "rename",
-    "renameat",
     "rmdir",
     "rt_sigaction",
     "rt_sigprocmask",
@@ -489,7 +520,6 @@ const FORBIDDEN_SYSCALLS: &[&str] = &[
     "tgkill",
     "tkill",
     "unlink",
-    "unlinkat",
     "vfork",
     "wait4",
     "waitid",

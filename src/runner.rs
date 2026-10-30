@@ -94,6 +94,8 @@ pub struct Job<'a> {
     pub stdin_file: Option<&'a Path>,
     /// Files put in its fresh working folder before it starts, by name relative to the folder.
     pub files: &'a BTreeMap<String, String>,
+    /// Empty folders put in its fresh working folder before it starts.
+    pub folders: &'a BTreeSet<String>,
     /// Its environment variables, by name: no others reach it.
     pub env: &'a BTreeMap<String, String>,
     /// A folder to run in instead of a fresh one; the program may read and write inside it.
@@ -116,12 +118,14 @@ impl<'a> Job<'a> {
         syscalls: &'a [Allowed],
     ) -> Self {
         static NO_FILES: BTreeMap<String, String> = BTreeMap::new();
+        static NO_FOLDERS: BTreeSet<String> = BTreeSet::new();
         Self {
             program,
             args,
             stdin,
             stdin_pieces: &[],
             files: &NO_FILES,
+            folders: &NO_FOLDERS,
             env: &NO_FILES,
             folder: None,
             syscalls,
@@ -200,6 +204,8 @@ pub struct Run {
     /// Every file in its fresh working folder afterwards, by name relative to the folder, or why
     /// they couldn't be read. Empty when it ran in a folder of the user's.
     pub files: Result<BTreeMap<String, Vec<u8>>, String>,
+    /// Every folder in it afterwards, by name relative to it, empty ones included.
+    pub folders: BTreeSet<String>,
     /// Why the test's random bytes or clock readings couldn't answer the program.
     pub supplied: Option<String>,
     /// How many random bytes the program asked for, when the test supplied them.
@@ -397,14 +403,18 @@ impl Started {
                 End::Exited(_) | End::Signaled(_) => counter.as_mut().and_then(exact_count),
                 End::TimedOut | End::OutputTooLarge | End::Stopped => None,
             });
-        let files = match &self.work {
-            Some(work) => read_files(work),
-            None => Ok(BTreeMap::new()),
+        let (files, folders) = match &self.work {
+            Some(work) => match read_files(work) {
+                Ok((files, folders)) => (Ok(files), folders),
+                Err(problem) => (Err(problem), BTreeSet::new()),
+            },
+            None => (Ok(BTreeMap::new()), BTreeSet::new()),
         };
         Ok(Run {
             stdout,
             stderr,
             end,
+            folders,
             instructions,
             cycles,
             cpu_time_ns,
@@ -431,6 +441,9 @@ pub async fn start(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<
         None => {
             std::fs::create_dir(&work)?;
             write_files(&work, job.files)?;
+            for folder in job.folders {
+                std::fs::create_dir_all(work.join(folder))?;
+            }
             work.clone()
         }
     };
@@ -721,10 +734,14 @@ fn write_files(folder: &Path, files: &BTreeMap<String, String>) -> io::Result<()
     Ok(())
 }
 
-/// Every file under `folder`, by name relative to it, or why they can't all be read.
-fn read_files(folder: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> {
+/// Every file under `folder`, and every folder, by name relative to it, or why they can't all be
+/// read.
+type Left = (BTreeMap<String, Vec<u8>>, BTreeSet<String>);
+
+fn read_files(folder: &Path) -> Result<Left, String> {
     let unreadable = |error: io::Error| format!("its working folder couldn't be read: {error}");
     let mut files = BTreeMap::new();
+    let mut folders = BTreeSet::new();
     let mut total = 0;
     let mut pending = vec![folder.to_path_buf()];
     while let Some(directory) = pending.pop() {
@@ -738,6 +755,7 @@ fn read_files(folder: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> {
                 .into_owned();
             let kind = entry.file_type().map_err(unreadable)?;
             if kind.is_dir() {
+                folders.insert(name);
                 pending.push(path);
                 continue;
             }
@@ -757,7 +775,7 @@ fn read_files(folder: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> {
             files.insert(name, std::fs::read(&path).map_err(unreadable)?);
         }
     }
-    Ok(files)
+    Ok((files, folders))
 }
 
 /// Reads until the end, keeping at most `cap` bytes and reporting when there's more.

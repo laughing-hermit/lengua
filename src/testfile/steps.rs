@@ -9,6 +9,7 @@
 //! - ``standard input holding TEXT``, `no standard input` or `empty standard input`
 //! - ``a file `name` holding TEXT``, ``an empty file `name` ``, ``no file `name` ``
 //! - ``the environment variable `NAME` set to TEXT``
+//! - ``an empty folder `name` ``
 //! - ``the clock at `seconds` ``, with ``then `seconds` `` for later readings
 //! - ``the random bytes `fc` and `2a` ``
 //! - ``a server on port `8080` that receives TEXT and replies TEXT``, ``no server on port `1` ``
@@ -21,6 +22,7 @@
 //! - ``it prints text matching `rule` `` for output the program chooses, such as
 //!   `` `rolled {any(1, 6)}` ``
 //! - ``the file `name` holds TEXT``
+//! - ``there is no file `name` ``, ``there is no folder `name` ``, ``there is a folder `name` ``
 //! - ``the client gets back TEXT``
 //! - ``it exits with code `0` ``, `it keeps serving`
 //!
@@ -43,13 +45,14 @@ const RUNS: &str = "runs";
 /// The phrasings lengua reads, for a step it can't.
 const GIVEN_PHRASES: &str = "`Given the arguments `…` and `…``, `Given no arguments`, `Given \
      standard input holding `…``, `Given a file `name` holding `…``, `Given no file `name``, \
-     `Given the environment variable `NAME` set to `…``, `Given the clock at `…``, `Given the \
+     `Given the environment variable `NAME` set to `…``, `Given an empty folder `name``, `Given \
+     the clock at `…``, `Given the \
      random bytes `…``, `Given a server on port \
      `…` that receives `…` and replies `…``, `Given a client that sends `…``";
 const THEN_PHRASES: &str = "`Then it prints `…``, `Then it prints `…` to standard error`, \
      `Then it prints nothing`, `Then it prints text matching `rule``, `Then the file `name` \
-     holds `…``, `Then the client gets back `…``, `And it exits with code `N``, `And it keeps \
-     serving`";
+     holds `…``, `Then there is no file `name``, `Then there is a folder `name``, `Then the \
+     client gets back `…``, `And it exits with code `N``, `And it keeps serving`";
 
 /// How a step's values read.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -208,10 +211,13 @@ struct Reading {
     args: Vec<Text>,
     stdin: Option<Text>,
     files: BTreeMap<String, Text>,
+    folders: BTreeSet<String>,
     env: BTreeMap<String, Text>,
     stdout: Vec<Text>,
     stderr: Vec<Text>,
     files_after: BTreeMap<String, Text>,
+    gone: BTreeSet<String>,
+    folders_after: BTreeSet<String>,
     random: Option<String>,
     clock: Vec<String>,
     server: Vec<ServerTable<Text>>,
@@ -296,6 +302,11 @@ impl Reading {
         if at.words(&["standard", "input", "holding"]) {
             self.wrote("stdin".into());
             self.stdin = Some(text(&mut at, mode)?);
+            return at.end();
+        }
+        if at.words(&["an", "empty", "folder"]) {
+            at.is("named");
+            self.folders.insert(at.value()?);
             return at.end();
         }
         if at.words(&["an", "empty", "file"]) {
@@ -385,6 +396,15 @@ impl Reading {
             self.answers.push(answer);
             return at.end();
         }
+        if at.words(&["there", "is", "no"]) {
+            (at.is("file") || at.is("folder")).then_some(())?;
+            self.gone.insert(at.value()?);
+            return at.end();
+        }
+        if at.words(&["there", "is", "a", "folder"]) {
+            self.folders_after.insert(at.value()?);
+            return at.end();
+        }
         at.word("the");
         at.word("file");
         let name = at.value()?;
@@ -428,10 +448,13 @@ impl Reading {
             args,
             stdin: self.stdin.unwrap_or_default(),
             files: self.files,
+            folders: self.folders,
             env: self.env,
             stdout: joined(self.stdout),
             stderr: joined(self.stderr),
             files_after: self.files_after,
+            gone: self.gone,
+            folders_after: self.folders_after,
             random: self.random,
             clock: self.clock,
             server: self.server,
@@ -463,10 +486,13 @@ impl Reading {
             args: args.into_iter().map(|arg| written(arg, "args")).collect(),
             stdin: written(self.stdin.unwrap_or_default(), "stdin"),
             files: texts(self.files, "files"),
+            folders: self.folders,
             env: texts(self.env, "env"),
             stdout: written(joined(self.stdout), "stdout"),
             stderr: written(joined(self.stderr), "stderr"),
             files_after: texts(self.files_after, "files_after"),
+            gone: self.gone,
+            folders_after: self.folders_after,
             random: self.random.map(|random| Written {
                 text: random,
                 line: at("random"),
@@ -889,6 +915,21 @@ mod tests {
             .map(|(name, value)| (name.as_str(), plain(value)))
             .collect();
         assert_eq!(env, [("HOME", "/home/ada".into()), ("NAME", "Ada".into())]);
+    }
+
+    #[test]
+    fn reads_folders_and_files_that_go() {
+        let read = table(
+            "- Given the argument `todo.txt`\n- And an empty folder `archive`\n- And a file \
+             `todo.txt` holding `milk`\n- When the program runs\n- Then there is no file \
+             `todo.txt`\n- And there is no folder `tmp`\n- And there is a folder `archive`\n- And \
+             the file `archive/todo.txt` holds `milk`\n- And it exits with code `0`",
+            "- Uses: files",
+        );
+        assert_eq!(read.folders.iter().collect::<Vec<_>>(), ["archive"]);
+        assert_eq!(read.gone.iter().collect::<Vec<_>>(), ["tmp", "todo.txt"]);
+        assert_eq!(read.folders_after.iter().collect::<Vec<_>>(), ["archive"]);
+        assert_eq!(plain(&read.files_after["archive/todo.txt"]), "milk");
     }
 
     #[test]

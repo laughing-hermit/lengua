@@ -16,12 +16,12 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 
 > Status: dialect 3 on Linux x86-64, with memory rules that check every address has an owner and
 > stays inside it. It covers whole numbers, exact decimals, floating point in double and single
-> precision with fused multiply-add, vectors from SSE2 to AVX-512, hashing and
-> checksums, files, environment variables, fork-join threads, the clock and random bytes (which
-> tests supply, so such output is exact), plain TCP clients and servers on the ports a spec
-> names, and inputs up to 1 MiB. The kernel holds every run to what its spec allows. lengua proves programs right for every
-> input, not just the tested ones, over whole numbers, decimals, choices, texts beyond ASCII and
-> text formulas, files and the network, in integer, bit and vector code from SSE2 to AVX-512,
+> precision with fused multiply-add, vectors from SSE2 to AVX-512, hashing and checksums, files
+> and folders, environment variables, fork-join threads, waiting, the clock and random bytes
+> (which tests supply, so such output is exact), plain TCP clients and servers on the ports a spec
+> names, and inputs up to 1 MiB. The kernel holds every run to what its spec allows. lengua
+> proves programs right for every input, not just the tested ones, over whole numbers, decimals,
+> choices, texts beyond ASCII and text formulas, files and the network, in integer, bit and vector code from SSE2 to AVX-512,
 > and over long texts up to a stated length (4,096 bytes of standard input). Programs that read
 > with the skill's `fill` are proven however their input arrives, cut into any pieces, and
 > servers are tested and proven with clients that keep the connection open, as curl does. Each
@@ -105,6 +105,8 @@ Complete programs, each with its spec, tests included, and its assembly:
   it through lengua, proven for every pair of inputs;
 - [`examples/greet`](examples/greet) greets whoever the `NAME` environment variable names. It
   gets only the variables its tests, or your `run`, give it;
+- [`examples/archive`](examples/archive) moves a file into an `archive` folder, making the folder
+  when it's missing;
 - [`examples/dice`](examples/dice) rolls a fair die from the kernel's random bytes. Its tests
   supply the bytes, so every roll is checked exactly, and the proof covers every pair of first
   bytes;

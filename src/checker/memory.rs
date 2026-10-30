@@ -200,6 +200,11 @@ impl Summary {
             // The time to sleep, and what's left of it when a signal wakes it.
             Some(Syscall::ClockNanosleep) => (&[Register::RDX, Register::R10], &[Register::R10]),
             Some(Syscall::Getrandom) => (&[Register::RDI], &[Register::RDI]),
+            // A file's details, and a folder's entries.
+            Some(Syscall::Fstat | Syscall::Getdents64) => (&[Register::RSI], &[Register::RSI]),
+            Some(Syscall::Mkdirat | Syscall::Unlinkat) => (&[Register::RSI], &[]),
+            // The old name and the new.
+            Some(Syscall::Renameat) => (&[Register::RSI, Register::R10], &[]),
             Some(Syscall::Accept4) => (
                 &[Register::RSI, Register::RDX],
                 &[Register::RSI, Register::RDX],

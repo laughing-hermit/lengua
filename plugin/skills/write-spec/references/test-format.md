@@ -25,6 +25,7 @@ reported with the phrasing to write instead. Values go in backticks, with `\n`, 
 | `no standard input`, `empty standard input` | Input that ends at once |
 | ``a file `notes.txt` holding TEXT``, ``an empty file `notes.txt` `` | A file in its working folder |
 | ``no file `notes.txt` `` | Nothing: the folder starts empty, and the step says so |
+| ``an empty folder `archive` `` | A folder in its working folder, for a spec that uses `files` |
 | ``the environment variable `NAME` set to TEXT`` | That variable, for a spec that uses `the environment`; it gets no others |
 | ``the clock at `1735689600` `` | What the program reads from the clock, in seconds since 1970; ``then `1735689601` `` adds a later reading |
 | ``the random bytes `fc` and `2a` `` | The random bytes the program asks the computer for, one byte of hex a value |
@@ -43,6 +44,8 @@ reported with the phrasing to write instead. Values go in backticks, with `\n`, 
 | `it prints nothing` | Nothing on either; also what a behavior means when it says neither |
 | ``it prints text matching `rolled {any(1, 6)}` `` | Output the program chooses: a [rule](#rules-output-the-program-chooses), here `rolled ` and a number from 1 to 6 |
 | ``the file `loud.txt` holds TEXT`` | A file the program leaves, with exactly that in it, or ``text matching `…` `` |
+| ``there is no file `notes.txt` ``, ``there is no folder `tmp` `` | A file or folder the program deleted, moved away, or never made |
+| ``there is a folder `archive` `` | A folder the program made or kept |
 | ``the client gets back TEXT`` | What the program answers that client, in the order of the clients' steps; or ``text matching `…` `` |
 | ``it exits with code `0` `` | Its exit code: 0 to 255, never 134 |
 | `it keeps serving` | A server still waiting for its next connection, with no exit code |
@@ -166,13 +169,15 @@ can't know the exact text. A rule stands for that part: `{any(lo, hi)}` is any w
 
 ## Files
 
-Each run happens in a fresh, empty working folder. The test puts its files there before the
-program starts, and after it ends the folder must hold exactly:
+Each run happens in a fresh, empty working folder. The test puts its files and empty folders
+there before the program starts, and after it ends the folder must hold exactly:
 - every file the test expects the program to leave, with exactly those contents;
-- every file the test gave that it doesn't expect changed, unchanged;
-- nothing else.
+- every file the test gave that it doesn't expect changed or gone, unchanged;
+- every folder the test gave, unless it expects it gone, and every folder it expects;
+- nothing else: no file, and no folder, the test doesn't name.
 
-So a program that writes a stray file, changes its input or leaves out its output fails. Name files
+So a program that writes a stray file, changes or deletes its input, makes a stray folder or
+leaves out its output fails. Name files
 relative to the working folder (`notes.txt`, `in/data.csv`), never with `/` at the start or `..`.
 A test names at most 16 files of at most 8 MiB each. The program can't reach files outside its
 working folder at all: lengua stops it.

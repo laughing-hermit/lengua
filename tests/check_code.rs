@@ -698,6 +698,47 @@ async fn proofs_survive_a_server_restart() {
 }
 
 #[tokio::test]
+async fn a_program_makes_folders_and_moves_files_inside_its_own() {
+    if !solvers_installed() {
+        return;
+    }
+    let session = Session::proving(Protocol::Discover).await;
+    let program = written(&session, example_files("archive")).await;
+    let report = done(&session, &program).await;
+    assert_eq!(
+        report["tests"][0], "main.s follows every rule and passed all 404 test runs",
+        "{report}"
+    );
+    // The proof follows the folder it makes and the file it moves, for every text in range.
+    assert!(
+        text(&report["proofs"][0]).contains("proven for every input"),
+        "{report}"
+    );
+    session.service.cancel().await.expect("close the session");
+}
+
+#[tokio::test]
+async fn a_program_lists_its_folder_and_deletes_inside_it() {
+    if !solvers_installed() {
+        return;
+    }
+    let session = Session::proving(Protocol::Discover).await;
+    let files = ["spec.md", "main.s"].map(|file| (file, fixture("sweep", file)));
+    let program = written(&session, files).await;
+    let report = done(&session, &program).await;
+    assert_eq!(
+        report["tests"][0], "main.s follows every rule and passed all 202 test runs",
+        "{report}"
+    );
+    // The kernel lists a folder in an order of its own, which the proof doesn't take.
+    assert!(
+        text(&report["proofs"][0]).contains("tested, not proven: listing a folder"),
+        "{report}"
+    );
+    session.service.cancel().await.expect("close the session");
+}
+
+#[tokio::test]
 async fn a_test_answers_a_sleep_at_once() {
     // nap sleeps 30 seconds, more than a test may run: the test's supervisor ends the sleep at
     // once, so the test passes in a moment.
@@ -722,7 +763,7 @@ async fn a_program_gets_only_the_environment_its_test_or_run_gives() {
     let program = written(&session, example_files("greet")).await;
     let report = done(&session, &program).await;
     assert_eq!(
-        report["tests"][0], "main.s follows every rule and passed all 203 test runs",
+        report["tests"][0], "main.s follows every rule and passed all 303 test runs",
         "{report}"
     );
     // Each name the proof can draw is greeted, and every run kept to the memory rules.

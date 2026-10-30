@@ -31,6 +31,16 @@ how to use it to standard error and exits with code 1. If writing fails, it exit
 - Then it prints `usage: NAME=<who> greet` followed by a newline to standard error
 - And it exits with code `1`
 
+### For any `home`
+- Given the environment variable `HOME` set to `{home}`
+- When the program runs
+- Then it prints `usage: NAME=<who> greet` followed by a newline to standard error
+- And it exits with code `1`
+
+| home |
+|---|
+| `string(1, 64, "/adehmo")` |
+
 ## B3: Shows usage for a name too long
 - Given the environment variable `NAME` set to `a` repeated `65` times
 - When the program runs

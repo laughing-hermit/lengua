@@ -3,7 +3,7 @@
 //! was expected and what happened, down to the line of a failed assertion. Once everything
 //! passes, each test's largest input runs again alone, for times the other runs can't disturb.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -196,12 +196,16 @@ pub fn explain_end(run: &Run, assertions: &BTreeMap<i64, usize>, limits: Limits)
     match run.end {
         End::Exited(code) if code == i32::from(ASSERTION_EXIT_CODE) => {
             let none = BTreeMap::new();
+            let no_folders = BTreeSet::new();
             let expected = Expected {
                 stdout: "",
                 stderr: "",
                 exit_code: 0,
                 files: &none,
                 files_after: &none,
+                folders: &no_folders,
+                gone: &no_folders,
+                folders_after: &no_folders,
                 now: 0,
                 random_supplied: None,
                 serves: false,
@@ -221,6 +225,12 @@ struct Expected<'a> {
     files: &'a BTreeMap<String, String>,
     /// The files expected after the run, with their exact contents or rules.
     files_after: &'a BTreeMap<String, String>,
+    /// The folders, empty, given before the run: each stays unless `gone` names it.
+    folders: &'a BTreeSet<String>,
+    /// Files and folders that must be gone after the run.
+    gone: &'a BTreeSet<String>,
+    /// Folders that must be there after the run.
+    folders_after: &'a BTreeSet<String>,
     /// When the run started, in Unix seconds, which a rule's `now` stands for.
     now: i128,
     /// How many random bytes the test supplies, when it supplies them.
@@ -254,7 +264,7 @@ fn compare_files(run: &Run, expected: &Expected<'_>, problems: &mut Vec<String>)
         }
     }
     for (name, contents) in expected.files {
-        if expected.files_after.contains_key(name) {
+        if expected.files_after.contains_key(name) || expected.gone.contains(name) {
             continue;
         }
         match found.get(name) {
@@ -270,7 +280,8 @@ fn compare_files(run: &Run, expected: &Expected<'_>, problems: &mut Vec<String>)
     let unexpected: Vec<&str> = found
         .keys()
         .filter(|name| {
-            !expected.files.contains_key(*name) && !expected.files_after.contains_key(*name)
+            !(expected.files.contains_key(*name) && !expected.gone.contains(*name))
+                && !expected.files_after.contains_key(*name)
         })
         .map(String::as_str)
         .collect();
@@ -278,6 +289,47 @@ fn compare_files(run: &Run, expected: &Expected<'_>, problems: &mut Vec<String>)
         problems.push(format!(
             "the program wrote files the test doesn't expect: {}",
             unexpected.join(", ")
+        ));
+    }
+    for name in expected.gone {
+        if found.contains_key(name) || run.folders.contains(name) {
+            problems.push(format!("{name} should be gone, but it's still there"));
+        }
+    }
+    for name in expected.folders_after {
+        if !run.folders.contains(name) {
+            problems.push(format!("the folder {name} should be there, but it isn't"));
+        }
+    }
+    for name in expected.folders {
+        if !expected.gone.contains(name) && !run.folders.contains(name) {
+            problems.push(format!("the folder {name} should stay, but it's gone"));
+        }
+    }
+    // A folder the test doesn't name is one the program made, unless it holds a file the test
+    // names.
+    let named = |folder: &String| {
+        let inside = format!("{folder}/");
+        expected.folders.contains(folder)
+            || expected.folders_after.contains(folder)
+            || expected
+                .files
+                .keys()
+                .chain(expected.files_after.keys())
+                .chain(expected.folders)
+                .chain(expected.folders_after)
+                .any(|name| name.starts_with(&inside))
+    };
+    let made: Vec<&str> = run
+        .folders
+        .iter()
+        .filter(|folder| !named(folder))
+        .map(String::as_str)
+        .collect();
+    if !made.is_empty() {
+        problems.push(format!(
+            "the program made folders the test doesn't expect: {}",
+            made.join(", ")
         ));
     }
 }
@@ -469,7 +521,10 @@ struct Test<'a> {
     args: &'a [String],
     stdin: &'a str,
     files: &'a BTreeMap<String, String>,
+    folders: &'a BTreeSet<String>,
     env: &'a BTreeMap<String, String>,
+    gone: &'a BTreeSet<String>,
+    folders_after: &'a BTreeSet<String>,
     stdout: &'a str,
     stderr: &'a str,
     files_after: &'a BTreeMap<String, String>,
@@ -487,7 +542,10 @@ impl<'a> Test<'a> {
             args: &example.args,
             stdin: &example.stdin,
             files: &example.files,
+            folders: &example.folders,
             env: &example.env,
+            gone: &example.gone,
+            folders_after: &example.folders_after,
             stdout: &example.stdout,
             stderr: &example.stderr,
             files_after: &example.files_after,
@@ -505,7 +563,10 @@ impl<'a> Test<'a> {
             args: &case.args,
             stdin: &case.stdin,
             files: &case.files,
+            folders: &case.folders,
             env: &case.env,
+            gone: &case.gone,
+            folders_after: &case.folders_after,
             stdout: &case.stdout,
             stderr: &case.stderr,
             files_after: &case.files_after,
@@ -576,6 +637,7 @@ async fn check_one(
     };
     let job = Job {
         files: &files,
+        folders: test.folders,
         env: test.env,
         supply: Some(&supply),
         net: Some(&net),
@@ -629,6 +691,9 @@ async fn check_one(
         exit_code: test.exit_code,
         files: &files,
         files_after: &files_after,
+        folders: test.folders,
+        gone: test.gone,
+        folders_after: test.folders_after,
         now,
         random_supplied: supply.random.as_ref().map(Vec::len),
         serves: test.serves,
@@ -1215,6 +1280,7 @@ mod tests {
             cpu_time_ns: Some(1000),
             wall_time_ns: 2000,
             files: Ok(BTreeMap::new()),
+            folders: BTreeSet::new(),
             supplied: None,
             random_asked: None,
         }
@@ -1226,12 +1292,16 @@ mod tests {
         files: &'a BTreeMap<String, String>,
         files_after: &'a BTreeMap<String, String>,
     ) -> Expected<'a> {
+        static NO_FOLDERS: BTreeSet<String> = BTreeSet::new();
         Expected {
             stdout,
             stderr: "",
             exit_code,
             files,
             files_after,
+            folders: &NO_FOLDERS,
+            gone: &NO_FOLDERS,
+            folders_after: &NO_FOLDERS,
             now: 1_735_689_600,
             random_supplied: None,
             serves: false,
@@ -1345,6 +1415,46 @@ mod tests {
                 ("tmp", "")
             ])
             .contains("the program wrote files the test doesn't expect: tmp")
+        );
+        // Folders: a file moved into one the program made, the file it came from gone.
+        let folders = |names: &[&str]| -> BTreeSet<String> {
+            names.iter().map(|name| (*name).to_owned()).collect()
+        };
+        let (given_folders, gone, made) = (
+            folders(&["old"]),
+            folders(&["notes.txt"]),
+            folders(&["box"]),
+        );
+        let moved = BTreeMap::from([file("box/notes.txt", "hello\n")]);
+        let expected = Expected {
+            folders: &given_folders,
+            gone: &gone,
+            folders_after: &made,
+            ..expect("", 0, &given, &moved)
+        };
+        let left_in = |files: &[(&str, &str)], names: &[&str]| Run {
+            folders: folders(names),
+            ..left(files)
+        };
+        let ok = left_in(&[("box/notes.txt", "hello\n")], &["box", "old"]);
+        assert_eq!(compare(&ok, &expected, &none), None);
+        let problem = |files: &[(&str, &str)], names: &[&str]| {
+            compare(&left_in(files, names), &expected, &none).expect("differs")
+        };
+        assert!(
+            problem(
+                &[("box/notes.txt", "hello\n"), ("notes.txt", "hello\n")],
+                &["box", "old"]
+            )
+            .contains("notes.txt should be gone, but it's still there")
+        );
+        assert!(
+            problem(&[("box/notes.txt", "hello\n")], &["box"])
+                .contains("the folder old should stay, but it's gone")
+        );
+        assert!(
+            problem(&[("box/notes.txt", "hello\n")], &["box", "old", "tmp"])
+                .contains("the program made folders the test doesn't expect: tmp")
         );
         let unreadable = Run {
             files: Err("it left more than 256 files".into()),

@@ -2110,16 +2110,39 @@ fn passes(
         });
     }
     for (name, before) in run.files_before() {
-        if block.files_after.contains_key(name) {
+        if block.files_after.contains_key(name) || block.gone.contains(name) {
             continue;
         }
-        let after = run.file(name).unwrap_or_default();
-        checks.push(same_terms(pool, before, after));
+        checks.push(match run.file(name) {
+            Some(after) => same_terms(pool, before, after),
+            None => pool.boolean(false),
+        });
     }
-    if run
-        .written
-        .keys()
-        .any(|name| !block.files.contains_key(name) && !block.files_after.contains_key(name))
+    // Folders: what's gone is gone, what's expected is there, what was given stays, and
+    // nothing else is made.
+    let inside = |folder: &str, name: &String| name.starts_with(&format!("{folder}/"));
+    let folders_hold = block
+        .gone
+        .iter()
+        .all(|name| run.file(name).is_none() && !run.is_folder(name))
+        && block.folders_after.iter().all(|name| run.is_folder(name))
+        && block
+            .folders
+            .iter()
+            .all(|name| block.gone.contains(name) || run.is_folder(name))
+        && run.folders_made().into_iter().all(|made| {
+            block.folders_after.contains(made)
+                || block
+                    .files_after
+                    .keys()
+                    .chain(&block.folders_after)
+                    .any(|name| inside(made, name))
+        });
+    if !folders_hold
+        || run
+            .written
+            .keys()
+            .any(|name| !block.files.contains_key(name) && !block.files_after.contains_key(name))
     {
         checks.push(pool.boolean(false));
     }
@@ -2839,6 +2862,7 @@ fn prove_shape(
     let every_cut = image.has_fill();
     let mut base = State::start(image, &mut pool, &args, &env, stdin)
         .with_files(files)
+        .with_folders(block.folders.clone())
         .with_supply(random, clock);
     if every_cut {
         base = base.for_every_cut();
@@ -3175,6 +3199,7 @@ pub fn agrees(
             .collect();
         let start = State::start(&image, &mut pool, &args, &env, stdin)
             .with_files(files)
+            .with_folders(case.folders.clone())
             .with_supply(random, clock)
             .with_network(network);
         let mut runs = exec::explore(&image, start, &mut pool, &mut exec::Concrete, 2)?;
@@ -3223,7 +3248,12 @@ pub fn agrees(
         let files_match = case
             .files_after
             .iter()
-            .all(|(name, contents)| agrees_with(run.file(name), contents));
+            .all(|(name, contents)| agrees_with(run.file(name), contents))
+            && case
+                .gone
+                .iter()
+                .all(|name| run.file(name).is_none() && !run.is_folder(name))
+            && case.folders_after.iter().all(|name| run.is_folder(name));
         // The network as the test's peers saw it: what the server received, what the client
         // was answered, and a server still serving when it should be.
         let made: Vec<_> = run.connections.iter().filter(|c| !c.accepted).collect();

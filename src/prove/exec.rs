@@ -10,7 +10,7 @@
 //! into a neighbour; no return address is written, and each `ret` goes back where its call came
 //! from; and no stack byte is read before something wrote it.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
 
 use iced_x86::{ConditionCode, Instruction, Mnemonic, OpKind, Register};
@@ -253,6 +253,12 @@ pub struct State {
     files: Rc<BTreeMap<String, Vec<Term>>>,
     /// The files the run created or replaced, by name, with everything written to them.
     pub written: BTreeMap<String, Vec<Term>>,
+    /// The empty folders in the working folder before the run.
+    folders_before: Rc<BTreeSet<String>>,
+    /// The folders the run made.
+    made: BTreeSet<String>,
+    /// The files and folders the run deleted, or renamed away.
+    removed: BTreeSet<String>,
     /// The files open, by descriptor.
     open: BTreeMap<u64, Open>,
     /// The test's network.
@@ -315,6 +321,18 @@ const O_TRUNC: u64 = 0o1000;
 /// exec.
 const O_HARMLESS: u64 = 0o400 | 0o100_000 | 0o2_000_000;
 const ENOENT: i64 = 2;
+const EEXIST: i64 = 17;
+const ENOTDIR: i64 = 20;
+const EISDIR: i64 = 21;
+const ENOTEMPTY: i64 = 39;
+const O_DIRECTORY: u64 = 0o200_000;
+const AT_REMOVEDIR: u64 = 0x200;
+/// The bytes of `struct stat`, and where its kind and size are.
+const STAT_LEN: u64 = 144;
+const STAT_MODE: u64 = 24;
+const STAT_SIZE: u64 = 48;
+/// A regular file that its owner may read and write and others may read.
+const REGULAR_FILE: u128 = 0o100_644;
 const EBADF: i64 = 9;
 const EINVAL: i64 = 22;
 
@@ -369,6 +387,9 @@ impl State {
             stdin_pieces: Rc::new(Vec::new()),
             files: Rc::new(BTreeMap::new()),
             written: BTreeMap::new(),
+            folders_before: Rc::new(BTreeSet::new()),
+            made: BTreeSet::new(),
+            removed: BTreeSet::new(),
             open: BTreeMap::new(),
             network: Rc::new(net::Network::default()),
             sockets: BTreeMap::new(),
@@ -444,6 +465,13 @@ impl State {
         self
     }
 
+    /// The same state with these empty folders in its working folder.
+    #[must_use]
+    pub fn with_folders(mut self, folders: BTreeSet<String>) -> Self {
+        self.folders_before = Rc::new(folders);
+        self
+    }
+
     /// The same state with standard input arriving in pieces of these lengths.
     #[must_use]
     pub fn with_stdin_pieces(mut self, pieces: Vec<usize>) -> Self {
@@ -470,10 +498,53 @@ impl State {
     /// it held before.
     #[must_use]
     pub fn file(&self, name: &str) -> Option<&[Term]> {
-        self.written
-            .get(name)
-            .or_else(|| self.files.get(name))
-            .map(Vec::as_slice)
+        if let Some(written) = self.written.get(name) {
+            return Some(written);
+        }
+        if self.removed.contains(name) {
+            return None;
+        }
+        self.files.get(name).map(Vec::as_slice)
+    }
+
+    /// Whether `name` is a folder now: given or made, or holding a file or folder, and not
+    /// removed since.
+    #[must_use]
+    pub fn is_folder(&self, name: &str) -> bool {
+        if self.made.contains(name) {
+            return true;
+        }
+        if self.removed.contains(name) {
+            return false;
+        }
+        let inside = format!("{name}/");
+        self.folders_before.contains(name)
+            || self
+                .folders_before
+                .iter()
+                .chain(&self.made)
+                .any(|folder| folder.starts_with(&inside))
+            || self
+                .files
+                .keys()
+                .chain(self.written.keys())
+                .any(|file| file.starts_with(&inside) && self.file(file).is_some())
+    }
+
+    /// The folders the run made that weren't there before it.
+    #[must_use]
+    pub fn folders_made(&self) -> Vec<&str> {
+        self.made
+            .iter()
+            .filter(|folder| !self.folders_before.contains(*folder))
+            .map(String::as_str)
+            .collect()
+    }
+
+    /// Whether the folder holding `name` is there: the working folder, or a folder in it.
+    fn parent_is_there(&self, name: &str) -> bool {
+        name.rsplit_once('/')
+            .is_none_or(|(parent, _)| self.is_folder(parent))
     }
 
     /// The files the working folder held before the run.
@@ -1893,11 +1964,55 @@ impl<'a> Cpu<'a> {
     fn open_at(&mut self) -> Result<u64, Stop> {
         let registers = self.state.registers;
         let (folder, path, flags) = (registers[7], registers[6], registers[2]);
-        // The kernel reads the folder and the flags as ints, and file descriptors as unsigned ints.
-        if self.constant(folder)? & 0xffff_ffff != AT_FDCWD {
+        let flags = self.constant(flags)? & 0xffff_ffff;
+        if flags & O_DIRECTORY != 0 {
             return Err(unsupported(
-                "opening a file other than in the working folder",
+                "listing a folder, whose entries the kernel gives in an order of its own",
             ));
+        }
+        let name = self.name_at(folder, path, "openat")?;
+        let writing = match flags & O_ACCMODE {
+            0 if flags & !O_ACCMODE & !O_HARMLESS == 0 => false,
+            O_WRONLY if flags & !O_ACCMODE & !O_HARMLESS & !O_TRUNC == O_CREAT => true,
+            _ => return Err(unsupported(format!("opening a file with flags {flags:#o}"))),
+        };
+        if self.state.is_folder(&name) {
+            return Ok((-EISDIR).cast_unsigned());
+        }
+        if writing {
+            if !self.state.parent_is_there(&name) {
+                return Ok((-ENOENT).cast_unsigned());
+            }
+            let exists = self.state.file(&name).is_some();
+            if exists && flags & O_TRUNC == 0 {
+                return Err(unsupported("writing into a file without emptying it first"));
+            }
+            self.state.written.insert(name.clone(), Vec::new());
+        } else if self.state.written.contains_key(&name) {
+            return Err(unsupported("reading a file the program wrote"));
+        } else if self.state.file(&name).is_none() {
+            return Ok((-ENOENT).cast_unsigned());
+        }
+        let fd = self.free_descriptor();
+        self.state.open.insert(
+            fd,
+            Open {
+                name,
+                position: 0,
+                writing,
+            },
+        );
+        Ok(fd)
+    }
+
+    /// The name a call is given in the working folder: a NUL-terminated path relative to it,
+    /// which the model follows only inside it.
+    fn name_at(&mut self, folder: Term, path: Term, call: &str) -> Result<String, Stop> {
+        // The kernel reads the folder as an int.
+        if self.constant(folder)? & 0xffff_ffff != AT_FDCWD {
+            return Err(unsupported(format!(
+                "{call} other than in the working folder"
+            )));
         }
         let start = self.constant(path)?;
         let mut address = start;
@@ -1917,43 +2032,117 @@ impl<'a> Cpu<'a> {
             }
             address += 1;
         }
-        self.lent(start, name.len() as u64 + 1, false, "openat")?;
+        self.lent(start, name.len() as u64 + 1, false, call)?;
         let name =
             String::from_utf8(name).map_err(|_| unsupported("a file name that isn't UTF-8"))?;
         // Only the test's folder is modeled: no absolute paths and no way out of it.
-        if name.starts_with('/') || name.split('/').any(|part| part == "..") || name.is_empty() {
+        if name.starts_with('/')
+            || name
+                .split('/')
+                .any(|part| part == ".." || part == "." || part.is_empty())
+        {
             return Err(unsupported(format!(
-                "opening {name:?}, outside the working folder"
+                "{call} on {name:?}, outside the working folder"
             )));
         }
-        let flags = self.constant(flags)? & 0xffff_ffff;
-        let writing = match flags & O_ACCMODE {
-            0 if flags & !O_ACCMODE & !O_HARMLESS == 0 => false,
-            O_WRONLY if flags & !O_ACCMODE & !O_HARMLESS & !O_TRUNC == O_CREAT => true,
-            _ => return Err(unsupported(format!("opening a file with flags {flags:#o}"))),
-        };
-        if writing {
-            let exists =
-                self.state.files.contains_key(&name) || self.state.written.contains_key(&name);
-            if exists && flags & O_TRUNC == 0 {
-                return Err(unsupported("writing into a file without emptying it first"));
+        Ok(name.trim_end_matches('/').to_owned())
+    }
+
+    /// `fstat(fd, details)`: an open file's kind and size, the file's own; the kernel's other
+    /// numbers, such as its device, owner and times, are any value.
+    fn file_details(&mut self, fd: u64, buffer: u64) -> Result<u64, Stop> {
+        self.lent(buffer, STAT_LEN, true, "fstat")?;
+        let Some(open) = self.state.open.get(&fd).cloned() else {
+            if fd <= 2 {
+                return Err(unsupported("the details of standard input or output"));
             }
-            self.state.written.insert(name.clone(), Vec::new());
-        } else if self.state.written.contains_key(&name) {
-            return Err(unsupported("reading a file the program wrote"));
-        } else if !self.state.files.contains_key(&name) {
+            return Ok((-EBADF).cast_unsigned());
+        };
+        let size = self.state.file(&open.name).map_or(0, <[Term]>::len);
+        let fresh = self.pool.len();
+        for offset in 0..STAT_LEN {
+            let byte = self.pool.var(8, &format!("stat{fresh}.{offset}"));
+            self.save(buffer + offset, byte)?;
+        }
+        let mode = self.pool.bv(32, REGULAR_FILE);
+        self.save(buffer + STAT_MODE, mode)?;
+        let size = self.pool.bv(64, size as u128);
+        self.save(buffer + STAT_SIZE, size)?;
+        Ok(0)
+    }
+
+    /// `mkdirat(folder, name, mode)`: a new folder, where its parent is.
+    fn make_folder(&mut self, name: String) -> u64 {
+        if self.state.is_folder(&name) || self.state.file(&name).is_some() {
+            return (-EEXIST).cast_unsigned();
+        }
+        if !self.state.parent_is_there(&name) {
+            return (-ENOENT).cast_unsigned();
+        }
+        self.state.removed.remove(&name);
+        self.state.made.insert(name);
+        0
+    }
+
+    /// `unlinkat(folder, name, flags)`: a file deleted, or with `AT_REMOVEDIR`, an empty folder.
+    fn remove(&mut self, name: String, flags: u64) -> Result<u64, Stop> {
+        let inside = format!("{name}/");
+        let errno = match flags {
+            0 if self.state.file(&name).is_some() => {
+                self.state.written.remove(&name);
+                self.state.removed.insert(name);
+                return Ok(0);
+            }
+            0 if self.state.is_folder(&name) => EISDIR,
+            AT_REMOVEDIR if self.state.is_folder(&name) => {
+                let holds = self
+                    .state
+                    .files
+                    .keys()
+                    .chain(self.state.written.keys())
+                    .any(|file| file.starts_with(&inside) && self.state.file(file).is_some())
+                    || self
+                        .state
+                        .folders_before
+                        .iter()
+                        .chain(&self.state.made)
+                        .any(|folder| folder.starts_with(&inside) && self.state.is_folder(folder));
+                if holds {
+                    ENOTEMPTY
+                } else {
+                    self.state.made.remove(&name);
+                    self.state.removed.insert(name);
+                    return Ok(0);
+                }
+            }
+            AT_REMOVEDIR if self.state.file(&name).is_some() => ENOTDIR,
+            0 | AT_REMOVEDIR => ENOENT,
+            other => return Err(unsupported(format!("unlinkat with flags {other:#x}"))),
+        };
+        Ok((-errno).cast_unsigned())
+    }
+
+    /// `renameat(folder, from, folder, to)`: a file moved to a name, replacing what's there.
+    fn rename(&mut self, from: String, to: String) -> Result<u64, Stop> {
+        if self.state.is_folder(&from) {
+            return Err(unsupported("renaming a folder"));
+        }
+        let Some(contents) = self.state.file(&from).map(<[Term]>::to_vec) else {
+            return Ok((-ENOENT).cast_unsigned());
+        };
+        if self.state.is_folder(&to) {
+            return Ok((-EISDIR).cast_unsigned());
+        }
+        if !self.state.parent_is_there(&to) {
             return Ok((-ENOENT).cast_unsigned());
         }
-        let fd = self.free_descriptor();
-        self.state.open.insert(
-            fd,
-            Open {
-                name,
-                position: 0,
-                writing,
-            },
-        );
-        Ok(fd)
+        if from != to {
+            self.state.written.remove(&from);
+            self.state.removed.insert(from);
+            self.state.removed.remove(&to);
+            self.state.written.insert(to, contents);
+        }
+        Ok(0)
     }
 
     fn syscall(&mut self) -> Result<Step, Stop> {
@@ -2137,6 +2326,30 @@ impl<'a> Cpu<'a> {
                 self.shutdown(fd, how)?
             }
             257 => self.open_at()?,
+            5 => {
+                let fd = self.constant(rdi)? & 0xffff_ffff;
+                let buffer = self.constant(rsi)?;
+                self.file_details(fd, buffer)?
+            }
+            217 => {
+                return Err(unsupported(
+                    "listing a folder, whose entries the kernel gives in an order of its own",
+                ));
+            }
+            258 => {
+                let name = self.name_at(rdi, rsi, "mkdirat")?;
+                self.make_folder(name)
+            }
+            263 => {
+                let name = self.name_at(rdi, rsi, "unlinkat")?;
+                let flags = self.constant(rdx)? & 0xffff_ffff;
+                self.remove(name, flags)?
+            }
+            264 => {
+                let from = self.name_at(rdi, rsi, "renameat")?;
+                let to = self.name_at(rdx, registers[10], "renameat")?;
+                self.rename(from, to)?
+            }
             // The test's readings, as the supervisor gives them, the last one repeating.
             228 if !self.state.clock.is_empty() => {
                 let buffer = self.constant(rsi)?;

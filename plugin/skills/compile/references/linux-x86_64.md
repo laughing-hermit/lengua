@@ -4,7 +4,7 @@
 
 What the spec names under `# Constraints` decides the calls a program may make on this computer:
 `write`, `exit` and `exit_group` always; `read` for `standard input`; `openat`, `read`, `write`,
-`lseek` and `close` for `files`; `clock_gettime` and `clock_nanosleep` (to wait) for `the
+`lseek`, `close`, `fstat`, `getdents64`, `mkdirat`, `unlinkat` and `renameat` for `files`; `clock_gettime` and `clock_nanosleep` (to wait) for `the
 clock`; `getrandom` for `random bytes`; none for `the environment`, which is on the stack at the
 start; `socket` and `connect` for `- Network: connects to …`, `accept4` for `- Network: listens
 on …`, and `read`, `close`, `shutdown` and `sendto` for either. The kernel refuses any other.
@@ -22,6 +22,11 @@ test it right away with `test rax, rax` and `js`.
 | `lseek` | 8 | `edi` fd, `rsi` offset, `edx` whence (0 start, 1 current, 2 end) | the new offset or an error |
 | `exit` | 60 | `edi` status | doesn't return |
 | `clock_gettime` | 228 | `edi` clock (0 the time of day, 1 a clock that only moves forward), `rsi` 16 bytes for seconds then nanoseconds | 0 or an error |
+| `fstat` | 5 | `edi` an open file, `rsi` 144 bytes for its details: its size is the 8 bytes at 48 | 0 or an error |
+| `getdents64` | 217 | `edi` a folder opened with `O_RDONLY \| O_DIRECTORY` (0x10000), `rsi` a buffer, `rdx` its size | the bytes of entries it filled, 0 at the end, or an error. Each entry: its length in the 2 bytes at 16, its kind at 18 (8 a file, 4 a folder), its NUL-terminated name from 19; `.` and `..` come too, in no set order |
+| `mkdirat` | 258 | `edi` `AT_FDCWD` (-100), `rsi` the folder's name, `edx` its mode, such as 0x1ed (`0755`) | 0, -17 (`EEXIST`) when it's there, or an error |
+| `unlinkat` | 263 | `edi` `AT_FDCWD`, `rsi` the name, `edx` 0 for a file or 0x200 (`AT_REMOVEDIR`) for an empty folder | 0 or an error |
+| `renameat` | 264 | `edi` `AT_FDCWD`, `rsi` the old name, `edx` `AT_FDCWD`, `r10` the new name, which it replaces | 0 or an error |
 | `clock_nanosleep` | 230 | `edi` clock (1, the one that only moves forward), `esi` 0, `rdx` 16 bytes of seconds then nanoseconds to wait, `r10` 0 | 0 or an error |
 | `exit_group` | 231 | `edi` status | doesn't return |
 | `openat` | 257 | `edi` -100 (the current folder), `rsi` NUL-terminated path, `edx` flags, `r10d` mode | a file descriptor or an error |
