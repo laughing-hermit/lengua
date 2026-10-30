@@ -346,8 +346,8 @@ fn call(
             };
             let from = crate::expr::tr_set(&String::from_utf8_lossy(&from));
             let to = crate::expr::tr_set(&String::from_utf8_lossy(&to));
-            if from.len() != to.len() || !from.iter().chain(&to).all(char::is_ascii) {
-                return Err("tr with sets of different lengths or beyond ASCII".into());
+            if from.len() != to.len() {
+                return Err("tr with sets of different lengths".into());
             }
             // Later pairs win, as a map built from them in order does.
             let mut map: BTreeMap<char, char> = BTreeMap::new();
@@ -355,34 +355,19 @@ fn call(
                 map.insert(source, target);
             }
             let pairs: Vec<(char, char)> = map.into_iter().collect();
-            Ok(Formula::Text(translate_bytes(pool, &bytes, &pairs)))
+            if pairs
+                .iter()
+                .all(|(source, target)| source.is_ascii() && target.is_ascii())
+            {
+                return Ok(Formula::Text(translate_bytes(pool, &bytes, &pairs)));
+            }
+            Ok(Formula::Text(translate_characters(pool, &bytes, &pairs)?))
         }
         Function::Reverse => {
-            // By characters, as the test language reverses: a byte that can only continue a
-            // character, 0x80 to 0xbf, stays after the byte before it.
+            // By characters, as the test language reverses.
             let bytes = text(next()?)?;
-            let mut characters: Vec<Vec<Term>> = Vec::new();
-            for byte in bytes {
-                let (low, high) = pool.range(byte);
-                let (low, high) = if high < 0x80 || low >= 0x80 && high <= 0xbf || low >= 0xc0 {
-                    (low, high)
-                } else {
-                    // A range that spans kinds of byte may still hold only one kind.
-                    match pool.byte_values(byte) {
-                        Some(values) if !values.is_empty() => {
-                            (u128::from(values[0]), u128::from(values[values.len() - 1]))
-                        }
-                        _ => (low, high),
-                    }
-                };
-                let continues = (0x80..=0xbf).contains(&low) && high <= 0xbf;
-                let starts = high < 0x80 || low >= 0xc0;
-                match characters.last_mut() {
-                    Some(character) if continues => character.push(byte),
-                    _ if continues || starts => characters.push(vec![byte]),
-                    _ => return Err("reverse of text whose characters can't be told apart".into()),
-                }
-            }
+            let mut characters = characters(pool, &bytes)
+                .ok_or("reverse of text whose characters can't be told apart")?;
             characters.reverse();
             Ok(Formula::Text(characters.concat()))
         }
@@ -493,6 +478,75 @@ fn call(
 }
 
 /// Each byte with `pairs` applied: a byte equal to a pair's first character becomes its second.
+/// A text's characters, each its bytes: a byte that can only continue a character, 0x80 to
+/// 0xbf, stays with the byte before it. `None` when a byte could be either kind.
+fn characters(pool: &Pool, bytes: &[Term]) -> Option<Vec<Vec<Term>>> {
+    let mut characters: Vec<Vec<Term>> = Vec::new();
+    for byte in bytes {
+        let (low, high) = pool.range(*byte);
+        let (low, high) = if high < 0x80 || low >= 0x80 && high <= 0xbf || low >= 0xc0 {
+            (low, high)
+        } else {
+            // A range that spans kinds of byte may still hold only one kind.
+            match pool.byte_values(*byte) {
+                Some(values) if !values.is_empty() => {
+                    (u128::from(values[0]), u128::from(values[values.len() - 1]))
+                }
+                _ => (low, high),
+            }
+        };
+        let continues = (0x80..=0xbf).contains(&low) && high <= 0xbf;
+        let starts = high < 0x80 || low >= 0xc0;
+        match characters.last_mut() {
+            Some(character) if continues => character.push(*byte),
+            _ if continues || starts => characters.push(vec![*byte]),
+            _ => return None,
+        }
+    }
+    Some(characters)
+}
+
+/// `tr` with characters beyond ASCII: each character, as its bytes, becomes its pair's when it
+/// is that pair's, a pair at a time; a character keeps its width in bytes, so the text keeps
+/// its shape. A pair that changes a character's width isn't one the proof can follow.
+fn translate_characters(
+    pool: &mut Pool,
+    bytes: &[Term],
+    pairs: &[(char, char)],
+) -> Result<Vec<Term>, String> {
+    let utf8 = |character: char| character.to_string().into_bytes();
+    if pairs
+        .iter()
+        .any(|(source, target)| source.len_utf8() != target.len_utf8())
+    {
+        return Err("tr that changes a character's width in bytes".into());
+    }
+    let characters =
+        characters(pool, bytes).ok_or("tr on text whose characters can't be told apart")?;
+    let mut out = Vec::with_capacity(bytes.len());
+    for character in characters {
+        let mut result = character.clone();
+        for (source, target) in pairs {
+            let (source, target) = (utf8(*source), utf8(*target));
+            if source.len() != character.len() {
+                continue;
+            }
+            let mut matched = pool.boolean(true);
+            for (byte, wanted) in character.iter().zip(&source) {
+                let wanted = pool.bv(8, u128::from(*wanted));
+                let same = pool.eq(*byte, wanted);
+                matched = pool.bool_and(matched, same);
+            }
+            for (slot, value) in result.iter_mut().zip(&target) {
+                let value = pool.bv(8, u128::from(*value));
+                *slot = pool.ite(matched, value, *slot);
+            }
+        }
+        out.extend(result);
+    }
+    Ok(out)
+}
+
 fn translate_bytes(pool: &mut Pool, bytes: &[Term], pairs: &[(char, char)]) -> Vec<Term> {
     // Later pairs win; then the bytes that move by the same amount move together: upper is
     // a to z moving down 32, one choice per byte.
@@ -602,6 +656,8 @@ mod tests {
             "upper(s)",
             "lower(s)",
             "tr(s, \"a-z\", \"n-za-m\")",
+            "tr(s, \"é€😀\", \"è₤😃\")",
+            "tr(s, \"aé\", \"bè\")",
             "reverse(s)",
             "reverse(upper(s)) + s",
             "s + \"!\" + upper(s)",

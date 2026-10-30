@@ -238,6 +238,24 @@ async fn proves_the_mean_of_two_prices() {
     assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
 }
 
+/// A file name the input chooses: archive opens the file its argument names, which no test file
+/// is, so the run where it's none of them is the only one, and the name it prints is the
+/// input's own.
+#[tokio::test]
+async fn proves_a_file_name_the_input_chooses() {
+    if std::process::Command::new("z3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let machine = machine(&example("archive", "main.s")).await;
+    let block = block(&example("archive", "spec.md"), 2);
+    let verdict = prove(&machine, &block, &budget(120));
+    assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
+}
+
 /// The mean of two whole numbers: the program halves a sum of cents with one away from zero
 /// added, and the formula multiplies the sum by 50. A sum every part of which the divisor
 /// divides divides part by part, so the two meet without the solvers dividing.

@@ -606,7 +606,9 @@ What it covers:
   solver question. Each rule has random tests against plain arithmetic.
 - Files: `openat`, `read`, `write`, `close` and `fstat` on the test's files, and `mkdirat`,
   `unlinkat` and `renameat` on its folders and files. A missing input file gives `ENOENT`, and
-  the checks on the files and folders left after the run are the runner's. A folder's listing
+  the checks on the files and folders left after the run are the runner's. A file name the input
+  chooses splits the run: one for each test file or folder it can be, with its bytes those on
+  the run's path, and one where it's none of them and the file isn't there. A folder's listing
   (`getdents64`) is tested, not proven.
 - The network: `socket`, `connect`, `accept4` and `accept` on the listener, `read`, `write`,
   `sendto`, `recvfrom`, `shutdown` and `close` on TCP connections over IPv4 on this computer.
@@ -616,8 +618,9 @@ What it covers:
 
 Not yet: shuffles across lanes (`vpermb`, `vpermd`), compress and gather instructions;
 `sha256`, `crc32` and `crc32c` formulas and the instructions behind them; floating point;
-threads; and `tr` with sets beyond ASCII. Those blocks are tested, not proven, and the report
-says why. A stream read both with `read` and with `fill` is proven for the four deliveries, not
+threads; and `tr` that changes a character's width in bytes (`tr` beyond ASCII is proven
+character by character, each keeping its width). Those blocks are tested, not proven, and the
+report says why. A stream read both with `read` and with `fill` is proven for the four deliveries, not
 every cut.
 
 ## Resources, threads and capabilities

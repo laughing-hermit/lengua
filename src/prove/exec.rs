@@ -212,6 +212,12 @@ struct Object {
     name: String,
 }
 
+/// A name a call is given: known, or chosen by the input, byte by byte.
+enum Name {
+    Known(String),
+    Chosen(Vec<Term>),
+}
+
 /// A return address on the stack: where it is, where it returns to, and the function called.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Return {
@@ -1959,9 +1965,8 @@ impl<'a> Cpu<'a> {
         }
     }
 
-    /// `openat` on the test's files: a file the working folder holds opens for reading; any
-    /// name opens for writing, created or emptied. A name the folder doesn't hold can't be read.
-    fn open_at(&mut self) -> Result<u64, Stop> {
+    /// `openat` on a name the input may choose: each test file it can be, or none.
+    fn open_chosen(&mut self) -> Result<Step, Stop> {
         let registers = self.state.registers;
         let (folder, path, flags) = (registers[7], registers[6], registers[2]);
         let flags = self.constant(flags)? & 0xffff_ffff;
@@ -1970,7 +1975,21 @@ impl<'a> Cpu<'a> {
                 "listing a folder, whose entries the kernel gives in an order of its own",
             ));
         }
-        let name = self.name_at(folder, path, "openat")?;
+        let bytes = match self.name_or_choice(folder, path, "openat")? {
+            Name::Known(name) => {
+                let result = self.open_name(name, flags)?;
+                self.state.registers[0] = self.pool.bv(64, u128::from(result));
+                self.state.registers[1] = self.pool.bv(64, u128::from(self.instruction.next_ip()));
+                self.state.registers[11] = self.pool.bv(64, 0x202);
+                return Ok(Step::Next);
+            }
+            Name::Chosen(bytes) => bytes,
+        };
+        self.open_choosing(&bytes, flags)
+    }
+
+    /// `openat` of `name` with `flags`, as the working folder stands.
+    fn open_name(&mut self, name: String, flags: u64) -> Result<u64, Stop> {
         let writing = match flags & O_ACCMODE {
             0 if flags & !O_ACCMODE & !O_HARMLESS == 0 => false,
             O_WRONLY if flags & !O_ACCMODE & !O_HARMLESS & !O_TRUNC == O_CREAT => true,
@@ -2008,6 +2027,17 @@ impl<'a> Cpu<'a> {
     /// The name a call is given in the working folder: a NUL-terminated path relative to it,
     /// which the model follows only inside it.
     fn name_at(&mut self, folder: Term, path: Term, call: &str) -> Result<String, Stop> {
+        match self.name_or_choice(folder, path, call)? {
+            Name::Known(name) => Ok(name),
+            Name::Chosen(_) => Err(unsupported(format!(
+                "{call} on a file name the input chooses"
+            ))),
+        }
+    }
+
+    /// The name a call is given, or, where the input chooses its bytes, those bytes: the
+    /// length is the shape's, so only which bytes is open.
+    fn name_or_choice(&mut self, folder: Term, path: Term, call: &str) -> Result<Name, Stop> {
         // The kernel reads the folder as an int.
         if self.constant(folder)? & 0xffff_ffff != AT_FDCWD {
             return Err(unsupported(format!(
@@ -2016,23 +2046,38 @@ impl<'a> Cpu<'a> {
         }
         let start = self.constant(path)?;
         let mut address = start;
-        let mut name = Vec::new();
+        let mut bytes = Vec::new();
         loop {
             let byte = self.load(address, 1)?;
-            let byte = self
-                .pool
-                .constant(byte)
-                .ok_or_else(|| unsupported("a file name chosen by the input"))?;
-            if byte == 0 {
-                break;
+            match self.pool.constant(byte) {
+                Some(0) => break,
+                Some(_) => {}
+                // A byte that may be the end, or may not, leaves the length open too.
+                None if self.pool.range(byte).0 == 0 => {
+                    return Err(unsupported(
+                        "a file name the input chooses, of a length it chooses too",
+                    ));
+                }
+                None => {}
             }
-            name.push(u8::try_from(byte).unwrap_or(0));
-            if name.len() > 4096 {
+            bytes.push(byte);
+            if bytes.len() > 4096 {
                 return Err(unsupported("a file name longer than 4096 bytes"));
             }
             address += 1;
         }
-        self.lent(start, name.len() as u64 + 1, false, call)?;
+        self.lent(start, bytes.len() as u64 + 1, false, call)?;
+        let known: Option<Vec<u8>> = bytes
+            .iter()
+            .map(|byte| {
+                self.pool
+                    .constant(*byte)
+                    .and_then(|value| u8::try_from(value).ok())
+            })
+            .collect();
+        let Some(name) = known else {
+            return Ok(Name::Chosen(bytes));
+        };
         let name =
             String::from_utf8(name).map_err(|_| unsupported("a file name that isn't UTF-8"))?;
         // Only the test's folder is modeled: no absolute paths and no way out of it.
@@ -2045,7 +2090,78 @@ impl<'a> Cpu<'a> {
                 "{call} on {name:?}, outside the working folder"
             )));
         }
-        Ok(name.trim_end_matches('/').to_owned())
+        Ok(Name::Known(name.trim_end_matches('/').to_owned()))
+    }
+
+    /// `openat` with `flags` on a name the input chooses: a run for each file or folder of the
+    /// test's the name can be, with its bytes those on the run's path, and one where it's none
+    /// of them, each as the system call leaves it. Where it's none of them, the name must be
+    /// one the working folder could hold, never `/`, `.` or `..` in it, or the kernel's answer
+    /// isn't the model's.
+    fn open_choosing(&mut self, bytes: &[Term], flags: u64) -> Result<Step, Stop> {
+        let mut names: Vec<String> = self
+            .state
+            .files
+            .keys()
+            .chain(self.state.written.keys())
+            .chain(self.state.folders_before.iter())
+            .chain(&self.state.made)
+            .filter(|name| name.len() == bytes.len())
+            .cloned()
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        let mut outcomes = Vec::new();
+        let mut none = self.pool.boolean(true);
+        for name in names {
+            let mut same = self.pool.boolean(true);
+            for (byte, wanted) in bytes.iter().zip(name.bytes()) {
+                let wanted = self.pool.bv(8, u128::from(wanted));
+                let equal = self.pool.eq(*byte, wanted);
+                same = self.pool.bool_and(same, equal);
+            }
+            let other = self.pool.bool_not(same);
+            none = self.pool.bool_and(none, other);
+            outcomes.push((same, Some(name)));
+        }
+        let may = |pool: &Pool, byte: &Term, value: u8| {
+            let (low, high) = pool.range(*byte);
+            (low..=high).contains(&u128::from(value))
+        };
+        let strange = bytes.iter().any(|byte| may(self.pool, byte, b'/'))
+            || (bytes.len() <= 2 && bytes.iter().all(|byte| may(self.pool, byte, b'.')));
+        if strange && self.pool.truth(none) != Some(false) {
+            return Err(unsupported(
+                "a file name the input chooses that may leave the working folder",
+            ));
+        }
+        outcomes.push((none, None));
+        let original = self.state.clone();
+        let next = self.instruction.next_ip();
+        let mut choices = Vec::new();
+        for (condition, name) in outcomes {
+            if self.pool.truth(condition) == Some(false) {
+                continue;
+            }
+            let mut outcome = original.clone();
+            std::mem::swap(self.state, &mut outcome);
+            let opened = match name {
+                Some(name) => self.open_name(name, flags),
+                None if flags & O_ACCMODE == 0 => Ok((-ENOENT).cast_unsigned()),
+                None => Err(unsupported("making a file the input names")),
+            };
+            match opened {
+                Ok(result) => {
+                    self.state.registers[0] = self.pool.bv(64, u128::from(result));
+                    self.state.registers[1] = self.pool.bv(64, u128::from(next));
+                    self.state.registers[11] = self.pool.bv(64, 0x202);
+                }
+                Err(stop) => self.state.end = Some(stop),
+            }
+            std::mem::swap(self.state, &mut outcome);
+            choices.push((condition, outcome));
+        }
+        Ok(Step::Choose(choices))
     }
 
     /// `fstat(fd, details)`: an open file's kind and size, the file's own; the kernel's other
@@ -2325,7 +2441,7 @@ impl<'a> Cpu<'a> {
                 let how = self.constant(rsi)? & 0xffff_ffff;
                 self.shutdown(fd, how)?
             }
-            257 => self.open_at()?,
+            257 => return self.open_chosen(),
             5 => {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 let buffer = self.constant(rsi)?;
