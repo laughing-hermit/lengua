@@ -537,6 +537,19 @@ impl Checker<'_, '_> {
                 );
                 continue;
             };
+            if let Some(problem) = self.compare_problem(function, position, register, &name, index)
+            {
+                self.violation(
+                    Rule::Bounds,
+                    function.steps[position].source.line,
+                    problem,
+                    format!(
+                        "compare the whole of {name} with a limit from 0 up, as `cmp {name}, LEN`, \
+                         after the last change to it"
+                    ),
+                );
+                continue;
+            }
             let jump = mnemonic(&function.steps[position + 1].machine);
             if !matches!(jump.as_str(), "jae" | "ja") {
                 self.violation(
@@ -552,6 +565,53 @@ impl Checker<'_, '_> {
             }
             self.check_buffer_size(function, flow, index, position, jump == "ja");
         }
+    }
+
+    /// M2: why the compare at `position` doesn't bound all of `register`, if it doesn't: it
+    /// compares only part of the register, whose upper bits nothing has cleared, or with a
+    /// negative limit, which an unsigned jump reads as a huge one.
+    fn compare_problem(
+        &mut self,
+        function: &MappedFunction<'_>,
+        position: usize,
+        register: Register,
+        name: &str,
+        access: usize,
+    ) -> Option<String> {
+        let compare = &function.steps[position].machine;
+        let compared = compare.op_register(0);
+        if !matches!(compare.op_kind(1), OpKind::Register | OpKind::Memory) {
+            let limit = i64::from_ne_bytes(compare.immediate(1).to_ne_bytes());
+            if limit < 0 {
+                return Some(format!(
+                    "the bounds check of {name} compares with {limit}, which an unsigned jump \
+                     reads as a huge number, so every index passes"
+                ));
+            }
+        }
+        let bits = compared.size() * 8;
+        if bits == 64 {
+            return None;
+        }
+        // A 32-bit write zeroes the upper half, so a 32-bit compare then bounds the whole.
+        let cleared = (run_start(function, position)..position)
+            .rev()
+            .find(|&at| writes(&function.steps[at].machine, register, &mut self.factory))
+            .is_some_and(|at| {
+                let written = &function.steps[at].machine;
+                written.op_count() >= 1
+                    && written.op_kind(0) == OpKind::Register
+                    && written.op_register(0).full_register() == register
+                    && written.op_register(0).size() == 4
+            });
+        if bits == 32 && cleared {
+            return None;
+        }
+        Some(format!(
+            "the bounds check of `{}` compares only the low {bits} bits of {name}, whose upper \
+             bits nothing in this run has cleared",
+            function.steps[access].source.text
+        ))
     }
 
     /// When an indexed access goes through a register that only ever holds the address of one

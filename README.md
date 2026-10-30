@@ -14,8 +14,9 @@ match. See [DESIGN.md](DESIGN.md) for how and why.
 lengua is an [Agent Plugin](https://agent-plugins.org): two skills and an MCP server, using only
 open standards, so it works in Claude Code, Codex, Cursor and other agent harnesses.
 
-> Status: dialect 2 on Linux x86-64. It covers whole numbers, exact decimals, floating point in
-> double and single precision with fused multiply-add, vectors from SSE2 to AVX-512, hashing and
+> Status: dialect 3 on Linux x86-64, with memory rules that check every address has an owner and
+> stays inside it. It covers whole numbers, exact decimals, floating point in double and single
+> precision with fused multiply-add, vectors from SSE2 to AVX-512, hashing and
 > checksums, files, fork-join threads, the clock and random bytes (which tests supply, so such
 > output is exact), plain TCP clients and servers on the ports a spec names, and inputs up to
 > 1 MiB. The

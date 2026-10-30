@@ -276,7 +276,7 @@ its message to standard error and exit with 134, whatever the spec allows). An a
 reached through a conditional jump, the fall-through of one, or a `jmp` right after one (the end
 of a comparison chain or of an exhausted loop).
 
-Instruction sets: dialect 2 (the current one) uses x86-64's integer instructions, its integer vector
+Instruction sets: dialect 3 (the current one) uses x86-64's integer instructions, its integer vector
 instructions and floating point in double and single precision, with fused multiply-add (scalar and
 packed; no half precision, approximations, rounding-mode changes or x87, so the tests can compute
 exactly what the code does: `single(x)` and `fma(a, b, c)` in a formula match `ss` instructions and
@@ -294,9 +294,24 @@ instruction needs. Vectors follow four extra rules:
 - every byte of an access counts: rule 9's bounds checks and `[rip + name]` accesses must keep
   the full 16 to 64 bytes inside their data symbol.
 
-Dialect 1 was the integer-only subset; locks record the dialect that checked the code, and a
-lock from another dialect has to be checked again. `assets/vector-template.s` is a checked SSE2
-program that finds a newline and capitalizes a line 16 bytes at a time.
+Dialect 1 was the integer-only subset, and dialect 2 had no memory rules; locks record the
+dialect that checked the code, and a lock from another dialect has to be checked again.
+`assets/vector-template.s` is a checked SSE2 program that finds a newline and capitalizes a line
+16 bytes at a time.
+
+Memory safety: dialect 3 checks memory the way Rust's borrow checker checks references, on the
+assembly itself. A dataflow over each function gives every register an owner: a data symbol's
+address, the function's own frame, a pointer the caller lent in a register, the program's
+arguments, a plain number, or a value it doesn't follow. Then the M rules hold: no address is
+made from a plain number (M1); constant offsets stay inside their symbol, bounds checks bound the
+whole index, and bit tests take constant offsets (M2); a frame address is never stored outside
+the frame or returned, and constant offsets from rsp stay inside the function's own frame (M3);
+no frame byte is read before every path has written it (M5); read-only data is never written
+through any register, and no segment is both writable and executable (M6); and the deepest path
+uses at most 1 MiB of stack (M8). Exclusive writes (M4) and races between threads (M7) are checked
+apart. What no rule settles, such as a pointer loaded from memory or an index checked against a
+length in a register, the proof settles for every input. Every program in the repository passes,
+and a planted bug for each rule is found on its line.
 
 ## Translation validation
 

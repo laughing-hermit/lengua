@@ -1,12 +1,13 @@
-//! The rule checker for dialect 2: the lengua Power of 10 for x86-64 assembly, integer and
-//! integer vector instructions.
+//! The rule checker for dialect 3: the lengua Power of 10 for x86-64 assembly, and the memory
+//! rules M1 to M8.
 //!
 //! It reads main.s ([`source`]), reads the linked executable back and matches every instruction
 //! to its line ([`decode`]), builds each function's control flow and stack depths ([`cfg`]), and
-//! checks the rules ([`rules`]).
+//! checks the rules ([`rules`], [`memory`] and [`threads`]).
 
 pub mod cfg;
 pub mod decode;
+pub mod memory;
 pub mod rules;
 pub mod source;
 pub mod threads;
@@ -63,10 +64,53 @@ pub enum Rule {
     Indirection,
     /// Rule 10: checked by tools.
     Tools,
+    /// M1: every address comes from a pointer, never a plain number.
+    Owners,
+    /// M2: every access stays inside its owner.
+    Bounds,
+    /// M3: a frame's addresses never outlive it, and its accesses stay inside it.
+    Lifetimes,
+    /// M4: a function writes only what it owns or was lent, never through overlapping
+    /// arguments.
+    ExclusiveWrites,
+    /// M5: no frame byte is read before it's written.
+    Initialization,
+    /// M6: read-only memory stays read-only, and no memory is both writable and executable.
+    Immutability,
+    /// M7: threads never write what another thread reads or writes.
+    Races,
+    /// M8: the stack stays within its limit.
+    StackSize,
 }
 
 impl Rule {
-    /// The rule's number, or `None` for the dialect's layout.
+    /// How reports name the rule: `rule 4`, `rule M3`, or `dialect`.
+    #[must_use]
+    pub fn label(self) -> String {
+        match (self.number(), self.memory_number()) {
+            (Some(number), _) => format!("rule {number}"),
+            (None, Some(number)) => format!("rule M{number}"),
+            (None, None) => "dialect".to_owned(),
+        }
+    }
+
+    /// The memory rule's number, M1 to M8.
+    #[must_use]
+    pub fn memory_number(self) -> Option<u8> {
+        match self {
+            Self::Owners => Some(1),
+            Self::Bounds => Some(2),
+            Self::Lifetimes => Some(3),
+            Self::ExclusiveWrites => Some(4),
+            Self::Initialization => Some(5),
+            Self::Immutability => Some(6),
+            Self::Races => Some(7),
+            Self::StackSize => Some(8),
+            _ => None,
+        }
+    }
+
+    /// The Power of 10 rule's number, or `None` for the dialect's layout and the memory rules.
     #[must_use]
     pub fn number(self) -> Option<u8> {
         match self {
@@ -81,6 +125,7 @@ impl Rule {
             Self::Constants => Some(8),
             Self::Indirection => Some(9),
             Self::Tools => Some(10),
+            _ => None,
         }
     }
 
@@ -99,6 +144,14 @@ impl Rule {
             Self::Constants => "named constants",
             Self::Indirection => "no indirection",
             Self::Tools => "checked by tools",
+            Self::Owners => "owners",
+            Self::Bounds => "bounds",
+            Self::Lifetimes => "lifetimes",
+            Self::ExclusiveWrites => "exclusive writes",
+            Self::Initialization => "initialization",
+            Self::Immutability => "immutability",
+            Self::Races => "no races",
+            Self::StackSize => "stack size",
         }
     }
 }
@@ -118,9 +171,9 @@ pub struct Violation {
 
 impl fmt::Display for Violation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.rule.number() {
-            Some(number) => write!(f, "rule {number} ({})", self.rule.name())?,
-            None => f.write_str("dialect")?,
+        match self.rule {
+            Rule::Dialect => f.write_str("dialect")?,
+            rule => write!(f, "{} ({})", rule.label(), rule.name())?,
         }
         match self.line {
             Some(line) => write!(f, " main.s:{line}: ")?,
@@ -236,6 +289,13 @@ pub fn check_program(source: &Source, executable: &[u8], context: Context<'_>) -
         &mut violations,
     );
     facts.features = decode::features_needed(&machine);
+    memory::check(
+        &program,
+        &flows,
+        facts.max_stack_bytes,
+        machine.writable_executable,
+        &mut violations,
+    );
     let parallel_template = source::parse(PARALLEL_TEMPLATE).0;
     threads::check(
         &program,

@@ -1,11 +1,12 @@
-# The lengua Power of 10 (dialect 2)
+# The lengua Power of 10 (dialect 3)
 
 `main.s` is x86-64 assembly for Linux in Intel syntax. `check` builds it, reads the machine
 code back, matches it to `main.s` line by line (operands included), and checks the rules below.
 Nothing runs before every rule passes. Each violation names its rule, its line and a fix.
 
 These are NASA's "Power of 10" rules for safety-critical code (Holzmann, 2006), adapted for
-assembly and combined with ideas from C, C++ and Rust.
+assembly and combined with ideas from C, C++ and Rust, then the memory rules M1 to M8, a borrow
+checker for assembly. Each violation's label says which: `rule 9` or `rule M3`.
 
 ## Layout
 
@@ -364,9 +365,36 @@ An access through `[rip + name]` must fit inside `name` in the same way. Where a
 check is provably unnecessary, wrap the access in `# unsafe: <reason>` … `# end unsafe`. Only
 bounds checks can be skipped this way, and `check` finds every unsafe block.
 
-This rule checks the shape of each bounds check, and the limit against data symbols. It doesn't
-check moving a pointer (`add rsi, rcx`) instead of indexing: the tests guard that until the proof
-step after the MVP.
+The compare must bound the whole index (M2): `cmp rcx, …` for an index in rcx, or `cmp ecx, …`
+right after a 32-bit write to ecx in the same run, which clears the upper half. A negative limit
+is refused, since `jae` reads it as a huge number.
+
+## Memory safety
+
+Every address has an owner, and every access stays inside it. `check` follows each register
+through each function: what it holds may be a data symbol's address (from `lea reg, [rip +
+name]`), an address in the function's own frame (from rsp), a pointer the caller lent in a
+register, the program's arguments (which `_start` finds above its stack), a plain number, or a
+value it doesn't follow, such as a pointer loaded from memory. Adding a number to an address
+keeps its owner. What the rules can't settle, the proof settles for every input.
+
+- **M1, owners.** An address is never made from a plain number: no fixed addresses, and no
+  `mov esi, 64` then `[rsi]`.
+- **M2, bounds.** An access at a constant offset from a symbol's address stays inside the symbol,
+  through any register, and rule 9's checks bound the whole index. A bit test in memory takes a
+  constant offset (`bt qword ptr [rsi], 3`), never a register: with one, it reaches past its
+  operand.
+- **M3, lifetimes.** An address in the function's own frame is lent to callees and system calls
+  in registers only: it's never stored outside the frame or returned. Every access at a constant
+  offset from rsp stays inside the frame the function made with `push` and `sub rsp`, never its
+  return address or its caller's frame; only `_start` reads above its frame, where its arguments
+  are.
+- **M5, initialization.** No frame byte is read before every path to the read has written it, by
+  a store, a `push`, or a call or system call that was lent the frame.
+- **M6, immutability.** Read-only data is never written, through any register, and no memory is
+  both writable and executable.
+- **M8, stack size.** The deepest path through the program uses at most 1 MiB of stack. Large
+  buffers go in `.bss`, sized from the spec's limits.
 
 ### 10. Checked by tools
 

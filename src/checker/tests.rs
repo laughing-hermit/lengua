@@ -104,7 +104,7 @@ async fn layout_hazards_are_dialect_violations() {
         ),
         ("    xor r9d, r9d /* clear */\n", "`/* */` comments"),
         ("    rep\n", "is a prefix"),
-        ("    fld1\n", "`fld1` isn't in dialect 2"),
+        ("    fld1\n", "`fld1` isn't in dialect 3"),
         ("    mov rax, offset usage_msg\n", "offset"),
         ("    mov rax, [usage_msg]\n", "address data relative to rip"),
     ] {
@@ -174,7 +174,7 @@ async fn x87_breaks_the_line_to_instruction_match() {
 async fn instructions_outside_dialect_1_are_rejected() {
     let line = line_of(TEMPLATE, "    xor r9d, r9d");
     let report = check(&with("    xor r9d, r9d\n", "    leave\n")).await;
-    assert_violation(&report, Rule::Dialect, line, "`leave` isn't in dialect 2");
+    assert_violation(&report, Rule::Dialect, line, "`leave` isn't in dialect 3");
 }
 
 #[tokio::test]
@@ -579,6 +579,189 @@ async fn a_long_function_gets_a_place_to_split() {
     );
 }
 
+/// Every program in the repository follows every rule, memory rules included, with what its own
+/// spec allows: the examples, the fixtures Claude Code wrote, the skill's assets and the
+/// benchmark's own programs.
+#[tokio::test]
+async fn every_program_in_the_repository_follows_every_rule() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let assets = root.join("plugin/skills/compile/assets");
+    let mut programs: Vec<(std::path::PathBuf, std::path::PathBuf)> = Vec::new();
+    for folder in [
+        "examples",
+        "tests/fixtures",
+        "plugin/skills/compile/assets/fast",
+    ] {
+        for entry in std::fs::read_dir(root.join(folder)).expect("a folder of programs") {
+            let path = entry.expect("an entry").path();
+            // The CSV total Claude Code wrote in interactive round 2 names a character as a
+            // constant, from before constants were held to numbers; its proof tests need only its
+            // machine code.
+            if path.ends_with("total") {
+                continue;
+            }
+            if path.join("main.s").is_file() {
+                programs.push((path.join("spec.md"), path.join("main.s")));
+            }
+        }
+    }
+    for (spec, code) in [
+        ("template-spec.md", "main-template.s"),
+        ("vector-template-spec.md", "vector-template.s"),
+        ("parallel-template-spec.md", "parallel-template.s"),
+    ] {
+        programs.push((assets.join(spec), assets.join(code)));
+    }
+    let benches = root.join("benches/programs");
+    for (spec, code) in [
+        ("examples/upcase/spec.md", "upcase/avx512.s"),
+        (
+            "plugin/skills/compile/assets/parallel-template-spec.md",
+            "shout/avx512.s",
+        ),
+        (
+            "plugin/skills/compile/assets/parallel-template-spec.md",
+            "shout/avx512-one.s",
+        ),
+    ] {
+        programs.push((root.join(spec), benches.join(code)));
+    }
+    let features = crate::platform::Machine::detect().features;
+    let mut failed = Vec::new();
+    for (spec, code) in &programs {
+        let spec = crate::spec::parse(&std::fs::read_to_string(spec).expect("a spec"))
+            .unwrap_or_else(|problems| panic!("{}: {problems:?}", spec.display()));
+        let text = std::fs::read_to_string(code).expect("a program");
+        let needs_more = text.contains("vpcmpub") || text.contains("zmm");
+        if needs_more && !features.avx512bw {
+            continue;
+        }
+        let report = check_full(&text, features, &spec.syscalls, spec.threads).await;
+        if !report.passed() {
+            let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+            failed.push(format!("{}: {all:#?}", code.display()));
+        }
+    }
+    assert!(programs.len() >= 25, "{} programs", programs.len());
+    assert!(failed.is_empty(), "{failed:#?}");
+}
+
+/// Memory safety: a bug planted for each memory rule is found, on its line.
+#[tokio::test]
+async fn memory_rules_find_each_planted_bug() {
+    let cases: [(&str, &str, &str, Rule, &str); 11] = [
+        // M2: a bounds check of part of the index, and one with a negative limit.
+        (
+            ".Lparse_loop:  # bound: 20\n    cmp rcx, MAX_CHARS\n",
+            ".Lparse_loop:  # bound: 20\n    cmp ecx, MAX_CHARS\n",
+            "    cmp ecx, MAX_CHARS",
+            Rule::Bounds,
+            "compares only the low 32 bits of rcx",
+        ),
+        (
+            ".Lparse_loop:  # bound: 20\n    cmp rcx, MAX_CHARS\n",
+            ".Lparse_loop:  # bound: 20\n    cmp rcx, -1\n",
+            "    cmp rcx, -1",
+            Rule::Bounds,
+            "compares with -1, which an unsigned jump reads as a huge number",
+        ),
+        // M2: a bit test whose offset is a register.
+        (
+            "    movzx edx, byte ptr [rdi + rcx]\n",
+            "    movzx edx, byte ptr [rdi + rcx]\n    bt qword ptr [rdi], rcx\n",
+            "    bt qword ptr [rdi], rcx",
+            Rule::Bounds,
+            "tests a bit in memory at an offset in a register",
+        ),
+        // M1: an address made from a plain number.
+        (
+            ".Lstart_usage:\n",
+            ".Lstart_usage:\n    mov esi, MAX_WRITES\n    mov byte ptr [rsi], 0\n",
+            "    mov byte ptr [rsi], 0",
+            Rule::Owners,
+            "holds a plain number here, not a pointer",
+        ),
+        // M2: a constant offset one byte past a symbol.
+        (
+            ".Lstart_write_failed:\n",
+            ".Lstart_write_failed:\n    lea rsi, [rip + out_buf]\n    mov byte ptr [rsi + \
+             OUT_BUF_LEN], 0\n",
+            "    mov byte ptr [rsi + OUT_BUF_LEN], 0",
+            Rule::Bounds,
+            "reaches byte 21 of out_buf, which has 21 bytes",
+        ),
+        // M3: an address in the frame, returned.
+        (
+            ".Lparse_return:\n    ret\n",
+            ".Lparse_return:\n    lea rdx, [rsp]\n    ret\n",
+            "    lea rdx, [rsp]\n    ret",
+            Rule::Lifetimes,
+            "returns an address in its own frame in rdx",
+        ),
+        // M3: an address in the frame, stored where it outlives the function.
+        (
+            ".Lparse_return:\n    ret\n",
+            ".Lparse_return:\n    lea rcx, [rsp]\n    mov qword ptr [rip + out_buf], rcx\n    \
+             ret\n",
+            "    mov qword ptr [rip + out_buf], rcx",
+            Rule::Lifetimes,
+            "an address in this function's frame, outside the frame",
+        ),
+        // M3: a read past the frame, into the caller's.
+        (
+            "parse_i64:\n",
+            "parse_i64:\n    mov r10, qword ptr [rsp + 8]\n",
+            "    mov r10, qword ptr [rsp + 8]",
+            Rule::Lifetimes,
+            "into its return address or its caller's frame",
+        ),
+        // M5: a frame slot read before anything writes it.
+        (
+            "parse_i64:\n",
+            "parse_i64:\n    sub rsp, 8\n    mov r10, qword ptr [rsp]\n    add rsp, 8\n",
+            "    mov r10, qword ptr [rsp]",
+            Rule::Initialization,
+            "reads the frame at rsp + 0, which some path reaches without writing",
+        ),
+        // M6: read-only data written through a register.
+        (
+            ".Lstart_usage:\n",
+            ".Lstart_usage:\n    lea rsi, [rip + usage_msg]\n    mov byte ptr [rsi], 0\n",
+            "    mov byte ptr [rsi], 0",
+            Rule::Immutability,
+            "writes to read-only usage_msg",
+        ),
+        // M8: a frame bigger than the stack's limit.
+        (
+            "_start:\n",
+            "_start:\n    sub rsp, 2097152\n",
+            "_start:",
+            Rule::StackSize,
+            "bytes of stack, more than 1048576",
+        ),
+    ];
+    for (from, to, at, rule, needle) in cases {
+        let text = with(from, to);
+        let report = check(&text).await;
+        // A returned address is reported where it's returned, on the `ret`.
+        let line = match rule {
+            Rule::StackSize => None,
+            _ if at.ends_with("\n    ret") => Some(line_of(&text, at) + 1),
+            _ => Some(line_of(&text, at)),
+        };
+        let found = report.violations.iter().any(|violation| {
+            violation.rule == rule
+                && (line.is_none() || violation.line == line)
+                && violation.to_string().contains(needle)
+        });
+        let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+        assert!(
+            found,
+            "no {rule:?} violation containing {needle:?} in {all:#?}"
+        );
+    }
+}
+
 #[test]
 fn reports_have_a_fixed_format() {
     let violation = Violation {
@@ -647,7 +830,7 @@ async fn integer_vector_instructions_are_in_dialect_2() {
 #[tokio::test]
 async fn vectors_leave_out_alignment_and_rounding_overrides() {
     for (line, needle) in [
-        ("    rcpps xmm0, xmm1\n", "`rcpps` isn't in dialect 2"),
+        ("    rcpps xmm0, xmm1\n", "`rcpps` isn't in dialect 3"),
         (
             "    movdqa xmm0, xmm1\n",
             "`movdqa` faults unless its memory is aligned",
@@ -743,19 +926,19 @@ async fn double_precision_is_in_dialect_2() {
     assert!(report.passed(), "{all:#?}");
 
     for (line, needle) in [
-        ("    rcpss xmm0, xmm1\n", "`rcpss` isn't in dialect 2"),
+        ("    rcpss xmm0, xmm1\n", "`rcpss` isn't in dialect 3"),
         (
             "    vrsqrt14ps zmm0, zmm1\n",
-            "`vrsqrt14ps` isn't in dialect 2",
+            "`vrsqrt14ps` isn't in dialect 3",
         ),
         (
             "    vcvtph2ps xmm0, xmm1\n",
-            "`vcvtph2ps` isn't in dialect 2",
+            "`vcvtph2ps` isn't in dialect 3",
         ),
-        ("    dpps xmm0, xmm1, 0xff\n", "`dpps` isn't in dialect 2"),
+        ("    dpps xmm0, xmm1, 0xff\n", "`dpps` isn't in dialect 3"),
         (
             "    ldmxcsr dword ptr [rsp]\n",
-            "`ldmxcsr` isn't in dialect 2",
+            "`ldmxcsr` isn't in dialect 3",
         ),
         ("    movsd\n", "string instruction"),
     ] {

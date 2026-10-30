@@ -7,7 +7,9 @@ use iced_x86::{
     CpuidFeature, Decoder, DecoderOptions, EncodingKind, FlowControl, Formatter, Instruction,
     IntelFormatter, MemorySize, OpKind, Register, RoundingControl,
 };
-use object::{Object, ObjectSection, ObjectSymbol, SectionKind, SymbolKind};
+use object::{
+    Object, ObjectSection, ObjectSegment, ObjectSymbol, SectionKind, SegmentFlags, SymbolKind,
+};
 
 use super::source::{
     Function as SourceFunction, Instruction as SourceInstruction, Item, Label, Memory, Operand,
@@ -47,6 +49,8 @@ pub struct Machine {
     pub functions: BTreeMap<String, MachineFunction>,
     /// Data symbols.
     pub data: BTreeMap<String, MachineData>,
+    /// Whether a loaded segment is both writable and executable.
+    pub writable_executable: bool,
 }
 
 /// Reads the functions and data symbols of a linked ELF executable and decodes the functions.
@@ -58,6 +62,13 @@ pub fn read(executable: &[u8]) -> Result<Machine, String> {
     let file = object::File::parse(executable)
         .map_err(|error| format!("can't read the executable: {error}"))?;
     let mut machine = Machine::default();
+    let both = object::elf::PF_W.0 | object::elf::PF_X.0;
+    machine.writable_executable = file.segments().any(|segment| {
+        matches!(
+            segment.flags(),
+            SegmentFlags::Elf { p_flags, .. } if p_flags.0 & both == both
+        )
+    });
     let mut text_ranges = Vec::new();
     for symbol in file.symbols() {
         let Ok(name) = symbol.name() else { continue };
@@ -1598,7 +1609,7 @@ fn check_instruction(step: &Step<'_>, features: CpuFeatures, violations: &mut Ve
             rule: Rule::Dialect,
             line,
             problem: format!(
-                "`{name}` isn't in dialect 2, which allows integer, vector and floating-point \
+                "`{name}` isn't in dialect 3, which allows integer, vector and floating-point \
                  instructions"
             ),
             fix: "use the instructions listed in references/power-of-10.md: no half precision, \
