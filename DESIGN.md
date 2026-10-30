@@ -597,8 +597,17 @@ What it covers:
   The vector template, upcase and the word counts Claude Code wrote are proven for every input
   up to 4096 bytes, with no solver question. An instruction the proof doesn't model yet is named
   with its function: "main.s's count uses vpermb, which the proof doesn't model yet".
-- Files: `openat`, `read`, `write` and `close` on the test's files. A missing input file gives
-  `ENOENT`, and the checks on the files left after the run are the runner's.
+- Arithmetic across widths: a program that halves a sum of cents in 64 bits and a formula that
+  multiplies a sum by 50 in 128 meet as one term. A sum divided by a constant that divides its
+  every part divides part by part, as both sides of a choice between such sums do; a factor a
+  sum shares with its divisor cancels; a value shifted right, then divided, is divided once; a
+  quotient is 0 just where its dividend is below its divisor; and a choice inside a choice whose
+  condition settles it goes. So mean's block of whole numbers is proven in milliseconds, with no
+  solver question. Each rule has random tests against plain arithmetic.
+- Files: `openat`, `read`, `write`, `close` and `fstat` on the test's files, and `mkdirat`,
+  `unlinkat` and `renameat` on its folders and files. A missing input file gives `ENOENT`, and
+  the checks on the files and folders left after the run are the runner's. A folder's listing
+  (`getdents64`) is tested, not proven.
 - The network: `socket`, `connect`, `accept4` and `accept` on the listener, `read`, `write`,
   `sendto`, `recvfrom`, `shutdown` and `close` on TCP connections over IPv4 on this computer.
   The echo server is proven for every line and delivery; fetch's argument errors for every
@@ -607,8 +616,7 @@ What it covers:
 
 Not yet: shuffles across lanes (`vpermb`, `vpermd`), compress and gather instructions;
 `sha256`, `crc32` and `crc32c` formulas and the instructions behind them; floating point;
-threads; `tr` with sets beyond ASCII; and halvings the formula writes at 128 bits and the program
-at 64, as in mean's block of whole numbers. Those blocks are tested, not proven, and the report
+threads; and `tr` with sets beyond ASCII. Those blocks are tested, not proven, and the report
 says why. A stream read both with `read` and with `fill` is proven for the four deliveries, not
 every cut.
 

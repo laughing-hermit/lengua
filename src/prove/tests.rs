@@ -238,6 +238,26 @@ async fn proves_the_mean_of_two_prices() {
     assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
 }
 
+/// The mean of two whole numbers: the program halves a sum of cents with one away from zero
+/// added, and the formula multiplies the sum by 50. A sum every part of which the divisor
+/// divides divides part by part, so the two meet without the solvers dividing.
+#[tokio::test]
+async fn proves_the_mean_of_whole_numbers() {
+    if std::process::Command::new("z3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let machine = machine(&example("mean", "main.s")).await;
+    let block = block(&example("mean", "spec.md"), 1);
+    let started = Instant::now();
+    let verdict = prove(&machine, &block, &budget(240));
+    eprintln!("mean B2: {verdict:?} in {:?}", started.elapsed());
+    assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
+}
+
 /// Decimal inputs: mean's usage (B4), a bad second price drawn by choice (B5) and a price out of
 /// range (B6), each with a decimal drawn over its whole range.
 #[tokio::test]

@@ -28,6 +28,15 @@ pub(super) fn term_at(number: u32) -> Term {
     Term(number)
 }
 
+/// The greatest common divisor of two numbers, `a` when `b` is 0.
+fn gcd(a: i128, b: i128) -> i128 {
+    let (mut a, mut b) = (a.abs(), b.abs());
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
+}
+
 /// What a term is: true/false, or a bit vector of a width from 1 to 128 bits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Sort {
@@ -949,6 +958,116 @@ impl Pool {
         (left == negated).then_some((true, left_constant.checked_add(right_constant)?))
     }
 
+    /// What `other` comes to wherever `given` is `holds`, when both compare a sum with a
+    /// constant, signed, and the sums are the same but for a constant or a sign, neither
+    /// wrapping: where the one sum lies decides the other. `None` when that doesn't settle it.
+    fn implied(&self, given: Term, holds: bool, other: Term) -> Option<bool> {
+        let (x, x_low, x_high) = self.interval(given, holds)?;
+        // Only the values the sum can take.
+        let (range_low, range_high) = self.signed_range(x);
+        let (x_low, x_high) = (x_low.max(range_low), x_high.min(range_high));
+        if x_low > x_high {
+            return None;
+        }
+        let (y, y_low, y_high) = self.interval(other, true)?;
+        let (negated, delta) = if self.width(y) >= self.width(x) {
+            self.related_wider(y, x)?
+        } else {
+            let (negated, delta) = self.related_wider(x, y)?;
+            // x = ±y + d, so y = ±(x - d).
+            (negated, if negated { delta } else { delta.checked_neg()? })
+        };
+        let (low, high) = if negated {
+            (delta.checked_sub(x_high)?, delta.checked_sub(x_low)?)
+        } else {
+            (x_low.checked_add(delta)?, x_high.checked_add(delta)?)
+        };
+        if low >= y_low && high <= y_high {
+            Some(true)
+        } else if high < y_low || low > y_high {
+            Some(false)
+        } else {
+            None
+        }
+    }
+
+    /// The values a signed comparison of a value with a constant leaves the value where the
+    /// comparison is `holds`: the value, and the bounds of one interval, read signed.
+    fn interval(&self, condition: Term, holds: bool) -> Option<(Term, i128, i128)> {
+        let bounds = |width: u32| (-(1_i128 << (width - 1)), (1_i128 << (width - 1)) - 1);
+        match *self.node(condition) {
+            Node::BoolNot(inner) => self.interval(inner, !holds),
+            // a <= b is not (b < a), which the arm above reads.
+            Node::Slt(a, b) => {
+                let width = self.width(a);
+                if !(2..=128).contains(&width) {
+                    return None;
+                }
+                let (min, max) = bounds(width);
+                if let Some(k) = self.constant(b) {
+                    // a < k: below the line, or at it and above.
+                    let last = signed(k, width).checked_sub(1)?;
+                    return Some(if holds {
+                        (a, min, last)
+                    } else {
+                        (a, last.checked_add(1)?, max)
+                    });
+                }
+                if let Some(k) = self.constant(a) {
+                    // k < b.
+                    let first = signed(k, width).checked_add(1)?;
+                    return Some(if holds {
+                        (b, first, max)
+                    } else {
+                        (b, min, first.checked_sub(1)?)
+                    });
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// How `x` is made from `y`, as whole numbers read signed: `x = s × y + d`, when each of
+    /// `x`'s parts is `s` times the same part of `y` and neither ever wraps, so each is exactly
+    /// its parts' sum. A formula that prints fifty times a sum compares what the program
+    /// compared of the sum itself.
+    #[must_use]
+    pub fn related_scaled(&self, x: Term, y: Term) -> Option<(i128, i128)> {
+        let usable = |width: u32| width > 0 && (width <= 126 || width == 128);
+        if !usable(self.width(x)) || !usable(self.width(y)) {
+            return None;
+        }
+        let exact = |term: Term| {
+            let width = self.width(term);
+            let linear = self.linear_view(term);
+            let mut parts: BTreeMap<(Term, bool), i128> = BTreeMap::new();
+            for (part, times) in &linear.parts {
+                *parts.entry(self.widened_from(*part)).or_insert(0) += signed(*times, width);
+            }
+            parts.retain(|_, times| *times != 0);
+            let (low, high) = self.exact_bounds(&linear, width, true)?;
+            Self::window(low, high, width, true).filter(|shift| *shift == 0)?;
+            Some((parts, signed(linear.constant, width)))
+        };
+        let ((left, left_constant), (right, right_constant)) = (exact(x)?, exact(y)?);
+        let (key, times) = left.iter().next()?;
+        let other = *right.get(key)?;
+        if left.len() != right.len() || other == 0 || times % other != 0 {
+            return None;
+        }
+        let scale = times / other;
+        for (key, times) in &left {
+            if right.get(key)?.checked_mul(scale)? != *times {
+                return None;
+            }
+        }
+        Some((
+            scale,
+            left_constant.checked_sub(right_constant.checked_mul(scale)?)?,
+        ))
+    }
+
     /// A sum's parts, as the value each is widened from and its multiple read signed, for
     /// explaining why two sums differ.
     #[must_use]
@@ -1413,6 +1532,8 @@ impl Pool {
             (_, Some(0)) => return self.bv(width, mask(width)),
             (Some(x), Some(y)) => return self.bv(width, x / y),
             (_, Some(1)) => return a,
+            (_, Some(y)) if let Some(quotient) = self.divided(a, y, false) => return quotient,
+            (_, Some(y)) if let Some(quotient) = self.reduced(a, y, false) => return quotient,
             // By a power of two it's a shift right: one form however it's written.
             (_, Some(y)) if y.is_power_of_two() => {
                 let shift = self.bv(width, u128::from(y.trailing_zeros()));
@@ -1431,6 +1552,19 @@ impl Pool {
                         }
                         None => self.bv(width, 0),
                     };
+                }
+                // The top bits of x from bit k on, divided by c, are x / (c × 2^k): one form
+                // for a value halved by a shift, then divided, and divided at once.
+                if let Node::Extract(inner, high, low) = *self.node(a)
+                    && low > 0
+                    && high + 1 == self.width(inner)
+                    && let Some(combined) = y
+                        .checked_shl(low)
+                        .filter(|combined| *combined <= mask(self.width(inner)))
+                {
+                    let divisor = self.bv(self.width(inner), combined);
+                    let quotient = self.udiv(inner, divisor);
+                    return self.extract(quotient, width - 1, 0);
                 }
                 // zext(x) / c is zext(x / c) when c fits in x.
                 if let Node::ZeroExtend(inner, by) = *self.node(a) {
@@ -1497,6 +1631,108 @@ impl Pool {
         self.make(Node::Urem(a, b), Sort::Bv(width))
     }
 
+    /// `a / c`, toward zero, read signed or not, as a sum when `a` is one: the parts of a sum
+    /// whose every multiple `c` divides divide part by part, and so do both sides of a choice
+    /// between such sums. The sum must be the exact integer its bits are read as, never
+    /// wrapping; then `(c × q + r) / c` is `q` plus `r`'s own quotient, and where truncation
+    /// toward zero meets a remainder, a choice on the sum's sign. `None` when `a` isn't such a
+    /// sum.
+    fn divided(&mut self, a: Term, c: u128, signed_read: bool) -> Option<Term> {
+        let width = self.width(a);
+        if c < 2 || c > mask(width - 1) {
+            return None;
+        }
+        if let Node::Ite(condition, then, otherwise) = *self.node(a) {
+            let then = self.divided(then, c, signed_read)?;
+            let otherwise = self.divided(otherwise, c, signed_read)?;
+            return Some(self.ite(condition, then, otherwise));
+        }
+        let linear = self.linear_view(a);
+        if linear.parts.is_empty() {
+            return None;
+        }
+        let divisor = i128::try_from(c).ok()?;
+        if !self.exact_in_window(&linear, width, signed_read) {
+            return None;
+        }
+        let mut quotient = Linear::default();
+        for (part, times) in &linear.parts {
+            let times = signed(*times, width);
+            if times % divisor != 0 {
+                return None;
+            }
+            quotient.add_part(*part, ((times / divisor) as u128) & mask(width), width);
+        }
+        let constant = signed(linear.constant, width);
+        let (whole, remainder) = (constant.div_euclid(divisor), constant.rem_euclid(divisor));
+        quotient.constant = (whole as u128) & mask(width);
+        let floor = self.linear_term(width, quotient);
+        if !signed_read || remainder == 0 {
+            return Some(floor);
+        }
+        // Below zero, truncation goes up from the floor.
+        let zero = self.bv(width, 0);
+        let negative = self.slt(a, zero);
+        let one = self.bv(width, 1);
+        let ceiling = self.add(floor, one);
+        Some(self.ite(negative, ceiling, floor))
+    }
+
+    /// `a / c` with the factor they share cancelled, when `a` is a sum whose every multiple and
+    /// constant share a factor with `c`, and its exact value never wraps: `(g × a') / (g × c')`
+    /// is `a' / c'`, read signed or not, so a quotient a program takes of a value and one a
+    /// formula takes of ten times it are one term.
+    fn reduced(&mut self, a: Term, c: u128, signed_read: bool) -> Option<Term> {
+        let width = self.width(a);
+        if c < 2 || c > mask(width - 1) {
+            return None;
+        }
+        let linear = self.linear_view(a);
+        if linear.parts.is_empty() || !self.exact_in_window(&linear, width, signed_read) {
+            return None;
+        }
+        let divisor = i128::try_from(c).ok()?;
+        let constant = signed(linear.constant, width);
+        let shared = linear
+            .parts
+            .values()
+            .map(|times| signed(*times, width))
+            .chain([constant])
+            .fold(divisor, |g, value| {
+                gcd(g, value.unsigned_abs().try_into().unwrap_or(1))
+            });
+        if shared < 2 {
+            return None;
+        }
+        let mut smaller = Linear::default();
+        for (part, times) in &linear.parts {
+            let times = signed(*times, width) / shared;
+            smaller.add_part(*part, (times as u128) & mask(width), width);
+        }
+        smaller.constant = ((constant / shared) as u128) & mask(width);
+        let dividend = self.linear_term(width, smaller);
+        let divisor = self.bv(width, (divisor / shared) as u128);
+        Some(if signed_read {
+            self.sdiv(dividend, divisor)
+        } else {
+            self.udiv(dividend, divisor)
+        })
+    }
+
+    /// Whether a sum's exact value, read with its parts signed or unsigned, always lies in the
+    /// window of `width`-bit values read signed or unsigned: then its bits are that value.
+    fn exact_in_window(&self, linear: &Linear, width: u32, signed_read: bool) -> bool {
+        let (low_bound, high_bound) = if signed_read {
+            (-(1_i128 << (width - 1)), (1_i128 << (width - 1)) - 1)
+        } else {
+            (0, i128::try_from(mask(width)).unwrap_or(i128::MAX))
+        };
+        [false, true].into_iter().any(|signed_parts| {
+            self.exact_bounds(linear, width, signed_parts)
+                .is_some_and(|(low, high)| low >= low_bound && high <= high_bound)
+        })
+    }
+
     /// A division or remainder by `divisor` of a dividend wider than 64 bits that fits in 64,
     /// done at 64 bits and widened back: the same division a program does with 64-bit `div`
     /// and a formula does in 128 bits then meet as one term. Always 64 bits, never the
@@ -1539,11 +1775,18 @@ impl Pool {
             let (one, minus_one) = (self.bv(width, 1), self.bv(width, mask(width)));
             return self.ite(negative, one, minus_one);
         }
-        // By a positive constant: divide the magnitude, then put the sign back, toward zero.
+        // By a positive constant: a sum each of whose parts it divides divides part by part;
+        // otherwise divide the magnitude, then put the sign back, toward zero.
         if let Some(c) = self.constant(b)
             && c > 0
             && c <= mask(width - 1)
         {
+            if let Some(quotient) = self
+                .divided(a, c, true)
+                .or_else(|| self.reduced(a, c, true))
+            {
+                return quotient;
+            }
             // A dividend that's never negative divides as unsigned.
             if self.signed_range(a).0 >= 0 {
                 return self.udiv(a, b);
@@ -2134,6 +2377,16 @@ impl Pool {
             Some(false) => return otherwise,
             None => {}
         }
+        // A choice inside a choice whose condition settles it: where s < 0, so is s - 1.
+        let inner = |pool: &Self, side: Term, holds: bool| match *pool.node(side) {
+            Node::Ite(inside, chosen, other) => match pool.implied(condition, holds, inside) {
+                Some(true) => chosen,
+                Some(false) => other,
+                None => side,
+            },
+            _ => side,
+        };
+        let (then, otherwise) = (inner(self, then, true), inner(self, otherwise, false));
         if then == otherwise {
             return then;
         }
@@ -2162,6 +2415,13 @@ impl Pool {
                 .parts
                 .first_key_value()
                 .is_some_and(|(_, times)| signed(*times, self.width(left)) < 0)
+            // A multiple that's its own negation, the top bit alone, counts negatively both
+            // ways round: written either way, it would turn forever.
+            && self
+                .linear_view(then)
+                .parts
+                .first_key_value()
+                .is_some_and(|(_, times)| signed(*times, self.width(then)) > 0)
         {
             let zero = self.bv(self.width(then), 0);
             let negative = self.slt(then, zero);
@@ -2188,6 +2448,17 @@ impl Pool {
         let ((al, ah), (bl, bh)) = (self.range(a), self.range(b));
         if ah < bl || bh < al {
             return self.boolean(false);
+        }
+        // A quotient is 0 exactly when the dividend is below the divisor: a program counting
+        // digits by dividing by 10 until nothing is left and a formula comparing with powers of
+        // 10 then ask the same.
+        for (quotient, other) in [(a, b), (b, a)] {
+            if self.constant(other) == Some(0)
+                && let Node::Udiv(dividend, divisor) = *self.node(quotient)
+                && self.constant(divisor).is_some_and(|c| c > 0)
+            {
+                return self.ult(dividend, divisor);
+            }
         }
         // Read signed, too: a small number below zero is never the most negative one.
         if self.sort(a) != Sort::Bool {
@@ -3169,6 +3440,40 @@ mod tests {
         let shifted = pool.ashr(a, one);
         assert_eq!(pool.evaluate(shifted, &values), Some(0xfc));
     }
+    #[test]
+    fn halving_a_rounded_sum_of_cents_is_half_the_sum() {
+        // mean: s = 100 x cents, one away from zero added, halved toward zero, is 50 x, as
+        // one term; and the digits a program takes of it by 10 are the formula's by 100.
+        let mut pool = Pool::default();
+        let (a, b) = (pool.var_in(8, "a", 0, 9), pool.var_in(8, "b", 0, 9));
+        let (a, b) = (pool.zero_extend(a, 56), pool.zero_extend(b, 56));
+        let x = pool.sub(a, b);
+        let hundred = pool.bv(64, 100);
+        let cents = pool.mul(x, hundred);
+        let one = pool.bv(64, 1);
+        let (up, down) = (pool.add(cents, one), pool.sub(cents, one));
+        let zero = pool.bv(64, 0);
+        let negative = pool.slt(cents, zero);
+        let rounded = pool.ite(negative, down, up);
+        let two = pool.bv(64, 2);
+        let half = pool.sdiv(rounded, two);
+        let fifty = pool.bv(64, 50);
+        let expected = pool.mul(x, fifty);
+        assert_eq!(half, expected);
+        // A sum that shares its factor with the divisor: (10 y) / 100 is y / 10.
+        let ten = pool.bv(64, 10);
+        let y = pool.mul(a, ten);
+        let by_hundred = pool.udiv(y, hundred);
+        assert_eq!(by_hundred, pool.udiv(a, ten));
+        // A value halved by a shift, then divided by 10, is the value divided by 20.
+        let halved = pool.udiv(y, two);
+        let twenty = pool.bv(64, 20);
+        assert_eq!(pool.udiv(halved, ten), pool.udiv(y, twenty));
+        // A quotient is 0 just where the dividend is below the divisor.
+        let nothing = pool.udiv(a, ten);
+        assert_eq!(pool.eq(nothing, zero), pool.ult(a, ten));
+    }
+
     #[test]
     fn a_programs_divisions_and_a_formulas_meet_as_one_term() {
         // (t / 86400 + 4) % 7: the program divides with 64-bit `div` (128-bit dividends),

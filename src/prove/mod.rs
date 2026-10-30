@@ -488,6 +488,19 @@ fn moved(values: &Values, negated: bool, offset: i128) -> Option<Values> {
         .collect()
 }
 
+/// `values` times `scale`, plus `offset`: every value the multiples can be, and the ones
+/// between, which a refutation may count too.
+fn scaled(values: &Values, scale: i128, offset: i128) -> Option<Values> {
+    values
+        .iter()
+        .map(|(low, high)| {
+            let from = low.checked_mul(scale)?.checked_add(offset)?;
+            let to = high.checked_mul(scale)?.checked_add(offset)?;
+            Some((from.min(to), from.max(to)))
+        })
+        .collect()
+}
+
 /// Whether the path's comparisons rule `condition` out: comparisons of the same sum, its
 /// negation, or either plus a constant, at the condition's width or another, taken together. A
 /// program that took a sign's branch then compares the number's size: `-x < 10^7` can't fail
@@ -505,6 +518,11 @@ fn refuted(pool: &Pool, path: &[Term], condition: Term) -> bool {
         let values = both(&held, &vec![pool.signed_range(y)]);
         let moved = if let Some((negated, delta)) = pool.related_wider(x, y) {
             moved(&values, negated, delta)
+        } else if let Some((scale, offset)) = pool
+            .related_scaled(x, y)
+            .filter(|(scale, _)| scale.unsigned_abs() > 1)
+        {
+            scaled(&values, scale, offset)
         } else if width <= 126
             && let Some((negated, offset)) = pool.related(x, y)
         {
@@ -3095,8 +3113,17 @@ fn check_runs(
         {
             continue;
         }
-        if std::env::var_os("LENGUA_PROVE_EXPLAIN").is_some() {
-            eprintln!("combination {combination} asks: {}", pool.sketch(broken, 9));
+        if let Some(explain) = std::env::var_os("LENGUA_PROVE_EXPLAIN") {
+            eprintln!(
+                "combination {combination} asks: {}",
+                pool.sketch(broken, 14)
+            );
+            // `path` shows the run's own conditions too.
+            if explain == "path" {
+                for condition in &run.path {
+                    eprintln!("  given: {}", pool.sketch(*condition, 7));
+                }
+            }
         }
         let mut conditions = run.path.clone();
         conditions.push(broken);

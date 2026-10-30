@@ -377,7 +377,7 @@ impl Writer<'_> {
             };
         }
         let deeper = depth - 1;
-        match self.rng.random_range(0..19) {
+        match self.rng.random_range(0..22) {
             0..=3 => {
                 let ops = [
                     Op::Add,
@@ -581,6 +581,64 @@ impl Writer<'_> {
                     count
                 }
             }
+            // A quotient of a sum each of whose parts its divisor divides, or of a choice
+            // between two such sums, as a program halves a sum of cents.
+            18 if width >= 8 => {
+                let divisor: u128 = [2, 3, 10, 100][self.rng.random_range(0..4)];
+                let dividend = if self.rng.random_bool(0.5) {
+                    let (then, otherwise) = (
+                        self.divisible_sum(width, divisor),
+                        self.divisible_sum(width, divisor),
+                    );
+                    Expr::Ite(
+                        Box::new(self.truth(deeper.min(1))),
+                        Box::new(then),
+                        Box::new(otherwise),
+                    )
+                } else {
+                    self.divisible_sum(width, divisor)
+                };
+                let op = [Op::Udiv, Op::Sdiv][self.rng.random_range(0..2)];
+                Expr::Binary(
+                    op,
+                    Box::new(dividend),
+                    Box::new(Expr::Const(width, divisor)),
+                )
+            }
+            // A value shifted right, then divided, as a program halves a number and takes its
+            // digits.
+            20 if width >= 8 => {
+                let shift = self.rng.random_range(1..4).min(width - 1);
+                let shifted = Expr::Binary(
+                    Op::Lshr,
+                    Box::new(self.number(width, deeper)),
+                    Box::new(Expr::Const(width, u128::from(shift))),
+                );
+                let divisor = [3, 5, 10][self.rng.random_range(0..3)];
+                Expr::Binary(
+                    Op::Udiv,
+                    Box::new(shifted),
+                    Box::new(Expr::Const(width, divisor)),
+                )
+            }
+            // A quotient of a sum sharing a factor with its divisor, as a formula takes one of
+            // ten times what a program divides: the factor cancels.
+            19 if width >= 16 => {
+                let factor: u128 = [2, 5, 10][self.rng.random_range(0..3)];
+                let divisor = factor * [3, 7, 10][self.rng.random_range(0..3)];
+                let mut sum = Expr::Const(width, factor * self.rng.random_range(0..50));
+                for _ in 0..self.rng.random_range(1..3) {
+                    let times = factor * self.rng.random_range(1..9);
+                    let part = Expr::Binary(
+                        Op::Mul,
+                        Box::new(self.variable(width)),
+                        Box::new(Expr::Const(width, times)),
+                    );
+                    sum = Expr::Binary(Op::Add, Box::new(sum), Box::new(part));
+                }
+                let op = [Op::Udiv, Op::Sdiv][self.rng.random_range(0..2)];
+                Expr::Binary(op, Box::new(sum), Box::new(Expr::Const(width, divisor)))
+            }
             _ => Expr::Binary(
                 Op::Add,
                 Box::new(self.number(width, deeper)),
@@ -589,12 +647,50 @@ impl Writer<'_> {
         }
     }
 
+    /// A sum of variables, each times a multiple of `divisor`, perhaps negated, plus a constant
+    /// of less than `divisor` either way.
+    fn divisible_sum(&mut self, width: u32, divisor: u128) -> Expr {
+        let off = self.rng.random_range(0..2 * divisor - 1);
+        let constant = (off as i128 - (divisor as i128 - 1)).cast_unsigned() & mask(width);
+        let mut total = Expr::Const(width, constant);
+        for _ in 0..self.rng.random_range(1..3) {
+            let times = divisor * self.rng.random_range(1..4);
+            let part = Expr::Binary(
+                Op::Mul,
+                Box::new(self.variable(width)),
+                Box::new(Expr::Const(width, times & mask(width))),
+            );
+            let part = if self.rng.random_bool(0.3) {
+                Expr::Neg(Box::new(part))
+            } else {
+                part
+            };
+            total = Expr::Binary(Op::Add, Box::new(total), Box::new(part));
+        }
+        total
+    }
+
     fn truth(&mut self, depth: u32) -> Expr {
         if depth == 0 {
             return Expr::Bool(self.rng.random_bool(0.5));
         }
         let deeper = depth - 1;
-        match self.rng.random_range(0..9) {
+        match self.rng.random_range(0..10) {
+            // A quotient compared with 0, as a program asks whether any digits are left.
+            9 => {
+                let width = [8, 16, 32, 64, 128][self.rng.random_range(0..5)];
+                let divisor = [3, 10, 100, 1000][self.rng.random_range(0..4)] & mask(width);
+                let quotient = Expr::Binary(
+                    Op::Udiv,
+                    Box::new(self.number(width, deeper)),
+                    Box::new(Expr::Const(width, divisor.max(2))),
+                );
+                Expr::Compare(
+                    Comparison::Eq,
+                    Box::new(quotient),
+                    Box::new(Expr::Const(width, 0)),
+                )
+            }
             // The sign bit of a value, as flags read it.
             6 => {
                 let width = self.widths[self.rng.random_range(1..self.widths.len())];
