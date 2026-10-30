@@ -1166,7 +1166,8 @@ async fn proves_long_text_up_to_the_bound() {
         bound,
         Some(Bound {
             bytes: TEXT_BOUND,
-            why: PAST_THE_BOUND.into()
+            why: PAST_THE_BOUND.into(),
+            characters: false,
         })
     );
     // With a newline after the text, the longest text no longer fits one pipe write.
@@ -1710,4 +1711,144 @@ fn reads_conditions_as_intervals_and_settles_only_what_holds() {
         read > 300 && ruled_out > 50 && settled_some > 50,
         "seed {seed}: {read} read, {ruled_out} ruled out, {settled_some} settled"
     );
+}
+
+/// A program that reads standard input whole and prints it back with each byte from `a` to
+/// `last` moved down 32: capitals, when `last` is `z`.
+fn capitals(last: u8) -> String {
+    format!(
+        ".intel_syntax noprefix
+.globl _start
+.text
+.type _start, @function
+_start:
+    xor edi, edi
+    lea rsi, [rip + buffer]
+    mov edx, 64
+    xor eax, eax
+    syscall
+    mov r12, rax
+    xor ecx, ecx
+.Lnext:
+    cmp rcx, r12
+    jae .Lprint
+    movzx eax, byte ptr [rsi + rcx]
+    cmp eax, 97
+    jb .Lkeep
+    cmp eax, {last}
+    ja .Lkeep
+    sub eax, 32
+    mov byte ptr [rsi + rcx], al
+.Lkeep:
+    inc rcx
+    jmp .Lnext
+.Lprint:
+    mov edi, 1
+    mov rdx, r12
+    mov eax, 1
+    syscall
+    xor edi, edi
+    mov eax, 60
+    syscall
+.size _start, . - _start
+.bss
+.type buffer, @object
+buffer:
+    .zero 64
+.size buffer, 64
+"
+    )
+}
+
+/// Text beyond ASCII: each character is one of those of its width, é and € among them, and
+/// every order of widths is a shape of its own, so capitals of ASCII letters are proven over
+/// text with accents and symbols, up to 8 characters; capitals that take 0xc3, é's first byte,
+/// for a letter are found.
+#[tokio::test]
+async fn proves_capitals_over_text_beyond_ascii() {
+    const SPEC: &str = "---
+type: lengua/program-spec
+title: capitals
+---
+# Purpose
+Prints standard input of `0` to `8` characters back with each ASCII letter in capitals.
+
+# Behaviors
+## B1: Prints it in capitals
+- Given standard input holding `ab`
+- When the program runs
+- Then it prints `AB`
+- And it exits with code `0`
+
+# Constraints
+- Allowed system calls: read, write, exit
+";
+    const TESTS: &str = r#"[[example]]
+id = "B1"
+stdin = "ab"
+stdout = "AB"
+exit_code = 0
+
+[[generated]]
+id = "B1"
+vars = { text = 'string(0, 8, "abz é€")' }
+stdin = "{text}"
+stdout = "{upper(text)}"
+exit_code = 0
+"#;
+    let block = block(SPEC, TESTS, 0);
+    // A path for each choice of letter or not at each ASCII place.
+    let budget = || Budget {
+        max_paths: 512,
+        ..text_budget()
+    };
+    let verdict = prove(&machine(&capitals(b'z')).await, &block, &budget());
+    assert!(
+        matches!(
+            verdict,
+            Verdict::Proven {
+                bound: None,
+                shapes: 9841,
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
+    let verdict = prove(&machine(&capitals(0xc3)).await, &block, &budget());
+    let Verdict::Counterexample(found) = &verdict else {
+        panic!("{verdict:?}");
+    };
+    assert!(
+        matches!(found.get("text"), Some(Value::Str(text)) if text.contains('é')),
+        "{found:?}"
+    );
+}
+
+/// examples/count's lines and words over text with accented letters and symbols: every byte of
+/// a character beyond ASCII belongs to a word.
+#[tokio::test]
+async fn proves_a_word_count_over_text_beyond_ascii() {
+    let spec = repository_file("examples/count/spec.md").replacen(
+        "The tests give it standard\ninput of up to `1048576` bytes",
+        "The tests give it standard\ninput of up to `1048576` bytes (tests: `16`)",
+        1,
+    );
+    let tests = repository_file("examples/count/tests.toml").replacen(
+        "string(0, 1048576, \"abcdefghijklmnopqrstuvwxyz0123456789 \\n\")",
+        "string(0, 16, \"abcdefghijklmnopqrstuvwxyz0123456789 \\né€\")",
+        1,
+    );
+    assert_ne!(tests, repository_file("examples/count/tests.toml"));
+    let machine = machine(&repository_file("examples/count/main.s")).await;
+    let verdict = prove(&machine, &block(&spec, &tests, 0), &text_budget());
+    // Characters of three widths in every order, up to 8 of them.
+    let Verdict::Proven {
+        bound: Some(bound), ..
+    } = &verdict
+    else {
+        panic!("{verdict:?}");
+    };
+    assert_eq!(bound.bytes, 8, "{verdict:?}");
+    assert!(bound.characters, "{verdict:?}");
+    assert!(bound.why.contains("8 characters"), "{verdict:?}");
 }

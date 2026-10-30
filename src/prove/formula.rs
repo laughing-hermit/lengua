@@ -358,9 +358,33 @@ fn call(
             Ok(Formula::Text(translate_bytes(pool, &bytes, &pairs)))
         }
         Function::Reverse => {
-            let mut bytes = text(next()?)?;
-            bytes.reverse();
-            Ok(Formula::Text(bytes))
+            // By characters, as the test language reverses: a byte that can only continue a
+            // character, 0x80 to 0xbf, stays after the byte before it.
+            let bytes = text(next()?)?;
+            let mut characters: Vec<Vec<Term>> = Vec::new();
+            for byte in bytes {
+                let (low, high) = pool.range(byte);
+                let (low, high) = if high < 0x80 || low >= 0x80 && high <= 0xbf || low >= 0xc0 {
+                    (low, high)
+                } else {
+                    // A range that spans kinds of byte may still hold only one kind.
+                    match pool.byte_values(byte) {
+                        Some(values) if !values.is_empty() => {
+                            (u128::from(values[0]), u128::from(values[values.len() - 1]))
+                        }
+                        _ => (low, high),
+                    }
+                };
+                let continues = (0x80..=0xbf).contains(&low) && high <= 0xbf;
+                let starts = high < 0x80 || low >= 0xc0;
+                match characters.last_mut() {
+                    Some(character) if continues => character.push(byte),
+                    _ if continues || starts => characters.push(vec![byte]),
+                    _ => return Err("reverse of text whose characters can't be told apart".into()),
+                }
+            }
+            characters.reverse();
+            Ok(Formula::Text(characters.concat()))
         }
         Function::Abs => {
             let a = number(next()?)?;
@@ -559,26 +583,60 @@ mod tests {
                 u64::from_le_bytes(bytes)
             });
         let mut rng = ChaCha8Rng::seed_from_u64(seed);
-        let alphabets: [&[u8]; 4] = [b"ab", b"a b\n", b"x. \t\n\x0b\x0c\r", b"aAzZ09-_"];
+        let alphabets = [
+            "ab",
+            "a b\n",
+            "x. \t\n\x0b\x0c\r",
+            "aAzZ09-_",
+            "aé€😀",
+            " é\u{a0}x",
+        ];
         let formulas = [
             "len(s)",
             "count(s, \"a\")",
             "count(s, \"aa\")",
             "count(s, \"aba\")",
             "count(s, \"\\n\")",
+            "count(s, \"é\")",
             "words(s)",
             "upper(s)",
             "lower(s)",
             "tr(s, \"a-z\", \"n-za-m\")",
             "reverse(s)",
+            "reverse(upper(s)) + s",
             "s + \"!\" + upper(s)",
             "if(s == \"ab\", 1, 0)",
         ];
-        for _ in 0..300 {
-            let alphabet = alphabets[rng.random_range(0..alphabets.len())];
+        for _ in 0..400 {
+            let alphabet: Vec<char> = alphabets[rng.random_range(0..alphabets.len())]
+                .chars()
+                .collect();
             let length = rng.random_range(0..12);
-            let text: String = (0..length)
-                .map(|_| char::from(alphabet[rng.random_range(0..alphabet.len())]))
+            let chosen: Vec<char> = (0..length)
+                .map(|_| alphabet[rng.random_range(0..alphabet.len())])
+                .collect();
+            let text: String = chosen.iter().collect();
+            let widths: Vec<u8> = chosen
+                .iter()
+                .map(|character| character.len_utf8() as u8)
+                .collect();
+            // Each character's variable: an ASCII character's byte, or a wider one's place
+            // among the alphabet's characters of its width, as a proof's input has them.
+            let values: HashMap<String, u128> = chosen
+                .iter()
+                .enumerate()
+                .map(|(index, character)| {
+                    let value = if character.is_ascii() {
+                        u128::from(*character as u8)
+                    } else {
+                        alphabet
+                            .iter()
+                            .filter(|other| other.len_utf8() == character.len_utf8())
+                            .position(|other| other == character)
+                            .expect("in the alphabet") as u128
+                    };
+                    (format!("s.c{index}"), value)
+                })
                 .collect();
             for source in formulas {
                 let expr = crate::expr::parse(source).expect("a formula");
@@ -587,15 +645,8 @@ mod tests {
                     .collect();
                 let expected = crate::expr::eval(&expr, &env).expect("evaluates");
                 let mut pool = Pool::default();
-                let bytes: Vec<Term> = (0..text.len())
-                    .map(|index| pool.var(8, &format!("s{index}")))
-                    .collect();
-                let values: HashMap<String, u128> = text
-                    .bytes()
-                    .enumerate()
-                    .map(|(index, byte)| (format!("s{index}"), u128::from(byte)))
-                    .collect();
-                let texts: BTreeMap<String, Vec<Term>> = [("s".to_owned(), bytes)].into();
+                let input = super::super::utf8_input(&mut pool, "s", &widths, &alphabet);
+                let texts: BTreeMap<String, Vec<Term>> = [("s".to_owned(), input.text)].into();
                 let formula = translate(&mut pool, &expr, &BTreeMap::new(), &texts)
                     .unwrap_or_else(|error| panic!("{source}: {error}"));
                 let found = match formula {
@@ -604,12 +655,13 @@ mod tests {
                         Value::Int(i128::from_ne_bytes(value.to_ne_bytes()))
                     }
                     Formula::Text(bytes) => Value::Str(
-                        bytes
-                            .iter()
-                            .map(|byte| {
-                                char::from(pool.evaluate(*byte, &values).expect("a byte") as u8)
-                            })
-                            .collect(),
+                        String::from_utf8(
+                            bytes
+                                .iter()
+                                .map(|byte| pool.evaluate(*byte, &values).expect("a byte") as u8)
+                                .collect(),
+                        )
+                        .expect("UTF-8"),
                     ),
                     Formula::Truth(term) => {
                         Value::Bool(pool.evaluate(term, &values).expect("a value") == 1)

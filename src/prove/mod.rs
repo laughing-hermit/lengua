@@ -63,6 +63,9 @@ pub struct Bound {
     pub bytes: usize,
     /// What stopped the proof at the next length.
     pub why: String,
+    /// Whether the lengths count characters, as they do where a text has characters beyond
+    /// ASCII. A text of so many bytes has at most as many characters.
+    pub characters: bool,
 }
 
 /// How much one proof may take.
@@ -899,6 +902,9 @@ enum Part {
     Fixed(Value),
     /// Text of this many bytes, each one of the generator's characters.
     Text(usize, Vec<u8>),
+    /// Text beyond ASCII: a character of each of these widths in bytes, each one of the
+    /// generator's characters that wide.
+    Utf8(Vec<u8>, std::sync::Arc<[char]>),
     /// A number the program reads only as this many random bytes: one shape, a variable a byte.
     Bytes(usize),
     /// A number the program reads only as a clock reading, from the first to the second, with
@@ -967,7 +973,7 @@ fn parts(name: &str, generator: &Generator) -> Result<Vec<Part>, String> {
         }
         Generator::Str { min, max, charset } => {
             if !charset.iter().all(char::is_ascii) {
-                return Err(format!("{name} is drawn from characters beyond ASCII"));
+                return utf8_parts(name, *min, *max, charset);
             }
             let bytes: Vec<u8> = charset.iter().map(|character| *character as u8).collect();
             let longest = text_cap(*min, *max).map_or(*max, |(cap, _)| cap);
@@ -975,6 +981,142 @@ fn parts(name: &str, generator: &Generator) -> Result<Vec<Part>, String> {
                 .map(|length| Part::Text(length, bytes.clone()))
                 .collect())
         }
+    }
+}
+
+/// The most shapes a text beyond ASCII is proven over: one for each order of its characters'
+/// widths, so the longest text proven depends on how many widths its characters have.
+const MAX_UTF8_SHAPES: usize = 1 << 14;
+
+/// How many characters a text beyond ASCII of `min` to `max` characters, from `charset`, is
+/// proven up to, and what the proof says past it when that stops short of `max`.
+fn utf8_reach(min: usize, max: usize, charset: &[char]) -> (usize, Option<String>) {
+    let widths: std::collections::BTreeSet<usize> = charset
+        .iter()
+        .map(|character| character.len_utf8())
+        .collect();
+    let widest = widths.iter().max().copied().unwrap_or(1);
+    let mut shapes = 0_usize;
+    let mut longest = min;
+    for length in min..=max.min(TEXT_BOUND / widest) {
+        let these = widths
+            .len()
+            .checked_pow(u32::try_from(length).unwrap_or(u32::MAX));
+        match these.and_then(|these| shapes.checked_add(these)) {
+            Some(total) if total <= MAX_UTF8_SHAPES || length == min => {
+                shapes = total;
+                longest = length;
+            }
+            _ => break,
+        }
+    }
+    let why = (longest < max).then(|| {
+        format!(
+            "a proof covers text beyond ASCII up to {longest} characters, each of its {} widths \
+             in every order",
+            widths.len()
+        )
+    });
+    (longest, why)
+}
+
+/// The parts that cover text of `min` to `max` characters from `charset`, which has characters
+/// beyond ASCII: for each length, every order of its characters' widths, shortest first.
+fn utf8_parts(name: &str, min: usize, max: usize, charset: &[char]) -> Result<Vec<Part>, String> {
+    let mut widths: Vec<u8> = charset
+        .iter()
+        .map(|character| character.len_utf8() as u8)
+        .collect();
+    widths.sort_unstable();
+    widths.dedup();
+    for width in &widths {
+        let count = charset
+            .iter()
+            .filter(|character| character.len_utf8() == usize::from(*width))
+            .count();
+        if count > 256 {
+            return Err(format!(
+                "{name} is drawn from more than 256 characters {width} bytes long"
+            ));
+        }
+    }
+    let characters: std::sync::Arc<[char]> = charset.iter().copied().collect();
+    let (longest, _) = utf8_reach(min, max, charset);
+    let mut parts = Vec::new();
+    for length in min..=longest {
+        let mut order = vec![0_usize; length];
+        loop {
+            parts.push(Part::Utf8(
+                order.iter().map(|at| widths[*at]).collect(),
+                std::sync::Arc::clone(&characters),
+            ));
+            // The next order, the last character's width fastest.
+            let Some(position) = order.iter().rposition(|at| at + 1 < widths.len()) else {
+                break;
+            };
+            order[position] += 1;
+            for later in &mut order[position + 1..] {
+                *later = 0;
+            }
+        }
+    }
+    Ok(parts)
+}
+
+/// The input for text of one character per entry of `widths`, each that many bytes and one of
+/// `characters` that wide. An ASCII character is a byte variable, as in any text; a wider one is
+/// a variable choosing among the characters of its width, and each of its bytes is that choice's
+/// byte, so a test of a byte is a test of the choice.
+fn utf8_input(pool: &mut Pool, name: &str, widths: &[u8], characters: &[char]) -> Input {
+    let mut by_width: BTreeMap<u8, Vec<[u8; 4]>> = BTreeMap::new();
+    for character in characters {
+        let mut encoded = [0; 4];
+        character.encode_utf8(&mut encoded);
+        by_width
+            .entry(character.len_utf8() as u8)
+            .or_default()
+            .push(encoded);
+    }
+    let ascii: Vec<u8> = by_width
+        .get(&1)
+        .map(|encoded| encoded.iter().map(|bytes| bytes[0]).collect())
+        .unwrap_or_default();
+    let (lowest, highest) = (
+        ascii.iter().copied().min().unwrap_or(0),
+        ascii.iter().copied().max().unwrap_or(0),
+    );
+    let mut text = Vec::new();
+    let mut constraints = Vec::new();
+    for (index, width) in widths.iter().enumerate() {
+        let variable = format!("{name}.c{index}");
+        if *width == 1 {
+            let byte = pool.var_in(8, &variable, u128::from(lowest), u128::from(highest));
+            pool.allow(byte, &ascii);
+            constraints.push(pool.is_one_of(byte, &ascii));
+            text.push(byte);
+            continue;
+        }
+        let choices = &by_width[width];
+        let last = choices.len() - 1;
+        let choice = pool.var_in(8, &variable, 0, last as u128);
+        let numbers: Vec<u8> = (0..=last as u8).collect();
+        pool.allow(choice, &numbers);
+        constraints.push(pool.is_one_of(choice, &numbers));
+        for (position, final_byte) in choices[last].iter().take(usize::from(*width)).enumerate() {
+            let mut byte = pool.bv(8, u128::from(*final_byte));
+            for (number, encoded) in choices[..last].iter().enumerate().rev() {
+                let here = pool.bv(8, number as u128);
+                let chosen = pool.eq(choice, here);
+                let value = pool.bv(8, u128::from(encoded[position]));
+                byte = pool.ite(chosen, value, byte);
+            }
+            text.push(byte);
+        }
+    }
+    Input {
+        text,
+        number: None,
+        constraints,
     }
 }
 
@@ -1982,7 +2124,7 @@ fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verd
     let by_length = each.iter().any(|(_, parts)| {
         parts
             .iter()
-            .filter(|part| matches!(part, Part::Text(..)))
+            .filter(|part| matches!(part, Part::Text(..) | Part::Utf8(..)))
             .count()
             > 1
     });
@@ -2166,29 +2308,41 @@ fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verd
     if let Some(reason) = failure.into_inner().ok().flatten() {
         return Err(out_of_time(reason));
     }
+    let characters = block.vars.iter().any(|(_, generator)| {
+        matches!(generator, Generator::Str { charset, .. } if !charset.iter().all(char::is_ascii))
+    });
     let bound = match gap.into_inner().ok().flatten() {
         // Not even the shortest texts were all proven.
         Some((length, why)) if length <= shortest => return Err(out_of_time(why)),
         Some((length, why)) => Some(Bound {
             bytes: length - 1,
             why: if why == OUT_OF_TIME {
-                format!("the proof ran out of time at {length} bytes")
+                let unit = if characters { "characters" } else { "bytes" };
+                format!("the proof ran out of time at {length} {unit}")
             } else {
                 why
             },
+            characters,
         }),
         // Every length was proven, up to where the proof stops.
         None => block
             .vars
             .iter()
             .filter_map(|(_, generator)| match generator {
-                Generator::Str { min, max, .. } => text_cap(*min, *max),
+                Generator::Str { min, max, charset } if !charset.iter().all(char::is_ascii) => {
+                    let (longest, why) = utf8_reach(*min, *max, charset);
+                    why.map(|why| (longest, why))
+                }
+                Generator::Str { min, max, .. } => {
+                    text_cap(*min, *max).map(|(cap, why)| (cap, why.to_owned()))
+                }
                 _ => None,
             })
             .min_by_key(|(cap, _)| *cap)
             .map(|(cap, why)| Bound {
                 bytes: cap,
-                why: why.into(),
+                why,
+                characters,
             }),
     };
     Ok(Verdict::Proven {
@@ -2300,6 +2454,7 @@ fn conjuncts(pool: &Pool, condition: Term) -> Vec<Term> {
 fn part_length(part: &Part) -> usize {
     match part {
         Part::Text(length, _) => *length,
+        Part::Utf8(widths, _) => widths.len(),
         _ => 0,
     }
 }
@@ -2526,6 +2681,11 @@ fn prove_shape(
             }
             Part::Text(length, characters) => {
                 let input = text_input(&mut pool, name, *length, characters);
+                texts.insert(name.clone(), input.text.clone());
+                input
+            }
+            Part::Utf8(widths, characters) => {
+                let input = utf8_input(&mut pool, name, widths, characters);
                 texts.insert(name.clone(), input.text.clone());
                 input
             }

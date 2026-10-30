@@ -96,7 +96,8 @@ the tests come before the code, and they decide whether the code is right.
   the spec's limits for behaviors about valid input.
 - **Lengths count characters.** `string(0, 1048576, "aé€")` can reach 3 MiB, since `é` takes 2
   bytes and `€` 3, while specs and programs count bytes. Draw long text from 1-byte (ASCII)
-  characters, and test other characters in short strings.
+  characters, and test other characters in short strings: a proof covers each order of their
+  widths, so it reaches about 8 characters where three widths mix, and 13 where two do.
 - **Fix a wrong test any time.** When `check` reports a failing test, decide from `spec.md`
   whether the test or `main.s` is wrong. If the test is, fix `tests.toml` and call `check`: it
   checks the fix against the spec again and records it, with no one to ask. After code has run,

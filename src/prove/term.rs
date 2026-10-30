@@ -2617,6 +2617,32 @@ impl Pool {
         result
     }
 
+    /// Every value `term`, eight bits computed from at most one byte variable, can take, in
+    /// order: the byte's own range, worked through.
+    #[must_use]
+    pub fn byte_values(&self, term: Term) -> Option<Vec<u8>> {
+        if self.width(term) != 8 {
+            return None;
+        }
+        match self.soles[term.index()] {
+            Sole::Constant => self.constant(term).map(|value| vec![value as u8]),
+            Sole::Byte(byte) => {
+                let (low, high) = self.range(byte);
+                let mut values = Vec::new();
+                for value in low..=high.min(255) {
+                    let result = self.evaluate_with(term, &mut |_, variable| {
+                        (variable == byte).then_some(value)
+                    })?;
+                    values.push(result as u8);
+                }
+                values.sort_unstable();
+                values.dedup();
+                Some(values)
+            }
+            Sole::Many => None,
+        }
+    }
+
     /// The term's value when every variable has the value `values` gives it (by name), or
     /// `None` when a variable has none. True is 1 and false 0.
     pub fn evaluate(&self, term: Term, values: &HashMap<String, u128>) -> Option<u128> {

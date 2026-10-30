@@ -1656,7 +1656,14 @@ fn proven_detail(
         "proven for every input {} ({}, {} through the machine code), {}",
         bound.as_ref().map_or_else(
             || "in range".to_owned(),
-            |bound| format!("with text up to {} bytes", bound.bytes)
+            |bound| {
+                let unit = if bound.characters {
+                    "characters"
+                } else {
+                    "bytes"
+                };
+                format!("with text up to {} {unit}", bound.bytes)
+            }
         ),
         counted(shapes, "input combination"),
         counted(paths, "path"),
