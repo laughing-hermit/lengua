@@ -130,6 +130,25 @@ pub enum Node {
     /// a time are 8 steps, so a program's checksum and a formula's of the same bytes are one
     /// term.
     Crc(Term, Term, u32),
+    /// An IEEE-754 operation on two floats' bit patterns, 32 bits wide for singles and 64 for
+    /// doubles, as SSE computes it (see [`float`]).
+    Float(FloatOp, Term, Term),
+    /// A float's square root, as `sqrtsd` takes it.
+    FloatSqrt(Term),
+    /// `a × b + c`, rounded once, as `vfmadd` takes it.
+    FloatFma(Term, Term, Term),
+    /// A signed whole number as the nearest float of this many bits, as `cvtsi2sd` takes it.
+    FloatFromInt(Term, u32),
+    /// A float as a signed whole number of this many bits, to the nearest with ties to even, as
+    /// `cvtsd2si` gives it, or truncated, as `cvttsd2si` does, when the flag says so; only the top
+    /// bit set for a NaN or a number out of range.
+    FloatToInt(Term, u32, bool),
+    /// A float rounded to a whole float, as `roundsd` rounds it.
+    FloatRound(Term, Rounding),
+    /// A float as the nearest float of this many bits, as `cvtsd2ss` and `cvtss2sd` take it.
+    FloatConvert(Term, u32),
+    /// What `ucomisd` tells of two floats: true or false.
+    FloatTest(FloatTest, Term, Term),
 }
 
 /// The reflected CRC-32C (Castagnoli) polynomial, as the `crc32` instruction uses it.
@@ -137,6 +156,51 @@ pub const CASTAGNOLI: u32 = 0x82F6_3B78;
 
 /// The reflected CRC-32 polynomial, as zlib, gzip and PNG use it.
 pub const ZLIB: u32 = 0xEDB8_8320;
+
+pub use float::{FloatOp, FloatTest, Rounding};
+
+/// How the solvers read a float result (see [`Pool::float_definition`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FloatDefinition {
+    /// Its value as an SMT-LIB float.
+    pub value: String,
+    /// Its bits when the value is a NaN.
+    pub nan: String,
+    /// Its width in bits: 32 or 64.
+    pub width: u32,
+}
+
+/// The SMT-LIB conversion to a float of `width` bits.
+#[must_use]
+pub fn fp_sort_cast(width: u32) -> &'static str {
+    if width == 32 {
+        "(_ to_fp 8 24)"
+    } else {
+        "(_ to_fp 11 53)"
+    }
+}
+
+/// The bits `name` names, read as a float of `width` bits.
+#[must_use]
+pub fn fp_of(name: &str, width: u32) -> String {
+    format!("({} {name})", fp_sort_cast(width))
+}
+
+/// `value` as an SMT-LIB float of `width` bits, exactly.
+fn fp_literal(value: f64, width: u32) -> String {
+    #[allow(clippy::cast_possible_truncation)] // Powers of two, exact as singles.
+    let bits = if width == 32 {
+        u128::from((value as f32).to_bits())
+    } else {
+        u128::from(value.to_bits())
+    };
+    fp_of(&bits_literal(bits, width), width)
+}
+
+/// `bits` as an SMT-LIB bit-vector literal of `width` bits.
+fn bits_literal(bits: u128, width: u32) -> String {
+    format!("#x{bits:0digits$x}", digits = (width / 4) as usize)
+}
 
 /// One byte through a reflected CRC-32 by `poly`, as the `crc32` instruction steps for
 /// CRC-32C: no inversion before or after.
@@ -214,6 +278,9 @@ pub struct Pool {
     declared: HashMap<String, (u128, u128)>,
     /// Each term's one byte variable, if it has exactly one.
     soles: Vec<Sole>,
+    /// Whether each term has a float operation in it, so a question about it goes to solvers
+    /// that read floats.
+    floats: Vec<bool>,
     /// Each one-byte term's shape: the term with its byte's identity left out, so tests of
     /// different bytes that compute the same thing share one. `u32::MAX` for other terms.
     shapes: Vec<u32>,
@@ -278,8 +345,13 @@ fn node_operands(node: &Node) -> Vec<Term> {
         | Node::ZeroExtend(a, _)
         | Node::SignExtend(a, _)
         | Node::BoolNot(a)
-        | Node::Lookup(a, _) => vec![a],
-        Node::Ite(c, a, b) => vec![c, a, b],
+        | Node::Lookup(a, _)
+        | Node::FloatSqrt(a)
+        | Node::FloatFromInt(a, _)
+        | Node::FloatToInt(a, _, _)
+        | Node::FloatRound(a, _)
+        | Node::FloatConvert(a, _) => vec![a],
+        Node::Ite(c, a, b) | Node::FloatFma(c, a, b) => vec![c, a, b],
         Node::Add(a, b)
         | Node::Mul(a, b)
         | Node::Udiv(a, b)
@@ -298,7 +370,9 @@ fn node_operands(node: &Node) -> Vec<Term> {
         | Node::Slt(a, b)
         | Node::BoolAnd(a, b)
         | Node::BoolOr(a, b)
-        | Node::Crc(a, b, _) => vec![a, b],
+        | Node::Crc(a, b, _)
+        | Node::Float(_, a, b)
+        | Node::FloatTest(_, a, b) => vec![a, b],
     }
 }
 
@@ -316,8 +390,13 @@ fn node_operands_mut(node: &mut Node) -> Vec<&mut Term> {
         | Node::ZeroExtend(a, _)
         | Node::SignExtend(a, _)
         | Node::BoolNot(a)
-        | Node::Lookup(a, _) => vec![a],
-        Node::Ite(c, a, b) => vec![c, a, b],
+        | Node::Lookup(a, _)
+        | Node::FloatSqrt(a)
+        | Node::FloatFromInt(a, _)
+        | Node::FloatToInt(a, _, _)
+        | Node::FloatRound(a, _)
+        | Node::FloatConvert(a, _) => vec![a],
+        Node::Ite(c, a, b) | Node::FloatFma(c, a, b) => vec![c, a, b],
         Node::Add(a, b)
         | Node::Mul(a, b)
         | Node::Udiv(a, b)
@@ -336,7 +415,9 @@ fn node_operands_mut(node: &mut Node) -> Vec<&mut Term> {
         | Node::Slt(a, b)
         | Node::BoolAnd(a, b)
         | Node::BoolOr(a, b)
-        | Node::Crc(a, b, _) => vec![a, b],
+        | Node::Crc(a, b, _)
+        | Node::Float(_, a, b)
+        | Node::FloatTest(_, a, b) => vec![a, b],
     }
 }
 
@@ -518,6 +599,20 @@ impl Pool {
         self.signed_ranges.push(signed_range);
         self.soles.push(sole);
         self.shapes.push(shape);
+        let float = matches!(
+            node,
+            Node::Float(..)
+                | Node::FloatSqrt(_)
+                | Node::FloatFma(..)
+                | Node::FloatFromInt(..)
+                | Node::FloatToInt(..)
+                | Node::FloatRound(..)
+                | Node::FloatConvert(..)
+                | Node::FloatTest(..)
+        ) || node_operands(&node)
+            .iter()
+            .any(|operand| self.floats.get(operand.index()).copied().unwrap_or(false));
+        self.floats.push(float);
         // A condition on one byte is the set of the byte's values where it holds.
         if let (Sort::Bool, Sole::Byte(byte)) = (sort, sole)
             && !matches!(node, Node::Lookup(..))
@@ -707,6 +802,82 @@ impl Pool {
             self.counts.push(parts);
         }
         self.make(Node::Count(number, width), Sort::Bv(width))
+    }
+
+    /// `op` of two floats, both `width(a)` bits.
+    pub fn float(&mut self, op: FloatOp, a: Term, b: Term) -> Term {
+        let width = self.width(a);
+        if let (Some(x), Some(y)) = (self.constant(a), self.constant(b)) {
+            return self.bv(width, float::binary(op, x, y, width));
+        }
+        self.make(Node::Float(op, a, b), Sort::Bv(width))
+    }
+
+    /// A float's square root.
+    pub fn float_sqrt(&mut self, a: Term) -> Term {
+        let width = self.width(a);
+        if let Some(x) = self.constant(a) {
+            return self.bv(width, float::sqrt(x, width));
+        }
+        self.make(Node::FloatSqrt(a), Sort::Bv(width))
+    }
+
+    /// `a × b + c`, rounded once.
+    pub fn float_fma(&mut self, a: Term, b: Term, c: Term) -> Term {
+        let width = self.width(a);
+        if let (Some(x), Some(y), Some(z)) = (self.constant(a), self.constant(b), self.constant(c))
+        {
+            return self.bv(width, float::fma(x, y, z, width));
+        }
+        self.make(Node::FloatFma(a, b, c), Sort::Bv(width))
+    }
+
+    /// A signed whole number as the nearest float of `width` bits.
+    pub fn float_from_int(&mut self, number: Term, width: u32) -> Term {
+        let from = self.width(number);
+        if let Some(x) = self.constant(number) {
+            return self.bv(width, float::from_int(x, from, width));
+        }
+        self.make(Node::FloatFromInt(number, width), Sort::Bv(width))
+    }
+
+    /// A float as a signed whole number of `to` bits, rounded to nearest or truncated.
+    pub fn float_to_int(&mut self, a: Term, to: u32, truncate: bool) -> Term {
+        let width = self.width(a);
+        if let Some(x) = self.constant(a) {
+            return self.bv(to, float::to_int(x, width, to, truncate));
+        }
+        self.make(Node::FloatToInt(a, to, truncate), Sort::Bv(to))
+    }
+
+    /// A float rounded to a whole float.
+    pub fn float_round(&mut self, a: Term, rounding: Rounding) -> Term {
+        let width = self.width(a);
+        if let Some(x) = self.constant(a) {
+            return self.bv(width, float::round(x, rounding, width));
+        }
+        self.make(Node::FloatRound(a, rounding), Sort::Bv(width))
+    }
+
+    /// A float as the nearest float of `to` bits.
+    pub fn float_convert(&mut self, a: Term, to: u32) -> Term {
+        let from = self.width(a);
+        if from == to {
+            return a;
+        }
+        if let Some(x) = self.constant(a) {
+            return self.bv(to, float::convert(x, from, to));
+        }
+        self.make(Node::FloatConvert(a, to), Sort::Bv(to))
+    }
+
+    /// What `test` says of two floats.
+    pub fn float_test(&mut self, test: FloatTest, a: Term, b: Term) -> Term {
+        let width = self.width(a);
+        if let (Some(x), Some(y)) = (self.constant(a), self.constant(b)) {
+            return self.boolean(float::test(test, x, y, width));
+        }
+        self.make(Node::FloatTest(test, a, b), Sort::Bool)
     }
 
     /// The CRC state after `byte`, from the 32-bit `state`, by the reflected polynomial `poly`.
@@ -2853,6 +3024,12 @@ impl Pool {
                     (Node::ZeroExtend(_, b1), Node::ZeroExtend(_, b2))
                     | (Node::SignExtend(_, b1), Node::SignExtend(_, b2)) => b1 == b2,
                     (Node::Crc(_, _, p), Node::Crc(_, _, q)) => p == q,
+                    (Node::Float(p, ..), Node::Float(q, ..)) => p == q,
+                    (Node::FloatTest(p, ..), Node::FloatTest(q, ..)) => p == q,
+                    (Node::FloatRound(_, p), Node::FloatRound(_, q)) => p == q,
+                    (Node::FloatFromInt(_, p), Node::FloatFromInt(_, q))
+                    | (Node::FloatConvert(_, p), Node::FloatConvert(_, q)) => p == q,
+                    (Node::FloatToInt(_, p, x), Node::FloatToInt(_, q, y)) => (p, x) == (q, y),
                     (Node::Const { .. }, _)
                     | (Node::Var { .. }, _)
                     | (Node::Bool(_), _)
@@ -3156,7 +3333,111 @@ impl Pool {
             Node::Crc(state, byte, poly) => {
                 u128::from(crc_byte(poly, get(state)? as u32, get(byte)? as u8))
             }
+            Node::Float(op, a, b) => float::binary(op, get(a)?, get(b)?, self.width(a)),
+            Node::FloatSqrt(a) => float::sqrt(get(a)?, self.width(a)),
+            Node::FloatFma(a, b, c) => float::fma(get(a)?, get(b)?, get(c)?, self.width(a)),
+            Node::FloatFromInt(a, width) => float::from_int(get(a)?, self.width(a), width),
+            Node::FloatToInt(a, to, truncate) => {
+                float::to_int(get(a)?, self.width(a), to, truncate)
+            }
+            Node::FloatRound(a, rounding) => float::round(get(a)?, rounding, self.width(a)),
+            Node::FloatConvert(a, to) => float::convert(get(a)?, self.width(a), to),
+            Node::FloatTest(test, a, b) => {
+                u128::from(float::test(test, get(a)?, get(b)?, self.width(a)))
+            }
         })
+    }
+
+    /// Whether any of `terms` has a float operation in it.
+    #[must_use]
+    pub fn has_float(&self, terms: &[Term]) -> bool {
+        terms
+            .iter()
+            .any(|term| self.floats.get(term.index()).copied().unwrap_or(false))
+    }
+
+    /// How the solvers read a float result: its value as an SMT-LIB float, `value`, which
+    /// pins its bits when it isn't a NaN, and its bits when it is, `nan`, as x86 gives them: the
+    /// first NaN operand quieted, or the default NaN. `None` for a term that isn't one.
+    #[must_use]
+    pub fn float_definition(&self, term: Term) -> Option<FloatDefinition> {
+        let name = |operand: &Term| format!("t{}", operand.index());
+        let width = self.width(term);
+        let quiet = |operand: &Term| {
+            let width = self.width(*operand);
+            format!(
+                "(bvor {} {})",
+                name(operand),
+                bits_literal(float::quiet_bit(width), width)
+            )
+        };
+        let first_nan = |operands: &[Term]| {
+            let mut nan = bits_literal(float::default_nan(width), width);
+            for operand in operands.iter().rev() {
+                nan = format!(
+                    "(ite (fp.isNaN {}) {} {nan})",
+                    fp_of(&name(operand), width),
+                    quiet(operand)
+                );
+            }
+            nan
+        };
+        let of = |operand: &Term| fp_of(&name(operand), self.width(*operand));
+        let (value, nan) = match self.node(term) {
+            Node::Float(op, a, b) => {
+                let op = match op {
+                    FloatOp::Add => "fp.add",
+                    FloatOp::Sub => "fp.sub",
+                    FloatOp::Mul => "fp.mul",
+                    FloatOp::Div => "fp.div",
+                };
+                (
+                    format!("({op} RNE {} {})", of(a), of(b)),
+                    first_nan(&[*a, *b]),
+                )
+            }
+            Node::FloatSqrt(a) => (format!("(fp.sqrt RNE {})", of(a)), first_nan(&[*a])),
+            Node::FloatFma(a, b, c) => (
+                format!("(fp.fma RNE {} {} {})", of(a), of(b), of(c)),
+                first_nan(&[*a, *b, *c]),
+            ),
+            // Never a NaN.
+            Node::FloatFromInt(a, _) => (
+                format!("({} RNE {})", fp_sort_cast(width), name(a)),
+                bits_literal(float::default_nan(width), width),
+            ),
+            Node::FloatRound(a, rounding) => {
+                let mode = match rounding {
+                    Rounding::Nearest => "RNE",
+                    Rounding::Down => "RTN",
+                    Rounding::Up => "RTP",
+                    Rounding::Zero => "RTZ",
+                };
+                (
+                    format!("(fp.roundToIntegral {mode} {})", of(a)),
+                    first_nan(&[*a]),
+                )
+            }
+            // A NaN keeps its sign and the top of its payload, quieted.
+            Node::FloatConvert(a, to) => {
+                let a = name(a);
+                let nan = if *to == 32 {
+                    format!("(concat ((_ extract 63 63) {a}) #b111111111 ((_ extract 50 29) {a}))")
+                } else {
+                    format!(
+                        "(concat ((_ extract 31 31) {a}) #b111111111111 ((_ extract 21 0) {a}) \
+                         #b00000000000000000000000000000)"
+                    )
+                };
+                let from = if *to == 32 { 64 } else { 32 };
+                (
+                    format!("({} RNE {})", fp_sort_cast(*to), fp_of(&a, from)),
+                    nan,
+                )
+            }
+            _ => return None,
+        };
+        Some(FloatDefinition { value, nan, width })
     }
 
     /// A term written out as an expression, `depth` levels deep, for finding where two terms
@@ -3262,6 +3543,48 @@ impl Pool {
                     _ => format!("(or {})", runs.join(" ")),
                 }
             }
+            Node::FloatToInt(a, to, truncate) => {
+                let width = self.width(*a);
+                let mode = if *truncate { "RTZ" } else { "RNE" };
+                let whole = format!("(fp.roundToIntegral {mode} {})", fp_of(&name(a), width));
+                let limit = 2_f64.powi(i32::try_from(*to).unwrap_or(64) - 1);
+                let (low, high) = (fp_literal(-limit, width), fp_literal(limit, width));
+                let indefinite = format!(
+                    "#x{:0digits$x}",
+                    1_u128 << (to - 1),
+                    digits = (*to / 4) as usize
+                );
+                format!(
+                    "(ite (and (not (fp.isNaN {whole})) (fp.geq {whole} {low}) (fp.lt {whole} \
+                     {high})) ((_ fp.to_sbv {to}) RTZ {whole}) {indefinite})"
+                )
+            }
+            Node::FloatTest(test, a, b) => {
+                let width = self.width(*a);
+                let (x, y) = (fp_of(&name(a), width), fp_of(&name(b), width));
+                match test {
+                    FloatTest::Less => format!("(fp.lt {x} {y})"),
+                    FloatTest::Equal => format!("(fp.eq {x} {y})"),
+                    FloatTest::Unordered => format!("(or (fp.isNaN {x}) (fp.isNaN {y}))"),
+                }
+            }
+            // The solvers declare a float result's bits and pin them (see float_definition);
+            // z3 alone can write it as one expression, for a sketch.
+            Node::Float(..)
+            | Node::FloatSqrt(_)
+            | Node::FloatFma(..)
+            | Node::FloatFromInt(..)
+            | Node::FloatRound(..)
+            | Node::FloatConvert(..) => self
+                .float_definition(term)
+                .map(|definition| {
+                    format!(
+                        "(ite (fp.isNaN {value}) {nan} (fp.to_ieee_bv {value}))",
+                        value = definition.value,
+                        nan = definition.nan
+                    )
+                })
+                .unwrap_or_default(),
             // The state's low byte xored with the byte picks columns of the step's table, which
             // is linear: one column for each of the 8 bits, xored with the state shifted right by
             // a byte.
@@ -3401,6 +3724,17 @@ impl Pool {
             Node::BoolAnd(..) => two(self, Self::bool_and),
             Node::BoolOr(..) => two(self, Self::bool_or),
             Node::Crc(_, _, poly) => b.map_or(a, |b| self.crc(a, b, poly)),
+            Node::Float(op, ..) => b.map_or(a, |b| self.float(op, a, b)),
+            Node::FloatTest(test, ..) => b.map_or(a, |b| self.float_test(test, a, b)),
+            Node::FloatFma(..) => match (b, c) {
+                (Some(b), Some(c)) => self.float_fma(a, b, c),
+                _ => a,
+            },
+            Node::FloatSqrt(_) => self.float_sqrt(a),
+            Node::FloatFromInt(_, width) => self.float_from_int(a, width),
+            Node::FloatToInt(_, to, truncate) => self.float_to_int(a, to, truncate),
+            Node::FloatRound(_, rounding) => self.float_round(a, rounding),
+            Node::FloatConvert(_, to) => self.float_convert(a, to),
             Node::Not(_) => self.not(a),
             Node::Neg(_) => self.neg(a),
             Node::BoolNot(_) => self.bool_not(a),
@@ -3442,6 +3776,7 @@ impl Pool {
     }
 }
 
+pub mod float;
 #[cfg(test)]
 mod random;
 

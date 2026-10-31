@@ -50,6 +50,16 @@ impl Kind {
 /// bit-blaster can't do alone, is defined by [`Solver::division`].
 const STRATEGY: &str = "(then bit-blast sat)";
 
+/// z3's strategy where floats come in: its own for floats and bit vectors. Its `fpa2bv`, then
+/// bit-blasting, gives wrong answers in z3 4.16, such as a 64-bit whole number turned into the
+/// wrong single, where this and cvc5 agree with the CPU.
+const FLOAT_STRATEGY: &str = "qffpbv";
+
+/// The logic a session speaks, by whether floats come in.
+const fn logic(floats: bool) -> &'static str {
+    if floats { "QF_FPBV" } else { "QF_BV" }
+}
+
 /// How many times longer than the first solver the second may take to confirm an answer: cvc5
 /// takes several times longer than z3's bit-blasting on lengua's questions.
 const CONFIRM_FACTOR: u64 = 4;
@@ -67,6 +77,8 @@ struct Process {
     /// Whether its last answer came only as its time limit ran out, which a solver cancelled
     /// mid-step may give another reason for.
     ran_out: bool,
+    /// Whether its questions may hold floats, which bit-vector settings can't answer.
+    floats: bool,
 }
 
 impl Drop for Process {
@@ -77,20 +89,18 @@ impl Drop for Process {
 }
 
 impl Process {
-    /// Starts `program`, which speaks like `kind`, giving each question at most `timeout_ms`.
-    fn start(kind: Kind, program: &str, timeout_ms: u64) -> io::Result<Self> {
+    /// Starts `program`, which speaks like `kind`, giving each question at most `timeout_ms`, for
+    /// questions that may hold floats when `floats` says so.
+    fn start(kind: Kind, program: &str, timeout_ms: u64, floats: bool) -> io::Result<Self> {
         let mut command = Command::new(program);
         match kind {
             Kind::Z3 => command.args(["-in", "-smt2", "-memory:4096"]),
             // Bit-blasting each question whole: lazily, cvc5 can take minutes over two copies
-            // of one small sum that eagerly take it milliseconds.
+            // of one small sum that eagerly take it milliseconds. It bit-blasts floats only
+            // lazily.
             Kind::Cvc5 => command
-                .args([
-                    "--lang=smt2",
-                    "--incremental",
-                    "--produce-models",
-                    "--bitblast=eager",
-                ])
+                .args(["--lang=smt2", "--incremental", "--produce-models"])
+                .args((!floats).then_some("--bitblast=eager"))
                 .arg(format!("--tlimit-per={timeout_ms}")),
         };
         let mut child = command
@@ -116,6 +126,7 @@ impl Process {
             limit_ms: timeout_ms,
             start_ms: timeout_ms,
             ran_out: false,
+            floats,
         };
         process.prepare()?;
         Ok(process)
@@ -123,12 +134,13 @@ impl Process {
 
     /// Sets the options and logic every session starts with.
     fn prepare(&mut self) -> io::Result<()> {
-        self.send(match self.kind {
-            Kind::Z3 => {
+        let logic = logic(self.floats);
+        self.send(&match self.kind {
+            Kind::Z3 => format!(
                 "(set-option :print-success false)\n(set-option :produce-models true)\n\
-                 (set-logic QF_BV)\n"
-            }
-            Kind::Cvc5 => "(set-logic QF_BV)\n",
+                 (set-logic {logic})\n"
+            ),
+            Kind::Cvc5 => format!("(set-logic {logic})\n"),
         })?;
         self.sync()?;
         Ok(())
@@ -178,7 +190,14 @@ impl Process {
     /// Whether the conditions asserted can all hold, decided within `limit_ms`.
     fn check_sat(&mut self, limit_ms: u64) -> io::Result<Answer> {
         let command = match self.kind {
-            Kind::Z3 => format!("(check-sat-using (try-for {STRATEGY} {limit_ms}))\n"),
+            Kind::Z3 => format!(
+                "(check-sat-using (try-for {} {limit_ms}))\n",
+                if self.floats {
+                    FLOAT_STRATEGY
+                } else {
+                    STRATEGY
+                }
+            ),
             Kind::Cvc5 if limit_ms == self.limit_ms => "(check-sat)\n".to_owned(),
             Kind::Cvc5 => format!("(set-option :tlimit-per {limit_ms})\n(check-sat)\n"),
         };
@@ -279,7 +298,13 @@ pub struct Solver {
     divisions: HashMap<Division, (String, String)>,
     /// The sums defined as counts, in the bits their range needs.
     counts: HashSet<Term>,
+    /// The session that answers questions with floats in them, started at the first.
+    floats: Option<Box<Solver>>,
 }
+
+/// Why questions with floats have one solver: z3 4.16 calls some of them possible, with inputs
+/// that don't meet them, such as a single's conversion to a 64-bit whole number.
+const FLOATS_ALONE: &str = "cvc5 alone answers the questions with floats, which z3 4.16 gets wrong";
 
 fn sort_text(sort: Sort) -> String {
     match sort {
@@ -333,12 +358,12 @@ impl Solver {
     ///
     /// Fails when neither solver can start.
     pub fn start(timeout_ms: u64) -> io::Result<Self> {
-        Self::with(&[(Kind::Z3, "z3"), (Kind::Cvc5, "cvc5")], timeout_ms)
+        Self::with(&[(Kind::Z3, "z3"), (Kind::Cvc5, "cvc5")], timeout_ms, false)
     }
 
     /// Starts the first of `solvers` that runs, to answer, and the next one that runs, to check
     /// it. Each is a kind of solver and the program to run for it.
-    fn with(solvers: &[(Kind, &str)], timeout_ms: u64) -> io::Result<Self> {
+    fn with(solvers: &[(Kind, &str)], timeout_ms: u64, floats: bool) -> io::Result<Self> {
         let mut running = Vec::new();
         let mut missing = Vec::new();
         for &(kind, program) in solvers {
@@ -351,7 +376,7 @@ impl Solver {
             } else {
                 timeout_ms * CONFIRM_FACTOR
             };
-            match Process::start(kind, program, limit) {
+            match Process::start(kind, program, limit, floats) {
                 Ok(process) => running.push(process),
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
                     missing.push(format!("{} isn't installed", kind.name()));
@@ -375,7 +400,8 @@ impl Solver {
             let session = SESSIONS.fetch_add(1, Ordering::Relaxed);
             let name = format!("{}-{session}.smt2", std::process::id());
             let mut file = std::fs::File::create(std::path::Path::new(&folder).join(name)).ok()?;
-            file.write_all(b"(set-logic QF_BV)\n").ok()?;
+            file.write_all(format!("(set-logic {})\n", logic(floats)).as_bytes())
+                .ok()?;
             Some(file)
         });
         Ok(Self {
@@ -391,12 +417,16 @@ impl Solver {
             deadline: None,
             divisions: HashMap::new(),
             counts: HashSet::new(),
+            floats: None,
         })
     }
 
     /// Stops asking after `deadline`: every question after it is unknown.
-    pub const fn until(&mut self, deadline: std::time::Instant) {
+    pub fn until(&mut self, deadline: std::time::Instant) {
         self.deadline = Some(deadline);
+        if let Some(floats) = &mut self.floats {
+            floats.until(deadline);
+        }
     }
 
     /// Forgets every term and division defined so far, so the processes can serve terms from a
@@ -406,7 +436,8 @@ impl Solver {
     ///
     /// Fails when a solver stops responding.
     pub fn reset(&mut self) -> io::Result<()> {
-        self.note("(reset)\n(set-logic QF_BV)\n");
+        let logic = logic(self.first.floats);
+        self.note(&format!("(reset)\n(set-logic {logic})\n"));
         self.first.reset()?;
         if let Some(second) = &mut self.second {
             second.reset()?;
@@ -415,6 +446,9 @@ impl Solver {
         self.divisions.clear();
         self.counts.clear();
         self.why_unknown.clear();
+        if let Some(floats) = &mut self.floats {
+            floats.reset()?;
+        }
         Ok(())
     }
 
@@ -586,6 +620,28 @@ impl Solver {
                     text.push_str(&format!(
                         "(define-fun t{} () {sort} {value})\n",
                         current.index()
+                    ));
+                }
+                // A float's bits: declared, pinned by its value where it isn't a NaN, and x86's
+                // NaN where it is. cvc5 can't turn a float back into bits, so no expression does.
+                Node::Float(..)
+                | Node::FloatSqrt(_)
+                | Node::FloatFma(..)
+                | Node::FloatFromInt(..)
+                | Node::FloatRound(..)
+                | Node::FloatConvert(..) => {
+                    let Some(definition) = pool.float_definition(current) else {
+                        continue;
+                    };
+                    let index = current.index();
+                    let bits = format!("f{index}");
+                    text.push_str(&format!(
+                        "(declare-const {bits} {sort})\n(assert (=> (not (fp.isNaN {value})) (= \
+                         {} {value})))\n(define-fun t{index} () {sort} (ite (fp.isNaN {value}) \
+                         {nan} {bits}))\n",
+                        crate::prove::term::fp_of(&bits, definition.width),
+                        value = definition.value,
+                        nan = definition.nan,
                     ));
                 }
                 &Node::Mul(factor, by) if pool.constant(by).is_some() => {
@@ -770,6 +826,24 @@ impl Solver {
             return Ok((Answer::Unsat, HashMap::new()));
         }
         self.questions += 1;
+        // Floats go to cvc5, in a session of their own that reads them; that session answers
+        // them itself.
+        if !self.first.floats && (pool.has_float(conditions) || pool.has_float(values)) {
+            if self.floats.is_none() {
+                let mut floats = Self::with(&[(Kind::Cvc5, "cvc5")], self.timeout_ms, true)?;
+                if let Some(deadline) = self.deadline {
+                    floats.until(deadline);
+                }
+                self.floats = Some(Box::new(floats));
+            }
+            let Some(floats) = self.floats.as_deref_mut() else {
+                return Ok((Answer::Unknown, HashMap::new()));
+            };
+            let answer = floats.ask(pool, conditions, values, model_wanted)?;
+            self.why_unknown.clone_from(&floats.why_unknown);
+            self.alone.get_or_insert_with(|| FLOATS_ALONE.to_owned());
+            return Ok(answer);
+        }
         if self.out_of_time() {
             self.why_unknown = "the proof ran out of time".into();
             return Ok((Answer::Unknown, HashMap::new()));
@@ -983,7 +1057,7 @@ mod tests {
             &[(Kind::Cvc5, "cvc5")],
         ]
         .iter()
-        .filter_map(|solvers| Solver::with(solvers, 5000).ok())
+        .filter_map(|solvers| Solver::with(solvers, 5000, false).ok())
         .collect()
     }
 
@@ -1067,7 +1141,8 @@ mod tests {
     fn the_second_solver_overrules_a_wrong_impossible() {
         let folder = tempfile::tempdir().expect("a folder");
         let liar = fake(folder.path(), "unsat");
-        let Ok(mut solver) = Solver::with(&[(Kind::Z3, &liar), (Kind::Cvc5, "cvc5")], 5000) else {
+        let Ok(mut solver) = Solver::with(&[(Kind::Z3, &liar), (Kind::Cvc5, "cvc5")], 5000, false)
+        else {
             return;
         };
         if let Some(reason) = &solver.alone {
@@ -1099,7 +1174,8 @@ mod tests {
     fn impossible_needs_both_solvers() {
         let folder = tempfile::tempdir().expect("a folder");
         let doubter = fake(folder.path(), "sat");
-        let Ok(mut solver) = Solver::with(&[(Kind::Z3, "z3"), (Kind::Cvc5, &doubter)], 5000) else {
+        let Ok(mut solver) = Solver::with(&[(Kind::Z3, "z3"), (Kind::Cvc5, &doubter)], 5000, false)
+        else {
             return;
         };
         if solver.second.is_none() {
@@ -1122,7 +1198,7 @@ mod tests {
         );
         let unknown = fake(folder.path(), "unknown");
         let mut solver =
-            Solver::with(&[(Kind::Z3, "z3"), (Kind::Cvc5, &unknown)], 5000).expect("starts");
+            Solver::with(&[(Kind::Z3, "z3"), (Kind::Cvc5, &unknown)], 5000, false).expect("starts");
         let (answer, _) = solver
             .check(&pool, &[wraps, x_is_zero], &[])
             .expect("answers");
@@ -1195,12 +1271,15 @@ mod tests {
 
     #[test]
     fn says_why_a_solver_answers_alone() {
-        let Ok(solver) = Solver::with(&[(Kind::Z3, "z3"), (Kind::Cvc5, "/nowhere/cvc5")], 5000)
-        else {
+        let Ok(solver) = Solver::with(
+            &[(Kind::Z3, "z3"), (Kind::Cvc5, "/nowhere/cvc5")],
+            5000,
+            false,
+        ) else {
             return;
         };
         assert_eq!(solver.alone.as_deref(), Some("cvc5 isn't installed"));
-        let error = Solver::with(&[(Kind::Z3, "/nowhere/z3")], 5000)
+        let error = Solver::with(&[(Kind::Z3, "/nowhere/z3")], 5000, false)
             .err()
             .expect("no solver");
         assert_eq!(error.to_string(), "z3 isn't installed");

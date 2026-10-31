@@ -982,6 +982,134 @@ fn a_crc_is_one_term_and_reads_the_same_in_the_solvers() {
     }
 }
 
+/// Floats: the solvers' IEEE-754 reading of each operation, NaNs and conversions included,
+/// meets the pool's, which is the CPU's, at special values and at random ones.
+#[test]
+fn the_solvers_read_floats_as_the_pool_evaluates_them() {
+    use super::{FloatOp, FloatTest, Rounding};
+    // A double's square root takes cvc5 about 3 seconds when its operand isn't simply
+    // substituted: the 10 seconds a proof's question gets.
+    let Ok(mut solver) = Solver::start(10_000) else {
+        eprintln!("no solver is installed");
+        return;
+    };
+    let mut rng = ChaCha8Rng::seed_from_u64(seed());
+    let draw = |rng: &mut ChaCha8Rng, width: u32| -> u128 {
+        let specials: [f64; 12] = [
+            0.0,
+            -0.0,
+            1.0,
+            -2.5,
+            0.5,
+            1e300,
+            -1e-300,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+            9_007_199_254_740_993.0,
+            3.0e9,
+        ];
+        let pick = specials[rng.random_range(0..specials.len())];
+        match (rng.random_range(0..3), width) {
+            (0, 64) => u128::from(rng.random::<u64>()),
+            (0, _) => u128::from(rng.random::<u32>()),
+            (_, 64) => u128::from(pick.to_bits()),
+            #[allow(clippy::cast_possible_truncation)]
+            _ => u128::from((pick as f32).to_bits()),
+        }
+    };
+    let mut problems = Vec::new();
+    for round in 0..120 {
+        // A float's definition stays asserted for its session, as in a proof, where each input
+        // combination starts over.
+        solver.reset().expect("the solvers start over");
+        let mut pool = Pool::default();
+        let width = if round % 3 == 0 { 32 } else { 64 };
+        let names = [
+            format!("fa{round}"),
+            format!("fb{round}"),
+            format!("fc{round}"),
+        ];
+        let [a, b, c] = names.clone().map(|name| pool.var(width, &name));
+        let int = pool.var(64, &format!("fi{round}"));
+        let term = match round % 10 {
+            0 => pool.float(FloatOp::Add, a, b),
+            1 => pool.float(FloatOp::Sub, a, b),
+            2 => pool.float(FloatOp::Mul, a, b),
+            3 => pool.float(FloatOp::Div, a, b),
+            4 => pool.float_sqrt(a),
+            5 => pool.float_fma(a, b, c),
+            6 => pool.float_from_int(int, width),
+            7 => pool.float_to_int(a, [32, 64][round % 2], round % 4 == 1),
+            8 => pool.float_round(
+                a,
+                [
+                    Rounding::Nearest,
+                    Rounding::Down,
+                    Rounding::Up,
+                    Rounding::Zero,
+                ][round % 4],
+            ),
+            _ => pool.float_convert(a, 96 - width),
+        };
+        let mut values: Vec<(Term, u128)> = [a, b, c]
+            .into_iter()
+            .map(|variable| (variable, draw(&mut rng, width)))
+            .collect();
+        values.push((int, u128::from(rng.random::<u64>())));
+        let by_name: HashMap<String, u128> = names
+            .iter()
+            .cloned()
+            .zip(values.iter().map(|(_, value)| *value))
+            .chain([(format!("fi{round}"), values[3].1)])
+            .collect();
+        let Some(expected) = pool.evaluate(term, &by_name) else {
+            continue;
+        };
+        let mut conditions: Vec<Term> = values
+            .iter()
+            .map(|(variable, value)| {
+                let width = pool.width(*variable);
+                let constant = pool.bv(width, *value);
+                pool.eq(*variable, constant)
+            })
+            .collect();
+        let constant = pool.bv(pool.width(term), expected);
+        let same = pool.eq(term, constant);
+        conditions.push(pool.bool_not(same));
+        // A comparison of the same values, too.
+        let test = [FloatTest::Less, FloatTest::Equal, FloatTest::Unordered][round % 3];
+        let tested = pool.float_test(test, a, b);
+        let holds = pool.evaluate(tested, &by_name);
+        let (answer, _) = solver
+            .check(&pool, &conditions, &[])
+            .expect("the solver answers");
+        if answer != Answer::Unsat {
+            problems.push(format!(
+                "round {round}: {} at {values:?}: the pool says {expected:#x}, the solvers {answer:?}",
+                pool.sketch(term, 2)
+            ));
+        }
+        if let Some(holds) = holds {
+            let fixed = conditions[..4].to_vec();
+            let other = if holds == 1 {
+                pool.bool_not(tested)
+            } else {
+                tested
+            };
+            let mut asked = fixed;
+            asked.push(other);
+            let (answer, _) = solver
+                .check(&pool, &asked, &[])
+                .expect("the solver answers");
+            if answer != Answer::Unsat {
+                problems.push(format!("round {round}: {test:?} at {values:?}: {answer:?}"));
+            }
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
 #[test]
 fn the_solvers_read_terms_as_the_pool_evaluates_them() {
     let Ok(mut solver) = Solver::start(3000) else {
