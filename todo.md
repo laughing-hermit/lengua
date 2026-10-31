@@ -105,6 +105,16 @@ one needs.
   detection and dialect reference, and an OS edge that differs in detail: other call numbers, no
   `poll` (only `ppoll`), another `struct stat` and `O_DIRECTORY`, other supervisor registers. It's
   tested under QEMU on this computer and on GitHub's ARM64 runners for the sandbox.
+
+  Round 9 covers the template's kind of program: arguments, whole numbers, text, standard input
+  through `fill`, and files and folders, checked, tested and proven. Until the rounds after it
+  land, lengua doesn't "run on ARM64", and nothing should say so:
+  - an install package for ARM64 Linux computers (today's release and installer are x86-64 only,
+    and the ARM64 server is built only on CI);
+  - vector instructions (NEON, then SVE), lengua's main speed tool, with ARM64 benchmarks against
+    C, C++ and Rust;
+  - floating point; threads; networking and servers; the terminal; the crypto and checksum
+    instructions.
 - **macOS and Windows need more than a new CPU.** They don't allow a program to call the OS
   directly, as lengua's programs do; a program must go through the system library (libSystem,
   ntdll), which lengua never checked, and there is no seccomp or Landlock. So those four targets
