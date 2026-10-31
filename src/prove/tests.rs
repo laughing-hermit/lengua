@@ -1433,6 +1433,39 @@ async fn proves_the_vector_template() {
 /// masks meeting the formulas' counts as one term; a count that misses carriage returns is
 /// found. Texts up to 200 bytes, past three whole vectors and a tail, keep the test quick even
 /// beside the others; up to 4096 prove the same way.
+/// Threads: each of parallel_for's workers runs to its end as it starts, which M7 makes the same
+/// as any order, so a program on several threads proves like any other. Each thread here takes
+/// 128 bytes, so a text of 300 runs on three.
+#[tokio::test]
+async fn proves_a_program_on_several_threads() {
+    let folder = "plugin/skills/compile/assets/";
+    let spec = repository_file(&format!("{folder}parallel-template-spec.md"))
+        .replacen(
+            "# Behaviors",
+            "Tests here give it up to `300` bytes.\n\n# Behaviors",
+            1,
+        )
+        .replace("string(0, 1048576,", "string(0, 300,");
+    // Sixteen chunks of 128 bytes hold at most 2048.
+    let source = repository_file(&format!("{folder}parallel-template.s"))
+        .replace(".equ CHUNK, 65536", ".equ CHUNK, 128")
+        .replace(".equ INPUT_MAX, 1048576", ".equ INPUT_MAX, 2048");
+    assert!(source.contains(".equ CHUNK, 128") && source.contains(".equ INPUT_MAX, 2048"));
+    let machine = machine(&source).await;
+    let verdict = prove(&machine, &block(&spec, 0), &text_budget());
+    assert!(
+        matches!(
+            &verdict,
+            Verdict::Proven {
+                bound: None,
+                unreached,
+                ..
+            } if unreached.is_empty()
+        ),
+        "{verdict:?}"
+    );
+}
+
 /// A program for the terminal proves as from a pipe, as its tests run: the terminal's mode
 /// can't be read or set, and a wait for the next key always finds one, or the input's end.
 #[tokio::test]

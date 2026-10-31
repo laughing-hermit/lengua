@@ -658,8 +658,17 @@ What it covers:
   port, and its fetch for every path with every body up to about 140 bytes in its share of the
   time.
 
+- Threads: `parallel_for`'s `clone` starts a thread that runs to its end at once, on the stack
+  it's given and with a first frame of its own, while the thread that started it waits; its
+  `exit` clears its id, as `CLONE_CHILD_CLEARTID` does, and the waiting thread goes on, so
+  `join_worker` finds it done. No thread writes what another reads (M7), and `parallel_for`,
+  copied word for word, joins every worker before it returns, so this order gives what any
+  order gives. Every run is held to the memory rules across threads. A program that splits its
+  input by 64 KiB a thread starts no thread on the 4096 bytes a proof covers, and its proof says
+  it never ran `start_worker` or `join_worker`.
+
 Not yet: `sha256` and the SHA and AES instructions; `pclmulqdq`, which joins CRC chains;
-floating point; threads; and `tr` that changes a character's width in bytes (`tr` beyond ASCII is proven
+floating point; and `tr` that changes a character's width in bytes (`tr` beyond ASCII is proven
 character by character, each keeping its width). Those blocks are tested, not proven, and the
 report says why. A stream read both with `read` and with `fill` is proven for the four
 deliveries, and, for standard input with at most 8 bytes left at a read, for every count the read

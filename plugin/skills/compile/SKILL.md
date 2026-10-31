@@ -84,8 +84,8 @@ and the CPU features the code needs; never write that line yourself.
    is written, and no stack is read before it's written. If the proof finds inputs where the
    program is wrong, or breaks a memory rule, `check` reports them like a failing test, and `run`
    won't run that build: fix `main.s` and call `check` again. "Tested, not proven" is fine: say
-   why in one line. Vector code proves too, from SSE2 to AVX-512 with masks, and so do clients and
-   servers on the network: what the test's peer sends arrives whole or cut, and in any pieces at
+   why in one line. Vector code proves too, from SSE2 to AVX-512 with masks, and so do programs on
+   several threads, and clients and servers on the network: what the test's peer sends arrives whole or cut, and in any pieces at
    all where the program reads it with `fill`. Programs that read and print numbers with the
    template's `parse_i64` and `write_i64` prove best.
 8. Tell the user, from the `done` reply, in a few short lines and plain words: where the program

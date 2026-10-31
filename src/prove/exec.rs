@@ -381,6 +381,28 @@ struct Return {
     frame: u64,
 }
 
+/// A thread that started another and waits for it: the prover runs the new thread to its end
+/// first, since no thread writes what another reads (M7), so the order can't change what either
+/// does. What the waiting thread had in its registers, flags and calls, and where it goes on.
+#[derive(Debug, Clone)]
+struct Suspended {
+    registers: [Term; 16],
+    last: Last,
+    flags: [Term; 5],
+    vectors: Vec<Rc<[Term; VECTOR_BYTES]>>,
+    masks: [Term; 8],
+    rip: u64,
+    returns: Vec<Return>,
+    owners: [Option<Owner>; 16],
+    stack_top: Option<u64>,
+    base_frame: u64,
+    /// Where the kernel clears the started thread's id as it ends (`CLONE_CHILD_CLEARTID`).
+    clear_at: u64,
+}
+
+/// The first thread id the model gives a thread it starts.
+const FIRST_TID: u64 = 1000;
+
 /// A live frame: from its lowest byte to just below its return address, with an address in the
 /// function it belongs to and its call's number.
 #[derive(Debug, Clone, Copy)]
@@ -477,6 +499,15 @@ pub struct State {
     /// The owner of the pointer last stored whole at an address, while none of its bytes has
     /// changed since.
     pointers: BTreeMap<u64, Owner>,
+    /// The threads waiting for the running one, the newest last.
+    suspended: Vec<Suspended>,
+    /// How many threads the run has started.
+    threads: u64,
+    /// The top of the running thread's own stack; `None` for the program's first thread, whose
+    /// stack holds the arguments above it.
+    stack_top: Option<u64>,
+    /// The number of the running thread's first frame: 0 for `_start`'s.
+    base_frame: u64,
     /// The program's arguments and environment as the run began, each from its start to its
     /// end with its name: the array of pointers first, then each string with its NUL.
     arguments: Rc<Vec<(u64, u64, String)>>,
@@ -520,6 +551,7 @@ const REGULAR_FILE: u128 = 0o100_644;
 const EBADF: i64 = 9;
 const EINVAL: i64 = 22;
 const ENOTTY: i64 = 25;
+const EAGAIN: i64 = 11;
 /// The bytes of one `struct pollfd`, and its event for something to read.
 const POLLFD_LEN: u64 = 8;
 const POLLIN: u128 = 1;
@@ -598,6 +630,10 @@ impl State {
             calls: 0,
             owners: [None; 16],
             pointers: BTreeMap::new(),
+            suspended: Vec::new(),
+            threads: 0,
+            stack_top: None,
+            base_frame: 0,
             arguments: Rc::new(Vec::new()),
             obligations: Vec::new(),
         };
@@ -800,7 +836,9 @@ impl State {
 
     /// The running call's number, which names its frame.
     fn frame(&self) -> u64 {
-        self.returns.last().map_or(0, |back| back.frame)
+        self.returns
+            .last()
+            .map_or(self.base_frame, |back| back.frame)
     }
 
     fn register(&self, pool: &mut Pool, register: Register) -> Option<Term> {
@@ -1047,16 +1085,17 @@ impl<'a> Cpu<'a> {
             low = back.slot + 8;
             running = back.back;
         }
-        let top = self
-            .state
-            .arguments
-            .first()
-            .map_or(STACK_TOP, |(_, end, _)| *end);
+        let top = self.state.stack_top.unwrap_or_else(|| {
+            self.state
+                .arguments
+                .first()
+                .map_or(STACK_TOP, |(_, end, _)| *end)
+        });
         frames.push(Frame {
             low,
             top,
             running,
-            number: 0,
+            number: self.state.base_frame,
         });
         frames
     }
@@ -1412,6 +1451,12 @@ impl<'a> Cpu<'a> {
             .state
             .returns
             .iter()
+            .chain(
+                self.state
+                    .suspended
+                    .iter()
+                    .flat_map(|thread| &thread.returns),
+            )
             .find(|back| address < back.slot + 8 && back.slot < end)
         {
             return Err(End::Unsafe(format!(
@@ -2711,6 +2756,93 @@ impl<'a> Cpu<'a> {
         Ok(0)
     }
 
+    /// `clone` as `parallel_for` makes it, with [`Profile::CLONE_FLAGS`]: a thread on the stack
+    /// it's given, which runs to its end now, while this thread waits to go on with the new
+    /// thread's id. Its id is where this thread asked (`CLONE_PARENT_SETTID`) before either runs.
+    ///
+    /// [`Profile::CLONE_FLAGS`]: crate::platform::Profile::CLONE_FLAGS
+    fn start_thread(&mut self) -> Result<Step, Stop> {
+        let registers = self.state.registers;
+        let flags = self.constant(registers[7])?;
+        if flags != crate::platform::Profile::CLONE_FLAGS {
+            return Err(unsupported(format!("clone with flags {flags:#x}")));
+        }
+        let (stack, parent_tid, child_tid) = (
+            self.constant(registers[6])?,
+            self.constant(registers[2])?,
+            self.constant(registers[10])?,
+        );
+        self.state.threads += 1;
+        let tid = FIRST_TID + self.state.threads;
+        let id = self.pool.bv(32, u128::from(tid));
+        self.save(parent_tid, id)?;
+        let next = self.instruction.next_ip();
+        let (next_term, flags_word) = (self.pool.bv(64, u128::from(next)), self.pool.bv(64, 0x202));
+        let mut waiting = registers;
+        waiting[0] = self.pool.bv(64, u128::from(tid));
+        waiting[1] = next_term;
+        waiting[11] = flags_word;
+        let state = &mut *self.state;
+        state.suspended.push(Suspended {
+            registers: waiting,
+            last: state.last,
+            flags: [
+                state.carry,
+                state.zero,
+                state.sign,
+                state.overflow,
+                state.parity,
+            ],
+            vectors: state.vectors.clone(),
+            masks: state.masks,
+            rip: next,
+            returns: std::mem::take(&mut state.returns),
+            owners: state.owners,
+            stack_top: state.stack_top,
+            base_frame: state.base_frame,
+            clear_at: child_tid,
+        });
+        // The new thread: the same registers but rax, 0, and rsp, its own stack, with no calls
+        // yet and a first frame of its own.
+        state.registers[0] = self.pool.bv(64, 0);
+        state.registers[1] = next_term;
+        state.registers[4] = self.pool.bv(64, u128::from(stack));
+        state.registers[11] = flags_word;
+        state.stack_top = Some(stack);
+        state.calls += 1;
+        state.base_frame = state.calls;
+        state.rip = next;
+        Ok(Step::Next)
+    }
+
+    /// A started thread's `exit`: the kernel clears its id (`CLONE_CHILD_CLEARTID`), and the
+    /// thread that started it goes on where it waited.
+    fn end_thread(&mut self) -> Result<Step, Stop> {
+        let Some(waiting) = self.state.suspended.pop() else {
+            return Err(unsupported("a thread's end with no thread to go back to"));
+        };
+        let cleared = self.pool.bv(32, 0);
+        self.save(waiting.clear_at, cleared)?;
+        let state = &mut *self.state;
+        state.registers = waiting.registers;
+        state.last = waiting.last;
+        [
+            state.carry,
+            state.zero,
+            state.sign,
+            state.overflow,
+            state.parity,
+        ] = waiting.flags;
+        state.vectors = waiting.vectors;
+        state.masks = waiting.masks;
+        state.rip = waiting.rip;
+        state.returns = waiting.returns;
+        state.owners = waiting.owners;
+        state.stack_top = waiting.stack_top;
+        state.base_frame = waiting.base_frame;
+        Ok(Step::Next)
+    }
+
     fn syscall(&mut self) -> Result<Step, Stop> {
         let number = self.state.registers[0];
         let number = self
@@ -3014,9 +3146,31 @@ impl<'a> Cpu<'a> {
                 }
                 0
             }
+            56 => return self.start_thread(),
+            // A thread's end: the kernel clears its id and wakes whoever waits on it, and the
+            // thread that started it goes on.
+            60 if !self.state.suspended.is_empty() => return self.end_thread(),
             60 | 231 => {
                 let status = self.pool.extract(rdi, 7, 0);
                 return Err(End::Exit(status));
+            }
+            // A wait for a thread to end. Threads run to their end as they start, so its id is
+            // already cleared: the word no longer holds what the waiter saw.
+            202 => {
+                let (word, operation) = (self.constant(rdi)?, self.constant(rsi)? & 0xffff_ffff);
+                // FUTEX_WAIT, with or without FUTEX_PRIVATE_FLAG.
+                if operation & !128 != 0 {
+                    return Err(unsupported(format!("futex operation {operation}")));
+                }
+                self.lent(Register::RDI, word, 4, false, "futex")?;
+                let now = self.load(word, 4)?;
+                let seen = self.pool.extract(rdx, 31, 0);
+                if self.pool.constant(now) == self.pool.constant(seen) {
+                    return Err(unsupported(
+                        "a wait for a word no thread changes, which would never end",
+                    ));
+                }
+                (-EAGAIN).cast_unsigned()
             }
             // A wait for the next key: as in a test, standard input has all arrived, so it always
             // has a key to read, or its end. A server's poll over its connections is beyond the
