@@ -151,7 +151,8 @@ spec. A `main.s` that comes along in a copied folder is checked from scratch bef
 when its second line says it was compiled for another computer or a CPU feature this one lacks,
 `check` says so, and you compile the spec again for this one. lengua's line names the code, it
 doesn't protect it: anyone can build main.s outside lengua, so its guarantees hold only for
-programs that `run` runs after `check`.
+programs that `run` runs after `check`. lengua supports one target so far, Linux x86-64; adding a
+CPU or OS is set out in [porting.md](references/porting.md).
 
 ## Making it faster
 

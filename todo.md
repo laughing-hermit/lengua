@@ -75,7 +75,27 @@ So people understand the idea, and so it can stand as a new standard. It explain
 
 ## 3. The other five targets
 
-macOS on Apple silicon and Intel, Linux on ARM64, and Windows on x86-64 and ARM64. Each is one profile compiled from the same specs.
+macOS on Apple silicon and Intel, Linux on ARM64, and Windows on x86-64 and ARM64.
+
+The spec already travels to all of them: it names no CPU or OS, and `check` enforces that, so the
+source people share is agnostic today. What is per-target is the compiled `main.s` and lengua's
+checking of it. LLVM's assembler and linkers cover every target, but LLVM does not check, prove or
+sandbox — so each target is a profile **and** its own instruction decoder, prover model, dialect
+reference and runner. The porting contract in DESIGN's "Porting a target" lists exactly what each
+one needs.
+
+- **Linux ARM64 is nearest:** same OS, same sandbox (seccomp and Landlock), same direct system
+  calls — only a new CPU, so a new decoder, prover model, feature detection and dialect reference.
+- **macOS and Windows need more than a new CPU.** They don't allow a program to call the OS
+  directly, as lengua's programs do; a program must go through the system library (libSystem,
+  ntdll), which lengua never checked, and there is no seccomp or Landlock. So those four targets
+  need a different model of the program's edge with the OS and a different sandbox.
+
+The plugin itself (skills plus one MCP server) is agnostic in its skills, which are markdown and
+install the same on every host. Its server is a native binary, built per host, and today builds
+and runs only on Linux, since its sandbox and tracer are Linux-only. So installing the plugin on,
+say, a Windows x86-64 machine and having it work is the Windows host's server build **and** the
+Windows target profile — the same work as item 3 for that host. See DESIGN's "Porting a target".
 
 ## 4. A site for sharing specs
 

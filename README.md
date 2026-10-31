@@ -35,8 +35,9 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 > bundle is, and `check` holds each program to its parts' current code. In ten scenarios in real
 > Claude Code sessions, from a web server to a sort, every program came from one request, with no
 > question. Next, as [todo.md](todo.md) has it: a white paper on lengua as an AI language; the
-> other five of the top CPU and OS targets, which LLVM already supports; and a site for sharing
-> specs.
+> other five of the top CPU and OS targets, each a profile with its own decoder, prover model and
+> runner (LLVM gives the assembler and linkers for every target, but not the checks, proofs or
+> sandbox); and a site for sharing specs.
 
 ## Requirements
 
