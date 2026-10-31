@@ -486,10 +486,13 @@ pub enum Function {
     /// `uniq(s)`: `s`'s lines with each run of identical ones kept once, each ending with a
     /// newline, as `uniq` prints them.
     Uniq,
+    /// `tally(s)`: each distinct word of `s`, as `words` splits them, with how many times it
+    /// appears, one per line as `count word`, most frequent first and ties in byte order.
+    Tally,
 }
 
 impl Function {
-    const ALL: [Self; 29] = [
+    const ALL: [Self; 30] = [
         Self::Len,
         Self::Abs,
         Self::Min,
@@ -519,6 +522,7 @@ impl Function {
         Self::Words,
         Self::Sort,
         Self::Uniq,
+        Self::Tally,
     ];
 
     fn name(self) -> &'static str {
@@ -552,6 +556,7 @@ impl Function {
             Self::Words => "words",
             Self::Sort => "sort",
             Self::Uniq => "uniq",
+            Self::Tally => "tally",
         }
     }
 
@@ -567,6 +572,7 @@ impl Function {
             | Self::Words
             | Self::Sort
             | Self::Uniq
+            | Self::Tally
             | Self::Abs
             | Self::Upper
             | Self::Lower
@@ -1435,6 +1441,30 @@ fn call(function: Function, arguments: &[Expr], env: &Env) -> Result<Value, Eval
         Function::Reverse => Ok(Value::Str(
             string(argument(0)?, name)?.chars().rev().collect(),
         )),
+        Function::Tally => {
+            let text = string(argument(0)?, name)?;
+            let space = |byte: u8| matches!(byte, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r');
+            let mut counts: std::collections::BTreeMap<&[u8], usize> =
+                std::collections::BTreeMap::new();
+            for word in text
+                .as_bytes()
+                .split(|byte| space(*byte))
+                .filter(|word| !word.is_empty())
+            {
+                *counts.entry(word).or_default() += 1;
+            }
+            let mut tally: Vec<(&[u8], usize)> = counts.into_iter().collect();
+            // Most frequent first; the map's byte order breaks ties, as the sort keeps it.
+            tally.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+            let mut out = Vec::new();
+            for (word, count) in tally {
+                out.extend_from_slice(format!("{count} ").as_bytes());
+                out.extend_from_slice(word);
+                out.push(b'\n');
+            }
+            // Words split at ASCII whitespace keep whole characters, so the text stays UTF-8.
+            Ok(Value::Str(String::from_utf8_lossy(&out).into_owned()))
+        }
         Function::Sort | Function::Uniq => {
             let text = string(argument(0)?, name)?;
             let mut lines = lines_of(&text);
@@ -2852,6 +2882,13 @@ mod tests {
         assert_eq!(value("uniq(t)", &lines("a\na")), text("a\n"));
         assert_eq!(value("uniq(t)", &lines("a\nb\na\n")), text("a\nb\na\n"));
         assert_eq!(value("uniq(sort(t))", &lines("b\na\nb\n")), text("a\nb\n"));
+        // tally: each word with its count, most frequent first, ties in byte order.
+        assert_eq!(
+            value("tally(t)", &lines("the cat and the\tdog, the cat\n")),
+            text("3 the\n2 cat\n1 and\n1 dog,\n")
+        );
+        assert_eq!(value("tally(t)", &lines(" \n\t")), text(""));
+        assert_eq!(value("tally(t)", &lines("é b é")), text("2 é\n1 b\n"));
         let rot13 = r#"tr(s, "A-Za-z", "N-ZA-Mn-za-m")"#;
         assert_eq!(value(rot13, &vars), Ok(Value::Str("Uéyyb".into())));
         assert_eq!(

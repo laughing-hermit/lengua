@@ -13,6 +13,7 @@ use super::super::{Image, Last, State, Step, VECTOR_BYTES, step};
 use super::{CONDITIONS, FLAGS, NAMES, allows, build, possible, register};
 use crate::prove::term::{Pool, Term};
 
+mod crypto;
 mod floats;
 
 /// Where each part of a run's state sits in its input and in its result.
@@ -384,6 +385,7 @@ fn probes(rng: &mut ChaCha8Rng) -> Vec<Vec<String>> {
         }
     }
     list.extend(floats::probes(rng));
+    list.extend(crypto::probes(rng));
     list
 }
 

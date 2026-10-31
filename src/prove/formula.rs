@@ -837,6 +837,9 @@ fn call(
         Function::Sort | Function::Uniq => {
             Err("sort and uniq compare whole lines, which the proof doesn't follow yet".into())
         }
+        Function::Tally => {
+            Err("tally counts distinct words, which the proof doesn't follow yet".into())
+        }
         other => Err(format!("the function {other:?}")),
     }
 }

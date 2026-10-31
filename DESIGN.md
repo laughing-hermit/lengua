@@ -544,7 +544,9 @@ How the proof works (`src/prove/`):
   1 GiB each for. A watchdog stops the solver holding the most whenever free memory falls below a
   sixteenth of all there is, so a hard question ends its proof as "not proven: the computer ran
   low on memory" instead of the kernel's out-of-memory killer ending whatever it picks, such as
-  the session the agent runs in.
+  the session the agent runs in. Each proof worker, and every solver it starts, runs ten steps
+  below normal priority, so a proof takes only the cores nothing else wants: the user's own work,
+  and the server answering the agent, always come first.
 
 Trust:
 
@@ -594,6 +596,9 @@ Trust:
     expressions shaped like the prover's are built through the simplifying pool and evaluated at
     random inputs. They must equal SMT-LIB's arithmetic as written, and every term's range must
     hold its value. It found dividing by a constant zero simplified wrongly.
+  - *The crypto instructions against this CPU*, in the same harness: AES rounds, key
+    expansion and `aesimc`, the SHA-1 and SHA-256 rounds and message steps, and `pclmulqdq`, on
+    random lanes; a constant changed in SHA-1's rounds or AES's MixColumns shows at once.
   - *Float formulas against the test language* (`src/prove/formula.rs`): 23 formulas of
     decimals, singles and doubles, `sqrt`, `fma`, the roundings and `fixed`, over 400 random
     draws, must give the test language's values bit for bit.
@@ -662,7 +667,12 @@ What it covers:
     `cmpsd` predicate into a vector or a mask, `ucomisd` and `comisd`, the conversions between
     whole numbers, singles and doubles, `movsd` and `movss`, broadcasts, `movmskpd`, unpacking,
     `shufpd` and `shufps`, horizontal adds, `movhlps` and `movlhps`, and the bitwise `pd`
-    forms. A rounding an EVEX instruction embeds is left to tests.
+    forms. A rounding an EVEX instruction embeds is left to tests;
+  - ciphers, hashes and carry-less multiplies: AES's rounds, `aesimc` and `aeskeygenassist`,
+    on one lane or, with VAES, two or four; SHA-1's and SHA-256's rounds and message steps; and
+    `pclmulqdq` on one lane or, with VPCLMULQDQ, several. Each is the bit arithmetic Intel
+    defines, the S-box a table its byte picks from, so known values fold and a proof runs the
+    rest.
 
   The vector template, upcase and the word counts Claude Code wrote are proven for every input
   up to 4096 bytes, with no solver question. An instruction the proof doesn't model yet is named
@@ -710,8 +720,9 @@ What it covers:
   input by 64 KiB a thread starts no thread on the 4096 bytes a proof covers, and its proof says
   it never ran `start_worker` or `join_worker`.
 
-Not yet: `sha256` and the SHA and AES instructions; `pclmulqdq`, which joins CRC chains; a
-float printed as the test language writes it on its own, its shortest exact digits, rather than
+Not yet: the `sha256` formula, which the SHA instructions now run under but no formula yet
+meets; a CRC joined by `pclmulqdq`, which runs but builds other terms than the chain of steps;
+`sort`, `uniq` and `tally`; a float printed as the test language writes it on its own, its shortest exact digits, rather than
 with `fixed`; and `tr` that changes a character's width in bytes (`tr` beyond ASCII is proven
 character by character, each keeping its width). Those blocks are tested, not proven, and the
 report says why. A stream read both with `read` and with `fill` is proven for the four

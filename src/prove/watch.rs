@@ -1,7 +1,9 @@
-//! Keeps the computer's memory free while proofs run: lengua starts fewer proof workers where
-//! less memory is free, and a watchdog stops the solver using the most when free memory runs
-//! low, so a hard proof ends as unknown, saying why, instead of the kernel's out-of-memory killer
-//! ending whatever it picks, such as the session the agent runs in.
+//! Keeps the computer usable while proofs run. lengua starts fewer proof workers where less
+//! memory is free, and a watchdog stops the solver using the most when free memory runs low, so
+//! a hard proof ends as unknown, saying why, instead of the kernel's out-of-memory killer ending
+//! whatever it picks, such as the session the agent runs in. And each proof worker, with the
+//! solvers it starts, runs below the user's own work, so a proof takes only the cores nothing
+//! else wants.
 
 use std::collections::BTreeSet;
 use std::sync::Mutex;
@@ -66,6 +68,16 @@ const fn floor(total: u64) -> u64 {
 fn resident(pid: u32) -> Option<u64> {
     let text = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
     field(&text, "VmRSS:")
+}
+
+/// How far below normal a proof worker's priority goes: other work always comes first.
+const PROOF_NICENESS: i32 = 10;
+
+/// Lowers the calling thread's priority below the user's own work, and with it the solvers it
+/// starts, which inherit it. Linux keeps a priority for each thread, so the server's other
+/// threads, which answer the agent, keep theirs.
+pub fn yield_to_others() {
+    let _ = rustix::process::setpriority_process(None, PROOF_NICENESS);
 }
 
 /// How many proof workers the free memory leaves room for, at most `cores`, and at least one.
@@ -186,6 +198,30 @@ mod tests {
         assert_eq!(floor(32 << 30), 2 << 30);
         assert!(workers(16) >= 1);
         assert_eq!(workers(1), 1);
+    }
+
+    /// A proof worker yields: its priority drops below normal, and a solver it starts inherits it.
+    #[test]
+    fn a_proof_worker_yields_to_other_work() {
+        std::thread::spawn(|| {
+            yield_to_others();
+            assert_eq!(
+                rustix::process::getpriority_process(None).expect("a priority"),
+                PROOF_NICENESS
+            );
+            let child = std::process::Command::new("sleep")
+                .arg("5")
+                .spawn()
+                .expect("a process");
+            let pid = rustix::process::Pid::from_raw(i32::try_from(child.id()).expect("a pid"));
+            let niceness = rustix::process::getpriority_process(pid).expect("its priority");
+            let mut child = child;
+            let _ = child.kill();
+            let _ = child.wait();
+            assert_eq!(niceness, PROOF_NICENESS);
+        })
+        .join()
+        .expect("the thread");
     }
 
     /// A solver the watchdog stops ends by SIGKILL, and is known to have been stopped. This

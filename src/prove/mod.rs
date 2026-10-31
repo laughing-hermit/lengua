@@ -2352,6 +2352,7 @@ fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verd
     std::thread::scope(|scope| {
         for _ in 0..workers {
             scope.spawn(|| {
+                watch::yield_to_others();
                 let mut solvers = Solvers::new(budget.question_ms);
                 while !stop.load(Ordering::Relaxed) {
                     let turn = next.fetch_add(1, Ordering::Relaxed);

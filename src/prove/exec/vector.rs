@@ -10,6 +10,7 @@ use iced_x86::{EncodingKind, Mnemonic, OpKind, Register};
 use super::{Cpu, Last, Step, Stop, VECTOR_BYTES, unsupported};
 use crate::prove::term::Term;
 
+mod crypto;
 mod float;
 
 /// A vector register's number, 0 to 31.
@@ -1130,7 +1131,7 @@ impl Cpu<'_> {
             | Mnemonic::Vpexpandd
             | Mnemonic::Vpexpandq => self.compress(mnemonic)?,
             other => {
-                if let Some(done) = self.floating(other) {
+                if let Some(done) = self.floating(other).or_else(|| self.crypto(other)) {
                     done?;
                     return Ok(Step::Next);
                 }
