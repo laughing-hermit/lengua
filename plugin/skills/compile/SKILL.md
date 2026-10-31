@@ -49,7 +49,11 @@ and the CPU features the code needs; never write that line yourself.
    every order between polls. A program for the terminal starts from
    [the key reader](assets/terminal-template.s) ([its spec](assets/terminal-template-spec.md)):
    keys one at a time with no echo, a wait for the next key, and the terminal set back at the
-   end. A choice made for each input byte with `cmov` or `setcc`, not a branch, keeps the proof
+   end. A program that counts or looks things up by key starts from
+   [the word tally](assets/tally-template.s) ([its spec](assets/tally-template-spec.md)): a hash
+   table of a million slots by FNV-1a with linear probing, its entries in the order the keys first
+   appear, sorted by a merge sort to print, so printing walks the entries, never the slots. A
+   choice made for each input byte with `cmov` or `setcc`, not a branch, keeps the proof
    to one path; a branch per byte doubles the paths with each byte, and the proof stops early.
 4. Write the code by [the rules](references/power-of-10.md), with
    [the Linux x86-64 reference](references/linux-x86_64.md) for system calls, the program's start

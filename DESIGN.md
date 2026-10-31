@@ -484,7 +484,17 @@ How the proof works (`src/prove/`):
 - **Addresses the input chooses.** A load or a store at an address with at most 256 places,
   all in memory the access may use, is a choice among the places: a table indexed by an input
   byte, or by a month, is a function of it, and a table of counters keeps each slot's value
-  unless the address is that slot's.
+  unless the address is that slot's. An index scaled by 8 lands only on every eighth byte, so a
+  table of 256 qwords is 256 places, not 2041. Past 256 places, an access held to a data symbol,
+  as a hash table's slot is, puts the symbol in a log: its bytes as they stood, then each store
+  since, oldest first, and a load anywhere in it is the newest store that may be there, then
+  what was there before. Every later access to it goes through the log, at any address; its
+  staying inside the symbol is a question for the solvers, and addresses two aligned ones a few
+  bytes apart are never taken for the same. So the word tally's index of a million slots, chosen
+  by each word's FNV-1a hash, is followed as it is: assets/tally-template.s is proven for every
+  text up to 5 bytes in two minutes, both solvers settling where two words' slots meet, and a
+  tally that forgets to note a word in its index, or puts tied words in the wrong order, is
+  found.
 - **The network is the tests' own peers.** A program that connects reaches only the test
   server's port, an input from 1 to 65535 since the kernel chooses it; any other port is
   refused, as the test's rules refuse it, and so is any other computer. The server waits for exactly what it must receive, so
@@ -784,7 +794,8 @@ What it covers:
 
 Not yet: the `sha256` formula, which the SHA instructions now run under but no formula yet
 meets; a CRC joined by `pclmulqdq`, which runs but builds other terms than the chain of steps;
-`sort` and `uniq` of texts over 8 bytes, and `tally`; a float printed as the test language writes it on its own, its shortest exact digits, rather than
+`sort` and `uniq` of texts over 8 bytes, and `tally` of texts over 8 (shorter ones are a choice
+of texts, as sorted ones are); a float printed as the test language writes it on its own, its shortest exact digits, rather than
 with `fixed`; and `tr` that changes a character's width in bytes (`tr` beyond ASCII is proven
 character by character, each keeping its width). Those blocks are tested, not proven, and the
 report says why. A stream read both with `read` and with `fill` is proven for the four

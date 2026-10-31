@@ -428,6 +428,36 @@ async fn the_streaming_filter_is_proven_for_every_length() {
     session.service.cancel().await.expect("close the session");
 }
 
+/// The word tally building block goes through check to done, every test passing, and runs.
+/// Its proof, whose questions about where words' hashes meet are heavy for the solvers, is the
+/// prover's own test's; here it gets a few seconds, so the machine stays free for the others.
+#[tokio::test]
+async fn the_tally_block_passes_its_checks() {
+    if !solvers_installed() {
+        return;
+    }
+    let session = Session::proving_for(Protocol::Discover, 5).await;
+    let program = written(
+        &session,
+        [
+            ("spec.md", asset("tally-template-spec.md")),
+            ("main.s", asset("tally-template.s")),
+        ],
+    )
+    .await;
+    let report = session.settle(&program).await;
+    assert_eq!(report["state"], "done", "{report}");
+    assert!(
+        text(&report["proofs"][0]).starts_with("generated B1: "),
+        "{report}"
+    );
+    let mut arguments = program.arguments();
+    arguments["stdin"] = Value::from("the cat and the\tdog the cat\n");
+    let run = session.call_ok("run", arguments).await;
+    assert_eq!(run["stdout"], "3 the\n2 cat\n1 and\n1 dog\n", "{run}");
+    session.service.cancel().await.expect("close the session");
+}
+
 /// A word count, whose count for each buffer-full depends on whether the one before ended
 /// inside a word, goes through check to done with its proof for every length: two buffer-fulls
 /// at a time, the second counted after the first's last byte. Its buffer is made small, so the
@@ -444,7 +474,7 @@ async fn a_word_count_is_proven_for_every_length() {
             ("spec.md", fixture("words", "spec.md")),
             (
                 "main.s",
-                fixture("words", "main.s").replace(".equ BUF_LEN, 4096\n", ".equ BUF_LEN, 256\n"),
+                fixture("words", "main.s").replace(".equ BUF_LEN, 4096\n", ".equ BUF_LEN, 128\n"),
             ),
         ],
     )
@@ -454,7 +484,7 @@ async fn a_word_count_is_proven_for_every_length() {
     let proof = text(&report["proofs"][0]);
     assert!(
         proof.starts_with("generated B1: proven for every input in range")
-            && proof.contains("two more buffer-fulls of 256 bytes")
+            && proof.contains("two more buffer-fulls of 128 bytes")
             && proof.contains("after the first's last 1 byte"),
         "{report}"
     );

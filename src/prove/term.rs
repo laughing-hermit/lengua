@@ -525,6 +525,44 @@ impl Pool {
         self.signed_ranges[term.index()]
     }
 
+    /// The step between the values `term` can take, and their remainder by it: read as a sum,
+    /// each part times a multiple of 2^s plus a constant, every value is the constant plus a
+    /// multiple of 2^s, as an index scaled by 8 into a table only lands on its entries.
+    #[must_use]
+    pub fn stride(&self, term: Term) -> (u128, u128) {
+        let width = self.width(term);
+        let linear = self.linear_view(term);
+        let shift = linear
+            .parts
+            .values()
+            .map(|times| times.trailing_zeros())
+            .min()
+            .unwrap_or(width)
+            .min(width)
+            .min(63);
+        let step = 1_u128 << shift;
+        (step, linear.constant & (step - 1))
+    }
+
+    /// Whether `a` and `b`, read as sums, differ by multiples of 2^s and a constant that isn't
+    /// one, so they're never equal: aligned addresses a few bytes apart never meet.
+    #[must_use]
+    pub fn apart(&self, a: Term, b: Term) -> bool {
+        let width = self.width(a);
+        let (x, y) = (self.linear_view(a), self.linear_view(b));
+        let mut parts = x.parts;
+        for (part, times) in y.parts {
+            let entry = parts.entry(part).or_insert(0);
+            *entry = entry.wrapping_sub(times) & mask(width);
+        }
+        parts.retain(|_, times| *times != 0);
+        let constant = x.constant.wrapping_sub(y.constant) & mask(width);
+        let Some(shift) = parts.values().map(|times| times.trailing_zeros()).min() else {
+            return false;
+        };
+        shift > 0 && constant.trailing_zeros() < shift.min(width)
+    }
+
     /// The signed range of a node's values, from its operands' signed ranges.
     fn signed_range_of(
         &self,

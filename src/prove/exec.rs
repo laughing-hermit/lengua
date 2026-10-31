@@ -496,6 +496,9 @@ pub struct State {
     head: Option<Box<induction::Snapshot>>,
     /// Where it stood the second time, one buffer-full on.
     second: Option<Box<induction::Second>>,
+    /// The data symbols an address the input chooses reached among more places than a run
+    /// follows one by one, each with its stores since.
+    logs: Rc<Vec<logs::Log>>,
     /// The bytes a test supplies for `getrandom`, in order, when it supplies them: the kernel's
     /// are any value.
     random: Option<Rc<Vec<Term>>>,
@@ -633,6 +636,7 @@ impl State {
             arrivals: 0,
             head: None,
             second: None,
+            logs: Rc::new(Vec::new()),
             rip: image.entry,
             path: Vec::new(),
             stdin: Rc::new(stdin),
@@ -836,6 +840,9 @@ impl State {
 
     /// Writes `value` little-endian at `address`, which must be known to be writable.
     fn store(&mut self, pool: &mut Pool, address: u64, value: Term) {
+        if self.store_logged(pool, address, value) {
+            return;
+        }
         let bytes = pool.width(value) / 8;
         // A whole value any of these bytes belonged to is gone; values are at most 8 bytes.
         let end = address + u64::from(bytes);
@@ -1055,6 +1062,11 @@ impl<'a> Cpu<'a> {
     }
 
     fn load(&mut self, address: u64, bytes: u32) -> Result<Term, Stop> {
+        // Memory an address the input chooses reached is its log's.
+        if let Some(index) = self.state.log_span(address, bytes)? {
+            let address = self.pool.bv(64, u128::from(address));
+            return Ok(self.logged_value(index, address, bytes));
+        }
         if let Some(whole) = self.state.stored.get(&address).copied()
             && self.pool.width(whole) == bytes * 8
             && self.image.region(address).is_some()
@@ -1089,6 +1101,10 @@ impl<'a> Cpu<'a> {
 
     /// The byte at `at` as it stands, to merge with: never-written stack is whatever was there.
     fn peek(&mut self, at: u64) -> Term {
+        if let Some(index) = self.state.log_at(at) {
+            let address = self.pool.bv(64, u128::from(at));
+            return self.state.logged(self.pool, index, address);
+        }
         if let Some(byte) = self.state.memory.get(at) {
             return byte;
         }
@@ -1525,7 +1541,10 @@ impl<'a> Cpu<'a> {
     /// input can choose it.
     fn places(&mut self, address: Term, bytes: u32, writing: bool) -> Result<Vec<u64>, Stop> {
         let (low, high) = self.pool.range(address);
-        if high - low >= MAX_PLACES {
+        // An address that's a sum of multiples of 2^s lands only every 2^s bytes.
+        let (step, remainder) = self.pool.stride(address);
+        let first = low + (remainder + step - low % step) % step;
+        if first > high || (high - first) / step >= MAX_PLACES {
             return Err(unsupported(
                 "an address that depends on the input in more than 256 ways",
             ));
@@ -1533,7 +1552,7 @@ impl<'a> Cpu<'a> {
         let held = self.held();
         let mut places = Vec::new();
         let mut outside = Vec::new();
-        for place in low..=high {
+        for place in (first..=high).step_by(usize::try_from(step).unwrap_or(1)) {
             let place = u64::try_from(place).map_err(|_| unsupported("an address past 64 bits"))?;
             for offset in 0..u64::from(bytes) {
                 match self.image.region(place.wrapping_add(offset)) {
@@ -1570,6 +1589,10 @@ impl<'a> Cpu<'a> {
     /// A load from an address the input chooses: the value at each place it can be, chosen by
     /// the address, so a table indexed by an input byte is a function of the byte.
     fn load_anywhere(&mut self, address: Term, bytes: u32) -> Result<Term, Stop> {
+        if let Some(object) = self.spread(address, bytes, false)? {
+            let index = self.log_of(&object)?;
+            return Ok(self.logged_value(index, address, bytes));
+        }
         let places = self.places(address, bytes, false)?;
         let mut value: Option<Term> = None;
         for place in places.into_iter().rev() {
@@ -1590,6 +1613,11 @@ impl<'a> Cpu<'a> {
     /// the address is that place.
     fn save_anywhere(&mut self, address: Term, value: Term) -> Result<(), Stop> {
         let bytes = self.pool.width(value) / 8;
+        if let Some(object) = self.spread(address, bytes, true)? {
+            let index = self.log_of(&object)?;
+            self.log_value(index, address, value);
+            return Ok(());
+        }
         for place in self.places(address, bytes, true)? {
             let constant = self.pool.bv(64, u128::from(place));
             let chosen = self.pool.eq(address, constant);
@@ -3380,6 +3408,7 @@ fn unwritten_stack(at: u64) -> bool {
 mod bits;
 mod fill;
 pub mod induction;
+mod logs;
 pub mod net;
 mod vector;
 

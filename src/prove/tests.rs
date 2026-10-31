@@ -1691,6 +1691,55 @@ async fn proves_sorting_for_short_texts() {
     assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
 }
 
+/// A word tally through a hash table of a million slots, which the words' hashes choose among:
+/// the table's log of stores follows them, so the building block is proven for short texts; a
+/// count that forgets to note a word in the table, ties in the wrong order and a slot left
+/// unmasked, which its own bounds check then stops, are found. Its questions about where two
+/// words' hashes meet keep the solvers busy for minutes, so it runs with the slow tests
+/// (`--ignored`).
+#[tokio::test]
+#[ignore = "minutes of solver work on hash collisions"]
+async fn proves_a_tally_for_short_texts() {
+    if !solvers_installed() {
+        return;
+    }
+    let spec = asset("tally-template-spec.md");
+    let source = asset("tally-template.s");
+    let right = machine(&source).await;
+    let tally = block(&spec, 0);
+    let verdict = prove(&right, &tally, &budget(90));
+    assert!(
+        matches!(&verdict, Verdict::Proven { bound: Some(bound), .. } if bound.bytes >= 3),
+        "{verdict:?}"
+    );
+    let mutants = [
+        // Every word new: its slot never takes its entry's number.
+        (
+            "    mov dword ptr [r15 + rbp*4], eax\n",
+            "    mov dword ptr [r15 + rbp*4], 0\n",
+        ),
+        // Ties in reverse byte order.
+        (
+            "    lea rdi, [rdx + r8]\n    lea rdx, [rdx + r9]\n",
+            "    lea rdi, [rdx + r9]\n    lea rdx, [rdx + r8]\n",
+        ),
+    ];
+    // The hash used whole as a slot, which the probe's bounds check stops with its assertion.
+    let unmasked = (
+        "    and rax, SLOT_MASK\n    mov rdi, r12\n",
+        "    mov rdi, r12\n",
+    );
+    for (from, to) in mutants.into_iter().chain([unmasked]) {
+        let wrong = source.replacen(from, to, 1);
+        assert_ne!(wrong, source, "{from}");
+        let verdict = prove(&machine(&wrong).await, &tally, &budget(60));
+        assert!(
+            matches!(verdict, Verdict::Counterexample(_)),
+            "{from}: {verdict:?}"
+        );
+    }
+}
+
 /// Vector code, AVX-512 with masks: the fast word count's lines and words, its popcounts of
 /// masks meeting the formulas' counts as one term; a count that misses carriage returns is
 /// found. Texts up to 200 bytes, past three whole vectors and a tail, keep the test quick even

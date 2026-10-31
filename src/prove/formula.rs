@@ -946,10 +946,168 @@ fn call(
             Ok(Formula::Texts(texts))
         }
         Function::Tally => {
-            Err("tally counts distinct words, which the proof doesn't follow yet".into())
+            let bytes = text(next()?)?;
+            Ok(Formula::Texts(tallied(pool, &bytes)?))
         }
         other => Err(format!("the function {other:?}")),
     }
+}
+
+/// The most bytes a text `tally` reads may have: each way its whitespace can fall, its words
+/// can group and its counts can tie is a text of its own.
+const MAX_TALLIED: usize = 8;
+
+/// The most texts a tally may be a choice of.
+const MAX_TALLIES: usize = 20_000;
+
+/// `tally` of a short text as a choice of texts: for each way its whitespace can fall, each way
+/// its words can be the same or differ, and each order words with the same count can come in,
+/// the text `tally` gives where that holds: each word's count, a space, the word and a newline,
+/// the most frequent first, ties in byte order. For any input exactly one choice holds.
+fn tallied(pool: &mut Pool, bytes: &[Term]) -> Result<Vec<(Term, Vec<Term>)>, String> {
+    if bytes.len() > MAX_TALLIED {
+        return Err(format!(
+            "tally of a text over {MAX_TALLIED} bytes, whose ways its words can fall and group \
+             are too many to follow"
+        ));
+    }
+    let spaces: Vec<Term> = bytes.iter().map(|byte| space(pool, *byte)).collect();
+    let mut choices = Vec::new();
+    for mask in 0..1_u32 << bytes.len() {
+        // Bit i set: byte i is whitespace.
+        let mut conditions = Vec::with_capacity(bytes.len());
+        let mut words: Vec<Vec<Term>> = Vec::new();
+        let mut word: Vec<Term> = Vec::new();
+        for (index, byte) in bytes.iter().enumerate() {
+            if mask >> index & 1 == 1 {
+                conditions.push(spaces[index]);
+                if !word.is_empty() {
+                    words.push(std::mem::take(&mut word));
+                }
+            } else {
+                conditions.push(pool.bool_not(spaces[index]));
+                word.push(*byte);
+            }
+        }
+        if !word.is_empty() {
+            words.push(word);
+        }
+        let split = pool.all(&conditions);
+        if pool.truth(split) == Some(false) {
+            continue;
+        }
+        for (grouped, classes) in groupings(pool, &words) {
+            let grouped = pool.bool_and(split, grouped);
+            if pool.truth(grouped) == Some(false) {
+                continue;
+            }
+            for (ordered, text) in tallies(pool, &words, &classes) {
+                let condition = pool.bool_and(grouped, ordered);
+                if pool.truth(condition) == Some(false) {
+                    continue;
+                }
+                choices.push((condition, text));
+                if choices.len() > MAX_TALLIES {
+                    return Err(
+                        "tally of a text whose ways its words can fall and group are too many to \
+                         follow"
+                            .into(),
+                    );
+                }
+            }
+        }
+    }
+    Ok(choices)
+}
+
+/// Each way `words` can be the same or differ: the condition for it, with each group's first
+/// word and how many words are in it, in the order the groups first appear. Words of different
+/// lengths always differ, so only those of the same length are compared.
+fn groupings(pool: &mut Pool, words: &[Vec<Term>]) -> Vec<(Term, Vec<(usize, usize)>)> {
+    let mut partial: Vec<(Term, Vec<(usize, usize)>)> = vec![(pool.boolean(true), Vec::new())];
+    for (index, word) in words.iter().enumerate() {
+        let mut next = Vec::new();
+        for (condition, classes) in partial {
+            // The same as an earlier group's first word: one more in that group.
+            for (place, (first, _)) in classes.iter().enumerate() {
+                if words[*first].len() != word.len() {
+                    continue;
+                }
+                let same = same_line(pool, &words[*first], word);
+                let joined = pool.bool_and(condition, same);
+                if pool.truth(joined) == Some(false) {
+                    continue;
+                }
+                let mut classes = classes.clone();
+                classes[place].1 += 1;
+                next.push((joined, classes));
+            }
+            // Unlike every earlier group of its length: a group of its own.
+            let mut alone = condition;
+            for (first, _) in &classes {
+                if words[*first].len() == word.len() {
+                    let same = same_line(pool, &words[*first], word);
+                    let differs = pool.bool_not(same);
+                    alone = pool.bool_and(alone, differs);
+                }
+            }
+            if pool.truth(alone) != Some(false) {
+                let mut classes = classes;
+                classes.push((index, 1));
+                next.push((alone, classes));
+            }
+        }
+        partial = next;
+    }
+    partial
+}
+
+/// The texts a tally of `classes`, groups of `words`, can be: the most frequent first, and each
+/// order the words with the same count can come in, with the condition that it's their byte
+/// order.
+fn tallies(
+    pool: &mut Pool,
+    words: &[Vec<Term>],
+    classes: &[(usize, usize)],
+) -> Vec<(Term, Vec<Term>)> {
+    let mut counts: Vec<usize> = classes.iter().map(|(_, count)| *count).collect();
+    counts.sort_unstable_by(|a, b| b.cmp(a));
+    counts.dedup();
+    let space = pool.bv(8, u128::from(b' '));
+    let newline = pool.bv(8, u128::from(b'\n'));
+    let mut partial: Vec<(Term, Vec<Term>)> = vec![(pool.boolean(true), Vec::new())];
+    for count in counts {
+        let tied: Vec<Vec<Term>> = classes
+            .iter()
+            .filter(|(_, many)| *many == count)
+            .map(|(first, _)| words[*first].clone())
+            .collect();
+        let digits: Vec<Term> = count
+            .to_string()
+            .bytes()
+            .map(|digit| pool.bv(8, u128::from(digit)))
+            .collect();
+        let orders = sorted(pool, &tied);
+        let mut next = Vec::new();
+        for (condition, text) in &partial {
+            for (order, lines) in &orders {
+                let joined = pool.bool_and(*condition, *order);
+                if pool.truth(joined) == Some(false) {
+                    continue;
+                }
+                let mut text = text.clone();
+                for line in lines {
+                    text.extend(&digits);
+                    text.push(space);
+                    text.extend(line);
+                    text.push(newline);
+                }
+                next.push((joined, text));
+            }
+        }
+        partial = next;
+    }
+    partial
 }
 
 /// The most bytes a text `sort` or `uniq` reads may have: each way its newlines can fall, and
@@ -1390,6 +1548,50 @@ mod tests {
                     "{source} of {first:?} then {rest:?}"
                 );
             }
+        }
+    }
+
+    /// tally over short texts, a choice of texts for each way the whitespace can fall, the words
+    /// group and words with the same count compare: on random texts, exactly one choice holds,
+    /// and it's the text the test language computes.
+    #[test]
+    fn tallies_agree_with_the_test_language() {
+        let mut rng = ChaCha8Rng::seed_from_u64(0x7a11_7a11);
+        let alphabet = b"ab \n";
+        let expr = crate::expr::parse("tally(s)").expect("a formula");
+        for _ in 0..300 {
+            let length = rng.random_range(0..=MAX_TALLIED);
+            let text: Vec<u8> = (0..length)
+                .map(|_| alphabet[rng.random_range(0..alphabet.len())])
+                .collect();
+            let shown = String::from_utf8(text.clone()).expect("ASCII");
+            let env: crate::expr::Env = [("s".to_owned(), Value::Str(shown.clone()))]
+                .into_iter()
+                .collect();
+            let expected = crate::expr::eval(&expr, &env).expect("evaluates");
+            let mut pool = Pool::default();
+            let bytes: Vec<Term> = (0..length)
+                .map(|index| pool.var(8, &format!("s{index}")))
+                .collect();
+            let values: HashMap<String, u128> = (0..length)
+                .map(|index| (format!("s{index}"), u128::from(text[index])))
+                .collect();
+            let texts: BTreeMap<String, Vec<Term>> = [("s".to_owned(), bytes)].into();
+            let Ok(Formula::Texts(choices)) = translate(&mut pool, &expr, &BTreeMap::new(), &texts)
+            else {
+                panic!("tally of {shown:?} translates");
+            };
+            let holding: Vec<String> = choices
+                .iter()
+                .filter(|(condition, _)| pool.evaluate(*condition, &values) == Some(1))
+                .map(|(_, bytes)| {
+                    bytes
+                        .iter()
+                        .map(|byte| pool.evaluate(*byte, &values).expect("a byte") as u8 as char)
+                        .collect()
+                })
+                .collect();
+            assert_eq!(holding, vec![expected.render().expect("text")], "{shown:?}");
         }
     }
 

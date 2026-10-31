@@ -1997,11 +1997,17 @@ impl Computed {
     }
 }
 
-/// Whether `expr` is `sort` or `uniq`, whose reason a proof gives when it can't follow them.
+/// Whether `expr` is `sort`, `uniq` or `tally`, whose reason a proof gives when it can't follow
+/// them.
 fn is_lined(expr: &crate::expr::Expr) -> bool {
     matches!(
         expr,
-        crate::expr::Expr::Call(crate::expr::Function::Sort | crate::expr::Function::Uniq, _)
+        crate::expr::Expr::Call(
+            crate::expr::Function::Sort
+                | crate::expr::Function::Uniq
+                | crate::expr::Function::Tally,
+            _
+        )
     )
 }
 

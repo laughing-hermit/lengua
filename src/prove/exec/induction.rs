@@ -366,6 +366,13 @@ impl State {
                 .other
                 .push("the read loop reads standard input with read itself, not only fill".into());
         }
+        if !self.logs.is_empty() {
+            changes.other.push(
+                "a time round the read loop reaches memory the input chooses among more places \
+                 than a proof follows one by one"
+                    .into(),
+            );
+        }
         changes
     }
 

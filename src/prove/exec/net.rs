@@ -811,6 +811,17 @@ impl super::State {
         for (address, value) in &self.stored {
             key.extend([*address, term(*value)]);
         }
+        key.push(self.logs.len() as u64);
+        for log in self.logs.iter() {
+            key.extend([log.start, log.end, term(log.common)]);
+            for (address, byte) in &log.others {
+                key.extend([*address, term(*byte)]);
+            }
+            key.push(log.entries.len() as u64);
+            for (address, byte) in &log.entries {
+                key.extend([term(*address), term(*byte)]);
+            }
+        }
         key.push(self.path.len() as u64);
         key.extend(self.path.iter().map(|condition| term(*condition)));
         key.push(self.stdin_read as u64);
