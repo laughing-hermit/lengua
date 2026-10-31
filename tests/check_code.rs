@@ -907,8 +907,9 @@ async fn the_file_example_proves_its_file_handling() {
     if !solvers_installed() {
         return;
     }
-    // A minute, so a machine busy with other tests still proves some lengths.
-    let session = Session::proving_for(Protocol::Discover, 60).await;
+    // Two minutes, so a machine busy with other tests' proofs still proves some lengths: the
+    // model's runs of the samples, mebibyte files among them, come out of the same time.
+    let session = Session::proving_for(Protocol::Discover, 120).await;
     let program = written(&session, example_files("upcase")).await;
     let report = done(&session, &program).await;
     // Usage (B2), a missing input (B3) and a file over the limit (B4, a mebibyte of any of its

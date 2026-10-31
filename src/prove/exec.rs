@@ -10,7 +10,7 @@
 //! into a neighbour that starts just past its end; no return address is written, and each `ret`
 //! goes back where its call came from; and no stack byte is read before something wrote it.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -468,6 +468,14 @@ pub struct State {
     network: Rc<net::Network>,
     /// The sockets open, by descriptor, with their connection's number once they have one.
     sockets: BTreeMap<u64, Option<usize>>,
+    /// Where each of the test's clients stands, once the program waits on its connections with
+    /// poll.
+    peers: Option<Vec<net::Peer>>,
+    /// The states the runs from one start have come back from poll in, after the clients took
+    /// steps, shared by them all: one that comes to a state another already has goes no further.
+    polled: Rc<std::cell::RefCell<HashSet<Vec<u64>>>>,
+    /// The states this run came back from poll in.
+    history: Option<Rc<net::History>>,
     /// Every connection the run made or took, in order.
     pub connections: Vec<net::Connection>,
     /// Bytes written to standard output, shared with the runs a fork made until one writes.
@@ -632,6 +640,9 @@ impl State {
             open: BTreeMap::new(),
             network: Rc::new(net::Network::default()),
             sockets: BTreeMap::new(),
+            peers: None,
+            polled: Rc::default(),
+            history: None,
             connections: Vec::new(),
             stdout: Rc::new(Vec::new()),
             stderr: Rc::new(Vec::new()),
@@ -3215,6 +3226,22 @@ impl<'a> Cpu<'a> {
                     let descriptor = self.load(table, 4)?;
                     self.pool.constant(descriptor) == Some(0)
                 };
+                // A server's wait on its listener and connections.
+                if !waits_for_input
+                    && (self.state.network.listening || !self.state.sockets.is_empty())
+                {
+                    if count == 0 || count > 1024 {
+                        return Err(unsupported(format!("poll over {count} descriptors")));
+                    }
+                    self.lent(Register::RDI, table, count * POLLFD_LEN, true, "poll")?;
+                    if self.constant(rdx)? & 0xffff_ffff != 0xffff_ffff {
+                        return Err(unsupported(
+                            "poll over connections with a time limit, rather than until one is \
+                             ready",
+                        ));
+                    }
+                    return self.poll_network(table, count);
+                }
                 if !waits_for_input {
                     return Err(unsupported(
                         "poll over several descriptors, with which a server serves clients at once",
@@ -3263,6 +3290,9 @@ pub fn explore(
     oracle: &mut dyn Oracle,
     max_runs: usize,
 ) -> Result<Vec<State>, String> {
+    // The states poll comes back in are this exploration's own.
+    let mut start = start;
+    start.polled = Rc::default();
     let mut pending = vec![start];
     let mut finished = Vec::new();
     while let Some(mut state) = pending.pop() {

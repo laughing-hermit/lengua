@@ -1826,6 +1826,60 @@ fn network_budget(listens: bool) -> Budget {
     }
 }
 
+/// A server for clients at once: the event-loop template waits on its listener and every
+/// connection with poll. One client is proven for every line in range, in every order its
+/// connecting and its pieces can come in between polls; two at once, in every such order, and
+/// with the first holding its last byte until the second has its answer, as the test's do, as
+/// far as the time goes. Serving the first slot alone, so the second client waits forever, and
+/// never closing a connection, so its client waits forever, are found.
+#[tokio::test]
+async fn proves_a_server_for_clients_at_once() {
+    if !solvers_installed() {
+        return;
+    }
+    let spec = asset("server-template-spec.md");
+    let source = asset("server-template.s");
+    let right = machine(&source).await;
+    let (one, two) = (block(&spec, 0), block(&spec, 1));
+    let budget = |seconds| Budget {
+        max_shapes: 100_000,
+        listens: true,
+        ..budget(seconds)
+    };
+    let verdict = prove(&right, &one, &budget(60));
+    assert!(
+        matches!(verdict, Verdict::Proven { bound: None, .. }),
+        "{verdict:?}"
+    );
+    // The model agrees with the real program on the tests' samples, each client but the last
+    // holding its last byte, as a check asks before it proves.
+    for block in [&one, &two] {
+        let samples: Vec<crate::testfile::Case> =
+            block.cases(1).take(24).filter_map(Result::ok).collect();
+        let found = agrees(&right, &samples, true).expect("the model agrees with the samples");
+        assert!(found.is_none(), "{found:?}");
+    }
+    let verdict = prove(&right, &two, &budget(20));
+    assert!(
+        matches!(&verdict, Verdict::Proven { bound: Some(bound), .. } if bound.bytes >= 8),
+        "{verdict:?}"
+    );
+    let first_slot = source.replace(
+        "    mov rbx, CLIENTS\n.Lserve_clients_slot:",
+        "    mov rbx, 1\n.Lserve_clients_slot:",
+    );
+    assert_ne!(first_slot, source);
+    let verdict = prove(&machine(&first_slot).await, &two, &budget(60));
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+    let open = source.replace(
+        "    mov eax, SYS_CLOSE\n    mov edi, ebx\n    syscall\n",
+        "    xor eax, eax\n",
+    );
+    assert_ne!(open, source);
+    let verdict = prove(&machine(&open).await, &one, &budget(60));
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+}
+
 /// A server on the network: the line-echo server reads its line with fill, so it answers every
 /// client's line however the network cuts it; one that reads once in place of fill, or never
 /// closes a connection and so waits on a client that waits for it, is found.

@@ -500,6 +500,20 @@ How the proof works (`src/prove/`):
   what it waits for, answered each client as the test says, and is serving at the end when the
   test says so. A counterexample is run for real with the same delivery. Two texts, a port and
   four deliveries multiply, so combinations go by their longest text without being listed first.
+- **A server that polls, in every order.** Once a program waits on its listener and its
+  connections with `poll`, the test's clients are agents of their own: each connects, sends
+  its pieces, and closes its side once its answer has begun, and between one poll and the next
+  each takes any of the steps open to it, each way its own run, so the runs cover every order
+  the clients' steps can come in relative to the server's. Clients at once also come with the
+  test's own order of steps, each but the newest holding its last byte until every newer client
+  has its whole answer: a server that waits on one client while another waits on it is caught
+  there, waiting forever. A read of a connection with nothing arrived waits, while every other
+  client waits too. Runs that come to the same state after the clients' steps go on as one; a
+  run back in a state it was in before, with no client able to step, goes round its loop
+  forever while a client waits, and fails. The event-loop template is proven so: one client for
+  every line in range in under a second, and two at once as far as the time goes, every pair
+  of lines up to 122 bytes each in a check's five minutes, with no solver question; serving its
+  first slot alone, or never closing a connection, is found.
 - **fill is read as a whole.** `fill` (in the skill's `assets/fill.s`, copied word for word with
   its constants, which the checker holds to) reads until its buffer is full, the input ends, or
   the last byte read is its end byte. At its loop's head the proof takes at once each place a
@@ -773,7 +787,7 @@ Rust share: everything a program may touch must be something the checker can acc
 | The terminal | `termios`, `poll`, `TIOCGWINSZ` | crossterm and the like | Under `the terminal`: `ioctl` on standard input, output or error for its mode (`TCGETS`, `TCSETS`) and its window's size, and nothing else, and `poll` to wait for a key. Tests give the keys as standard input, a pipe, where the mode can't be set, so a program goes on as from a pipe, and `\e` writes escape sequences; the proof models the same. `lengua-mcp run` puts the terminal back as it found it when the program ends, however it ends (`assets/terminal-template.s`) |
 | Left out, by design | `fork`/`exec`, `malloc`, recursion, function pointers | `std::process`, `Box`/`Vec`, recursion, `dyn` | Running other programs (their code isn't checked); allocating while running (rule 3: buffers and arenas in `.bss`, sized from the spec, cost nothing until touched, and input of any length streams through `fill`); recursion and function pointers (rules 1 and 9: explicit stacks, and dispatch by comparison) |
 | Clock, random | `time()`, `rand()` | `Instant`, `SystemTime`, `rand` | Capabilities the spec names, `the clock` and `random bytes` (on this target `clock_gettime` and `getrandom`), enforced by the kernel like the rest. Tests supply the bytes and readings, so output that depends on them is exact, and the prover covers every value the test's variables can take; without a supply, a rule such as "a number from 1 to 6" (`{any(1, 6)}`) checks the output, and the prover treats the kernel's values as any value |
-| Network | Sockets | `std::net` | Plain TCP on the ports the spec names, to this computer unless the spec says `on any computer`. seccomp allows only TCP sockets (no UDP, raw or local ones), `sendto` without an address, and `accept4` on descriptor 3; Landlock lets `connect` reach only the spec's ports, and lengua's supervisor only this computer. A server never binds: the launcher listens on its port, on the loopback unless the spec says `for any computer`, and hands it the socket as descriptor 3, and only its accept loop, or its loop around `poll`, may run forever (`# bound: forever`, NASA's exception). A server serves one client at a time unless its spec says `up to N clients at once`: then seccomp allows `poll`, the event loop C servers use, over a fixed table of connections (`assets/server-template.s`), and a test whose clients connect at once makes each wait for another's answer, so a server that serves one at a time fails; the proof says such blocks are tested, not proven, for now. Tests bring their own server or client on a free loopback port; websites and APIs go through the agent's own tools, which pass the data in |
+| Network | Sockets | `std::net` | Plain TCP on the ports the spec names, to this computer unless the spec says `on any computer`. seccomp allows only TCP sockets (no UDP, raw or local ones), `sendto` without an address, and `accept4` on descriptor 3; Landlock lets `connect` reach only the spec's ports, and lengua's supervisor only this computer. A server never binds: the launcher listens on its port, on the loopback unless the spec says `for any computer`, and hands it the socket as descriptor 3, and only its accept loop, or its loop around `poll`, may run forever (`# bound: forever`, NASA's exception). A server serves one client at a time unless its spec says `up to N clients at once`: then seccomp allows `poll`, the event loop C servers use, over a fixed table of connections (`assets/server-template.s`), and a test whose clients connect at once makes each wait for another's answer, so a server that serves one at a time fails; the proof follows a server that polls through every order its clients' steps can come in, and through the test's own. Tests bring their own server or client on a free loopback port; websites and APIs go through the agent's own tools, which pass the data in |
 
 A worker gets its index and its slot. It and every function it calls write only their own stack
 frames and the slot, which it keeps in `rbx`, inside bounds checks; they make no system calls; and
@@ -786,8 +800,8 @@ Roadmap, in order:
 1. induction for folds whose state crosses from one buffer-full into the next, as `words` and
    `count` of a longer part do, where today such a proof goes as far as its time and
    `prove_further` reach;
-2. proofs of sorting, of floats computed in another order than the formula's, and of servers
-   whose clients overlap, which are tested today;
+2. proofs of sorting and of floats computed in another order than the formula's, which are
+   tested today;
 3. the other platforms, toward the top six CPU and OS targets.
 
 ## Platforms
@@ -910,8 +924,9 @@ Dialect 3 is the current one:
   many clients at once when the spec says so, each confined by the kernel to what the spec
   allows;
 - proofs for every input in range over whole numbers, decimals, choices, texts and text
-  formulas, checksums, floats computed in the formula's order, files, the network and threads,
-  each solver step confirmed by a second solver, with texts proven as far as the spec's lengths
+  formulas, checksums, floats computed in the formula's order, files, the network, servers
+  that poll in every order their clients' steps can come in, and threads, each solver step
+  confirmed by a second solver, with texts proven as far as the spec's lengths
   and the proof's time reach, and further with `prove_further`, and streaming filters and
   counts proven for every length by induction over their read loop;
 - specs that name no CPU or OS, which `check` holds them to, so a spec shared alone compiles on
@@ -928,7 +943,7 @@ the same day, has lengua's best ahead of or level with C, C++ and Rust on every 
 measure, with 2.5 to 3.1 times less memory.
 
 Tested, not proven, for now: sorting and `uniq`, floats computed in another order than the
-formula's, servers whose clients overlap, a folder's listing, and the SHA and AES instructions.
+formula's, a folder's listing, and the SHA and AES instructions.
 Left out of the dialect on purpose: gathers and scatters, whose addresses can't be bounds-checked,
 allocation while running, recursion, function pointers, and running other programs.
 

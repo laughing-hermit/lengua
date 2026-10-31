@@ -23,8 +23,8 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 > the ports a spec names, for other computers and many clients at once when it says so. The
 > kernel holds every run to what its spec allows. lengua proves programs right for every input,
 > not just the tested ones, over whole numbers, decimals, choices, texts beyond ASCII and text
-> formulas, checksums, files and the network, threads, and floats computed in the formula's
-> order, in integer, bit, vector and float code from SSE2 to AVX-512, and over texts as long as
+> formulas, checksums, files and the network, servers that poll in every order their clients'
+> steps can come in, threads, and floats computed in the formula's order, in integer, bit, vector and float code from SSE2 to AVX-512, and over texts as long as
 > the spec's lengths and the proof's time reach, and further with `prove_further`; a filter or
 > a count that streams its input a buffer-full at a time is proven for every length, by
 > induction over its read loop. Programs that read with the skill's `fill` are proven however their input

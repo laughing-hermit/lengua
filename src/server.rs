@@ -1927,6 +1927,12 @@ fn proven_detail(
         );
     }
     let networked = !block.server.is_empty() || !block.client.is_empty();
+    if block.clients_at_once {
+        detail.push_str(
+            "; the clients taking their steps in every order between the server's polls, and as \
+             the test does, each holding its last byte until the next has its answer",
+        );
+    }
     if networked && cut_any_way {
         detail.push_str("; what the test's peer sends arriving cut into pieces any way");
     } else if networked {

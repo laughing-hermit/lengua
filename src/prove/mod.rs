@@ -2313,13 +2313,6 @@ fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verd
     if block.uses_now() {
         return Err("it uses now, the second a run starts, which a proof can't fix".into());
     }
-    if block.clients_at_once {
-        return Err(
-            "its clients connect at once, and the proof doesn't follow the ways their bytes can \
-             interleave yet"
-                .into(),
-        );
-    }
     let image = Image::new(machine).ok_or("the program has no _start")?;
     // A streaming filter is proven for every length at once where its read loop's step holds;
     // otherwise, and for every other program, the proof goes length by length.
@@ -2764,6 +2757,15 @@ fn talks(
         .iter()
         .filter(|connection| connection.accepted)
         .collect();
+    // Clients at once are followed in every order their steps can come only where the program
+    // waits on them with poll; a server that doesn't fails their tests anyway.
+    if block.clients_at_once && !run.polled() {
+        return Err(
+            "its clients connect at once, which a proof follows only for a server that waits on \
+             them with poll"
+                .into(),
+        );
+    }
     if made.len() != block.server.len()
         || taken.len() != block.client.len()
         || block.serves != ended_serving
@@ -3135,7 +3137,11 @@ fn prove_shape(
         .get("port")
         .filter(|_| !block.server.is_empty())
         .map(|number| number.term);
-    let network_for = |delivery: Delivery| exec::net::Network {
+    // Clients at once take their steps in every order, and also with each but the newest
+    // holding its last byte until every newer client has its answer, as the test's do: then a
+    // server that waits on one client while another waits on it is caught.
+    let newest = sends.len().saturating_sub(1);
+    let network_for = |delivery: Delivery, hold: bool| exec::net::Network {
         port,
         server: receives
             .iter()
@@ -3144,12 +3150,28 @@ fn prove_shape(
             .collect(),
         client: sends
             .iter()
-            .map(|(bytes, waits)| exec::net::Client {
-                pieces: cut(bytes, delivery),
-                waits: *waits,
+            .enumerate()
+            .map(|(index, (bytes, waits))| {
+                let held = hold && index < newest && !bytes.is_empty();
+                let mut pieces = if held {
+                    cut(&bytes[..bytes.len() - 1], delivery)
+                } else {
+                    cut(bytes, delivery)
+                };
+                if held {
+                    pieces.push(bytes[bytes.len() - 1..].to_vec());
+                }
+                pieces.retain(|piece| !piece.is_empty());
+                exec::net::Client {
+                    pieces,
+                    waits: *waits,
+                    held,
+                }
             })
             .collect(),
         listening: budget.listens,
+        at_once: block.clients_at_once,
+        eager: false,
     };
     // fill, where the program has it, is read as a whole for every way its input can be cut.
     let every_cut = image.has_fill();
@@ -3182,13 +3204,19 @@ fn prove_shape(
     let networked = !block.server.is_empty() || !block.client.is_empty();
     let began = Instant::now();
     let questions_before = solvers.solver.as_ref().map_or(0, |solver| solver.questions);
-    let mut deliveries = vec![delivery];
+    let holds: &[bool] = if block.clients_at_once {
+        &[true, false]
+    } else {
+        &[false]
+    };
+    let mut deliveries: Vec<(Delivery, bool)> =
+        holds.iter().map(|hold| (delivery, *hold)).collect();
     let mut any_cut = every_cut;
     let mut count = 0;
     let mut turn = 0;
-    while let Some(&delivery) = deliveries.get(turn) {
+    while let Some(&(delivery, hold)) = deliveries.get(turn) {
         turn += 1;
-        let start = base.clone().with_network(network_for(delivery));
+        let start = base.clone().with_network(network_for(delivery, hold));
         // Branches no witness reaches are followed without asking first; a run that can't
         // happen is then settled where it ends. If that makes too many runs, the branches are
         // asked about after all.
@@ -3211,7 +3239,9 @@ fn prove_shape(
         // test's peer sends is then proven as each of the tests' cuts delivers it.
         if runs.iter().any(|run| run.raw_reads) {
             if any_cut && networked {
-                deliveries.extend(Delivery::ALL.into_iter().filter(|other| *other != delivery));
+                for other in Delivery::ALL.into_iter().filter(|other| *other != delivery) {
+                    deliveries.extend(holds.iter().map(|hold| (other, *hold)));
+                }
             }
             any_cut = false;
         }
@@ -3549,9 +3579,25 @@ pub fn agrees(
         let client = case
             .client
             .iter()
-            .map(|exchange| exec::net::Client {
-                pieces: vec![exec::bytes(&mut pool, fill(&exchange.sends).as_bytes())],
-                waits: !exchange.receives.is_empty(),
+            .enumerate()
+            .map(|(index, exchange)| {
+                let bytes = exec::bytes(&mut pool, fill(&exchange.sends).as_bytes());
+                let held =
+                    case.clients_at_once && index + 1 < case.client.len() && !bytes.is_empty();
+                let mut pieces = if held {
+                    vec![
+                        bytes[..bytes.len() - 1].to_vec(),
+                        bytes[bytes.len() - 1..].to_vec(),
+                    ]
+                } else {
+                    vec![bytes]
+                };
+                pieces.retain(|piece| !piece.is_empty());
+                exec::net::Client {
+                    pieces,
+                    waits: !exchange.receives.is_empty(),
+                    held,
+                }
             })
             .collect();
         let network = exec::net::Network {
@@ -3560,6 +3606,8 @@ pub fn agrees(
             server,
             client,
             listening: listens,
+            at_once: case.clients_at_once,
+            eager: true,
         };
         let supply = case.supply();
         let random = supply
