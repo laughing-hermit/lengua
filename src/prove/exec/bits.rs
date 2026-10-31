@@ -1,12 +1,12 @@
 //! The bit instructions: bit counts (popcnt, lzcnt, tzcnt, bsf, bsr), the BMI1 and BMI2
-//! operations, bit tests, double shifts, byte-swapping moves and the carry flag's own
-//! instructions. Each is a term built from the operands' bits, so a count over input bytes stays
-//! a sum the prover can compare with a formula's.
+//! operations, bit tests, double shifts, byte-swapping moves, the carry flag's own instructions
+//! and `crc32`. Each is a term built from the operands' bits, so a count over input bytes stays
+//! a sum, and a checksum a chain of CRC steps, the prover can compare with a formula's.
 
 use iced_x86::{Mnemonic, OpKind, Register};
 
 use super::{Cpu, Last, Step, Stop, slot, unsupported};
-use crate::prove::term::Term;
+use crate::prove::term::{CASTAGNOLI, Term};
 
 /// The runs of set bits in the low `width` bits of `mask`, lowest first, as (lowest bit, length).
 fn runs(mask: u128, width: u32) -> Vec<(u32, u32)> {
@@ -27,6 +27,27 @@ fn runs(mask: u128, width: u32) -> Vec<(u32, u32)> {
 }
 
 impl Cpu<'_> {
+    /// `crc32 r, r/m`: the destination's low 32 bits are a CRC-32C state, which takes the
+    /// source's bytes from the lowest, one CRC step each; a 64-bit destination gets the state
+    /// zero-extended, as a 32-bit write leaves it. The flags stay as they were.
+    pub(super) fn crc32(&mut self) -> Result<Step, Stop> {
+        let (to, from) = (self.width(0), self.width(1));
+        let data = self.read(1, from)?;
+        let destination = self.read(0, to)?;
+        let mut state = self.pool.extract(destination, 31, 0);
+        for byte in 0..from / 8 {
+            let part = self.pool.extract(data, byte * 8 + 7, byte * 8);
+            state = self.pool.crc(state, part, CASTAGNOLI);
+        }
+        let value = if to == 64 {
+            self.pool.zero_extend(state, 32)
+        } else {
+            state
+        };
+        self.write(0, value)?;
+        Ok(Step::Next)
+    }
+
     /// A value of `width` bits the CPU doesn't define, which a proof must hold for whatever it is.
     fn undefined(&mut self, width: u32) -> Term {
         let name = format!("undefined{}", self.pool.len());

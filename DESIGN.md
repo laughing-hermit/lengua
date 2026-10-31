@@ -586,11 +586,16 @@ What it covers:
   length fully proven: "proven for every input with text up to 4096 bytes; longer texts are
   tested, not proven", with the reason. lengua.lock records such a proof under `bounded`, with
   its length, never as a full one, and the done reply says so.
+- What the proof ran. A function no run of a proof called, such as a fast path that starts past
+  the proof's bound, is named in the proof's line: "the proof never ran crc_block, so what it
+  does isn't proven". The CRC-32C asset's three chains join only past 12,288 bytes, so its
+  proof covers the byte-at-a-time path alone, and says so.
 - Formulas: whole numbers (`+ - * / %` including chains of divisions, `abs`, `min`, `max`, `if`,
   and `scaled(x, places)` for a decimal's digits), printed plainly or with `places(x, k)`; and
   text: `len`, `count` (non-overlapping, leftmost first, as the test language counts), `words`,
   `upper`, `lower`, `tr`, `reverse`, joining texts with `+`, and comparing them with `==` and
-  `!=`. All but `reverse` work byte by byte, which is exact on UTF-8; `reverse` goes by
+  `!=`; and checksums: `crc32` and `crc32c`, a CRC step per byte from all ones, inverted at the
+  end. All but `reverse` work byte by byte, which is exact on UTF-8; `reverse` goes by
   characters, as the test language does, telling them apart by each byte's values. Any placeholder whose variables all have fixed values in a shape is computed outright,
   so messages that quote an argument prove. A placeholder that's a text, drawn or computed,
   compares byte for byte.
@@ -610,6 +615,11 @@ What it covers:
   The vector template, upcase and the word counts Claude Code wrote are proven for every input
   up to 4096 bytes, with no solver question. An instruction the proof doesn't model yet is named
   with its function: "main.s's count uses vpermb, which the proof doesn't model yet".
+- Checksums: `crc32` takes the bytes of its source one CRC step each, from the lowest, so 8
+  bytes at a time and one at a time are one chain of steps, and so is the formula's `crc32c`:
+  the CRC-32C asset is proven for every text up to 4096 bytes in about 20 seconds, with no
+  solver question. A table lookup or a bitwise loop computing zlib's `crc32` builds other terms,
+  so such a program is tested, not proven.
 - Arithmetic across widths: a program that halves a sum of cents in 64 bits and a formula that
   multiplies a sum by 50 in 128 meet as one term. A sum divided by a constant that divides its
   every part divides part by part, as both sides of a choice between such sums do; a factor a
@@ -629,8 +639,8 @@ What it covers:
   port, and its fetch for every path with every body up to about 140 bytes in its share of the
   time.
 
-Not yet: `sha256`, `crc32` and `crc32c` formulas and the instructions behind them; floating point;
-threads; and `tr` that changes a character's width in bytes (`tr` beyond ASCII is proven
+Not yet: `sha256` and the SHA and AES instructions; `pclmulqdq`, which joins CRC chains;
+floating point; threads; and `tr` that changes a character's width in bytes (`tr` beyond ASCII is proven
 character by character, each keeping its width). Those blocks are tested, not proven, and the
 report says why. A stream read both with `read` and with `fill` is proven for the four
 deliveries, and, for standard input with at most 8 bytes left at a read, for every count the read

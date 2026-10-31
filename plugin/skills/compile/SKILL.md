@@ -68,8 +68,10 @@ and the CPU features the code needs; never write that line yourself.
    refuses that build from then on, even after lengua restarts. For each generated
    test it can, it proves for every input rather than a sample that the program prints what the
    formulas say: whole numbers, decimals, each value of a `choice(…)`, texts and text formulas such
-   as `upper` and `count`, and files. Long texts are proven up to a length, such as 4096 bytes, and
-   tested beyond it: each line of `proofs` says how far. Every run a proof covers is also held to
+   as `upper` and `count`, checksums from `crc32` instructions, and files. Long texts are proven
+   up to a length, such as 4096 bytes, and tested beyond it: each line of `proofs` says how far,
+   and names any function the proof never ran, such as a fast path for longer inputs. Tell the
+   user that code isn't proven. Every run a proof covers is also held to
    the memory rules: each access stays inside its own buffer, frame or argument, no return address
    is written, and no stack is read before it's written. If the proof finds inputs where the
    program is wrong, or breaks a memory rule, `check` reports them like a failing test, and `run`

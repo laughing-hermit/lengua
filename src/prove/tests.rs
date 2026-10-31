@@ -614,6 +614,7 @@ async fn a_shape_its_terms_settle_starts_no_solver() {
             alone: None,
             bound: None,
             cut_any_way: false,
+            unreached: Vec::new(),
         }
     );
 }
@@ -1432,6 +1433,57 @@ async fn proves_the_vector_template() {
 /// masks meeting the formulas' counts as one term; a count that misses carriage returns is
 /// found. Texts up to 200 bytes, past three whole vectors and a tail, keep the test quick even
 /// beside the others; up to 4096 prove the same way.
+/// The CRC-32C asset's own spec, every text up to the 4096 bytes a proof covers.
+#[tokio::test]
+#[ignore = "slow: 4097 lengths of text"]
+async fn proves_the_crc32c_checksum_up_to_the_bound() {
+    let folder = "plugin/skills/compile/assets/fast/crc32c/";
+    let block = block(&repository_file(&format!("{folder}spec.md")), 0);
+    let machine = machine(&repository_file(&format!("{folder}main.s"))).await;
+    let started = Instant::now();
+    let budget = Budget {
+        max_shapes: 100_000,
+        ..budget(300)
+    };
+    let verdict = prove(&machine, &block, &budget);
+    eprintln!("crc32c: {verdict:?} in {:?}", started.elapsed());
+    assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
+}
+
+/// The CRC-32C asset: `crc32` over 8 bytes at a time, then over single bytes, meets the
+/// formula's chain of byte steps, so each text proves without a question to the solvers.
+#[tokio::test]
+async fn proves_the_crc32c_checksum() {
+    let folder = "plugin/skills/compile/assets/fast/crc32c/";
+    let spec = repository_file(&format!("{folder}spec.md"))
+        .replace("Tests give it up to `1048576`", "Tests give it up to `100`")
+        .replace("string(0, 1048576,", "string(0, 100,");
+    assert!(spec.contains("string(0, 100,"), "{spec}");
+    let source = repository_file(&format!("{folder}main.s"));
+    let block = block(&spec, 0);
+    let right = machine(&source).await;
+    let verdict = prove(&right, &block, &text_budget());
+    // Three chains at once start at 12288 bytes, past every text proven: the proof says it
+    // never ran them.
+    assert!(
+        matches!(
+            &verdict,
+            Verdict::Proven {
+                bound: None,
+                questions: 0,
+                unreached,
+                ..
+            } if unreached == &["move_front", "crc_block"]
+        ),
+        "{verdict:?}"
+    );
+    // One bit of the start wrong puts every checksum off.
+    let wrong =
+        machine(&source.replace(".equ CRC_START, 0xFFFFFFFF", ".equ CRC_START, 0xFFFFFFFE")).await;
+    let verdict = prove(&wrong, &block, &text_budget());
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+}
+
 #[tokio::test]
 async fn proves_the_avx512_word_count() {
     if !crate::platform::Machine::detect().features.avx512bw {

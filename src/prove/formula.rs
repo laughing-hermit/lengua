@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use super::term::{Pool, Term};
+use super::term::{CASTAGNOLI, Pool, Term, ZLIB};
 use crate::expr::{BinaryOp, Expr, Function, Value};
 
 /// The width formulas are computed in: wide enough for any product of two 64-bit numbers.
@@ -471,6 +471,26 @@ fn call(
                 pool.mul(value.term, factor),
                 low,
                 high,
+            )))
+        }
+        // From all ones, a CRC step a byte, inverted at the end: one chain of steps, the term a
+        // program's `crc32` instructions build however many bytes each takes.
+        Function::Crc32 | Function::Crc32c => {
+            let bytes = text(next()?)?;
+            let poly = if function == Function::Crc32 {
+                ZLIB
+            } else {
+                CASTAGNOLI
+            };
+            let mut state = pool.bv(32, u128::from(u32::MAX));
+            for byte in bytes {
+                state = pool.crc(state, byte, poly);
+            }
+            let inverted = pool.not(state);
+            Ok(Formula::Number(Number::whole(
+                pool.zero_extend(inverted, WIDTH - 32),
+                0,
+                i128::from(u32::MAX),
             )))
         }
         other => Err(format!("the function {other:?}")),

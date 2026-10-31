@@ -125,6 +125,30 @@ pub enum Node {
     /// wide: a sum of ones and zeros in any order and grouping, so a popcount of a mask and a
     /// formula's count of the same tests are one term.
     Count(u32, u32),
+    /// One byte through a reflected CRC-32: a 32-bit state, then a byte, by the polynomial, as
+    /// the `crc32` instruction takes each byte for CRC-32C and zlib for CRC-32. Bytes taken 8 at
+    /// a time are 8 steps, so a program's checksum and a formula's of the same bytes are one
+    /// term.
+    Crc(Term, Term, u32),
+}
+
+/// The reflected CRC-32C (Castagnoli) polynomial, as the `crc32` instruction uses it.
+pub const CASTAGNOLI: u32 = 0x82F6_3B78;
+
+/// The reflected CRC-32 polynomial, as zlib, gzip and PNG use it.
+pub const ZLIB: u32 = 0xEDB8_8320;
+
+/// One byte through a reflected CRC-32 by `poly`, as the `crc32` instruction steps for
+/// CRC-32C: no inversion before or after.
+#[must_use]
+pub const fn crc_byte(poly: u32, state: u32, byte: u8) -> u32 {
+    let mut state = state ^ byte as u32;
+    let mut bit = 0;
+    while bit < 8 {
+        state = (state >> 1) ^ (poly & (state & 1).wrapping_neg());
+        bit += 1;
+    }
+    state
 }
 
 /// A set of byte values: bit `v` of word `v / 64` is set for each value `v` in it.
@@ -273,7 +297,8 @@ fn node_operands(node: &Node) -> Vec<Term> {
         | Node::Ult(a, b)
         | Node::Slt(a, b)
         | Node::BoolAnd(a, b)
-        | Node::BoolOr(a, b) => vec![a, b],
+        | Node::BoolOr(a, b)
+        | Node::Crc(a, b, _) => vec![a, b],
     }
 }
 
@@ -310,7 +335,8 @@ fn node_operands_mut(node: &mut Node) -> Vec<&mut Term> {
         | Node::Ult(a, b)
         | Node::Slt(a, b)
         | Node::BoolAnd(a, b)
-        | Node::BoolOr(a, b) => vec![a, b],
+        | Node::BoolOr(a, b)
+        | Node::Crc(a, b, _) => vec![a, b],
     }
 }
 
@@ -683,6 +709,16 @@ impl Pool {
         self.make(Node::Count(number, width), Sort::Bv(width))
     }
 
+    /// The CRC state after `byte`, from the 32-bit `state`, by the reflected polynomial `poly`.
+    pub fn crc(&mut self, state: Term, byte: Term, poly: u32) -> Term {
+        if let (Some(state), Some(byte)) = (self.constant(state), self.constant(byte)) {
+            // Constants are 32 and 8 bits wide.
+            let value = crc_byte(poly, state as u32, byte as u8);
+            return self.bv(32, u128::from(value));
+        }
+        self.make(Node::Crc(state, byte, poly), Sort::Bv(32))
+    }
+
     /// Whether [`Self::counted`] finds conditions in `term`, without making any terms.
     fn is_counted(&self, term: Term) -> bool {
         match *self.node(term) {
@@ -884,6 +920,32 @@ impl Pool {
             (None, Some(0), true) => negation_of(left),
             _ => false,
         }
+    }
+
+    /// The values a sum is made of, each as the value it's widened from, sorted: two terms with
+    /// no part in common are never one sum moved or scaled, so no relation can hold between
+    /// them.
+    #[must_use]
+    pub fn parts(&self, term: Term) -> Vec<Term> {
+        let mut parts: Vec<Term> = self
+            .linear_view(term)
+            .parts
+            .keys()
+            .map(|part| self.widened_from(*part).0)
+            .collect();
+        parts.sort_unstable();
+        parts.dedup();
+        parts
+    }
+
+    /// Whether `y` has a part among `parts`, or either has none: then `y` may be the sum of
+    /// `parts`, moved or scaled.
+    #[must_use]
+    pub fn shares_parts(&self, parts: &[Term], y: Term) -> bool {
+        let theirs = self.parts(y);
+        parts.is_empty()
+            || theirs.is_empty()
+            || theirs.iter().any(|part| parts.binary_search(part).is_ok())
     }
 
     /// How `x` is made from `y`, modulo 2^width of `x`: `x = y + offset` (`false`) or
@@ -1873,6 +1935,8 @@ impl Pool {
         match (self.constant(a), self.constant(b)) {
             (Some(x), Some(y)) => return self.bv(width, x ^ y),
             (_, Some(0)) => return a,
+            // So `xor eax, -1` and `not eax` are one term.
+            (_, Some(ones)) if ones == mask(width) => return self.not(a),
             _ => {}
         }
         self.make(Node::Xor(a, b), Sort::Bv(width))
@@ -2788,6 +2852,7 @@ impl Pool {
                     (Node::Extract(_, h1, l1), Node::Extract(_, h2, l2)) => (h1, l1) == (h2, l2),
                     (Node::ZeroExtend(_, b1), Node::ZeroExtend(_, b2))
                     | (Node::SignExtend(_, b1), Node::SignExtend(_, b2)) => b1 == b2,
+                    (Node::Crc(_, _, p), Node::Crc(_, _, q)) => p == q,
                     (Node::Const { .. }, _)
                     | (Node::Var { .. }, _)
                     | (Node::Bool(_), _)
@@ -3088,6 +3153,9 @@ impl Pool {
                 }
                 held
             }
+            Node::Crc(state, byte, poly) => {
+                u128::from(crc_byte(poly, get(state)? as u32, get(byte)? as u8))
+            }
         })
     }
 
@@ -3193,6 +3261,22 @@ impl Pool {
                     1 => runs.remove(0),
                     _ => format!("(or {})", runs.join(" ")),
                 }
+            }
+            // The state's low byte xored with the byte picks columns of the step's table, which
+            // is linear: one column for each of the 8 bits, xored with the state shifted right by
+            // a byte.
+            Node::Crc(state, byte, poly) => {
+                let (state, byte) = (name(state), name(byte));
+                let mixed = format!("(bvxor ((_ extract 7 0) {state}) {byte})");
+                let columns: Vec<String> = (0..8)
+                    .map(|bit| {
+                        format!(
+                            "(ite (= ((_ extract {bit} {bit}) {mixed}) #b1) #x{:08x} #x00000000)",
+                            crc_byte(*poly, 0, 1 << bit)
+                        )
+                    })
+                    .collect();
+                format!("(bvxor (bvlshr {state} #x00000008) {})", columns.join(" "))
             }
             Node::Count(number, _) => {
                 let width = self.width(term);
@@ -3316,6 +3400,7 @@ impl Pool {
             Node::Slt(..) => two(self, Self::slt),
             Node::BoolAnd(..) => two(self, Self::bool_and),
             Node::BoolOr(..) => two(self, Self::bool_or),
+            Node::Crc(_, _, poly) => b.map_or(a, |b| self.crc(a, b, poly)),
             Node::Not(_) => self.not(a),
             Node::Neg(_) => self.neg(a),
             Node::BoolNot(_) => self.bool_not(a),

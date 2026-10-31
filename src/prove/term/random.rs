@@ -28,6 +28,8 @@ enum Expr {
     Compare(Comparison, Box<Self>, Box<Self>),
     Logic(bool, Box<Self>, Box<Self>),
     BoolNot(Box<Self>),
+    /// A 32-bit state, a byte through a CRC by the polynomial.
+    Crc(Box<Self>, Box<Self>, u32),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -188,6 +190,22 @@ fn reference(expr: &Expr, variables: &[Variable], values: &[u128]) -> (u128, u32
             );
             ((high << low_width) | low, high_width + low_width)
         }
+        // Bit by bit, from the lowest, as the CRC is defined.
+        Expr::Crc(state, byte, poly) => {
+            let ((state, _), (byte, _)) = (
+                reference(state, variables, values),
+                reference(byte, variables, values),
+            );
+            let mut crc = u32::try_from(state ^ byte).unwrap_or(0);
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 {
+                    (crc >> 1) ^ poly
+                } else {
+                    crc >> 1
+                };
+            }
+            (u128::from(crc), 32)
+        }
         Expr::Ite(condition, then, otherwise) => {
             if reference(condition, variables, values).0 == 1 {
                 reference(then, variables, values)
@@ -268,6 +286,10 @@ fn build(pool: &mut Pool, expr: &Expr, variables: &[Term]) -> Term {
         Expr::Concat(high, low) => {
             let (high, low) = (build(pool, high, variables), build(pool, low, variables));
             pool.concat(high, low)
+        }
+        Expr::Crc(state, byte, poly) => {
+            let (state, byte) = (build(pool, state, variables), build(pool, byte, variables));
+            pool.crc(state, byte, *poly)
         }
         Expr::Ite(condition, then, otherwise) => {
             let condition = build(pool, condition, variables);
@@ -639,6 +661,17 @@ impl Writer<'_> {
                 let op = [Op::Udiv, Op::Sdiv][self.rng.random_range(0..2)];
                 Expr::Binary(op, Box::new(sum), Box::new(Expr::Const(width, divisor)))
             }
+            // A checksum: a few bytes through a CRC, as the `crc32` instruction and the
+            // formulas take them.
+            21 if width == 32 => {
+                let poly = [super::CASTAGNOLI, super::ZLIB][self.rng.random_range(0..2)];
+                let mut state = self.number(32, deeper);
+                for _ in 0..self.rng.random_range(1..4) {
+                    let byte = self.number(8, deeper.min(1));
+                    state = Expr::Crc(Box::new(state), Box::new(byte), poly);
+                }
+                state
+            }
             _ => Expr::Binary(
                 Op::Add,
                 Box::new(self.number(width, deeper)),
@@ -888,6 +921,65 @@ fn simplified_terms_keep_their_values_and_ranges() {
         "seed {seed}: {count} of {checked} evaluations went wrong:\n{}",
         problems.join("\n")
     );
+}
+
+#[test]
+fn a_crc_is_one_term_and_reads_the_same_in_the_solvers() {
+    // The known check values of "123456789", from all ones, inverted at the end.
+    let mut pool = Pool::default();
+    for (poly, check) in [
+        (super::CASTAGNOLI, 0xE306_9283_u128),
+        (super::ZLIB, 0xCBF4_3926),
+    ] {
+        let mut state = pool.bv(32, u128::from(u32::MAX));
+        for byte in b"123456789" {
+            let byte = pool.bv(8, u128::from(*byte));
+            state = pool.crc(state, byte, poly);
+        }
+        let ones = pool.bv(32, u128::from(u32::MAX));
+        let value = pool.xor(state, ones);
+        assert_eq!(pool.constant(value), Some(check));
+    }
+    // A qword taken at once, as `crc32 rax, qword ptr [...]` takes it, is its bytes in order.
+    let state = pool.var(32, "state");
+    let bytes: Vec<Term> = (0..8)
+        .map(|index| pool.var(8, &format!("b{index}")))
+        .collect();
+    let mut by_bytes = state;
+    for byte in &bytes {
+        by_bytes = pool.crc(by_bytes, *byte, super::CASTAGNOLI);
+    }
+    let word = bytes[1..]
+        .iter()
+        .fold(bytes[0], |low, high| pool.concat(*high, low));
+    let mut by_word = state;
+    for index in 0..8 {
+        let byte = pool.extract(word, index * 8 + 7, index * 8);
+        by_word = pool.crc(by_word, byte, super::CASTAGNOLI);
+    }
+    assert_eq!(by_word, by_bytes);
+    // The solvers' reading of a step meets the pool's at random points.
+    let Ok(mut solver) = Solver::start(3000) else {
+        eprintln!("no solver is installed");
+        return;
+    };
+    let mut rng = ChaCha8Rng::seed_from_u64(seed());
+    let byte = bytes[0];
+    for poly in [super::CASTAGNOLI, super::ZLIB] {
+        let step = pool.crc(state, byte, poly);
+        for _ in 0..8 {
+            let (s, b) = (rng.random::<u32>(), rng.random::<u8>());
+            let (s_term, b_term) = (pool.bv(32, u128::from(s)), pool.bv(8, u128::from(b)));
+            let fixed = [pool.eq(state, s_term), pool.eq(byte, b_term)];
+            let expected = pool.bv(32, u128::from(super::crc_byte(poly, s, b)));
+            let same = pool.eq(step, expected);
+            let other = pool.bool_not(same);
+            let (answer, _) = solver
+                .check(&pool, &[fixed[0], fixed[1], other], &[])
+                .expect("the solver answers");
+            assert_eq!(answer, Answer::Unsat, "{poly:#x} at {s:#x}, {b:#x}");
+        }
+    }
 }
 
 #[test]

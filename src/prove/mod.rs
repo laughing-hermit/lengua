@@ -48,6 +48,9 @@ pub enum Verdict {
         /// Whether the program reads standard input and its connections only through fill, so
         /// the proof covers each message cut into pieces any way, not only the tests' cuts.
         cut_any_way: bool,
+        /// The functions no run of the proof called, such as a fast path for inputs longer than
+        /// the proof's bound: the proof says nothing of what they do.
+        unreached: Vec<String>,
     },
     /// Inputs where the program, as the prover reads it, disagrees with the formulas.
     Counterexample(BTreeMap<String, Value>),
@@ -428,6 +431,26 @@ fn values_of(pool: &Pool, condition: Term) -> Option<(Term, Values)> {
     values_within(pool, condition, 8)
 }
 
+/// The term `condition` says which values of, as [`values_within`] finds it, without working out
+/// the values.
+fn subject_within(pool: &Pool, condition: Term, depth: u32) -> Option<Term> {
+    if let Some((x, _)) = bounds_of(pool, condition) {
+        return Some(x);
+    }
+    if depth == 0 {
+        return None;
+    }
+    match *pool.node(condition) {
+        Node::Lookup(byte, _) => Some(byte),
+        Node::BoolOr(a, b) | Node::BoolAnd(a, b) => {
+            let x = subject_within(pool, a, depth - 1)?;
+            (subject_within(pool, b, depth - 1)? == x).then_some(x)
+        }
+        Node::BoolNot(inner) => subject_within(pool, inner, depth - 1),
+        _ => None,
+    }
+}
+
 fn values_within(pool: &Pool, condition: Term, depth: u32) -> Option<(Term, Values)> {
     if let Some((x, bounds)) = bounds_of(pool, condition) {
         return Some((x, reading(bounds, pool.width(x))?));
@@ -511,7 +534,15 @@ fn refuted(pool: &Pool, path: &[Term], condition: Term) -> bool {
     };
     let width = pool.width(x);
     let mut known: Values = vec![pool.signed_range(x)];
+    // Only a value made of some of x's parts can be x moved or scaled: a long text's
+    // conditions on each of its bytes say nothing of its checksum, and are passed over unread.
+    let parts = pool.parts(x);
     for path_condition in path {
+        if let Some(y) = subject_within(pool, *path_condition, 8)
+            && !pool.shares_parts(&parts, y)
+        {
+            continue;
+        }
         let Some((y, held)) = values_of(pool, *path_condition) else {
             continue;
         };
@@ -665,6 +696,12 @@ fn open_choice(pool: &Pool, path: &[Term], holds: Term) -> Option<Term> {
 /// The most evaluations [`search`] makes for one condition.
 const MAX_SEARCH: usize = 400;
 
+/// The most variable values [`search`] goes through in all its evaluations: each evaluation
+/// starts from every variable's value, so a condition on a long text's every byte, such as its
+/// checksum or count, gets a few tries, where moving one byte seldom turns it anyway, and a
+/// condition on a few numbers gets [`MAX_SEARCH`].
+const MAX_SEARCH_VALUES: usize = MAX_SEARCH * 64;
+
 /// Inputs that meet every one of `conditions`, found by moving one variable of the newest of
 /// them in `witness`: to its range's ends and middle, and to the edge where the newest condition
 /// turns true, found by halving. A sum or a division compared with a constant turns at one
@@ -689,7 +726,7 @@ fn search(
             (variable, value)
         })
         .collect();
-    let mut left = MAX_SEARCH;
+    let mut left = (MAX_SEARCH_VALUES / base.len().max(1)).clamp(4, MAX_SEARCH);
     let truth = |values: &HashMap<Term, u128>, terms: &[Term], left: &mut usize| {
         *left = left.saturating_sub(1);
         let mut known = values.clone();
@@ -2457,6 +2494,7 @@ fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verd
         alone: alone.into_inner().ok().flatten(),
         bound,
         cut_any_way: cut_any_way.into_inner(),
+        unreached: image.unreached(),
     })
 }
 

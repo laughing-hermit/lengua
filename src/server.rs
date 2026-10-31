@@ -1353,6 +1353,7 @@ impl LenguaServer {
                     alone,
                     bound,
                     cut_any_way,
+                    unreached,
                 }) => {
                     match &bound {
                         Some(bound) => {
@@ -1367,7 +1368,16 @@ impl LenguaServer {
                         }
                     }
                     (
-                        proven_detail(block, shapes, paths, questions, alone, bound, cut_any_way),
+                        proven_detail(
+                            block,
+                            shapes,
+                            paths,
+                            questions,
+                            alone,
+                            bound,
+                            cut_any_way,
+                            &unreached,
+                        ),
                         false,
                     )
                 }
@@ -1786,6 +1796,7 @@ fn again(folder: &ProgramFolder) -> String {
 }
 
 /// What a proven block's proof covered, in a line.
+#[allow(clippy::too_many_arguments)]
 fn proven_detail(
     block: &testfile::Generated,
     shapes: usize,
@@ -1794,6 +1805,7 @@ fn proven_detail(
     alone: Option<String>,
     bound: Option<prove::Bound>,
     cut_any_way: bool,
+    unreached: &[String],
 ) -> String {
     let mut detail = format!(
         "proven for every input {} ({}, {} through the machine code), {}",
@@ -1840,6 +1852,24 @@ fn proven_detail(
         );
     } else if cut_any_way && !block.stdin.is_empty() {
         detail.push_str("; standard input arriving cut into pieces any way");
+    }
+    // A fast path for inputs past the proof's bound is code no run reached: proven says
+    // nothing of it.
+    if let Some((last, rest)) = unreached.split_last() {
+        let names = if rest.is_empty() {
+            last.clone()
+        } else {
+            format!("{} or {last}", rest.join(", "))
+        };
+        let pronoun = if rest.is_empty() {
+            "it does"
+        } else {
+            "they do"
+        };
+        let _ = write!(
+            detail,
+            "; the proof never ran {names}, so what {pronoun} isn't proven"
+        );
     }
     detail
 }

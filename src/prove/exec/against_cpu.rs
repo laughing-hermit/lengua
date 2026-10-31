@@ -546,6 +546,18 @@ fn bit_probes(rng: &mut ChaCha8Rng, list: &mut Vec<Probe>) {
             list.push(after_compare(rng, op.to_owned()));
         }
     }
+    // crc32: a CRC-32C state in the destination's low 32 bits, the source's bytes into it.
+    for (to, from) in [(32_u32, 8_u32), (32, 16), (32, 32), (64, 8), (64, 64)] {
+        for _ in 0..2 {
+            let (a, b) = (register(rng, to), register(rng, from));
+            list.push(one(format!("crc32 {a}, {b}")));
+        }
+        list.push(one(format!(
+            "crc32 {}, {}",
+            register(rng, to),
+            memory(from)
+        )));
+    }
 }
 
 /// The harness: reads vectors from standard input, runs each one's probe with its registers,

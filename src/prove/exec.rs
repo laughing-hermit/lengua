@@ -12,6 +12,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use iced_x86::{ConditionCode, Instruction, Mnemonic, OpKind, Register};
 
@@ -64,6 +65,9 @@ pub struct Image {
     named: HashMap<u64, usize>,
     /// The canonical fill's places, when the program has it.
     fill: Option<fill::Fill>,
+    /// Whether some run has called each function, as `functions` lists them: a proof says
+    /// nothing of code no run reached.
+    entered: Vec<AtomicBool>,
 }
 
 impl Image {
@@ -112,6 +116,7 @@ impl Image {
                 Some((*ip, place))
             })
             .collect();
+        let entered = functions.iter().map(|_| AtomicBool::new(false)).collect();
         let mut image = Self {
             instructions,
             regions,
@@ -121,6 +126,7 @@ impl Image {
             symbols,
             named,
             fill: None,
+            entered,
         };
         image.fill = fill::Fill::find(&image, machine);
         Some(image)
@@ -149,6 +155,38 @@ impl Image {
             (Some(place), None) | (None, Some(place)) => Some(Owner::Symbol(place)),
             _ => None,
         }
+    }
+
+    /// Notes that a run called the function at `address`.
+    fn enter(&self, address: u64) {
+        if let Some(index) = self
+            .functions
+            .iter()
+            .position(|(start, _, _)| *start == address)
+        {
+            self.entered[index].store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// The functions no run has called, in the order of their code, but `_start`, where every
+    /// run begins, and `assert_fail`, which only a failed assertion calls.
+    #[must_use]
+    pub fn unreached(&self) -> Vec<String> {
+        let mut unreached: Vec<(u64, &str)> = self
+            .functions
+            .iter()
+            .zip(&self.entered)
+            .filter(|((_, _, name), entered)| {
+                !entered.load(Ordering::Relaxed)
+                    && !matches!(name.as_str(), "_start" | "assert_fail")
+            })
+            .map(|((start, _, name), _)| (*start, name.as_str()))
+            .collect();
+        unreached.sort_unstable();
+        unreached
+            .into_iter()
+            .map(|(_, name)| name.to_owned())
+            .collect()
     }
 
     /// The name of the function whose code holds `address`.
@@ -1929,6 +1967,7 @@ impl<'a> Cpu<'a> {
                 let back = self.pool.bv(64, u128::from(instruction.next_ip()));
                 self.push(back)?;
                 let slot = self.constant(self.state.registers[4])?;
+                self.image.enter(instruction.near_branch_target());
                 self.state.calls += 1;
                 self.state.returns.push(Return {
                     slot,
@@ -1957,6 +1996,7 @@ impl<'a> Cpu<'a> {
             }
             Mnemonic::Syscall => self.syscall(),
             Mnemonic::Popcnt => self.popcnt(),
+            Mnemonic::Crc32 => self.crc32(),
             Mnemonic::Tzcnt | Mnemonic::Lzcnt | Mnemonic::Bsf | Mnemonic::Bsr => {
                 self.find_bit(mnemonic)
             }
