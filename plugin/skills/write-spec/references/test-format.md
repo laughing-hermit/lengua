@@ -50,7 +50,8 @@ reported with the phrasing to write instead. Values go in backticks, with `\n`, 
 | ``it exits with code `0` `` | Its exit code: 0 to 255, never 134 |
 | `it keeps serving` | A server still waiting for its next connection, with no exit code |
 
-**TEXT** is a value in backticks. ``followed by a newline`` adds a line break,
+**TEXT** is a value in backticks, where `\n`, `\r`, `\t`, `\e` (the escape that starts a
+terminal's sequences) and `\\` stand for those characters. ``followed by a newline`` adds a line break,
 ``repeated `N` times`` repeats a value, and `followed by` or `then` joins parts:
 ``- Given standard input holding `a` repeated `4096` times followed by `x` `` is 4096 `a`s and an
 `x`, up to 8 MiB a value. Several printing steps print one after another.
@@ -123,6 +124,14 @@ variable as bytes, and ``the clock at `{t}` `` reads a variable.
 - **The example and its generated tests supply alike:** random bytes in both or neither, and
   clock readings in both or neither. The example's bytes and readings count as inputs, so its
   variables are read back from them when its formulas are checked.
+
+## The terminal
+
+A spec that uses `the terminal` gets its keys as standard input in tests, a key a byte or an
+escape sequence of several, such as `\e[A` for up, and its tests write what it prints with `\e`
+for the escape that starts each sequence: ``it prints `\e[2J\e[H` followed by …``. A test's
+standard input is a pipe, so the program can't set the terminal's mode there and goes on as from
+a pipe; every wait for a key finds one, or the end of the input.
 
 ## The network
 

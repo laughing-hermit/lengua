@@ -986,6 +986,8 @@ fn unescape(written: &str) -> String {
             Some('r') => text.push('\r'),
             Some('n') => text.push('\n'),
             Some('t') => text.push('\t'),
+            // ESC, which starts a terminal's escape sequences.
+            Some('e') => text.push('\u{1b}'),
             Some('\\') => text.push('\\'),
             Some(other) => {
                 text.push('\\');

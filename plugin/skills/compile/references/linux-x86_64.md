@@ -6,8 +6,9 @@ What the spec names under `# Constraints` decides the calls a program may make o
 `write`, `exit` and `exit_group` always; `read` for `standard input`; `openat`, `read`, `write`,
 `lseek`, `close`, `fstat`, `getdents64`, `mkdirat`, `unlinkat` and `renameat` for `files`; `clock_gettime` and `clock_nanosleep` (to wait) for `the
 clock`; `getrandom` for `random bytes`; none for `the environment`, which is on the stack at the
-start; `socket` and `connect` for `- Network: connects to …`, `accept4` for `- Network: listens
-on …`, and `read`, `close`, `shutdown` and `sendto` for either. The kernel refuses any other.
+start; `read`, `ioctl` and `poll` for `the terminal`; `socket` and `connect` for `- Network:
+connects to …`, `accept4` for `- Network: listens on …`, with `poll` for `up to N clients at
+once`, and `read`, `close`, `shutdown` and `sendto` for either. The kernel refuses any other.
 
 `mov eax, SYS_NAME` picks the call, the arguments go in `rdi`, `rsi`, `rdx`, `r10`, `r8` and `r9`
 (`r10`, not `rcx`), and `syscall` runs it. It returns in `rax` and changes `rcx` and `r11`; every
@@ -36,6 +37,8 @@ test it right away with `test rax, rax` and `js`.
 | `sendto` | 44 | `edi` the connection, `rsi` bytes, `rdx` count, `r10d` 0x4000 (`MSG_NOSIGNAL`), `r8` 0, `r9` 0 | bytes sent or an error |
 | `shutdown` | 48 | `edi` the connection, `esi` 1 to stop sending | 0 or an error |
 | `accept4` | 288 | `edi` 3, `rsi` 0, `rdx` 0, `r10d` 0 | the next connection's file descriptor, or an error |
+| `poll` | 7 | `rdi` a table of 8-byte entries (the descriptor, 4 bytes; the events waited for, 2; the events that came, 2), `esi` how many, `edx` the most milliseconds to wait, -1 for no limit | how many entries have events, 0 when the time ran out, or an error; a negative descriptor is passed over |
+| `ioctl` | 16 | `edi` 0, 1 or 2; `esi` 0x5401 (`TCGETS`) to read the terminal's mode or 0x5402 (`TCSETS`) to set it, with `rdx` its 36 bytes, or 0x5413 (`TIOCGWINSZ`) for the window's rows and columns, 2 bytes each, in `rdx`'s 8 bytes | 0, or -25 (`ENOTTY`) when it isn't a terminal, as in every test; the kernel refuses any other request |
 
 File descriptors 0, 1 and 2 are standard input, output and error. `openat` flags: `O_RDONLY` 0,
 `O_WRONLY` 1, `O_RDWR` 2, `O_CREAT` 0x40, `O_TRUNC` 0x200, `O_APPEND` 0x400; a mode such as 0o644
@@ -49,6 +52,15 @@ descriptor 3, and it takes each connection with `accept4`, reads until it has th
 with `sendto` and `MSG_NOSIGNAL` (with `write`, a client that hangs up early would kill it with
 SIGPIPE), and closes the connection. A client reads until `read` returns 0, when the server has
 closed its side. Data can arrive in pieces, so never assume one `read` gets it all.
+
+The terminal: keys one at a time with no echo take the terminal's mode with `TCGETS`, its local
+flags (the 4 bytes at 12) without `ICANON` (2) and `ECHO` (8), `VMIN` (the byte at 23) 1 and
+`VTIME` (at 22) 0, set with `TCSETS`; the mode as found goes back at the end, as
+`assets/terminal-template.s` does. When `TCGETS` fails, as it does in every test, where standard
+input is a pipe, keys come as they are and nothing changes. `poll` on standard input with a time
+waits for the next key, a game's tick when none comes. Arrows and other special keys are escape
+sequences of several bytes, such as 27, 91, 65 for up, and `\033[…` sequences move the cursor,
+clear the screen and color text.
 
 Random bytes and the clock: tests usually supply them in place of the kernel's, so output that
 depends on them can be checked exactly. Draw the random bytes the spec's Purpose says how to use,

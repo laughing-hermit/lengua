@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use lengua::platform::{Allowed, Profile};
 use lengua::runner::{End, Job, Limits, Net, Run, run, start};
-use lengua::spec::Syscall;
+use lengua::spec::{Syscall, Use};
 use lengua::supply::Supply;
 use lengua::toolchain::Toolchain;
 
@@ -813,9 +813,14 @@ async fn template_tests(edit: impl Fn(&str) -> String, workers: usize) -> lengua
 
 /// Runs the event-loop server's spec against `code`: the server template itself, or another.
 async fn server_tests(code: &str) -> lengua::testrun::Outcome {
+    asset_tests("server-template-spec.md", code).await
+}
+
+/// Runs the tests of the compile skill's asset spec `spec` against `code`.
+async fn asset_tests(spec: &str, code: &str) -> lengua::testrun::Outcome {
     let assets = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugin/skills/compile/assets");
     let read = |name: &str| std::fs::read_to_string(assets.join(name)).expect("an asset");
-    let spec = lengua::spec::parse(&read("server-template-spec.md")).expect("the server's spec");
+    let spec = lengua::spec::parse(&read(spec)).expect("the asset's spec");
     let suite = lengua::testfile::check(&spec).expect("the tests check");
     let (source, _) = lengua::checker::source::parse(code);
     let folder = tempfile::tempdir().expect("a folder");
@@ -857,6 +862,38 @@ async fn a_server_for_clients_at_once_answers_each_while_others_send() {
         "{:#?}",
         outcome.failures
     );
+}
+
+/// A program for the terminal takes keys from a pipe as it would from a terminal, and the kernel
+/// lets it read and set the terminal's mode and nothing else.
+#[tokio::test]
+async fn a_terminal_program_takes_keys_from_a_pipe_too() {
+    let assets = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugin/skills/compile/assets");
+    let template =
+        std::fs::read_to_string(assets.join("terminal-template.s")).expect("the terminal template");
+    let outcome = asset_tests("terminal-template-spec.md", &template).await;
+    assert!(outcome.passed(), "{:#?}", outcome.failures);
+    // Asking how many bytes wait to be read, FIONREAD, isn't one of the terminal's requests.
+    let folder = tempfile::tempdir().expect("temporary folder");
+    let asks = build(
+        folder.path(),
+        "asks",
+        &program(
+            "    mov eax, 16\n    xor edi, edi\n    mov esi, 0x541b\n    lea rdx, [rip + \
+             waiting]\n    syscall\n    mov eax, 60\n    xor edi, edi\n    syscall",
+            ".data\nwaiting:\n    .zero 8",
+        ),
+    )
+    .await;
+    let calls = Profile::LinuxX86_64.allowed_syscalls(Use::Terminal.syscalls(), false);
+    let ran = run(
+        launcher(),
+        Job::new(&asks, &[], b"", &calls),
+        Limits::default(),
+    )
+    .await
+    .expect("run");
+    assert_eq!(ran.end, End::Signaled(31), "{ran:?}");
 }
 
 #[tokio::test]

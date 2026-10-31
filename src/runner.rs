@@ -560,6 +560,9 @@ pub async fn attached(launcher: &Path, job: Job<'_>) -> io::Result<End> {
     let mut interrupt = signal(SignalKind::interrupt())?;
     let mut hangup = signal(SignalKind::hangup())?;
     let mut terminate = signal(SignalKind::terminate())?;
+    // A program that sets the terminal's mode may end without setting it back: the shell gets
+    // it back as it was.
+    let terminal = rustix::termios::tcgetattr(std::io::stdin()).ok();
     let Launched {
         mut child,
         pid,
@@ -591,6 +594,13 @@ pub async fn attached(launcher: &Path, job: Job<'_>) -> io::Result<End> {
     };
     if let Some((mut supervisor, _)) = supervisor {
         let _ = supervisor.wait().await;
+    }
+    if let Some(terminal) = terminal {
+        let _ = rustix::termios::tcsetattr(
+            std::io::stdin(),
+            rustix::termios::OptionalActions::Now,
+            &terminal,
+        );
     }
     Ok(match status.code() {
         Some(code) => End::Exited(code),
@@ -1117,6 +1127,19 @@ fn pin_rules(pin: Pin) -> Result<Vec<SeccompRule>, seccompiler::BackendError> {
             SeccompCmpOp::Eq,
             3,
         )?])?]),
+        // TCGETS, TCSETS, TCSETSW, TCSETSF and TIOCGWINSZ, on standard input, output or error.
+        Pin::Terminal => {
+            let mut rules = Vec::new();
+            for descriptor in [0, 1, 2] {
+                for request in [0x5401, 0x5402, 0x5403, 0x5404, 0x5413] {
+                    rules.push(SeccompRule::new(vec![
+                        condition(0, Dword, SeccompCmpOp::Eq, descriptor)?,
+                        condition(1, Qword, SeccompCmpOp::Eq, request)?,
+                    ])?);
+                }
+            }
+            Ok(rules)
+        }
         // No flag but MSG_NOSIGNAL (MSG_FASTOPEN would connect), and no address.
         Pin::NoAddress => Ok(vec![SeccompRule::new(vec![
             condition(

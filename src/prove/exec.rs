@@ -519,6 +519,10 @@ const STAT_SIZE: u64 = 48;
 const REGULAR_FILE: u128 = 0o100_644;
 const EBADF: i64 = 9;
 const EINVAL: i64 = 22;
+const ENOTTY: i64 = 25;
+/// The bytes of one `struct pollfd`, and its event for something to read.
+const POLLFD_LEN: u64 = 8;
+const POLLIN: u128 = 1;
 
 /// The general-purpose register a register is part of, 0 for rax to 15 for r15.
 fn slot(register: Register) -> Option<usize> {
@@ -3014,10 +3018,32 @@ impl<'a> Cpu<'a> {
                 let status = self.pool.extract(rdi, 7, 0);
                 return Err(End::Exit(status));
             }
+            // A wait for the next key: as in a test, standard input has all arrived, so it always
+            // has a key to read, or its end. A server's poll over its connections is beyond the
+            // model.
             7 => {
-                return Err(unsupported(
-                    "poll, with which a server serves clients at once",
-                ));
+                let (table, count) = (self.constant(rdi)?, self.constant(rsi)?);
+                let waits_for_input = count == 1 && {
+                    self.lent(Register::RDI, table, POLLFD_LEN, true, "poll")?;
+                    let descriptor = self.load(table, 4)?;
+                    self.pool.constant(descriptor) == Some(0)
+                };
+                if !waits_for_input {
+                    return Err(unsupported(
+                        "poll over several descriptors, with which a server serves clients at once",
+                    ));
+                }
+                let ready = self.pool.bv(16, POLLIN);
+                self.save(table + 6, ready)?;
+                1
+            }
+            // As in a test, standard input, output and error are never a terminal: its mode
+            // can't be read or set, and the program goes on as from a pipe.
+            16 => {
+                if self.constant(rdi)? & 0xffff_ffff > 2 {
+                    return Err(unsupported("ioctl on a file or a connection"));
+                }
+                (-ENOTTY).cast_unsigned()
             }
             other => return Err(unsupported(format!("system call {other}"))),
         };

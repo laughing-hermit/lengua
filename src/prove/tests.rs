@@ -1433,6 +1433,29 @@ async fn proves_the_vector_template() {
 /// masks meeting the formulas' counts as one term; a count that misses carriage returns is
 /// found. Texts up to 200 bytes, past three whole vectors and a tail, keep the test quick even
 /// beside the others; up to 4096 prove the same way.
+/// A program for the terminal proves as from a pipe, as its tests run: the terminal's mode
+/// can't be read or set, and a wait for the next key always finds one, or the input's end.
+#[tokio::test]
+async fn proves_a_program_for_the_terminal() {
+    let folder = "plugin/skills/compile/assets/";
+    let spec = repository_file(&format!("{folder}terminal-template-spec.md"));
+    let machine = machine(&repository_file(&format!("{folder}terminal-template.s"))).await;
+    for index in 0..2 {
+        let verdict = prove(&machine, &block(&spec, index), &text_budget());
+        assert!(
+            matches!(
+                verdict,
+                Verdict::Proven {
+                    bound: None,
+                    questions: 0,
+                    ..
+                }
+            ),
+            "block {index}: {verdict:?}"
+        );
+    }
+}
+
 /// The CRC-32C asset's own spec, every text up to the 4096 bytes a proof covers.
 #[tokio::test]
 #[ignore = "slow: 4097 lengths of text"]

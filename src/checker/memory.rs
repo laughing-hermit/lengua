@@ -214,6 +214,8 @@ impl Summary {
             Some(Syscall::Sendto) => (&[Register::RSI, Register::R8], &[]),
             // The table of descriptors, whose events the kernel writes back.
             Some(Syscall::Poll) => (&[Register::RDI], &[Register::RDI]),
+            // The terminal's mode, read or written, or its window's size.
+            Some(Syscall::Ioctl) => (&[Register::RDX], &[Register::RDX]),
             Some(
                 Syscall::Close
                 | Syscall::Lseek

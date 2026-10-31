@@ -65,6 +65,7 @@ impl Profile {
             (Self::LinuxX86_64, Syscall::Shutdown) => 48,
             (Self::LinuxX86_64, Syscall::Accept4) => 288,
             (Self::LinuxX86_64, Syscall::Poll) => 7,
+            (Self::LinuxX86_64, Syscall::Ioctl) => 16,
         }
     }
 
@@ -93,6 +94,7 @@ impl Profile {
                     Syscall::Socket => Pin::TcpSocket,
                     Syscall::Accept4 => Pin::ListeningSocket,
                     Syscall::Sendto => Pin::NoAddress,
+                    Syscall::Ioctl => Pin::Terminal,
                     _ => Pin::Any,
                 },
             })
@@ -145,11 +147,14 @@ pub enum Pin {
     /// `sendto` on a connection: no address, and no flag but `MSG_NOSIGNAL`, so it can't open a
     /// connection of its own.
     NoAddress,
+    /// `ioctl` on standard input, output or error, to read or set the terminal's mode or read
+    /// its window's size, and nothing else.
+    Terminal,
 }
 
 impl Pin {
     /// How the launcher's argument writes it after the call's number: nothing, `:N`, `:tcp`,
-    /// `:listening` or `:noaddress`.
+    /// `:listening`, `:noaddress` or `:terminal`.
     #[must_use]
     pub fn encode(self) -> String {
         match self {
@@ -158,6 +163,7 @@ impl Pin {
             Self::TcpSocket => ":tcp".into(),
             Self::ListeningSocket => ":listening".into(),
             Self::NoAddress => ":noaddress".into(),
+            Self::Terminal => ":terminal".into(),
         }
     }
 
@@ -168,6 +174,7 @@ impl Pin {
             "tcp" => Some(Self::TcpSocket),
             "listening" => Some(Self::ListeningSocket),
             "noaddress" => Some(Self::NoAddress),
+            "terminal" => Some(Self::Terminal),
             argument => argument.parse().ok().map(Self::First),
         }
     }

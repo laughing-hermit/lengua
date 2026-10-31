@@ -289,16 +289,20 @@ pub enum Use {
     RandomBytes,
     /// Environment variables: only those a test, or the user through `run`, gives it.
     Environment,
+    /// The terminal it runs in: keys as they're pressed, with no echo or line editing, a wait
+    /// for the next key of a set time, and the window's size.
+    Terminal,
 }
 
 impl Use {
     /// Every capability, in the order specs list them.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::StandardInput,
         Self::Files,
         Self::Clock,
         Self::RandomBytes,
         Self::Environment,
+        Self::Terminal,
     ];
 
     /// The words a spec names it with.
@@ -310,6 +314,7 @@ impl Use {
             Self::Clock => "the clock",
             Self::RandomBytes => "random bytes",
             Self::Environment => "the environment",
+            Self::Terminal => "the terminal",
         }
     }
 
@@ -321,6 +326,7 @@ impl Use {
             "clock" => Some(Self::Clock),
             "random bytes" | "random" => Some(Self::RandomBytes),
             "environment" | "environment variables" => Some(Self::Environment),
+            "terminal" => Some(Self::Terminal),
             _ => None,
         }
     }
@@ -346,6 +352,7 @@ impl Use {
             Self::RandomBytes => &[Syscall::Getrandom],
             // The kernel lays them out above the arguments: no call reads them.
             Self::Environment => &[],
+            Self::Terminal => &[Syscall::Read, Syscall::Ioctl, Syscall::Poll],
         }
     }
 
@@ -365,6 +372,7 @@ impl Use {
             | Syscall::Renameat => Some(Self::Files),
             Syscall::ClockGettime | Syscall::ClockNanosleep => Some(Self::Clock),
             Syscall::Getrandom => Some(Self::RandomBytes),
+            Syscall::Ioctl => Some(Self::Terminal),
             _ => None,
         }
     }
@@ -420,13 +428,16 @@ pub enum Syscall {
     /// Send on a connection, with no address, possibly with `MSG_NOSIGNAL`.
     Sendto,
     /// Wait until the listening socket or one of the connections has something to read, for a
-    /// server of several clients at once.
+    /// server of several clients at once, or for the next key, a set time at most.
     Poll,
+    /// Read or set the terminal's mode, or read its window's size: on standard input, output or
+    /// error, and nothing else.
+    Ioctl,
 }
 
 impl Syscall {
     /// Every system call a spec may allow.
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 22] = [
         Self::Read,
         Self::Write,
         Self::Openat,
@@ -448,6 +459,7 @@ impl Syscall {
         Self::Shutdown,
         Self::Sendto,
         Self::Poll,
+        Self::Ioctl,
     ];
 
     /// The calls only a program on the network may make.
@@ -485,6 +497,7 @@ impl Syscall {
             Self::Shutdown => "shutdown",
             Self::Sendto => "sendto",
             Self::Poll => "poll",
+            Self::Ioctl => "ioctl",
         }
     }
 
@@ -513,7 +526,6 @@ const FORBIDDEN_SYSCALLS: &[&str] = &[
     "fcntl",
     "fork",
     "futex",
-    "ioctl",
     "kill",
     "listen",
     "madvise",
@@ -2182,6 +2194,12 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
         assert!(!spec.syscalls.contains(&Syscall::Getrandom));
         let spec = parse(&uses("- Uses: `random bytes`")).expect("valid spec");
         assert_eq!(spec.uses, [Use::RandomBytes]);
+        // The terminal: its keys, its mode and its size, with a wait for the next key.
+        let spec = parse(&uses("- Uses: the terminal")).expect("valid spec");
+        assert_eq!(spec.uses, [Use::Terminal]);
+        for call in [Syscall::Read, Syscall::Ioctl, Syscall::Poll] {
+            assert!(spec.syscalls.contains(&call), "{call:?}");
+        }
         // No Constraints at all is a program that needs nothing.
         let end = ADD.find("# Constraints").expect("constraints");
         assert!(parse(&ADD[..end]).expect("valid spec").uses.is_empty());

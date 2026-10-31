@@ -26,8 +26,8 @@
 //! - ``the client gets back TEXT``
 //! - ``it exits with code `0` ``, `it keeps serving`
 //!
-//! TEXT is a value in backticks, written with `\n`, `\r`, `\t` and `\\` for the characters they
-//! name; ``followed by a newline`` adds one, ``repeated `N` times`` repeats a value in an example,
+//! TEXT is a value in backticks, written with `\n`, `\r`, `\t`, `\e` and `\\` for the characters
+//! they name; ``followed by a newline`` adds one, ``repeated `N` times`` repeats a value in an example,
 //! and `followed by` or `then` joins parts. In a generated test, `{…}` holds a formula, whose own
 //! strings keep their escapes.
 

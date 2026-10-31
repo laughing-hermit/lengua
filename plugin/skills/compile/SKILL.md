@@ -32,7 +32,11 @@ and the CPU features the code needs; never write that line yourself.
    spec serves several clients at once starts from
    [the event-loop server](assets/server-template.s) ([its spec](assets/server-template-spec.md)):
    `poll` over the listening socket and a fixed table of connections, a line buffer for each,
-   and answering each client as its request completes.
+   and answering each client as its request completes. A program for the terminal starts from
+   [the key reader](assets/terminal-template.s) ([its spec](assets/terminal-template-spec.md)):
+   keys one at a time with no echo, a wait for the next key, and the terminal set back at the
+   end. A choice made for each input byte with `cmov` or `setcc`, not a branch, keeps the proof
+   to one path; a branch per byte doubles the paths with each byte, and the proof stops early.
 4. Write the code by [the rules](references/power-of-10.md), with
    [the Linux x86-64 reference](references/linux-x86_64.md) for system calls, the program's start
    and the calling convention. Write it correct first; speed comes in step 6.
