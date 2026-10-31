@@ -36,8 +36,15 @@ and loops whose state crosses from one buffer-full to the next, as a word count'
 
 Left for later on this target:
 - Sorting at every length, which needs quantified facts over memory.
-- SHA-256 and AES programs: left out after two safety stops, and not routed around them by any
-  means.
+
+Not done because a safety filter stopped the work (Claude's, in Claude Code, 2026-10-31). What a
+stopped reply held is never produced again, reworded or through other models or agents:
+- **SHA-256 and AES programs.** Two replies working toward them were stopped, so there is no
+  SHA-256 or AES program among the examples and assets, and no proof that a program meets the
+  `sha256` formula. The CPU's SHA and AES instructions are modeled in the prover and checked
+  against this CPU, and tests can still check a program against `sha256`.
+- **A reply planning lengua for every target LLVM supports** was stopped before its plan was
+  done. What it held isn't known; the plan is being made again from the start.
 
 ## 2. A white paper: lengua is an AI language, not a programming language
 
