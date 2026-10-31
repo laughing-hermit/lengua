@@ -1358,6 +1358,31 @@ mod tests {
         }
     }
 
+    /// A question with floats starts one session that reads them, which answers it itself and
+    /// never starts a session of its own: when it did, each float question started another,
+    /// and 824 cvc5 processes filled the computer's memory.
+    #[test]
+    fn a_float_session_starts_no_session_of_its_own() {
+        let Ok(mut solver) = Solver::start(10_000) else {
+            return;
+        };
+        let mut pool = Pool::default();
+        // x + 1.0 == x, for a 16-bit whole number x as a double: never, which the bits alone
+        // can't show, so the question goes to the floats.
+        let number = pool.var(16, "n");
+        let x = pool.float_from_int(number, 64);
+        let one = pool.bv(64, u128::from(1.0_f64.to_bits()));
+        let sum = pool.float(crate::prove::term::FloatOp::Add, x, one);
+        let same = pool.eq(sum, x);
+        let (answer, _) = solver.check(&pool, &[same], &[]).expect("an answer");
+        assert_eq!(answer, Answer::Unsat);
+        let floats = solver.floats.as_ref().expect("a session for the floats");
+        assert!(
+            floats.floats.is_none(),
+            "the float session started one of its own"
+        );
+    }
+
     /// A question to a solver the watchdog stopped fails, saying the memory ran low.
     #[test]
     fn a_solver_stopped_for_memory_says_so() {
