@@ -2,7 +2,11 @@
 
 In order. Each item starts when the one before it is done.
 
-## 1. Perfect lengua for this target (x86-64 Linux): done, 2026-10-31
+## 1. Perfect lengua for this target (x86-64 Linux)
+
+Marked done on 2026-10-31, then reopened the same day. Round 7 is under way: word counts for
+every length, hash tables and word tallies, the fastest word count proven for every length, and
+checked jump tables.
 
 What lengua is on this target now:
 - **Two files.** spec.md, an OKF concept document, holds every behavior and every test, and names
@@ -29,6 +33,11 @@ What lengua is on this target now:
 Tested, not proven, and each proof line says why: sorting past a few bytes, word tallies,
 floats computed in another order than the formula's, a folder's listing, the `sha256` formula,
 and loops whose state crosses from one buffer-full to the next, as a word count's does.
+
+Left for later on this target:
+- Sorting at every length, which needs quantified facts over memory.
+- SHA-256 and AES programs: left out after two safety stops, and not routed around them by any
+  means.
 
 ## 2. A white paper: lengua is an AI language, not a programming language
 
