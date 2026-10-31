@@ -744,9 +744,11 @@ order makes reductions deterministic, and laying the slots end to end makes a ma
 thread with `exit_group`, so a failed check anywhere stops the whole program.
 
 Roadmap, in order:
-1. proofs of decimal arithmetic written in a different shape, and of every way a network may cut
-   a message;
-2. the other platforms, toward the top six CPU and OS targets.
+1. proofs of read loops for texts of every length, by induction over one more chunk, where today
+   a proof goes as far as its time and `prove_further` reach;
+2. proofs of sorting, of floats computed in another order than the formula's, and of servers
+   whose clients overlap, which are tested today;
+3. the other platforms, toward the top six CPU and OS targets.
 
 ## Platforms
 
@@ -834,30 +836,42 @@ limits, so lengua's guarantees hold only for a program that `run` runs after `ch
 ## Status
 
 The MVP is built: milestones 1 foundation, 2 spec and lock, 3 tests, 4 rule checker, 5 code and
-run, and 6 end to end, each committed after the project owner approved it. Since then a program is
-two files: the tests went into the spec, whose steps are its examples. `tests/e2e.rs` runs the
-whole workflow on `examples/add` in both MCP protocol generations.
+run, and 6 end to end, each committed after the project owner approved it. A program is two
+files: the tests are in the spec, whose steps are its examples. `tests/e2e.rs` runs the whole
+workflow on `examples/add` in both MCP protocol generations.
 
-Dialect 2 followed:
-- vectors from SSE2 to AVX-512, with masks and broadcasts;
-- hashing and checksum instructions;
-- floating point in double and single precision, with fused multiply-add, plus exact decimals in
-  the test language;
-- inputs up to 1 MiB;
-- every value tried when a range is small;
-- files in tests, and the kernel confining every run to what the spec allows;
-- fork-join threads, with each worker proven to write only its own stack and slot;
-- proofs of programs for every input in range over whole numbers, decimals,
-  choices, texts (beyond ASCII too) and text formulas, files, the network, and random bytes and
-  clock readings the tests supply, in integer, bit and vector code from SSE2 to AVX-512, with
-  every step confirmed by a second solver, and over long texts up to a stated length; through
-  `fill`, for input cut into pieces any way;
-- the clock and random bytes, which tests supply through a ptrace supervisor, and rules such as
-  `{any(1, 6)}` where they don't;
-- plain TCP clients and servers on the ports a spec names, tested against their own loopback
-  server or client, whose client keeps the connection open as curl does;
-- one `check` tool for the whole loop, each call back within about 40 seconds while the tests
-  and the proof run in the background.
+Dialect 3 is the current one:
+- memory rules M1 to M8, a borrow checker for assembly: every pointer has an owner and every
+  access stays inside it, statically where the rules settle it and by proof elsewhere, down to a
+  pointer one step past its buffer;
+- vectors from SSE2 to AVX-512, hashing and checksum instructions, and floating point in single
+  and double precision with fused multiply-add, all modeled for proofs and checked against this
+  CPU;
+- files and folders, environment variables, sleeping, the clock and random bytes, fork-join
+  threads, the terminal, and TCP clients and servers, reachable from other computers and serving
+  many clients at once when the spec says so, each confined by the kernel to what the spec
+  allows;
+- proofs for every input in range over whole numbers, decimals, choices, texts and text
+  formulas, checksums, floats computed in the formula's order, files, the network and threads,
+  each solver step confirmed by a second solver, with texts proven as far as the spec's lengths
+  and the proof's time reach, and further with `prove_further`;
+- specs that name no CPU or OS, which `check` holds them to, so a spec shared alone compiles on
+  another computer and its copy passes the same checks;
+- `lengua-mcp run` for the user's own shell, and a release archive that installs with no Rust
+  toolchain.
+
+Interactive round 4 (2026-10-31) ran ten scenarios in real Claude Code sessions, each from one
+request: a CSV total, a line-reversing server, a tiny web server, a fast `wc`, a SIMD ROT13, an
+HTTP fetcher, a clock, a sort, a mean and standard deviation, and a spec shared alone. Every one
+finished with no question, every test passing and every call under 45 seconds, for about $20 at
+list prices; twelve phrasings of a request all chose write-spec first. BENCHMARKS.md, measured
+the same day, has lengua's best ahead of or level with C, C++ and Rust on every workload and
+measure, with 2.5 to 3.1 times less memory.
+
+Tested, not proven, for now: sorting and `uniq`, floats computed in another order than the
+formula's, servers whose clients overlap, a folder's listing, and the SHA and AES instructions.
+Left out of the dialect on purpose: gathers and scatters, whose addresses can't be bounds-checked,
+allocation while running, recursion, function pointers, and running other programs.
 
 All of it is checked on this machine (x86-64 Linux). The long-term goal is the top six CPU and OS
 targets, through LLVM and one profile per target; they come next, in the order Platforms gives.

@@ -19,16 +19,19 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 > stays inside it. It covers whole numbers, exact decimals, floating point in double and single
 > precision with fused multiply-add, vectors from SSE2 to AVX-512, hashing and checksums, files
 > and folders, environment variables, fork-join threads, waiting, the clock and random bytes
-> (which tests supply, so such output is exact), plain TCP clients and servers on the ports a spec
-> names, and inputs up to 1 MiB. The kernel holds every run to what its spec allows. lengua
-> proves programs right for every input, not just the tested ones, over whole numbers, decimals,
-> choices, texts beyond ASCII and text formulas, files and the network, threads and floats, in integer, bit, vector and float code from SSE2 to AVX-512,
-> and over long texts up to a stated length (4,096 bytes of standard input). Programs that read
-> with the skill's `fill` are proven however their input arrives, cut into any pieces, and
-> servers are tested and proven with clients that keep the connection open, as curl does. Each
-> solver step is confirmed by two independent solvers, z3 and cvc5, and most proofs need none:
-> the terms settle every step. `lengua.lock` records what's proven. Next:
-> - proofs over texts of every length, and up to the lengths a spec itself states;
+> (which tests supply, so such output is exact), the terminal, and TCP clients and servers on
+> the ports a spec names, for other computers and many clients at once when it says so. The
+> kernel holds every run to what its spec allows. lengua proves programs right for every input,
+> not just the tested ones, over whole numbers, decimals, choices, texts beyond ASCII and text
+> formulas, checksums, files and the network, threads, and floats computed in the formula's
+> order, in integer, bit, vector and float code from SSE2 to AVX-512, and over texts as long as
+> the spec's lengths and the proof's time reach, and further with `prove_further`. Programs
+> that read with the skill's `fill` are proven however their input arrives, cut into any
+> pieces. Each solver step is confirmed by two independent solvers, z3 and cvc5, and most proofs
+> need none: the terms settle every step. `lengua.lock` records what's proven. In ten scenarios
+> in real Claude Code sessions, from a web server to a sort, every program came from one
+> request, with no question. Next:
+> - proofs of read loops for texts of every length, by induction;
 > - more of the top CPU and OS targets, which LLVM already supports.
 
 ## Requirements
