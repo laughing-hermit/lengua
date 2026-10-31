@@ -92,6 +92,19 @@ pub struct CodeStamp {
     pub features: Vec<String>,
 }
 
+/// A generated test proven for every input with texts up to a length.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bounded {
+    /// Its id, such as `B1`.
+    pub id: String,
+    /// The longest text proven, with every shorter one, in bytes.
+    pub bytes: usize,
+    /// The longest the spec lets its texts be.
+    pub of: usize,
+    /// Whether proving on could reach further, as `check` with `prove_further` does.
+    pub more: bool,
+}
+
 /// What `prove` proved about one build of the code.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProofStamp {
@@ -99,9 +112,8 @@ pub struct ProofStamp {
     pub executable_sha256: Sha256Hex,
     /// The ids of the generated tests proven for every input in range, in the spec's order.
     pub proven: Vec<String>,
-    /// The generated tests proven only for texts up to a length: each id with that length in
-    /// bytes. Never also in `proven`.
-    pub bounded: Vec<(String, usize)>,
+    /// The generated tests proven only for texts up to a length. Never also in `proven`.
+    pub bounded: Vec<Bounded>,
     /// Which solvers checked them: `z3 and cvc5`, or one of them alone.
     pub solvers: String,
     /// The generated tests a proof found wrong, each id with what it found: `run` refuses this
@@ -211,7 +223,15 @@ impl Lock {
                 let bounded: Vec<String> = proofs
                     .bounded
                     .iter()
-                    .map(|(id, bytes)| format!("{{ id = {}, bytes = {bytes} }}", toml_string(id)))
+                    .map(|bounded| {
+                        format!(
+                            "{{ id = {}, bytes = {}, of = {}, more = {} }}",
+                            toml_string(&bounded.id),
+                            bounded.bytes,
+                            bounded.of,
+                            bounded.more
+                        )
+                    })
                     .collect();
                 let _ = writeln!(text, "bounded = [{}]", bounded.join(", "));
             }
@@ -282,6 +302,10 @@ struct WrongTable {
 struct BoundedTable {
     id: String,
     bytes: usize,
+    #[serde(default)]
+    of: usize,
+    #[serde(default)]
+    more: bool,
 }
 
 #[derive(Deserialize)]
@@ -359,7 +383,12 @@ fn parse_body(body: &str) -> Result<Lock, LockError> {
                     bounded: proofs
                         .bounded
                         .into_iter()
-                        .map(|bounded| (bounded.id, bounded.bytes))
+                        .map(|bounded| Bounded {
+                            id: bounded.id,
+                            bytes: bounded.bytes,
+                            of: bounded.of,
+                            more: bounded.more,
+                        })
                         .collect(),
                     solvers: proofs.solvers,
                     wrong: proofs
@@ -723,11 +752,17 @@ mod tests {
         // A proof that holds only up to a length is recorded with it, apart from full ones.
         let mut bounded = lock.clone();
         if let Some(proofs) = &mut bounded.proofs {
-            proofs.bounded = vec![("B3".into(), 4096)];
+            proofs.bounded = vec![Bounded {
+                id: "B3".into(),
+                bytes: 4096,
+                of: 5000,
+                more: true,
+            }];
         }
         let bounded_text = bounded.to_signed_text(&key(1));
         assert!(
-            bounded_text.contains("bounded = [{ id = \"B3\", bytes = 4096 }]\n"),
+            bounded_text
+                .contains("bounded = [{ id = \"B3\", bytes = 4096, of = 5000, more = true }]\n"),
             "{bounded_text}"
         );
         assert_eq!(Lock::from_signed_text(&bounded_text, &key(1)), Ok(bounded));

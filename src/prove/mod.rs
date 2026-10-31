@@ -65,6 +65,10 @@ pub enum Verdict {
 pub struct Bound {
     /// The longest text proven, with every shorter one.
     pub bytes: usize,
+    /// The longest the spec lets the block's texts be.
+    pub of: usize,
+    /// Whether proving on could reach further: the time ran out, not the model.
+    pub more: bool,
     /// What stopped the proof at the next length.
     pub why: String,
     /// Whether the lengths count characters, as they do where a text has characters beyond
@@ -90,6 +94,9 @@ pub struct Budget {
     pub cancel: Arc<AtomicBool>,
     /// How far the proof has got, for whoever waits on it.
     pub progress: Arc<Progress>,
+    /// Where the proof starts, when the texts below this length are proven already: a check
+    /// goes on from where the last proof of the same build stopped.
+    pub from_length: usize,
 }
 
 impl Budget {
@@ -104,6 +111,7 @@ impl Budget {
             listens,
             cancel: Arc::default(),
             progress: Arc::default(),
+            from_length: 0,
         }
     }
 
@@ -980,38 +988,28 @@ pub const DELIVERY: &str = "(delivery)";
 /// formula.
 pub const UNSAFE: &str = "(unsafe)";
 
-/// The longest text a proof covers from the shortest: standard input up to what one pipe write
-/// holds, which the model reads whole, and other texts as long. Longer texts are tested, not
-/// proven.
-pub const TEXT_BOUND: usize = 4096;
+/// What one pipe write holds, which one read of standard input returns whole: past it, input
+/// arrives in pieces, which only a program that reads with fill takes right however they fall.
+pub const PIPE_WRITE: usize = 4096;
 
-/// What a proof that covered every length up to [`TEXT_BOUND`] says about longer texts.
-const PAST_THE_BOUND: &str = "a proof covers texts up to 4096 bytes";
+/// The most text lengths one proof lays out past where it starts, more than its time reaches: a
+/// text is proven up to the length the spec gives it, shortest first, as far as the proof's time
+/// goes, and the next check goes on from where it stopped.
+const WINDOW: usize = 1 << 16;
 
-/// The most lengths a text that starts past [`TEXT_BOUND`] is proven over, shortest first: a
-/// mebibyte-long file the program only measures, say.
-const LONG_LENGTHS: usize = 4096;
-
-/// The longest length of `generator`'s text a proof covers, and what it says past it, when that
-/// stops short of the generator's own longest.
-fn text_cap(min: usize, max: usize) -> Option<(usize, &'static str)> {
-    let cap = if min <= TEXT_BOUND {
-        (TEXT_BOUND, PAST_THE_BOUND)
-    } else {
-        (
-            min + LONG_LENGTHS - 1,
-            "a proof covers 4096 lengths of a long text, from the shortest",
-        )
-    };
-    (max > cap.0).then_some(cap)
+/// The longest length of a text from `min` to `max` long that a proof starting at `from` lays
+/// out.
+fn laid_out(min: usize, max: usize, from: usize) -> usize {
+    max.min(min.max(from).saturating_add(WINDOW))
 }
 
 /// Texts this long or shorter have each byte held to the generator's characters; longer ones
 /// only to the range the characters span, which proves more than needed but nothing false.
 const MAX_CHECKED_TEXT: usize = 4096;
 
-/// The parts that cover every value `generator` draws.
-fn parts(name: &str, generator: &Generator) -> Result<Vec<Part>, String> {
+/// The parts that cover every value `generator` draws, texts up to the length a proof starting
+/// at `from` lays out.
+fn parts(name: &str, generator: &Generator, from: usize) -> Result<Vec<Part>, String> {
     match generator {
         Generator::Int { lo, hi } => Ok(shapes(*lo, *hi)
             .into_iter()
@@ -1036,8 +1034,7 @@ fn parts(name: &str, generator: &Generator) -> Result<Vec<Part>, String> {
                 return utf8_parts(name, *min, *max, charset);
             }
             let bytes: Vec<u8> = charset.iter().map(|character| *character as u8).collect();
-            let longest = text_cap(*min, *max).map_or(*max, |(cap, _)| cap);
-            Ok((*min..=longest)
+            Ok((*min..=laid_out(*min, *max, from))
                 .map(|length| Part::Text(length, bytes.clone()))
                 .collect())
         }
@@ -1051,7 +1048,7 @@ pub fn size(block: &Generated) -> usize {
     block
         .vars
         .iter()
-        .map(|(name, generator)| parts(name, generator).map_or(usize::MAX, |parts| parts.len()))
+        .map(|(name, generator)| parts(name, generator, 0).map_or(usize::MAX, |parts| parts.len()))
         .fold(1, usize::saturating_mul)
 }
 
@@ -1069,7 +1066,7 @@ fn utf8_reach(min: usize, max: usize, charset: &[char]) -> (usize, Option<String
     let widest = widths.iter().max().copied().unwrap_or(1);
     let mut shapes = 0_usize;
     let mut longest = min;
-    for length in min..=max.min(TEXT_BOUND / widest) {
+    for length in min..=max.min(PIPE_WRITE / widest) {
         let these = widths
             .len()
             .checked_pow(u32::try_from(length).unwrap_or(u32::MAX));
@@ -2248,14 +2245,14 @@ fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verd
             (None, Generator::Dec { lo, hi, places }) if clock.contains(name) => {
                 vec![Part::Plain(*lo, *hi, *places)]
             }
-            _ => parts(name, generator)?,
+            _ => parts(name, generator, budget.from_length)?,
         };
         each.push((name.clone(), these));
     }
     // The test server's port, which the kernel chooses: any port at all.
     if !block.server.is_empty() && !block.vars.iter().any(|(name, _)| name == "port") {
         let any = Generator::Int { lo: 1, hi: 65535 };
-        each.push(("port".to_owned(), parts("port", &any)?));
+        each.push(("port".to_owned(), parts("port", &any, 0)?));
     }
     let image = Image::new(machine).ok_or("the program has no _start")?;
     // What a test's peer sends arrives whole or cut, each way the tests' runs and the merges of
@@ -2289,12 +2286,18 @@ fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verd
     }
     let stride = stride(total);
     let scattered = |turn: usize| (turn as u128 * stride as u128 % total as u128) as usize;
-    let levels = Mutex::new(Levels::new(&each));
+    let levels = Mutex::new(Levels::new(&each, budget.from_length));
     let shortest = each
         .iter()
         .map(|(_, parts)| parts.iter().map(part_length).min().unwrap_or(0))
         .max()
-        .unwrap_or(0);
+        .unwrap_or(0)
+        .max(budget.from_length);
+    // Lengths below where the proof starts are proven already.
+    budget
+        .progress
+        .proven_below
+        .store(budget.from_length, Ordering::Relaxed);
     // The shapes are independent: every core takes the next one until all are done, a
     // counterexample turns up, or something can't be proven.
     let next = AtomicUsize::new(0);
@@ -2468,36 +2471,60 @@ fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verd
     let characters = block.vars.iter().any(|(_, generator)| {
         matches!(generator, Generator::Str { charset, .. } if !charset.iter().all(char::is_ascii))
     });
+    // The longest the spec lets any of the block's texts be.
+    let of = block
+        .vars
+        .iter()
+        .filter_map(|(_, generator)| match generator {
+            Generator::Str { max, .. } => Some(*max),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0);
+    let from = budget.from_length;
     let bound = match gap.into_inner().ok().flatten() {
-        // Not even the shortest texts were all proven.
-        Some((length, why)) if length <= shortest => return Err(out_of_time(why)),
+        // Not even the shortest texts were all proven, when no earlier proof proved any.
+        Some((length, why)) if length <= shortest && from == 0 => {
+            return Err(out_of_time(why));
+        }
         Some((length, why)) => Some(Bound {
-            bytes: length - 1,
+            bytes: length.max(from) - 1,
+            of,
+            more: why == OUT_OF_TIME,
             why: if why == OUT_OF_TIME {
                 let unit = if characters { "characters" } else { "bytes" };
-                format!("the proof ran out of time at {length} {unit}")
+                format!("the proof's time ran out at {length} {unit}")
             } else {
                 why
             },
             characters,
         }),
-        // Every length was proven, up to where the proof stops.
+        // Every length laid out was proven: the rest are the next check's.
         None => block
             .vars
             .iter()
             .filter_map(|(_, generator)| match generator {
                 Generator::Str { min, max, charset } if !charset.iter().all(char::is_ascii) => {
                     let (longest, why) = utf8_reach(*min, *max, charset);
-                    why.map(|why| (longest, why))
+                    why.map(|why| (longest, why, false))
                 }
                 Generator::Str { min, max, .. } => {
-                    text_cap(*min, *max).map(|(cap, why)| (cap, why.to_owned()))
+                    let longest = laid_out(*min, *max, from);
+                    (longest < *max).then(|| {
+                        (
+                            longest,
+                            format!("the proof went through every text up to {longest} bytes"),
+                            true,
+                        )
+                    })
                 }
                 _ => None,
             })
-            .min_by_key(|(cap, _)| *cap)
-            .map(|(cap, why)| Bound {
+            .min_by_key(|(cap, ..)| *cap)
+            .map(|(cap, why, more)| Bound {
                 bytes: cap,
+                of,
+                more,
                 why,
                 characters,
             }),
@@ -2636,7 +2663,8 @@ struct Levels {
 }
 
 impl Levels {
-    fn new(each: &[(String, Vec<Part>)]) -> Self {
+    /// The levels of `each`'s combinations from the longest text length `from` on.
+    fn new(each: &[(String, Vec<Part>)], from: usize) -> Self {
         let sorted: Vec<Vec<(usize, usize)>> = each
             .iter()
             .map(|(_, parts)| {
@@ -2658,6 +2686,7 @@ impl Levels {
         let mut lengths: Vec<usize> = sorted.iter().flatten().map(|(length, _)| *length).collect();
         lengths.sort_unstable();
         lengths.dedup();
+        lengths.retain(|length| *length >= from);
         lengths.reverse();
         Self {
             sorted,
@@ -2875,10 +2904,10 @@ fn prove_shape(
     let stdin = pattern_bytes(&mut pool, &block.stdin, &inputs)?;
     // The model has one read return everything that's there, which a pipe guarantees only for
     // what one write of at most 4096 bytes put in it; fill reads any length cut any way.
-    if stdin.len() > TEXT_BOUND && !image.has_fill() {
+    if stdin.len() > PIPE_WRITE && !image.has_fill() {
         return Err(Stop::Beyond(format!(
-            "standard input past {TEXT_BOUND} bytes is more than one pipe write, which the proof \
-             reads whole"
+            "standard input past {PIPE_WRITE} bytes is more than one pipe write, which the proof \
+             reads whole; read it with fill to be proven for any length"
         )));
     }
     let mut files = BTreeMap::new();

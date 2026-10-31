@@ -623,7 +623,10 @@ async fn a_shape_its_terms_settle_starts_no_solver() {
     let machine = machine(ECHO).await;
     let block = block(ECHO_SPEC, 0);
     let image = Image::new(&machine).expect("an entry");
-    let each = vec![("s".to_owned(), parts("s", &block.vars[0].1).expect("parts"))];
+    let each = vec![(
+        "s".to_owned(),
+        parts("s", &block.vars[0].1, 0).expect("parts"),
+    )];
     let mut solvers = Solvers::new(10_000);
     for combination in 0..3 {
         solvers.next();
@@ -712,7 +715,7 @@ async fn traces_a_few_csv_total_combinations() {
         .iter()
         .map(|(name, generator)| {
             assert!(!random.contains_key(name));
-            (name.clone(), parts(name, generator).expect("parts"))
+            (name.clone(), parts(name, generator, 0).expect("parts"))
         })
         .collect();
     let total: usize = each.iter().map(|(_, parts)| parts.len()).product();
@@ -1351,8 +1354,9 @@ fn long_budget() -> Budget {
     }
 }
 
-/// Text longer than the proof covers: every length up to the bound is proven, and the verdict
-/// says where it stops and why.
+/// Text longer than one pipe write, read with `read`: every length a pipe write holds is
+/// proven, and the verdict says where it stops and why. Where the proof starts later, it goes
+/// on from there.
 #[tokio::test]
 async fn proves_long_text_up_to_the_bound() {
     let machine = machine(&echo("")).await;
@@ -1360,23 +1364,29 @@ async fn proves_long_text_up_to_the_bound() {
     let Verdict::Proven { shapes, bound, .. } = verdict else {
         panic!("{verdict:?}");
     };
-    assert_eq!(shapes, TEXT_BOUND + 1);
-    assert_eq!(
-        bound,
-        Some(Bound {
-            bytes: TEXT_BOUND,
-            why: PAST_THE_BOUND.into(),
-            characters: false,
-        })
-    );
+    assert_eq!(shapes, PIPE_WRITE + 1);
+    let bound = bound.expect("a bound");
+    assert_eq!((bound.bytes, bound.of), (PIPE_WRITE, 5000));
+    assert!(bound.why.contains("one pipe write"), "{}", bound.why);
     // With a newline after the text, the longest text no longer fits one pipe write.
     let verdict = prove(&machine, &echo_block("{text}\\n", "ab\\n"), &long_budget());
     let Verdict::Proven { bound, .. } = verdict else {
         panic!("{verdict:?}");
     };
     let bound = bound.expect("a bound");
-    assert_eq!(bound.bytes, TEXT_BOUND - 1);
+    assert_eq!(bound.bytes, PIPE_WRITE - 1);
     assert!(bound.why.contains("one pipe write"), "{}", bound.why);
+    // A proof that starts where an earlier one stopped proves only from there.
+    let resumed = Budget {
+        from_length: 4000,
+        ..long_budget()
+    };
+    let verdict = prove(&machine, &echo_block("{text}", "ab"), &resumed);
+    let Verdict::Proven { shapes, bound, .. } = verdict else {
+        panic!("{verdict:?}");
+    };
+    assert_eq!(shapes, PIPE_WRITE + 1 - 4000);
+    assert_eq!(bound.map(|bound| bound.bytes), Some(PIPE_WRITE));
 }
 
 /// Where the model stops following the program at some length, the proof holds below it.
@@ -1460,7 +1470,7 @@ async fn proves_the_vector_template() {
     else {
         panic!("{verdict:?}");
     };
-    assert_eq!(bound.bytes, TEXT_BOUND - 1);
+    assert_eq!(bound.bytes, PIPE_WRITE - 1);
     let wrong =
         machine(&source.replace(".equ ABOVE_Z_X4, 0x7b7b7b7b", ".equ ABOVE_Z_X4, 0x7a7a7a7a"))
             .await;
@@ -1673,7 +1683,7 @@ fn goes_through_every_combination_once_by_its_longest_text() {
     ];
     for each in cases {
         let total: usize = each.iter().map(|(_, parts)| parts.len()).product();
-        let mut levels = Levels::new(&each);
+        let mut levels = Levels::new(&each, 0);
         let mut seen = Vec::new();
         let mut last = 0;
         while let Some((combination, length)) = levels.next() {

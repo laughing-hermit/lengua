@@ -2862,11 +2862,11 @@ impl<'a> Cpu<'a> {
                     // A pipe hands over at most 4096 bytes whole; past that, how the input
                     // arrives matters, which only fill makes not matter. A test's sample is run
                     // as one read gives it.
-                    if self.state.every_cut && self.state.stdin.len() > super::TEXT_BOUND {
+                    if self.state.every_cut && self.state.stdin.len() > super::PIPE_WRITE {
                         return Err(End::Unsupported(format!(
                             "standard input past {} bytes is more than one pipe write, which the \
                              proof reads whole; read it with fill to be proven for any length",
-                            super::TEXT_BOUND
+                            super::PIPE_WRITE
                         )));
                     }
                     let available = (self.state.stdin.len() - self.state.stdin_read) as u64;

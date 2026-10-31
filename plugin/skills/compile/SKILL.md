@@ -76,10 +76,13 @@ and the CPU features the code needs; never write that line yourself.
    refuses that build from then on, even after lengua restarts. For each generated
    test it can, it proves for every input rather than a sample that the program prints what the
    formulas say: whole numbers, decimals, each value of a `choice(…)`, texts and text formulas such
-   as `upper` and `count`, checksums from `crc32` instructions, and files. Long texts are proven
-   up to a length, such as 4096 bytes, and tested beyond it: each line of `proofs` says how far,
+   as `upper` and `count`, checksums from `crc32` instructions, floats, and files. A text is
+   proven up to the length its spec gives it, shortest first, as far as the proof's five minutes
+   reach, and tested beyond: each line of `proofs` says how far ("up to 4889 of 1048576 bytes"),
    and names any function the proof never ran, such as a fast path for longer inputs. Tell the
-   user that code isn't proven. Every run a proof covers is also held to
+   user that code isn't proven. A line that says to check with `prove_further` can go on: when
+   the user wants more of it proven, call `check` with `prove_further: true`, and each such
+   check proves on from where the last stopped, for another stretch in the background. Every run a proof covers is also held to
    the memory rules: each access stays inside its own buffer, frame or argument, no return address
    is written, and no stack is read before it's written. If the proof finds inputs where the
    program is wrong, or breaks a memory rule, `check` reports them like a failing test, and `run`
@@ -92,7 +95,8 @@ and the CPU features the code needs; never write that line yourself.
    is; what its spec promises, in two or three lines (its behaviors, its limits such as input
    sizes and ranges, and what it may touch: files, ports); that it follows every rule and passed
    all its test runs; which behaviors are proven for every input, and which up to a length, such
-   as "proven for every input up to 4096 bytes, tested beyond" (and, if the proof says one solver
+   as "proven for every input up to 4889 of 1048576 bytes, tested beyond; I can prove on" (and,
+   if the proof says one solver
    answered alone, which one to install for a second check), and which proofs are still running,
    which checking again later shows; what `memory` says, in one line; what the spec's first
    example did

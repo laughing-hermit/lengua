@@ -118,7 +118,8 @@ Complete programs, each with its spec, tests included, and its assembly:
 - [`examples/hypotenuse`](examples/hypotenuse) computes a square root in double-precision floating
   point and prints it with three decimals;
 - [`examples/upcase`](examples/upcase) writes a copy of a text file in capitals, 16 bytes at a
-  time with SSE2, proven for every file up to 4096 bytes;
+  time with SSE2, proven for every file as long as the proof's time reaches, and further with
+  each `check` that asks to prove on;
 - [`examples/absdiff`](examples/absdiff) prints how far apart two numbers are. Claude Code wrote
   it through lengua, proven for every pair of inputs;
 - [`examples/greet`](examples/greet) greets whoever the `NAME` environment variable names. It
@@ -135,7 +136,8 @@ Complete programs, each with its spec, tests included, and its assembly:
 - [`examples/count`](examples/count) counts lines and words like `wc -lw`. Claude Code wrote it
   through lengua from one plain request in an interactive session; on a 4 GiB file it ran at
   15.8 GB/s, ahead of hand-written AVX-512 C, 12 times faster than plain C and 25 times faster
-  than GNU `wc`. Its AVX-512 counting is proven right for every input up to 4096 bytes.
+  than GNU `wc`. Its AVX-512 counting is proven right for every input up to 4096 bytes, what one
+  pipe write holds.
 
 Their `lengua.lock` files aren't committed, because a lock is signed with each machine's own key.
 Ask the agent to check one with lengua: one `check` records the spec, checks its tests and the

@@ -78,6 +78,9 @@ fn green_grace() -> Duration {
         .map_or(GREEN_GRACE, Duration::from_millis)
 }
 
+/// What a proof that stopped short of the spec's lengths says it can do.
+const FURTHER: &str = "; check with prove_further to prove on from there";
+
 /// How long the proof of one version may take: [`PROOF_TIME`], or `LENGUA_PROOF_SECONDS` for
 /// tests that aren't about proofs.
 fn proof_time() -> Duration {
@@ -142,6 +145,8 @@ struct Checking {
     stage: watch::Sender<Stage>,
     /// Whether a reply has said the tests pass yet.
     green_told: AtomicBool,
+    /// Whether to prove on from where lengua.lock says this build's proofs stopped short.
+    further: bool,
 }
 
 impl std::fmt::Debug for Checking {
@@ -289,6 +294,11 @@ pub struct CheckParams {
     /// recorded.
     #[serde(default)]
     pub request: Option<String>,
+    /// Proves on from where the last proof of this very build stopped short of the lengths the
+    /// spec gives its texts, for each proof whose line says so: another stretch of proof time,
+    /// in the background.
+    #[serde(default)]
+    pub prove_further: bool,
 }
 
 /// What `check` reports: where the program stands, and the one thing to do next.
@@ -630,7 +640,10 @@ impl LenguaServer {
             )));
         }
         let files = [spec_hash, header::code_hash(code.as_bytes())];
-        let checking = match self.current_checking(&folder, &files).await {
+        let checking = match self
+            .current_checking(&folder, &files, params.prove_further)
+            .await
+        {
             Some(checking) => checking,
             None => {
                 let fix = || {
@@ -686,6 +699,7 @@ impl LenguaServer {
                         report,
                         profile,
                     },
+                    params.prove_further,
                 )
                 .await
             }
@@ -940,11 +954,13 @@ impl LenguaServer {
     }
 
     /// The checking job for these files, running or ended, unless it ended with failed tests,
-    /// which run again, or passed them but lengua.lock no longer records the code it checked.
+    /// which run again, or passed them but lengua.lock no longer records the code it checked,
+    /// or ended with proofs that stopped short and `further` asks to prove on.
     async fn current_checking(
         &self,
         folder: &ProgramFolder,
         files: &[Sha256Hex; 2],
+        further: bool,
     ) -> Option<Arc<Checking>> {
         let checks = self.checks.lock().await;
         let checking = checks.get(folder.path())?;
@@ -959,27 +975,41 @@ impl LenguaServer {
             return None;
         }
         if passed {
-            let recorded = Key::load(&self.data_dir)
+            let lock = Key::load(&self.data_dir)
                 .ok()
                 .flatten()
-                .and_then(|key| lock::read(folder.path(), Some(&key)).ok().flatten())
-                .and_then(|lock| lock.code)
+                .and_then(|key| lock::read(folder.path(), Some(&key)).ok().flatten());
+            let recorded = lock
+                .as_ref()
+                .and_then(|lock| lock.code.as_ref())
                 .is_some_and(|code| {
                     code.sha256 == files[1] && code.executable_sha256 == checking.executable
                 });
             if !recorded {
                 return None;
             }
+            let short = lock
+                .as_ref()
+                .and_then(|lock| lock.proofs.as_ref())
+                .is_some_and(|proofs| {
+                    proofs.executable_sha256 == checking.executable
+                        && proofs.bounded.iter().any(|bounded| bounded.more)
+                });
+            if further && ended && short {
+                return None;
+            }
         }
         Some(Arc::clone(checking))
     }
 
-    /// Starts testing and proving `code` in the background, stopping any job on older files.
+    /// Starts testing and proving `code` in the background, stopping any job on older files;
+    /// with `further`, the proof goes on from where lengua.lock says it stopped short.
     async fn start_checking(
         &self,
         folder: &ProgramFolder,
         files: [Sha256Hex; 2],
         code: Code,
+        further: bool,
     ) -> Arc<Checking> {
         let proofs = code
             .suite
@@ -1002,6 +1032,7 @@ impl LenguaServer {
             }),
             stage: watch::Sender::new(Stage::Testing),
             green_told: AtomicBool::new(false),
+            further,
         });
         if let Some(old) = self
             .checks
@@ -1094,9 +1125,16 @@ impl LenguaServer {
             });
         }
         checking.stage.send_replace(Stage::Proving(Instant::now()));
-        if !self.recorded_proofs(folder, checking, &code.suite, &executable) {
-            self.prove_all(folder, checking, &code, &syscalls, &executable)
-                .await;
+        match self.recorded_proofs(folder, checking, &code.suite, &executable) {
+            None => {
+                self.prove_all(folder, checking, &code, &syscalls, &executable, &[])
+                    .await;
+            }
+            Some(further) if !further.is_empty() => {
+                self.prove_all(folder, checking, &code, &syscalls, &executable, &further)
+                    .await;
+            }
+            Some(_) => {}
         }
         if !checking.cancel.load(Ordering::Relaxed) {
             self.write_header(folder, checking).await;
@@ -1144,29 +1182,34 @@ impl LenguaServer {
     }
 
     /// Takes the proofs lengua.lock records about this very build, after a restart lost the job
-    /// that made them. Returns whether it has any.
+    /// that made them, or when the job is to prove on. Returns `None` when there are none, and
+    /// otherwise the blocks to prove on, each with the length to start at.
     fn recorded_proofs(
         &self,
         folder: &ProgramFolder,
         checking: &Checking,
         suite: &TestSuite,
         executable: &Sha256Hex,
-    ) -> bool {
-        let Some(stamp) = Key::load(&self.data_dir)
+    ) -> Option<Vec<(usize, usize)>> {
+        let stamp = Key::load(&self.data_dir)
             .ok()
             .flatten()
             .and_then(|key| lock::read(folder.path(), Some(&key)).ok().flatten())
             .and_then(|lock| lock.proofs)
-            .filter(|proofs| proofs.executable_sha256 == *executable)
-        else {
-            return false;
-        };
-        let Ok(mut found) = checking.found.lock() else {
-            return false;
-        };
+            .filter(|proofs| proofs.executable_sha256 == *executable)?;
+        let mut found = checking.found.lock().ok()?;
         let mut any_wrong = false;
-        for (block, proof) in suite.generated.iter().zip(&mut found.proofs) {
+        let mut further = Vec::new();
+        for (index, (block, proof)) in suite.generated.iter().zip(&mut found.proofs).enumerate() {
             let id = block.id.to_string();
+            if let Some(bounded) = stamp
+                .bounded
+                .iter()
+                .find(|bounded| bounded.id == id && bounded.more && checking.further)
+            {
+                further.push((index, bounded.bytes + 1));
+                continue;
+            }
             if let Some((_, what)) = stamp.wrong.iter().find(|(known, _)| *known == id) {
                 proof.detail = Some(what.clone());
                 proof.wrong = true;
@@ -1175,21 +1218,25 @@ impl LenguaServer {
             }
             proof.detail = Some(if stamp.proven.contains(&id) {
                 "proven for every input in range, as lengua.lock records".to_owned()
-            } else if let Some((_, bytes)) = stamp.bounded.iter().find(|(known, _)| *known == id) {
+            } else if let Some(bounded) = stamp.bounded.iter().find(|bounded| bounded.id == id) {
                 format!(
-                    "proven for every input with text up to {bytes} bytes, as lengua.lock \
-                         records; longer texts are tested, not proven"
+                    "proven for every input with text up to {} of {} bytes, as lengua.lock \
+                     records; longer texts are tested, not proven{}",
+                    bounded.bytes,
+                    bounded.of,
+                    if bounded.more { FURTHER } else { "" }
                 )
             } else {
                 "tested, not proven".to_owned()
             });
         }
         found.wrong |= any_wrong;
-        true
+        Some(further)
     }
 
     /// Proves each generated test in turn, each with its share of [`PROOF_TIME`], and records
-    /// what was proven.
+    /// what was proven. With `further`, proves only those blocks, each from its length on, and
+    /// keeps what lengua.lock records of the others.
     async fn prove_all(
         &self,
         folder: &ProgramFolder,
@@ -1197,6 +1244,7 @@ impl LenguaServer {
         code: &Code,
         syscalls: &[crate::platform::Allowed],
         executable: &Sha256Hex,
+        further: &[(usize, usize)],
     ) {
         let set = |index: usize, detail: String, wrong: bool| {
             if let Ok(mut found) = checking.found.lock() {
@@ -1227,15 +1275,47 @@ impl LenguaServer {
         // The ids proven, those found wrong, how many the solvers proved, and why any rested on
         // one solver.
         let mut proven_ids = Vec::new();
-        let mut bounded_ids = Vec::new();
+        let mut bounded_ids: Vec<(usize, lock::Bounded)> = Vec::new();
         let mut wrong_ids: Vec<(String, String)> = Vec::new();
         let mut solved = 0;
         let mut alone_reason: Option<String> = None;
+        // Proving on keeps what the lock records of every block it doesn't prove.
+        let mut recorded_solvers = None;
+        if !further.is_empty()
+            && let Some(stamp) = Key::load(&self.data_dir)
+                .ok()
+                .flatten()
+                .and_then(|key| lock::read(folder.path(), Some(&key)).ok().flatten())
+                .and_then(|lock| lock.proofs)
+                .filter(|proofs| proofs.executable_sha256 == *executable)
+        {
+            for (index, block) in code.suite.generated.iter().enumerate() {
+                if further.iter().any(|(again, _)| *again == index) {
+                    continue;
+                }
+                let id = block.id.to_string();
+                if stamp.proven.contains(&id) {
+                    proven_ids.push((index, id.clone()));
+                }
+                if let Some(bounded) = stamp.bounded.iter().find(|bounded| bounded.id == id) {
+                    bounded_ids.push((index, bounded.clone()));
+                }
+                if let Some(wrong) = stamp.wrong.iter().find(|(known, _)| *known == id) {
+                    wrong_ids.push(wrong.clone());
+                }
+            }
+            recorded_solvers = Some(stamp.solvers.clone());
+        }
         let allows = |call: spec::Syscall| spec.syscalls.contains(&call);
         let listens = spec.network.listens.is_some();
         let blocks = code.suite.generated.len();
         // Small blocks first: they finish in their share and pass the rest on to the big ones.
-        let mut order: Vec<usize> = (0..blocks).collect();
+        let mut order: Vec<usize> = if further.is_empty() {
+            (0..blocks).collect()
+        } else {
+            further.iter().map(|(index, _)| *index).collect()
+        };
+        let blocks = order.len();
         order.sort_by_key(|index| prove::size(&code.suite.generated[*index]));
         for (turn, &index) in order.iter().enumerate() {
             let block = &code.suite.generated[index];
@@ -1262,6 +1342,10 @@ impl LenguaServer {
             }
             let budget = prove::Budget {
                 cancel: Arc::clone(&checking.cancel),
+                from_length: further
+                    .iter()
+                    .find(|(again, _)| *again == index)
+                    .map_or(0, |(_, from)| *from),
                 ..prove::Budget::until(now + share, listens)
             };
             if let Ok(mut found) = checking.found.lock()
@@ -1297,9 +1381,15 @@ impl LenguaServer {
                     unreached,
                 }) => {
                     match &bound {
-                        Some(bound) => {
-                            bounded_ids.push((index, (block.id.to_string(), bound.bytes)));
-                        }
+                        Some(bound) => bounded_ids.push((
+                            index,
+                            lock::Bounded {
+                                id: block.id.to_string(),
+                                bytes: bound.bytes,
+                                of: bound.of,
+                                more: bound.more,
+                            },
+                        )),
                         None => proven_ids.push((index, block.id.to_string())),
                     }
                     if questions > 0 {
@@ -1348,16 +1438,18 @@ impl LenguaServer {
         if proven_ids.is_empty() && bounded_ids.is_empty() && wrong_ids.is_empty() {
             return;
         }
-        let solvers = match (solved, alone_reason) {
-            (0, _) => {
+        let solvers = match (solved, alone_reason, recorded_solvers) {
+            // Proving on with no question keeps what the earlier proof needed.
+            (0, _, Some(recorded)) => recorded,
+            (0, ..) => {
                 "none: the tests tried every value, or the terms settled every step".to_owned()
             }
-            (_, None) => "z3 and cvc5".to_owned(),
-            (_, Some(reason)) => format!("one solver alone: {reason}"),
+            (_, None, _) => "z3 and cvc5".to_owned(),
+            (_, Some(reason), _) => format!("one solver alone: {reason}"),
         };
         // In the tests' own order, however they were proven.
         proven_ids.sort_unstable();
-        bounded_ids.sort_unstable();
+        bounded_ids.sort_unstable_by_key(|(index, _)| *index);
         let proven_ids = proven_ids.into_iter().map(|(_, id)| id).collect();
         let bounded_ids = bounded_ids.into_iter().map(|(_, bound)| bound).collect();
         self.stamp_proofs(
@@ -1701,7 +1793,7 @@ impl LenguaServer {
         folder: &ProgramFolder,
         executable: &Sha256Hex,
         proven: Vec<String>,
-        bounded: Vec<(String, usize)>,
+        bounded: Vec<lock::Bounded>,
         wrong: Vec<(String, String)>,
         solvers: String,
     ) -> bool {
@@ -1785,7 +1877,7 @@ fn proven_detail(
                 } else {
                     "bytes"
                 };
-                format!("with text up to {} {unit}", bound.bytes)
+                format!("with text up to {} of {} {unit}", bound.bytes, bound.of)
             }
         ),
         counted(shapes, "input combination"),
@@ -1806,8 +1898,9 @@ fn proven_detail(
     if let Some(bound) = &bound {
         let _ = write!(
             detail,
-            "; longer texts are tested, not proven: {}",
-            bound.why
+            "; longer texts are tested, not proven: {}{}",
+            bound.why,
+            if bound.more { FURTHER } else { "" }
         );
     }
     let networked = !block.server.is_empty() || !block.client.is_empty();

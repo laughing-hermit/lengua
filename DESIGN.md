@@ -618,12 +618,18 @@ What it covers:
   choice's byte, so a program's test of a byte is a test of the choice. The shapes multiply with
   the widths, so the proof reaches about 8 characters where three widths mix and 13 where two
   do: "proven for every input with text up to 8 characters".
-- Long text, up to a stated length. Standard input is proven up to what one pipe write holds,
-  4,096 bytes, which the model reads whole. Where a block's texts run longer, or its time or the
-  model runs out at some length, the proof holds for every input with texts up to the last
-  length fully proven: "proven for every input with text up to 4096 bytes; longer texts are
-  tested, not proven", with the reason. lengua.lock records such a proof under `bounded`, with
-  its length, never as a full one, and the done reply says so.
+- Long text, up to the length the spec gives it. A proof goes through lengths shortest first,
+  as far as its time reaches, with no length of its own: a text the spec allows a mebibyte is
+  proven as far as five minutes go. Where its time or the model runs out at some length, the
+  proof holds for every input with texts up to the last length fully proven: "proven for every
+  input with text up to 4889 of 1048576 bytes; longer texts are tested, not proven: the proof's
+  time ran out at 4890 bytes". lengua.lock records such a proof under `bounded`, with its length,
+  the spec's, and whether proving on can reach further, never as a full one. Where it can,
+  `check` with `prove_further` proves on from there, for another stretch, keeping what the lock
+  records of the rest, so the agent, or the user through it, decides how far a proof goes. One
+  limit is the model's, not the time's: a pipe write holds 4,096 bytes, which a read returns
+  whole, so standard input read with `read` is proven up to that, and read with `fill`, which
+  takes any pieces, as far as time goes.
 - What the proof ran. A function no run of a proof called, such as a fast path that starts past
   the proof's bound, is named in the proof's line: "the proof never ran crc_block, so what it
   does isn't proven". The CRC-32C asset's three chains join only past 12,288 bytes, so its

@@ -873,18 +873,28 @@ async fn the_file_example_proves_its_file_handling() {
     if !solvers_installed() {
         return;
     }
-    let session = Session::proving(Protocol::Discover).await;
+    let session = Session::proving_for(Protocol::Discover, 20).await;
     let program = written(&session, example_files("upcase")).await;
     let report = done(&session, &program).await;
     // Usage (B2), a missing input (B3) and a file over the limit (B4, a mebibyte of any of its
     // characters) are proven; capitalizing a file (B1), with SSE2, is proven for every file up
-    // to the length a proof covers.
+    // to the length the proof's time reaches, of the mebibyte the spec allows.
     let proofs = &report["proofs"];
+    let first = text(&proofs[0]);
     assert!(
-        text(&proofs[0])
-            .starts_with("generated B1: proven for every input with text up to 4096 bytes"),
+        first.starts_with("generated B1: proven for every input with text up to ")
+            && first.contains(" of 1048576 bytes (")
+            && first.contains("; check with prove_further to prove on from there"),
         "{report}"
     );
+    let reached = |line: &str| -> usize {
+        line["generated B1: proven for every input with text up to ".len()..]
+            .split(' ')
+            .next()
+            .and_then(|bytes| bytes.parse().ok())
+            .expect("a length")
+    };
+    let before = reached(first);
     for index in 1..4 {
         assert!(
             text(&proofs[index]).contains("proven for every input in range"),
@@ -897,9 +907,24 @@ async fn the_file_example_proves_its_file_handling() {
     );
     let lock = program.read("lengua.lock").expect("the lock");
     assert!(
-        lock.contains("bounded = [{ id = \"B1\", bytes = 4096 }]"),
+        lock.contains(&format!(
+            "bounded = [{{ id = \"B1\", bytes = {before}, of = 1048576, more = true }}]"
+        )),
         "{lock}"
     );
+    // Proving further goes on from there, and the lock keeps the rest.
+    let mut arguments = program.arguments();
+    arguments["prove_further"] = serde_json::json!(true);
+    let report = session.settle_with(&program, arguments).await;
+    assert_eq!(report["state"], "done", "{report}");
+    let after = reached(text(&report["proofs"][0]));
+    assert!(after > before, "{before} then {after}: {report}");
+    for index in 1..4 {
+        assert!(
+            text(&report["proofs"][index]).contains("proven for every input in range"),
+            "{report}"
+        );
+    }
     session.service.cancel().await.expect("close the session");
 }
 
@@ -1105,20 +1130,24 @@ async fn long_text_is_proven_up_to_the_bound() {
     )
     .await;
     let report = done(&session, &program).await;
-    // Texts run to 5000 bytes, and the proof covers them to 4096: not every input in range.
+    // Texts run to 5000 bytes, read with read, and a pipe write holds 4096: proving further
+    // can't help, so the line doesn't offer it.
     let only = text(&report["proofs"][0]);
     assert!(
-        only.starts_with("generated B1: proven for every input with text up to 4096 bytes (")
-            && only.ends_with(
-                "; longer texts are tested, not proven: a proof covers texts up to 4096 bytes"
-            ),
+        only.starts_with(
+            "generated B1: proven for every input with text up to 4096 of 5000 bytes ("
+        ) && only.ends_with(
+            "; longer texts are tested, not proven: standard input past 4096 bytes is more \
+             than one pipe write, which the proof reads whole; read it with fill to be proven \
+             for any length"
+        ),
         "{only}"
     );
     // The lock records it apart from full proofs.
     let lock = program.read("lengua.lock").expect("the lock");
     assert!(lock.contains("proven = []"), "{lock}");
     assert!(
-        lock.contains("bounded = [{ id = \"B1\", bytes = 4096 }]"),
+        lock.contains("bounded = [{ id = \"B1\", bytes = 4096, of = 5000, more = false }]"),
         "{lock}"
     );
     session.service.cancel().await.expect("close the session");

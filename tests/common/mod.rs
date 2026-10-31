@@ -106,6 +106,11 @@ impl Session {
         Self::start_with(protocol, None, None, None).await
     }
 
+    /// Starts `lengua-mcp` giving each version's proofs `seconds` in all.
+    pub async fn proving_for(protocol: Protocol, seconds: u64) -> Self {
+        Self::start_with(protocol, Some(seconds), None, None).await
+    }
+
     /// Starts `lengua-mcp` with its full time for proofs and `check` waiting at most
     /// `milliseconds` for them.
     pub async fn proving_waiting(protocol: Protocol, milliseconds: u64) -> Self {
@@ -263,8 +268,17 @@ impl Session {
     /// Checks the program until its tests and proofs have ended, as an agent that wants the
     /// final proofs keeps calling while check says they're running, and returns the last reply.
     pub async fn settle(&self, program: &Program) -> Value {
+        self.settle_with(program, program.arguments()).await
+    }
+
+    /// [`Self::settle`], the first check with `arguments`, such as `prove_further`.
+    pub async fn settle_with(&self, program: &Program, arguments: Value) -> Value {
+        let mut arguments = Some(arguments);
         loop {
-            let reply = self.check(program).await;
+            let reply = match arguments.take() {
+                Some(arguments) => self.call_ok("check", arguments).await,
+                None => self.check(program).await,
+            };
             let running = reply["proofs"].as_array().is_some_and(|proofs| {
                 proofs.iter().filter_map(Value::as_str).any(|line| {
                     line.contains(": proving") || line.ends_with("waiting for its turn")
