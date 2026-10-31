@@ -1107,6 +1107,16 @@ async fn the_benchmarks_own_programs_pass_their_checks() {
 }
 
 #[tokio::test]
+async fn the_sort_claude_code_wrote_passes_its_checks() {
+    // Sorting lines as LC_ALL=C sort does, with -u: written through lengua from one plain
+    // request in an interactive Claude Code session, with sort(s) and uniq(s) in its tests.
+    let session = session().await;
+    let program = written(&session, example_files("sort")).await;
+    done(&session, &program).await;
+    session.service.cancel().await.expect("close the session");
+}
+
+#[tokio::test]
 async fn the_word_count_claude_code_wrote_passes_its_checks() {
     // Written through lengua from a plain request in an interactive Claude Code session.
     if !has_avx512() {

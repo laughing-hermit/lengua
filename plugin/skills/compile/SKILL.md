@@ -78,7 +78,10 @@ and the CPU features the code needs; never write that line yourself.
    refuses that build from then on, even after lengua restarts. For each generated
    test it can, it proves for every input rather than a sample that the program prints what the
    formulas say: whole numbers, decimals, each value of a `choice(…)`, texts and text formulas such
-   as `upper` and `count`, checksums from `crc32` instructions, floats, and files. A text is
+   as `upper` and `count`, checksums from `crc32` instructions, floats, and files. Compute floats
+   in the formula's order, operation for operation: the proof then follows them term for term, in
+   milliseconds, where another method, even a more accurate one, is at best tested, and can print
+   a different last digit than the formula. A text is
    proven up to the length its spec gives it, shortest first, as far as the proof's five minutes
    reach, and tested beyond: each line of `proofs` says how far ("up to 4889 of 1048576 bytes"),
    and names any function the proof never ran, such as a fast path for longer inputs. Tell the

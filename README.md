@@ -122,6 +122,9 @@ Complete programs, each with its spec, tests included, and its assembly:
   each `check` that asks to prove on;
 - [`examples/absdiff`](examples/absdiff) prints how far apart two numbers are. Claude Code wrote
   it through lengua, proven for every pair of inputs;
+- [`examples/sort`](examples/sort) sorts lines as `LC_ALL=C sort` does, with `-u` to drop
+  duplicates, comparing 8 bytes at a time. Claude Code wrote it through lengua from one plain
+  request; its errors are proven, and its sorting tested;
 - [`examples/greet`](examples/greet) greets whoever the `NAME` environment variable names. It
   gets only the variables its tests, or your `run`, give it;
 - [`examples/archive`](examples/archive) moves a file into an `archive` folder, making the folder
