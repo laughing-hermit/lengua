@@ -325,6 +325,11 @@ pub struct CheckReport {
     /// What changed after the user's request, once done.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changes: Option<ChangesReport>,
+    /// The command that runs the program from the user's own terminal, scripts and services,
+    /// once done, followed by its arguments: `run`'s checks and confinement, with no time limit,
+    /// the shell's own input and output, and files read and written in the folder it starts in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell: Option<String>,
     /// The single next thing to do.
     pub next_step: String,
 }
@@ -735,66 +740,23 @@ impl LenguaServer {
             };
             return Ok(Json(ended_report(&result, &entry.assertions, limits)));
         }
-        let state = self.program_state(&folder)?;
-        if state != State::Ready {
-            return Err(format!(
-                "lengua runs a program only when its spec and code match lengua.lock, and \
-                 {folder} doesn't. {}",
-                state.next_step(&folder)
-            ));
-        }
+        let Runnable {
+            built,
+            source,
+            spec,
+            syscalls,
+            net,
+        } = runnable(&self.data_dir, &folder, &params.env).await?;
         if let Some(wrong) = self.proven_wrong(&folder).await {
             return Err(format!(
                 "The proof found inputs where {CODE_FILE} is wrong, so it won't run: {wrong}. \
                  Call check with path {folder} to see them, then fix {CODE_FILE}."
             ));
         }
-        let key = Key::load(&self.data_dir)
-            .map_err(|error| error.to_string())?
-            .ok_or("lengua's signing key is missing; call check")?;
-        let lock = lock::read(folder.path(), Some(&key))
-            .map_err(|error| format!("lengua.lock can't be trusted: {error}"))?
-            .ok_or("lengua.lock is missing; call check")?;
-        let Some(stamp) = lock.code.as_ref() else {
-            return Err(format!(
-                "{CODE_FILE} isn't checked; call check with path {folder} first."
-            ));
-        };
-        // What a proof found wrong outlasts lengua's restarts: lengua.lock records it.
-        if let Some(proofs) = &lock.proofs
-            && proofs.executable_sha256 == stamp.executable_sha256
-            && !proofs.wrong.is_empty()
-        {
-            let wrong: Vec<String> = proofs
-                .wrong
-                .iter()
-                .map(|(id, found)| format!("generated {id}: {found}"))
-                .collect();
-            return Err(format!(
-                "The proof found inputs where {CODE_FILE} is wrong, so it won't run: {}. Call \
-                 check with path {folder} to see them, then fix {CODE_FILE}.",
-                wrong.join("; ")
-            ));
-        }
-        let code = read_code(&folder)?;
-        let source = checker::check_layout(&code).0;
-        let spec = read_spec(&folder).and_then(|text| {
-            spec::parse(&text).map_err(|problems| spec_problems(&folder, &problems))
-        })?;
         let workspace = match params.folder.as_deref() {
             None => None,
             Some(path) => Some(working_folder(path)?),
         };
-        let machine = Machine::detect();
-        let profile = supported(&machine)?;
-        let built = build(&code, profile).await?;
-        if Sha256Hex::of(&built.bytes) != stamp.executable_sha256 {
-            return Err(format!(
-                "This build of {CODE_FILE} differs from the one check tested (built with {}; \
-                 now {}), so it won't run. Call check with path {folder} to test this build.",
-                stamp.toolchain, built.toolchain
-            ));
-        }
         let seconds = params.timeout_seconds.unwrap_or(10);
         if !(1..=RUN_SECONDS).contains(&seconds) {
             return Err(format!("timeout_seconds goes from 1 to {RUN_SECONDS}"));
@@ -821,19 +783,6 @@ impl LenguaServer {
                 Some(inside)
             }
         };
-        let syscalls = profile.allowed_syscalls(&spec.syscalls, spec.threads.is_some());
-        // The ports the spec names, and for a server, its own port on the loopback.
-        let net = Net {
-            connect: spec.network.connects.clone(),
-            anywhere: spec.network.anywhere,
-            listen: spec.network.listens,
-        };
-        if !params.env.is_empty() && !spec.uses.contains(&spec::Use::Environment) {
-            return Err(format!(
-                "{SPEC_FILE} doesn't use the environment, so the program gets no environment \
-                 variables; leave env out, or add `the environment` to its `- Uses:` line"
-            ));
-        }
         let job = Job {
             folder: workspace.as_deref(),
             net: Some(&net),
@@ -890,14 +839,6 @@ async fn wait_for(checking: &Checking, until: Instant) {
 }
 
 impl LenguaServer {
-    /// The program's state.
-    fn program_state(&self, folder: &ProgramFolder) -> Result<State, String> {
-        let key = Key::load(&self.data_dir).map_err(|error| error.to_string())?;
-        let snapshot = Snapshot::read(folder, key.as_ref())
-            .map_err(|error| format!("can't read {folder}: {error}"))?;
-        Ok(State::of(&snapshot))
-    }
-
     /// What the proof found wrong in the code now in `folder`, when its job confirmed a
     /// counterexample: the tests passed, but these inputs, run for real, show main.s is wrong.
     async fn proven_wrong(&self, folder: &ProgramFolder) -> Option<String> {
@@ -1632,15 +1573,42 @@ impl LenguaServer {
             example: passed.shown.clone(),
             performance: passed.performance.clone(),
             changes,
+            shell: Some(self.shell_command(folder)),
             ..CheckReport::new(
                 "done",
                 format!(
                     "Done: tell the user where the program is, what its spec promises, that it \
                      passed every test, and what's proven, memory included.{running}{shown} run \
-                     runs it on their own inputs."
+                     runs it on their own inputs here; give them the shell command, followed by \
+                     its arguments, for their own terminal, scripts and services."
                 ),
             )
         }
+    }
+
+    /// The command that runs `folder`'s program from a shell: then its arguments. The data folder
+    /// is named only where a shell wouldn't find this one by itself.
+    fn shell_command(&self, folder: &ProgramFolder) -> String {
+        let quote = |text: &str| {
+            if !text.is_empty()
+                && text
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "/._-+=:@%,".contains(c))
+            {
+                text.to_owned()
+            } else {
+                format!("'{}'", text.replace('\'', "'\\''"))
+            }
+        };
+        let mut command = quote(&self.launcher.to_string_lossy());
+        if DataDir::from_env().as_ref().map(DataDir::path) != Some(self.data_dir.path()) {
+            command.push_str(" --data-dir ");
+            command.push_str(&quote(&self.data_dir.path().to_string_lossy()));
+        }
+        format!(
+            "{command} run {} --",
+            quote(&folder.path().to_string_lossy())
+        )
     }
 
     /// What changed after the user's request, by the program's current lock; nothing when it
@@ -1952,6 +1920,171 @@ fn read_code(folder: &ProgramFolder) -> Result<String, String> {
     read_optional(folder, CODE_FILE)?.ok_or_else(|| {
         format!("There's no {CODE_FILE} in {folder}. Write it with the compile skill.")
     })
+}
+
+/// Where `folder` stands with lengua.lock, as this user's key reads it.
+fn state_of(data_dir: &DataDir, folder: &ProgramFolder) -> Result<State, String> {
+    let key = Key::load(data_dir).map_err(|error| error.to_string())?;
+    let snapshot = Snapshot::read(folder, key.as_ref())
+        .map_err(|error| format!("can't read {folder}: {error}"))?;
+    Ok(State::of(&snapshot))
+}
+
+/// A program lengua may run: the build check tested, its parsed code and spec, and the calls and
+/// network its spec allows.
+struct Runnable {
+    built: Build,
+    source: Source,
+    spec: Spec,
+    syscalls: Vec<crate::platform::Allowed>,
+    net: Net,
+}
+
+/// Checks that `folder` holds a program lengua may run, as `run` does from MCP and from a shell:
+/// its spec and code match lengua.lock, no proof found it wrong, and this build of main.s is the
+/// one check tested. Environment variables reach only a program whose spec uses the environment.
+async fn runnable(
+    data_dir: &DataDir,
+    folder: &ProgramFolder,
+    env: &BTreeMap<String, String>,
+) -> Result<Runnable, String> {
+    let state = state_of(data_dir, folder)?;
+    if state != State::Ready {
+        return Err(format!(
+            "lengua runs a program only when its spec and code match lengua.lock, and {folder} \
+             doesn't. {}",
+            state.next_step(folder)
+        ));
+    }
+    let key = Key::load(data_dir)
+        .map_err(|error| error.to_string())?
+        .ok_or("lengua's signing key is missing; call check")?;
+    let lock = lock::read(folder.path(), Some(&key))
+        .map_err(|error| format!("lengua.lock can't be trusted: {error}"))?
+        .ok_or("lengua.lock is missing; call check")?;
+    let Some(stamp) = lock.code.as_ref() else {
+        return Err(format!(
+            "{CODE_FILE} isn't checked; call check with path {folder} first."
+        ));
+    };
+    // What a proof found wrong outlasts lengua's restarts: lengua.lock records it.
+    if let Some(proofs) = &lock.proofs
+        && proofs.executable_sha256 == stamp.executable_sha256
+        && !proofs.wrong.is_empty()
+    {
+        let wrong: Vec<String> = proofs
+            .wrong
+            .iter()
+            .map(|(id, found)| format!("generated {id}: {found}"))
+            .collect();
+        return Err(format!(
+            "The proof found inputs where {CODE_FILE} is wrong, so it won't run: {}. Call check \
+             with path {folder} to see them, then fix {CODE_FILE}.",
+            wrong.join("; ")
+        ));
+    }
+    let code = read_code(folder)?;
+    let source = checker::check_layout(&code).0;
+    let spec = read_spec(folder)
+        .and_then(|text| spec::parse(&text).map_err(|problems| spec_problems(folder, &problems)))?;
+    if !env.is_empty() && !spec.uses.contains(&spec::Use::Environment) {
+        return Err(format!(
+            "{SPEC_FILE} doesn't use the environment, so the program gets no environment \
+             variables; leave env out, or add `the environment` to its `- Uses:` line"
+        ));
+    }
+    let machine = Machine::detect();
+    let profile = supported(&machine)?;
+    let built = build(&code, profile).await?;
+    if Sha256Hex::of(&built.bytes) != stamp.executable_sha256 {
+        return Err(format!(
+            "This build of {CODE_FILE} differs from the one check tested (built with {}; now \
+             {}), so it won't run. Call check with path {folder} to test this build.",
+            stamp.toolchain, built.toolchain
+        ));
+    }
+    let syscalls = profile.allowed_syscalls(&spec.syscalls, spec.threads.is_some());
+    // The ports the spec names, and for a server, its own port on the loopback.
+    let net = Net {
+        connect: spec.network.connects.clone(),
+        anywhere: spec.network.anywhere,
+        listen: spec.network.listens,
+    };
+    Ok(Runnable {
+        built,
+        source,
+        spec,
+        syscalls,
+        net,
+    })
+}
+
+/// What `lengua-mcp run` was asked to run from a shell.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ShellRun {
+    /// The program folder, absolute or relative to the shell's current folder.
+    pub path: String,
+    /// The folder to run in, which the program may read and write: the shell's current folder
+    /// when `None`.
+    pub folder: Option<String>,
+    /// Environment variables for a program whose spec uses the environment: only these reach
+    /// it.
+    pub env: BTreeMap<String, String>,
+    /// The program's command-line arguments.
+    pub args: Vec<String>,
+}
+
+/// Runs a checked program from a shell, script or service: `run`'s checks and confinement, with
+/// the shell's own standard input, output and error and no time limit. Returns the program's
+/// exit code, or 128 plus the number of the signal that ended it, which it names on standard
+/// error.
+///
+/// # Errors
+///
+/// Fails, saying why, when lengua won't run the program or can't start it.
+pub async fn run_from_shell(data_dir: &DataDir, request: &ShellRun) -> Result<i32, String> {
+    let here = std::env::current_dir()
+        .map_err(|error| format!("can't read the current folder: {error}"))?;
+    let absolute = |path: &str| here.join(path).to_string_lossy().into_owned();
+    let folder = ProgramFolder::new(&absolute(&request.path))?;
+    let Runnable {
+        built,
+        syscalls,
+        net,
+        ..
+    } = runnable(data_dir, &folder, &request.env).await?;
+    let workspace = working_folder(
+        &request
+            .folder
+            .as_deref()
+            .map_or_else(|| here.to_string_lossy().into_owned(), absolute),
+    )?;
+    let launcher = std::env::current_exe()
+        .map_err(|error| format!("can't find lengua-mcp itself: {error}"))?;
+    let job = Job {
+        folder: Some(&workspace),
+        net: Some(&net),
+        env: &request.env,
+        ..Job::new(&built.executable, &request.args, &[], &syscalls)
+    };
+    match runner::attached(&launcher, job)
+        .await
+        .map_err(|error| format!("couldn't run the program: {error}"))?
+    {
+        End::Signaled(signal) => {
+            // A fault says what it was; an interrupt, a hangup, a stop or a closed pipe is the
+            // user's or the shell's doing, and quiet, as for any program.
+            if !matches!(signal, 1 | 2 | 13 | 15) {
+                eprintln!(
+                    "lengua-mcp: the program was stopped by {}",
+                    runner::signal_name(signal)
+                );
+            }
+            Ok(128 + signal)
+        }
+        End::Exited(code) => Ok(code),
+        other => Err(other.describe(Limits::default())),
+    }
 }
 
 /// A built program, in a temporary folder that lives as long as this value.

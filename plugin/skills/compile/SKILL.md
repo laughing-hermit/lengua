@@ -88,9 +88,10 @@ and the CPU features the code needs; never write that line yourself.
    answered alone, which one to install for a second check), and which proofs are still running,
    which checking again later shows; what `memory` says, in one line; what the spec's first
    example did
-   (`example`); and that they can ask you to run it on their own inputs or files with `run`, or to
-   change what it does. A server isn't running after `check`: offer to start it with `run`, which
-   returns its address. If the reply has `changes`, say in a line each what changed after their
+   (`example`); that they can ask you to run it on their own inputs or files with `run`, or to
+   change what it does; and the command that runs it from their own terminal, scripts and
+   services, `shell`, as it is, followed by the program's arguments. A server isn't running after
+   `check`: offer to start it with `run`, which returns its address. If the reply has `changes`, say in a line each what changed after their
    request and why, and name every change that tests less; if it lists more than one request,
    every one must be the user's own words. If the code handles a case the spec doesn't mention,
    such as input longer than a buffer, say so in one line and offer to add it to the spec. When

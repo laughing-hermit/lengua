@@ -76,6 +76,18 @@ waits for your go-ahead. Later, ask the agent to run the program with other inpu
 files ("run it on notes.txt in ~/docs"), or to change what it does. If you don't name a folder,
 the program goes in a new folder inside the current one.
 
+Run it yourself, too, from your terminal, scripts, pipelines and services, with the command the
+agent's report gives you, then the program's arguments:
+
+```sh
+~/path/to/lengua/plugin/server/lengua-mcp run ./add -- 2 3
+```
+
+It streams your standard input and output, has no time limit, works on the files in the folder
+you start it in (or `--in <folder>`), and exits with the program's own code. A server keeps
+serving on its spec's port until you stop it. lengua runs only a program whose spec and code it
+checked; otherwise it says why and exits with 125.
+
 Every run is confined by the kernel: the program can use only what its spec names (standard
 input, files, the clock, random bytes, environment variables, the network ports it lists), and
 touch files only in the folder it runs in.

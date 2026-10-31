@@ -168,7 +168,9 @@ impl End {
     }
 }
 
-fn signal_name(signal: i32) -> String {
+/// A signal's name, and what it most likely means for a lengua program.
+#[must_use]
+pub fn signal_name(signal: i32) -> String {
     match signal {
         4 => "SIGILL (an instruction this CPU can't run)".into(),
         6 => "SIGABRT".into(),
@@ -434,7 +436,6 @@ impl Started {
 /// Fails when the program can't be started.
 pub async fn start(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<Started> {
     let scratch = tempfile::tempdir()?;
-    let socket = scratch.path().join("go");
     let work = scratch.path().join("work");
     let folder = match job.folder {
         Some(folder) => folder.to_path_buf(),
@@ -447,129 +448,18 @@ pub async fn start(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<
             work.clone()
         }
     };
-    let listener = UnixListener::bind(&socket)?;
-    let supply = job.supply.filter(|supply| !supply.is_empty());
-    let net = job.net.cloned().unwrap_or_default();
-    // The calls the supply answers stop for the supervisor; the rest run as in any test.
-    let mut traced = supply.map_or_else(Vec::new, |supply| {
-        let mut traced = Vec::new();
-        if supply.random.is_some() {
-            traced.push(GETRANDOM);
-        }
-        if !supply.clock.is_empty() {
-            traced.push(CLOCK_GETTIME);
-        }
-        traced
-    });
-    // A program may reach only this computer unless its spec says any computer: the
-    // supervisor reads where each connection goes, since the kernel's rules are by port alone.
-    let local = !net.connect.is_empty() && !net.anywhere;
-    if local {
-        traced.push(CONNECT);
-    }
-    // A test's sleeps end at once; a real run's take as long as they say.
-    let sleeps = job.supply.is_some()
-        && job
-            .syscalls
-            .iter()
-            .any(|allowed| allowed.number == CLOCK_NANOSLEEP);
-    if sleeps {
-        traced.push(CLOCK_NANOSLEEP);
-    }
-    let watched = supply.is_some() || local || sleeps;
-    let nothing_supplied = Supply::default();
-    let supply = supply.or_else(|| (local || sleeps).then_some(&nothing_supplied));
-    let syscalls: Vec<String> = job
-        .syscalls
-        .iter()
-        .map(|allowed| format!("{}{}", allowed.number, allowed.pin.encode()))
-        .chain(traced.iter().map(|number| format!("{number}:trace")))
-        .collect();
-    let file_limit = limits
-        .max_file_size
-        .map_or_else(|| "none".to_owned(), |bytes| bytes.to_string());
-    let mut supervisor = match supply.filter(|_| watched) {
-        None => None,
-        Some(_) => Some(
-            Command::new(launcher)
-                .arg(SUPERVISE_FLAG)
-                .env_clear()
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .kill_on_drop(true)
-                .spawn()?,
-        ),
-    };
-    let tracer = supervisor
-        .as_ref()
-        .and_then(tokio::process::Child::id)
-        .map_or_else(|| "none".to_owned(), |pid| pid.to_string());
     let input = match job.stdin_file {
         Some(path) => Stdio::from(std::fs::File::open(path)?),
         None => Stdio::piped(),
     };
-    let mut child = Command::new(launcher)
-        .arg(LAUNCH_FLAG)
-        .arg(&socket)
-        .arg(syscalls.join(","))
-        .arg(file_limit)
-        .arg(tracer)
-        .arg(net.encode())
-        .arg(encode_environment(job.env))
-        .arg(job.program)
-        .args(job.args)
-        .current_dir(&folder)
-        .env_clear()
-        .stdin(input)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()?;
-    let pid = child
-        .id()
-        .and_then(|pid| i32::try_from(pid).ok())
-        .ok_or_else(|| io::Error::other("the launcher has no process id"))?;
-    let accepted = tokio::time::timeout(LAUNCH_TIMEOUT, listener.accept()).await;
-    let Ok(Ok((mut go, _))) = accepted else {
-        // The launcher says why on its standard error, such as a port that's taken.
-        let _ = child.kill().await;
-        let mut said = String::new();
-        if let Some(mut errors) = child.stderr.take() {
-            let _ = errors.read_to_string(&mut said).await;
-        }
-        let said = said.trim().trim_start_matches("lengua-mcp: ");
-        return Err(io::Error::other(if said.is_empty() {
-            "the launcher didn't start".to_owned()
-        } else {
-            said.to_owned()
-        }));
-    };
-    // A server's launcher has already bound its port, and says which.
-    let mut port = None;
-    if net.listen.is_some() {
-        let mut bytes = [0_u8; 2];
-        go.read_exact(&mut bytes).await?;
-        port = Some(u16::from_be_bytes(bytes));
-    }
-    // The launcher has let the supervisor trace it; now it may, before the program starts.
-    let supervisor = match (supervisor.take(), supply) {
-        (Some(mut supervisor), Some(supply)) => {
-            let lines = attach_supervisor(&mut supervisor, pid, supply, local).await?;
-            Some((supervisor, lines))
-        }
-        _ => None,
-    };
-    // Count from the program's exec to its exit; unavailable when the system doesn't allow
-    // performance counters.
-    let counters = [
-        attach(Hardware::INSTRUCTIONS, pid, false),
-        attach(Hardware::CPU_CYCLES, pid, false),
-        attach(Software::TASK_CLOCK, pid, true)
-            .or_else(|| attach(Software::TASK_CLOCK, pid, false)),
-    ];
-    go.write_all(&[1]).await?;
-    drop(go);
+    let streams = [input, Stdio::piped(), Stdio::piped()];
+    let Launched {
+        mut child,
+        pid,
+        port,
+        supervisor,
+        counters,
+    } = launch_job(launcher, &job, &limits, &folder, scratch.path(), streams).await?;
     let began = std::time::Instant::now();
 
     let input = child.stdin.take();
@@ -629,6 +519,215 @@ pub async fn start(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<
         supervisor,
         work: job.folder.is_none().then_some(work),
         _scratch: scratch,
+    })
+}
+
+/// Runs `job` attached to this process's own standard input, output and error, for as long as
+/// it takes, as `lengua-mcp run` does from a shell: confined as any run is, in the folder the
+/// job names. A server says where it serves on standard error. An interrupt, hangup or request
+/// to terminate that reaches this process goes on to the program, as a service manager's stop
+/// would. Returns how the program ended.
+///
+/// # Errors
+///
+/// Fails when the program can't be started, or the job names no folder.
+pub async fn attached(launcher: &Path, job: Job<'_>) -> io::Result<End> {
+    use std::os::unix::process::ExitStatusExt as _;
+    let scratch = tempfile::tempdir()?;
+    let folder = job
+        .folder
+        .ok_or_else(|| io::Error::other("a run from a shell needs a folder to run in"))?
+        .to_path_buf();
+    let limits = Limits {
+        max_file_size: None,
+        ..Limits::default()
+    };
+    let streams = [Stdio::inherit(), Stdio::inherit(), Stdio::inherit()];
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut interrupt = signal(SignalKind::interrupt())?;
+    let mut hangup = signal(SignalKind::hangup())?;
+    let mut terminate = signal(SignalKind::terminate())?;
+    let Launched {
+        mut child,
+        pid,
+        port,
+        supervisor,
+        ..
+    } = launch_job(launcher, &job, &limits, &folder, scratch.path(), streams).await?;
+    if let Some(port) = port {
+        eprintln!("lengua-mcp: serving on 127.0.0.1:{port}");
+    }
+    let program = rustix::process::Pid::from_raw(pid);
+    let forward = |signal: rustix::process::Signal| {
+        // The program may have ended already.
+        if let Some(program) = program {
+            let _ = rustix::process::kill_process(program, signal);
+        }
+    };
+    let status = loop {
+        tokio::select! {
+            status = child.wait() => break status?,
+            _ = interrupt.recv() => forward(rustix::process::Signal::INT),
+            _ = hangup.recv() => forward(rustix::process::Signal::HUP),
+            _ = terminate.recv() => forward(rustix::process::Signal::TERM),
+        }
+    };
+    if let Some((mut supervisor, _)) = supervisor {
+        let _ = supervisor.wait().await;
+    }
+    Ok(match status.code() {
+        Some(code) => End::Exited(code),
+        None => End::Signaled(status.signal().unwrap_or(0)),
+    })
+}
+
+/// The launcher, confined and told to become the program, with its process id, the port it
+/// serves on if it serves, the supervisor tracing it if one does, and its counters.
+struct Launched {
+    child: tokio::process::Child,
+    pid: i32,
+    port: Option<u16>,
+    supervisor: Option<(tokio::process::Child, SupervisorLines)>,
+    counters: [Option<Counter>; 3],
+}
+
+/// Starts `job` through `launcher` in `folder`, with `streams` as its standard input, output and
+/// error, and waits until the launcher has confined itself and been told to go on.
+async fn launch_job(
+    launcher: &Path,
+    job: &Job<'_>,
+    limits: &Limits,
+    folder: &Path,
+    scratch: &Path,
+    streams: [Stdio; 3],
+) -> io::Result<Launched> {
+    let socket = scratch.join("go");
+    let listener = UnixListener::bind(&socket)?;
+    let supply = job.supply.filter(|supply| !supply.is_empty());
+    let net = job.net.cloned().unwrap_or_default();
+    // The calls the supply answers stop for the supervisor; the rest run as in any test.
+    let mut traced = supply.map_or_else(Vec::new, |supply| {
+        let mut traced = Vec::new();
+        if supply.random.is_some() {
+            traced.push(GETRANDOM);
+        }
+        if !supply.clock.is_empty() {
+            traced.push(CLOCK_GETTIME);
+        }
+        traced
+    });
+    // A program may reach only this computer unless its spec says any computer: the
+    // supervisor reads where each connection goes, since the kernel's rules are by port alone.
+    let local = !net.connect.is_empty() && !net.anywhere;
+    if local {
+        traced.push(CONNECT);
+    }
+    // A test's sleeps end at once; a real run's take as long as they say.
+    let sleeps = job.supply.is_some()
+        && job
+            .syscalls
+            .iter()
+            .any(|allowed| allowed.number == CLOCK_NANOSLEEP);
+    if sleeps {
+        traced.push(CLOCK_NANOSLEEP);
+    }
+    let watched = supply.is_some() || local || sleeps;
+    let nothing_supplied = Supply::default();
+    let supply = supply.or_else(|| (local || sleeps).then_some(&nothing_supplied));
+    let syscalls: Vec<String> = job
+        .syscalls
+        .iter()
+        .map(|allowed| format!("{}{}", allowed.number, allowed.pin.encode()))
+        .chain(traced.iter().map(|number| format!("{number}:trace")))
+        .collect();
+    let file_limit = limits
+        .max_file_size
+        .map_or_else(|| "none".to_owned(), |bytes| bytes.to_string());
+    let mut supervisor = match supply.filter(|_| watched) {
+        None => None,
+        Some(_) => Some(
+            Command::new(launcher)
+                .arg(SUPERVISE_FLAG)
+                .env_clear()
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()?,
+        ),
+    };
+    let tracer = supervisor
+        .as_ref()
+        .and_then(tokio::process::Child::id)
+        .map_or_else(|| "none".to_owned(), |pid| pid.to_string());
+    let [input, output, errors] = streams;
+    let mut child = Command::new(launcher)
+        .arg(LAUNCH_FLAG)
+        .arg(&socket)
+        .arg(syscalls.join(","))
+        .arg(file_limit)
+        .arg(tracer)
+        .arg(net.encode())
+        .arg(encode_environment(job.env))
+        .arg(job.program)
+        .args(job.args)
+        .current_dir(folder)
+        .env_clear()
+        .stdin(input)
+        .stdout(output)
+        .stderr(errors)
+        .kill_on_drop(true)
+        .spawn()?;
+    let pid = child
+        .id()
+        .and_then(|pid| i32::try_from(pid).ok())
+        .ok_or_else(|| io::Error::other("the launcher has no process id"))?;
+    let accepted = tokio::time::timeout(LAUNCH_TIMEOUT, listener.accept()).await;
+    let Ok(Ok((mut go, _))) = accepted else {
+        // The launcher says why on its standard error, such as a port that's taken.
+        let _ = child.kill().await;
+        let mut said = String::new();
+        if let Some(mut errors) = child.stderr.take() {
+            let _ = errors.read_to_string(&mut said).await;
+        }
+        let said = said.trim().trim_start_matches("lengua-mcp: ");
+        return Err(io::Error::other(if said.is_empty() {
+            "the launcher didn't start".to_owned()
+        } else {
+            said.to_owned()
+        }));
+    };
+    // A server's launcher has already bound its port, and says which.
+    let mut port = None;
+    if net.listen.is_some() {
+        let mut bytes = [0_u8; 2];
+        go.read_exact(&mut bytes).await?;
+        port = Some(u16::from_be_bytes(bytes));
+    }
+    // The launcher has let the supervisor trace it; now it may, before the program starts.
+    let supervisor = match (supervisor.take(), supply) {
+        (Some(mut supervisor), Some(supply)) => {
+            let lines = attach_supervisor(&mut supervisor, pid, supply, local).await?;
+            Some((supervisor, lines))
+        }
+        _ => None,
+    };
+    // Count from the program's exec to its exit; unavailable when the system doesn't allow
+    // performance counters.
+    let counters = [
+        attach(Hardware::INSTRUCTIONS, pid, false),
+        attach(Hardware::CPU_CYCLES, pid, false),
+        attach(Software::TASK_CLOCK, pid, true)
+            .or_else(|| attach(Software::TASK_CLOCK, pid, false)),
+    ];
+    go.write_all(&[1]).await?;
+    drop(go);
+    Ok(Launched {
+        child,
+        pid,
+        port,
+        supervisor,
+        counters,
     })
 }
 

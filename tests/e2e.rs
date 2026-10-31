@@ -4,7 +4,9 @@
 
 mod common;
 
-use std::path::PathBuf;
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
 
 use common::{Program, Protocol, REQUEST, Session};
 use lengua::hash::Sha256Hex;
@@ -39,6 +41,144 @@ fn compiled_from(spec: &str) -> String {
         "# lengua: compiled from spec.md sha256:{} for linux-x86_64",
         Sha256Hex::of(spec.as_bytes())
     )
+}
+
+fn fixture(name: &str, file: &str) -> String {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+        .join(file);
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
+}
+
+/// `lengua-mcp run` from a shell, with the session's data folder and so its key.
+fn from_shell(session: &Session, folder: &Path, args: &[&str], stdin: &[u8]) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_lengua-mcp"))
+        .arg("--data-dir")
+        .arg(session.data_dir.path())
+        .arg("run")
+        .arg(folder)
+        .arg("--")
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("lengua-mcp starts");
+    let mut input = child.stdin.take().expect("its standard input");
+    input.write_all(stdin).expect("write standard input");
+    drop(input);
+    child.wait_with_output().expect("lengua-mcp ends")
+}
+
+/// A checked program runs from a shell, script or service as well as through `run`: the same
+/// checks and confinement, the shell's own standard input, output and error, no time limit, and
+/// the program's exit code; 125 and the reason when lengua won't run it.
+#[tokio::test]
+async fn a_checked_program_runs_from_a_shell() {
+    let session = Session::start(Protocol::Handshake).await;
+    let program = Program::new();
+    program.write("spec.md", &example("spec.md"));
+    session.record(&program).await;
+    program.write("main.s", &example("main.s"));
+    let done = session.settle(&program).await;
+    assert_eq!(done["state"], "done", "{done}");
+    // The done reply's command, as the user pastes it, with the program's arguments after it.
+    let shell = text(&done["shell"]);
+    assert!(shell.ends_with(" --"), "{done}");
+    let sum = Command::new("sh")
+        .arg("-c")
+        .arg(format!("{shell} 2 3"))
+        .output()
+        .expect("sh runs");
+    assert_eq!(sum.stdout, b"5\n", "{sum:?}");
+    assert_eq!(sum.status.code(), Some(0), "{sum:?}");
+    let usage = from_shell(&session, program.path(), &[], b"");
+    assert_eq!(usage.stderr, b"usage: add <a> <b>\n", "{usage:?}");
+    assert_eq!(usage.status.code(), Some(1), "{usage:?}");
+
+    // Standard input streams through, however long.
+    let cat = Program::new();
+    cat.write("spec.md", &fixture("cat", "spec.md"));
+    session.record(&cat).await;
+    cat.write("main.s", &fixture("cat", "main.s"));
+    let done = session.settle(&cat).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let text = "hello abe\n".repeat(400);
+    let copied = from_shell(&session, cat.path(), &[], text.as_bytes());
+    assert_eq!(copied.stdout, text.as_bytes(), "{:?}", copied.stderr);
+    assert_eq!(copied.status.code(), Some(0), "{copied:?}");
+
+    // Code that isn't what check tested doesn't run.
+    let code = program.read("main.s").expect("main.s");
+    program.write("main.s", &format!("{code}# changed\n"));
+    let refused = from_shell(&session, program.path(), &["2", "3"], b"");
+    assert_eq!(refused.status.code(), Some(125), "{refused:?}");
+    let said = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        said.contains("lengua runs a program only when its spec and code match lengua.lock"),
+        "{said}"
+    );
+    assert!(refused.stdout.is_empty(), "{refused:?}");
+}
+
+/// A server runs from a shell until something stops it: on its spec's port, and a stop that
+/// reaches lengua-mcp, as a service manager sends one, stops the program too.
+#[tokio::test]
+async fn a_server_from_a_shell_serves_until_it_is_stopped() {
+    use std::io::{BufRead as _, Read as _};
+    let session = Session::start(Protocol::Handshake).await;
+    let port = std::net::TcpListener::bind(("127.0.0.1", 0))
+        .and_then(|listener| listener.local_addr())
+        .expect("a free port")
+        .port();
+    let read = |file: &str| {
+        std::fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("examples/echo")
+                .join(file),
+        )
+        .expect("the echo example")
+    };
+    let program = Program::new();
+    program.write(
+        "spec.md",
+        &read("spec.md").replace("7007", &port.to_string()),
+    );
+    session.record(&program).await;
+    program.write("main.s", &read("main.s"));
+    let done = session.settle(&program).await;
+    assert_eq!(done["state"], "done", "{done}");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_lengua-mcp"))
+        .arg("--data-dir")
+        .arg(session.data_dir.path())
+        .arg("run")
+        .arg(program.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("lengua-mcp starts");
+    let mut errors = std::io::BufReader::new(child.stderr.take().expect("its standard error"));
+    let mut said = String::new();
+    errors.read_line(&mut said).expect("a line");
+    assert_eq!(said, format!("lengua-mcp: serving on 127.0.0.1:{port}\n"));
+    for line in ["hi\n", "again\n"] {
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        stream.write_all(line.as_bytes()).expect("send");
+        let mut back = String::new();
+        stream.read_to_string(&mut back).expect("receive");
+        assert_eq!(back, line);
+    }
+    let pid =
+        rustix::process::Pid::from_raw(i32::try_from(child.id()).expect("a pid")).expect("a pid");
+    rustix::process::kill_process(pid, rustix::process::Signal::TERM).expect("stop it");
+    let status = child.wait().expect("lengua-mcp ends");
+    assert_eq!(status.code(), Some(128 + 15), "{status:?}");
+    // The program has gone with it: nothing serves on the port.
+    assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err());
 }
 
 #[test]

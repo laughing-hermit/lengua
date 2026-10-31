@@ -215,6 +215,16 @@ its cycles, CPU time and wall time, which other runs would disturb. Only when th
 test pass does it stamp `[code]`, including the executable's SHA-256 and the toolchain versions.
 `run` rebuilds `main.s` and runs it only if the build is byte for byte that executable.
 
+A checked program also runs outside the agent, from the user's own terminal, scripts and
+services: `lengua-mcp run <program folder> [--in <folder>] [--env NAME=value]… [-- <argument>…]`,
+the command `check`'s done reply gives as `shell`. It makes `run`'s checks (the lock and the
+user's key, no proof found it wrong, the build byte for byte the one tested) and confines the
+program the same way, with the shell's current folder, or `--in`'s, as its working folder. Its
+standard input, output and error are the shell's own, streamed, with no time or output limit; a
+server serves on its spec's port until it's stopped; an interrupt, hangup or request to terminate
+goes on to the program; and the exit code is the program's, or 128 plus the signal that ended it.
+When lengua won't run it, it says why and exits with 125, as `timeout` and `env` do.
+
 The proof records its results in a `[proofs]` table: the executable it's about, the generated
 tests proven for every input in range or up to a length, the solvers that checked them, and the
 tests it found wrong, with what it found, the moment it finds them. `run` refuses a build that
