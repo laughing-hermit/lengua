@@ -48,6 +48,11 @@ scripts/build-plugin.sh
 This builds the server and installs it at `plugin/server/lengua-mcp`, where both plugin manifests
 expect it. Run it again after every change to the Rust code.
 
+`scripts/release.sh` builds an archive that installs with no Rust toolchain,
+`dist/lengua-<version>-x86_64-linux.tar.gz`, and checks it as a user would get it. Unpack it
+anywhere and run its `install.sh`, which checks what lengua needs and says how to install
+anything missing.
+
 ## Use it
 
 Load the plugin in your agent harness. In Claude Code:

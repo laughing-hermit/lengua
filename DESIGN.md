@@ -109,7 +109,16 @@ or run.
 | `plugin/.claude-plugin/plugin.json`, `plugin/.mcp.json` | Claude Code, which ignores the standard's two files |
 
 Both MCP configs start the same binary, `plugin/server/lengua-mcp` (built by
-`scripts/build-plugin.sh`, not committed). The server keeps its private data in
+`scripts/build-plugin.sh`, not committed). `scripts/release.sh` builds the release archive,
+`dist/lengua-<version>-x86_64-linux.tar.gz`, with a SHA-256 beside it: the plugin with its
+server built, `install.sh` and a short README, so installing needs no Rust toolchain. The server
+needs glibc 2.39 or later. `install.sh` checks for that, LLVM's assembler and linker and the two
+solvers, prints the `dnf` or `apt` line for anything missing, and copies the plugin to
+`~/.local/share/lengua/plugin`; `--link` puts `lengua-mcp` in `~/.local/bin`. The script then
+checks the archive as a user gets it: unpacked in a fresh folder, installed, validated, and
+`examples/add` taken from its spec to done through the archive's own server over MCP
+(`scripts/release-check.py`), then run from a shell with the done reply's command. Nothing is
+published. A test holds the crate's version and both manifests' to one. The server keeps its private data in
 `~/.local/share/lengua` (or `$XDG_DATA_HOME/lengua`): one signing key per user, shared by every
 harness, so a lock recorded in one harness verifies in all of them.
 

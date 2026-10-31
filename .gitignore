@@ -1,3 +1,4 @@
 /target/
 /plugin/server/lengua-mcp
 /examples/*/lengua.lock
+/dist/
