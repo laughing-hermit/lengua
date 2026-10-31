@@ -1,26 +1,31 @@
-//! Proof by induction over a streaming program's read loop. A filter that reads standard input
-//! a buffer-full at a time through fill and writes each buffer-full's bytes mapped one by one,
-//! as `upper`, `lower` and `tr` map them, is proven for every length in two parts:
+//! Proof by induction over a streaming program's read loop. A program that reads standard
+//! input a buffer-full at a time through fill, and either writes each buffer-full's bytes mapped
+//! one by one, as `upper`, `lower` and `tr` map them, or keeps counts that add up over the
+//! buffer-fulls, as `len` and `count` of one character do, and writes them at the end, is
+//! proven for every length in two parts:
 //!
 //! - the step: from any state the loop can be in at its head with more than a buffer-full
-//!   left, one time round reads exactly a buffer-full, writes the formula's bytes for it and
-//!   nothing else, and comes back to the head in a state of the same kind, its bound counters
-//!   one lower;
+//!   left, one time round reads exactly a buffer-full, writes the formula's bytes for it (or,
+//!   for counts, nothing, each count grown by the buffer-full's), and comes back to the head in
+//!   a state of the same kind, its bound counters one lower;
 //! - the base: from any such state, every input of up to a buffer-full gives the formula's
-//!   output and exit code, proven as any text is, length by length.
+//!   output and exit code, each count going on from what came before the head, proven as any
+//!   text is, length by length.
 //!
-//! So an input of any length goes round the loop a buffer-full at a time, each time writing the
-//! formula's bytes for that buffer-full, until a buffer-full or less is left, which the base
-//! covers. The states the loop can be in are found as a fixpoint: what one time round changes,
-//! from the first time at the head and then from the head with all that made arbitrary, until
-//! nothing new changes; everything else stays as it was the first time.
+//! So an input of any length goes round the loop a buffer-full at a time until a buffer-full or
+//! less is left, which the base covers. The states the loop can be in are found as a fixpoint:
+//! what one time round changes, from the first time at the head and then from the head with all
+//! that made arbitrary, until nothing new changes; everything else stays as it was the first
+//! time. A count is kept in a register that went from a constant to it and the buffer-full's
+//! count, and goes on adding from any count so far.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
-use super::exec::induction::Hook;
+use super::exec::induction::{Fold, Hook};
 use super::exec::{self, End, Image, State};
+use super::formula::{self, Formula, WIDTH};
 use super::smt::Answer;
 use super::term::{Pool, Term};
 use super::{
@@ -55,11 +60,22 @@ struct Streamed<'a> {
     characters: Vec<u8>,
     /// The longest the spec lets it be.
     max: usize,
+    /// What the program writes of it.
+    output: Output<'a>,
 }
 
-/// The text `block` streams, when it's one the induction applies to: a filter whose standard
-/// input is one text, whose output is that text mapped byte by byte, and which takes nothing
-/// else in.
+/// What a streaming program writes.
+enum Output<'a> {
+    /// Each buffer-full's bytes mapped one by one, as it goes.
+    Map,
+    /// Counts that add up over the buffer-fulls, written at the end: each placeholder's place
+    /// among the template's pieces, with its formula.
+    Counts(Vec<(usize, &'a Expr)>),
+}
+
+/// The text `block` streams, when it's one the induction applies to: a program whose standard
+/// input is one text, whose output is that text mapped byte by byte or counts of it that add
+/// up over its pieces, and which takes nothing else in.
 fn streamed<'a>(image: &Image, block: &'a Generated) -> Result<Streamed<'a>, String> {
     if !image.has_fill() {
         return Err("it doesn't read with fill".into());
@@ -73,14 +89,32 @@ fn streamed<'a>(image: &Image, block: &'a Generated) -> Result<Streamed<'a>, Str
     let [Piece::Expr(Expr::Var(read))] = block.stdin.pieces()[..] else {
         return Err("its standard input isn't the text alone".into());
     };
-    let [Piece::Expr(output)] = block.stdout.pieces()[..] else {
-        return Err("its output isn't one formula of the text".into());
-    };
-    if read != name || !byte_map(output, name) {
-        return Err(
-            "its output isn't the text mapped byte by byte, as upper, lower and tr map it".into(),
-        );
+    if read != name {
+        return Err("its standard input isn't the text alone".into());
     }
+    let pieces = block.stdout.pieces();
+    let output = match pieces[..] {
+        [Piece::Expr(mapped)] if byte_map(mapped, name) => Output::Map,
+        _ => {
+            let counts: Vec<(usize, &Expr)> = pieces
+                .iter()
+                .enumerate()
+                .filter_map(|(place, piece)| match piece {
+                    Piece::Expr(expr) => Some((place, *expr)),
+                    Piece::Text(_) => None,
+                })
+                .collect();
+            if counts.is_empty() || !counts.iter().all(|(_, expr)| adds_up(expr, name)) {
+                return Err(
+                    "its output isn't the text mapped byte by byte, as upper, lower and \
+                     tr map it, nor counts that add up over its pieces, as len and count of one \
+                     character do"
+                        .into(),
+                );
+            }
+            Output::Counts(counts)
+        }
+    };
     let others = !block.args.is_empty()
         || !block.env.is_empty()
         || !block.files.is_empty()
@@ -102,7 +136,59 @@ fn streamed<'a>(image: &Image, block: &'a Generated) -> Result<Streamed<'a>, Str
         name,
         characters: charset.iter().map(|character| *character as u8).collect(),
         max: *max,
+        output,
     })
+}
+
+/// Whether `expr` counts something of the text `name` that adds up over its pieces, the count
+/// of a whole the sum of its pieces' counts: its length, or how often one character appears.
+fn adds_up(expr: &Expr, name: &str) -> bool {
+    match expr {
+        Expr::Call(Function::Len, arguments) => {
+            matches!(arguments.as_slice(), [Expr::Var(var)] if var == name)
+        }
+        Expr::Call(Function::Count, arguments) => matches!(
+            arguments.as_slice(),
+            [Expr::Var(var), Expr::Literal(Value::Str(part))] if var == name && part.len() == 1
+        ),
+        _ => false,
+    }
+}
+
+/// `expr`, a count, over `bytes`.
+fn counted(pool: &mut Pool, expr: &Expr, name: &str, bytes: &[Term]) -> Result<Term, String> {
+    let texts = BTreeMap::from([(name.to_owned(), bytes.to_vec())]);
+    match formula::translate(pool, expr, &BTreeMap::new(), &texts)? {
+        Formula::Number(number) => Ok(number.term),
+        _ => Err("a count that isn't a number".into()),
+    }
+}
+
+/// Whether the run's `register`, which held `start` at the head, holds `start` and `count`
+/// back at it: the terms say so, or the solvers find no input where it doesn't.
+fn grows(
+    pool: &mut Pool,
+    solvers: &mut Solvers,
+    budget: &Budget,
+    run: &State,
+    register: usize,
+    before: Term,
+    count: Term,
+) -> Result<bool, String> {
+    let now = pool.zero_extend(run.register_term(register), WIDTH - 64);
+    let before = pool.zero_extend(before, WIDTH - 64);
+    let expected = pool.add(before, count);
+    let same = pool.eq(now, expected);
+    if let Some(truth) = pool.truth(same) {
+        return Ok(truth);
+    }
+    let mut conditions = run.path.clone();
+    conditions.push(pool.bool_not(same));
+    let solver = solvers.get(budget.deadline)?;
+    let (answer, _) = solver
+        .check(pool, &conditions, &[])
+        .map_err(|error| format!("the solver failed: {error}"))?;
+    Ok(answer == Answer::Unsat)
 }
 
 /// Whether `expr` maps the text `name` byte by byte, each byte's output a byte that depends on
@@ -186,7 +272,9 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
             if let Some(why) = changes.other.first() {
                 return Err(why.clone());
             }
-            // A bound counter goes from its start one lower each time round.
+            let taken = run.stdin_taken() - snapshot.stdin_read;
+            // A bound counter goes from its start one lower each time round; a count, from its
+            // start, by what the buffer-full adds.
             if round == 0 {
                 for register in &changes.registers {
                     let then = pool.constant(snapshot.registers[*register]);
@@ -198,24 +286,105 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
                         grown.counters.insert(*register, then);
                     }
                 }
+                if let Output::Counts(counts) = &streamed.output
+                    && grown.folds.is_empty()
+                {
+                    // Every register that went from a constant to it and the buffer-full's
+                    // count may keep the count: a later round keeps only those that go on
+                    // adding, as a register that holds only the last buffer-full's doesn't.
+                    let fed = run.stdin_bytes()[..taken.min(run.stdin_bytes().len())].to_vec();
+                    for (placeholder, expr) in counts {
+                        let count = counted(&mut pool, expr, streamed.name, &fed)?;
+                        for register in &changes.registers {
+                            let before = snapshot.registers[*register];
+                            if let Some(start) = pool.constant(before)
+                                && !grown.counters.contains_key(register)
+                                && !grown.folds.contains_key(register)
+                                && grows(
+                                    &mut pool,
+                                    &mut solvers,
+                                    budget,
+                                    run,
+                                    *register,
+                                    before,
+                                    count,
+                                )?
+                            {
+                                grown.folds.insert(
+                                    *register,
+                                    Fold {
+                                        start,
+                                        most: 0,
+                                        placeholder: *placeholder,
+                                    },
+                                );
+                            }
+                        }
+                    }
+                }
+            } else if let Output::Counts(counts) = &streamed.output {
+                let fed = run.stdin_bytes()[..taken.min(run.stdin_bytes().len())].to_vec();
+                let kept: Vec<(usize, Fold)> = grown.folds.clone().into_iter().collect();
+                for (register, fold) in kept {
+                    let Some((_, expr)) =
+                        counts.iter().find(|(place, _)| *place == fold.placeholder)
+                    else {
+                        continue;
+                    };
+                    let count = counted(&mut pool, expr, streamed.name, &fed)?;
+                    let before = snapshot.registers[register];
+                    if !grows(
+                        &mut pool,
+                        &mut solvers,
+                        budget,
+                        run,
+                        register,
+                        before,
+                        count,
+                    )? {
+                        grown.folds.remove(&register);
+                        grown.registers.insert(register);
+                    }
+                }
             }
             for register in changes.registers {
-                if !grown.counters.contains_key(&register) {
+                if !grown.counters.contains_key(&register) && !grown.folds.contains_key(&register) {
                     grown.registers.insert(register);
                 }
             }
             grown.memory.extend(changes.memory);
             grown.vectors.extend(changes.vectors);
             grown.masks.extend(changes.masks);
-            chunk = Some(run.stdin_taken() - snapshot.stdin_read);
+            chunk = Some(taken);
         }
         let chunk = chunk
             .filter(|chunk| *chunk > 0)
             .ok_or("no run of one buffer-full came back to the read loop's head")?;
+        if let Output::Counts(counts) = &streamed.output
+            && counts
+                .iter()
+                .any(|(place, _)| !grown.folds.values().any(|fold| fold.placeholder == *place))
+        {
+            return Err("it keeps a count in no register of its own as it goes".into());
+        }
         if streamed.max <= chunk {
             return Err(
                 "its texts fit in one buffer-full, which the proof by length covers".into(),
             );
+        }
+        // The step holds while every counter is at least 3, the base while it's at least 2: as
+        // many times round as the smallest counter's start less one, as far as the spec's
+        // lengths go. A count is at most what was read before the head.
+        let rounds = grown
+            .counters
+            .values()
+            .min()
+            .map_or(u128::MAX, |start| start - 1);
+        let reach = rounds
+            .saturating_mul(chunk as u128)
+            .min(streamed.max as u128);
+        for fold in grown.folds.values_mut() {
+            fold.most = reach - chunk as u128;
         }
         if grown == hook {
             let questions = verify(
@@ -228,18 +397,16 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
                 budget,
                 chunk,
             )?;
-            // The step holds while every counter is at least 3, the base while it's at least
-            // 2: as many times round as the smallest counter's start less one.
-            let rounds = hook
-                .counters
-                .values()
-                .min()
-                .map_or(u128::MAX, |start| start - 1);
+            let mut folds = hook.folds.clone();
+            for fold in folds.values_mut() {
+                fold.most = reach;
+            }
             return Ok(Found {
                 hook: Hook {
                     low: 2,
                     stop: false,
                     feed: None,
+                    folds,
                     ..hook
                 },
                 chunk,
@@ -291,19 +458,46 @@ fn verify(
                 if run.stdin_taken() - snapshot.stdin_read != chunk || fed.len() <= chunk {
                     return Err("a time round the read loop reads other than a buffer-full".into());
                 }
-                let texts = BTreeMap::from([(streamed.name.to_owned(), fed[..chunk].to_vec())]);
-                let known = Known {
-                    numbers: &none,
-                    fixed: &fixed,
-                    texts: &texts,
-                    translated: RefCell::new(HashMap::new()),
-                };
-                let mut checks = vec![text_is(
-                    pool,
-                    &run.stdout[snapshot.stdout..],
-                    &block.stdout,
-                    &known,
-                )?];
+                let mut checks = Vec::new();
+                match &streamed.output {
+                    // The formula's bytes for the buffer-full, as it goes.
+                    Output::Map => {
+                        let texts =
+                            BTreeMap::from([(streamed.name.to_owned(), fed[..chunk].to_vec())]);
+                        let known = Known {
+                            numbers: &none,
+                            fixed: &fixed,
+                            texts: &texts,
+                            translated: RefCell::new(HashMap::new()),
+                            offsets: HashMap::new(),
+                        };
+                        checks.push(text_is(
+                            pool,
+                            &run.stdout[snapshot.stdout..],
+                            &block.stdout,
+                            &known,
+                        )?);
+                    }
+                    // Nothing yet, and each count grown by the buffer-full's.
+                    Output::Counts(counts) => {
+                        if run.stdout.len() != snapshot.stdout {
+                            checks.push(pool.boolean(false));
+                        }
+                        for (register, fold) in &hook.folds {
+                            let Some((_, expr)) =
+                                counts.iter().find(|(place, _)| *place == fold.placeholder)
+                            else {
+                                return Err("a count with no placeholder".into());
+                            };
+                            let count = counted(pool, expr, streamed.name, &fed[..chunk])?;
+                            let now = pool.zero_extend(run.register_term(*register), WIDTH - 64);
+                            let before =
+                                pool.zero_extend(snapshot.registers[*register], WIDTH - 64);
+                            let expected = pool.add(before, count);
+                            checks.push(pool.eq(now, expected));
+                        }
+                    }
+                }
                 if run.stderr.len() != snapshot.stderr {
                     checks.push(pool.boolean(false));
                 }
@@ -356,7 +550,13 @@ fn verify(
                 })?;
             match answer {
                 Answer::Unsat => {}
-                Answer::Sat => return Err(problem),
+                Answer::Sat => {
+                    if std::env::var_os("LENGUA_PROVE_EXPLAIN").is_some() {
+                        let sketch: String = pool.sketch(condition, 6).chars().take(2000).collect();
+                        eprintln!("induction step: {problem}, where {sketch}");
+                    }
+                    return Err(problem);
+                }
                 Answer::Unknown => {
                     if solver.out_of_time() {
                         return Err(super::OUT_OF_TIME.into());

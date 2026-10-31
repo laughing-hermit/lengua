@@ -27,11 +27,37 @@ pub struct Hook {
     pub counters: BTreeMap<usize, u128>,
     /// The least a bound counter is at the head: enough for the loop to take what's left.
     pub low: u128,
+    /// The counts the loop keeps as it goes, as `len` and `count` fold the text, by register.
+    pub folds: BTreeMap<usize, Fold>,
     /// Whether the run stops when it comes back to the head, as the step's does.
     pub stop: bool,
     /// For the step: the characters of the input it reads from the head, fresh bytes one more
     /// than the buffer-full fill is given there, so the loop goes round again.
     pub feed: Option<Vec<u8>>,
+}
+
+/// A count a read loop keeps in a register as it goes: at the head, what it starts at plus the
+/// count of everything read so far.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fold {
+    /// What the register holds the first time at the head.
+    pub start: u128,
+    /// The most the count of what was read before the head can be.
+    pub most: u128,
+    /// The output's placeholder it counts for, by its place among the template's pieces.
+    pub placeholder: usize,
+}
+
+impl Fold {
+    /// The register's value at the head, any from its start to its start and its most.
+    pub fn value(&self, pool: &mut Pool, register: usize) -> Term {
+        pool.var_in(
+            64,
+            &format!("induction.f{register}"),
+            self.start,
+            self.start + self.most,
+        )
+    }
 }
 
 /// Where a run stood the first time it reached the head.
@@ -150,6 +176,10 @@ impl State {
         for (register, start) in &hook.counters {
             self.registers[*register] =
                 pool.var_in(64, &format!("induction.c{register}"), hook.low, *start);
+            self.owners[*register] = None;
+        }
+        for (register, fold) in &hook.folds {
+            self.registers[*register] = fold.value(pool, *register);
             self.owners[*register] = None;
         }
         for vector in &hook.vectors {

@@ -17,6 +17,9 @@ And written for the tests themselves:
   4,096 bytes a proof reaches.
 - `padded`: an AVX-512 `wc -lw` from interactive round 2, which pads its counts to seven
   columns with a chain of `if(…)`s choosing among texts of different lengths.
+- `lines`: `wc -l` over standard input of any length, a buffer-full at a time through `fill`,
+  its count kept in a register: proven for every length by induction, the count growing by each
+  buffer-full's newlines.
 - `second`: two lines from standard input, read with one `fill` to the first newline a read
   ends with, so it's right only when both lines arrive together, as they do in the tests: the
   proof, which takes every way standard input can be cut, finds the cut after the first line.

@@ -1913,8 +1913,9 @@ fn proven_detail(
         let _ = write!(
             detail,
             "; every length by induction over its read loop: from any state the loop can be in \
-             at its head, one more buffer-full of {chunk} bytes writes what the formula says, \
-             and every input of up to {chunk} bytes is proven from there"
+             at its head, one more buffer-full of {chunk} bytes keeps what it writes and counts \
+             in step with the formula, and every input of up to {chunk} bytes is proven from \
+             there"
         );
     }
     if let Some(bound) = &bound {

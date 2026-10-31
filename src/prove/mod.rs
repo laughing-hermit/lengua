@@ -545,14 +545,82 @@ fn refuted(pool: &Pool, path: &[Term], condition: Term) -> bool {
     let Some((x, wanted)) = values_of(pool, condition) else {
         return false;
     };
+    let parts = pool.parts(x);
+    refuted_among(pool, path.iter().copied(), x, &wanted, &parts)
+}
+
+/// A run's conditions, each under the parts of the value it bounds, so a question about one
+/// value reads only those that can say something of it: a text's thousands of conditions on its
+/// bytes, one each, aren't read again for every byte.
+struct Indexed<'a> {
+    path: &'a [Term],
+    /// The conditions whose value has no parts, or that bound no one value: read for any.
+    general: Vec<usize>,
+    /// The others, under each of their value's parts.
+    by_part: HashMap<Term, Vec<usize>>,
+}
+
+impl<'a> Indexed<'a> {
+    fn new(pool: &Pool, path: &'a [Term]) -> Self {
+        let mut general = Vec::new();
+        let mut by_part: HashMap<Term, Vec<usize>> = HashMap::new();
+        for (index, condition) in path.iter().enumerate() {
+            let parts = subject_within(pool, *condition, 8).map(|y| pool.parts(y));
+            match parts {
+                Some(parts) if !parts.is_empty() => {
+                    for part in parts {
+                        by_part.entry(part).or_default().push(index);
+                    }
+                }
+                _ => general.push(index),
+            }
+        }
+        Self {
+            path,
+            general,
+            by_part,
+        }
+    }
+
+    /// [`refuted`], reading only the conditions that can bound the condition's value.
+    fn refutes(&self, pool: &Pool, condition: Term) -> bool {
+        let Some((x, wanted)) = values_of(pool, condition) else {
+            return false;
+        };
+        let parts = pool.parts(x);
+        if parts.is_empty() {
+            return refuted_among(pool, self.path.iter().copied(), x, &wanted, &parts);
+        }
+        let mut indices = self.general.clone();
+        for part in &parts {
+            if let Some(found) = self.by_part.get(part) {
+                indices.extend(found);
+            }
+        }
+        indices.sort_unstable();
+        indices.dedup();
+        let conditions = indices.into_iter().map(|index| self.path[index]);
+        refuted_among(pool, conditions, x, &wanted, &parts)
+    }
+}
+
+/// Whether `conditions` rule out every one of `wanted`, the values `x`, made of `parts`, must
+/// take for some condition to hold.
+fn refuted_among(
+    pool: &Pool,
+    conditions: impl Iterator<Item = Term>,
+    x: Term,
+    wanted: &Values,
+    parts: &[Term],
+) -> bool {
     let width = pool.width(x);
     let mut known: Values = vec![pool.signed_range(x)];
     // Only a value made of some of x's parts can be x moved or scaled: a long text's
     // conditions on each of its bytes say nothing of its checksum, and are passed over unread.
-    let parts = pool.parts(x);
-    for path_condition in path {
+    for path_condition in conditions {
+        let path_condition = &path_condition;
         if let Some(y) = subject_within(pool, *path_condition, 8)
-            && !pool.shares_parts(&parts, y)
+            && !pool.shares_parts(parts, y)
         {
             continue;
         }
@@ -599,7 +667,7 @@ fn refuted(pool: &Pool, path: &[Term], condition: Term) -> bool {
             return true;
         }
     }
-    both(&known, &wanted).is_empty()
+    both(&known, wanted).is_empty()
 }
 
 /// The most times [`settled`] splits an output check on a condition the path leaves open.
@@ -632,6 +700,7 @@ fn settled(pool: &mut Pool, path: &[Term], holds: Term, splits: u32) -> Term {
         }
     }
     let mut holds = holds;
+    let indexed = Indexed::new(pool, path);
     for _ in 0..4 {
         let before = holds;
         let mut seen = HashSet::new();
@@ -645,9 +714,9 @@ fn settled(pool: &mut Pool, path: &[Term], holds: Term, splits: u32) -> Term {
                 && values_of(pool, term).is_some()
             {
                 let negated = pool.bool_not(term);
-                if refuted(pool, path, term) {
+                if indexed.refutes(pool, term) {
                     facts.insert(term, false);
-                } else if refuted(pool, path, negated) {
+                } else if indexed.refutes(pool, negated) {
                     facts.insert(term, true);
                 }
             }
@@ -1661,6 +1730,9 @@ struct Known<'a> {
     /// Formulas translated in this shape, by expression: every run of a shape asks for the
     /// same ones, and a text formula over thousands of bytes is worth translating once.
     translated: std::cell::RefCell<HashMap<*const crate::expr::Expr, Result<Formula, String>>>,
+    /// In an induction's base, the count of what was read before the read loop's head, for
+    /// each count placeholder: a term, and the most it can be.
+    offsets: HashMap<*const crate::expr::Expr, (Term, i128)>,
 }
 
 impl Known<'_> {
@@ -1670,7 +1742,17 @@ impl Known<'_> {
         if let Some(found) = self.translated.borrow().get(&key) {
             return found.clone();
         }
-        let result = formula::translate(pool, expr, self.numbers, self.texts);
+        let mut result = formula::translate(pool, expr, self.numbers, self.texts);
+        // A count over the text from the head on, and what came before it.
+        if let (Ok(Formula::Number(number)), Some((before, most))) =
+            (&result, self.offsets.get(&key))
+        {
+            result = Ok(Formula::Number(Number {
+                term: pool.add(*before, number.term),
+                high: number.high.saturating_add(*most),
+                ..*number
+            }));
+        }
         self.translated.borrow_mut().insert(key, result.clone());
         result
     }
@@ -3078,8 +3160,23 @@ fn prove_shape(
     if every_cut {
         base = base.for_every_cut();
     }
+    // In an induction's base, each count the loop keeps holds what was read before the head
+    // too: the formula's count goes on from there.
+    let mut offsets = HashMap::new();
     if let Some(hook) = hook {
         base = base.with_hook(std::rc::Rc::new(hook.clone()));
+        let pieces = block.stdout.pieces();
+        for (register, fold) in &hook.folds {
+            let Some(Piece::Expr(expr)) = pieces.get(fold.placeholder) else {
+                return Err("a count with no placeholder".into());
+            };
+            let value = fold.value(&mut pool, *register);
+            let wide = pool.zero_extend(value, WIDTH - 64);
+            let start = pool.bv(WIDTH, fold.start);
+            let before = pool.sub(wide, start);
+            let most = i128::try_from(fold.most).map_err(|_| "a count too large")?;
+            offsets.insert(std::ptr::from_ref(*expr), (before, most));
+        }
     }
     base.path = constraints;
     let networked = !block.server.is_empty() || !block.client.is_empty();
@@ -3128,6 +3225,7 @@ fn prove_shape(
             fixed: &chosen,
             texts: &texts,
             translated: std::cell::RefCell::new(HashMap::new()),
+            offsets: offsets.clone(),
         };
         check_runs(
             &mut pool,
@@ -3144,8 +3242,9 @@ fn prove_shape(
         if std::env::var_os("LENGUA_PROVE_TRACE").is_some() {
             eprintln!(
                 "shape {combination}: {count} runs, {questions} questions exploring in \
-                 {explored:?}, {} checking, {} terms",
+                 {explored:?}, {} checking in {:?}, {} terms",
                 asked(solvers) - questions,
+                began.elapsed() - explored,
                 pool.len(),
             );
         }

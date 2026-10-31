@@ -222,6 +222,7 @@ fn text_around_a_number_matches_exactly() {
         let bytes = bytes_of(&mut pool, &text);
         let known = super::Known {
             translated: std::cell::RefCell::default(),
+            offsets: HashMap::new(),
             numbers: &numbers,
             fixed: &BTreeMap::new(),
             texts: &BTreeMap::new(),
@@ -303,6 +304,7 @@ fn any_takes_exactly_the_plain_numbers_in_range() {
         let bytes = bytes_of(&mut pool, &text);
         let known = super::Known {
             translated: std::cell::RefCell::default(),
+            offsets: HashMap::new(),
             numbers: &numbers,
             fixed: &BTreeMap::new(),
             texts: &BTreeMap::new(),
@@ -410,6 +412,7 @@ fn several_numbers_in_one_line_match_exactly() {
         let bytes = bytes_of(&mut pool, &text);
         let known = super::Known {
             translated: std::cell::RefCell::default(),
+            offsets: HashMap::new(),
             numbers: &numbers,
             fixed: &BTreeMap::new(),
             texts: &BTreeMap::new(),
@@ -455,6 +458,7 @@ fn a_chosen_text_matches_only_its_own_choice() {
         let bytes = bytes_of(&mut pool, &text);
         let known = super::Known {
             translated: std::cell::RefCell::default(),
+            offsets: HashMap::new(),
             numbers: &numbers,
             fixed: &BTreeMap::new(),
             texts: &BTreeMap::new(),

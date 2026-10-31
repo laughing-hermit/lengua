@@ -1549,6 +1549,46 @@ async fn proves_a_stream_for_every_length_by_induction() {
     );
 }
 
+/// Induction over counts: a line count kept in a register, grown by each buffer-full's
+/// newlines, 16 bytes at a time, is proven for every length the spec allows; a count that
+/// misses the last chunk of each buffer-full is found.
+#[tokio::test]
+async fn proves_a_count_for_every_length_by_induction() {
+    if !solvers_installed() {
+        return;
+    }
+    let spec = fixture("lines", "spec.md");
+    let source = fixture("lines", "main.s");
+    let right = machine(&source).await;
+    let lines = block(&spec, 0);
+    // Four minutes, so a machine busy with the other tests still finishes the base.
+    let verdict = prove(&right, &lines, &long_budget());
+    assert!(
+        matches!(
+            verdict,
+            Verdict::Proven {
+                bound: None,
+                induction: Some(4096),
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
+    let short = machine(&source.replace(
+        "    cmp rcx, rdi\n    jae .Lcount_lines_return\n",
+        "    lea rdx, [rcx + 16]\n    cmp rdx, rdi\n    jae .Lcount_lines_return\n",
+    ))
+    .await;
+    let verdict = prove(&short, &lines, &text_budget());
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+    // A count of the last buffer-full alone: the first time round it looks like the count so
+    // far, and from any later state it isn't, so no induction applies.
+    let last_only = machine(&source.replace("    add r13, rax\n", "    mov r13, rax\n")).await;
+    let image = Image::new(&last_only).expect("an entry");
+    let step = induction::step(&image, &lines, &text_budget());
+    assert!(step.is_err(), "{step:?}");
+}
+
 /// Vector code, AVX-512 with masks: the fast word count's lines and words, its popcounts of
 /// masks meeting the formulas' counts as one term; a count that misses carriage returns is
 /// found. Texts up to 200 bytes, past three whole vectors and a tail, keep the test quick even
