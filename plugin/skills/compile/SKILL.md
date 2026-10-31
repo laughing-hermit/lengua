@@ -28,7 +28,9 @@ and the CPU features the code needs; never write that line yourself.
    `write_all` can be reused as they are. To read a whole input, a reply, or a request up to the
    byte that ends it (such as a newline), call `fill` from [fill.s](assets/fill.s), copied word for
    word with its three constants: the proof then covers every way the input can arrive, cut into
-   any pieces. Write your own read loop only to stream input larger than a buffer. A server whose
+   any pieces. To stream input larger than a buffer, call `fill` again for each buffer-full, with
+   `ecx` -1: its proof goes on through longer input as far as its time reaches, where a read
+   loop of your own is proven only up to the 4096 bytes one pipe write holds. A server whose
    spec serves several clients at once starts from
    [the event-loop server](assets/server-template.s) ([its spec](assets/server-template-spec.md)):
    `poll` over the listening socket and a fixed table of connections, a line buffer for each,

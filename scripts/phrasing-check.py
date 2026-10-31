@@ -40,16 +40,27 @@ def session(*args):
                           text=True, check=True).stdout
 
 
+def trust(name, seconds=30):
+    """Answers the new folder's trust prompt, which starts on "No, exit", with "Yes", before
+    anything is typed: text typed into the prompt would answer it."""
+    for _ in range(seconds):
+        time.sleep(1)
+        try:
+            screen = session("screen", name, "4000").lower()
+        except subprocess.CalledProcessError:
+            # The session hasn't drawn its screen yet.
+            continue
+        if "trust" in screen and "folder" in screen:
+            session("keys", name, "Down", "Enter")
+            break
+    time.sleep(3)
+
+
 def first_call(name, seconds=150):
     """The first tool the session's agent calls, as `name input`, or why there is none."""
     deadline = time.monotonic() + seconds
-    trusted = False
     while time.monotonic() < deadline:
         time.sleep(1)
-        screen = session("screen", name, "4000")
-        if not trusted and "trust" in screen.lower() and "folder" in screen.lower():
-            session("keys", name, "Enter")
-            trusted = True
         path = session("transcript", name).strip()
         if not path or path == "None" or not pathlib.Path(path).exists():
             continue
@@ -77,7 +88,7 @@ def main(claude_args):
         shutil.rmtree(folder, ignore_errors=True)
         folder.mkdir(parents=True)
         session("start", name, str(folder), "--permission-mode", "auto", *claude_args)
-        time.sleep(6)
+        trust(name)
         session("type", name, phrasing)
         called = first_call(name)
         session("stop", name)

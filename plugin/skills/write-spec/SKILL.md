@@ -94,7 +94,9 @@ by one concrete example in its steps, and its generated tests try that rule with
 - **Exit codes:** each behavior ends with one. Codes go from 0 to 255, and 134 is reserved for
   failed assertions.
 - **Errors are behaviors too:** missing or extra arguments, numbers out of range, text that
-  isn't a number. Give each one its own exit code other than 0.
+  isn't a number. Give each one its own exit code other than 0. Every limit Purpose states, such
+  as the largest input, the longest line or the most rows, gets a behavior for input just past
+  it, with its message and exit code: a program never quietly drops what's past a limit.
 - **Files:** a program works only on files in the folder it runs in, named relative to it; it
   can't reach other files at all. Within it, it can read, write, list folders, read a file's
   size, make and remove folders, and delete and rename files. Purpose states the largest file it reads in backticks, like any
