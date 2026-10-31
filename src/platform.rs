@@ -6,6 +6,7 @@
 use serde::Serialize;
 
 use crate::spec::Syscall;
+use crate::syscalls;
 
 /// The OS + CPU combinations lengua knows how to build for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,28 +45,28 @@ impl Profile {
     #[must_use]
     pub fn syscall_number(self, syscall: Syscall) -> i64 {
         match (self, syscall) {
-            (Self::LinuxX86_64, Syscall::Read) => 0,
-            (Self::LinuxX86_64, Syscall::Write) => 1,
-            (Self::LinuxX86_64, Syscall::Close) => 3,
-            (Self::LinuxX86_64, Syscall::Lseek) => 8,
-            (Self::LinuxX86_64, Syscall::Fstat) => 5,
-            (Self::LinuxX86_64, Syscall::Getdents64) => 217,
-            (Self::LinuxX86_64, Syscall::Mkdirat) => 258,
-            (Self::LinuxX86_64, Syscall::Unlinkat) => 263,
-            (Self::LinuxX86_64, Syscall::Renameat) => 264,
-            (Self::LinuxX86_64, Syscall::Exit) => 60,
-            (Self::LinuxX86_64, Syscall::ExitGroup) => 231,
-            (Self::LinuxX86_64, Syscall::ClockGettime) => 228,
-            (Self::LinuxX86_64, Syscall::ClockNanosleep) => 230,
-            (Self::LinuxX86_64, Syscall::Getrandom) => 318,
-            (Self::LinuxX86_64, Syscall::Openat) => 257,
-            (Self::LinuxX86_64, Syscall::Socket) => 41,
-            (Self::LinuxX86_64, Syscall::Connect) => 42,
-            (Self::LinuxX86_64, Syscall::Sendto) => 44,
-            (Self::LinuxX86_64, Syscall::Shutdown) => 48,
-            (Self::LinuxX86_64, Syscall::Accept4) => 288,
-            (Self::LinuxX86_64, Syscall::Poll) => 7,
-            (Self::LinuxX86_64, Syscall::Ioctl) => 16,
+            (Self::LinuxX86_64, Syscall::Read) => syscalls::READ,
+            (Self::LinuxX86_64, Syscall::Write) => syscalls::WRITE,
+            (Self::LinuxX86_64, Syscall::Close) => syscalls::CLOSE,
+            (Self::LinuxX86_64, Syscall::Lseek) => syscalls::LSEEK,
+            (Self::LinuxX86_64, Syscall::Fstat) => syscalls::FSTAT,
+            (Self::LinuxX86_64, Syscall::Getdents64) => syscalls::GETDENTS64,
+            (Self::LinuxX86_64, Syscall::Mkdirat) => syscalls::MKDIRAT,
+            (Self::LinuxX86_64, Syscall::Unlinkat) => syscalls::UNLINKAT,
+            (Self::LinuxX86_64, Syscall::Renameat) => syscalls::RENAMEAT,
+            (Self::LinuxX86_64, Syscall::Exit) => syscalls::EXIT,
+            (Self::LinuxX86_64, Syscall::ExitGroup) => syscalls::EXIT_GROUP,
+            (Self::LinuxX86_64, Syscall::ClockGettime) => syscalls::CLOCK_GETTIME,
+            (Self::LinuxX86_64, Syscall::ClockNanosleep) => syscalls::CLOCK_NANOSLEEP,
+            (Self::LinuxX86_64, Syscall::Getrandom) => syscalls::GETRANDOM,
+            (Self::LinuxX86_64, Syscall::Openat) => syscalls::OPENAT,
+            (Self::LinuxX86_64, Syscall::Socket) => syscalls::SOCKET,
+            (Self::LinuxX86_64, Syscall::Connect) => syscalls::CONNECT,
+            (Self::LinuxX86_64, Syscall::Sendto) => syscalls::SENDTO,
+            (Self::LinuxX86_64, Syscall::Shutdown) => syscalls::SHUTDOWN,
+            (Self::LinuxX86_64, Syscall::Accept4) => syscalls::ACCEPT4,
+            (Self::LinuxX86_64, Syscall::Poll) => syscalls::POLL,
+            (Self::LinuxX86_64, Syscall::Ioctl) => syscalls::IOCTL,
         }
     }
 

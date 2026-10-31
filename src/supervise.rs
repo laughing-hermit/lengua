@@ -25,20 +25,10 @@ use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::Pid;
 
 use crate::supply::Supply;
+use crate::syscalls;
 
 /// The command-line flag that starts the binary as a supervisor.
 pub const SUPERVISE_FLAG: &str = "--supervise";
-
-/// The system calls a supply answers, by number.
-pub const GETRANDOM: i64 = 318;
-/// See [`GETRANDOM`].
-pub const CLOCK_GETTIME: i64 = 228;
-/// `clock_nanosleep`, which a test answers at once: what a program does after a sleep doesn't
-/// depend on how long it slept, and a test shouldn't wait.
-pub const CLOCK_NANOSLEEP: i64 = 230;
-/// `connect`, whose address the supervisor checks when the program may reach only this
-/// computer.
-pub const CONNECT: i64 = 42;
 
 fn say(line: &str) {
     let mut stdout = std::io::stdout().lock();
@@ -158,10 +148,13 @@ impl Supervisor {
             return;
         };
         let result = match i64::try_from(registers.orig_rax) {
-            Ok(GETRANDOM) => self.random(task, registers.rdi, registers.rsi, registers.rdx),
-            Ok(CLOCK_GETTIME) => self.clock(task, registers.rsi),
-            Ok(CLOCK_NANOSLEEP) => 0,
-            Ok(CONNECT) if self.local => match reaches_this_computer(task, registers.rsi) {
+            Ok(syscalls::GETRANDOM) => {
+                self.random(task, registers.rdi, registers.rsi, registers.rdx)
+            }
+            Ok(syscalls::CLOCK_GETTIME) => self.clock(task, registers.rsi),
+            Ok(syscalls::CLOCK_NANOSLEEP) => 0,
+            Ok(syscalls::CONNECT) if self.local => match reaches_this_computer(task, registers.rsi)
+            {
                 true => return,
                 false => -(Errno::EACCES as i64),
             },

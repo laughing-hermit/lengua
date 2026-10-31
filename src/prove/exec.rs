@@ -18,6 +18,7 @@ use iced_x86::{ConditionCode, Instruction, Mnemonic, OpKind, Register};
 
 use super::term::{Pool, Term};
 use crate::checker::decode::Machine;
+use crate::syscalls;
 
 /// The address of `argc` when `_start` begins.
 pub const STACK_TOP: u64 = 0x7ffd_0000_0000;
@@ -2922,15 +2923,17 @@ impl<'a> Cpu<'a> {
     }
 
     fn syscall(&mut self) -> Result<Step, Stop> {
-        let number = self.state.registers[0];
-        let number = self
+        let raw = self.state.registers[0];
+        let raw = self
             .pool
-            .constant(number)
+            .constant(raw)
             .ok_or_else(|| unsupported("a system call chosen by the input"))?;
+        // The numbers below are this target's, from `crate::syscalls`; this is the x86-64 prover.
+        let number = i64::try_from(raw).ok();
         let registers = self.state.registers;
         let (rdi, rsi, rdx) = (registers[7], registers[6], registers[2]);
         let result = match number {
-            0 => {
+            Some(syscalls::READ) => {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 let buffer = self.constant(rsi)?;
                 let count = self.constant(rdx)?;
@@ -3000,9 +3003,10 @@ impl<'a> Cpu<'a> {
                     (-EBADF).cast_unsigned()
                 }
             }
-            1 if self
-                .connection_of(self.constant(rdi)? & 0xffff_ffff)
-                .is_ok() =>
+            Some(syscalls::WRITE)
+                if self
+                    .connection_of(self.constant(rdi)? & 0xffff_ffff)
+                    .is_ok() =>
             {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 let (buffer, count) = (self.constant(rsi)?, self.constant(rdx)?);
@@ -3012,7 +3016,7 @@ impl<'a> Cpu<'a> {
                     _ => self.not_connected(),
                 }
             }
-            1 => {
+            Some(syscalls::WRITE) => {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 let buffer = self.constant(rsi)?;
                 let count = self.constant(rdx)?;
@@ -3046,7 +3050,7 @@ impl<'a> Cpu<'a> {
                     }
                 }
             }
-            3 => {
+            Some(syscalls::CLOSE) => {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 if self.state.open.remove(&fd).is_some() || self.close_socket(fd) {
                     0
@@ -3054,7 +3058,7 @@ impl<'a> Cpu<'a> {
                     (-EBADF).cast_unsigned()
                 }
             }
-            41 => {
+            Some(syscalls::SOCKET) => {
                 let (domain, kind, protocol) = (
                     self.constant(rdi)? & 0xffff_ffff,
                     self.constant(rsi)? & 0xffff_ffff,
@@ -3062,7 +3066,7 @@ impl<'a> Cpu<'a> {
                 );
                 self.socket(domain, kind, protocol)?
             }
-            42 => {
+            Some(syscalls::CONNECT) => {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 let address = self.constant(rsi)?;
                 self.lent(
@@ -3074,10 +3078,12 @@ impl<'a> Cpu<'a> {
                 )?;
                 return self.connect(fd, address);
             }
-            43 | 288 => {
+            Some(syscalls::ACCEPT | syscalls::ACCEPT4) => {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 let (address, length) = (self.constant(rsi)?, self.constant(rdx)?);
-                if number == 288 && self.constant(registers[10])? & !0o2_000_000 != 0 {
+                if number == Some(syscalls::ACCEPT4)
+                    && self.constant(registers[10])? & !0o2_000_000 != 0
+                {
                     return Err(unsupported(
                         "accepting a connection with flags beyond close-on-exec",
                     ));
@@ -3088,19 +3094,20 @@ impl<'a> Cpu<'a> {
                 }
                 self.accept(fd, address, length)?
             }
-            44 | 45 => {
+            Some(syscalls::SENDTO | syscalls::RECVFROM) => {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 let (buffer, count) = (self.constant(rsi)?, self.constant(rdx)?);
                 let flags = self.constant(registers[10])? & 0xffff_ffff;
                 if self.constant(registers[8])? != 0 {
                     return Err(unsupported("sending to or receiving from a named address"));
                 }
-                let call = if number == 44 { "sendto" } else { "recvfrom" };
-                self.lent(Register::RSI, buffer, count, number == 45, call)?;
+                let sending = number == Some(syscalls::SENDTO);
+                let call = if sending { "sendto" } else { "recvfrom" };
+                self.lent(Register::RSI, buffer, count, !sending, call)?;
                 match self.connection_of(fd) {
                     Err(()) => (-EBADF).cast_unsigned(),
                     Ok(None) => self.not_connected(),
-                    Ok(Some(connection)) if number == 44 => {
+                    Ok(Some(connection)) if sending => {
                         self.send(connection, buffer, count, flags)?
                     }
                     Ok(Some(connection)) => {
@@ -3111,38 +3118,38 @@ impl<'a> Cpu<'a> {
                     }
                 }
             }
-            48 => {
+            Some(syscalls::SHUTDOWN) => {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 let how = self.constant(rsi)? & 0xffff_ffff;
                 self.shutdown(fd, how)?
             }
-            257 => return self.open_chosen(),
-            5 => {
+            Some(syscalls::OPENAT) => return self.open_chosen(),
+            Some(syscalls::FSTAT) => {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 let buffer = self.constant(rsi)?;
                 self.file_details(fd, buffer)?
             }
-            217 => {
+            Some(syscalls::GETDENTS64) => {
                 return Err(unsupported(
                     "listing a folder, whose entries the kernel gives in an order of its own",
                 ));
             }
-            258 => {
+            Some(syscalls::MKDIRAT) => {
                 let name = self.name_at(rdi, Register::RSI, "mkdirat")?;
                 self.make_folder(name)
             }
-            263 => {
+            Some(syscalls::UNLINKAT) => {
                 let name = self.name_at(rdi, Register::RSI, "unlinkat")?;
                 let flags = self.constant(rdx)? & 0xffff_ffff;
                 self.remove(name, flags)?
             }
-            264 => {
+            Some(syscalls::RENAMEAT) => {
                 let from = self.name_at(rdi, Register::RSI, "renameat")?;
                 let to = self.name_at(rdx, Register::R10, "renameat")?;
                 self.rename(from, to)?
             }
             // The test's readings, as the supervisor gives them, the last one repeating.
-            228 if !self.state.clock.is_empty() => {
+            Some(syscalls::CLOCK_GETTIME) if !self.state.clock.is_empty() => {
                 let buffer = self.constant(rsi)?;
                 self.lent(Register::RSI, buffer, 16, true, "clock_gettime")?;
                 let readings = Rc::clone(&self.state.clock);
@@ -3154,7 +3161,7 @@ impl<'a> Cpu<'a> {
                 0
             }
             // The test's bytes, as the supervisor gives them: zeros past their end.
-            318 if self.state.random.is_some() => {
+            Some(syscalls::GETRANDOM) if self.state.random.is_some() => {
                 let buffer = self.constant(rdi)?;
                 let count = self.constant(rsi)?;
                 self.lent(Register::RDI, buffer, count, true, "getrandom")?;
@@ -3180,7 +3187,7 @@ impl<'a> Cpu<'a> {
                 }
             }
             // Values the kernel chooses: any at all, a fresh variable for each.
-            228 => {
+            Some(syscalls::CLOCK_GETTIME) => {
                 let clock = self.constant(rdi)? & 0xffff_ffff;
                 if !matches!(clock, 0 | 1) {
                     return Err(unsupported(format!("reading clock {clock}")));
@@ -3198,7 +3205,7 @@ impl<'a> Cpu<'a> {
                 self.save(buffer + 8, nanoseconds)?;
                 0
             }
-            318 => {
+            Some(syscalls::GETRANDOM) => {
                 let buffer = self.constant(rdi)?;
                 let count = self.constant(rsi)?;
                 self.lent(Register::RDI, buffer, count, true, "getrandom")?;
@@ -3214,7 +3221,7 @@ impl<'a> Cpu<'a> {
             }
             // A sleep ends at once: what the program does next doesn't depend on how long it
             // slept. It reads the time it's given, and may write what's left of it.
-            230 => {
+            Some(syscalls::CLOCK_NANOSLEEP) => {
                 let request = self.constant(rdx)?;
                 self.lent(Register::RDX, request, 16, false, "clock_nanosleep")?;
                 self.load(request, 16)?;
@@ -3224,17 +3231,17 @@ impl<'a> Cpu<'a> {
                 }
                 0
             }
-            56 => return self.start_thread(),
+            Some(syscalls::CLONE) => return self.start_thread(),
             // A thread's end: the kernel clears its id and wakes whoever waits on it, and the
             // thread that started it goes on.
-            60 if !self.state.suspended.is_empty() => return self.end_thread(),
-            60 | 231 => {
+            Some(syscalls::EXIT) if !self.state.suspended.is_empty() => return self.end_thread(),
+            Some(syscalls::EXIT | syscalls::EXIT_GROUP) => {
                 let status = self.pool.extract(rdi, 7, 0);
                 return Err(End::Exit(status));
             }
             // A wait for a thread to end. Threads run to their end as they start, so its id is
             // already cleared: the word no longer holds what the waiter saw.
-            202 => {
+            Some(syscalls::FUTEX) => {
                 let (word, operation) = (self.constant(rdi)?, self.constant(rsi)? & 0xffff_ffff);
                 // FUTEX_WAIT, with or without FUTEX_PRIVATE_FLAG.
                 if operation & !128 != 0 {
@@ -3253,7 +3260,7 @@ impl<'a> Cpu<'a> {
             // A wait for the next key: as in a test, standard input has all arrived, so it always
             // has a key to read, or its end. A server's poll over its connections is beyond the
             // model.
-            7 => {
+            Some(syscalls::POLL) => {
                 let (table, count) = (self.constant(rdi)?, self.constant(rsi)?);
                 let waits_for_input = count == 1 && {
                     self.lent(Register::RDI, table, POLLFD_LEN, true, "poll")?;
@@ -3287,13 +3294,13 @@ impl<'a> Cpu<'a> {
             }
             // As in a test, standard input, output and error are never a terminal: its mode
             // can't be read or set, and the program goes on as from a pipe.
-            16 => {
+            Some(syscalls::IOCTL) => {
                 if self.constant(rdi)? & 0xffff_ffff > 2 {
                     return Err(unsupported("ioctl on a file or a connection"));
                 }
                 (-ENOTTY).cast_unsigned()
             }
-            other => return Err(unsupported(format!("system call {other}"))),
+            _ => return Err(unsupported(format!("system call {raw}"))),
         };
         self.state.registers[0] = self.pool.bv(64, u128::from(result));
         self.state.registers[1] = self.pool.bv(64, u128::from(self.instruction.next_ip()));
