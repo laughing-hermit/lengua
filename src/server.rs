@@ -1390,6 +1390,7 @@ impl LenguaServer {
                     bound,
                     cut_any_way,
                     unreached,
+                    induction,
                 }) => {
                     match &bound {
                         Some(bound) => bounded_ids.push((
@@ -1419,6 +1420,7 @@ impl LenguaServer {
                             bound,
                             cut_any_way,
                             &unreached,
+                            induction,
                         ),
                         false,
                     )
@@ -1877,6 +1879,7 @@ fn proven_detail(
     bound: Option<prove::Bound>,
     cut_any_way: bool,
     unreached: &[String],
+    induction: Option<usize>,
 ) -> String {
     let mut detail = format!(
         "proven for every input {} ({}, {} through the machine code), {}",
@@ -1906,6 +1909,14 @@ fn proven_detail(
             ),
         }
     );
+    if let Some(chunk) = induction {
+        let _ = write!(
+            detail,
+            "; every length by induction over its read loop: from any state the loop can be in \
+             at its head, one more buffer-full of {chunk} bytes writes what the formula says, \
+             and every input of up to {chunk} bytes is proven from there"
+        );
+    }
     if let Some(bound) = &bound {
         let _ = write!(
             detail,

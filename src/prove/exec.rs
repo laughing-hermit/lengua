@@ -139,6 +139,13 @@ impl Image {
         self.fill.is_some()
     }
 
+    /// Where fill's read loop starts, when the program has the canonical fill: the head a
+    /// proof by induction goes round.
+    #[must_use]
+    pub fn fill_head(&self) -> Option<u64> {
+        self.fill.map(fill::Fill::head)
+    }
+
     /// The owner of the address `[rip + name]` computes at `ip`: the symbol main.s names there,
     /// or, without main.s, the symbol the address is in or just past the end of, where only one
     /// can be meant.
@@ -223,6 +230,9 @@ pub enum End {
     Stuck(String),
     /// An access the memory rules forbid, which the CPU might let through: what it did.
     Unsafe(String),
+    /// Back at the read loop's head, where a proof by induction compares the run with where it
+    /// started.
+    Looped,
 }
 
 /// What last set the flags, when a branch can read it as a plain comparison.
@@ -467,6 +477,12 @@ pub struct State {
     steps: u64,
     /// How the run ended, once it has.
     pub end: Option<End>,
+    /// How the run takes the read loop's head, in a proof by induction.
+    hook: Option<Rc<induction::Hook>>,
+    /// How many times it has reached that head.
+    arrivals: u32,
+    /// Where it stood the first time.
+    head: Option<Box<induction::Snapshot>>,
     /// The bytes a test supplies for `getrandom`, in order, when it supplies them: the kernel's
     /// are any value.
     random: Option<Rc<Vec<Term>>>,
@@ -600,6 +616,9 @@ impl State {
             masks: [zero; 8],
             memory: Memory::default(),
             stored: BTreeMap::new(),
+            hook: None,
+            arrivals: 0,
+            head: None,
             rip: image.entry,
             path: Vec::new(),
             stdin: Rc::new(stdin),
@@ -694,6 +713,13 @@ impl State {
         }
         state.registers[4] = pool.bv(64, u128::from(STACK_TOP));
         state
+    }
+
+    /// Takes the read loop's head as `hook` says, for a proof by induction.
+    #[must_use]
+    pub fn with_hook(mut self, hook: Rc<induction::Hook>) -> Self {
+        self.hook = Some(hook);
+        self
     }
 
     /// The same state with `files` in its working folder.
@@ -904,6 +930,13 @@ fn step(image: &Image, state: &mut State, pool: &mut Pool) -> Result<Step, Stop>
         return Err(unsupported("a run took too many instructions to follow"));
     }
     let before = state.registers;
+    // The read loop's head, in a proof by induction.
+    if let Some(hook) = state.hook.clone()
+        && state.every_cut
+        && hook.head == state.rip
+    {
+        state.arrive(pool, &hook)?;
+    }
     // fill read as a whole, where the proof takes every way its input can be cut; elsewhere,
     // as for a test's sample, its code runs as it is.
     if let Some(fill) = image.fill
@@ -3310,6 +3343,7 @@ fn unwritten_stack(at: u64) -> bool {
 
 mod bits;
 mod fill;
+pub mod induction;
 pub mod net;
 mod vector;
 

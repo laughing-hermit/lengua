@@ -637,6 +637,7 @@ async fn a_shape_its_terms_settle_starts_no_solver() {
             combination,
             &budget(60),
             &mut solvers,
+            None,
         );
         assert!(
             matches!(result, Ok((1, 0, None, false))),
@@ -657,6 +658,7 @@ async fn a_shape_its_terms_settle_starts_no_solver() {
             bound: None,
             cut_any_way: false,
             unreached: Vec::new(),
+            induction: None,
         }
     );
 }
@@ -738,6 +740,7 @@ async fn traces_a_few_csv_total_combinations() {
             combination,
             &budget(120),
             &mut solvers,
+            None,
         );
         let questions = solvers.solver.as_ref().map_or(0, |solver| solver.questions) - before;
         let outcome = match result {
@@ -1476,6 +1479,74 @@ async fn proves_the_vector_template() {
             .await;
     let verdict = prove(&wrong, &shout, &budget(60));
     assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+}
+
+/// Induction: the streaming template, which capitalizes its input a buffer-full at a time
+/// through fill, is proven for every length its loop's bound allows, far past what any proof
+/// by length reaches; capitals that stop at `y` are still found, and so is a loop that drops
+/// the bytes of every buffer-full after the first.
+#[tokio::test]
+async fn proves_a_stream_for_every_length_by_induction() {
+    if !solvers_installed() {
+        return;
+    }
+    let spec = asset("stream-template-spec.md");
+    let source = asset("stream-template.s");
+    let right = machine(&source).await;
+    let shout = block(&spec, 0);
+    let verdict = prove(&right, &shout, &text_budget());
+    assert!(
+        matches!(
+            verdict,
+            Verdict::Proven {
+                bound: None,
+                induction: Some(4096),
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
+    let wrong =
+        machine(&source.replace(".equ ABOVE_Z_X4, 0x7b7b7b7b", ".equ ABOVE_Z_X4, 0x7a7a7a7a"))
+            .await;
+    let verdict = prove(&wrong, &shout, &text_budget());
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+    // Only the first buffer-full capitalized: from a later time round's state, the bytes go
+    // out as they came in.
+    let first_only = machine(
+        &source
+            .replace(
+                "    mov rbx, MAX_FULLS\n",
+                "    xor r13d, r13d\n    mov rbx, MAX_FULLS\n",
+            )
+            .replace(
+                "    call shout\n",
+                "    test r13, r13\n    jnz .Lstart_shouted\n    call shout\n.Lstart_shouted:\n    \
+                 mov r13d, 1\n",
+            ),
+    )
+    .await;
+    let verdict = prove(&first_only, &shout, &text_budget());
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+    // A loop bound of four buffer-fulls: proven for three, as far as the induction reaches,
+    // and no further.
+    let four = machine(&source.replace(".equ MAX_FULLS, 1099511627776", ".equ MAX_FULLS, 4")).await;
+    let verdict = prove(&four, &shout, &text_budget());
+    assert!(
+        matches!(
+            &verdict,
+            Verdict::Proven {
+                bound: Some(Bound {
+                    bytes: 12288,
+                    more: true,
+                    ..
+                }),
+                induction: Some(4096),
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
 }
 
 /// Vector code, AVX-512 with masks: the fast word count's lines and words, its popcounts of

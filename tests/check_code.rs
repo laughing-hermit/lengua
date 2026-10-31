@@ -394,6 +394,40 @@ async fn the_vector_template_passes_its_tests() {
     session.service.cancel().await.expect("close the session");
 }
 
+/// The streaming filter goes through check to done with its proof for every length, by
+/// induction over its read loop, where a proof by length would reach a few thousand bytes.
+#[tokio::test]
+async fn the_streaming_filter_is_proven_for_every_length() {
+    if !solvers_installed() {
+        return;
+    }
+    let session = Session::proving_for(Protocol::Discover, 120).await;
+    let program = written(
+        &session,
+        [
+            ("spec.md", asset("stream-template-spec.md")),
+            ("main.s", asset("stream-template.s")),
+        ],
+    )
+    .await;
+    let report = session.settle(&program).await;
+    assert_eq!(report["state"], "done", "{report}");
+    let proof = text(&report["proofs"][0]);
+    assert!(
+        proof.starts_with("generated B1: proven for every input in range")
+            && proof.contains("every length by induction over its read loop")
+            && proof.contains("one more buffer-full of 4096 bytes"),
+        "{report}"
+    );
+    let lock = program.read("lengua.lock").expect("the lock");
+    assert!(lock.contains("proven = [\"B1\"]"), "{lock}");
+    let mut arguments = program.arguments();
+    arguments["stdin"] = Value::from("stream me\n");
+    let run = session.call_ok("run", arguments).await;
+    assert_eq!(run["stdout"], "STREAM ME\n", "{run}");
+    session.service.cancel().await.expect("close the session");
+}
+
 #[tokio::test]
 async fn small_ranges_run_every_value() {
     let session = session().await;

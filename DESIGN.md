@@ -635,6 +635,23 @@ What it covers:
   limit is the model's, not the time's: a pipe write holds 4,096 bytes, which a read returns
   whole, so standard input read with `read` is proven up to that, and read with `fill`, which
   takes any pieces, as far as time goes.
+- Every length, by induction. A filter that streams standard input through `fill` a
+  buffer-full at a time and writes each buffer-full mapped byte by byte (`upper`, `lower`, `tr`,
+  or the text itself) is proven for every length its read loop's bound allows, in two parts, as
+  a proof by induction over the number of times round the loop. The step: from any state the
+  loop can be in at fill's head with more than a buffer-full left, one time round reads exactly
+  a buffer-full, writes the formula's bytes for it and nothing else, and comes back to the head
+  in a state of the same kind, each bound counter one lower. The base: from any such state,
+  every input of up to a buffer-full gives the formula's output and exit code, proven length by
+  length. The states are found as a fixpoint: what one time round changes (the buffer, the
+  registers its calls leave, the vector registers, the flags) is made arbitrary at the head,
+  and the round is run again until nothing new changes; everything else must be as it was the
+  first time, the calls under way, owners and stored pointers included, and the stack below the
+  head holds nothing a run can read before writing it. The loop's counter, which rule 2 gives
+  every loop, sets the reach: a counter starting at 2^40 covers 2^40 − 1 buffer-fulls, far past
+  any test. `assets/stream-template.s` is proven so, every length up to 65,536 bytes and beyond,
+  in about 13 seconds with no solver question: "every length by induction over its read loop".
+  A loop the induction doesn't fit, or whose step doesn't hold, is proven by length as above.
 - What the proof ran. A function no run of a proof called, such as a fast path that starts past
   the proof's bound, is named in the proof's line: "the proof never ran crc_block, so what it
   does isn't proven". The CRC-32C asset's three chains join only past 12,288 bytes, so its
@@ -755,8 +772,8 @@ order makes reductions deterministic, and laying the slots end to end makes a ma
 thread with `exit_group`, so a failed check anywhere stops the whole program.
 
 Roadmap, in order:
-1. proofs of read loops for texts of every length, by induction over one more chunk, where today
-   a proof goes as far as its time and `prove_further` reach;
+1. induction for counting folds (`len`, `count`, `words`) as for byte maps, where today such a
+   proof goes as far as its time and `prove_further` reach;
 2. proofs of sorting, of floats computed in another order than the formula's, and of servers
    whose clients overlap, which are tested today;
 3. the other platforms, toward the top six CPU and OS targets.
@@ -883,7 +900,8 @@ Dialect 3 is the current one:
 - proofs for every input in range over whole numbers, decimals, choices, texts and text
   formulas, checksums, floats computed in the formula's order, files, the network and threads,
   each solver step confirmed by a second solver, with texts proven as far as the spec's lengths
-  and the proof's time reach, and further with `prove_further`;
+  and the proof's time reach, and further with `prove_further`, and streaming filters proven for
+  every length by induction over their read loop;
 - specs that name no CPU or OS, which `check` holds them to, so a spec shared alone compiles on
   another computer and its copy passes the same checks;
 - `lengua-mcp run` for the user's own shell, and a release archive that installs with no Rust

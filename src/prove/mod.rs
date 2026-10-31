@@ -9,6 +9,7 @@
 
 pub mod exec;
 pub mod formula;
+pub mod induction;
 pub mod smt;
 pub mod term;
 pub mod watch;
@@ -52,6 +53,9 @@ pub enum Verdict {
         /// The functions no run of the proof called, such as a fast path for inputs longer than
         /// the proof's bound: the proof says nothing of what they do.
         unreached: Vec<String>,
+        /// Where every length is proven by induction over the program's read loop: the bytes it
+        /// takes each time round.
+        induction: Option<usize>,
     },
     /// Inputs where the program, as the prover reads it, disagrees with the formulas.
     Counterexample(BTreeMap<String, Value>),
@@ -2234,6 +2238,111 @@ fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verd
                 .into(),
         );
     }
+    let image = Image::new(machine).ok_or("the program has no _start")?;
+    // A streaming filter is proven for every length at once where its read loop's step holds;
+    // otherwise, and for every other program, the proof goes length by length.
+    if budget.from_length == 0 {
+        match by_induction(&image, block, budget) {
+            Ok(Some(verdict)) => return Ok(verdict),
+            Ok(None) => {}
+            Err(why) => {
+                if std::env::var_os("LENGUA_PROVE_TRACE").is_some() {
+                    eprintln!("no proof by induction: {why}");
+                }
+            }
+        }
+    }
+    by_length(&image, block, budget, None)
+}
+
+/// Proves `block` by induction over the program's read loop: the step from any state the loop
+/// can be in at its head, then every input up to one buffer-full from such a state. `None`
+/// where the step holds but the base doesn't: the proof by length says what's wrong.
+///
+/// # Errors
+///
+/// Why no induction applies, or its step doesn't hold.
+fn by_induction(
+    image: &Image,
+    block: &Generated,
+    budget: &Budget,
+) -> Result<Option<Verdict>, String> {
+    let found = induction::step(image, block, budget)?;
+    let [(name, Generator::Str { min, max, charset })] = block.vars.as_slice() else {
+        return Ok(None);
+    };
+    // The base: whatever a time round leaves, from one byte up to a buffer-full, and the
+    // shortest texts at the start.
+    let mut short = block.clone();
+    short.vars = vec![(
+        name.clone(),
+        Generator::Str {
+            min: (*min).min(1),
+            max: found.chunk,
+            charset: charset.clone(),
+        },
+    )];
+    let verdict = by_length(image, &short, budget, Some(&found.hook))?;
+    let Verdict::Proven {
+        shapes,
+        paths,
+        questions,
+        alone,
+        bound,
+        cut_any_way,
+        unreached,
+        ..
+    } = verdict
+    else {
+        return Ok(None);
+    };
+    let (bound, induction) = match bound {
+        // Every input up to a buffer-full from any state at the head: every length the loop's
+        // bound allows.
+        None => (
+            usize::try_from(found.reach)
+                .ok()
+                .filter(|reach| reach < max)
+                .map(|reach| Bound {
+                    bytes: reach,
+                    of: *max,
+                    more: true,
+                    why: format!(
+                        "the induction covers {} buffer-fulls of {} bytes, one fewer than its \
+                         read loop's bound allows",
+                        found.reach / found.chunk as u128,
+                        found.chunk
+                    ),
+                    characters: false,
+                }),
+            Some(found.chunk),
+        ),
+        // Time ran out before the base was done: what it proved holds as a proof by length.
+        Some(bound) if bound.more => (Some(Bound { of: *max, ..bound }), None),
+        // Something the base couldn't prove from any state at the head, which the proof by
+        // length may prove from the state the loop is really in.
+        Some(_) => return Ok(None),
+    };
+    Ok(Some(Verdict::Proven {
+        shapes: shapes + 1,
+        paths: paths + found.paths,
+        questions: questions + found.questions,
+        alone,
+        bound,
+        cut_any_way,
+        unreached,
+        induction,
+    }))
+}
+
+/// Proves `block` length by length, as far as the budget goes: each input combination its own
+/// shape. With `hook`, each run takes the read loop's head as an induction's base does.
+fn by_length(
+    image: &Image,
+    block: &Generated,
+    budget: &Budget,
+    hook: Option<&exec::induction::Hook>,
+) -> Result<Verdict, String> {
     let mut each = Vec::new();
     let (random, clock) = (block.random_only(), block.clock_only());
     for (name, generator) in &block.vars {
@@ -2254,7 +2363,6 @@ fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verd
         let any = Generator::Int { lo: 1, hi: 65535 };
         each.push(("port".to_owned(), parts("port", &any, 0)?));
     }
-    let image = Image::new(machine).ok_or("the program has no _start")?;
     // What a test's peer sends arrives whole or cut, each way the tests' runs and the merges of
     // their pieces cut it; through fill, every way at once.
     if (!block.server.is_empty() || !block.client.is_empty()) && !image.has_fill() {
@@ -2389,7 +2497,7 @@ fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verd
                     let result = if budget.stopped() {
                         Err(Stop::Unproven(OUT_OF_TIME.into()))
                     } else {
-                        prove_shape(&image, block, &each, combination, budget, &mut solvers)
+                        prove_shape(image, block, &each, combination, budget, &mut solvers, hook)
                     };
                     match result {
                         Ok((count, asked, reason, any_cut)) => {
@@ -2538,6 +2646,7 @@ fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verd
         bound,
         cut_any_way: cut_any_way.into_inner(),
         unreached: image.unreached(),
+        induction: None,
     })
 }
 
@@ -2843,6 +2952,7 @@ fn prove_shape(
     combination: usize,
     budget: &Budget,
     solvers: &mut Solvers,
+    hook: Option<&exec::induction::Hook>,
 ) -> Result<(usize, usize, Option<String>, bool), Stop> {
     let mut pool = Pool::default();
     let mut rest = combination;
@@ -2968,6 +3078,9 @@ fn prove_shape(
     if every_cut {
         base = base.for_every_cut();
     }
+    if let Some(hook) = hook {
+        base = base.with_hook(std::rc::Rc::new(hook.clone()));
+    }
     base.path = constraints;
     let networked = !block.server.is_empty() || !block.client.is_empty();
     let began = Instant::now();
@@ -3062,22 +3175,52 @@ fn check_runs(
     delivery: Option<Delivery>,
 ) -> Result<(), Stop> {
     let (numbers, chosen, texts) = (known.numbers, known.fixed, known.texts);
-    // A counterexample shows each number, and each text short enough to show.
-    let shown: Vec<(&String, &Vec<Term>)> = texts
-        .iter()
-        .filter(|(_, bytes)| bytes.len() <= MAX_CHECKED_TEXT)
-        .collect();
+    // A counterexample shows each number and each text; a question asks for the texts short
+    // enough to have every byte held to its characters, and the rest only when it finds inputs.
     let values: Vec<Term> = numbers
         .values()
         .map(|number| number.term)
-        .chain(shown.iter().flat_map(|(_, bytes)| bytes.iter().copied()))
+        .chain(
+            texts
+                .values()
+                .filter(|bytes| bytes.len() <= MAX_CHECKED_TEXT)
+                .flat_map(|bytes| bytes.iter().copied()),
+        )
         .collect();
+    let every_value: Vec<Term> = numbers
+        .values()
+        .map(|number| number.term)
+        .chain(texts.values().flat_map(|bytes| bytes.iter().copied()))
+        .collect();
+    // A text too long to have each byte held to its characters on every question is held to
+    // them where a question finds inputs: inputs with other characters prove nothing.
+    let mut held: Vec<Term> = Vec::new();
+    for (name, bytes) in texts {
+        let characters = block
+            .vars
+            .iter()
+            .find_map(|(var, generator)| match generator {
+                Generator::Str { charset, .. }
+                    if var == name && charset.iter().all(char::is_ascii) =>
+                {
+                    Some(
+                        charset
+                            .iter()
+                            .map(|character| *character as u8)
+                            .collect::<Vec<u8>>(),
+                    )
+                }
+                _ => None,
+            });
+        if let Some(characters) = characters
+            && bytes.len() > MAX_CHECKED_TEXT
+        {
+            held.extend(bytes.iter().map(|byte| pool.is_one_of(*byte, &characters)));
+        }
+    }
     // The inputs a model gives, with how what the program read arrived.
     let found =
         |model: &HashMap<Term, u128>, run: &State| -> Result<BTreeMap<String, Value>, Stop> {
-            if shown.len() < texts.len() {
-                return Err("a counterexample in a text too long to show".into());
-            }
             let mut found = chosen.clone();
             // Cut where fill stopped short, or as the test's peer delivered it.
             let arrived = run
@@ -3088,13 +3231,14 @@ fn check_runs(
             if let Some(arrived) = arrived {
                 found.insert(DELIVERY.to_owned(), Value::Str(arrived.describe()));
             }
-            for (name, bytes) in &shown {
+            for (name, bytes) in texts {
                 let text: Vec<u8> = bytes
                     .iter()
-                    .map(|byte| model.get(byte).map_or(b'?', |value| *value as u8))
-                    .collect();
+                    .map(|byte| model.get(byte).map(|value| *value as u8))
+                    .collect::<Option<_>>()
+                    .ok_or("a counterexample in a text too long to show")?;
                 found.insert(
-                    (*name).clone(),
+                    name.clone(),
                     Value::Str(String::from_utf8_lossy(&text).into_owned()),
                 );
             }
@@ -3127,6 +3271,8 @@ fn check_runs(
             let (answer, model) = solver
                 .check(pool, &conditions, &values)
                 .map_err(|error| format!("the solver failed: {error}"))?;
+            let (answer, model) =
+                within(pool, solver, answer, model, conditions, &held, &every_value)?;
             match answer {
                 Answer::Unsat => {}
                 Answer::Sat => {
@@ -3157,6 +3303,10 @@ fn check_runs(
             }
             Some(End::Serving | End::Stuck(_)) => pool.boolean(false),
             Some(End::Signal(_)) => pool.boolean(false),
+            // Only the step of a proof by induction stops at the read loop's head.
+            Some(End::Looped) => {
+                return Err(Stop::Unproven("a run stopped at its read loop".into()));
+            }
             // No input takes this run: the memory rules found none.
             Some(End::Unsafe(_)) => continue,
             Some(End::Unsupported(reason)) => {
@@ -3218,6 +3368,7 @@ fn check_runs(
         let (answer, model) = solver
             .check(pool, &conditions, &values)
             .map_err(|error| format!("the solver failed: {error}"))?;
+        let (answer, model) = within(pool, solver, answer, model, conditions, &held, &every_value)?;
         match answer {
             Answer::Unsat => {}
             Answer::Sat => return Err(Stop::Counterexample(found(&model, &run)?)),
@@ -3230,6 +3381,26 @@ fn check_runs(
         }
     }
     Ok(())
+}
+
+/// A question's answer once the long texts' bytes are held to their characters: where it found
+/// inputs, it's asked again with `held`, so a counterexample is one the spec can give.
+fn within(
+    pool: &mut Pool,
+    solver: &mut Solver,
+    answer: Answer,
+    model: HashMap<Term, u128>,
+    mut conditions: Vec<Term>,
+    held: &[Term],
+    values: &[Term],
+) -> Result<(Answer, HashMap<Term, u128>), Stop> {
+    if answer != Answer::Sat || held.is_empty() {
+        return Ok((answer, model));
+    }
+    conditions.extend(held);
+    solver
+        .check(pool, &conditions, values)
+        .map_err(|error| Stop::Unproven(format!("the solver failed: {error}")))
 }
 
 /// Runs the prover's model of the code on concrete inputs that the real program has passed, and

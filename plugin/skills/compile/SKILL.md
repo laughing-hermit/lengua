@@ -34,7 +34,10 @@ and the CPU features the code needs; never write that line yourself.
    byte that ends it (such as a newline), call `fill` from [fill.s](assets/fill.s), copied word for
    word with its three constants: the proof then covers every way the input can arrive, cut into
    any pieces. To stream input larger than a buffer, call `fill` again for each buffer-full, with
-   `ecx` -1: its proof goes on through longer input as far as its time reaches, where a read
+   `ecx` -1, as [the streaming filter](assets/stream-template.s) does
+   ([its spec](assets/stream-template-spec.md)): where each buffer-full's output is its bytes
+   mapped one by one (`upper`, `lower`, `tr`), the proof covers every length by induction over
+   the loop; otherwise it goes on through longer input as far as its time reaches, where a read
    loop of your own is proven only up to the 4096 bytes one pipe write holds. A server whose
    spec serves several clients at once starts from
    [the event-loop server](assets/server-template.s) ([its spec](assets/server-template-spec.md)):
@@ -66,8 +69,9 @@ and the CPU features the code needs; never write that line yourself.
    - **Break dependency chains:** when each step waits on the one before, as in a checksum or a
      running sum, run two to four independent chains side by side and join them at the end.
    - **Large pieces:** read and write a megabyte at a time, never a line or a byte per call.
-   - **Input of any length streams:** read a piece, process it, keep only what crosses into the
-     next piece (such as whether the last byte ended a word), and repeat until `read` returns 0.
+   - **Input of any length streams:** fill a buffer, process it, keep only what crosses into the
+     next buffer-full (such as whether the last byte ended a word), and repeat until `fill`
+     returns less than the buffer.
    - **Threads** only when each gets at least a few hundred kilobytes of work (see below).
 
    `assets/fast` holds three checked programs to learn from and copy from, each with its spec:

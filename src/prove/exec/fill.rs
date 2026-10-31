@@ -50,6 +50,11 @@ impl Fill {
     pub fn at_head(self, address: u64) -> bool {
         address == self.head
     }
+
+    /// The loop's head.
+    pub const fn head(self) -> u64 {
+        self.head
+    }
 }
 
 /// Where the bytes fill reads come from.
