@@ -28,7 +28,10 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 > the spec's lengths and the proof's time reach, and further with `prove_further`. Programs
 > that read with the skill's `fill` are proven however their input arrives, cut into any
 > pieces. Each solver step is confirmed by two independent solvers, z3 and cvc5, and most proofs
-> need none: the terms settle every step. `lengua.lock` records what's proven. In ten scenarios
+> need none: the terms settle every step. `lengua.lock` records what's proven. Programs build
+> on programs: a spec links to the specs of the parts it uses, so a folder of programs is a graph
+> of two-file nodes, as an OKF bundle is, and `check` holds each program to its parts' current
+> code. In ten scenarios
 > in real Claude Code sessions, from a web server to a sort, every program came from one
 > request, with no question. Next:
 > - proofs of read loops for texts of every length, by induction;

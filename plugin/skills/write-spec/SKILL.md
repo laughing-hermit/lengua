@@ -151,6 +151,20 @@ by one concrete example in its steps, and its generated tests try that rule with
 - **Large inputs:** a program for data of any size says so in Purpose, such as "it reads standard
   input of any length, a piece at a time", and still gives the largest input the tests use in
   backticks (`1048576`): tests stay within a megabyte, and the program streams beyond it.
+- **Limits that make sense:** a limit is what the program can really take, never a number for
+  the tests' sake. A program that can stream has no limit on its total input. One that must hold
+  all of it at once, such as a sort, states a generous limit, such as `1073741824` bytes: its
+  memory costs nothing until it's used, and the tests and proofs still try smaller inputs, given
+  in backticks of their own.
+- **Programs built from programs:** a program can build on others, each a folder with its own
+  spec.md and main.s, linked as a graph is: `- Builds on: [sort lines](../sort/spec.md)` under
+  `# Constraints`, each part by a path relative to this spec. Build on a part when the program
+  needs what another program already does, such as sorting, parsing numbers or a hash table,
+  rather than doing it again. A part is a whole program, with its own behaviors and tests: a
+  library, such as a hash table, is specified through a small program that uses it, so the same
+  steps test it. Keep the parts in sibling folders, and an `index.md` in their common folder
+  that links each one with its description, as an OKF bundle's index does. Each part is written,
+  compiled and checked on its own, before the programs that build on it.
 - **Threads:** when the user wants a program that does heavy work on large inputs as fast as
   possible, add `- Threads: up to N` under `# Constraints`, with N up to the machine's cores
   (`check` reports them in `machine`; at most 64). The program may then split its work across

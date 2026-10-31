@@ -593,6 +593,9 @@ impl LenguaServer {
                 Err(problems) => Err(problems.iter().map(ToString::to_string).collect()),
                 Ok(spec) => match testfile::check(&spec) {
                     Err(problems) => Err(problems.iter().map(ToString::to_string).collect()),
+                    Ok(_) if !missing_parts(&folder, &spec).is_empty() => {
+                        Err(missing_parts(&folder, &spec))
+                    }
                     Ok(suite) => Ok((spec, suite)),
                 },
             }
@@ -658,6 +661,14 @@ impl LenguaServer {
                     return Ok(Json(CheckReport::problems(
                         "code_problems",
                         violation_lines(&layout),
+                        fix(),
+                    )));
+                }
+                let from_parts = parts_problems(&self.data_dir, &folder, &spec, &source);
+                if !from_parts.is_empty() {
+                    return Ok(Json(CheckReport::problems(
+                        "code_problems",
+                        from_parts,
                         fix(),
                     )));
                 }
@@ -2016,6 +2027,118 @@ fn read_code(folder: &ProgramFolder) -> Result<String, String> {
 }
 
 /// Where `folder` stands with lengua.lock, as this user's key reads it.
+/// The parts `spec` builds on that aren't lengua specs in their folders, each a problem saying so.
+fn missing_parts(folder: &ProgramFolder, spec: &spec::Spec) -> Vec<String> {
+    spec.parts
+        .iter()
+        .filter_map(|part| {
+            let path = folder.path().join(&part.spec);
+            match std::fs::read_to_string(&path) {
+                Err(_) => Some(format!(
+                    "`- Builds on:` links to [{}]({}), but {} isn't there: make that part first, \
+                     a folder with its own spec.md and main.s, or fix the link",
+                    part.name,
+                    part.spec,
+                    path.display()
+                )),
+                Ok(text) if spec::parse(&text).is_err() => Some(format!(
+                    "the part [{}]({}) has spec problems of its own: call check with path {} \
+                     first",
+                    part.name,
+                    part.spec,
+                    path.parent()
+                        .map_or(path.clone(), Path::to_path_buf)
+                        .display()
+                )),
+                Ok(_) => None,
+            }
+        })
+        .collect()
+}
+
+/// What keeps main.s from building on its spec's parts: a part that isn't checked on this
+/// computer, a function taken from one that isn't its current code word for word, a function
+/// that names a part the spec doesn't build on, and a part the spec builds on that main.s takes
+/// nothing from. Each part is a node checked on its own: what main.s takes from it is its checked
+/// code, and changes to it show here.
+fn parts_problems(
+    data_dir: &DataDir,
+    folder: &ProgramFolder,
+    spec: &spec::Spec,
+    source: &checker::Source,
+) -> Vec<String> {
+    let mut problems = Vec::new();
+    let mut used: Vec<&spec::Part> = Vec::new();
+    let mut checked: Vec<String> = Vec::new();
+    for function in &source.functions {
+        let Some(from) = &function.from else {
+            continue;
+        };
+        let wanted = spec::folder_of_link(from);
+        let Some(part) = spec.parts.iter().find(|part| part.folder() == wanted) else {
+            problems.push(format!(
+                "{CODE_FILE}'s {} says `# from: {from}`, a part {SPEC_FILE} doesn't build on: add \
+                 `[{wanted}]({wanted}/spec.md)` to its `- Builds on:` line, or drop the line",
+                function.name
+            ));
+            continue;
+        };
+        if !used.contains(&part) {
+            used.push(part);
+        }
+        // The part's own path, `..` resolved, as a program folder takes it.
+        let joined = folder.path().join(part.folder());
+        let part_folder = std::fs::canonicalize(&joined).unwrap_or(joined);
+        let shown = part_folder.display().to_string();
+        if !checked.contains(&part.spec) {
+            checked.push(part.spec.clone());
+            let ready = part_folder
+                .to_str()
+                .and_then(|path| folder_of(path).ok())
+                .and_then(|part_folder| state_of(data_dir, &part_folder).ok())
+                .is_some_and(|state| state == State::Ready);
+            if !ready {
+                problems.push(format!(
+                    "the part [{}]({}) isn't checked on this computer: call check with path \
+                     {shown} until it's done, then check this program",
+                    part.name, part.spec
+                ));
+                continue;
+            }
+        }
+        let Ok(part_code) = std::fs::read_to_string(part_folder.join(CODE_FILE)) else {
+            continue;
+        };
+        let (part_source, _) = checker::check_layout(&part_code);
+        match part_source.function(&function.name) {
+            None => problems.push(format!(
+                "{CODE_FILE}'s {} says `# from: {from}`, but {shown}/{CODE_FILE} has no {}: take \
+                 it from the part under the name it has there",
+                function.name, function.name
+            )),
+            Some(theirs) if theirs.body != function.body => problems.push(format!(
+                "{CODE_FILE}'s {} differs from {shown}/{CODE_FILE}'s, where it comes from: copy it \
+                 again word for word, keeping its `# from: {from}` line",
+                function.name
+            )),
+            Some(_) => {}
+        }
+    }
+    for part in &spec.parts {
+        if !used.contains(&part) {
+            problems.push(format!(
+                "{SPEC_FILE} builds on [{}]({}), but {CODE_FILE} takes nothing from it: copy each \
+                 function it uses with a `# from: {}` line above it, or drop the part from \
+                 `- Builds on:`",
+                part.name,
+                part.spec,
+                part.folder()
+            ));
+        }
+    }
+    problems
+}
+
 fn state_of(data_dir: &DataDir, folder: &ProgramFolder) -> Result<State, String> {
     let key = Key::load(data_dir).map_err(|error| error.to_string())?;
     let snapshot = Snapshot::read(folder, key.as_ref())

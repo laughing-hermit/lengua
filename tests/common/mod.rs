@@ -312,6 +312,26 @@ impl Program {
         }
     }
 
+    /// An empty program folder named for `name` inside `parent`, beside the others there, as the
+    /// programs a graph links stand.
+    pub fn new_in(parent: &Path, name: &str) -> Self {
+        Self {
+            dir: tempfile::Builder::new()
+                .prefix(name)
+                .tempdir_in(parent)
+                .expect("create a program folder"),
+        }
+    }
+
+    /// The folder's own name.
+    pub fn name(&self) -> String {
+        self.path()
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("a UTF-8 name")
+            .to_owned()
+    }
+
     /// A program folder holding the add spec, its tests included.
     pub fn with_add_spec() -> Self {
         let program = Self::new();

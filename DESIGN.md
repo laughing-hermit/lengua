@@ -818,6 +818,24 @@ ties the code to the version of the spec it was compiled from. It names the code
 protect it: main.s is plain text anyone can build outside lengua, past its checks and the kernel's
 limits, so lengua's guarantees hold only for a program that `run` runs after `check`.
 
+## Programs built from programs
+
+Programs stack. A spec links to the programs it builds on, `- Builds on: [sort lines](../sort/spec.md)`,
+so the specs are the nodes of a graph and the links its edges, as an OKF bundle's concepts link
+to each other and an LLM Wiki's pages do: a folder of program folders, with an `index.md` that
+lists each with its description, is a bundle to browse. Each node is a folder of two files, its
+spec and its code, checked on its own: its own tests, its own proofs, its own lock. A library,
+such as a hash table, is a node too, specified through a small program that uses it.
+
+A program's main.s takes what it uses from its parts' code word for word, each function marked
+`# from: ../sort`. `check` holds the graph to the code: a part must be done on this computer
+before a program builds on it; a function taken from a part must be that part's current code,
+so a part that changes shows in every program that uses it, with the functions to copy again;
+a function can come only from a part the spec names; and a part the spec names must give
+something. The program's main.s stays one file, its tests and proofs run through all of it, and
+`run` needs nothing but its own folder. Sharing a program shares its node and the nodes it links
+to: each computer compiles every one of them for itself.
+
 ## Threat model and known limits
 
 - The lock's signature detects edits not made by the server. It is not a security boundary: any

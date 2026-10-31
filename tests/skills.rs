@@ -100,7 +100,17 @@ fn every_skill_follows_the_agent_skills_format() {
 #[test]
 fn skills_link_only_to_files_that_exist() {
     for (folder, text) in skills() {
-        let mut rest = text.as_str();
+        // A link in backticks is an example of one, such as a spec's `- Builds on:` line.
+        let mut prose = String::with_capacity(text.len());
+        let mut in_code = false;
+        for character in text.chars() {
+            if character == '`' {
+                in_code = !in_code;
+            } else if !in_code {
+                prose.push(character);
+            }
+        }
+        let mut rest = prose.as_str();
         while let Some(start) = rest.find("](") {
             let after = &rest[start + 2..];
             let end = after.find(')').expect("closed link");

@@ -40,6 +40,38 @@ pub struct Spec {
     pub purpose_values: Vec<String>,
     /// What it may do on the network.
     pub network: Network,
+    /// The programs it builds on, each a folder with its own spec and code: the nodes it links to
+    /// in the graph of programs.
+    pub parts: Vec<Part>,
+}
+
+/// A program another builds on, as its spec links to it: `[sort lines](../sort/spec.md)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Part {
+    /// What the link calls it.
+    pub name: String,
+    /// Its spec.md, relative to the folder of the spec that links to it.
+    pub spec: String,
+}
+
+impl Part {
+    /// Its folder, relative to the folder of the spec that links to it.
+    #[must_use]
+    pub fn folder(&self) -> String {
+        folder_of_link(&self.spec)
+    }
+}
+
+/// The folder a link to a part names, without a trailing `spec.md`, `main.s` or slash: `../sort`
+/// for `../sort/spec.md`.
+#[must_use]
+pub fn folder_of_link(link: &str) -> String {
+    let trimmed = link.trim().trim_end_matches('/');
+    let trimmed = trimmed
+        .strip_suffix("/spec.md")
+        .or_else(|| trimmed.strip_suffix("/main.s"))
+        .unwrap_or(trimmed);
+    trimmed.trim_end_matches('/').to_owned()
 }
 
 /// The most clients a server may take at once: a table of this many connections is a few
@@ -694,6 +726,7 @@ struct Parser {
     uses: Option<Vec<Use>>,
     threads: Option<u32>,
     network: Network,
+    parts: Vec<Part>,
     /// Whether `# Purpose` holds any text.
     purpose_written: bool,
     purpose_values: Vec<String>,
@@ -713,6 +746,7 @@ impl Default for Parser {
             uses: None,
             threads: None,
             network: Network::default(),
+            parts: Vec::new(),
             purpose_written: false,
             purpose_values: Vec::new(),
         }
@@ -1246,6 +1280,53 @@ impl Parser {
         }
     }
 
+    /// `- Builds on: [sort lines](../sort/spec.md), [numbers](../numbers/spec.md)`: the parts,
+    /// each a link to its spec by a path relative to this one, so the graph travels with the
+    /// folders.
+    fn parts_line(&mut self, number: usize, rest: &str) {
+        let mut rest = rest;
+        let mut found = 0;
+        while let Some(open) = rest.find('[') {
+            let Some(close) = rest[open..].find("](").map(|at| open + at) else {
+                break;
+            };
+            let Some(end) = rest[close + 2..].find(')').map(|at| close + 2 + at) else {
+                break;
+            };
+            let name = rest[open + 1..close].trim().to_owned();
+            let target = rest[close + 2..end].trim().to_owned();
+            rest = &rest[end + 1..];
+            found += 1;
+            let portable = !target.starts_with('/')
+                && !target.contains("://")
+                && !target.contains('\\')
+                && target.ends_with("spec.md");
+            if !portable {
+                self.problem(
+                    Some(number),
+                    format!(
+                        "the part [{name}]({target}) links to its spec by a path relative to this \
+                         one, ending in spec.md, so the graph travels with the folders: such as \
+                         `[{name}](../{}/spec.md)`",
+                        name.to_lowercase().replace(' ', "-")
+                    ),
+                );
+                continue;
+            }
+            if self.parts.iter().any(|part| part.spec == target) {
+                self.problem(Some(number), format!("the part {target} is listed twice"));
+                continue;
+            }
+            self.parts.push(Part { name, spec: target });
+        }
+        if found == 0 {
+            self.problem(
+                Some(number),
+                "`- Builds on:` links to each part's spec: `- Builds on: [sort lines](../sort/spec.md)`",
+            );
+        }
+    }
+
     fn constraint_line(&mut self, number: usize, line: &str) {
         let Some(item) = list_item(line) else {
             return;
@@ -1263,12 +1344,16 @@ impl Parser {
             self.problem(Some(number), allowed_calls_rewrite(rest));
             return;
         }
+        if let Some(rest) = strip_prefix_ignore_case(item, "builds on:") {
+            self.parts_line(number, rest);
+            return;
+        }
         let Some(rest) = strip_prefix_ignore_case(item, "uses:") else {
             self.problem(
                 Some(number),
                 "`# Constraints` lists only what the program uses, which means the same on every \
-                 computer: `- Uses: …`, `- Network: …` and `- Threads: …`; say anything else in \
-                 `# Purpose`",
+                 computer: `- Uses: …`, `- Network: …`, `- Threads: …` and `- Builds on: …`; say \
+                 anything else in `# Purpose`",
             );
             return;
         };
@@ -1483,6 +1568,7 @@ impl Parser {
                 threads: self.threads,
                 purpose_values: self.purpose_values,
                 network: self.network,
+                parts: self.parts,
             }),
             _ => Err(self.into_problems()),
         }
@@ -1949,6 +2035,46 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
             problems.iter().any(|problem| problem.contains(needle)),
             "no problem containing {needle:?} in {problems:#?}"
         );
+    }
+
+    /// A spec links to the parts it builds on, each by a path relative to it, so the graph of
+    /// programs travels with their folders.
+    #[test]
+    fn a_spec_builds_on_parts() {
+        let built = ADD.replace(
+            "- Uses: nothing",
+            "- Uses: nothing\n- Builds on: [sort lines](../sort/spec.md), [numbers](parts/numbers/spec.md)",
+        );
+        let spec = parse(&built).expect("valid spec");
+        assert_eq!(
+            spec.parts,
+            vec![
+                Part {
+                    name: "sort lines".into(),
+                    spec: "../sort/spec.md".into(),
+                },
+                Part {
+                    name: "numbers".into(),
+                    spec: "parts/numbers/spec.md".into(),
+                },
+            ]
+        );
+        assert_eq!(spec.parts[0].folder(), "../sort");
+        assert_eq!(folder_of_link("../sort/"), "../sort");
+        assert_eq!(folder_of_link("../sort/main.s"), "../sort");
+        for link in [
+            "/home/me/sort/spec.md",
+            "https://example.com/spec.md",
+            "../sort",
+        ] {
+            let bad = ADD.replace(
+                "- Uses: nothing",
+                &format!("- Uses: nothing\n- Builds on: [sort]({link})"),
+            );
+            assert_problem(&bad, "links to its spec by a path relative to this one");
+        }
+        let bare = ADD.replace("- Uses: nothing", "- Uses: nothing\n- Builds on: sort");
+        assert_problem(&bare, "`- Builds on:` links to each part's spec");
     }
 
     /// A spec names no kind of computer in its prose, unless one is its subject; values,

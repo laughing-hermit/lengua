@@ -64,6 +64,8 @@ pub struct Function {
     pub line: usize,
     /// Whether `# returns: result` marks it: rax < 0 means an error.
     pub returns_result: bool,
+    /// The part it was copied from, word for word, when `# from: ../sort` says so.
+    pub from: Option<String>,
     /// Its labels and instructions, in order.
     pub items: Vec<Item>,
     /// Its lines from `.type` to `.size`, without comments or extra spaces.
@@ -788,6 +790,7 @@ struct Parser {
     violations: Vec<Violation>,
     place: Place,
     pending_returns: Option<usize>,
+    pending_from: Option<String>,
     pending_shared: Option<usize>,
     pending_type: Option<(String, bool, usize)>,
     function: Option<OpenFunction>,
@@ -881,6 +884,8 @@ impl Parser {
     fn comment(&mut self, number: usize, comment: &str) {
         if comment == "returns: result" {
             self.pending_returns = Some(number);
+        } else if let Some(part) = comment.strip_prefix("from:") {
+            self.pending_from = Some(part.trim().to_owned());
         } else if let Some(reason) = comment.strip_prefix("shared:") {
             if reason.trim().is_empty() {
                 self.violation(
@@ -1041,6 +1046,7 @@ impl Parser {
                     name: name.to_owned(),
                     line: number,
                     returns_result: self.pending_returns.take().is_some(),
+                    from: self.pending_from.take(),
                     items: Vec::new(),
                     body: vec![
                         normalize(&format!(".type {name}, @function")),
@@ -1518,6 +1524,7 @@ pub fn parse(text: &str) -> (Source, Vec<Violation>) {
         violations: Vec::new(),
         place: Place::Header,
         pending_returns: None,
+        pending_from: None,
         pending_shared: None,
         pending_type: None,
         function: None,

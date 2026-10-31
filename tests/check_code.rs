@@ -1107,6 +1107,67 @@ async fn the_benchmarks_own_programs_pass_their_checks() {
     }
 }
 
+/// Programs stack like nodes of a graph: one spec links to another it builds on, and its main.s
+/// takes the part's checked functions word for word, which check holds to the part's current
+/// code.
+#[tokio::test]
+async fn a_program_builds_on_another() {
+    let session = session().await;
+    let parent = tempfile::tempdir().expect("a folder for both");
+    let part = Program::new_in(parent.path(), "sort");
+    let node = Program::new_in(parent.path(), "sorted");
+    for (name, text) in example_files("sort") {
+        part.write(name, &text);
+    }
+    let link = format!("../{}", part.name());
+    node.write(
+        "spec.md",
+        &example("sort", "spec.md")
+            .replace("title: sort", "title: sorted")
+            .replace(
+                "- Uses: standard input",
+                &format!("- Uses: standard input\n- Builds on: [sort]({link}/spec.md)"),
+            ),
+    );
+    let code = example("sort", "main.s");
+    node.write("main.s", &code);
+    let problems = |report: &Value| report["problems"].to_string();
+    // A part it builds on but takes nothing from.
+    let report = session.record(&node).await;
+    assert_eq!(report["state"], "code_problems", "{report}");
+    assert!(
+        problems(&report).contains("takes nothing from it"),
+        "{report}"
+    );
+    // A part that isn't checked yet.
+    let taken = code.replace(
+        ".type merge_sort, @function",
+        &format!("# from: {link}\n.type merge_sort, @function"),
+    );
+    node.write("main.s", &taken);
+    let report = session.check(&node).await;
+    assert!(
+        problems(&report).contains("isn't checked on this computer"),
+        "{report}"
+    );
+    // Once the part is done, so is the program built on it.
+    session.record(&part).await;
+    done(&session, &part).await;
+    done(&session, &node).await;
+    // A copy that drifts from the part's code.
+    node.write(
+        "main.s",
+        &taken.replace(".Lmerge_sort_done", ".Lmerge_sort_finished"),
+    );
+    let report = session.check(&node).await;
+    assert!(
+        problems(&report).contains("merge_sort differs from")
+            && problems(&report).contains("copy it again"),
+        "{report}"
+    );
+    session.service.cancel().await.expect("close the session");
+}
+
 #[tokio::test]
 async fn the_sort_claude_code_wrote_passes_its_checks() {
     // Sorting lines as LC_ALL=C sort does, with -u: written through lengua from one plain

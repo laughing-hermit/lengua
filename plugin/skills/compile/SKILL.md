@@ -20,7 +20,12 @@ and the CPU features the code needs; never write that line yourself.
    reply's `machine` lists the CPU extensions main.s may use, such as BMI, POPCNT, LZCNT, ADX,
    MOVBE, AVX2 or AVX-512.
 2. Plan the functions before writing them: at most 60 instructions each (rule 4), so `_start`
-   checks the arguments and calls the functions that do the work.
+   checks the arguments and calls the functions that do the work. When the spec builds on parts
+   (`- Builds on:`), each part must be done first: call `check` on its folder until it is. Then
+   take the functions you use from the part's main.s word for word, each with a
+   `# from: ../sort` line in the comment above its `.type`, with the data they use: `check` holds
+   each to the part's current code, and says which to copy again when the part changes. Never
+   rewrite what a part already does.
 3. Write `<path>/main.s` in the shape of [the template](assets/main-template.s): its first line
    is `.intel_syntax noprefix`, and `assert_fail` and `assert_message` are copied word for word;
    the rest is the program. The template is a complete, checked program that prints the negative
