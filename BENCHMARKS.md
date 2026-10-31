@@ -4,7 +4,7 @@ Measured by `cargo bench --bench against_rust_and_c`, which writes this file. Ev
 
 - CPU: AMD Ryzen AI 7 PRO 350 w/ Radeon 860M (16 cores)
 - lengua: `llvm-mc 22.1.8, ld.lld 22.1.8`
-- Rust: `rustc 1.99.0 (b940084d7 2026-09-28) (Fedora 1.99.0-1.fc44)`, `rustc --edition 2024 -C opt-level=3 -C target-cpu=native -C codegen-units=1 -C lto=fat -C panic=abort`
+- Rust: `rustc 1.99.1 (58cf8f9c3 2026-10-13) (Fedora 1.99.1-2.fc44)`, `rustc --edition 2024 -C opt-level=3 -C target-cpu=native -C codegen-units=1 -C lto=fat -C panic=abort`
 - C and C++: `gcc (GCC) 16.2.1 20260819 (Red Hat 16.2.1-2)`, `gcc -O3 -march=native -flto -s` and `g++ -O3 -march=native -flto -s`
 - C, C++ and Rust link the system's C library dynamically, as they ship by default; lengua's programs are static and use no library.
 
@@ -14,12 +14,25 @@ Parses two numbers from its arguments and prints their sum: almost all of it is 
 
 | | lengua | Rust | C | C++ | best other ÷ best lengua |
 |---|---|---|---|---|---|
-| instructions | 441 | 260,360 | 102,824 | 2,590,146 | 233.2× |
-| cycles | 1,693 | 280,378 | 178,800 | 1,202,840 | 105.6× |
-| CPU time | 49 µs | 372 µs | 194 µs | 802 µs | 4.0× |
-| wall time | 103 µs | 484 µs | 298 µs | 937 µs | 2.9× |
-| peak memory | 648 KiB | 2,064 KiB | 1,732 KiB | 4,048 KiB | 2.7× |
+| instructions | 441 | 260,314 | 133,755 | 2,590,146 | 303.3× |
+| cycles | 1,815 | 285,847 | 219,759 | 1,209,416 | 121.1× |
+| CPU time | 89 µs | 283 µs | 288 µs | 437 µs | 3.2× |
+| wall time | 164 µs | 375 µs | 394 µs | 511 µs | 2.3× |
+| peak memory | 776 KiB | 2,004 KiB | 2,152 KiB | 4,200 KiB | 2.6× |
 | file size | 2,792 B | 4178 KiB | 11 KiB | 11 KiB | 4.0× |
+
+## hypotenuse
+
+Prints the hypotenuse of two decimal sides given as arguments, with three decimals: each side divided into a double, a square root, and the result rounded to thousandths. Like add, it's mostly starting up and exiting: here C and C++ load the math library too.
+
+| | lengua | Rust | C | C++ | best other ÷ best lengua |
+|---|---|---|---|---|---|
+| instructions | 664 | 261,935 | 133,187 | 2,592,816 | 200.6× |
+| cycles | 2,268 | 288,338 | 220,437 | 1,202,209 | 97.2× |
+| CPU time | 90 µs | 326 µs | 190 µs | 800 µs | 2.1× |
+| wall time | 166 µs | 421 µs | 293 µs | 937 µs | 1.8× |
+| peak memory | 648 KiB | 1,952 KiB | 2,084 KiB | 4,012 KiB | 3.0× |
+| file size | 3,552 B | 4188 KiB | 11 KiB | 11 KiB | 3.1× |
 
 ## upcase
 
@@ -27,11 +40,11 @@ Copies a 1 MiB text file to another with its ASCII letters capitalized: file rea
 
 | | lengua | lengua, AVX-512 | Rust | C | C++ | best other ÷ best lengua |
 |---|---|---|---|---|---|---|
-| instructions | 983,200 | 196,765 | 371,080 | 267,712 | 2,741,042 | 1.4× |
-| cycles | 133,161 | 53,558 | 347,225 | 231,764 | 1,335,979 | 4.3× |
-| CPU time | 672 µs | 624 µs | 567 µs | 546 µs | 917 µs | 0.9× |
-| wall time | 781 µs | 732 µs | 637 µs | 660 µs | 1062 µs | 0.9× |
-| peak memory | 1,024 KiB | 896 KiB | 2,860 KiB | 2,508 KiB | 4,780 KiB | 2.8× |
+| instructions | 983,200 | 196,765 | 371,099 | 298,123 | 2,741,042 | 1.5× |
+| cycles | 133,247 | 52,855 | 344,814 | 267,747 | 1,269,136 | 5.1× |
+| CPU time | 722 µs | 634 µs | 1006 µs | 886 µs | 1420 µs | 1.4× |
+| wall time | 830 µs | 742 µs | 1119 µs | 1040 µs | 1607 µs | 1.4× |
+| peak memory | 1,024 KiB | 1,024 KiB | 2,908 KiB | 2,976 KiB | 4,944 KiB | 2.8× |
 | file size | 4,056 B | 4,032 B | 4174 KiB | 11 KiB | 11 KiB | 2.8× |
 
 ## shout
@@ -40,11 +53,11 @@ Capitalizes 1 MiB of standard input to standard output. lengua's versions are th
 
 | | lengua | lengua, AVX-512 | lengua, AVX-512, one thread | Rust | Rust, threads | C | C++ | best other ÷ best lengua |
 |---|---|---|---|---|---|---|---|---|
-| instructions | 1,050,511 | 198,495 | 197,017 | 372,129 | 548,601 | 262,737 | 2,735,657 | 1.3× |
-| cycles | 157,844 | 82,668 | 47,522 | 361,413 | 791,554 | 229,177 | 1,366,337 | 4.8× |
-| CPU time | 755 µs | 769 µs | 555 µs | 911 µs | 1552 µs | 730 µs | 1310 µs | 1.3× |
-| wall time | 1058 µs | 1056 µs | 883 µs | 1257 µs | 1408 µs | 1060 µs | 1623 µs | 1.2× |
-| peak memory | 1,024 KiB | 1,024 KiB | 1,024 KiB | 2,860 KiB | 3,232 KiB | 2,448 KiB | 4,780 KiB | 2.4× |
+| instructions | 1,050,511 | 198,495 | 197,017 | 372,173 | 548,677 | 293,396 | 2,735,657 | 1.5× |
+| cycles | 155,061 | 81,617 | 47,705 | 358,573 | 768,063 | 266,466 | 1,370,768 | 5.6× |
+| CPU time | 552 µs | 511 µs | 340 µs | 908 µs | 1549 µs | 746 µs | 1297 µs | 2.2× |
+| wall time | 954 µs | 832 µs | 764 µs | 1241 µs | 1424 µs | 1114 µs | 1630 µs | 1.5× |
+| peak memory | 1,024 KiB | 1,024 KiB | 1,024 KiB | 2,732 KiB | 3,232 KiB | 2,764 KiB | 5,004 KiB | 2.7× |
 | file size | 4,160 B | 3,992 B | 3,992 B | 4169 KiB | 4828 KiB | 11 KiB | 11 KiB | 2.8× |
 
 ## wc
@@ -53,11 +66,11 @@ Counts the lines and words of 64 MiB on standard input, as `wc -lw` does. C, C++
 
 | | lengua | lengua, by Claude Code | Rust | C | C++ | best other ÷ best lengua |
 |---|---|---|---|---|---|---|
-| instructions | 25,214,160 | 21,055,699 | 153,689,516 | 78,888,215 | 82,423,988 | 3.7× |
-| cycles | 4,553,788 | 4,007,886 | 56,341,708 | 55,067,005 | 59,445,020 | 13.7× |
-| CPU time | 9585 µs | 10448 µs | 16390 µs | 15395 µs | 16765 µs | 1.6× |
-| wall time | 13864 µs | 12901 µs | 16954 µs | 16141 µs | 17182 µs | 1.3× |
-| peak memory | 776 KiB | 648 KiB | 1,960 KiB | 1,732 KiB | 4,172 KiB | 2.7× |
+| instructions | 25,214,160 | 21,055,698 | 153,689,493 | 78,918,855 | 82,423,990 | 3.7× |
+| cycles | 4,511,954 | 3,954,003 | 55,263,715 | 55,038,520 | 58,780,261 | 13.9× |
+| CPU time | 9431 µs | 10133 µs | 16555 µs | 15696 µs | 16935 µs | 1.7× |
+| wall time | 13120 µs | 12980 µs | 17001 µs | 16123 µs | 17356 µs | 1.2× |
+| peak memory | 648 KiB | 648 KiB | 2,024 KiB | 2,188 KiB | 4,172 KiB | 3.1× |
 | file size | 3,040 B | 4,000 B | 4212 KiB | 11 KiB | 11 KiB | 3.7× |
 
 ## histogram
@@ -66,11 +79,11 @@ Counts each byte value of 64 MiB on standard input. Every version spreads neighb
 
 | | lengua | Rust | C | C++ | best other ÷ best lengua |
 |---|---|---|---|---|---|
-| instructions | 201,375,979 | 147,161,052 | 184,740,538 | 187,230,063 | 0.7× |
-| cycles | 61,333,572 | 60,936,965 | 62,659,677 | 64,349,170 | 1.0× |
-| CPU time | 17358 µs | 17222 µs | 17453 µs | 18087 µs | 1.0× |
-| wall time | 17719 µs | 17644 µs | 17766 µs | 18738 µs | 1.0× |
-| peak memory | 776 KiB | 1,840 KiB | 1,688 KiB | 4,196 KiB | 2.2× |
+| instructions | 201,375,978 | 147,161,042 | 184,771,179 | 187,230,063 | 0.7× |
+| cycles | 61,425,041 | 60,394,452 | 62,706,441 | 64,187,940 | 1.0× |
+| CPU time | 17045 µs | 17617 µs | 17657 µs | 18287 µs | 1.0× |
+| wall time | 17314 µs | 18189 µs | 18065 µs | 18775 µs | 1.0× |
+| peak memory | 776 KiB | 1,968 KiB | 2,272 KiB | 4,080 KiB | 2.5× |
 | file size | 2,984 B | 4221 KiB | 11 KiB | 11 KiB | 3.7× |
 
 ## crc32c
@@ -79,9 +92,9 @@ The CRC-32C of 64 MiB on standard input. C, C++ and Rust use the CPU's `crc32` i
 
 | | lengua | Rust | C | C++ | best other ÷ best lengua |
 |---|---|---|---|---|---|
-| instructions | 23,593,975 | 11,875,280 | 21,127,993 | 23,617,517 | 0.5× |
-| cycles | 8,759,672 | 25,703,709 | 25,533,562 | 27,229,450 | 2.9× |
-| CPU time | 12201 µs | 12831 µs | 13711 µs | 13387 µs | 1.1× |
-| wall time | 13099 µs | 13390 µs | 14063 µs | 14190 µs | 1.0× |
-| peak memory | 648 KiB | 2,024 KiB | 1,684 KiB | 4,348 KiB | 2.6× |
+| instructions | 23,593,975 | 11,875,194 | 21,158,632 | 23,617,519 | 0.5× |
+| cycles | 8,754,744 | 25,654,449 | 25,580,578 | 27,151,970 | 2.9× |
+| CPU time | 12556 µs | 12670 µs | 13065 µs | 13670 µs | 1.0× |
+| wall time | 13364 µs | 13063 µs | 13925 µs | 14076 µs | 1.0× |
+| peak memory | 648 KiB | 1,984 KiB | 2,188 KiB | 4,240 KiB | 3.1× |
 | file size | 3,384 B | 4204 KiB | 11 KiB | 11 KiB | 3.3× |

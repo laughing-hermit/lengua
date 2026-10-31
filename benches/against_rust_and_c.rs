@@ -121,6 +121,19 @@ fn workloads() -> Vec<Workload> {
             output_file: None,
         },
         Workload {
+            name: "hypotenuse",
+            about: "Prints the hypotenuse of two decimal sides given as arguments, with three \
+                    decimals: each side divided into a double, a square root, and the result \
+                    rounded to thousandths. Like add, it's mostly starting up and exiting: here \
+                    C and C++ load the math library too.",
+            lengua: &[("lengua", "examples/hypotenuse/main.s")],
+            others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
+            args: vec!["123456.789".into(), "98765.432".into()],
+            stdin: Vec::new(),
+            files: Vec::new(),
+            output_file: None,
+        },
+        Workload {
             name: "upcase",
             about: "Copies a 1 MiB text file to another with its ASCII letters capitalized: \
                     file reads and writes, and one pass over the bytes. lengua's versions are \
@@ -228,11 +241,14 @@ fn first_line(program: &str, args: &[&str]) -> String {
 }
 
 fn compile(program: &str, args: &[&str], source: &Path, output: &Path) {
+    // C and C++ link the math library, which a program that takes square roots needs.
+    let libraries: &[&str] = if program == "rustc" { &[] } else { &["-lm"] };
     let status = Command::new(program)
         .args(args)
         .arg("-o")
         .arg(output)
         .arg(source)
+        .args(libraries)
         .status()
         .unwrap_or_else(|error| panic!("{program} didn't run: {error}"));
     assert!(status.success(), "{program} failed on {}", source.display());
@@ -443,6 +459,13 @@ fn expected_output(workload: &Workload) -> Vec<u8> {
     let space = |byte: &u8| matches!(byte, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r');
     match workload.name {
         "add" => b"122469135\n".to_vec(),
+        // fixed(sqrt(a * a + b * b), 3), as the spec computes it.
+        "hypotenuse" => {
+            let (a, b) = (123_456_789.0_f64 / 1000.0, 98_765_432.0_f64 / 1000.0);
+            #[allow(clippy::cast_possible_truncation)]
+            let thousandths = ((a * a + b * b).sqrt() * 1000.0).round_ties_even() as i64;
+            format!("{}.{:03}\n", thousandths / 1000, thousandths % 1000).into_bytes()
+        }
         "wc" => {
             let lines = workload.stdin.iter().filter(|byte| **byte == b'\n').count();
             let words = workload

@@ -148,23 +148,25 @@ code, and creates the lock.
 [BENCHMARKS.md](BENCHMARKS.md) measures lengua programs against the same programs in C, C++ and
 Rust, built with every optimization for this CPU (`cargo bench --bench against_rust_and_c`
 measures again). On this machine, lengua's best version is ahead or level on every workload and
-every measure, and uses less than half the memory:
+every measure, with memory safety proven rather than checked at run time, and uses less than half
+the memory:
 
-| Workload | Cycles | CPU time | Wall time |
-|---|---|---|---|
-| `add`, mostly starting and exiting | 106× fewer | 1.8× less | 1.4× less |
-| Capitalize a 1 MiB file | 4.4× fewer | 1.2× less | 1.2× less |
-| Capitalize 1 MiB of standard input | 4.8× fewer | 1.6× less | 1.3× less |
-| Count lines and words of 64 MiB (Claude Code's version) | 13.7× fewer | 1.6× less | 1.3× less |
-| CRC-32C of 64 MiB | 2.9× fewer | 1.1× less | 1.1× less |
-| Byte histogram of 64 MiB | level | level | level |
+| Workload | Cycles | CPU time | Wall time | Peak memory |
+|---|---|---|---|---|
+| `add`, mostly starting and exiting | 121× fewer | 3.2× less | 2.3× less | 2.6× less |
+| `hypotenuse`, a square root in doubles | 97× fewer | 2.1× less | 1.8× less | 3.0× less |
+| Capitalize a 1 MiB file | 5.1× fewer | 1.4× less | 1.4× less | 2.8× less |
+| Capitalize 1 MiB of standard input | 5.6× fewer | 2.2× less | 1.5× less | 2.7× less |
+| Count lines and words of 64 MiB (Claude Code's version) | 13.9× fewer | 1.7× less | 1.2× less | 3.1× less |
+| CRC-32C of 64 MiB | 2.9× fewer | level | level | 3.1× less |
+| Byte histogram of 64 MiB | level | level | level | 2.5× less |
 
 The baselines are written the way a performance-minded programmer would: the CRC uses the
 `crc32` instruction, the histogram four tables, and the word count a loop compilers vectorize.
 lengua wins by using the CPU fully: 64 bytes a step with AVX-512, three `crc32` chains side by
 side, no C library and no runtime. The histogram is limited by one memory update per byte in
 every language. On 64 MiB through a pipe, the kernel's copying is most of the wall time, so a 3×
-lead in the program's own cycles shows as 1.1× on the clock.
+lead in the program's own cycles shows as level on the clock. Measured 2026-10-31.
 
 ## Develop
 
