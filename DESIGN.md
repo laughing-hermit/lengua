@@ -868,16 +868,20 @@ The plugin is skills plus one MCP server. The **skills** are markdown and instal
 same on every host. The **server** (`lengua-mcp`) is a native binary, built per host.
 
 What needs the host, and what doesn't:
-- **Checking, proving and compiling are host-independent.** They're computation over the program
+- **Checking the rules and proving are host-independent.** They're computation over the program
   and the spec: `llvm-mc` cross-assembles for any target, and a proof is math. A Linux x86-64
-  server can compile, check and prove a program *for* macOS ARM64, given that target's backend. So
-  one server build can carry every target's decoder, prover model and dialect and work on any of
-  them, whatever host it runs on.
-- **Only `run` needs the matching host.** Running a program under its spec's capabilities needs
-  the host's own sandbox — seccomp and Landlock on Linux, something else on macOS and Windows —
-  and, to execute non-host code, that host or an emulator. So the one truly per-host part of the
-  server is the runner (item 6 below); it's also why the server builds and runs only on Linux
-  today, its confinement being Linux-only.
+  server can check and prove a program *for* macOS ARM64, given that target's backend. So one
+  server build can carry every target's decoder, prover model and dialect, whatever host it runs
+  on.
+- **Testing and running need the target's CPU.** `check` runs the spec's tests and `run` runs the
+  program, under the host's own sandbox — seccomp, Landlock and the test supervisor on Linux,
+  something else on macOS and Windows — so both need that CPU, natively or under an emulator.
+  Under QEMU's user mode, which runs Linux ARM64 programs on an x86-64 Linux host, the kernel sees
+  QEMU's own system calls, not the program's: Landlock and resource limits still confine a run,
+  but the spec-exact system-call filter, the tests' supplied random bytes and clock, and the cycle
+  counts need the target natively (Round 9 tests those on GitHub's ARM64 runners). So the per-host
+  part of the server is the runner (item 6 below); it's also why the server builds and runs only
+  on Linux today, its confinement being Linux-only.
 
 **The plugin decides per target.** The server detects its host at startup (`Profile::for_target`
 over `std::env::consts`) and uses that target, so the user installs one plugin and it picks what it
@@ -897,28 +901,35 @@ runner — the machines to build and run them on come from CI and emulation.
 `src/platform.rs`'s `Profile` holds the triple, the short name and the syscall-number table; the
 rest below is still to build per target. A new profile must supply:
 
-1. **Toolchain:** the LLVM triple, the linker binary and the object format. Today `toolchain.rs`
-   `link()` hardcodes `ld.lld` and ELF; macOS needs `ld64.lld` and Mach-O, Windows `lld-link` and
-   PE/COFF.
+1. **Toolchain:** the LLVM triple, the linker binary, its flags and the object format. Today
+   `toolchain.rs` `link()` hardcodes `ld.lld` and ELF; macOS needs `ld64.lld` and Mach-O, Windows
+   `lld-link` and PE/COFF. Every instruction must link as written: for AArch64, `ld.lld` rewrites
+   `adrp` + `add :lo12:` pairs into `nop` + `adr` unless given `--no-relax`.
 2. **Decoder:** a decoder for the CPU's machine code. Today `checker/decode.rs` uses iced-x86,
-   which is x86 only, and reads ELF through the `object` crate. LLVM's own disassembler could make
-   this step target-uniform instead of a decoder per CPU — a thing to weigh when the second target
-   lands, since lengua uses LLVM to assemble and link already.
+   which is x86 only, and reads ELF through the `object` crate. For a new CPU lengua decodes
+   exactly its dialect's subset itself (Round 9 does so for AArch64): anything outside it is
+   refused by construction, the matching of main.s to the machine code stays lengua's own reading
+   rather than LLVM agreeing with itself, and LLVM's disassembler serves as the decoder's test.
 3. **Prover model:** the CPU's instructions in `src/prove/exec` (today an x86 `match`), and CPU
    feature detection (today x86 `is_x86_feature_detected!`).
 4. **Dialect:** the Power of 10 in that CPU's mnemonics and registers, with its reference (today
    `references/linux-x86_64.md` and the x86 parts of `references/power-of-10.md`).
-5. **The OS edge:** on Linux, the syscall-number table (in `Profile`) and the direct-syscall
-   convention. macOS and Windows don't allow a program to call the OS directly: a program must go
+5. **The OS edge:** on Linux, the system calls' numbers, the instruction and registers that make
+   them, and the ABI's details, which differ between CPUs even on one OS. On AArch64 there is no
+   `poll`, only `ppoll`; `clone`'s child-tid argument moves; `struct stat` is 128 bytes with
+   `st_mode` at 16 (x86-64: 144 and 24); and `O_DIRECTORY` is `0o40000`, x86-64's value for
+   `O_DIRECT`. macOS and Windows don't allow a program to call the OS directly: a program must go
    through the system library (libSystem, ntdll), code lengua never checked, so those need the
    system-library calling convention modelled instead.
-6. **The runner and sandbox:** on Linux, seccomp and Landlock (`runner.rs`, `supervise.rs`). macOS
-   and Windows have neither; each needs its own confinement.
+6. **The runner and sandbox:** on Linux, seccomp and Landlock (`runner.rs`), and the supervisor
+   that supplies tests' random bytes and clock (`supervise.rs`, which reads the CPU's registers).
+   macOS and Windows have neither; each needs its own confinement.
 
-**Linux ARM64 is nearest:** it reuses 5 and 6 unchanged (same OS, same sandbox, same direct
-syscalls) and keeps ELF, so only 2, 3 and 4 and a new triple with ARM64 features are new. macOS
-and Windows need all six, the OS edge and sandbox most of all. QEMU user-mode, which the user would
-install, would let Linux ARM64 be tested on this machine.
+**Linux ARM64 is nearest:** the same OS, so the same kinds of system calls, the same sandbox and
+ELF, but 2, 3 and 4 and a new triple are new, and 5 and 6 change in detail (the call numbers, the
+ABI details above, the supervisor's registers). macOS and Windows need all six, the OS edge and
+sandbox most of all. QEMU's user mode, installed here on 2026-10-31, tests Linux ARM64 on this
+machine for all but the sandbox's exact filter and supplies, which GitHub's ARM64 runners test.
 
 The plugin's own server binary will ship for x86_64/aarch64 Linux (musl), aarch64 macOS and
 x86_64/aarch64 Windows; that is the server running, separate from which targets it can compile and

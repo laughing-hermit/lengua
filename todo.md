@@ -100,8 +100,11 @@ sandbox — so each target is a profile **and** its own instruction decoder, pro
 reference and runner. The porting contract in DESIGN's "Porting a target" lists exactly what each
 one needs.
 
-- **Linux ARM64 is nearest:** same OS, same sandbox (seccomp and Landlock), same direct system
-  calls — only a new CPU, so a new decoder, prover model, feature detection and dialect reference.
+- **Linux ARM64 is nearest, and under way (Round 9):** the same OS and sandbox (seccomp and
+  Landlock) and the same kinds of direct system calls, but a new decoder, prover model, feature
+  detection and dialect reference, and an OS edge that differs in detail: other call numbers, no
+  `poll` (only `ppoll`), another `struct stat` and `O_DIRECTORY`, other supervisor registers. It's
+  tested under QEMU on this computer and on GitHub's ARM64 runners for the sandbox.
 - **macOS and Windows need more than a new CPU.** They don't allow a program to call the OS
   directly, as lengua's programs do; a program must go through the system library (libSystem,
   ntdll), which lengua never checked, and there is no seccomp or Landlock. So those four targets

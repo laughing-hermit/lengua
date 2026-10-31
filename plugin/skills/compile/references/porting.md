@@ -14,11 +14,16 @@ optimizer would rewrite the instructions the prover just checked.
 
 ## What needs the host, and what doesn't
 
-- **Checking, proving and compiling are host-independent.** `llvm-mc` cross-assembles for any
-  target and a proof is math, so one server build can carry every target's backend and compile,
-  check and prove for any of them, whatever host it runs on.
-- **Only `run` needs the matching host** — its sandbox is OS-specific, and executing non-host code
-  needs that host or an emulator. So the one truly per-host part of the server is the runner.
+- **Checking the rules and proving are host-independent.** `llvm-mc` cross-assembles for any
+  target and a proof is math, so one server build can carry every target's backend and check and
+  prove for any of them, whatever host it runs on.
+- **Testing and running need the target's CPU.** `check` runs the spec's tests, and `run` runs
+  the program, so both need that CPU: natively, or under an emulator for development (QEMU's user
+  mode runs Linux ARM64 programs on an x86-64 Linux host). Under emulation the kernel sees the
+  emulator's own system calls, not the program's, so only Landlock and resource limits still
+  confine a run; the spec-exact system-call filter, the tests' supplied random bytes and clock,
+  and the cycle counts need the target natively. So the per-host part of the server is the
+  runner, and a target is fully tested only on its own CPU (a CI runner counts).
 - **The plugin decides per target.** The server detects its host at startup
   (`Profile::for_target` over `std::env::consts`) and uses that target; the user installs one
   plugin and it picks what it needs. On an unsupported host it says so and points here. Ship one
@@ -34,24 +39,34 @@ A profile lives in `src/platform.rs` (today one variant, `LinuxX86_64`, holding 
 short name and the syscall-number table). Each new target needs:
 
 1. **Toolchain** — the LLVM triple, the linker (`ld.lld` for ELF/Linux, `ld64.lld` for
-   Mach-O/macOS, `lld-link` for COFF/Windows) and the object format. `toolchain.rs` `link()`
-   hardcodes `ld.lld` and ELF today, so it must learn to select these.
+   Mach-O/macOS, `lld-link` for COFF/Windows), its flags and the object format. `toolchain.rs`
+   `link()` hardcodes `ld.lld` and ELF today, so it must learn to select these. Every
+   instruction must link as written: on AArch64, `ld.lld` rewrites `adrp` + `add :lo12:` pairs
+   into `nop` + `adr` unless it's given `--no-relax`, which would break the line-for-line match.
 2. **Decoder** — a decoder for the CPU's machine code (today iced-x86, x86 only, reading ELF).
-   LLVM's disassembler, or Capstone, could make this step multi-architecture.
+   For a new CPU, lengua decodes exactly its dialect's subset itself, so anything outside it is
+   refused by construction, and tests that decoder against LLVM's disassembler.
 3. **Prover model** — the CPU's instructions in `src/prove/exec`, and CPU-feature detection.
 4. **Dialect** — the Power of 10 in that CPU's mnemonics and registers, with its own reference
    beside `linux-x86_64.md`.
-5. **The OS edge** — on Linux, the syscall-number table (in the profile) and direct `syscall`
-   instructions. **macOS and Windows don't allow direct syscalls:** a program must call the system
-   library (libSystem, ntdll), so those model the system-library calling convention instead.
+5. **The OS edge** — on Linux, the system calls' numbers, the instruction and registers that make
+   them, and the ABI's details, which differ between CPUs even on one OS (on AArch64: no `poll`,
+   only `ppoll`; `clone`'s child-tid argument in another place; a 128-byte `struct stat` with
+   `st_mode` at 16 rather than 144 and 24; `O_DIRECTORY` = `0o40000`, which is x86-64's value
+   for `O_DIRECT`). **macOS and Windows don't allow direct syscalls:** a program must call the
+   system library (libSystem, ntdll), so those model the system-library calling convention
+   instead.
 6. **The runner and sandbox** (the per-host part) — on Linux, seccomp and Landlock
-   (`runner.rs`, `supervise.rs`); macOS and Windows each need their own confinement. macOS also
-   needs the binary code-signed (ad-hoc via `ld64.lld`) before it will run.
+   (`runner.rs`) and the supervisor that supplies tests' random bytes and clock (`supervise.rs`,
+   which reads the CPU's registers); macOS and Windows each need their own confinement. macOS
+   also needs the binary code-signed (ad-hoc via `ld64.lld`) before it will run.
 
 ## Order of targets
 
-- **Linux ARM64 is nearest:** same OS, so it reuses the OS edge (5) and the runner (6) unchanged,
-  and keeps ELF; only the decoder, prover model, dialect and a new triple with ARM64 features (2,
-  3, 4) are new. Testable here under QEMU.
+- **Linux ARM64 is nearest:** the same OS, so the same kinds of system calls, the same sandbox
+  (seccomp, Landlock) and ELF; but its decoder, prover model, dialect and triple (2, 3, 4) are new,
+  and the OS edge (5) and the supervisor's registers (6) change in detail. Tested under QEMU on an
+  x86-64 Linux computer for everything but the sandbox's exact filter and supplies, and on an
+  ARM64 computer or CI runner for those.
 - **macOS (ARM64, x86-64)** and **Windows (x86-64, ARM64)** need all six, the OS edge and the
   sandbox most of all, because they forbid the direct syscalls lengua's Linux programs use.
