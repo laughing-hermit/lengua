@@ -943,7 +943,9 @@ Interactive round 4 (2026-10-31) ran ten scenarios in real Claude Code sessions,
 request: a CSV total, a line-reversing server, a tiny web server, a fast `wc`, a SIMD ROT13, an
 HTTP fetcher, a clock, a sort, a mean and standard deviation, and a spec shared alone. Every one
 finished with no question, every test passing and every call under 45 seconds, for about $20 at
-list prices; twelve phrasings of a request all chose write-spec first. BENCHMARKS.md, measured
+list prices; twelve phrasings of a request all chose write-spec first. A word-frequency count
+followed the same way: from one request with no question, a 1,034-line hash-table program with
+every test passing, in about eight minutes for about $2. BENCHMARKS.md, measured
 the same day, has lengua's best ahead of or level with C, C++ and Rust on every workload and
 measure, with 2.5 to 3.1 times less memory.
 

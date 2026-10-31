@@ -19,25 +19,24 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 > stays inside it. It covers whole numbers, exact decimals, floating point in double and single
 > precision with fused multiply-add, vectors from SSE2 to AVX-512, hashing and checksums, files
 > and folders, environment variables, fork-join threads, waiting, the clock and random bytes
-> (which tests supply, so such output is exact), the terminal, and TCP clients and servers on
-> the ports a spec names, for other computers and many clients at once when it says so. The
-> kernel holds every run to what its spec allows. lengua proves programs right for every input,
-> not just the tested ones, over whole numbers, decimals, choices, texts beyond ASCII and text
-> formulas, checksums, files and the network, servers that poll in every order their clients'
-> steps can come in, threads, and floats computed in the formula's order, in integer, bit, vector and float code from SSE2 to AVX-512, and over texts as long as
-> the spec's lengths and the proof's time reach, and further with `prove_further`; a filter or
-> a count that streams its input a buffer-full at a time is proven for every length, by
-> induction over its read loop. Programs that read with the skill's `fill` are proven however their input
-> arrives, cut into any pieces. Each solver step is confirmed by two independent solvers, z3 and cvc5, and most proofs
-> need none: the terms settle every step. `lengua.lock` records what's proven. Programs build
-> on programs: a spec links to the specs of the parts it uses, so a folder of programs is a graph
-> of two-file nodes, as an OKF bundle is, and `check` holds each program to its parts' current
-> code. In ten scenarios
-> in real Claude Code sessions, from a web server to a sort, every program came from one
-> request, with no question. Next:
-> - induction for loops whose state crosses from one buffer-full to the next, as a word count's
->   does;
-> - more of the top CPU and OS targets, which LLVM already supports.
+> (which tests supply, so such output is exact), the terminal, and TCP clients and servers on the
+> ports a spec names, for other computers and many clients at once when it says so. The kernel
+> holds every run to what its spec allows. lengua proves programs right for every input, not just
+> the tested ones, over whole numbers, decimals, choices, texts beyond ASCII and text formulas,
+> checksums, files and the network, servers that poll in every order their clients' steps can come
+> in, threads, and floats computed in the formula's order, in integer, bit, vector and float code
+> from SSE2 to AVX-512, and over texts as long as the spec's lengths and the proof's time reach,
+> and further with `prove_further`; a filter or a count that streams its input a buffer-full at a
+> time is proven for every length, by induction over its read loop. Programs that read with the
+> skill's `fill` are proven however their input arrives, cut into any pieces. Each solver step is
+> confirmed by two independent solvers, z3 and cvc5, and most proofs need none: the terms settle
+> every step. `lengua.lock` records what's proven. Programs build on programs: a spec links to the
+> specs of the parts it uses, so a folder of programs is a graph of two-file nodes, as an OKF
+> bundle is, and `check` holds each program to its parts' current code. In ten scenarios in real
+> Claude Code sessions, from a web server to a sort, every program came from one request, with no
+> question. Next, as [todo.md](todo.md) has it: a white paper on lengua as an AI language; the
+> other five of the top CPU and OS targets, which LLVM already supports; and a site for sharing
+> specs.
 
 ## Requirements
 

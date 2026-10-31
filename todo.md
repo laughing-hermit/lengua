@@ -2,17 +2,33 @@
 
 In order. Each item starts when the one before it is done.
 
-## 1. Perfect lengua for this target (x86-64 Linux)
+## 1. Perfect lengua for this target (x86-64 Linux): done, 2026-10-31
 
-This round's plan:
-- **Two files.** spec.md holds every behavior and every test; main.s is the compiled code.
-- **The agent's experience.**
-- **Memory safety:** a borrow checker for assembly.
-- **The remaining proofs.**
-- **A release built locally.**
-- **An interactive round.**
+What lengua is on this target now:
+- **Two files.** spec.md, an OKF concept document, holds every behavior and every test, and names
+  no CPU or OS, so it can be shared as it is; main.s is the code the agent compiles from it for
+  this computer. Programs build on programs: a spec links to the specs of its parts, so a folder
+  of programs is a graph of two-file nodes.
+- **The agent's experience.** Two skills (write-spec, compile) and two tools (check, run), every
+  call under about 40 seconds. In ten scenarios in real Claude Code sessions every program came
+  from one request, with no question.
+- **Memory safety.** The rules M1 to M8, a borrow checker for assembly: every pointer has an
+  owner and every access stays inside it, checked by the rules where they can follow a pointer
+  and by the proof everywhere else.
+- **The proofs.** For every input in range, each solver step confirmed by z3 and cvc5: whole
+  numbers, decimals, choices, texts and text formulas, checksums, floats computed in the
+  formula's order, files and folders, the network, threads. Texts as far as the spec's lengths
+  and the proof's time reach, and further with `prove_further`. Streaming filters and counts for
+  every length, by induction over their read loop. Servers that poll, in every order their
+  clients' steps can come in. Sorting for short texts.
+- **Speed.** Ahead of or level with C, C++ and Rust on every benchmark, with 2.5 to 3.1 times less
+  memory (BENCHMARKS.md).
+- **A release built locally** that installs with no Rust toolchain, and `lengua-mcp run` for the
+  user's own shell.
 
-When this is done, lengua is finished for this target.
+Tested, not proven, and each proof line says why: sorting past a few bytes, word tallies,
+floats computed in another order than the formula's, a folder's listing, the `sha256` formula,
+and loops whose state crosses from one buffer-full to the next, as a word count's does.
 
 ## 2. A white paper: lengua is an AI language, not a programming language
 
