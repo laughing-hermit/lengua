@@ -159,6 +159,43 @@ pub const ZLIB: u32 = 0xEDB8_8320;
 
 pub use float::{FloatOp, FloatTest, Rounding};
 
+impl Node {
+    /// Whether the node is an operation on floats, which only solvers that read floats can
+    /// compute.
+    #[must_use]
+    pub const fn is_float_operation(&self) -> bool {
+        matches!(
+            self,
+            Self::Float(..)
+                | Self::FloatSqrt(_)
+                | Self::FloatFma(..)
+                | Self::FloatFromInt(..)
+                | Self::FloatToInt(..)
+                | Self::FloatRound(..)
+                | Self::FloatConvert(..)
+                | Self::FloatTest(..)
+        )
+    }
+
+    /// What two float operations must share to be the same function of their operands: the
+    /// kind, its parameter, and the operands' width.
+    #[must_use]
+    pub fn float_function(&self, operand_width: u32) -> Option<(u8, u32, u32)> {
+        let (kind, parameter) = match self {
+            Self::Float(op, ..) => (0, *op as u32),
+            Self::FloatSqrt(_) => (1, 0),
+            Self::FloatFma(..) => (2, 0),
+            Self::FloatFromInt(_, width) => (3, *width),
+            Self::FloatToInt(_, to, truncate) => (4, to * 2 + u32::from(*truncate)),
+            Self::FloatRound(_, rounding) => (5, *rounding as u32),
+            Self::FloatConvert(_, to) => (6, *to),
+            Self::FloatTest(test, ..) => (7, *test as u32),
+            _ => return None,
+        };
+        Some((kind, parameter, operand_width))
+    }
+}
+
 /// How the solvers read a float result (see [`Pool::float_definition`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FloatDefinition {
@@ -281,6 +318,9 @@ pub struct Pool {
     /// Whether each term has a float operation in it, so a question about it goes to solvers
     /// that read floats.
     floats: Vec<bool>,
+    /// The smallest and largest value of each float result, when its operands' bounds rule out
+    /// a NaN: from the ranges of the whole numbers it comes from, operation by operation.
+    float_bounds: Vec<Option<(f64, f64)>>,
     /// Each one-byte term's shape: the term with its byte's identity left out, so tests of
     /// different bytes that compute the same thing share one. `u32::MAX` for other terms.
     shapes: Vec<u32>,
@@ -550,6 +590,9 @@ impl Pool {
                 let (low, high) = self.range(*a);
                 i128::try_from(low).ok().zip(i128::try_from(high).ok())
             }
+            Node::FloatToInt(a, to, truncate) => self
+                .float_bounds(*a)
+                .and_then(|bounds| float::to_int_range(bounds, *to, *truncate)),
             Node::Ite(condition, a, b) => {
                 let given = |value: Term, holds: bool| {
                     let (low, high) = self.signed_range(value);
@@ -588,6 +631,7 @@ impl Pool {
             Sort::Bv(width) => self.signed_range_of(&node, width, range),
             Sort::Bool => (0, 1),
         };
+        let bounds = self.float_bounds_of(&node);
         let sole = self.sole_of(&node, term);
         let shape = match sole {
             Sole::Byte(_) => self.shape_of(&node, term),
@@ -599,20 +643,12 @@ impl Pool {
         self.signed_ranges.push(signed_range);
         self.soles.push(sole);
         self.shapes.push(shape);
-        let float = matches!(
-            node,
-            Node::Float(..)
-                | Node::FloatSqrt(_)
-                | Node::FloatFma(..)
-                | Node::FloatFromInt(..)
-                | Node::FloatToInt(..)
-                | Node::FloatRound(..)
-                | Node::FloatConvert(..)
-                | Node::FloatTest(..)
-        ) || node_operands(&node)
-            .iter()
-            .any(|operand| self.floats.get(operand.index()).copied().unwrap_or(false));
+        let float = node.is_float_operation()
+            || node_operands(&node)
+                .iter()
+                .any(|operand| self.floats.get(operand.index()).copied().unwrap_or(false));
         self.floats.push(float);
+        self.float_bounds.push(bounds);
         // A condition on one byte is the set of the byte's values where it holds.
         if let (Sort::Bool, Sole::Byte(byte)) = (sort, sole)
             && !matches!(node, Node::Lookup(..))
@@ -841,8 +877,16 @@ impl Pool {
         self.make(Node::FloatFromInt(number, width), Sort::Bv(width))
     }
 
-    /// A float as a signed whole number of `to` bits, rounded to nearest or truncated.
+    /// A float as a signed whole number of `to` bits, rounded to nearest or truncated. A float
+    /// rounded to a whole one first converts as the rounding would, so `roundsd` then
+    /// `cvttsd2si` and a formula's `round(x)` are one term.
     pub fn float_to_int(&mut self, a: Term, to: u32, truncate: bool) -> Term {
+        let (a, truncate) = match *self.node(a) {
+            Node::FloatRound(inner, Rounding::Nearest) => (inner, false),
+            Node::FloatRound(inner, Rounding::Zero) => (inner, true),
+            Node::FloatRound(..) => (a, true),
+            _ => (a, truncate),
+        };
         let width = self.width(a);
         if let Some(x) = self.constant(a) {
             return self.bv(to, float::to_int(x, width, to, truncate));
@@ -932,6 +976,11 @@ impl Pool {
             Sort::Bool => {
                 return match node {
                     Node::Bool(value) => (u128::from(*value), u128::from(*value)),
+                    Node::FloatTest(test, a, b) => self
+                        .float_bounds(*a)
+                        .zip(self.float_bounds(*b))
+                        .and_then(|(a, b)| float::test_bounds(*test, a, b))
+                        .map_or((0, 1), |holds| (u128::from(holds), u128::from(holds))),
                     _ => (0, 1),
                 };
             }
@@ -1053,8 +1102,89 @@ impl Pool {
                 );
                 (then.0.min(otherwise.0), then.1.max(otherwise.1))
             }
+            // A conversion of a float whose bounds stay inside the width, read unsigned.
+            Node::FloatToInt(a, to, truncate) => {
+                match self
+                    .float_bounds(*a)
+                    .and_then(|bounds| float::to_int_range(bounds, *to, *truncate))
+                {
+                    Some((low, high)) if low >= 0 || high < 0 => {
+                        let unsigned = |value: i128| value.cast_unsigned() & mask(width);
+                        (unsigned(low), unsigned(high))
+                    }
+                    _ => full,
+                }
+            }
             _ => full,
         }
+    }
+
+    /// The bounds of a float result: from its operands' bounds, or for a whole number
+    /// converted, from its range.
+    fn float_bounds_of(&self, node: &Node) -> Option<(f64, f64)> {
+        let bounds = |term: &Term| self.float_bounds(*term);
+        match node {
+            Node::FloatFromInt(number, width) => {
+                let (low, high) = self.signed_range(*number);
+                Some(float::from_int_bounds(
+                    low,
+                    high,
+                    self.width(*number),
+                    *width,
+                ))
+            }
+            Node::Float(op, a, b) => {
+                float::binary_bounds(*op, bounds(a)?, bounds(b)?, self.width(*a))
+            }
+            Node::FloatSqrt(a) => float::sqrt_bounds(bounds(a)?, self.width(*a)),
+            Node::FloatFma(a, b, c) => {
+                float::fma_bounds(bounds(a)?, bounds(b)?, bounds(c)?, self.width(*a))
+            }
+            Node::FloatRound(a, rounding) => {
+                float::round_bounds(bounds(a)?, *rounding, self.width(*a))
+            }
+            Node::FloatConvert(a, to) => float::convert_bounds(bounds(a)?, self.width(*a), *to),
+            // A float with its sign flipped, as `-x`, or cleared, as `abs(x)`.
+            Node::Xor(a, b) | Node::And(a, b) if matches!(self.width(*a), 32 | 64) => {
+                let sign = 1_u128 << (self.width(*a) - 1);
+                let (value, constant) = match (self.constant(*a), self.constant(*b)) {
+                    (None, Some(constant)) => (*a, constant),
+                    (Some(constant), None) => (*b, constant),
+                    _ => return None,
+                };
+                let (low, high) = bounds(&value)?;
+                match node {
+                    Node::Xor(..) if constant == sign => Some((-high, -low)),
+                    Node::And(..) if constant == sign - 1 => Some(if low >= 0.0 {
+                        (low, high)
+                    } else if high <= 0.0 {
+                        (-high, -low)
+                    } else {
+                        (0.0, high.max(-low))
+                    }),
+                    _ => None,
+                }
+            }
+            // One of two floats.
+            Node::Ite(_, a, b) if matches!(self.width(*a), 32 | 64) => {
+                let ((al, ah), (bl, bh)) = (bounds(a)?, bounds(b)?);
+                Some((al.min(bl), ah.max(bh)))
+            }
+            _ => None,
+        }
+    }
+
+    /// The smallest and largest value `term` can have read as a float of its width, 32 or 64
+    /// bits, when it's a constant or a float result whose bounds are known; `None` where it
+    /// could be a NaN.
+    #[must_use]
+    pub fn float_bounds(&self, term: Term) -> Option<(f64, f64)> {
+        let width = self.width(term);
+        if let Some(bits) = self.constant(term) {
+            let value = float::value(bits, width);
+            return (matches!(width, 32 | 64) && !value.is_nan()).then_some((value, value));
+        }
+        self.float_bounds.get(term.index()).copied().flatten()
     }
 
     /// Whether `condition` being `holds` settles that `value`, read as signed, is at least zero:

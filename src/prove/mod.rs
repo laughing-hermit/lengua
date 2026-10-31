@@ -11,6 +11,7 @@ pub mod exec;
 pub mod formula;
 pub mod smt;
 pub mod term;
+pub mod watch;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -1893,7 +1894,7 @@ fn alternatives(
         crate::expr::Expr::Call(crate::expr::Function::If, arguments) if arguments.len() == 3 => {
             let condition = match known.translate(pool, &arguments[0])? {
                 Formula::Truth(condition) => condition,
-                Formula::Number(_) | Formula::Text(_) => {
+                Formula::Number(_) | Formula::Text(_) | Formula::Float(_) => {
                     return Err("an if(…) whose condition isn't true or false".into());
                 }
             };
@@ -1963,6 +1964,12 @@ fn printed(
         Formula::Number(number) => number,
         Formula::Truth(_) => return Err("a placeholder that prints true or false".into()),
         Formula::Text(_) => return Err("a text placeholder where a number goes".into()),
+        // The test language writes a float its shortest exact way, which proofs don't follow.
+        Formula::Float(_) => {
+            return Err(
+                "a placeholder that prints a float as it is, not with fixed(x, places)".into(),
+            );
+        }
     };
     // places(x, k) prints a whole number with k places; a decimal itself prints with its own.
     let places = match (places, number.places) {
@@ -2142,7 +2149,7 @@ fn passes(
             } else {
                 match known.translate(pool, expr)? {
                     Formula::Number(number) => number,
-                    Formula::Truth(_) | Formula::Text(_) => {
+                    Formula::Truth(_) | Formula::Text(_) | Formula::Float(_) => {
                         return Err("an exit code that isn't a whole number".into());
                     }
                 }
@@ -2334,9 +2341,10 @@ fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verd
             .proven_below
             .fetch_max(proven_below, Ordering::Relaxed);
     };
-    let workers = std::thread::available_parallelism()
-        .map_or(1, std::num::NonZero::get)
-        .min(total.max(1));
+    // One worker a core, as many as the free memory leaves room for.
+    let workers =
+        watch::workers(std::thread::available_parallelism().map_or(1, std::num::NonZero::get))
+            .min(total.max(1));
     let began = Instant::now();
     std::thread::scope(|scope| {
         for _ in 0..workers {

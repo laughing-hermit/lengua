@@ -2,7 +2,8 @@
 //! wide for singles and 64 for doubles: rounding to nearest with ties to even, as the default
 //! MXCSR does; a NaN operand comes through quieted, the first one's first; an operation with no
 //! meaning, such as 0 / 0, gives the default NaN; and a conversion to a whole number that doesn't
-//! fit gives the "integer indefinite", only the top bit set.
+//! fit gives the "integer indefinite", only the top bit set. The NaN rules and the indefinite are
+//! x86's: another target brings its own, as AArch64's positive default NaN.
 
 /// The four operations of two floats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -68,7 +69,8 @@ pub fn is_nan(bits: u128, width: u32) -> bool {
 }
 
 /// A value of `width` bits as a double, exactly.
-fn value(bits: u128, width: u32) -> f64 {
+#[must_use]
+pub fn value(bits: u128, width: u32) -> f64 {
     if width == 32 {
         f64::from(f32::from_bits(bits as u32))
     } else {
@@ -235,6 +237,134 @@ pub fn test(test: FloatTest, a: u128, b: u128, width: u32) -> bool {
         FloatTest::Less => x < y,
         FloatTest::Equal => x == y,
         FloatTest::Unordered => x.is_nan() || y.is_nan(),
+    }
+}
+
+/// A value as the bits of a float of `width` bits: a single's value as it is.
+fn bits(value: f64, width: u32) -> u128 {
+    if width == 32 {
+        #[allow(clippy::cast_possible_truncation)] // A single's own value, exactly.
+        u128::from((value as f32).to_bits())
+    } else {
+        u128::from(value.to_bits())
+    }
+}
+
+/// The smallest and largest of `values`; `None` if one is a NaN.
+fn hull(values: &[f64]) -> Option<(f64, f64)> {
+    if values.iter().any(|value| value.is_nan()) {
+        return None;
+    }
+    let low = values.iter().copied().fold(f64::INFINITY, f64::min);
+    let high = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    Some((low, high))
+}
+
+/// Whether every end of `bounds` is a finite number.
+fn finite(bounds: &[(f64, f64)]) -> bool {
+    bounds
+        .iter()
+        .all(|(low, high)| low.is_finite() && high.is_finite())
+}
+
+/// The bounds of `op` of two floats within bounds `a` and `b`, or `None` where a NaN could
+/// come of them. Rounding never reverses an order, so the exact operation's extremes, which
+/// lie at the corners for these four with a divisor that keeps its sign, round to the result's.
+#[must_use]
+pub fn binary_bounds(op: FloatOp, a: (f64, f64), b: (f64, f64), width: u32) -> Option<(f64, f64)> {
+    if !finite(&[a, b]) || op == FloatOp::Div && b.0 <= 0.0 && b.1 >= 0.0 {
+        return None;
+    }
+    let corners = [(a.0, b.0), (a.0, b.1), (a.1, b.0), (a.1, b.1)]
+        .map(|(x, y)| value(binary(op, bits(x, width), bits(y, width), width), width));
+    hull(&corners)
+}
+
+/// The bounds of the square root of a float within `a`, unless it can be below zero.
+#[must_use]
+pub fn sqrt_bounds(a: (f64, f64), width: u32) -> Option<(f64, f64)> {
+    if a.0 < 0.0 {
+        return None;
+    }
+    let ends = [a.0, a.1].map(|x| value(sqrt(bits(x, width), width), width));
+    hull(&ends)
+}
+
+/// The bounds of `a × b + c` rounded once: the exact value's extremes are at the corners of
+/// `a` and `b`, with `c` at its own ends.
+#[must_use]
+pub fn fma_bounds(a: (f64, f64), b: (f64, f64), c: (f64, f64), width: u32) -> Option<(f64, f64)> {
+    if !finite(&[a, b, c]) {
+        return None;
+    }
+    let corners = [(a.0, b.0), (a.0, b.1), (a.1, b.0), (a.1, b.1)];
+    let at = |z: f64| {
+        corners.map(|(x, y)| {
+            value(
+                fma(bits(x, width), bits(y, width), bits(z, width), width),
+                width,
+            )
+        })
+    };
+    let (low, _) = hull(&at(c.0))?;
+    let (_, high) = hull(&at(c.1))?;
+    Some((low, high))
+}
+
+/// The bounds of a float within `a` rounded to a whole float.
+#[must_use]
+pub fn round_bounds(a: (f64, f64), rounding: Rounding, width: u32) -> Option<(f64, f64)> {
+    let ends = [a.0, a.1].map(|x| value(round(bits(x, width), rounding, width), width));
+    hull(&ends)
+}
+
+/// The bounds of a float within `a` as the nearest float of `to` bits.
+#[must_use]
+pub fn convert_bounds(a: (f64, f64), from: u32, to: u32) -> Option<(f64, f64)> {
+    let ends = [a.0, a.1].map(|x| value(convert(bits(x, from), from, to), to));
+    hull(&ends)
+}
+
+/// The bounds of a signed whole number from `low` to `high`, `from` bits wide, as a float of
+/// `width` bits.
+#[must_use]
+pub fn from_int_bounds(low: i128, high: i128, from: u32, width: u32) -> (f64, f64) {
+    let mask = u128::MAX >> (128 - from);
+    let end = |number: i128| value(from_int(number.cast_unsigned() & mask, from, width), width);
+    (end(low), end(high))
+}
+
+/// The signed range of a float within `a` converted to a whole number of `to` bits, when every
+/// value converts inside it rather than to the integer indefinite.
+#[must_use]
+pub fn to_int_range(a: (f64, f64), to: u32, truncate: bool) -> Option<(i128, i128)> {
+    let whole = |x: f64| {
+        if truncate {
+            x.trunc()
+        } else {
+            x.round_ties_even()
+        }
+    };
+    let (low, high) = (whole(a.0), whole(a.1));
+    let limit = f64::from(2_u32).powi(i32::try_from(to - 1).ok()?);
+    if !(low >= -limit && high < limit) {
+        return None;
+    }
+    #[allow(clippy::cast_possible_truncation)] // Whole numbers inside `to` bits.
+    Some((low as i128, high as i128))
+}
+
+/// What `test` says of floats within `a` and `b`, when their bounds settle it.
+#[must_use]
+pub fn test_bounds(test: FloatTest, a: (f64, f64), b: (f64, f64)) -> Option<bool> {
+    match test {
+        FloatTest::Less if a.1 < b.0 => Some(true),
+        FloatTest::Less if a.0 >= b.1 => Some(false),
+        FloatTest::Equal if a.1 < b.0 || b.1 < a.0 => Some(false),
+        FloatTest::Equal if a.0 == a.1 && b.0 == b.1 && a.0 == b.0 => Some(true),
+        // Neither can be a NaN.
+        FloatTest::Unordered => Some(false),
+        _ => None,
     }
 }
 

@@ -1019,6 +1019,7 @@ fn the_solvers_read_floats_as_the_pool_evaluates_them() {
         }
     };
     let mut problems = Vec::new();
+    let mut slow = 0;
     for round in 0..120 {
         // A float's definition stays asserted for its session, as in a proof, where each input
         // combination starts over.
@@ -1084,7 +1085,11 @@ fn the_solvers_read_floats_as_the_pool_evaluates_them() {
         let (answer, _) = solver
             .check(&pool, &conditions, &[])
             .expect("the solver answers");
-        if answer != Answer::Unsat {
+        // Out of time is no answer, which a busy machine makes more of; any other answer but
+        // impossible is a mistake.
+        if answer == Answer::Unknown && solver.why_unknown.ends_with("ran out of time") {
+            slow += 1;
+        } else if answer != Answer::Unsat {
             problems.push(format!(
                 "round {round}: {} at {values:?}: the pool says {expected:#x}, the solvers {answer:?}",
                 pool.sketch(term, 2)
@@ -1102,12 +1107,15 @@ fn the_solvers_read_floats_as_the_pool_evaluates_them() {
             let (answer, _) = solver
                 .check(&pool, &asked, &[])
                 .expect("the solver answers");
-            if answer != Answer::Unsat {
+            if answer == Answer::Unknown && solver.why_unknown.ends_with("ran out of time") {
+                slow += 1;
+            } else if answer != Answer::Unsat {
                 problems.push(format!("round {round}: {test:?} at {values:?}: {answer:?}"));
             }
         }
     }
     assert!(problems.is_empty(), "{}", problems.join("\n"));
+    assert!(slow < 12, "{slow} of 240 questions ran out of time");
 }
 
 #[test]

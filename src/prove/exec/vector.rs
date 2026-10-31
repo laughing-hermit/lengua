@@ -10,6 +10,8 @@ use iced_x86::{EncodingKind, Mnemonic, OpKind, Register};
 use super::{Cpu, Last, Step, Stop, VECTOR_BYTES, unsupported};
 use crate::prove::term::Term;
 
+mod float;
+
 /// A vector register's number, 0 to 31.
 fn vector_number(register: Register) -> Option<usize> {
     (register.is_xmm() || register.is_ymm() || register.is_zmm()).then(|| register.number())
@@ -609,8 +611,23 @@ impl Cpu<'_> {
             | Mnemonic::Vandps
             | Mnemonic::Vorps
             | Mnemonic::Vxorps
-            | Mnemonic::Vandnps => {
-                let element = if evex { element_of(&name) } else { 1 };
+            | Mnemonic::Vandnps
+            | Mnemonic::Andpd
+            | Mnemonic::Orpd
+            | Mnemonic::Xorpd
+            | Mnemonic::Andnpd
+            | Mnemonic::Vandpd
+            | Mnemonic::Vorpd
+            | Mnemonic::Vxorpd
+            | Mnemonic::Vandnpd => {
+                // A mask's elements: the integer forms' last letter, a single's 4 bytes or a
+                // double's 8.
+                let element = match (evex, name.ends_with("ps"), name.ends_with("pd")) {
+                    (false, ..) => 1,
+                    (true, true, _) => 4,
+                    (true, _, true) => 8,
+                    _ => element_of(&name),
+                };
                 let not_first = name.contains("andn");
                 let operation = if name.contains("xor") {
                     2
@@ -1113,6 +1130,10 @@ impl Cpu<'_> {
             | Mnemonic::Vpexpandd
             | Mnemonic::Vpexpandq => self.compress(mnemonic)?,
             other => {
+                if let Some(done) = self.floating(other) {
+                    done?;
+                    return Ok(Step::Next);
+                }
                 let function = self.image.function_at(instruction.ip());
                 let name = format!("{other:?}").to_lowercase();
                 return Err(unsupported(format!(

@@ -1,10 +1,12 @@
 //! The tests' formulas as terms: whole numbers with the range of values each part can take, so a
-//! formula that could overflow or divide by zero is caught before it's trusted, and text byte by
-//! byte, with the text functions written out over each byte.
+//! formula that could overflow or divide by zero is caught before it's trusted; text byte by
+//! byte, with the text functions written out over each byte; and decimals as the test language
+//! computes them, in doubles or singles, as the same float terms the CPU's instructions make, each
+//! with the bounds that show it stays finite.
 
 use std::collections::BTreeMap;
 
-use super::term::{CASTAGNOLI, Pool, Term, ZLIB};
+use super::term::{CASTAGNOLI, FloatOp, FloatTest, Pool, Rounding, Term, ZLIB, float};
 use crate::expr::{BinaryOp, Expr, Function, Value};
 
 /// The width formulas are computed in: wide enough for any product of two 64-bit numbers.
@@ -47,6 +49,8 @@ pub enum Formula {
     Truth(Term),
     /// Text, one 8-bit term a byte.
     Text(Vec<Term>),
+    /// A float: a double, or a single where the term is 32 bits wide.
+    Float(Term),
 }
 
 fn overflow() -> String {
@@ -62,13 +66,16 @@ fn number(formula: Formula) -> Result<Number, String> {
         }
         Formula::Truth(_) => Err("a formula uses true/false where a number goes".into()),
         Formula::Text(_) => Err("a formula uses text where a number goes".into()),
+        Formula::Float(_) => {
+            Err("a formula uses a decimal where a whole number goes, without round(x)".into())
+        }
     }
 }
 
 fn truth(formula: Formula) -> Result<Term, String> {
     match formula {
         Formula::Truth(term) => Ok(term),
-        Formula::Number(_) | Formula::Text(_) => {
+        Formula::Number(_) | Formula::Text(_) | Formula::Float(_) => {
             Err("a formula uses a value where true/false goes".into())
         }
     }
@@ -77,10 +84,194 @@ fn truth(formula: Formula) -> Result<Term, String> {
 fn text(formula: Formula) -> Result<Vec<Term>, String> {
     match formula {
         Formula::Text(bytes) => Ok(bytes),
-        Formula::Number(_) | Formula::Truth(_) => {
+        Formula::Number(_) | Formula::Truth(_) | Formula::Float(_) => {
             Err("a formula uses a number or true/false where text goes".into())
         }
     }
+}
+
+/// The largest whole number a double holds exactly, 2^53, and a single, 2^24.
+const EXACT_DOUBLE: i128 = 1 << 53;
+const EXACT_SINGLE: i128 = 1 << 24;
+
+/// The most places a decimal converts with exactly: 10^15 is a double's, 10^10 a single's.
+const DOUBLE_PLACES: u8 = 15;
+const SINGLE_PLACES: u8 = 10;
+
+/// Whether `formula` is a decimal or a float, which compute as floats.
+fn floating(formula: &Formula) -> bool {
+    matches!(formula, Formula::Float(_))
+        || matches!(formula, Formula::Number(number) if number.places > 0)
+}
+
+/// Whether `formula` is a single.
+fn single(pool: &Pool, formula: &Formula) -> bool {
+    matches!(formula, Formula::Float(term) if pool.width(*term) == 32)
+}
+
+/// Ten to the power `places`, as a float of `width` bits: exact for the places a formula takes.
+fn power_of_ten(pool: &mut Pool, places: u8, width: u32) -> Term {
+    let value = (0..places).fold(1.0_f64, |power, _| power * 10.0);
+    let bits = if width == 32 {
+        #[allow(clippy::cast_possible_truncation)] // Exact: 10^10 at most.
+        u128::from((value as f32).to_bits())
+    } else {
+        u128::from(value.to_bits())
+    };
+    pool.bv(width, bits)
+}
+
+/// A whole number as the nearest float of `width` bits, as `cvtsi2sd` converts it.
+fn whole_float(pool: &mut Pool, number: Number, width: u32) -> Result<Term, String> {
+    if number.low < i128::from(i64::MIN) || number.high > i128::from(i64::MAX) {
+        return Err("a whole number outside 64 bits converted to a float".into());
+    }
+    let low = pool.extract(number.term, 63, 0);
+    Ok(pool.float_from_int(low, width))
+}
+
+/// A decimal's digits, its places of them after the point, as a float of `width` bits: one
+/// division of two exact numbers, as the test language and a program compute it. The same
+/// value written with more places is the same float, since both divisions round one number.
+fn decimal_float(pool: &mut Pool, number: Number, width: u32) -> Result<Term, String> {
+    let (exact, places) = if width == 32 {
+        (EXACT_SINGLE, SINGLE_PLACES)
+    } else {
+        (EXACT_DOUBLE, DOUBLE_PLACES)
+    };
+    if number.low < -exact || number.high > exact || number.places > places {
+        return Err(format!(
+            "a decimal with more digits than a {} holds exactly",
+            if width == 32 { "single" } else { "double" }
+        ));
+    }
+    let digits = whole_float(pool, number, width)?;
+    let scale = power_of_ten(pool, number.places, width);
+    Ok(pool.float(FloatOp::Div, digits, scale))
+}
+
+/// `formula` as a float of `width` bits for arithmetic: a float of that width, or a decimal;
+/// whole numbers and the other precision don't mix in, as in the test language.
+fn as_float(pool: &mut Pool, formula: Formula, width: u32) -> Result<Term, String> {
+    match formula {
+        Formula::Float(term) if pool.width(term) == width => Ok(term),
+        Formula::Float(_) => Err("a formula mixes a single and a double".into()),
+        Formula::Number(number) if number.places > 0 => decimal_float(pool, number, width),
+        Formula::Number(_) => Err("a formula mixes a whole number and a decimal".into()),
+        Formula::Truth(_) | Formula::Text(_) => {
+            Err("a formula uses true/false or text where a decimal goes".into())
+        }
+    }
+}
+
+/// `formula` widened to a double, a single exactly, as rounding and printing take it.
+fn widened(pool: &mut Pool, formula: Formula) -> Result<Term, String> {
+    match formula {
+        Formula::Float(term) if pool.width(term) == 32 => Ok(pool.float_convert(term, 64)),
+        other => as_float(pool, other, 64),
+    }
+}
+
+/// A float result, when its bounds show it's always a finite number, as the test language
+/// requires of every one.
+fn finite(pool: &Pool, term: Term) -> Result<Formula, String> {
+    match pool.float_bounds(term) {
+        Some((low, high)) if low.is_finite() && high.is_finite() => Ok(Formula::Float(term)),
+        _ => Err("the formula could give a number that isn't finite, or divide by zero".into()),
+    }
+}
+
+/// `a op b` where either is a decimal or a float: arithmetic in doubles, or singles where one is
+/// a single; comparisons of exact decimals exactly, and of floats as the CPU compares.
+fn float_binary(pool: &mut Pool, op: BinaryOp, a: Formula, b: Formula) -> Result<Formula, String> {
+    let singles = single(pool, &a) || single(pool, &b);
+    let float_op = match op {
+        BinaryOp::Add => Some(FloatOp::Add),
+        BinaryOp::Sub => Some(FloatOp::Sub),
+        BinaryOp::Mul => Some(FloatOp::Mul),
+        BinaryOp::Div => Some(FloatOp::Div),
+        _ => None,
+    };
+    if let Some(float_op) = float_op {
+        let width = if singles { 32 } else { 64 };
+        let (x, y) = (as_float(pool, a, width)?, as_float(pool, b, width)?);
+        let result = pool.float(float_op, x, y);
+        return finite(pool, result);
+    }
+    if op == BinaryOp::Rem {
+        return Err("% works on whole numbers only".into());
+    }
+    if !matches!(
+        op,
+        BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
+    ) {
+        return Err("and/or of numbers".into());
+    }
+    let (x, y) = match (a, b) {
+        (Formula::Number(a), Formula::Number(b)) => return Ok(exact_compare(pool, op, a, b)),
+        (a, b) => {
+            // Singles compare as singles, with a decimal as its nearest single; next to a
+            // whole number or a double, as doubles.
+            let whole = |formula: &Formula| matches!(formula, Formula::Number(number) if number.places == 0);
+            let width = if singles && !whole(&a) && !whole(&b) {
+                32
+            } else {
+                64
+            };
+            (compared(pool, a, width)?, compared(pool, b, width)?)
+        }
+    };
+    let less = pool.float_test(FloatTest::Less, x, y);
+    let greater = pool.float_test(FloatTest::Less, y, x);
+    let equal = pool.float_test(FloatTest::Equal, x, y);
+    Ok(Formula::Truth(match op {
+        BinaryOp::Eq => equal,
+        BinaryOp::Ne => pool.bool_not(equal),
+        BinaryOp::Lt => less,
+        BinaryOp::Gt => greater,
+        BinaryOp::Le => pool.bool_or(less, equal),
+        _ => pool.bool_or(greater, equal),
+    }))
+}
+
+/// A side of a float comparison as a float of `width` bits: a whole number rounded to the
+/// nearest, as the test language compares it.
+fn compared(pool: &mut Pool, formula: Formula, width: u32) -> Result<Term, String> {
+    match formula {
+        Formula::Number(number) if number.places == 0 => whole_float(pool, number, width),
+        Formula::Float(term) if width == 64 && pool.width(term) == 32 => {
+            Ok(pool.float_convert(term, 64))
+        }
+        other => as_float(pool, other, width),
+    }
+}
+
+/// Two exact numbers, whole or decimal, compared exactly: each scaled to the places of the
+/// one with more.
+fn exact_compare(pool: &mut Pool, op: BinaryOp, a: Number, b: Number) -> Formula {
+    let places = a.places.max(b.places);
+    let mut scaled = |number: Number| {
+        let factor = 10_i128.pow(u32::from(places - number.places));
+        let factor = pool.bv_signed(WIDTH, factor);
+        pool.mul(number.term, factor)
+    };
+    let (x, y) = (scaled(a), scaled(b));
+    Formula::Truth(match op {
+        BinaryOp::Eq => pool.eq(x, y),
+        BinaryOp::Ne => {
+            let same = pool.eq(x, y);
+            pool.bool_not(same)
+        }
+        BinaryOp::Lt => pool.slt(x, y),
+        BinaryOp::Le => pool.sle(x, y),
+        BinaryOp::Gt => pool.slt(y, x),
+        _ => pool.sle(y, x),
+    })
+}
+
+/// A float's sign bit, at its width.
+const fn sign_bit(width: u32) -> u128 {
+    1 << (width - 1)
 }
 
 /// Constant bytes, such as a literal `part` of `count`.
@@ -136,13 +327,24 @@ pub fn translate(
             *value,
         ))),
         Expr::Literal(Value::Bool(value)) => Ok(Formula::Truth(pool.boolean(*value))),
+        Expr::Literal(Value::Dec { m, p }) => Ok(Formula::Number(Number {
+            term: pool.bv_signed(WIDTH, *m),
+            low: *m,
+            high: *m,
+            places: *p,
+        })),
+        Expr::Literal(Value::Float(bits)) => Ok(Formula::Float(
+            pool.bv(64, u128::from(bits.value().to_bits())),
+        )),
+        Expr::Literal(Value::Single(bits)) => Ok(Formula::Float(
+            pool.bv(32, u128::from(bits.value().to_bits())),
+        )),
         Expr::Literal(Value::Str(value)) => Ok(Formula::Text(
             value
                 .bytes()
                 .map(|byte| pool.bv(8, u128::from(byte)))
                 .collect(),
         )),
-        Expr::Literal(_) => Err("a formula with decimals".into()),
         Expr::Var(name) => match (vars.get(name), texts.get(name)) {
             (Some(number), _) => Ok(Formula::Number(*number)),
             (None, Some(bytes)) => Ok(Formula::Text(bytes.clone())),
@@ -151,13 +353,24 @@ pub fn translate(
             )),
         },
         Expr::Neg(inner) => {
-            let inner = number(translate(pool, inner, vars, texts)?)?;
+            let inner = match translate(pool, inner, vars, texts)? {
+                // A float's sign flipped, as `-x` is exactly.
+                Formula::Float(term) => {
+                    let sign = pool.bv(pool.width(term), sign_bit(pool.width(term)));
+                    let flipped = pool.xor(term, sign);
+                    return finite(pool, flipped);
+                }
+                // A decimal negates exactly, keeping its places.
+                Formula::Number(number) => number,
+                other => number(other)?,
+            };
             let (low, high) = span(&[inner.high.checked_neg(), inner.low.checked_neg()])?;
-            Ok(Formula::Number(Number::whole(
-                pool.neg(inner.term),
+            Ok(Formula::Number(Number {
+                term: pool.neg(inner.term),
                 low,
                 high,
-            )))
+                places: inner.places,
+            }))
         }
         Expr::Not(inner) => {
             let inner = truth(translate(pool, inner, vars, texts)?)?;
@@ -203,6 +416,10 @@ fn binary(
             }
             _ => Err("arithmetic on text".into()),
         };
+    }
+    let numeric = |formula: &Formula| matches!(formula, Formula::Number(_) | Formula::Float(_));
+    if (floating(&a) || floating(&b)) && numeric(&a) && numeric(&b) {
+        return float_binary(pool, op, a, b);
     }
     match op {
         BinaryOp::And | BinaryOp::Or => {
@@ -372,7 +589,15 @@ fn call(
             Ok(Formula::Text(characters.concat()))
         }
         Function::Abs => {
-            let a = number(next()?)?;
+            let a = match next()? {
+                // A float's sign cleared.
+                Formula::Float(term) => {
+                    let magnitude = pool.bv(pool.width(term), sign_bit(pool.width(term)) - 1);
+                    let cleared = pool.and(term, magnitude);
+                    return finite(pool, cleared);
+                }
+                other => number(other)?,
+            };
             let zero = pool.bv(WIDTH, 0);
             let negative = pool.slt(a.term, zero);
             let negated = pool.neg(a.term);
@@ -424,16 +649,21 @@ fn call(
         Function::If => {
             let condition = truth(next()?)?;
             match (next()?, next()?) {
-                (Formula::Number(a), Formula::Number(b)) => {
-                    let (a, b) = (number(Formula::Number(a))?, number(Formula::Number(b))?);
-                    Ok(Formula::Number(Number::whole(
-                        pool.ite(condition, a.term, b.term),
-                        a.low.min(b.low),
-                        a.high.max(b.high),
-                    )))
+                // Two numbers with the same places, such as two decimals printed alike.
+                (Formula::Number(a), Formula::Number(b)) if a.places == b.places => {
+                    Ok(Formula::Number(Number {
+                        term: pool.ite(condition, a.term, b.term),
+                        low: a.low.min(b.low),
+                        high: a.high.max(b.high),
+                        places: a.places,
+                    }))
                 }
                 (Formula::Truth(a), Formula::Truth(b)) => {
                     Ok(Formula::Truth(pool.ite(condition, a, b)))
+                }
+                (Formula::Float(a), Formula::Float(b)) if pool.width(a) == pool.width(b) => {
+                    let chosen = pool.ite(condition, a, b);
+                    finite(pool, chosen)
                 }
                 (Formula::Text(a), Formula::Text(b)) if a.len() == b.len() => Ok(Formula::Text(
                     a.iter()
@@ -492,6 +722,117 @@ fn call(
                 0,
                 i128::from(u32::MAX),
             )))
+        }
+        Function::Double => match next()? {
+            Formula::Number(number) if number.places == 0 => {
+                if number.low < -EXACT_DOUBLE || number.high > EXACT_DOUBLE {
+                    return Err("double(n) of a whole number a double can't hold exactly".into());
+                }
+                let term = whole_float(pool, number, 64)?;
+                finite(pool, term)
+            }
+            other => {
+                let term = widened(pool, other)?;
+                finite(pool, term)
+            }
+        },
+        Function::Single => match next()? {
+            Formula::Number(number) if number.places == 0 => {
+                if number.low < -EXACT_SINGLE || number.high > EXACT_SINGLE {
+                    return Err("single(n) of a whole number a single can't hold exactly".into());
+                }
+                let term = whole_float(pool, number, 32)?;
+                finite(pool, term)
+            }
+            // Rounds to the nearest, as cvtsd2ss does.
+            Formula::Float(term) if pool.width(term) == 64 => {
+                let narrowed = pool.float_convert(term, 32);
+                finite(pool, narrowed)
+            }
+            other => {
+                let term = as_float(pool, other, 32)?;
+                finite(pool, term)
+            }
+        },
+        Function::Fma => {
+            let values: Vec<Formula> = std::iter::from_fn(|| next().ok()).collect();
+            let [a, b, c] =
+                <[Formula; 3]>::try_from(values).map_err(|_| "fma without its three arguments")?;
+            let width = if [&a, &b, &c].iter().any(|value| single(pool, value)) {
+                32
+            } else {
+                64
+            };
+            let (x, y, z) = (
+                as_float(pool, a, width)?,
+                as_float(pool, b, width)?,
+                as_float(pool, c, width)?,
+            );
+            let result = pool.float_fma(x, y, z);
+            finite(pool, result)
+        }
+        Function::Round | Function::Trunc | Function::Floor | Function::Ceil => {
+            let x = widened(pool, next()?)?;
+            // cvtsd2si rounds to nearest, ties to even, and cvttsd2si truncates; floor and
+            // ceil round to a whole float first, as roundsd does.
+            let (x, truncate) = match function {
+                Function::Round => (x, false),
+                Function::Trunc => (x, true),
+                Function::Floor => (pool.float_round(x, Rounding::Down), true),
+                _ => (pool.float_round(x, Rounding::Up), true),
+            };
+            let (low, high) = pool
+                .float_bounds(x)
+                .and_then(|bounds| float::to_int_range(bounds, 64, truncate))
+                .ok_or("a rounding that could leave 64-bit whole numbers")?;
+            let whole = pool.float_to_int(x, 64, truncate);
+            Ok(Formula::Number(Number::whole(
+                pool.sign_extend(whole, WIDTH - 64),
+                low,
+                high,
+            )))
+        }
+        Function::Sqrt => {
+            let value = next()?;
+            let x = if single(pool, &value) {
+                as_float(pool, value, 32)?
+            } else {
+                as_float(pool, value, 64)?
+            };
+            // -0.0 has a square root of its own; below it, the test language stops.
+            if !pool.float_bounds(x).is_some_and(|(low, _)| low >= 0.0) {
+                return Err("sqrt of a number that could be below zero".into());
+            }
+            let root = pool.float_sqrt(x);
+            finite(pool, root)
+        }
+        // One multiplication by an exact power of ten, then to the nearest whole number, ties
+        // to even: mulsd, then cvtsd2si. The digits print with the places after a point.
+        Function::Fixed => {
+            let x = widened(pool, next()?)?;
+            let places = match &arguments[1] {
+                Expr::Literal(Value::Int(places)) => u8::try_from(*places)
+                    .ok()
+                    .filter(|places| *places <= DOUBLE_PLACES)
+                    .ok_or("fixed's places go from 0 to 15")?,
+                _ => return Err("fixed with places given by a formula".into()),
+            };
+            let scale = power_of_ten(pool, places, 64);
+            let scaled = pool.float(FloatOp::Mul, x, scale);
+            #[allow(clippy::cast_precision_loss)] // 2^53 is exact.
+            let limit = EXACT_DOUBLE as f64;
+            let (low, high) = pool
+                .float_bounds(scaled)
+                .filter(|(low, high)| low.abs() < limit && high.abs() < limit)
+                .and_then(|bounds| float::to_int_range(bounds, 64, false))
+                .ok_or("fixed of a value that could be too large to round exactly")?;
+            let whole = pool.float_to_int(scaled, 64, false);
+            Ok(Formula::Number(Number {
+                term: pool.sign_extend(whole, WIDTH - 64),
+                low,
+                high,
+                places,
+            }))
         }
         other => Err(format!("the function {other:?}")),
     }
@@ -742,9 +1083,146 @@ mod tests {
                     Formula::Truth(term) => {
                         Value::Bool(pool.evaluate(term, &values).expect("a value") == 1)
                     }
+                    Formula::Float(_) => panic!("{source} gave a float"),
                 };
                 assert_eq!(found, expected, "seed {seed}: {source} of {text:?}");
             }
         }
+    }
+
+    /// Decimal and float formulas over random decimals and whole numbers, evaluated at their
+    /// digits, must give what the test language computes, bit for bit.
+    #[test]
+    fn float_functions_agree_with_the_test_language() {
+        let seed = std::env::var("LENGUA_RANDOM_SEED")
+            .ok()
+            .and_then(|seed| seed.parse().ok())
+            .unwrap_or_else(|| {
+                let mut bytes = [0; 8];
+                getrandom::fill(&mut bytes).expect("a seed");
+                u64::from_le_bytes(bytes)
+            });
+        let mut rng = ChaCha8Rng::seed_from_u64(seed);
+        // a and b: decimals of 3 places up to 1000000.000; c and d: up to 16777.215, which
+        // singles hold; n and m: whole numbers up to a million.
+        let formulas = [
+            "fixed(sqrt(a * a + b * b), 3)",
+            "fixed(sqrt(double(n) * double(n) + double(m) * double(m)), 3)",
+            "round(a * 100.0)",
+            "trunc(a / b)",
+            "floor(a - b)",
+            "ceil(a * b)",
+            "fixed(fma(a, b, a), 2)",
+            "fixed(a / 3.0, 6)",
+            "fixed(-a, 1)",
+            "fixed(abs(a - b), 3)",
+            "round(double(n) / 7.0)",
+            "fixed(double(n) / 1000.0, 3)",
+            "fixed(single(c) * single(d), 2)",
+            "fixed(sqrt(single(c)), 4)",
+            "fixed(fma(single(c), d, c), 1)",
+            "fixed(single(double(n) / 3.0), 3)",
+            "a < b",
+            "a * 2.0 == b",
+            "double(n) <= a",
+            "single(c) > d",
+            "single(c) >= double(m)",
+            "a < 500.25",
+            "if(a < b, fixed(a, 2), fixed(b, 2))",
+        ];
+        let decimal = |rng: &mut ChaCha8Rng, high: i128| {
+            // Edges and ties as often as anything else.
+            match rng.random_range(0..4) {
+                0 => [1, 5, 500, 1000, 1500, 2500, high][rng.random_range(0..7)],
+                _ => rng.random_range(1..=high),
+            }
+        };
+        let mut compared = 0;
+        for _ in 0..400 {
+            let values = [
+                ("a", decimal(&mut rng, 1_000_000_000), 3),
+                ("b", decimal(&mut rng, 1_000_000_000), 3),
+                ("c", decimal(&mut rng, 16_777_215), 3),
+                ("d", decimal(&mut rng, 16_777_215), 3),
+                ("n", rng.random_range(0..=1_000_000), 0),
+                ("m", rng.random_range(0..=1_000_000), 0),
+            ];
+            let env: crate::expr::Env = values
+                .iter()
+                .map(|(name, m, p)| {
+                    let value = if *p == 0 {
+                        Value::Int(*m)
+                    } else {
+                        Value::Dec { m: *m, p: *p }
+                    };
+                    ((*name).to_owned(), value)
+                })
+                .collect();
+            let by_name: HashMap<String, u128> = values
+                .iter()
+                .map(|(name, m, _)| ((*name).to_owned(), *m as u128))
+                .collect();
+            for source in formulas {
+                let expr = crate::expr::parse(source).expect("a formula");
+                let Ok(expected) = crate::expr::eval(&expr, &env) else {
+                    continue;
+                };
+                let mut pool = Pool::default();
+                let vars: BTreeMap<String, Number> = [
+                    ("a", 1_000_000_000, 3),
+                    ("b", 1_000_000_000, 3),
+                    ("c", 16_777_215, 3),
+                    ("d", 16_777_215, 3),
+                    ("n", 1_000_000, 0),
+                    ("m", 1_000_000, 0),
+                ]
+                .iter()
+                .map(|(name, high, places)| {
+                    let low = i128::from(*places > 0);
+                    let digits = pool.var_in(64, name, low as u128, *high as u128);
+                    let term = pool.zero_extend(digits, WIDTH - 64);
+                    let number = Number {
+                        term,
+                        low,
+                        high: *high,
+                        places: *places,
+                    };
+                    ((*name).to_owned(), number)
+                })
+                .collect();
+                let formula = translate(&mut pool, &expr, &vars, &BTreeMap::new())
+                    .unwrap_or_else(|error| panic!("{source}: {error}"));
+                let evaluate = |term: Term| pool.evaluate(term, &by_name).expect("a value");
+                compared += 1;
+                let found = match formula {
+                    Formula::Number(number) => {
+                        let value = i128::from_ne_bytes(evaluate(number.term).to_ne_bytes());
+                        if number.places > 0 {
+                            Value::Str(crate::expr::decimal_text(value, number.places))
+                        } else {
+                            Value::Int(value)
+                        }
+                    }
+                    Formula::Truth(term) => Value::Bool(evaluate(term) == 1),
+                    Formula::Float(term) => {
+                        let bits = evaluate(term);
+                        let wanted = match &expected {
+                            Value::Float(value) => u128::from(value.value().to_bits()),
+                            Value::Single(value) => u128::from(value.value().to_bits()),
+                            other => panic!("{source} gave {other:?} in the test language"),
+                        };
+                        assert_eq!(bits, wanted, "seed {seed}: {source} with {values:?}");
+                        continue;
+                    }
+                    Formula::Text(_) => panic!("{source} gave text"),
+                };
+                assert_eq!(found, expected, "seed {seed}: {source} with {values:?}");
+            }
+        }
+        // Only a few draws make the test language refuse a formula, such as a sum past 2^53.
+        assert!(
+            compared > 400 * formulas.len() * 9 / 10,
+            "seed {seed}: {compared} compared"
+        );
     }
 }

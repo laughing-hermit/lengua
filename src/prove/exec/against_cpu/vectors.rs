@@ -13,6 +13,8 @@ use super::super::{Image, Last, State, Step, VECTOR_BYTES, step};
 use super::{CONDITIONS, FLAGS, NAMES, allows, build, possible, register};
 use crate::prove::term::{Pool, Term};
 
+mod floats;
+
 /// Where each part of a run's state sits in its input and in its result.
 const GPRS: usize = 0;
 const FLAGS_AT: usize = 128;
@@ -381,6 +383,7 @@ fn probes(rng: &mut ChaCha8Rng) -> Vec<Vec<String>> {
             ]);
         }
     }
+    list.extend(floats::probes(rng));
     list
 }
 
@@ -581,9 +584,20 @@ fn input(rng: &mut ChaCha8Rng, address: u64, cell_address: u64) -> Vec<u8> {
         1 => EDGES[rng.random_range(0..EDGES.len())],
         _ => b'a' + rng.random_range(0..26),
     };
-    for slot in &mut bytes[ZMMS..KS] {
-        *slot = byte(rng);
-    }
+    // Each 8 bytes a double, two singles or a mix of bytes, so float code meets its edges.
+    let fill = |rng: &mut ChaCha8Rng, bytes: &mut [u8]| {
+        for chunk in bytes.chunks_mut(8) {
+            match floats::lane(rng) {
+                Some(lane) => chunk.copy_from_slice(&lane[..chunk.len()]),
+                None => {
+                    for slot in chunk {
+                        *slot = byte(rng);
+                    }
+                }
+            }
+        }
+    };
+    fill(rng, &mut bytes[ZMMS..KS]);
     for number in 0..8 {
         let mask: u64 = match rng.random_range(0..4) {
             0 => u64::MAX,
@@ -592,9 +606,7 @@ fn input(rng: &mut ChaCha8Rng, address: u64, cell_address: u64) -> Vec<u8> {
         };
         bytes[KS + number * 8..KS + number * 8 + 8].copy_from_slice(&mask.to_le_bytes());
     }
-    for slot in &mut bytes[CELL..CELL + CELL_BYTES] {
-        *slot = byte(rng);
-    }
+    fill(rng, &mut bytes[CELL..CELL + CELL_BYTES]);
     bytes[ADDRESS..ADDRESS + 8].copy_from_slice(&address.to_le_bytes());
     bytes
 }

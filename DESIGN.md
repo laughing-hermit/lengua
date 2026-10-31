@@ -533,6 +533,18 @@ How the proof works (`src/prove/`):
   best with them. cvc5 bit-blasts each question whole, which takes it milliseconds where its lazy
   default took minutes. When z3 gives up on a question, inputs cvc5 finds still show a branch can
   be taken; only "impossible" needs both.
+- **Floats as bits first.** A question with floats in it goes first to the same two solvers as
+  bits, each float result an unknown in the range its bounds give, which the same operation on
+  equal operands gives again. That allows more than the floats do, so "impossible" there is
+  impossible, and inputs it finds count only where lengua's evaluator shows they really meet the
+  conditions. A branch it can't rule out is followed; whether an output can break goes on to cvc5
+  alone, in a session that reads IEEE floats, since z3 4.16 gives wrong conversions and a wrong
+  "possible" on singles.
+- **Memory stays free.** A proof starts one worker per core, as many as the free memory leaves
+  1 GiB each for. A watchdog stops the solver holding the most whenever free memory falls below a
+  sixteenth of all there is, so a hard question ends its proof as "not proven: the computer ran
+  low on memory" instead of the kernel's out-of-memory killer ending whatever it picks, such as
+  the session the agent runs in.
 
 Trust:
 
@@ -570,14 +582,21 @@ Trust:
     found a real bug: a 32-bit shift by zero still clears the register's upper half.
   - *Each vector instruction against this CPU* (`src/prove/exec/against_cpu/vectors.rs`): a
     second harness records zmm0 to zmm7, k0 to k7 and a 128-byte memory cell as well, and runs
-    about 530 probes, legacy SSE, VEX and EVEX forms with register and memory operands and merge
-    and zero masks, on about 6,300 runs whose bytes lean to the ones vector code tests (controls,
+    about 1,150 probes, legacy SSE, VEX and EVEX forms with register and memory operands and merge
+    and zero masks, on about 13,800 runs whose bytes lean to the ones vector code tests (controls,
     blanks, digits, letter bounds, the top bit). Its first run found a masked `vpandq` whose
-    memory source the model read by byte instead of by quadword.
+    memory source the model read by byte instead of by quadword. About 620 of the probes run
+    every float instruction the model runs, on lanes of doubles and singles that lean to float
+    edges: zeros of both signs, ties, the ends of the whole numbers conversions take,
+    the largest and smallest, infinities, and NaNs quiet, signaling and the default. They found
+    a masked `vunpcklps` whose memory source the model read only where the mask was set.
   - *The simplifier against plain arithmetic* (`src/prove/term/random.rs`): 4,000 random
     expressions shaped like the prover's are built through the simplifying pool and evaluated at
     random inputs. They must equal SMT-LIB's arithmetic as written, and every term's range must
     hold its value. It found dividing by a constant zero simplified wrongly.
+  - *Float formulas against the test language* (`src/prove/formula.rs`): 23 formulas of
+    decimals, singles and doubles, `sqrt`, `fma`, the roundings and `fixed`, over 400 random
+    draws, must give the test language's values bit for bit.
   - *The solvers against the pool*: with every input fixed, both solvers must find any other
     value of a random term impossible, and its own value possible, so the SMT-LIB text means
     what the pool evaluates and never rules out the right answer, which would make every proof
@@ -614,7 +633,9 @@ What it covers:
   text: `len`, `count` (non-overlapping, leftmost first, as the test language counts), `words`,
   `upper`, `lower`, `tr`, `reverse`, joining texts with `+`, and comparing them with `==` and
   `!=`; and checksums: `crc32` and `crc32c`, a CRC step per byte from all ones, inverted at the
-  end. All but `reverse` work byte by byte, which is exact on UTF-8; `reverse` goes by
+  end; and floats as the test language computes them: decimals in doubles, or singles where
+  `single(x)` says, with `+ - * /`, `sqrt`, `fma`, `round`, `trunc`, `floor`, `ceil`, `double`,
+  `single`, comparisons, and `fixed(x, places)` printed. All but `reverse` work byte by byte, which is exact on UTF-8; `reverse` goes by
   characters, as the test language does, telling them apart by each byte's values. Any placeholder whose variables all have fixed values in a shape is computed outright,
   so messages that quote an argument prove. A placeholder that's a text, drawn or computed,
   compares byte for byte.
@@ -629,11 +650,27 @@ What it covers:
   - compares into vectors or masks, every `vpcmp` predicate, `vptestm` and `vptestnm`, `ptest`;
   - and, or, xor, and-not, `vpternlog`; adds and subtracts, saturating bytes, `pminub`, `pmaxub`;
   - `pmovmskb`, `vpmovm2*` and `vpmov*2m`, and every mask register instruction (`kmov`, `kor`,
-    `kand`, `kandn`, `kxor`, `kxnor`, `knot`, `kshift`, `kortest`, `ktest`).
+    `kand`, `kandn`, `kxor`, `kxnor`, `knot`, `kshift`, `kortest`, `ktest`);
+  - floats, scalar and packed, singles and doubles, in legacy SSE, VEX and EVEX forms: the four
+    operations, `min` and `max`, square roots, `vfmadd` in its three orders, `roundsd`, every
+    `cmpsd` predicate into a vector or a mask, `ucomisd` and `comisd`, the conversions between
+    whole numbers, singles and doubles, `movsd` and `movss`, broadcasts, `movmskpd`, unpacking,
+    `shufpd` and `shufps`, horizontal adds, `movhlps` and `movlhps`, and the bitwise `pd`
+    forms. A rounding an EVEX instruction embeds is left to tests.
 
   The vector template, upcase and the word counts Claude Code wrote are proven for every input
   up to 4096 bytes, with no solver question. An instruction the proof doesn't model yet is named
   with its function: "main.s's count uses vpermb, which the proof doesn't model yet".
+- Floats: IEEE-754 singles and doubles as the CPU computes them under the MXCSR every program
+  starts with, rounding to nearest with ties to even: the first NaN operand quieted, the default
+  NaN for an operation with no meaning, the integer indefinite for a conversion that doesn't fit,
+  each checked against this CPU. Every float result has the bounds its operands' give, so a
+  branch on a float or on a whole number converted from one, such as a print loop's digit count,
+  is settled without a solver. A program that computes in the formula's order meets it term for
+  term: hypotenuse divides each side's thousandths by 1000, squares, adds, takes the square root
+  and scales by 1000 before `cvtsd2si`, which is what `fixed(sqrt(a * a + b * b), 3)` computes,
+  so it's proven for every pair of decimal sides in milliseconds, with no solver question. A
+  program that computes in another order goes to the solvers, and may be "not proven".
 - Checksums: `crc32` takes the bytes of its source one CRC step each, from the lowest, so 8
   bytes at a time and one at a time are one chain of steps, and so is the formula's `crc32c`:
   the CRC-32C asset is proven for every text up to 4096 bytes in about 20 seconds, with no
@@ -667,8 +704,9 @@ What it covers:
   input by 64 KiB a thread starts no thread on the 4096 bytes a proof covers, and its proof says
   it never ran `start_worker` or `join_worker`.
 
-Not yet: `sha256` and the SHA and AES instructions; `pclmulqdq`, which joins CRC chains;
-floating point; and `tr` that changes a character's width in bytes (`tr` beyond ASCII is proven
+Not yet: `sha256` and the SHA and AES instructions; `pclmulqdq`, which joins CRC chains; a
+float printed as the test language writes it on its own, its shortest exact digits, rather than
+with `fixed`; and `tr` that changes a character's width in bytes (`tr` beyond ASCII is proven
 character by character, each keeping its width). Those blocks are tested, not proven, and the
 report says why. A stream read both with `read` and with `fill` is proven for the four
 deliveries, and, for standard input with at most 8 bytes left at a read, for every count the read

@@ -361,6 +361,45 @@ async fn proves_decimal_inputs_where_the_output_is_fixed() {
     }
 }
 
+/// The hypotenuse of two whole sides, every pair the table draws: the program and the formula
+/// compute the same doubles step by step, so each pair runs to its one output.
+#[tokio::test]
+async fn proves_the_hypotenuse_of_whole_sides() {
+    if std::process::Command::new("z3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let machine = machine(&example("hypotenuse", "main.s")).await;
+    let block = block(&example("hypotenuse", "spec.md"), 0);
+    let started = Instant::now();
+    let verdict = prove(&machine, &block, &budget(120));
+    eprintln!("hypotenuse B1: {verdict:?} in {:?}", started.elapsed());
+    assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
+}
+
+/// The hypotenuse of decimal sides over their whole range: the program divides each side's
+/// thousandths by 1000, squares, adds, takes the square root and scales back, the formula's
+/// own steps, so the two outputs are one float computed alike.
+#[tokio::test]
+async fn proves_the_hypotenuse_of_decimal_sides() {
+    if std::process::Command::new("z3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let machine = machine(&example("hypotenuse", "main.s")).await;
+    let block = block(&example("hypotenuse", "spec.md"), 1);
+    let started = Instant::now();
+    let verdict = prove(&machine, &block, &budget(240));
+    eprintln!("hypotenuse B2: {verdict:?} in {:?}", started.elapsed());
+    assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
+}
+
 /// A die: one random byte from the kernel, printed as 1 to 6. The kernel's byte is any value, so
 /// the proof covers all 256; the rule `{any(1, 6)}` holds for each, and `% 7` breaks it.
 #[tokio::test]

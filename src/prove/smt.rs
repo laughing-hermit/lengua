@@ -64,6 +64,9 @@ const fn logic(floats: bool) -> &'static str {
 /// takes several times longer than z3's bit-blasting on lengua's questions.
 const CONFIRM_FACTOR: u64 = 4;
 
+/// The most earlier results of one float operation a new one is tied to, for each.
+const MAX_CONGRUENT: usize = 64;
+
 /// One running solver.
 struct Process {
     kind: Kind,
@@ -85,6 +88,7 @@ impl Drop for Process {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        super::watch::ended(self.child.id());
     }
 }
 
@@ -108,6 +112,7 @@ impl Process {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()?;
+        super::watch::started(child.id());
         let input = child
             .stdin
             .take()
@@ -155,8 +160,19 @@ impl Process {
     }
 
     fn send(&mut self, text: &str) -> io::Result<()> {
-        self.input.write_all(text.as_bytes())?;
-        self.input.flush()
+        self.input
+            .write_all(text.as_bytes())
+            .and_then(|()| self.input.flush())
+            .map_err(|error| self.failed(error))
+    }
+
+    /// Why the solver failed: the watchdog's reason when it stopped the solver.
+    fn failed(&self, error: io::Error) -> io::Error {
+        if super::watch::was_stopped(self.child.id()) {
+            io::Error::other(super::watch::LOW_MEMORY)
+        } else {
+            error
+        }
     }
 
     /// Waits until the solver has answered everything sent so far; returns what it printed.
@@ -169,8 +185,12 @@ impl Process {
         let mut lines = Vec::new();
         loop {
             let mut line = String::new();
-            if self.output.read_line(&mut line)? == 0 {
-                return Err(io::Error::other(format!("{} stopped", self.kind.name())));
+            let read = self
+                .output
+                .read_line(&mut line)
+                .map_err(|error| self.failed(error))?;
+            if read == 0 {
+                return Err(self.failed(io::Error::other(format!("{} stopped", self.kind.name()))));
             }
             // cvc5 echoes the quotes too.
             let line = line.trim().trim_matches('"').to_owned();
@@ -252,7 +272,8 @@ impl Process {
         conditions: &[Term],
         values: &[Term],
     ) -> io::Result<Option<HashMap<Term, u128>>> {
-        let variables = pool.variables(conditions);
+        let every: Vec<Term> = conditions.iter().chain(values).copied().collect();
+        let variables = pool.variables(&every);
         let asked: Vec<Term> = values.iter().chain(&variables).copied().collect();
         let model = if asked.is_empty() {
             HashMap::new()
@@ -271,7 +292,23 @@ impl Process {
         let holds = conditions
             .iter()
             .all(|condition| pool.evaluate(*condition, &by_name) == Some(1));
-        Ok(holds.then_some(model))
+        if !holds {
+            return Ok(None);
+        }
+        // A session that doesn't read floats gave its float results any values the
+        // conditions allowed: a value with one in it is its inputs' own.
+        let mut model = model;
+        if !self.floats {
+            for value in values {
+                if pool.has_float(&[*value]) {
+                    let Some(exact) = pool.evaluate(*value, &by_name) else {
+                        return Ok(None);
+                    };
+                    model.insert(*value, exact);
+                }
+            }
+        }
+        Ok(Some(model))
     }
 }
 
@@ -300,6 +337,9 @@ pub struct Solver {
     counts: HashSet<Term>,
     /// The session that answers questions with floats in them, started at the first.
     floats: Option<Box<Solver>>,
+    /// In a session that reads no floats, the float results defined so far, by the function
+    /// they compute (see [`Node::float_function`]).
+    float_results: HashMap<(u8, u32, u32), Vec<Term>>,
 }
 
 /// Why questions with floats have one solver: z3 4.16 calls some of them possible, with inputs
@@ -418,6 +458,7 @@ impl Solver {
             divisions: HashMap::new(),
             counts: HashSet::new(),
             floats: None,
+            float_results: HashMap::new(),
         })
     }
 
@@ -445,6 +486,7 @@ impl Solver {
         self.defined.clear();
         self.divisions.clear();
         self.counts.clear();
+        self.float_results.clear();
         self.why_unknown.clear();
         if let Some(floats) = &mut self.floats {
             floats.reset()?;
@@ -503,6 +545,43 @@ impl Solver {
             self.defined[current.index()] = true;
             let sort = sort_text(pool.sort(current));
             match pool.node(current) {
+                // Where floats can't be read, a float result is an unknown in the range its
+                // bounds give, that the same operation on equal operands gives again.
+                node if !self.first.floats && node.is_float_operation() => {
+                    let index = current.index();
+                    text.push_str(&format!("(declare-const t{index} {sort})\n"));
+                    if let Sort::Bv(width) = pool.sort(current) {
+                        let (low, high) = pool.range(current);
+                        if (low, high) != (0, ones(width)) {
+                            text.push_str(&format!(
+                                "(assert (bvule {} t{index}))\n(assert (bvule t{index} {}))\n",
+                                literal(low, width),
+                                literal(high, width)
+                            ));
+                        }
+                    }
+                    let operands = pool.operands(current);
+                    let width = operands.first().map_or(0, |operand| pool.width(*operand));
+                    if let Some(function) = node.float_function(width) {
+                        let earlier = self.float_results.entry(function).or_default();
+                        for other in earlier.iter().rev().take(MAX_CONGRUENT) {
+                            let same: Vec<String> = operands
+                                .iter()
+                                .zip(pool.operands(*other))
+                                .map(|(x, y)| format!("(= t{} t{})", x.index(), y.index()))
+                                .collect();
+                            let same = match same.as_slice() {
+                                [only] => only.clone(),
+                                _ => format!("(and {})", same.join(" ")),
+                            };
+                            text.push_str(&format!(
+                                "(assert (=> {same} (= t{index} t{})))\n",
+                                other.index()
+                            ));
+                        }
+                        earlier.push(current);
+                    }
+                }
                 Node::Var { width, .. } => {
                     text.push_str(&format!("(declare-const t{} {sort})\n", current.index()));
                     // The solver must know every range the terms were simplified with.
@@ -826,9 +905,21 @@ impl Solver {
             return Ok((Answer::Unsat, HashMap::new()));
         }
         self.questions += 1;
-        // Floats go to cvc5, in a session of their own that reads them; that session answers
-        // them itself.
         if !self.first.floats && (pool.has_float(conditions) || pool.has_float(values)) {
+            // First as bits, every float result an unknown that equal operands give again,
+            // which allows more than the floats do: impossible then is impossible, and inputs
+            // found count only where they really meet the conditions.
+            let (answer, model) = self.ask_bits(pool, conditions, values, true)?;
+            if answer != Answer::Unknown {
+                return Ok((answer, model));
+            }
+            // A branch the bits couldn't rule out is followed, which costs only time; whether
+            // an output can break goes to the floats themselves.
+            if model_wanted && values.is_empty() {
+                return Ok((Answer::Unknown, HashMap::new()));
+            }
+            // Floats go to cvc5, in a session of their own that reads them; that session
+            // answers them itself.
             if self.floats.is_none() {
                 let mut floats = Self::with(&[(Kind::Cvc5, "cvc5")], self.timeout_ms, true)?;
                 if let Some(deadline) = self.deadline {
@@ -844,6 +935,17 @@ impl Solver {
             self.alone.get_or_insert_with(|| FLOATS_ALONE.to_owned());
             return Ok(answer);
         }
+        self.ask_bits(pool, conditions, values, model_wanted)
+    }
+
+    /// [`Self::ask`] of this session's solvers, as bit vectors.
+    fn ask_bits(
+        &mut self,
+        pool: &Pool,
+        conditions: &[Term],
+        values: &[Term],
+        model_wanted: bool,
+    ) -> io::Result<(Answer, HashMap<Term, u128>)> {
         if self.out_of_time() {
             self.why_unknown = "the proof ran out of time".into();
             return Ok((Answer::Unknown, HashMap::new()));
@@ -1254,6 +1356,23 @@ mod tests {
             let (answer, _) = solver.check(&pool, &[never], &[]).expect("answers");
             assert_eq!(answer, Answer::Unsat);
         }
+    }
+
+    /// A question to a solver the watchdog stopped fails, saying the memory ran low.
+    #[test]
+    fn a_solver_stopped_for_memory_says_so() {
+        let Ok(mut solver) = Solver::start(1000) else {
+            return;
+        };
+        assert!(crate::prove::watch::stop_for_test(solver.first.child.id()));
+        let mut pool = Pool::default();
+        let x = pool.var(8, "x");
+        let three = pool.bv(8, 3);
+        let same = pool.eq(x, three);
+        let error = solver
+            .check(&pool, &[same], &[])
+            .expect_err("the solver is gone");
+        assert_eq!(error.to_string(), crate::prove::watch::LOW_MEMORY);
     }
 
     #[test]
