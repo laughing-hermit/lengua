@@ -37,14 +37,17 @@ and loops whose state crosses from one buffer-full to the next, as a word count'
 Left for later on this target:
 - Sorting at every length, which needs quantified facts over memory.
 
-Not done because a safety filter stopped the work (Claude's, in Claude Code, 2026-10-31). What a
-stopped reply held is never produced again, reworded or through other models or agents:
-- **SHA-256 and AES programs.** Two replies working toward them were stopped, so there is no
-  SHA-256 or AES program among the examples and assets, and no proof that a program meets the
-  `sha256` formula. The CPU's SHA and AES instructions are modeled in the prover and checked
-  against this CPU, and tests can still check a program against `sha256`.
-- **A reply planning lengua for every target LLVM supports** was stopped before its plan was
-  done. What it held isn't known; the plan is being made again from the start.
+Not done because a safety filter stopped the work (Claude's own, in Claude Code, 2026-10-31). What
+a stopped reply held is never produced again — not reworded, and not by routing it through other
+models or subagents (the user asked to use Sonnet 5.5 / Haiku 5.5 agents for it; declined, because
+switching models to get around a safety stop is circumvention, whoever runs the subagent):
+- **SHA-256 and AES programs.** Replies working toward them were stopped, so there is no SHA-256 or
+  AES program among lengua's own examples and assets, and no proof (by lengua) that such a program
+  meets the `sha256` formula. **The crypto support itself is not blocked:** the SHA and AES CPU
+  instructions are modeled in the prover and probed against this CPU, and the test language has
+  `sha256`, `crc32` and `crc32c`. So a user can write or drop in a standard SHA-256/AES
+  implementation and lengua will check and test it, and a proof against `sha256` can be attempted
+  on that supplied program. Only lengua hand-authoring the bundled example is blocked.
 
 ## 2. A white paper: lengua is an AI language, not a programming language
 
