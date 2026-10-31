@@ -743,11 +743,12 @@ async fn the_template_is_proven_for_every_input() {
 #[tokio::test]
 async fn a_bug_the_samples_miss_is_found_by_the_proof_and_run_for_real() {
     // The negative of 1234567 comes out one too big: one input in 18 quintillion, which the
-    // tests' samples miss and the proof finds; a real run with that input confirms it.
+    // tests' samples miss and the proof finds; a real run with that input confirms it. Finding
+    // it takes the solvers most of their time for a question, so no other proof runs beside it.
     if !solvers_installed() {
         return;
     }
-    let session = Session::proving(Protocol::Discover).await;
+    let session = Session::proving_alone(Protocol::Discover).await;
     let program = checked_template(&session).await;
     let buggy = asset("main-template.s")
         .replacen(

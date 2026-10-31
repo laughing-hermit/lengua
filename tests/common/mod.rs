@@ -5,6 +5,7 @@
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
 
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, ClientCapabilities, ClientConfig, Implementation,
@@ -15,6 +16,21 @@ use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
 use rmcp::{ClientHandler, ClientLifecycleMode, ClientServiceExt, RoleClient, ServiceExt};
 use serde_json::{Map, Value};
 use tempfile::TempDir;
+use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
+
+/// Sessions that prove share this lock, and one whose test needs a hard query answered within the
+/// solvers' time takes it alone: each proof uses every core, so beside the others its solvers
+/// would run out of time. The tests that don't prove run beside it either way.
+fn proving() -> Arc<RwLock<()>> {
+    static PROVING: OnceLock<Arc<RwLock<()>>> = OnceLock::new();
+    PROVING.get_or_init(|| Arc::new(RwLock::new(()))).clone()
+}
+
+/// A proving session's hold on [`proving`].
+enum Proving {
+    Shared(OwnedRwLockReadGuard<()>),
+    Alone(OwnedRwLockWriteGuard<()>),
+}
 
 /// A valid spec, tests included, for a program that adds two numbers.
 pub const ADD_SPEC: &str = r#"---
@@ -92,6 +108,8 @@ pub struct Session {
     proof_seconds: Option<u64>,
     wait_ms: Option<u64>,
     grace_ms: Option<u64>,
+    /// While the session may prove, its hold on the proving lock.
+    _proving: Option<Proving>,
 }
 
 impl Session {
@@ -135,7 +153,19 @@ impl Session {
         grace_ms: Option<u64>,
     ) -> Self {
         let data_dir = tempfile::tempdir().expect("create a temporary data folder");
-        Self::connect(protocol, data_dir, proof_seconds, wait_ms, grace_ms).await
+        let hold = match proof_seconds {
+            Some(0) => None,
+            _ => Some(Proving::Shared(proving().read_owned().await)),
+        };
+        Self::connect(protocol, data_dir, proof_seconds, wait_ms, grace_ms, hold).await
+    }
+
+    /// Starts `lengua-mcp` with its full time for proofs, once no other session in the test
+    /// binary is proving, and keeps the others from proving until it ends.
+    pub async fn proving_alone(protocol: Protocol) -> Self {
+        let hold = Some(Proving::Alone(proving().write_owned().await));
+        let data_dir = tempfile::tempdir().expect("create a temporary data folder");
+        Self::connect(protocol, data_dir, None, None, None, hold).await
     }
 
     /// Ends this server and starts a new one on the same data folder, as when a harness restarts
@@ -148,9 +178,10 @@ impl Session {
             proof_seconds,
             wait_ms,
             grace_ms,
+            _proving: hold,
         } = self;
         service.cancel().await.expect("close the session");
-        Self::connect(protocol, data_dir, proof_seconds, wait_ms, grace_ms).await
+        Self::connect(protocol, data_dir, proof_seconds, wait_ms, grace_ms, hold).await
     }
 
     async fn connect(
@@ -159,6 +190,7 @@ impl Session {
         proof_seconds: Option<u64>,
         wait_ms: Option<u64>,
         grace_ms: Option<u64>,
+        hold: Option<Proving>,
     ) -> Self {
         let command =
             tokio::process::Command::new(env!("CARGO_BIN_EXE_lengua-mcp")).configure(|command| {
@@ -195,6 +227,7 @@ impl Session {
             proof_seconds,
             wait_ms,
             grace_ms,
+            _proving: hold,
         }
     }
 

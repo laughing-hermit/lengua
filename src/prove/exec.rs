@@ -1020,6 +1020,57 @@ fn step(image: &Image, state: &mut State, pool: &mut Pool) -> Result<Step, Stop>
     step
 }
 
+#[cfg(test)]
+impl State {
+    /// What a concrete run left, for Round 9's prover golden: how it ended, its steps, where it
+    /// stopped, its registers and flags, and hashes of what it wrote; values that aren't
+    /// constants print as `?`.
+    pub(crate) fn fingerprint(&self, pool: &Pool) -> String {
+        let value = |term: Term| {
+            pool.constant(term)
+                .map_or_else(|| "?".to_owned(), |value| format!("{value:x}"))
+        };
+        let bytes = |terms: &[Term]| -> String {
+            let known: Option<Vec<u8>> = terms
+                .iter()
+                .map(|term| {
+                    pool.constant(*term)
+                        .and_then(|byte| u8::try_from(byte).ok())
+                })
+                .collect();
+            match known {
+                Some(known) => crate::hash::Sha256Hex::of(&known).as_str()[..16].to_owned(),
+                None => format!("?{}", terms.len()),
+            }
+        };
+        let end = match &self.end {
+            Some(End::Exit(status)) => format!("exit {}", value(*status)),
+            Some(other) => format!("{other:?}"),
+            None => "running".to_owned(),
+        };
+        let registers: Vec<String> = self.registers.iter().map(|term| value(*term)).collect();
+        let flags: Vec<String> = [self.carry, self.zero, self.sign, self.overflow, self.parity]
+            .iter()
+            .map(|term| value(*term))
+            .collect();
+        let written: Vec<String> = self
+            .written
+            .iter()
+            .map(|(name, contents)| format!("{name}={}", bytes(contents)))
+            .collect();
+        format!(
+            "{end}; {} steps; rip {:x}; registers {}; flags {}; out {}; err {}; written [{}]",
+            self.steps,
+            self.rip,
+            registers.join(","),
+            flags.join(","),
+            bytes(&self.stdout),
+            bytes(&self.stderr),
+            written.join(",")
+        )
+    }
+}
+
 /// One instruction being executed on a state.
 struct Cpu<'a> {
     image: &'a Image,

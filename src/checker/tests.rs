@@ -239,6 +239,49 @@ async fn operands_must_mean_what_the_machine_does() {
     );
 }
 
+/// A number that doesn't fit its instruction's field is refused: the assembler would keep only
+/// its low bits, so main.s wouldn't say what runs.
+#[tokio::test]
+async fn numbers_must_fit_their_field() {
+    for (old, new, bits) in [
+        (
+            "    mov edx, USAGE_MSG_LEN\n",
+            "    mov edx, 4294967314\n",
+            32,
+        ),
+        (
+            "    cmp byte ptr [rdi], '-'\n",
+            "    cmp byte ptr [rdi], 301\n",
+            8,
+        ),
+    ] {
+        let text = with(old, new);
+        let report = check(&text).await;
+        assert_violation(
+            &report,
+            Rule::Dialect,
+            line_of(&text, new),
+            &format!("which doesn't fit in its {bits} bits"),
+        );
+    }
+    // A number that fits, read signed or unsigned, is as written.
+    for (old, new) in [
+        ("    mov edx, USAGE_MSG_LEN\n", "    mov edx, 4294967295\n"),
+        ("    mov edx, USAGE_MSG_LEN\n", "    mov edx, -1\n"),
+    ] {
+        let text = with(old, new);
+        let report = check(&text).await;
+        assert!(
+            !report
+                .violations
+                .iter()
+                .any(|violation| violation.to_string().contains("doesn't fit")),
+            "{new:?}: {:#?}",
+            report.violations
+        );
+    }
+}
+
 #[tokio::test]
 async fn the_stack_is_tracked_exactly() {
     let line = line_of(TEMPLATE, "    test rsi, rsi");

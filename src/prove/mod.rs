@@ -3867,6 +3867,98 @@ fn within(
         .map_err(|error| Stop::Unproven(format!("the solver failed: {error}")))
 }
 
+/// A sample's text as the model takes it: the test server's port, which a real run's kernel
+/// chooses, is one for the samples.
+fn sample_text(text: &str) -> String {
+    text.replace(crate::testfile::PORT_TEXT, SAMPLE_PORT)
+}
+
+/// The state a sample's run starts in: its arguments, input, files, folders, environment,
+/// network, random bytes and clock, all as the sample has them.
+fn sample_start(
+    image: &Image,
+    pool: &mut Pool,
+    case: &crate::testfile::Case,
+    listens: bool,
+) -> State {
+    let fill = sample_text;
+    let args: Vec<Vec<Term>> = case
+        .args
+        .iter()
+        .map(|arg| exec::bytes(pool, fill(arg).as_bytes()))
+        .collect();
+    let stdin = exec::bytes(pool, fill(&case.stdin).as_bytes());
+    let files = case
+        .files
+        .iter()
+        .map(|(name, contents)| (name.clone(), exec::bytes(pool, fill(contents).as_bytes())))
+        .collect();
+    let server = case
+        .server
+        .iter()
+        .map(|reply| {
+            (
+                exec::bytes(pool, fill(&reply.receives).as_bytes()),
+                vec![exec::bytes(pool, fill(&reply.replies).as_bytes())],
+            )
+        })
+        .collect();
+    let client = case
+        .client
+        .iter()
+        .enumerate()
+        .map(|(index, exchange)| {
+            let bytes = exec::bytes(pool, fill(&exchange.sends).as_bytes());
+            let held = case.clients_at_once && index + 1 < case.client.len() && !bytes.is_empty();
+            let mut pieces = if held {
+                vec![
+                    bytes[..bytes.len() - 1].to_vec(),
+                    bytes[bytes.len() - 1..].to_vec(),
+                ]
+            } else {
+                vec![bytes]
+            };
+            pieces.retain(|piece| !piece.is_empty());
+            exec::net::Client {
+                pieces,
+                waits: !exchange.receives.is_empty(),
+                held,
+            }
+        })
+        .collect();
+    let network = exec::net::Network {
+        port: (!case.server.is_empty())
+            .then(|| pool.bv(WIDTH, SAMPLE_PORT.parse().unwrap_or(40000))),
+        server,
+        client,
+        listening: listens,
+        at_once: case.clients_at_once,
+        eager: true,
+    };
+    let supply = case.supply();
+    let random = supply.random.as_ref().map(|bytes| exec::bytes(pool, bytes));
+    let clock = supply
+        .clock
+        .iter()
+        .map(|time| {
+            (
+                pool.bv(64, u128::from(time.seconds.cast_unsigned())),
+                pool.bv(64, u128::from(time.nanoseconds)),
+            )
+        })
+        .collect();
+    let env: Vec<Vec<Term>> = case
+        .env
+        .iter()
+        .map(|(name, value)| exec::bytes(pool, format!("{name}={value}").as_bytes()))
+        .collect();
+    State::start(image, pool, &args, &env, stdin)
+        .with_files(files)
+        .with_folders(case.folders.clone())
+        .with_supply(random, clock)
+        .with_network(network)
+}
+
 /// Runs the prover's model of the code on concrete inputs that the real program has passed, and
 /// says where the model disagrees: then the model can't be trusted for a proof. A sample on
 /// which the program breaks a memory rule, which a real run can pass without showing it, is the
@@ -3890,92 +3982,8 @@ pub fn agrees(
     });
     for case in cases {
         let mut pool = Pool::default();
-        // The test server's port, which a real run's kernel chooses: one for the samples.
-        let fill = |text: &str| text.replace(crate::testfile::PORT_TEXT, SAMPLE_PORT);
-        let args: Vec<Vec<Term>> = case
-            .args
-            .iter()
-            .map(|arg| exec::bytes(&mut pool, fill(arg).as_bytes()))
-            .collect();
-        let stdin = exec::bytes(&mut pool, fill(&case.stdin).as_bytes());
-        let files = case
-            .files
-            .iter()
-            .map(|(name, contents)| {
-                (
-                    name.clone(),
-                    exec::bytes(&mut pool, fill(contents).as_bytes()),
-                )
-            })
-            .collect();
-        let server = case
-            .server
-            .iter()
-            .map(|reply| {
-                (
-                    exec::bytes(&mut pool, fill(&reply.receives).as_bytes()),
-                    vec![exec::bytes(&mut pool, fill(&reply.replies).as_bytes())],
-                )
-            })
-            .collect();
-        let client = case
-            .client
-            .iter()
-            .enumerate()
-            .map(|(index, exchange)| {
-                let bytes = exec::bytes(&mut pool, fill(&exchange.sends).as_bytes());
-                let held =
-                    case.clients_at_once && index + 1 < case.client.len() && !bytes.is_empty();
-                let mut pieces = if held {
-                    vec![
-                        bytes[..bytes.len() - 1].to_vec(),
-                        bytes[bytes.len() - 1..].to_vec(),
-                    ]
-                } else {
-                    vec![bytes]
-                };
-                pieces.retain(|piece| !piece.is_empty());
-                exec::net::Client {
-                    pieces,
-                    waits: !exchange.receives.is_empty(),
-                    held,
-                }
-            })
-            .collect();
-        let network = exec::net::Network {
-            port: (!case.server.is_empty())
-                .then(|| pool.bv(WIDTH, SAMPLE_PORT.parse().unwrap_or(40000))),
-            server,
-            client,
-            listening: listens,
-            at_once: case.clients_at_once,
-            eager: true,
-        };
-        let supply = case.supply();
-        let random = supply
-            .random
-            .as_ref()
-            .map(|bytes| exec::bytes(&mut pool, bytes));
-        let clock = supply
-            .clock
-            .iter()
-            .map(|time| {
-                (
-                    pool.bv(64, u128::from(time.seconds.cast_unsigned())),
-                    pool.bv(64, u128::from(time.nanoseconds)),
-                )
-            })
-            .collect();
-        let env: Vec<Vec<Term>> = case
-            .env
-            .iter()
-            .map(|(name, value)| exec::bytes(&mut pool, format!("{name}={value}").as_bytes()))
-            .collect();
-        let start = State::start(&image, &mut pool, &args, &env, stdin)
-            .with_files(files)
-            .with_folders(case.folders.clone())
-            .with_supply(random, clock)
-            .with_network(network);
+        let fill = sample_text;
+        let start = sample_start(&image, &mut pool, case, listens);
         let mut runs = exec::explore(&image, start, &mut pool, &mut exec::Concrete, 2)?;
         let run = runs.pop().ok_or("the model didn't run")?;
         if let Some(End::Unsafe(problem)) = &run.end {
@@ -4067,6 +4075,8 @@ pub fn agrees(
     Ok(None)
 }
 
+#[cfg(test)]
+mod golden;
 #[cfg(test)]
 mod outputs;
 #[cfg(test)]

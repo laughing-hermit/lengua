@@ -14,6 +14,8 @@ pub mod tables;
 pub mod threads;
 
 #[cfg(test)]
+pub(crate) mod golden;
+#[cfg(test)]
 mod tests;
 
 use std::collections::BTreeMap;

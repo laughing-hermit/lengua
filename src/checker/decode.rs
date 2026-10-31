@@ -1486,6 +1486,19 @@ fn same_instruction(
                 let bits = immediate_bits(kind).ok_or_else(|| {
                     format!("operand {position} isn't a number in the machine code")
                 })?;
+                // The number as written must fit the field, read signed or unsigned: llvm-mc
+                // keeps only the low bits of one that doesn't, so `mov eax, 0x100000001` would
+                // run as `mov eax, 1`.
+                if bits < 64 {
+                    let fits = -(1_i128 << (bits - 1))..=(1_i128 << bits) - 1;
+                    if !fits.contains(&i128::from(*value)) {
+                        return Err(format!(
+                            "operand {position} is {value} as written, which doesn't fit in its \
+                             {bits} bits, so the machine code holds {}",
+                            instruction.immediate(index) & ((1_u64 << bits) - 1)
+                        ));
+                    }
+                }
                 let mask = if bits == 64 {
                     u64::MAX
                 } else {
