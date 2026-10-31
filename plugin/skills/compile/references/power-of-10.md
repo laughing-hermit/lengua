@@ -1,4 +1,4 @@
-# The lengua Power of 10 (dialect 3)
+# The lengua Power of 10 (dialect 4)
 
 `main.s` is x86-64 assembly for Linux in Intel syntax. `check` builds it, reads the machine
 code back, matches it to `main.s` line by line (operands included), and checks the rules below.
@@ -65,8 +65,8 @@ constant, and `lea reg, [rip + name]` loads an address. Write the size (`byte pt
 
 ## Instruction set
 
-Dialect 2 is integer instructions, `syscall`, vector instructions and floating point in double
-and single precision:
+The dialect's instructions are integer instructions, `syscall`, vector instructions and floating
+point in double and single precision:
 
 - `mov movzx movsx movsxd lea push pop xchg bswap` and every `cmovCC`
 - `add adc sub sbb neg inc dec mul imul div idiv cbw cwde cdqe cwd cdq cqo`
@@ -234,6 +234,9 @@ an assertion, so an unexpected value can't slip through:
     jmp .Lassert_unknown_kind
 ```
 
+For a dense range of cases, such as an operator's character or a state machine's state, a checked
+jump table (rule 9) picks the case with one bounds check and one jump, whichever case it is.
+
 ### 2. Bounded loops
 
 ```
@@ -339,8 +342,9 @@ to the exit; 0 to 255, never 134), `.zero` and `.skip` sizes, and loop counts. A
 
 ### 9. No indirection, checked indexes
 
-No jumps or calls through registers or memory, and data holds numbers, never addresses. A memory
-access with an index register needs, since the last label, `cmp index, LIMIT` followed by `jae`
+No calls through registers or memory and no jumps through memory; the one jump through a register
+is a checked jump table's, below. Data holds numbers, never addresses, but for a jump table's
+entries. A memory access with an index register needs, since the last label, `cmp index, LIMIT` followed by `jae`
 (or `ja`) away from the access, and no change to the index before the access. `jae` compares
 without sign, so a negative index is caught too. `lea` doesn't access memory, so `lea rdi,
 [rbx + rdx]` needs no check:
@@ -371,6 +375,43 @@ bounds checks can be skipped this way, and `check` finds every unsafe block.
 The compare must bound the whole index (M2): `cmp rcx, …` for an index in rcx, or `cmp ecx, …`
 right after a 32-bit write to ecx in the same run, which clears the upper half. A negative limit
 is refused, since `jae` reads it as a huge number.
+
+**Checked jump tables** (since dialect 4). A `switch` over a dense range of small numbers jumps
+through a table of the function's own labels: the index bounds-checked as any index is, then
+exactly these four instructions in a row, any registers but the table's and the target's apart,
+with no label before the last three:
+
+```
+    sub eax, OPERATOR_FIRST
+    cmp eax, OPERATORS
+    jae .Lapply_unknown
+    lea rcx, [rip + operations]
+    movsxd rax, dword ptr [rcx + rax*4]
+    add rax, rcx
+    jmp rax
+.Lapply_multiply:
+```
+
+The table is in `.rodata`, holds only `.long .Lcase - table` entries, one per index, and its limit
+keeps every entry read inside it, as for any data symbol. Each entry names a label of the same
+function after the jump: a table jumps forward only, so every backward jump stays a loop's end. An
+entry may repeat, as a default case does:
+
+```
+.section .rodata
+
+.type operations, @object
+.balign 4
+operations:
+    .long .Lapply_multiply - operations
+    .long .Lapply_add - operations
+    .long .Lapply_unknown - operations
+    .long .Lapply_subtract - operations
+.size operations, . - operations
+```
+
+`check` gives the jump the table's cases as successors, so every rule follows each case, and the
+proof follows every case the index can reach.
 
 ## Memory safety
 
@@ -417,4 +458,4 @@ written, and no stack may be read before something wrote it.
 ### 10. Checked by tools
 
 The assembler and linker treat warnings as errors. `check` runs on every change, and nothing
-runs or is stamped before every rule passes. The lock records `dialect = 3`.
+runs or is stamped before every rule passes. The lock records `dialect = 4`.

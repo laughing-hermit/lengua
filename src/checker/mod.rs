@@ -1,4 +1,4 @@
-//! The rule checker for dialect 3: the lengua Power of 10 for x86-64 assembly, and the memory
+//! The rule checker for dialect 4: the lengua Power of 10 for x86-64 assembly, and the memory
 //! rules M1 to M8.
 //!
 //! It reads main.s ([`source`]), reads the linked executable back and matches every instruction
@@ -10,6 +10,7 @@ pub mod decode;
 pub mod memory;
 pub mod rules;
 pub mod source;
+pub mod tables;
 pub mod threads;
 
 #[cfg(test)]
@@ -268,13 +269,16 @@ pub fn check_program(source: &Source, executable: &[u8], context: Context<'_>) -
         context.profile.syscall_number(Syscall::Exit),
         context.profile.syscall_number(Syscall::ExitGroup),
     ];
+    // Jumps through checked tables, found first, since the control flow follows their cases.
+    let jumps = tables::every(&program, &mut violations);
     let flows: BTreeMap<String, cfg::Flow> = program
         .functions
         .iter()
         .map(|function| {
+            let jumps = jumps.get(function.name()).map_or(&[][..], Vec::as_slice);
             (
                 function.name().to_owned(),
-                cfg::analyze(function, &program, &exit_numbers, &mut violations),
+                cfg::analyze(function, &program, &exit_numbers, jumps, &mut violations),
             )
         })
         .collect();
@@ -290,6 +294,7 @@ pub fn check_program(source: &Source, executable: &[u8], context: Context<'_>) -
     );
     facts.features = decode::features_needed(&machine);
     facts.named = program.named_symbols();
+    facts.tables = tables::addresses(&program, &jumps);
     memory::check(
         &program,
         &flows,

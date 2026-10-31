@@ -67,6 +67,8 @@ pub struct Image {
     /// The symbol each `[rip + name]` names in main.s, by instruction address, as a place in
     /// `symbols`.
     named: HashMap<u64, usize>,
+    /// Each checked jump table's `jmp`, by address, and the addresses of its cases.
+    tables: HashMap<u64, Vec<u64>>,
     /// The canonical fill's places, when the program has it.
     fill: Option<fill::Fill>,
     /// Whether some run has called each function, as `functions` lists them: a proof says
@@ -129,6 +131,17 @@ impl Image {
             functions,
             symbols,
             named,
+            tables: machine
+                .tables
+                .iter()
+                .map(|(jump, cases)| {
+                    let mut cases = cases.clone();
+                    // A table may name a case more than once; a run goes there once.
+                    cases.sort_unstable();
+                    cases.dedup();
+                    (*jump, cases)
+                })
+                .collect(),
             fill: None,
             entered,
         };
@@ -1541,18 +1554,56 @@ impl<'a> Cpu<'a> {
     /// object the operand's pointer points into is an obligation: the proof asks whether the
     /// input can choose it.
     fn places(&mut self, address: Term, bytes: u32, writing: bool) -> Result<Vec<u64>, Stop> {
-        let (low, high) = self.pool.range(address);
+        let range = self.pool.range(address);
         // An address that's a sum of multiples of 2^s lands only every 2^s bytes.
-        let (step, remainder) = self.pool.stride(address);
+        let stride = self.pool.stride(address);
+        let held = self.held();
+        let places = match self.every_place(range, stride, bytes, writing) {
+            Ok(places) => places,
+            Err(why) => {
+                return self
+                    .places_inside(held, address, range, stride, bytes, writing)
+                    .ok_or(why);
+            }
+        };
+        let mut outside = Vec::new();
+        for place in &places {
+            if let Some(held) = held
+                && let Err(End::Unsafe(problem)) =
+                    self.reach(held, *place, u64::from(bytes), writing, &Self::doing)
+            {
+                outside.push((*place, problem));
+            }
+        }
+        if let Some((_, problem)) = outside.first() {
+            let mut chosen = self.pool.boolean(false);
+            for (place, _) in &outside {
+                let constant = self.pool.bv(64, u128::from(*place));
+                let here = self.pool.eq(address, constant);
+                chosen = self.pool.bool_or(chosen, here);
+            }
+            let problem = format!("for some input, {problem}");
+            self.state.obligations.push((chosen, problem));
+        }
+        Ok(places)
+    }
+
+    /// Every place from `low` to `high` an address landing every `step` bytes from `remainder`
+    /// can be, its `bytes` all in the program's memory, and writable for a write.
+    fn every_place(
+        &self,
+        (low, high): (u128, u128),
+        (step, remainder): (u128, u128),
+        bytes: u32,
+        writing: bool,
+    ) -> Result<Vec<u64>, Stop> {
         let first = low + (remainder + step - low % step) % step;
         if first > high || (high - first) / step >= MAX_PLACES {
             return Err(unsupported(
                 "an address that depends on the input in more than 256 ways",
             ));
         }
-        let held = self.held();
         let mut places = Vec::new();
-        let mut outside = Vec::new();
         for place in (first..=high).step_by(usize::try_from(step).unwrap_or(1)) {
             let place = u64::try_from(place).map_err(|_| unsupported("an address past 64 bits"))?;
             for offset in 0..u64::from(bytes) {
@@ -1566,25 +1617,47 @@ impl<'a> Cpu<'a> {
                     }
                 }
             }
-            if let Some(held) = held
-                && let Err(End::Unsafe(problem)) =
-                    self.reach(held, place, u64::from(bytes), writing, &Self::doing)
-            {
-                outside.push((place, problem));
-            }
             places.push(place);
         }
-        if let Some((_, problem)) = outside.first() {
-            let mut chosen = self.pool.boolean(false);
-            for (place, _) in &outside {
-                let constant = self.pool.bv(64, u128::from(*place));
-                let here = self.pool.eq(address, constant);
-                chosen = self.pool.bool_or(chosen, here);
-            }
-            let problem = format!("for some input, {problem}");
-            self.state.obligations.push((chosen, problem));
-        }
         Ok(places)
+    }
+
+    /// The places inside the object it's held to an address can be, where its range alone
+    /// reaches past the program's memory: an index only a compare on the path bounds, as a
+    /// checked jump table's `cmp` and `jae` do its index, needs only the places inside, and
+    /// whether some input pushes the address outside becomes a question for the solvers.
+    fn places_inside(
+        &mut self,
+        held: Option<Held>,
+        address: Term,
+        (low, high): (u128, u128),
+        stride: (u128, u128),
+        bytes: u32,
+        writing: bool,
+    ) -> Option<Vec<u64>> {
+        let object = match held? {
+            Held::Owner(owner) => self.owned(owner)?,
+            Held::Pointer(pointer) => self.object(pointer, pointer)?,
+        };
+        let start = u128::from(object.start);
+        let last = u128::from(object.end).checked_sub(u128::from(bytes))?;
+        let places = self
+            .every_place((low.max(start), high.min(last)), stride, bytes, writing)
+            .ok()?;
+        let (first, final_place) = (self.pool.bv(64, start), self.pool.bv(64, last));
+        let below = self.pool.ult(address, first);
+        let above = self.pool.ult(final_place, address);
+        let outside = self.pool.bool_or(below, above);
+        let problem = format!(
+            "for some input, {} {} {bytes} byte{} outside {}, which has {} bytes",
+            self.doing(),
+            if writing { "writes" } else { "reads" },
+            if bytes == 1 { "" } else { "s" },
+            object.name,
+            object.end - object.start
+        );
+        self.state.obligations.push((outside, problem));
+        Some(places)
     }
 
     /// A load from an address the input chooses: the value at each place it can be, chosen by
@@ -2056,6 +2129,7 @@ impl<'a> Cpu<'a> {
                 self.write(0, value)?;
                 Ok(Step::Next)
             }
+            Mnemonic::Jmp if instruction.op_kind(0) == OpKind::Register => self.table_jump(),
             Mnemonic::Jmp => {
                 self.state.rip = instruction.near_branch_target();
                 Ok(Step::Next)
@@ -2148,6 +2222,45 @@ impl<'a> Cpu<'a> {
             }
             other => self.vector(other),
         }
+    }
+
+    /// `jmp` through a register, which only a checked jump table does (dialect 4): the run goes
+    /// on at each of the table's cases the target can be, each where the target is that case.
+    /// The checker matched the table to the jump and rule 9 holds its index to the table, but a
+    /// target that could be anything else still ends the proof, so it rests on neither.
+    fn table_jump(&mut self) -> Result<Step, Stop> {
+        let ip = self.instruction.ip();
+        let target = self.read(0, 64)?;
+        let Some(cases) = self.image.tables.get(&ip) else {
+            return Err(unsupported(
+                "a jump through a register that isn't a checked jump table's",
+            ));
+        };
+        let stray = || unsupported("a jump through a table to an address that isn't its case");
+        if let Some(known) = self.pool.constant(target) {
+            let known = u64::try_from(known).map_err(|_| stray())?;
+            if !cases.contains(&known) {
+                return Err(stray());
+            }
+            self.state.rip = known;
+            return Ok(Step::Next);
+        }
+        let mut choices = Vec::new();
+        let mut elsewhere = self.pool.boolean(true);
+        for case in cases {
+            let at = self.pool.bv(64, u128::from(*case));
+            let here = self.pool.eq(target, at);
+            let not_here = self.pool.bool_not(here);
+            elsewhere = self.pool.bool_and(elsewhere, not_here);
+            let mut choice = self.state.clone();
+            choice.rip = *case;
+            choices.push((here, choice));
+        }
+        // Where no case is the target, the proof stops there: it follows only the cases.
+        let mut astray = self.state.clone();
+        astray.end = Some(stray());
+        choices.push((elsewhere, astray));
+        Ok(Step::Choose(choices))
     }
 
     /// The address `lea` computes, as a 64-bit term.

@@ -53,6 +53,9 @@ pub struct DataSymbol {
     pub shared: bool,
     /// Its lines from `.type` to `.size`, without comments or extra spaces.
     pub body: Vec<String>,
+    /// For a jump table, the local label each entry names (`.long .Lcase - table`), in order:
+    /// empty for any other data.
+    pub table: Vec<String>,
 }
 
 /// A function, between `.type f, @function` and `.size f, . - f`.
@@ -1070,6 +1073,7 @@ impl Parser {
                     normalize(&format!(".type {name}, @object")),
                     format!("{name}:"),
                 ],
+                table: Vec::new(),
             });
         }
     }
@@ -1309,6 +1313,7 @@ impl Parser {
         };
         data.body.push(normalize(code));
         let section = data.section;
+        let symbol = data.name.clone();
         match name {
             ".zero" | ".skip" => {
                 if !self.source.constants.contains_key(arguments.trim()) {
@@ -1345,12 +1350,53 @@ impl Parser {
             }
             ".byte" | ".short" | ".long" | ".quad" => {
                 for value in split_operands(arguments) {
+                    // A jump table's entry: a label of the function that jumps through the table,
+                    // as its distance from the table, which the linker fills in.
+                    if let Some((label, from)) = value.split_once('-')
+                        && label.trim().starts_with(".L")
+                    {
+                        let (label, from) = (label.trim(), from.trim());
+                        if name != ".long" || from != symbol {
+                            self.violation(
+                                Rule::Indirection,
+                                number,
+                                format!("data value `{value}` isn't a jump table's entry"),
+                                format!(
+                                    "a jump table's entries are `.long .Lcase - {symbol}`: a label \
+                                     of the function that jumps through it, minus the table itself"
+                                ),
+                            );
+                        } else if section != SectionKind::ReadOnly {
+                            self.violation(
+                                Rule::Immutability,
+                                number,
+                                format!("jump table {symbol} is in writable data"),
+                                "put a jump table in .section .rodata, where nothing can change \
+                                 where it jumps",
+                            );
+                        } else if let Some(data) = self.data.as_mut() {
+                            data.table.push(label.to_owned());
+                        }
+                        continue;
+                    }
                     if let Err(problem) = evaluate(value, &self.source.constants) {
                         self.violation(
                             Rule::Indirection,
                             number,
                             format!("data value `{value}`: {problem}"),
-                            "data holds numbers only, never addresses",
+                            "data holds numbers only, never addresses, but for a jump table's \
+                             entries",
+                        );
+                    } else if self
+                        .data
+                        .as_ref()
+                        .is_some_and(|data| !data.table.is_empty())
+                    {
+                        self.violation(
+                            Rule::Indirection,
+                            number,
+                            format!("jump table {symbol} mixes numbers with its entries"),
+                            "a jump table holds only `.long .Lcase - table` entries",
                         );
                     }
                 }

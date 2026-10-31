@@ -58,6 +58,8 @@ pub enum Exit {
         /// Whether it's `exit` or `exit_group`.
         exit: bool,
     },
+    /// Jumps through a checked table to the instruction at one of these indexes.
+    Table(Vec<usize>),
     /// Something the dialect doesn't allow; already reported.
     Stop,
 }
@@ -185,6 +187,7 @@ pub fn analyze(
     function: &MappedFunction<'_>,
     program: &Program<'_>,
     exit_numbers: &[i64],
+    jumps: &[super::tables::TableJump],
     violations: &mut Vec<Violation>,
 ) -> Flow {
     let name = function.name();
@@ -249,6 +252,12 @@ pub fn analyze(
                     Exit::Stop
                 }
             },
+            // A jump through a checked table goes to one of its cases; any other jump through a
+            // register is already reported.
+            FlowControl::IndirectBranch => jumps
+                .iter()
+                .find(|jump| jump.jump == index)
+                .map_or(Exit::Stop, |jump| Exit::Table(jump.cases.clone())),
             _ => Exit::Stop,
         };
         exits.push(exit);
@@ -260,10 +269,13 @@ pub fn analyze(
             Exit::Next | Exit::Branch(_) => true,
             Exit::Call { callee } => callee != ASSERT_FAIL,
             Exit::Syscall { exit } => !exit,
-            Exit::Jump(_) | Exit::Return | Exit::Stop => false,
+            Exit::Jump(_) | Exit::Table(_) | Exit::Return | Exit::Stop => false,
         };
         if let Exit::Jump(target) | Exit::Branch(target) = exit {
             successors[index].push(*target);
+        }
+        if let Exit::Table(cases) = exit {
+            successors[index].extend(cases);
         }
         if falls_through {
             if index + 1 < count {

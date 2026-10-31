@@ -22,7 +22,7 @@ pub const LOCK_FILE: &str = "lengua.lock";
 pub const VERSION: u32 = 4;
 
 /// The lengua dialect this server checks.
-pub const DIALECT: u32 = 3;
+pub const DIALECT: u32 = 4;
 
 const HEADER: &str = "# lengua.lock: written only by the lengua MCP server. Do not edit.\n";
 const SIGNATURE_DOMAIN: &[u8] = b"lengua-lock-v1\n";
@@ -881,11 +881,11 @@ mod tests {
             Lock::from_signed_text(&older, &key(1)),
             Err(LockError::UnsupportedVersion("3".into()))
         );
-        // Dialect 2 had no memory rules.
-        let dialect = forge(&body.replace("dialect = 3", "dialect = 2"), &key(1));
+        // Dialect 3 had no jump tables.
+        let dialect = forge(&body.replace("dialect = 4", "dialect = 3"), &key(1));
         assert_eq!(
             Lock::from_signed_text(&dialect, &key(1)),
-            Err(LockError::UnsupportedDialect(2))
+            Err(LockError::UnsupportedDialect(3))
         );
     }
 

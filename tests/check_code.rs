@@ -495,6 +495,35 @@ async fn a_word_count_is_proven_for_every_length() {
     session.service.cancel().await.expect("close the session");
 }
 
+/// A `switch` on an operator, as a checked jump table (dialect 4): it follows every rule, passes
+/// its tests, and each case runs.
+#[tokio::test]
+async fn a_checked_jump_table_passes_its_checks_and_runs_each_case() {
+    let session = session().await;
+    let files = ["spec.md", "main.s"].map(|file| (file, fixture("calc", file)));
+    let program = written(&session, files).await;
+    let report = done(&session, &program).await;
+    assert!(
+        text(&report["tests"][0]).starts_with("main.s follows every rule and passed all"),
+        "{report}"
+    );
+    for (operator, printed) in [("+", "9\n"), ("-", "3\n"), ("*", "18\n")] {
+        let run = session
+            .call_ok("run", with_args(&program, &["6", operator, "3"]))
+            .await;
+        assert_eq!(run["stdout"], printed, "{run}");
+        assert_eq!(run["exit_code"], 0, "{run}");
+    }
+    // `,` is in the table's range, as its unknown case.
+    for operator in [",", "/", ""] {
+        let run = session
+            .call_ok("run", with_args(&program, &["6", operator, "3"]))
+            .await;
+        assert_eq!(run["exit_code"], 3, "{operator:?}: {run}");
+    }
+    session.service.cancel().await.expect("close the session");
+}
+
 #[tokio::test]
 async fn small_ranges_run_every_value() {
     let session = session().await;

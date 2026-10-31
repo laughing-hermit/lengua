@@ -81,6 +81,8 @@ and the CPU features the code needs; never write that line yourself.
      next buffer-full (such as whether the last byte ended a word), and repeat until `fill`
      returns less than the buffer.
    - **Threads** only when each gets at least a few hundred kilobytes of work (see below).
+   - **Many cases on one small number** (an operator's character, a state machine's state): one
+     checked jump table, not a chain of compares (references/power-of-10.md, rule 9).
 
    `assets/fast` holds three checked programs to learn from and copy from, each with its spec:
    [wc](assets/fast/wc/main.s) counts lines and words 64 bytes a step with AVX-512 masks;

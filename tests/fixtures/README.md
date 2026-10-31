@@ -24,6 +24,8 @@ And written for the tests themselves:
   64 bytes a step with AVX-512 masks, whether the last byte read was whitespace kept in r14:
   proven for every length by induction, each buffer-full's words counted after the last byte of
   the one before.
+- `calc`: a whole number, an operator and another, its `switch` on the operator's character a
+  checked jump table (dialect 4) over `*`, `+`, `,` and `-`, the comma its unknown case.
 - `second`: two lines from standard input, read with one `fill` to the first newline a read
   ends with, so it's right only when both lines arrive together, as they do in the tests: the
   proof, which takes every way standard input can be cut, finds the cut after the first line.

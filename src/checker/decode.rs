@@ -16,6 +16,7 @@ use super::source::{
     Source,
 };
 use super::{Rule, Violation};
+use crate::lock::DIALECT;
 use crate::platform::CpuFeatures;
 
 /// A function in the executable.
@@ -55,6 +56,9 @@ pub struct Machine {
     /// address, once the checker has matched main.s to the executable (see
     /// [`Program::named_symbols`]); empty until then.
     pub named: BTreeMap<u64, String>,
+    /// Each checked jump table's `jmp`, by address, and the addresses of its cases in the
+    /// table's order, once the checker has found them (see [`super::tables`]); empty until then.
+    pub tables: BTreeMap<u64, Vec<u64>>,
 }
 
 /// Reads the functions and data symbols of a linked ELF executable and decodes the functions.
@@ -1637,8 +1641,8 @@ fn check_instruction(step: &Step<'_>, features: CpuFeatures, violations: &mut Ve
             rule: Rule::Dialect,
             line,
             problem: format!(
-                "`{name}` isn't in dialect 3, which allows integer, vector and floating-point \
-                 instructions"
+                "`{name}` isn't in dialect {DIALECT}, which allows integer, vector and \
+                 floating-point instructions"
             ),
             fix: "use the instructions listed in references/power-of-10.md: no half precision, \
                   rcp/rsqrt approximations, x87, MMX, string instructions, gathers or scatters"
@@ -1719,16 +1723,19 @@ fn check_instruction(step: &Step<'_>, features: CpuFeatures, violations: &mut Ve
             fix: "address memory through general-purpose registers or [rip + name]".into(),
         });
     }
+    // A jump through a register is a checked jump table's or nothing, which `tables` decides with
+    // the steps before it; a jump through memory or any call through a register or memory is out.
     if matches!(
         instruction.flow_control(),
         FlowControl::IndirectBranch | FlowControl::IndirectCall
-    ) {
+    ) && !super::tables::is_register_jump(instruction)
+    {
         violations.push(Violation {
             rule: Rule::Indirection,
             line,
             problem: format!("`{}` jumps through a register or memory", step.source.text),
             fix: "jump and call only to labels and function names; choose between targets with \
-                  compare-and-jump chains"
+                  compare-and-jump chains, or with a checked jump table"
                 .into(),
         });
     }

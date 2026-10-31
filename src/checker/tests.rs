@@ -104,7 +104,7 @@ async fn layout_hazards_are_dialect_violations() {
         ),
         ("    xor r9d, r9d /* clear */\n", "`/* */` comments"),
         ("    rep\n", "is a prefix"),
-        ("    fld1\n", "`fld1` isn't in dialect 3"),
+        ("    fld1\n", "`fld1` isn't in dialect 4"),
         ("    mov rax, offset usage_msg\n", "offset"),
         ("    mov rax, [usage_msg]\n", "address data relative to rip"),
     ] {
@@ -174,7 +174,7 @@ async fn x87_breaks_the_line_to_instruction_match() {
 async fn instructions_outside_dialect_1_are_rejected() {
     let line = line_of(TEMPLATE, "    xor r9d, r9d");
     let report = check(&with("    xor r9d, r9d\n", "    leave\n")).await;
-    assert_violation(&report, Rule::Dialect, line, "`leave` isn't in dialect 3");
+    assert_violation(&report, Rule::Dialect, line, "`leave` isn't in dialect 4");
 }
 
 #[tokio::test]
@@ -535,6 +535,134 @@ async fn bounds_checks_compare_without_sign_and_fit_the_buffer() {
     );
     let report = check(&text).await;
     assert!(report.violations.is_empty(), "{:#?}", report.violations);
+}
+
+/// The calc fixture, whose `apply` picks its operator's case through a checked jump table.
+fn calc() -> String {
+    std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/calc/main.s"),
+    )
+    .expect("calc's main.s")
+}
+
+/// `calc` with the first `old` replaced by `new`.
+fn calc_with(old: &str, new: &str) -> String {
+    let calc = calc();
+    assert!(calc.contains(old), "{old:?} isn't in calc");
+    calc.replacen(old, new, 1)
+}
+
+/// Dialect 4's one jump through a register: a checked jump table passes, with the table's cases
+/// as the jump's successors, and every other way to jump through a register or memory is refused.
+#[tokio::test]
+async fn jumps_go_through_registers_only_as_checked_tables() {
+    let report = check(&calc()).await;
+    let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+    assert!(report.passed(), "{all:#?}");
+    let facts = report.facts.expect("the rules ran");
+    assert_eq!(facts.tables.len(), 1, "{facts:?}");
+    let (jump, cases) = facts.tables.iter().next().expect("one table");
+    assert_eq!(cases.len(), 4, "{cases:?}");
+    assert!(cases.iter().all(|case| case > jump), "{cases:?}");
+
+    let jump = "    jmp rax\n";
+    let entries = "    .long .Lapply_multiply - operations\n";
+    for (text, rule, at, needle) in [
+        // The index unchecked, or checked against a limit past the table.
+        (
+            calc_with("    cmp eax, OPERATORS\n    jae .Lapply_unknown\n", ""),
+            Rule::Indirection,
+            "    movsxd rax, dword ptr [rcx + rax*4]\n",
+            "isn't bounds-checked",
+        ),
+        (
+            calc_with("    cmp eax, OPERATORS\n", "    cmp eax, OPERATORS + 1\n"),
+            Rule::Indirection,
+            "    cmp eax, OPERATORS + 1\n",
+            "reach byte 19 of operations, which has 16 bytes",
+        ),
+        // Entries naming what isn't a case of this jump.
+        (
+            calc_with(entries, "    .long .Lstart_exit - operations\n"),
+            Rule::Indirection,
+            jump,
+            "names .Lstart_exit, which isn't a label of apply",
+        ),
+        (
+            calc_with(
+                "    lea rcx, [rip + operations]\n",
+                ".Lapply_table:\n    lea rcx, [rip + operations]\n",
+            )
+            .replacen(entries, "    .long .Lapply_table - operations\n", 1),
+            Rule::Indirection,
+            jump,
+            "comes before the jump",
+        ),
+        // A table that can change, isn't only entries, or isn't the table's own distances.
+        (
+            calc_with(
+                "# apply's jump table",
+                ".section .data\n# apply's jump table",
+            )
+            .replacen(
+                ".size operations, . - operations\n",
+                ".size operations, . - operations\n.section .rodata\n",
+                1,
+            ),
+            Rule::Immutability,
+            entries,
+            "jump table operations is in writable data",
+        ),
+        (
+            calc_with(entries, "    .quad .Lapply_multiply - operations\n"),
+            Rule::Indirection,
+            "    .quad .Lapply_multiply - operations\n",
+            "isn't a jump table's entry",
+        ),
+        (
+            calc_with(entries, "    .long .Lapply_multiply - nan_msg\n"),
+            Rule::Indirection,
+            "    .long .Lapply_multiply - nan_msg\n",
+            "isn't a jump table's entry",
+        ),
+        (
+            calc_with(
+                "    .long .Lapply_subtract - operations\n",
+                "    .long .Lapply_subtract - operations\n    .long 0\n",
+            ),
+            Rule::Indirection,
+            "    .long 0\n",
+            "mixes numbers with its entries",
+        ),
+        // Any other jump through a register, or one through memory.
+        (
+            calc_with(
+                "    add rax, rcx\n    jmp rax\n",
+                "    add rax, rcx\n    or rax, 1\n    jmp rax\n",
+            ),
+            Rule::Indirection,
+            jump,
+            "not through a checked jump table",
+        ),
+        (
+            calc_with("    add rax, rcx\n", ".Lapply_into:\n    add rax, rcx\n"),
+            Rule::Indirection,
+            jump,
+            "not through a checked jump table",
+        ),
+        (
+            calc_with(
+                "    movsxd rax, dword ptr [rcx + rax*4]\n    add rax, rcx\n    jmp rax\n",
+                "    jmp qword ptr [rcx + rax*8]\n",
+            ),
+            Rule::Indirection,
+            "    jmp qword ptr [rcx + rax*8]\n",
+            "jumps through a register or memory",
+        ),
+    ] {
+        let report = check(&text).await;
+        assert_violation(&report, rule, line_of(&text, at), needle);
+    }
 }
 
 #[tokio::test]
@@ -1052,7 +1180,7 @@ async fn integer_vector_instructions_are_in_dialect_2() {
 #[tokio::test]
 async fn vectors_leave_out_alignment_and_rounding_overrides() {
     for (line, needle) in [
-        ("    rcpps xmm0, xmm1\n", "`rcpps` isn't in dialect 3"),
+        ("    rcpps xmm0, xmm1\n", "`rcpps` isn't in dialect 4"),
         (
             "    movdqa xmm0, xmm1\n",
             "`movdqa` faults unless its memory is aligned",
@@ -1148,19 +1276,19 @@ async fn double_precision_is_in_dialect_2() {
     assert!(report.passed(), "{all:#?}");
 
     for (line, needle) in [
-        ("    rcpss xmm0, xmm1\n", "`rcpss` isn't in dialect 3"),
+        ("    rcpss xmm0, xmm1\n", "`rcpss` isn't in dialect 4"),
         (
             "    vrsqrt14ps zmm0, zmm1\n",
-            "`vrsqrt14ps` isn't in dialect 3",
+            "`vrsqrt14ps` isn't in dialect 4",
         ),
         (
             "    vcvtph2ps xmm0, xmm1\n",
-            "`vcvtph2ps` isn't in dialect 3",
+            "`vcvtph2ps` isn't in dialect 4",
         ),
-        ("    dpps xmm0, xmm1, 0xff\n", "`dpps` isn't in dialect 3"),
+        ("    dpps xmm0, xmm1, 0xff\n", "`dpps` isn't in dialect 4"),
         (
             "    ldmxcsr dword ptr [rsp]\n",
-            "`ldmxcsr` isn't in dialect 3",
+            "`ldmxcsr` isn't in dialect 4",
         ),
         ("    movsd\n", "string instruction"),
     ] {

@@ -34,6 +34,8 @@ pub struct Facts {
     pub features: Vec<&'static str>,
     /// The data symbol each `[rip + name]` operand names, by its instruction's address.
     pub named: BTreeMap<u64, String>,
+    /// The cases' addresses of each jump through a checked table, by the jump's address.
+    pub tables: BTreeMap<u64, Vec<u64>>,
 }
 
 struct Checker<'a, 'p> {
@@ -137,6 +139,7 @@ pub fn check(
         functions,
         features: Vec::new(),
         named: BTreeMap::new(),
+        tables: BTreeMap::new(),
     }
 }
 

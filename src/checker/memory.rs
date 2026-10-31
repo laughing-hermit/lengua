@@ -1,4 +1,5 @@
-//! Memory safety, the M rules of dialect 3, which the checker settles statically wherever it can:
+//! Memory safety, the M rules (since dialect 3), which the checker settles statically wherever it
+//! can:
 //!
 //! - **M1, owners.** Every address comes from a pointer with an owner: a data symbol, the current
 //!   frame, a pointer the caller lent in a register, or the program's arguments. None is made

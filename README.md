@@ -15,13 +15,14 @@ match. See [DESIGN.md](DESIGN.md) for how and why.
 lengua is an [Agent Plugin](https://agent-plugins.org): two skills and an MCP server, using only
 open standards, so it works in Claude Code, Codex, Cursor and other agent harnesses.
 
-> Status: dialect 3 on Linux x86-64, with memory rules that check every address has an owner and
+> Status: dialect 4 on Linux x86-64, with memory rules that check every address has an owner and
 > stays inside it. It covers whole numbers, exact decimals, floating point in double and single
 > precision with fused multiply-add, vectors from SSE2 to AVX-512, hashing and checksums, files
 > and folders, environment variables, fork-join threads, waiting, the clock and random bytes
-> (which tests supply, so such output is exact), the terminal, and TCP clients and servers on the
-> ports a spec names, for other computers and many clients at once when it says so. The kernel
-> holds every run to what its spec allows. lengua proves programs right for every input, not just
+> (which tests supply, so such output is exact), the terminal, TCP clients and servers on the
+> ports a spec names, for other computers and many clients at once when it says so, and `switch`es
+> as checked jump tables. The kernel holds every run to what its spec allows. lengua proves
+> programs right for every input, not just
 > the tested ones, over whole numbers, decimals, choices, texts beyond ASCII and text formulas,
 > checksums, files and the network, servers that poll in every order their clients' steps can come
 > in, threads, and floats computed in the formula's order, in integer, bit, vector and float code

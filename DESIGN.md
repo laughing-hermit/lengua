@@ -283,7 +283,7 @@ branches, marked `unsafe` blocks, dialect versions), checked against NASA's "Pow
 adapted for assembly. The full rule text lives in
 `plugin/skills/compile/references/power-of-10.md`. In short:
 
-1. Simple control flow: jumps stay in their function, no recursion, compare chains end in an assertion.
+1. Simple control flow: jumps stay in their function, no recursion, compare chains end in an assertion, and a checked jump table picks among dense cases.
 2. Every loop counts down from a named maximum.
 3. Resources reserved up front: memory is static (`.bss` sized from the spec's limits) plus the stack, nothing is allocated while running, one thread, and only the system calls of what the spec names (write and exit by default), with a computed maximum stack size.
 4. Functions of at most 60 instructions, standard calling convention, one exit.
@@ -291,7 +291,7 @@ adapted for assembly. The full rule text lives in
 6. Smallest scope: one owning function per buffer, only `_start` exported, read-only data stays read-only.
 7. Every result is checked (`rax` < 0 means error).
 8. No macros; named constants for system calls, exit codes, sizes and loop bounds.
-9. No function pointers; indexed accesses are bounds-checked over their full width (16 to 64 bytes for vectors), except inside a reported `unsafe` block.
+9. No function pointers, and no jump through a register but a checked jump table's; indexed accesses are bounds-checked over their full width (16 to 64 bytes for vectors), except inside a reported `unsafe` block.
 10. Warnings are errors, every change is checked, and the dialect is versioned.
 
 The checker analyzes the **linked executable** together with the source, and nothing AI-written
@@ -305,7 +305,7 @@ its message to standard error and exit with 134, whatever the spec allows). An a
 reached through a conditional jump, the fall-through of one, or a `jmp` right after one (the end
 of a comparison chain or of an exhausted loop).
 
-Instruction sets: dialect 3 (the current one) uses x86-64's integer instructions, its integer vector
+Instruction sets: dialect 4 (the current one) uses x86-64's integer instructions, its integer vector
 instructions and floating point in double and single precision, with fused multiply-add (scalar and
 packed; no half precision, approximations, rounding-mode changes or x87, so the tests can compute
 exactly what the code does: `single(x)` and `fma(a, b, c)` in a formula match `ss` instructions and
@@ -325,17 +325,30 @@ instruction needs. Vectors follow four extra rules:
 - every byte of an access counts: rule 9's bounds checks and `[rip + name]` accesses must keep
   the full 16 to 64 bytes inside their data symbol.
 
-Dialect 1 was the integer-only subset, and dialect 2 had no memory rules; locks record the
-dialect that checked the code, and a lock from another dialect has to be checked again.
+Dialect 1 was the integer-only subset, dialect 2 had no memory rules, and dialect 3 no jump
+tables; locks record the dialect that checked the code, and a lock from another dialect has to be
+checked again.
+
+Checked jump tables (dialect 4) are the one jump through a register: rule 9's bounds check of the
+index, then `lea base, [rip + table]`, `movsxd target, dword ptr [base + index*4]`, `add target,
+base` and `jmp target` in a row, with the table in `.rodata` holding only `.long .Lcase - table`,
+each a label of the same function after the jump (`checker/tables.rs`). The checker gives the jump
+the table's cases as successors, so the control flow, the stack depths and the memory rules follow
+each one, and since a table only jumps forward, every backward jump stays a loop's end. The proof
+forks at the jump into each case the target can be, as the solvers decide, and stops where it
+could be anything else, so it rests on neither the checker's match nor the assembler's entries.
+An index only its compare bounds can range far past the table: the proof then reads only the
+places inside the object the access is held to and asks the solvers whether any input reaches
+further, as it does for any address the input chooses.
 `assets/vector-template.s` is a checked SSE2 program that finds a newline and capitalizes a line
 16 bytes at a time.
 
-Memory safety: dialect 3 checks memory the way Rust's borrow checker checks references, on the
-assembly itself. A dataflow over each function gives every register an owner: a data symbol's
-address, the function's own frame, a pointer the caller lent in a register, the program's
-arguments, a plain number, or a value it doesn't follow. Functions are checked callees first, and
-each one's summary (the registers it reads and writes through, itself and in what it calls,
-system calls included, and what it returns) carries owners across calls, so no header has to
+Memory safety: since dialect 3, lengua checks memory the way Rust's borrow checker checks
+references, on the assembly itself. A dataflow over each function gives every register an owner: a
+data symbol's address, the function's own frame, a pointer the caller lent in a register, the
+program's arguments, a plain number, or a value it doesn't follow. Functions are checked callees
+first, and each one's summary (the registers it reads and writes through, itself and in what it
+calls, system calls included, and what it returns) carries owners across calls, so no header has to
 declare them. Then the M rules hold:
 - no address is made from a plain number (M1);
 - constant offsets stay inside their symbol, the one main.s names even where the next symbol
@@ -1007,7 +1020,9 @@ run, and 6 end to end, each committed after the project owner approved it. A pro
 files: the tests are in the spec, whose steps are its examples. `tests/e2e.rs` runs the whole
 workflow on `examples/add` in both MCP protocol generations.
 
-Dialect 3 is the current one:
+Dialect 4 is the current one:
+- checked jump tables: a `switch` over dense cases in one bounds check and one jump, each case
+  followed by the rules and the proofs;
 - memory rules M1 to M8, a borrow checker for assembly: every pointer has an owner and every
   access stays inside it, statically where the rules settle it and by proof elsewhere, down to a
   pointer one step past its buffer;

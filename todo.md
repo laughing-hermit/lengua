@@ -5,7 +5,7 @@ In order. Each item starts when the one before it is done.
 ## 1. Perfect lengua for this target (x86-64 Linux)
 
 Marked done on 2026-10-31, then reopened the same day. Round 7: word counts proven for every
-length and hash tables with word tallies are done; checked jump tables are under way; the fastest
+length, hash tables with word tallies, and checked jump tables (dialect 4) are done; the fastest
 word count proven for every length is deferred (below). Round 8 told the portability story straight
 and wrote the porting contract (DESIGN's "Porting a target"). The direction, decided 2026-10-31:
 **native per target** — the agent writes each target's assembly and lengua proves the actual
@@ -30,7 +30,8 @@ What lengua is on this target now:
   every length, by induction over their read loop, word counts too (two buffer-fulls a step, so
   the proof never needs to know how the program carries a word across them). Servers that poll,
   in every order their clients' steps can come in. Hash tables, through a write log of their
-  stores, and word tallies for short texts. Sorting for short texts.
+  stores, and word tallies for short texts. Sorting for short texts. `switch`es as checked jump
+  tables, through every case their index can reach.
 - **Speed.** Ahead of or level with C, C++ and Rust on every benchmark, with 2.5 to 3.1 times less
   memory (BENCHMARKS.md).
 - **A release built locally** that installs with no Rust toolchain, and `lengua-mcp run` for the

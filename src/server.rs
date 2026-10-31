@@ -1277,9 +1277,11 @@ impl LenguaServer {
             }
         };
         // Which symbol each [rip + name] names, so proofs hold a pointer just past one
-        // symbol's end to that symbol, not to the one starting there.
+        // symbol's end to that symbol, not to the one starting there; and each checked jump
+        // table's cases, so proofs follow every one.
         if let Some(facts) = &code.report.facts {
             decoded.named.clone_from(&facts.named);
+            decoded.tables.clone_from(&facts.tables);
         }
         let spec = &code.spec;
         let deadline = Instant::now() + proof_time();

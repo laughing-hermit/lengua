@@ -22,12 +22,15 @@ async fn machine(source: &str) -> Machine {
     toolchain.link(&object, &executable).await.expect("link");
     let mut machine =
         crate::checker::decode::read(&std::fs::read(&executable).expect("read")).expect("decode");
-    // Which symbol each [rip + name] names, as the server passes it on.
+    // Which symbol each [rip + name] names, and each checked jump table's cases, as the server
+    // passes them on.
     let (parsed, _) = crate::checker::check_layout(source);
     let features = crate::platform::Machine::detect().features;
     if let Some(program) = crate::checker::decode::map(&parsed, &machine, features, &mut Vec::new())
     {
         machine.named = program.named_symbols();
+        let jumps = crate::checker::tables::every(&program, &mut Vec::new());
+        machine.tables = crate::checker::tables::addresses(&program, &jumps);
     }
     machine
 }
@@ -755,6 +758,198 @@ async fn traces_a_few_csv_total_combinations() {
     eprintln!("100 combinations in {:?}; the slowest:", all.elapsed());
     for (time, combination, questions, outcome) in times.iter().take(8) {
         eprintln!("  {combination}: {time:?}, {questions} questions, {outcome}");
+    }
+}
+
+/// calc with its operator any of the three, one symbolic byte, the numbers fixed, so the run
+/// forks at the jump table into every case. (A `choice` would run each value on its own.)
+const CHOSEN_OPERATOR: &str = r#"---
+type: lengua/program-spec
+title: calc
+description: Combines 6 and 3 with the operator it's given.
+---
+# Purpose
+Prints 6 and 3 combined by the operator it's given, `1` character: their sum, difference or
+product.
+
+# Behaviors
+## B1: Applies the operator
+- Given the arguments `6`, `+` and `3`
+- When the program runs
+- Then it prints `9` followed by a newline
+- And it exits with code `0`
+
+### For any `op`
+- Given the arguments `6`, `{op}` and `3`
+- When the program runs
+- Then it prints `{if(op == "+", 9, if(op == "-", 3, 18))}` followed by a newline
+- And it exits with code `0`
+
+| op | runs |
+|---|---|
+| `string(1, 1, "+-*")` | 10 |
+
+# Constraints
+- Uses: nothing
+"#;
+
+/// A checked jump table (dialect 4): the proof follows every case the input can reach through
+/// it, and only those, and finds a table whose entries send an operator to the wrong case.
+#[tokio::test]
+async fn proves_each_case_a_jump_table_can_take() {
+    if !solvers_installed() {
+        return;
+    }
+    let calc = fixture("calc", "main.s");
+    let right = machine(&calc).await;
+    assert_eq!(right.tables.len(), 1, "{:?}", right.tables);
+    // Each of the three operators, a path through each case its byte can pick.
+    let verdict = prove(&right, &block(CHOSEN_OPERATOR, 0), &budget(120));
+    assert!(
+        matches!(verdict, Verdict::Proven { paths, .. } if paths >= 3),
+        "{verdict:?}"
+    );
+    // B6: an operator that isn't one, where of the characters only `,` passes the bounds check,
+    // to the table's entry for it.
+    let verdict = prove(&right, &block(&fixture("calc", "spec.md"), 4), &budget(120));
+    assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
+    // `+` and `-` swapped in the table: 6 + 3 prints 3.
+    let table = "    .long .Lapply_add - operations\n    .long .Lapply_unknown - operations\n    \
+                 .long .Lapply_subtract - operations\n";
+    let swapped = calc.replacen(
+        table,
+        &table
+            .replace("apply_add", "apply_TEMPORARY")
+            .replace("apply_subtract", "apply_add")
+            .replace("apply_TEMPORARY", "apply_subtract"),
+        1,
+    );
+    assert_ne!(swapped, calc, "the entries were swapped");
+    let wrong = machine(&swapped).await;
+    let verdict = prove(&wrong, &block(CHOSEN_OPERATOR, 0), &budget(120));
+    let Verdict::Counterexample(values) = &verdict else {
+        panic!("{verdict:?}");
+    };
+    assert!(
+        matches!(values.get("op"), Some(Value::Str(op)) if op == "+" || op == "-"),
+        "{values:?}"
+    );
+}
+
+/// A jump table indexed by a byte of the input that only its `cmp` and `jae` bound, so the index
+/// can reach past the table and out of the program's memory: the proof reads only the places
+/// inside the table and asks the solvers whether any input reaches further. By `xor` the index
+/// can be anything, which the table's log follows; by `and`, a few places past it.
+#[tokio::test]
+async fn proves_a_table_whose_index_only_its_check_bounds() {
+    const SPEC: &str = r#"---
+type: lengua/program-spec
+title: letters
+---
+# Purpose
+Turns `1` character of standard input into a capital: `h` to `k` become `W` to `Z`, and `l`
+prints nothing.
+
+# Behaviors
+## B1: Turns a letter into a capital
+- Given standard input holding `i`
+- When the program runs
+- Then it prints `X`
+- And it exits with code `0`
+
+### For any `text`
+- Given standard input holding `{text}`
+- When the program runs
+- Then it prints `{if(text == "l", "", tr(text, "hijk", "WXYZ"))}`
+- And it exits with code `0`
+
+| text |
+|---|
+| `string(1, 1, "hijkl")` |
+
+# Constraints
+- Uses: standard input
+"#;
+    let program = |index: &str, limit: u32| {
+        format!(
+            "    .intel_syntax noprefix
+    .globl _start
+    .text
+    .type _start, @function
+_start:
+    xor edi, edi
+    lea rsi, [rip + buffer]
+    mov edx, 1
+    xor eax, eax
+    syscall
+    movzx eax, byte ptr [rip + buffer]
+    {index}
+    cmp eax, {limit}
+    jae .Ldone
+    lea rcx, [rip + cases]
+    movsxd rax, dword ptr [rcx + rax*4]
+    add rax, rcx
+    jmp rax
+.Lw:
+    mov byte ptr [rip + buffer], 87
+    jmp .Lprint
+.Lx:
+    mov byte ptr [rip + buffer], 88
+    jmp .Lprint
+.Ly:
+    mov byte ptr [rip + buffer], 89
+    jmp .Lprint
+.Lz:
+    mov byte ptr [rip + buffer], 90
+.Lprint:
+    mov edi, 1
+    lea rsi, [rip + buffer]
+    mov edx, 1
+    mov eax, 1
+    syscall
+.Ldone:
+    xor edi, edi
+    mov eax, 60
+    syscall
+    .size _start, . - _start
+    .section .rodata
+    .type cases, @object
+cases:
+    .long .Lw - cases
+    .long .Lx - cases
+    .long .Ly - cases
+    .long .Lz - cases
+    .size cases, . - cases
+    .data
+    .type buffer, @object
+buffer:
+    .zero 1
+    .size buffer, 1
+"
+        )
+    };
+    if !solvers_installed() {
+        return;
+    }
+    let block = block(SPEC, 0);
+    for index in ["xor eax, 104", "and eax, 7"] {
+        let right = machine(&program(index, 4)).await;
+        assert_eq!(right.tables.len(), 1, "{:?}", right.tables);
+        let verdict = prove(&right, &block, &budget(120));
+        assert!(
+            matches!(verdict, Verdict::Proven { .. }),
+            "{index}: {verdict:?}"
+        );
+        // A check one too loose lets `l` read past the table.
+        let wrong = machine(&program(index, 5)).await;
+        let verdict = prove(&wrong, &block, &budget(120));
+        let Verdict::Counterexample(values) = &verdict else {
+            panic!("{index}: {verdict:?}");
+        };
+        assert!(
+            matches!(values.get(UNSAFE), Some(Value::Str(problem)) if problem.contains("outside cases")),
+            "{index}: {values:?}"
+        );
     }
 }
 
