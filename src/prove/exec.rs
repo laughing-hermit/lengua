@@ -3014,6 +3014,11 @@ impl<'a> Cpu<'a> {
                 let status = self.pool.extract(rdi, 7, 0);
                 return Err(End::Exit(status));
             }
+            7 => {
+                return Err(unsupported(
+                    "poll, with which a server serves clients at once",
+                ));
+            }
             other => return Err(unsupported(format!("system call {other}"))),
         };
         self.state.registers[0] = self.pool.bv(64, u128::from(result));

@@ -212,6 +212,8 @@ impl Summary {
             ),
             Some(Syscall::Write | Syscall::Openat | Syscall::Connect) => (&[Register::RSI], &[]),
             Some(Syscall::Sendto) => (&[Register::RSI, Register::R8], &[]),
+            // The table of descriptors, whose events the kernel writes back.
+            Some(Syscall::Poll) => (&[Register::RDI], &[Register::RDI]),
             Some(
                 Syscall::Close
                 | Syscall::Lseek

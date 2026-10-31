@@ -120,7 +120,13 @@ by one concrete example in its steps, and its generated tests try that rule with
     free port of their own, so a program that checks for 8080 can't be tested.
   - A server says `- Network: listens on TCP port 8080`: lengua listens on that port of this
     computer and hands the program the socket as file descriptor 3, and its behaviors may end
-    with ``- And it keeps serving`` instead of an exit code. A request ends with something the
+    with ``- And it keeps serving`` instead of an exit code. Only programs on this computer can
+    connect to it, unless the line ends with `for any computer`: write that only when the user
+    asks for a server other computers reach, and say so in your report. A server serves one
+    client at a time unless the line says how many at once, as `- Network: listens on TCP port
+    8080, up to 64 clients at once` does: write that whenever clients may overlap, as a chat,
+    web or game server's do, sized from what the user says or a few dozen, and give a behavior
+    two or more clients and `- And the clients connect at once` (see the test format). A request ends with something the
     server can see, such as its newline, its blank line or a stated length: clients such as curl
     and browsers keep their side of the connection open until they have the answer, so a server
     that waits for them to close waits forever.

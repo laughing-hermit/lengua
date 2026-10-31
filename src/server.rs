@@ -2009,6 +2009,7 @@ async fn runnable(
         connect: spec.network.connects.clone(),
         anywhere: spec.network.anywhere,
         listen: spec.network.listens,
+        serve_anywhere: spec.network.serves_anywhere,
     };
     Ok(Runnable {
         built,

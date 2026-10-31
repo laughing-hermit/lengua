@@ -632,12 +632,14 @@ async fn programs_connect_only_to_approved_ports() {
         connect: vec![port],
         anywhere: false,
         listen: None,
+        serve_anywhere: false,
     };
     assert_eq!(run_on(&client, &calls, &approved).await.end, End::Exited(0));
     let other = Net {
         connect: vec![port.wrapping_add(1).max(1)],
         anywhere: false,
         listen: None,
+        serve_anywhere: false,
     };
     assert_eq!(
         run_on(&client, &calls, &other).await.end,
@@ -718,6 +720,7 @@ async fn servers_take_connections_on_descriptor_3() {
         connect: Vec::new(),
         anywhere: false,
         listen: Some(0),
+        serve_anywhere: false,
     };
     let job = Job {
         net: Some(&net),
@@ -727,9 +730,36 @@ async fn servers_take_connections_on_descriptor_3() {
         .await
         .expect("start");
     let port = started.port().expect("a port");
+    // On the loopback alone: 127.0.0.2 is this computer too, but not the address it listens on.
+    assert!(
+        tokio::net::TcpStream::connect(("127.0.0.2", port))
+            .await
+            .is_err()
+    );
     let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
         .await
         .expect("connect");
+    let mut said = Vec::new();
+    stream.read_to_end(&mut said).await.expect("read");
+    assert_eq!(said, b"hi");
+    assert_eq!(started.wait().await.expect("wait").end, End::Exited(0));
+
+    // A server open to any computer listens on every address.
+    let open = Net {
+        serve_anywhere: true,
+        ..net.clone()
+    };
+    let job = Job {
+        net: Some(&open),
+        ..Job::new(&server, &[], b"", &calls)
+    };
+    let started = start(launcher(), job, Limits::default())
+        .await
+        .expect("start");
+    let port = started.port().expect("a port");
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.2", port))
+        .await
+        .expect("connect from another address");
     let mut said = Vec::new();
     stream.read_to_end(&mut said).await.expect("read");
     assert_eq!(said, b"hi");
@@ -779,6 +809,54 @@ async fn template_tests(edit: impl Fn(&str) -> String, workers: usize) -> lengua
     )
     .await
     .expect("the tests run")
+}
+
+/// Runs the event-loop server's spec against `code`: the server template itself, or another.
+async fn server_tests(code: &str) -> lengua::testrun::Outcome {
+    let assets = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugin/skills/compile/assets");
+    let read = |name: &str| std::fs::read_to_string(assets.join(name)).expect("an asset");
+    let spec = lengua::spec::parse(&read("server-template-spec.md")).expect("the server's spec");
+    let suite = lengua::testfile::check(&spec).expect("the tests check");
+    let (source, _) = lengua::checker::source::parse(code);
+    let folder = tempfile::tempdir().expect("a folder");
+    let executable = build(folder.path(), "main", code).await;
+    let syscalls = Profile::LinuxX86_64.allowed_syscalls(&spec.syscalls, false);
+    lengua::testrun::run_tests(
+        &suite,
+        launcher(),
+        &executable,
+        &source,
+        7,
+        &syscalls,
+        &spec.network,
+        8,
+    )
+    .await
+    .expect("the tests run")
+}
+
+/// A server for clients at once answers each client as its request completes, while others are
+/// still sending; one that serves a client at a time is caught waiting on the first.
+#[tokio::test]
+async fn a_server_for_clients_at_once_answers_each_while_others_send() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let template =
+        std::fs::read_to_string(root.join("plugin/skills/compile/assets/server-template.s"))
+            .expect("the server template");
+    let outcome = server_tests(&template).await;
+    assert!(outcome.passed(), "{:#?}", outcome.failures);
+    assert!(outcome.runs > 2, "{}", outcome.runs);
+    let one_at_a_time =
+        std::fs::read_to_string(root.join("examples/echo/main.s")).expect("the echo example");
+    let outcome = server_tests(&one_at_a_time).await;
+    assert!(
+        outcome
+            .failures
+            .iter()
+            .any(|failure| failure.contains("while connection 1 was still sending")),
+        "{:#?}",
+        outcome.failures
+    );
 }
 
 #[tokio::test]

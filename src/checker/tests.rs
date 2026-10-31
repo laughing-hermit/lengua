@@ -609,6 +609,7 @@ async fn every_program_in_the_repository_follows_every_rule() {
         ("template-spec.md", "main-template.s"),
         ("vector-template-spec.md", "vector-template.s"),
         ("parallel-template-spec.md", "parallel-template.s"),
+        ("server-template-spec.md", "server-template.s"),
     ] {
         programs.push((assets.join(spec), assets.join(code)));
     }

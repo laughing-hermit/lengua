@@ -2223,6 +2223,13 @@ fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verd
     if block.uses_now() {
         return Err("it uses now, the second a run starts, which a proof can't fix".into());
     }
+    if block.clients_at_once {
+        return Err(
+            "its clients connect at once, and the proof doesn't follow the ways their bytes can \
+             interleave yet"
+                .into(),
+        );
+    }
     let mut each = Vec::new();
     let (random, clock) = (block.random_only(), block.clock_only());
     for (name, generator) in &block.vars {

@@ -80,6 +80,9 @@ pub struct Example {
     pub server: Vec<Reply>,
     /// The test's own client, one entry a connection, for a program that serves.
     pub client: Vec<Exchange>,
+    /// Whether the test's clients connect at once, each still sending while another must be
+    /// answered, rather than one after another.
+    pub clients_at_once: bool,
     /// Whether the program must still be serving at the end, instead of exiting.
     pub serves: bool,
 }
@@ -155,6 +158,9 @@ pub struct Generated {
     pub server: Vec<(Template, Template)>,
     /// The test client's templates, one pair a connection: what it sends, what it receives.
     pub client: Vec<(Template, Template)>,
+    /// Whether the test's clients connect at once, each still sending while another must be
+    /// answered, rather than one after another.
+    pub clients_at_once: bool,
     /// Whether the program must still be serving at the end, instead of exiting.
     pub serves: bool,
 }
@@ -209,6 +215,9 @@ pub struct Case {
     pub server: Vec<Reply>,
     /// The test's own client, one entry a connection.
     pub client: Vec<Exchange>,
+    /// Whether the test's clients connect at once, each still sending while another must be
+    /// answered, rather than one after another.
+    pub clients_at_once: bool,
     /// Whether the program must still be serving at the end, instead of exiting.
     pub serves: bool,
 }
@@ -425,6 +434,7 @@ impl Generated {
             clock,
             server,
             client,
+            clients_at_once: self.clients_at_once,
             serves: self.serves,
         })
     }
@@ -674,6 +684,7 @@ struct ExampleTable {
     clock: Vec<String>,
     server: Vec<ServerTable<Text>>,
     client: Vec<ClientTable<Text>>,
+    clients_at_once: bool,
 }
 
 /// What the test's own server does on one connection: it receives exactly this, then replies.
@@ -800,6 +811,7 @@ struct OutlineSteps {
     clock: Vec<Written>,
     server: Vec<(Written, Written)>,
     client: Vec<(Written, Written)>,
+    clients_at_once: bool,
     /// The exit code as written: a number or a formula.
     exit_code: Option<Written>,
     serves: bool,
@@ -857,6 +869,20 @@ pub fn check(spec: &Spec) -> Result<TestSuite, Vec<Problem>> {
     let generated = checker.generated_blocks(generated, dry_run_seed(&written));
     checker.coverage(&examples, &generated);
     checker.formulas(&examples, &generated);
+    // A server of several clients at once shows it in a test.
+    if let Some(limit) = spec.network.at_once
+        && !examples.iter().any(|example| example.clients_at_once)
+        && !generated.iter().any(|block| block.clients_at_once)
+    {
+        checker.problem(
+            None,
+            format!(
+                "spec.md serves up to {limit} clients at once, but no test's clients connect at \
+                 once: give a behavior two or more `a client that sends …` steps and `- And the \
+                 clients connect at once`, so its tests show it"
+            ),
+        );
+    }
     if checker.problems.is_empty() {
         Ok(TestSuite {
             examples,
@@ -976,6 +1002,8 @@ struct Peers<'p> {
     server: bool,
     client: bool,
     port: Option<&'p str>,
+    /// How many clients connect at once, when they do.
+    at_once: Option<usize>,
 }
 
 /// The port a server step names, such as the `8080` of ``a server on port `8080` that …``.
@@ -1176,6 +1204,7 @@ impl<'a> Checker<'a> {
                     server: !server.is_empty(),
                     client: !client.is_empty() || behavior.serves,
                     port: server_port(&behavior.steps),
+                    at_once: table.clients_at_once.then_some(client.len()),
                 },
             );
             let uses_port = args
@@ -1210,6 +1239,7 @@ impl<'a> Checker<'a> {
                 clock: table.clock,
                 server,
                 client,
+                clients_at_once: table.clients_at_once,
                 serves: behavior.serves,
             });
         }
@@ -1445,6 +1475,7 @@ impl<'a> Checker<'a> {
                     .outline
                     .as_ref()
                     .and_then(|outline| server_port(&outline.steps)),
+                at_once: steps.clients_at_once.then_some(steps.client.len()),
             },
         );
         self.check_ending(line, name, behavior, exit_code.is_some(), steps.serves)?;
@@ -1470,6 +1501,7 @@ impl<'a> Checker<'a> {
             clock: clock?,
             server: server?,
             client: client?,
+            clients_at_once: steps.clients_at_once,
             serves: steps.serves,
         })
     }
@@ -1498,6 +1530,26 @@ impl<'a> Checker<'a> {
                 ),
             );
         }
+        let Some(clients) = peers.at_once else {
+            return;
+        };
+        let problem = match self.spec.network.at_once {
+            _ if clients < 2 => format!(
+                "{name}: its clients connect at once, but it has {clients}: give it two or more \
+                 `a client that sends …` steps"
+            ),
+            None => format!(
+                "{name}: its clients connect at once, but spec.md serves one at a time: end its \
+                 `- Network: listens on TCP port N` line with `, up to {clients} clients at \
+                 once`, or more"
+            ),
+            Some(limit) if clients > limit as usize => format!(
+                "{name}: {clients} clients connect at once, more than the {limit} spec.md serves \
+                 at once"
+            ),
+            Some(_) => return,
+        };
+        self.problem(Some(line), problem);
     }
 
     /// A test ends as its behavior does: with the exit code the spec states, or, for a behavior
@@ -2906,6 +2958,65 @@ Prints the hour of the day in UTC, from `0` to `23`, for a reader numbered from 
                 .any(|problem| problem.contains(r#""{line}!\r\n" can't become "hello\r\n""#)),
             "{problems:#?}"
         );
+    }
+
+    /// A server's clients at once: its spec says how many, its tests show it, and no test has
+    /// more than it serves, or only one.
+    #[test]
+    fn clients_at_once_stay_within_what_the_server_serves() {
+        let spec = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("plugin/skills/compile/assets/server-template-spec.md"),
+        )
+        .expect("the server template's spec");
+        let suite = tests_of(&spec).expect("valid tests");
+        let at_once: Vec<&Example> = suite
+            .examples
+            .iter()
+            .filter(|example| example.clients_at_once)
+            .collect();
+        assert_eq!(at_once.len(), 1);
+        assert_eq!(at_once[0].client.len(), 2);
+        assert!(suite.generated.iter().any(|block| block.clients_at_once));
+        assert_problem(
+            &edit(&spec, ", up to 8 clients at once", ""),
+            "its clients connect at once, but spec.md serves one at a time",
+        );
+        assert_problem(
+            &edit(&spec, "up to 8 clients", "up to 2 clients")
+                .replacen(
+                    "- And a client that sends `second` followed by a newline\n",
+                    "- And a client that sends `second` followed by a newline\n- And a client \
+                     that sends `third` followed by a newline\n",
+                    1,
+                )
+                .replacen(
+                    "- And the client gets back `second` followed by a newline\n",
+                    "- And the client gets back `second` followed by a newline\n- And the \
+                     client gets back `third` followed by a newline\n",
+                    1,
+                ),
+            "3 clients connect at once, more than the 2 spec.md serves at once",
+        );
+        let alone = edit(
+            &spec,
+            "- And a client that sends `second` followed by a newline\n",
+            "",
+        );
+        assert_problem(
+            &edit(
+                &alone,
+                "- And the client gets back `second` followed by a newline\n",
+                "",
+            ),
+            "its clients connect at once, but it has 1",
+        );
+        let untested: String = spec
+            .lines()
+            .filter(|line| !line.contains("the clients connect at once"))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        assert_problem(&untested, "but no test's clients connect at once");
     }
 
     #[test]

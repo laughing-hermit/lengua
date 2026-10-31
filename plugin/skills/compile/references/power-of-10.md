@@ -252,7 +252,8 @@ Nothing in the body changes `R`: `syscall` changes `rax`, `rcx` and `r11`, and `
 to `r15`. Every backward jump must be such a loop's end.
 
 One loop may run without a bound, as NASA's rule allows for loops meant never to end: a server's
-loop that takes connections, in a program whose spec says `- Network: listens on TCP port N`. Its
+loop that takes connections, in a program whose spec says `- Network: listens on TCP port N`, or,
+for a server of several clients at once, its loop around `poll`. Its
 head label says `# bound: forever` and it closes with an unconditional `jmp` to the head, so it
 provably never ends by itself; leaving early (to exit) uses forward jumps as usual:
 

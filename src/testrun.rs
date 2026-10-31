@@ -575,6 +575,7 @@ struct Test<'a> {
     clock: &'a [String],
     server: &'a [Reply],
     client: &'a [Exchange],
+    clients_at_once: bool,
     serves: bool,
 }
 
@@ -596,6 +597,7 @@ impl<'a> Test<'a> {
             clock: &example.clock,
             server: &example.server,
             client: &example.client,
+            clients_at_once: example.clients_at_once,
             serves: example.serves,
         }
     }
@@ -617,6 +619,7 @@ impl<'a> Test<'a> {
             clock: &case.clock,
             server: &case.server,
             client: &case.client,
+            clients_at_once: case.clients_at_once,
             serves: case.serves,
         }
     }
@@ -671,6 +674,8 @@ async fn check_one(
         connect: port.into_iter().collect(),
         anywhere: false,
         listen: network.listens.map(|_| 0),
+        // Tests serve on the loopback, whoever the spec serves.
+        serve_anywhere: false,
     };
     // Standard input arrives whole, except where a proof found a cut that matters.
     let stdin_pieces = match delivery {
@@ -710,7 +715,11 @@ async fn check_one(
         .port()
         .filter(|_| !test.client.is_empty() || test.serves)
     {
-        problem = talk(port, test.client, delivery, now).await.err();
+        problem = if test.clients_at_once {
+            talk_at_once(port, test.client, now).await.err()
+        } else {
+            talk(port, test.client, delivery, now).await.err()
+        };
         if test.serves {
             if problem.is_none() && !waiting_for_connections(started.pid()).await {
                 problem = Some(
@@ -922,13 +931,102 @@ async fn talk(
     Ok(())
 }
 
-/// Whether the program is waiting in `accept4` on file descriptor 3 for the next connection,
-/// checked for up to half a second.
+/// The test's own clients at once: every one connects, and all but the newest send all but
+/// their last byte and hold it; the newest sends everything and must be answered while the
+/// others still hold, then each in turn, from the newest, sends its last byte and must be
+/// answered. A server that serves one client at a time is caught waiting on the first.
+async fn talk_at_once(port: u16, exchanges: &[Exchange], now: i128) -> Result<(), String> {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let last = exchanges.len().saturating_sub(1);
+    let mut open = Vec::new();
+    for (index, exchange) in exchanges.iter().enumerate() {
+        let on = format!(" on connection {}", index + 1);
+        let stream = tokio::time::timeout(
+            PEER_TIMEOUT,
+            tokio::net::TcpStream::connect(("127.0.0.1", port)),
+        )
+        .await
+        .map_err(|_| format!("the test's client couldn't connect{on}"))?
+        .map_err(|error| format!("the test's client couldn't connect{on}: {error}"))?;
+        let (reader, mut writer) = stream.into_split();
+        let sends = exchange.sends.as_bytes();
+        let held = if index < last {
+            sends.len().saturating_sub(1)
+        } else {
+            sends.len()
+        };
+        writer
+            .write_all(&sends[..held])
+            .await
+            .map_err(|error| format!("the test's client couldn't send{on}: {error}"))?;
+        open.push((reader, writer, held));
+    }
+    for (index, (exchange, (mut reader, mut writer, held))) in
+        exchanges.iter().zip(open).enumerate().rev()
+    {
+        let on = format!(" on connection {}", index + 1);
+        let sends = exchange.sends.as_bytes();
+        writer
+            .write_all(&sends[held..])
+            .await
+            .map_err(|error| format!("the test's client couldn't send{on}: {error}"))?;
+        // As in any test, the client keeps its side open until the answer begins.
+        let mut answer = Vec::new();
+        let mut chunk = vec![0_u8; 65536];
+        match tokio::time::timeout(PEER_TIMEOUT, reader.read(&mut chunk)).await {
+            Ok(Ok(read)) => answer.extend_from_slice(&chunk[..read]),
+            Ok(Err(_)) => {}
+            Err(_) if index == last && last > 0 => {
+                return Err(format!(
+                    "the program answered nothing{on}, whose request was whole, while {} still \
+                     sending: its spec serves clients at once, so it must answer each as its \
+                     request completes, whatever the others are doing, with poll over the \
+                     listening socket and every connection",
+                    if last == 1 {
+                        "connection 1 was".to_owned()
+                    } else {
+                        format!("connections 1 to {last} were")
+                    }
+                ));
+            }
+            Err(_) => {
+                return Err(format!(
+                    "the program answered nothing{on} once its request was whole"
+                ));
+            }
+        }
+        let _ = writer.shutdown().await;
+        let left = MAX_ANSWER.saturating_sub(answer.len() as u64);
+        let read = tokio::time::timeout(
+            PEER_TIMEOUT,
+            (&mut reader).take(left).read_to_end(&mut answer),
+        )
+        .await;
+        if read.is_err() {
+            return Err(format!(
+                "the program answered {}{on} and then kept the connection open; close it after \
+                 answering",
+                show(&answer)
+            ));
+        }
+        if !crate::expect::matches(&exchange.receives, &answer, now) {
+            return Err(format!(
+                "the program answered {}{on}, but the test expects {}",
+                show(&answer),
+                show_expected(&exchange.receives)
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Whether the program is waiting for the next connection, in `accept4` on file descriptor 3,
+/// or, serving clients at once, in `poll`, checked for up to half a second.
 async fn waiting_for_connections(pid: i32) -> bool {
     let path = format!("/proc/{pid}/syscall");
     for _ in 0..100 {
         match tokio::fs::read_to_string(&path).await {
-            Ok(call) if call.starts_with("288 0x3 ") => return true,
+            Ok(call) if call.starts_with("288 0x3 ") || call.starts_with("7 ") => return true,
             Ok(_) => tokio::time::sleep(Duration::from_millis(5)).await,
             Err(_) => return false,
         }

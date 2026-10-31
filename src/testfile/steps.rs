@@ -13,7 +13,7 @@
 //! - ``the clock at `seconds` ``, with ``then `seconds` `` for later readings
 //! - ``the random bytes `fc` and `2a` ``
 //! - ``a server on port `8080` that receives TEXT and replies TEXT``, ``no server on port `1` ``
-//! - ``a client that sends TEXT``
+//! - ``a client that sends TEXT``, and `the clients connect at once` for clients that overlap
 //!
 //! When: `the program runs`.
 //!
@@ -48,7 +48,8 @@ const GIVEN_PHRASES: &str = "`Given the arguments `…` and `…``, `Given no ar
      `Given the environment variable `NAME` set to `…``, `Given an empty folder `name``, `Given \
      the clock at `…``, `Given the \
      random bytes `…``, `Given a server on port \
-     `…` that receives `…` and replies `…``, `Given a client that sends `…``";
+     `…` that receives `…` and replies `…``, `Given a client that sends `…``, `And the clients \
+     connect at once`";
 const THEN_PHRASES: &str = "`Then it prints `…``, `Then it prints `…` to standard error`, \
      `Then it prints nothing`, `Then it prints text matching `rule``, `Then the file `name` \
      holds `…``, `Then there is no file `name``, `Then there is a folder `name``, `Then the \
@@ -222,6 +223,7 @@ struct Reading {
     clock: Vec<String>,
     server: Vec<ServerTable<Text>>,
     client: Vec<Text>,
+    clients_at_once: bool,
     answers: Vec<Text>,
     /// A generated test's exit code as written: a number or a formula.
     exit_code: Option<String>,
@@ -240,6 +242,11 @@ impl Reading {
     fn input(&mut self, tokens: &[Token]) -> Option<()> {
         let mode = self.mode;
         let mut at = Cursor::new(tokens);
+        if at.words(&["the", "clients", "connect", "at", "once"]) {
+            self.wrote("clients_at_once".into());
+            self.clients_at_once = true;
+            return at.end();
+        }
         if at.words(&["no", "arguments"])
             || at.words(&["no", "standard", "input"])
             || at.words(&["empty", "standard", "input"])
@@ -459,6 +466,7 @@ impl Reading {
             clock: self.clock,
             server: self.server,
             client,
+            clients_at_once: self.clients_at_once,
         }
     }
 
@@ -527,6 +535,7 @@ impl Reading {
                     (written(sends, &field), written(receives, &field))
                 })
                 .collect(),
+            clients_at_once: self.clients_at_once,
             exit_code: self.exit_code.map(|code| Written {
                 text: code,
                 line: at("exit_code"),

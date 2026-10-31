@@ -142,6 +142,13 @@ spec's port, which lengua allows only for `run`.
   until it closes the connection. So a server must answer once the request is complete, by its
   newline, blank line or length, never by waiting for the client to close. A behavior that keeps
   serving ends with the program waiting for the next connection; lengua stops it.
+- **Clients at once:** a server whose `- Network:` line ends with `, up to N clients at once`
+  shows it in a behavior with two or more ``a client that sends …`` steps and ``- And the
+  clients connect at once``, at most N of them. Its test opens every connection; all but the
+  newest send all but their last byte and hold it, and the newest sends everything and must be
+  answered while the others hold; then each, from the newest, sends its last byte and must be
+  answered. A server that serves one client at a time is caught waiting on the first. Each
+  ``the client gets back …`` belongs to its client, in order.
 - **Pieces:** on every other generated run, the test's server and client send in three pieces
   with short pauses, as a network may deliver them, so a program must read until it has what it
   needs. A program that reads with the compile skill's `fill` is proven for every way a message

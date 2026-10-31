@@ -28,7 +28,11 @@ and the CPU features the code needs; never write that line yourself.
    `write_all` can be reused as they are. To read a whole input, a reply, or a request up to the
    byte that ends it (such as a newline), call `fill` from [fill.s](assets/fill.s), copied word for
    word with its three constants: the proof then covers every way the input can arrive, cut into
-   any pieces. Write your own read loop only to stream input larger than a buffer.
+   any pieces. Write your own read loop only to stream input larger than a buffer. A server whose
+   spec serves several clients at once starts from
+   [the event-loop server](assets/server-template.s) ([its spec](assets/server-template-spec.md)):
+   `poll` over the listening socket and a fixed table of connections, a line buffer for each,
+   and answering each client as its request completes.
 4. Write the code by [the rules](references/power-of-10.md), with
    [the Linux x86-64 reference](references/linux-x86_64.md) for system calls, the program's start
    and the calling convention. Write it correct first; speed comes in step 6.

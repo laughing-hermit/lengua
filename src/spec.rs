@@ -42,6 +42,10 @@ pub struct Spec {
     pub network: Network,
 }
 
+/// The most clients a server may take at once: a table of this many connections is a few
+/// pages of `.bss`, and `poll` goes through all of them on every wake.
+pub const MAX_AT_ONCE: u32 = 4096;
+
 /// What a spec lets a program do on the network: plain TCP, on the ports it names.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Network {
@@ -51,9 +55,17 @@ pub struct Network {
     /// Whether it may connect to other computers too, which its spec says with `on any
     /// computer`.
     pub anywhere: bool,
-    /// The port it serves on. lengua binds it on the loopback and hands the program the
-    /// listening socket as file descriptor 3, so the program never binds or listens itself.
+    /// The port it serves on. lengua binds it and hands the program the listening socket as
+    /// file descriptor 3, so the program never binds or listens itself.
     pub listens: Option<u16>,
+    /// Whether other computers may connect to the port it serves on, which its spec says with
+    /// `for any computer`: lengua then listens on every address of this computer, not only the
+    /// loopback. Tests always use the loopback.
+    pub serves_anywhere: bool,
+    /// How many clients it serves at once, which its spec says with `up to N clients at once`:
+    /// it then waits on all of them, and on its listening socket, with `poll`. One at a time
+    /// when `None`.
+    pub at_once: Option<u32>,
 }
 
 impl Network {
@@ -407,11 +419,14 @@ pub enum Syscall {
     Shutdown,
     /// Send on a connection, with no address, possibly with `MSG_NOSIGNAL`.
     Sendto,
+    /// Wait until the listening socket or one of the connections has something to read, for a
+    /// server of several clients at once.
+    Poll,
 }
 
 impl Syscall {
     /// Every system call a spec may allow.
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::Read,
         Self::Write,
         Self::Openat,
@@ -432,15 +447,17 @@ impl Syscall {
         Self::Accept4,
         Self::Shutdown,
         Self::Sendto,
+        Self::Poll,
     ];
 
     /// The calls only a program on the network may make.
-    pub const NETWORK: [Self; 5] = [
+    pub const NETWORK: [Self; 6] = [
         Self::Socket,
         Self::Connect,
         Self::Accept4,
         Self::Shutdown,
         Self::Sendto,
+        Self::Poll,
     ];
 
     /// The Linux name, as written in specs.
@@ -467,6 +484,7 @@ impl Syscall {
             Self::Accept4 => "accept4",
             Self::Shutdown => "shutdown",
             Self::Sendto => "sendto",
+            Self::Poll => "poll",
         }
     }
 
@@ -1257,7 +1275,40 @@ impl Parser {
                      program that opens connections, or `- Network: listens on TCP port 8080` \
                      for one that serves them";
         let rest = rest.trim().trim_end_matches('.').replace('`', "");
-        let lower = rest.to_ascii_lowercase();
+        let mut lower = rest.to_ascii_lowercase();
+        // `, up to 64 clients at once`: a server of several clients at once.
+        if let Some(start) = lower.find("up to ")
+            && let Some(length) = lower[start..].find(" clients at once")
+        {
+            let count = lower[start + "up to ".len()..start + length]
+                .trim()
+                .to_owned();
+            lower.replace_range(start..start + length + " clients at once".len(), "");
+            lower = lower.trim().trim_end_matches(',').trim().to_owned();
+            match count.parse::<u32>() {
+                Ok(count) if (2..=MAX_AT_ONCE).contains(&count) && lower.starts_with("listens") => {
+                    self.network.at_once = Some(count);
+                }
+                Ok(_) if !lower.starts_with("listens") => {
+                    self.problem(
+                        Some(number),
+                        "clients at once are a server's: write `up to N clients at once` on its \
+                         `- Network: listens on TCP port N` line",
+                    );
+                    return;
+                }
+                _ => {
+                    self.problem(
+                        Some(number),
+                        format!(
+                            "a server takes from 2 to {MAX_AT_ONCE} clients at once: write `up to \
+                             64 clients at once`, say, or leave it out to serve one at a time"
+                        ),
+                    );
+                    return;
+                }
+            }
+        }
         let (listens, numbers) = if let Some(numbers) = lower
             .strip_prefix("connects to tcp ports")
             .or_else(|| lower.strip_prefix("connects to tcp port"))
@@ -1269,24 +1320,28 @@ impl Parser {
             self.problem(Some(number), usage);
             return;
         };
-        // Connections reach this computer unless the line says any computer.
+        // Connections reach this computer, and come from it, unless the line says any
+        // computer: `connects to TCP port 443 on any computer`, `listens on TCP port 8080 for any
+        // computer`.
         let numbers = numbers.trim();
-        let (numbers, anywhere) = match numbers.strip_suffix("on any computer") {
+        let (numbers, anywhere) = match numbers
+            .strip_suffix("on any computer")
+            .or_else(|| numbers.strip_suffix("for any computer"))
+        {
             Some(ports) => (ports, true),
             None => (
-                numbers.strip_suffix("on this computer").unwrap_or(numbers),
+                numbers
+                    .strip_suffix("on this computer")
+                    .or_else(|| numbers.strip_suffix("for this computer"))
+                    .unwrap_or(numbers),
                 false,
             ),
         };
-        if listens && anywhere {
-            self.problem(
-                Some(number),
-                "a server listens on this computer, where lengua listens for it; drop `on any \
-                 computer`",
-            );
-            return;
+        if listens {
+            self.network.serves_anywhere |= anywhere;
+        } else {
+            self.network.anywhere |= anywhere;
         }
-        self.network.anywhere |= anywhere;
         let ports: Option<Vec<u16>> = numbers
             .split(',')
             .flat_map(|part| part.split(" and "))
@@ -1400,6 +1455,9 @@ impl Parser {
         }
         if self.network.listens.is_some() {
             allowed.push(Syscall::Accept4);
+        }
+        if self.network.at_once.is_some() {
+            allowed.push(Syscall::Poll);
         }
         if self.network.is_used() {
             allowed.extend([
@@ -1942,6 +2000,36 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
             .replace("- And it exits with code `0`", "- And it keeps serving");
         let spec = parse(&server).expect("valid spec");
         assert_eq!(spec.network.listens, Some(7007));
+        assert!(
+            !spec.network.serves_anywhere,
+            "the loopback, unless the spec says otherwise"
+        );
+        // Clients at once are a server's, from 2 to a limit.
+        let at_once = parse(&server.replace("port 7007", "port 7007, up to 64 clients at once"))
+            .expect("valid spec");
+        assert_eq!(at_once.network.at_once, Some(64));
+        assert_eq!(at_once.network.listens, Some(7007));
+        assert!(
+            at_once.syscalls.contains(&Syscall::Poll) && !spec.syscalls.contains(&Syscall::Poll)
+        );
+        assert_problem(
+            &server.replace("port 7007", "port 7007, up to 1 clients at once"),
+            "a server takes from 2 to 4096 clients at once",
+        );
+        assert_problem(
+            &client.replace("8080.", "8080, up to 4 clients at once."),
+            "clients at once are a server's",
+        );
+        // A server other computers may reach says so; its own connections don't follow.
+        for any in ["for any computer", "on any computer"] {
+            let open = parse(&server.replace("port 7007", &format!("port 7007 {any}")))
+                .expect("valid spec");
+            assert_eq!(open.network.listens, Some(7007));
+            assert!(
+                open.network.serves_anywhere && !open.network.anywhere,
+                "{any}"
+            );
+        }
         assert!(spec.behaviors[0].serves);
         assert!(!spec.behaviors[1].serves);
         assert!(

@@ -249,9 +249,12 @@ pub struct Net {
     /// each connection's address and refuses any computer but this one, which the kernel's
     /// port rules can't.
     pub anywhere: bool,
-    /// The loopback port lengua listens on for the program and hands it as file descriptor 3,
-    /// or 0 for any free one; `None` for a program that doesn't serve.
+    /// The port lengua listens on for the program and hands it as file descriptor 3, or 0 for
+    /// any free one; `None` for a program that doesn't serve.
     pub listen: Option<u16>,
+    /// Whether that port is open to other computers: lengua listens on every address of this
+    /// computer instead of the loopback.
+    pub serve_anywhere: bool,
 }
 
 impl Net {
@@ -261,7 +264,8 @@ impl Net {
         !self.connect.is_empty() || self.listen.is_some()
     }
 
-    /// The launcher's argument: `none`, or `connect=80,8080` and `listen=0`, joined by `;`.
+    /// The launcher's argument: `none`, or `connect=80,8080` and `listen=0` (`listen_any=8080`
+    /// for every address), joined by `;`.
     fn encode(&self) -> String {
         let mut parts = Vec::new();
         if !self.connect.is_empty() {
@@ -269,7 +273,12 @@ impl Net {
             parts.push(format!("connect={}", ports.join(",")));
         }
         if let Some(port) = self.listen {
-            parts.push(format!("listen={port}"));
+            let listen = if self.serve_anywhere {
+                "listen_any"
+            } else {
+                "listen"
+            };
+            parts.push(format!("{listen}={port}"));
         }
         if parts.is_empty() {
             "none".into()
@@ -289,6 +298,10 @@ impl Net {
                     }
                 }
                 Some(("listen", port)) => net.listen = Some(port.parse().map_err(|_| bad())?),
+                Some(("listen_any", port)) => {
+                    net.listen = Some(port.parse().map_err(|_| bad())?);
+                    net.serve_anywhere = true;
+                }
                 _ => return Err(bad()),
             }
         }
@@ -555,7 +568,11 @@ pub async fn attached(launcher: &Path, job: Job<'_>) -> io::Result<End> {
         ..
     } = launch_job(launcher, &job, &limits, &folder, scratch.path(), streams).await?;
     if let Some(port) = port {
-        eprintln!("lengua-mcp: serving on 127.0.0.1:{port}");
+        if job.net.is_some_and(|net| net.serve_anywhere) {
+            eprintln!("lengua-mcp: serving on port {port} of every address of this computer");
+        } else {
+            eprintln!("lengua-mcp: serving on 127.0.0.1:{port}");
+        }
     }
     let program = rustix::process::Pid::from_raw(pid);
     let forward = |signal: rustix::process::Signal| {
@@ -943,7 +960,11 @@ pub fn launch(mut args: impl Iterator<Item = OsString>) -> ExitCode {
     };
     // A server's listening socket comes first, so it's file descriptor 3; it stays open into
     // the program, which only takes connections on it.
-    let listener = match net.listen.map(listen_on_fd3).transpose() {
+    let listener = match net
+        .listen
+        .map(|port| listen_on_fd3(port, net.serve_anywhere))
+        .transpose()
+    {
         Ok(listener) => listener,
         Err(problem) => {
             eprintln!("lengua-mcp: {problem}");
@@ -995,10 +1016,15 @@ pub fn launch(mut args: impl Iterator<Item = OsString>) -> ExitCode {
 
 /// Listens on `port` of the loopback (any free port for 0) with file descriptor 3, kept open
 /// across `exec`.
-fn listen_on_fd3(port: u16) -> Result<std::net::TcpListener, String> {
+fn listen_on_fd3(port: u16, anywhere: bool) -> Result<std::net::TcpListener, String> {
     use std::os::fd::AsRawFd as _;
-    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
-        .map_err(|error| format!("couldn't listen on 127.0.0.1:{port}: {error}"))?;
+    let address = if anywhere {
+        std::net::Ipv4Addr::UNSPECIFIED
+    } else {
+        std::net::Ipv4Addr::LOCALHOST
+    };
+    let listener = std::net::TcpListener::bind((address, port))
+        .map_err(|error| format!("couldn't listen on {address}:{port}: {error}"))?;
     if listener.as_raw_fd() != 3 {
         return Err("the listening socket isn't file descriptor 3".into());
     }

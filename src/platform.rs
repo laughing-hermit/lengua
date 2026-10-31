@@ -64,6 +64,7 @@ impl Profile {
             (Self::LinuxX86_64, Syscall::Sendto) => 44,
             (Self::LinuxX86_64, Syscall::Shutdown) => 48,
             (Self::LinuxX86_64, Syscall::Accept4) => 288,
+            (Self::LinuxX86_64, Syscall::Poll) => 7,
         }
     }
 
