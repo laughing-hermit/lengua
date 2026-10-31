@@ -480,10 +480,16 @@ pub enum Function {
     /// in hex; `hex(258, 2)` is "0201". Eight bytes take any 64-bit value, negatives as two's
     /// complement.
     Hex,
+    /// `sort(s)`: `s`'s lines in byte order, each ending with a newline, as `LC_ALL=C sort`
+    /// prints them; a last line without one is a line too.
+    Sort,
+    /// `uniq(s)`: `s`'s lines with each run of identical ones kept once, each ending with a
+    /// newline, as `uniq` prints them.
+    Uniq,
 }
 
 impl Function {
-    const ALL: [Self; 27] = [
+    const ALL: [Self; 29] = [
         Self::Len,
         Self::Abs,
         Self::Min,
@@ -511,6 +517,8 @@ impl Function {
         Self::Any,
         Self::Hex,
         Self::Words,
+        Self::Sort,
+        Self::Uniq,
     ];
 
     fn name(self) -> &'static str {
@@ -542,6 +550,8 @@ impl Function {
             Self::Any => "any",
             Self::Hex => "hex",
             Self::Words => "words",
+            Self::Sort => "sort",
+            Self::Uniq => "uniq",
         }
     }
 
@@ -555,6 +565,8 @@ impl Function {
             }
             Self::Len
             | Self::Words
+            | Self::Sort
+            | Self::Uniq
             | Self::Abs
             | Self::Upper
             | Self::Lower
@@ -1125,6 +1137,16 @@ fn binary(op: BinaryOp, left: &Expr, right: &Expr, env: &Env) -> Result<Value, E
     }
 }
 
+/// `text`'s lines, each without its newline: a last line without one is a line too, and the
+/// nothing after a final newline isn't.
+fn lines_of(text: &str) -> Vec<&str> {
+    let mut lines: Vec<&str> = text.split('\n').collect();
+    if text.is_empty() || text.ends_with('\n') {
+        lines.pop();
+    }
+    lines
+}
+
 /// A count of decimal places, 0 to 15.
 fn places_argument(value: Value, name: &str) -> Result<u8, EvalError> {
     let places = int(value, name)?;
@@ -1413,6 +1435,23 @@ fn call(function: Function, arguments: &[Expr], env: &Env) -> Result<Value, Eval
         Function::Reverse => Ok(Value::Str(
             string(argument(0)?, name)?.chars().rev().collect(),
         )),
+        Function::Sort | Function::Uniq => {
+            let text = string(argument(0)?, name)?;
+            let mut lines = lines_of(&text);
+            if function == Function::Sort {
+                lines.sort_unstable();
+            } else {
+                lines.dedup();
+            }
+            Ok(Value::Str(lines.iter().fold(
+                String::new(),
+                |mut out, line| {
+                    out.push_str(line);
+                    out.push('\n');
+                    out
+                },
+            )))
+        }
         Function::Count => {
             let text = string(argument(0)?, name)?;
             let part = string(argument(1)?, name)?;
@@ -2798,6 +2837,21 @@ mod tests {
         assert_eq!(value("upper(s)", &vars), Ok(Value::Str("HéLLO".into())));
         assert_eq!(value("lower(s)", &vars), Ok(Value::Str("héllo".into())));
         assert_eq!(value("reverse(s)", &vars), Ok(Value::Str("olléH".into())));
+        // sort and uniq go by lines, as LC_ALL=C sort and uniq do: a last line without a
+        // newline is one, and every line printed ends with one.
+        let lines = |text: &str| -> Env {
+            [("t".to_owned(), Value::Str(text.into()))]
+                .into_iter()
+                .collect()
+        };
+        let text = |text: &str| Ok(Value::Str(text.into()));
+        assert_eq!(value("sort(t)", &lines("b\na")), text("a\nb\n"));
+        assert_eq!(value("sort(t)", &lines("a\n\nb\n\n")), text("\n\na\nb\n"));
+        assert_eq!(value("sort(t)", &lines("")), text(""));
+        assert_eq!(value("sort(t)", &lines("B\na\n_\n")), text("B\n_\na\n"));
+        assert_eq!(value("uniq(t)", &lines("a\na")), text("a\n"));
+        assert_eq!(value("uniq(t)", &lines("a\nb\na\n")), text("a\nb\na\n"));
+        assert_eq!(value("uniq(sort(t))", &lines("b\na\nb\n")), text("a\nb\n"));
         let rot13 = r#"tr(s, "A-Za-z", "N-ZA-Mn-za-m")"#;
         assert_eq!(value(rot13, &vars), Ok(Value::Str("Uéyyb".into())));
         assert_eq!(

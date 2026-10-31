@@ -834,6 +834,9 @@ fn call(
                 places,
             }))
         }
+        Function::Sort | Function::Uniq => {
+            Err("sort and uniq compare whole lines, which the proof doesn't follow yet".into())
+        }
         other => Err(format!("the function {other:?}")),
     }
 }

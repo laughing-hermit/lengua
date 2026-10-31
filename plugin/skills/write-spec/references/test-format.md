@@ -262,6 +262,8 @@ to choose text.
 | `if(condition, then, else)` | `then` or `else`; only the chosen one is evaluated, so `if(b == 0, 0, a / b)` is safe |
 | `upper(s)`, `lower(s)` | ASCII letters in upper or lower case |
 | `reverse(s)` | The characters in reverse order |
+| `sort(s)` | `s`'s lines in byte order, each ending with a newline, as `LC_ALL=C sort` prints them; a last line without a newline is a line too |
+| `uniq(s)` | `s`'s lines with each run of identical ones kept once, each ending with a newline, as `uniq` prints them: `uniq(sort(s))` is each distinct line once |
 | `tr(s, from, to)` | Each character of `s` listed in `from` becomes the one at the same place in `to`, as Unix `tr` does; `a-z` is a range. ROT13 is `tr(s, "A-Za-z", "N-ZA-Mn-za-m")` |
 | `count(s, part)` | How many times `part` appears in `s`, without overlaps: `count(line, "e")` |
 | `words(s)` | How many words `s` has: runs of bytes other than spaces, tabs, newlines, vertical tabs, form feeds and carriage returns, as `wc -w` counts them |
