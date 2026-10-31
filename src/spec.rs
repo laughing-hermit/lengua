@@ -590,6 +590,18 @@ pub fn parse(text: &str) -> Result<Spec, Vec<Problem>> {
         return Err(parser.into_problems());
     };
     let header = parser.frontmatter(&lines[1..end].join("\n"));
+    // A spec travels to every computer: its words name none, unless one is its subject.
+    let subject = header
+        .as_ref()
+        .map(|(title, _)| title.to_lowercase())
+        .unwrap_or_default();
+    if let Some((index, line)) = lines[1..end]
+        .iter()
+        .enumerate()
+        .find(|(_, line)| line.trim_start().starts_with("description:"))
+    {
+        parser.portable(index + 2, line, &subject);
+    }
     // An open code block: the line it starts on, its language, and its lines so far.
     let mut fence: Option<(usize, String, Vec<&str>)> = None;
     for (index, line) in lines.iter().enumerate().skip(end + 1) {
@@ -608,7 +620,10 @@ pub fn parse(text: &str) -> Result<Spec, Vec<Problem>> {
         }
         match fence.as_mut() {
             Some((_, _, body)) => body.push(line),
-            None => parser.line(number, line),
+            None => {
+                parser.portable(number, line, &subject);
+                parser.line(number, line);
+            }
         }
     }
     parser.finish_behavior();
@@ -713,6 +728,24 @@ impl Parser {
             });
         } else {
             self.hidden_problems += 1;
+        }
+    }
+
+    /// A problem for each word on the line, outside its values, that names one kind of computer
+    /// rather than what the program does, unless the title names it too.
+    fn portable(&mut self, number: usize, line: &str, subject: &str) {
+        for word in machine_words(line) {
+            if subject.contains(&word.to_lowercase()) {
+                continue;
+            }
+            self.problem(
+                Some(number),
+                format!(
+                    "`{word}` names one kind of computer, not what the program does: a spec is \
+                     the same on every computer, so say what the program does and leave how to \
+                     the compile skill. Name it only when it's the program's subject, in its title"
+                ),
+            );
         }
     }
 
@@ -1745,6 +1778,65 @@ fn backtick_values(text: &str) -> (Vec<String>, bool) {
     (values, true)
 }
 
+/// Words that name one kind of computer: CPUs, their instruction sets and registers, operating
+/// systems and their interfaces, and toolchains. Only words with no everyday meaning are here,
+/// so `neon` and `clang` aren't.
+const MACHINE_WORDS: &[&str] = &[
+    "x86", "x86-64", "x86_64", "amd64", "i386", "i686", "aarch64", "arm64", "armv7", "armv8",
+    "risc-v", "riscv", "riscv64", "avx", "avx2", "avx-512", "avx512", "sse", "sse2", "sse3",
+    "ssse3", "sse4", "sse4.1", "sse4.2", "simd", "mmx", "syscall", "syscalls", "seccomp",
+    "landlock", "linux", "macos", "freebsd", "openbsd", "netbsd", "posix", "glibc", "libc", "musl",
+    "llvm", "llvm-mc", "ld.lld", "gcc", "nasm", "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp",
+    "rsp", "eax", "ebx", "ecx", "edx", "esi", "edi",
+];
+
+/// Phrases of that kind longer than a word.
+const MACHINE_PHRASES: &[&str] = &["system call", "file descriptor", "/proc/", "/dev/"];
+
+/// The words in `line`, outside its backtick values, that name one kind of computer.
+fn machine_words(line: &str) -> Vec<String> {
+    // Only the prose: values are what the program reads or prints, which may be anything.
+    let mut prose = String::new();
+    let mut inside = false;
+    for character in line.chars() {
+        if character == '`' {
+            inside = !inside;
+            prose.push(' ');
+        } else if !inside {
+            prose.push(character);
+        }
+    }
+    let lower = prose.to_lowercase();
+    let mut found: Vec<String> = MACHINE_PHRASES
+        .iter()
+        .filter(|phrase| lower.contains(*phrase))
+        .map(|phrase| phrase.trim_matches('/').to_owned())
+        .collect();
+    let numbered = |word: &str, prefix: &str| {
+        word.strip_prefix(prefix)
+            .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|byte| byte.is_ascii_digit()))
+    };
+    for word in prose.split(|character: char| {
+        !(character.is_alphanumeric() || matches!(character, '-' | '_' | '.'))
+    }) {
+        let word = word.trim_matches(|character: char| matches!(character, '.' | '-' | '_'));
+        let lower = word.to_lowercase();
+        let register = ["xmm", "ymm", "zmm"]
+            .iter()
+            .any(|prefix| numbered(&lower, prefix))
+            || (numbered(&lower, "r")
+                && lower[1..]
+                    .parse::<u8>()
+                    .is_ok_and(|n| (8..=15).contains(&n)));
+        if (MACHINE_WORDS.contains(&lower.as_str()) || register)
+            && !found.contains(&word.to_owned())
+        {
+            found.push(word.to_owned());
+        }
+    }
+    found
+}
+
 /// Finds a run of exactly `run` backticks.
 fn find_exact_run(text: &str, run: usize) -> Option<usize> {
     let bytes = text.as_bytes();
@@ -1857,6 +1949,39 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
             problems.iter().any(|problem| problem.contains(needle)),
             "no problem containing {needle:?} in {problems:#?}"
         );
+    }
+
+    /// A spec names no kind of computer in its prose, unless one is its subject; values,
+    /// which the program reads or prints, may be anything.
+    #[test]
+    fn a_spec_names_no_kind_of_computer() {
+        let fast = ADD.replace(
+            "Adds two whole numbers between",
+            "Adds, with AVX-512 and one system call, two whole numbers between",
+        );
+        assert_problem(&fast, "line 7: `AVX-512` names one kind of computer");
+        assert_problem(&fast, "`system call` names one kind of computer");
+        let described = ADD.replace("prints the sum.", "prints the sum on Linux.");
+        assert_problem(&described, "line 4: `Linux` names one kind of computer");
+        let registers = ADD.replace(
+            "Adds two whole numbers between",
+            "Adds rax and xmm0, between",
+        );
+        assert_problem(&registers, "`rax`");
+        assert_problem(&registers, "`xmm0`");
+        // Its subject, values, and everyday words pass.
+        let subject = ADD.replace("title: add", "title: x86 add").replace(
+            "Adds two whole numbers between",
+            "Adds two x86 registers' whole numbers between",
+        );
+        assert!(parse(&subject).is_ok(), "{:?}", parse(&subject));
+        let values = ADD.replace("prints `5`", "prints `rax`");
+        assert!(parse(&values).is_ok(), "{:?}", parse(&values));
+        let everyday = ADD.replace(
+            "Adds two whole numbers between",
+            "Adds, under a neon sign with a clang, two whole numbers between",
+        );
+        assert!(parse(&everyday).is_ok(), "{:?}", parse(&everyday));
     }
 
     #[test]

@@ -41,8 +41,8 @@ by one concrete example in its steps, and its generated tests try that rule with
 - **The same on every computer:** a spec says what the program does, never what it runs on. Name
   no CPU, instruction set, operating system, kernel, system call or toolchain, and no one
   computer's limits; how the program is built for each computer is the compile skill's. Only a
-  program whose subject is such a thing, such as an instruction decoder, names it, as its
-  subject.
+  program whose subject is such a thing, such as an instruction decoder, names it, in its title
+  too; `check` points out any other.
 - **Frontmatter:** `type: lengua/program-spec`, a short `title` and a one-sentence
   `description`. Never add a `status` field: the record lives in `lengua.lock`, and any edit to
   the spec, even a status change, is recorded again.
@@ -67,8 +67,8 @@ by one concrete example in its steps, and its generated tests try that rule with
   examples, avoid values that end in exactly 5 past the printed places, such as `1.015` printed
   with 2, because binary doubles round them in ways people don't expect. When the user wants
   speed more than digits, Purpose may say the results are computed in single precision (about 7
-  significant digits), which doubles what each vector instruction does; it pays off when the
-  program computes many values, not one. Either way the tests compute in the same precision, step
+  significant digits), which lets a computer work on twice as many values at a time; it pays
+  off when the program computes many values, not one. Either way the tests compute in the same precision, step
   by step, so they always agree with the program: precision decides which digits print, never
   whether a test passes.
 - **One rule per behavior,** under a heading `## B<n>: <title>` with a unique ID (B1, B2, B3…).
@@ -121,9 +121,9 @@ by one concrete example in its steps, and its generated tests try that rule with
     (`127.0.0.1`), since lengua programs don't look up names. Don't have the program refuse other
     ports itself: lengua holds it to the spec's ports when it runs, and its tests talk over a
     free port of their own, so a program that checks for 8080 can't be tested.
-  - A server says `- Network: listens on TCP port 8080`: lengua listens on that port of this
-    computer and hands the program the socket as file descriptor 3, and its behaviors may end
-    with ``- And it keeps serving`` instead of an exit code. Only programs on this computer can
+  - A server says `- Network: listens on TCP port 8080`: lengua listens on that port and hands
+    the program its connections, and its behaviors may end with ``- And it keeps serving``
+    instead of an exit code. Only programs on this computer can
     connect to it, unless the line ends with `for any computer`: write that only when the user
     asks for a server other computers reach, and say so in your report. A server serves one
     client at a time unless the line says how many at once, as `- Network: listens on TCP port
@@ -182,8 +182,8 @@ before the code, and they decide whether it's right.
   `{places(scaled(a, 2) + scaled(b, 2), 2)}`. For measured decimals, compute in doubles and print
   with `fixed`: `{fixed(sqrt(x), 3)}`, or in singles when the spec says single precision:
   `{fixed(sqrt(single(x)), 3)}`. Write a multiply followed by an add, as in a dot product or a
-  polynomial, as `fma(a, b, c)`: it rounds once, which is more accurate, and lets the program use
-  one `vfmadd` instruction. Write `2.0`, not `2`, next to decimals.
+  polynomial, as `fma(a, b, c)`: it rounds once, which is more accurate, and computers do it in
+  one step. Write `2.0`, not `2`, next to decimals.
 - **A computing behavior gets a row of its numbers alone.** The proof goes through text lengths
   one by one, so a row with several free texts proves only short ones. When a behavior computes
   with numbers among other text (a total of amounts between other fields, a date, a count), add a

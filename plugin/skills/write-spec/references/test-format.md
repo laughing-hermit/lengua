@@ -144,8 +144,8 @@ spec's port, which lengua allows only for `run`.
   and expects nothing more. The program learns the port from its arguments or input: the spec's
   own port given whole as an argument, in the example or a generated test, is the test server's
   port, which lengua fills in. In tests, the program can connect to that port alone.
-- **A program that serves** gets its listening socket from lengua as file descriptor 3, in every
-  test. The test's client connects once a connection and behaves as curl and browsers do: it
+- **A program that serves** gets its listening socket from lengua, in every test. The test's
+  client connects once a connection and behaves as curl and browsers do: it
   sends its text and keeps its side of the connection open until the program starts answering
   (or closes it at once when it expects no answer), then reads everything the program answers
   until it closes the connection. So a server must answer once the request is complete, by its
@@ -207,8 +207,8 @@ working folder at all: lengua stops it.
 | `choice(a, b, …)` | One of the values: all whole numbers, all decimals or all strings | Every value (the first and last when there are more than 16) |
 | `string(min, max, "chars")` | `min` to `max` characters (at most 1048576) drawn from `chars` | The shortest string of the first character, the longest of the last |
 
-Linux limits each argument to 131072 bytes, so `check` refuses a run whose argument is
-longer; long text belongs on standard input.
+An argument holds at most 131072 bytes, so `check` refuses a run whose argument is longer;
+long text belongs on standard input.
 
 Arguments must be literal values. The limits of `int` and `decimal` and the lengths of `string`
 must be numbers that the `# Purpose` section writes in backticks, so every range comes from the
@@ -249,8 +249,8 @@ to choose text.
 - **Operators**, from lowest precedence to highest: `||`, then `&&`, then the comparisons
   `== != < <= > >=` (one per comparison; strings compare only with `==` and `!=`), then `+ -`,
   then `* / %`, then unary `-` and `!`. Parentheses group.
-- **Division** truncates toward zero and `%` keeps the sign of the dividend, like the CPU's
-  `idiv`: `-7 / 2` is `-3` and `-7 % 2` is `-1`. Dividing by zero is an error.
+- **Division** truncates toward zero and `%` keeps the sign of the dividend, as in C and Rust:
+  `-7 / 2` is `-3` and `-7 % 2` is `-1`. Dividing by zero is an error.
 - **Variable names** use lowercase letters, digits and `_`, start with a letter or `_`, and aren't
   function or generator names. `now` is built in unless a table has a column of that name.
 
@@ -275,7 +275,7 @@ to choose text.
 | `places(n, places)` | A whole number of units printed as a decimal: `places(1250, 2)` is "12.50", `places(-5, 2)` is "-0.05" |
 | `sha256(s)` | The SHA-256 of `s`'s bytes, in lowercase hex |
 | `crc32(s)` | The CRC-32 of `s`'s bytes, as zlib, gzip and PNG compute it |
-| `crc32c(s)` | The CRC-32C (Castagnoli) of `s`'s bytes, as the `crc32` instruction computes it |
+| `crc32c(s)` | The CRC-32C (Castagnoli) of `s`'s bytes, as iSCSI and ext4 compute it |
 | `any(lo, hi)` | In expected output only: any whole number from `lo` to `hi`, written plainly. See [Rules](#rules-output-the-program-chooses) |
 | `hex(x, n)` | In the random bytes only: `x` as `n` bytes, least significant first, in hex. See [Random bytes and the clock](#random-bytes-and-the-clock) |
 

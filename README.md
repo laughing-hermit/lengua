@@ -3,7 +3,8 @@
 Natural language in, checked machine code out. lengua is an AI language, not a programming
 language: you describe a program in plain words, and your AI agent is the compiler. A program is
 two files. `spec.md` is the source: what the program does, as behaviors shown by examples, with
-the tests that try each one, in plain markdown anyone can read and share. `main.s` is the fastest
+the tests that try each one, in plain markdown anyone can read and share: an idea file, in
+Andrej Karpathy's words, that anyone's agent builds out for their own computer. `main.s` is the fastest
 x86-64 assembly the agent can compile from it for your computer, and it's disposable: the spec is
 what you keep and share. That assembly must pass every
 test and an adapted NASA "Power of 10" rule set, and lengua validates each step of the
@@ -21,13 +22,13 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 > (which tests supply, so such output is exact), plain TCP clients and servers on the ports a spec
 > names, and inputs up to 1 MiB. The kernel holds every run to what its spec allows. lengua
 > proves programs right for every input, not just the tested ones, over whole numbers, decimals,
-> choices, texts beyond ASCII and text formulas, files and the network, in integer, bit and vector code from SSE2 to AVX-512,
+> choices, texts beyond ASCII and text formulas, files and the network, threads and floats, in integer, bit, vector and float code from SSE2 to AVX-512,
 > and over long texts up to a stated length (4,096 bytes of standard input). Programs that read
 > with the skill's `fill` are proven however their input arrives, cut into any pieces, and
 > servers are tested and proven with clients that keep the connection open, as curl does. Each
 > solver step is confirmed by two independent solvers, z3 and cvc5, and most proofs need none:
 > the terms settle every step. `lengua.lock` records what's proven. Next:
-> - proofs of arithmetic a formula writes at 128 bits and a program at 64, such as a halving;
+> - proofs over texts of every length, and up to the lengths a spec itself states;
 > - more of the top CPU and OS targets, which LLVM already supports.
 
 ## Requirements
@@ -124,7 +125,7 @@ Complete programs, each with its spec, tests included, and its assembly:
   gets only the variables its tests, or your `run`, give it;
 - [`examples/archive`](examples/archive) moves a file into an `archive` folder, making the folder
   when it's missing;
-- [`examples/dice`](examples/dice) rolls a fair die from the kernel's random bytes. Its tests
+- [`examples/dice`](examples/dice) rolls a fair die from the computer's random bytes. Its tests
   supply the bytes, so every roll is checked exactly, and the proof covers every pair of first
   bytes;
 - [`examples/fetch`](examples/fetch) fetches a page from a web server on this computer over

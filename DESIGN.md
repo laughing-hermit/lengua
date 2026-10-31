@@ -21,7 +21,7 @@ A program is two files, plus lengua's own record of them:
 
 | File | Written by | Purpose |
 |---|---|---|
-| `spec.md` | the AI, from the person's request | The source of truth, the mother of everything else, and the only file people share: natural language, Given/When/Then behaviors with IDs whose steps are their example tests, the generated tests under each behavior, and what the program uses. An [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) (OKF) concept document, the same on every target |
+| `spec.md` | the AI, from the person's request | The source of truth, the mother of everything else, and the only file people share: natural language, Given/When/Then behaviors with IDs whose steps are their example tests, the generated tests under each behavior, and what the program uses. An [Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledge-format) (OKF) concept document, the same on every target |
 | `main.s` | the AI, compiling the spec | x86-64 assembly in the lengua dialect for one target. It's disposable: each computer compiles its own from the spec. Once it passes, lengua writes its second line, naming the version of the spec it was compiled from, the target and the CPU features it needs |
 | `lengua.lock` | only the lengua server | This computer's record: the person's requests for the build in progress, SHA-256 of both files and of the checked executable, the target and features, a combined fingerprint, which tests are proven for every input on that executable, and a signature. It isn't shared |
 
@@ -768,7 +768,14 @@ decides.
 ## Sharing
 
 People share specs, never code. The spec is the source of truth: the same on every computer, and
-all anyone needs to have the program. main.s is disposable: each computer compiles its own from
+all anyone needs to have the program. It's an idea file, as Andrej Karpathy calls his
+[LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f): it says what's
+wanted, and each person's own agent builds out the specifics, here a program for their computer.
+In the [Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledge-format)
+v0.2 it's a concept document, `type` its one required key, so a folder of specs is an OKF bundle
+that a site for specs can index by each one's description. To stay the same on every computer, a
+spec names no CPU, instruction set, operating system, system call or toolchain: `check` points
+out any such word in its prose, unless it's the program's subject, named in its title. main.s is disposable: each computer compiles its own from
 the spec, lengua checks it there, and it can always be compiled again. lengua.lock is that
 computer's own record and doesn't travel either.
 

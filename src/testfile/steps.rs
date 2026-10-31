@@ -293,7 +293,7 @@ impl Reading {
                 }
                 return Some(());
             }
-            if at.words(&["kernel's", "random", "bytes"]) || at.words(&["random", "bytes"]) {
+            if at.words(&["random", "bytes"]) {
                 let mut hex = String::new();
                 while !at.is_end() {
                     at.word("and");
