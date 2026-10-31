@@ -36,10 +36,12 @@ and the CPU features the code needs; never write that line yourself.
    any pieces. To stream input larger than a buffer, call `fill` again for each buffer-full, with
    `ecx` -1, as [the streaming filter](assets/stream-template.s) does
    ([its spec](assets/stream-template-spec.md)): where each buffer-full's output is its bytes
-   mapped one by one (`upper`, `lower`, `tr`), or a count kept in a register and printed at the
-   end (`len`, `count` of one character), the proof covers every length by induction over the
-   loop; otherwise it goes on through longer input as far as its time reaches, where a read
-   loop of your own is proven only up to the 4096 bytes one pipe write holds. A server whose
+   mapped one by one (`upper`, `lower`, `tr`), or counts kept in registers and printed at the
+   end (`len`, `words`, `count` of a part that can't overlap itself, such as `"\n"` or
+   `"\r\n"`), the proof covers every length by induction over the loop, whatever the program
+   keeps of the last buffer-full (such as whether it ended inside a word); otherwise it goes on
+   through longer input as far as its time reaches, where a read loop of your own is proven
+   only up to the 4096 bytes one pipe write holds. A server whose
    spec serves several clients at once starts from
    [the event-loop server](assets/server-template.s) ([its spec](assets/server-template-spec.md)):
    `poll` over the listening socket and a fixed table of connections, a line buffer for each,

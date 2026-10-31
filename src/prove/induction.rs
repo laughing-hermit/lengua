@@ -18,6 +18,14 @@
 //! that made arbitrary, until nothing new changes; everything else stays as it was the first
 //! time. A count is kept in a register that went from a constant to it and the buffer-full's
 //! count, and goes on adding from any count so far.
+//!
+//! A count whose buffer-full's part depends on the bytes before it, as `words` does on whether
+//! the last buffer-full ended inside a word, is checked a buffer-full later: the step reads two
+//! buffer-fulls from any state at the head, and the second's count must be what the formula
+//! adds for it after the first's last bytes. Whatever the program keeps of what came before, a
+//! flag, a byte or a mask's bit, its count must come out so, which needs no telling where it
+//! keeps it. The base likewise reads a buffer-full from any state at the head before each final
+//! piece, and the shortest inputs are proven from the program's start.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -47,6 +55,34 @@ pub struct Found {
     pub paths: usize,
     /// Questions its solvers answered.
     pub questions: usize,
+    /// The bytes before each buffer-full its counts need: none for a map, or for counts that
+    /// add up as they are.
+    pub lookback: usize,
+}
+
+/// Why a proof by induction doesn't hold, with an input that may show it.
+#[derive(Debug, Clone)]
+pub struct Refused {
+    /// Why.
+    pub why: String,
+    /// The buffer-fulls a step that went wrong read, from the solver's model: run from the
+    /// program's start, they may show it wrong.
+    pub input: Option<Vec<u8>>,
+}
+
+impl From<String> for Refused {
+    fn from(why: String) -> Self {
+        Self { why, input: None }
+    }
+}
+
+impl From<&str> for Refused {
+    fn from(why: &str) -> Self {
+        Self {
+            why: why.to_owned(),
+            input: None,
+        }
+    }
 }
 
 /// Rounds of finding what a time round the loop changes before giving up on a fixpoint.
@@ -62,6 +98,8 @@ struct Streamed<'a> {
     max: usize,
     /// What the program writes of it.
     output: Output<'a>,
+    /// The bytes before each buffer-full its counts need.
+    lookback: usize,
 }
 
 /// What a streaming program writes.
@@ -93,8 +131,8 @@ fn streamed<'a>(image: &Image, block: &'a Generated) -> Result<Streamed<'a>, Str
         return Err("its standard input isn't the text alone".into());
     }
     let pieces = block.stdout.pieces();
-    let output = match pieces[..] {
-        [Piece::Expr(mapped)] if byte_map(mapped, name) => Output::Map,
+    let (output, lookback) = match pieces[..] {
+        [Piece::Expr(mapped)] if byte_map(mapped, name) => (Output::Map, 0),
         _ => {
             let counts: Vec<(usize, &Expr)> = pieces
                 .iter()
@@ -104,15 +142,20 @@ fn streamed<'a>(image: &Image, block: &'a Generated) -> Result<Streamed<'a>, Str
                     Piece::Text(_) => None,
                 })
                 .collect();
-            if counts.is_empty() || !counts.iter().all(|(_, expr)| adds_up(expr, name)) {
+            let lookbacks: Option<Vec<usize>> = counts
+                .iter()
+                .map(|(_, expr)| formula::lookback(expr, name))
+                .collect();
+            let lookback = lookbacks.and_then(|lookbacks| lookbacks.into_iter().max());
+            let Some(lookback) = lookback.filter(|_| !counts.is_empty()) else {
                 return Err(
                     "its output isn't the text mapped byte by byte, as upper, lower and \
-                     tr map it, nor counts that add up over its pieces, as len and count of one \
-                     character do"
+                     tr map it, nor counts that add up over its pieces after the bytes just \
+                     before each, as len, count and words do"
                         .into(),
                 );
-            }
-            Output::Counts(counts)
+            };
+            (Output::Counts(counts), lookback)
         }
     };
     let others = !block.args.is_empty()
@@ -137,22 +180,8 @@ fn streamed<'a>(image: &Image, block: &'a Generated) -> Result<Streamed<'a>, Str
         characters: charset.iter().map(|character| *character as u8).collect(),
         max: *max,
         output,
+        lookback,
     })
-}
-
-/// Whether `expr` counts something of the text `name` that adds up over its pieces, the count
-/// of a whole the sum of its pieces' counts: its length, or how often one character appears.
-fn adds_up(expr: &Expr, name: &str) -> bool {
-    match expr {
-        Expr::Call(Function::Len, arguments) => {
-            matches!(arguments.as_slice(), [Expr::Var(var)] if var == name)
-        }
-        Expr::Call(Function::Count, arguments) => matches!(
-            arguments.as_slice(),
-            [Expr::Var(var), Expr::Literal(Value::Str(part))] if var == name && part.len() == 1
-        ),
-        _ => false,
-    }
 }
 
 /// `expr`, a count, over `bytes`.
@@ -164,8 +193,42 @@ fn counted(pool: &mut Pool, expr: &Expr, name: &str, bytes: &[Term]) -> Result<T
     }
 }
 
-/// Whether the run's `register`, which held `start` at the head, holds `start` and `count`
-/// back at it: the terms say so, or the solvers find no input where it doesn't.
+/// What `expr`, a count, adds for `piece` after `window`, the bytes just before it.
+fn added(
+    pool: &mut Pool,
+    expr: &Expr,
+    name: &str,
+    window: &[Term],
+    piece: &[Term],
+) -> Result<Term, String> {
+    let texts = BTreeMap::from([(name.to_owned(), piece.to_vec())]);
+    match formula::delta(pool, expr, &texts, window)? {
+        Formula::Number(number) => Ok(number.term),
+        _ => Err("a count that isn't a number".into()),
+    }
+}
+
+/// The run's standard input held to `characters`, byte by byte: the facts a question that
+/// finds inputs is asked again with, so its inputs are ones the spec can give.
+fn held(pool: &mut Pool, run: &State, characters: &[u8]) -> Vec<Term> {
+    run.stdin_bytes()
+        .iter()
+        .map(|byte| pool.is_one_of(*byte, characters))
+        .collect()
+}
+
+/// Whether a register grows as a count does.
+enum Grows {
+    /// It holds what it held and the count.
+    Yes,
+    /// It doesn't, and where the solvers found an input that shows it, the bytes `read` are.
+    No(Option<Vec<u8>>),
+}
+
+/// Whether the run's `register`, which held `before`, now holds `before` and `count`: the
+/// terms say so, or the solvers find no input with `held` that takes the run where it doesn't.
+/// Where they find one, its bytes `read` come with the answer.
+#[allow(clippy::too_many_arguments)]
 fn grows(
     pool: &mut Pool,
     solvers: &mut Solvers,
@@ -174,21 +237,39 @@ fn grows(
     register: usize,
     before: Term,
     count: Term,
-) -> Result<bool, String> {
+    held: &[Term],
+    read: &[Term],
+) -> Result<Grows, String> {
     let now = pool.zero_extend(run.register_term(register), WIDTH - 64);
     let before = pool.zero_extend(before, WIDTH - 64);
     let expected = pool.add(before, count);
     let same = pool.eq(now, expected);
-    if let Some(truth) = pool.truth(same) {
-        return Ok(truth);
+    match pool.truth(same) {
+        Some(true) => return Ok(Grows::Yes),
+        Some(false) => return Ok(Grows::No(None)),
+        None => {}
     }
     let mut conditions = run.path.clone();
     conditions.push(pool.bool_not(same));
     let solver = solvers.get(budget.deadline)?;
-    let (answer, _) = solver
-        .check(pool, &conditions, &[])
+    let (answer, model) = solver
+        .check(pool, &conditions, read)
         .map_err(|error| format!("the solver failed: {error}"))?;
-    Ok(answer == Answer::Unsat)
+    let (answer, model) = super::within(pool, solver, answer, model, conditions, held, read)
+        .map_err(|stop| match stop {
+            super::Stop::Unproven(why) | super::Stop::Beyond(why) => why,
+            super::Stop::Counterexample(_) => "a counterexample".into(),
+        })?;
+    Ok(match answer {
+        Answer::Unsat => Grows::Yes,
+        Answer::Sat => Grows::No(
+            read.iter()
+                .map(|byte| model.get(byte).map(|value| *value as u8))
+                .collect::<Option<Vec<u8>>>()
+                .filter(|input| !input.is_empty()),
+        ),
+        Answer::Unknown => Grows::No(None),
+    })
 }
 
 /// Whether `expr` maps the text `name` byte by byte, each byte's output a byte that depends on
@@ -235,10 +316,12 @@ fn explore(
 ///
 /// # Errors
 ///
-/// Why the induction doesn't apply or its step doesn't hold: the proof then goes by length.
-pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, String> {
+/// Why the induction doesn't apply or its step doesn't hold, with the input a step that went
+/// wrong read: the proof then goes by length.
+pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, Refused> {
     let streamed = streamed(image, block)?;
     let head = image.fill_head().ok_or("it has no fill")?;
+    let looks_back = streamed.lookback > 0;
     let mut solvers = Solvers::new(budget.question_ms);
     let mut hook = Hook {
         head,
@@ -248,6 +331,9 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
         ..Hook::default()
     };
     let mut paths = 0;
+    // The bytes a run read where a count stopped growing as the formula's does: from the
+    // program's start, they may show it wrong.
+    let mut shown: Option<Vec<u8>> = None;
     for round in 0..MAX_ROUNDS {
         if budget.stopped() {
             return Err(super::OUT_OF_TIME.into());
@@ -261,6 +347,9 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
         paths += runs.len();
         let mut grown = hook.clone();
         let mut chunk = None;
+        // For counts that look back: the registers that went from a constant to it and the
+        // first buffer-full's count on every run.
+        let mut candidates: Option<BTreeMap<usize, Fold>> = None;
         for run in &runs {
             if run.end != Some(End::Looped) {
                 continue;
@@ -268,11 +357,28 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
             let snapshot = run
                 .at_head()
                 .ok_or("a run came back to a head it never left")?;
-            let changes = run.changes(snapshot);
+            // What one buffer-full changes: to the run's end, or to its second time at the
+            // head where it reads two.
+            let (changes, taken) = if hook.fulls() > 1 {
+                let second = run
+                    .at_second()
+                    .ok_or("a run read two buffer-fulls without coming back between them")?;
+                let changes = second
+                    .changes
+                    .clone()
+                    .ok_or("a run's first buffer-full left no changes")?;
+                (changes, second.stdin_read - snapshot.stdin_read)
+            } else {
+                (
+                    run.changes(snapshot),
+                    run.stdin_taken() - snapshot.stdin_read,
+                )
+            };
             if let Some(why) = changes.other.first() {
-                return Err(why.clone());
+                return Err(why.clone().into());
             }
-            let taken = run.stdin_taken() - snapshot.stdin_read;
+            let held = held(&mut pool, run, &streamed.characters);
+            let fed = run.stdin_bytes()[snapshot.stdin_read..].to_vec();
             // A bound counter goes from its start one lower each time round; a count, from its
             // start, by what the buffer-full adds.
             if round == 0 {
@@ -287,30 +393,36 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
                     }
                 }
                 if let Output::Counts(counts) = &streamed.output
-                    && grown.folds.is_empty()
+                    && (looks_back || grown.folds.is_empty())
                 {
                     // Every register that went from a constant to it and the buffer-full's
                     // count may keep the count: a later round keeps only those that go on
                     // adding, as a register that holds only the last buffer-full's doesn't.
-                    let fed = run.stdin_bytes()[..taken.min(run.stdin_bytes().len())].to_vec();
+                    let first = &fed[..taken.min(fed.len())];
+                    let mut these = BTreeMap::new();
                     for (placeholder, expr) in counts {
-                        let count = counted(&mut pool, expr, streamed.name, &fed)?;
+                        let count = counted(&mut pool, expr, streamed.name, first)?;
                         for register in &changes.registers {
                             let before = snapshot.registers[*register];
                             if let Some(start) = pool.constant(before)
                                 && !grown.counters.contains_key(register)
-                                && !grown.folds.contains_key(register)
-                                && grows(
-                                    &mut pool,
-                                    &mut solvers,
-                                    budget,
-                                    run,
-                                    *register,
-                                    before,
-                                    count,
-                                )?
+                                && !these.contains_key(register)
+                                && matches!(
+                                    grows(
+                                        &mut pool,
+                                        &mut solvers,
+                                        budget,
+                                        run,
+                                        *register,
+                                        before,
+                                        count,
+                                        &held,
+                                        &[],
+                                    )?,
+                                    Grows::Yes
+                                )
                             {
-                                grown.folds.insert(
+                                these.insert(
                                     *register,
                                     Fold {
                                         start,
@@ -321,9 +433,21 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
                             }
                         }
                     }
+                    if looks_back {
+                        // The first buffer-full's count is checked here alone, so it must hold
+                        // on every run.
+                        candidates = Some(match candidates {
+                            None => these,
+                            Some(kept) => kept
+                                .into_iter()
+                                .filter(|(register, fold)| these.get(register) == Some(fold))
+                                .collect(),
+                        });
+                    } else {
+                        grown.folds = these;
+                    }
                 }
             } else if let Output::Counts(counts) = &streamed.output {
-                let fed = run.stdin_bytes()[..taken.min(run.stdin_bytes().len())].to_vec();
                 let kept: Vec<(usize, Fold)> = grown.folds.clone().into_iter().collect();
                 for (register, fold) in kept {
                     let Some((_, expr)) =
@@ -331,9 +455,28 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
                     else {
                         continue;
                     };
-                    let count = counted(&mut pool, expr, streamed.name, &fed)?;
-                    let before = snapshot.registers[register];
-                    if !grows(
+                    let (before, count) = if looks_back {
+                        // The second buffer-full's count after the first's last bytes.
+                        let second = run
+                            .at_second()
+                            .ok_or("a run read two buffer-fulls without coming back")?;
+                        let back = taken.saturating_sub(streamed.lookback);
+                        let read = run.stdin_taken() - snapshot.stdin_read;
+                        let count = added(
+                            &mut pool,
+                            expr,
+                            streamed.name,
+                            &fed[back..taken],
+                            &fed[taken..read.min(fed.len())],
+                        )?;
+                        (second.registers[register], count)
+                    } else {
+                        let count =
+                            counted(&mut pool, expr, streamed.name, &fed[..taken.min(fed.len())])?;
+                        (snapshot.registers[register], count)
+                    };
+                    let read = &fed[..(run.stdin_taken() - snapshot.stdin_read).min(fed.len())];
+                    if let Grows::No(input) = grows(
                         &mut pool,
                         &mut solvers,
                         budget,
@@ -341,9 +484,12 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
                         register,
                         before,
                         count,
+                        &held,
+                        read,
                     )? {
                         grown.folds.remove(&register);
                         grown.registers.insert(register);
+                        shown = shown.or(input);
                     }
                 }
             }
@@ -357,6 +503,14 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
             grown.masks.extend(changes.masks);
             chunk = Some(taken);
         }
+        if let Some(found) = candidates {
+            for register in found.keys() {
+                grown.registers.remove(register);
+            }
+            grown.folds = found;
+            // From here on a run reads two buffer-fulls, the second checked after the first.
+            grown.fulls = 2;
+        }
         let chunk = chunk
             .filter(|chunk| *chunk > 0)
             .ok_or("no run of one buffer-full came back to the read loop's head")?;
@@ -365,16 +519,23 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
                 .iter()
                 .any(|(place, _)| !grown.folds.values().any(|fold| fold.placeholder == *place))
         {
-            return Err("it keeps a count in no register of its own as it goes".into());
+            return Err(Refused {
+                why: "it keeps a count in no register of its own as it goes".into(),
+                input: shown,
+            });
         }
         if streamed.max <= chunk {
             return Err(
                 "its texts fit in one buffer-full, which the proof by length covers".into(),
             );
         }
-        // The step holds while every counter is at least 3, the base while it's at least 2: as
-        // many times round as the smallest counter's start less one, as far as the spec's
-        // lengths go. A count is at most what was read before the head.
+        if streamed.lookback >= chunk {
+            return Err("its counts look back further than a buffer-full".into());
+        }
+        // The step holds while every counter is at least 3, the base while it's at least 2 (3
+        // where a buffer-full comes before each final piece): as many times round as the
+        // smallest counter's start less one, as far as the spec's lengths go. A count is at
+        // most what was read before the head.
         let rounds = grown
             .counters
             .values()
@@ -401,23 +562,136 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
             for fold in folds.values_mut() {
                 fold.most = reach;
             }
-            return Ok(Found {
-                hook: Hook {
+            let base = if looks_back {
+                Hook {
+                    low: 3,
+                    stop: false,
+                    fulls: 0,
+                    feed: None,
+                    lead: Some(streamed.characters.clone()),
+                    folds,
+                    ..hook
+                }
+            } else {
+                Hook {
                     low: 2,
                     stop: false,
                     feed: None,
                     folds,
                     ..hook
-                },
+                }
+            };
+            return Ok(Found {
+                hook: base,
                 chunk,
                 reach: rounds.saturating_mul(chunk as u128),
                 paths,
                 questions,
+                lookback: streamed.lookback,
             });
         }
         hook = grown;
     }
     Err("what one time round the read loop changes didn't settle".into())
+}
+
+/// The checks a run back at the head meets: it read a buffer-full (two, where its counts look
+/// back), wrote the formula's bytes for it and nothing to standard error, kept each count in
+/// step with the formula, and has each counter one lower each time round.
+fn looped_checks(
+    pool: &mut Pool,
+    block: &Generated,
+    streamed: &Streamed<'_>,
+    run: &State,
+    hook: &Hook,
+    chunk: usize,
+) -> Result<Term, String> {
+    let snapshot = run
+        .at_head()
+        .ok_or("a run came back to a head it never left")?;
+    let fed = &run.stdin_bytes()[snapshot.stdin_read..];
+    let fulls = usize::try_from(hook.fulls()).unwrap_or(1);
+    let second = run.at_second();
+    let short = |read: usize| read != chunk * fulls || fed.len() <= chunk * fulls;
+    if short(run.stdin_taken() - snapshot.stdin_read)
+        || (fulls > 1
+            && second.is_none_or(|second| second.stdin_read - snapshot.stdin_read != chunk))
+    {
+        return Err("a time round the read loop reads other than a buffer-full".into());
+    }
+    let none = BTreeMap::new();
+    let fixed = crate::expr::Env::new();
+    let mut checks = Vec::new();
+    match &streamed.output {
+        // The formula's bytes for the buffer-full, as it goes.
+        Output::Map => {
+            let texts = BTreeMap::from([(streamed.name.to_owned(), fed[..chunk].to_vec())]);
+            let known = Known {
+                numbers: &none,
+                fixed: &fixed,
+                texts: &texts,
+                translated: RefCell::new(HashMap::new()),
+                offsets: HashMap::new(),
+                relative: None,
+            };
+            checks.push(text_is(
+                pool,
+                &run.stdout[snapshot.stdout..],
+                &block.stdout,
+                &known,
+            )?);
+        }
+        // Nothing yet, and each count grown by the buffer-full's: where the counts look back,
+        // by what the second adds after the first's last bytes.
+        Output::Counts(counts) => {
+            if run.stdout.len() != snapshot.stdout {
+                checks.push(pool.boolean(false));
+            }
+            for (register, fold) in &hook.folds {
+                let Some((_, expr)) = counts.iter().find(|(place, _)| *place == fold.placeholder)
+                else {
+                    return Err("a count with no placeholder".into());
+                };
+                let (before, count) = match second {
+                    Some(second) if fulls > 1 => {
+                        let back = chunk - streamed.lookback;
+                        let count = added(
+                            pool,
+                            expr,
+                            streamed.name,
+                            &fed[back..chunk],
+                            &fed[chunk..2 * chunk],
+                        )?;
+                        (second.registers[*register], count)
+                    }
+                    _ => (
+                        snapshot.registers[*register],
+                        counted(pool, expr, streamed.name, &fed[..chunk])?,
+                    ),
+                };
+                let now = pool.zero_extend(run.register_term(*register), WIDTH - 64);
+                let before = pool.zero_extend(before, WIDTH - 64);
+                let expected = pool.add(before, count);
+                checks.push(pool.eq(now, expected));
+            }
+        }
+    }
+    if run.stderr.len() != snapshot.stderr {
+        checks.push(pool.boolean(false));
+    }
+    // Each counter one lower than it was at the head each time round.
+    for register in hook.counters.keys() {
+        let then = snapshot.registers[*register];
+        if let Some(second) = second.filter(|_| fulls > 1) {
+            let one = pool.bv(64, 1);
+            let lower = pool.sub(then, one);
+            checks.push(pool.eq(second.registers[*register], lower));
+        }
+        let rounds = pool.bv(64, fulls as u128);
+        let lower = pool.sub(then, rounds);
+        checks.push(pool.eq(run.register_term(*register), lower));
+    }
+    Ok(pool.all(&checks))
 }
 
 /// Checks the step's runs: each one breaks no memory rule, and each one that can happen comes
@@ -433,81 +707,33 @@ fn verify(
     solvers: &mut Solvers,
     budget: &Budget,
     chunk: usize,
-) -> Result<usize, String> {
+) -> Result<usize, Refused> {
     let before = solvers.solver.as_ref().map_or(0, |solver| solver.questions);
-    let none = BTreeMap::new();
-    let fixed = crate::expr::Env::new();
+    let fulls = usize::try_from(hook.fulls()).unwrap_or(1);
     for run in runs {
         // The fed bytes are more than a proof holds to their characters on every question, so
         // they're held to them where a question finds inputs.
-        let held: Vec<Term> = run
-            .stdin_bytes()
+        let held = held(pool, run, &streamed.characters);
+        // The buffer-fulls the step reads: what a counterexample would be made of.
+        let read: Vec<Term> = run
+            .at_head()
+            .map(|snapshot| {
+                let from = snapshot.stdin_read.min(run.stdin_bytes().len());
+                let to = (from + chunk * fulls).min(run.stdin_bytes().len());
+                run.stdin_bytes()[from..to].to_vec()
+            })
+            .unwrap_or_default();
+        let mut questions: Vec<(Term, String, bool)> = run
+            .obligations
             .iter()
-            .map(|byte| pool.is_one_of(*byte, &streamed.characters))
+            .map(|(condition, problem)| (*condition, problem.clone(), false))
             .collect();
-        let mut questions: Vec<(Term, String)> = run.obligations.clone();
         if let Some(End::Unsafe(problem)) = &run.end {
-            questions.insert(0, (pool.boolean(true), problem.clone()));
+            questions.insert(0, (pool.boolean(true), problem.clone(), false));
         }
         let broken = match &run.end {
             Some(End::Looped) => {
-                let snapshot = run
-                    .at_head()
-                    .ok_or("a run came back to a head it never left")?;
-                let fed = run.stdin_bytes();
-                if run.stdin_taken() - snapshot.stdin_read != chunk || fed.len() <= chunk {
-                    return Err("a time round the read loop reads other than a buffer-full".into());
-                }
-                let mut checks = Vec::new();
-                match &streamed.output {
-                    // The formula's bytes for the buffer-full, as it goes.
-                    Output::Map => {
-                        let texts =
-                            BTreeMap::from([(streamed.name.to_owned(), fed[..chunk].to_vec())]);
-                        let known = Known {
-                            numbers: &none,
-                            fixed: &fixed,
-                            texts: &texts,
-                            translated: RefCell::new(HashMap::new()),
-                            offsets: HashMap::new(),
-                        };
-                        checks.push(text_is(
-                            pool,
-                            &run.stdout[snapshot.stdout..],
-                            &block.stdout,
-                            &known,
-                        )?);
-                    }
-                    // Nothing yet, and each count grown by the buffer-full's.
-                    Output::Counts(counts) => {
-                        if run.stdout.len() != snapshot.stdout {
-                            checks.push(pool.boolean(false));
-                        }
-                        for (register, fold) in &hook.folds {
-                            let Some((_, expr)) =
-                                counts.iter().find(|(place, _)| *place == fold.placeholder)
-                            else {
-                                return Err("a count with no placeholder".into());
-                            };
-                            let count = counted(pool, expr, streamed.name, &fed[..chunk])?;
-                            let now = pool.zero_extend(run.register_term(*register), WIDTH - 64);
-                            let before =
-                                pool.zero_extend(snapshot.registers[*register], WIDTH - 64);
-                            let expected = pool.add(before, count);
-                            checks.push(pool.eq(now, expected));
-                        }
-                    }
-                }
-                if run.stderr.len() != snapshot.stderr {
-                    checks.push(pool.boolean(false));
-                }
-                // Each counter one lower than it was at the head.
-                for register in hook.counters.keys() {
-                    let one = pool.bv(64, 1);
-                    let lower = pool.sub(snapshot.registers[*register], one);
-                    checks.push(pool.eq(run.register_term(*register), lower));
-                }
-                let holds = pool.all(&checks);
+                let holds = looped_checks(pool, block, streamed, run, hook, chunk)?;
                 let holds = settled(pool, &run.path, holds, MAX_CHOICES);
                 pool.bool_not(holds)
             }
@@ -520,8 +746,9 @@ fn verify(
         questions.push((
             broken,
             "one more buffer-full from the read loop's head goes wrong".into(),
+            true,
         ));
-        for (condition, problem) in questions {
+        for (condition, problem, shows) in questions {
             if pool.truth(condition) == Some(false) {
                 continue;
             }
@@ -539,15 +766,18 @@ fn verify(
             }
             let mut conditions = run.path.clone();
             conditions.push(condition);
+            let values: &[Term] = if shows { &read } else { &[] };
             let solver = solvers.get(budget.deadline)?;
             let (answer, model) = solver
-                .check(pool, &conditions, &[])
+                .check(pool, &conditions, values)
                 .map_err(|error| format!("the solver failed: {error}"))?;
-            let (answer, _) = super::within(pool, solver, answer, model, conditions, &held, &[])
-                .map_err(|stop| match stop {
-                    super::Stop::Unproven(why) | super::Stop::Beyond(why) => why,
-                    super::Stop::Counterexample(_) => "a counterexample".into(),
-                })?;
+            let (answer, model) = super::within(
+                pool, solver, answer, model, conditions, &held, values,
+            )
+            .map_err(|stop| match stop {
+                super::Stop::Unproven(why) | super::Stop::Beyond(why) => why,
+                super::Stop::Counterexample(_) => "a counterexample".into(),
+            })?;
             match answer {
                 Answer::Unsat => {}
                 Answer::Sat => {
@@ -555,7 +785,18 @@ fn verify(
                         let sketch: String = pool.sketch(condition, 6).chars().take(2000).collect();
                         eprintln!("induction step: {problem}, where {sketch}");
                     }
-                    return Err(problem);
+                    let input = shows
+                        .then(|| {
+                            read.iter()
+                                .map(|byte| model.get(byte).map(|value| *value as u8))
+                                .collect::<Option<Vec<u8>>>()
+                        })
+                        .flatten()
+                        .filter(|input| !input.is_empty());
+                    return Err(Refused {
+                        why: problem,
+                        input,
+                    });
                 }
                 Answer::Unknown => {
                     if solver.out_of_time() {
@@ -564,7 +805,8 @@ fn verify(
                     return Err(format!(
                         "a time round the read loop couldn't be settled: {}",
                         solver.why_unknown
-                    ));
+                    )
+                    .into());
                 }
             }
         }

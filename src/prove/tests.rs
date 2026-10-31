@@ -659,6 +659,7 @@ async fn a_shape_its_terms_settle_starts_no_solver() {
             cut_any_way: false,
             unreached: Vec::new(),
             induction: None,
+            lookback: 0,
         }
     );
 }
@@ -1586,6 +1587,63 @@ async fn proves_a_count_for_every_length_by_induction() {
     let last_only = machine(&source.replace("    add r13, rax\n", "    mov r13, rax\n")).await;
     let image = Image::new(&last_only).expect("an entry");
     let step = induction::step(&image, &lines, &text_budget());
+    assert!(step.is_err(), "{step:?}");
+}
+
+/// Words, whose count for a buffer-full depends on whether the one before ended inside a word:
+/// the step reads two buffer-fulls and checks the second's counts after the first's last byte,
+/// whatever the program keeps of it, so the fixture's wc -lw is proven for every length; a
+/// program that forgets at each read that the last one ended inside a word, which only an input
+/// longer than a buffer-full shows, gets the two buffer-fulls that show it.
+#[tokio::test]
+async fn proves_words_for_every_length_by_induction() {
+    if !solvers_installed() {
+        return;
+    }
+    let spec = fixture("words", "spec.md");
+    // A smaller buffer than the fixture's, so the base's lengths go by quickly.
+    let source = fixture("words", "main.s").replace(".equ BUF_LEN, 4096\n", ".equ BUF_LEN, 256\n");
+    let right = machine(&source).await;
+    let words = block(&spec, 0);
+    let verdict = prove(&right, &words, &long_budget());
+    assert!(
+        matches!(
+            verdict,
+            Verdict::Proven {
+                bound: None,
+                induction: Some(256),
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
+    // Each buffer-full taken as if whitespace came before it, and the word-ending flag lost
+    // after each one: only an input longer than a buffer-full shows either, and the step finds
+    // the two buffer-fulls that do.
+    for (wrong, why) in [
+        ("    call fill\n", "    mov r14d, 1\n    call fill\n"),
+        (".Lstart_next:\n", ".Lstart_next:\n    xor r14d, r14d\n"),
+    ]
+    .map(|(from, to)| (source.replacen(from, to, 1), from))
+    {
+        let wrong = machine(&wrong).await;
+        let verdict = prove(&wrong, &words, &text_budget());
+        let Verdict::Counterexample(values) = &verdict else {
+            panic!("{why}: {verdict:?}");
+        };
+        let Some(Value::Str(text)) = values.get("text") else {
+            panic!("{why}: {values:?}");
+        };
+        assert!(text.len() > 256, "{why}: {text:?}");
+    }
+    // A count of the last buffer-full's words alone: no register keeps the words as they go.
+    let last_only = machine(&source.replace(
+        "    add r13, rdx\n    mov r14, rcx\n    mov rsi, r15\n",
+        "    mov r13, rdx\n    mov r14, rcx\n    mov rsi, r15\n",
+    ))
+    .await;
+    let image = Image::new(&last_only).expect("an entry");
+    let step = induction::step(&image, &words, &text_budget());
     assert!(step.is_err(), "{step:?}");
 }
 

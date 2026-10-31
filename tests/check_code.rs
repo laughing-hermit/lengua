@@ -428,6 +428,43 @@ async fn the_streaming_filter_is_proven_for_every_length() {
     session.service.cancel().await.expect("close the session");
 }
 
+/// A word count, whose count for each buffer-full depends on whether the one before ended
+/// inside a word, goes through check to done with its proof for every length: two buffer-fulls
+/// at a time, the second counted after the first's last byte. Its buffer is made small, so the
+/// proof's base finishes in the test's time.
+#[tokio::test]
+async fn a_word_count_is_proven_for_every_length() {
+    if !solvers_installed() {
+        return;
+    }
+    let session = Session::proving_for(Protocol::Discover, 120).await;
+    let program = written(
+        &session,
+        [
+            ("spec.md", fixture("words", "spec.md")),
+            (
+                "main.s",
+                fixture("words", "main.s").replace(".equ BUF_LEN, 4096\n", ".equ BUF_LEN, 256\n"),
+            ),
+        ],
+    )
+    .await;
+    let report = session.settle(&program).await;
+    assert_eq!(report["state"], "done", "{report}");
+    let proof = text(&report["proofs"][0]);
+    assert!(
+        proof.starts_with("generated B1: proven for every input in range")
+            && proof.contains("two more buffer-fulls of 256 bytes")
+            && proof.contains("after the first's last 1 byte"),
+        "{report}"
+    );
+    let mut arguments = program.arguments();
+    arguments["stdin"] = Value::from("one two\nthree\n");
+    let run = session.call_ok("run", arguments).await;
+    assert_eq!(run["stdout"], "2 3\n", "{run}");
+    session.service.cancel().await.expect("close the session");
+}
+
 #[tokio::test]
 async fn small_ranges_run_every_value() {
     let session = session().await;

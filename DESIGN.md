@@ -674,9 +674,24 @@ What it covers:
   minute, also with none. Its first version masked the last chunk with `bzhi` by the bytes left,
   which `bzhi` reads modulo 256, so a chunk 256 bytes from the end counted nothing: no register
   kept the formula's count, and the proof by length found a 256-byte text whose first newlines
-  went uncounted. A loop the induction doesn't
-  fit, or whose step doesn't hold, is proven by length as above; words, whose count depends on
-  whether the last buffer-full ended inside a word, are among those for now.
+  went uncounted. A count whose buffer-full's part depends on the bytes before it, as `words`
+  does on whether the last buffer-full ended inside a word, and `count` of a longer part that
+  can't overlap itself (`"\r\n"`) on its last bytes, is checked a buffer-full later: the step
+  reads two buffer-fulls from any state at the head, and the second's count must be what the
+  formula adds for it after the first's last bytes. Whatever the program keeps of what came
+  before, a flag, a byte or a mask's bit, its count must come out so, which needs no telling
+  where it keeps it, and `F(x ++ y) = F(x) + delta(x's last bytes, y)` carries the count across
+  every buffer-full. The base reads a buffer-full from any state at the head before each final
+  piece, each count going on from the run's own count after it, and the inputs of up to a
+  buffer-full are proven from the start. The first buffer-full's count must hold on every path,
+  since nothing else checks it outright. A step that goes wrong gives the solver's two
+  buffer-fulls, which run from the program's start show the counterexample where the program is
+  wrong: a wc that forgets at each read that the last one ended inside a word gets a text just
+  over a buffer-full whose word straddles the two. tests/fixtures/words, a `wc -lw` through
+  `fill` 64 bytes a step with AVX-512 masks, is proven so with no solver question. A count whose
+  part looks back further than that, as `count` of `"aa"` does on how the matches before it
+  fell, or a loop the induction doesn't fit, or whose step doesn't hold, is proven by length as
+  above.
 - What the proof ran. A function no run of a proof called, such as a fast path that starts past
   the proof's bound, is named in the proof's line: "the proof never ran crc_block, so what it
   does isn't proven". The CRC-32C asset's three chains join only past 12,288 bytes, so its
@@ -802,11 +817,11 @@ order makes reductions deterministic, and laying the slots end to end makes a ma
 thread with `exit_group`, so a failed check anywhere stops the whole program.
 
 Roadmap, in order:
-1. induction for folds whose state crosses from one buffer-full into the next, as `words` and
-   `count` of a longer part do, where today such a proof goes as far as its time and
-   `prove_further` reach;
-2. proofs of sorting past a few bytes and of floats computed in another order than the
-   formula's, which are tested today;
+1. the fastest streaming programs proven for every length, whose buffer-fulls are too large for
+   a base that goes length by length, and hash tables, whose slots the input chooses among
+   thousands (Round 7);
+2. proofs of sorting past a few bytes, which need facts quantified over memory, and of floats
+   computed in another order than the formula's, which are tested today;
 3. the other platforms, toward the top six CPU and OS targets.
 
 ## Platforms

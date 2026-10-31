@@ -56,6 +56,10 @@ pub enum Verdict {
         /// Where every length is proven by induction over the program's read loop: the bytes it
         /// takes each time round.
         induction: Option<usize>,
+        /// The bytes before each buffer-full the induction's counts needed, as `words` needs
+        /// whether the last buffer-full ended inside a word: none for maps and counts that add
+        /// up as they are.
+        lookback: usize,
     },
     /// Inputs where the program, as the prover reads it, disagrees with the formulas.
     Counterexample(BTreeMap<String, Value>),
@@ -1731,8 +1735,31 @@ struct Known<'a> {
     /// same ones, and a text formula over thousands of bytes is worth translating once.
     translated: std::cell::RefCell<HashMap<*const crate::expr::Expr, Result<Formula, String>>>,
     /// In an induction's base, the count of what was read before the read loop's head, for
-    /// each count placeholder: a term, and the most it can be.
-    offsets: HashMap<*const crate::expr::Expr, (Term, i128)>,
+    /// each count placeholder.
+    offsets: HashMap<*const crate::expr::Expr, Offset>,
+    /// In the base of an induction whose counts look back, what each run's own offsets come
+    /// from.
+    relative: Option<&'a Relative>,
+}
+
+/// In an induction's base, what a count placeholder's formula goes on from: the count of what
+/// came before the text, from its least to its most, and, where the count looks back, the bytes
+/// just before the text, after which it counts what the text adds.
+#[derive(Debug, Clone)]
+struct Offset {
+    before: Term,
+    low: i128,
+    high: i128,
+    window: Option<Vec<Term>>,
+}
+
+/// In the base of an induction whose counts look back, where each run reads a fresh
+/// buffer-full from the head before its final piece: for each count, its register, the value
+/// it starts at, its placeholder's formula and how far back it looks; and the text's
+/// characters, which that buffer-full is held to.
+struct Relative {
+    folds: Vec<(usize, u128, *const crate::expr::Expr, usize)>,
+    characters: Vec<u8>,
 }
 
 impl Known<'_> {
@@ -1742,14 +1769,17 @@ impl Known<'_> {
         if let Some(found) = self.translated.borrow().get(&key) {
             return found.clone();
         }
-        let mut result = formula::translate(pool, expr, self.numbers, self.texts);
+        let offset = self.offsets.get(&key);
+        let mut result = match offset.and_then(|offset| offset.window.as_ref()) {
+            Some(window) => formula::delta(pool, expr, self.texts, window),
+            None => formula::translate(pool, expr, self.numbers, self.texts),
+        };
         // A count over the text from the head on, and what came before it.
-        if let (Ok(Formula::Number(number)), Some((before, most))) =
-            (&result, self.offsets.get(&key))
-        {
+        if let (Ok(Formula::Number(number)), Some(offset)) = (&result, offset) {
             result = Ok(Formula::Number(Number {
-                term: pool.add(*before, number.term),
-                high: number.high.saturating_add(*most),
+                term: pool.add(offset.before, number.term),
+                low: number.low.saturating_add(offset.low),
+                high: number.high.saturating_add(offset.high),
                 ..*number
             }));
         }
@@ -2356,9 +2386,11 @@ fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verd
     by_length(&image, block, budget, None)
 }
 
-/// Proves `block` by induction over the program's read loop: the step from any state the loop
-/// can be in at its head, then every input up to one buffer-full from such a state. `None`
-/// where the step holds but the base doesn't: the proof by length says what's wrong.
+/// Proves `block` for every length by induction over its read loop: first the states the loop
+/// can be in at its head, then every input up to one buffer-full from such a state. Where its
+/// counts look back, the shortest inputs are proven from the program's start and every final
+/// piece after a buffer-full read from such a state. `None` where the step holds but the base
+/// doesn't: the proof by length says what's wrong.
 ///
 /// # Errors
 ///
@@ -2368,22 +2400,131 @@ fn by_induction(
     block: &Generated,
     budget: &Budget,
 ) -> Result<Option<Verdict>, String> {
-    let found = induction::step(image, block, budget)?;
+    let found = match induction::step(image, block, budget) {
+        Ok(found) => found,
+        Err(refused) => {
+            // A step that went wrong read buffer-fulls which, from the program's start, may
+            // show it wrong outright.
+            if let Some(input) = &refused.input
+                && let Some(verdict) = replay(image, block, input)?
+            {
+                return Ok(Some(verdict));
+            }
+            return Err(refused.why);
+        }
+    };
     let [(name, Generator::Str { min, max, charset })] = block.vars.as_slice() else {
         return Ok(None);
     };
-    // The base: whatever a time round leaves, from one byte up to a buffer-full, and the
-    // shortest texts at the start.
-    let mut short = block.clone();
-    short.vars = vec![(
-        name.clone(),
-        Generator::Str {
-            min: (*min).min(1),
-            max: found.chunk,
-            charset: charset.clone(),
-        },
-    )];
-    let verdict = by_length(image, &short, budget, Some(&found.hook))?;
+    let texts = |min: usize, max: usize| {
+        let mut short = block.clone();
+        short.vars = vec![(
+            name.clone(),
+            Generator::Str {
+                min,
+                max,
+                charset: charset.clone(),
+            },
+        )];
+        short
+    };
+    // Every input up to a buffer-full from any state at the head: every length the loop's
+    // bound allows.
+    let reached = || {
+        usize::try_from(found.reach)
+            .ok()
+            .filter(|reach| reach < max)
+            .map(|reach| Bound {
+                bytes: reach,
+                of: *max,
+                more: true,
+                why: format!(
+                    "the induction covers {} buffer-fulls of {} bytes, one fewer than its read \
+                     loop's bound allows",
+                    found.reach / found.chunk as u128,
+                    found.chunk
+                ),
+                characters: false,
+            })
+    };
+    if found.lookback == 0 {
+        // The base: whatever a time round leaves, from one byte up to a buffer-full, and the
+        // shortest texts at the start.
+        let verdict = by_length(
+            image,
+            &texts((*min).min(1), found.chunk),
+            budget,
+            Some(&found.hook),
+        )?;
+        let Verdict::Proven {
+            shapes,
+            paths,
+            questions,
+            alone,
+            bound,
+            cut_any_way,
+            unreached,
+            ..
+        } = verdict
+        else {
+            return Ok(None);
+        };
+        let (bound, induction) = match bound {
+            None => (reached(), Some(found.chunk)),
+            // Time ran out before the base was done: what it proved holds as a proof by length.
+            Some(bound) if bound.more => (Some(Bound { of: *max, ..bound }), None),
+            // Something the base couldn't prove from any state at the head, which the proof by
+            // length may prove from the state the loop is really in.
+            Some(_) => return Ok(None),
+        };
+        return Ok(Some(Verdict::Proven {
+            shapes: shapes + 1,
+            paths: paths + found.paths,
+            questions: questions + found.questions,
+            alone,
+            bound,
+            cut_any_way,
+            unreached,
+            induction,
+            lookback: 0,
+        }));
+    }
+    // The inputs of up to a buffer-full, from the program's start: a counterexample there is
+    // the program's own.
+    let first = if *min <= found.chunk {
+        let verdict = by_length(image, &texts(*min, found.chunk), budget, None)?;
+        match verdict {
+            Verdict::Proven { bound: None, .. } => Some(verdict),
+            Verdict::Proven {
+                shapes,
+                paths,
+                questions,
+                alone,
+                bound: Some(bound),
+                cut_any_way,
+                unreached,
+                ..
+            } if bound.more => {
+                return Ok(Some(Verdict::Proven {
+                    shapes,
+                    paths,
+                    questions,
+                    alone,
+                    bound: Some(Bound { of: *max, ..bound }),
+                    cut_any_way,
+                    unreached,
+                    induction: None,
+                    lookback: 0,
+                }));
+            }
+            Verdict::Counterexample(_) => return Ok(Some(verdict)),
+            _ => return Ok(None),
+        }
+    } else {
+        None
+    };
+    // Every final piece after a buffer-full read from any state at the head.
+    let verdict = by_length(image, &texts(1, found.chunk), budget, Some(&found.hook))?;
     let Verdict::Proven {
         shapes,
         paths,
@@ -2398,31 +2539,40 @@ fn by_induction(
         return Ok(None);
     };
     let (bound, induction) = match bound {
-        // Every input up to a buffer-full from any state at the head: every length the loop's
-        // bound allows.
-        None => (
-            usize::try_from(found.reach)
-                .ok()
-                .filter(|reach| reach < max)
-                .map(|reach| Bound {
-                    bytes: reach,
-                    of: *max,
-                    more: true,
-                    why: format!(
-                        "the induction covers {} buffer-fulls of {} bytes, one fewer than its \
-                         read loop's bound allows",
-                        found.reach / found.chunk as u128,
-                        found.chunk
-                    ),
-                    characters: false,
-                }),
-            Some(found.chunk),
+        None => (reached(), Some(found.chunk)),
+        // Every input of up to a buffer-full, and each longer one whose final piece is as far as
+        // the base got.
+        Some(bound) if bound.more => (
+            Some(Bound {
+                bytes: found.chunk + bound.bytes,
+                of: *max,
+                ..bound
+            }),
+            None,
         ),
-        // Time ran out before the base was done: what it proved holds as a proof by length.
-        Some(bound) if bound.more => (Some(Bound { of: *max, ..bound }), None),
-        // Something the base couldn't prove from any state at the head, which the proof by
-        // length may prove from the state the loop is really in.
         Some(_) => return Ok(None),
+    };
+    let (shapes, paths, questions, alone, cut_any_way, unreached) = match first {
+        Some(Verdict::Proven {
+            shapes: before,
+            paths: followed,
+            questions: asked,
+            alone: lone,
+            cut_any_way: cut,
+            unreached: missed,
+            ..
+        }) => (
+            shapes + before,
+            paths + followed,
+            questions + asked,
+            alone.or(lone),
+            cut_any_way && cut,
+            missed
+                .into_iter()
+                .filter(|function| unreached.contains(function))
+                .collect(),
+        ),
+        _ => (shapes, paths, questions, alone, cut_any_way, unreached),
     };
     Ok(Some(Verdict::Proven {
         shapes: shapes + 1,
@@ -2432,8 +2582,69 @@ fn by_induction(
         bound,
         cut_any_way,
         unreached,
+        lookback: induction.map_or(0, |_| found.lookback),
         induction,
     }))
+}
+
+/// Runs the prover's model of the code from its start on `input`, a text a step that went
+/// wrong read, and gives it as a counterexample where the program's output or exit code isn't
+/// the test language's for it, or a memory rule breaks.
+///
+/// # Errors
+///
+/// What the model can't run.
+fn replay(image: &Image, block: &Generated, input: &[u8]) -> Result<Option<Verdict>, String> {
+    let [(name, Generator::Str { max, charset, .. })] = block.vars.as_slice() else {
+        return Ok(None);
+    };
+    if input.len() > *max
+        || !input
+            .iter()
+            .all(|byte| charset.contains(&char::from(*byte)))
+    {
+        return Ok(None);
+    }
+    let Ok(text) = String::from_utf8(input.to_vec()) else {
+        return Ok(None);
+    };
+    let now = crate::expect::now();
+    let inputs: crate::expr::Env = [(name.clone(), Value::Str(text))].into_iter().collect();
+    let Ok(case) = block.case(inputs, now) else {
+        return Ok(None);
+    };
+    let mut pool = Pool::default();
+    let stdin = exec::bytes(&mut pool, case.stdin.as_bytes());
+    let start = State::start(image, &mut pool, &[], &[], stdin);
+    let mut runs = exec::explore(image, start, &mut pool, &mut exec::Concrete, 2)?;
+    let Some(run) = runs.pop() else {
+        return Ok(None);
+    };
+    let bytes = |terms: &[Term]| -> Option<Vec<u8>> {
+        terms
+            .iter()
+            .map(|term| {
+                pool.constant(*term)
+                    .and_then(|value| u8::try_from(value).ok())
+            })
+            .collect()
+    };
+    let wrong = match &run.end {
+        Some(End::Exit(status)) => {
+            pool.constant(*status) != Some(u128::from(case.exit_code))
+                || bytes(&run.stdout)
+                    .is_none_or(|out| !crate::expect::matches(&case.stdout, &out, now))
+                || bytes(&run.stderr)
+                    .is_none_or(|err| !crate::expect::matches(&case.stderr, &err, now))
+        }
+        Some(End::Unsafe(problem)) => {
+            let mut values = case.inputs.clone();
+            values.insert(UNSAFE.to_owned(), Value::Str(problem.clone()));
+            return Ok(Some(Verdict::Counterexample(values)));
+        }
+        _ => false,
+    };
+    Ok(wrong.then_some(Verdict::Counterexample(case.inputs)))
 }
 
 /// Proves `block` length by length, as far as the budget goes: each input combination its own
@@ -2748,6 +2959,7 @@ fn by_length(
         cut_any_way: cut_any_way.into_inner(),
         unreached: image.unreached(),
         induction: None,
+        lookback: 0,
     })
 }
 
@@ -3209,21 +3421,48 @@ fn prove_shape(
         base = base.for_every_cut();
     }
     // In an induction's base, each count the loop keeps holds what was read before the head
-    // too: the formula's count goes on from there.
+    // too: the formula's count goes on from there. Where the counts look back, each run reads
+    // a buffer-full from the head first, and its own count there is what the final piece's
+    // goes on from.
     let mut offsets = HashMap::new();
+    let mut relative = None;
     if let Some(hook) = hook {
         base = base.with_hook(std::rc::Rc::new(hook.clone()));
         let pieces = block.stdout.pieces();
+        let mut folds = Vec::new();
         for (register, fold) in &hook.folds {
             let Some(Piece::Expr(expr)) = pieces.get(fold.placeholder) else {
                 return Err("a count with no placeholder".into());
             };
+            if hook.lead.is_some() {
+                let back = block
+                    .vars
+                    .first()
+                    .and_then(|(name, _)| formula::lookback(expr, name))
+                    .ok_or("a count that doesn't look back")?;
+                folds.push((*register, fold.start, std::ptr::from_ref(*expr), back));
+                continue;
+            }
             let value = fold.value(&mut pool, *register);
             let wide = pool.zero_extend(value, WIDTH - 64);
             let start = pool.bv(WIDTH, fold.start);
             let before = pool.sub(wide, start);
             let most = i128::try_from(fold.most).map_err(|_| "a count too large")?;
-            offsets.insert(std::ptr::from_ref(*expr), (before, most));
+            offsets.insert(
+                std::ptr::from_ref(*expr),
+                Offset {
+                    before,
+                    low: 0,
+                    high: most,
+                    window: None,
+                },
+            );
+        }
+        if let Some(characters) = &hook.lead {
+            relative = Some(Relative {
+                folds,
+                characters: characters.clone(),
+            });
         }
     }
     base.path = constraints;
@@ -3282,6 +3521,7 @@ fn prove_shape(
             texts: &texts,
             translated: std::cell::RefCell::new(HashMap::new()),
             offsets: offsets.clone(),
+            relative: relative.as_ref(),
         };
         check_runs(
             &mut pool,
@@ -3410,6 +3650,16 @@ fn check_runs(
             Ok(found)
         };
     for run in runs {
+        // In the base of an induction whose counts look back, the buffer-full each run reads
+        // from the head is held to the text's characters too.
+        let mut held = held.clone();
+        if let Some(relative) = known.relative {
+            held.extend(
+                run.stdin_bytes()
+                    .iter()
+                    .map(|byte| pool.is_one_of(*byte, &relative.characters)),
+            );
+        }
         // The memory rules first: a run that broke one, or an access whose place the input
         // chooses that some input pushes out of its object.
         let mut broken_rules = run.obligations.clone();
@@ -3445,6 +3695,59 @@ fn check_runs(
                 }
             }
         }
+        // There, the run's own count after that buffer-full is what its final piece's goes on
+        // from, and a run that never read the buffer-full must be one no input takes.
+        let own: Known<'_>;
+        let known = match known.relative {
+            None => known,
+            Some(relative) => {
+                let (Some(snapshot), Some(second)) = (run.at_head(), run.at_second()) else {
+                    let solver = solvers.get(budget.deadline)?;
+                    let (answer, _) = solver
+                        .check(pool, &run.path, &[])
+                        .map_err(|error| format!("the solver failed: {error}"))?;
+                    if answer == Answer::Unsat {
+                        continue;
+                    }
+                    return Err(Stop::Unproven(
+                        "a run of the induction's base ended before the buffer-full it reads \
+                         from the read loop's head"
+                            .into(),
+                    ));
+                };
+                let lead = &run.stdin_bytes()[snapshot.stdin_read..second.stdin_read];
+                let mut offsets = HashMap::new();
+                for (register, start, expr, back) in &relative.folds {
+                    let value = second.registers[*register];
+                    let wide = pool.zero_extend(value, WIDTH - 64);
+                    let first = pool.bv(WIDTH, *start);
+                    let before = pool.sub(wide, first);
+                    let (lowest, highest) = pool.range(value);
+                    let start = i128::try_from(*start).map_err(|_| "a count too large")?;
+                    let low = i128::try_from(lowest).map_err(|_| "a count too large")? - start;
+                    let high = i128::try_from(highest).map_err(|_| "a count too large")? - start;
+                    let window = lead[lead.len().saturating_sub(*back)..].to_vec();
+                    offsets.insert(
+                        *expr,
+                        Offset {
+                            before,
+                            low,
+                            high,
+                            window: Some(window),
+                        },
+                    );
+                }
+                own = Known {
+                    numbers: known.numbers,
+                    fixed: known.fixed,
+                    texts: known.texts,
+                    translated: std::cell::RefCell::new(HashMap::new()),
+                    offsets,
+                    relative: None,
+                };
+                &own
+            }
+        };
         let holds = match &run.end {
             Some(End::Exit(status)) => {
                 let output = passes(pool, block, known, &run, *status)?;

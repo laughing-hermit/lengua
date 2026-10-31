@@ -31,9 +31,25 @@ pub struct Hook {
     pub folds: BTreeMap<usize, Fold>,
     /// Whether the run stops when it comes back to the head, as the step's does.
     pub stop: bool,
+    /// How many buffer-fulls a stopping run reads from the head before it stops there: two for
+    /// a count that needs the bytes before each buffer-full, whose second buffer-full is then
+    /// checked after the first's last bytes. None given means one.
+    pub fulls: u32,
     /// For the step: the characters of the input it reads from the head, fresh bytes one more
-    /// than the buffer-full fill is given there, so the loop goes round again.
+    /// than the buffer-fulls fill is given there, so the loop goes round again.
     pub feed: Option<Vec<u8>>,
+    /// For the base of a count that needs the bytes before each buffer-full: the characters of
+    /// a fresh buffer-full put before what's left of standard input at the head, so each final
+    /// piece follows a whole buffer-full read from any state the loop can be in.
+    pub lead: Option<Vec<u8>>,
+}
+
+impl Hook {
+    /// The buffer-fulls a stopping run reads from the head.
+    #[must_use]
+    pub fn fulls(&self) -> u32 {
+        self.fulls.max(1)
+    }
 }
 
 /// A count a read loop keeps in a register as it goes: at the head, what it starts at plus the
@@ -80,6 +96,21 @@ pub struct Snapshot {
     pub stdin_read: usize,
     /// Where the stack's free part ends: the stack pointer, when it's known.
     stack: Option<u64>,
+}
+
+/// Where a run stood the second time it reached the head, one buffer-full on from the first.
+#[derive(Debug, Clone)]
+pub struct Second {
+    /// The general registers.
+    pub registers: [Term; 16],
+    /// What that buffer-full changed, for a run that reads two from the head.
+    pub changes: Option<Changes>,
+    /// How much it had written to standard output.
+    pub stdout: usize,
+    /// How much to standard error.
+    pub stderr: usize,
+    /// How much of standard input it had read.
+    pub stdin_read: usize,
 }
 
 /// What differs between where a run stood at the head and where it stands back at it.
@@ -135,8 +166,22 @@ impl State {
     /// Ends the step's run back at the head.
     pub(super) fn arrive(&mut self, pool: &mut Pool, hook: &Hook) -> Result<(), End> {
         self.arrivals += 1;
-        if self.arrivals == 2 && hook.stop {
+        if hook.stop && self.arrivals == hook.fulls() + 1 {
             return Err(End::Looped);
+        }
+        if self.arrivals == 2 {
+            // One buffer-full on: where a count that looks back is checked from.
+            if let Some(start) = self.head.as_deref() {
+                let changes = (hook.fulls() > 1).then(|| self.changes(start));
+                self.second = Some(Box::new(Second {
+                    registers: self.registers,
+                    changes,
+                    stdout: self.stdout.len(),
+                    stderr: self.stderr.len(),
+                    stdin_read: self.stdin_read,
+                }));
+            }
+            return Ok(());
         }
         if self.arrivals != 1 {
             return Ok(());
@@ -149,9 +194,22 @@ impl State {
             && self.stdin_read == 0
             && let Some(space) = constant(pool, self.registers[2])
         {
-            let input = crate::prove::text_input(pool, "induction.chunk", space + 1, characters);
+            let fulls = usize::try_from(hook.fulls()).unwrap_or(1);
+            let input =
+                crate::prove::text_input(pool, "induction.chunk", space * fulls + 1, characters);
             self.path.extend(input.constraints);
             self.stdin = Rc::new(input.text);
+        }
+        if let Some(characters) = &hook.lead
+            && let Some(space) = constant(pool, self.registers[2])
+        {
+            let lead = crate::prove::text_input(pool, "induction.lead", space, characters);
+            self.path.extend(lead.constraints);
+            let read = self.stdin_read.min(self.stdin.len());
+            let mut stdin = self.stdin[..read].to_vec();
+            stdin.extend(lead.text);
+            stdin.extend_from_slice(&self.stdin[read..]);
+            self.stdin = Rc::new(stdin);
         }
         for address in &hook.memory {
             let byte = pool.var(8, &format!("induction.m{address:x}"));
@@ -315,6 +373,12 @@ impl State {
     #[must_use]
     pub fn at_head(&self) -> Option<&Snapshot> {
         self.head.as_deref()
+    }
+
+    /// Where it stood the second time, one buffer-full on, once it has come back.
+    #[must_use]
+    pub fn at_second(&self) -> Option<&Second> {
+        self.second.as_deref()
     }
 
     /// Standard input as the run reads it.

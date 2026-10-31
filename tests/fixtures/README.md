@@ -20,6 +20,10 @@ And written for the tests themselves:
 - `lines`: `wc -l` over standard input of any length, a buffer-full at a time through `fill`,
   its count kept in a register: proven for every length by induction, the count growing by each
   buffer-full's newlines.
+- `words`: `wc -lw` over standard input of any length, a buffer-full at a time through `fill`,
+  64 bytes a step with AVX-512 masks, whether the last byte read was whitespace kept in r14:
+  proven for every length by induction, each buffer-full's words counted after the last byte of
+  the one before.
 - `second`: two lines from standard input, read with one `fill` to the first newline a read
   ends with, so it's right only when both lines arrive together, as they do in the tests: the
   proof, which takes every way standard input can be cut, finds the cut after the first line.

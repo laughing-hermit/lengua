@@ -494,6 +494,8 @@ pub struct State {
     arrivals: u32,
     /// Where it stood the first time.
     head: Option<Box<induction::Snapshot>>,
+    /// Where it stood the second time, one buffer-full on.
+    second: Option<Box<induction::Second>>,
     /// The bytes a test supplies for `getrandom`, in order, when it supplies them: the kernel's
     /// are any value.
     random: Option<Rc<Vec<Term>>>,
@@ -630,6 +632,7 @@ impl State {
             hook: None,
             arrivals: 0,
             head: None,
+            second: None,
             rip: image.entry,
             path: Vec::new(),
             stdin: Rc::new(stdin),

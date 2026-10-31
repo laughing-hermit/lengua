@@ -306,6 +306,92 @@ fn space(pool: &mut Pool, byte: Term) -> Term {
     pool.bool_or(control, is_blank)
 }
 
+/// How many bytes before a piece of the text `name` the count `expr` needs, when the count of a
+/// whole is the count of what comes before the piece and what the piece adds after those bytes:
+/// none for `len` and `count` of one byte, one for `words`, and one fewer than a part's length
+/// for `count` of a part no two of whose matches can overlap. `None` for any other formula,
+/// whose count of a whole doesn't follow from its pieces' so.
+#[must_use]
+pub fn lookback(expr: &Expr, name: &str) -> Option<usize> {
+    let Expr::Call(function, arguments) = expr else {
+        return None;
+    };
+    match (function, arguments.as_slice()) {
+        (Function::Len, [Expr::Var(var)]) if var == name => Some(0),
+        (Function::Words, [Expr::Var(var)]) if var == name => Some(1),
+        (Function::Count, [Expr::Var(var), Expr::Literal(Value::Str(part))])
+            if var == name && !part.is_empty() && borderless(part.as_bytes()) =>
+        {
+            Some(part.len() - 1)
+        }
+        _ => None,
+    }
+}
+
+/// What the count `expr`, one [`lookback`] admits, adds for the text in `texts` after `window`,
+/// the bytes just before it: its parts whose last byte is the text's, built as the count's own
+/// formula builds them, so they're the same terms. With a window as long as the count's
+/// lookback, a whole's count is the count before the text and this.
+///
+/// # Errors
+///
+/// For a formula [`lookback`] doesn't admit.
+pub fn delta(
+    pool: &mut Pool,
+    expr: &Expr,
+    texts: &BTreeMap<String, Vec<Term>>,
+    window: &[Term],
+) -> Result<Formula, String> {
+    let Expr::Call(function, arguments) = expr else {
+        return Err("a count that isn't a function".into());
+    };
+    let Some(Expr::Var(name)) = arguments.first() else {
+        return Err("a count of no text".into());
+    };
+    if lookback(expr, name).is_none() {
+        return Err("a count whose whole doesn't follow from its pieces'".into());
+    }
+    let piece = texts.get(name).ok_or("a count of an unknown text")?;
+    let bytes: Vec<Term> = window.iter().chain(piece).copied().collect();
+    let first = window.len();
+    let most = i128::try_from(piece.len()).map_err(|_| overflow())?;
+    let parts: Vec<Term> = match (function, arguments.as_slice()) {
+        (Function::Len, _) => {
+            return Ok(Formula::Number(Number::whole(
+                pool.bv_signed(WIDTH, most),
+                most,
+                most,
+            )));
+        }
+        (Function::Words, _) => {
+            let spaces: Vec<Term> = bytes.iter().map(|byte| space(pool, *byte)).collect();
+            (first..bytes.len())
+                .map(|index| {
+                    let word = pool.bool_not(spaces[index]);
+                    if index == 0 {
+                        word
+                    } else {
+                        pool.bool_and(word, spaces[index - 1])
+                    }
+                })
+                .collect()
+        }
+        (Function::Count, [_, Expr::Literal(Value::Str(part))]) => {
+            let part = part.as_bytes();
+            (first..bytes.len())
+                .filter(|end| end + 1 >= part.len())
+                .map(|end| matches_at(pool, &bytes, end + 1 - part.len(), part))
+                .collect()
+        }
+        _ => return Err("a count whose whole doesn't follow from its pieces'".into()),
+    };
+    Ok(Formula::Number(Number::whole(
+        pool.count(WIDTH, &parts),
+        0,
+        most,
+    )))
+}
+
 /// The smallest and largest of `values`.
 fn span(values: &[Option<i128>]) -> Result<(i128, i128), String> {
     let values: Vec<i128> = values
@@ -1150,6 +1236,28 @@ fn translate_bytes(pool: &mut Pool, bytes: &[Term], pairs: &[(char, char)]) -> V
         .collect()
 }
 
+/// Whether `part` at `start` of `bytes`, all of it there.
+fn matches_at(pool: &mut Pool, bytes: &[Term], start: usize, part: &[u8]) -> Term {
+    if start + part.len() > bytes.len() {
+        return pool.boolean(false);
+    }
+    let checks: Vec<Term> = part
+        .iter()
+        .enumerate()
+        .map(|(offset, wanted)| {
+            let wanted = pool.bv(8, u128::from(*wanted));
+            pool.eq(bytes[start + offset], wanted)
+        })
+        .collect();
+    pool.all(&checks)
+}
+
+/// Whether `part` has no border, no shorter start that's also its end, so no two of its matches
+/// can overlap: counting them without overlaps counts them all.
+fn borderless(part: &[u8]) -> bool {
+    (1..part.len()).all(|length| part[..length] != part[part.len() - length..])
+}
+
 /// How many times `part` appears in `bytes` without overlaps, leftmost first, as `count` counts:
 /// a match counts when none of the counted ones before it overlaps it.
 fn count(pool: &mut Pool, bytes: &[Term], part: &[u8]) -> Result<Formula, String> {
@@ -1157,27 +1265,19 @@ fn count(pool: &mut Pool, bytes: &[Term], part: &[u8]) -> Result<Formula, String
         return Err("count of an empty part".into());
     }
     let length = part.len();
+    let alone = borderless(part);
     let mut counted: Vec<Term> = Vec::new();
     for start in 0..bytes.len() {
-        let matched = if start + length <= bytes.len() {
-            let checks: Vec<Term> = part
-                .iter()
-                .enumerate()
-                .map(|(offset, wanted)| {
-                    let wanted = pool.bv(8, u128::from(*wanted));
-                    pool.eq(bytes[start + offset], wanted)
-                })
-                .collect();
-            pool.all(&checks)
-        } else {
-            pool.boolean(false)
-        };
-        // A counted match within the part's length before this one overlaps it.
-        let earlier = start.saturating_sub(length - 1)..start;
+        let matched = matches_at(pool, bytes, start, part);
+        // A counted match within the part's length before this one overlaps it, which a part
+        // with no border never has.
         let mut counts = matched;
-        for before in earlier {
-            let free = pool.bool_not(counted[before]);
-            counts = pool.bool_and(counts, free);
+        if !alone {
+            let earlier: Vec<Term> = counted[start.saturating_sub(length - 1)..start].to_vec();
+            for before in earlier {
+                let free = pool.bool_not(before);
+                counts = pool.bool_and(counts, free);
+            }
         }
         counted.push(counts);
     }
@@ -1197,6 +1297,101 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
+
+    /// The counts an induction admits, with how far back each looks; and on random texts, the
+    /// count of a whole is the count of a first piece and what the rest adds after the piece's
+    /// last bytes, each as the test language counts.
+    #[test]
+    fn counts_add_up_after_their_lookback() {
+        let looks = [
+            ("len(s)", Some(0)),
+            ("count(s, \"\\n\")", Some(0)),
+            ("words(s)", Some(1)),
+            ("count(s, \"\\r\\n\")", Some(1)),
+            ("count(s, \"ab\")", Some(1)),
+            ("count(s, \"abc\")", Some(2)),
+            ("count(s, \"aa\")", None),
+            ("count(s, \"aba\")", None),
+            ("upper(s)", None),
+            ("words(t)", None),
+        ];
+        for (source, expected) in looks {
+            let expr = crate::expr::parse(source).expect("a formula");
+            assert_eq!(lookback(&expr, "s"), expected, "{source}");
+        }
+        let mut rng = ChaCha8Rng::seed_from_u64(0x5eed_c0de);
+        let alphabet = b"ab \n\r\t";
+        let counts = [
+            "len(s)",
+            "count(s, \"\\n\")",
+            "words(s)",
+            "count(s, \"\\r\\n\")",
+            "count(s, \"ab\")",
+            "count(s, \"aa\")",
+        ];
+        for _ in 0..400 {
+            let first: Vec<u8> = (0..rng.random_range(0..6))
+                .map(|_| alphabet[rng.random_range(0..alphabet.len())])
+                .collect();
+            let rest: Vec<u8> = (0..rng.random_range(0..6))
+                .map(|_| alphabet[rng.random_range(0..alphabet.len())])
+                .collect();
+            let whole: Vec<u8> = first.iter().chain(&rest).copied().collect();
+            let mut pool = Pool::default();
+            let bytes: Vec<Term> = (0..whole.len())
+                .map(|index| pool.var(8, &format!("s{index}")))
+                .collect();
+            let values: HashMap<String, u128> = whole
+                .iter()
+                .enumerate()
+                .map(|(index, byte)| (format!("s{index}"), u128::from(*byte)))
+                .collect();
+            let eval = |text: &[u8], expr: &Expr| {
+                let env: crate::expr::Env = [(
+                    "s".to_owned(),
+                    Value::Str(String::from_utf8(text.to_vec()).expect("ASCII")),
+                )]
+                .into_iter()
+                .collect();
+                match crate::expr::eval(expr, &env).expect("evaluates") {
+                    Value::Int(count) => count,
+                    other => panic!("{other:?}"),
+                }
+            };
+            for source in counts {
+                let expr = crate::expr::parse(source).expect("a formula");
+                // The whole's count, as the translation computes it.
+                let texts: BTreeMap<String, Vec<Term>> = [("s".to_owned(), bytes.clone())].into();
+                let Ok(Formula::Number(number)) =
+                    translate(&mut pool, &expr, &BTreeMap::new(), &texts)
+                else {
+                    panic!("{source} translates");
+                };
+                let counted = pool.evaluate(number.term, &values).expect("a count");
+                assert_eq!(
+                    counted as i128,
+                    eval(&whole, &expr),
+                    "{source} of {whole:?}"
+                );
+                // The rest's part after the first piece's last bytes.
+                let Some(back) = lookback(&expr, "s") else {
+                    continue;
+                };
+                let window = &bytes[first.len().saturating_sub(back)..first.len()];
+                let piece: BTreeMap<String, Vec<Term>> =
+                    [("s".to_owned(), bytes[first.len()..].to_vec())].into();
+                let Ok(Formula::Number(added)) = delta(&mut pool, &expr, &piece, window) else {
+                    panic!("{source} has a delta");
+                };
+                let added = pool.evaluate(added.term, &values).expect("a count");
+                assert_eq!(
+                    eval(&first, &expr) + added as i128,
+                    eval(&whole, &expr),
+                    "{source} of {first:?} then {rest:?}"
+                );
+            }
+        }
+    }
 
     /// sort and uniq over short texts, a choice of texts for each way the newlines can fall and
     /// the lines compare: on random texts, exactly one choice holds, and it's the text the test

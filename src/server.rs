@@ -1391,6 +1391,7 @@ impl LenguaServer {
                     cut_any_way,
                     unreached,
                     induction,
+                    lookback,
                 }) => {
                     match &bound {
                         Some(bound) => bounded_ids.push((
@@ -1420,7 +1421,7 @@ impl LenguaServer {
                             bound,
                             cut_any_way,
                             &unreached,
-                            induction,
+                            induction.map(|chunk| (chunk, lookback)),
                         ),
                         false,
                     )
@@ -1879,7 +1880,7 @@ fn proven_detail(
     bound: Option<prove::Bound>,
     cut_any_way: bool,
     unreached: &[String],
-    induction: Option<usize>,
+    induction: Option<(usize, usize)>,
 ) -> String {
     let mut detail = format!(
         "proven for every input {} ({}, {} through the machine code), {}",
@@ -1909,14 +1910,29 @@ fn proven_detail(
             ),
         }
     );
-    if let Some(chunk) = induction {
-        let _ = write!(
-            detail,
-            "; every length by induction over its read loop: from any state the loop can be in \
-             at its head, one more buffer-full of {chunk} bytes keeps what it writes and counts \
-             in step with the formula, and every input of up to {chunk} bytes is proven from \
-             there"
-        );
+    match induction {
+        Some((chunk, 0)) => {
+            let _ = write!(
+                detail,
+                "; every length by induction over its read loop: from any state the loop can be \
+                 in at its head, one more buffer-full of {chunk} bytes keeps what it writes and \
+                 counts in step with the formula, and every input of up to {chunk} bytes is \
+                 proven from there"
+            );
+        }
+        Some((chunk, back)) => {
+            let bytes = if back == 1 { "byte" } else { "bytes" };
+            let _ = write!(
+                detail,
+                "; every length by induction over its read loop: from any state the loop can be \
+                 in at its head, two more buffer-fulls of {chunk} bytes keep its counts in step \
+                 with the formula, the second's counted after the first's last {back} {bytes} \
+                 however the program keeps them; every final piece of up to {chunk} bytes after \
+                 a buffer-full is proven from there, and every input of up to {chunk} bytes from \
+                 the start"
+            );
+        }
+        None => {}
     }
     if let Some(bound) = &bound {
         let _ = write!(
