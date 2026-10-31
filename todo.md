@@ -4,9 +4,13 @@ In order. Each item starts when the one before it is done.
 
 ## 1. Perfect lengua for this target (x86-64 Linux)
 
-Marked done on 2026-10-31, then reopened the same day. Round 7 is under way: word counts for
-every length, hash tables and word tallies, the fastest word count proven for every length, and
-checked jump tables.
+Marked done on 2026-10-31, then reopened the same day. Round 7: word counts proven for every
+length and hash tables with word tallies are done; checked jump tables are under way; the fastest
+word count proven for every length is deferred (below). Round 8 told the portability story straight
+and wrote the porting contract (DESIGN's "Porting a target"). The direction, decided 2026-10-31:
+**native per target** — the agent writes each target's assembly and lengua proves the actual
+machine code, the novel path and the only one that can beat C, C++ and Rust — with the spec as the
+agnostic product that travels to every target.
 
 What lengua is on this target now:
 - **Two files.** spec.md, an OKF concept document, holds every behavior and every test, and names
@@ -23,24 +27,32 @@ What lengua is on this target now:
   numbers, decimals, choices, texts and text formulas, checksums, floats computed in the
   formula's order, files and folders, the network, threads. Texts as far as the spec's lengths
   and the proof's time reach, and further with `prove_further`. Streaming filters and counts for
-  every length, by induction over their read loop. Servers that poll, in every order their
-  clients' steps can come in. Sorting for short texts.
+  every length, by induction over their read loop, word counts too (two buffer-fulls a step, so
+  the proof never needs to know how the program carries a word across them). Servers that poll,
+  in every order their clients' steps can come in. Hash tables, through a write log of their
+  stores, and word tallies for short texts. Sorting for short texts.
 - **Speed.** Ahead of or level with C, C++ and Rust on every benchmark, with 2.5 to 3.1 times less
   memory (BENCHMARKS.md).
 - **A release built locally** that installs with no Rust toolchain, and `lengua-mcp run` for the
   user's own shell.
 
-Tested, not proven, and each proof line says why: sorting past a few bytes, word tallies,
-floats computed in another order than the formula's, a folder's listing, the `sha256` formula,
-and loops whose state crosses from one buffer-full to the next, as a word count's does.
+Tested, not proven, and each proof line says why: sorting past a few bytes, word tallies past a
+few bytes, floats computed in another order than the formula's, a folder's listing, the `sha256`
+formula, counts of a part that can overlap itself (such as `"aa"`), and the benchmark's fastest
+word count, which reads a megabyte at a time and is proven by length.
 
 Left for later on this target:
 - Sorting at every length, which needs quantified facts over memory.
+- The fastest streaming programs proven for every length. The induction's base proves each final
+  length one by one, so its cost grows with the square of the buffer; a base that covers every
+  final length in one shape would let a 64 KiB buffer, C's size, be proven. The design review
+  recommended this as its own round (about 1,000 to 1,500 lines).
 
 Not done because a safety filter stopped the work (Claude's own, in Claude Code, 2026-10-31). What
 a stopped reply held is never produced again — not reworded, and not by routing it through other
 models or subagents (the user asked to use Sonnet 5.5 / Haiku 5.5 agents for it; declined, because
-switching models to get around a safety stop is circumvention, whoever runs the subagent):
+switching models to get around a safety stop is circumvention, whoever runs the subagent). Anything
+a safety filter stops from here on goes on this list, with what it was working toward:
 - **SHA-256 and AES programs.** Replies working toward them were stopped, so there is no SHA-256 or
   AES program among lengua's own examples and assets, and no proof (by lengua) that such a program
   meets the `sha256` formula. **The crypto support itself is not blocked:** the SHA and AES CPU
