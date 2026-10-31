@@ -51,6 +51,9 @@ pub enum Formula {
     Text(Vec<Term>),
     /// A float: a double, or a single where the term is 32 bits wide.
     Float(Term),
+    /// One of several texts, each where its condition holds, as `sort` gives for each way a
+    /// short text's newlines can fall and its lines compare.
+    Texts(Vec<(Term, Vec<Term>)>),
 }
 
 fn overflow() -> String {
@@ -65,7 +68,9 @@ fn number(formula: Formula) -> Result<Number, String> {
             Err("a formula computes on a decimal without scaled(x, places)".into())
         }
         Formula::Truth(_) => Err("a formula uses true/false where a number goes".into()),
-        Formula::Text(_) => Err("a formula uses text where a number goes".into()),
+        Formula::Text(_) | Formula::Texts(_) => {
+            Err("a formula uses text where a number goes".into())
+        }
         Formula::Float(_) => {
             Err("a formula uses a decimal where a whole number goes, without round(x)".into())
         }
@@ -75,7 +80,7 @@ fn number(formula: Formula) -> Result<Number, String> {
 fn truth(formula: Formula) -> Result<Term, String> {
     match formula {
         Formula::Truth(term) => Ok(term),
-        Formula::Number(_) | Formula::Text(_) | Formula::Float(_) => {
+        Formula::Number(_) | Formula::Text(_) | Formula::Float(_) | Formula::Texts(_) => {
             Err("a formula uses a value where true/false goes".into())
         }
     }
@@ -84,6 +89,10 @@ fn truth(formula: Formula) -> Result<Term, String> {
 fn text(formula: Formula) -> Result<Vec<Term>, String> {
     match formula {
         Formula::Text(bytes) => Ok(bytes),
+        Formula::Texts(_) => Err(
+            "sorted or deduplicated text inside another formula, which the proof doesn't follow"
+                .into(),
+        ),
         Formula::Number(_) | Formula::Truth(_) | Formula::Float(_) => {
             Err("a formula uses a number or true/false where text goes".into())
         }
@@ -158,7 +167,7 @@ fn as_float(pool: &mut Pool, formula: Formula, width: u32) -> Result<Term, Strin
         Formula::Float(_) => Err("a formula mixes a single and a double".into()),
         Formula::Number(number) if number.places > 0 => decimal_float(pool, number, width),
         Formula::Number(_) => Err("a formula mixes a whole number and a decimal".into()),
-        Formula::Truth(_) | Formula::Text(_) => {
+        Formula::Truth(_) | Formula::Text(_) | Formula::Texts(_) => {
             Err("a formula uses true/false or text where a decimal goes".into())
         }
     }
@@ -835,13 +844,211 @@ fn call(
             }))
         }
         Function::Sort | Function::Uniq => {
-            Err("sort and uniq compare whole lines, which the proof doesn't follow yet".into())
+            let call = Expr::Call(function, arguments.to_vec());
+            let newline = pool.bv(8, u128::from(b'\n'));
+            let texts = lined(pool, &call, vars, texts)?
+                .into_iter()
+                .map(|(condition, lines)| {
+                    let mut text = Vec::new();
+                    for line in lines {
+                        text.extend(line);
+                        text.push(newline);
+                    }
+                    (condition, text)
+                })
+                .collect();
+            Ok(Formula::Texts(texts))
         }
         Function::Tally => {
             Err("tally counts distinct words, which the proof doesn't follow yet".into())
         }
         other => Err(format!("the function {other:?}")),
     }
+}
+
+/// The most bytes a text `sort` or `uniq` reads may have: each way its newlines can fall, and
+/// each order its lines can sort in, is a text of its own.
+const MAX_LINED: usize = 8;
+
+/// A text as `sort` and `uniq` read it: for each way its newlines can fall and its lines
+/// compare, where that holds, and its lines, each without its newline.
+type Lined = Vec<(Term, Vec<Vec<Term>>)>;
+
+/// `expr`'s lines: a text split at its newlines, a last line without one still a line; `sort`
+/// of one, its lines in byte order; `uniq` of one, each run of the same line kept once.
+fn lined(
+    pool: &mut Pool,
+    expr: &Expr,
+    vars: &BTreeMap<String, Number>,
+    texts: &BTreeMap<String, Vec<Term>>,
+) -> Result<Lined, String> {
+    match expr {
+        Expr::Call(function @ (Function::Sort | Function::Uniq), arguments) => {
+            let [inner] = arguments.as_slice() else {
+                return Err("sort or uniq without its one text".into());
+            };
+            let mut out = Vec::new();
+            for (condition, lines) in lined(pool, inner, vars, texts)? {
+                let ways = if *function == Function::Sort {
+                    sorted(pool, &lines)
+                } else {
+                    deduplicated(pool, &lines)
+                };
+                for (holds, lines) in ways {
+                    let both = pool.bool_and(condition, holds);
+                    if pool.truth(both) != Some(false) {
+                        out.push((both, lines));
+                    }
+                }
+            }
+            Ok(out)
+        }
+        other => {
+            let bytes = text(translate(pool, other, vars, texts)?)?;
+            if bytes.len() > MAX_LINED {
+                return Err(format!(
+                    "sort and uniq of a text over {MAX_LINED} bytes, whose ways its newlines can \
+                     fall the proof doesn't follow"
+                ));
+            }
+            let newline = pool.bv(8, u128::from(b'\n'));
+            let breaks: Vec<Term> = bytes.iter().map(|byte| pool.eq(*byte, newline)).collect();
+            let mut out = Vec::new();
+            for falls in 0..1_u32 << bytes.len() {
+                let mut conditions = Vec::with_capacity(bytes.len());
+                let mut lines = Vec::new();
+                let mut line = Vec::new();
+                for (index, byte) in bytes.iter().enumerate() {
+                    if falls >> index & 1 == 1 {
+                        conditions.push(breaks[index]);
+                        lines.push(std::mem::take(&mut line));
+                    } else {
+                        conditions.push(pool.bool_not(breaks[index]));
+                        line.push(*byte);
+                    }
+                }
+                if !line.is_empty() {
+                    lines.push(line);
+                }
+                let condition = pool.all(&conditions);
+                if pool.truth(condition) != Some(false) {
+                    out.push((condition, lines));
+                }
+            }
+            Ok(out)
+        }
+    }
+}
+
+/// Whether line `a` comes before line `b` or is the same, in byte order: at the first byte they
+/// differ, `a`'s is lower, or `a` ends first.
+fn at_most(pool: &mut Pool, a: &[Term], b: &[Term]) -> Term {
+    let mut holds = pool.boolean(a.len() <= b.len());
+    for index in (0..a.len().min(b.len())).rev() {
+        let lower = pool.ult(a[index], b[index]);
+        let same = pool.eq(a[index], b[index]);
+        let then = pool.bool_and(same, holds);
+        holds = pool.bool_or(lower, then);
+    }
+    holds
+}
+
+/// Whether two lines are the same.
+fn same_line(pool: &mut Pool, a: &[Term], b: &[Term]) -> Term {
+    if a.len() != b.len() {
+        return pool.boolean(false);
+    }
+    let checks: Vec<Term> = a.iter().zip(b).map(|(x, y)| pool.eq(*x, *y)).collect();
+    pool.all(&checks)
+}
+
+/// `lines` in byte order: each order they can come in, where it's sorted. Lines that are the
+/// same term for term give one order between them, and of lines that compare the same, the
+/// one that came first stays first, so each sorted text comes once.
+fn sorted(pool: &mut Pool, lines: &[Vec<Term>]) -> Vec<(Term, Vec<Vec<Term>>)> {
+    let mut out = Vec::new();
+    let mut order: Vec<usize> = Vec::new();
+    let mut used = vec![false; lines.len()];
+    let yes = pool.boolean(true);
+    arrange(pool, lines, &mut order, &mut used, yes, &mut out);
+    out
+}
+
+/// The sorted orders that go on from `order`, each where `holds` and the rest of its order do.
+fn arrange(
+    pool: &mut Pool,
+    lines: &[Vec<Term>],
+    order: &mut Vec<usize>,
+    used: &mut [bool],
+    holds: Term,
+    out: &mut Vec<(Term, Vec<Vec<Term>>)>,
+) {
+    if pool.truth(holds) == Some(false) {
+        return;
+    }
+    if order.len() == lines.len() {
+        out.push((
+            holds,
+            order.iter().map(|index| lines[*index].clone()).collect(),
+        ));
+        return;
+    }
+    for next in 0..lines.len() {
+        // A line the same as one not yet placed before it comes after that one.
+        if used[next] || (0..next).any(|earlier| !used[earlier] && lines[earlier] == lines[next]) {
+            continue;
+        }
+        let step = match order.last() {
+            Some(&last) => {
+                let ordered = at_most(pool, &lines[last], &lines[next]);
+                // Equal lines keep the order they came in.
+                if last > next {
+                    let same = same_line(pool, &lines[last], &lines[next]);
+                    let differ = pool.bool_not(same);
+                    pool.bool_and(ordered, differ)
+                } else {
+                    ordered
+                }
+            }
+            None => pool.boolean(true),
+        };
+        let holds = pool.bool_and(holds, step);
+        used[next] = true;
+        order.push(next);
+        arrange(pool, lines, order, used, holds, out);
+        order.pop();
+        used[next] = false;
+    }
+}
+
+/// `lines` with each run of the same line kept once: for each way neighbours can be the same
+/// or differ.
+fn deduplicated(pool: &mut Pool, lines: &[Vec<Term>]) -> Vec<(Term, Vec<Vec<Term>>)> {
+    let Some((first, rest)) = lines.split_first() else {
+        return vec![(pool.boolean(true), Vec::new())];
+    };
+    let mut ways = vec![(pool.boolean(true), vec![first.clone()])];
+    let mut previous = first;
+    for line in rest {
+        let same = same_line(pool, previous, line);
+        let differ = pool.bool_not(same);
+        let mut next = Vec::new();
+        for (holds, kept) in ways {
+            let dropped = pool.bool_and(holds, same);
+            if pool.truth(dropped) != Some(false) {
+                next.push((dropped, kept.clone()));
+            }
+            let added = pool.bool_and(holds, differ);
+            if pool.truth(added) != Some(false) {
+                let mut kept = kept;
+                kept.push(line.clone());
+                next.push((added, kept));
+            }
+        }
+        ways = next;
+        previous = line;
+    }
+    ways
 }
 
 /// A text's characters, each its bytes: a byte that can only continue a character, 0x80 to
@@ -991,6 +1198,73 @@ mod tests {
 
     use super::*;
 
+    /// sort and uniq over short texts, a choice of texts for each way the newlines can fall and
+    /// the lines compare: on random texts, exactly one choice holds, and it's the text the test
+    /// language computes.
+    #[test]
+    fn sorted_lines_agree_with_the_test_language() {
+        let seed = std::env::var("LENGUA_RANDOM_SEED")
+            .ok()
+            .and_then(|seed| seed.parse().ok())
+            .unwrap_or_else(|| {
+                let mut bytes = [0; 8];
+                getrandom::fill(&mut bytes).expect("a seed");
+                u64::from_le_bytes(bytes)
+            });
+        let mut rng = ChaCha8Rng::seed_from_u64(seed);
+        let alphabet = b"ab\nB";
+        let formulas = ["sort(s)", "uniq(s)", "uniq(sort(s))", "sort(s) + \"!\""];
+        for _ in 0..300 {
+            let length = rng.random_range(0..=MAX_LINED);
+            let text: Vec<u8> = (0..length)
+                .map(|_| alphabet[rng.random_range(0..alphabet.len())])
+                .collect();
+            for source in formulas {
+                let expr = crate::expr::parse(source).expect("a formula");
+                let shown = String::from_utf8(text.clone()).expect("ASCII");
+                let env: crate::expr::Env = [("s".to_owned(), Value::Str(shown.clone()))]
+                    .into_iter()
+                    .collect();
+                let expected = crate::expr::eval(&expr, &env).expect("evaluates");
+                let mut pool = Pool::default();
+                let bytes: Vec<Term> = (0..length)
+                    .map(|index| pool.var(8, &format!("s{index}")))
+                    .collect();
+                let values: HashMap<String, u128> = (0..length)
+                    .map(|index| (format!("s{index}"), u128::from(text[index])))
+                    .collect();
+                let texts: BTreeMap<String, Vec<Term>> = [("s".to_owned(), bytes)].into();
+                let formula = translate(&mut pool, &expr, &BTreeMap::new(), &texts);
+                let choices = match formula {
+                    Ok(Formula::Texts(choices)) => choices,
+                    // A choice joined to more text is beyond the translation.
+                    Err(_) if source.contains('+') => continue,
+                    other => panic!("{source}: {other:?}"),
+                };
+                let holding: Vec<String> = choices
+                    .iter()
+                    .filter(|(condition, _)| pool.evaluate(*condition, &values) == Some(1))
+                    .map(|(_, bytes)| {
+                        bytes
+                            .iter()
+                            .map(|byte| {
+                                pool.evaluate(*byte, &values).expect("a byte") as u8 as char
+                            })
+                            .collect()
+                    })
+                    .collect();
+                assert_eq!(
+                    holding,
+                    vec![match &expected {
+                        Value::Str(text) => text.clone(),
+                        other => panic!("{other:?}"),
+                    }],
+                    "seed {seed}: {source} of {shown:?}"
+                );
+            }
+        }
+    }
+
     /// The formulas over random texts, evaluated at their bytes, must give what the test
     /// language computes.
     #[test]
@@ -1090,6 +1364,7 @@ mod tests {
                         Value::Bool(pool.evaluate(term, &values).expect("a value") == 1)
                     }
                     Formula::Float(_) => panic!("{source} gave a float"),
+                    Formula::Texts(_) => panic!("{source} gave a choice of texts"),
                 };
                 assert_eq!(found, expected, "seed {seed}: {source} of {text:?}");
             }
@@ -1220,7 +1495,7 @@ mod tests {
                         assert_eq!(bits, wanted, "seed {seed}: {source} with {values:?}");
                         continue;
                     }
-                    Formula::Text(_) => panic!("{source} gave text"),
+                    Formula::Text(_) | Formula::Texts(_) => panic!("{source} gave text"),
                 };
                 assert_eq!(found, expected, "seed {seed}: {source} with {values:?}");
             }

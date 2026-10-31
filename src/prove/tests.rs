@@ -1589,6 +1589,50 @@ async fn proves_a_count_for_every_length_by_induction() {
     assert!(step.is_err(), "{step:?}");
 }
 
+/// Sorting: sort and uniq over short texts are a choice of texts, one for each way the newlines
+/// can fall and the lines compare, so the sort example is proven for every input up to the
+/// length where its comparisons branch past the proof's paths, with and without `-u`; a
+/// comparison that puts the longer of two lines with the same start first is found.
+#[tokio::test]
+async fn proves_sorting_for_short_texts() {
+    if !solvers_installed() {
+        return;
+    }
+    let spec = repository_file("examples/sort/spec.md");
+    let source = repository_file("examples/sort/main.s");
+    let right = machine(&source).await;
+    // Two minutes each, so a machine busy with other tests' proofs still reaches the lengths.
+    let budget = || Budget {
+        max_shapes: 100_000,
+        max_paths: 256,
+        ..budget(120)
+    };
+    // A mebibyte sample is too long for the model to follow, which says nothing of it: the
+    // check before the proof goes on with the shorter ones.
+    let samples: Vec<crate::testfile::Case> = block(&spec, 0)
+        .cases(1)
+        .take(24)
+        .filter_map(Result::ok)
+        .collect();
+    assert!(samples.iter().any(|sample| sample.stdin.len() > 1 << 19));
+    let found = agrees(&right, &samples, false).expect("the model agrees with the samples");
+    assert!(found.is_none(), "{found:?}");
+    for index in [0, 2] {
+        let verdict = prove(&right, &block(&spec, index), &budget());
+        assert!(
+            matches!(&verdict, Verdict::Proven { bound: Some(bound), .. } if bound.bytes >= 5),
+            "{verdict:?}"
+        );
+    }
+    let longer_first = source.replace(
+        ".Lcompare_lengths:\n    mov rax, r8\n    sub rax, r9\n",
+        ".Lcompare_lengths:\n    mov rax, r9\n    sub rax, r8\n",
+    );
+    assert_ne!(longer_first, source);
+    let verdict = prove(&machine(&longer_first).await, &block(&spec, 0), &budget());
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+}
+
 /// Vector code, AVX-512 with masks: the fast word count's lines and words, its popcounts of
 /// masks meeting the formulas' counts as one term; a count that misses carriage returns is
 /// found. Texts up to 200 bytes, past three whole vectors and a tail, keep the test quick even

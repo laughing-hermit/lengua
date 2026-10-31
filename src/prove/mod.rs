@@ -1767,6 +1767,8 @@ enum Segment<'a> {
     Any(&'a crate::expr::Expr, &'a crate::expr::Expr),
     /// `if(condition, "text", "other text")`: one of two fixed texts, as a condition says.
     Either(&'a crate::expr::Expr),
+    /// One of several texts, each where its condition holds, as `sort(s)` gives.
+    Texts(Vec<(Term, Vec<Term>)>),
 }
 
 /// What must hold for `bytes` to be exactly `template`'s text for these inputs. Literal text, a
@@ -1821,9 +1823,12 @@ fn text_is(
                     _ => return Err("places with its places given by a formula".into()),
                 }
             }
-            // A placeholder whose value is text, such as upper(text), is its bytes.
+            // A placeholder whose value is text, such as upper(text), is its bytes; sort(text),
+            // one of its texts.
             Piece::Expr(expr) => match known.translate(pool, expr) {
                 Ok(Formula::Text(bytes)) => Segment::Bytes(bytes),
+                Ok(Formula::Texts(texts)) => Segment::Texts(texts),
+                Err(why) if is_lined(expr) => return Err(why),
                 _ => Segment::Number(expr, 0),
             },
         };
@@ -1854,6 +1859,14 @@ fn text_is(
             Segment::Either(expr) => {
                 let always = pool.boolean(true);
                 computed.push(Computed::Either(alternatives(pool, expr, known, always)?));
+                literals.push(Vec::new());
+            }
+            Segment::Texts(texts) => {
+                let texts = texts
+                    .into_iter()
+                    .map(|(condition, text)| (condition, Outcome::Text(text)))
+                    .collect();
+                computed.push(Computed::Either(texts));
                 literals.push(Vec::new());
             }
         }
@@ -1954,6 +1967,14 @@ impl Computed {
     }
 }
 
+/// Whether `expr` is `sort` or `uniq`, whose reason a proof gives when it can't follow them.
+fn is_lined(expr: &crate::expr::Expr) -> bool {
+    matches!(
+        expr,
+        crate::expr::Expr::Call(crate::expr::Function::Sort | crate::expr::Function::Uniq, _)
+    )
+}
+
 /// Whether `expr` is an `if(…)` chain with a fixed text among its outcomes, such as padding
 /// that depends on a number's size, or a value printed only where the input is valid.
 fn chooses_text(expr: &crate::expr::Expr, known: &Known<'_>) -> bool {
@@ -1977,7 +1998,7 @@ fn alternatives(
         crate::expr::Expr::Call(crate::expr::Function::If, arguments) if arguments.len() == 3 => {
             let condition = match known.translate(pool, &arguments[0])? {
                 Formula::Truth(condition) => condition,
-                Formula::Number(_) | Formula::Text(_) | Formula::Float(_) => {
+                Formula::Number(_) | Formula::Text(_) | Formula::Float(_) | Formula::Texts(_) => {
                     return Err("an if(…) whose condition isn't true or false".into());
                 }
             };
@@ -2046,7 +2067,9 @@ fn printed(
     let number = match known.translate(pool, expr)? {
         Formula::Number(number) => number,
         Formula::Truth(_) => return Err("a placeholder that prints true or false".into()),
-        Formula::Text(_) => return Err("a text placeholder where a number goes".into()),
+        Formula::Text(_) | Formula::Texts(_) => {
+            return Err("a text placeholder where a number goes".into());
+        }
         // The test language writes a float its shortest exact way, which proofs don't follow.
         Formula::Float(_) => {
             return Err(
@@ -2232,7 +2255,10 @@ fn passes(
             } else {
                 match known.translate(pool, expr)? {
                     Formula::Number(number) => number,
-                    Formula::Truth(_) | Formula::Text(_) | Formula::Float(_) => {
+                    Formula::Truth(_)
+                    | Formula::Text(_)
+                    | Formula::Float(_)
+                    | Formula::Texts(_) => {
                         return Err("an exit code that isn't a whole number".into());
                     }
                 }
@@ -3546,6 +3572,13 @@ pub fn agrees(
     listens: bool,
 ) -> Result<Option<Verdict>, String> {
     let image = Image::new(machine).ok_or("the program has no _start")?;
+    // Smallest first: once one is too long for the model to follow, the larger ones are too.
+    let mut cases: Vec<&crate::testfile::Case> = cases.iter().collect();
+    cases.sort_by_key(|case| {
+        case.stdin.len()
+            + case.files.values().map(String::len).sum::<usize>()
+            + case.args.iter().map(String::len).sum::<usize>()
+    });
     for case in cases {
         let mut pool = Pool::default();
         // The test server's port, which a real run's kernel chooses: one for the samples.
@@ -3652,6 +3685,9 @@ pub fn agrees(
         };
         let status = match &run.end {
             Some(End::Exit(status)) => pool.constant(*status),
+            // A sample too long for the model to follow, such as a mebibyte sorted, says nothing
+            // of it: the shorter ones the proof covers still check it.
+            Some(End::Unsupported(reason)) if reason == exec::TOO_LONG => break,
             Some(End::Unsupported(reason)) => return Err(reason.clone()),
             _ => None,
         };

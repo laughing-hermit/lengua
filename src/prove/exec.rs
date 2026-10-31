@@ -31,6 +31,9 @@ const ARGUMENT_ROOM: u64 = 1024 * 1024;
 /// The most instructions one run may take before the prover gives up on it.
 pub const MAX_STEPS: u64 = 5_000_000;
 
+/// Why a run past [`MAX_STEPS`] proves nothing.
+pub const TOO_LONG: &str = "a run took too many instructions to follow";
+
 /// The most bytes of standard input left for which a proof takes every count a read can
 /// return: every way 8 bytes can be cut is 128 runs.
 const RAW_CUT_BYTES: u64 = 8;
@@ -938,7 +941,7 @@ fn step(image: &Image, state: &mut State, pool: &mut Pool) -> Result<Step, Stop>
     };
     state.steps += 1;
     if state.steps > MAX_STEPS {
-        return Err(unsupported("a run took too many instructions to follow"));
+        return Err(unsupported(TOO_LONG));
     }
     let before = state.registers;
     // The read loop's head, in a proof by induction.

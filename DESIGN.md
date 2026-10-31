@@ -691,7 +691,12 @@ What it covers:
   `single`, comparisons, and `fixed(x, places)` printed. All but `reverse` work byte by byte, which is exact on UTF-8; `reverse` goes by
   characters, as the test language does, telling them apart by each byte's values. Any placeholder whose variables all have fixed values in a shape is computed outright,
   so messages that quote an argument prove. A placeholder that's a text, drawn or computed,
-  compares byte for byte.
+  compares byte for byte. `sort` and `uniq` of a text of up to 8 bytes are a choice of texts,
+  one for each way its newlines can fall and its lines compare, each where that holds: lines
+  that are the same term for term sort once, equal lines keep their order, so for any input
+  exactly one choice holds, and a random test holds it to the test language's own sort and uniq.
+  The sort example is proven so for every input up to 6 bytes, where its comparisons' branches
+  pass the 256 paths a shape may take.
 - Instructions: the integer instructions, the bit instructions listed above, and the vector
   instructions programs use most:
   - moves of whole and partial registers, `movd` and `movq`, broadcasts, `vzeroupper`;
@@ -764,7 +769,7 @@ What it covers:
 
 Not yet: the `sha256` formula, which the SHA instructions now run under but no formula yet
 meets; a CRC joined by `pclmulqdq`, which runs but builds other terms than the chain of steps;
-`sort`, `uniq` and `tally`; a float printed as the test language writes it on its own, its shortest exact digits, rather than
+`sort` and `uniq` of texts over 8 bytes, and `tally`; a float printed as the test language writes it on its own, its shortest exact digits, rather than
 with `fixed`; and `tr` that changes a character's width in bytes (`tr` beyond ASCII is proven
 character by character, each keeping its width). Those blocks are tested, not proven, and the
 report says why. A stream read both with `read` and with `fill` is proven for the four
@@ -800,8 +805,8 @@ Roadmap, in order:
 1. induction for folds whose state crosses from one buffer-full into the next, as `words` and
    `count` of a longer part do, where today such a proof goes as far as its time and
    `prove_further` reach;
-2. proofs of sorting and of floats computed in another order than the formula's, which are
-   tested today;
+2. proofs of sorting past a few bytes and of floats computed in another order than the
+   formula's, which are tested today;
 3. the other platforms, toward the top six CPU and OS targets.
 
 ## Platforms
@@ -942,8 +947,8 @@ list prices; twelve phrasings of a request all chose write-spec first. BENCHMARK
 the same day, has lengua's best ahead of or level with C, C++ and Rust on every workload and
 measure, with 2.5 to 3.1 times less memory.
 
-Tested, not proven, for now: sorting and `uniq`, floats computed in another order than the
-formula's, a folder's listing, and the SHA and AES instructions.
+Tested, not proven, for now: sorting and `uniq` past a few bytes, floats computed in another
+order than the formula's, a folder's listing, and the SHA and AES instructions.
 Left out of the dialect on purpose: gathers and scatters, whose addresses can't be bounds-checked,
 allocation while running, recursion, function pointers, and running other programs.
 
