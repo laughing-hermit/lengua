@@ -395,8 +395,8 @@ fn split_operands(text: &str) -> Vec<&str> {
                 }
             }
             b'\'' => index += 2,
-            b'[' | b'(' => depth += 1,
-            b']' | b')' => depth -= 1,
+            b'[' | b'(' | b'{' => depth += 1,
+            b']' | b')' | b'}' => depth -= 1,
             b',' if depth == 0 => {
                 parts.push(text[start..index].trim());
                 start = index + 1;
@@ -1843,6 +1843,30 @@ fn aarch64_operand(text: &str, constants: &BTreeMap<String, Constant>) -> Result
     }
     if let Some(register) = aarch64::text::fp_register(text) {
         return Ok(Operand::Register(Reg::A64Fp(register)));
+    }
+    // A vector register, one of its lanes, a whole q register or a scalar across lanes write:
+    // the V register, named by its low double as the facts name it.
+    let whole = |number: u8| {
+        Operand::Register(Reg::A64Fp(aarch64::FpReg {
+            number,
+            double: true,
+        }))
+    };
+    if let Some(register) = aarch64::text::vreg(text) {
+        return Ok(whole(register.number));
+    }
+    if let Some(lane) = aarch64::text::lane(text) {
+        return Ok(whole(lane.number));
+    }
+    if let Some(number) = aarch64::text::q_register(text) {
+        return Ok(whole(number));
+    }
+    if let Some(scalar) = aarch64::text::scalar(text) {
+        return Ok(whole(scalar.number));
+    }
+    // A list of vector registers, as written: `{ v0.16b, v1.16b }`.
+    if text.starts_with('{') && text.ends_with('}') {
+        return Ok(Operand::Modifier(text.to_owned()));
     }
     if A64Cond::named(text).is_some() || text.contains(char::is_whitespace) {
         return Ok(Operand::Modifier(text.to_owned()));

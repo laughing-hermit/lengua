@@ -4,7 +4,7 @@
 
 use super::{
     A64Cond, A64Reg, Address, FpConversion, FpOne, FpReg, FpThree, FpTwo, Gpr, Indirect, Inst,
-    Logic, VThree, Wide,
+    Logic, Source, VImmediate, VThree, VTwo, Wide, Writeback,
 };
 use crate::isa::{Cond, Control, Insn, MemRef, Op, Operand, Reg, RegSet, Stack, Value};
 
@@ -25,6 +25,27 @@ const fn fp(register: FpReg) -> Reg {
 
 fn fp_operand(register: FpReg) -> Operand {
     Operand::Reg(fp(register))
+}
+
+/// A V register whole, as the shared facts name it: its low double's name, the part a call keeps
+/// for d8 to d15.
+const fn v(number: u8) -> Reg {
+    fp(FpReg {
+        number,
+        double: true,
+    })
+}
+
+fn v_operand(number: u8) -> Operand {
+    Operand::Reg(v(number))
+}
+
+/// What a `dup` or an insert copies from, as an operand.
+fn source_operand(from: Source) -> Operand {
+    match from {
+        Source::Lane(lane) => v_operand(lane.number),
+        Source::General(register) => operand(register),
+    }
 }
 
 /// Whether the conversion's result goes to the general register.
@@ -755,29 +776,154 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
                 stack,
             )
         }
-        // Vectors: refused by the dialect for now, so no facts yet.
-        Inst::VectorThree { .. }
-        | Inst::VectorTwo { .. }
-        | Inst::VectorAcross { .. }
-        | Inst::VectorShift { .. }
-        | Inst::VectorPermute { .. }
-        | Inst::VectorExtract { .. }
-        | Inst::VectorTable { .. }
-        | Inst::VectorDup { .. }
-        | Inst::VectorToGeneral { .. }
-        | Inst::VectorInsert { .. }
-        | Inst::VectorImmediate { .. }
-        | Inst::VectorLoadStore { .. }
-        | Inst::VectorPair { .. }
-        | Inst::VectorStructures { .. } => (
+        // Vectors. Their registers, the V registers whole, hold no addresses the memory rules
+        // follow, as floating point's don't.
+        Inst::VectorThree { rd, rn, rm, .. }
+        | Inst::VectorPermute { rd, rn, rm, .. }
+        | Inst::VectorExtract { rd, rn, rm, .. } => (
             Control::Next,
-            None,
-            Vec::new(),
+            Some(v(rd.number)),
+            vec![
+                v_operand(rd.number),
+                v_operand(rn.number),
+                v_operand(rm.number),
+            ],
             None,
             Op::Other,
             Value::Other,
             Stack::Same,
         ),
+        Inst::VectorTwo { rd, rn, .. } | Inst::VectorShift { rd, rn, .. } => (
+            Control::Next,
+            Some(v(rd.number)),
+            vec![v_operand(rd.number), v_operand(rn.number)],
+            None,
+            Op::Other,
+            Value::Other,
+            Stack::Same,
+        ),
+        Inst::VectorAcross { rd, rn, .. } => (
+            Control::Next,
+            Some(v(rd.number)),
+            vec![v_operand(rd.number), v_operand(rn.number)],
+            None,
+            Op::Other,
+            Value::Other,
+            Stack::Same,
+        ),
+        Inst::VectorTable { rd, table, rm, .. } => (
+            Control::Next,
+            Some(v(rd.number)),
+            vec![v_operand(rd.number), v_operand(table), v_operand(rm.number)],
+            None,
+            Op::Other,
+            Value::Other,
+            Stack::Same,
+        ),
+        Inst::VectorDup { rd, from } => (
+            Control::Next,
+            Some(v(rd.number)),
+            vec![v_operand(rd.number), source_operand(from)],
+            None,
+            Op::Other,
+            Value::Other,
+            Stack::Same,
+        ),
+        Inst::VectorInsert { rd, from } => (
+            Control::Next,
+            Some(v(rd.number)),
+            vec![v_operand(rd.number), source_operand(from)],
+            None,
+            Op::Other,
+            Value::Other,
+            Stack::Same,
+        ),
+        Inst::VectorToGeneral { rd, rn, .. } => (
+            Control::Next,
+            Some(a64(rd)),
+            vec![operand(rd), v_operand(rn.number)],
+            None,
+            Op::Other,
+            Value::Other,
+            Stack::Same,
+        ),
+        Inst::VectorImmediate { rd, .. } => (
+            Control::Next,
+            Some(v(rd.number)),
+            vec![v_operand(rd.number)],
+            None,
+            Op::Other,
+            Value::Number,
+            Stack::Same,
+        ),
+        Inst::VectorLoadStore {
+            load,
+            rt,
+            address: place,
+        } => {
+            let memory = memory(place, 16, load);
+            let (idiom, stack) = frame(place, &[v(rt)], load);
+            (
+                Control::Next,
+                load.then_some(v(rt)),
+                vec![v_operand(rt), Operand::Mem],
+                Some(memory),
+                idiom,
+                if load { Value::Load } else { Value::Other },
+                stack,
+            )
+        }
+        Inst::VectorPair {
+            load,
+            rt,
+            rt2,
+            address: place,
+        } => {
+            let memory = memory(place, 32, load);
+            let (idiom, stack) = frame(place, &[v(rt), v(rt2)], load);
+            (
+                Control::Next,
+                load.then_some(v(rt)),
+                vec![v_operand(rt), v_operand(rt2), Operand::Mem],
+                Some(memory),
+                idiom,
+                if load { Value::Load } else { Value::Other },
+                stack,
+            )
+        }
+        Inst::VectorStructures {
+            load,
+            first,
+            count,
+            arrangement,
+            base,
+            step,
+        } => {
+            let width = u64::from(count) * u64::from(arrangement.bytes());
+            let stack = if is_sp(base) && step.is_some() {
+                Stack::Refused(format!("`{}` moves sp", mnemonic(inst)))
+            } else {
+                Stack::Same
+            };
+            (
+                Control::Next,
+                load.then_some(v(first)),
+                vec![v_operand(first), Operand::Mem],
+                Some(MemRef {
+                    base: Some(Reg::A64(base)),
+                    index: None,
+                    scale: 1,
+                    displacement: 0,
+                    pc_relative: false,
+                    width,
+                    reads: load,
+                    writes: !load,
+                }),
+                Op::Other,
+                if load { Value::Load } else { Value::Other },
+                stack,
+            )
+        }
     };
     // AArch64 faults on an access through sp that isn't a multiple of 16.
     let stack = match stack {
@@ -1030,21 +1176,140 @@ impl Facts {
                     }
                 }
             }
-            // Vectors: refused by the dialect for now, so no facts yet.
-            Inst::VectorThree { .. }
-            | Inst::VectorTwo { .. }
-            | Inst::VectorAcross { .. }
-            | Inst::VectorShift { .. }
-            | Inst::VectorPermute { .. }
-            | Inst::VectorExtract { .. }
-            | Inst::VectorTable { .. }
-            | Inst::VectorDup { .. }
-            | Inst::VectorToGeneral { .. }
-            | Inst::VectorInsert { .. }
-            | Inst::VectorImmediate { .. }
-            | Inst::VectorLoadStore { .. }
-            | Inst::VectorPair { .. }
-            | Inst::VectorStructures { .. } => {}
+            // A vector write of any arrangement writes the whole V register, as the CPU clears
+            // what's above the lanes it writes; the operations that keep part of the destination
+            // read it too.
+            Inst::VectorThree { op, rd, rn, rm } => {
+                self.reads_v(rn.number);
+                self.reads_v(rm.number);
+                if op.reads_destination() {
+                    self.reads_v(rd.number);
+                }
+                self.writes_v(rd.number);
+            }
+            Inst::VectorTwo { op, rd, rn } => {
+                self.reads_v(rn.number);
+                if op == VTwo::Xtn && rd.arrangement.whole() {
+                    self.reads_v(rd.number);
+                }
+                self.writes_v(rd.number);
+            }
+            Inst::VectorAcross { rd, rn, .. } => {
+                self.reads_v(rn.number);
+                self.writes_v(rd.number);
+            }
+            Inst::VectorShift { op, rd, rn, .. } => {
+                self.reads_v(rn.number);
+                if op.reads_destination(rd) {
+                    self.reads_v(rd.number);
+                }
+                self.writes_v(rd.number);
+            }
+            Inst::VectorPermute { rd, rn, rm, .. } | Inst::VectorExtract { rd, rn, rm, .. } => {
+                self.reads_v(rn.number);
+                self.reads_v(rm.number);
+                self.writes_v(rd.number);
+            }
+            Inst::VectorTable {
+                keep,
+                rd,
+                table,
+                count,
+                rm,
+            } => {
+                for offset in 0..count {
+                    self.reads_v((table + offset) % 32);
+                }
+                self.reads_v(rm.number);
+                if keep {
+                    self.reads_v(rd.number);
+                }
+                self.writes_v(rd.number);
+            }
+            Inst::VectorDup { rd, from } => {
+                self.reads_source(from);
+                self.writes_v(rd.number);
+            }
+            Inst::VectorInsert { rd, from } => {
+                self.reads_source(from);
+                self.reads_v(rd.number);
+                self.writes_v(rd.number);
+            }
+            Inst::VectorToGeneral { rd, rn, .. } => {
+                self.reads_v(rn.number);
+                self.writes_register(rd);
+            }
+            Inst::VectorImmediate { op, rd, .. } => {
+                if matches!(op, VImmediate::Orr | VImmediate::Bic) {
+                    self.reads_v(rd.number);
+                }
+                self.writes_v(rd.number);
+            }
+            Inst::VectorLoadStore { load, rt, address } => {
+                self.address(address);
+                if load {
+                    self.writes_v(rt);
+                } else {
+                    self.reads_v(rt);
+                }
+            }
+            Inst::VectorPair {
+                load,
+                rt,
+                rt2,
+                address,
+            } => {
+                self.address(address);
+                for register in [rt, rt2] {
+                    if load {
+                        self.writes_v(register);
+                    } else {
+                        self.reads_v(register);
+                    }
+                }
+            }
+            Inst::VectorStructures {
+                load,
+                first,
+                count,
+                base,
+                step,
+                ..
+            } => {
+                self.reads_register(base);
+                match step {
+                    Some(Writeback::Register(by)) => {
+                        self.reads_register(by);
+                        self.writes_register(base);
+                    }
+                    Some(Writeback::Bytes) => self.writes_register(base),
+                    None => {}
+                }
+                for offset in 0..count {
+                    let register = (first + offset) % 32;
+                    if load {
+                        self.writes_v(register);
+                    } else {
+                        self.reads_v(register);
+                    }
+                }
+            }
+        }
+    }
+
+    fn reads_v(&mut self, number: u8) {
+        self.reads.insert(v(number));
+    }
+
+    fn writes_v(&mut self, number: u8) {
+        self.writes.insert(v(number));
+    }
+
+    /// The register a `dup` or an insert reads.
+    fn reads_source(&mut self, from: Source) {
+        match from {
+            Source::Lane(lane) => self.reads_v(lane.number),
+            Source::General(register) => self.reads_register(register),
         }
     }
 

@@ -2051,6 +2051,67 @@ async fn an_aarch64_float_program_passes_every_rule() {
     );
 }
 
+/// The AArch64 vector template, x86-64's `shout` spec compiled with NEON, passes every rule. Its
+/// 16-byte loads and stores are held to their buffer as x86-64's are, a V register a function
+/// changes from v8 to v15 is saved as d8 to d15 are, and x18, widened indexes and floating point
+/// on vectors stay out.
+#[tokio::test]
+async fn the_aarch64_vector_template_passes_every_rule() {
+    let syscalls = [Syscall::Read, Syscall::Write, Syscall::Exit];
+    let text = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("plugin/skills/compile/assets/linux-aarch64/vector-template.s"),
+    )
+    .expect("the template");
+    let report = check_full(&text, CpuFeatures::all(), &syscalls, None).await;
+    let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+    assert!(report.passed(), "{all:#?}");
+
+    let cases = [
+        (
+            "    cmp x2, #LINE_BUF_LEN - CHUNK + 1\n    b.hs .Lshout_assert_index\n",
+            "    cmp x2, #LINE_BUF_LEN - CHUNK + 2\n    b.hs .Lshout_assert_index\n",
+            Rule::Indirection,
+            "    cmp x2, #LINE_BUF_LEN - CHUNK + 2",
+            "this check lets `ldr q0, [x1, x2]` reach byte 80 of line_buf, which has 80 bytes",
+        ),
+        (
+            "    cmhi v4.16b, v0.16b, v1.16b\n",
+            "    cmhi v8.16b, v0.16b, v1.16b\n",
+            Rule::Functions,
+            "shout:",
+            "shout changes d8 without saving it",
+        ),
+        (
+            "    movi v1.16b, #NEWLINE\n",
+            "    dup v1.16b, w18\n",
+            Rule::Dialect,
+            "    dup v1.16b, w18",
+            "uses x18",
+        ),
+        (
+            "    ldr q0, [x1, x2]\n    cmeq",
+            "    ldr q0, [x1, w2, uxtw]\n    cmeq",
+            Rule::Dialect,
+            "    ldr q0, [x1, w2, uxtw]",
+            "widens its index with uxtw",
+        ),
+        (
+            "    sub v0.16b, v0.16b, v4.16b\n",
+            "    fadd v0.4s, v0.4s, v4.4s\n",
+            Rule::Dialect,
+            "    fadd v0.4s",
+            "floating point on vectors isn't in the dialect yet",
+        ),
+    ];
+    for (from, to, rule, at, needle) in cases {
+        let changed = text.replacen(from, to, 1);
+        assert_ne!(changed, text, "{to}");
+        let report = check_full(&changed, CpuFeatures::all(), &syscalls, None).await;
+        assert_violation(&report, rule, line_of(&changed, at), needle);
+    }
+}
+
 /// AArch64's fill passes every rule, and is held to its template as x86-64's is: its code and
 /// its constants.
 #[tokio::test]

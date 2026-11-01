@@ -57,7 +57,8 @@ pub fn lane(text: &str) -> Option<Lane> {
 }
 
 /// A V register's low lane as a scalar: `b0`, `h0`, `s0` or `d0`.
-fn scalar(text: &str) -> Option<Scalar> {
+#[must_use]
+pub fn scalar(text: &str) -> Option<Scalar> {
     let (letter, digits) = text.split_at_checked(1)?;
     let number = number(&format!("v{digits}"))?;
     Some(Scalar {

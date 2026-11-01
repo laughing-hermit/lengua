@@ -374,6 +374,45 @@ fn the_facts_say_what_each_idiom_does() {
     assert_eq!(post.memory.expect("memory").displacement, 0);
     assert!(post.changes(x(1), &ABI) && post.uses(x(0)) && post.dst.is_none());
     assert!(facts_of("adrp x1, label").changes(x(1), &ABI));
+
+    // Vectors: a V register whole, named by its low double, which is what a call keeps of v8 to
+    // v15.
+    let d = |number| {
+        Reg::A64Fp(super::FpReg {
+            number,
+            double: true,
+        })
+    };
+    let push = facts_of("stp q8, q9, [sp, #-32]!");
+    assert_eq!(
+        (push.op, push.stack),
+        (Op::Push([Some(d(8)), Some(d(9))]), Stack::Moves(32))
+    );
+    let select = facts_of("bsl v0.16b, v1.16b, v2.16b");
+    assert!(select.uses(d(0)) && select.uses(d(1)) && select.changes(d(0), &ABI));
+    assert!(!facts_of("orr v0.16b, v1.16b, v2.16b").uses(d(0)));
+    let loads = facts_of("ld1 {v30.16b-v1.16b}, [x1], #64");
+    assert!(
+        [30, 31, 0, 1]
+            .into_iter()
+            .all(|number| loads.changes(d(number), &ABI))
+    );
+    assert!(loads.changes(x(1), &ABI) && !loads.changes(d(2), &ABI));
+    assert_eq!(loads.memory.expect("memory").width, 64);
+    let lane = facts_of("umov w3, v1.b[7]");
+    assert_eq!(lane.dst, Some(w(3)));
+    assert!(lane.uses(d(1)) && lane.changes(x(3), &ABI));
+    let insert = facts_of("mov v2.s[1], w4");
+    assert!(insert.uses(d(2)) && insert.uses(w(4)) && insert.changes(d(2), &ABI));
+    assert_eq!(
+        facts_of("ldr q0, [x1, x2, lsl #4]")
+            .memory
+            .map(|memory| (memory.scale, memory.width)),
+        Some((16, 16))
+    );
+    // A call changes the vectors but v8 to v15's low halves.
+    let call = facts_of("bl label");
+    assert!(call.changes(d(16), &ABI) && !call.changes(d(8), &ABI));
 }
 
 /// Vector lines as main.s may write them, aliases LLVM never prints included: each must read as

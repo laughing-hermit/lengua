@@ -62,9 +62,9 @@ pub(super) fn steps<'a>(
                      lengua's AArch64 dialect has",
                     source.text, word.bits
                 ),
-                fix: "use the instructions the dialect reference lists: whole numbers, and \
-                      floating point in s and d registers; no vectors, half precision, atomics \
-                      or system registers"
+                fix: "use the instructions the dialect reference lists: whole numbers, floating \
+                      point in s and d registers, and vectors of whole numbers; no floating point \
+                      on vectors, half precision, atomics or system registers"
                     .into(),
             }),
         }
@@ -256,24 +256,6 @@ pub(super) fn check_instruction(step: &Step<'_>, word: &Word, violations: &mut V
             format!("`{text}`: adr isn't in the dialect"),
             "make an address with `adrp xN, name` followed by `add xN, xN, :lo12:name`",
         ),
-        Inst::VectorThree { .. }
-        | Inst::VectorTwo { .. }
-        | Inst::VectorAcross { .. }
-        | Inst::VectorShift { .. }
-        | Inst::VectorPermute { .. }
-        | Inst::VectorExtract { .. }
-        | Inst::VectorTable { .. }
-        | Inst::VectorDup { .. }
-        | Inst::VectorToGeneral { .. }
-        | Inst::VectorInsert { .. }
-        | Inst::VectorImmediate { .. }
-        | Inst::VectorLoadStore { .. }
-        | Inst::VectorPair { .. }
-        | Inst::VectorStructures { .. } => refuse(
-            format!("`{text}`: vectors aren't in lengua's AArch64 dialect yet"),
-            "compute a byte or a number at a time, or compile the spec for x86-64, whose dialect \
-             has vectors",
-        ),
         Inst::BranchReg {
             kind: Indirect::Blr,
             ..
@@ -295,6 +277,22 @@ pub(super) fn check_instruction(step: &Step<'_>, word: &Word, violations: &mut V
         // A bounds check compares the whole index, so the access uses the whole of it; a
         // sign-extended low half could be negative however the whole compares.
         Inst::LoadStore {
+            address:
+                Address::Register {
+                    extend: extend @ (Extend::Uxtw | Extend::Sxtw | Extend::Sxtx),
+                    ..
+                },
+            ..
+        }
+        | Inst::FpLoadStore {
+            address:
+                Address::Register {
+                    extend: extend @ (Extend::Uxtw | Extend::Sxtw | Extend::Sxtx),
+                    ..
+                },
+            ..
+        }
+        | Inst::VectorLoadStore {
             address:
                 Address::Register {
                     extend: extend @ (Extend::Uxtw | Extend::Sxtw | Extend::Sxtx),
