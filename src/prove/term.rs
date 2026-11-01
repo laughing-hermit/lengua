@@ -355,6 +355,151 @@ fn mask(width: u32) -> u128 {
     }
 }
 
+/// The most intervals a set of a variable's values [`Pool::holds_where`] works out may have.
+const MAX_INTERVALS: usize = 1 << 16;
+
+/// A question [`Pool::holds_where`] answers of a part of a condition: the values of a variable
+/// where a condition holds, or where a value is below a constant, unsigned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Where {
+    Holds(Term),
+    Below(Term, u128),
+}
+
+/// How the sets of a question's parts make its own.
+#[derive(Debug, Clone, Copy)]
+enum Joined {
+    /// The one part's set.
+    Same,
+    /// The range's values outside the one part's set.
+    Not,
+    /// The values in both parts' sets.
+    And,
+    /// The values in either part's set.
+    Or,
+    /// The values in the first part's set and not the second's.
+    Except,
+    /// The second part's values where the first part holds, and the third's where it doesn't.
+    Choice,
+}
+
+/// What a question comes to: a set at once, nothing that can be read, or its parts' sets joined.
+enum Reading {
+    Set(Vec<(u128, u128)>),
+    Unread,
+    Parts(Joined, Vec<Where>),
+}
+
+/// The values in both sets, each sorted, disjoint, inclusive intervals.
+fn intersect(a: &[(u128, u128)], b: &[(u128, u128)]) -> Vec<(u128, u128)> {
+    let (mut i, mut j, mut out) = (0, 0, Vec::new());
+    while i < a.len() && j < b.len() {
+        let (low, high) = (a[i].0.max(b[j].0), a[i].1.min(b[j].1));
+        if low <= high {
+            out.push((low, high));
+        }
+        if a[i].1 < b[j].1 {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    out
+}
+
+/// The values in either set, as sorted, disjoint intervals, neighbors joined.
+fn union(a: &[(u128, u128)], b: &[(u128, u128)]) -> Vec<(u128, u128)> {
+    let mut all: Vec<(u128, u128)> = a.iter().chain(b).copied().collect();
+    all.sort_unstable();
+    let mut out: Vec<(u128, u128)> = Vec::new();
+    for (low, high) in all {
+        match out.last_mut() {
+            Some(last) if low <= last.1.saturating_add(1) => last.1 = last.1.max(high),
+            _ => out.push((low, high)),
+        }
+    }
+    out
+}
+
+/// The values of `range` not in `set`.
+fn complement(set: &[(u128, u128)], (low, high): (u128, u128)) -> Vec<(u128, u128)> {
+    let mut out = Vec::new();
+    let mut next = Some(low);
+    for (from, to) in set {
+        if let Some(start) = next
+            && *from > start
+        {
+            out.push((start, (*from - 1).min(high)));
+        }
+        next = to.checked_add(1);
+    }
+    if let Some(start) = next
+        && start <= high
+    {
+        out.push((start, high));
+    }
+    out.retain(|(from, to)| from <= to && *from >= low);
+    out
+}
+
+/// The values `x` of `range` where `(x + offset) mod 2^bits` is below `k`: once each 2^bits,
+/// or, with 128 bits, below and above where adding `offset` wraps.
+fn modular_below(
+    (low, high): (u128, u128),
+    offset: u128,
+    bits: u32,
+    k: u128,
+) -> Option<Vec<(u128, u128)>> {
+    if k == 0 || low > high {
+        return Some(Vec::new());
+    }
+    if bits >= 128 {
+        // x + offset below where it wraps, and x - (2^128 - offset) past it.
+        let wraps = offset.wrapping_neg();
+        let mut out = Vec::new();
+        if offset == 0 {
+            if low < k {
+                out.push((low, high.min(k - 1)));
+            }
+            return Some(out);
+        }
+        if k > offset && low < wraps {
+            let last = high.min(wraps - 1).min(k - offset - 1);
+            if low <= last {
+                out.push((low, last));
+            }
+        }
+        let first = low.max(wraps);
+        if first <= high && wraps.checked_add(k - 1).is_some_and(|last| first <= last) {
+            out.push((first, high.min(wraps + (k - 1))));
+        }
+        return Some(out);
+    }
+    let modulus = 1_u128 << bits;
+    if k >= modulus {
+        return Some(vec![(low, high)]);
+    }
+    let mut out = Vec::new();
+    let mut x = low;
+    loop {
+        let residue = (x + offset) % modulus;
+        if residue < k {
+            let last = x
+                .checked_add(k - 1 - residue)
+                .map_or(high, |last| last.min(high));
+            out.push((x, last));
+            if out.len() > MAX_INTERVALS {
+                return None;
+            }
+        }
+        match x.checked_add(modulus - residue) {
+            Some(next) if next <= high => x = next,
+            _ => break,
+        }
+    }
+    Some(out)
+}
+
 /// Whether every item of `small`, sorted, is in `large`, sorted, as often.
 fn within_multiset(small: &[Term], large: &[Term]) -> bool {
     let mut large = large.iter().peekable();
@@ -1417,6 +1562,288 @@ impl Pool {
         } else {
             None
         }
+    }
+
+    /// `condition` with what it says of `x` alone, a value from its range such as a text's
+    /// length, written as one comparison or two: the conjuncts made only of comparisons of `x`
+    /// moved by constants (or of their low bits) with constants, joined by and, or, not and
+    /// choices, are the set of `x`'s values where they hold. So however a program works out
+    /// whether a byte is inside the text, as a mask's bit of the bytes left in its last chunk,
+    /// the condition comes out as the formula's `position < length`.
+    pub fn on_length(&mut self, condition: Term, x: Term) -> Term {
+        let range = self.range(x);
+        let mut pending = vec![condition];
+        let mut said = Vec::new();
+        let mut set = vec![range];
+        while let Some(part) = pending.pop() {
+            if let Node::BoolAnd(a, b) = *self.node(part) {
+                pending.extend([a, b]);
+                continue;
+            }
+            if let Some(where_) = self.holds_where(part, x, range) {
+                set = intersect(&set, &where_);
+                said.push(part);
+            }
+        }
+        let Some(&first) = said.first() else {
+            return condition;
+        };
+        let comparison = self.within_intervals(&set, x, range);
+        if said.len() == 1 && comparison == first {
+            return condition;
+        }
+        // The first conjunct about x says all of them do, the rest say nothing more, each in
+        // its place: what else the condition says keeps its form, as a formula's would.
+        let true_ = self.boolean(true);
+        let mut replaced: HashMap<Term, Term> = said.iter().map(|part| (*part, true_)).collect();
+        replaced.insert(first, comparison);
+        self.conjuncts_replaced(condition, &replaced)
+    }
+
+    /// `condition` with each of its conjuncts in `replaced` replaced, and the conjunctions
+    /// around them built again, one at a time, without a call for each level.
+    fn conjuncts_replaced(&mut self, condition: Term, replaced: &HashMap<Term, Term>) -> Term {
+        let mut done: HashMap<Term, Term> = HashMap::new();
+        let mut pending = vec![(condition, false)];
+        while let Some((current, expanded)) = pending.pop() {
+            if done.contains_key(&current) {
+                continue;
+            }
+            if let Some(by) = replaced.get(&current) {
+                done.insert(current, *by);
+                continue;
+            }
+            let Node::BoolAnd(a, b) = *self.node(current) else {
+                done.insert(current, current);
+                continue;
+            };
+            if expanded {
+                let (new_a, new_b) = (
+                    done.get(&a).copied().unwrap_or(a),
+                    done.get(&b).copied().unwrap_or(b),
+                );
+                let rebuilt = if (new_a, new_b) == (a, b) {
+                    current
+                } else {
+                    self.bool_and(new_a, new_b)
+                };
+                done.insert(current, rebuilt);
+            } else {
+                pending.extend([(current, true), (a, false), (b, false)]);
+            }
+        }
+        done.get(&condition).copied().unwrap_or(condition)
+    }
+
+    /// That `x`, which lies in `range`, lies in one of `set`'s intervals: true, false, or a
+    /// comparison with each end that isn't `range`'s.
+    fn within_intervals(&mut self, set: &[(u128, u128)], x: Term, range: (u128, u128)) -> Term {
+        let width = self.width(x);
+        let mut ways = Vec::new();
+        for (low, high) in set {
+            let mut sides = Vec::new();
+            if *low > range.0 {
+                let before = self.bv(width, low - 1);
+                sides.push(self.ult(before, x));
+            }
+            if *high < range.1 {
+                let after = self.bv(width, high + 1);
+                sides.push(self.ult(x, after));
+            }
+            ways.push(self.all(&sides));
+        }
+        self.any(&ways)
+    }
+
+    /// The values of `x` in `range` where `condition` holds, as sorted, disjoint intervals, when
+    /// it's made only of comparisons of `x` moved by constants, or of their low bits, with
+    /// constants, joined by and, or, not and choices. `None` for anything else. Each part is read
+    /// once, without a call for each level, so a condition built byte by byte, as a matcher's
+    /// state is, can be as deep as a text is long; and the parts read at once are read before the
+    /// joined ones, so a part that isn't about `x` ends the walk before a long chain is walked.
+    #[must_use]
+    pub fn holds_where(
+        &self,
+        condition: Term,
+        x: Term,
+        range: (u128, u128),
+    ) -> Option<Vec<(u128, u128)>> {
+        let mut sets: HashMap<Where, Vec<(u128, u128)>> = HashMap::new();
+        let mut pending = vec![(Where::Holds(condition), false)];
+        while let Some((question, expanded)) = pending.pop() {
+            if sets.contains_key(&question) {
+                continue;
+            }
+            match self.reading(question, x, range) {
+                Reading::Set(set) => {
+                    sets.insert(question, set);
+                }
+                Reading::Unread => return None,
+                Reading::Parts(joined, parts) if expanded => {
+                    let mut read = Vec::with_capacity(parts.len());
+                    for part in &parts {
+                        read.push(sets.get(part)?);
+                    }
+                    let set = match (joined, read.as_slice()) {
+                        (Joined::Same, [only]) => (*only).clone(),
+                        (Joined::Not, [only]) => complement(only, range),
+                        (Joined::And, [a, b]) => intersect(a, b),
+                        (Joined::Or, [a, b]) => union(a, b),
+                        (Joined::Except, [kept, left_out]) => {
+                            intersect(kept, &complement(left_out, range))
+                        }
+                        (Joined::Choice, [chosen, then, otherwise]) => union(
+                            &intersect(chosen, then),
+                            &intersect(&complement(chosen, range), otherwise),
+                        ),
+                        _ => return None,
+                    };
+                    sets.insert(question, set);
+                }
+                Reading::Parts(_, parts) => {
+                    pending.push((question, true));
+                    // Joined parts first, so the rest, which are read at once, come off first.
+                    let (joined, at_once): (Vec<Where>, Vec<Where>) = parts
+                        .into_iter()
+                        .filter(|part| !sets.contains_key(part))
+                        .partition(|part| self.joins(*part, x));
+                    pending.extend(joined.into_iter().map(|part| (part, false)));
+                    pending.extend(at_once.into_iter().map(|part| (part, false)));
+                }
+            }
+        }
+        sets.remove(&Where::Holds(condition))
+    }
+
+    /// Whether [`Self::reading`] reads `question` from parts of its own.
+    fn joins(&self, question: Where, x: Term) -> bool {
+        match question {
+            Where::Holds(condition) => match *self.node(condition) {
+                Node::BoolNot(_) | Node::BoolAnd(..) | Node::BoolOr(..) => true,
+                Node::Ite(_, then, _) => self.sort(then) == Sort::Bool,
+                _ => false,
+            },
+            Where::Below(value, _) => match *self.node(value) {
+                Node::Ite(..) => true,
+                Node::ZeroExtend(inner, _) => inner != x,
+                _ => false,
+            },
+        }
+    }
+
+    /// One step of [`Self::holds_where`]: the set `question` asks for, at once, or the parts
+    /// whose sets make it, for a value that's a constant, `x` moved by a constant, its low bits,
+    /// a widening of one, or a choice of two on a condition it reads.
+    fn reading(&self, question: Where, x: Term, range: (u128, u128)) -> Reading {
+        let full = |holds: bool| Reading::Set(if holds { vec![range] } else { Vec::new() });
+        let moved = |term: Term, low_bits: Option<u32>, k: u128| {
+            let Some((bits, offset)) = self.moved(term, x) else {
+                return Reading::Unread;
+            };
+            let (bits, offset) = match low_bits {
+                Some(high) => {
+                    let bits = bits.min(high + 1);
+                    (bits, offset & mask(bits))
+                }
+                None => (bits, offset),
+            };
+            modular_below(range, offset, bits, k).map_or(Reading::Unread, Reading::Set)
+        };
+        match question {
+            Where::Holds(condition) => {
+                if let Some(truth) = self.truth(condition) {
+                    return full(truth);
+                }
+                match *self.node(condition) {
+                    Node::BoolNot(inner) => Reading::Parts(Joined::Not, vec![Where::Holds(inner)]),
+                    Node::BoolAnd(a, b) => {
+                        Reading::Parts(Joined::And, vec![Where::Holds(a), Where::Holds(b)])
+                    }
+                    Node::BoolOr(a, b) => {
+                        Reading::Parts(Joined::Or, vec![Where::Holds(a), Where::Holds(b)])
+                    }
+                    Node::Ite(choice, then, otherwise) if self.sort(then) == Sort::Bool => {
+                        Reading::Parts(
+                            Joined::Choice,
+                            vec![
+                                Where::Holds(choice),
+                                Where::Holds(then),
+                                Where::Holds(otherwise),
+                            ],
+                        )
+                    }
+                    Node::Ult(a, b) => {
+                        if let Some(k) = self.constant(b) {
+                            return Reading::Parts(Joined::Same, vec![Where::Below(a, k)]);
+                        }
+                        let Some(k) = self.constant(a) else {
+                            return Reading::Unread;
+                        };
+                        // k < v is not v < k + 1.
+                        match k.checked_add(1) {
+                            Some(next) => Reading::Parts(Joined::Not, vec![Where::Below(b, next)]),
+                            None => full(false),
+                        }
+                    }
+                    Node::Eq(a, b) => {
+                        let (value, k) = match (self.constant(a), self.constant(b)) {
+                            (None, Some(k)) => (a, k),
+                            (Some(k), None) => (b, k),
+                            _ => return Reading::Unread,
+                        };
+                        // At most k and not below it.
+                        match k.checked_add(1) {
+                            Some(next) => Reading::Parts(
+                                Joined::Except,
+                                vec![Where::Below(value, next), Where::Below(value, k)],
+                            ),
+                            None => Reading::Parts(Joined::Not, vec![Where::Below(value, k)]),
+                        }
+                    }
+                    _ => Reading::Unread,
+                }
+            }
+            Where::Below(value, k) => {
+                if let Some(constant) = self.constant(value) {
+                    return full(constant < k);
+                }
+                match *self.node(value) {
+                    Node::ZeroExtend(inner, _) if inner != x => {
+                        Reading::Parts(Joined::Same, vec![Where::Below(inner, k)])
+                    }
+                    Node::Ite(choice, then, otherwise) => Reading::Parts(
+                        Joined::Choice,
+                        vec![
+                            Where::Holds(choice),
+                            Where::Below(then, k),
+                            Where::Below(otherwise, k),
+                        ],
+                    ),
+                    Node::Extract(inner, high, 0) => moved(inner, Some(high), k),
+                    _ => moved(value, None, k),
+                }
+            }
+        }
+    }
+
+    /// When `term` is `x`, widened with zeros or its low bits or not, plus a constant, modulo 2
+    /// to its width: the width and the constant. Low bits of `x` plus a constant are `x` plus it,
+    /// modulo as many bits.
+    fn moved(&self, term: Term, x: Term) -> Option<(u32, u128)> {
+        let is_x = |part: Term| match *self.node(part) {
+            _ if part == x => true,
+            Node::ZeroExtend(inner, _) => inner == x,
+            Node::Extract(inner, high, 0) => inner == x && high + 1 >= self.width(term),
+            _ => false,
+        };
+        if is_x(term) {
+            return Some((self.width(term), 0));
+        }
+        let linear = self.linear_view(term);
+        let [(part, times)] = linear.parts.iter().collect::<Vec<_>>()[..] else {
+            return None;
+        };
+        (*times == 1 && is_x(*part)).then_some((self.width(term), linear.constant))
     }
 
     /// The value `condition` compares with a constant, when it's such a comparison.
@@ -2521,6 +2948,20 @@ impl Pool {
         }
         if let Some(x) = self.constant(a) {
             return self.bv(out, x >> low);
+        }
+        // A bit of the low mask of n bits, (1 << n) - 1 as bzhi builds one, is set where it's
+        // below n, and every bit where n is past the width, since 1 shifted that far is 0 and
+        // 0 - 1 is every bit: one form for each bit, however the low bits of a sum would fold.
+        if high == low
+            && let Node::Add(shifted, ones) = *self.node(a)
+            && self.constant(ones) == Some(mask(width))
+            && let Node::Shl(one, n) = *self.node(shifted)
+            && self.constant(one) == Some(1)
+        {
+            let at = self.bv(width, u128::from(low));
+            let below = self.ult(at, n);
+            let (set, clear) = (self.bv(1, 1), self.bv(1, 0));
+            return self.ite(below, set, clear);
         }
         match *self.node(a) {
             Node::Extract(inner, _, inner_low) => {

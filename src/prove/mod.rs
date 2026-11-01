@@ -678,6 +678,10 @@ fn refuted_among(
     both(&known, wanted).is_empty()
 }
 
+/// The most terms [`settled`] reads of an output check: enough for a count of every byte of a
+/// 64 KiB buffer-full, each guarded by whether it's inside the text.
+const MAX_SETTLED: usize = 1_000_000;
+
 /// The most times [`settled`] splits an output check on a condition the path leaves open.
 const MAX_CHOICES: u32 = 2;
 
@@ -726,7 +730,7 @@ fn settled_with(
         let mut seen = HashSet::new();
         let mut pending = vec![holds];
         while let Some(term) = pending.pop() {
-            if !seen.insert(term) || seen.len() > 20_000 {
+            if !seen.insert(term) || seen.len() > MAX_SETTLED {
                 continue;
             }
             if pool.sort(term) == term::Sort::Bool
@@ -2552,7 +2556,21 @@ fn by_induction(
             within: true,
             ..budget.clone()
         };
-        let verdict = match by_length(image, &base, &within, Some(&found.hook)) {
+        // Only counts of the text are written for a text of any length: a mapped text's bytes
+        // would each be a choice by where it ends.
+        let counts = block.stdout.pieces().iter().all(|piece| match piece {
+            Piece::Text(_) => true,
+            Piece::Expr(expr) => {
+                formula::lookback(expr, name).is_some()
+                    || formula::bordered_part(expr, name).is_some()
+            }
+        });
+        let at_once = if counts {
+            by_length(image, &base, &within, Some(&found.hook))
+        } else {
+            Err("its output isn't counts of the text".into())
+        };
+        let verdict = match at_once {
             Ok(verdict @ Verdict::Proven { bound: None, .. }) => verdict,
             other => {
                 if std::env::var_os("LENGUA_PROVE_TRACE").is_some() {

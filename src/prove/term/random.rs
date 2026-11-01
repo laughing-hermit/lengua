@@ -399,7 +399,30 @@ impl Writer<'_> {
             };
         }
         let deeper = depth - 1;
-        match self.rng.random_range(0..24) {
+        match self.rng.random_range(0..25) {
+            // A bit of the low mask of n bits, (1 << n) - 1, as bzhi builds one with an index
+            // the input chooses: sometimes past the width, where every bit is set.
+            24 if width >= 8 => {
+                let count = if self.rng.random_bool(0.5) {
+                    self.variable(width)
+                } else {
+                    self.variables.push(Variable {
+                        width,
+                        low: 0,
+                        high: u128::from(width) + 3,
+                    });
+                    Expr::Var(self.variables.len() - 1)
+                };
+                let shifted =
+                    Expr::Binary(Op::Shl, Box::new(Expr::Const(width, 1)), Box::new(count));
+                let low_mask =
+                    Expr::Binary(Op::Sub, Box::new(shifted), Box::new(Expr::Const(width, 1)));
+                let bit = self.rng.random_range(0..width);
+                Expr::ZeroExtend(
+                    Box::new(Expr::Extract(Box::new(low_mask), bit, bit)),
+                    width - 1,
+                )
+            }
             // Two values that are each 0 or 1, as setcc leaves them, combined bitwise as a
             // program keeps a flag: pending = is_a and not (is_a and pending).
             23 if width >= 8 => {
@@ -1572,4 +1595,140 @@ fn low_bits_widened_past_their_value_are_the_value() {
     let low = pool.extract(half, 61, 0);
     let wide = pool.zero_extend(low, 66);
     assert_ne!(wide, pool.zero_extend(half, 64));
+}
+
+#[test]
+fn where_a_condition_on_one_value_holds_is_exactly_its_set() {
+    // Random conditions on one value x, as a program asks whether a byte is inside the text:
+    // comparisons of x moved by a constant, of its low byte, of a choice of a constant or a moved
+    // x, and a bit of the low mask of that many bits, joined by and, or and not. The set
+    // holds_where gives must hold at each value of the range and nowhere else.
+    let seed = seed();
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    let mut read = 0;
+    for round in 0..400 {
+        let mut pool = Pool::default();
+        let low = rng.random_range(0..300_u128);
+        let high = low + rng.random_range(0..600_u128);
+        let x = pool.var_in(64, "x", low, high);
+        let moved = |pool: &mut Pool, rng: &mut ChaCha8Rng| {
+            let offset = pool.bv_signed(64, rng.random_range(-700_i128..700));
+            let value = pool.add(x, offset);
+            match rng.random_range(0..4) {
+                0 => {
+                    let byte = pool.extract(value, 7, 0);
+                    pool.zero_extend(byte, 56)
+                }
+                1 => {
+                    let k = pool.bv(64, rng.random_range(0..40));
+                    let wide = pool.bv(64, rng.random_range(0..40));
+                    let small = pool.ult(k, value);
+                    pool.ite(small, wide, value)
+                }
+                _ => value,
+            }
+        };
+        let atom = |pool: &mut Pool, rng: &mut ChaCha8Rng| {
+            let value = moved(pool, rng);
+            let k = pool.bv(64, rng.random_range(0..800));
+            match rng.random_range(0..5) {
+                0 => pool.ult(value, k),
+                1 => pool.ult(k, value),
+                2 => pool.eq(value, k),
+                3 => {
+                    // bit b of (1 << n) - 1, n the value's low byte, as bzhi reads its index
+                    let byte = pool.extract(value, 7, 0);
+                    let n = pool.zero_extend(byte, 24);
+                    let one = pool.bv(32, 1);
+                    let shifted = pool.shl(one, n);
+                    let low_mask = pool.sub(shifted, one);
+                    let bit = rng.random_range(0..32);
+                    let set = pool.extract(low_mask, bit, bit);
+                    let zero = pool.bv(1, 0);
+                    let clear = pool.eq(set, zero);
+                    pool.bool_not(clear)
+                }
+                _ => {
+                    let other = pool.bv(64, rng.random_range(0..800));
+                    pool.ule(value, other)
+                }
+            }
+        };
+        let mut condition = atom(&mut pool, &mut rng);
+        for _ in 0..rng.random_range(0..4) {
+            let next = atom(&mut pool, &mut rng);
+            condition = match rng.random_range(0..3) {
+                0 => pool.bool_and(condition, next),
+                1 => pool.bool_or(condition, next),
+                _ => {
+                    let not = pool.bool_not(next);
+                    pool.bool_and(condition, not)
+                }
+            };
+        }
+        let Some(set) = pool.holds_where(condition, x, (low, high)) else {
+            continue;
+        };
+        read += 1;
+        for value in low..=high {
+            let values = HashMap::from([("x".to_owned(), value)]);
+            let holds = pool.evaluate(condition, &values) == Some(1);
+            let inside = set.iter().any(|(from, to)| (*from..=*to).contains(&value));
+            assert_eq!(
+                holds,
+                inside,
+                "seed {seed}, round {round}: x = {value}, {} gave {set:?}",
+                pool.sketch(condition, 8)
+            );
+        }
+        // Written back as comparisons, the condition is the same.
+        let written = pool.on_length(condition, x);
+        for value in low..=high {
+            let values = HashMap::from([("x".to_owned(), value)]);
+            assert_eq!(
+                pool.evaluate(written, &values),
+                pool.evaluate(condition, &values),
+                "seed {seed}, round {round}: x = {value}, {} written as {}",
+                pool.sketch(condition, 8),
+                pool.sketch(written, 8)
+            );
+        }
+    }
+    // Every condition here is of that kind, so nearly all are read.
+    assert!(
+        read > 300,
+        "seed {seed}: only {read} of 400 conditions read"
+    );
+}
+
+#[test]
+fn a_condition_as_deep_as_a_long_text_is_read_without_a_call_for_each_level() {
+    // A matcher's state built byte by byte, as a count of a part that overlaps itself keeps it,
+    // `a_k and not (a_k-1 and not (...))`, 100,000 deep: it isn't about x, which its first byte
+    // shows at once, and a condition guarded by it keeps its form. A choice of x's values as
+    // deep, x one of 100,000 lengths, is read as its one interval.
+    let mut pool = Pool::default();
+    let range = (0, 200_000);
+    let x = pool.var_in(64, "x", range.0, range.1);
+    let letter = pool.bv(8, u128::from(b'a'));
+    let mut state = pool.boolean(false);
+    for at in 0..100_000 {
+        // The state before first, as a program's is: the deeper operand is the earlier term.
+        let not_state = pool.bool_not(state);
+        let byte = pool.var(8, &format!("in.{at}"));
+        let is_letter = pool.eq(byte, letter);
+        state = pool.bool_and(is_letter, not_state);
+    }
+    assert_eq!(pool.holds_where(state, x, range), None);
+    let five = pool.bv(64, 5);
+    let inside = pool.ult(five, x);
+    let guarded = pool.bool_and(state, inside);
+    assert_eq!(pool.on_length(guarded, x), guarded);
+    let mut any = pool.boolean(false);
+    for at in 0..100_000_u128 {
+        let length = pool.bv(64, at);
+        let here = pool.eq(x, length);
+        any = pool.bool_or(here, any);
+    }
+    assert_eq!(pool.holds_where(any, x, range), Some(vec![(0, 99_999)]));
 }

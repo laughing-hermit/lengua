@@ -2886,3 +2886,42 @@ async fn proves_every_final_piece_at_once_where_a_loop_leaves_on_the_length() {
     let verdict = prove(&past, &block, &text_budget());
     assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
 }
+
+/// The line counter with a 64 KiB buffer, C's size: its count loop masks its last chunk by the
+/// bytes left (`bzhi`), and what each byte's mask says of the length comes out as the formula's
+/// `position < length`, so the base takes every final piece at once and the counter is proven
+/// for every length with no solver question. A counter that skips its last chunk, or keeps only
+/// the last buffer-full's count, is still caught.
+#[tokio::test]
+async fn proves_a_count_with_a_64_kib_buffer_for_every_length() {
+    if !solvers_installed() {
+        return;
+    }
+    let spec = fixture("lines", "spec.md").replace("65536", "1048576");
+    let block = block(&spec, 0);
+    let source =
+        fixture("lines", "main.s").replace(".equ BUF_LEN, 4096\n", ".equ BUF_LEN, 65536\n");
+    let right = machine(&source).await;
+    let started = Instant::now();
+    let verdict = prove(&right, &block, &long_budget());
+    eprintln!("lines at 64 KiB: {verdict:?} in {:?}", started.elapsed());
+    assert!(
+        matches!(
+            verdict,
+            Verdict::Proven {
+                bound: None,
+                induction: Some(65536),
+                shapes: 2,
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
+    let short = machine(&source.replace(
+        "    cmp rcx, rdi\n    jae .Lcount_lines_return\n",
+        "    lea rdx, [rcx + 16]\n    cmp rdx, rdi\n    jae .Lcount_lines_return\n",
+    ))
+    .await;
+    let verdict = prove(&short, &block, &text_budget());
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+}

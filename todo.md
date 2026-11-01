@@ -64,11 +64,14 @@ when the fastest `wc` is proven for every length with a 64 KiB buffer or more. P
 no longer asks the solvers about every temporary register (the line counter's step at 64 KiB:
 five minutes to six seconds); the base takes every final piece at once, its length the input's
 choice, and merges the exits of a loop that leaves on that length, so `pairs` at 4 KiB is proven
-in under four seconds (nine minutes before). Left: a loop that masks its last chunk (`bzhi` by
-the bytes left), as the line counter and the fast `wc` do, needs its guards to meet the
-formula's (`16j + b < L`), by canonical forms or by proving the time round with its position
-symbolic; and a count built a byte at a time keeps a copy of all its parts at every byte, so a
-byte loop's 64 KiB base runs out of memory (counts that share their parts would fix it).
+in under four seconds (nine minutes before); and a condition on the length alone is worked out as
+the set of lengths where it holds, so a loop that masks its last chunk with `bzhi` meets the
+formula's guards: the line counter with a 64 KiB buffer, C's size, is proven for every length in
+under 30 seconds with no solver question. Left: counts that look back (`words`, so the fast
+`wc`), whose base reads a buffer-full before the final piece; the fast `wc`'s own shape (a tail
+routine that loads its last vector at a place the length chooses, and raw `read`s of any size);
+and a count built a byte at a time keeps a copy of all its parts at every byte, so a byte loop's
+64 KiB base runs out of memory (counts that share their parts would fix it).
 
 **The finish line** (decided 2026-11-01, before ARM64 resumes): everything that can be proven is
 proven, however many rounds that takes, except where a concrete, demonstrated reason shows lengua's

@@ -741,14 +741,22 @@ What it covers:
   held, which is anything), fill returning that length; and where a loop over the piece leaves
   on the length itself, the run doesn't split at each time round: it goes on as if still in the
   loop while each side that left waits at the exit, and when the loop is done the runs merge
-  into one, for each input the one that left first. A count that only grew between exits is
-  then one count of each part where the loop was still running when it was added, and the
-  formula's count of a text of that length guards each part by whether it's inside, so the two
-  are one term. `pairs` with a 4 KiB buffer is proven for every length so in under four seconds,
-  against nine minutes one final length at a time. A loop that masks its last chunk by the bytes
-  left (`bzhi`), as the line counter does, doesn't meet the formula's terms that way yet, so its
-  base goes one length at a time as before. A loop the induction doesn't fit, or whose step
-  doesn't hold, is proven by length as above.
+  into one, for each input the one that left first. They merge only where the loop stored
+  nothing, so their memory is one; past 64 exits, any other register, flag or vector that differs
+  between them is a fresh value, which stands for any of theirs, rather than a choice among them.
+  A count that only grew between exits is then one count of each part where the loop was still
+  running when it was added, and the formula's count of a text of that length guards each part by
+  whether it's inside, so the two are one term. What a condition says of the length alone,
+  however the program works it out, is the set of lengths where it holds, worked out exactly from
+  comparisons of the length moved by constants and their low bits (each a run of intervals), and
+  written back, in its place in the condition, as the formula writes it: a mask's bit `b` of the
+  bytes left in chunk `j`, as `bzhi` clears the bits from its index (the low byte of
+  `min(length - 16j, 16)`), with the loop still running there, is `16j + b < length`. `pairs`
+  with a 4 KiB buffer is proven for every length so in under four seconds, against nine minutes
+  one final length at a time; the line counter, which masks its last chunk with `bzhi`, with a 64
+  KiB buffer, C's size, in under 30 seconds with no solver question. Where every final piece at
+  once isn't proven, the base goes one length at a time as before. A loop the induction doesn't
+  fit, or whose step doesn't hold, is proven by length as above.
 - What the proof ran. A function no run of a proof called, such as a fast path that starts past
   the proof's bound, is named in the proof's line: "the proof never ran crc_block, so what it
   does isn't proven". The CRC-32C asset's three chains join only past 12,288 bytes, so its

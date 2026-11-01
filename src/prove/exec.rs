@@ -3819,6 +3819,14 @@ fn mergeable(a: &State, b: &State) -> bool {
         && a.suspended.is_empty()
         && b.suspended.is_empty()
         && (Rc::ptr_eq(&a.logs, &b.logs) || (a.logs.is_empty() && b.logs.is_empty()))
+        // A loop that stored nothing between its exits, as a loop that counts what it reads.
+        && a.memory.pages.len() == b.memory.pages.len()
+        && a
+            .memory
+            .pages
+            .iter()
+            .zip(&b.memory.pages)
+            .all(|((page, bytes), (other, theirs))| page == other && Rc::ptr_eq(bytes, theirs))
 }
 
 /// `a` where `leaves` holds and `b` elsewhere, as one run, for two runs that have done the
@@ -3920,18 +3928,56 @@ fn merge_all(pool: &mut Pool, exits: &[Rc<Parked>], last: &State, alive: Term) -
         if values.iter().all(|value| *value == values[0]) {
             continue;
         }
-        merged_state.registers[slot] = match grown_count(pool, &values, &after) {
+        merged_state.registers[slot] = match grown_count(pool, &values, &after, last.stdin_length) {
             Some(count) => count,
-            None => values[..values.len() - 1]
-                .iter()
-                .zip(exits)
-                .rev()
-                .fold(values[values.len() - 1], |later, (value, exit)| {
-                    pool.ite(exit.leaves, *value, later)
-                }),
+            None => chosen_by_exit(pool, &values, exits, slot),
         };
     }
-    // Flags, vectors, masks and memory, a choice by exit.
+    // Flags, vectors, masks and memory, a choice by exit, where there are few enough exits.
+    if exits.len() > MAX_CHOICES_MERGED {
+        let count = pool.len();
+        let fresh = |pool: &mut Pool, name: &str, width: u32| {
+            pool.var(width, &format!("merged{count}.{name}"))
+        };
+        let differs =
+            |pick: fn(&State) -> Term| exits.iter().any(|exit| pick(&exit.state) != pick(last));
+        if differs(|state| state.carry) {
+            merged_state.carry = pool.bool_var(&format!("merged{count}.cf"));
+        }
+        if differs(|state| state.zero) {
+            merged_state.zero = pool.bool_var(&format!("merged{count}.zf"));
+        }
+        if differs(|state| state.sign) {
+            merged_state.sign = pool.bool_var(&format!("merged{count}.sf"));
+        }
+        if differs(|state| state.overflow) {
+            merged_state.overflow = pool.bool_var(&format!("merged{count}.of"));
+        }
+        if differs(|state| state.parity) {
+            merged_state.parity = pool.bool_var(&format!("merged{count}.pf"));
+        }
+        for number in 0..last.vectors.len() {
+            if exits
+                .iter()
+                .any(|exit| exit.state.vectors[number][..] != last.vectors[number][..])
+            {
+                let bytes: [Term; VECTOR_BYTES] =
+                    std::array::from_fn(|at| fresh(pool, &format!("v{number}.{at}"), 8));
+                merged_state.vectors[number] = Rc::new(bytes);
+            }
+        }
+        for number in 0..last.masks.len() {
+            if exits
+                .iter()
+                .any(|exit| exit.state.masks[number] != last.masks[number])
+            {
+                merged_state.masks[number] = fresh(pool, &format!("k{number}"), 64);
+            }
+        }
+        merged_state.last = Last::Other;
+        merged_state.stored.clear();
+        return Some(merged_state);
+    }
     let mut folded = last.clone();
     for exit in exits.iter().rev() {
         folded = merged(pool, exit.leaves, &exit.state, folded, false)?;
@@ -3949,10 +3995,39 @@ fn merge_all(pool: &mut Pool, exits: &[Rc<Parked>], last: &State, alive: Term) -
     Some(merged_state)
 }
 
+/// The most exits whose values a merge writes as a choice by exit; past it, a value that differs
+/// is a fresh one, which stands for any of them: deep choices would be walked down by every
+/// rule that reads a choice's sides.
+const MAX_CHOICES_MERGED: usize = 64;
+
+/// `values`, a register's at each exit and then the last, as a choice by exit, or, past
+/// [`MAX_CHOICES_MERGED`] exits, a fresh value, which stands for any of them.
+fn chosen_by_exit(pool: &mut Pool, values: &[Term], exits: &[Rc<Parked>], slot: usize) -> Term {
+    if exits.len() > MAX_CHOICES_MERGED {
+        let count = pool.len();
+        let width = pool.width(values[0]);
+        return pool.var(width, &format!("merged{count}.r{slot}"));
+    }
+    values[..values.len() - 1]
+        .iter()
+        .zip(exits)
+        .rev()
+        .fold(values[values.len() - 1], |later, (value, exit)| {
+            pool.ite(exit.leaves, *value, later)
+        })
+}
+
 /// `values`, a register's at each exit and then the last, as one count, when each is a count
 /// whose conditions, in their order, start with the one before's: each condition first counted
-/// at an exit's successor counts where the loop was running after that exit, `after`.
-fn grown_count(pool: &mut Pool, values: &[Term], after: &[Term]) -> Option<Term> {
+/// at an exit's successor counts where the loop was running after that exit, `after`. What each
+/// condition says of the input's `length` is written as the formula writes it, a comparison of
+/// the length with where the part ends.
+fn grown_count(
+    pool: &mut Pool,
+    values: &[Term],
+    after: &[Term],
+    length: Option<Term>,
+) -> Option<Term> {
     let width = pool.width(values[0]);
     let mut lists = Vec::with_capacity(values.len());
     for value in values {
@@ -3970,6 +4045,11 @@ fn grown_count(pool: &mut Pool, values: &[Term], after: &[Term]) -> Option<Term>
         }
         for part in &now[before.len()..] {
             parts.push(pool.bool_and(*part, after[index]));
+        }
+    }
+    if let Some(length) = length {
+        for part in &mut parts {
+            *part = pool.on_length(*part, length);
         }
     }
     ((parts.len() as u128) < (1_u128 << width.min(127))).then(|| pool.count(width, &parts))
