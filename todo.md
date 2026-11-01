@@ -137,9 +137,9 @@ here on goes here too.
    when the work in them is ordinary, so Claude leaves the topic and goes on with unrelated work.
 
 **Not blocked, and safer alternatives Claude does itself.** The crypto support is built: a user can
-write or drop in a standard SHA-256 or AES program and lengua checks and tests it. For a hash over
-input, checked, tested and proven, lengua's own program is a plain checksum, far from the stopped
-topic:
+write or drop in a standard SHA-256 or AES program and lengua checks and tests it. For a value
+computed from the input, checked, tested and proven, lengua's own program is a plain checksum, far
+from the stopped topic, which shows the same kind of proof:
 - CRC-32C, done: `plugin/skills/compile/assets/fast/crc32c`, the checksum iSCSI and ext4 use, is
   checked, tested, measured against C, C++ and Rust, and proven against `crc32c`.
 - CRC-32, as zip, gzip, PNG and Ethernet use it, could follow: the test language already has
@@ -147,6 +147,17 @@ topic:
   have to read that loop as the formula's chain of byte steps to prove it for every length.
 - Adler-32 (zlib's checksum) and FNV-1a (a hash-table hash) could follow too, each with a function
   added to the test language.
+
+**What the alternatives don't cover: security.** A checksum catches accidental damage, such as a
+corrupted download or a flipped bit on disk. It doesn't stand up to anyone changing the data on
+purpose, who can always keep the same checksum, and it hides nothing, as AES encryption does. So
+the checksums show lengua's kind of proof but don't replace SHA-256 or AES:
+- lengua isn't to be presented as covering security because of them, in the white paper (item 2),
+  the site (item 4) or anywhere else;
+- they're not for a program that must resist an attacker, such as checking that a download wasn't
+  tampered with, or keeping data secret;
+- that still takes SHA-256 or AES, which a user can supply and lengua checks and tests (items 1 and
+  2 above), or the engineer's hand-written examples once they exist.
 
 ## 2. A white paper: lengua is an AI language, not a programming language
 
