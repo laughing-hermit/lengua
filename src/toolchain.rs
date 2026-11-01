@@ -227,22 +227,23 @@ fn is_executable(path: &Path) -> bool {
     path.is_file()
 }
 
-/// `llvm-mc --version` prints a line like `  LLVM version 22.1.8`.
+/// `llvm-mc --version` prints a line like `  LLVM version 22.1.8`, or from a distribution's own
+/// build, `Ubuntu LLVM version 22.1.8`.
 fn parse_llvm_mc_version(output: &str) -> Option<String> {
     output.lines().find_map(|line| {
-        line.trim()
-            .strip_prefix("LLVM version ")
-            .map(|version| version.trim().to_owned())
+        let (_, version) = line.split_once("LLVM version ")?;
+        version.split_whitespace().next().map(str::to_owned)
     })
 }
 
-/// `ld.lld --version` prints `LLD 22.1.8 (compatible with GNU linkers)`.
+/// `ld.lld --version` prints `LLD 22.1.8 (compatible with GNU linkers)`, or from a distribution's
+/// own build, `Ubuntu LLD 22.1.8 (compatible with GNU linkers)`.
 fn parse_lld_version(output: &str) -> Option<String> {
-    output
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("LLD "))
-        .and_then(|rest| rest.split_whitespace().next())
-        .map(str::to_owned)
+    output.lines().find_map(|line| {
+        let mut words = line.split_whitespace();
+        words.by_ref().find(|word| *word == "LLD")?;
+        words.next().map(str::to_owned)
+    })
 }
 
 fn truncate_to_char_boundary(text: &mut String, max_bytes: usize) {
@@ -266,6 +267,9 @@ mod tests {
         let output = "LLVM (http://llvm.org/):\n  LLVM version 22.1.8\n  Optimized build.\n";
         assert_eq!(parse_llvm_mc_version(output).as_deref(), Some("22.1.8"));
         assert_eq!(parse_llvm_mc_version("nothing here"), None);
+        // apt.llvm.org's, and Debian's and Ubuntu's own.
+        let ubuntu = "Ubuntu LLVM version 22.1.8\n  Optimized build.\n";
+        assert_eq!(parse_llvm_mc_version(ubuntu).as_deref(), Some("22.1.8"));
     }
 
     #[test]
@@ -273,6 +277,8 @@ mod tests {
         let output = "LLD 22.1.8 (compatible with GNU linkers)\n";
         assert_eq!(parse_lld_version(output).as_deref(), Some("22.1.8"));
         assert_eq!(parse_lld_version("GNU ld 2.46"), None);
+        let ubuntu = "Ubuntu LLD 22.1.8 (compatible with GNU linkers)\n";
+        assert_eq!(parse_lld_version(ubuntu).as_deref(), Some("22.1.8"));
     }
 
     #[test]
