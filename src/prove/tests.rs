@@ -15,12 +15,18 @@ async fn machine(source: &str) -> Machine {
         folder.path().join("main"),
     );
     std::fs::write(&assembly, source).expect("write");
+    // main.s's first line says which CPU's code it is.
+    let profile = if source.starts_with(".arch armv8-a") {
+        Profile::LinuxAarch64
+    } else {
+        Profile::LinuxX86_64
+    };
     toolchain
-        .assemble(Profile::LinuxX86_64, &assembly, &object)
+        .assemble(profile, &assembly, &object)
         .await
         .expect("assemble");
     toolchain
-        .link(Profile::LinuxX86_64, &object, &executable)
+        .link(profile, &object, &executable)
         .await
         .expect("link");
     let mut machine =
@@ -83,6 +89,29 @@ async fn proves_the_template_for_every_input() {
     let verdict = prove(&machine, &block, &budget(120));
     eprintln!("{verdict:?} in {:?}", started.elapsed());
     assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
+}
+
+/// The AArch64 template is proven as x86-64's is, from the same spec. Not yet: its first block's
+/// proof runs, but a path takes cvc5 past its time to confirm, where x86-64's settles in its terms.
+#[tokio::test]
+#[ignore = "Round 9, R9b: the AArch64 template's proof doesn't settle yet"]
+async fn proves_the_aarch64_template_for_every_input() {
+    if !solvers_installed() {
+        return;
+    }
+    let machine = machine(crate::checker::AARCH64_TEMPLATE).await;
+    let spec = asset("template-spec.md");
+    let suite = {
+        let spec = crate::spec::parse(&spec).unwrap_or_else(|problems| panic!("{problems:?}"));
+        crate::testfile::check(&spec).unwrap_or_else(|problems| panic!("{problems:?}"))
+    };
+    for (number, _) in suite.generated.iter().enumerate() {
+        let block = block(&spec, number);
+        let started = Instant::now();
+        let verdict = prove(&machine, &block, &budget(120));
+        eprintln!("block {number}: {verdict:?} in {:?}", started.elapsed());
+        assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
+    }
 }
 
 #[test]

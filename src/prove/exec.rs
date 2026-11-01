@@ -18,7 +18,7 @@ use iced_x86::{ConditionCode, Instruction, Mnemonic, OpKind, Register};
 
 use super::term::{Pool, Term};
 use crate::checker::decode::Machine;
-use crate::isa::{Isa, aarch64};
+use crate::isa::{Isa, aarch64 as a64};
 use calls::{Call, Convention};
 
 /// The address of `argc` when `_start` begins.
@@ -63,7 +63,7 @@ struct Region {
 pub struct Image {
     instructions: HashMap<u64, Instruction>,
     /// AArch64's instructions, by address, in the dialect's canonical form.
-    words: HashMap<u64, aarch64::Inst>,
+    words: HashMap<u64, a64::Inst>,
     regions: Vec<Region>,
     initial: HashMap<u64, u8>,
     entry: u64,
@@ -363,8 +363,8 @@ enum Held {
 /// changes holds no pointer the run follows.
 #[derive(Debug, Default)]
 struct Plan {
-    registers: [Option<(usize, Option<Owner>)>; 2],
-    store: Option<(u64, Term, Owner)>,
+    registers: [Option<(usize, Option<Owner>)>; 3],
+    stores: [Option<(u64, Term, Owner)>; 2],
 }
 
 impl Plan {
@@ -395,10 +395,10 @@ impl Plan {
         for (index, owner) in self.registers.iter().flatten() {
             state.owners[*index] = *owner;
         }
-        if let Some((address, value, owner)) = self.store
-            && state.stored.get(&address) == Some(&value)
-        {
-            state.pointers.insert(address, owner);
+        for (address, value, owner) in self.stores.iter().flatten() {
+            if state.stored.get(address) == Some(value) {
+                state.pointers.insert(*address, *owner);
+            }
         }
     }
 
@@ -1002,7 +1002,7 @@ fn unsupported(text: impl Into<String>) -> Stop {
 #[derive(Clone, Copy)]
 struct Running<'a> {
     instruction: &'a Instruction,
-    word: Option<aarch64::Inst>,
+    word: Option<a64::Inst>,
     at: u64,
     next: u64,
 }
@@ -1051,8 +1051,8 @@ fn step(image: &Image, state: &mut State, pool: &mut Pool) -> Result<Step, Stop>
         // fill moves its cursor through the buffer it was lent.
         let cursor = fill::FillAbi::of(image.isa).cursor;
         let plan = Plan {
-            registers: [Some((cursor, state.owners[cursor])), None],
-            store: None,
+            registers: [Some((cursor, state.owners[cursor])), None, None],
+            stores: [None, None],
         };
         let mut cpu = Cpu::new(image, state, pool, running);
         if let Some(mut step) = cpu.fill(fill)? {
@@ -1167,7 +1167,7 @@ struct Cpu<'a> {
     /// The x86-64 instruction running, on x86-64.
     instruction: &'a Instruction,
     /// The AArch64 instruction running, on AArch64.
-    word: Option<aarch64::Inst>,
+    word: Option<a64::Inst>,
     /// Where the instruction running is.
     at: u64,
     /// Where the next one is.
@@ -1536,8 +1536,8 @@ impl<'a> Cpu<'a> {
 
     /// How the instruction about to run passes owners on, from the state before it.
     fn plan(&mut self) -> Plan {
-        if self.word.is_some() {
-            return Plan::default();
+        if let Some(word) = self.word {
+            return self.plan_a64(word);
         }
         let instruction = self.instruction;
         let mut plan = Plan::default();
@@ -1553,7 +1553,7 @@ impl<'a> Cpu<'a> {
             if let (Some(address), Some(from)) = (address, from)
                 && let (Some(owner), Some(index)) = (cpu.state.owner(from), slot(from))
             {
-                plan.store = Some((address, cpu.state.registers[index], owner));
+                plan.stores[0] = Some((address, cpu.state.registers[index], owner));
             }
         };
         let rsp = self.value_of(Register::RSP);
@@ -1642,10 +1642,8 @@ impl<'a> Cpu<'a> {
         }
     }
 
-    /// Checks a buffer of `count` bytes at `buffer`, lent to the kernel in `register` by the
-    /// system call `call`.
-    /// The `count` bytes at `buffer` that a system call's argument `argument` (from 0) lends the
-    /// kernel, to read or, when `writing`, to write.
+    /// Checks the `count` bytes at `buffer` that a system call's argument `argument` (from 0)
+    /// lends the kernel, to read or, when `writing`, to write.
     fn lent(
         &mut self,
         argument: usize,
@@ -2081,10 +2079,8 @@ impl<'a> Cpu<'a> {
     }
 
     fn execute(&mut self) -> Result<Step, Stop> {
-        if self.word.is_some() {
-            return Err(unsupported(
-                "AArch64's instructions, which lengua's prover has no model of yet",
-            ));
+        if let Some(word) = self.word {
+            return self.execute_a64(word);
         }
         let instruction = self.instruction;
         let mnemonic = instruction.mnemonic();
@@ -2392,8 +2388,13 @@ impl<'a> Cpu<'a> {
     /// The checker matched the table to the jump and rule 9 holds its index to the table, but a
     /// target that could be anything else still ends the proof, so it rests on neither.
     fn table_jump(&mut self) -> Result<Step, Stop> {
-        let ip = self.at;
         let target = self.read(0, 64)?;
+        self.jump_through_table(target)
+    }
+
+    /// A jump to `target` through the checked jump table of the instruction running.
+    fn jump_through_table(&mut self, target: Term) -> Result<Step, Stop> {
+        let ip = self.at;
         let Some(cases) = self.image.tables.get(&ip) else {
             return Err(unsupported(
                 "a jump through a register that isn't a checked jump table's",
@@ -3684,6 +3685,7 @@ fn unwritten_stack(at: u64) -> bool {
     (STACK_TOP - STACK_SIZE..STACK_TOP - 8).contains(&at)
 }
 
+mod aarch64;
 mod bits;
 mod calls;
 mod fill;
@@ -3695,6 +3697,10 @@ mod vector;
 // It runs a harness of x86-64 instructions on this computer's CPU.
 #[cfg(all(test, target_arch = "x86_64"))]
 mod against_cpu;
+
+// It runs a harness of AArch64 instructions on an AArch64 CPU: this computer's, or QEMU's.
+#[cfg(test)]
+mod against_a64;
 
 #[cfg(test)]
 mod tests {
