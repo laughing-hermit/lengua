@@ -6,14 +6,17 @@
 //!
 //! It names the code; it doesn't protect it. main.s is plain text anyone can build outside
 //! lengua, so code someone shares is checked again on each computer before lengua runs it. The
-//! line sits second, after `.intel_syntax noprefix`, and lengua's hash of main.s leaves it out,
-//! so writing it changes nothing that was checked.
+//! line sits second, after `.intel_syntax noprefix` or `.arch armv8-a`, as a comment of the
+//! target's CPU (`// lengua: …` on AArch64), and lengua's hash of main.s leaves it out, so
+//! writing it changes nothing that was checked.
 
 use crate::checker::x86_64;
 use crate::hash::Sha256Hex;
+use crate::isa::Isa;
 use crate::platform::{CpuFeatures, Profile};
 
-const PREFIX: &str = "# lengua: compiled from spec.md sha256:";
+/// The line after its comment marker.
+const BODY: &str = " lengua: compiled from spec.md sha256:";
 
 /// What lengua's line in main.s says.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,10 +30,13 @@ pub struct Header {
 }
 
 impl Header {
-    /// The line itself.
+    /// The line itself, a comment of the target's CPU.
     #[must_use]
     pub fn line(&self) -> String {
-        let mut line = format!("{PREFIX}{} for {}", self.spec, self.target);
+        let comment = Profile::from_name(&self.target)
+            .map_or(Isa::X86_64, Profile::isa)
+            .comment();
+        let mut line = format!("{comment}{BODY}{} for {}", self.spec, self.target);
         if !self.features.is_empty() {
             line.push_str("; needs ");
             line.push_str(&self.features.join(", "));
@@ -42,7 +48,7 @@ impl Header {
     #[must_use]
     pub fn of(code: &str) -> Option<Self> {
         let line = code.lines().find(|line| is_header(line))?;
-        let (spec, rest) = line.trim_end().strip_prefix(PREFIX)?.split_once(" for ")?;
+        let (spec, rest) = body(line.trim_end())?.split_once(" for ")?;
         let (target, features) = match rest.split_once("; needs ") {
             Some((target, features)) => (target, features.split(", ").map(str::to_owned).collect()),
             None => (rest, Vec::new()),
@@ -80,8 +86,16 @@ impl Header {
     }
 }
 
+/// What follows the header's prefix, when `line` is a header: lengua's words after either
+/// CPU's comment marker.
+fn body(line: &str) -> Option<&str> {
+    [Isa::X86_64, Isa::Aarch64]
+        .into_iter()
+        .find_map(|isa| line.strip_prefix(isa.comment())?.strip_prefix(BODY))
+}
+
 fn is_header(line: &str) -> bool {
-    line.starts_with(PREFIX)
+    body(line).is_some()
 }
 
 /// main.s as lengua hashes it: without lengua's own line, so writing that line changes nothing
@@ -101,7 +115,7 @@ pub fn code_hash(code: &[u8]) -> Sha256Hex {
 }
 
 /// `code` with `header` as lengua's line, in place of any it had: second, after
-/// `.intel_syntax noprefix`.
+/// `.intel_syntax noprefix` or `.arch armv8-a`.
 #[must_use]
 pub fn with(code: &str, header: &Header) -> String {
     let mut lines = code.split_inclusive('\n').filter(|line| !is_header(line));
@@ -148,6 +162,29 @@ mod tests {
         assert_eq!(Header::of(&again), Some(header(&[])));
         assert!(!again.contains("needs"), "{again}");
         assert_eq!(Header::of(CODE), None);
+    }
+
+    /// On AArch64 the line is a `//` comment, since `#` starts a number there.
+    #[test]
+    fn an_aarch64_line_is_a_comment_there() {
+        let code = ".arch armv8-a\n.globl _start\n_start:\n    ret\n";
+        let aarch64 = Header {
+            target: "linux-aarch64".into(),
+            ..header(&[])
+        };
+        let written = with(code, &aarch64);
+        let lines: Vec<&str> = written.lines().collect();
+        assert_eq!(lines[0], ".arch armv8-a");
+        assert_eq!(
+            lines[1],
+            format!(
+                "// lengua: compiled from spec.md sha256:{} for linux-aarch64",
+                Sha256Hex::of(b"spec")
+            )
+        );
+        assert_eq!(Header::of(&written), Some(aarch64.clone()));
+        assert_eq!(code_hash(written.as_bytes()), code_hash(code.as_bytes()));
+        assert_eq!(with(&written, &aarch64), written);
     }
 
     #[test]

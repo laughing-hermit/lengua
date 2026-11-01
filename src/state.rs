@@ -89,7 +89,7 @@ pub enum LockStatus {
     /// There is no lock yet.
     Missing,
     /// The lock's signature and format check out.
-    Valid(Lock),
+    Valid(Box<Lock>),
     /// The lock exists but can't be trusted.
     Invalid(LockError),
 }
@@ -111,7 +111,7 @@ impl Snapshot {
             code: hash(CODE_FILE, crate::header::code_hash)?,
             lock: match lock::read(folder.path(), key) {
                 Ok(None) => LockStatus::Missing,
-                Ok(Some(lock)) => LockStatus::Valid(lock),
+                Ok(Some(lock)) => LockStatus::Valid(Box::new(lock)),
                 Err(error) => LockStatus::Invalid(error),
             },
         })
@@ -121,7 +121,7 @@ impl Snapshot {
     #[must_use]
     pub fn valid_lock(&self) -> Option<&Lock> {
         match &self.lock {
-            LockStatus::Valid(lock) => Some(lock),
+            LockStatus::Valid(lock) => Some(lock.as_ref()),
             LockStatus::Missing | LockStatus::Invalid(_) => None,
         }
     }
@@ -234,6 +234,7 @@ mod tests {
                 unsafe_blocks: 0,
                 target: "linux-x86_64".into(),
                 features: Vec::new(),
+                emulator: None,
             }),
             ..recorded()
         }
@@ -251,7 +252,10 @@ mod tests {
 
     #[test]
     fn row_no_spec() {
-        let state = state([None, Some("code")], LockStatus::Valid(recorded()));
+        let state = state(
+            [None, Some("code")],
+            LockStatus::Valid(Box::new(recorded())),
+        );
         assert_eq!(state, State::NoSpec);
         assert!(
             next_step(&state).starts_with(
@@ -287,7 +291,7 @@ mod tests {
         let missing = state([Some("spec"), None], LockStatus::Missing);
         let changed = state(
             [Some("edited spec"), Some("code")],
-            LockStatus::Valid(with_code()),
+            LockStatus::Valid(Box::new(with_code())),
         );
         assert_eq!(missing, State::SpecUnrecorded);
         assert_eq!(changed, State::SpecUnrecorded);
@@ -300,7 +304,10 @@ mod tests {
 
     #[test]
     fn row_code_missing() {
-        let state = state([Some("spec"), None], LockStatus::Valid(recorded()));
+        let state = state(
+            [Some("spec"), None],
+            LockStatus::Valid(Box::new(recorded())),
+        );
         assert_eq!(state, State::CodeMissing);
         let step = next_step(&state);
         assert!(step.contains("with the compile skill"), "{step}");
@@ -309,10 +316,13 @@ mod tests {
 
     #[test]
     fn row_code_unchecked() {
-        let unchecked = state([Some("spec"), Some("code")], LockStatus::Valid(recorded()));
+        let unchecked = state(
+            [Some("spec"), Some("code")],
+            LockStatus::Valid(Box::new(recorded())),
+        );
         let edited = state(
             [Some("spec"), Some("edited code")],
-            LockStatus::Valid(with_code()),
+            LockStatus::Valid(Box::new(with_code())),
         );
         assert_eq!(unchecked, State::CodeUnchecked);
         assert_eq!(edited, State::CodeUnchecked);
@@ -324,7 +334,10 @@ mod tests {
 
     #[test]
     fn row_ready() {
-        let state = state([Some("spec"), Some("code")], LockStatus::Valid(with_code()));
+        let state = state(
+            [Some("spec"), Some("code")],
+            LockStatus::Valid(Box::new(with_code())),
+        );
         assert_eq!(state, State::Ready);
         assert_eq!(
             next_step(&state),

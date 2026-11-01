@@ -19,8 +19,9 @@ use crate::data_dir::DataDir;
 use crate::expr;
 use crate::hash::Sha256Hex;
 use crate::header::{self, Header};
+use crate::isa::Isa;
 use crate::lock::{self, CodeStamp, Key, Lock, ProofStamp, SpecStamp};
-use crate::platform::{Machine, Profile};
+use crate::platform::{Emulator, Machine, Profile, Target};
 use crate::prove;
 use crate::runner::{self, End, Job, Limits, Net, Started};
 use crate::spec::{self, Spec};
@@ -194,6 +195,12 @@ struct Passed {
     shown: Option<String>,
     /// lengua's line for main.s, written once the job ends without the proof finding it wrong.
     header: Header,
+    /// QEMU, when it ran the tests for the target's CPU.
+    under: Option<String>,
+    /// The tests not run here, each with what it needs that only the target's own CPU gives.
+    not_run: Vec<String>,
+    /// The target, such as `linux-aarch64`.
+    target: &'static str,
 }
 
 /// One generated test's proof.
@@ -213,6 +220,16 @@ struct BlockProof {
 /// on each of which every access stayed inside the object its pointer was made from.
 fn memory_line(proofs: &[BlockProof]) -> String {
     let rules = "the rules (M1 to M8) hold every address they can follow to its owner";
+    if let Some(detail) = proofs
+        .iter()
+        .find_map(|proof| proof.detail.as_deref())
+        .filter(|detail| detail.starts_with(NOT_MODELLED))
+    {
+        return format!(
+            "{rules}; the rest is tested, not proven: {}",
+            &detail[NOT_MODELLED.len()..]
+        );
+    }
     let proven: Vec<&str> = proofs
         .iter()
         .filter(|proof| {
@@ -436,6 +453,9 @@ pub struct RunReport {
     pub wall_time_us: u64,
     /// Where a server is taking connections, while it runs in the background.
     pub serving: Option<String>,
+    /// What held the run, when QEMU's user mode ran it for the target's CPU.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emulated: Option<String>,
 }
 
 /// What `run` reports about a program that has ended.
@@ -457,6 +477,7 @@ fn ended_report(
         cpu_time_us: result.cpu_time_ns.map(|nanoseconds| nanoseconds / 1000),
         wall_time_us: result.wall_time_ns / 1000,
         serving: None,
+        emulated: None,
     }
 }
 
@@ -522,6 +543,7 @@ impl LenguaServer {
             cpu_time_us: None,
             wall_time_us: 0,
             serving: Some(address),
+            emulated: None,
         })
     }
 }
@@ -560,8 +582,9 @@ impl LenguaServer {
         if let Some(blocked) = machine_blocker(&machine, toolchain.as_ref().err()) {
             return Ok(Json(CheckReport::new("blocked", blocked)));
         }
-        let profile = supported(&machine)?;
-        let machine_line = || machine_line(&machine);
+        let target = session_target(&machine)?;
+        let profile = target.profile;
+        let machine_line = || machine_line(&machine, &target);
 
         // spec.md, tests included: recorded with the user's words once it parses and its tests
         // check.
@@ -629,6 +652,21 @@ impl LenguaServer {
                 ..CheckReport::new("write_code", State::CodeMissing.next_step(&folder))
             }));
         };
+        // main.s's first line says which CPU's code it is: it never chooses the target.
+        if let Some(other) = code_for_another_cpu(&code, &target) {
+            return Ok(Json(CheckReport::problems(
+                "code_problems",
+                vec![other],
+                format!(
+                    "Next: compile {folder}/{SPEC_FILE} into {folder}/{CODE_FILE} for {} with \
+                     the compile skill, then call check with path {folder}.",
+                    match target.emulator {
+                        None => "this computer".to_owned(),
+                        Some(_) => format!("{}, the target LENGUA_TARGET names", profile.name()),
+                    }
+                ),
+            )));
+        }
         // Code compiled for another computer is compiled again for this one.
         if let Some(elsewhere) =
             Header::of(&code).and_then(|header| header.elsewhere(profile, &machine.features))
@@ -709,6 +747,7 @@ impl LenguaServer {
                         built,
                         report,
                         profile,
+                        emulator: target.emulator.clone(),
                     },
                     params.prove_further,
                 )
@@ -771,6 +810,7 @@ impl LenguaServer {
             spec,
             syscalls,
             net,
+            emulator,
         } = runnable(&self.data_dir, &folder, &params.env).await?;
         if let Some(wrong) = self.proven_wrong(&folder).await {
             return Err(format!(
@@ -813,6 +853,7 @@ impl LenguaServer {
             net: Some(&net),
             stdin_file: stdin_file.as_deref(),
             env: &params.env,
+            emulated: emulator.is_some(),
             ..Job::new(
                 &built.executable,
                 &params.args,
@@ -830,7 +871,16 @@ impl LenguaServer {
         let result = runner::run(&self.launcher, job, limits)
             .await
             .map_err(|error| format!("couldn't run the program: {error}"))?;
-        Ok(Json(ended_report(&result, &assertions, limits)))
+        let mut report = ended_report(&result, &assertions, limits);
+        report.emulated = emulator.map(|emulator| {
+            format!(
+                "ran under {}: Landlock held it to its files and network as on any run, but the \
+                 kernel couldn't hold its system calls to the spec, which only lengua's rules \
+                 did, and nothing was measured",
+                emulator.name
+            )
+        });
+        Ok(Json(report))
     }
 }
 
@@ -842,6 +892,8 @@ struct Code {
     built: Build,
     report: checker::Report,
     profile: Profile,
+    /// QEMU, when this computer runs the target's programs only through it.
+    emulator: Option<Emulator>,
 }
 
 /// Waits until `checking` ends or `until`, whichever comes first; once its tests pass, at most
@@ -1085,6 +1137,9 @@ impl LenguaServer {
             &syscalls,
             &code.spec.network,
             testrun::workers(code.spec.threads),
+            code.emulator.as_ref().map(|_| testrun::Emulated {
+                sleeps: code.spec.syscalls.contains(&spec::Syscall::ClockNanosleep),
+            }),
         )
         .await
         {
@@ -1108,6 +1163,7 @@ impl LenguaServer {
                 .iter()
                 .map(|feature| (*feature).to_owned())
                 .collect(),
+            emulator: code.emulator.as_ref().map(|emulator| emulator.name.clone()),
         };
         let header = Header {
             spec: spec_hash.to_string(),
@@ -1133,19 +1189,30 @@ impl LenguaServer {
                 performance: outcome.costs.iter().map(cost_line).collect(),
                 shown: outcome.shown,
                 header,
+                under: code.emulator.as_ref().map(|emulator| emulator.name.clone()),
+                not_run: outcome.not_run,
+                target: code.profile.name(),
             });
         }
         checking.stage.send_replace(Stage::Proving(Instant::now()));
-        match self.recorded_proofs(folder, checking, &code.suite, &executable) {
-            None => {
-                self.prove_all(folder, checking, &code, &syscalls, &executable, &[])
-                    .await;
+        if !modelled(code.profile) {
+            if let Ok(mut found) = checking.found.lock() {
+                for proof in &mut found.proofs {
+                    proof.detail = Some(not_modelled(code.profile));
+                }
             }
-            Some(further) if !further.is_empty() => {
-                self.prove_all(folder, checking, &code, &syscalls, &executable, &further)
-                    .await;
+        } else {
+            match self.recorded_proofs(folder, checking, &code.suite, &executable) {
+                None => {
+                    self.prove_all(folder, checking, &code, &syscalls, &executable, &[])
+                        .await;
+                }
+                Some(further) if !further.is_empty() => {
+                    self.prove_all(folder, checking, &code, &syscalls, &executable, &further)
+                        .await;
+                }
+                Some(_) => {}
             }
-            Some(_) => {}
         }
         if !checking.cancel.load(Ordering::Relaxed) {
             self.write_header(folder, checking).await;
@@ -1612,6 +1679,21 @@ impl LenguaServer {
             "{CODE_FILE} follows every rule and passed all {} test runs",
             passed.runs
         )];
+        if let Some(emulator) = &passed.under {
+            tests[0].push_str(&format!(" under {emulator}"));
+            tests.push(format!(
+                "under {emulator}, Landlock held each run to its files and network as on any \
+                 run, but the kernel couldn't hold its system calls to the spec, which only \
+                 lengua's rules did, and nothing was measured"
+            ));
+        }
+        if !passed.not_run.is_empty() {
+            tests.push(format!(
+                "not run here, since they need a {} computer: {}",
+                passed.target,
+                passed.not_run.join("; ")
+            ));
+        }
         tests.extend(passed.every_value.iter().cloned());
         if found.wrong {
             return CheckReport {
@@ -2004,10 +2086,10 @@ fn cost_line(cost: &testrun::Cost) -> String {
     line
 }
 
-/// The machine in one line: its cores, and the CPU extensions main.s may use.
-fn machine_line(machine: &Machine) -> String {
+/// The machine in one line: the target, its cores, and the CPU extensions main.s may use.
+fn machine_line(machine: &Machine, target: &Target) -> String {
     let features = match serde_json::to_value(machine.features) {
-        Ok(serde_json::Value::Object(features)) => features
+        Ok(serde_json::Value::Object(features)) if target.profile.isa() == Isa::X86_64 => features
             .into_iter()
             .filter(|(_, present)| *present == serde_json::Value::Bool(true))
             .map(|(name, _)| name.replace("sse4_", "sse4."))
@@ -2015,9 +2097,8 @@ fn machine_line(machine: &Machine) -> String {
         _ => Vec::new(),
     };
     format!(
-        "{}-{}, {}; main.s may use the base instructions{}",
-        machine.os,
-        machine.arch,
+        "{}, {}; main.s may use the base instructions{}",
+        target.describe(machine),
         counted(machine.cores, "core"),
         if features.is_empty() {
             String::new()
@@ -2190,6 +2271,8 @@ struct Runnable {
     spec: Spec,
     syscalls: Vec<crate::platform::Allowed>,
     net: Net,
+    /// QEMU, when this computer runs the target's programs only through it.
+    emulator: Option<Emulator>,
 }
 
 /// Checks that `folder` holds a program lengua may run, as `run` does from MCP and from a shell:
@@ -2246,7 +2329,28 @@ async fn runnable(
         ));
     }
     let machine = Machine::detect();
-    let profile = supported(&machine)?;
+    let target = session_target(&machine)?;
+    let profile = target.profile;
+    let mode = |emulator: Option<&str>| {
+        emulator.map_or_else(
+            || "natively".to_owned(),
+            |emulator| format!("under {emulator}"),
+        )
+    };
+    let here = target
+        .emulator
+        .as_ref()
+        .map(|emulator| emulator.name.as_str());
+    if stamp.target != profile.name() || stamp.emulator.is_some() != here.is_some() {
+        return Err(format!(
+            "{CODE_FILE} was tested as {} code {}, and this session runs {} code {}, so it won't \
+             run here. Call check with path {folder} to test it here.",
+            stamp.target,
+            mode(stamp.emulator.as_deref()),
+            profile.name(),
+            mode(here)
+        ));
+    }
     let built = build(&code, profile).await?;
     if Sha256Hex::of(&built.bytes) != stamp.executable_sha256 {
         return Err(format!(
@@ -2269,6 +2373,7 @@ async fn runnable(
         spec,
         syscalls,
         net,
+        emulator: target.emulator,
     })
 }
 
@@ -2304,6 +2409,7 @@ pub async fn run_from_shell(data_dir: &DataDir, request: &ShellRun) -> Result<i3
         built,
         syscalls,
         net,
+        emulator,
         ..
     } = runnable(data_dir, &folder, &request.env).await?;
     let workspace = working_folder(
@@ -2318,6 +2424,7 @@ pub async fn run_from_shell(data_dir: &DataDir, request: &ShellRun) -> Result<i3
         folder: Some(&workspace),
         net: Some(&net),
         env: &request.env,
+        emulated: emulator.is_some(),
         ..Job::new(&built.executable, &request.args, &[], &syscalls)
     };
     match runner::attached(&launcher, job)
@@ -2401,13 +2508,55 @@ fn working_folder(path: &str) -> Result<PathBuf, String> {
     Ok(folder)
 }
 
-fn supported(machine: &Machine) -> Result<Profile, String> {
-    machine.profile.ok_or_else(|| {
-        format!(
-            "lengua can't build programs on {}-{} yet.",
-            machine.os, machine.arch
-        )
+/// The session's target, decided once: this computer's own, or the one a developer's
+/// `LENGUA_TARGET` names, which QEMU's user mode runs here.
+fn session_target(machine: &Machine) -> Result<Target, String> {
+    static TARGET: std::sync::OnceLock<Result<Target, String>> = std::sync::OnceLock::new();
+    TARGET
+        .get_or_init(|| Target::session(machine, std::env::var("LENGUA_TARGET").ok().as_deref()))
+        .clone()
+}
+
+/// Why main.s is code for another CPU than the session's target, when it is: its first line
+/// says which CPU's code it is.
+fn code_for_another_cpu(code: &str, target: &Target) -> Option<String> {
+    let isa = match code.lines().next().map(str::trim_end) {
+        Some(".intel_syntax noprefix") => Isa::X86_64,
+        Some(".arch armv8-a") => Isa::Aarch64,
+        _ => return None,
+    };
+    let name = |isa| match isa {
+        Isa::X86_64 => "x86-64",
+        Isa::Aarch64 => "AArch64",
+    };
+    (isa != target.profile.isa()).then(|| match target.emulator {
+        None => format!(
+            "{CODE_FILE} is {} code, and this computer is {}",
+            name(isa),
+            target.profile.name()
+        ),
+        Some(_) => format!(
+            "{CODE_FILE} is {} code, and LENGUA_TARGET has lengua check {} code here",
+            name(isa),
+            target.profile.name()
+        ),
     })
+}
+
+/// How a proof line of code the prover has no model for begins.
+const NOT_MODELLED: &str = "tested, not proven: ";
+
+/// Whether the prover models the CPU of `profile`'s programs: x86-64's, so far.
+fn modelled(profile: Profile) -> bool {
+    profile.isa() == Isa::X86_64
+}
+
+/// The proof line of a test whose program's CPU the prover has no model of.
+fn not_modelled(profile: Profile) -> String {
+    format!(
+        "{NOT_MODELLED}lengua's prover has no model of {} code yet",
+        profile.name()
+    )
 }
 
 fn random_seed() -> Result<u64, String> {
@@ -2460,11 +2609,8 @@ fn machine_blocker(
     machine: &Machine,
     toolchain_error: Option<&crate::toolchain::ToolchainError>,
 ) -> Option<String> {
-    if machine.profile.is_none() {
-        return Some(format!(
-            "Blocked: {}-{} isn't supported yet. lengua currently builds programs for linux-x86_64.",
-            machine.os, machine.arch
-        ));
+    if let Err(problem) = session_target(machine) {
+        return Some(format!("Blocked: {problem}"));
     }
     toolchain_error.map(|error| format!("Blocked: {error}"))
 }
@@ -2502,9 +2648,62 @@ mod tests {
 
     #[test]
     fn the_machine_fits_in_a_line() {
-        let line = machine_line(&Machine::detect());
+        let machine = Machine::detect();
+        let native = Target::session(&machine, None).expect("a host lengua builds on");
+        let line = machine_line(&machine, &native);
         assert!(line.contains("core"), "{line}");
         assert!(!line.contains('\n'), "{line}");
         assert!(!line.contains("sse4_"), "{line}");
+        assert!(line.starts_with(native.profile.name()), "{line}");
+        // Under QEMU, the target comes first and says what runs it, with no x86-64 extensions.
+        let emulated = Target {
+            profile: Profile::LinuxAarch64,
+            emulator: Some(Emulator {
+                name: "qemu-aarch64 10.2.2".into(),
+            }),
+        };
+        let line = machine_line(&machine, &emulated);
+        assert!(
+            line.starts_with(&format!(
+                "linux-aarch64 (emulated by qemu-aarch64 10.2.2 on {}-{}), ",
+                machine.os, machine.arch
+            )),
+            "{line}"
+        );
+        assert!(
+            line.ends_with("main.s may use the base instructions"),
+            "{line}"
+        );
+    }
+
+    /// main.s's first line says which CPU's code it is; code for another stops check.
+    #[test]
+    fn code_for_another_cpu_is_compiled_again() {
+        let native = Target {
+            profile: Profile::LinuxX86_64,
+            emulator: None,
+        };
+        let emulated = Target {
+            profile: Profile::LinuxAarch64,
+            emulator: Some(Emulator {
+                name: "qemu-aarch64 10.2.2".into(),
+            }),
+        };
+        let x86 = ".intel_syntax noprefix\n_start:\n";
+        let aarch64 = ".arch armv8-a\n_start:\n";
+        assert_eq!(code_for_another_cpu(x86, &native), None);
+        assert_eq!(code_for_another_cpu(aarch64, &emulated), None);
+        assert_eq!(
+            code_for_another_cpu(aarch64, &native).as_deref(),
+            Some("main.s is AArch64 code, and this computer is linux-x86_64")
+        );
+        assert_eq!(
+            code_for_another_cpu(x86, &emulated).as_deref(),
+            Some(
+                "main.s is x86-64 code, and LENGUA_TARGET has lengua check linux-aarch64 code here"
+            )
+        );
+        // A first line that's neither is the layout check's to explain.
+        assert_eq!(code_for_another_cpu("_start:\n", &native), None);
     }
 }

@@ -6,6 +6,7 @@
 
 use serde::Serialize;
 
+use crate::isa::Isa;
 use crate::spec::Syscall;
 use crate::syscalls;
 
@@ -24,7 +25,34 @@ impl Profile {
     pub fn for_target(os: &str, arch: &str) -> Option<Self> {
         match (os, arch) {
             ("linux", "x86_64") => Some(Self::LinuxX86_64),
+            ("linux", "aarch64") => Some(Self::LinuxAarch64),
             _ => None,
+        }
+    }
+
+    /// The profile a short name, such as `linux-aarch64`, names.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        [Self::LinuxX86_64, Self::LinuxAarch64]
+            .into_iter()
+            .find(|profile| profile.name() == name)
+    }
+
+    /// The CPU whose instructions its programs are.
+    #[must_use]
+    pub const fn isa(self) -> Isa {
+        match self {
+            Self::LinuxX86_64 => Isa::X86_64,
+            Self::LinuxAarch64 => Isa::Aarch64,
+        }
+    }
+
+    /// The CPU's name, as `std::env::consts::ARCH` and QEMU name it.
+    #[must_use]
+    pub const fn cpu(self) -> &'static str {
+        match self {
+            Self::LinuxX86_64 => "x86_64",
+            Self::LinuxAarch64 => "aarch64",
         }
     }
 
@@ -297,6 +325,132 @@ impl CpuFeatures {
     }
 }
 
+/// QEMU's user mode, which runs another CPU's Linux programs on this computer: the kernel hands
+/// it each such program it's asked to run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Emulator {
+    /// What runs them, with its version, such as `qemu-aarch64 10.2.2`.
+    pub name: String,
+}
+
+/// What a session compiles, checks and runs programs for: this computer's own target, or, at a
+/// developer's request, another that QEMU's user mode runs here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Target {
+    /// The target.
+    pub profile: Profile,
+    /// QEMU, when this computer runs the target's programs only through it.
+    pub emulator: Option<Emulator>,
+}
+
+impl Target {
+    /// The session's target: this computer's own, unless `requested`, the developer's
+    /// `LENGUA_TARGET`, names another that QEMU's user mode runs here. Emulation is for
+    /// developing lengua; the target of a session that isn't asked for one is always this
+    /// computer's.
+    ///
+    /// # Errors
+    ///
+    /// Why the session can't have that target: this computer isn't one lengua builds on, the
+    /// name isn't a target, or QEMU isn't set up to run the target's programs.
+    pub fn session(machine: &Machine, requested: Option<&str>) -> Result<Self, String> {
+        let host = machine.profile.ok_or_else(|| {
+            format!(
+                "{}-{} isn't supported yet. lengua builds programs for linux-x86_64 and \
+                 linux-aarch64.",
+                machine.os, machine.arch
+            )
+        })?;
+        let Some(name) = requested.map(str::trim).filter(|name| !name.is_empty()) else {
+            return Ok(Self {
+                profile: host,
+                emulator: None,
+            });
+        };
+        let profile = Profile::from_name(name).ok_or_else(|| {
+            format!(
+                "LENGUA_TARGET is {name}, which isn't a target lengua knows: linux-x86_64 or \
+                 linux-aarch64"
+            )
+        })?;
+        if profile == host {
+            return Ok(Self {
+                profile,
+                emulator: None,
+            });
+        }
+        let cpu = profile.cpu();
+        let entry = std::fs::read_to_string(format!("/proc/sys/fs/binfmt_misc/qemu-{cpu}"))
+            .unwrap_or_default();
+        let interpreter = registered_interpreter(&entry).ok_or_else(|| {
+            format!(
+                "LENGUA_TARGET is {name}, which this computer runs only through QEMU's user \
+                 mode: install qemu-user-static, whose binfmt_misc entry qemu-{cpu} must be \
+                 enabled with flag F"
+            )
+        })?;
+        let version = std::process::Command::new(interpreter)
+            .arg("--version")
+            .env_clear()
+            .output()
+            .ok()
+            .and_then(|output| String::from_utf8(output.stdout).ok())
+            .and_then(|text| qemu_version(&text));
+        Ok(Self {
+            profile,
+            emulator: Some(Emulator {
+                name: version.map_or_else(
+                    || format!("qemu-{cpu}"),
+                    |version| format!("qemu-{cpu} {version}"),
+                ),
+            }),
+        })
+    }
+
+    /// The target as a machine line names it: `linux-aarch64`, or
+    /// `linux-aarch64 (emulated by qemu-aarch64 10.2.2 on linux-x86_64)`.
+    #[must_use]
+    pub fn describe(&self, machine: &Machine) -> String {
+        match &self.emulator {
+            None => self.profile.name().to_owned(),
+            Some(emulator) => format!(
+                "{} (emulated by {} on {}-{})",
+                self.profile.name(),
+                emulator.name,
+                machine.os,
+                machine.arch
+            ),
+        }
+    }
+}
+
+/// The interpreter a binfmt_misc entry runs, when the entry is enabled and its flags include F:
+/// the kernel opened the interpreter when it was registered, so a program confined to its own
+/// folder still runs through it.
+fn registered_interpreter(entry: &str) -> Option<&str> {
+    let mut lines = entry.lines().map(str::trim);
+    if lines.next() != Some("enabled") {
+        return None;
+    }
+    let field = |name: &str| {
+        entry
+            .lines()
+            .find_map(|line| line.trim().strip_prefix(name).map(str::trim))
+    };
+    let interpreter = field("interpreter ")?;
+    field("flags:")?
+        .contains('F')
+        .then_some(interpreter)
+        .filter(|interpreter| !interpreter.is_empty())
+}
+
+/// The version `qemu-<cpu> --version` says, as `10.2.2`.
+fn qemu_version(text: &str) -> Option<String> {
+    let line = text.lines().next()?;
+    let (_, rest) = line.split_once(" version ")?;
+    rest.split_whitespace().next().map(str::to_owned)
+}
+
 /// What lengua knows about the machine it runs on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Machine {
@@ -407,14 +561,90 @@ mod tests {
     }
 
     #[test]
-    fn only_linux_x86_64_is_a_host_yet() {
+    fn linux_on_x86_64_and_aarch64_are_hosts() {
         assert_eq!(
             Profile::for_target("linux", "x86_64"),
             Some(Profile::LinuxX86_64)
         );
-        assert_eq!(Profile::for_target("linux", "aarch64"), None);
+        assert_eq!(
+            Profile::for_target("linux", "aarch64"),
+            Some(Profile::LinuxAarch64)
+        );
         assert_eq!(Profile::for_target("macos", "aarch64"), None);
         assert_eq!(Profile::for_target("windows", "x86_64"), None);
+        for profile in [Profile::LinuxX86_64, Profile::LinuxAarch64] {
+            assert_eq!(Profile::from_name(profile.name()), Some(profile));
+        }
+        assert_eq!(Profile::from_name("macos-aarch64"), None);
+    }
+
+    /// The session's target is this computer's unless a developer asks for another, and then
+    /// only through a QEMU registered to run it.
+    #[test]
+    fn a_session_targets_this_computer_unless_asked_otherwise() {
+        let machine = |arch: &'static str| Machine {
+            os: "linux",
+            arch,
+            cpu_model: None,
+            cores: 1,
+            features: CpuFeatures::default(),
+            profile: Profile::for_target("linux", arch),
+        };
+        let x86 = machine("x86_64");
+        let native = |profile| Target {
+            profile,
+            emulator: None,
+        };
+        assert_eq!(
+            Target::session(&x86, None),
+            Ok(native(Profile::LinuxX86_64))
+        );
+        assert_eq!(
+            Target::session(&x86, Some(" ")),
+            Ok(native(Profile::LinuxX86_64))
+        );
+        assert_eq!(
+            Target::session(&x86, Some("linux-x86_64")),
+            Ok(native(Profile::LinuxX86_64))
+        );
+        assert_eq!(
+            Target::session(&machine("aarch64"), Some("linux-aarch64")),
+            Ok(native(Profile::LinuxAarch64))
+        );
+        let unknown = Target::session(&x86, Some("windows-x86_64")).expect_err("not a target");
+        assert!(unknown.contains("isn't a target lengua knows"), "{unknown}");
+        let riscv = Machine {
+            profile: None,
+            ..machine("riscv64")
+        };
+        let unsupported = Target::session(&riscv, None).expect_err("not a host");
+        assert!(
+            unsupported.contains("linux-riscv64 isn't supported yet"),
+            "{unsupported}"
+        );
+    }
+
+    #[test]
+    fn reads_qemus_registration_and_version() {
+        let entry = "enabled\ninterpreter /usr/bin/qemu-aarch64-static\nflags: F\noffset 0\n";
+        assert_eq!(
+            registered_interpreter(entry),
+            Some("/usr/bin/qemu-aarch64-static")
+        );
+        assert_eq!(
+            registered_interpreter(&entry.replace("flags: F", "flags: PC")),
+            None
+        );
+        assert_eq!(
+            registered_interpreter(&entry.replace("enabled", "disabled")),
+            None
+        );
+        assert_eq!(registered_interpreter(""), None);
+        assert_eq!(
+            qemu_version("qemu-aarch64 version 10.2.2 (qemu-10.2.2-1.fc44)\nCopyright\n"),
+            Some("10.2.2".to_owned())
+        );
+        assert_eq!(qemu_version("nonsense"), None);
     }
 
     #[test]

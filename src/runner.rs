@@ -107,6 +107,11 @@ pub struct Job<'a> {
     pub supply: Option<&'a Supply>,
     /// The network it may use; none at all when `None`.
     pub net: Option<&'a Net>,
+    /// Whether QEMU's user mode runs it, for another CPU: then the kernel sees QEMU's own
+    /// system calls rather than the program's, so it can't hold the program to `syscalls`, and
+    /// neither the supervisor nor the CPU's counters can follow it. Landlock and the limits
+    /// hold as on any run.
+    pub emulated: bool,
 }
 
 impl<'a> Job<'a> {
@@ -133,6 +138,7 @@ impl<'a> Job<'a> {
             supply: None,
             net: None,
             stdin_file: None,
+            emulated: false,
         }
     }
 }
@@ -631,8 +637,18 @@ async fn launch_job(
 ) -> io::Result<Launched> {
     let socket = scratch.join("go");
     let listener = UnixListener::bind(&socket)?;
-    let supply = job.supply.filter(|supply| !supply.is_empty());
     let net = job.net.cloned().unwrap_or_default();
+    // Under QEMU the supervisor would see QEMU's own calls, so it can't check where the program
+    // connects, nor supply anything; the tests that need it aren't run there.
+    if job.emulated && !net.connect.is_empty() && !net.anywhere {
+        return Err(io::Error::other(
+            "the program may connect only to this computer, which lengua checks where it can \
+             follow the program's own calls: on the target's own CPU, not under QEMU",
+        ));
+    }
+    let supply = job
+        .supply
+        .filter(|supply| !supply.is_empty() && !job.emulated);
     // The calls the supply answers stop for the supervisor; the rest run as in any test.
     let mut traced = supply.map_or_else(Vec::new, |supply| {
         let mut traced = Vec::new();
@@ -652,6 +668,7 @@ async fn launch_job(
     }
     // A test's sleeps end at once; a real run's take as long as they say.
     let sleeps = job.supply.is_some()
+        && !job.emulated
         && job
             .syscalls
             .iter()
@@ -662,12 +679,15 @@ async fn launch_job(
     let watched = supply.is_some() || local || sleeps;
     let nothing_supplied = Supply::default();
     let supply = supply.or_else(|| (local || sleeps).then_some(&nothing_supplied));
-    let syscalls: Vec<String> = job
-        .syscalls
-        .iter()
-        .map(|allowed| format!("{}{}", allowed.number, allowed.pin.encode()))
-        .chain(traced.iter().map(|number| format!("{number}:trace")))
-        .collect();
+    let syscalls: Vec<String> = if job.emulated {
+        vec![EMULATED.to_owned()]
+    } else {
+        job.syscalls
+            .iter()
+            .map(|allowed| format!("{}{}", allowed.number, allowed.pin.encode()))
+            .chain(traced.iter().map(|number| format!("{number}:trace")))
+            .collect()
+    };
     let file_limit = limits
         .max_file_size
         .map_or_else(|| "none".to_owned(), |bytes| bytes.to_string());
@@ -741,13 +761,17 @@ async fn launch_job(
         _ => None,
     };
     // Count from the program's exec to its exit; unavailable when the system doesn't allow
-    // performance counters.
-    let counters = [
-        attach(Hardware::INSTRUCTIONS, pid, false),
-        attach(Hardware::CPU_CYCLES, pid, false),
-        attach(Software::TASK_CLOCK, pid, true)
-            .or_else(|| attach(Software::TASK_CLOCK, pid, false)),
-    ];
+    // performance counters, and not counted under QEMU, whose instructions they'd be.
+    let counters = if job.emulated {
+        [None, None, None]
+    } else {
+        [
+            attach(Hardware::INSTRUCTIONS, pid, false),
+            attach(Hardware::CPU_CYCLES, pid, false),
+            attach(Software::TASK_CLOCK, pid, true)
+                .or_else(|| attach(Software::TASK_CLOCK, pid, false)),
+        ]
+    };
     go.write_all(&[1]).await?;
     drop(go);
     Ok(Launched {
@@ -1004,10 +1028,18 @@ pub fn launch(mut args: impl Iterator<Item = OsString>) -> ExitCode {
         eprintln!("lengua-mcp: no go signal from the server: {error}");
         return ExitCode::from(127);
     }
-    let confined =
-        parse_confinement(&syscalls, &file_limit).and_then(|(syscalls, traced, file_limit)| {
-            confine(Path::new(&program), &syscalls, &traced, file_limit, &net)
-        });
+    let confined = parse_confinement(&syscalls, &file_limit).and_then(
+        |(syscalls, traced, file_limit, emulated)| {
+            confine(
+                Path::new(&program),
+                &syscalls,
+                &traced,
+                file_limit,
+                &net,
+                emulated,
+            )
+        },
+    );
     if let Err(problem) = confined {
         eprintln!("lengua-mcp: couldn't confine the program: {problem}");
         return ExitCode::from(127);
@@ -1044,15 +1076,66 @@ fn listen_on_fd3(port: u16, anywhere: bool) -> Result<std::net::TcpListener, Str
     Ok(listener)
 }
 
-/// The launcher's confinement: the calls allowed, the calls the supervisor answers, and the
-/// file size limit.
-type Confinement = (Vec<Allowed>, Vec<i64>, Option<u64>);
+/// The launcher's confinement: the calls allowed, the calls the supervisor answers, the file
+/// size limit, and whether QEMU's user mode runs the program.
+type Confinement = (Vec<Allowed>, Vec<i64>, Option<u64>, bool);
+
+/// The system call list the launcher gets for a program QEMU's user mode runs: the kernel sees
+/// QEMU's calls, not the program's, so it can't hold the program to its spec's.
+const EMULATED: &str = "emulated";
+
+/// The calls QEMU's user mode never needs to make for a program, which a program run through it
+/// may not make either: tracing or reading other processes, the kernel's own business (modules,
+/// keys, mounts, namespaces, clocks, rebooting), and the interfaces that reach the kernel past
+/// a filter on calls (io_uring, BPF). The program's own calls are held to its spec by lengua's
+/// rules; these are the kernel's limit on QEMU.
+const NEVER_EMULATED: [i64; 37] = [
+    nix::libc::SYS_ptrace,
+    nix::libc::SYS_process_vm_readv,
+    nix::libc::SYS_process_vm_writev,
+    nix::libc::SYS_perf_event_open,
+    nix::libc::SYS_bpf,
+    nix::libc::SYS_userfaultfd,
+    nix::libc::SYS_io_uring_setup,
+    nix::libc::SYS_io_uring_enter,
+    nix::libc::SYS_io_uring_register,
+    nix::libc::SYS_mount,
+    nix::libc::SYS_umount2,
+    nix::libc::SYS_pivot_root,
+    nix::libc::SYS_chroot,
+    nix::libc::SYS_unshare,
+    nix::libc::SYS_setns,
+    nix::libc::SYS_open_tree,
+    nix::libc::SYS_move_mount,
+    nix::libc::SYS_fsopen,
+    nix::libc::SYS_fsconfig,
+    nix::libc::SYS_fsmount,
+    nix::libc::SYS_fspick,
+    nix::libc::SYS_mount_setattr,
+    nix::libc::SYS_open_by_handle_at,
+    nix::libc::SYS_init_module,
+    nix::libc::SYS_finit_module,
+    nix::libc::SYS_delete_module,
+    nix::libc::SYS_kexec_load,
+    nix::libc::SYS_kexec_file_load,
+    nix::libc::SYS_keyctl,
+    nix::libc::SYS_add_key,
+    nix::libc::SYS_request_key,
+    nix::libc::SYS_swapon,
+    nix::libc::SYS_swapoff,
+    nix::libc::SYS_reboot,
+    nix::libc::SYS_acct,
+    nix::libc::SYS_settimeofday,
+    nix::libc::SYS_clock_settime,
+];
 
 /// Reads the launcher's system call list ("0,1,56:3477248,318:trace": a number and, after a
-/// colon, the only first argument allowed, or `trace` for a call the supervisor answers) and file
-/// limit ("1048576" or "none").
+/// colon, the only first argument allowed, or `trace` for a call the supervisor answers; or
+/// [`EMULATED`]) and file limit ("1048576" or "none").
 fn parse_confinement(syscalls: &OsString, file_limit: &OsString) -> Result<Confinement, String> {
     let syscalls = syscalls.to_string_lossy();
+    let emulated = syscalls == EMULATED;
+    let syscalls = if emulated { "".into() } else { syscalls };
     let mut traced = Vec::new();
     for entry in syscalls.split(',') {
         if let Some(number) = entry.strip_suffix(":trace") {
@@ -1086,7 +1169,7 @@ fn parse_confinement(syscalls: &OsString, file_limit: &OsString) -> Result<Confi
                 .map_err(|_| format!("{bytes:?} isn't a file size limit"))?,
         ),
     };
-    Ok((numbers, traced, file_limit))
+    Ok((numbers, traced, file_limit, emulated))
 }
 
 /// The seccomp rules a pin stands for: any one of them allows the call.
@@ -1158,13 +1241,16 @@ fn pin_rules(pin: Pin) -> Result<Vec<SeccompRule>, seccompiler::BackendError> {
 /// Confines this process, and so the program it becomes: files only inside the current folder
 /// (its working folder), executing only `program`, no network and no signals to other
 /// processes (Landlock); files of at most `file_limit` bytes and no core files; and only the
-/// system calls in `syscalls` (seccomp), so any other stops it with SIGSYS.
+/// system calls in `syscalls` (seccomp), so any other stops it with SIGSYS. A program QEMU's
+/// user mode runs (`emulated`) is held by Landlock and the limits alike, but its calls reach
+/// the kernel as QEMU's, so the kernel stops only [`NEVER_EMULATED`].
 fn confine(
     program: &Path,
     syscalls: &[Allowed],
     traced: &[i64],
     file_limit: Option<u64>,
     net: &Net,
+    emulated: bool,
 ) -> Result<(), String> {
     let abi = ABI::V6;
     let folder = PathFd::new(".").map_err(|error| format!("working folder: {error}"))?;
@@ -1212,6 +1298,23 @@ fn confine(
     // A crash leaves no core file behind.
     rustix::process::setrlimit(rustix::process::Resource::Core, limit(0))
         .map_err(|error| format!("core file limit: {error}"))?;
+    let arch = TargetArch::try_from(std::env::consts::ARCH)
+        .map_err(|error| format!("seccomp: {error}"))?;
+    if emulated {
+        let never = NEVER_EMULATED
+            .iter()
+            .map(|number| (*number, Vec::new()))
+            .collect();
+        let filter: BpfProgram = SeccompFilter::new(
+            never,
+            SeccompAction::Allow,
+            SeccompAction::KillProcess,
+            arch,
+        )
+        .and_then(TryInto::try_into)
+        .map_err(|error| format!("seccomp: {error}"))?;
+        return seccompiler::apply_filter(&filter).map_err(|error| format!("seccomp: {error}"));
+    }
     // No rules allow any arguments; each rule allows the arguments its conditions name.
     let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
     let mut any = BTreeSet::new();
@@ -1226,8 +1329,6 @@ fn confine(
     for number in any {
         rules.insert(number, Vec::new());
     }
-    let arch = TargetArch::try_from(std::env::consts::ARCH)
-        .map_err(|error| format!("seccomp: {error}"))?;
     // The calls a test's supply answers stop for its supervisor. This filter goes first: once
     // the next one is in, installing another would be a call it kills. The kernel applies the
     // stricter answer of the two, so these calls stop, and every other call is as below.

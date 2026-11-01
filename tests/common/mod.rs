@@ -98,6 +98,26 @@ impl ClientHandler for TestClient {
     }
 }
 
+/// Whether this computer runs AArch64 programs only through QEMU's user mode, registered with
+/// binfmt_misc's flag F as lengua needs: then a session for linux-aarch64 is emulated here.
+#[must_use]
+pub fn qemu_runs_aarch64() -> bool {
+    if cfg!(target_arch = "aarch64") {
+        return false;
+    }
+    let entry =
+        std::fs::read_to_string("/proc/sys/fs/binfmt_misc/qemu-aarch64").unwrap_or_default();
+    let ready = entry.lines().next() == Some("enabled")
+        && entry.lines().any(|line| {
+            line.strip_prefix("flags: ")
+                .is_some_and(|flags| flags.contains('F'))
+        });
+    if !ready {
+        eprintln!("skipped: QEMU doesn't run AArch64 programs here (install qemu-user-static)");
+    }
+    ready
+}
+
 /// A running `lengua-mcp` with a private, temporary data folder.
 pub struct Session {
     /// The connected client.
@@ -108,6 +128,8 @@ pub struct Session {
     proof_seconds: Option<u64>,
     wait_ms: Option<u64>,
     grace_ms: Option<u64>,
+    /// The target a developer's `LENGUA_TARGET` names, when the session has one.
+    target: Option<&'static str>,
     /// While the session may prove, its hold on the proving lock.
     _proving: Option<Proving>,
 }
@@ -157,7 +179,23 @@ impl Session {
             Some(0) => None,
             _ => Some(Proving::Shared(proving().read_owned().await)),
         };
-        Self::connect(protocol, data_dir, proof_seconds, wait_ms, grace_ms, hold).await
+        Self::connect(
+            protocol,
+            data_dir,
+            proof_seconds,
+            wait_ms,
+            grace_ms,
+            None,
+            hold,
+        )
+        .await
+    }
+
+    /// Starts `lengua-mcp` for `target`, as a developer's `LENGUA_TARGET` asks: a target this
+    /// computer runs only through QEMU's user mode. Its proofs get no time.
+    pub async fn emulating(protocol: Protocol, target: &'static str) -> Self {
+        let data_dir = tempfile::tempdir().expect("create a temporary data folder");
+        Self::connect(protocol, data_dir, Some(0), None, None, Some(target), None).await
     }
 
     /// Starts `lengua-mcp` with its full time for proofs, once no other session in the test
@@ -165,12 +203,18 @@ impl Session {
     pub async fn proving_alone(protocol: Protocol) -> Self {
         let hold = Some(Proving::Alone(proving().write_owned().await));
         let data_dir = tempfile::tempdir().expect("create a temporary data folder");
-        Self::connect(protocol, data_dir, None, None, None, hold).await
+        Self::connect(protocol, data_dir, None, None, None, None, hold).await
     }
 
     /// Ends this server and starts a new one on the same data folder, as when a harness restarts
     /// it: whatever the old one kept in memory is gone.
     pub async fn restart(self) -> Self {
+        let target = self.target;
+        self.restart_for(target).await
+    }
+
+    /// Restarts it as [`Session::restart`] does, for `target` (`None`: this computer's own).
+    pub async fn restart_for(self, target: Option<&'static str>) -> Self {
         let Self {
             service,
             data_dir,
@@ -179,9 +223,19 @@ impl Session {
             wait_ms,
             grace_ms,
             _proving: hold,
+            ..
         } = self;
         service.cancel().await.expect("close the session");
-        Self::connect(protocol, data_dir, proof_seconds, wait_ms, grace_ms, hold).await
+        Self::connect(
+            protocol,
+            data_dir,
+            proof_seconds,
+            wait_ms,
+            grace_ms,
+            target,
+            hold,
+        )
+        .await
     }
 
     async fn connect(
@@ -190,11 +244,17 @@ impl Session {
         proof_seconds: Option<u64>,
         wait_ms: Option<u64>,
         grace_ms: Option<u64>,
+        target: Option<&'static str>,
         hold: Option<Proving>,
     ) -> Self {
         let command =
             tokio::process::Command::new(env!("CARGO_BIN_EXE_lengua-mcp")).configure(|command| {
                 command.arg("--data-dir").arg(data_dir.path());
+                // The session's own target, never one the developer's shell happens to name.
+                command.env_remove("LENGUA_TARGET");
+                if let Some(target) = target {
+                    command.env("LENGUA_TARGET", target);
+                }
                 if let Some(seconds) = proof_seconds {
                     command.env("LENGUA_PROOF_SECONDS", seconds.to_string());
                 }
@@ -227,6 +287,7 @@ impl Session {
             proof_seconds,
             wait_ms,
             grace_ms,
+            target,
             _proving: hold,
         }
     }

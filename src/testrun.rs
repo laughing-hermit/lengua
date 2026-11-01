@@ -132,6 +132,33 @@ pub struct Outcome {
     pub costs: Vec<Cost>,
     /// The first example as it ran, in one line, for a report to show.
     pub shown: Option<String>,
+    /// The tests not run here, each with what it needs that only the target's own CPU gives.
+    pub not_run: Vec<String>,
+}
+
+/// How tests run where QEMU's user mode runs the program for the target's CPU. lengua's
+/// supervisor, which supplies a test's random bytes and clock, ends its sleeps at once and
+/// checks where it connects, can't follow the program inside QEMU, so tests that need it aren't
+/// run here; nor are the program's runs timed, since its instructions are QEMU's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Emulated {
+    /// Whether the spec lets the program sleep, which a test ends at once.
+    pub sleeps: bool,
+}
+
+/// What `test` needs that only a run on the target's own CPU gives, if anything.
+fn needs_the_cpu(test: &Test<'_>, emulated: Emulated) -> Option<&'static str> {
+    if test.random.is_some() {
+        Some("random bytes the test supplies")
+    } else if !test.clock.is_empty() {
+        Some("a clock the test sets")
+    } else if !test.server.is_empty() {
+        Some("a server of the test's, whose connections lengua checks")
+    } else if emulated.sleeps {
+        Some("sleeps the test ends at once")
+    } else {
+        None
+    }
 }
 
 impl Outcome {
@@ -442,6 +469,7 @@ pub async fn check_case(
         network,
         delivery,
         &assertion_lines(source),
+        false,
     )
     .await?;
     Ok(problem)
@@ -633,7 +661,8 @@ const MAX_ANSWER: u64 = 8 * 1024 * 1024;
 
 /// Runs one test, with the test's own server or client when it has one, and says what went
 /// wrong, if anything. `delivery` cuts what the test's server and client send into pieces, as a
-/// network may deliver them.
+/// network may deliver them; `emulated` runs the program as QEMU's user mode runs it here.
+#[allow(clippy::too_many_arguments)]
 async fn check_one(
     launcher: &Path,
     program: &Path,
@@ -642,6 +671,7 @@ async fn check_one(
     network: &Network,
     delivery: Delivery,
     assertions: &BTreeMap<i64, usize>,
+    emulated: bool,
 ) -> io::Result<(Run, Option<String>)> {
     let supply = crate::supply::Supply::parse(test.random, test.clock).unwrap_or_default();
     // The test's own server listens before the program starts, on a free port of its own.
@@ -689,6 +719,7 @@ async fn check_one(
         supply: Some(&supply),
         net: Some(&net),
         stdin_pieces: &stdin_pieces,
+        emulated,
         ..Job::new(program, &args, stdin.as_bytes(), syscalls)
     };
     let now = crate::expect::now();
@@ -1124,6 +1155,7 @@ struct Shared {
     syscalls: Vec<Allowed>,
     network: Network,
     assertions: BTreeMap<i64, usize>,
+    emulated: Option<Emulated>,
 }
 
 /// A test a run owns, so runs can go at once.
@@ -1154,6 +1186,7 @@ async fn run_one(
         &shared.network,
         delivery,
         &shared.assertions,
+        shared.emulated.is_some(),
     )
     .await
 }
@@ -1212,6 +1245,7 @@ pub async fn run_tests(
     syscalls: &[Allowed],
     network: &Network,
     workers: usize,
+    emulated: Option<Emulated>,
 ) -> io::Result<Outcome> {
     let shared = Arc::new(Shared {
         launcher: launcher.to_owned(),
@@ -1219,6 +1253,7 @@ pub async fn run_tests(
         syscalls: syscalls.to_vec(),
         network: network.clone(),
         assertions: assertion_lines(source),
+        emulated,
     });
     let workers = workers.max(1);
     let deadline = Instant::now() + TOTAL_TIMEOUT;
@@ -1235,7 +1270,17 @@ pub async fn run_tests(
                 record(&mut outcome, timed_out());
                 return Ok(outcome);
             }
-            let test = Owned::Example(suite.examples[next].clone());
+            let example = &suite.examples[next];
+            if let Some(why) =
+                emulated.and_then(|mode| needs_the_cpu(&Test::of_example(example), mode))
+            {
+                outcome
+                    .not_run
+                    .push(format!("example {} ({why})", example.id));
+                next += 1;
+                continue;
+            }
+            let test = Owned::Example(example.clone());
             let shared = Arc::clone(&shared);
             let index = next;
             running.spawn(async move {
@@ -1285,6 +1330,16 @@ pub async fn run_tests(
     // the failure reported is the block's lowest-numbered one.
     for block in &suite.generated {
         let name = format!("generated {}", block.id);
+        if let Some(mode) = emulated {
+            let first = block.case(block.inputs(seed).at(0), crate::expect::now());
+            if let Some(why) = first
+                .ok()
+                .and_then(|case| needs_the_cpu(&Test::of_case(&case), mode))
+            {
+                outcome.not_run.push(format!("{name} ({why})"));
+                continue;
+            }
+        }
         let total = block.run_count();
         let shared_block = Arc::new(block.clone());
         let mut samples = Samples::default();
@@ -1376,7 +1431,7 @@ pub async fn run_tests(
             (None, None) => {}
         }
     }
-    if !outcome.passed() {
+    if !outcome.passed() || emulated.is_some() {
         return Ok(outcome);
     }
 

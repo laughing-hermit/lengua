@@ -90,6 +90,9 @@ pub struct CodeStamp {
     pub target: String,
     /// The CPU features its instructions need beyond the target's baseline, in order.
     pub features: Vec<String>,
+    /// What ran its tests when this computer runs the target's programs only through QEMU,
+    /// such as `qemu-aarch64 10.2.2`; none when they ran natively.
+    pub emulator: Option<String>,
 }
 
 /// A generated test proven for every input with texts up to a length.
@@ -210,6 +213,9 @@ impl Lock {
                 toml_string(&code.target),
                 features.join(", ")
             );
+            if let Some(emulator) = &code.emulator {
+                let _ = writeln!(text, "emulator = {}", toml_string(emulator));
+            }
         }
         if let Some(proofs) = &self.proofs {
             let proven: Vec<String> = proofs.proven.iter().map(|id| toml_string(id)).collect();
@@ -331,6 +337,8 @@ struct CodeTable {
     unsafe_blocks: u32,
     target: String,
     features: Vec<String>,
+    #[serde(default)]
+    emulator: Option<String>,
 }
 
 fn parse_body(body: &str) -> Result<Lock, LockError> {
@@ -371,6 +379,7 @@ fn parse_body(body: &str) -> Result<Lock, LockError> {
                     unsafe_blocks: code.unsafe_blocks,
                     target: code.target,
                     features: code.features,
+                    emulator: code.emulator,
                 })
             })
             .transpose()?,
@@ -710,6 +719,7 @@ mod tests {
                 unsafe_blocks: 1,
                 target: "linux-x86_64".into(),
                 features: vec!["avx2".into(), "bmi2".into()],
+                emulator: None,
             }),
             proofs: None,
         }
@@ -815,6 +825,28 @@ mod tests {
         );
         assert!(
             text.contains("target = \"linux-x86_64\"\nfeatures = [\"avx2\", \"bmi2\"]\n"),
+            "{text}"
+        );
+        assert_eq!(Lock::from_signed_text(&text, &key(1)), Ok(lock));
+    }
+
+    /// Code tested under QEMU says so, and reads back as emulated; a native lock says nothing
+    /// of it.
+    #[test]
+    fn round_trips_what_ran_the_tests() {
+        let mut lock = full_lock();
+        let native = lock.to_signed_text(&key(1));
+        assert!(!native.contains("emulator"), "{native}");
+        if let Some(code) = lock.code.as_mut() {
+            code.target = "linux-aarch64".into();
+            code.features = Vec::new();
+            code.emulator = Some("qemu-aarch64 10.2.2".into());
+        }
+        let text = lock.to_signed_text(&key(1));
+        assert!(
+            text.contains(
+                "target = \"linux-aarch64\"\nfeatures = []\nemulator = \"qemu-aarch64 10.2.2\"\n"
+            ),
             "{text}"
         );
         assert_eq!(Lock::from_signed_text(&text, &key(1)), Ok(lock));

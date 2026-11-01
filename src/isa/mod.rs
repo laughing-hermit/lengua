@@ -20,6 +20,16 @@ pub enum Isa {
 }
 
 impl Isa {
+    /// What starts a comment in its assembly: `#` for x86-64, `//` for AArch64, where `#`
+    /// starts a number.
+    #[must_use]
+    pub const fn comment(self) -> &'static str {
+        match self {
+            Self::X86_64 => "#",
+            Self::Aarch64 => "//",
+        }
+    }
+
     /// Its calling convention and the registers its rules name.
     #[must_use]
     pub const fn abi(self) -> &'static Abi {

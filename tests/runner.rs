@@ -809,6 +809,7 @@ async fn template_tests(edit: impl Fn(&str) -> String, workers: usize) -> lengua
         &syscalls,
         &spec.network,
         workers,
+        None,
     )
     .await
     .expect("the tests run")
@@ -838,6 +839,7 @@ async fn asset_tests(spec: &str, code: &str) -> lengua::testrun::Outcome {
         &syscalls,
         &spec.network,
         8,
+        None,
     )
     .await
     .expect("the tests run")
@@ -986,6 +988,7 @@ async fn speedup_of_runs_at_once_on_the_word_count() {
             &syscalls,
             &spec.network,
             workers,
+            None,
         )
         .await
         .expect("the tests run");
@@ -996,4 +999,93 @@ async fn speedup_of_runs_at_once_on_the_word_count() {
             began.elapsed().as_secs_f64()
         );
     }
+}
+
+/// Whether this computer runs AArch64 programs only through QEMU's user mode, registered with
+/// binfmt_misc's flag F.
+fn qemu_runs_aarch64() -> bool {
+    if cfg!(target_arch = "aarch64") {
+        return false;
+    }
+    let entry =
+        std::fs::read_to_string("/proc/sys/fs/binfmt_misc/qemu-aarch64").unwrap_or_default();
+    let ready = entry.lines().next() == Some("enabled")
+        && entry.lines().any(|line| {
+            line.strip_prefix("flags: ")
+                .is_some_and(|flags| flags.contains('F'))
+        });
+    if !ready {
+        eprintln!("skipped: QEMU doesn't run AArch64 programs here (install qemu-user-static)");
+    }
+    ready
+}
+
+/// Builds AArch64 assembly into `folder` and returns the executable.
+async fn build_aarch64(folder: &Path, name: &str, source: &str) -> PathBuf {
+    let toolchain = Toolchain::discover().await.expect("llvm-mc and ld.lld");
+    let assembly = folder.join(format!("{name}.s"));
+    let object = folder.join(format!("{name}.o"));
+    let executable = folder.join(name);
+    std::fs::write(&assembly, source).expect("write the source");
+    toolchain
+        .assemble(Profile::LinuxAarch64, &assembly, &object)
+        .await
+        .expect("assemble");
+    toolchain
+        .link(Profile::LinuxAarch64, &object, &executable)
+        .await
+        .expect("link");
+    executable
+}
+
+/// A program QEMU's user mode runs is held by Landlock and the limits as any program is: it
+/// opens files only inside its folder. The kernel can't hold its calls to its spec's, since it
+/// sees QEMU's, but it stops the calls QEMU never needs to make, such as `unshare`; and nothing
+/// is counted, since the instructions would be QEMU's.
+#[tokio::test]
+async fn an_emulated_program_is_confined_by_landlock_and_the_kernel() {
+    if !qemu_runs_aarch64() {
+        return;
+    }
+    let scratch = tempfile::tempdir().expect("a folder");
+    let opens = build_aarch64(
+        scratch.path(),
+        "opens",
+        // Exits 0 when it opens the file its argument names, 1 when it can't.
+        ".arch armv8-a\n.text\n.globl _start\n_start:\n    ldr x1, [sp, #16]\n    mov x0, \
+         #-100\n    mov x2, #0\n    mov x3, #0\n    mov x8, #56\n    svc #0\n    lsr x0, x0, \
+         #63\n    mov x8, #93\n    svc #0\n",
+    )
+    .await;
+    let unshares = build_aarch64(
+        scratch.path(),
+        "unshares",
+        ".arch armv8-a\n.text\n.globl _start\n_start:\n    mov x0, #0x10000000\n    mov x8, \
+         #97\n    svc #0\n    mov x0, #0\n    mov x8, #93\n    svc #0\n",
+    )
+    .await;
+    let folder = scratch.path().join("inside");
+    std::fs::create_dir(&folder).expect("its folder");
+    std::fs::write(folder.join("here"), "inside").expect("a file inside");
+    std::fs::write(scratch.path().join("x"), "outside").expect("a file outside");
+    let run_emulated = |program: &Path, arguments: Vec<String>| {
+        let (program, folder) = (program.to_owned(), folder.clone());
+        async move {
+            let job = Job {
+                folder: Some(&folder),
+                emulated: true,
+                ..Job::new(&program, &arguments, &[], &[])
+            };
+            run(launcher(), job, Limits::default())
+                .await
+                .expect("the run")
+        }
+    };
+    let inside = run_emulated(&opens, args(&["here"])).await;
+    assert_eq!(inside.end, End::Exited(0), "{inside:?}");
+    assert_eq!(inside.instructions, None, "{inside:?}");
+    let outside = run_emulated(&opens, args(&["../x"])).await;
+    assert_eq!(outside.end, End::Exited(1), "{outside:?}");
+    let unshared = run_emulated(&unshares, Vec::new()).await;
+    assert_eq!(unshared.end, End::Signaled(31), "{unshared:?}");
 }

@@ -887,7 +887,24 @@ What needs the host, and what doesn't:
 **The plugin decides per target.** The server detects its host at startup (`Profile::for_target`
 over `std::env::consts`) and uses that target, so the user installs one plugin and it picks what it
 needs rather than choosing a build from a list. On a host lengua doesn't support yet it says so and
-points here, rather than failing deep inside. Distribution is then: one server build per host OS,
+points here, rather than failing deep inside.
+
+main.s's first line says which CPU's code it is (`.intel_syntax noprefix` or `.arch armv8-a`) but
+never chooses the target: code for another CPU stops `check` ("main.s is AArch64 code, and this
+computer is linux-x86_64"), so a main.s someone shares is compiled again for each computer
+rather than moving its tests onto a weaker path. For developing lengua, a server started with
+`LENGUA_TARGET=linux-aarch64` (as `LENGUA_PROOF_SECONDS` sets the proofs' time) checks and tests
+AArch64 code on an x86-64 computer through QEMU's user mode, when its binfmt_misc entry has flag F
+(the kernel opens QEMU when it's registered, so a program confined to its folder still runs). Its
+machine line starts `linux-aarch64 (emulated by qemu-aarch64 10.2.2 on linux-x86_64)`. Under QEMU
+each run keeps Landlock, the file and core limits and the time and output limits, and the kernel
+stops the calls QEMU never needs to make, such as tracing, mounts, namespaces, modules and
+io_uring; but the spec's exact filter, the supervisor and the counters would see QEMU, not the
+program. So tests that need the supervisor (supplied random bytes or clock, instant sleeps, a
+server of the test's whose connections lengua checks) are reported as not run there, nothing is
+measured, and the reply says what held the runs. lengua.lock records what ran the tests
+(`emulator = "qemu-aarch64 10.2.2"`), and `run` won't run code tested one way in a session of
+the other. lengua's line in main.s is the target CPU's comment, `// lengua: …` on AArch64. Distribution is then: one server build per host OS,
 each with that host's runner and the shared backends; a thin selector picks the host's build; the
 skills are the same everywhere.
 
