@@ -1499,9 +1499,15 @@ async fn an_edit_mid_proof_starts_over_and_the_old_proof_never_lands() {
     if !solvers_installed() {
         return;
     }
-    let session = Session::proving_waiting(Protocol::Discover, 500).await;
-    let program = written(&session, example_files("add")).await;
-    // add's proof takes a while: wait until it's running.
+    // Each check waits 50 ms at most, so it sees the proof running: cat's, of every text up to
+    // 4096 bytes, takes over a second even on an idle computer, where add's now takes less
+    // than one check's wait.
+    let session = Session::proving_waiting(Protocol::Discover, 50).await;
+    let program = written(
+        &session,
+        ["spec.md", "main.s"].map(|name| (name, fixture("cat", name))),
+    )
+    .await;
     loop {
         let report = session.check(&program).await;
         match report["state"].as_str() {
@@ -1512,11 +1518,11 @@ async fn an_edit_mid_proof_starts_over_and_the_old_proof_never_lands() {
     }
     program.write(
         "main.s",
-        &example("add", "main.s").replacen("_start:\n", "_start:\n    nop\n", 1),
+        &fixture("cat", "main.s").replacen("_start:\n", "_start:\n    nop\n", 1),
     );
     let report = done(&session, &program).await;
     assert!(
-        any_line(&report["proofs"], "proven for every input in range"),
+        any_line(&report["proofs"], "proven for every input"),
         "{report}"
     );
     let lock = program.read("lengua.lock").expect("the lock");
