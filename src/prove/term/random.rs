@@ -399,7 +399,7 @@ impl Writer<'_> {
             };
         }
         let deeper = depth - 1;
-        match self.rng.random_range(0..22) {
+        match self.rng.random_range(0..23) {
             0..=3 => {
                 let ops = [
                     Op::Add,
@@ -661,6 +661,28 @@ impl Writer<'_> {
                 let op = [Op::Udiv, Op::Sdiv][self.rng.random_range(0..2)];
                 Expr::Binary(op, Box::new(sum), Box::new(Expr::Const(width, divisor)))
             }
+            // A quotient's low bits widened past the quotient's own width, as a formula widens
+            // to 128 bits a value a program narrowed: the quotient itself where it fits them.
+            22 if width >= 16 => {
+                let narrower: Vec<u32> = self
+                    .widths
+                    .iter()
+                    .copied()
+                    .filter(|candidate| *candidate < width && *candidate >= 8)
+                    .collect();
+                let from = narrower[self.rng.random_range(0..narrower.len())];
+                let divisor = ([2, 10, 20, 1000][self.rng.random_range(0..4)] & mask(from)).max(2);
+                let quotient = Expr::Binary(
+                    Op::Udiv,
+                    Box::new(self.number(from, deeper)),
+                    Box::new(Expr::Const(from, divisor)),
+                );
+                let kept = self.rng.random_range(from.saturating_sub(12).max(1)..from);
+                Expr::ZeroExtend(
+                    Box::new(Expr::Extract(Box::new(quotient), kept - 1, 0)),
+                    width - kept,
+                )
+            }
             // A checksum: a few bytes through a CRC, as the `crc32` instruction and the
             // formulas take them.
             21 if width == 32 => {
@@ -708,7 +730,31 @@ impl Writer<'_> {
             return Expr::Bool(self.rng.random_bool(0.5));
         }
         let deeper = depth - 1;
-        match self.rng.random_range(0..10) {
+        match self.rng.random_range(0..11) {
+            // A value shifted right compared with a constant, as a formula bounds a halved
+            // number's digits: sometimes past anything the shift leaves.
+            10 => {
+                let width = [8, 16, 32, 63, 64, 128][self.rng.random_range(0..6)];
+                let shift = self.rng.random_range(1..width.min(5));
+                let shifted = Expr::Binary(
+                    Op::Lshr,
+                    Box::new(self.number(width, deeper)),
+                    Box::new(Expr::Const(width, u128::from(shift))),
+                );
+                let largest = mask(width) >> shift;
+                let constant = match self.rng.random_range(0..4) {
+                    0 => largest,
+                    1 => largest.saturating_add(1) & mask(width),
+                    _ => self.constant(width),
+                };
+                let comparison = [Comparison::Ult, Comparison::Ule][self.rng.random_range(0..2)];
+                let constant = Box::new(Expr::Const(width, constant));
+                if self.rng.random_bool(0.5) {
+                    Expr::Compare(comparison, Box::new(shifted), constant)
+                } else {
+                    Expr::Compare(comparison, constant, Box::new(shifted))
+                }
+            }
             // A quotient compared with 0, as a program asks whether any digits are left.
             9 => {
                 let width = [8, 16, 32, 64, 128][self.rng.random_range(0..5)];
@@ -1396,4 +1442,47 @@ fn a_power_of_two_divides_as_a_shift() {
         let kept = pool.zero_extend(low, 64 - shift);
         assert_eq!(kept, pool.urem(x, power), "x % 2^{shift}");
     }
+}
+
+#[test]
+fn a_halved_value_compares_as_the_value_itself() {
+    // A program asks whether x / 2 / 10^4 is 0; a formula whether x >> 1 is below 10^4.
+    let mut pool = Pool::default();
+    let x = pool.var(64, "x");
+    let (one, two, ten_thousand) = (pool.bv(64, 1), pool.bv(64, 2), pool.bv(64, 10_000));
+    let halved = pool.lshr(x, one);
+    let below = pool.ult(halved, ten_thousand);
+    let twenty_thousand = pool.bv(64, 20_000);
+    assert_eq!(below, pool.ult(x, twenty_thousand));
+    let half = pool.udiv(x, two);
+    let quotient = pool.udiv(half, ten_thousand);
+    let zero = pool.bv(64, 0);
+    assert_eq!(pool.eq(quotient, zero), below, "x / 2 / 10^4 = 0");
+    // 10^4 < x >> 1 is 20002 <= x.
+    let above = pool.ult(ten_thousand, halved);
+    let least = pool.bv(64, 20_002);
+    assert_eq!(above, pool.ule(least, x));
+    // Nothing the top 63 bits hold is above the largest of them.
+    let top = pool.extract(x, 63, 1);
+    let largest = pool.bv(63, (1 << 63) - 1);
+    let past = pool.ult(largest, top);
+    assert_eq!(pool.truth(past), Some(false));
+}
+
+#[test]
+fn low_bits_widened_past_their_value_are_the_value() {
+    // A 64-bit quotient a program narrowed to 63 bits, widened to 128 by a formula.
+    let mut pool = Pool::default();
+    let x = pool.var(64, "x");
+    let twenty = pool.bv(64, 20);
+    let quotient = pool.udiv(x, twenty);
+    let low = pool.extract(quotient, 62, 0);
+    let wide = pool.zero_extend(low, 65);
+    assert_eq!(wide, pool.zero_extend(quotient, 64));
+    // Not where the bits kept don't hold the value: x / 2 needs all 63.
+    let two = pool.bv(64, 2);
+    let half = pool.udiv(x, two);
+    let low = pool.extract(half, 61, 0);
+    let wide = pool.zero_extend(low, 66);
+    assert_ne!(wide, pool.zero_extend(half, 64));
 }

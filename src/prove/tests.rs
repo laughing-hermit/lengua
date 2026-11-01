@@ -374,8 +374,8 @@ async fn proves_absolute_difference() {
 }
 
 /// The mean of two prices in cents, rounded half away from zero: decimals in, decimals out. The
-/// parse and the input are one sum, but the formula halves at 128 bits and the program at 64, so
-/// the solvers still compare the digits.
+/// parse and the input are one sum; the formula halves at 128 bits and the program at 64, both by
+/// a shift, and their digits meet as one term, so the solvers are left how many there are.
 #[tokio::test]
 #[ignore = "slow: a minute or more"]
 async fn proves_the_mean_of_two_prices() {

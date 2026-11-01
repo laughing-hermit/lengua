@@ -1065,10 +1065,9 @@ async fn the_file_example_proves_its_file_handling() {
     session.service.cancel().await.expect("close the session");
 }
 
-/// Five minutes: mean's two blocks of decimals take a minute each with every core, and its block
-/// of whole numbers runs to the proof's time limit.
+/// About three minutes with 16 cores: mean's two blocks of decimal means take over a minute each.
 #[tokio::test]
-#[ignore = "slow: the proof takes its five minutes"]
+#[ignore = "slow: the proof takes minutes"]
 async fn the_decimal_example_is_proven() {
     // mean takes decimals and prints exact cents: scaled(a, 2) and places(x, 2) in its tests.
     if !solvers_installed() {
@@ -1077,8 +1076,8 @@ async fn the_decimal_example_is_proven() {
     let session = Session::proving(Protocol::Discover).await;
     let program = written(&session, example_files("mean")).await;
     let report = done(&session, &program).await;
-    // Every block but B2's whole numbers, halved at 64 bits where the formula multiplies at 128.
-    for index in [0, 2, 3, 4, 5] {
+    // Every block: the decimal means, the whole ones, and the three errors.
+    for index in 0..6 {
         assert!(
             text(&report["proofs"][index]).contains("proven for every input in range"),
             "{report}"

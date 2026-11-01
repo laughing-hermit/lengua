@@ -43,10 +43,6 @@ formula, counts of a part that can overlap itself (such as `"aa"`), and the benc
 word count, which reads a megabyte at a time and is proven by length.
 
 Left for later on this target:
-- mean's decimal means (its B1 and B3, two prices up to a million) aren't proven in the proof's
-  five minutes: z3 runs out of time on one path. Found by Round 9's G4 at R1 (2026-10-31): the
-  ignored `proves_the_mean_of_two_prices` and check_code's `the_decimal_example_is_proven` fail,
-  each run alone. They're proven for prices up to 9.99, as the prover golden proves them.
 - Sorting at every length, which needs quantified facts over memory.
 - The fastest streaming programs proven for every length. The induction's base proves each final
   length one by one, so its cost grows with the square of the buffer; a base that covers every
@@ -58,8 +54,13 @@ proven, however many rounds that takes, except where a concrete, demonstrated re
 approach can't prove it, which comes back to the user with the evidence. By item:
 - Can: the proof tests that failed only when every slow test ran at once (long proofs now take
   turns).
-- Likely: mean's decimal means; counts of a part that can overlap itself; the fastest streaming
-  programs for every length.
+- Done 2026-11-01: mean's decimal means, two prices up to a million, proven in about 80 seconds
+  with 16 cores, and all six of its blocks through the server in under three minutes. The digits
+  the program printed and the formula's had been built two ways, so the solvers compared them:
+  a value halved by a shift now compares as the value itself, and a quotient narrowed to 63 bits
+  and widened again is the quotient.
+- Likely: counts of a part that can overlap itself; the fastest streaming programs for every
+  length.
 - Uncertain, research: sorting at every length and word tallies past a few bytes, which need
   quantified facts over memory.
 - Not by their nature, so "tested, not proven" is the right final answer: floats computed in

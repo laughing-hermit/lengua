@@ -2522,11 +2522,14 @@ impl Pool {
             Node::Count(number, _) => {
                 return self.make(Node::Count(number, width), Sort::Bv(width));
             }
-            // The low bits of a value that fits in them, widened back, are the value.
+            // The low bits of a value that fits in them, widened back, are the value, widened
+            // as far: a 64-bit quotient a program narrowed to 63 bits and a formula widened to
+            // 128 is the quotient itself, so both divide it further at 64 bits.
             Node::Extract(inner, high, 0)
-                if self.width(inner) == width && self.range(inner).1 <= mask(high + 1) =>
+                if self.width(inner) <= width && self.range(inner).1 <= mask(high + 1) =>
             {
-                return inner;
+                let more = width - self.width(inner);
+                return self.zero_extend(inner, more);
             }
             // A sum or product that never wraps widens part by part, so the same arithmetic
             // done in different widths ends up the same term.
@@ -3025,6 +3028,42 @@ impl Pool {
             return match k
                 .checked_add(1)
                 .and_then(|next| c.checked_mul(next))
+                .filter(|bound| *bound <= mask(width))
+            {
+                Some(bound) => {
+                    let bound = self.bv(width, bound);
+                    self.ule(bound, x)
+                }
+                None => self.boolean(false),
+            };
+        }
+        // The top bits of x from bit s on are x / 2^s: x >> s < k is x < k·2^s, and
+        // k < x >> s is (k + 1)·2^s ≤ x, as for a quotient, so a value halved by a shift and
+        // one divided compare alike.
+        if let (Node::Extract(x, high, low), Some(k)) = (self.node(a).clone(), self.constant(b))
+            && low > 0
+            && high + 1 == self.width(x)
+        {
+            let width = self.width(x);
+            return match k
+                .checked_mul(1_u128 << low)
+                .filter(|bound| *bound <= mask(width))
+            {
+                Some(bound) => {
+                    let bound = self.bv(width, bound);
+                    self.ult(x, bound)
+                }
+                None => self.boolean(true),
+            };
+        }
+        if let (Some(k), Node::Extract(x, high, low)) = (self.constant(a), self.node(b).clone())
+            && low > 0
+            && high + 1 == self.width(x)
+        {
+            let width = self.width(x);
+            return match k
+                .checked_add(1)
+                .and_then(|next| next.checked_mul(1_u128 << low))
                 .filter(|bound| *bound <= mask(width))
             {
                 Some(bound) => {

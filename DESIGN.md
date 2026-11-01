@@ -787,9 +787,14 @@ What it covers:
   multiplies a sum by 50 in 128 meet as one term. A sum divided by a constant that divides its
   every part divides part by part, as both sides of a choice between such sums do; a factor a
   sum shares with its divisor cancels; a value shifted right, then divided, is divided once; a
-  quotient is 0 just where its dividend is below its divisor; and a choice inside a choice whose
-  condition settles it goes. So mean's block of whole numbers is proven in milliseconds, with no
-  solver question. Each rule has random tests against plain arithmetic.
+  quotient is 0 just where its dividend is below its divisor; a value shifted right compares
+  with a constant as the value itself with the constant shifted left; a quotient's low bits,
+  widened past the quotient's own width, are the quotient where it fits them; and a choice inside
+  a choice whose condition settles it goes. So mean's block of whole numbers is proven in
+  milliseconds, with no solver question, and its decimal means, two prices up to a million, in
+  about 80 seconds with 16 cores: the program's digits and the formula's meet as one term, and
+  the solvers are left how many digits there are. Each rule has random tests against plain
+  arithmetic.
 - Files: `openat`, `read`, `write`, `close` and `fstat` on the test's files, and `mkdirat`,
   `unlinkat` and `renameat` on its folders and files. A missing input file gives `ENOENT`, and
   the checks on the files and folders left after the run are the runner's. A file name the input
