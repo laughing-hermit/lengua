@@ -638,12 +638,14 @@ async fn launch_job(
     let socket = scratch.join("go");
     let listener = UnixListener::bind(&socket)?;
     let net = job.net.cloned().unwrap_or_default();
-    // Under QEMU the supervisor would see QEMU's own calls, so it can't check where the program
-    // connects, nor supply anything; the tests that need it aren't run there.
-    if job.emulated && !net.connect.is_empty() && !net.anywhere {
+    // The supervisor checks where a program that may reach only this computer connects; under
+    // QEMU it would see QEMU's own calls, and on some CPUs it doesn't run yet. The tests that
+    // need it aren't run there.
+    if (job.emulated || !crate::supervise::AVAILABLE) && !net.connect.is_empty() && !net.anywhere {
         return Err(io::Error::other(
-            "the program may connect only to this computer, which lengua checks where it can \
-             follow the program's own calls: on the target's own CPU, not under QEMU",
+            "the program may connect only to this computer, which lengua checks where its \
+             supervisor can follow the program's own calls: not under QEMU, and not yet on \
+             this CPU",
         ));
     }
     let supply = job

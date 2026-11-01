@@ -1,0 +1,151 @@
+name: arm64
+
+# Linux ARM64 on ARM64 hardware: the native sandbox (the spec's own system call filter, Landlock,
+# the supervisor), the CPU's counters, and every test that runs there. x86-64 is tested by the
+# local gate.
+on:
+  push:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "plugin/**"
+      - "benches/**"
+      - "examples/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/**"
+  workflow_dispatch:
+    inputs:
+      ignored:
+        description: "Also run the slow ignored tests"
+        type: boolean
+        default: false
+
+concurrency:
+  group: arm64-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  RUST_VERSION: "1.99.1"
+  LLVM_VERSION: "22"
+  Z3_VERSION: "4.16.0"
+  Z3_SHA256: "87fcd963d3eecb0f12cf1c3ef0ad74e84a3a7bd3caed5d94445645ef94ae6274"
+  CVC5_VERSION: "1.3.4"
+  CVC5_SHA256: "2a4c108367f20b0c8990abd6b9535a5d62e08908d471d4671c00734e408f85bc"
+  CARGO_TERM_COLOR: never
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The machine
+        run: |
+          uname -a
+          nproc
+          echo "LSMs: $(cat /sys/kernel/security/lsm 2>/dev/null || echo unknown)"
+          echo "perf_event_paranoid: $(cat /proc/sys/kernel/perf_event_paranoid)"
+          echo "ptrace_scope: $(cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null || echo none)"
+          sudo sysctl kernel.perf_event_paranoid=1 || true
+
+      - name: Rust ${{ env.RUST_VERSION }}
+        run: |
+          if ! command -v rustup; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --profile minimal --default-toolchain none
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component clippy,rustfmt
+          rustup default "$RUST_VERSION"
+
+      - name: LLVM ${{ env.LLVM_VERSION }}
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-$LLVM_VERSION main" \
+            | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update -q
+          sudo apt-get install -y -q "llvm-$LLVM_VERSION" "lld-$LLVM_VERSION"
+          echo "/usr/lib/llvm-$LLVM_VERSION/bin" >> "$GITHUB_PATH"
+
+      - uses: actions/cache@v4
+        id: solvers
+        with:
+          path: ~/solvers
+          key: solvers-${{ env.Z3_SHA256 }}-${{ env.CVC5_SHA256 }}
+
+      - name: z3 and cvc5, pinned by checksum
+        if: steps.solvers.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/solvers/download ~/solvers/bin
+          cd ~/solvers/download
+          curl -sSfL -o z3.zip \
+            "https://github.com/Z3Prover/z3/releases/download/z3-$Z3_VERSION/z3-$Z3_VERSION-arm64-glibc-2.38.zip"
+          curl -sSfL -o cvc5.zip \
+            "https://github.com/cvc5/cvc5/releases/download/cvc5-$CVC5_VERSION/cvc5-Linux-arm64-static.zip"
+          echo "$Z3_SHA256  z3.zip" | sha256sum -c -
+          echo "$CVC5_SHA256  cvc5.zip" | sha256sum -c -
+          unzip -q z3.zip
+          unzip -q cvc5.zip
+          cp -r "z3-$Z3_VERSION-arm64-glibc-2.38/bin/." ~/solvers/bin/
+          cp cvc5-Linux-arm64-static/bin/cvc5 ~/solvers/bin/
+          cd ~
+          rm -rf ~/solvers/download
+
+      - name: The tools
+        run: |
+          echo "$HOME/solvers/bin" >> "$GITHUB_PATH"
+          ~/solvers/bin/z3 --version
+          ~/solvers/bin/cvc5 --version | head -1
+          llvm-mc --version | head -2
+          ld.lld --version
+          rustc --version
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ env.RUST_VERSION }}-
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --release --all-targets --locked -- -D warnings
+
+      - name: Tests
+        env:
+          LENGUA_PROOF_SECONDS: "60"
+          RUST_TEST_THREADS: "2"
+        run: cargo test --release --locked --no-fail-fast 2>&1 | tee test.log
+
+      - name: The slow ignored tests
+        if: github.event_name == 'workflow_dispatch' && inputs.ignored
+        env:
+          LENGUA_PROOF_SECONDS: "60"
+          RUST_TEST_THREADS: "2"
+        run: cargo test --release --locked --no-fail-fast -- --ignored 2>&1 | tee ignored.log
+
+      - name: Keep the logs and the server
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: arm64-${{ github.run_number }}
+          path: |
+            test.log
+            ignored.log
+            target/release/lengua-mcp
+          retention-days: 7
+          if-no-files-found: ignore

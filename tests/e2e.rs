@@ -2,6 +2,10 @@
 //! from the request to done through check alone, then run, and every way lengua refuses or
 //! recovers.
 
+// Its programs are x86-64 code, which runs only on an x86-64 computer; an ARM64 one runs the
+// AArch64 suites (tests/aarch64.rs, tests/aarch64_session.rs) and the ones for any CPU.
+#![cfg(target_arch = "x86_64")]
+
 mod common;
 
 use std::io::Write as _;

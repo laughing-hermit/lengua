@@ -3,18 +3,22 @@
 use lengua::platform::Profile;
 use lengua::toolchain::{BuildStep, Toolchain};
 
-const EXIT_42: &str = "\
-.intel_syntax noprefix
-.globl _start
-.text
-_start:
-    mov eax, 60
-    mov edi, 42
-    syscall
-";
+/// A program that exits with 42, for this computer's CPU.
+#[cfg(target_arch = "x86_64")]
+const EXIT_42: (Profile, &str) = (
+    Profile::LinuxX86_64,
+    ".intel_syntax noprefix\n.globl _start\n.text\n_start:\n    mov eax, 60\n    mov edi, 42\n    \
+     syscall\n",
+);
+#[cfg(target_arch = "aarch64")]
+const EXIT_42: (Profile, &str) = (
+    Profile::LinuxAarch64,
+    ".arch armv8-a\n.globl _start\n.text\n_start:\n    mov x8, #93\n    mov x0, #42\n    svc #0\n",
+);
 
 #[tokio::test]
 async fn builds_a_program_that_exits_with_42() {
+    let (profile, program) = EXIT_42;
     let toolchain = Toolchain::discover()
         .await
         .expect("llvm-mc and ld.lld are installed");
@@ -22,14 +26,14 @@ async fn builds_a_program_that_exits_with_42() {
     let source = dir.path().join("main.s");
     let object = dir.path().join("main.o");
     let executable = dir.path().join("main");
-    std::fs::write(&source, EXIT_42).expect("write main.s");
+    std::fs::write(&source, program).expect("write main.s");
 
     toolchain
-        .assemble(Profile::LinuxX86_64, &source, &object)
+        .assemble(profile, &source, &object)
         .await
         .expect("assemble");
     toolchain
-        .link(Profile::LinuxX86_64, &object, &executable)
+        .link(profile, &object, &executable)
         .await
         .expect("link");
 

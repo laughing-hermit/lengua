@@ -136,25 +136,38 @@ pub struct Outcome {
     pub not_run: Vec<String>,
 }
 
-/// How tests run where QEMU's user mode runs the program for the target's CPU. lengua's
-/// supervisor, which supplies a test's random bytes and clock, ends its sleeps at once and
-/// checks where it connects, can't follow the program inside QEMU, so tests that need it aren't
-/// run here; nor are the program's runs timed, since its instructions are QEMU's.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Emulated {
+/// Where the tests run. lengua's supervisor supplies a test's random bytes and clock, ends its
+/// sleeps at once and checks where it connects; it can't follow a program that QEMU's user mode
+/// runs, and runs only on the CPUs whose registers it reads, so where it can't, the tests that
+/// need it aren't run. Under QEMU the runs aren't timed either: their instructions are QEMU's.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Setting {
+    /// Whether QEMU's user mode runs the program, for the target's CPU.
+    pub emulated: bool,
     /// Whether the spec lets the program sleep, which a test ends at once.
     pub sleeps: bool,
 }
 
-/// What `test` needs that only a run on the target's own CPU gives, if anything.
-fn needs_the_cpu(test: &Test<'_>, emulated: Emulated) -> Option<&'static str> {
-    if test.random.is_some() {
+impl Setting {
+    /// Whether the supervisor can follow the program here.
+    #[must_use]
+    pub fn supervised(self) -> bool {
+        !self.emulated && crate::supervise::AVAILABLE
+    }
+}
+
+/// What `test` needs that only the supervisor gives, when the supervisor can't follow the
+/// program here.
+fn needs_the_supervisor(test: &Test<'_>, setting: Setting) -> Option<&'static str> {
+    if setting.supervised() {
+        None
+    } else if test.random.is_some() {
         Some("random bytes the test supplies")
     } else if !test.clock.is_empty() {
         Some("a clock the test sets")
     } else if !test.server.is_empty() {
         Some("a server of the test's, whose connections lengua checks")
-    } else if emulated.sleeps {
+    } else if setting.sleeps {
         Some("sleeps the test ends at once")
     } else {
         None
@@ -1155,7 +1168,7 @@ struct Shared {
     syscalls: Vec<Allowed>,
     network: Network,
     assertions: BTreeMap<i64, usize>,
-    emulated: Option<Emulated>,
+    setting: Setting,
 }
 
 /// A test a run owns, so runs can go at once.
@@ -1186,7 +1199,7 @@ async fn run_one(
         &shared.network,
         delivery,
         &shared.assertions,
-        shared.emulated.is_some(),
+        shared.setting.emulated,
     )
     .await
 }
@@ -1245,7 +1258,7 @@ pub async fn run_tests(
     syscalls: &[Allowed],
     network: &Network,
     workers: usize,
-    emulated: Option<Emulated>,
+    setting: Setting,
 ) -> io::Result<Outcome> {
     let shared = Arc::new(Shared {
         launcher: launcher.to_owned(),
@@ -1253,7 +1266,7 @@ pub async fn run_tests(
         syscalls: syscalls.to_vec(),
         network: network.clone(),
         assertions: assertion_lines(source),
-        emulated,
+        setting,
     });
     let workers = workers.max(1);
     let deadline = Instant::now() + TOTAL_TIMEOUT;
@@ -1271,9 +1284,7 @@ pub async fn run_tests(
                 return Ok(outcome);
             }
             let example = &suite.examples[next];
-            if let Some(why) =
-                emulated.and_then(|mode| needs_the_cpu(&Test::of_example(example), mode))
-            {
+            if let Some(why) = needs_the_supervisor(&Test::of_example(example), setting) {
                 outcome
                     .not_run
                     .push(format!("example {} ({why})", example.id));
@@ -1330,11 +1341,11 @@ pub async fn run_tests(
     // the failure reported is the block's lowest-numbered one.
     for block in &suite.generated {
         let name = format!("generated {}", block.id);
-        if let Some(mode) = emulated {
+        if !setting.supervised() {
             let first = block.case(block.inputs(seed).at(0), crate::expect::now());
             if let Some(why) = first
                 .ok()
-                .and_then(|case| needs_the_cpu(&Test::of_case(&case), mode))
+                .and_then(|case| needs_the_supervisor(&Test::of_case(&case), setting))
             {
                 outcome.not_run.push(format!("{name} ({why})"));
                 continue;
@@ -1431,7 +1442,7 @@ pub async fn run_tests(
             (None, None) => {}
         }
     }
-    if !outcome.passed() || emulated.is_some() {
+    if !outcome.passed() || setting.emulated {
         return Ok(outcome);
     }
 

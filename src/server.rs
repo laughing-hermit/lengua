@@ -197,10 +197,10 @@ struct Passed {
     header: Header,
     /// QEMU, when it ran the tests for the target's CPU.
     under: Option<String>,
-    /// The tests not run here, each with what it needs that only the target's own CPU gives.
+    /// The tests not run here, each with what it needs that only the supervisor gives.
     not_run: Vec<String>,
-    /// The target, such as `linux-aarch64`.
-    target: &'static str,
+    /// Why they weren't run here.
+    not_run_why: String,
 }
 
 /// One generated test's proof.
@@ -1137,9 +1137,10 @@ impl LenguaServer {
             &syscalls,
             &code.spec.network,
             testrun::workers(code.spec.threads),
-            code.emulator.as_ref().map(|_| testrun::Emulated {
+            testrun::Setting {
+                emulated: code.emulator.is_some(),
                 sleeps: code.spec.syscalls.contains(&spec::Syscall::ClockNanosleep),
-            }),
+            },
         )
         .await
         {
@@ -1191,7 +1192,14 @@ impl LenguaServer {
                 header,
                 under: code.emulator.as_ref().map(|emulator| emulator.name.clone()),
                 not_run: outcome.not_run,
-                target: code.profile.name(),
+                not_run_why: if code.emulator.is_some() {
+                    format!("they need a {} computer", code.profile.name())
+                } else {
+                    format!(
+                        "lengua's supervisor, which they need, doesn't run on {} yet",
+                        code.profile.name()
+                    )
+                },
             });
         }
         checking.stage.send_replace(Stage::Proving(Instant::now()));
@@ -1689,8 +1697,8 @@ impl LenguaServer {
         }
         if !passed.not_run.is_empty() {
             tests.push(format!(
-                "not run here, since they need a {} computer: {}",
-                passed.target,
+                "not run here, since {}: {}",
+                passed.not_run_why,
                 passed.not_run.join("; ")
             ));
         }

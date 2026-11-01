@@ -3584,7 +3584,8 @@ mod logs;
 pub mod net;
 mod vector;
 
-#[cfg(test)]
+// It runs a harness of x86-64 instructions on this computer's CPU.
+#[cfg(all(test, target_arch = "x86_64"))]
 mod against_cpu;
 
 #[cfg(test)]
