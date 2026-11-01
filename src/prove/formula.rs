@@ -328,6 +328,54 @@ pub fn lookback(expr: &Expr, name: &str) -> Option<usize> {
     }
 }
 
+/// The part `expr` counts in the text `name`, when it can overlap itself: such a count's whole
+/// follows from its pieces only through the matcher's phase between them.
+#[must_use]
+pub fn bordered_part(expr: &Expr, name: &str) -> Option<Vec<u8>> {
+    match expr {
+        Expr::Call(Function::Count, arguments) => match arguments.as_slice() {
+            [Expr::Var(var), Expr::Literal(Value::Str(part))]
+                if var == name && !part.is_empty() && !borderless(part.as_bytes()) =>
+            {
+                Some(part.as_bytes().to_vec())
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// What the count `expr`, one [`bordered_part`] admits, comes to for the text in `texts` read
+/// from `phase`, where the bytes before it left the matcher: with the count before it, a whole's
+/// count.
+///
+/// # Errors
+///
+/// For a formula [`bordered_part`] doesn't admit.
+pub fn count_from(
+    pool: &mut Pool,
+    expr: &Expr,
+    texts: &BTreeMap<String, Vec<Term>>,
+    phase: &Phase,
+) -> Result<Formula, String> {
+    let Expr::Call(_, arguments) = expr else {
+        return Err("a count that isn't a function".into());
+    };
+    let Some(Expr::Var(name)) = arguments.first() else {
+        return Err("a count of no text".into());
+    };
+    let part = bordered_part(expr, name).ok_or("a count of a part with no border")?;
+    let bytes = texts.get(name).ok_or("a count of an unknown text")?;
+    let (ends, _) = matches_from(pool, bytes, &part, phase);
+    // The first byte may end a match the bytes before began.
+    let high = i128::try_from(bytes.len().div_ceil(part.len())).map_err(|_| overflow())?;
+    Ok(Formula::Number(Number::whole(
+        pool.count(WIDTH, &ends),
+        0,
+        high,
+    )))
+}
+
 /// What the count `expr`, one [`lookback`] admits, adds for the text in `texts` after `window`,
 /// the bytes just before it: its parts whose last byte is the text's, built as the count's own
 /// formula builds them, so they're the same terms. With a window as long as the count's
@@ -1416,30 +1464,129 @@ fn borderless(part: &[u8]) -> bool {
     (1..part.len()).all(|length| part[..length] != part[part.len() - length..])
 }
 
+/// Where the bytes of `matched` and then `byte` leave a matcher of `part`: the longest start of
+/// `part` they end with, which is `part`'s length on a match.
+fn transition(part: &[u8], matched: usize, byte: u8) -> usize {
+    let mut seen = part[..matched].to_vec();
+    seen.push(byte);
+    (0..=seen.len().min(part.len()))
+        .rev()
+        .find(|length| seen.ends_with(&part[..*length]))
+        .unwrap_or(0)
+}
+
+/// A matcher of `part` as `count` reads a text: how much of `part` the bytes since the last
+/// match end with, one condition for each length from 1 to `part`'s length less one (none of
+/// them means none), and back to none after each match, so matches never overlap.
+#[derive(Debug, Clone)]
+pub struct Phase(Vec<Term>);
+
+impl Phase {
+    /// Where a text's start leaves the matcher: with nothing matched.
+    #[must_use]
+    pub fn start(pool: &mut Pool, part: &[u8]) -> Self {
+        let none = pool.boolean(false);
+        Self(vec![none; part.len().saturating_sub(1)])
+    }
+
+    /// The conditions: the `k`th that the bytes since the last match end with `k + 1` of
+    /// `part`'s.
+    #[must_use]
+    pub fn conditions(&self) -> &[Term] {
+        &self.0
+    }
+
+    /// The phase with these conditions, at most one of which can hold.
+    #[must_use]
+    pub const fn of(conditions: Vec<Term>) -> Self {
+        Self(conditions)
+    }
+
+    /// Whether the matcher has `length` bytes of `part`: for 0, that it has none.
+    fn at(&self, pool: &mut Pool, length: usize) -> Term {
+        if length == 0 {
+            let some = pool.any(&self.0);
+            pool.bool_not(some)
+        } else {
+            self.0[length - 1]
+        }
+    }
+
+    /// The matcher after `byte`, and whether `byte` ends a match.
+    fn after(&self, pool: &mut Pool, part: &[u8], byte: Term) -> (Self, Term) {
+        let mut characters = part.to_vec();
+        characters.sort_unstable();
+        characters.dedup();
+        let mut next = vec![Vec::new(); part.len().saturating_sub(1)];
+        let mut ends = Vec::new();
+        for matched in 0..part.len() {
+            let here = self.at(pool, matched);
+            if pool.truth(here) == Some(false) {
+                continue;
+            }
+            for character in &characters {
+                let to = transition(part, matched, *character);
+                if to == 0 {
+                    continue;
+                }
+                let wanted = pool.bv(8, u128::from(*character));
+                let is = pool.eq(byte, wanted);
+                let moves = pool.bool_and(here, is);
+                if to == part.len() {
+                    ends.push(moves);
+                } else {
+                    next[to - 1].push(moves);
+                }
+            }
+        }
+        let next = next.iter().map(|ways| pool.any(ways)).collect();
+        let ended = pool.any(&ends);
+        (Self(next), ended)
+    }
+}
+
+/// The matches of `part`, one condition for each byte of `bytes` that can end one, read from
+/// `phase`, and the phase they leave.
+#[must_use]
+pub fn matches_from(
+    pool: &mut Pool,
+    bytes: &[Term],
+    part: &[u8],
+    phase: &Phase,
+) -> (Vec<Term>, Phase) {
+    let mut phase = phase.clone();
+    let mut ends = Vec::with_capacity(bytes.len());
+    for byte in bytes {
+        let (next, ended) = phase.after(pool, part, *byte);
+        ends.push(ended);
+        phase = next;
+    }
+    (ends, phase)
+}
+
 /// How many times `part` appears in `bytes` without overlaps, leftmost first, as `count` counts:
-/// a match counts when none of the counted ones before it overlaps it.
+/// a match counts when none of the counted ones before it overlaps it. A part with a border is
+/// counted as a matcher reads the text, one byte at a time, the way a program that keeps how much
+/// of the part it has seen counts it, so the two are one term.
 fn count(pool: &mut Pool, bytes: &[Term], part: &[u8]) -> Result<Formula, String> {
     if part.is_empty() {
         return Err("count of an empty part".into());
     }
     let length = part.len();
-    let alone = borderless(part);
-    let mut counted: Vec<Term> = Vec::new();
-    for start in 0..bytes.len() {
-        let matched = matches_at(pool, bytes, start, part);
-        // A counted match within the part's length before this one overlaps it, which a part
-        // with no border never has.
-        let mut counts = matched;
-        if !alone {
-            let earlier: Vec<Term> = counted[start.saturating_sub(length - 1)..start].to_vec();
-            for before in earlier {
-                let free = pool.bool_not(before);
-                counts = pool.bool_and(counts, free);
-            }
-        }
-        counted.push(counts);
-    }
     let high = i128::try_from(bytes.len() / length).map_err(|_| overflow())?;
+    if !borderless(part) {
+        let start = Phase::start(pool, part);
+        let (ends, _) = matches_from(pool, bytes, part, &start);
+        return Ok(Formula::Number(Number::whole(
+            pool.count(WIDTH, &ends),
+            0,
+            high,
+        )));
+    }
+    // A part with no border never overlaps itself: every match counts.
+    let counted: Vec<Term> = (0..bytes.len())
+        .map(|start| matches_at(pool, bytes, start, part))
+        .collect();
     Ok(Formula::Number(Number::whole(
         pool.count(WIDTH, &counted),
         0,
@@ -1455,6 +1602,59 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
+
+    /// A part that can overlap itself, counted as a matcher reads the text: the count the test
+    /// language gives on random texts; and a whole's count is its first piece's and the rest's
+    /// matches read from the phase the first piece leaves.
+    #[test]
+    fn a_part_with_a_border_counts_as_the_test_language_does() {
+        let parts = ["aa", "aaa", "aba", "abab", "aab", "aaba", "abaab", "baa"];
+        let mut rng = ChaCha8Rng::seed_from_u64(0xb0_4de4);
+        for _ in 0..600 {
+            let part = parts[rng.random_range(0..parts.len())];
+            let alphabet: &[u8] = if rng.random_bool(0.7) { b"ab" } else { b"ab c" };
+            let first: Vec<u8> = (0..rng.random_range(0..8))
+                .map(|_| alphabet[rng.random_range(0..alphabet.len())])
+                .collect();
+            let rest: Vec<u8> = (0..rng.random_range(0..8))
+                .map(|_| alphabet[rng.random_range(0..alphabet.len())])
+                .collect();
+            let whole: Vec<u8> = first.iter().chain(&rest).copied().collect();
+            let mut pool = Pool::default();
+            let bytes: Vec<Term> = (0..whole.len())
+                .map(|index| pool.var(8, &format!("s{index}")))
+                .collect();
+            let values: HashMap<String, u128> = whole
+                .iter()
+                .enumerate()
+                .map(|(index, byte)| (format!("s{index}"), u128::from(*byte)))
+                .collect();
+            let text = String::from_utf8(whole.clone()).expect("ASCII");
+            let expected = text.matches(part).count() as u128;
+            let Ok(Formula::Number(number)) = count(&mut pool, &bytes, part.as_bytes()) else {
+                panic!("{part} counts");
+            };
+            assert_eq!(
+                pool.evaluate(number.term, &values),
+                Some(expected),
+                "{part} in {text:?}"
+            );
+            let start = Phase::start(&mut pool, part.as_bytes());
+            let (before, phase) =
+                matches_from(&mut pool, &bytes[..first.len()], part.as_bytes(), &start);
+            let (after, _) =
+                matches_from(&mut pool, &bytes[first.len()..], part.as_bytes(), &phase);
+            let mut both = before;
+            both.extend(after);
+            let joined = pool.count(WIDTH, &both);
+            assert_eq!(
+                pool.evaluate(joined, &values),
+                Some(expected),
+                "{part} in {text:?}, cut after {}",
+                first.len()
+            );
+        }
+    }
 
     /// The counts an induction admits, with how far back each looks; and on random texts, the
     /// count of a whole is the count of a first piece and what the rest adds after the piece's

@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use super::{End, Last, Memory, Owner, Return, STACK_SIZE, STACK_TOP, State, VECTOR_BYTES};
+use crate::prove::formula::Phase;
 use crate::prove::term::{Pool, Term};
 
 /// How a run takes the read loop's head.
@@ -29,6 +30,9 @@ pub struct Hook {
     pub low: u128,
     /// The counts the loop keeps as it goes, as `len` and `count` fold the text, by register.
     pub folds: BTreeMap<usize, Fold>,
+    /// Where the loop keeps the matcher's phase of a count of a part that overlaps itself, by
+    /// register.
+    pub phases: BTreeMap<usize, PhaseFold>,
     /// Whether the run stops when it comes back to the head, as the step's does.
     pub stop: bool,
     /// How many buffer-fulls a stopping run reads from the head before it stops there: two for
@@ -73,6 +77,60 @@ impl Fold {
             self.start,
             self.start + self.most,
         )
+    }
+}
+
+/// Where a read loop keeps the phase of a count of a part that can overlap itself: at the head,
+/// one of the values the register took the first time round, each standing for how much of the
+/// part the text since its last match ends with. The step shows each time round keeps it so.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PhaseFold {
+    /// The register's values at the head, each with the matcher's state it stands for: how many
+    /// bytes of the part the text since its last match ends with.
+    pub states: BTreeMap<u128, usize>,
+    /// The output's placeholder whose count it carries the phase of.
+    pub placeholder: usize,
+}
+
+impl PhaseFold {
+    /// The register's value at the head: any from its least value to its largest, and one of
+    /// them where [`Self::holds`] says so.
+    pub fn value(&self, pool: &mut Pool, register: usize) -> Term {
+        let low = self.states.keys().next().copied().unwrap_or(0);
+        let high = self.states.keys().next_back().copied().unwrap_or(0);
+        pool.var_in(64, &format!("induction.p{register}"), low, high)
+    }
+
+    /// That `value` is one of the register's values.
+    pub fn holds(&self, pool: &mut Pool, value: Term) -> Term {
+        let ways: Vec<Term> = self
+            .states
+            .keys()
+            .map(|known| {
+                let known = pool.bv(64, *known);
+                pool.eq(value, known)
+            })
+            .collect();
+        pool.any(&ways)
+    }
+
+    /// The matcher's phase `value` stands for, for a part of `length` bytes.
+    pub fn phase(&self, pool: &mut Pool, value: Term, length: usize) -> Phase {
+        let conditions = (1..length)
+            .map(|matched| {
+                let ways: Vec<Term> = self
+                    .states
+                    .iter()
+                    .filter(|(_, state)| **state == matched)
+                    .map(|(known, _)| {
+                        let known = pool.bv(64, *known);
+                        pool.eq(value, known)
+                    })
+                    .collect();
+                pool.any(&ways)
+            })
+            .collect();
+        Phase::of(conditions)
     }
 }
 
@@ -244,6 +302,16 @@ impl State {
         }
         for (register, fold) in &hook.folds {
             self.registers[*register] = fold.value(pool, *register);
+            self.owners[*register] = None;
+        }
+        // A phase's register holds one of its values, each standing for a phase.
+        for (register, phase) in &hook.phases {
+            let value = phase.value(pool, *register);
+            let known = phase.holds(pool, value);
+            if pool.truth(known) != Some(true) {
+                self.path.push(known);
+            }
+            self.registers[*register] = value;
             self.owners[*register] = None;
         }
         for vector in &hook.vectors {

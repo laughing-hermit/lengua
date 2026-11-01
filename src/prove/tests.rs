@@ -2807,3 +2807,47 @@ async fn proves_a_word_count_over_text_beyond_ascii() {
     assert!(bound.characters, "{verdict:?}");
     assert!(bound.why.contains("8 characters"), "{verdict:?}");
 }
+
+/// A count of a part that overlaps itself, `aa`: how much of it the text ends with carries
+/// across each cut, which no last few bytes settle (on `aaa…` it's the parity of everything
+/// read), so a register the first time round shows keeping it, and every later time round
+/// proven to keep it, carries the count from one buffer-full to the next: the fixture is proven
+/// for every length. Programs that drop it at a buffer-full's end, ignore it coming into the
+/// count, or start out with an `a` pending each get an input that shows it.
+#[tokio::test]
+async fn proves_a_count_of_a_part_that_overlaps_itself_for_every_length() {
+    if !solvers_installed() {
+        return;
+    }
+    let source = fixture("pairs", "main.s");
+    let block = block(&fixture("pairs", "spec.md"), 0);
+    let right = machine(&source).await;
+    let verdict = prove(&right, &block, &text_budget());
+    assert!(
+        matches!(
+            verdict,
+            Verdict::Proven {
+                bound: None,
+                induction: Some(256),
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
+    for (from, to) in [
+        ("    mov r14, rdx\n", "    xor r14d, r14d\n"),
+        ("    mov rdx, rsi\n", "    xor edx, edx\n"),
+        (
+            "    xor r14d, r14d\n    mov rbx, MAX_FULLS\n",
+            "    mov r14d, 1\n    mov rbx, MAX_FULLS\n",
+        ),
+    ] {
+        assert!(source.contains(from), "{from:?}");
+        let wrong = machine(&source.replacen(from, to, 1)).await;
+        let verdict = prove(&wrong, &block, &text_budget());
+        assert!(
+            matches!(verdict, Verdict::Counterexample(_)),
+            "{to:?}: {verdict:?}"
+        );
+    }
+}

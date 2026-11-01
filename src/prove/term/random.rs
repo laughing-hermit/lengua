@@ -399,7 +399,19 @@ impl Writer<'_> {
             };
         }
         let deeper = depth - 1;
-        match self.rng.random_range(0..23) {
+        match self.rng.random_range(0..24) {
+            // Two values that are each 0 or 1, as setcc leaves them, combined bitwise as a
+            // program keeps a flag: pending = is_a and not (is_a and pending).
+            23 if width >= 8 => {
+                let op = [Op::And, Op::Or, Op::Xor][self.rng.random_range(0..3)];
+                let a = self.bit(width, deeper);
+                let b = if self.rng.random_bool(0.3) {
+                    Expr::Const(width, 1)
+                } else {
+                    self.bit(width, deeper)
+                };
+                Expr::Binary(op, Box::new(a), Box::new(b))
+            }
             0..=3 => {
                 let ops = [
                     Op::Add,
@@ -702,6 +714,42 @@ impl Writer<'_> {
         }
     }
 
+    /// A value of `width` bits that's only ever 0 or 1: a choice of the two, perhaps widened
+    /// from a byte as setcc writes one, a variable of those two values, or two of these
+    /// combined bitwise.
+    fn bit(&mut self, width: u32, depth: u32) -> Expr {
+        let choice = |writer: &mut Self, width: u32| {
+            let (one, zero) = (Expr::Const(width, 1), Expr::Const(width, 0));
+            let (then, otherwise) = if writer.rng.random_bool(0.7) {
+                (one, zero)
+            } else {
+                (zero, one)
+            };
+            Expr::Ite(
+                Box::new(writer.truth(depth.min(2))),
+                Box::new(then),
+                Box::new(otherwise),
+            )
+        };
+        match self.rng.random_range(0..5) {
+            0 if width > 8 => Expr::ZeroExtend(Box::new(choice(self, 8)), width - 8),
+            1 => {
+                self.variables.push(Variable {
+                    width,
+                    low: 0,
+                    high: 1,
+                });
+                Expr::Var(self.variables.len() - 1)
+            }
+            2 if depth > 0 => {
+                let op = [Op::And, Op::Or, Op::Xor][self.rng.random_range(0..3)];
+                let (a, b) = (self.bit(width, depth - 1), self.bit(width, depth - 1));
+                Expr::Binary(op, Box::new(a), Box::new(b))
+            }
+            _ => choice(self, width),
+        }
+    }
+
     /// A sum of variables, each times a multiple of `divisor`, perhaps negated, plus a constant
     /// of less than `divisor` either way.
     fn divisible_sum(&mut self, width: u32, divisor: u128) -> Expr {
@@ -730,7 +778,23 @@ impl Writer<'_> {
             return Expr::Bool(self.rng.random_bool(0.5));
         }
         let deeper = depth - 1;
-        match self.rng.random_range(0..11) {
+        match self.rng.random_range(0..12) {
+            // a and not (a and c), either way round, as a matcher's state after a byte is
+            // written: the byte matched and ended no match.
+            11 => {
+                let (a, c) = (self.truth(deeper), self.truth(deeper));
+                let inner = if self.rng.random_bool(0.5) {
+                    Expr::Logic(true, Box::new(a.clone()), Box::new(c))
+                } else {
+                    Expr::Logic(true, Box::new(c), Box::new(a.clone()))
+                };
+                let not_both = Expr::BoolNot(Box::new(inner));
+                if self.rng.random_bool(0.5) {
+                    Expr::Logic(true, Box::new(a), Box::new(not_both))
+                } else {
+                    Expr::Logic(true, Box::new(not_both), Box::new(a))
+                }
+            }
             // A value shifted right compared with a constant, as a formula bounds a halved
             // number's digits: sometimes past anything the shift leaves.
             10 => {

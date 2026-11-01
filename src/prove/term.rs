@@ -870,6 +870,12 @@ impl Pool {
         if parts.iter().all(|part| self.truth(*part) == Some(true)) {
             return self.bv(width, parts.len() as u128);
         }
+        // A count of one condition is that condition's 1 or 0, the form a flag a program adds
+        // takes, so the two are one term.
+        if let [only] = parts[..] {
+            let (one, zero) = (self.bv(width, 1), self.bv(width, 0));
+            return self.ite(only, one, zero);
+        }
         let next = u32::try_from(self.counts.len()).unwrap_or(u32::MAX);
         let number = *self.count_index.entry(parts.clone()).or_insert(next);
         if number == next {
@@ -2243,7 +2249,12 @@ impl Pool {
             (Some(x), Some(y)) => return self.bv(width, x & y),
             (_, Some(0)) => return b,
             (_, Some(y)) if y == mask(width) => return a,
+            // A value that's 0 or 1 is itself in its lowest bit.
+            (_, Some(1)) if self.range(a).1 <= 1 => return a,
             _ => {}
+        }
+        if let Some(both) = self.bit_logic(a, b, Self::bool_and) {
+            return both;
         }
         self.make(Node::And(a, b), Sort::Bv(width))
     }
@@ -2260,6 +2271,9 @@ impl Pool {
             (_, Some(0)) => return a,
             (_, Some(y)) if y == mask(width) => return b,
             _ => {}
+        }
+        if let Some(either) = self.bit_logic(a, b, Self::bool_or) {
+            return either;
         }
         self.make(Node::Or(a, b), Sort::Bv(width))
     }
@@ -2278,7 +2292,71 @@ impl Pool {
             (_, Some(ones)) if ones == mask(width) => return self.not(a),
             _ => {}
         }
+        if let Some(one) = self.bit_logic(a, b, Self::bool_xor) {
+            return one;
+        }
         self.make(Node::Xor(a, b), Sort::Bv(width))
+    }
+
+    /// `op` of two values that are each 0 or 1, as setcc leaves them and a program combines
+    /// them with `and`, `or` and `xor`: 1 where `op` of their conditions holds. So a flag a
+    /// program keeps as a number and a formula's condition are one form, and a sum of such
+    /// values is a count.
+    fn bit_logic(
+        &mut self,
+        a: Term,
+        b: Term,
+        op: fn(&mut Self, Term, Term) -> Term,
+    ) -> Option<Term> {
+        if self.constant(a).is_some() && self.constant(b).is_some() {
+            return None;
+        }
+        let x = self.bit_condition(a)?;
+        let y = self.bit_condition(b)?;
+        let width = self.width(a);
+        let holds = op(self, x, y);
+        let (one, zero) = (self.bv(width, 1), self.bv(width, 0));
+        Some(self.ite(holds, one, zero))
+    }
+
+    /// The condition that `term`, a value that's only ever 0 or 1, is 1: a choice of 1 or 0
+    /// says it, widened or not, and any other such value is 1 where it isn't 0.
+    fn bit_condition(&mut self, term: Term) -> Option<Term> {
+        if self.sort(term) == Sort::Bool || self.range(term).1 > 1 {
+            return None;
+        }
+        if let Some(value) = self.constant(term) {
+            return Some(self.boolean(value == 1));
+        }
+        match *self.node(term) {
+            Node::Ite(condition, then, otherwise) => {
+                match (self.constant(then), self.constant(otherwise)) {
+                    (Some(1), Some(0)) => return Some(condition),
+                    (Some(0), Some(1)) => return Some(self.bool_not(condition)),
+                    _ => {}
+                }
+            }
+            Node::ZeroExtend(inner, _) => return self.bit_condition(inner),
+            _ => {}
+        }
+        let zero = self.bv(self.width(term), 0);
+        let none = self.eq(term, zero);
+        Some(self.bool_not(none))
+    }
+
+    /// Exactly one of `a` and `b` true.
+    pub fn bool_xor(&mut self, a: Term, b: Term) -> Term {
+        match (self.truth(a), self.truth(b)) {
+            (Some(x), Some(y)) => self.boolean(x != y),
+            (Some(false), _) => b,
+            (_, Some(false)) => a,
+            (Some(true), _) => self.bool_not(b),
+            (_, Some(true)) => self.bool_not(a),
+            _ => {
+                let same = self.eq(a, b);
+                self.bool_not(same)
+            }
+        }
     }
 
     /// Bitwise not.
@@ -2917,6 +2995,19 @@ impl Pool {
                 };
             }
         }
+        // A value that's only ever 0 or 1 is 1 where it isn't 0: one condition however a
+        // program or a formula asks it.
+        for (bit, other) in [(a, b), (b, a)] {
+            if self.width(bit) > 1
+                && self.constant(other) == Some(1)
+                && self.constant(bit).is_none()
+                && self.range(bit).1 <= 1
+            {
+                let zero = self.bv(self.width(bit), 0);
+                let none = self.eq(bit, zero);
+                return self.bool_not(none);
+            }
+        }
         // A 1-bit and, or or not of bits is 1 where the and, or or not of their conditions
         // holds: a mask's bit is the test that made it.
         if self.width(a) == 1
@@ -3178,6 +3269,18 @@ impl Pool {
         // x and not x.
         if self.negates(a, b) {
             return self.boolean(false);
+        }
+        // a and not (a and c) is a and not c: a matcher's state after a byte that ended no
+        // match, written either way.
+        for (first, second) in [(a, b), (b, a)] {
+            if let Node::BoolNot(inner) = *self.node(second)
+                && let Node::BoolAnd(x, y) = *self.node(inner)
+                && (x == first || y == first)
+            {
+                let other = if x == first { y } else { x };
+                let not_other = self.bool_not(other);
+                return self.bool_and(first, not_other);
+            }
         }
         let (a, b) = self.ordered(a, b);
         self.make(Node::BoolAnd(a, b), Sort::Bool)

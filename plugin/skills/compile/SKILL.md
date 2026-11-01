@@ -37,10 +37,13 @@ and the CPU features the code needs; never write that line yourself.
    `ecx` -1, as [the streaming filter](assets/stream-template.s) does
    ([its spec](assets/stream-template-spec.md)): where each buffer-full's output is its bytes
    mapped one by one (`upper`, `lower`, `tr`), or counts kept in registers and printed at the
-   end (`len`, `words`, `count` of a part that can't overlap itself, such as `"\n"` or
-   `"\r\n"`), the proof covers every length by induction over the loop, whatever the program
-   keeps of the last buffer-full (such as whether it ended inside a word); otherwise it goes on
-   through longer input as far as its time reaches, where a read loop of your own is proven
+   end (`len`, `words`, `count` of a part such as `"\n"` or `"\r\n"`), the proof covers every
+   length by induction over the loop, whatever the program keeps of the last buffer-full (such
+   as whether it ended inside a word); a `count` of a part that can overlap itself, such as
+   `"aa"`, is covered too where a register of its own carries how much of the part the text ends
+   with from one buffer-full to the next (for `"aa"`, whether the last byte is an `a` that starts
+   no pair yet), kept as 0 or 1 with `setcc`, `and` and `xor`, without branches; otherwise it
+   goes on through longer input as far as its time reaches, where a read loop of your own is proven
    only up to the 4096 bytes one pipe write holds. A server whose
    spec serves several clients at once starts from
    [the event-loop server](assets/server-template.s) ([its spec](assets/server-template-spec.md)):

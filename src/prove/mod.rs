@@ -1751,6 +1751,8 @@ struct Offset {
     low: i128,
     high: i128,
     window: Option<Vec<Term>>,
+    /// For a count of a part that overlaps itself, the phase the head left its matcher in.
+    phase: Option<formula::Phase>,
 }
 
 /// In the base of an induction whose counts look back, where each run reads a fresh
@@ -1770,9 +1772,15 @@ impl Known<'_> {
             return found.clone();
         }
         let offset = self.offsets.get(&key);
-        let mut result = match offset.and_then(|offset| offset.window.as_ref()) {
-            Some(window) => formula::delta(pool, expr, self.texts, window),
-            None => formula::translate(pool, expr, self.numbers, self.texts),
+        let mut result = match offset {
+            Some(Offset {
+                phase: Some(phase), ..
+            }) => formula::count_from(pool, expr, self.texts, phase),
+            Some(Offset {
+                window: Some(window),
+                ..
+            }) => formula::delta(pool, expr, self.texts, window),
+            _ => formula::translate(pool, expr, self.numbers, self.texts),
         };
         // A count over the text from the head on, and what came before it.
         if let (Ok(Formula::Number(number)), Some(offset)) = (&result, offset) {
@@ -3454,6 +3462,24 @@ fn prove_shape(
             let start = pool.bv(WIDTH, fold.start);
             let before = pool.sub(wide, start);
             let most = i128::try_from(fold.most).map_err(|_| "a count too large")?;
+            // A count of a part that overlaps itself goes on from the phase its register
+            // stands for at the head, the same value the head gives it.
+            let phase = match hook
+                .phases
+                .iter()
+                .find(|(_, phase)| phase.placeholder == fold.placeholder)
+            {
+                Some((phase_register, phase)) => {
+                    let part = block
+                        .vars
+                        .first()
+                        .and_then(|(name, _)| formula::bordered_part(expr, name))
+                        .ok_or("a phase for a count of a part with no border")?;
+                    let held = phase.value(&mut pool, *phase_register);
+                    Some(phase.phase(&mut pool, held, part.len()))
+                }
+                None => None,
+            };
             offsets.insert(
                 std::ptr::from_ref(*expr),
                 Offset {
@@ -3461,6 +3487,7 @@ fn prove_shape(
                     low: 0,
                     high: most,
                     window: None,
+                    phase,
                 },
             );
         }
@@ -3740,6 +3767,7 @@ fn check_runs(
                             low,
                             high,
                             window: Some(window),
+                            phase: None,
                         },
                     );
                 }

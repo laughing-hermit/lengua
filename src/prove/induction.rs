@@ -31,7 +31,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
-use super::exec::induction::{Fold, Hook};
+use super::exec::induction::{Fold, Hook, PhaseFold};
 use super::exec::{self, End, Image, State};
 use super::formula::{self, Formula, WIDTH};
 use super::smt::Answer;
@@ -100,6 +100,9 @@ struct Streamed<'a> {
     output: Output<'a>,
     /// The bytes before each buffer-full its counts need.
     lookback: usize,
+    /// The counts of a part that can overlap itself, by placeholder, with the part: each goes
+    /// on from the matcher's phase, which a register keeps.
+    phased: Vec<(usize, Vec<u8>)>,
 }
 
 /// What a streaming program writes.
@@ -142,9 +145,14 @@ fn streamed<'a>(image: &Image, block: &'a Generated) -> Result<Streamed<'a>, Str
                     Piece::Text(_) => None,
                 })
                 .collect();
+            // A count of a part that overlaps itself goes on from the matcher's phase, not
+            // from bytes before the piece.
             let lookbacks: Option<Vec<usize>> = counts
                 .iter()
-                .map(|(_, expr)| formula::lookback(expr, name))
+                .map(|(_, expr)| {
+                    formula::lookback(expr, name)
+                        .or_else(|| formula::bordered_part(expr, name).map(|_| 0))
+                })
                 .collect();
             let lookback = lookbacks.and_then(|lookbacks| lookbacks.into_iter().max());
             let Some(lookback) = lookback.filter(|_| !counts.is_empty()) else {
@@ -158,6 +166,20 @@ fn streamed<'a>(image: &Image, block: &'a Generated) -> Result<Streamed<'a>, Str
             (Output::Counts(counts), lookback)
         }
     };
+    let phased: Vec<(usize, Vec<u8>)> = match &output {
+        Output::Counts(counts) => counts
+            .iter()
+            .filter_map(|(place, expr)| Some((*place, formula::bordered_part(expr, name)?)))
+            .collect(),
+        Output::Map => Vec::new(),
+    };
+    if !phased.is_empty() && lookback > 0 {
+        return Err(
+            "it counts a part that overlaps itself beside counts that look back at the bytes \
+             before each piece, which the induction doesn't take together yet"
+                .into(),
+        );
+    }
     let others = !block.args.is_empty()
         || !block.env.is_empty()
         || !block.files.is_empty()
@@ -181,7 +203,139 @@ fn streamed<'a>(image: &Image, block: &'a Generated) -> Result<Streamed<'a>, Str
         max: *max,
         output,
         lookback,
+        phased,
     })
+}
+
+/// What the count `expr`, the output's placeholder at `placeholder`, adds for `piece` from where
+/// the run stood at the head, whose registers were `at_head`: as from a text's start, or, for a
+/// part that overlaps itself, from the phase the head's phase register stands for.
+fn grown_by(
+    pool: &mut Pool,
+    streamed: &Streamed<'_>,
+    hook: &Hook,
+    at_head: &[Term],
+    (placeholder, expr): (usize, &Expr),
+    piece: &[Term],
+) -> Result<Term, String> {
+    let Some(part) = phased_part(streamed, placeholder) else {
+        return counted(pool, expr, streamed.name, piece);
+    };
+    let (register, fold) = hook
+        .phases
+        .iter()
+        .find(|(_, fold)| fold.placeholder == placeholder)
+        .ok_or("a count of a part that overlaps itself whose phase no register keeps")?;
+    let phase = fold.phase(pool, at_head[*register], part.len());
+    let texts = BTreeMap::from([(streamed.name.to_owned(), piece.to_vec())]);
+    match formula::count_from(pool, expr, &texts, &phase)? {
+        Formula::Number(number) => Ok(number.term),
+        _ => Err("a count that isn't a number".into()),
+    }
+}
+
+/// That each phase register, which held `at_head` at the head, holds one of its values after
+/// the time round, standing for the phase the formula's matcher is in after `piece`.
+fn phases_kept(
+    pool: &mut Pool,
+    streamed: &Streamed<'_>,
+    hook: &Hook,
+    at_head: &[Term],
+    now: &[Term],
+    piece: &[Term],
+) -> Result<Term, String> {
+    let mut checks = Vec::new();
+    for (register, fold) in &hook.phases {
+        let part = phased_part(streamed, fold.placeholder).ok_or("a phase of no count")?;
+        let before = fold.phase(pool, at_head[*register], part.len());
+        let (_, after) = formula::matches_from(pool, piece, part, &before);
+        let value = now[*register];
+        checks.push(fold.holds(pool, value));
+        let kept = fold.phase(pool, value, part.len());
+        for (said, wanted) in kept.conditions().iter().zip(after.conditions()) {
+            checks.push(pool.eq(*said, *wanted));
+        }
+    }
+    Ok(pool.all(&checks))
+}
+
+/// The part of the count at `placeholder`, when it's a count of a part that overlaps itself.
+fn phased_part<'a>(streamed: &'a Streamed<'_>, placeholder: usize) -> Option<&'a [u8]> {
+    streamed
+        .phased
+        .iter()
+        .find(|(place, _)| *place == placeholder)
+        .map(|(_, part)| part.as_slice())
+}
+
+/// Random buffer-fulls a phase is learned from.
+const PHASE_SAMPLES: usize = 256;
+
+/// The values `term`, a register after the first time round the loop from the program's start,
+/// takes on random inputs of `characters` the run's path allows, each with the state the
+/// formula's matcher of `part` is in after the buffer-full of `chunk` bytes the run read,
+/// `phase`: how many bytes of `part` the text since its last match ends with. `initial`, the
+/// register's value before, stands for none. `None` where one value stands for two states, so
+/// the register doesn't keep the phase.
+#[allow(clippy::too_many_arguments)]
+fn phase_states(
+    pool: &Pool,
+    run: &State,
+    term: Term,
+    phase: &formula::Phase,
+    chunk: usize,
+    part: &[u8],
+    initial: u128,
+    characters: &[u8],
+) -> Option<BTreeMap<u128, usize>> {
+    use rand::{RngExt, SeedableRng};
+    // Every byte the run's input holds, the buffer-full and what's past it alike.
+    let names: Vec<String> = run
+        .stdin_bytes()
+        .iter()
+        .map(|byte| pool.name(*byte).map(str::to_owned))
+        .collect::<Option<_>>()?;
+    let chunk = chunk.min(names.len());
+    let mut rng = rand::rngs::ChaCha8Rng::seed_from_u64(0x9a5e_f01d);
+    let mut states = BTreeMap::from([(initial, 0)]);
+    for sample in 0..PHASE_SAMPLES {
+        let mut bytes: Vec<u8> = (0..names.len())
+            .map(|_| characters[rng.random_range(0..characters.len())])
+            .collect();
+        // Every other buffer-full ends with a start of the part, so each phase shows.
+        if sample % 2 == 1 && part.len() > 1 {
+            let start = &part[..rng.random_range(1..part.len())];
+            if start.iter().all(|byte| characters.contains(byte)) && start.len() <= chunk {
+                bytes[chunk - start.len()..chunk].copy_from_slice(start);
+            }
+        }
+        let values: HashMap<String, u128> = names
+            .iter()
+            .cloned()
+            .zip(bytes.iter().map(|byte| u128::from(*byte)))
+            .collect();
+        if run
+            .path
+            .iter()
+            .any(|condition| pool.evaluate(*condition, &values) != Some(1))
+        {
+            continue;
+        }
+        let value = pool.evaluate(term, &values)?;
+        let mut state = 0;
+        for (index, condition) in phase.conditions().iter().enumerate() {
+            if pool.evaluate(*condition, &values)? == 1 {
+                if state != 0 {
+                    return None;
+                }
+                state = index + 1;
+            }
+        }
+        if *states.entry(value).or_insert(state) != state {
+            return None;
+        }
+    }
+    (states.values().any(|state| *state != 0)).then_some(states)
 }
 
 /// `expr`, a count, over `bytes`.
@@ -433,6 +587,43 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
                             }
                         }
                     }
+                    // Where a count is of a part that overlaps itself, the register whose value
+                    // after the first time round says the matcher's phase then, on every random
+                    // buffer-full: it starts out standing for nothing matched, and the step shows
+                    // each later time round keeps it so.
+                    for (placeholder, part) in &streamed.phased {
+                        let start = formula::Phase::start(&mut pool, part);
+                        let (_, after) = formula::matches_from(&mut pool, first, part, &start);
+                        let found = changes.registers.iter().find_map(|register| {
+                            if grown.counters.contains_key(register)
+                                || these.contains_key(register)
+                                || grown.phases.contains_key(register)
+                            {
+                                return None;
+                            }
+                            let initial = pool.constant(snapshot.registers[*register])?;
+                            let states = phase_states(
+                                &pool,
+                                run,
+                                run.register_term(*register),
+                                &after,
+                                first.len(),
+                                part,
+                                initial,
+                                &streamed.characters,
+                            )?;
+                            Some((*register, states))
+                        });
+                        if let Some((register, states)) = found {
+                            grown.phases.insert(
+                                register,
+                                PhaseFold {
+                                    states,
+                                    placeholder: *placeholder,
+                                },
+                            );
+                        }
+                    }
                     if looks_back {
                         // The first buffer-full's count is checked here alone, so it must hold
                         // on every run.
@@ -471,8 +662,14 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
                         )?;
                         (second.registers[register], count)
                     } else {
-                        let count =
-                            counted(&mut pool, expr, streamed.name, &fed[..taken.min(fed.len())])?;
+                        let count = grown_by(
+                            &mut pool,
+                            &streamed,
+                            &hook,
+                            &snapshot.registers,
+                            (fold.placeholder, expr),
+                            &fed[..taken.min(fed.len())],
+                        )?;
                         (snapshot.registers[register], count)
                     };
                     let read = &fed[..(run.stdin_taken() - snapshot.stdin_read).min(fed.len())];
@@ -494,7 +691,10 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
                 }
             }
             for register in changes.registers {
-                if !grown.counters.contains_key(&register) && !grown.folds.contains_key(&register) {
+                if !grown.counters.contains_key(&register)
+                    && !grown.folds.contains_key(&register)
+                    && !grown.phases.contains_key(&register)
+                {
                     grown.registers.insert(register);
                 }
             }
@@ -521,6 +721,18 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
         {
             return Err(Refused {
                 why: "it keeps a count in no register of its own as it goes".into(),
+                input: shown,
+            });
+        }
+        if streamed
+            .phased
+            .iter()
+            .any(|(place, _)| !grown.phases.values().any(|fold| fold.placeholder == *place))
+        {
+            return Err(Refused {
+                why: "it counts a part that can overlap itself, and no register of its own says \
+                      after each buffer-full how much of the part the text ends with"
+                    .into(),
                 input: shown,
             });
         }
@@ -666,7 +878,14 @@ fn looped_checks(
                     }
                     _ => (
                         snapshot.registers[*register],
-                        counted(pool, expr, streamed.name, &fed[..chunk])?,
+                        grown_by(
+                            pool,
+                            streamed,
+                            hook,
+                            &snapshot.registers,
+                            (fold.placeholder, expr),
+                            &fed[..chunk],
+                        )?,
                     ),
                 };
                 let now = pool.zero_extend(run.register_term(*register), WIDTH - 64);
@@ -674,6 +893,19 @@ fn looped_checks(
                 let expected = pool.add(before, count);
                 checks.push(pool.eq(now, expected));
             }
+            // Each phase register back at one of its values, saying the phase after the
+            // buffer-full.
+            let now: Vec<Term> = (0..snapshot.registers.len())
+                .map(|register| run.register_term(register))
+                .collect();
+            checks.push(phases_kept(
+                pool,
+                streamed,
+                hook,
+                &snapshot.registers,
+                &now,
+                &fed[..chunk],
+            )?);
         }
     }
     if run.stderr.len() != snapshot.stderr {

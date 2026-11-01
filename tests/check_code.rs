@@ -499,6 +499,32 @@ async fn a_word_count_is_proven_for_every_length() {
     session.service.cancel().await.expect("close the session");
 }
 
+/// A count of a part that overlaps itself, `aa`, goes through check to done proven for every
+/// length: the program keeps, across each buffer-full, whether its last byte is an `a` that
+/// starts no pair yet, and the proof shows every time round keeps that so.
+#[tokio::test]
+async fn a_count_of_a_part_that_overlaps_itself_is_proven_for_every_length() {
+    if !solvers_installed() {
+        return;
+    }
+    let session = Session::proving_for(Protocol::Discover, 120).await;
+    let files = ["spec.md", "main.s"].map(|file| (file, fixture("pairs", file)));
+    let program = written(&session, files).await;
+    let report = session.settle(&program).await;
+    assert_eq!(report["state"], "done", "{report}");
+    let proof = text(&report["proofs"][0]);
+    assert!(
+        proof.starts_with("generated B1: proven for every input in range")
+            && proof.contains("one more buffer-full of 256 bytes"),
+        "{report}"
+    );
+    let mut arguments = program.arguments();
+    arguments["stdin"] = Value::from("aaa baaaa\naa");
+    let run = session.call_ok("run", arguments).await;
+    assert_eq!(run["stdout"], "4\n", "{run}");
+    session.service.cancel().await.expect("close the session");
+}
+
 /// A `switch` on an operator, as a checked jump table (dialect 4): it follows every rule, passes
 /// its tests, and each case runs.
 #[tokio::test]

@@ -717,10 +717,24 @@ What it covers:
   buffer-fulls, which run from the program's start show the counterexample where the program is
   wrong: a wc that forgets at each read that the last one ended inside a word gets a text just
   over a buffer-full whose word straddles the two. tests/fixtures/words, a `wc -lw` through
-  `fill` 64 bytes a step with AVX-512 masks, is proven so with no solver question. A count whose
-  part looks back further than that, as `count` of `"aa"` does on how the matches before it
-  fell, or a loop the induction doesn't fit, or whose step doesn't hold, is proven by length as
-  above.
+  `fill` 64 bytes a step with AVX-512 masks, is proven so with no solver question. A count of a
+  part that can overlap itself, as `count` of `"aa"`, depends on more than the last bytes: on
+  `aaa…a` whether the next `a` ends a pair is the parity of everything read. The formula counts
+  such a part as a matcher reads the text, one byte at a time, keeping how much of the part the
+  bytes since its last match end with, and starting over after each match, which is `count`'s
+  leftmost-first rule; a whole's count is then its first piece's and the rest's read from the
+  phase the first piece leaves. The step learns where the program keeps that phase: in the first
+  time round from the start, it evaluates each register the round changed, and the formula's
+  phase, on random buffer-fulls, and takes the register whose values say the phase, each value
+  one state, its value at the start standing for nothing matched. From then on the head holds
+  that register at any of its values, and each time round must add the formula's matches read
+  from the phase its value says and leave it at a value saying the phase after; the base reads
+  each final piece from it. tests/fixtures/pairs, which keeps whether its last byte is an `a`
+  that starts no pair yet, is proven so for every length in about 2 seconds, with no solver
+  question; a program that drops that flag at a buffer-full's end, ignores it coming into the
+  count, or starts with an `a` pending gets an input that shows it. A loop the induction doesn't
+  fit, or whose step doesn't
+  hold, is proven by length as above.
 - What the proof ran. A function no run of a proof called, such as a fast path that starts past
   the proof's bound, is named in the proof's line: "the proof never ran crc_block, so what it
   does isn't proven". The CRC-32C asset's three chains join only past 12,288 bytes, so its
@@ -795,6 +809,15 @@ What it covers:
   about 80 seconds with 16 cores: the program's digits and the formula's meet as one term, and
   the solvers are left how many digits there are. Each rule has random tests against plain
   arithmetic.
+- Flags kept as numbers: a value that's only ever 0 or 1, as `setcc` leaves one, is 1 where its
+  condition holds, and `and`, `or` and `xor` of two such values are 1 where the and, or or
+  exclusive or of their conditions holds; such a value equal to 1 is the same as not 0; and
+  `a and not (a and c)` is `a and not c`; and a count of one condition is that condition's 1 or
+  0. So a program that keeps a flag in a register and a formula's condition are one term, and a
+  sum of flags is a count: `pairs`' flag chain, `pending = is_a and not (is_a and pending)`, is
+  the formula's matcher, and its count of `aa` is proven by length with no solver question where
+  the two had been compared byte by byte (46 bytes, then cvc5 ran out of time). Random tests
+  check each rule against plain arithmetic.
 - Files: `openat`, `read`, `write`, `close` and `fstat` on the test's files, and `mkdirat`,
   `unlinkat` and `renameat` on its folders and files. A missing input file gives `ENOENT`, and
   the checks on the files and folders left after the run are the runner's. A file name the input

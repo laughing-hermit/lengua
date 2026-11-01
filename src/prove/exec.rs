@@ -59,6 +59,49 @@ struct Region {
     writable: bool,
 }
 
+/// A bounded loop, as the dialect writes every one: its time round runs from its head down to a
+/// `dec` of its bound counter and a `jnz` back up to the head.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Loop {
+    /// Where each time round starts.
+    pub head: u64,
+    /// The `jnz` that goes round again.
+    pub latch: u64,
+    /// Where the loop goes on once its counter runs out: the instruction after the `jnz`.
+    pub exit: u64,
+    /// The bound counter's register.
+    pub counter: usize,
+}
+
+/// The bounded loops in `code`, the instructions of one function from `start` to `end`: each
+/// `jnz` back up into the function right after a `dec` of a whole register.
+fn loops_in(code: &[Instruction], start: u64, end: u64) -> Vec<Loop> {
+    code.windows(2)
+        .filter_map(|pair| {
+            let [counted, back] = pair else {
+                return None;
+            };
+            let target = back.near_branch_target();
+            let whole = counted.op0_kind() == OpKind::Register
+                && counted.op0_register().full_register() == counted.op0_register();
+            (back.mnemonic() == Mnemonic::Jne
+                && counted.mnemonic() == Mnemonic::Dec
+                && whole
+                && target < back.ip()
+                && (start..end).contains(&target))
+            .then(|| {
+                Some(Loop {
+                    head: target,
+                    latch: back.ip(),
+                    exit: back.next_ip(),
+                    counter: slot(counted.op0_register())?,
+                })
+            })
+            .flatten()
+        })
+        .collect()
+}
+
 /// The program as loaded: its instructions by address, and its memory.
 pub struct Image {
     instructions: HashMap<u64, Instruction>,
@@ -78,6 +121,8 @@ pub struct Image {
     tables: HashMap<u64, Vec<u64>>,
     /// The canonical fill's places, when the program has it.
     fill: Option<fill::Fill>,
+    /// Every bounded loop, by its head.
+    loops: BTreeMap<u64, Loop>,
     /// Whether some run has called each function, as `functions` lists them: a proof says
     /// nothing of code no run reached.
     entered: Vec<AtomicBool>,
@@ -101,9 +146,17 @@ impl Image {
         let mut instructions = HashMap::new();
         let mut words = HashMap::new();
         let mut functions = Vec::new();
+        let mut loops = BTreeMap::new();
         for (name, function) in &machine.functions {
             for instruction in function.x86() {
                 instructions.insert(instruction.ip(), *instruction);
+            }
+            for found in loops_in(
+                function.x86(),
+                function.address,
+                function.address + function.size,
+            ) {
+                loops.insert(found.head, found);
             }
             for word in function.words() {
                 if let Ok(inst) = word.inst {
@@ -167,11 +220,23 @@ impl Image {
                 })
                 .collect(),
             fill: None,
+            loops,
             entered,
             isa: machine.isa,
         };
         image.fill = fill::Fill::find(&image, machine);
         Some(image)
+    }
+
+    /// The bounded loop whose head is `head`.
+    #[must_use]
+    pub fn loop_at(&self, head: u64) -> Option<&Loop> {
+        self.loops.get(&head)
+    }
+
+    /// Every bounded loop, by its head, fill's own read loop among them.
+    pub fn loops(&self) -> impl Iterator<Item = &Loop> {
+        self.loops.values()
     }
 
     /// Whether the program has the canonical fill, which proofs read as a whole for every way
@@ -3756,6 +3821,34 @@ mod tests {
             other => panic!("ended with {other:?}"),
         };
         (text(&state.stdout), text(&state.stderr), status)
+    }
+
+    #[tokio::test]
+    async fn every_bounded_loop_is_found_with_its_counter() {
+        // The line counter's five loops: the main loop over buffer-fulls (rbx), the count over a
+        // buffer-full's chunks (r8), fill's reads (r9), and the digits and writes (r8).
+        let source = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/lines/main.s"),
+        )
+        .expect("the fixture");
+        let image = image(&source).await;
+        let counters: Vec<usize> = image.loops().map(|found| found.counter).collect();
+        let mut sorted = counters.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, vec![3, 8, 8, 8, 9], "{:?}", image.loops);
+        for found in image.loops() {
+            let latch = image.instructions[&found.latch];
+            assert_eq!(latch.mnemonic(), Mnemonic::Jne);
+            assert_eq!(latch.near_branch_target(), found.head);
+            assert_eq!(latch.next_ip(), found.exit);
+            assert!(found.head < found.latch);
+        }
+        assert_eq!(
+            image
+                .loop_at(image.fill_head().expect("fill"))
+                .map(|found| found.counter),
+            Some(9)
+        );
     }
 
     #[tokio::test]

@@ -39,8 +39,8 @@ What lengua is on this target now:
 
 Tested, not proven, and each proof line says why: sorting past a few bytes, word tallies past a
 few bytes, floats computed in another order than the formula's, a folder's listing, the `sha256`
-formula, counts of a part that can overlap itself (such as `"aa"`), and the benchmark's fastest
-word count, which reads a megabyte at a time and is proven by length.
+formula, and the benchmark's fastest word count, which reads a megabyte at a time and is proven
+by length.
 
 Left for later on this target:
 - Sorting at every length, which needs quantified facts over memory.
@@ -48,6 +48,19 @@ Left for later on this target:
   length one by one, so its cost grows with the square of the buffer; a base that covers every
   final length in one shape would let a 64 KiB buffer, C's size, be proven. The design review
   recommended this as its own round (about 1,000 to 1,500 lines).
+
+**Next round: proofs whose cost grows with the input, not its square** (planned 2026-11-01,
+revised after a design review the same day). The fastest streaming programs aren't proven for
+every length because the induction's base proves each final piece's length one by one, building
+terms for every byte each time: quadratic in the buffer. The step is already linear and
+canonical at 64 KiB for counts (`popcnt` is a count, and counts merge). The review showed that
+summarizing inner loops with a known number of times round only cuts the constant, and that a
+summary built from the formula's own terms leaves nothing downstream to catch it if it's wrong.
+What's linear is one run whose final piece has a length the input chooses, each byte's part
+guarded by whether it's inside: one shape for every final length, which is also what reading
+with raw `read` (any size each time round, as the fastest `wc`'s megabyte reads) needs. Done
+when the fastest `wc` is proven for every length with a 64 KiB buffer or more. Plan:
+`~/.claude/plans/round-10-loop-summaries.md`.
 
 **The finish line** (decided 2026-11-01, before ARM64 resumes): everything that can be proven is
 proven, however many rounds that takes, except where a concrete, demonstrated reason shows lengua's
@@ -59,8 +72,13 @@ approach can't prove it, which comes back to the user with the evidence. By item
   the program printed and the formula's had been built two ways, so the solvers compared them:
   a value halved by a shift now compares as the value itself, and a quotient narrowed to 63 bits
   and widened again is the quotient.
-- Likely: counts of a part that can overlap itself; the fastest streaming programs for every
-  length.
+- Done 2026-11-01: counts of a part that can overlap itself (`count(s, "aa")`), proven for every
+  length. The formula counts such a part as a matcher reads the text, and flags a program keeps
+  as numbers are their conditions, so `tests/fixtures/pairs`' flag chain and the formula's are
+  one term (by length: no solver question where the solvers had stopped at 46 bytes); the
+  induction learns which register keeps the matcher's phase across a cut from the first time
+  round, and proves every later one keeps it (about 2 seconds, no solver question).
+- Likely: the fastest streaming programs for every length, by the next round above.
 - Uncertain, research: sorting at every length and word tallies past a few bytes, which need
   quantified facts over memory.
 - Not by their nature, so "tested, not proven" is the right final answer: floats computed in
