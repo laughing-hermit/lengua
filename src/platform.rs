@@ -490,10 +490,19 @@ fn cpu_model() -> Option<String> {
     model_name_from_cpuinfo(&cpuinfo)
 }
 
+/// The CPU's model: its `model name`, which x86-64 Linux gives, or else, as on ARM64 Linux,
+/// which gives none, the implementer and part numbers that name the design.
 fn model_name_from_cpuinfo(cpuinfo: &str) -> Option<String> {
-    cpuinfo.lines().find_map(|line| {
-        let (key, value) = line.split_once(':')?;
-        (key.trim() == "model name").then(|| value.trim().to_owned())
+    let field = |name: &str| {
+        cpuinfo.lines().find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            (key.trim() == name).then(|| value.trim().to_owned())
+        })
+    };
+    field("model name").or_else(|| {
+        let implementer = field("CPU implementer")?;
+        let part = field("CPU part")?;
+        Some(format!("CPU implementer {implementer}, part {part}"))
     })
 }
 
@@ -655,5 +664,12 @@ mod tests {
             Some("Example CPU 9000")
         );
         assert_eq!(model_name_from_cpuinfo("processor\t: 0\n"), None);
+        // ARM64 Linux names no model, only the design's numbers.
+        let arm = "processor\t: 0\nBogoMIPS\t: 50.00\nCPU implementer\t: 0x41\nCPU \
+                   architecture: 8\nCPU variant\t: 0x3\nCPU part\t: 0xd0c\n";
+        assert_eq!(
+            model_name_from_cpuinfo(arm).as_deref(),
+            Some("CPU implementer 0x41, part 0xd0c")
+        );
     }
 }

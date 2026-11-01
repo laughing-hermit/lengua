@@ -198,8 +198,13 @@ When a test supplies random bytes or clock readings, a second process of the ser
 supervisor, traces the launcher with ptrace before it becomes the program. The launcher installs
 one more seccomp filter first, which stops only `getrandom` and `clock_gettime` for the
 supervisor; the supervisor writes the test's bytes or reading into the program's memory with
-`process_vm_writev` and skips the kernel's call, so the program sees the test's values. A test
-of a program that may sleep has the supervisor too: it ends each `clock_nanosleep` at once,
+`process_vm_writev` and skips the kernel's call, so the program sees the test's values. On
+AArch64 a call can't be skipped without a register set nix gives no safe way to write
+(`NT_ARM_SYSTEM_CALL`), so the supervisor makes the kernel's call harmless instead (`getrandom`
+for no bytes, a clock that doesn't exist, descriptor -1 for a refused `connect`), lets it return
+at once, and at its exit puts the answer in x0 and the count it changed back in x1; every other
+register stays as the program left it. A test of a program that may sleep has the supervisor
+too: it ends each `clock_nanosleep` at once,
 since what the program does next can't depend on how long it slept, and a test shouldn't wait
 for it; a real `run` sleeps as long as the program asks. Signals, threads, the exit status, the
 counters and the time limit work as in any run, and runs that need none of this have no
@@ -963,8 +968,9 @@ still to build per target. A new profile must supply:
    through the system library (libSystem, ntdll), code lengua never checked, so those need the
    system-library calling convention modelled instead.
 6. **The runner and sandbox:** on Linux, seccomp and Landlock (`runner.rs`), and the supervisor
-   that supplies tests' random bytes and clock (`supervise.rs`, which reads the CPU's registers).
-   macOS and Windows have neither; each needs its own confinement.
+   that supplies tests' random bytes and clock (`supervise.rs`, which reads the CPU's registers:
+   x86-64's and AArch64's, each in its own small `cpu` module). macOS and Windows have neither;
+   each needs its own confinement.
 
 **Linux ARM64 is nearest:** the same OS, so the same kinds of system calls, the same sandbox and
 ELF, but 2, 3 and 4 and a new triple are new, and 5 and 6 change in detail (the call numbers, the

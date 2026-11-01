@@ -22,9 +22,9 @@ use std::process::ExitCode;
 pub const SUPERVISE_FLAG: &str = "--supervise";
 
 /// Whether the supervisor runs on this computer's CPU: it reads and rewrites a stopped call's
-/// registers, x86-64's so far. Where it doesn't, tests that need it aren't run, and a program
-/// that may connect only to this computer doesn't run either.
-pub const AVAILABLE: bool = cfg!(target_arch = "x86_64");
+/// registers, x86-64's and AArch64's. Where it doesn't, tests that need it aren't run, and a
+/// program that may connect only to this computer doesn't run either.
+pub const AVAILABLE: bool = cfg!(any(target_arch = "x86_64", target_arch = "aarch64"));
 
 fn say(line: &str) {
     let mut stdout = std::io::stdout().lock();
@@ -35,11 +35,11 @@ fn say(line: &str) {
 /// Supervisor mode: traces the launcher named on standard input until its program ends.
 #[must_use]
 pub fn supervise() -> ExitCode {
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
     {
         traced::supervise()
     }
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     {
         say(&format!(
             "error: lengua's supervisor doesn't run on {} yet",
@@ -50,8 +50,9 @@ pub fn supervise() -> ExitCode {
 }
 
 /// The supervisor itself, for a CPU whose registers it reads.
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 mod traced {
+    use std::collections::HashMap;
     use std::io::{IoSlice, Read as _};
     use std::process::ExitCode;
 
@@ -94,9 +95,12 @@ mod traced {
                 return ExitCode::FAILURE;
             }
         };
+        // TRACESYSGOOD tells a stop at a call's exit, where AArch64's answers land, from a
+        // signal's.
         let options = Options::PTRACE_O_TRACESECCOMP
             | Options::PTRACE_O_TRACECLONE
             | Options::PTRACE_O_TRACEEXEC
+            | Options::PTRACE_O_TRACESYSGOOD
             | Options::PTRACE_O_EXITKILL;
         if let Err(error) = ptrace::seize(leader, options) {
             say(&format!(
@@ -113,6 +117,7 @@ mod traced {
             random_used: 0,
             readings_used: 0,
             started: false,
+            landing: HashMap::new(),
         };
         say(&supervisor.follow());
         ExitCode::SUCCESS
@@ -128,6 +133,29 @@ mod traced {
         readings_used: usize,
         /// Whether the launcher has become the program: its own calls before then run for real.
         started: bool,
+        /// The answers to land at their calls' exits, by the task making each call, with its
+        /// registers as the program left them.
+        landing: HashMap<Pid, (i64, cpu::Registers)>,
+    }
+
+    /// How a call the supervisor answers is kept from doing anything in the kernel, where the CPU
+    /// can't skip it: the call made with nothing to do, so it returns at once.
+    #[derive(Debug, Clone, Copy)]
+    pub(super) enum Harmless {
+        /// `getrandom` asking for no bytes.
+        ZeroCount,
+        /// A clock that doesn't exist, for `clock_gettime` and `clock_nanosleep`.
+        MissingClock,
+        /// A file descriptor that doesn't exist, for `connect`.
+        MissingDescriptor,
+    }
+
+    /// How the stopped task goes on.
+    pub(super) enum Resume {
+        /// To wherever it goes next.
+        On,
+        /// To its call's exit, where the answer lands.
+        ToExit,
     }
 
     impl Supervisor {
@@ -144,8 +172,20 @@ mod traced {
                     WaitStatus::PtraceEvent(task, _, event)
                         if event == Event::PTRACE_EVENT_SECCOMP as i32 =>
                     {
-                        if self.started {
-                            self.answer(task);
+                        let resume = if self.started {
+                            self.answer(task)
+                        } else {
+                            Resume::On
+                        };
+                        let _ = match resume {
+                            Resume::On => ptrace::cont(task, None),
+                            Resume::ToExit => ptrace::syscall(task, None),
+                        };
+                    }
+                    // A call's exit, where its answer lands.
+                    WaitStatus::PtraceSyscall(task) => {
+                        if let Some((result, left)) = self.landing.remove(&task) {
+                            cpu::land(task, result, &left);
                         }
                         let _ = ptrace::cont(task, None);
                     }
@@ -170,29 +210,35 @@ mod traced {
             format!("ok {}", self.random_used)
         }
 
-        /// Answers the call `task` is stopped at, skipping the kernel's, or lets the kernel make it.
-        fn answer(&mut self, task: Pid) {
-            let Ok(mut registers) = ptrace::getregs(task) else {
-                return;
+        /// Answers the call `task` is stopped at in place of the kernel, or lets the kernel make
+        /// it, and says how the task goes on.
+        fn answer(&mut self, task: Pid) -> Resume {
+            let Ok(registers) = ptrace::getregs(task) else {
+                return Resume::On;
             };
-            let result = match i64::try_from(registers.orig_rax) {
-                Ok(syscalls::GETRANDOM) => {
-                    self.random(task, registers.rdi, registers.rsi, registers.rdx)
+            let [first, second, third, ..] = cpu::arguments(&registers);
+            let (result, harmless) = match i64::try_from(cpu::number(&registers)) {
+                Ok(syscalls::GETRANDOM) => (
+                    self.random(task, first, second, third),
+                    Some(Harmless::ZeroCount),
+                ),
+                Ok(syscalls::CLOCK_GETTIME) => {
+                    (self.clock(task, second), Some(Harmless::MissingClock))
                 }
-                Ok(syscalls::CLOCK_GETTIME) => self.clock(task, registers.rsi),
-                Ok(syscalls::CLOCK_NANOSLEEP) => 0,
-                Ok(syscalls::CONNECT) if self.local => {
-                    match reaches_this_computer(task, registers.rsi) {
-                        true => return,
-                        false => -(Errno::EACCES as i64),
-                    }
-                }
-                _ => -(Errno::ENOSYS as i64),
+                Ok(syscalls::CLOCK_NANOSLEEP) => (0, Some(Harmless::MissingClock)),
+                Ok(syscalls::CONNECT) if self.local => match reaches_this_computer(task, second) {
+                    true => return Resume::On,
+                    false => (-(Errno::EACCES as i64), Some(Harmless::MissingDescriptor)),
+                },
+                _ => (-(Errno::ENOSYS as i64), None),
             };
-            // A call number of -1 skips the call; the program sees `result` as what it returned.
-            registers.orig_rax = u64::MAX;
-            registers.rax = result.cast_unsigned();
-            let _ = ptrace::setregs(task, registers);
+            match cpu::answer(task, registers, result, harmless) {
+                Some(left) => {
+                    self.landing.insert(task, (result, left));
+                    Resume::ToExit
+                }
+                None => Resume::On,
+            }
         }
 
         /// `getrandom(buffer, count, flags)`: the test's next `count` bytes, zeros past its end.
@@ -285,6 +331,107 @@ mod traced {
         match process_vm_writev(task, &[IoSlice::new(bytes)], &remote) {
             Ok(written) if written == bytes.len() => Ok(()),
             _ => Err(Errno::EFAULT),
+        }
+    }
+
+    /// x86-64: a stopped call's number is in `orig_rax` and its arguments in `rdi`, `rsi`, `rdx`,
+    /// `r10`, `r8` and `r9`; a number of -1 skips the call, its result in `rax`.
+    #[cfg(target_arch = "x86_64")]
+    mod cpu {
+        use nix::sys::ptrace;
+        use nix::unistd::Pid;
+
+        use super::Harmless;
+
+        pub(super) type Registers = nix::libc::user_regs_struct;
+
+        pub(super) fn number(registers: &Registers) -> u64 {
+            registers.orig_rax
+        }
+
+        pub(super) fn arguments(registers: &Registers) -> [u64; 6] {
+            [
+                registers.rdi,
+                registers.rsi,
+                registers.rdx,
+                registers.r10,
+                registers.r8,
+                registers.r9,
+            ]
+        }
+
+        /// The program sees `result` as what the call returned, and the kernel never makes it.
+        /// Nothing lands later.
+        pub(super) fn answer(
+            task: Pid,
+            mut registers: Registers,
+            result: i64,
+            _: Option<Harmless>,
+        ) -> Option<Registers> {
+            registers.orig_rax = u64::MAX;
+            registers.rax = result.cast_unsigned();
+            let _ = ptrace::setregs(task, registers);
+            None
+        }
+
+        /// x86-64's answers never wait for a call's exit.
+        pub(super) fn land(_: Pid, _: i64, _: &Registers) {}
+    }
+
+    /// AArch64: a stopped call's number is in x8 and its arguments in x0 to x5, and its result
+    /// goes in x0. The kernel takes a changed number only through `NT_ARM_SYSTEM_CALL`, which
+    /// lengua can't write without `unsafe`, so a call it answers goes to the kernel made harmless
+    /// and returns at once; at its exit the answer lands in x0, and the one argument made
+    /// harmless that isn't x0 (`getrandom`'s count, in x1) is put back. The kernel restores x7,
+    /// which it uses to tell a call's entry from its exit, by itself.
+    #[cfg(target_arch = "aarch64")]
+    mod cpu {
+        use nix::sys::ptrace;
+        use nix::unistd::Pid;
+
+        use super::Harmless;
+
+        pub(super) type Registers = nix::libc::user_regs_struct;
+
+        /// A clock id past the kernel's last, so `clock_gettime` and `clock_nanosleep` refuse it
+        /// at once with `EINVAL`.
+        const NO_CLOCK: u64 = 16;
+
+        pub(super) fn number(registers: &Registers) -> u64 {
+            registers.regs[8]
+        }
+
+        pub(super) fn arguments(registers: &Registers) -> [u64; 6] {
+            let x = &registers.regs;
+            [x[0], x[1], x[2], x[3], x[4], x[5]]
+        }
+
+        /// Makes the call harmless and returns the registers as the program left them, for its
+        /// answer to land at the call's exit; or `None` when the call can't be made harmless, so
+        /// it's the kernel's to make.
+        pub(super) fn answer(
+            task: Pid,
+            registers: Registers,
+            _: i64,
+            harmless: Option<Harmless>,
+        ) -> Option<Registers> {
+            let mut changed = registers;
+            match harmless? {
+                Harmless::ZeroCount => changed.regs[1] = 0,
+                Harmless::MissingClock => changed.regs[0] = NO_CLOCK,
+                Harmless::MissingDescriptor => changed.regs[0] = u64::MAX,
+            }
+            ptrace::setregs(task, changed).ok()?;
+            Some(registers)
+        }
+
+        /// At the call's exit: `result` in x0, and x1 as the program left it.
+        pub(super) fn land(task: Pid, result: i64, left: &Registers) {
+            if let Ok(mut registers) = ptrace::getregs(task) {
+                registers.regs[0] = result.cast_unsigned();
+                registers.regs[1] = left.regs[1];
+                let _ = ptrace::setregs(task, registers);
+            }
         }
     }
 }
