@@ -232,9 +232,13 @@ one needs.
   through `fill`, and files and folders, checked, tested and proven. Proven since R9b
   (2026-11-01), with no solver question, through the server too, natively and under QEMU: the
   template, a streaming filter through `fill` for every length, and a file program
-  (`tests/fixtures/linux-aarch64/upcase`, the upcase example's spec unchanged). Next is R10, the
-  skills and references for AArch64 and interactive sessions. Until the rounds after it land,
-  lengua doesn't "run on ARM64", and nothing should say so:
+  (`tests/fixtures/linux-aarch64/upcase`, the upcase example's spec unchanged). R10's skills and
+  references are done too: the compile skill compiles for the machine line's target, with
+  `references/linux-aarch64.md`. Left of R10, skipped for now at the user's word (2026-11-01) so
+  it costs nothing: 4 to 6 real interactive Claude Code sessions compiling specs for AArch64 from
+  one request each, and one for x86-64 as a regression check; they run on the user's Claude
+  account. Until the rounds after it land, lengua doesn't "run on ARM64", and nothing should say
+  so:
   - an install package for ARM64 Linux computers (today's release and installer are x86-64 only,
     and the ARM64 server is built only on CI);
   - vector instructions (NEON, then SVE), lengua's main speed tool, with ARM64 benchmarks against
