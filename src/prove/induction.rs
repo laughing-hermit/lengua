@@ -371,6 +371,9 @@ fn held(pool: &mut Pool, run: &State, characters: &[u8]) -> Vec<Term> {
         .collect()
 }
 
+/// Random inputs that may show a register isn't a count before a solver is asked.
+const REFUTING_SAMPLES: usize = 8;
+
 /// Whether a register grows as a count does.
 enum Grows {
     /// It holds what it held and the count.
@@ -388,12 +391,11 @@ fn grows(
     solvers: &mut Solvers,
     budget: &Budget,
     run: &State,
-    register: usize,
-    before: Term,
-    count: Term,
-    held: &[Term],
+    (register, before, count): (usize, Term, Term),
+    (held, characters): (&[Term], &[u8]),
     read: &[Term],
 ) -> Result<Grows, String> {
+    use rand::{RngExt, SeedableRng};
     let now = pool.zero_extend(run.register_term(register), WIDTH - 64);
     let before = pool.zero_extend(before, WIDTH - 64);
     let expected = pool.add(before, count);
@@ -405,6 +407,27 @@ fn grows(
     }
     let mut conditions = run.path.clone();
     conditions.push(pool.bool_not(same));
+    // Most registers a time round changes aren't a count: an input of the text's characters
+    // that the run's path allows and that shows this one isn't settles it with no solver.
+    let mut rng = rand::rngs::ChaCha8Rng::seed_from_u64(0x6e05_5eed);
+    for _ in 0..REFUTING_SAMPLES {
+        let mut witness: HashMap<Term, u128> = run
+            .stdin_bytes()
+            .iter()
+            .map(|byte| {
+                let character = characters[rng.random_range(0..characters.len())];
+                (*byte, u128::from(character))
+            })
+            .collect();
+        if super::meets(pool, &conditions, &mut witness, &mut rng) {
+            let input = read
+                .iter()
+                .map(|byte| witness.get(byte).map(|value| *value as u8))
+                .collect::<Option<Vec<u8>>>()
+                .filter(|input| !input.is_empty());
+            return Ok(Grows::No(input));
+        }
+    }
     let solver = solvers.get(budget.deadline)?;
     let (answer, model) = solver
         .check(pool, &conditions, read)
@@ -567,10 +590,8 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
                                         &mut solvers,
                                         budget,
                                         run,
-                                        *register,
-                                        before,
-                                        count,
-                                        &held,
+                                        (*register, before, count),
+                                        (&held, &streamed.characters),
                                         &[],
                                     )?,
                                     Grows::Yes
@@ -678,10 +699,8 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
                         &mut solvers,
                         budget,
                         run,
-                        register,
-                        before,
-                        count,
-                        &held,
+                        (register, before, count),
+                        (&held, &streamed.characters),
                         read,
                     )? {
                         grown.folds.remove(&register);
