@@ -303,6 +303,38 @@ impl Linear {
 /// Marks a shape's number where a term would be, in a node that stands for a shape.
 const SHAPE: u32 = 1 << 31;
 
+/// The conditions one count counts, sorted: those of the count it extends, if any, then its own.
+/// A running total a loop adds to keeps only what each step adds, not a copy of all it counted
+/// before, so the counts over a long text take memory in proportion to the text, not its square.
+#[derive(Debug)]
+struct Counted {
+    /// The count this one extends, by number.
+    base: Option<u32>,
+    /// The conditions this count adds to its base's, sorted.
+    own: Vec<Term>,
+    /// How many conditions it counts in all.
+    len: usize,
+    /// How many of them are the constant true.
+    sure: usize,
+    /// The largest condition.
+    last: Term,
+    /// Whether the base's conditions, then the count's own, are in order.
+    sorted: bool,
+    /// The conditions' hash: the sum of each one's [`mix`], however they're held.
+    hash: u64,
+    /// The count made before this one with the same hash.
+    same_hash: Option<u32>,
+}
+
+/// A condition's share of its count's hash: splitmix64's finalizer of its number, so the sums of
+/// two different sets of conditions hardly ever agree.
+fn mix(term: Term) -> u64 {
+    let mut z = u64::from(term.0).wrapping_add(0x9e37_79b9_7f4a_7c15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^ (z >> 31)
+}
+
 /// Every term made so far, each made once, with the unsigned range of values each can take.
 #[derive(Debug, Default)]
 pub struct Pool {
@@ -330,9 +362,10 @@ pub struct Pool {
     /// The sets lookups test, by number.
     tables: Vec<Table>,
     table_index: HashMap<Table, u32>,
-    /// The conditions each count counts, sorted, by number.
-    counts: Vec<Vec<Term>>,
-    count_index: HashMap<Vec<Term>, u32>,
+    /// The conditions each count counts, by number.
+    counts: Vec<Counted>,
+    /// The last count made with each hash of its conditions.
+    count_index: HashMap<u64, u32>,
     /// Each conjunction a count has counted, in its one form ([`Pool::canonical_part`]).
     canonical_parts: HashMap<Term, Term>,
     /// The values a byte variable is held to by the conditions it's drawn with, such as a
@@ -1005,24 +1038,46 @@ impl Pool {
         self.tables[number as usize]
     }
 
-    /// The conditions a count counts.
+    /// The conditions a count counts, sorted.
     #[must_use]
-    pub fn count_parts(&self, number: u32) -> &[Term] {
-        &self.counts[number as usize]
+    pub fn count_parts(&self, number: u32) -> Vec<Term> {
+        let mut chain = Vec::new();
+        let mut at = Some(number);
+        while let Some(here) = at {
+            chain.push(here);
+            at = self.counts[here as usize].base;
+        }
+        let counted = &self.counts[number as usize];
+        let mut parts = Vec::with_capacity(counted.len);
+        for here in chain.iter().rev() {
+            parts.extend_from_slice(&self.counts[*here as usize].own);
+        }
+        if !counted.sorted {
+            parts.sort_unstable();
+        }
+        parts
     }
 
     /// How many of `parts`, true/false terms, hold, as a `width`-bit number: a count, the same
     /// term whatever order the parts come in.
     pub fn count(&mut self, width: u32, parts: &[Term]) -> Term {
-        let mut kept = Vec::with_capacity(parts.len());
-        for part in parts {
+        self.count_with(width, None, parts)
+    }
+
+    /// [`Self::count`] of count `base`'s conditions, if any, and `more`: a count that extends
+    /// `base` keeps only `more`.
+    fn count_with(&mut self, width: u32, base: Option<u32>, more: &[Term]) -> Term {
+        let mut own = Vec::with_capacity(more.len());
+        for part in more {
             if self.truth(*part) != Some(false) {
-                kept.push(self.canonical_part(*part));
+                own.push(self.canonical_part(*part));
             }
         }
-        let mut parts = kept;
-        if parts.len() as u128 > mask(width) {
+        let below = base.map_or(0, |base| self.counts[base as usize].len);
+        if (below + own.len()) as u128 > mask(width) {
             // It would wrap: add it up instead.
+            let mut parts = base.map_or_else(Vec::new, |base| self.count_parts(base));
+            parts.extend(own);
             let (one, zero) = (self.bv(width, 1), self.bv(width, 0));
             let ones: Vec<Term> = parts
                 .iter()
@@ -1030,25 +1085,96 @@ impl Pool {
                 .collect();
             return self.sum(width, &ones);
         }
-        parts.sort_unstable();
-        if parts.is_empty() {
+        own.sort_unstable();
+        if let Some(base) = base {
+            // The base counts two or more conditions, not all true: so does this count.
+            if own.is_empty() {
+                return self.make(Node::Count(base, width), Sort::Bv(width));
+            }
+            return self.stored_count(width, Some(base), own);
+        }
+        if own.is_empty() {
             return self.bv(width, 0);
         }
-        if parts.iter().all(|part| self.truth(*part) == Some(true)) {
-            return self.bv(width, parts.len() as u128);
+        if own.iter().all(|part| self.truth(*part) == Some(true)) {
+            return self.bv(width, own.len() as u128);
         }
         // A count of one condition is that condition's 1 or 0, the form a flag a program adds
         // takes, so the two are one term.
-        if let [only] = parts[..] {
+        if let [only] = own[..] {
             let (one, zero) = (self.bv(width, 1), self.bv(width, 0));
             return self.ite(only, one, zero);
         }
-        let next = u32::try_from(self.counts.len()).unwrap_or(u32::MAX);
-        let number = *self.count_index.entry(parts.clone()).or_insert(next);
-        if number == next {
-            self.counts.push(parts);
+        self.stored_count(width, None, own)
+    }
+
+    /// The count of count `base`'s conditions, if any, then `own`, sorted, as a `width`-bit
+    /// number: an earlier count of the same conditions, however it holds them, or a new one.
+    fn stored_count(&mut self, width: u32, base: Option<u32>, own: Vec<Term>) -> Term {
+        let (mut len, mut sure, mut hash, mut sorted, mut last) =
+            base.map_or((0, 0, 0_u64, true, None), |base| {
+                let counted = &self.counts[base as usize];
+                (
+                    counted.len,
+                    counted.sure,
+                    counted.hash,
+                    counted.sorted,
+                    Some(counted.last),
+                )
+            });
+        for part in &own {
+            len += 1;
+            sure += usize::from(matches!(self.node(*part), Node::Bool(true)));
+            hash = hash.wrapping_add(mix(*part));
         }
+        if let (Some(before), Some(first)) = (last, own.first()) {
+            sorted &= before <= *first;
+        }
+        last = last.max(own.last().copied());
+        let mut candidate = self.count_index.get(&hash).copied();
+        while let Some(number) = candidate {
+            if self.same_count(number, base, &own, len) {
+                return self.make(Node::Count(number, width), Sort::Bv(width));
+            }
+            candidate = self.counts[number as usize].same_hash;
+        }
+        let number = u32::try_from(self.counts.len()).unwrap_or(u32::MAX);
+        let same_hash = self.count_index.insert(hash, number);
+        self.counts.push(Counted {
+            base,
+            own,
+            len,
+            sure,
+            last: last.unwrap_or(Term(0)),
+            sorted,
+            hash,
+            same_hash,
+        });
         self.make(Node::Count(number, width), Sort::Bv(width))
+    }
+
+    /// Whether count `number` counts what count `base`, if any, and then `own` do.
+    fn same_count(&self, number: u32, base: Option<u32>, own: &[Term], len: usize) -> bool {
+        let counted = &self.counts[number as usize];
+        if counted.len != len {
+            return false;
+        }
+        if counted.base == base && counted.own == own {
+            return true;
+        }
+        let mut mine = base.map_or_else(Vec::new, |base| self.count_parts(base));
+        mine.extend_from_slice(own);
+        mine.sort_unstable();
+        self.count_parts(number) == mine
+    }
+
+    /// The number of the count `term` is, or is widened from.
+    fn count_number(&self, term: Term) -> Option<u32> {
+        match *self.node(term) {
+            Node::Count(number, _) => Some(number),
+            Node::ZeroExtend(inner, _) if self.width(inner) != 1 => self.count_number(inner),
+            _ => None,
+        }
     }
 
     /// `part`, a condition a count counts, in one form however a program or a formula grouped
@@ -1208,7 +1334,7 @@ impl Pool {
     /// or one of those widened.
     fn counted(&mut self, term: Term) -> Option<Vec<Term>> {
         match *self.node(term) {
-            Node::Count(number, _) => Some(self.counts[number as usize].clone()),
+            Node::Count(number, _) => Some(self.count_parts(number)),
             Node::Const { value: 0, .. } => Some(Vec::new()),
             Node::Ite(condition, then, otherwise) => {
                 match (self.constant(then), self.constant(otherwise)) {
@@ -1249,12 +1375,8 @@ impl Pool {
             Node::Const { value, .. } => (*value, *value),
             Node::Var { name, .. } => self.declared.get(name).copied().unwrap_or(full),
             Node::Count(number, _) => {
-                let parts = &self.counts[*number as usize];
-                let sure = parts
-                    .iter()
-                    .filter(|part| matches!(self.node(**part), Node::Bool(true)))
-                    .count();
-                (sure as u128, parts.len() as u128)
+                let counted = &self.counts[*number as usize];
+                (counted.sure as u128, counted.len as u128)
             }
             Node::Add(a, b) => {
                 // Each end's sum, and whether it wrapped past the width.
@@ -2543,20 +2665,35 @@ impl Pool {
         if counted.len() < 2 {
             return;
         }
+        // The largest count among them is extended by the others' conditions, so what it counts
+        // already isn't copied.
+        let base = counted
+            .iter()
+            .filter_map(|term| self.count_number(*term))
+            .max_by_key(|number| self.counts[*number as usize].len);
+        let (mut taken, mut len) = (false, 0);
         let mut conditions = Vec::new();
         for term in &counted {
+            if !taken && base.is_some() && self.count_number(*term) == base {
+                taken = true;
+                len += base.map_or(0, |base| self.counts[base as usize].len);
+                continue;
+            }
             match self.counted(*term) {
-                Some(list) => conditions.extend(list),
+                Some(list) => {
+                    len += list.len();
+                    conditions.extend(list);
+                }
                 None => return,
             }
         }
-        if conditions.len() as u128 > mask(width) {
+        if len as u128 > mask(width) {
             return;
         }
         for term in &counted {
             linear.parts.remove(term);
         }
-        let count = self.count(width, &conditions);
+        let count = self.count_with(width, base, &conditions);
         let count = self.linear(count);
         linear.add(&count, 1, width);
     }
@@ -3194,7 +3331,7 @@ impl Pool {
             }
             // A count's low bits are the count when it fits them.
             Node::Count(number, _)
-                if low == 0 && self.counts[number as usize].len() as u128 <= mask(out) =>
+                if low == 0 && self.counts[number as usize].len as u128 <= mask(out) =>
             {
                 return self.make(Node::Count(number, out), Sort::Bv(out));
             }
@@ -3665,26 +3802,34 @@ impl Pool {
         picked.sort_unstable();
         other.sort_unstable();
         // Which is the smaller, and where the larger is chosen.
-        let (smaller, larger, chosen) = if within_multiset(&picked, &other) {
-            (picked, other, self.bool_not(condition))
+        let (smaller, larger, chosen, small) = if within_multiset(&picked, &other) {
+            (picked, other, self.bool_not(condition), then)
         } else if within_multiset(&other, &picked) {
-            (other, picked, condition)
+            (other, picked, condition, otherwise)
         } else {
             return None;
         };
-        let mut parts = smaller.clone();
+        let mut more = Vec::new();
         let mut rest = smaller.iter().peekable();
         for part in larger {
             if rest.peek() == Some(&&part) {
                 rest.next();
                 continue;
             }
-            parts.push(self.bool_and(part, chosen));
+            more.push(self.bool_and(part, chosen));
         }
-        if parts.len() as u128 > mask(width) {
+        if (smaller.len() + more.len()) as u128 > mask(width) {
             return None;
         }
-        Some(self.count(width, &parts))
+        // The smaller count's conditions are kept once, extended by the larger's others.
+        match self.count_number(small) {
+            Some(base) => Some(self.count_with(width, Some(base), &more)),
+            None => {
+                let mut parts = smaller;
+                parts.extend(more);
+                Some(self.count(width, &parts))
+            }
+        }
     }
 
     /// `a = b`.
@@ -4496,8 +4641,13 @@ impl Pool {
             }
             Node::Count(number, _) => {
                 let mut held = 0_u128;
-                for part in &self.counts[number as usize] {
-                    held += u128::from(get(*part)? == 1);
+                let mut at = Some(number);
+                while let Some(here) = at {
+                    let counted = &self.counts[here as usize];
+                    for part in &counted.own {
+                        held += u128::from(get(*part)? == 1);
+                    }
+                    at = counted.base;
                 }
                 held
             }
@@ -4786,7 +4936,8 @@ impl Pool {
                         format!("#b{:0digits$b}", 0, digits = width as usize),
                     )
                 };
-                let ones: Vec<String> = self.counts[*number as usize]
+                let ones: Vec<String> = self
+                    .count_parts(*number)
                     .iter()
                     .map(|part| format!("(ite {} {one} {zero})", name(part)))
                     .collect();
@@ -4842,7 +4993,7 @@ impl Pool {
             }
             // A count's conditions are its operands here: they settle as any others do.
             let operands = match *self.node(current) {
-                Node::Count(number, _) => self.counts[number as usize].clone(),
+                Node::Count(number, _) => self.count_parts(number),
                 _ => node_operands(self.node(current)),
             };
             if operands.is_empty() {
@@ -4962,7 +5113,7 @@ impl Pool {
     #[must_use]
     pub fn operands(&self, term: Term) -> Vec<Term> {
         match *self.node(term) {
-            Node::Count(number, _) => self.counts[number as usize].clone(),
+            Node::Count(number, _) => self.count_parts(number),
             ref node => node_operands(node),
         }
     }
@@ -4975,6 +5126,55 @@ mod random;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_running_count_keeps_each_condition_once() {
+        let mut pool = Pool::default();
+        let mut total = pool.bv(64, 0);
+        let mut all = Vec::new();
+        for step in 0..512 {
+            let parts: Vec<Term> = (0..16)
+                .map(|lane| pool.bool_var(&format!("c{step}_{lane}")))
+                .collect();
+            all.extend_from_slice(&parts);
+            let piece = pool.count(64, &parts);
+            total = pool.add(total, piece);
+        }
+        let kept: usize = pool.counts.iter().map(|counted| counted.own.len()).sum();
+        assert!(
+            kept <= 2 * all.len(),
+            "{kept} conditions kept for {} counted",
+            all.len()
+        );
+        assert_eq!(
+            total,
+            pool.count(64, &all),
+            "the total is the count of them all"
+        );
+        assert_eq!(pool.range(total), (0, all.len() as u128));
+        let values: HashMap<String, u128> = (0..512)
+            .flat_map(|step| (0..16).map(move |lane| (step, lane)))
+            .map(|(step, lane)| (format!("c{step}_{lane}"), u128::from(lane % 3 == 0)))
+            .collect();
+        assert_eq!(pool.evaluate(total, &values), Some(512 * 6));
+
+        // A count extended by conditions made before its own still is the count of them all,
+        // its conditions in order.
+        let early: Vec<Term> = (0..3)
+            .map(|n| pool.bool_var(&format!("early{n}")))
+            .collect();
+        let late: Vec<Term> = (0..4).map(|n| pool.bool_var(&format!("late{n}"))).collect();
+        let base = pool.count(64, &late);
+        let more = pool.count(64, &early);
+        let both = pool.add(base, more);
+        let mut every = [early, late].concat();
+        assert_eq!(both, pool.count(64, &every));
+        every.sort_unstable();
+        let Node::Count(number, _) = *pool.node(both) else {
+            panic!("not a count: {both:?}");
+        };
+        assert_eq!(pool.count_parts(number), every);
+    }
 
     #[test]
     fn equal_computations_are_one_term() {

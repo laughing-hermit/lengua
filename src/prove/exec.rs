@@ -4094,23 +4094,25 @@ fn grown_count(
     length: Option<Term>,
 ) -> Option<Term> {
     let width = pool.width(values[0]);
-    let mut lists = Vec::with_capacity(values.len());
-    for value in values {
-        let mut list = pool.counted_parts(*value)?;
-        list.sort_unstable();
-        lists.push(list);
-    }
-    let mut parts = lists[0].clone();
-    for (index, window) in lists.windows(2).enumerate() {
-        let [before, now] = window else {
-            return None;
-        };
-        if !now.starts_with(before) {
-            return None;
+    // Each exit's parts against the one before's alone, so a loop of many steps keeps two lists
+    // at a time, not one for every exit.
+    let mut parts = Vec::new();
+    let mut before: Option<Vec<Term>> = None;
+    for (index, value) in values.iter().enumerate() {
+        let mut now = pool.counted_parts(*value)?;
+        now.sort_unstable();
+        match &before {
+            None => parts.extend_from_slice(&now),
+            Some(before) => {
+                if !now.starts_with(before) {
+                    return None;
+                }
+                for part in &now[before.len()..] {
+                    parts.push(pool.bool_and(*part, after[index - 1]));
+                }
+            }
         }
-        for part in &now[before.len()..] {
-            parts.push(pool.bool_and(*part, after[index]));
-        }
+        before = Some(now);
     }
     if let Some(length) = length {
         for part in &mut parts {

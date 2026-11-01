@@ -870,7 +870,12 @@ What it covers:
   sum of flags is a count: `pairs`' flag chain, `pending = is_a and not (is_a and pending)`, is
   the formula's matcher, and its count of `aa` is proven by length with no solver question where
   the two had been compared byte by byte (46 bytes, then cvc5 ran out of time). Random tests
-  check each rule against plain arithmetic.
+  check each rule against plain arithmetic. A count that extends another, as a running total
+  each step adds to does, keeps only the conditions it adds, and a hash of all its conditions
+  finds an earlier count of the same ones however that one holds them. So a loop's counts take
+  memory in proportion to the text it reads, not its square. Before, each step's total was a copy
+  of everything counted so far: NEON's fast wc takes four times as many steps as x86-64's, and its
+  proof needed 9 GB, more than CI's ARM64 runners have.
 - Files: `openat`, `read`, `write`, `close` and `fstat` on the test's files, and `mkdirat`,
   `unlinkat` and `renameat` on its folders and files. A missing input file gives `ENOENT`, and
   the checks on the files and folders left after the run are the runner's. A file name the input
@@ -1055,8 +1060,8 @@ still to build per target. A new profile must supply:
    low bits of a value that fits in them is the comparison of the value itself. So
    [the fast wc's NEON form](plugin/skills/compile/assets/linux-aarch64/fast/wc/main.s), each
    16-byte step masked with `cmhi` of the bytes left against each lane's place, is proven for
-   every length with a 64 KiB buffer, with no solver question, in about 140 seconds, as x86-64's
-   AVX-512 one is in about 110; and the vector template from its spec unchanged, every line with
+   every length with a 64 KiB buffer, with no solver question, in about 105 seconds and 1.8 GB,
+   as x86-64's AVX-512 one is; and the vector template from its spec unchanged, every line with
    no solver question. CPU feature detection is per CPU too (x86's `is_x86_feature_detected!`).
 4. **Dialect:** the Power of 10 in that CPU's mnemonics and registers, with its reference (today
    `references/linux-x86_64.md` and the x86 parts of `references/power-of-10.md`). The rules

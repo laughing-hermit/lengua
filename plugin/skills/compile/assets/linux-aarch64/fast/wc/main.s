@@ -138,7 +138,6 @@ count_piece:
     movi v20.16b, #TAB_TO_CR
     // The byte before the piece's whitespace, in every lane: only the last is read.
     dup v21.16b, w2
-    mov x7, x2
     mov x8, #0
     mov x9, #0
     mov x10, #0
@@ -176,19 +175,19 @@ count_piece:
     addv b3, v3.16b
     umov w6, v3.b[0]
     add x9, x9, x6
-    // Whether this step's last byte is whitespace, for the next piece.
-    sub w5, w4, #1
-    dup v4.16b, w5
-    tbl v4.16b, { v2.16b }, v4.16b
-    umov w7, v4.b[0]
     mov v21.16b, v2.16b
     add x10, x10, #VECTOR
     subs x11, x11, #1
     b.ne .Lcount_piece_loop
 .Lcount_piece_done:
+    // Whether the piece's last byte is whitespace, for the next piece: the last step's lane
+    // for its last byte.
+    sub w5, w4, #1
+    dup v4.16b, w5
+    tbl v4.16b, { v21.16b }, v4.16b
+    umov w2, v4.b[0]
     mov x0, x8
     mov x1, x9
-    mov x2, x7
     ret
 .Lcount_piece_assert_bytes:
     mov w0, #3
