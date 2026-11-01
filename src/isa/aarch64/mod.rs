@@ -11,6 +11,12 @@
 pub mod decode;
 pub mod facts;
 pub mod text;
+pub mod vector;
+
+pub use vector::{
+    Arrangement, Expand, Lane, Scalar, Source, VAcross, VImmediate, VPermute, VReg, VShift, VThree,
+    VTwo, Writeback,
+};
 
 #[cfg(test)]
 mod tests;
@@ -990,6 +996,156 @@ pub enum Inst {
         /// The address.
         address: Address,
     },
+    /// The lanes of two vectors, each with its own: `add v0.16b, v1.16b, v2.16b`; `mov v0.16b,
+    /// v1.16b` is `orr` of one register with itself.
+    VectorThree {
+        /// The operation.
+        op: VThree,
+        /// Where the result goes.
+        rd: VReg,
+        /// The first operand.
+        rn: VReg,
+        /// The second.
+        rm: VReg,
+    },
+    /// One vector's lanes: `cnt v0.16b, v1.16b`, the comparisons with zero, and the widening and
+    /// narrowing ones, whose two arrangements differ.
+    VectorTwo {
+        /// The operation.
+        op: VTwo,
+        /// Where the result goes.
+        rd: VReg,
+        /// The operand.
+        rn: VReg,
+    },
+    /// A vector's lanes into one scalar: `addv b0, v1.16b`.
+    VectorAcross {
+        /// The operation.
+        op: VAcross,
+        /// Where the result goes.
+        rd: Scalar,
+        /// The vector.
+        rn: VReg,
+    },
+    /// Each lane shifted by a number: `ushr v0.16b, v1.16b, #3`.
+    VectorShift {
+        /// The operation.
+        op: VShift,
+        /// Where the result goes.
+        rd: VReg,
+        /// The vector shifted.
+        rn: VReg,
+        /// By how many bits.
+        amount: u8,
+    },
+    /// Lanes of two vectors, interleaved or picked: `zip1 v0.16b, v1.16b, v2.16b`.
+    VectorPermute {
+        /// The operation.
+        op: VPermute,
+        /// Where the result goes.
+        rd: VReg,
+        /// The first vector.
+        rn: VReg,
+        /// The second.
+        rm: VReg,
+    },
+    /// The bytes of two vectors joined, from byte `index` of the first up: `ext v0.16b, v1.16b,
+    /// v2.16b, #3`.
+    VectorExtract {
+        /// Where the result goes.
+        rd: VReg,
+        /// The low part.
+        rn: VReg,
+        /// The high part.
+        rm: VReg,
+        /// The first byte taken.
+        index: u8,
+    },
+    /// Each byte of `rm` looked up in a table of 1 to 4 vectors: `tbl`, 0 where it's past the
+    /// table, or `tbx`, which keeps the destination's byte there.
+    VectorTable {
+        /// `tbx`.
+        keep: bool,
+        /// Where the result goes.
+        rd: VReg,
+        /// The table's first register; the rest follow it, wrapping from v31 to v0.
+        table: u8,
+        /// How many registers the table has.
+        count: u8,
+        /// The indexes.
+        rm: VReg,
+    },
+    /// A lane or a general register in every lane: `dup v0.16b, v1.b[3]`, `dup v0.4s, w1`.
+    VectorDup {
+        /// Where it goes.
+        rd: VReg,
+        /// What's copied.
+        from: Source,
+    },
+    /// A lane into a general register, widened without a sign or with one: `umov w0, v1.b[3]`,
+    /// which LLVM writes `mov` for a word or a doubleword, and `smov`.
+    VectorToGeneral {
+        /// `smov`.
+        signed: bool,
+        /// Where it goes.
+        rd: A64Reg,
+        /// The lane.
+        rn: Lane,
+    },
+    /// A general register or a lane into one lane, the others kept: `mov v0.b[3], w1`.
+    VectorInsert {
+        /// The lane written.
+        rd: Lane,
+        /// What's copied.
+        from: Source,
+    },
+    /// A number in every lane, `movi` and `mvni`, or `orr` and `bic` of it with every lane.
+    VectorImmediate {
+        /// The operation.
+        op: VImmediate,
+        /// The vector; a `1d` one is `movi d0, #…`.
+        rd: VReg,
+        /// The 8 bits the instruction holds.
+        imm8: u8,
+        /// How they become each lane's number.
+        expand: Expand,
+    },
+    /// A load or store of one whole q register.
+    VectorLoadStore {
+        /// A load, or a store.
+        load: bool,
+        /// The register, q0 to q31.
+        rt: u8,
+        /// The address.
+        address: Address,
+    },
+    /// `ldp`/`stp` of two q registers, next to each other in memory.
+    VectorPair {
+        /// A load, or a store.
+        load: bool,
+        /// The first register, at the address.
+        rt: u8,
+        /// The second, 16 bytes after it.
+        rt2: u8,
+        /// The address.
+        address: Address,
+    },
+    /// `ld1`/`st1` of 1 to 4 vectors one after another in memory: `ld1 { v0.16b, v1.16b },
+    /// [x1], #32`.
+    VectorStructures {
+        /// A load, or a store.
+        load: bool,
+        /// The first register; the rest follow it, wrapping from v31 to v0.
+        first: u8,
+        /// How many registers.
+        count: u8,
+        /// Their lanes, the same for all.
+        arrangement: Arrangement,
+        /// The address.
+        base: A64Reg,
+        /// How the base moves after, if it does.
+        step: Option<Writeback>,
+    },
     /// `nop`.
     Nop,
 }
@@ -1143,6 +1299,83 @@ impl fmt::Display for Inst {
             Self::FpPair {
                 rt, rt2, address, ..
             } => write!(formatter, "{name} {rt}, {rt2}, {address}"),
+            Self::VectorThree { op, rd, rn, rm } if op == VThree::Orr && rn == rm => {
+                write!(formatter, "{name} {rd}, {rn}")
+            }
+            Self::VectorThree { rd, rn, rm, .. } | Self::VectorPermute { rd, rn, rm, .. } => {
+                write!(formatter, "{name} {rd}, {rn}, {rm}")
+            }
+            Self::VectorTwo { op, rd, rn } if op.with_zero() => {
+                write!(formatter, "{name} {rd}, {rn}, #0")
+            }
+            Self::VectorTwo { rd, rn, .. } => write!(formatter, "{name} {rd}, {rn}"),
+            Self::VectorAcross { rd, rn, .. } => write!(formatter, "{name} {rd}, {rn}"),
+            Self::VectorShift { rd, rn, amount, .. } => {
+                write!(formatter, "{name} {rd}, {rn}, #{amount}")
+            }
+            Self::VectorExtract { rd, rn, rm, index } => {
+                write!(formatter, "{name} {rd}, {rn}, {rm}, #{index}")
+            }
+            Self::VectorTable {
+                rd,
+                table,
+                count,
+                rm,
+                ..
+            } => write!(
+                formatter,
+                "{name} {rd}, {}, {rm}",
+                vector::list(table, count, Arrangement::B16)
+            ),
+            Self::VectorDup { rd, from } => write!(formatter, "{name} {rd}, {from}"),
+            Self::VectorToGeneral { rd, rn, .. } => write!(formatter, "{name} {rd}, {rn}"),
+            Self::VectorInsert { rd, from } => write!(formatter, "{name} {rd}, {from}"),
+            Self::VectorImmediate {
+                rd, imm8, expand, ..
+            } => {
+                let register = if rd.arrangement == Arrangement::D1 {
+                    format!("d{}", rd.number)
+                } else {
+                    rd.to_string()
+                };
+                match expand {
+                    Expand::Bytes => write!(
+                        formatter,
+                        "{name} {register}, #{:#018x}",
+                        expand.value(imm8, 64)
+                    ),
+                    Expand::Lsl(0) => write!(formatter, "{name} {register}, #{imm8}"),
+                    Expand::Lsl(by) => write!(formatter, "{name} {register}, #{imm8}, lsl #{by}"),
+                    Expand::Msl(by) => write!(formatter, "{name} {register}, #{imm8}, msl #{by}"),
+                }
+            }
+            Self::VectorLoadStore { rt, address, .. } => {
+                write!(formatter, "{name} q{rt}, {address}")
+            }
+            Self::VectorPair {
+                rt, rt2, address, ..
+            } => write!(formatter, "{name} q{rt}, q{rt2}, {address}"),
+            Self::VectorStructures {
+                first,
+                count,
+                arrangement,
+                base,
+                step,
+                ..
+            } => {
+                let list = vector::list(first, count, arrangement);
+                match step {
+                    None => write!(formatter, "{name} {list}, [{base}]"),
+                    Some(Writeback::Bytes) => write!(
+                        formatter,
+                        "{name} {list}, [{base}], #{}",
+                        u32::from(count) * arrangement.bytes()
+                    ),
+                    Some(Writeback::Register(by)) => {
+                        write!(formatter, "{name} {list}, [{base}], {by}")
+                    }
+                }
+            }
         }
     }
 }

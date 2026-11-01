@@ -266,6 +266,20 @@ impl Cpu<'_> {
             | Inst::FpConvert { .. }
             | Inst::FpLoadStore { .. }
             | Inst::FpPair { .. } => self.execute_fp(inst),
+            Inst::VectorThree { .. }
+            | Inst::VectorTwo { .. }
+            | Inst::VectorAcross { .. }
+            | Inst::VectorShift { .. }
+            | Inst::VectorPermute { .. }
+            | Inst::VectorExtract { .. }
+            | Inst::VectorTable { .. }
+            | Inst::VectorDup { .. }
+            | Inst::VectorToGeneral { .. }
+            | Inst::VectorInsert { .. }
+            | Inst::VectorImmediate { .. }
+            | Inst::VectorLoadStore { .. }
+            | Inst::VectorPair { .. }
+            | Inst::VectorStructures { .. } => Err(unsupported("vectors on AArch64")),
         }
     }
 

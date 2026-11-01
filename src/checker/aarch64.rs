@@ -5,7 +5,9 @@
 use super::decode::{MappedFunction, Program, Step, Word};
 use super::source::{Function as SourceFunction, Instruction as SourceInstruction, Operand};
 use super::{Rule, Violation};
-use crate::isa::aarch64::{A64Reg, Address, Extend, Gpr, Indirect, Inst, facts, text};
+use crate::isa::aarch64::{
+    A64Reg, Address, Extend, Gpr, Indirect, Inst, Source, Writeback, facts, text,
+};
 use crate::isa::{Insn, MemRef, Op, Reg, Value};
 
 /// The word's canonical form, or the word itself when it isn't in the dialect, for messages.
@@ -183,6 +185,34 @@ fn registers(inst: &Inst) -> Vec<A64Reg> {
         | Inst::FpCompare { .. }
         | Inst::FpCondSelect { .. }
         | Inst::FpMoveImm { .. } => Vec::new(),
+        // A vector instruction's general registers: what it moves to or from one, and its
+        // address's.
+        Inst::VectorDup {
+            from: Source::General(gpr),
+            ..
+        }
+        | Inst::VectorInsert {
+            from: Source::General(gpr),
+            ..
+        }
+        | Inst::VectorToGeneral { rd: gpr, .. } => vec![gpr],
+        Inst::VectorLoadStore { address, .. } | Inst::VectorPair { address, .. } => {
+            address_registers(address)
+        }
+        Inst::VectorStructures { base, step, .. } => match step {
+            Some(Writeback::Register(by)) => vec![base, by],
+            _ => vec![base],
+        },
+        Inst::VectorThree { .. }
+        | Inst::VectorTwo { .. }
+        | Inst::VectorAcross { .. }
+        | Inst::VectorShift { .. }
+        | Inst::VectorPermute { .. }
+        | Inst::VectorExtract { .. }
+        | Inst::VectorTable { .. }
+        | Inst::VectorDup { .. }
+        | Inst::VectorInsert { .. }
+        | Inst::VectorImmediate { .. } => Vec::new(),
     }
 }
 
@@ -225,6 +255,24 @@ pub(super) fn check_instruction(step: &Step<'_>, word: &Word, violations: &mut V
         Inst::Adr { .. } => refuse(
             format!("`{text}`: adr isn't in the dialect"),
             "make an address with `adrp xN, name` followed by `add xN, xN, :lo12:name`",
+        ),
+        Inst::VectorThree { .. }
+        | Inst::VectorTwo { .. }
+        | Inst::VectorAcross { .. }
+        | Inst::VectorShift { .. }
+        | Inst::VectorPermute { .. }
+        | Inst::VectorExtract { .. }
+        | Inst::VectorTable { .. }
+        | Inst::VectorDup { .. }
+        | Inst::VectorToGeneral { .. }
+        | Inst::VectorInsert { .. }
+        | Inst::VectorImmediate { .. }
+        | Inst::VectorLoadStore { .. }
+        | Inst::VectorPair { .. }
+        | Inst::VectorStructures { .. } => refuse(
+            format!("`{text}`: vectors aren't in lengua's AArch64 dialect yet"),
+            "compute a byte or a number at a time, or compile the spec for x86-64, whose dialect \
+             has vectors",
         ),
         Inst::BranchReg {
             kind: Indirect::Blr,

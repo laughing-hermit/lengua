@@ -5,10 +5,14 @@
 //! field by field.
 
 use super::decode::bitmask;
+
+mod vector;
+
 use super::{
     A64Cond, A64Reg, Access, Address, Extend, Field, FpConversion, FpOne, FpReg, FpThree, FpTwo,
     Gpr, Indirect, Inst, Logic, One, Select, Shift, Three, Two, Wide,
 };
+pub use vector::{lane, q_register, vreg};
 
 /// What a name in an operand stands for: a constant's value, or a label's or data symbol's
 /// address.
@@ -36,14 +40,14 @@ pub fn parse(
     line.instruction()
 }
 
-/// The operands, split at the commas outside brackets.
+/// The operands, split at the commas outside brackets and braces.
 fn split(text: &str) -> Result<Vec<&str>, String> {
     let mut found = Vec::new();
     let (mut depth, mut start) = (0_i32, 0);
     for (at, character) in text.char_indices() {
         match character {
-            '[' => depth += 1,
-            ']' => depth -= 1,
+            '[' | '{' => depth += 1,
+            ']' | '}' => depth -= 1,
             ',' if depth == 0 => {
                 found.push(text[start..at].trim());
                 start = at + 1;
@@ -51,11 +55,11 @@ fn split(text: &str) -> Result<Vec<&str>, String> {
             _ => {}
         }
         if depth < 0 {
-            return Err("a `]` has no `[` before it".into());
+            return Err("a `]` or `}` has nothing open before it".into());
         }
     }
     if depth != 0 {
-        return Err("a `[` isn't closed".into());
+        return Err("a `[` or `{` isn't closed".into());
     }
     let last = text[start..].trim();
     if !last.is_empty() || !found.is_empty() {
@@ -199,10 +203,10 @@ impl Line<'_> {
                      have: compute in s (single) or d (double) registers",
                     at + 1
                 )
-            } else if other('q') || other('v') {
+            } else if other('q') || vreg(operand).is_some() {
                 format!(
-                    "operand {} is a whole vector register, which the dialect doesn't have yet: \
-                     use s or d registers",
+                    "operand {}: floating point on vectors isn't in the dialect yet: use s or d \
+                     registers",
                     at + 1
                 )
             } else {
@@ -510,6 +514,9 @@ impl Line<'_> {
     }
 
     fn instruction(&self) -> Result<Inst, String> {
+        if let Some(vector) = self.vector() {
+            return vector;
+        }
         if let Some(floating) = self.floating() {
             return floating;
         }

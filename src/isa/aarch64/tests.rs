@@ -22,7 +22,7 @@ const PER_CLASS: usize = 3000;
 /// Each encoding class the dialect has: its name, the bits that place a word in it, and their
 /// value. The classes whose fields are mostly unallocated fix more bits, so random words land on
 /// instructions.
-const CLASSES: [(&str, u32, u32); 33] = [
+const CLASSES: [(&str, u32, u32); 48] = [
     ("adr and adrp", 0x1f00_0000, 0x1000_0000),
     ("add and sub with a number", 0x1f80_0000, 0x1100_0000),
     ("logical with a bitmask", 0x1f80_0000, 0x1200_0000),
@@ -84,6 +84,33 @@ const CLASSES: [(&str, u32, u32); 33] = [
         0x3c20_0800,
     ),
     ("fp pairs", 0x3c00_0000, 0x2c00_0000),
+    ("vector three same", 0x9f20_0400, 0x0e20_0400),
+    ("vector two-register misc", 0x9f3e_0c00, 0x0e20_0800),
+    ("vector across lanes", 0x9f3e_0c00, 0x0e30_0800),
+    ("vector copy", 0x9fe0_8400, 0x0e00_0400),
+    ("vector permute", 0xbf20_8c00, 0x0e00_0800),
+    ("vector extract", 0xbfe0_8400, 0x2e00_0000),
+    ("vector table", 0xbfe0_8c00, 0x0e00_0000),
+    ("vector modified immediate", 0x9ff8_0400, 0x0f00_0400),
+    ("vector shift by immediate", 0x9f80_0400, 0x0f00_0400),
+    ("ld1 and st1", 0xbfbf_0000, 0x0c00_0000),
+    ("ld1 and st1, moving", 0xbfa0_0000, 0x0c80_0000),
+    (
+        "q loads and stores, unsigned offset",
+        0xff80_0000,
+        0x3d80_0000,
+    ),
+    (
+        "q loads and stores, unscaled and moving",
+        0xffa0_0000,
+        0x3c80_0000,
+    ),
+    (
+        "q loads and stores, register offset",
+        0xffa0_0c00,
+        0x3ca0_0800,
+    ),
+    ("q pairs", 0xfe00_0000, 0xac00_0000),
 ];
 
 /// What LLVM's disassembler says of each word: its text, or none where it refuses the word or
@@ -347,4 +374,153 @@ fn the_facts_say_what_each_idiom_does() {
     assert_eq!(post.memory.expect("memory").displacement, 0);
     assert!(post.changes(x(1), &ABI) && post.uses(x(0)) && post.dst.is_none());
     assert!(facts_of("adrp x1, label").changes(x(1), &ABI));
+}
+
+/// Vector lines as main.s may write them, aliases LLVM never prints included: each must read as
+/// the word LLVM's assembler makes of it.
+const VECTOR_LINES: &[&str] = &[
+    "add v0.16b, v1.16b, v2.16b",
+    "sub v31.2d, v30.2d, v29.2d",
+    "mul v0.8h, v1.8h, v2.8h",
+    "uqsub v0.16b, v1.16b, v2.16b",
+    "sqadd v0.4s, v1.4s, v2.4s",
+    "cmeq v0.16b, v1.16b, v2.16b",
+    "cmhi v0.16b, v1.16b, v2.16b",
+    "cmle v0.8h, v1.8h, v2.8h",
+    "cmlt v0.4s, v1.4s, v2.4s",
+    "cmlo v0.16b, v1.16b, v2.16b",
+    "cmls v0.2d, v1.2d, v2.2d",
+    "umaxp v0.16b, v1.16b, v2.16b",
+    "addp v0.2d, v1.2d, v2.2d",
+    "and v0.16b, v1.16b, v2.16b",
+    "bic v0.8b, v1.8b, v2.8b",
+    "orn v0.16b, v1.16b, v2.16b",
+    "bsl v0.16b, v1.16b, v2.16b",
+    "mov v3.16b, v4.16b",
+    "mov v3.8b, v4.8b",
+    "not v0.16b, v1.16b",
+    "mvn v0.8b, v1.8b",
+    "cnt v0.8b, v1.8b",
+    "rbit v0.16b, v1.16b",
+    "rev32 v0.8h, v1.8h",
+    "cmeq v0.16b, v1.16b, #0",
+    "cmlt v0.2d, v1.2d, #0",
+    "neg v0.2d, v1.2d",
+    "uaddlp v0.4s, v1.8h",
+    "xtn v0.2s, v1.2d",
+    "xtn2 v0.16b, v1.8h",
+    "addv b0, v1.8b",
+    "uaddlv h0, v1.16b",
+    "uaddlv s0, v1.8h",
+    "umaxv b0, v1.16b",
+    "ushr v0.2d, v1.2d, #64",
+    "shl v0.2d, v1.2d, #63",
+    "sri v0.16b, v1.16b, #8",
+    "sli v0.4s, v1.4s, #0",
+    "shrn2 v0.16b, v1.8h, #8",
+    "ushll2 v0.8h, v1.16b, #7",
+    "uxtl v0.8h, v1.8b",
+    "uxtl2 v0.4s, v1.8h",
+    "sxtl v0.2d, v1.2s",
+    "zip2 v0.2d, v1.2d, v2.2d",
+    "ext v0.16b, v1.16b, v2.16b, #15",
+    "tbl v0.8b, {v31.16b, v0.16b}, v1.8b",
+    "tbx v0.16b, {v1.16b-v4.16b}, v5.16b",
+    "dup v0.16b, wzr",
+    "dup v0.8h, v1.h[7]",
+    "dup v0.2d, x30",
+    "umov w0, v1.b[15]",
+    "umov w0, v1.s[1]",
+    "mov w0, v1.s[3]",
+    "mov x0, v1.d[1]",
+    "smov x0, v1.h[2]",
+    "ins v0.b[3], w1",
+    "ins v0.s[2], v1.s[0]",
+    "mov v0.d[1], x1",
+    "mov v0.h[1], v1.h[7]",
+    "movi v0.16b, #32",
+    "movi v0.8b, #0xff",
+    "movi v0.2d, #0",
+    "movi d0, #0xff00ff00ff00ff00",
+    "movi v0.4s, #32, msl #8",
+    "movi v0.4h, #1, lsl #8",
+    "mvni v0.2s, #32, lsl #16",
+    "orr v0.8h, #32, lsl #8",
+    "bic v0.4s, #1, lsl #24",
+    "ldr q0, [x1]",
+    "ldr q0, [x1, #65520]",
+    "ldr q0, [x1, #-16]",
+    "ldur q0, [x1, #-3]",
+    "ldr q0, [x1, x2, lsl #4]",
+    "str q31, [sp, #-32]!",
+    "ldr q0, [x1], #16",
+    "ldp q0, q1, [sp, #-1024]",
+    "stp q30, q31, [x1, #1008]!",
+    "ld1 {v0.16b}, [x1]",
+    "ld1 {v0.16b-v3.16b}, [x1], #64",
+    "ld1 {v0.16b, v1.16b}, [sp], x2",
+    "st1 {v31.1d, v0.1d}, [x1], #16",
+];
+
+/// The words `llvm-mc` assembles `lines` into, one each, or none where it isn't installed.
+fn assembled(lines: &[&str]) -> Option<Vec<u32>> {
+    let mut child = Command::new("llvm-mc")
+        .args(["--triple=aarch64-unknown-linux-gnu", "--show-encoding"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+    let input = lines.join("\n") + "\n";
+    let mut stdin = child.stdin.take()?;
+    let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
+    let output = child.wait_with_output().ok()?;
+    writer.join().ok()?.ok()?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.trim().is_empty(), "llvm-mc refused a line: {stderr}");
+    let words = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.split_once("encoding: [").map(|(_, bytes)| bytes))
+        .map(|bytes| {
+            let bytes: Vec<u8> = bytes
+                .trim_end_matches(']')
+                .split(',')
+                .map(|byte| u8::from_str_radix(byte.trim().trim_start_matches("0x"), 16))
+                .collect::<Result<_, _>>()
+                .expect("an encoding's bytes");
+            u32::from_le_bytes(bytes.try_into().expect("four bytes"))
+        })
+        .collect();
+    Some(words)
+}
+
+#[test]
+fn vector_lines_read_as_the_words_they_assemble_to() {
+    let Some(words) = assembled(VECTOR_LINES) else {
+        eprintln!("llvm-mc isn't installed: not checked");
+        return;
+    };
+    assert_eq!(words.len(), VECTOR_LINES.len());
+    let mut problems = Vec::new();
+    for (line, word) in VECTOR_LINES.iter().zip(&words) {
+        let (mnemonic, operands) = line.split_once(' ').unwrap_or((line, ""));
+        let parsed = parse(mnemonic, operands, ADDRESS, &|_| None);
+        let decoded = decode(*word, ADDRESS);
+        match (&parsed, &decoded) {
+            (Ok(parsed), Ok(decoded)) if parsed == decoded => {
+                // And the canonical form reads back as itself.
+                let text = decoded.to_string();
+                let (mnemonic, operands) = text.split_once(' ').unwrap_or((&text, ""));
+                if parse(mnemonic, operands, ADDRESS, &|_| None).as_ref() != Ok(decoded) {
+                    problems.push(format!(
+                        "`{line}`: its canonical form `{text}` reads otherwise"
+                    ));
+                }
+            }
+            _ => problems.push(format!(
+                "`{line}` ({word:#010x}): reads {parsed:?}, decodes {decoded:?}"
+            )),
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
 }

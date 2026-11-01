@@ -8,6 +8,8 @@ use super::{
     Indirect, Inst, Logic, One, Select, Shift, Three, Two, Wide,
 };
 
+mod vector;
+
 /// Bits `high` down to `low` of `word`.
 const fn bits(word: u32, high: u32, low: u32) -> u32 {
     (word >> low) & ((1 << (high - low + 1)) - 1)
@@ -40,8 +42,9 @@ pub fn decode(word: u32, address: u64) -> Result<Inst, String> {
         0b1010 | 0b1011 => branch(word, address),
         0b0100 | 0b0110 | 0b1100 | 0b1110 => load_store(word),
         0b0101 | 0b1101 => register(word),
+        0b0111 => vector::vector(word),
         0b1111 => floating(word),
-        // Scalable vectors, vectors, and what's unallocated.
+        // Scalable vectors, and what's unallocated.
         _ => Err(outside(word)),
     }
 }
@@ -264,11 +267,12 @@ fn branch(word: u32, address: u64) -> Result<Inst, String> {
 
 /// Loads and stores of general-purpose registers.
 fn load_store(word: u32) -> Result<Inst, String> {
-    // Floating-point registers: singles and doubles, never vectors.
+    // Floating-point and vector registers: singles, doubles and whole q registers, and ld1/st1.
     if bit(word, 26) {
         return match bits(word, 29, 27) {
             0b111 => fp_single(word),
             0b101 => fp_pair(word),
+            0b001 => vector::structures(word),
             _ => Err(outside(word)),
         };
     }
@@ -384,9 +388,12 @@ fn single_address(word: u32, size: u32) -> Result<Address, String> {
 }
 
 /// A load or store of one floating-point register: a single (`size` 10) or a double (11), `opc`
-/// 00 to store and 01 to load.
+/// 00 to store and 01 to load; or of a whole q register (`size` 00, `opc` 1x).
 fn fp_single(word: u32) -> Result<Inst, String> {
     let size = bits(word, 31, 30);
+    if size == 0 && bit(word, 23) {
+        return vector::q_single(word);
+    }
     let double = match size {
         0b10 => false,
         0b11 => true,
@@ -406,13 +413,14 @@ fn fp_single(word: u32) -> Result<Inst, String> {
     Ok(Inst::FpLoadStore { load, rt, address })
 }
 
-/// A load or store of two floating-point registers: `opc` 00 singles or 01 doubles.
+/// A load or store of two floating-point registers: `opc` 00 singles, 01 doubles or 10 whole
+/// q registers.
 fn fp_pair(word: u32) -> Result<Inst, String> {
     let load = bit(word, 22);
     let (double, scale) = match bits(word, 31, 30) {
         0b00 => (false, 4),
         0b01 => (true, 8),
-        // Whole vectors.
+        0b10 => (true, 16),
         _ => return Err(outside(word)),
     };
     let offset = signed(bits(word, 21, 15), 7) * scale;
@@ -431,6 +439,9 @@ fn fp_pair(word: u32) -> Result<Inst, String> {
         // Pairs that hint the cache isn't needed.
         _ => return Err(outside(word)),
     };
+    if scale == 16 {
+        return vector::q_pair(word, address);
+    }
     // Two loads into one register have no defined result.
     if load && rt.number == rt2.number {
         return Err(outside(word));

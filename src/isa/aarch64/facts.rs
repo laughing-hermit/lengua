@@ -4,7 +4,7 @@
 
 use super::{
     A64Cond, A64Reg, Address, FpConversion, FpOne, FpReg, FpThree, FpTwo, Gpr, Indirect, Inst,
-    Logic, Wide,
+    Logic, VThree, Wide,
 };
 use crate::isa::{Cond, Control, Insn, MemRef, Op, Operand, Reg, RegSet, Stack, Value};
 
@@ -234,11 +234,57 @@ pub fn mnemonic(inst: &Inst) -> String {
                 "str"
             }
         }
-        Inst::FpPair { load, .. } => {
+        Inst::FpPair { load, .. } | Inst::VectorPair { load, .. } => {
             if *load {
                 "ldp"
             } else {
                 "stp"
+            }
+        }
+        Inst::VectorThree { op, rn, rm, .. } => {
+            if *op == VThree::Orr && rn == rm {
+                "mov"
+            } else {
+                op.name()
+            }
+        }
+        Inst::VectorTwo { op, rd, .. } => op.name(*rd),
+        Inst::VectorAcross { op, .. } => op.name(),
+        Inst::VectorShift { op, rd, rn, .. } => op.name(*rd, *rn),
+        Inst::VectorPermute { op, .. } => op.name(),
+        Inst::VectorExtract { .. } => "ext",
+        Inst::VectorTable { keep, .. } => {
+            if *keep {
+                "tbx"
+            } else {
+                "tbl"
+            }
+        }
+        Inst::VectorDup { .. } => "dup",
+        // LLVM writes `umov` of a word or a doubleword as `mov`.
+        Inst::VectorToGeneral { signed: true, .. } => "smov",
+        Inst::VectorToGeneral { rn, .. } if rn.size >= 2 => "mov",
+        Inst::VectorToGeneral { .. } => "umov",
+        Inst::VectorInsert { .. } => "mov",
+        Inst::VectorImmediate { op, .. } => op.name(),
+        Inst::VectorLoadStore { load, address, .. } => {
+            // An offset `ldr` can't hold is `ldur`'s, as LLVM writes it.
+            let unscaled = matches!(
+                address,
+                Address::Offset { offset, .. } if *offset < 0 || offset % 16 != 0
+            );
+            match (*load, unscaled) {
+                (true, false) => "ldr",
+                (true, true) => "ldur",
+                (false, false) => "str",
+                (false, true) => "stur",
+            }
+        }
+        Inst::VectorStructures { load, .. } => {
+            if *load {
+                "ld1"
+            } else {
+                "st1"
             }
         }
     };
@@ -709,6 +755,29 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
                 stack,
             )
         }
+        // Vectors: refused by the dialect for now, so no facts yet.
+        Inst::VectorThree { .. }
+        | Inst::VectorTwo { .. }
+        | Inst::VectorAcross { .. }
+        | Inst::VectorShift { .. }
+        | Inst::VectorPermute { .. }
+        | Inst::VectorExtract { .. }
+        | Inst::VectorTable { .. }
+        | Inst::VectorDup { .. }
+        | Inst::VectorToGeneral { .. }
+        | Inst::VectorInsert { .. }
+        | Inst::VectorImmediate { .. }
+        | Inst::VectorLoadStore { .. }
+        | Inst::VectorPair { .. }
+        | Inst::VectorStructures { .. } => (
+            Control::Next,
+            None,
+            Vec::new(),
+            None,
+            Op::Other,
+            Value::Other,
+            Stack::Same,
+        ),
     };
     // AArch64 faults on an access through sp that isn't a multiple of 16.
     let stack = match stack {
@@ -961,6 +1030,21 @@ impl Facts {
                     }
                 }
             }
+            // Vectors: refused by the dialect for now, so no facts yet.
+            Inst::VectorThree { .. }
+            | Inst::VectorTwo { .. }
+            | Inst::VectorAcross { .. }
+            | Inst::VectorShift { .. }
+            | Inst::VectorPermute { .. }
+            | Inst::VectorExtract { .. }
+            | Inst::VectorTable { .. }
+            | Inst::VectorDup { .. }
+            | Inst::VectorToGeneral { .. }
+            | Inst::VectorInsert { .. }
+            | Inst::VectorImmediate { .. }
+            | Inst::VectorLoadStore { .. }
+            | Inst::VectorPair { .. }
+            | Inst::VectorStructures { .. } => {}
         }
     }
 
