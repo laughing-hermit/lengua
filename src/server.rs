@@ -2554,9 +2554,9 @@ fn code_for_another_cpu(code: &str, target: &Target) -> Option<String> {
 /// How a proof line of code the prover has no model for begins.
 const NOT_MODELLED: &str = "tested, not proven: ";
 
-/// Whether the prover models the CPU of `profile`'s programs: x86-64's, so far.
+/// Whether the prover models the CPU of `profile`'s programs: x86-64's and AArch64's.
 fn modelled(profile: Profile) -> bool {
-    profile.isa() == Isa::X86_64
+    matches!(profile.isa(), Isa::X86_64 | Isa::Aarch64)
 }
 
 /// The proof line of a test whose program's CPU the prover has no model of.

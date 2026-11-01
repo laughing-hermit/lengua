@@ -198,6 +198,23 @@ impl Session {
         Self::connect(protocol, data_dir, Some(0), None, None, Some(target), None).await
     }
 
+    /// Starts `lengua-mcp` for `target` through QEMU's user mode, as [`Self::emulating`] does,
+    /// giving each version's proofs `seconds` in all.
+    pub async fn emulating_for(protocol: Protocol, target: &'static str, seconds: u64) -> Self {
+        let hold = Some(Proving::Shared(proving().read_owned().await));
+        let data_dir = tempfile::tempdir().expect("create a temporary data folder");
+        Self::connect(
+            protocol,
+            data_dir,
+            Some(seconds),
+            None,
+            None,
+            Some(target),
+            hold,
+        )
+        .await
+    }
+
     /// Starts `lengua-mcp` giving each version's proofs `seconds` in all, once no other session
     /// in the test binary is proving, and keeps the others from proving until it ends: a proof
     /// that must end within its time, as an induction's, would run out of it beside theirs.

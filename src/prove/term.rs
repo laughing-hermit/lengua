@@ -2423,6 +2423,81 @@ impl Pool {
             let remainder = self.linear(remainder);
             linear.add(&remainder, 1, width);
         }
+        // A sum less c times its own quotient by c is its remainder too, though its parts are
+        // the whole's: what AArch64's `udiv` and `msub` leave of a number being printed, where
+        // x86-64's `div` gives the remainder itself.
+        let sums: Vec<(Term, Term, u128)> = linear
+            .parts
+            .iter()
+            .filter_map(|(part, times)| {
+                let Node::Udiv(dividend, divisor) = *self.node(*part) else {
+                    return None;
+                };
+                let c = self.constant(divisor).filter(|c| *c > 0)?;
+                (*times == c.wrapping_neg() & mask(width)
+                    && matches!(self.node(dividend), Node::Add(..)))
+                .then_some((*part, dividend, c))
+            })
+            .collect();
+        for (quotient, dividend, c) in sums {
+            let own = self.linear_view(dividend);
+            if !linear.parts.contains_key(&quotient)
+                || !own
+                    .parts
+                    .iter()
+                    .all(|(part, times)| linear.parts.get(part) == Some(times))
+            {
+                continue;
+            }
+            linear.parts.remove(&quotient);
+            for part in own.parts.keys() {
+                linear.parts.remove(part);
+            }
+            linear.constant = linear.constant.wrapping_sub(own.constant) & mask(width);
+            let divisor = self.bv(width, c);
+            let remainder = self.urem(dividend, divisor);
+            let remainder = self.linear(remainder);
+            linear.add(&remainder, 1, width);
+        }
+        // A quotient less c times the next one is its remainder by c, though the next was
+        // written as one division, `p / (c1 c)` for `(p / c1) / c`: the digits a print loop
+        // takes off one division at a time.
+        let chained: Vec<(Term, Term, u128)> = linear
+            .parts
+            .iter()
+            .filter_map(|(part, times)| {
+                let Node::Udiv(dividend, divisor) = *self.node(*part) else {
+                    return None;
+                };
+                let whole = self.constant(divisor).filter(|whole| *whole > 1)?;
+                let by = times.wrapping_neg() & mask(width);
+                (by > 1 && by < whole && whole % by == 0).then_some((*part, dividend, by))
+            })
+            .collect();
+        for (quotient, dividend, by) in chained {
+            let Some(whole) = self.constant(match *self.node(quotient) {
+                Node::Udiv(_, divisor) => divisor,
+                _ => continue,
+            }) else {
+                continue;
+            };
+            let first = self.bv(width, whole / by);
+            let before = self.udiv(dividend, first);
+            if !linear.parts.contains_key(&quotient)
+                || !linear
+                    .parts
+                    .get(&before)
+                    .is_some_and(|times| signed(*times, width) >= 1)
+            {
+                continue;
+            }
+            linear.parts.remove(&quotient);
+            linear.add_part(before, mask(width), width);
+            let divisor = self.bv(width, by);
+            let remainder = self.urem(before, divisor);
+            let remainder = self.linear(remainder);
+            linear.add(&remainder, 1, width);
+        }
     }
 
     /// Counts, and values that are each 0 or 1, added together are one count of all their
@@ -3590,6 +3665,26 @@ impl Pool {
         let ((al, ah), (bl, bh)) = (self.range(a), self.range(b));
         if ah < bl || bh < al {
             return self.boolean(false);
+        }
+        // A value's sign shifted down over all of it, as AArch64 compares a product's high half
+        // with its low half's: none where the value is at least 0, all ones where it's below,
+        // which its signed range settles.
+        for (shifted, other) in [(a, b), (b, a)] {
+            if let Node::Ashr(value, amount) = *self.node(shifted)
+                && self.constant(amount) == Some(u128::from(self.width(value) - 1))
+                && let Some(fill) = self.constant(other)
+            {
+                let width = self.width(value);
+                let zero = self.bv(width, 0);
+                let negative = self.slt(value, zero);
+                if fill == 0 {
+                    return self.bool_not(negative);
+                }
+                if fill == mask(width) {
+                    return negative;
+                }
+                return self.boolean(false);
+            }
         }
         // A quotient is 0 exactly when the dividend is below the divisor: a program counting
         // digits by dividing by 10 until nothing is left and a formula comparing with powers of

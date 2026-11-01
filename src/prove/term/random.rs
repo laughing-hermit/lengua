@@ -399,7 +399,32 @@ impl Writer<'_> {
             };
         }
         let deeper = depth - 1;
-        match self.rng.random_range(0..25) {
+        match self.rng.random_range(0..27) {
+            // A quotient less c times its own quotient by c, as a print loop takes the next
+            // digit off with udiv and msub: (p / c1) % c, the second division written
+            // p / (c1 c).
+            26 => {
+                let value = self.number(width, deeper);
+                let first = Expr::Const(width, self.rng.random_range(1..=16_u128) & mask(width));
+                let by = Expr::Const(width, self.rng.random_range(2..=16_u128) & mask(width));
+                let quotient = Expr::Binary(Op::Udiv, Box::new(value), Box::new(first));
+                let next = Expr::Binary(Op::Udiv, Box::new(quotient.clone()), Box::new(by.clone()));
+                let product = Expr::Binary(Op::Mul, Box::new(next), Box::new(by));
+                Expr::Binary(Op::Sub, Box::new(quotient), Box::new(product))
+            }
+            // A sum less c times its own quotient by c, as AArch64's udiv and msub leave a
+            // number's last digit: its remainder.
+            25 => {
+                let left = self.number(width, deeper);
+                let right = self.number(width, deeper);
+                let sum = Expr::Binary(Op::Add, Box::new(left), Box::new(right));
+                let divisor =
+                    Expr::Const(width, (self.rng.random_range(1..=255_u128)) & mask(width));
+                let quotient =
+                    Expr::Binary(Op::Udiv, Box::new(sum.clone()), Box::new(divisor.clone()));
+                let product = Expr::Binary(Op::Mul, Box::new(quotient), Box::new(divisor));
+                Expr::Binary(Op::Sub, Box::new(sum), Box::new(product))
+            }
             // A bit of the low mask of n bits, (1 << n) - 1, as bzhi builds one with an index
             // the input chooses: sometimes past the width, where every bit is set.
             24 if width >= 8 => {

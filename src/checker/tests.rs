@@ -1925,6 +1925,28 @@ fn aarch64_with_fill() -> String {
     .expect("the fixture")
 }
 
+/// An AArch64 file program, the upcase example's spec compiled for AArch64: it reads one file
+/// whole, capitalizes its letters with no branch on a byte, and writes another, passing every
+/// rule, memory rules included.
+#[tokio::test]
+async fn an_aarch64_file_program_passes_every_rule() {
+    let syscalls = [
+        Syscall::Openat,
+        Syscall::Close,
+        Syscall::Read,
+        Syscall::Write,
+        Syscall::Exit,
+    ];
+    let text = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/linux-aarch64/upcase/main.s"),
+    )
+    .expect("the fixture");
+    let report = check_full(&text, CpuFeatures::all(), &syscalls, None).await;
+    let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+    assert!(report.passed(), "{all:#?}");
+}
+
 /// AArch64's fill passes every rule, and is held to its template as x86-64's is: its code and
 /// its constants.
 #[tokio::test]

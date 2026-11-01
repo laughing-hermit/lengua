@@ -138,10 +138,11 @@ async fn proves_the_template_for_every_input() {
     assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
 }
 
-/// The AArch64 template is proven as x86-64's is, from the same spec. Not yet: its first block's
-/// proof runs, but a path takes cvc5 past its time to confirm, where x86-64's settles in its terms.
+/// The AArch64 template is proven as x86-64's is, from the same spec, with no solver question: its
+/// digits, which `udiv` and `msub` take off one division at a time, are the formula's remainders,
+/// and its overflow checks, a product's high half against its low half's sign, settle in the
+/// values' ranges.
 #[tokio::test]
-#[ignore = "Round 9, R9b: the AArch64 template's proof doesn't settle yet"]
 async fn proves_the_aarch64_template_for_every_input() {
     if !solvers_installed() {
         return;
@@ -159,6 +160,69 @@ async fn proves_the_aarch64_template_for_every_input() {
         eprintln!("block {number}: {verdict:?} in {:?}", started.elapsed());
         assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
     }
+}
+
+/// An AArch64 streaming filter through `fill`, `cat` from the same kind of spec as x86-64's, is
+/// proven for every length by induction over its read loop.
+#[tokio::test]
+async fn proves_the_aarch64_streaming_filter_for_every_length() {
+    if !solvers_installed() {
+        return;
+    }
+    let spec = repository_file("tests/fixtures/linux-aarch64/cat/spec.md");
+    let source = repository_file("tests/fixtures/linux-aarch64/cat/main.s");
+    let machine = machine(&source).await;
+    let block = block(&spec, 0);
+    let started = Instant::now();
+    let verdict = prove(&machine, &block, &long_budget());
+    eprintln!("the AArch64 cat: {verdict:?} in {:?}", started.elapsed());
+    assert!(
+        matches!(
+            verdict,
+            Verdict::Proven {
+                bound: None,
+                induction: Some(_),
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
+}
+
+/// An AArch64 file program, from the same spec as x86-64's upcase example, its files cut to 300
+/// bytes so every length goes by: every block proven, each letter's capital with no branch on
+/// the byte, and a bound that lets `z` stay small is caught.
+#[tokio::test]
+async fn proves_the_aarch64_file_program() {
+    if !solvers_installed() {
+        return;
+    }
+    let spec = repository_file("tests/fixtures/linux-aarch64/upcase/spec.md")
+        .replacen(
+            "# Behaviors",
+            "Tests also give it files of `0` to `300` bytes.\n\n# Behaviors",
+            1,
+        )
+        .replacen("string(0, 1048576,", "string(0, 300,", 1);
+    let source = repository_file("tests/fixtures/linux-aarch64/upcase/main.s");
+    let right = machine(&source).await;
+    for number in 0..4 {
+        let block = block(&spec, number);
+        let started = Instant::now();
+        let verdict = prove(&right, &block, &text_budget());
+        eprintln!(
+            "AArch64 upcase block {number}: {verdict:?} in {:?}",
+            started.elapsed()
+        );
+        assert!(
+            matches!(verdict, Verdict::Proven { bound: None, .. }),
+            "block {number}: {verdict:?}"
+        );
+    }
+    let wrong =
+        machine(&source.replace("    cmp w5, #LETTERS\n", "    cmp w5, #LETTERS - 1\n")).await;
+    let verdict = prove(&wrong, &block(&spec, 0), &text_budget());
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
 }
 
 #[test]

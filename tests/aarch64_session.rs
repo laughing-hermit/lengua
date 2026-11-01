@@ -1,7 +1,7 @@
-//! A session for linux-aarch64 checks, tests and runs AArch64 code: natively on an ARM64
+//! A session for linux-aarch64 checks, tests, proves and runs AArch64 code: natively on an ARM64
 //! computer, and on an x86-64 one through QEMU's user mode, as a developer's `LENGUA_TARGET`
-//! asks. Either way the rules hold, the tests run, nothing is proven yet (the prover has no
-//! AArch64 model), and lengua's line in main.s is an AArch64 comment.
+//! asks. Either way the rules hold, the tests run, the proofs are x86-64's, and lengua's line in
+//! main.s is an AArch64 comment.
 
 mod common;
 
@@ -70,8 +70,8 @@ async fn aarch64_session() -> Option<(Session, bool)> {
     }
 }
 
-/// The AArch64 cat passes every rule and its tests, with no proof yet; lengua's line is a `//`
-/// comment and the lock says what ran the tests. Under QEMU the reply and run say what held the
+/// The AArch64 cat passes every rule and its tests, with no time for proofs; lengua's line is a
+/// `//` comment and the lock says what ran the tests. Under QEMU the reply and run say what held the
 /// runs, and a session for this computer itself runs none of it.
 #[tokio::test]
 async fn aarch64_code_is_checked_and_tested() {
@@ -97,13 +97,12 @@ async fn aarch64_code_is_checked_and_tested() {
         emulated,
         "{report}"
     );
+    // With no time for proofs, as x86-64's say with none: the prover models AArch64 code.
     assert!(
         report["proofs"]
             .as_array()
             .is_some_and(|proofs| !proofs.is_empty()
-                && proofs.iter().all(|proof| text(proof).ends_with(
-                    "tested, not proven: lengua's prover has no model of linux-aarch64 code yet"
-                ))),
+                && proofs.iter().all(|proof| !text(proof).contains("no model"))),
         "{report}"
     );
     assert!(
@@ -194,6 +193,28 @@ async fn the_aarch64_calc_runs_each_case_of_its_table() {
     assert_eq!(report["state"], "code_problems", "{report}");
     assert!(
         any_line(&report["problems"], "main.s is x86-64 code, and"),
+        "{report}"
+    );
+    session.service.cancel().await.expect("close the session");
+}
+
+/// The AArch64 cat, a streaming filter through `fill`, is proven for every length through the
+/// server, as x86-64's is: natively on an ARM64 computer, and through QEMU here.
+#[tokio::test]
+async fn aarch64_code_is_proven() {
+    let session = if cfg!(target_arch = "aarch64") {
+        Session::proving_for(Protocol::Discover, 120).await
+    } else if common::qemu_runs_aarch64() {
+        Session::emulating_for(Protocol::Discover, "linux-aarch64", 120).await
+    } else {
+        return;
+    };
+    let program = written(&session, aarch64_files("cat")).await;
+    let report = session.settle(&program).await;
+    assert_eq!(report["state"], "done", "{report}");
+    let proof = text(&report["proofs"][0]);
+    assert!(
+        proof.starts_with("generated B1: proven for every input in range"),
         "{report}"
     );
     session.service.cancel().await.expect("close the session");

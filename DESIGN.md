@@ -1027,8 +1027,15 @@ still to build per target. A new profile must supply:
    has, refusing every word LLVM refuses. `checker/aarch64.rs` matches main.s to AArch64's
    machine code as `checker/x86_64.rs` does x86-64's: both read into that form, each line with
    its names' addresses in the executable, and numbers compared whole, never masked.
-3. **Prover model:** the CPU's instructions in `src/prove/exec` (today an x86 `match`), and CPU
-   feature detection (today x86 `is_x86_feature_detected!`).
+3. **Prover model:** the CPU's instructions in `src/prove/exec`, x86-64's and AArch64's
+   (`exec/aarch64.rs`, held to QEMU and to ARM64 silicon by its `against_a64` harness), around one
+   shared core: calls by the CPU's convention, `fill`, induction and the term pool. AArch64's
+   proofs settle as x86-64's do, with no solver question: its template, a streaming filter
+   through `fill` for every length, and a file program. Its idioms needed two readings of the
+   pool's own: a digit taken off with `udiv` and `msub`, `n - (n / 10) × 10` one division at a
+   time, is the remainder, where x86-64's `div` gives it; and a product's overflow check, its
+   high half against its low half's sign, `asr #63`, is the value's sign, which its range settles.
+   CPU feature detection is per CPU too (x86's `is_x86_feature_detected!`).
 4. **Dialect:** the Power of 10 in that CPU's mnemonics and registers, with its reference (today
    `references/linux-x86_64.md` and the x86 parts of `references/power-of-10.md`). The rules
    themselves read only the facts, so they're shared; what's per CPU is the syntax and what the

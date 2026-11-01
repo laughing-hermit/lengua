@@ -229,8 +229,12 @@ one needs.
   tested under QEMU on this computer and on GitHub's ARM64 runners for the sandbox.
 
   Round 9 covers the template's kind of program: arguments, whole numbers, text, standard input
-  through `fill`, and files and folders, checked, tested and proven. Until the rounds after it
-  land, lengua doesn't "run on ARM64", and nothing should say so:
+  through `fill`, and files and folders, checked, tested and proven. Proven since R9b
+  (2026-11-01), with no solver question, through the server too, natively and under QEMU: the
+  template, a streaming filter through `fill` for every length, and a file program
+  (`tests/fixtures/linux-aarch64/upcase`, the upcase example's spec unchanged). Next is R10, the
+  skills and references for AArch64 and interactive sessions. Until the rounds after it land,
+  lengua doesn't "run on ARM64", and nothing should say so:
   - an install package for ARM64 Linux computers (today's release and installer are x86-64 only,
     and the ARM64 server is built only on CI);
   - vector instructions (NEON, then SVE), lengua's main speed tool, with ARM64 benchmarks against

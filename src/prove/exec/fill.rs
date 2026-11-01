@@ -63,10 +63,60 @@ const SHAPE: [&str; 27] = [
     "ret",
 ];
 
+/// AArch64's fill, as assets/linux-aarch64/fill.s assembles it: each instruction's kind in the
+/// canonical form the decoder reads, through its `ret`.
+const SHAPE_AARCH64: [&str; 25] = [
+    "CompareBranch",
+    "CompareBranch",
+    "LogicalShifted",
+    "LogicalShifted",
+    "LogicalShifted",
+    "MoveWide",
+    "LogicalShifted",
+    "MoveWide",
+    "Svc",
+    "TestBranch",
+    "CompareBranch",
+    "AddShifted",
+    "BranchCond",
+    "AddShifted",
+    "AddShifted",
+    "BranchCond",
+    "LoadStore",
+    "AddShifted",
+    "BranchCond",
+    "AddImm",
+    "BranchCond",
+    "MoveWide",
+    "Branch",
+    "AddShifted",
+    "BranchReg",
+];
+
 impl Fill {
     /// fill's places in `image`, when it has a function named fill of the canonical shape.
     pub fn find(image: &Image, machine: &crate::checker::decode::Machine) -> Option<Self> {
         let function = machine.functions.get("fill")?;
+        let words = function.words();
+        if !words.is_empty() {
+            if words.len() < SHAPE_AARCH64.len() {
+                return None;
+            }
+            let same = words.iter().zip(SHAPE_AARCH64).all(|(word, kind)| {
+                word.inst.as_ref().is_ok_and(|inst| {
+                    let name = format!("{inst:?}");
+                    name.split(|character: char| !character.is_alphanumeric())
+                        .next()
+                        == Some(kind)
+                })
+            });
+            // Its loop's head, `mov x0, x9`; after `svc`; and `.Lfill_done`.
+            return same.then(|| Self {
+                head: words[6].address,
+                after_call: words[9].address,
+                done: words[23].address,
+            });
+        }
         let instructions = function.x86();
         if instructions.len() < SHAPE.len() {
             return None;
