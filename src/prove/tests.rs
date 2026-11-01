@@ -2851,3 +2851,38 @@ async fn proves_a_count_of_a_part_that_overlaps_itself_for_every_length() {
         );
     }
 }
+
+/// The induction's base takes every final piece at once, its length the input's choice: the
+/// count loop's exits on that length merge into one run, each part counted where it's inside,
+/// so `pairs` with a 4 KiB buffer is proven for every length in seconds with one shape for its
+/// base. A program that counts the whole buffer-full, past what fill read, is caught: its base
+/// doesn't hold, and from the program's start a text just over a buffer-full shows it.
+#[tokio::test]
+async fn proves_every_final_piece_at_once_where_a_loop_leaves_on_the_length() {
+    if !solvers_installed() {
+        return;
+    }
+    let block = block(&fixture("pairs", "spec.md"), 0);
+    let source = fixture("pairs", "main.s");
+    let large = machine(&source.replace(".equ BUF_LEN, 256\n", ".equ BUF_LEN, 4096\n")).await;
+    let started = Instant::now();
+    let verdict = prove(&large, &block, &text_budget());
+    eprintln!("pairs at 4 KiB: {verdict:?} in {:?}", started.elapsed());
+    assert!(
+        matches!(
+            verdict,
+            Verdict::Proven {
+                bound: None,
+                induction: Some(4096),
+                shapes: 2,
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
+    let from = "    mov rdi, rax\n    mov rsi, r14\n";
+    assert!(source.contains(from));
+    let past = machine(&source.replace(from, "    mov edi, BUF_LEN\n    mov rsi, r14\n")).await;
+    let verdict = prove(&past, &block, &text_budget());
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+}

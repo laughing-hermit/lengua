@@ -227,6 +227,7 @@ fn text_around_a_number_matches_exactly() {
             numbers: &numbers,
             fixed: &BTreeMap::new(),
             texts: &BTreeMap::new(),
+            lengths: None,
         };
         let condition = text_is(&mut pool, &bytes, &template, &known).expect("a condition");
         assert_eq!(
@@ -310,6 +311,7 @@ fn any_takes_exactly_the_plain_numbers_in_range() {
             numbers: &numbers,
             fixed: &BTreeMap::new(),
             texts: &BTreeMap::new(),
+            lengths: None,
         };
         let condition = text_is(&mut pool, &bytes, &template, &known).expect("a condition");
         let rule = format!(
@@ -419,6 +421,7 @@ fn several_numbers_in_one_line_match_exactly() {
             numbers: &numbers,
             fixed: &BTreeMap::new(),
             texts: &BTreeMap::new(),
+            lengths: None,
         };
         let condition = text_is(&mut pool, &bytes, &template, &known).expect("a condition");
         assert_eq!(
@@ -466,6 +469,7 @@ fn a_chosen_text_matches_only_its_own_choice() {
             numbers: &numbers,
             fixed: &BTreeMap::new(),
             texts: &BTreeMap::new(),
+            lengths: None,
         };
         let condition = text_is(&mut pool, &bytes, &template, &known).expect("a condition");
         assert_eq!(

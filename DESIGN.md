@@ -735,8 +735,20 @@ What it covers:
   count, or starts with an `a` pending gets an input that shows it. Most registers a time round
   changes keep no count; a random input of the text's characters shows each such one so before
   any solver is asked, which took the line counter's step at 4 KiB from 52 seconds to a tenth of
-  one, and at 64 KiB from five minutes to six seconds. A loop the induction doesn't fit, or whose
-  step doesn't hold, is proven by length as above.
+  one, and at 64 KiB from five minutes to six seconds. The base takes every final piece at
+  once where it can: a buffer-full of fresh bytes whose length the input chooses (each held to
+  the text's characters only where it's inside; those past it stand for whatever the buffer
+  held, which is anything), fill returning that length; and where a loop over the piece leaves
+  on the length itself, the run doesn't split at each time round: it goes on as if still in the
+  loop while each side that left waits at the exit, and when the loop is done the runs merge
+  into one, for each input the one that left first. A count that only grew between exits is
+  then one count of each part where the loop was still running when it was added, and the
+  formula's count of a text of that length guards each part by whether it's inside, so the two
+  are one term. `pairs` with a 4 KiB buffer is proven for every length so in under four seconds,
+  against nine minutes one final length at a time. A loop that masks its last chunk by the bytes
+  left (`bzhi`), as the line counter does, doesn't meet the formula's terms that way yet, so its
+  base goes one length at a time as before. A loop the induction doesn't fit, or whose step
+  doesn't hold, is proven by length as above.
 - What the proof ran. A function no run of a proof called, such as a fast path that starts past
   the proof's bound, is named in the proof's line: "the proof never ran crc_block, so what it
   does isn't proven". The CRC-32C asset's three chains join only past 12,288 bytes, so its

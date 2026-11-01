@@ -105,6 +105,9 @@ pub struct Budget {
     /// Where the proof starts, when the texts below this length are proven already: a check
     /// goes on from where the last proof of the same build stopped.
     pub from_length: usize,
+    /// Whether a text's length is the input's choice in one shape, every length at once, rather
+    /// than one shape a length: an induction's base over its final piece.
+    pub within: bool,
 }
 
 impl Budget {
@@ -120,6 +123,7 @@ impl Budget {
             cancel: Arc::default(),
             progress: Arc::default(),
             from_length: 0,
+            within: false,
         }
     }
 
@@ -683,6 +687,18 @@ const MAX_CHOICES: u32 = 2;
 /// speaks of but leaves open still chooses, as the sign of a total that may be 0 chooses its size,
 /// each choice is settled on its own, with the condition on the path.
 fn settled(pool: &mut Pool, path: &[Term], holds: Term, splits: u32) -> Term {
+    settled_with(pool, path, holds, splits, &mut HashMap::new())
+}
+
+/// [`settled`], noting in `derived` the comparisons in `holds` the path settles, beyond the
+/// path's own conditions: the facts that rewrite the path's terms the same way.
+fn settled_with(
+    pool: &mut Pool,
+    path: &[Term],
+    holds: Term,
+    splits: u32,
+    derived: &mut HashMap<Term, bool>,
+) -> Term {
     if pool.truth(holds).is_some() {
         return holds;
     }
@@ -720,8 +736,10 @@ fn settled(pool: &mut Pool, path: &[Term], holds: Term, splits: u32) -> Term {
                 let negated = pool.bool_not(term);
                 if indexed.refutes(pool, term) {
                     facts.insert(term, false);
+                    derived.insert(term, false);
                 } else if indexed.refutes(pool, negated) {
                     facts.insert(term, true);
+                    derived.insert(term, true);
                 }
             }
             pending.extend(pool.operands(term));
@@ -1043,6 +1061,9 @@ enum Part {
     Fixed(Value),
     /// Text of this many bytes, each one of the generator's characters.
     Text(usize, Vec<u8>),
+    /// Text of any length from the first to the second, the input's choice, its bytes the
+    /// generator's characters.
+    Within(usize, usize, Vec<u8>),
     /// Text beyond ASCII: a character of each of these widths in bytes, each one of the
     /// generator's characters that wide.
     Utf8(Vec<u8>, std::sync::Arc<[char]>),
@@ -1431,6 +1452,51 @@ fn text_input(pool: &mut Pool, name: &str, length: usize, characters: &[u8]) -> 
     }
 }
 
+/// A text of a length the input chooses, from `shortest` to `longest`, its bytes from
+/// `characters`: as many bytes as it can be long, each held to the characters where it's inside,
+/// and the length.
+fn within_input(
+    pool: &mut Pool,
+    name: &str,
+    (shortest, longest): (usize, usize),
+    characters: &[u8],
+) -> (Input, Term) {
+    let length = pool.var_in(
+        64,
+        &format!("{name}.length"),
+        shortest as u128,
+        longest as u128,
+    );
+    // Its bytes are held to its characters where a question finds inputs, not on every
+    // question: a condition for each byte, each on the length, would make every comparison of
+    // the length read them all.
+    let text = (0..longest)
+        .map(|index| {
+            // A byte past the end stands for nothing read: any byte.
+            let byte = pool.var(8, &format!("{name}.within{longest}.{index}"));
+            pool.allow(byte, characters);
+            byte
+        })
+        .collect();
+    (
+        Input {
+            text,
+            number: None,
+            constraints: Vec::new(),
+        },
+        length,
+    )
+}
+
+/// That `byte`, the `index`th of a text `length` long, is one of `characters` where it's inside.
+fn held_inside(pool: &mut Pool, byte: Term, index: usize, length: Term, characters: &[u8]) -> Term {
+    let held = pool.is_one_of(byte, characters);
+    let at = pool.bv(64, index as u128);
+    let inside = pool.ult(at, length);
+    let outside = pool.bool_not(inside);
+    pool.bool_or(outside, held)
+}
+
 /// The input for one value of a `choice(…)`: its text, and its value when it's a whole number.
 fn fixed(pool: &mut Pool, value: &Value) -> Result<Input, String> {
     let text = value
@@ -1731,6 +1797,9 @@ struct Known<'a> {
     numbers: &'a BTreeMap<String, Number>,
     fixed: &'a crate::expr::Env,
     texts: &'a BTreeMap<String, Vec<Term>>,
+    /// The lengths of the texts whose length the input chooses, which `texts` holds as many
+    /// bytes of as they can be long.
+    lengths: Option<&'a BTreeMap<String, Term>>,
     /// Formulas translated in this shape, by expression: every run of a shape asks for the
     /// same ones, and a text formula over thousands of bytes is worth translating once.
     translated: std::cell::RefCell<HashMap<*const crate::expr::Expr, Result<Formula, String>>>,
@@ -1772,7 +1841,20 @@ impl Known<'_> {
             return found.clone();
         }
         let offset = self.offsets.get(&key);
+        let chosen_length = self.lengths.filter(|lengths| {
+            crate::expr::variables_of(expr)
+                .iter()
+                .any(|name| lengths.contains_key(name))
+        });
         let mut result = match offset {
+            // A count of a text whose length the input chooses, each part where it's inside.
+            _ if let Some(lengths) = chosen_length => formula::within(
+                pool,
+                expr,
+                self.texts,
+                lengths,
+                offset.and_then(|offset| offset.phase.as_ref()),
+            ),
             Some(Offset {
                 phase: Some(phase), ..
             }) => formula::count_from(pool, expr, self.texts, phase),
@@ -2463,13 +2545,22 @@ fn by_induction(
     };
     if found.lookback == 0 {
         // The base: whatever a time round leaves, from one byte up to a buffer-full, and the
-        // shortest texts at the start.
-        let verdict = by_length(
-            image,
-            &texts((*min).min(1), found.chunk),
-            budget,
-            Some(&found.hook),
-        )?;
+        // shortest texts at the start. First every such final piece at once, its length the
+        // input's choice; where that doesn't prove it, one length at a time.
+        let base = texts((*min).min(1), found.chunk);
+        let within = Budget {
+            within: true,
+            ..budget.clone()
+        };
+        let verdict = match by_length(image, &base, &within, Some(&found.hook)) {
+            Ok(verdict @ Verdict::Proven { bound: None, .. }) => verdict,
+            other => {
+                if std::env::var_os("LENGUA_PROVE_TRACE").is_some() {
+                    eprintln!("every final piece at once isn't proven: {other:?}");
+                }
+                by_length(image, &base, budget, Some(&found.hook))?
+            }
+        };
         let Verdict::Proven {
             shapes,
             paths,
@@ -2679,6 +2770,12 @@ fn by_length(
             }
             (None, Generator::Dec { lo, hi, places }) if clock.contains(name) => {
                 vec![Part::Plain(*lo, *hi, *places)]
+            }
+            (None, Generator::Str { min, max, charset })
+                if budget.within && charset.iter().all(char::is_ascii) =>
+            {
+                let bytes = charset.iter().map(|character| *character as u8).collect();
+                vec![Part::Within(*min, *max, bytes)]
             }
             _ => parts(name, generator, budget.from_length)?,
         };
@@ -3084,7 +3181,7 @@ fn conjuncts(pool: &Pool, condition: Term) -> Vec<Term> {
 /// A part's text length: 0 for a part that isn't text.
 fn part_length(part: &Part) -> usize {
     match part {
-        Part::Text(length, _) => *length,
+        Part::Text(length, _) | Part::Within(_, length, _) => *length,
         Part::Utf8(widths, _) => widths.len(),
         _ => 0,
     }
@@ -3299,6 +3396,8 @@ fn prove_shape(
     // texts drawn, byte by byte.
     let mut chosen = BTreeMap::new();
     let mut texts: BTreeMap<String, Vec<Term>> = BTreeMap::new();
+    // The lengths of the texts whose length the input chooses.
+    let mut lengths: BTreeMap<String, Term> = BTreeMap::new();
     let mut delivery = Delivery::Whole;
     for (name, parts) in each {
         let number = rest % parts.len();
@@ -3316,6 +3415,13 @@ fn prove_shape(
             Part::Text(length, characters) => {
                 let input = text_input(&mut pool, name, *length, characters);
                 texts.insert(name.clone(), input.text.clone());
+                input
+            }
+            Part::Within(shortest, longest, characters) => {
+                let (input, length) =
+                    within_input(&mut pool, name, (*shortest, *longest), characters);
+                texts.insert(name.clone(), input.text.clone());
+                lengths.insert(name.clone(), length);
                 input
             }
             Part::Utf8(widths, characters) => {
@@ -3433,6 +3539,17 @@ fn prove_shape(
         .with_supply(random, clock);
     if every_cut {
         base = base.for_every_cut();
+    }
+    // A text whose length the input chooses is all of standard input, which ends after it.
+    if !lengths.is_empty() {
+        let read = match block.stdin.pieces()[..] {
+            [Piece::Expr(crate::expr::Expr::Var(read))] => lengths.get(read).copied(),
+            _ => None,
+        };
+        let length = read
+            .filter(|_| lengths.len() == 1 && block.args.is_empty() && block.files.is_empty())
+            .ok_or("a text whose length the input chooses that isn't all of standard input")?;
+        base = base.with_stdin_length(length);
     }
     // In an induction's base, each count the loop keeps holds what was read before the head
     // too: the formula's count goes on from there. Where the counts look back, each run reads
@@ -3552,6 +3669,7 @@ fn prove_shape(
             numbers: &numbers,
             fixed: &chosen,
             texts: &texts,
+            lengths: Some(&lengths),
             translated: std::cell::RefCell::new(HashMap::new()),
             offsets: offsets.clone(),
             relative: relative.as_ref(),
@@ -3603,11 +3721,13 @@ fn check_runs(
     delivery: Option<Delivery>,
 ) -> Result<(), Stop> {
     let (numbers, chosen, texts) = (known.numbers, known.fixed, known.texts);
+    let lengths = known.lengths.cloned().unwrap_or_default();
     // A counterexample shows each number and each text; a question asks for the texts short
     // enough to have every byte held to its characters, and the rest only when it finds inputs.
     let values: Vec<Term> = numbers
         .values()
         .map(|number| number.term)
+        .chain(lengths.values().copied())
         .chain(
             texts
                 .values()
@@ -3618,6 +3738,7 @@ fn check_runs(
     let every_value: Vec<Term> = numbers
         .values()
         .map(|number| number.term)
+        .chain(lengths.values().copied())
         .chain(texts.values().flat_map(|bytes| bytes.iter().copied()))
         .collect();
     // A text too long to have each byte held to its characters on every question is held to
@@ -3640,10 +3761,21 @@ fn check_runs(
                 }
                 _ => None,
             });
-        if let Some(characters) = characters
-            && bytes.len() > MAX_CHECKED_TEXT
-        {
-            held.extend(bytes.iter().map(|byte| pool.is_one_of(*byte, &characters)));
+        if let Some(characters) = characters {
+            match lengths.get(name) {
+                // A text whose length the input chooses, whatever its length, only where it's
+                // inside.
+                Some(length) => held.extend(
+                    bytes
+                        .iter()
+                        .enumerate()
+                        .map(|(index, byte)| held_inside(pool, *byte, index, *length, &characters)),
+                ),
+                None if bytes.len() > MAX_CHECKED_TEXT => {
+                    held.extend(bytes.iter().map(|byte| pool.is_one_of(*byte, &characters)));
+                }
+                None => {}
+            }
         }
     }
     // The inputs a model gives, with how what the program read arrived.
@@ -3660,7 +3792,20 @@ fn check_runs(
                 found.insert(DELIVERY.to_owned(), Value::Str(arrived.describe()));
             }
             for (name, bytes) in texts {
-                let text: Vec<u8> = bytes
+                // A text whose length the input chose is as long as the model says.
+                let inside = match lengths.get(name) {
+                    Some(length) => {
+                        let length = model
+                            .get(length)
+                            .copied()
+                            .ok_or("a counterexample without its text's length")?;
+                        usize::try_from(length)
+                            .unwrap_or(usize::MAX)
+                            .min(bytes.len())
+                    }
+                    None => bytes.len(),
+                };
+                let text: Vec<u8> = bytes[..inside]
                     .iter()
                     .map(|byte| model.get(byte).map(|value| *value as u8))
                     .collect::<Option<_>>()
@@ -3775,6 +3920,7 @@ fn check_runs(
                     numbers: known.numbers,
                     fixed: known.fixed,
                     texts: known.texts,
+                    lengths: known.lengths,
                     translated: std::cell::RefCell::new(HashMap::new()),
                     offsets,
                     relative: None,
@@ -3822,8 +3968,19 @@ fn check_runs(
             None => return Err("a run that didn't end".into()),
         };
         // What the output check comes to where the run's own branches went as they did.
-        let holds = settled(pool, &run.path, holds, MAX_CHOICES);
+        let mut derived = HashMap::new();
+        let holds = settled_with(pool, &run.path, holds, MAX_CHOICES, &mut derived);
         let broken = pool.bool_not(holds);
+        // The run's own conditions as the same facts rewrite them: a count the program built
+        // before its path said how long the text is, there as the formula's is here.
+        let rewritten: Vec<Term> = if derived.is_empty() {
+            Vec::new()
+        } else {
+            run.path
+                .iter()
+                .map(|condition| pool.assuming(*condition, &derived))
+                .collect()
+        };
         // Output whose terms are the formulas' own can't break: nothing to ask. Nor can output
         // whose every condition is one of the run's own branches, as a printed number's digit
         // count is the print loop's.
@@ -3833,6 +3990,7 @@ fn check_runs(
                 || run
                     .path
                     .iter()
+                    .chain(&rewritten)
                     .any(|condition| pool.equivalent(*condition, *part))
         };
         if pool.truth(broken) == Some(false)

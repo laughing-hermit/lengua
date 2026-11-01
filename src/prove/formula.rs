@@ -328,6 +328,111 @@ pub fn lookback(expr: &Expr, name: &str) -> Option<usize> {
     }
 }
 
+/// `expr`, a `len`, `count` or `words` of a text whose length the input chooses: `texts` holds
+/// as many bytes as it can be long, and `lengths` its length, a 64-bit term. Each part counts
+/// where its last byte is inside. A count of a part that overlaps itself reads the text from
+/// `phase` where one is given, as [`count_from`] does. Any other formula of such a text isn't
+/// taken.
+///
+/// # Errors
+///
+/// For any other formula over a text whose length the input chooses.
+pub fn within(
+    pool: &mut Pool,
+    expr: &Expr,
+    texts: &BTreeMap<String, Vec<Term>>,
+    lengths: &BTreeMap<String, Term>,
+    phase: Option<&Phase>,
+) -> Result<Formula, String> {
+    let refused = || {
+        "a formula of a text whose length the input chooses other than len, count \
+                      or words of it"
+            .to_owned()
+    };
+    let Expr::Call(function, arguments) = expr else {
+        return Err(refused());
+    };
+    let Some(Expr::Var(name)) = arguments.first() else {
+        return Err(refused());
+    };
+    let (Some(bytes), Some(length)) = (texts.get(name), lengths.get(name)) else {
+        return Err(refused());
+    };
+    let (shortest, longest) = pool.range(*length);
+    let shortest = i128::try_from(shortest).map_err(|_| overflow())?;
+    let longest_bytes = usize::try_from(longest)
+        .map_err(|_| overflow())?
+        .min(bytes.len());
+    let inside = |pool: &mut Pool, last: usize| {
+        let at = pool.bv(64, last as u128);
+        pool.ult(at, *length)
+    };
+    let (parts, high) = match (function, arguments.as_slice()) {
+        (Function::Len, [_]) => {
+            let wide = pool.zero_extend(*length, WIDTH - 64);
+            let longest = i128::try_from(longest).map_err(|_| overflow())?;
+            return Ok(Formula::Number(Number::whole(wide, shortest, longest)));
+        }
+        (Function::Count, [_, Expr::Literal(Value::Str(part))]) if !part.is_empty() => {
+            let part = part.as_bytes();
+            let ends: Vec<Term> = if borderless(part) {
+                (0..bytes.len())
+                    .map(|start| matches_at(pool, bytes, start, part))
+                    .collect()
+            } else {
+                let start = Phase::start(pool, part);
+                let (ends, _) = matches_from(pool, bytes, part, phase.unwrap_or(&start));
+                // A matcher's match ends at its last byte; a start-indexed one, the part's
+                // length on. From a phase, the first byte may end a match begun before.
+                return guarded_count(pool, &ends, 0, inside, longest_bytes.div_ceil(part.len()));
+            };
+            let back = part.len() - 1;
+            return guarded_count(pool, &ends, back, inside, longest_bytes / part.len());
+        }
+        (Function::Words, [_]) => {
+            let spaces: Vec<Term> = bytes.iter().map(|byte| space(pool, *byte)).collect();
+            let starts: Vec<Term> = (0..bytes.len())
+                .map(|index| {
+                    let word = pool.bool_not(spaces[index]);
+                    if index == 0 {
+                        word
+                    } else {
+                        pool.bool_and(word, spaces[index - 1])
+                    }
+                })
+                .collect();
+            (starts, longest_bytes.div_ceil(2))
+        }
+        _ => return Err(refused()),
+    };
+    guarded_count(pool, &parts, 0, inside, high)
+}
+
+/// The count of `parts`, each where its last byte, `back` bytes after where it's listed, is
+/// inside the text: `inside` says so of a byte's place. At most `high`.
+fn guarded_count(
+    pool: &mut Pool,
+    parts: &[Term],
+    back: usize,
+    mut inside: impl FnMut(&mut Pool, usize) -> Term,
+    high: usize,
+) -> Result<Formula, String> {
+    let guarded: Vec<Term> = parts
+        .iter()
+        .enumerate()
+        .map(|(at, part)| {
+            let within = inside(pool, at + back);
+            pool.bool_and(*part, within)
+        })
+        .collect();
+    let high = i128::try_from(high).map_err(|_| overflow())?;
+    Ok(Formula::Number(Number::whole(
+        pool.count(WIDTH, &guarded),
+        0,
+        high,
+    )))
+}
+
 /// The part `expr` counts in the text `name`, when it can overlap itself: such a count's whole
 /// follows from its pieces only through the matcher's phase between them.
 #[must_use]
@@ -1654,6 +1759,73 @@ mod tests {
                 first.len()
             );
         }
+    }
+
+    /// A text whose length the input chooses: `len`, `count` and `words` of it, for each length,
+    /// are what the test language gives for that many of its bytes, whatever the bytes past the
+    /// end hold.
+    #[test]
+    fn counts_of_a_text_of_any_length_count_only_what_is_inside() {
+        let formulas = [
+            "len(s)",
+            "count(s, \"\\n\")",
+            "count(s, \"ab\")",
+            "count(s, \"aa\")",
+            "count(s, \"aba\")",
+            "words(s)",
+        ];
+        let mut rng = ChaCha8Rng::seed_from_u64(0x1e_6e7);
+        let alphabet = b"ab \n";
+        for _ in 0..300 {
+            let held = rng.random_range(1..12);
+            let all: Vec<u8> = (0..held)
+                .map(|_| alphabet[rng.random_range(0..alphabet.len())])
+                .collect();
+            let length = rng.random_range(0..=held);
+            let mut pool = Pool::default();
+            let bytes: Vec<Term> = (0..held)
+                .map(|index| pool.var(8, &format!("s{index}")))
+                .collect();
+            let size = pool.var_in(64, "s.length", 0, held as u128);
+            let mut values: HashMap<String, u128> = all
+                .iter()
+                .enumerate()
+                .map(|(index, byte)| (format!("s{index}"), u128::from(*byte)))
+                .collect();
+            values.insert("s.length".to_owned(), length as u128);
+            let texts: BTreeMap<String, Vec<Term>> = [("s".to_owned(), bytes)].into();
+            let lengths: BTreeMap<String, Term> = [("s".to_owned(), size)].into();
+            let text = String::from_utf8(all[..length].to_vec()).expect("ASCII");
+            let env: crate::expr::Env = [("s".to_owned(), Value::Str(text.clone()))]
+                .into_iter()
+                .collect();
+            for source in formulas {
+                let expr = crate::expr::parse(source).expect("a formula");
+                let Ok(Formula::Number(number)) = within(&mut pool, &expr, &texts, &lengths, None)
+                else {
+                    panic!("{source} of a text of any length");
+                };
+                let Value::Int(expected) = crate::expr::eval(&expr, &env).expect("evaluates")
+                else {
+                    panic!("{source} is a number");
+                };
+                assert_eq!(
+                    pool.evaluate(number.term, &values)
+                        .map(|value| value as i128),
+                    Some(expected),
+                    "{source} of {text:?}, with {:?} past it",
+                    &all[length..]
+                );
+            }
+        }
+        // Other formulas of such a text are refused.
+        let mut pool = Pool::default();
+        let bytes = vec![pool.var(8, "s0")];
+        let size = pool.var_in(64, "s.length", 0, 1);
+        let texts: BTreeMap<String, Vec<Term>> = [("s".to_owned(), bytes)].into();
+        let lengths: BTreeMap<String, Term> = [("s".to_owned(), size)].into();
+        let upper = crate::expr::parse("upper(s)").expect("a formula");
+        assert!(within(&mut pool, &upper, &texts, &lengths, None).is_err());
     }
 
     /// The counts an induction admits, with how far back each looks; and on random texts, the

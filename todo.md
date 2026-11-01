@@ -60,7 +60,15 @@ What's linear is one run whose final piece has a length the input chooses, each 
 guarded by whether it's inside: one shape for every final length, which is also what reading
 with raw `read` (any size each time round, as the fastest `wc`'s megabyte reads) needs. Done
 when the fastest `wc` is proven for every length with a 64 KiB buffer or more. Plan:
-`~/.claude/plans/round-10-loop-summaries.md`.
+`~/.claude/plans/round-10-loop-summaries.md`. Progress (2026-11-01): the step's fold detection
+no longer asks the solvers about every temporary register (the line counter's step at 64 KiB:
+five minutes to six seconds); the base takes every final piece at once, its length the input's
+choice, and merges the exits of a loop that leaves on that length, so `pairs` at 4 KiB is proven
+in under four seconds (nine minutes before). Left: a loop that masks its last chunk (`bzhi` by
+the bytes left), as the line counter and the fast `wc` do, needs its guards to meet the
+formula's (`16j + b < L`), by canonical forms or by proving the time round with its position
+symbolic; and a count built a byte at a time keeps a copy of all its parts at every byte, so a
+byte loop's 64 KiB base runs out of memory (counts that share their parts would fix it).
 
 **The finish line** (decided 2026-11-01, before ARM64 resumes): everything that can be proven is
 proven, however many rounds that takes, except where a concrete, demonstrated reason shows lengua's

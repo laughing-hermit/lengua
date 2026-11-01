@@ -355,6 +355,17 @@ fn mask(width: u32) -> u128 {
     }
 }
 
+/// Whether every item of `small`, sorted, is in `large`, sorted, as often.
+fn within_multiset(small: &[Term], large: &[Term]) -> bool {
+    let mut large = large.iter().peekable();
+    small.iter().all(|item| {
+        while large.peek().is_some_and(|next| *next < item) {
+            large.next();
+        }
+        large.next_if(|next| *next == item).is_some()
+    })
+}
+
 /// A constant read as a signed number of its width.
 fn signed(value: u128, width: u32) -> i128 {
     if width >= 128 {
@@ -978,6 +989,16 @@ impl Pool {
         self.make(Node::Crc(state, byte, poly), Sort::Bv(32))
     }
 
+    /// The conditions `term` counts, when it's a count or a 0 or 1, as [`Self::counted`] finds
+    /// them.
+    pub fn counted_parts(&mut self, term: Term) -> Option<Vec<Term>> {
+        if self.sort(term) == Sort::Bool || !self.is_counted(term) && self.constant(term) != Some(0)
+        {
+            return None;
+        }
+        self.counted(term)
+    }
+
     /// Whether [`Self::counted`] finds conditions in `term`, without making any terms.
     fn is_counted(&self, term: Term) -> bool {
         match *self.node(term) {
@@ -1398,6 +1419,12 @@ impl Pool {
         }
     }
 
+    /// The value `condition` compares with a constant, when it's such a comparison.
+    #[must_use]
+    pub fn interval_subject(&self, condition: Term) -> Option<Term> {
+        self.interval(condition, true).map(|(subject, ..)| subject)
+    }
+
     /// The values a signed comparison of a value with a constant leaves the value where the
     /// comparison is `holds`: the value, and the bounds of one interval, read signed.
     fn interval(&self, condition: Term, holds: bool) -> Option<(Term, i128, i128)> {
@@ -1427,6 +1454,39 @@ impl Pool {
                         (b, first, max)
                     } else {
                         (b, min, first.checked_sub(1)?)
+                    });
+                }
+                None
+            }
+            // An unsigned comparison of a value that's never negative read signed, with a
+            // constant that isn't either: the same interval read either way.
+            Node::Ult(a, b) => {
+                let width = self.width(a);
+                if !(2..=128).contains(&width) {
+                    return None;
+                }
+                let (_, max) = bounds(width);
+                let positive = |term: Term| self.range(term).1 <= mask(width - 1);
+                if let Some(k) = self.constant(b)
+                    && positive(a)
+                    && positive(b)
+                {
+                    let k = signed(k, width);
+                    return Some(if holds {
+                        (a, 0, k.checked_sub(1)?)
+                    } else {
+                        (a, k, max)
+                    });
+                }
+                if let Some(k) = self.constant(a)
+                    && positive(a)
+                    && positive(b)
+                {
+                    let k = signed(k, width);
+                    return Some(if holds {
+                        (b, k.checked_add(1)?, max)
+                    } else {
+                        (b, 0, k)
                     });
                 }
                 None
@@ -2920,7 +2980,45 @@ impl Pool {
                 _ => {}
             }
         }
+        if let Some(count) = self.chosen_count(condition, then, otherwise) {
+            return count;
+        }
         self.make(Node::Ite(condition, then, otherwise), sort)
+    }
+
+    /// A choice between two counts one of which counts some of the other's conditions: the
+    /// smaller count, and each of the larger one's other conditions where the choice picks it.
+    /// So the counts of a loop whose exits were merged, each a count of what was read before
+    /// leaving, are one count of each part where the loop hadn't left by then.
+    fn chosen_count(&mut self, condition: Term, then: Term, otherwise: Term) -> Option<Term> {
+        if self.sort(then) == Sort::Bool || !self.is_counted(then) || !self.is_counted(otherwise) {
+            return None;
+        }
+        let width = self.width(then);
+        let (mut picked, mut other) = (self.counted(then)?, self.counted(otherwise)?);
+        picked.sort_unstable();
+        other.sort_unstable();
+        // Which is the smaller, and where the larger is chosen.
+        let (smaller, larger, chosen) = if within_multiset(&picked, &other) {
+            (picked, other, self.bool_not(condition))
+        } else if within_multiset(&other, &picked) {
+            (other, picked, condition)
+        } else {
+            return None;
+        };
+        let mut parts = smaller.clone();
+        let mut rest = smaller.iter().peekable();
+        for part in larger {
+            if rest.peek() == Some(&&part) {
+                rest.next();
+                continue;
+            }
+            parts.push(self.bool_and(part, chosen));
+        }
+        if parts.len() as u128 > mask(width) {
+            return None;
+        }
+        Some(self.count(width, &parts))
     }
 
     /// `a = b`.
@@ -3269,6 +3367,40 @@ impl Pool {
         // x and not x.
         if self.negates(a, b) {
             return self.boolean(false);
+        }
+        // Two comparisons of one value with constants: the one that says more where it holds
+        // wherever the other does, as a loop still running after its kth time round ran every
+        // one before; nothing where they can't both hold.
+        if let (Some((x, x_low, x_high)), Some((y, y_low, y_high))) =
+            (self.interval(a, true), self.interval(b, true))
+            && x == y
+        {
+            if x_low >= y_low && x_high <= y_high {
+                return a;
+            }
+            if y_low >= x_low && y_high <= x_high {
+                return b;
+            }
+            if x_high < y_low || y_high < x_low {
+                return self.boolean(false);
+            }
+        }
+        // A comparison joining a conjunction that holds one of the same value joins that one,
+        // so the conditions a merged loop's exits put on each part come to one.
+        for (whole, comparison) in [(a, b), (b, a)] {
+            if let Node::BoolAnd(x, y) = *self.node(whole)
+                && let Some((subject, ..)) = self.interval(comparison, true)
+            {
+                for (kept, joined) in [(x, y), (y, x)] {
+                    if self
+                        .interval(joined, true)
+                        .is_some_and(|(other, ..)| other == subject)
+                    {
+                        let combined = self.bool_and(joined, comparison);
+                        return self.bool_and(kept, combined);
+                    }
+                }
+            }
         }
         // a and not (a and c) is a and not c: a matcher's state after a byte that ended no
         // match, written either way.

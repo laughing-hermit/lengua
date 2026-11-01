@@ -778,7 +778,30 @@ impl Writer<'_> {
             return Expr::Bool(self.rng.random_bool(0.5));
         }
         let deeper = depth - 1;
-        match self.rng.random_range(0..12) {
+        match self.rng.random_range(0..13) {
+            // Two comparisons of one value with constants, both holding, as a loop's "still
+            // running" conditions pile up.
+            12 => {
+                let width = [8, 16, 32, 64][self.rng.random_range(0..4)];
+                let value = self.number(width, deeper);
+                let comparison = |writer: &mut Self| {
+                    let comparisons = [
+                        Comparison::Ult,
+                        Comparison::Ule,
+                        Comparison::Slt,
+                        Comparison::Sle,
+                    ];
+                    let comparison = comparisons[writer.rng.random_range(0..comparisons.len())];
+                    let constant = Box::new(Expr::Const(width, writer.constant(width)));
+                    if writer.rng.random_bool(0.5) {
+                        Expr::Compare(comparison, Box::new(value.clone()), constant)
+                    } else {
+                        Expr::Compare(comparison, constant, Box::new(value.clone()))
+                    }
+                };
+                let (first, second) = (comparison(self), comparison(self));
+                Expr::Logic(true, Box::new(first), Box::new(second))
+            }
             // a and not (a and c), either way round, as a matcher's state after a byte is
             // written: the byte matched and ended no match.
             11 => {

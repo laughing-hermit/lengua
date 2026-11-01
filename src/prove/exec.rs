@@ -59,6 +59,25 @@ struct Region {
     writable: bool,
 }
 
+/// A loop whose exits on a condition the input's length decides are merged: the run goes on
+/// round it as if it never left, and each run that left waits at the exit, to be merged with
+/// the rest once the loop is done. Exact: for each input, the merged run is the one that left
+/// first.
+#[derive(Debug, Clone)]
+struct Merging {
+    /// The loop's head.
+    head: u64,
+    /// Its `jnz` back up.
+    latch: u64,
+    /// Where the runs that left went.
+    target: u64,
+    /// Whether the run is still in the loop: no exit taken yet.
+    alive: Term,
+    /// The last run that left, which links to the ones before it: a fork of the run that
+    /// stays shares them.
+    parked: Option<Rc<Parked>>,
+}
+
 /// A bounded loop, as the dialect writes every one: its time round runs from its head down to a
 /// `dec` of its bound counter and a `jnz` back up to the head.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -567,6 +586,11 @@ pub struct State {
     pub path: Vec<Term>,
     stdin: Rc<Vec<Term>>,
     stdin_read: usize,
+    /// Where standard input ends, when its length is the input's choice: `stdin` then holds as
+    /// many bytes as it can be long, those past the end standing for nothing read.
+    stdin_length: Option<Term>,
+    /// A loop whose exits that length decides are being merged, while the run goes round it.
+    merging: Option<Box<Merging>>,
     /// The pieces standard input arrives in, by length, when it doesn't arrive whole: each read
     /// gets at most what its piece has left.
     stdin_pieces: Rc<Vec<usize>>,
@@ -749,6 +773,8 @@ impl State {
             path: Vec::new(),
             stdin: Rc::new(stdin),
             stdin_read: 0,
+            stdin_length: None,
+            merging: None,
             stdin_pieces: Rc::new(Vec::new()),
             files: Rc::new(BTreeMap::new()),
             written: BTreeMap::new(),
@@ -842,6 +868,14 @@ impl State {
         }
         state.registers[Convention::of(image.isa).stack] = pool.bv(64, u128::from(STACK_TOP));
         state
+    }
+
+    /// The same state, its standard input ending after `length` of its bytes, a length the
+    /// input chooses: `stdin` holds as many bytes as it can be long.
+    #[must_use]
+    pub fn with_stdin_length(mut self, length: Term) -> Self {
+        self.stdin_length = Some(length);
+        self
     }
 
     /// Takes the read loop's head as `hook` says, for a proof by induction.
@@ -3282,6 +3316,12 @@ impl<'a> Cpu<'a> {
                 self.lent(1, buffer, count, true, "read")?;
                 if fd == 0 {
                     self.state.raw_reads = true;
+                    if self.state.stdin_length.is_some() {
+                        return Err(unsupported(
+                            "standard input of a length the input chooses, read with read \
+                             itself rather than fill",
+                        ));
+                    }
                     // A pipe hands over at most 4096 bytes whole; past that, how the input
                     // arrives matters, which only fill makes not matter. A test's sample is run
                     // as one read gives it.
@@ -3657,6 +3697,323 @@ pub trait Oracle {
     fn possible(&mut self, pool: &Pool, path: &[Term], condition: Term) -> Result<bool, String>;
 }
 
+/// A run that left a loop whose exits are merged: the condition it left on, whether the run was
+/// still in the loop then, and the run; and the one that left before it.
+#[derive(Debug)]
+struct Parked {
+    leaves: Term,
+    alive: Term,
+    state: State,
+    before: Option<Rc<Parked>>,
+}
+
+impl Merging {
+    /// The runs that left, first first.
+    fn exits(&self) -> Vec<Rc<Parked>> {
+        let mut exits = Vec::new();
+        let mut at = self.parked.clone();
+        while let Some(node) = at {
+            at = node.before.clone();
+            exits.push(node);
+        }
+        exits.reverse();
+        exits
+    }
+}
+
+/// Where `state`, a run whose input's length is its choice, leaves a loop at a branch both sides
+/// of which can happen and `other` doesn't, or the other way round: the side that leaves waits at
+/// the exit and `state` becomes the one that stays, still going round. `other` back where the
+/// branch isn't such an exit, or leaves for another place than this loop's exits so far.
+fn park(
+    image: &Image,
+    pool: &mut Pool,
+    state: &mut State,
+    other: State,
+    condition: Term,
+) -> Option<State> {
+    if state.stdin_length.is_none() {
+        return Some(other);
+    }
+    let inside = |found: &Loop, rip: u64| (found.head..=found.latch).contains(&rip);
+    // The innermost loop the branch leaves.
+    let Some(found) = image
+        .loops()
+        .filter(|found| inside(found, state.rip) != inside(found, other.rip))
+        .min_by_key(|found| found.latch - found.head)
+        .copied()
+    else {
+        return Some(other);
+    };
+    let state_leaves = !inside(&found, state.rip);
+    let target = if state_leaves { state.rip } else { other.rip };
+    if state
+        .merging
+        .as_ref()
+        .is_some_and(|merging| merging.head != found.head || merging.target != target)
+    {
+        return Some(other);
+    }
+    let leaves = if state_leaves {
+        condition
+    } else {
+        pool.bool_not(condition)
+    };
+    // Only an exit on the length itself, as a loop over what was read leaves where its index
+    // reaches the end: a loop that leaves on what it computed, as a print loop on how many
+    // digits its number has, keeps its own runs, which the output's checks follow.
+    if pool.interval_subject(leaves) != state.stdin_length {
+        return Some(other);
+    }
+    let mut leaving = if state_leaves {
+        std::mem::replace(state, other)
+    } else {
+        other
+    };
+    leaving.merging = None;
+    let yes = pool.boolean(true);
+    let mut merging = state.merging.take().unwrap_or_else(|| {
+        Box::new(Merging {
+            head: found.head,
+            latch: found.latch,
+            target,
+            alive: yes,
+            parked: None,
+        })
+    });
+    let alive = merging.alive;
+    merging.parked = Some(Rc::new(Parked {
+        leaves,
+        alive,
+        state: leaving,
+        before: merging.parked.take(),
+    }));
+    let stays = pool.bool_not(leaves);
+    merging.alive = pool.bool_and(alive, stays);
+    state.merging = Some(merging);
+    None
+}
+
+/// Whether `a` and `b` have done the same, so they differ only in what they hold: the same
+/// place, calls, owners, output, input read and everything else a run does.
+fn mergeable(a: &State, b: &State) -> bool {
+    let same_stream = |x: &Rc<Vec<Term>>, y: &Rc<Vec<Term>>| Rc::ptr_eq(x, y) || x[..] == y[..];
+    a.rip == b.rip
+        && a.end.is_none()
+        && b.end.is_none()
+        && a.returns == b.returns
+        && a.owners == b.owners
+        && a.pointers == b.pointers
+        && same_stream(&a.stdout, &b.stdout)
+        && same_stream(&a.stderr, &b.stderr)
+        && a.stdin_read == b.stdin_read
+        && a.arrivals == b.arrivals
+        && a.calls == b.calls
+        && a.threads == b.threads
+        && a.random_used == b.random_used
+        && a.readings_used == b.readings_used
+        && a.fill_cut == b.fill_cut
+        && a.raw_cuts == b.raw_cuts
+        && a.written.len() == b.written.len()
+        && a.open.len() == b.open.len()
+        && a.suspended.is_empty()
+        && b.suspended.is_empty()
+        && (Rc::ptr_eq(&a.logs, &b.logs) || (a.logs.is_empty() && b.logs.is_empty()))
+}
+
+/// `a` where `leaves` holds and `b` elsewhere, as one run, for two runs that have done the
+/// same ([`mergeable`]): flags, vectors, masks, memory and, where `registers`, registers become
+/// choices. `None` where one holds a byte of memory the other never wrote.
+fn merged(pool: &mut Pool, leaves: Term, a: &State, b: State, registers: bool) -> Option<State> {
+    let mut merged = b;
+    if registers {
+        for slot in 0..SLOTS {
+            if a.registers[slot] != merged.registers[slot] {
+                merged.registers[slot] =
+                    pool.ite(leaves, a.registers[slot], merged.registers[slot]);
+            }
+        }
+    }
+    for (flag, from) in [
+        (&mut merged.carry, a.carry),
+        (&mut merged.zero, a.zero),
+        (&mut merged.sign, a.sign),
+        (&mut merged.overflow, a.overflow),
+        (&mut merged.parity, a.parity),
+    ] {
+        if *flag != from {
+            *flag = pool.ite(leaves, from, *flag);
+        }
+    }
+    merged.last = Last::Other;
+    for (number, vector) in a.vectors.iter().enumerate() {
+        if !Rc::ptr_eq(vector, &merged.vectors[number]) && vector[..] != merged.vectors[number][..]
+        {
+            let mut bytes = *merged.vectors[number];
+            for (byte, from) in bytes.iter_mut().zip(vector.iter()) {
+                if *byte != *from {
+                    *byte = pool.ite(leaves, *from, *byte);
+                }
+            }
+            merged.vectors[number] = Rc::new(bytes);
+        }
+    }
+    for (mask, from) in merged.masks.iter_mut().zip(a.masks) {
+        if *mask != from {
+            *mask = pool.ite(leaves, from, *mask);
+        }
+    }
+    let pages: BTreeSet<u64> = a
+        .memory
+        .pages
+        .keys()
+        .chain(merged.memory.pages.keys())
+        .copied()
+        .collect();
+    for page in pages {
+        let (from, to) = (a.memory.pages.get(&page), merged.memory.pages.get(&page));
+        match (from, to) {
+            (Some(from), Some(to)) if Rc::ptr_eq(from, to) => {}
+            (Some(from), Some(to)) => {
+                let mut bytes = **to;
+                for (byte, earlier) in bytes.iter_mut().zip(from.iter()) {
+                    match (*earlier, *byte) {
+                        (Some(x), Some(y)) if x != y => *byte = Some(pool.ite(leaves, x, y)),
+                        (Some(_), Some(_)) | (None, None) => {}
+                        _ => return None,
+                    }
+                }
+                merged.memory.pages.insert(page, Rc::new(bytes));
+            }
+            _ => return None,
+        }
+    }
+    merged.stored.clear();
+    merged.steps = merged.steps.max(a.steps);
+    Some(merged)
+}
+
+/// The runs that left a loop, `exits`, first first, and `last`, the one that stayed or left
+/// last, as one run: for each input, the one that left first. A count that only grew between
+/// exits, as a loop's count of what it read does, is one count of each part where the loop
+/// hadn't left before the part was added, in one pass; anything else a register or flag holds is
+/// a choice by exit.
+fn merge_all(pool: &mut Pool, exits: &[Rc<Parked>], last: &State, alive: Term) -> Option<State> {
+    // What the runs have done must be the same: only what they hold differs.
+    if !exits.iter().all(|exit| mergeable(&exit.state, last)) {
+        return None;
+    }
+    let mut merged_state = last.clone();
+    // Whether the loop was still running after each exit's test: the next exit's, or `alive`.
+    let after: Vec<Term> = exits
+        .iter()
+        .skip(1)
+        .map(|exit| exit.alive)
+        .chain([alive])
+        .collect();
+    for slot in 0..SLOTS {
+        let values: Vec<Term> = exits
+            .iter()
+            .map(|exit| exit.state.registers[slot])
+            .chain([last.registers[slot]])
+            .collect();
+        if values.iter().all(|value| *value == values[0]) {
+            continue;
+        }
+        merged_state.registers[slot] = match grown_count(pool, &values, &after) {
+            Some(count) => count,
+            None => values[..values.len() - 1]
+                .iter()
+                .zip(exits)
+                .rev()
+                .fold(values[values.len() - 1], |later, (value, exit)| {
+                    pool.ite(exit.leaves, *value, later)
+                }),
+        };
+    }
+    // Flags, vectors, masks and memory, a choice by exit.
+    let mut folded = last.clone();
+    for exit in exits.iter().rev() {
+        folded = merged(pool, exit.leaves, &exit.state, folded, false)?;
+    }
+    merged_state.carry = folded.carry;
+    merged_state.zero = folded.zero;
+    merged_state.sign = folded.sign;
+    merged_state.overflow = folded.overflow;
+    merged_state.parity = folded.parity;
+    merged_state.vectors = folded.vectors;
+    merged_state.masks = folded.masks;
+    merged_state.memory = folded.memory;
+    merged_state.last = Last::Other;
+    merged_state.stored.clear();
+    Some(merged_state)
+}
+
+/// `values`, a register's at each exit and then the last, as one count, when each is a count
+/// whose conditions, in their order, start with the one before's: each condition first counted
+/// at an exit's successor counts where the loop was running after that exit, `after`.
+fn grown_count(pool: &mut Pool, values: &[Term], after: &[Term]) -> Option<Term> {
+    let width = pool.width(values[0]);
+    let mut lists = Vec::with_capacity(values.len());
+    for value in values {
+        let mut list = pool.counted_parts(*value)?;
+        list.sort_unstable();
+        lists.push(list);
+    }
+    let mut parts = lists[0].clone();
+    for (index, window) in lists.windows(2).enumerate() {
+        let [before, now] = window else {
+            return None;
+        };
+        if !now.starts_with(before) {
+            return None;
+        }
+        for part in &now[before.len()..] {
+            parts.push(pool.bool_and(*part, after[index]));
+        }
+    }
+    ((parts.len() as u128) < (1_u128 << width.min(127))).then(|| pool.count(width, &parts))
+}
+
+/// The run that stayed in a loop whose exits it merged, done with it: where it left for the
+/// exits' place, it and every run that left are one run, for each input the one that left first;
+/// where it left another way, the runs that left are one run of their own, in `pending`, and it
+/// goes on where it's still in the loop. Where the runs can't be merged, each goes on alone,
+/// where it left.
+fn finish_merging(pool: &mut Pool, state: &mut State, pending: &mut Vec<State>) {
+    let Some(merging) = state.merging.take() else {
+        return;
+    };
+    let exits = merging.exits();
+    if state.end.is_none() && state.rip == merging.target {
+        // The merge keeps the staying run's path and what it must meet.
+        if let Some(one) = merge_all(pool, &exits, state, merging.alive) {
+            *state = one;
+            return;
+        }
+    } else if let Some((last, earlier)) = exits.split_last()
+        && let Some(mut one) = merge_all(pool, earlier, &last.state, last.alive)
+    {
+        let left = pool.bool_not(merging.alive);
+        one.path.push(left);
+        pending.push(one);
+        if pool.truth(merging.alive) != Some(true) {
+            state.path.push(merging.alive);
+        }
+        return;
+    }
+    // Each where it left, as a run of its own.
+    for exit in &exits {
+        let mut alone = exit.state.clone();
+        let here = pool.bool_and(exit.alive, exit.leaves);
+        alone.path.push(here);
+        pending.push(alone);
+    }
+    if pool.truth(merging.alive) != Some(true) {
+        state.path.push(merging.alive);
+    }
+}
+
 /// Every run from `start`, splitting at branches the inputs decide, at most `max_runs`.
 ///
 /// # Errors
@@ -3681,11 +4038,29 @@ pub fn explore(
             break;
         }
         loop {
+            // A run done going round a loop whose exits it merged, or ending in it: the exits
+            // and it, one run where they can be.
+            if state.merging.as_ref().is_some_and(|merging| {
+                state.end.is_some() || !(merging.head..=merging.latch).contains(&state.rip)
+            }) {
+                finish_merging(pool, &mut state, &mut pending);
+            }
             if state.end.is_some() {
                 finished.push(state);
                 break;
             }
-            match step(image, &mut state, pool) {
+            let obligations = state.obligations.len();
+            let stepped = step(image, &mut state, pool);
+            // While a loop's exits are merged, the run that stays must meet what it meets only
+            // where it's still in the loop.
+            if let Some(alive) = state.merging.as_ref().map(|merging| merging.alive)
+                && pool.truth(alive) != Some(true)
+            {
+                for (condition, _) in &mut state.obligations[obligations..] {
+                    *condition = pool.bool_and(alive, *condition);
+                }
+            }
+            match stepped {
                 Ok(Step::Next) => {}
                 Ok(Step::Split(condition, other)) => {
                     let mut other = *other;
@@ -3694,6 +4069,17 @@ pub fn explore(
                     // branch is impossible the other is certain, and needs no question.
                     let yes = oracle.possible(pool, &state.path, condition)?;
                     let no = !yes || oracle.possible(pool, &other.path, opposite)?;
+                    // A loop's exit the input's length decides waits to be merged.
+                    if yes && no {
+                        match park(image, pool, &mut state, other, condition) {
+                            None => continue,
+                            Some(back) => other = back,
+                        }
+                    }
+                    // Where only the other side can happen, it carries on the loop's merging.
+                    if !yes {
+                        other.merging = state.merging.take();
+                    }
                     if no {
                         other.path.push(opposite);
                         pending.push(other);
@@ -3717,9 +4103,8 @@ pub fn explore(
                     break;
                 }
                 Err(end) => {
+                    // Ended: the loop's top merges any exits it was carrying, then finishes it.
                     state.end = Some(end);
-                    finished.push(state);
-                    break;
                 }
             }
         }

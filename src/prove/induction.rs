@@ -861,6 +861,7 @@ fn looped_checks(
                 numbers: &none,
                 fixed: &fixed,
                 texts: &texts,
+                lengths: None,
                 translated: RefCell::new(HashMap::new()),
                 offsets: HashMap::new(),
                 relative: None,

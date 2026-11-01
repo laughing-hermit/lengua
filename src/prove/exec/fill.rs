@@ -144,6 +144,22 @@ impl Cpu<'_> {
         let Some((stream, available, after)) = self.stream(fd)? else {
             return Ok(None);
         };
+        // Standard input of a length the input chooses, none of it read yet and all of it room
+        // for the buffer: one read takes all of it, however it's cut, its count that length.
+        // Its bytes past that length go in too, standing for whatever the buffer held, which is
+        // anything.
+        if let (Stream::Stdin, Some(length)) = (stream, self.state.stdin_length)
+            && self.state.stdin_read < self.state.stdin.len()
+        {
+            let room = usize::try_from(space).unwrap_or(usize::MAX);
+            if end.is_some() || self.state.stdin_read > 0 || room < available.len() {
+                return Err(super::unsupported(
+                    "standard input of a length the input chooses read other than all at once",
+                ));
+            }
+            self.take_all(fill, &available, cursor, space, length)?;
+            return Ok(Some(Step::Next));
+        }
         let last = usize::try_from(space)
             .unwrap_or(usize::MAX)
             .min(available.len());
@@ -268,6 +284,38 @@ impl Cpu<'_> {
         self.state.registers[roles.space] = self.pool.bv(64, u128::from(space - taken));
         // What the reads leave: on x86-64 the kernel's rcx and r11, and a loop count that depends
         // on how the input was cut.
+        if self.image.isa == Isa::X86_64 {
+            self.state.registers[1] = self.pool.bv(64, u128::from(fill.after_call));
+            self.state.registers[11] = self.pool.bv(64, 0x202);
+        }
+        let count = self.pool.len();
+        self.state.registers[roles.counter] = self.pool.var(64, &format!("fill{count}.reads"));
+        self.state.rip = fill.done;
+        Ok(())
+    }
+}
+
+impl Cpu<'_> {
+    /// fill having read all of standard input, `length` of its bytes, a length the input
+    /// chooses, into the buffer at `cursor` with `space` bytes: every byte `available` holds in
+    /// place, standard input read to its end, and the run at `.Lfill_done`.
+    fn take_all(
+        &mut self,
+        fill: Fill,
+        available: &[Term],
+        cursor: u64,
+        space: u64,
+        length: Term,
+    ) -> Result<(), Stop> {
+        for (offset, byte) in available.iter().enumerate() {
+            self.save(cursor + offset as u64, *byte)?;
+        }
+        self.state.stdin_read = self.state.stdin.len();
+        let roles = FillAbi::of(self.image.isa);
+        let start = self.pool.bv(64, u128::from(cursor));
+        self.state.registers[roles.cursor] = self.pool.add(start, length);
+        let room = self.pool.bv(64, u128::from(space));
+        self.state.registers[roles.space] = self.pool.sub(room, length);
         if self.image.isa == Isa::X86_64 {
             self.state.registers[1] = self.pool.bv(64, u128::from(fill.after_call));
             self.state.registers[11] = self.pool.bv(64, 0x202);
