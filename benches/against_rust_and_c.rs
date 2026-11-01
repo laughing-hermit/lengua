@@ -266,7 +266,7 @@ async fn build(workload: &Workload, toolchain: &Toolchain, folder: &Path) -> Vec
             .await
             .expect("assemble a lengua version");
         toolchain
-            .link(&object, &executable)
+            .link(Profile::LinuxX86_64, &object, &executable)
             .await
             .expect("link a lengua version");
         versions.push(Version {

@@ -317,7 +317,10 @@ impl Checker<'_, '_> {
                 continue;
             }
             let line = function.steps[index].source.line;
-            let allowed_names: Vec<&str> = allowed.iter().map(|syscall| syscall.name()).collect();
+            let allowed_names: Vec<&str> = allowed
+                .iter()
+                .map(|syscall| profile.syscall_name(*syscall))
+                .collect();
             let abi = self.program.abi();
             let Some((setter, number)) = constant_before(function, index, abi.syscall_number, abi)
             else {
@@ -349,7 +352,7 @@ impl Checker<'_, '_> {
                             format!(
                                 "system call {} isn't one the spec allows: it needs {needs}, \
                                  which spec.md doesn't name",
-                                call.name()
+                                profile.syscall_name(call)
                             ),
                             format!(
                                 "use only what spec.md's Constraints name, or, when the program \
@@ -368,7 +371,8 @@ impl Checker<'_, '_> {
                 self.violation(Rule::Resources, line, problem, fix);
                 continue;
             };
-            let expected = format!("SYS_{}", syscall.name().to_ascii_uppercase());
+            let name = profile.syscall_name(*syscall);
+            let expected = format!("SYS_{}", name.to_ascii_uppercase());
             let named = matches!(
                 function.steps[setter].source.operands.get(1),
                 Some(Operand::Immediate { name: Some(name), .. }) if *name == expected
@@ -377,7 +381,7 @@ impl Checker<'_, '_> {
                 self.violation(
                     Rule::Constants,
                     function.steps[setter].source.line,
-                    format!("system call {} isn't named", syscall.name()),
+                    format!("system call {name} isn't named"),
                     format!(
                         "write `mov eax, {expected}` with `.equ {expected}, {number}` at the top"
                     ),

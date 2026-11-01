@@ -19,7 +19,10 @@ async fn machine(source: &str) -> Machine {
         .assemble(Profile::LinuxX86_64, &assembly, &object)
         .await
         .expect("assemble");
-    toolchain.link(&object, &executable).await.expect("link");
+    toolchain
+        .link(Profile::LinuxX86_64, &object, &executable)
+        .await
+        .expect("link");
     let mut machine =
         crate::checker::decode::read(&std::fs::read(&executable).expect("read")).expect("decode");
     // Which symbol each [rip + name] names, and each checked jump table's cases, as the server

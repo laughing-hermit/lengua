@@ -7,7 +7,8 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-const TRIPLE: &str = "aarch64-unknown-linux-gnu";
+use lengua::platform::Profile;
+use lengua::toolchain::Toolchain;
 
 fn asset(name: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -16,9 +17,10 @@ fn asset(name: &str) -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
 }
 
-/// Builds `source` into an AArch64 executable in `folder`. The link keeps every instruction as
-/// written: by default ld.lld rewrites some `adrp` + `add :lo12:` pairs into `nop` + `adr`, which
-/// would break lengua's line-for-line match of main.s to the machine code.
+/// Builds `source` into an AArch64 executable in `folder`, through lengua's toolchain for the
+/// AArch64 profile, whose link keeps every instruction as written: by default ld.lld rewrites some
+/// `adrp` + `add :lo12:` pairs into `nop` + `adr`, which would break lengua's line-for-line match
+/// of main.s to the machine code.
 fn build(folder: &Path, source: &str) -> PathBuf {
     let (assembly, object, executable) = (
         folder.join("main.s"),
@@ -26,30 +28,20 @@ fn build(folder: &Path, source: &str) -> PathBuf {
         folder.join("main"),
     );
     std::fs::write(&assembly, source).expect("write main.s");
-    let assembled = Command::new("llvm-mc")
-        .arg(format!("--triple={TRIPLE}"))
-        .args(["--filetype=obj", "--fatal-warnings"])
-        .arg(&assembly)
-        .arg("-o")
-        .arg(&object)
-        .output()
-        .expect("llvm-mc");
-    assert!(
-        assembled.status.success(),
-        "{}",
-        String::from_utf8_lossy(&assembled.stderr)
-    );
-    let linked = Command::new("ld.lld")
-        .args(["--fatal-warnings", "--no-relax", "-o"])
-        .arg(&executable)
-        .arg(&object)
-        .output()
-        .expect("ld.lld");
-    assert!(
-        linked.status.success(),
-        "{}",
-        String::from_utf8_lossy(&linked.stderr)
-    );
+    let runtime = tokio::runtime::Runtime::new().expect("a runtime");
+    runtime.block_on(async {
+        let toolchain = Toolchain::discover()
+            .await
+            .expect("llvm-mc and ld.lld are installed");
+        toolchain
+            .assemble(Profile::LinuxAarch64, &assembly, &object)
+            .await
+            .expect("assemble");
+        toolchain
+            .link(Profile::LinuxAarch64, &object, &executable)
+            .await
+            .expect("link");
+    });
     executable
 }
 

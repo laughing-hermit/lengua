@@ -34,7 +34,7 @@ async fn check_full(
         .await
         .unwrap_or_else(|error| panic!("assembling failed: {error:?}"));
     toolchain
-        .link(&object, &executable)
+        .link(Profile::LinuxX86_64, &object, &executable)
         .await
         .unwrap_or_else(|error| panic!("linking failed: {error:?}"));
     let bytes = std::fs::read(&executable).expect("read the executable");
@@ -217,7 +217,11 @@ async fn operands_must_mean_what_the_machine_does() {
         .await
         .expect("assemble");
     toolchain
-        .link(&folder.path().join("main.o"), &folder.path().join("main"))
+        .link(
+            Profile::LinuxX86_64,
+            &folder.path().join("main.o"),
+            &folder.path().join("main"),
+        )
         .await
         .expect("link");
     let bytes = std::fs::read(folder.path().join("main")).expect("read");

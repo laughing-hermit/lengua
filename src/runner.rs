@@ -40,7 +40,7 @@ use tokio::sync::mpsc;
 use crate::platform::{Allowed, Pin};
 use crate::supervise::SUPERVISE_FLAG;
 use crate::supply::Supply;
-use crate::syscalls::{CLOCK_GETTIME, CLOCK_NANOSLEEP, CONNECT, GETRANDOM};
+use crate::syscalls::host::{CLOCK_GETTIME, CLOCK_NANOSLEEP, CONNECT, GETRANDOM};
 
 /// The command-line flag that starts the binary as a launcher.
 pub const LAUNCH_FLAG: &str = "--launch";

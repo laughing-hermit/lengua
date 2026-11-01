@@ -393,7 +393,11 @@ pub(crate) async fn built(toolchain: &Toolchain, text: &str) -> Result<Vec<u8>, 
         .assemble(Profile::LinuxX86_64, &assembly, &object)
         .await
     {
-        Ok(()) => toolchain.link(&object, &executable).await,
+        Ok(()) => {
+            toolchain
+                .link(Profile::LinuxX86_64, &object, &executable)
+                .await
+        }
         Err(error) => Err(error),
     };
     match made {

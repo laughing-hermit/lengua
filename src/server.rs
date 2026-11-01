@@ -2362,7 +2362,7 @@ async fn build(code: &str, profile: Profile) -> Result<Build, String> {
     std::fs::write(&main, code)
         .map_err(|error| format!("couldn't copy main.s to the build folder: {error}"))?;
     let built = match toolchain.assemble(profile, &main, &object).await {
-        Ok(()) => toolchain.link(&object, &executable).await,
+        Ok(()) => toolchain.link(profile, &object, &executable).await,
         Err(error) => Err(error),
     };
     built.map_err(|error| format!("{CODE_FILE} doesn't build: {error}"))?;

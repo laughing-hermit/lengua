@@ -1,7 +1,8 @@
 //! Detects the machine (OS, CPU, CPU features) and picks its platform profile.
 //!
-//! A profile holds everything that differs per OS and CPU: the target triple today, and later the
-//! system call table, calling convention and linker details. The MVP has one profile.
+//! A profile holds what differs per OS and CPU: the target triple, the system call table and the
+//! details of Linux's ABI ([`crate::syscalls`]), and the linker's flags. The checker's facts of
+//! each CPU's instructions and its calling convention are [`crate::isa`]'s.
 
 use serde::Serialize;
 
@@ -13,6 +14,8 @@ use crate::syscalls;
 pub enum Profile {
     /// Linux on x86-64: ELF executables, direct system calls, System V calling convention.
     LinuxX86_64,
+    /// Linux on AArch64: ELF executables, direct system calls, the AAPCS64 calling convention.
+    LinuxAarch64,
 }
 
 impl Profile {
@@ -30,6 +33,7 @@ impl Profile {
     pub fn name(self) -> &'static str {
         match self {
             Self::LinuxX86_64 => "linux-x86_64",
+            Self::LinuxAarch64 => "linux-aarch64",
         }
     }
 
@@ -38,35 +42,35 @@ impl Profile {
     pub fn llvm_triple(self) -> &'static str {
         match self {
             Self::LinuxX86_64 => "x86_64-unknown-linux-gnu",
+            Self::LinuxAarch64 => "aarch64-unknown-linux-gnu",
         }
     }
 
-    /// The number a program loads into `eax` to make this system call.
+    /// The details of Linux's ABI on this CPU that the prover models.
     #[must_use]
-    pub fn syscall_number(self, syscall: Syscall) -> i64 {
-        match (self, syscall) {
-            (Self::LinuxX86_64, Syscall::Read) => syscalls::READ,
-            (Self::LinuxX86_64, Syscall::Write) => syscalls::WRITE,
-            (Self::LinuxX86_64, Syscall::Close) => syscalls::CLOSE,
-            (Self::LinuxX86_64, Syscall::Lseek) => syscalls::LSEEK,
-            (Self::LinuxX86_64, Syscall::Fstat) => syscalls::FSTAT,
-            (Self::LinuxX86_64, Syscall::Getdents64) => syscalls::GETDENTS64,
-            (Self::LinuxX86_64, Syscall::Mkdirat) => syscalls::MKDIRAT,
-            (Self::LinuxX86_64, Syscall::Unlinkat) => syscalls::UNLINKAT,
-            (Self::LinuxX86_64, Syscall::Renameat) => syscalls::RENAMEAT,
-            (Self::LinuxX86_64, Syscall::Exit) => syscalls::EXIT,
-            (Self::LinuxX86_64, Syscall::ExitGroup) => syscalls::EXIT_GROUP,
-            (Self::LinuxX86_64, Syscall::ClockGettime) => syscalls::CLOCK_GETTIME,
-            (Self::LinuxX86_64, Syscall::ClockNanosleep) => syscalls::CLOCK_NANOSLEEP,
-            (Self::LinuxX86_64, Syscall::Getrandom) => syscalls::GETRANDOM,
-            (Self::LinuxX86_64, Syscall::Openat) => syscalls::OPENAT,
-            (Self::LinuxX86_64, Syscall::Socket) => syscalls::SOCKET,
-            (Self::LinuxX86_64, Syscall::Connect) => syscalls::CONNECT,
-            (Self::LinuxX86_64, Syscall::Sendto) => syscalls::SENDTO,
-            (Self::LinuxX86_64, Syscall::Shutdown) => syscalls::SHUTDOWN,
-            (Self::LinuxX86_64, Syscall::Accept4) => syscalls::ACCEPT4,
-            (Self::LinuxX86_64, Syscall::Poll) => syscalls::POLL,
-            (Self::LinuxX86_64, Syscall::Ioctl) => syscalls::IOCTL,
+    pub const fn linux_abi(self) -> &'static syscalls::LinuxAbi {
+        match self {
+            Self::LinuxX86_64 => &syscalls::x86_64::ABI,
+            Self::LinuxAarch64 => &syscalls::aarch64::ABI,
+        }
+    }
+
+    /// The system call's name on this CPU, as main.s names its number (`SYS_PPOLL` for a wait
+    /// on AArch64, which has no `poll`).
+    #[must_use]
+    pub fn syscall_name(self, syscall: Syscall) -> &'static str {
+        match (syscall, self.linux_abi().wait) {
+            (Syscall::Poll, syscalls::Wait::Ppoll) => "ppoll",
+            _ => syscall.name(),
+        }
+    }
+
+    /// The number a program makes this system call with.
+    #[must_use]
+    pub const fn syscall_number(self, syscall: Syscall) -> i64 {
+        match self {
+            Self::LinuxX86_64 => syscalls::x86_64::number(syscall),
+            Self::LinuxAarch64 => syscalls::aarch64::number(syscall),
         }
     }
 
@@ -83,7 +87,14 @@ impl Profile {
     #[must_use]
     pub fn allowed_syscalls(self, spec: &[Syscall], threads: bool) -> Vec<Allowed> {
         let (launch, clone, futex): (&[i64], i64, i64) = match self {
-            Self::LinuxX86_64 => (&[14, 13, 59], 56, 202),
+            Self::LinuxX86_64 => {
+                use syscalls::x86_64::{CLONE, EXECVE, FUTEX, RT_SIGACTION, RT_SIGPROCMASK};
+                (&[RT_SIGPROCMASK, RT_SIGACTION, EXECVE], CLONE, FUTEX)
+            }
+            Self::LinuxAarch64 => {
+                use syscalls::aarch64::{CLONE, EXECVE, FUTEX, RT_SIGACTION, RT_SIGPROCMASK};
+                (&[RT_SIGPROCMASK, RT_SIGACTION, EXECVE], CLONE, FUTEX)
+            }
         };
         let mut allowed: Vec<Allowed> = spec
             .iter()
@@ -378,7 +389,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_linux_x86_64_is_supported() {
+    fn the_aarch64_profile_has_its_own_names_and_calls() {
+        let arm = Profile::LinuxAarch64;
+        assert_eq!(arm.name(), "linux-aarch64");
+        assert_eq!(arm.llvm_triple(), "aarch64-unknown-linux-gnu");
+        assert_eq!(arm.syscall_number(Syscall::Read), 63);
+        assert_eq!(arm.syscall_name(Syscall::Poll), "ppoll");
+        assert_eq!(arm.syscall_number(Syscall::Poll), 73);
+        assert_eq!(Profile::LinuxX86_64.syscall_name(Syscall::Poll), "poll");
+        let launcher = arm.allowed_syscalls(&[], true);
+        for number in [135, 134, 221, 220, 98, 64, 94, 93] {
+            assert!(
+                launcher.iter().any(|allowed| allowed.number == number),
+                "{number}: {launcher:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_linux_x86_64_is_a_host_yet() {
         assert_eq!(
             Profile::for_target("linux", "x86_64"),
             Some(Profile::LinuxX86_64)

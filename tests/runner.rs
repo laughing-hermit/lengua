@@ -44,7 +44,10 @@ async fn build(folder: &Path, name: &str, source: &str) -> PathBuf {
         .assemble(Profile::LinuxX86_64, &assembly, &object)
         .await
         .expect("assemble");
-    toolchain.link(&object, &executable).await.expect("link");
+    toolchain
+        .link(Profile::LinuxX86_64, &object, &executable)
+        .await
+        .expect("link");
     executable
 }
 

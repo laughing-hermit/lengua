@@ -28,7 +28,10 @@ async fn builds_a_program_that_exits_with_42() {
         .assemble(Profile::LinuxX86_64, &source, &object)
         .await
         .expect("assemble");
-    toolchain.link(&object, &executable).await.expect("link");
+    toolchain
+        .link(Profile::LinuxX86_64, &object, &executable)
+        .await
+        .expect("link");
 
     let status = std::process::Command::new(&executable)
         .status()

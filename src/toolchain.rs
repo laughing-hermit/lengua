@@ -127,14 +127,24 @@ impl Toolchain {
         run_build_tool(BuildStep::Assemble, &self.assembler.path, &args).await
     }
 
-    /// Links `object` into the static executable `executable`, treating warnings as errors.
-    pub async fn link(&self, object: &Path, executable: &Path) -> Result<(), BuildError> {
-        let args: [&OsStr; 4] = [
-            "--fatal-warnings".as_ref(),
-            "-o".as_ref(),
-            executable.as_os_str(),
-            object.as_os_str(),
-        ];
+    /// Links `object` into the static executable `executable`, treating warnings as errors. For
+    /// AArch64 the linker is told not to relax: it would rewrite an `adrp` + `add :lo12:` pair
+    /// into `nop` + `adr`, and the machine code would no longer be main.s line for line.
+    pub async fn link(
+        &self,
+        profile: Profile,
+        object: &Path,
+        executable: &Path,
+    ) -> Result<(), BuildError> {
+        let relax: &[&OsStr] = match profile {
+            Profile::LinuxX86_64 => &[],
+            Profile::LinuxAarch64 => &["--no-relax".as_ref()],
+        };
+        let args: Vec<&OsStr> = ["--fatal-warnings".as_ref()]
+            .into_iter()
+            .chain(relax.iter().copied())
+            .chain(["-o".as_ref(), executable.as_os_str(), object.as_os_str()])
+            .collect();
         run_build_tool(BuildStep::Link, &self.linker.path, &args).await
     }
 }

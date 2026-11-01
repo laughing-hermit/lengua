@@ -898,8 +898,11 @@ runner — the machines to build and run them on come from CI and emulation.
 
 ### Porting a target
 
-`src/platform.rs`'s `Profile` holds the triple, the short name and the syscall-number table; the
-rest below is still to build per target. A new profile must supply:
+`src/platform.rs`'s `Profile` holds the triple, the short name and the linker's flags, and
+through `src/syscalls.rs` each CPU's Linux: its system call numbers and the details of the ABI
+that differ (`struct stat`'s layout, `O_DIRECTORY`, `poll` or only `ppoll`), pinned against the
+kernel's headers and the C library. Linux on x86-64 and on AArch64 have both; the rest below is
+still to build per target. A new profile must supply:
 
 1. **Toolchain:** the LLVM triple, the linker binary, its flags and the object format. Today
    `toolchain.rs` `link()` hardcodes `ld.lld` and ELF; macOS needs `ld64.lld` and Mach-O, Windows

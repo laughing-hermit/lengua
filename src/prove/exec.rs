@@ -18,7 +18,7 @@ use iced_x86::{ConditionCode, Instruction, Mnemonic, OpKind, Register};
 
 use super::term::{Pool, Term};
 use crate::checker::decode::Machine;
-use crate::syscalls;
+use crate::syscalls::x86_64 as syscalls;
 
 /// The address of `argc` when `_start` begins.
 pub const STACK_TOP: u64 = 0x7ffd_0000_0000;
@@ -580,18 +580,18 @@ const O_CREAT: u64 = 0o100;
 const O_TRUNC: u64 = 0o1000;
 /// Flags that change nothing the model tracks: no controlling terminal, large files, closing on
 /// exec.
-const O_HARMLESS: u64 = 0o400 | 0o100_000 | 0o2_000_000;
+const O_HARMLESS: u64 = syscalls::ABI.o_harmless;
 const ENOENT: i64 = 2;
 const EEXIST: i64 = 17;
 const ENOTDIR: i64 = 20;
 const EISDIR: i64 = 21;
 const ENOTEMPTY: i64 = 39;
-const O_DIRECTORY: u64 = 0o200_000;
+const O_DIRECTORY: u64 = syscalls::ABI.o_directory;
 const AT_REMOVEDIR: u64 = 0x200;
 /// The bytes of `struct stat`, and where its kind and size are.
-const STAT_LEN: u64 = 144;
-const STAT_MODE: u64 = 24;
-const STAT_SIZE: u64 = 48;
+const STAT_LEN: u64 = syscalls::ABI.stat_len;
+const STAT_MODE: u64 = syscalls::ABI.stat_mode;
+const STAT_SIZE: u64 = syscalls::ABI.stat_size;
 /// A regular file that its owner may read and write and others may read.
 const REGULAR_FILE: u128 = 0o100_644;
 const EBADF: i64 = 9;
@@ -3092,7 +3092,8 @@ impl<'a> Cpu<'a> {
             .pool
             .constant(raw)
             .ok_or_else(|| unsupported("a system call chosen by the input"))?;
-        // The numbers below are this target's, from `crate::syscalls`; this is the x86-64 prover.
+        // The numbers below are x86-64 Linux's, from `crate::syscalls::x86_64`: this is the x86-64
+        // prover.
         let number = i64::try_from(raw).ok();
         let registers = self.state.registers;
         let (rdi, rsi, rdx) = (registers[7], registers[6], registers[2]);
@@ -3606,7 +3607,10 @@ mod tests {
             .assemble(Profile::LinuxX86_64, &assembly, &object)
             .await
             .expect("assemble");
-        toolchain.link(&object, &executable).await.expect("link");
+        toolchain
+            .link(Profile::LinuxX86_64, &object, &executable)
+            .await
+            .expect("link");
         let bytes = std::fs::read(&executable).expect("read");
         let machine = crate::checker::decode::read(&bytes).expect("decode");
         Image::new(&machine).expect("an entry point")

@@ -843,7 +843,7 @@ async fn build(source: &str, folder: &std::path::Path) -> (std::path::PathBuf, M
         .await
         .expect("assemble the harness");
     toolchain
-        .link(&object, &executable)
+        .link(Profile::LinuxX86_64, &object, &executable)
         .await
         .expect("link the harness");
     let machine = crate::checker::decode::read(&std::fs::read(&executable).expect("read"))

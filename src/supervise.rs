@@ -25,7 +25,7 @@ use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::Pid;
 
 use crate::supply::Supply;
-use crate::syscalls;
+use crate::syscalls::host as syscalls;
 
 /// The command-line flag that starts the binary as a supervisor.
 pub const SUPERVISE_FLAG: &str = "--supervise";
