@@ -198,6 +198,37 @@ async fn the_aarch64_calc_runs_each_case_of_its_table() {
     session.service.cancel().await.expect("close the session");
 }
 
+/// The AArch64 hypotenuse, x86-64's example spec unchanged, computes in doubles and passes every
+/// test, its decimals rounded as x86-64's are.
+#[tokio::test]
+async fn the_aarch64_hypotenuse_computes_in_doubles() {
+    let Some((session, _)) = aarch64_session().await else {
+        return;
+    };
+    let program = written(&session, aarch64_files("hypotenuse")).await;
+    let report = done(&session, &program).await;
+    assert!(
+        any_line(&report["tests"], "follows every rule and passed all"),
+        "{report}"
+    );
+    for (args, stdout) in [
+        (["3", "4"], "5.000\n"),
+        (["1.5", "2.25"], "2.704\n"),
+        (["0.001", "0.001"], "0.001\n"),
+        (["1000000", "1000000"], "1414213.562\n"),
+    ] {
+        let run = session.call_ok("run", with_args(&program, &args)).await;
+        assert_eq!(run["stdout"], stdout, "{run}");
+        assert_eq!(run["exit_code"], 0, "{run}");
+    }
+    let run = session
+        .call_ok("run", with_args(&program, &["3", "four"]))
+        .await;
+    assert_eq!(run["stderr"], "error: side is not a number\n", "{run}");
+    assert_eq!(run["exit_code"], 2, "{run}");
+    session.service.cancel().await.expect("close the session");
+}
+
 /// The AArch64 cat, a streaming filter through `fill`, is proven for every length through the
 /// server, as x86-64's is: natively on an ARM64 computer, and through QEMU here.
 #[tokio::test]

@@ -3,7 +3,8 @@
 //! idiom it is, and what it puts in its destination.
 
 use super::{
-    A64Cond, A64Reg, Address, FpConversion, FpOne, FpThree, FpTwo, Gpr, Indirect, Inst, Logic, Wide,
+    A64Cond, A64Reg, Address, FpConversion, FpOne, FpReg, FpThree, FpTwo, Gpr, Indirect, Inst,
+    Logic, Wide,
 };
 use crate::isa::{Cond, Control, Insn, MemRef, Op, Operand, Reg, RegSet, Stack, Value};
 
@@ -17,6 +18,23 @@ fn operand(register: A64Reg) -> Operand {
 }
 
 /// Whether `register` is the stack pointer.
+/// A floating-point register, as the shared facts name it.
+const fn fp(register: FpReg) -> Reg {
+    Reg::A64Fp(register)
+}
+
+fn fp_operand(register: FpReg) -> Operand {
+    Operand::Reg(fp(register))
+}
+
+/// Whether the conversion's result goes to the general register.
+const fn to_general(op: FpConversion) -> bool {
+    matches!(
+        op,
+        FpConversion::Fcvtzs | FpConversion::Fcvtzu | FpConversion::ToGeneral
+    )
+}
+
 fn is_sp(register: A64Reg) -> bool {
     register.gpr == Gpr::Sp
 }
@@ -271,7 +289,7 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
             };
             (
                 Control::Next,
-                Some(rd),
+                Some(a64(rd)),
                 vec![operand(rd), operand(rn), Operand::Imm(number)],
                 None,
                 op,
@@ -304,7 +322,7 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
             };
             (
                 Control::Next,
-                Some(rd),
+                Some(a64(rd)),
                 vec![operand(rd), operand(rn), operand(rm)],
                 None,
                 op,
@@ -330,7 +348,7 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
             };
             (
                 Control::Next,
-                Some(rd),
+                Some(a64(rd)),
                 vec![operand(rd), operand(rn), number],
                 None,
                 idiom,
@@ -357,7 +375,7 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
             };
             (
                 Control::Next,
-                Some(rd),
+                Some(a64(rd)),
                 vec![operand(rd), operand(rn), operand(rm)],
                 None,
                 idiom,
@@ -391,7 +409,7 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
             };
             (
                 Control::Next,
-                Some(rd),
+                Some(a64(rd)),
                 vec![operand(rd), Operand::Imm(i64::from(imm))],
                 None,
                 idiom,
@@ -401,7 +419,7 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
         }
         Inst::Bitfield { rd, rn, .. } | Inst::OneSource { rd, rn, .. } => (
             Control::Next,
-            Some(rd),
+            Some(a64(rd)),
             vec![operand(rd), operand(rn)],
             None,
             Op::Other,
@@ -412,7 +430,7 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
         | Inst::CondSelect { rd, rn, rm, .. }
         | Inst::TwoSource { rd, rn, rm, .. } => (
             Control::Next,
-            Some(rd),
+            Some(a64(rd)),
             vec![operand(rd), operand(rn), operand(rm)],
             None,
             Op::Other,
@@ -421,7 +439,7 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
         ),
         Inst::ThreeSource { rd, rn, rm, ra, .. } => (
             Control::Next,
-            Some(rd),
+            Some(a64(rd)),
             vec![operand(rd), operand(rn), operand(rm), operand(ra)],
             None,
             Op::Other,
@@ -430,7 +448,7 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
         ),
         Inst::Adrp { rd, page } => (
             Control::Next,
-            Some(rd),
+            Some(a64(rd)),
             vec![operand(rd), Operand::Target(page)],
             None,
             Op::Other,
@@ -439,7 +457,7 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
         ),
         Inst::Adr { rd, target } => (
             Control::Next,
-            Some(rd),
+            Some(a64(rd)),
             vec![operand(rd), Operand::Target(target)],
             None,
             Op::Other,
@@ -540,10 +558,10 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
             address: place,
         } => {
             let memory = memory(place, u64::from(access.size), access.load);
-            let (idiom, stack) = frame(place, &[rt], access.load);
+            let (idiom, stack) = frame(place, &[a64(rt)], access.load);
             (
                 Control::Next,
-                access.load.then_some(rt),
+                access.load.then_some(a64(rt)),
                 vec![operand(rt), Operand::Mem],
                 Some(memory),
                 idiom,
@@ -564,10 +582,10 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
         } => {
             let size = if rt.wide && !signed { 8 } else { 4 };
             let memory = memory(place, 2 * size, load);
-            let (idiom, stack) = frame(place, &[rt, rt2], load);
+            let (idiom, stack) = frame(place, &[a64(rt), a64(rt2)], load);
             (
                 Control::Next,
-                load.then_some(rt),
+                load.then_some(a64(rt)),
                 vec![operand(rt), operand(rt2), Operand::Mem],
                 Some(memory),
                 idiom,
@@ -584,24 +602,113 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
             Value::Other,
             Stack::Same,
         ),
-        // Floating point: refused by the dialect for now, so no facts yet.
-        Inst::FpOneSource { .. }
-        | Inst::FpTwoSource { .. }
-        | Inst::FpThreeSource { .. }
-        | Inst::FpCompare { .. }
-        | Inst::FpCondSelect { .. }
-        | Inst::FpMoveImm { .. }
-        | Inst::FpConvert { .. }
-        | Inst::FpLoadStore { .. }
-        | Inst::FpPair { .. } => (
+        // Floating point. Its registers hold no addresses the memory rules follow, as x86-64's
+        // vector registers don't: what comes out of one is unknown to them.
+        Inst::FpOneSource { rd, rn, .. } => (
             Control::Next,
-            None,
-            Vec::new(),
+            Some(fp(rd)),
+            vec![fp_operand(rd), fp_operand(rn)],
             None,
             Op::Other,
             Value::Other,
             Stack::Same,
         ),
+        Inst::FpTwoSource { rd, rn, rm, .. } | Inst::FpCondSelect { rd, rn, rm, .. } => (
+            Control::Next,
+            Some(fp(rd)),
+            vec![fp_operand(rd), fp_operand(rn), fp_operand(rm)],
+            None,
+            Op::Other,
+            Value::Other,
+            Stack::Same,
+        ),
+        Inst::FpThreeSource { rd, rn, rm, ra, .. } => (
+            Control::Next,
+            Some(fp(rd)),
+            vec![
+                fp_operand(rd),
+                fp_operand(rn),
+                fp_operand(rm),
+                fp_operand(ra),
+            ],
+            None,
+            Op::Other,
+            Value::Other,
+            Stack::Same,
+        ),
+        Inst::FpCompare { rn, rm, .. } => (
+            Control::Next,
+            None,
+            vec![fp_operand(rn), rm.map_or(Operand::Imm(0), fp_operand)],
+            None,
+            Op::Other,
+            Value::Other,
+            Stack::Same,
+        ),
+        Inst::FpMoveImm { rd, imm8 } => (
+            Control::Next,
+            Some(fp(rd)),
+            vec![fp_operand(rd), Operand::Imm(i64::from(imm8))],
+            None,
+            Op::Other,
+            Value::Number,
+            Stack::Same,
+        ),
+        Inst::FpConvert {
+            op,
+            fp: register,
+            gpr,
+        } => {
+            let (dst, operands) = if to_general(op) {
+                (a64(gpr), vec![operand(gpr), fp_operand(register)])
+            } else {
+                (fp(register), vec![fp_operand(register), operand(gpr)])
+            };
+            (
+                Control::Next,
+                Some(dst),
+                operands,
+                None,
+                Op::Other,
+                Value::Other,
+                Stack::Same,
+            )
+        }
+        Inst::FpLoadStore {
+            load,
+            rt,
+            address: place,
+        } => {
+            let memory = memory(place, if rt.double { 8 } else { 4 }, load);
+            let (idiom, stack) = frame(place, &[fp(rt)], load);
+            (
+                Control::Next,
+                load.then_some(fp(rt)),
+                vec![fp_operand(rt), Operand::Mem],
+                Some(memory),
+                idiom,
+                if load { Value::Load } else { Value::Other },
+                stack,
+            )
+        }
+        Inst::FpPair {
+            load,
+            rt,
+            rt2,
+            address: place,
+        } => {
+            let memory = memory(place, if rt.double { 16 } else { 8 }, load);
+            let (idiom, stack) = frame(place, &[fp(rt), fp(rt2)], load);
+            (
+                Control::Next,
+                load.then_some(fp(rt)),
+                vec![fp_operand(rt), fp_operand(rt2), Operand::Mem],
+                Some(memory),
+                idiom,
+                if load { Value::Load } else { Value::Other },
+                stack,
+            )
+        }
     };
     // AArch64 faults on an access through sp that isn't a multiple of 16.
     let stack = match stack {
@@ -617,7 +724,8 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
         control,
         reads: facts.reads,
         writes: facts.writes,
-        dst: dst.filter(|register| register.gpr != Gpr::Zr).map(a64),
+        dst: dst
+            .filter(|register| !matches!(register, Reg::A64(written) if written.gpr == Gpr::Zr)),
         operands,
         reads_memory: memory.is_some_and(|memory: MemRef| memory.reads),
         writes_memory: memory.is_some_and(|memory: MemRef| memory.writes),
@@ -655,7 +763,7 @@ fn memory(place: Address, width: u64, load: bool) -> MemRef {
 /// What an access at `place` of `registers` does to the stack: a store before which sp moves
 /// down pushes them, a load after which it moves back up pops them, and any other move of sp is
 /// counted as it is.
-fn frame(place: Address, registers: &[A64Reg], load: bool) -> (Op, Stack) {
+fn frame(place: Address, registers: &[Reg], load: bool) -> (Op, Stack) {
     let (Address::PreIndex { base, offset } | Address::PostIndex { base, offset }) = place else {
         return (Op::Other, Stack::Same);
     };
@@ -663,8 +771,8 @@ fn frame(place: Address, registers: &[A64Reg], load: bool) -> (Op, Stack) {
         return (Op::Other, Stack::Same);
     }
     let whole = [
-        registers.first().map(|register| Reg::A64(register.full())),
-        registers.get(1).map(|register| Reg::A64(register.full())),
+        registers.first().map(|register| register.full()),
+        registers.get(1).map(|register| register.full()),
     ];
     let idiom = match place {
         Address::PreIndex { .. } if !load && offset < 0 => Op::Push(whole),
@@ -688,6 +796,14 @@ impl Facts {
 
     fn writes_register(&mut self, register: A64Reg) {
         self.writes.insert(Reg::A64(register));
+    }
+
+    fn reads_fp(&mut self, register: FpReg) {
+        self.reads.insert(fp(register));
+    }
+
+    fn writes_fp(&mut self, register: FpReg) {
+        self.writes.insert(fp(register));
     }
 
     /// What it does to sp when its destination is `rd`: only the instructions the dialect
@@ -789,16 +905,62 @@ impl Facts {
                 }
             }
             Inst::BranchCond { .. } | Inst::Nop => {}
-            // Floating point: refused by the dialect for now, so no facts yet.
-            Inst::FpOneSource { .. }
-            | Inst::FpTwoSource { .. }
-            | Inst::FpThreeSource { .. }
-            | Inst::FpCompare { .. }
-            | Inst::FpCondSelect { .. }
-            | Inst::FpMoveImm { .. }
-            | Inst::FpConvert { .. }
-            | Inst::FpLoadStore { .. }
-            | Inst::FpPair { .. } => {}
+            // A write of a single or a double clears the rest of its vector register, so it
+            // writes the whole, as a w register's write does its x.
+            Inst::FpOneSource { rd, rn, .. } => {
+                self.reads_fp(rn);
+                self.writes_fp(rd);
+            }
+            Inst::FpTwoSource { rd, rn, rm, .. } | Inst::FpCondSelect { rd, rn, rm, .. } => {
+                self.reads_fp(rn);
+                self.reads_fp(rm);
+                self.writes_fp(rd);
+            }
+            Inst::FpThreeSource { rd, rn, rm, ra, .. } => {
+                self.reads_fp(rn);
+                self.reads_fp(rm);
+                self.reads_fp(ra);
+                self.writes_fp(rd);
+            }
+            Inst::FpCompare { rn, rm, .. } => {
+                self.reads_fp(rn);
+                if let Some(rm) = rm {
+                    self.reads_fp(rm);
+                }
+            }
+            Inst::FpMoveImm { rd, .. } => self.writes_fp(rd),
+            Inst::FpConvert { op, fp, gpr } => {
+                if to_general(op) {
+                    self.reads_fp(fp);
+                    self.writes_register(gpr);
+                } else {
+                    self.reads_register(gpr);
+                    self.writes_fp(fp);
+                }
+            }
+            Inst::FpLoadStore { load, rt, address } => {
+                self.address(address);
+                if load {
+                    self.writes_fp(rt);
+                } else {
+                    self.reads_fp(rt);
+                }
+            }
+            Inst::FpPair {
+                load,
+                rt,
+                rt2,
+                address,
+            } => {
+                self.address(address);
+                for register in [rt, rt2] {
+                    if load {
+                        self.writes_fp(register);
+                    } else {
+                        self.reads_fp(register);
+                    }
+                }
+            }
         }
     }
 

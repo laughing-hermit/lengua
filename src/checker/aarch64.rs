@@ -60,8 +60,9 @@ pub(super) fn steps<'a>(
                      lengua's AArch64 dialect has",
                     source.text, word.bits
                 ),
-                fix: "use the integer instructions the dialect reference lists: no floating \
-                      point, vectors, atomics or system registers"
+                fix: "use the instructions the dialect reference lists: whole numbers, and \
+                      floating point in s and d registers; no vectors, half precision, atomics \
+                      or system registers"
                     .into(),
             }),
         }
@@ -225,19 +226,6 @@ pub(super) fn check_instruction(step: &Step<'_>, word: &Word, violations: &mut V
             format!("`{text}`: adr isn't in the dialect"),
             "make an address with `adrp xN, name` followed by `add xN, xN, :lo12:name`",
         ),
-        Inst::FpOneSource { .. }
-        | Inst::FpTwoSource { .. }
-        | Inst::FpThreeSource { .. }
-        | Inst::FpCompare { .. }
-        | Inst::FpCondSelect { .. }
-        | Inst::FpMoveImm { .. }
-        | Inst::FpConvert { .. }
-        | Inst::FpLoadStore { .. }
-        | Inst::FpPair { .. } => refuse(
-            format!("`{text}`: floating point isn't in lengua's AArch64 dialect yet"),
-            "compute in whole numbers, or compile the spec for x86-64, whose dialect has floating \
-             point",
-        ),
         Inst::BranchReg {
             kind: Indirect::Blr,
             ..
@@ -342,8 +330,8 @@ const WORDS: [(&str, &str); 42] = [
     (
         "push callee-saved registers (rbx, rbp, r12-r15) at the start and pop them in reverse order \
          right before ret",
-        "save callee-saved registers (x19 to x29) in stp pairs at the start and restore them with \
-         ldp in reverse order right before ret",
+        "save callee-saved registers (x19 to x29, d8 to d15) in stp pairs at the start and restore \
+         them with ldp in reverse order right before ret",
     ),
     (
         "calls change rax, rcx, rdx, rsi, rdi and r8-r11, and syscall changes rax, rcx and r11, so \

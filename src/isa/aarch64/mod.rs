@@ -197,6 +197,13 @@ const fn x(number: u32) -> Reg {
     Reg::A64(A64Reg::new(number, true, false))
 }
 
+const fn d(number: u8) -> Reg {
+    Reg::A64Fp(FpReg {
+        number,
+        double: true,
+    })
+}
+
 /// AAPCS64 on Linux, as lengua's AArch64 programs follow it.
 pub const ABI: Abi = Abi {
     registers: &[
@@ -246,7 +253,7 @@ pub const ABI: Abi = Abi {
     worker_slot: x(19),
     link: Some(x(30)),
     // x18 is the platform register, which the dialect doesn't use; a call changes x30, the link
-    // register, too.
+    // register, too, and the floating-point registers but d8 to d15.
     caller_saved: &[
         x(0),
         x(1),
@@ -268,6 +275,30 @@ pub const ABI: Abi = Abi {
         x(17),
         x(18),
         x(30),
+        d(0),
+        d(1),
+        d(2),
+        d(3),
+        d(4),
+        d(5),
+        d(6),
+        d(7),
+        d(16),
+        d(17),
+        d(18),
+        d(19),
+        d(20),
+        d(21),
+        d(22),
+        d(23),
+        d(24),
+        d(25),
+        d(26),
+        d(27),
+        d(28),
+        d(29),
+        d(30),
+        d(31),
     ],
     syscall_clobbers: &[x(0)],
     callee_saved: &[
@@ -282,6 +313,15 @@ pub const ABI: Abi = Abi {
         x(27),
         x(28),
         x(29),
+        // The low 64 bits of v8 to v15, all a scalar uses of them.
+        d(8),
+        d(9),
+        d(10),
+        d(11),
+        d(12),
+        d(13),
+        d(14),
+        d(15),
     ],
 };
 

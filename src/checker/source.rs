@@ -164,7 +164,8 @@ pub enum Operand {
     Memory(Memory),
     /// A jump or call target, or a data symbol `adrp` names.
     Target(String),
-    /// A shift, extend or condition, as written: AArch64's `lsl #12`, `asr #63`, `eq`.
+    /// A shift, extend or condition, or a floating-point number, as written: AArch64's `lsl #12`,
+    /// `asr #63`, `eq`, `#1.5`.
     Modifier(String),
 }
 
@@ -1808,6 +1809,11 @@ fn aarch64_operand(text: &str, constants: &BTreeMap<String, Constant>) -> Result
     }
     if let Some(expression) = text.strip_prefix('#') {
         let expression = expression.trim();
+        // A floating-point number, such as fmov's `#1.5` or fcmp's `#0.0`, which matching reads
+        // as the instruction does.
+        if is_float(expression) {
+            return Ok(Operand::Modifier(text.to_owned()));
+        }
         let value = evaluate(expression, constants)?;
         let name = constants
             .contains_key(expression)
@@ -1835,6 +1841,9 @@ fn aarch64_operand(text: &str, constants: &BTreeMap<String, Constant>) -> Result
     if let Some(register) = aarch64::text::register(text) {
         return Ok(Operand::Register(Reg::A64(register)));
     }
+    if let Some(register) = aarch64::text::fp_register(text) {
+        return Ok(Operand::Register(Reg::A64Fp(register)));
+    }
     if A64Cond::named(text).is_some() || text.contains(char::is_whitespace) {
         return Ok(Operand::Modifier(text.to_owned()));
     }
@@ -1842,6 +1851,14 @@ fn aarch64_operand(text: &str, constants: &BTreeMap<String, Constant>) -> Result
         return Ok(Operand::Target(text.to_owned()));
     }
     Err("isn't an operand the dialect has".into())
+}
+
+/// Whether `text` is a floating-point number with a point: `1.5`, `-0.25`, `2.0e3`.
+fn is_float(text: &str) -> bool {
+    let digits = text.strip_prefix(['-', '+']).unwrap_or(text);
+    digits.starts_with(|first: char| first.is_ascii_digit())
+        && digits.contains('.')
+        && digits.parse::<f64>().is_ok()
 }
 
 /// An AArch64 memory operand: `[base]`, `[base, #offset]` (with `!` when the base moves first),

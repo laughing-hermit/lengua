@@ -1947,6 +1947,82 @@ async fn an_aarch64_file_program_passes_every_rule() {
     assert!(report.passed(), "{all:#?}");
 }
 
+/// An AArch64 floating-point program, the hypotenuse example's spec compiled for AArch64: its
+/// doubles (scvtf, fdiv, fmul, fadd, fsqrt, frintn, fcvtzs) pass every rule. d8 to d15 are
+/// callee-saved, so a function that changes one saves it, in stp pairs after the frame record and
+/// restored in mirror order, as x19 to x28 are; half precision isn't in the dialect.
+#[tokio::test]
+async fn an_aarch64_float_program_passes_every_rule() {
+    let syscalls = [Syscall::Write, Syscall::Exit];
+    let text = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/linux-aarch64/hypotenuse/main.s"),
+    )
+    .expect("the fixture");
+    let report = check_full(&text, CpuFeatures::all(), &syscalls, None).await;
+    let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+    assert!(report.passed(), "{all:#?}");
+
+    // The scale kept in d8, which a caller expects back.
+    let unsaved = text.replace(" d2", " d8");
+    assert_ne!(unsaved, text);
+    let report = check_full(&unsaved, CpuFeatures::all(), &syscalls, None).await;
+    assert_violation(
+        &report,
+        Rule::Functions,
+        line_of(&unsaved, "print_hypotenuse:"),
+        "print_hypotenuse changes d8 without saving it",
+    );
+
+    let opening = "print_hypotenuse:\n    stp x29, x30, [sp, #-16]!\n";
+    let closing = ".Lprint_hypotenuse_return:\n    ldp x29, x30, [sp], #16\n";
+    let saved = unsaved
+        .replacen(
+            opening,
+            &format!("{opening}    stp d8, d9, [sp, #-16]!\n"),
+            1,
+        )
+        .replacen(
+            closing,
+            ".Lprint_hypotenuse_return:\n    ldp d8, d9, [sp], #16\n    ldp x29, x30, [sp], #16\n",
+            1,
+        );
+    let report = check_full(&saved, CpuFeatures::all(), &syscalls, None).await;
+    let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+    assert!(report.passed(), "{all:#?}");
+
+    // Restored before the frame record rather than after it: not the mirror of the saves.
+    let unmirrored = unsaved
+        .replacen(
+            opening,
+            &format!("{opening}    stp d8, d9, [sp, #-16]!\n"),
+            1,
+        )
+        .replacen(
+            closing,
+            ".Lprint_hypotenuse_return:\n    ldp x29, x30, [sp], #16\n    ldp d8, d9, [sp], #16\n",
+            1,
+        );
+    let report = check_full(&unmirrored, CpuFeatures::all(), &syscalls, None).await;
+    assert_violation(
+        &report,
+        Rule::Functions,
+        line_of(&unmirrored, "    ret\n.Lprint_hypotenuse_assert_side_a"),
+        "don't mirror its pushes",
+    );
+
+    let half = text.replacen("    fadd d0, d0, d1\n", "    fadd h0, h0, h1\n", 1);
+    assert_ne!(half, text);
+    let report = check_full(&half, CpuFeatures::all(), &syscalls, None).await;
+    assert_violation(
+        &report,
+        Rule::Dialect,
+        line_of(&half, "    fadd h0"),
+        "`fadd h0, h0, h1`: operand 1 is a half-precision or byte register, which the dialect \
+         doesn't have",
+    );
+}
+
 /// AArch64's fill passes every rule, and is held to its template as x86-64's is: its code and
 /// its constants.
 #[tokio::test]

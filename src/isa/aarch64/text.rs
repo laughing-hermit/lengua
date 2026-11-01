@@ -185,15 +185,30 @@ impl Line<'_> {
 
     /// Operand `at`, a floating-point register.
     fn fp(&self, at: usize) -> Result<FpReg, String> {
-        self.operands
-            .get(at)
-            .and_then(|operand| fp_register(operand))
-            .ok_or_else(|| {
-                self.problem(&format!(
-                    "operand {} isn't a floating-point register",
+        let operand = self.operands.get(at).copied().unwrap_or_default();
+        fp_register(operand).ok_or_else(|| {
+            // The other views of a vector register: its byte, half, and whole 128 bits.
+            let other = |kind: char| {
+                operand.strip_prefix(kind).is_some_and(|digits| {
+                    !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+                })
+            };
+            self.problem(&if other('h') || other('b') {
+                format!(
+                    "operand {} is a half-precision or byte register, which the dialect doesn't \
+                     have: compute in s (single) or d (double) registers",
                     at + 1
-                ))
+                )
+            } else if other('q') || other('v') {
+                format!(
+                    "operand {} is a whole vector register, which the dialect doesn't have yet: \
+                     use s or d registers",
+                    at + 1
+                )
+            } else {
+                format!("operand {} isn't a floating-point register", at + 1)
             })
+        })
     }
 
     /// Operand `at`, a floating-point register as wide as `double` says.

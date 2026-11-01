@@ -47,6 +47,9 @@ pub enum Reg {
     X86(iced_x86::Register),
     /// An AArch64 general-purpose register.
     A64(aarch64::A64Reg),
+    /// An AArch64 floating-point register, a single or a double: the low part of a vector
+    /// register.
+    A64Fp(aarch64::FpReg),
 }
 
 impl Reg {
@@ -56,6 +59,11 @@ impl Reg {
         match self {
             Self::X86(register) => Self::X86(register.full_register()),
             Self::A64(register) => Self::A64(register.full()),
+            // A single's write clears the rest: the whole that holds is the double.
+            Self::A64Fp(register) => Self::A64Fp(aarch64::FpReg {
+                number: register.number,
+                double: true,
+            }),
         }
     }
 
@@ -66,6 +74,13 @@ impl Reg {
             Self::X86(register) => register.size() * 8,
             Self::A64(register) => {
                 if register.wide {
+                    64
+                } else {
+                    32
+                }
+            }
+            Self::A64Fp(register) => {
+                if register.double {
                     64
                 } else {
                     32
@@ -82,6 +97,8 @@ impl Reg {
         match self {
             Self::X86(register) => x86_64::slot(register),
             Self::A64(register) => aarch64::slot(register),
+            // After the 32 general-purpose slots.
+            Self::A64Fp(register) => Some(32 + u32::from(register.number)),
         }
     }
 }
@@ -94,6 +111,7 @@ impl fmt::Display for Reg {
                 formatter.write_str(&name.to_ascii_lowercase())
             }
             Self::A64(register) => write!(formatter, "{register}"),
+            Self::A64Fp(register) => write!(formatter, "{register}"),
         }
     }
 }
