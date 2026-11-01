@@ -15,10 +15,9 @@
 
 use std::collections::BTreeMap;
 
-use iced_x86::{FlowControl, Instruction, OpKind, Register};
-
-use super::decode::{MappedFunction, Program, mnemonic};
+use super::decode::{MappedFunction, Program};
 use super::{Rule, Violation};
+use crate::isa::{Control, Insn, Op, Operand};
 
 /// A jump through a checked table.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,11 +28,10 @@ pub struct TableJump {
     pub cases: Vec<usize>,
 }
 
-/// Whether `instruction` jumps through a register.
+/// Whether `insn` jumps through a register.
 #[must_use]
-pub fn is_register_jump(instruction: &Instruction) -> bool {
-    instruction.flow_control() == FlowControl::IndirectBranch
-        && instruction.op_kind(0) == OpKind::Register
+pub fn is_register_jump(insn: &Insn) -> bool {
+    insn.control == Control::IndirectJump && matches!(insn.operands.as_slice(), [Operand::Reg(_)])
 }
 
 /// Every function's jumps through checked tables, by the function's name. Any other jump
@@ -70,7 +68,7 @@ pub fn addresses(
                 .into_iter()
                 .flatten()
                 .map(move |jump| {
-                    let ip = |step: usize| function.steps[step].machine.ip();
+                    let ip = |step: usize| function.steps[step].insn.address;
                     (
                         ip(jump.jump),
                         jump.cases.iter().map(|case| ip(*case)).collect(),
@@ -89,7 +87,7 @@ pub fn find(
 ) -> Vec<TableJump> {
     let mut found = Vec::new();
     for (index, step) in function.steps.iter().enumerate() {
-        if !is_register_jump(&step.machine) {
+        if !is_register_jump(&step.insn) {
             continue;
         }
         match cases(function, program, index) {
@@ -135,33 +133,31 @@ fn cases(
         &function.steps[index - 2],
         &function.steps[index - 1],
     );
-    let target = function.steps[index].machine.op_register(0);
-    let (lea_machine, load_machine, add_machine) = (&lea.machine, &load.machine, &add.machine);
-    // add target, base
-    if mnemonic(add_machine) != "add"
-        || add_machine.op_kind(0) != OpKind::Register
-        || add_machine.op_kind(1) != OpKind::Register
-        || add_machine.op_register(0) != target
-    {
+    let [Operand::Reg(target)] = function.steps[index].insn.operands[..] else {
         return Err(shape());
-    }
-    let base = add_machine.op_register(1);
-    if base == target {
+    };
+    // add target, base
+    let [Operand::Reg(added), Operand::Reg(base)] = add.insn.operands[..] else {
+        return Err(shape());
+    };
+    if add.insn.mnemonic != "add" || added != target || base == target {
         return Err(shape());
     }
     // movsxd target, dword ptr [base + index*4]
-    if mnemonic(load_machine) != "movsxd"
-        || load_machine.op_register(0) != target
-        || load_machine.op_kind(1) != OpKind::Memory
-        || load_machine.memory_base() != base
-        || load_machine.memory_index() == Register::None
-        || load_machine.memory_index_scale() != 4
-        || load_machine.memory_displacement64() != 0
+    let loads_entry = load.insn.memory.is_some_and(|memory| {
+        memory.base == Some(base)
+            && memory.index.is_some()
+            && memory.scale == 4
+            && memory.displacement == 0
+    });
+    if load.insn.mnemonic != "movsxd"
+        || !matches!(load.insn.operands[..], [Operand::Reg(loaded), Operand::Mem] if loaded == target)
+        || !loads_entry
     {
         return Err(shape());
     }
     // lea base, [rip + table]
-    if mnemonic(lea_machine) != "lea" || lea_machine.op_register(0) != base {
+    if !matches!(lea.insn.op, Op::AddressOf { dst } if dst == base) {
         return Err(shape());
     }
     let Some((name, data, 0)) = program.named(lea) else {

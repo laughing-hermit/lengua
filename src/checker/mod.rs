@@ -12,6 +12,7 @@ pub mod rules;
 pub mod source;
 pub mod tables;
 pub mod threads;
+pub mod x86_64;
 
 #[cfg(test)]
 pub(crate) mod golden;
@@ -294,7 +295,7 @@ pub fn check_program(source: &Source, executable: &[u8], context: Context<'_>) -
         [&template, &fill_template],
         &mut violations,
     );
-    facts.features = decode::features_needed(&machine);
+    facts.features = x86_64::features_needed(&machine);
     facts.named = program.named_symbols();
     facts.tables = tables::addresses(&program, &jumps);
     memory::check(

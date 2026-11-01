@@ -43,6 +43,10 @@ formula, counts of a part that can overlap itself (such as `"aa"`), and the benc
 word count, which reads a megabyte at a time and is proven by length.
 
 Left for later on this target:
+- mean's decimal means (its B1 and B3, two prices up to a million) aren't proven in the proof's
+  five minutes: z3 runs out of time on one path. Found by Round 9's G4 at R1 (2026-10-31): the
+  ignored `proves_the_mean_of_two_prices` and check_code's `the_decimal_example_is_proven` fail,
+  each run alone. They're proven for prices up to 9.99, as the prover golden proves them.
 - Sorting at every length, which needs quantified facts over memory.
 - The fastest streaming programs proven for every length. The induction's base proves each final
   length one by one, so its cost grows with the square of the buffer; a base that covers every

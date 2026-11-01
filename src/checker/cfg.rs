@@ -3,36 +3,9 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use iced_x86::{FlowControl, Instruction, InstructionInfoFactory, OpAccess, OpKind, Register};
-
-use super::decode::{MappedFunction, Program, mnemonic};
+use super::decode::{MappedFunction, Program};
 use super::{Rule, Violation};
-
-/// Registers a `call` may change (System V).
-pub const CALLER_SAVED: [Register; 9] = [
-    Register::RAX,
-    Register::RCX,
-    Register::RDX,
-    Register::RSI,
-    Register::RDI,
-    Register::R8,
-    Register::R9,
-    Register::R10,
-    Register::R11,
-];
-
-/// Registers a `syscall` changes.
-pub const SYSCALL_CLOBBERS: [Register; 3] = [Register::RAX, Register::RCX, Register::R11];
-
-/// Registers a function must give back unchanged (System V).
-pub const CALLEE_SAVED: [Register; 6] = [
-    Register::RBX,
-    Register::RBP,
-    Register::R12,
-    Register::R13,
-    Register::R14,
-    Register::R15,
-];
+use crate::isa::{Abi, Control, Op, Reg, Stack};
 
 /// The function every assertion calls.
 pub const ASSERT_FAIL: &str = "assert_fail";
@@ -81,61 +54,6 @@ pub struct Flow {
     pub max_depth: i64,
 }
 
-/// Whether `instruction` changes `register` (any part of it), counting what calls and system
-/// calls change.
-#[must_use]
-pub fn writes(
-    instruction: &Instruction,
-    register: Register,
-    factory: &mut InstructionInfoFactory,
-) -> bool {
-    let full = register.full_register();
-    let name = mnemonic(instruction);
-    if (name == "call" && CALLER_SAVED.contains(&full))
-        || (name == "syscall" && SYSCALL_CLOBBERS.contains(&full))
-    {
-        return true;
-    }
-    factory
-        .info(instruction)
-        .used_registers()
-        .iter()
-        .any(|used| {
-            used.register().full_register() == full
-                && matches!(
-                    used.access(),
-                    OpAccess::Write
-                        | OpAccess::CondWrite
-                        | OpAccess::ReadWrite
-                        | OpAccess::ReadCondWrite
-                )
-        })
-}
-
-/// Whether `instruction` reads `register` (any part of it).
-#[must_use]
-pub fn reads(
-    instruction: &Instruction,
-    register: Register,
-    factory: &mut InstructionInfoFactory,
-) -> bool {
-    let full = register.full_register();
-    factory
-        .info(instruction)
-        .used_registers()
-        .iter()
-        .any(|used| {
-            used.register().full_register() == full
-                && matches!(
-                    used.access(),
-                    OpAccess::Read
-                        | OpAccess::CondRead
-                        | OpAccess::ReadWrite
-                        | OpAccess::ReadCondWrite
-                )
-        })
-}
-
 /// The index of the first instruction of the straight-line run holding `index`: runs start at
 /// the function's start and at every label.
 #[must_use]
@@ -149,34 +67,30 @@ pub fn run_start(function: &MappedFunction<'_>, index: usize) -> usize {
         .unwrap_or(0)
 }
 
-/// The value `mov eax, VALUE` (or `mov rax, VALUE`) puts in rax as the last write to rax in the
-/// straight-line run before `index`.
+/// The number `mov REG, VALUE` puts in `register` as the last change to it in the straight-line
+/// run before `index`, with REG the register whole or its low 32 bits: where it is, and the
+/// number.
 #[must_use]
-pub fn rax_value_before(
+pub fn constant_before(
     function: &MappedFunction<'_>,
     index: usize,
-    factory: &mut InstructionInfoFactory,
+    register: Reg,
+    abi: &Abi,
 ) -> Option<(usize, i64)> {
     let start = run_start(function, index);
     (start..index)
         .rev()
         .find_map(|position| {
-            let instruction = &function.steps[position].machine;
-            if !writes(instruction, Register::RAX, factory) {
+            let insn = &function.steps[position].insn;
+            if !insn.changes(register, abi) {
                 return None;
             }
-            let is_mov_immediate = mnemonic(instruction) == "mov"
-                && instruction.op_kind(0) == OpKind::Register
-                && matches!(instruction.op_register(0), Register::EAX | Register::RAX)
-                && instruction.op_count() == 2
-                && instruction.op_kind(1) != OpKind::Register
-                && instruction.op_kind(1) != OpKind::Memory;
-            Some(is_mov_immediate.then(|| {
-                (
-                    position,
-                    i64::from_ne_bytes(instruction.immediate(1).to_ne_bytes()),
-                )
-            }))
+            Some(match insn.op {
+                Op::MovImm { dst, value } if dst.full() == register.full() && dst.bits() >= 32 => {
+                    Some((position, value))
+                }
+                _ => None,
+            })
         })
         .flatten()
 }
@@ -193,7 +107,7 @@ pub fn analyze(
     let name = function.name();
     let exempt = name == ASSERT_FAIL;
     let count = function.steps.len();
-    let mut factory = InstructionInfoFactory::new();
+    let abi = program.abi();
     let mut report = |rule: Rule, line: usize, problem: String, fix: &str| {
         if !exempt {
             violations.push(Violation {
@@ -206,15 +120,12 @@ pub fn analyze(
     };
     let mut exits = Vec::with_capacity(count);
     for (index, step) in function.steps.iter().enumerate() {
-        let instruction = &step.machine;
         let line = step.source.line;
-        let exit = match instruction.flow_control() {
-            FlowControl::Next => Exit::Next,
-            FlowControl::UnconditionalBranch | FlowControl::ConditionalBranch => {
-                match function.index_of(instruction.near_branch_target()) {
-                    Some(target)
-                        if instruction.flow_control() == FlowControl::ConditionalBranch =>
-                    {
+        let exit = match step.insn.control {
+            Control::Next => Exit::Next,
+            Control::Jump(target) | Control::Branch { target, .. } => {
+                match function.index_of(target) {
+                    Some(target) if matches!(step.insn.control, Control::Branch { .. }) => {
                         Exit::Branch(target)
                     }
                     Some(target) => Exit::Jump(target),
@@ -229,13 +140,13 @@ pub fn analyze(
                     }
                 }
             }
-            FlowControl::Return => Exit::Return,
-            FlowControl::Call if mnemonic(instruction) == "syscall" => {
-                let exit = rax_value_before(function, index, &mut factory)
+            Control::Return => Exit::Return,
+            Control::Syscall => {
+                let exit = constant_before(function, index, abi.syscall_number, abi)
                     .is_some_and(|(_, number)| exit_numbers.contains(&number));
                 Exit::Syscall { exit }
             }
-            FlowControl::Call => match program.function_at(instruction.near_branch_target()) {
+            Control::Call(target) => match program.function_at(target) {
                 Some(callee) => Exit::Call {
                     callee: callee.name().to_owned(),
                 },
@@ -254,11 +165,11 @@ pub fn analyze(
             },
             // A jump through a checked table goes to one of its cases; any other jump through a
             // register is already reported.
-            FlowControl::IndirectBranch => jumps
+            Control::IndirectJump => jumps
                 .iter()
                 .find(|jump| jump.jump == index)
                 .map_or(Exit::Stop, |jump| Exit::Table(jump.cases.clone())),
-            _ => Exit::Stop,
+            Control::IndirectCall | Control::Other => Exit::Stop,
         };
         exits.push(exit);
     }
@@ -297,7 +208,11 @@ pub fn analyze(
         }
     }
 
-    let entry_depth = if name == "_start" { 0 } else { 8 };
+    let entry_depth = if name == "_start" {
+        0
+    } else {
+        abi.return_address
+    };
     let mut reachable = vec![false; count];
     let mut depth: Vec<Option<i64>> = vec![None; count];
     let mut max_depth = entry_depth;
@@ -311,15 +226,19 @@ pub fn analyze(
         let before = depth[index].unwrap_or(entry_depth);
         let step = &function.steps[index];
         let line = step.source.line;
-        let after = stack_effect(&step.machine, before, &mut factory).unwrap_or_else(|problem| {
-            report(
-                Rule::Resources,
-                line,
-                problem,
-                "change rsp only with push, pop, call, ret, and add or sub rsp with a constant",
-            );
-            before
-        });
+        let after = match &step.insn.stack {
+            Stack::Same => before,
+            Stack::Moves(bytes) => before + bytes,
+            Stack::Refused(problem) => {
+                report(
+                    Rule::Resources,
+                    line,
+                    problem.clone(),
+                    "change rsp only with push, pop, call, ret, and add or sub rsp with a constant",
+                );
+                before
+            }
+        };
         if after < entry_depth {
             report(
                 Rule::Resources,
@@ -328,11 +247,14 @@ pub fn analyze(
                 "pop exactly what you push",
             );
         }
-        if exits[index] == Exit::Return && before != 8 {
+        if exits[index] == Exit::Return && before != abi.return_address {
             report(
                 Rule::Functions,
                 line,
-                format!("ret runs with {} bytes still on the stack", before - 8),
+                format!(
+                    "ret runs with {} bytes still on the stack",
+                    before - abi.return_address
+                ),
                 "undo every push and sub rsp before ret",
             );
         }
@@ -394,51 +316,6 @@ pub fn analyze(
         reachable,
         depth,
         max_depth,
-    }
-}
-
-/// The stack depth after `instruction`, given the depth before it.
-fn stack_effect(
-    instruction: &Instruction,
-    before: i64,
-    factory: &mut InstructionInfoFactory,
-) -> Result<i64, String> {
-    let name = mnemonic(instruction);
-    let operand_is_rsp = instruction.op_count() >= 1
-        && instruction.op_kind(0) == OpKind::Register
-        && instruction.op_register(0) == Register::RSP;
-    match name.as_str() {
-        "push" | "pop" => {
-            let wide = match instruction.op_kind(0) {
-                OpKind::Register => instruction.op_register(0).size() == 8,
-                _ => instruction.stack_pointer_increment().abs() == 8,
-            };
-            if !wide {
-                return Err(format!(
-                    "`{name}` moves 16 bits; push and pop 64-bit registers"
-                ));
-            }
-            Ok(if name == "push" {
-                before + 8
-            } else {
-                before - 8
-            })
-        }
-        "sub" | "add" if operand_is_rsp => {
-            let kind = instruction.op_kind(1);
-            if matches!(kind, OpKind::Register | OpKind::Memory) {
-                return Err(format!("`{name} rsp` uses a register or memory"));
-            }
-            let amount = i64::from_ne_bytes(instruction.immediate(1).to_ne_bytes());
-            Ok(if name == "sub" {
-                before + amount
-            } else {
-                before - amount
-            })
-        }
-        "call" | "ret" | "syscall" => Ok(before),
-        _ if writes(instruction, Register::RSP, factory) => Err(format!("`{name}` changes rsp")),
-        _ => Ok(before),
     }
 }
 

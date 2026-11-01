@@ -26,56 +26,15 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use iced_x86::{Instruction, InstructionInfoFactory, OpAccess, OpKind, Register};
-
-use super::cfg::{ASSERT_FAIL, CALLER_SAVED, Exit, Flow, SYSCALL_CLOBBERS, rax_value_before};
-use super::decode::{MappedFunction, Program, mnemonic};
+use super::cfg::{ASSERT_FAIL, Exit, Flow, constant_before};
+use super::decode::{MappedFunction, Program};
 use super::{Rule, Violation};
+use crate::isa::{Abi, Control, Insn, Op, Operand, Reg, Value};
 use crate::platform::Profile;
 use crate::spec::Syscall;
 
 /// The most stack a program may use on any path.
 pub const MAX_STACK_BYTES: u64 = 1 << 20;
-
-/// The 64-bit general-purpose registers, in the order states keep them.
-const REGISTERS: [Register; 16] = [
-    Register::RAX,
-    Register::RCX,
-    Register::RDX,
-    Register::RBX,
-    Register::RSP,
-    Register::RBP,
-    Register::RSI,
-    Register::RDI,
-    Register::R8,
-    Register::R9,
-    Register::R10,
-    Register::R11,
-    Register::R12,
-    Register::R13,
-    Register::R14,
-    Register::R15,
-];
-
-/// The registers a caller lends values in (System V).
-const ARGUMENTS: [Register; 6] = [
-    Register::RDI,
-    Register::RSI,
-    Register::RDX,
-    Register::RCX,
-    Register::R8,
-    Register::R9,
-];
-
-/// The registers the kernel takes a system call's arguments in.
-const SYSCALL_ARGUMENTS: [Register; 6] = [
-    Register::RDI,
-    Register::RSI,
-    Register::RDX,
-    Register::R10,
-    Register::R8,
-    Register::R9,
-];
 
 /// What a register's value is, as far as addresses go.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,7 +59,7 @@ pub enum Owner {
     /// An address inside what the caller lent in this register.
     Argument {
         /// The register the caller lent it in.
-        register: Register,
+        register: Reg,
         /// The offset from the address lent, when it's known.
         offset: Option<i64>,
     },
@@ -163,9 +122,9 @@ impl Owner {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Summary {
     /// The registers whose pointers it reads or writes through, itself or in what it calls.
-    uses: BTreeSet<Register>,
+    uses: BTreeSet<Reg>,
     /// The registers whose pointers it writes through.
-    writes: BTreeSet<Register>,
+    writes: BTreeSet<Reg>,
     /// What it returns in rax, with [`Owner::Argument`] for an address in what the caller lent.
     returns: Owner,
 }
@@ -181,8 +140,8 @@ impl Summary {
     }
 
     /// May read and write through any of `registers`.
-    fn every(registers: &[Register]) -> Self {
-        let all: BTreeSet<Register> = registers.iter().copied().collect();
+    fn every(registers: &[Reg]) -> Self {
+        let all: BTreeSet<Reg> = registers.iter().copied().collect();
         Self {
             uses: all.clone(),
             writes: all,
@@ -190,33 +149,31 @@ impl Summary {
         }
     }
 
-    /// The buffers a system call reads and writes, by number.
-    fn syscall(number: Option<i64>, profile: Profile) -> Self {
+    /// The buffers a system call reads and writes, by number: its arguments, counted from 0,
+    /// in the registers `abi` passes them in.
+    fn syscall(number: Option<i64>, profile: Profile, abi: &Abi) -> Self {
         let known = number.and_then(|number| {
             Syscall::ALL
                 .into_iter()
                 .find(|syscall| profile.syscall_number(*syscall) == number)
         });
-        let (uses, writes): (&[Register], &[Register]) = match known {
-            Some(Syscall::Read | Syscall::ClockGettime) => (&[Register::RSI], &[Register::RSI]),
+        let (uses, writes): (&[usize], &[usize]) = match known {
+            Some(Syscall::Read | Syscall::ClockGettime) => (&[1], &[1]),
             // The time to sleep, and what's left of it when a signal wakes it.
-            Some(Syscall::ClockNanosleep) => (&[Register::RDX, Register::R10], &[Register::R10]),
-            Some(Syscall::Getrandom) => (&[Register::RDI], &[Register::RDI]),
+            Some(Syscall::ClockNanosleep) => (&[2, 3], &[3]),
+            Some(Syscall::Getrandom) => (&[0], &[0]),
             // A file's details, and a folder's entries.
-            Some(Syscall::Fstat | Syscall::Getdents64) => (&[Register::RSI], &[Register::RSI]),
-            Some(Syscall::Mkdirat | Syscall::Unlinkat) => (&[Register::RSI], &[]),
+            Some(Syscall::Fstat | Syscall::Getdents64) => (&[1], &[1]),
+            Some(Syscall::Mkdirat | Syscall::Unlinkat) => (&[1], &[]),
             // The old name and the new.
-            Some(Syscall::Renameat) => (&[Register::RSI, Register::R10], &[]),
-            Some(Syscall::Accept4) => (
-                &[Register::RSI, Register::RDX],
-                &[Register::RSI, Register::RDX],
-            ),
-            Some(Syscall::Write | Syscall::Openat | Syscall::Connect) => (&[Register::RSI], &[]),
-            Some(Syscall::Sendto) => (&[Register::RSI, Register::R8], &[]),
+            Some(Syscall::Renameat) => (&[1, 3], &[]),
+            Some(Syscall::Accept4) => (&[1, 2], &[1, 2]),
+            Some(Syscall::Write | Syscall::Openat | Syscall::Connect) => (&[1], &[]),
+            Some(Syscall::Sendto) => (&[1, 4], &[]),
             // The table of descriptors, whose events the kernel writes back.
-            Some(Syscall::Poll) => (&[Register::RDI], &[Register::RDI]),
+            Some(Syscall::Poll) => (&[0], &[0]),
             // The terminal's mode, read or written, or its window's size.
-            Some(Syscall::Ioctl) => (&[Register::RDX], &[Register::RDX]),
+            Some(Syscall::Ioctl) => (&[2], &[2]),
             Some(
                 Syscall::Close
                 | Syscall::Lseek
@@ -226,32 +183,59 @@ impl Summary {
                 | Syscall::Shutdown,
             ) => (&[], &[]),
             // clone, futex, or a call the rules refuse.
-            None => return Self::every(&SYSCALL_ARGUMENTS),
+            None => return Self::every(&abi.syscall_arguments),
+        };
+        let registers = |positions: &[usize]| -> BTreeSet<Reg> {
+            positions
+                .iter()
+                .map(|position| abi.syscall_arguments[*position])
+                .collect()
         };
         Self {
-            uses: uses.iter().copied().collect(),
-            writes: writes.iter().copied().collect(),
+            uses: registers(uses),
+            writes: registers(writes),
             returns: Owner::Number,
         }
     }
 }
 
-/// Each register's owner before an instruction, and which frame bytes every path has written.
+/// Each general-purpose register's owner before an instruction, by its slot, and which frame
+/// bytes every path has written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct State {
     registers: Vec<Owner>,
     /// The frame bytes written on every path, by their distance below the frame's top.
     written: BTreeSet<i64>,
+    /// The stack pointer's slot, which keeps no owner: an address in the frame is its own.
+    stack: Option<usize>,
 }
 
 impl State {
-    fn get(&self, register: Register) -> Owner {
-        index(register).map_or(Owner::Unknown, |at| self.registers[at].clone())
+    /// Every register's owner unknown, for `abi`'s registers.
+    fn unknown(abi: &Abi) -> Self {
+        Self {
+            registers: vec![Owner::Unknown; abi.registers.len()],
+            written: BTreeSet::new(),
+            stack: abi.stack_pointer.slot().map(|slot| slot as usize),
+        }
     }
 
-    fn set(&mut self, register: Register, owner: Owner) {
-        if let Some(at) = index(register)
-            && REGISTERS[at] != Register::RSP
+    /// The slot `register` keeps its owner in, when it's a general-purpose register.
+    fn slot(&self, register: Reg) -> Option<usize> {
+        register
+            .slot()
+            .map(|slot| slot as usize)
+            .filter(|slot| *slot < self.registers.len())
+    }
+
+    fn get(&self, register: Reg) -> Owner {
+        self.slot(register)
+            .map_or(Owner::Unknown, |at| self.registers[at].clone())
+    }
+
+    fn set(&mut self, register: Reg, owner: Owner) {
+        if let Some(at) = self.slot(register)
+            && Some(at) != self.stack
         {
             self.registers[at] = owner;
         }
@@ -266,13 +250,9 @@ impl State {
                 .map(|(a, b)| a.join(b))
                 .collect(),
             written: self.written.intersection(&other.written).copied().collect(),
+            stack: self.stack,
         }
     }
-}
-
-fn index(register: Register) -> Option<usize> {
-    let full = register.full_register();
-    REGISTERS.iter().position(|known| *known == full)
 }
 
 /// Where a function's frame starts: the frame's top is at rsp plus the depth less this, the
@@ -291,7 +271,7 @@ pub fn check(
     writable_executable: bool,
     violations: &mut Vec<Violation>,
 ) {
-    let mut factory = InstructionInfoFactory::new();
+    let abi = program.abi();
     let functions: BTreeMap<&str, &MappedFunction<'_>> = program
         .functions
         .iter()
@@ -305,19 +285,26 @@ pub fn check(
         if name == ASSERT_FAIL {
             continue;
         }
-        let lent = lent(function, flow, &summaries, profile, &mut factory);
-        let states = states(function, flow, &lent, program, &mut factory);
+        let lent = lent(function, flow, &summaries, profile, abi);
+        let states = states(function, flow, &lent, program);
         for (at, step) in function.steps.iter().enumerate() {
             let Some(state) = &states[at] else {
                 continue;
             };
             let depth = flow.depth[at];
-            let mut found = access(function, at, state, depth, program, &mut factory);
+            let mut found = access(function, at, state, depth, program);
             if let Exit::Call { callee } = &flow.exits[at]
                 && let Some(summary) = summaries.get(callee)
             {
                 let frame = depth.map(|depth| depth - frame_base(function));
-                found.extend(exclusive(&step.source.text, callee, summary, state, frame));
+                found.extend(exclusive(
+                    &step.source.text,
+                    callee,
+                    summary,
+                    state,
+                    frame,
+                    abi,
+                ));
             }
             for (rule, problem, fix) in found {
                 violations.push(Violation {
@@ -328,7 +315,7 @@ pub fn check(
                 });
             }
         }
-        let summary = summary(function, &states, &lent, &mut factory);
+        let summary = summary(function, &states, &lent, abi);
         summaries.insert(name.to_owned(), summary);
     }
     if max_stack > MAX_STACK_BYTES {
@@ -391,23 +378,24 @@ fn lent(
     flow: &Flow,
     summaries: &BTreeMap<String, Summary>,
     profile: Profile,
-    factory: &mut InstructionInfoFactory,
+    abi: &Abi,
 ) -> Vec<Option<Summary>> {
     function
         .steps
         .iter()
         .enumerate()
-        .map(|(at, step)| match mnemonic(&step.machine).as_str() {
-            "call" => Some(match &flow.exits[at] {
+        .map(|(at, step)| match step.insn.control {
+            Control::Call(_) | Control::IndirectCall => Some(match &flow.exits[at] {
                 Exit::Call { callee } => summaries
                     .get(callee)
                     .cloned()
-                    .unwrap_or_else(|| Summary::every(&ARGUMENTS)),
-                _ => Summary::every(&ARGUMENTS),
+                    .unwrap_or_else(|| Summary::every(&abi.arguments)),
+                _ => Summary::every(&abi.arguments),
             }),
-            "syscall" => Some(Summary::syscall(
-                rax_value_before(function, at, factory).map(|(_, number)| number),
+            Control::Syscall => Some(Summary::syscall(
+                constant_before(function, at, abi.syscall_number, abi).map(|(_, number)| number),
                 profile,
+                abi,
             )),
             _ => None,
         })
@@ -420,20 +408,17 @@ fn states(
     flow: &Flow,
     lent: &[Option<Summary>],
     program: &Program<'_>,
-    factory: &mut InstructionInfoFactory,
 ) -> Vec<Option<State>> {
     let count = function.steps.len();
     let mut states: Vec<Option<State>> = vec![None; count];
     if count == 0 {
         return states;
     }
+    let abi = program.abi();
     let start = function.name() == "_start";
-    let mut entry = State {
-        registers: vec![Owner::Unknown; REGISTERS.len()],
-        written: BTreeSet::new(),
-    };
+    let mut entry = State::unknown(abi);
     if !start {
-        for register in ARGUMENTS {
+        for register in abi.arguments {
             entry.set(
                 register,
                 Owner::Argument {
@@ -454,7 +439,7 @@ fn states(
         let Some(before) = states[at].clone() else {
             continue;
         };
-        let after = transfer(function, flow, at, &before, lent, program, factory);
+        let after = transfer(function, flow, at, &before, lent, program);
         for &next in &flow.successors[at] {
             let joined = match &states[next] {
                 None => after.clone(),
@@ -477,34 +462,29 @@ fn transfer(
     before: &State,
     lent: &[Option<Summary>],
     program: &Program<'_>,
-    factory: &mut InstructionInfoFactory,
 ) -> State {
-    let instruction = &function.steps[at].machine;
-    let name = mnemonic(instruction);
+    let insn = &function.steps[at].insn;
+    let abi = program.abi();
     let mut after = before.clone();
     let depth = flow.depth[at];
     let base = frame_base(function);
     // Frame bytes this instruction writes: by push, at a constant offset from rsp, or through a
     // pointer to a known place in the frame.
     if let Some(depth) = depth {
-        if name == "push" {
+        if matches!(insn.op, Op::Push(_)) {
             let top = depth + 8 - base;
             after.written.extend((top - 7)..=top);
-        } else if writes_memory(instruction, factory)
-            && instruction.memory_index() == Register::None
-        {
-            let first = match (
-                instruction.memory_base(),
-                before.get(instruction.memory_base()),
-            ) {
-                (Register::RSP, _) => Some(depth - base - displacement(instruction)),
-                (_, Owner::Frame { key: Some(key) }) => Some(key - displacement(instruction)),
+        } else if insn.writes_memory && insn.memory.is_none_or(|memory| memory.index.is_none()) {
+            let memory_base = insn.memory.and_then(|memory| memory.base);
+            let first = match (memory_base, owner_of(before, memory_base)) {
+                (Some(register), _) if register == abi.stack_pointer => {
+                    Some(depth - base - displacement(insn))
+                }
+                (_, Owner::Frame { key: Some(key) }) => Some(key - displacement(insn)),
                 _ => None,
             };
             if let Some(first) = first {
-                after
-                    .written
-                    .extend((first - width(instruction) + 1)..=first);
+                after.written.extend((first - width(insn) + 1)..=first);
             }
         }
     }
@@ -517,36 +497,31 @@ fn transfer(
         if written && let Some(depth) = depth {
             after.written.extend(1..=(depth - base));
         }
-        if name == "syscall" {
-            for register in SYSCALL_CLOBBERS {
-                after.set(register, Owner::Number);
+        if insn.control == Control::Syscall {
+            for register in abi.syscall_clobbers {
+                after.set(*register, Owner::Number);
             }
         } else {
-            for register in CALLER_SAVED {
-                after.set(register, Owner::Unknown);
+            for register in abi.caller_saved {
+                after.set(*register, Owner::Unknown);
             }
-            after.set(Register::RAX, returned(&summary.returns, before));
+            after.set(abi.result, returned(&summary.returns, before));
         }
         return after;
     }
     let result = result(function, at, before, depth, program);
-    let destination = (instruction.op_count() >= 1 && instruction.op_kind(0) == OpKind::Register)
-        .then(|| instruction.op_register(0));
-    for used in factory.info(instruction).used_registers() {
-        let written = matches!(
-            used.access(),
-            OpAccess::Write | OpAccess::CondWrite | OpAccess::ReadWrite | OpAccess::ReadCondWrite
-        );
-        if !written || index(used.register()).is_none() {
+    for full in abi.registers {
+        if !insn.writes.contains(*full) {
             continue;
         }
-        let full = used.register().full_register();
-        let owner = match destination {
-            Some(register) if register.full_register() == full => result.clone(),
-            _ if name == "xchg" => before.get(other_operand(instruction, full)),
+        let owner = match insn.dst {
+            Some(register) if register.full() == *full => result.clone(),
+            _ if insn.op == Op::Exchange => {
+                other_operand(insn, *full).map_or(Owner::Unknown, |other| before.get(other))
+            }
             _ => Owner::Number,
         };
-        after.set(full, owner);
+        after.set(*full, owner);
     }
     after
 }
@@ -565,7 +540,7 @@ fn summary(
     function: &MappedFunction<'_>,
     states: &[Option<State>],
     lent: &[Option<Summary>],
-    factory: &mut InstructionInfoFactory,
+    abi: &Abi,
 ) -> Summary {
     let mut summary = Summary::none();
     let mut returns: Option<Owner> = None;
@@ -573,9 +548,8 @@ fn summary(
         let Some(state) = &states[at] else {
             continue;
         };
-        let instruction = &step.machine;
-        let name = mnemonic(instruction);
-        let mut lend = |register: Register, writes: bool| {
+        let insn = &step.insn;
+        let mut lend = |register: Reg, writes: bool| {
             if let Owner::Argument { register: from, .. } = state.get(register) {
                 summary.uses.insert(from);
                 if writes {
@@ -587,23 +561,26 @@ fn summary(
             for register in &callee.uses {
                 lend(*register, callee.writes.contains(register));
             }
-        } else if name == "ret" {
+        } else if insn.control == Control::Return {
             // A frame address returned is M3's to report; the caller can't use it.
-            let owner = match state.get(Register::RAX) {
+            let owner = match state.get(abi.result) {
                 Owner::Frame { .. } => Owner::Unknown,
                 owner => owner,
             };
             returns = Some(returns.map_or_else(|| owner.clone(), |known| known.join(&owner)));
-        } else if accesses_memory(instruction)
-            && !matches!(instruction.memory_base(), Register::RSP | Register::RIP)
+        } else if let Some(memory) = insn.memory
+            && accesses_memory(insn)
+            && memory.base != Some(abi.stack_pointer)
+            && !memory.pc_relative
         {
-            let base = instruction.memory_base();
-            let through = if owner_of(state, base).is_pointer() {
-                base
+            let through = if owner_of(state, memory.base).is_pointer() {
+                memory.base
             } else {
-                instruction.memory_index()
+                memory.index
             };
-            lend(through, writes_memory(instruction, factory));
+            if let Some(through) = through {
+                lend(through, insn.writes_memory);
+            }
         }
     }
     summary.returns = returns.unwrap_or(Owner::Unknown);
@@ -618,6 +595,7 @@ fn exclusive(
     summary: &Summary,
     before: &State,
     frame: Option<i64>,
+    abi: &Abi,
 ) -> Option<(Rule, String, String)> {
     for written in &summary.writes {
         for other in summary.uses.iter().filter(|other| *other != written) {
@@ -625,12 +603,12 @@ fn exclusive(
             if owner != before.get(*other) {
                 continue;
             }
-            let Some(address) = address_name(&owner, frame) else {
+            let Some(address) = address_name(&owner, frame, abi) else {
                 continue;
             };
             // In the order the calling convention lends them.
             let position =
-                |register: &Register| ARGUMENTS.iter().position(|known| known == register);
+                |register: &Reg| abi.arguments.iter().position(|known| known == register);
             let (first, second) = if position(written) <= position(other) {
                 (written, other)
             } else {
@@ -639,11 +617,8 @@ fn exclusive(
             return Some((
                 Rule::ExclusiveWrites,
                 format!(
-                    "`{text}` lends one address, {address}, in both {} and {}, and {callee} \
-                     writes through {}, so its writes change what it reads",
-                    register_name(*first),
-                    register_name(*second),
-                    register_name(*written)
+                    "`{text}` lends one address, {address}, in both {first} and {second}, and \
+                     {callee} writes through {written}, so its writes change what it reads"
                 ),
                 "lend an address that's written in one register only: separate buffers or \
                  separate parts of one, or one pointer the function both reads and writes through"
@@ -656,7 +631,7 @@ fn exclusive(
 
 /// The address an owner names, when it's one known address: `frame` is the size of the frame,
 /// when it's known.
-fn address_name(owner: &Owner, frame: Option<i64>) -> Option<String> {
+fn address_name(owner: &Owner, frame: Option<i64>, abi: &Abi) -> Option<String> {
     let plus = |offset: i64| {
         if offset == 0 {
             String::new()
@@ -669,13 +644,14 @@ fn address_name(owner: &Owner, frame: Option<i64>) -> Option<String> {
             symbol,
             offset: Some(offset),
         } => Some(format!("{symbol}{}", plus(*offset))),
-        Owner::Frame { key: Some(key) } => Some(format!("rsp{}", plus(frame? - key))),
+        Owner::Frame { key: Some(key) } => {
+            Some(format!("{}{}", abi.stack_pointer, plus(frame? - key)))
+        }
         Owner::Argument {
             register,
             offset: Some(offset),
         } => Some(format!(
-            "the pointer it was lent in {}{}",
-            register_name(*register),
+            "the pointer it was lent in {register}{}",
             plus(*offset)
         )),
         _ => None,
@@ -684,30 +660,21 @@ fn address_name(owner: &Owner, frame: Option<i64>) -> Option<String> {
 
 /// Whether an instruction reads or writes memory through an operand: not `lea`, which only
 /// computes an address, nor hints.
-fn accesses_memory(instruction: &Instruction) -> bool {
-    let name = mnemonic(instruction);
-    (0..instruction.op_count()).any(|operand| instruction.op_kind(operand) == OpKind::Memory)
-        && name != "lea"
-        && !name.starts_with("nop")
-        && !name.starts_with("prefetch")
+fn accesses_memory(insn: &Insn) -> bool {
+    insn.memory.is_some() && !matches!(insn.op, Op::AddressOf { .. } | Op::Hint)
 }
 
 /// A register's owner, where no register is a plain number (an address without a base).
-fn owner_of(state: &State, register: Register) -> Owner {
-    if register == Register::None {
-        Owner::Number
-    } else {
-        state.get(register)
-    }
+fn owner_of(state: &State, register: Option<Reg>) -> Owner {
+    register.map_or(Owner::Number, |register| state.get(register))
 }
 
 /// The other register of an `xchg`.
-fn other_operand(instruction: &Instruction, register: Register) -> Register {
-    (0..instruction.op_count())
-        .filter(|&operand| instruction.op_kind(operand) == OpKind::Register)
-        .map(|operand| instruction.op_register(operand))
-        .find(|found| found.full_register() != register)
-        .unwrap_or(Register::None)
+fn other_operand(insn: &Insn, register: Reg) -> Option<Reg> {
+    insn.operands.iter().find_map(|operand| match operand {
+        Operand::Reg(found) if found.full() != register => Some(*found),
+        _ => None,
+    })
 }
 
 /// The owner of what the instruction at `at` writes to its first operand.
@@ -718,17 +685,16 @@ fn result(
     depth: Option<i64>,
     program: &Program<'_>,
 ) -> Owner {
-    let instruction = &function.steps[at].machine;
-    let name = mnemonic(instruction);
-    if instruction.op_count() == 0 || instruction.op_kind(0) != OpKind::Register {
+    let insn = &function.steps[at].insn;
+    let abi = program.abi();
+    let Some(destination) = insn.dst else {
         return Owner::Unknown;
-    }
-    let destination = instruction.op_register(0);
+    };
     let old = before.get(destination);
     // A 32-bit write zeroes the upper half: a truncated address is no address.
-    match destination.size() {
-        8 => {}
-        4 => return Owner::Number,
+    match destination.bits() {
+        64 => {}
+        32 => return Owner::Number,
         _ => {
             return if old == Owner::Number {
                 Owner::Number
@@ -737,77 +703,64 @@ fn result(
             };
         }
     }
-    let source = |operand: u32| -> Owner {
-        match instruction.op_kind(operand) {
-            // rsp itself is the address of the frame's lowest byte.
-            OpKind::Register if instruction.op_register(operand) == Register::RSP => Owner::Frame {
+    let source = |operand: Operand| -> Owner {
+        match operand {
+            // The stack pointer itself is the address of the frame's lowest byte.
+            Operand::Reg(register) if register == abi.stack_pointer => Owner::Frame {
                 key: depth.map(|depth| depth - frame_base(function)),
             },
-            OpKind::Register => before.get(instruction.op_register(operand)),
-            OpKind::Memory => Owner::Unknown,
-            _ => Owner::Number,
+            Operand::Reg(register) => before.get(register),
+            Operand::Mem => Owner::Unknown,
+            Operand::Imm(_) | Operand::Target(_) => Owner::Number,
         }
     };
-    let immediate = || -> Option<i64> {
-        (instruction.op_count() >= 2
-            && !matches!(instruction.op_kind(1), OpKind::Register | OpKind::Memory))
-        .then(|| i64::from_ne_bytes(instruction.immediate(1).to_ne_bytes()))
+    let number = |operand: Operand| match operand {
+        Operand::Imm(value) => Some(value),
+        _ => None,
     };
-    match name.as_str() {
-        "lea" => address_owner(function, at, before, depth, program),
-        "xchg" => source(1),
-        "movzx" | "movsx" | "movsxd" => Owner::Number,
-        "mov" => match instruction.op_kind(1) {
-            OpKind::Memory => load_owner(function, at, before, depth),
-            _ => source(1),
-        },
-        "add" => {
-            let other = source(1);
-            match (old.is_pointer(), other.is_pointer()) {
-                (true, false) if other == Owner::Number => old.moved(immediate()),
-                (false, true) if old == Owner::Number => other,
-                (false, false) if old == Owner::Number && other == Owner::Number => Owner::Number,
+    let same = |a: Operand, b: Operand| matches!((a, b), (Operand::Reg(a), Operand::Reg(b)) if a.full() == b.full());
+    match insn.value {
+        Value::Address => address_owner(function, at, before, depth, program),
+        Value::Copy(operand) => source(operand),
+        Value::Number => Owner::Number,
+        Value::Load => load_owner(function, at, before, depth, abi),
+        Value::Add(base, by) => {
+            let (from, other) = (source(base), source(by));
+            match (from.is_pointer(), other.is_pointer()) {
+                (true, false) if other == Owner::Number => from.moved(number(by)),
+                (false, true) if from == Owner::Number => other,
+                (false, false) if from == Owner::Number && other == Owner::Number => Owner::Number,
                 _ => Owner::Unknown,
             }
         }
-        "sub" => {
-            let other = source(1);
-            match (old.is_pointer(), other.is_pointer()) {
+        Value::Sub(base, by) => {
+            let (from, other) = (source(base), source(by));
+            match (from.is_pointer(), other.is_pointer()) {
                 (true, false) if other == Owner::Number => {
-                    old.moved(immediate().map(|amount| -amount))
+                    from.moved(number(by).map(|amount| -amount))
                 }
                 // The distance between two addresses is a length.
                 (true, true) => Owner::Number,
-                (false, false) if old == Owner::Number && other == Owner::Number => Owner::Number,
-                _ if instruction.op_kind(1) == OpKind::Register
-                    && instruction.op_register(1).full_register()
-                        == destination.full_register() =>
-                {
-                    Owner::Number
-                }
+                (false, false) if from == Owner::Number && other == Owner::Number => Owner::Number,
+                // A register less itself is zero.
+                _ if same(base, by) => Owner::Number,
                 _ => Owner::Unknown,
             }
         }
-        "inc" => old.moved(Some(1)),
-        "dec" => old.moved(Some(-1)),
-        "and" if old.is_pointer() && immediate().is_some() => old.moved(None),
-        "xor"
-            if instruction.op_kind(1) == OpKind::Register
-                && instruction.op_register(1).full_register() == destination.full_register() =>
-        {
-            Owner::Number
+        Value::And(base, mask) if source(base).is_pointer() && number(mask).is_some() => {
+            source(base).moved(None)
         }
-        "pop" => Owner::Unknown,
-        _ if name.starts_with("cmov") => old.join(&source(1)),
-        _ => {
-            let reads_pointer = (0..instruction.op_count()).any(|operand| {
-                instruction.op_kind(operand) == OpKind::Register
-                    && before.get(instruction.op_register(operand)).is_pointer()
-            }) || old.is_pointer();
-            let reads_unknown = (0..instruction.op_count()).any(|operand| {
-                instruction.op_kind(operand) == OpKind::Register
-                    && before.get(instruction.op_register(operand)) == Owner::Unknown
-            });
+        Value::Pop => Owner::Unknown,
+        Value::Select(operand) => old.join(&source(operand)),
+        Value::And(..) | Value::Other => {
+            let registers = || {
+                insn.operands.iter().filter_map(|operand| match operand {
+                    Operand::Reg(register) => Some(before.get(*register)),
+                    _ => None,
+                })
+            };
+            let reads_pointer = registers().any(|owner| owner.is_pointer()) || old.is_pointer();
+            let reads_unknown = registers().any(|owner| owner == Owner::Unknown);
             if reads_pointer || reads_unknown {
                 Owner::Unknown
             } else {
@@ -825,10 +778,11 @@ fn address_owner(
     depth: Option<i64>,
     program: &Program<'_>,
 ) -> Owner {
-    let instruction = &function.steps[at].machine;
-    let base = instruction.memory_base();
-    let index = instruction.memory_index();
-    if base == Register::RIP {
+    let insn = &function.steps[at].insn;
+    let Some(memory) = insn.memory else {
+        return Owner::Unknown;
+    };
+    if memory.pc_relative {
         return program
             .named(&function.steps[at])
             .map_or(Owner::Unknown, |(symbol, _, offset)| Owner::Data {
@@ -836,18 +790,20 @@ fn address_owner(
                 offset: Some(offset),
             });
     }
-    let displacement = displacement(instruction);
-    if base == Register::RSP {
-        let key = (index == Register::None)
+    let displacement = memory.displacement;
+    if memory.base == Some(program.abi().stack_pointer) {
+        let key = memory
+            .index
+            .is_none()
             .then(|| depth.map(|depth| depth - frame_base(function) - displacement))
             .flatten();
         return Owner::Frame { key };
     }
-    let base_owner = owner_of(before, base);
-    let index_owner = owner_of(before, index);
+    let base_owner = owner_of(before, memory.base);
+    let index_owner = owner_of(before, memory.index);
     match (base_owner.is_pointer(), index_owner.is_pointer()) {
         (true, false) if index_owner == Owner::Number => {
-            base_owner.moved((index == Register::None).then_some(displacement))
+            base_owner.moved(memory.index.is_none().then_some(displacement))
         }
         (false, true) if base_owner == Owner::Number => index_owner.moved(None),
         (false, false) if base_owner == Owner::Number && index_owner == Owner::Number => {
@@ -864,18 +820,22 @@ fn load_owner(
     at: usize,
     before: &State,
     depth: Option<i64>,
+    abi: &Abi,
 ) -> Owner {
-    let instruction = &function.steps[at].machine;
-    if instruction.op_register(0).size() != 8 {
+    let insn = &function.steps[at].insn;
+    let (Some(destination), Some(memory)) = (insn.dst, insn.memory) else {
+        return Owner::Unknown;
+    };
+    if destination.bits() != 64 {
         return Owner::Number;
     }
-    let base = instruction.memory_base();
+    let base = memory.base;
     if function.name() == "_start"
-        && base == Register::RSP
-        && instruction.memory_index() == Register::None
+        && base == Some(abi.stack_pointer)
+        && memory.index.is_none()
         && let Some(depth) = depth
     {
-        let displacement = displacement(instruction);
+        let displacement = memory.displacement;
         // The count sits at the stack's top as the program starts, the strings above it.
         if displacement == depth {
             return Owner::Number;
@@ -884,7 +844,7 @@ fn load_owner(
             return Owner::Arguments;
         }
     }
-    if base != Register::None && before.get(base) == Owner::Arguments {
+    if owner_of(before, base) == Owner::Arguments {
         return Owner::Arguments;
     }
     Owner::Unknown
@@ -897,23 +857,22 @@ fn access(
     before: &State,
     depth: Option<i64>,
     program: &Program<'_>,
-    factory: &mut InstructionInfoFactory,
 ) -> Vec<(Rule, String, String)> {
     let step = &function.steps[at];
-    let instruction = &step.machine;
-    let name = mnemonic(instruction);
+    let insn = &step.insn;
+    let abi = program.abi();
     let text = &step.source.text;
     let mut found = Vec::new();
     // M3: an address in this frame never leaves it, stored or returned.
-    if name == "ret" {
-        for register in [Register::RAX, Register::RDX] {
+    if insn.control == Control::Return {
+        for register in abi.returns {
             if matches!(before.get(register), Owner::Frame { .. }) {
                 found.push((
                     Rule::Lifetimes,
                     format!(
-                        "{} returns an address in its own frame in {}, which ends as it returns",
+                        "{} returns an address in its own frame in {register}, which ends as it \
+                         returns",
                         function.name(),
-                        register_name(register)
                     ),
                     "return a value, or let the caller lend the buffer to write into".into(),
                 ));
@@ -921,17 +880,15 @@ fn access(
         }
         return found;
     }
-    if !accesses_memory(instruction) {
+    let Some(memory) = insn.memory.filter(|_| accesses_memory(insn)) else {
         return found;
-    }
-    let writes = writes_memory(instruction, factory);
-    let base = instruction.memory_base();
-    let index = instruction.memory_index();
+    };
+    let writes = insn.writes_memory;
+    let (base, index) = (memory.base, memory.index);
     let unchecked = step.source.unsafe_block.is_some();
     // M2: a bit test in memory with a register offset reaches as far as the offset goes.
-    if matches!(name.as_str(), "bt" | "bts" | "btr" | "btc")
-        && instruction.op_kind(0) == OpKind::Memory
-        && instruction.op_kind(1) == OpKind::Register
+    if matches!(insn.mnemonic.as_str(), "bt" | "bts" | "btr" | "btc")
+        && matches!(insn.operands.as_slice(), [Operand::Mem, Operand::Reg(_)])
     {
         found.push((
             Rule::Bounds,
@@ -944,20 +901,22 @@ fn access(
                 .into(),
         ));
     }
-    if writes && base != Register::RSP {
-        let stored = (0..instruction.op_count())
-            .filter(|&operand| instruction.op_kind(operand) == OpKind::Register)
-            .map(|operand| instruction.op_register(operand))
-            .find(|register| matches!(before.get(*register), Owner::Frame { .. }));
-        let into_frame = matches!(before.get(base), Owner::Frame { .. });
+    if writes && base != Some(abi.stack_pointer) {
+        let stored = insn.operands.iter().find_map(|operand| match operand {
+            Operand::Reg(register) if matches!(before.get(*register), Owner::Frame { .. }) => {
+                Some(*register)
+            }
+            _ => None,
+        });
+        let into_frame = matches!(owner_of(before, base), Owner::Frame { .. });
         if let Some(register) = stored
             && !into_frame
         {
             found.push((
                 Rule::Lifetimes,
                 format!(
-                    "`{text}` stores {}, an address in this function's frame, outside the frame",
-                    register_name(register)
+                    "`{text}` stores {register}, an address in this function's frame, outside \
+                     the frame"
                 ),
                 "lend a frame address to a callee in a register only; never store it where it \
                  could outlive the function"
@@ -966,24 +925,24 @@ fn access(
         }
     }
     // Rule 6 holds [rip + name] to its symbol.
-    if instruction.is_ip_rel_memory_operand() {
+    if memory.pc_relative {
         return found;
     }
     // M3: constant offsets from rsp, or from a pointer to a known place in the frame, stay
     // inside the function's own frame. `first` is how far below the frame's top the access's
     // first byte is.
-    let first = match (index, base, before.get(base)) {
-        (Register::None, Register::RSP, _) => {
-            Some(depth.map(|depth| depth - frame_base(function) - displacement(instruction)))
+    let first = match (index, base, owner_of(before, base)) {
+        (None, Some(register), _) if register == abi.stack_pointer => {
+            Some(depth.map(|depth| depth - frame_base(function) - memory.displacement))
         }
-        (Register::None, _, Owner::Frame { key: Some(key) }) => {
-            Some(depth.map(|_| key - displacement(instruction)))
+        (None, _, Owner::Frame { key: Some(key) }) => {
+            Some(depth.map(|_| key - memory.displacement))
         }
         _ => None,
     };
     if let Some(first) = first {
         if let (Some(depth), Some(first)) = (depth, first) {
-            let width = width(instruction);
+            let width = width(insn);
             let own = depth - frame_base(function);
             let start = function.name() == "_start";
             let inside = first <= own && first - width + 1 >= 1;
@@ -1004,7 +963,7 @@ fn access(
                      and sub rsp"
                         .into(),
                 ));
-            } else if inside && name != "pop" && reads_memory(instruction, factory) {
+            } else if inside && !matches!(insn.op, Op::Pop(_)) && insn.reads_memory {
                 // M5: what's read was written first, on every path.
                 let unwritten = ((first - width + 1)..=first)
                     .rev()
@@ -1024,7 +983,7 @@ fn access(
         }
         return found;
     }
-    if base == Register::None && index == Register::None {
+    if base.is_none() && index.is_none() {
         found.push((
             Rule::Owners,
             format!("`{text}` uses a fixed address, which no pointer owns"),
@@ -1041,7 +1000,8 @@ fn access(
             format!(
                 "`{text}` uses {} as an address, but it holds a plain number here, not a pointer \
                  into a buffer",
-                register_name(if base == Register::None { index } else { base })
+                base.or(index)
+                    .map_or_else(String::new, |register| register.to_string())
             ),
             "address memory only through a pointer from lea [rip + name], the frame, a \
              pointer argument or the program's arguments"
@@ -1075,11 +1035,11 @@ fn access(
         }
         // M2: a constant offset from the symbol's address stays inside it.
         if let Some(offset) = offset
-            && index == Register::None
+            && index.is_none()
             && !unchecked
         {
-            let first = offset + displacement(instruction);
-            let last = first + width(instruction) - 1;
+            let first = offset + memory.displacement;
+            let last = first + width(insn) - 1;
             let size = i64::try_from(data.size).unwrap_or(i64::MAX);
             if first < 0 || last >= size {
                 found.push((
@@ -1096,46 +1056,14 @@ fn access(
     found
 }
 
-fn register_name(register: Register) -> String {
-    format!("{register:?}").to_ascii_lowercase()
-}
-
-fn displacement(instruction: &Instruction) -> i64 {
-    i64::from_ne_bytes(instruction.memory_displacement64().to_ne_bytes())
+/// The constant the memory operand adds, if it has one.
+fn displacement(insn: &Insn) -> i64 {
+    insn.memory.map_or(0, |memory| memory.displacement)
 }
 
 /// How many bytes the memory operand covers, at least one.
-fn width(instruction: &Instruction) -> i64 {
-    i64::try_from(instruction.memory_size().size())
-        .unwrap_or(1)
+fn width(insn: &Insn) -> i64 {
+    insn.memory
+        .map_or(1, |memory| i64::try_from(memory.width).unwrap_or(1))
         .max(1)
-}
-
-fn writes_memory(instruction: &Instruction, factory: &mut InstructionInfoFactory) -> bool {
-    factory
-        .info(instruction)
-        .used_memory()
-        .iter()
-        .any(|memory| {
-            matches!(
-                memory.access(),
-                OpAccess::Write
-                    | OpAccess::ReadWrite
-                    | OpAccess::CondWrite
-                    | OpAccess::ReadCondWrite
-            )
-        })
-}
-
-fn reads_memory(instruction: &Instruction, factory: &mut InstructionInfoFactory) -> bool {
-    factory
-        .info(instruction)
-        .used_memory()
-        .iter()
-        .any(|memory| {
-            matches!(
-                memory.access(),
-                OpAccess::Read | OpAccess::CondRead | OpAccess::ReadWrite | OpAccess::ReadCondWrite
-            )
-        })
 }

@@ -905,11 +905,16 @@ rest below is still to build per target. A new profile must supply:
    `toolchain.rs` `link()` hardcodes `ld.lld` and ELF; macOS needs `ld64.lld` and Mach-O, Windows
    `lld-link` and PE/COFF. Every instruction must link as written: for AArch64, `ld.lld` rewrites
    `adrp` + `add :lo12:` pairs into `nop` + `adr` unless given `--no-relax`.
-2. **Decoder:** a decoder for the CPU's machine code. Today `checker/decode.rs` uses iced-x86,
-   which is x86 only, and reads ELF through the `object` crate. For a new CPU lengua decodes
-   exactly its dialect's subset itself (Round 9 does so for AArch64): anything outside it is
-   refused by construction, the matching of main.s to the machine code stays lengua's own reading
-   rather than LLVM agreeing with itself, and LLVM's disassembler serves as the decoder's test.
+2. **Decoder:** a decoder for the CPU's machine code that gives every instruction its facts, the
+   one thing the checker's rules read (`src/isa`'s `Insn`: the registers it reads and writes, how
+   control leaves it, its memory operand, what it does to the stack, the idiom it is), and the
+   CPU's calling convention (`isa::Abi`). x86-64's facts come from iced-x86 (`isa/x86_64.rs`),
+   and its matching of main.s to the machine code, line by line, and its lists of instructions and
+   CPU features, from `checker/x86_64.rs`; `checker/decode.rs` reads the ELF through the `object`
+   crate for any CPU. For a new CPU lengua decodes exactly its dialect's subset itself (Round 9
+   does so for AArch64): anything outside it is refused by construction, the matching of main.s to
+   the machine code stays lengua's own reading rather than LLVM agreeing with itself, and LLVM's
+   disassembler serves as the decoder's test.
 3. **Prover model:** the CPU's instructions in `src/prove/exec` (today an x86 `match`), and CPU
    feature detection (today x86 `is_x86_feature_detected!`).
 4. **Dialect:** the Power of 10 in that CPU's mnemonics and registers, with its reference (today

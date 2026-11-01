@@ -4,14 +4,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use iced_x86::{FlowControl, InstructionInfoFactory, OpAccess, OpKind, Register};
-
-use super::cfg::{
-    ASSERT_FAIL, CALLEE_SAVED, Exit, Flow, deepest, rax_value_before, reads, run_start, writes,
-};
-use super::decode::{MappedFunction, Program, mnemonic};
+use super::cfg::{ASSERT_FAIL, Exit, Flow, constant_before, deepest, run_start};
+use super::decode::{MappedFunction, Program};
 use super::source::{Operand, Source};
 use super::{Rule, Violation};
+use crate::isa::{self, Cond, Control, Op, Reg};
 use crate::platform::Profile;
 use crate::spec::{ASSERTION_EXIT_CODE, Syscall};
 
@@ -41,7 +38,6 @@ pub struct Facts {
 struct Checker<'a, 'p> {
     program: &'a Program<'p>,
     flows: &'a BTreeMap<String, Flow>,
-    factory: InstructionInfoFactory,
     violations: &'a mut Vec<Violation>,
 }
 
@@ -78,7 +74,6 @@ pub fn check(
     let mut checker = Checker {
         program,
         flows,
-        factory: InstructionInfoFactory::new(),
         violations,
     };
     let mut ids: BTreeMap<i64, usize> = BTreeMap::new();
@@ -232,34 +227,36 @@ impl Checker<'_, '_> {
             return;
         }
         let steps = &function.steps;
-        let register_operand = |index: usize, name: &str| {
-            let instruction = &steps[index].machine;
-            (mnemonic(instruction) == name && instruction.op_kind(0) == OpKind::Register)
-                .then(|| instruction.op_register(0).full_register())
+        let abi = self.program.abi();
+        // The registers each instruction at the start pushes, and each right before ret pops,
+        // in the order it names them.
+        let pushes = |index: usize| match steps[index].insn.op {
+            Op::Push(registers @ [Some(_), _]) => Some(registers),
+            _ => None,
         };
-        let pushed: Vec<Register> = (0..steps.len())
-            .map_while(|index| register_operand(index, "push"))
-            .collect();
+        let pops = |index: usize| match steps[index].insn.op {
+            Op::Pop(registers @ [Some(_), _]) => Some(registers),
+            _ => None,
+        };
+        let pushing: Vec<_> = (0..steps.len()).map_while(pushes).collect();
         let Some(ret) = flow.exits.iter().position(|exit| *exit == Exit::Return) else {
             return;
         };
-        let popped: Vec<Register> = (0..ret)
-            .rev()
-            .map_while(|index| register_operand(index, "pop"))
-            .collect();
-        let saved_region = pushed.len()..ret - popped.len();
+        let popping: Vec<_> = (0..ret).rev().map_while(pops).collect();
+        let registers = |each: &[[Option<Reg>; 2]]| -> Vec<Reg> {
+            each.iter().flatten().flatten().copied().collect()
+        };
+        let (pushed, popped) = (registers(&pushing), registers(&popping));
+        let saved_region = pushing.len()..ret - popping.len();
         let mut changed = BTreeSet::new();
         for index in saved_region {
-            for register in CALLEE_SAVED {
-                if writes(&steps[index].machine, register, &mut self.factory) {
-                    changed.insert(format!("{register:?}").to_ascii_lowercase());
+            for register in abi.callee_saved {
+                if steps[index].insn.changes(*register, abi) {
+                    changed.insert(register.to_string());
                 }
             }
         }
-        let pushed_names: BTreeSet<String> = pushed
-            .iter()
-            .map(|register| format!("{register:?}").to_ascii_lowercase())
-            .collect();
+        let pushed_names: BTreeSet<String> = pushed.iter().map(ToString::to_string).collect();
         let unsaved: Vec<&String> = changed.difference(&pushed_names).collect();
         if !unsaved.is_empty() {
             let list: Vec<&str> = unsaved.iter().map(|name| name.as_str()).collect();
@@ -290,13 +287,12 @@ impl Checker<'_, '_> {
 
     /// Rule 3: nothing below rsp (no red zone).
     fn red_zone(&mut self, function: &MappedFunction<'_>) {
+        let stack_pointer = self.program.abi().stack_pointer;
         for step in &function.steps {
-            let instruction = &step.machine;
-            let has_memory = (0..instruction.op_count())
-                .any(|index| instruction.op_kind(index) == OpKind::Memory);
-            let displacement =
-                i64::from_ne_bytes(instruction.memory_displacement64().to_ne_bytes());
-            if has_memory && instruction.memory_base() == Register::RSP && displacement < 0 {
+            let below = step.insn.memory.is_some_and(|memory| {
+                memory.base == Some(stack_pointer) && memory.displacement < 0
+            });
+            if below {
                 self.violation(
                     Rule::Resources,
                     step.source.line,
@@ -322,7 +318,8 @@ impl Checker<'_, '_> {
             }
             let line = function.steps[index].source.line;
             let allowed_names: Vec<&str> = allowed.iter().map(|syscall| syscall.name()).collect();
-            let Some((setter, number)) = rax_value_before(function, index, &mut self.factory)
+            let abi = self.program.abi();
+            let Some((setter, number)) = constant_before(function, index, abi.syscall_number, abi)
             else {
                 self.violation(
                     Rule::Resources,
@@ -404,8 +401,9 @@ impl Checker<'_, '_> {
                     continue;
                 }
                 let step = &function.steps[position];
-                if writes(&step.machine, Register::RDI, &mut self.factory) {
-                    let named = mnemonic(&step.machine) == "mov"
+                let abi = self.program.abi();
+                if step.insn.changes(abi.first_argument, abi) {
+                    let named = matches!(step.insn.op, Op::MovImm { .. } | Op::Move)
                         && matches!(
                             step.source.operands.get(1),
                             Some(Operand::Immediate { name: Some(_), value })
@@ -460,14 +458,14 @@ impl Checker<'_, '_> {
                     verdict = Err("a label comes before the check");
                     break;
                 }
-                let instruction = &function.steps[next].machine;
-                if reads(instruction, Register::RAX, &mut self.factory)
-                    || writes(instruction, Register::RAX, &mut self.factory)
-                {
-                    let is_check = matches!(mnemonic(instruction).as_str(), "test" | "cmp");
-                    let then_jumps = function.steps.get(next + 1).is_some_and(|after| {
-                        after.machine.flow_control() == FlowControl::ConditionalBranch
-                    });
+                let insn = &function.steps[next].insn;
+                let abi = self.program.abi();
+                if insn.uses(abi.result) || insn.changes(abi.result, abi) {
+                    let is_check = matches!(insn.op, Op::Test | Op::Compare { .. });
+                    let then_jumps = function
+                        .steps
+                        .get(next + 1)
+                        .is_some_and(|after| matches!(after.insn.control, Control::Branch { .. }));
                     verdict = if is_check && then_jumps {
                         Ok(())
                     } else {
@@ -475,7 +473,7 @@ impl Checker<'_, '_> {
                     };
                     break;
                 }
-                if instruction.flow_control() != FlowControl::Next {
+                if insn.control != Control::Next {
                     verdict = Err("control moves on before the check");
                     break;
                 }
@@ -495,34 +493,32 @@ impl Checker<'_, '_> {
     /// Rule 9: an indexed access needs a `cmp` of its index and a conditional jump earlier in
     /// the same straight-line code, with no change to the index in between.
     fn indexes(&mut self, function: &MappedFunction<'_>, flow: &Flow) {
+        let abi = self.program.abi();
         for (index, step) in function.steps.iter().enumerate() {
-            let instruction = &step.machine;
-            let has_memory = (0..instruction.op_count())
-                .any(|operand| instruction.op_kind(operand) == OpKind::Memory);
             // `lea` only computes an address and never touches memory, like `add`.
-            if !has_memory
-                || mnemonic(instruction) == "lea"
-                || instruction.memory_index() == Register::None
-                || step.source.unsafe_block.is_some()
-            {
+            let Some(index_register) = step.insn.memory.and_then(|memory| memory.index) else {
+                continue;
+            };
+            if matches!(step.insn.op, Op::AddressOf { .. }) || step.source.unsafe_block.is_some() {
                 continue;
             }
-            let register = instruction.memory_index().full_register();
-            let name = format!("{register:?}").to_ascii_lowercase();
+            let register = index_register.full();
+            let name = register.to_string();
             let mut check = None;
             for position in (run_start(function, index)..index).rev() {
-                let candidate = &function.steps[position].machine;
-                let compares = mnemonic(candidate) == "cmp"
-                    && candidate.op_kind(0) == OpKind::Register
-                    && candidate.op_register(0).full_register() == register
-                    && function.steps.get(position + 1).is_some_and(|next| {
-                        next.machine.flow_control() == FlowControl::ConditionalBranch
-                    });
+                let candidate = &function.steps[position].insn;
+                let compares = matches!(
+                    candidate.op,
+                    Op::Compare { left: isa::Operand::Reg(left), .. } if left.full() == register
+                ) && function
+                    .steps
+                    .get(position + 1)
+                    .is_some_and(|next| matches!(next.insn.control, Control::Branch { .. }));
                 if compares {
                     check = Some(position);
                     break;
                 }
-                if writes(candidate, register, &mut self.factory) {
+                if candidate.changes(register, abi) {
                     break;
                 }
             }
@@ -556,20 +552,29 @@ impl Checker<'_, '_> {
                 );
                 continue;
             }
-            let jump = mnemonic(&function.steps[position + 1].machine);
-            if !matches!(jump.as_str(), "jae" | "ja") {
-                self.violation(
-                    Rule::Indirection,
-                    function.steps[position + 1].source.line,
-                    format!("the bounds check of {name} jumps with {jump}"),
-                    format!(
-                        "jump away with jae (or ja), which compares without sign, so a {name} \
-                         that's too big or negative never reaches the access"
-                    ),
-                );
-                continue;
-            }
-            self.check_buffer_size(function, flow, index, position, jump == "ja");
+            let jump = &function.steps[position + 1].insn;
+            let inclusive = match jump.control {
+                Control::Branch {
+                    cond: Cond::AboveEqual,
+                    ..
+                } => false,
+                Control::Branch {
+                    cond: Cond::Above, ..
+                } => true,
+                _ => {
+                    self.violation(
+                        Rule::Indirection,
+                        function.steps[position + 1].source.line,
+                        format!("the bounds check of {name} jumps with {}", jump.mnemonic),
+                        format!(
+                            "jump away with jae (or ja), which compares without sign, so a \
+                             {name} that's too big or negative never reaches the access"
+                        ),
+                    );
+                    continue;
+                }
+            };
+            self.check_buffer_size(function, flow, index, position, inclusive);
         }
     }
 
@@ -580,35 +585,39 @@ impl Checker<'_, '_> {
         &mut self,
         function: &MappedFunction<'_>,
         position: usize,
-        register: Register,
+        register: Reg,
         name: &str,
         access: usize,
     ) -> Option<String> {
-        let compare = &function.steps[position].machine;
-        let compared = compare.op_register(0);
-        if !matches!(compare.op_kind(1), OpKind::Register | OpKind::Memory) {
-            let limit = i64::from_ne_bytes(compare.immediate(1).to_ne_bytes());
-            if limit < 0 {
-                return Some(format!(
-                    "the bounds check of {name} compares with {limit}, which an unsigned jump \
-                     reads as a huge number, so every index passes"
-                ));
-            }
+        let abi = self.program.abi();
+        let Op::Compare {
+            left: isa::Operand::Reg(compared),
+            right,
+        } = function.steps[position].insn.op
+        else {
+            return None;
+        };
+        if let isa::Operand::Imm(limit) = right
+            && limit < 0
+        {
+            return Some(format!(
+                "the bounds check of {name} compares with {limit}, which an unsigned jump reads \
+                 as a huge number, so every index passes"
+            ));
         }
-        let bits = compared.size() * 8;
+        let bits = compared.bits();
         if bits == 64 {
             return None;
         }
         // A 32-bit write zeroes the upper half, so a 32-bit compare then bounds the whole.
         let cleared = (run_start(function, position)..position)
             .rev()
-            .find(|&at| writes(&function.steps[at].machine, register, &mut self.factory))
+            .find(|&at| function.steps[at].insn.changes(register, abi))
             .is_some_and(|at| {
-                let written = &function.steps[at].machine;
-                written.op_count() >= 1
-                    && written.op_kind(0) == OpKind::Register
-                    && written.op_register(0).full_register() == register
-                    && written.op_register(0).size() == 4
+                function.steps[at]
+                    .insn
+                    .dst
+                    .is_some_and(|written| written.full() == register && written.bits() == 32)
             });
         if bits == 32 && cleared {
             return None;
@@ -630,14 +639,17 @@ impl Checker<'_, '_> {
         check: usize,
         inclusive: bool,
     ) {
-        let access = &function.steps[index].machine;
-        let compare = &function.steps[check].machine;
-        if matches!(compare.op_kind(1), OpKind::Register | OpKind::Memory) {
-            return;
-        }
-        let limit = i64::from_ne_bytes(compare.immediate(1).to_ne_bytes());
-        let Some((symbol, base_offset)) = self.buffer(function, flow, index, access.memory_base())
+        let Op::Compare {
+            right: isa::Operand::Imm(limit),
+            ..
+        } = function.steps[check].insn.op
         else {
+            return;
+        };
+        let Some(memory) = function.steps[index].insn.memory else {
+            return;
+        };
+        let Some((symbol, base_offset)) = self.buffer(function, flow, index, memory.base) else {
             return;
         };
         let Some(size) = self
@@ -649,12 +661,9 @@ impl Checker<'_, '_> {
             return;
         };
         let largest_index = if inclusive { limit } else { limit - 1 };
-        let width = i64::try_from(access.memory_size().size())
-            .unwrap_or(1)
-            .max(1);
-        let displacement = i64::from_ne_bytes(access.memory_displacement64().to_ne_bytes());
-        let first = base_offset + displacement;
-        let last = first + largest_index * i64::from(access.memory_index_scale()) + width - 1;
+        let width = i64::try_from(memory.width).unwrap_or(1).max(1);
+        let first = base_offset + memory.displacement;
+        let last = first + largest_index * i64::from(memory.scale) + width - 1;
         if first < 0 || last >= size {
             self.violation(
                 Rule::Indirection,
@@ -675,11 +684,10 @@ impl Checker<'_, '_> {
         function: &MappedFunction<'_>,
         flow: &Flow,
         index: usize,
-        register: Register,
+        register: Option<Reg>,
     ) -> Option<(String, i64)> {
-        if register == Register::None {
-            return None;
-        }
+        let register = register?;
+        let abi = self.program.abi();
         let mut found: Option<(String, i64)> = None;
         let mut seen = BTreeSet::new();
         let mut pending = flow.predecessors[index].clone();
@@ -690,8 +698,8 @@ impl Checker<'_, '_> {
             if !seen.insert(position) {
                 continue;
             }
-            let instruction = &function.steps[position].machine;
-            if !writes(instruction, register, &mut self.factory) {
+            let insn = &function.steps[position].insn;
+            if !insn.changes(register, abi) {
                 if flow.predecessors[position].is_empty() {
                     // The register comes from the caller: its buffer is unknown.
                     return None;
@@ -699,9 +707,8 @@ impl Checker<'_, '_> {
                 pending.extend(&flow.predecessors[position]);
                 continue;
             }
-            let loads_address = mnemonic(instruction) == "lea"
-                && instruction.op_register(0).full_register() == register.full_register()
-                && instruction.memory_base() == Register::RIP;
+            let loads_address = matches!(insn.op, Op::AddressOf { dst } if dst.full() == register.full())
+                && insn.memory.is_some_and(|memory| memory.pc_relative);
             if !loads_address {
                 return None;
             }
@@ -723,10 +730,10 @@ impl Checker<'_, '_> {
         users: &mut BTreeMap<String, BTreeSet<String>>,
     ) {
         for step in &function.steps {
-            let instruction = &step.machine;
-            if !instruction.is_ip_rel_memory_operand() {
+            let insn = &step.insn;
+            let Some(memory) = insn.memory.filter(|memory| memory.pc_relative) else {
                 continue;
-            }
+            };
             let Some((name, data, offset)) = self.program.named(step) else {
                 self.violation(
                     Rule::Scope,
@@ -742,11 +749,11 @@ impl Checker<'_, '_> {
             // Every byte of the access stays inside the symbol it names, vector widths included,
             // even where the next symbol starts just past its end; lea may point just past the
             // end, as a limit does.
-            let lea = mnemonic(instruction) == "lea";
+            let lea = matches!(insn.op, Op::AddressOf { .. });
             let width = if lea {
                 0
             } else {
-                i64::try_from(instruction.memory_size().size()).unwrap_or(0)
+                i64::try_from(memory.width).unwrap_or(0)
             };
             let size = i64::try_from(data.size).unwrap_or(i64::MAX);
             let (reaches, fix) = if lea {
@@ -782,21 +789,7 @@ impl Checker<'_, '_> {
                 );
             }
             let (name, writable) = (name.to_owned(), data.writable);
-            let writes_memory = self
-                .factory
-                .info(instruction)
-                .used_memory()
-                .iter()
-                .any(|memory| {
-                    matches!(
-                        memory.access(),
-                        OpAccess::Write
-                            | OpAccess::ReadWrite
-                            | OpAccess::CondWrite
-                            | OpAccess::ReadCondWrite
-                    )
-                });
-            if writes_memory && !writable {
+            if insn.writes_memory && !writable {
                 self.violation(
                     Rule::Scope,
                     step.source.line,
@@ -921,26 +914,34 @@ impl Checker<'_, '_> {
     /// jump to an assertion, so no case goes unhandled silently.
     fn chains(&mut self, function: &MappedFunction<'_>, flow: &Flow) {
         let steps = &function.steps;
-        let compare_on = |index: usize| -> Option<Register> {
-            let instruction = &steps.get(index)?.machine;
-            (mnemonic(instruction) == "cmp"
-                && instruction.op_kind(0) == OpKind::Register
-                && !matches!(instruction.op_kind(1), OpKind::Register | OpKind::Memory))
-            .then(|| instruction.op_register(0).full_register())
+        let compare_on = |index: usize| -> Option<Reg> {
+            match steps.get(index)?.insn.op {
+                Op::Compare {
+                    left: isa::Operand::Reg(register),
+                    right: isa::Operand::Imm(_),
+                } => Some(register.full()),
+                _ => None,
+            }
         };
-        let is = |index: usize, name: &str| {
+        let branches = |index: usize, when: Cond| {
+            steps.get(index).is_some_and(
+                |step| matches!(step.insn.control, Control::Branch { cond, .. } if cond == when),
+            )
+        };
+        let jumps = |index: usize| {
             steps
                 .get(index)
-                .is_some_and(|step| mnemonic(&step.machine) == name)
+                .is_some_and(|step| matches!(step.insn.control, Control::Jump(_)))
         };
         let mut index = 0;
         while index < steps.len() {
-            let Some(register) = compare_on(index).filter(|_| is(index + 1, "je")) else {
+            let Some(register) = compare_on(index).filter(|_| branches(index + 1, Cond::Equal))
+            else {
                 index += 1;
                 continue;
             };
             let mut end = index;
-            while compare_on(end) == Some(register) && is(end + 1, "je") {
+            while compare_on(end) == Some(register) && branches(end + 1, Cond::Equal) {
                 end += 2;
             }
             let pairs = (end - index) / 2;
@@ -951,12 +952,12 @@ impl Checker<'_, '_> {
                     }
                     _ => false,
                 };
-                let defaulted = (is(end, "jmp") && assertion_at(end))
+                let defaulted = (jumps(end) && assertion_at(end))
                     || (compare_on(end) == Some(register)
-                        && is(end + 1, "jne")
+                        && branches(end + 1, Cond::NotEqual)
                         && assertion_at(end + 1));
                 if !defaulted {
-                    let name = format!("{register:?}").to_ascii_lowercase();
+                    let name = register.to_string();
                     self.violation(
                         Rule::ControlFlow,
                         steps[index].source.line,
@@ -973,17 +974,16 @@ impl Checker<'_, '_> {
     /// Whether the instruction at `index` starts an assertion block.
     fn is_assertion(&self, function: &MappedFunction<'_>, index: usize) -> bool {
         let steps = &function.steps;
+        let assert_fail = self
+            .program
+            .function(ASSERT_FAIL)
+            .map_or(0, |assert| assert.address);
         steps
             .get(index)
-            .is_some_and(|step| mnemonic(&step.machine) == "mov")
-            && steps.get(index + 1).is_some_and(|step| {
-                step.machine.near_branch_target()
-                    == self
-                        .program
-                        .function(ASSERT_FAIL)
-                        .map_or(0, |assert| assert.address)
-                    && mnemonic(&step.machine) == "call"
-            })
+            .is_some_and(|step| matches!(step.insn.op, Op::MovImm { .. } | Op::Move))
+            && steps.get(index + 1).is_some_and(
+                |step| matches!(step.insn.control, Control::Call(target) if target == assert_fail),
+            )
     }
 
     /// Rule 2: every backward jump closes a counted loop, except in a server: its loop that takes
@@ -1027,17 +1027,18 @@ impl Checker<'_, '_> {
             }
             let counter = back
                 .checked_sub(1)
-                .map(|index| &steps[index].machine)
-                .filter(|decrement| {
-                    decrement.op_kind(0) == OpKind::Register
-                        && (mnemonic(decrement) == "dec"
-                            || (mnemonic(decrement) == "sub"
-                                && decrement.op_count() == 2
-                                && decrement.op_kind(1) != OpKind::Register
-                                && decrement.immediate(1) == 1))
-                })
-                .map(|decrement| decrement.op_register(0).full_register());
-            let Some(counter) = counter.filter(|_| mnemonic(&steps[back].machine) == "jne") else {
+                .and_then(|index| match steps[index].insn.op {
+                    Op::Decrement { counter } => Some(counter),
+                    _ => None,
+                });
+            let closes = matches!(
+                steps[back].insn.control,
+                Control::Branch {
+                    cond: Cond::NotEqual,
+                    ..
+                }
+            );
+            let Some(counter) = counter.filter(|_| closes) else {
                 self.violation(
                     Rule::Loops,
                     line,
@@ -1048,10 +1049,8 @@ impl Checker<'_, '_> {
             };
             let init = head.checked_sub(1).and_then(|index| {
                 let step = &steps[index];
-                let instruction = &step.machine;
-                let sets_counter = mnemonic(instruction) == "mov"
-                    && instruction.op_kind(0) == OpKind::Register
-                    && instruction.op_register(0).full_register() == counter;
+                let sets_counter =
+                    matches!(step.insn.op, Op::MovImm { dst, .. } if dst.full() == counter);
                 match step.source.operands.get(1) {
                     Some(Operand::Immediate {
                         name: Some(_),
@@ -1091,9 +1090,10 @@ impl Checker<'_, '_> {
                 Some(_) => {}
             }
             self.entered_through_head(steps, flow, head, back);
+            let abi = self.program.abi();
             for step in &steps[head..back.saturating_sub(1)] {
-                if writes(&step.machine, counter, &mut self.factory) {
-                    let name = format!("{counter:?}").to_ascii_lowercase();
+                if step.insn.changes(counter, abi) {
+                    let name = counter.to_string();
                     self.violation(
                         Rule::Loops,
                         step.source.line,
@@ -1157,17 +1157,18 @@ impl Checker<'_, '_> {
                 );
                 continue;
             };
+            let number_register = self.program.abi().assertion_number;
             let id = match (
-                mnemonic(&steps[start].machine).as_str(),
+                steps[start].insn.op,
                 steps[start].source.operands.as_slice(),
             ) {
                 (
-                    "mov",
+                    Op::MovImm { .. } | Op::Move,
                     [
-                        Operand::Register(Register::EDI),
+                        Operand::Register(register),
                         Operand::Immediate { value, name: None },
                     ],
-                ) if (1..=999).contains(value) => *value,
+                ) if *register == number_register && (1..=999).contains(value) => *value,
                 _ => {
                     self.violation(
                         Rule::Assertions,

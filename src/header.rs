@@ -9,7 +9,7 @@
 //! line sits second, after `.intel_syntax noprefix`, and lengua's hash of main.s leaves it out,
 //! so writing it changes nothing that was checked.
 
-use crate::checker::decode;
+use crate::checker::x86_64;
 use crate::hash::Sha256Hex;
 use crate::platform::{CpuFeatures, Profile};
 
@@ -68,7 +68,7 @@ impl Header {
         let lacking: Vec<&str> = self
             .features
             .iter()
-            .filter(|name| decode::cpu_has(name, cpu) == Some(false))
+            .filter(|name| x86_64::cpu_has(name, cpu) == Some(false))
             .map(String::as_str)
             .collect();
         (!lacking.is_empty()).then(|| {

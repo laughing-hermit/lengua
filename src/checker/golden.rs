@@ -567,3 +567,30 @@ fn mutants_are_made_the_same_way_every_time() {
     // Each mutant changes the program.
     assert!(first.iter().all(|(_, mutant)| mutant != text));
 }
+
+/// Prints the report on one program or mutant, for a golden that differs:
+/// `LENGUA_GOLDEN_MUTANT="examples/sort/main.s L432:family"` (or `base`).
+#[tokio::test]
+#[ignore = "explains a golden's difference"]
+async fn explains_a_mutant() {
+    let wanted = std::env::var("LENGUA_GOLDEN_MUTANT").expect("LENGUA_GOLDEN_MUTANT names one");
+    let (name, id) = wanted.split_once(' ').expect("a program and a mutant");
+    let program = programs()
+        .into_iter()
+        .find(|program| program.name == name)
+        .expect("a program in the golden");
+    let text = if id == "base" {
+        program.text.clone()
+    } else {
+        mutants(&program.text)
+            .into_iter()
+            .find(|(found, _)| found == id)
+            .expect("a mutant of it")
+            .1
+    };
+    let toolchain = Toolchain::discover().await.expect("llvm-mc and ld.lld");
+    eprintln!(
+        "{}",
+        report(&toolchain, &text, &program.syscalls, program.threads).await
+    );
+}

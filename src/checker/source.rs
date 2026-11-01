@@ -8,6 +8,8 @@ use std::collections::BTreeMap;
 
 use iced_x86::Register;
 
+use crate::isa::Reg;
+
 use super::{Rule, Violation};
 
 /// What a section holds.
@@ -120,7 +122,7 @@ pub struct Instruction {
     /// The operands, in order.
     pub operands: Vec<Operand>,
     /// The AVX-512 write mask on the first operand: `{k1}` to `{k7}`.
-    pub mask: Option<Register>,
+    pub mask: Option<Reg>,
     /// Whether the mask zeroes the lanes it leaves out (`{z}`) instead of keeping them.
     pub zeroing: bool,
     /// The line's code without its comment.
@@ -133,7 +135,7 @@ pub struct Instruction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Operand {
     /// A register.
-    Register(Register),
+    Register(Reg),
     /// A number: a literal, a constant, or an expression of them.
     Immediate {
         /// Its value.
@@ -153,9 +155,9 @@ pub struct Memory {
     /// The access size in bytes, when written (`byte ptr` is 1).
     pub size: Option<u8>,
     /// The base register; `RIP` for `[rip + symbol]`.
-    pub base: Option<Register>,
+    pub base: Option<Reg>,
     /// The index register.
-    pub index: Option<Register>,
+    pub index: Option<Reg>,
     /// The index's scale: 1, 2, 4 or 8.
     pub scale: u32,
     /// The constant displacement.
@@ -268,6 +270,9 @@ const REGISTERS: [(&str, Register); 69] = [
     ("dh", Register::DH),
     ("rip", Register::RIP),
 ];
+
+/// The instruction pointer, which `[rip + symbol]` addresses data relative to.
+const RIP: Reg = Reg::X86(Register::RIP);
 
 /// The register with this name, in any case: a general-purpose register, a vector register
 /// (`xmm0`–`xmm31`, `ymm0`–`ymm31`, `zmm0`–`zmm31`) or an AVX-512 mask register (`k0`–`k7`).
@@ -539,7 +544,7 @@ fn evaluate(text: &str, constants: &BTreeMap<String, Constant>) -> Result<i64, S
 /// AVX-512 decorations written after an operand.
 #[derive(Debug, Default)]
 struct Decorations {
-    mask: Option<Register>,
+    mask: Option<Reg>,
     zeroing: bool,
     broadcast: bool,
 }
@@ -558,7 +563,7 @@ fn decorations(text: &str, position: usize) -> Result<(&str, Decorations), Strin
         match decoration.as_str() {
             "z" => found.zeroing = true,
             "k0" => return Err("k0 can't be a write mask; use k1 to k7".into()),
-            _ if mask.is_some() => found.mask = mask,
+            _ if mask.is_some() => found.mask = mask.map(Reg::X86),
             "1to2" | "1to4" | "1to8" | "1to16" | "1to32" | "1to64" => found.broadcast = true,
             "rn-sae" | "rd-sae" | "ru-sae" | "rz-sae" | "sae" => {
                 return Err(
@@ -609,7 +614,7 @@ fn operand(
         if register == Register::RIP {
             return Err("rip can only appear inside [rip + symbol]".into());
         }
-        return Ok(Operand::Register(register));
+        return Ok(Operand::Register(Reg::X86(register)));
     }
     if text.contains('[') || lower.contains(" ptr") {
         return memory(text, constants).map(Operand::Memory);
@@ -679,9 +684,9 @@ fn memory(text: &str, constants: &BTreeMap<String, Constant>) -> Result<Memory, 
                 return Err(format!("registers can't be subtracted (`- {term}`)"));
             }
             if memory.base.is_none() {
-                memory.base = Some(register);
+                memory.base = Some(Reg::X86(register));
             } else if memory.index.is_none() {
-                memory.index = Some(register);
+                memory.index = Some(Reg::X86(register));
             } else {
                 return Err("a memory operand has at most a base and an index register".into());
             }
@@ -701,7 +706,7 @@ fn memory(text: &str, constants: &BTreeMap<String, Constant>) -> Result<Memory, 
                     1 | 2 | 4 | 8 => u32::try_from(scale).unwrap_or(1),
                     _ => return Err(format!("an index scale is 1, 2, 4 or 8, not {scale}")),
                 };
-                memory.index = Some(index);
+                memory.index = Some(Reg::X86(index));
                 continue;
             }
         }
@@ -721,18 +726,16 @@ fn memory(text: &str, constants: &BTreeMap<String, Constant>) -> Result<Memory, 
     if !constant_terms.is_empty() {
         memory.displacement = evaluate(&format!("0{constant_terms}"), constants)?;
     }
-    if memory.base == Some(Register::RIP) && memory.symbol.is_none() {
+    if memory.base == Some(RIP) && memory.symbol.is_none() {
         return Err("[rip + …] must name a data symbol".into());
     }
-    if memory.symbol.is_some() && memory.base != Some(Register::RIP) {
+    if memory.symbol.is_some() && memory.base != Some(RIP) {
         return Err(format!(
             "address data relative to rip: [rip + {}]",
             memory.symbol.as_deref().unwrap_or_default()
         ));
     }
-    if memory.index == Some(Register::RIP)
-        || (memory.base == Some(Register::RIP) && memory.index.is_some())
-    {
+    if memory.index == Some(RIP) || (memory.base == Some(RIP) && memory.index.is_some()) {
         return Err("[rip + symbol] can't have an index register".into());
     }
     if memory.base.is_none() && memory.index.is_none() {
@@ -1655,7 +1658,7 @@ mod tests {
         let constants = &source.constants;
         assert_eq!(
             operand("rax", false, constants),
-            Ok(Operand::Register(Register::RAX))
+            Ok(Operand::Register(Reg::X86(Register::RAX)))
         );
         assert_eq!(
             operand("SYS_WRITE", false, constants),
@@ -1689,7 +1692,7 @@ mod tests {
             operand("qword ptr [rsp + 16]", false, constants),
             Ok(Operand::Memory(Memory {
                 size: Some(8),
-                base: Some(Register::RSP),
+                base: Some(Reg::X86(Register::RSP)),
                 index: None,
                 scale: 1,
                 displacement: 16,
@@ -1705,7 +1708,7 @@ mod tests {
             ),
             Ok(Operand::Memory(Memory {
                 size: Some(1),
-                base: Some(Register::RIP),
+                base: Some(Reg::X86(Register::RIP)),
                 index: None,
                 scale: 1,
                 displacement: 20,
@@ -1717,8 +1720,8 @@ mod tests {
             operand("[rbx + rcx*8 - 8]", false, constants),
             Ok(Operand::Memory(Memory {
                 size: None,
-                base: Some(Register::RBX),
-                index: Some(Register::RCX),
+                base: Some(Reg::X86(Register::RBX)),
+                index: Some(Reg::X86(Register::RCX)),
                 scale: 8,
                 displacement: -8,
                 symbol: None,

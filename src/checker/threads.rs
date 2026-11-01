@@ -6,12 +6,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use iced_x86::{FlowControl, Instruction, InstructionInfoFactory, OpAccess, OpKind, Register};
-
-use super::cfg::{ASSERT_FAIL, Exit, Flow, deepest, run_start, writes};
-use super::decode::{MappedFunction, Program, mnemonic};
+use super::cfg::{ASSERT_FAIL, Exit, Flow, deepest, run_start};
+use super::decode::{MappedFunction, Program};
 use super::source::Source;
 use super::{Rule, Violation};
+use crate::isa::{Abi, Cond, Control, MemRef, Op, Operand};
 use crate::spec::MAX_THREADS;
 
 /// The canonical functions, copied word for word from the parallel template.
@@ -47,9 +46,6 @@ const FIXED_CONSTANTS: [&str; 7] = [
 /// The function every thread runs.
 pub const WORKER: &str = "worker";
 
-/// The register that holds a worker's slot.
-const SLOT_REGISTER: Register = Register::RBX;
-
 /// Where the canonical code is, for messages.
 const TEMPLATE_PATH: &str = "assets/parallel-template.s";
 
@@ -62,7 +58,6 @@ pub fn used(source: &Source) -> bool {
 struct Checker<'a, 'p> {
     program: &'a Program<'p>,
     flows: &'a BTreeMap<String, Flow>,
-    factory: InstructionInfoFactory,
     violations: &'a mut Vec<Violation>,
 }
 
@@ -108,7 +103,6 @@ pub fn check(
     let mut checker = Checker {
         program,
         flows,
-        factory: InstructionInfoFactory::new(),
         violations,
     };
     let line = FUNCTIONS
@@ -394,11 +388,12 @@ impl Checker<'_, '_> {
             return;
         };
         let flow = flow.clone();
+        let abi = self.program.abi();
         let is_worker = function.name() == WORKER;
-        let slot_set = is_worker.then(|| slot_copy(function, &flow)).flatten();
+        let slot_set = is_worker.then(|| slot_copy(function, &flow, abi)).flatten();
         let slot_size = self.constant("SLOT_SIZE").unwrap_or(0);
         for (index, step) in function.steps.iter().enumerate() {
-            let instruction = &step.machine;
+            let insn = &step.insn;
             let line = step.source.line;
             if matches!(flow.exits[index], Exit::Syscall { .. }) {
                 self.violation(
@@ -410,9 +405,9 @@ impl Checker<'_, '_> {
             }
             let sets_slot = Some(index) == slot_set;
             let restores = is_worker
-                && mnemonic(instruction) == "pop"
+                && matches!(insn.op, Op::Pop(_))
                 && flow.exits.get(index + 1) == Some(&Exit::Return);
-            if !sets_slot && !restores && writes(instruction, SLOT_REGISTER, &mut self.factory) {
+            if !sets_slot && !restores && insn.changes(abi.worker_slot, abi) {
                 self.violation(
                     Rule::Scope,
                     line,
@@ -424,14 +419,12 @@ impl Checker<'_, '_> {
                      registers for everything else",
                 );
             }
-            let Some(operand) = (0..instruction.op_count())
-                .find(|operand| instruction.op_kind(*operand) == OpKind::Memory)
-            else {
+            let Some(memory) = insn.memory else {
                 continue;
             };
             // M7: other threads write the per-thread data, so a worker reaches only its own part,
             // through rbx: never through the symbol's address.
-            if instruction.memory_base() == Register::RIP
+            if memory.pc_relative
                 && let Some((name, ..)) = self.program.named(step)
                 && DATA.iter().any(|(known, ..)| *known == name)
             {
@@ -448,22 +441,16 @@ impl Checker<'_, '_> {
                 );
                 continue;
             }
-            if mnemonic(instruction) == "lea" {
+            if matches!(insn.op, Op::AddressOf { .. }) {
                 continue;
             }
-            let written = matches!(
-                self.factory.info(instruction).op_access(operand),
-                OpAccess::Write
-                    | OpAccess::ReadWrite
-                    | OpAccess::CondWrite
-                    | OpAccess::ReadCondWrite
-            );
-            match instruction.memory_base() {
-                Register::RSP => {
+            let written = memory.writes;
+            match memory.base {
+                Some(base) if base == abi.stack_pointer => {
                     let frame = flow.depth[index].map_or(0, |depth| depth - 8);
                     self.inside(function, index, frame, "its own stack frame");
                 }
-                SLOT_REGISTER => {
+                Some(base) if base == abi.worker_slot => {
                     if is_worker && slot_set.is_none_or(|set| index < set) {
                         self.violation(
                             Rule::Scope,
@@ -475,7 +462,7 @@ impl Checker<'_, '_> {
                     }
                     self.inside(function, index, slot_size, "the worker's slot");
                 }
-                Register::RIP if written => {
+                _ if memory.pc_relative && written => {
                     let name = self
                         .program
                         .named(step)
@@ -492,7 +479,7 @@ impl Checker<'_, '_> {
                     );
                 }
                 base if written => {
-                    let register = format!("{base:?}").to_ascii_lowercase();
+                    let register = base.map_or_else(|| "none".to_owned(), |base| base.to_string());
                     self.violation(
                         Rule::Scope,
                         line,
@@ -511,15 +498,15 @@ impl Checker<'_, '_> {
     /// The memory access at `index` stays inside the first `size` bytes past its base register.
     fn inside(&mut self, function: &MappedFunction<'_>, index: usize, size: i64, what: &str) {
         let step = &function.steps[index];
-        let instruction = &step.machine;
-        let width = i64::try_from(instruction.memory_size().size())
-            .unwrap_or(1)
-            .max(1);
-        let displacement = i64::from_ne_bytes(instruction.memory_displacement64().to_ne_bytes());
-        let largest_index = if instruction.memory_index() == Register::None {
+        let Some(memory) = step.insn.memory else {
+            return;
+        };
+        let width = i64::try_from(memory.width).unwrap_or(1).max(1);
+        let displacement = memory.displacement;
+        let largest_index = if memory.index.is_none() {
             Some(0)
         } else {
-            index_limit(function, index, instruction, &mut self.factory)
+            index_limit(function, index, memory, self.program.abi())
         };
         // M7: an index bounded only by a register could reach another thread's part.
         let Some(largest_index) = largest_index else {
@@ -538,8 +525,7 @@ impl Checker<'_, '_> {
             );
             return;
         };
-        let last =
-            displacement + largest_index * i64::from(instruction.memory_index_scale()) + width - 1;
+        let last = displacement + largest_index * i64::from(memory.scale) + width - 1;
         if displacement < 0 || last >= size {
             self.violation(
                 Rule::Scope,
@@ -556,7 +542,7 @@ impl Checker<'_, '_> {
 }
 
 /// Where worker copies its slot into rbx: `mov rbx, rsi` before any label or call.
-fn slot_copy(function: &MappedFunction<'_>, flow: &Flow) -> Option<usize> {
+fn slot_copy(function: &MappedFunction<'_>, flow: &Flow, abi: &Abi) -> Option<usize> {
     function
         .steps
         .iter()
@@ -565,13 +551,12 @@ fn slot_copy(function: &MappedFunction<'_>, flow: &Flow) -> Option<usize> {
             run_start(function, *index) == 0 && !matches!(flow.exits[*index], Exit::Call { .. })
         })
         .find(|(_, step)| {
-            let instruction = &step.machine;
-            mnemonic(instruction) == "mov"
-                && instruction.op_count() == 2
-                && instruction.op_kind(0) == OpKind::Register
-                && instruction.op_register(0) == Register::RBX
-                && instruction.op_kind(1) == OpKind::Register
-                && instruction.op_register(1) == Register::RSI
+            step.insn.mnemonic == "mov"
+                && matches!(
+                    step.insn.operands[..],
+                    [Operand::Reg(slot), Operand::Reg(lent)]
+                        if slot == abi.worker_slot && lent == abi.arguments[1]
+                )
         })
         .map(|(index, _)| index)
 }
@@ -581,29 +566,29 @@ fn slot_copy(function: &MappedFunction<'_>, flow: &Flow) -> Option<usize> {
 fn index_limit(
     function: &MappedFunction<'_>,
     index: usize,
-    access: &Instruction,
-    factory: &mut InstructionInfoFactory,
+    access: MemRef,
+    abi: &Abi,
 ) -> Option<i64> {
-    let register = access.memory_index().full_register();
+    let register = access.index?.full();
     for position in (run_start(function, index)..index).rev() {
-        let candidate = &function.steps[position].machine;
-        let compares = mnemonic(candidate) == "cmp"
-            && candidate.op_kind(0) == OpKind::Register
-            && candidate.op_register(0).full_register() == register
-            && !matches!(candidate.op_kind(1), OpKind::Register | OpKind::Memory);
-        if compares {
-            let next = &function.steps.get(position + 1)?.machine;
-            if next.flow_control() != FlowControl::ConditionalBranch {
+        let candidate = &function.steps[position].insn;
+        if let Op::Compare {
+            left: Operand::Reg(left),
+            right: Operand::Imm(limit),
+        } = candidate.op
+            && left.full() == register
+        {
+            let Control::Branch { cond, .. } = function.steps.get(position + 1)?.insn.control
+            else {
                 return None;
-            }
-            let limit = i64::from_ne_bytes(candidate.immediate(1).to_ne_bytes());
-            return match mnemonic(next).as_str() {
-                "jae" => Some(limit - 1),
-                "ja" => Some(limit),
+            };
+            return match cond {
+                Cond::AboveEqual => Some(limit - 1),
+                Cond::Above => Some(limit),
                 _ => None,
             };
         }
-        if writes(candidate, register, factory) {
+        if candidate.changes(register, abi) {
             return None;
         }
     }

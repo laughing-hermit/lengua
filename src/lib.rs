@@ -12,6 +12,7 @@ pub mod expect;
 pub mod expr;
 pub mod hash;
 pub mod header;
+pub mod isa;
 pub mod lock;
 pub mod platform;
 pub mod prove;
