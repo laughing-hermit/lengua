@@ -6,7 +6,7 @@ use super::{
     A64Cond, A64Reg, Address, FpConversion, FpOne, FpReg, FpThree, FpTwo, Gpr, Indirect, Inst,
     Logic, Source, VImmediate, VThree, VTwo, Wide, Writeback,
 };
-use crate::isa::{Cond, Control, Insn, MemRef, Op, Operand, Reg, RegSet, Stack, Value};
+use crate::isa::{BaseMove, Cond, Control, Insn, MemRef, Op, Operand, Reg, RegSet, Stack, Value};
 
 /// `register` as an operand: the zero register is the number 0, which holds no address.
 fn operand(register: A64Reg) -> Operand {
@@ -918,6 +918,10 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
                     width,
                     reads: load,
                     writes: !load,
+                    base_moves: step.map(|step| match step {
+                        Writeback::Bytes => BaseMove::By(width.cast_signed()),
+                        Writeback::Register(_) => BaseMove::ByRegister,
+                    }),
                 }),
                 Op::Other,
                 if load { Value::Load } else { Value::Other },
@@ -963,6 +967,12 @@ fn memory(place: Address, width: u64, load: bool) -> MemRef {
             base, index, shift, ..
         } => (base, Some(Reg::A64(index)), 1 << shift, 0),
     };
+    let base_moves = match place {
+        Address::PreIndex { offset, .. } | Address::PostIndex { offset, .. } => {
+            Some(BaseMove::By(offset))
+        }
+        Address::Offset { .. } | Address::Register { .. } => None,
+    };
     MemRef {
         base: Some(Reg::A64(base)),
         index,
@@ -972,6 +982,7 @@ fn memory(place: Address, width: u64, load: bool) -> MemRef {
         width,
         reads: load,
         writes: !load,
+        base_moves,
     }
 }
 

@@ -121,6 +121,60 @@ fn loops_in(code: &[Instruction], start: u64, end: u64) -> Vec<Loop> {
         .collect()
 }
 
+/// The bounded loops in AArch64 code, the words of one function from `start` to `end`: each
+/// `b.ne` back up into the function right after a `subs` of one from a whole register, or each
+/// `cbnz` of a whole register back up right after a `sub` of one from it, as the dialect ends
+/// every loop.
+fn loops_in_a64(words: &[crate::checker::decode::Word], start: u64, end: u64) -> Vec<Loop> {
+    use crate::isa::aarch64::{A64Cond, Gpr};
+    words
+        .windows(2)
+        .filter_map(|pair| {
+            let [counted, back] = pair else {
+                return None;
+            };
+            let (Ok(counted_inst), Ok(back_inst)) = (&counted.inst, &back.inst) else {
+                return None;
+            };
+            let a64::Inst::AddImm {
+                sub: true,
+                flags,
+                rd,
+                rn,
+                imm: 1,
+                shift12: false,
+            } = *counted_inst
+            else {
+                return None;
+            };
+            let Gpr::R(number) = rd.gpr else {
+                return None;
+            };
+            if rd != rn || !rd.wide {
+                return None;
+            }
+            let target = match *back_inst {
+                a64::Inst::BranchCond {
+                    cond: A64Cond::Ne,
+                    target,
+                } if flags => target,
+                a64::Inst::CompareBranch {
+                    nonzero: true,
+                    rt,
+                    target,
+                } if !flags && rt == rd => target,
+                _ => return None,
+            };
+            (target < back.address && (start..end).contains(&target)).then_some(Loop {
+                head: target,
+                latch: back.address,
+                exit: back.address + 4,
+                counter: usize::from(number),
+            })
+        })
+        .collect()
+}
+
 /// The program as loaded: its instructions by address, and its memory.
 pub struct Image {
     instructions: HashMap<u64, Instruction>,
@@ -172,6 +226,13 @@ impl Image {
             }
             for found in loops_in(
                 function.x86(),
+                function.address,
+                function.address + function.size,
+            ) {
+                loops.insert(found.head, found);
+            }
+            for found in loops_in_a64(
+                function.words(),
                 function.address,
                 function.address + function.size,
             ) {

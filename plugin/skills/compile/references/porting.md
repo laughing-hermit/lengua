@@ -79,8 +79,9 @@ it covers what x86-64 covers, each item with its own hardware's means.
   Tested under QEMU on an x86-64 Linux computer for everything but the sandbox's exact filter and
   supplies, and on an ARM64 computer or CI runner for those. Checked, tested and proven, as
   x86-64's code is, for the template's kind of program: arguments, whole numbers, floating point,
-  text, standard input of any length through `fill`, and files and folders
-  ([its reference](linux-aarch64.md)). Vectors, threads, servers, the terminal and the crypto
-  instructions come next.
+  vectors (NEON), text, standard input of any length through `fill`, and files and folders
+  ([its reference](linux-aarch64.md)); its fast `wc` is proven for every length with a 64 KiB
+  buffer, as x86-64's is. Floating point on vectors, threads, servers, the terminal and the
+  crypto instructions come next.
 - **macOS (ARM64, x86-64)** and **Windows (x86-64, ARM64)** need all six, the OS edge and the
   sandbox most of all, because they forbid the direct syscalls lengua's Linux programs use.

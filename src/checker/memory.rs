@@ -30,7 +30,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::cfg::{ASSERT_FAIL, Exit, Flow, constant_before};
 use super::decode::{MappedFunction, Program};
 use super::{Rule, Violation};
-use crate::isa::{Abi, Control, Insn, Op, Operand, Reg, Stack, Value};
+use crate::isa::{Abi, BaseMove, Control, Insn, Op, Operand, Reg, Stack, Value};
 use crate::platform::Profile;
 use crate::spec::Syscall;
 
@@ -519,6 +519,15 @@ fn transfer(
         return after;
     }
     let result = result(function, at, before, depth, program);
+    // A base an access moves, as AArch64's writeback does, points into what it pointed into.
+    let moved_base = insn.memory.and_then(|memory| {
+        let base = memory.base?.full();
+        let by = match memory.base_moves? {
+            BaseMove::By(bytes) => Some(bytes),
+            BaseMove::ByRegister => None,
+        };
+        Some((base, by))
+    });
     for full in abi.registers {
         if !insn.writes.contains(*full) {
             continue;
@@ -528,7 +537,10 @@ fn transfer(
             _ if insn.op == Op::Exchange => {
                 other_operand(insn, *full).map_or(Owner::Unknown, |other| before.get(other))
             }
-            _ => Owner::Number,
+            _ => match moved_base {
+                Some((base, by)) if base == *full => before.get(base).moved(by),
+                _ => Owner::Number,
+            },
         };
         after.set(*full, owner);
     }

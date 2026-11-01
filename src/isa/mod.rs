@@ -236,6 +236,18 @@ pub struct MemRef {
     pub reads: bool,
     /// Whether the instruction writes this operand.
     pub writes: bool,
+    /// How the access moves its base, where it does, as AArch64's writeback does: never on
+    /// x86-64.
+    pub base_moves: Option<BaseMove>,
+}
+
+/// How an access moves its base register: AArch64's `[x1], #1`, `[x1, #-1]!` and `ld1`'s steps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BaseMove {
+    /// By this many bytes.
+    By(i64),
+    /// By what a register holds.
+    ByRegister,
 }
 
 /// One of an instruction's operands, as an idiom needs it.

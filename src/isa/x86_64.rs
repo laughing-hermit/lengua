@@ -312,6 +312,7 @@ pub fn facts(instruction: &Instruction, factory: &mut InstructionInfoFactory) ->
                 .then_some(x86(register))
         };
         MemRef {
+            base_moves: None,
             base: register(instruction.memory_base()),
             index: register(instruction.memory_index()),
             scale: instruction.memory_index_scale(),

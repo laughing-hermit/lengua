@@ -91,6 +91,7 @@ fn insn(source: &SourceInstruction, inst: &Inst, address: u64) -> Insn {
         insn.op = Op::AddressOf { dst: Reg::A64(*rd) };
         insn.value = Value::Address;
         insn.memory = Some(MemRef {
+            base_moves: None,
             base: None,
             index: None,
             scale: 1,

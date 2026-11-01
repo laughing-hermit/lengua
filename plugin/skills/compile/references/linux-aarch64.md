@@ -7,10 +7,10 @@ an x86-64 one testing AArch64 code through QEMU. The rules are the same as x86-6
 [AArch64's fill](../assets/linux-aarch64/fill.s), copied word for word with its constants.
 
 What AArch64 code covers so far, checked, tested and proven as x86-64's is: arguments, whole
-numbers, floating point in singles and doubles, text, standard input of any length through
-`fill`, and files and folders. Not yet, so a spec that needs them is compiled for x86-64 for now:
-vectors (NEON), threads, servers and several clients at once, the terminal, and the checksum and
-crypto instructions.
+numbers, floating point in singles and doubles, vectors of whole numbers (NEON), text, standard
+input of any length through `fill`, and files and folders. Not yet, so a spec that needs them is
+compiled for x86-64 for now: floating point on vectors, threads, servers and several clients at
+once, the terminal, and the checksum and crypto instructions.
 
 ## The dialect's form
 
@@ -106,6 +106,41 @@ with `exit`, and keeps what it needs across calls in `x19` to `x28` without savi
   `sub w4, w4, w5, lsl #5` after `cset` of whether it's a letter, with no branch on the byte, which
   keeps a proof's paths to one.
 - Exit codes go from 0 to 255; 134 is lengua's code for a failed assertion.
+
+## Vector facts
+
+- NEON's 32 vector registers are 16 bytes each: `v0.16b` names v0's 16 bytes, `v0.8h` its 8
+  halfwords, `v0.4s` its 4 words and `v0.2d` its 2 doublewords; `8b`, `4h` and `2s` name the low
+  8 bytes alone. A write of any arrangement clears the rest of the register. `q0` names a whole
+  register in loads and stores, and `v1.b[3]` one lane.
+- `d8` to `d15`, the low halves of `v8` to `v15`, are all a call keeps: a function that changes
+  `v8` to `v15` saves `d8` to `d15` (see floating point below), and after a `bl` every other
+  vector register holds anything. System calls keep them all.
+- Load and store 16 bytes with `ldr q0, [x1, x2]` and `str q0, [x1, x2]`, after `cmp x2, LIMIT`
+  and `b.hs` away with `LIMIT` the buffer's size less 15, so the whole vector stays inside; a
+  limit too wide for `cmp`'s number is a named constant in a register. A pointer moved by `add`,
+  `sub` or an access's writeback (`ldrb w3, [x1], #1`) still points into its buffer, as the rules
+  follow it.
+- A number in every lane: `movi v1.16b, #NEWLINE`; a register's low byte in every lane: `dup
+  v1.16b, w4`. A table of bytes, such as each lane's place, comes from `.byte` in `.rodata`,
+  `ldr q16, [x3]`.
+- A comparison sets each lane to all ones where it holds, else zero: `cmeq` (equal), `cmhi` and
+  `cmhs` (higher, and higher or the same, without a sign), `cmgt` and `cmge` (with one), and
+  their forms with `#0`. `and`, `orr`, `bic` and `eor` join them.
+- Count a comparison's lanes: `ushr v1.16b, v1.16b, #7` makes each 1 or 0, `addv b1, v1.16b`
+  adds them, and `umov w6, v1.b[0]` takes the sum.
+- Find the first matching byte: `shrn v0.8b, v0.8h, #4` packs each byte's comparison into 4 bits
+  of a doubleword, `fmov x0, d0` takes it, and `rbit` then `clz` give 4 times the byte's place.
+- Mask a loop's last step to the bytes left, so it's the same code: `dup` the bytes left,
+  `min(left, 16)`, over a vector and `cmhi` it against each lane's place, then `and` each
+  comparison with that mask, as [the fast wc](../assets/linux-aarch64/fast/wc/main.s) does.
+- The byte before each of a step's bytes, the last step's carried in: `ext v3.16b, v21.16b,
+  v2.16b, #15`, with `v21` the step before. `tbl v4.16b, { v2.16b }, v4.16b` picks the lanes
+  `v4` names.
+- [The vector template](../assets/linux-aarch64/vector-template.s) finds a newline and
+  capitalizes a line 16 bytes at a time, from [its spec](../assets/vector-template-spec.md).
+- Not in the dialect yet: floating point on vectors (`fadd v0.4s`), the interleaving `ld2` to
+  `ld4`, the single-lane loads, and SVE.
 
 ## Floating-point facts
 

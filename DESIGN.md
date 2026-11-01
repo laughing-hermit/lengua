@@ -1043,7 +1043,21 @@ still to build per target. A new profile must supply:
    proven as x86-64's is, step by step the formula's doubles, with no solver question; the
    `against_a64` harness holds every float instruction to the CPU on NaNs of both kinds, zeros of
    both signs, subnormals and the ends of each conversion, and whole V registers, so a scalar
-   write clears the rest. CPU feature detection is per CPU too (x86's `is_x86_feature_detected!`).
+   write clears the rest. Its vectors (`exec/aarch64/vector.rs`, NEON's integer instructions) are
+   lanes over the V registers' bytes: a comparison's lane is a choice of all ones or zero on its
+   condition, so a program's tests of bytes are the formula's conditions, and `addv` of lanes
+   that are each 0 or 1 is the pool's count, as x86-64's `popcnt` of a mask is. Its loops end
+   with `subs` and `b.ne`, or `sub` and `cbnz`, which the proof finds as it finds x86-64's `dec`
+   and `jnz`, so a loop over a buffer-full that leaves where its index reaches the bytes read has
+   its exits merged into one run. Two rules of the pool's met NEON's mask of the bytes left, the
+   low byte of `min(left, 16)` that `dup` spreads over a vector: a branch of a choice keeps the
+   range its condition gives it, so `ite(x < k, x, k)` is at most k, and a comparison with the
+   low bits of a value that fits in them is the comparison of the value itself. So
+   [the fast wc's NEON form](plugin/skills/compile/assets/linux-aarch64/fast/wc/main.s), each
+   16-byte step masked with `cmhi` of the bytes left against each lane's place, is proven for
+   every length with a 64 KiB buffer, with no solver question, in about 140 seconds, as x86-64's
+   AVX-512 one is in about 110; and the vector template from its spec unchanged, every line with
+   no solver question. CPU feature detection is per CPU too (x86's `is_x86_feature_detected!`).
 4. **Dialect:** the Power of 10 in that CPU's mnemonics and registers, with its reference (today
    `references/linux-x86_64.md` and the x86 parts of `references/power-of-10.md`). The rules
    themselves read only the facts, so they're shared; what's per CPU is the syntax and what the

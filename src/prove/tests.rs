@@ -3103,6 +3103,65 @@ async fn proves_the_fast_word_count_for_every_length() {
     }
 }
 
+/// The fast word count on AArch64, the same spec compiled with NEON: fill into 64 KiB, and one loop
+/// that masks each 16-byte step to the bytes left with lanes compared against their places, is
+/// proven for every length as x86-64's AVX-512 one is, with no solver question. Its mutants, with
+/// a 4 KiB buffer whose counterexamples come sooner, are caught: a piece that forgets the
+/// whitespace before it, a step that forgets the one before it, a lane past the end counted, and
+/// the larger of the bytes left and a step taken for the smaller.
+#[tokio::test]
+async fn proves_the_aarch64_fast_word_count_for_every_length() {
+    if !solvers_installed() {
+        return;
+    }
+    let assets = "plugin/skills/compile/assets/";
+    let spec = repository_file(&format!("{assets}fast/wc/spec.md"));
+    let asset = repository_file(&format!("{assets}linux-aarch64/fast/wc/main.s"));
+    let block = block(&spec, 0);
+    let right = machine(&asset).await;
+    let started = Instant::now();
+    let verdict = prove(&right, &block, &long_budget());
+    eprintln!(
+        "the AArch64 fast wc at 64 KiB: {verdict:?} in {:?}",
+        started.elapsed()
+    );
+    assert!(
+        matches!(
+            verdict,
+            Verdict::Proven {
+                bound: None,
+                induction: Some(65536),
+                questions: 0,
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
+    let small = asset
+        .replace(".equ BUF_LEN, 65536\n", ".equ BUF_LEN, 4096\n")
+        .replace("  // bound: 4096\n", "  // bound: 256\n");
+    for (from, to) in [
+        (
+            "    mov x2, x23\n    bl count_piece\n",
+            "    mov x2, #0xff\n    bl count_piece\n",
+        ),
+        ("    mov v21.16b, v2.16b\n", ""),
+        (
+            "    cmhi v22.16b, v22.16b, v16.16b\n",
+            "    cmhs v22.16b, v22.16b, v16.16b\n",
+        ),
+        ("    csel x4, x4, x5, lo\n", "    csel x4, x5, x4, lo\n"),
+    ] {
+        assert!(small.contains(from), "{from:?}");
+        let wrong = machine(&small.replacen(from, to, 1)).await;
+        let verdict = prove(&wrong, &block, &text_budget());
+        assert!(
+            matches!(verdict, Verdict::Counterexample(_)),
+            "{to:?}: {verdict:?}"
+        );
+    }
+}
+
 /// A proof keeps its time even inside one long shape, as the fast word count's base that takes
 /// every final piece at once is: given seconds where it needs minutes, it stops within its
 /// budget and a shape's least time, where once it ran six minutes past.

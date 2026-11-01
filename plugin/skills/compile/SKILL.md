@@ -51,7 +51,10 @@ and the CPU features the code needs; never write that line yourself.
    the last buffer-full at every length at once, which needs each loop over a buffer-full to leave
    only where its index reaches the bytes `fill` read, and to mask each step to the bytes left
    (`bzhi` of `min(left, 64)` into `k1`), so the last partial step is the same code, as
-   [the fast wc](assets/fast/wc/main.s) does. A separate routine for the last partial vector, at a
+   [the fast wc](assets/fast/wc/main.s) does; on AArch64, `cmhi` of `min(left, 16)`, spread over
+   a vector with `dup`, against each lane's place, as
+   [its NEON form](assets/linux-aarch64/fast/wc/main.s) does. A separate routine for the last
+   partial vector, at a
    place the length chooses, is proven only one final length at a time, which a large buffer's
    proof doesn't finish. A server whose
    spec serves several clients at once starts from
@@ -86,8 +89,8 @@ and the CPU features the code needs; never write that line yourself.
    - **Vectors as wide as the CPU allows:** a loop over bytes takes 64 at a time with AVX-512
      when `machine` lists it (32 with AVX2), never byte by byte, each step masked to the bytes
      left so the last partial vector is the same code (a `k1` mask with masked compares, or a
-     masked load, `vmovdqu8 zmm0 {k1}{z}`). `gcc -O3 -march=native` vectorizes too, so only the
-     widest loop beats it.
+     masked load, `vmovdqu8 zmm0 {k1}{z}`); on AArch64, NEON's 16 bytes a step, masked with
+     lanes. `gcc -O3 -march=native` vectorizes too, so only the widest loop beats it.
    - **Break dependency chains:** when each step waits on the one before, as in a checksum or a
      running sum, run two to four independent chains side by side and join them at the end.
    - **Large pieces:** read through `fill` into a 64 KiB buffer, the most a pipe hands over at
@@ -101,7 +104,8 @@ and the CPU features the code needs; never write that line yourself.
 
    `assets/fast` holds three checked programs to learn from and copy from, each with its spec:
    [wc](assets/fast/wc/main.s) counts lines and words 64 bytes a step with AVX-512 masks, each
-   step masked to the bytes left, and is proven for every length;
+   step masked to the bytes left, and is proven for every length, as is
+   [its NEON form](assets/linux-aarch64/fast/wc/main.s) for AArch64;
    [crc32c](assets/fast/crc32c/main.s) runs three `crc32` chains side by side and joins them with
    `pclmulqdq`; [histogram](assets/fast/histogram/main.s) spreads its counts over four tables.
    Their `digits` (write a number's decimal digits) can be copied as it is.
@@ -171,8 +175,8 @@ when its second line says it was compiled for another computer or a CPU feature 
 doesn't protect it: anyone can build main.s outside lengua, so its guarantees hold only for
 programs that `run` runs after `check`. lengua supports two targets so far, Linux on x86-64 and on
 AArch64, the same lengua on each; AArch64 code covers the template's kind of program for now
-(arguments, whole numbers, floating point, text, standard input and files), as its reference
-says. Adding a CPU
+(arguments, whole numbers, floating point, vectors, text, standard input and files), as its
+reference says. Adding a CPU
 or OS is set out in [porting.md](references/porting.md).
 
 ## Making it faster
@@ -192,7 +196,9 @@ measures cover every thread, and the time on the clock says how long it took.
 The biggest win on text and arrays is usually vector instructions: one `pcmpeqb` compares 16 bytes,
 and AVX2 and AVX-512 do 32 and 64. [The vector template](assets/vector-template.s) (with
 [its spec](assets/vector-template-spec.md)) is a checked SSE2 program that finds a newline and
-capitalizes a line 16 bytes at a time. Use AVX2 or AVX-512 when `machine` lists them, and keep
+capitalizes a line 16 bytes at a time, and on AArch64
+[its NEON form](assets/linux-aarch64/vector-template.s) does the same from the same spec. Use AVX2
+or AVX-512 when `machine` lists them, and keep
 every vector access inside its buffer: see "Vectors" in [the rules](references/power-of-10.md).
 With AVX-512BW, a byte test is one compare into a mask register and the change one masked
 instruction: `vpsubb zmm4, zmm0, zmm1` (subtract `'a'`), `vpcmpub k1, zmm4, zmm2, 1` (below 26),

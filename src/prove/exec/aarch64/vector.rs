@@ -445,7 +445,11 @@ impl Cpu<'_> {
                     .map(|pair| {
                         let x = self.v_extended(pair[0], width, signed);
                         let y = self.v_extended(pair[1], width, signed);
-                        self.pool.add(x, y)
+                        if signed {
+                            self.pool.add(x, y)
+                        } else {
+                            self.v_sum(2 * width, &[x, y])
+                        }
                     })
                     .collect()
             }
@@ -477,13 +481,35 @@ impl Cpu<'_> {
         }
     }
 
+    /// The sum of `lanes`, `width` bits wide: where each is a 0 or a 1 on a condition, the count
+    /// of those conditions, as x86-64's `popcnt` of a mask is, so a program's counted lanes and a
+    /// formula's count of the same tests are one term.
+    fn v_sum(&mut self, width: u32, lanes: &[Term]) -> Term {
+        let mut parts = Vec::with_capacity(lanes.len());
+        for lane in lanes {
+            match self.pool.counted_parts(*lane) {
+                Some(found) => parts.extend(found),
+                None => return self.pool.sum(width, lanes),
+            }
+        }
+        self.pool.count(width, &parts)
+    }
+
     /// A vector's lanes into one scalar.
     fn v_across(&mut self, op: VAcross, rd: Scalar, rn: VReg) -> Term {
         let a = self.v_lanes(rn);
         let width = rn.arrangement.lane_bits();
         match op {
-            VAcross::Addv => self.pool.sum(width, &a),
-            VAcross::Uaddlv | VAcross::Saddlv => {
+            VAcross::Addv => self.v_sum(width, &a),
+            VAcross::Uaddlv => {
+                let by = (8 << rd.size) - width;
+                let widened: Vec<Term> = a
+                    .iter()
+                    .map(|lane| self.v_extended(*lane, by, false))
+                    .collect();
+                self.v_sum(width + by, &widened)
+            }
+            VAcross::Saddlv => {
                 let by = (8 << rd.size) - width;
                 let signed = op == VAcross::Saddlv;
                 let widened: Vec<Term> = a

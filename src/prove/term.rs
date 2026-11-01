@@ -2121,12 +2121,43 @@ impl Pool {
 
     /// The range of `value` where `condition` is `holds`.
     fn range_given(&self, condition: Term, holds: bool, value: Term) -> (u128, u128) {
-        let (low, high) = self.range(value);
+        let (mut low, mut high) = self.range(value);
         if self.non_negative_when(condition, holds, value) {
             let (_, signed_high) = self.signed_range(value);
             if let Ok(signed_high) = u128::try_from(signed_high) {
                 return (low.min(signed_high), signed_high.min(high));
             }
+        }
+        // Where the condition compares the value with a constant, the value is on that side of
+        // it: `ite(x < k, x, k)`, the smaller of the two, is at most k.
+        let (condition, holds) = match *self.node(condition) {
+            Node::BoolNot(inner) => (inner, !holds),
+            _ => (condition, holds),
+        };
+        if let Node::Ult(a, b) = *self.node(condition) {
+            match (a == value, b == value, self.constant(a), self.constant(b)) {
+                // value < k, or value >= k.
+                (true, false, _, Some(k)) => {
+                    if holds {
+                        high = high.min(k.saturating_sub(1));
+                    } else {
+                        low = low.max(k);
+                    }
+                }
+                // k < value, or value <= k.
+                (false, true, Some(k), _) => {
+                    if holds {
+                        low = low.max(k.saturating_add(1));
+                    } else {
+                        high = high.min(k);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if low > high {
+            // The branch is never taken; any range is the value's.
+            return self.range(value);
         }
         (low, high)
     }
@@ -3917,6 +3948,9 @@ impl Pool {
                 None => self.boolean(false),
             };
         }
+        if let Some((a, b)) = self.widened_pair(a, b) {
+            return self.ult(a, b);
+        }
         if let Some((a, b)) = self.narrow_pair(a, b) {
             return self.ult(a, b);
         }
@@ -3924,6 +3958,34 @@ impl Pool {
             return self.ult(a, b);
         }
         self.make(Node::Ult(a, b), Sort::Bool)
+    }
+
+    /// `a` and `b` at a wider width, when one is the low bits of a value that fits in them and
+    /// the other a constant: comparing the value itself is the same comparison. So a vector's
+    /// lanes compared with the low byte of a count of bytes left, as NEON's `dup` of a w
+    /// register takes it, compare with the count as a formula's guards do.
+    fn widened_pair(&mut self, a: Term, b: Term) -> Option<(Term, Term)> {
+        let low_bits_of = |pool: &Self, term: Term| match *pool.node(term) {
+            Node::Extract(inner, high, 0)
+                if high + 1 < pool.width(inner) && pool.range(inner).1 <= mask(high + 1) =>
+            {
+                Some(inner)
+            }
+            _ => None,
+        };
+        match (low_bits_of(self, a), low_bits_of(self, b)) {
+            (None, Some(inner)) => {
+                let k = self.constant(a)?;
+                let width = self.width(inner);
+                Some((self.bv(width, k), inner))
+            }
+            (Some(inner), None) => {
+                let k = self.constant(b)?;
+                let width = self.width(inner);
+                Some((inner, self.bv(width, k)))
+            }
+            _ => None,
+        }
     }
 
     /// `a` and `b` at a narrower width, when one is a zero-extended value and the other a

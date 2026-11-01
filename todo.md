@@ -239,7 +239,13 @@ one needs.
   checked, tested and proven: the hypotenuse example's spec unchanged
   (`tests/fixtures/linux-aarch64/hypotenuse`), all five blocks with no solver question, through
   the server too; the model is held to QEMU and ARM64 silicon for every float instruction, NaNs,
-  zeros' signs, subnormals and the ends of each conversion included. Left of R10, skipped for
+  zeros' signs, subnormals and the ends of each conversion included. R12 (2026-11-01) adds
+  NEON's integer vectors, checked, tested and proven: the vector template from x86-64's spec
+  unchanged, and the fast `wc` for every length with a 64 KiB buffer, as x86-64's is, with no
+  solver question; the model held to QEMU and ARM64 silicon for every vector class in every
+  arrangement. The memory rules follow a pointer an access's writeback moves, as they follow
+  x86-64's `add`. Left of R12: floating point on vectors, as x86-64's packed doubles and singles
+  have it, and the benchmarks on ARM64 hardware. Left of R10, skipped for
   now at the user's word (2026-11-01) so
   it costs nothing: 4 to 6 real interactive Claude Code sessions compiling specs for AArch64 from
   one request each, and one for x86-64 as a regression check; they run on the user's Claude
@@ -247,8 +253,7 @@ one needs.
   so:
   - an install package for ARM64 Linux computers (today's release and installer are x86-64 only,
     and the ARM64 server is built only on CI);
-  - vector instructions (NEON, then SVE), lengua's main speed tool, with ARM64 benchmarks against
-    C, C++ and Rust;
+  - floating point on vectors, then SVE, and ARM64 benchmarks against C, C++ and Rust;
   - threads; networking and servers; the terminal; the crypto and checksum instructions.
 - **macOS and Windows need more than a new CPU.** They don't allow a program to call the OS
   directly, as lengua's programs do; a program must go through the system library (libSystem,

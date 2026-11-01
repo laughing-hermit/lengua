@@ -2112,6 +2112,39 @@ async fn the_aarch64_vector_template_passes_every_rule() {
     }
 }
 
+/// The AArch64 fast wc, the skill's fast `wc` compiled with NEON: fill into 64 KiB, and one loop
+/// that masks each 16-byte step to the bytes left, passes every rule.
+#[tokio::test]
+async fn the_aarch64_fast_wc_passes_every_rule() {
+    let syscalls = [Syscall::Read, Syscall::Write, Syscall::Exit];
+    let text = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("plugin/skills/compile/assets/linux-aarch64/fast/wc/main.s"),
+    )
+    .expect("the asset");
+    let report = check_full(&text, CpuFeatures::all(), &syscalls, None).await;
+    let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+    assert!(report.passed(), "{all:#?}");
+
+    // A pointer moved by an access's writeback points into what it pointed into, as one moved
+    // by `sub` does.
+    let writeback = text
+        .replacen(
+            "    sub x1, x1, #1\n    strb w5, [x1]\n",
+            "    strb w5, [x1, #-1]!\n",
+            1,
+        )
+        .replacen(
+            "    sub x0, x0, #1\n    strb w2, [x0]\n",
+            "    strb w2, [x0, #-1]!\n",
+            1,
+        );
+    assert_eq!(writeback.matches("#-1]!").count(), 2);
+    let report = check_full(&writeback, CpuFeatures::all(), &syscalls, None).await;
+    let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+    assert!(report.passed(), "{all:#?}");
+}
+
 /// AArch64's fill passes every rule, and is held to its template as x86-64's is: its code and
 /// its constants.
 #[tokio::test]
