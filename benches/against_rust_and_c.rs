@@ -47,6 +47,12 @@ struct Workload {
     about: &'static str,
     /// lengua's versions: a label and a main.s, from the repository root.
     lengua: &'static [(&'static str, &'static str)],
+    /// lengua's AArch64 versions, measured on an ARM64 computer; none where lengua's AArch64
+    /// code doesn't do it yet.
+    lengua_aarch64: &'static [(&'static str, &'static str)],
+    /// What the workload says on an ARM64 computer, where its versions differ; empty for the
+    /// same as `about`.
+    about_aarch64: &'static str,
     /// Versions in other languages: a label and a source file in benches/programs/<name>/.
     others: &'static [(&'static str, &'static str)],
     args: Vec<String>,
@@ -114,6 +120,8 @@ fn workloads() -> Vec<Workload> {
             about: "Parses two numbers from its arguments and prints their sum: almost all of \
                     it is starting up and exiting.",
             lengua: &[("lengua", "examples/add/main.s")],
+            lengua_aarch64: &[("lengua", "tests/fixtures/linux-aarch64/add/main.s")],
+            about_aarch64: "",
             others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
             args: vec!["123456789".into(), "-987654".into()],
             stdin: Vec::new(),
@@ -127,6 +135,8 @@ fn workloads() -> Vec<Workload> {
                     rounded to thousandths. Like add, it's mostly starting up and exiting: here \
                     C and C++ load the math library too.",
             lengua: &[("lengua", "examples/hypotenuse/main.s")],
+            lengua_aarch64: &[("lengua", "tests/fixtures/linux-aarch64/hypotenuse/main.s")],
+            about_aarch64: "",
             others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
             args: vec!["123456.789".into(), "98765.432".into()],
             stdin: Vec::new(),
@@ -143,6 +153,14 @@ fn workloads() -> Vec<Workload> {
                 ("lengua", "examples/upcase/main.s"),
                 ("lengua, AVX-512", "benches/programs/upcase/avx512.s"),
             ],
+            lengua_aarch64: &[
+                ("lengua", "tests/fixtures/linux-aarch64/upcase/main.s"),
+                ("lengua, NEON", "benches/programs/upcase/neon.s"),
+            ],
+            about_aarch64: "Copies a 1 MiB text file to another with its ASCII letters \
+                            capitalized: file reads and writes, and one pass over the bytes. \
+                            lengua's versions are the file program, a byte at a time with no \
+                            branch, and the same program 16 bytes at a time with NEON.",
             others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
             args: vec!["in.txt".into(), "out.txt".into()],
             stdin: Vec::new(),
@@ -163,6 +181,14 @@ fn workloads() -> Vec<Workload> {
                     "benches/programs/shout/avx512-one.s",
                 ),
             ],
+            lengua_aarch64: &[(
+                "lengua, NEON, one thread",
+                "benches/programs/shout/neon-one.s",
+            )],
+            about_aarch64: "Capitalizes 1 MiB of standard input to standard output. lengua's \
+                            version takes 16 bytes a step with NEON on one thread, since \
+                            threads on AArch64 come later; Rust is shown both plain and with \
+                            scoped threads.",
             others: &[
                 ("Rust", "main.rs"),
                 ("Rust, threads", "threads.rs"),
@@ -185,6 +211,14 @@ fn workloads() -> Vec<Workload> {
                 ("lengua", "plugin/skills/compile/assets/fast/wc/main.s"),
                 ("lengua, by Claude Code", "examples/count/main.s"),
             ],
+            lengua_aarch64: &[(
+                "lengua",
+                "plugin/skills/compile/assets/linux-aarch64/fast/wc/main.s",
+            )],
+            about_aarch64: "Counts the lines and words of 64 MiB on standard input, as `wc -lw` \
+                            does. C, C++ and Rust compare each byte with the one before it, \
+                            which compilers can vectorize. lengua's version takes 16 bytes a \
+                            step with NEON, each step masked to the bytes left.",
             others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
             args: Vec::new(),
             stdin: large.clone(),
@@ -199,6 +233,8 @@ fn workloads() -> Vec<Workload> {
                 "lengua",
                 "plugin/skills/compile/assets/fast/histogram/main.s",
             )],
+            lengua_aarch64: &[],
+            about_aarch64: "",
             others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
             args: Vec::new(),
             stdin: large.clone(),
@@ -212,6 +248,8 @@ fn workloads() -> Vec<Workload> {
                     lengua's version runs three chains side by side and joins them with \
                     carry-less multiplies.",
             lengua: &[("lengua", "plugin/skills/compile/assets/fast/crc32c/main.s")],
+            lengua_aarch64: &[],
+            about_aarch64: "",
             others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
             args: Vec::new(),
             stdin: large,
@@ -254,19 +292,38 @@ fn compile(program: &str, args: &[&str], source: &Path, output: &Path) {
     assert!(status.success(), "{program} failed on {}", source.display());
 }
 
+/// Whether this computer is an ARM64 one, whose lengua versions are the AArch64 ones.
+const ARM64: bool = cfg!(target_arch = "aarch64");
+
+/// The profile lengua's versions are built for here.
+const PROFILE: Profile = if ARM64 {
+    Profile::LinuxAarch64
+} else {
+    Profile::LinuxX86_64
+};
+
+/// lengua's versions of `workload` for this computer's CPU.
+fn lengua_versions(workload: &Workload) -> &'static [(&'static str, &'static str)] {
+    if ARM64 {
+        workload.lengua_aarch64
+    } else {
+        workload.lengua
+    }
+}
+
 async fn build(workload: &Workload, toolchain: &Toolchain, folder: &Path) -> Vec<Version> {
     let mut versions = Vec::new();
-    for (number, (label, source)) in workload.lengua.iter().enumerate() {
+    for (number, (label, source)) in lengua_versions(workload).iter().enumerate() {
         let (object, executable) = (
             folder.join(format!("{}-{number}.o", workload.name)),
             folder.join(format!("{}-lengua-{number}", workload.name)),
         );
         toolchain
-            .assemble(Profile::LinuxX86_64, &root().join(source), &object)
+            .assemble(PROFILE, &root().join(source), &object)
             .await
             .expect("assemble a lengua version");
         toolchain
-            .link(Profile::LinuxX86_64, &object, &executable)
+            .link(PROFILE, &object, &executable)
             .await
             .expect("link a lengua version");
         versions.push(Version {
@@ -552,10 +609,16 @@ async fn main() {
     let toolchain = Toolchain::discover().await.expect("llvm-mc and ld.lld");
     let machine = Machine::detect();
     let folder = tempfile::tempdir().expect("a folder");
-    let mut report = String::from(
+    let mut report = String::from(if ARM64 {
+        "# lengua against C, C++ and Rust on ARM64\n\nMeasured on an ARM64 computer by `cargo \
+         bench --bench against_rust_and_c`, which writes this file. Every version"
+    } else {
         "# lengua against C, C++ and Rust\n\nMeasured by `cargo bench --bench against_rust_and_c`, \
-         which writes this file. Every version of a program gets the same arguments, input and \
-         files and must give the same output. Instructions and cycles are user-space counts \
+         which writes this file. Every version"
+    });
+    report.push_str(
+        " of a program gets the same arguments, input and files and must give the same output. \
+         Instructions and cycles are user-space counts \
          from the CPU's counters, starting at the program's own exec, so a dynamically linked \
          program's loader counts; CPU time includes the kernel's work for it. Each figure is \
          the median of ",
@@ -580,6 +643,14 @@ async fn main() {
         GCC_FLAGS.join(" "),
     );
     for workload in workloads() {
+        if lengua_versions(&workload).is_empty() {
+            let _ = write!(
+                report,
+                "\n## {}\n\nNot measured here: lengua's AArch64 code doesn't do it yet.\n",
+                workload.name
+            );
+            continue;
+        }
         eprintln!("{}…", workload.name);
         let versions = build(&workload, &toolchain, folder.path()).await;
         let expected = expected_output(&workload);
@@ -595,7 +666,11 @@ async fn main() {
             report,
             "\n## {}\n\n{}\n\n| | {} | best other ÷ best lengua |\n|---|{}---|\n",
             workload.name,
-            workload.about,
+            if ARM64 && !workload.about_aarch64.is_empty() {
+                workload.about_aarch64
+            } else {
+                workload.about
+            },
             versions
                 .iter()
                 .map(|version| version.label.as_str())
@@ -652,8 +727,12 @@ async fn main() {
             Some(m.size as f64)
         }));
     }
-    let path = root().join("BENCHMARKS.md");
-    std::fs::write(&path, &report).expect("write BENCHMARKS.md");
+    let path = root().join(if ARM64 {
+        "BENCHMARKS-aarch64.md"
+    } else {
+        "BENCHMARKS.md"
+    });
+    std::fs::write(&path, &report).expect("write the benchmarks");
     println!("{report}");
     eprintln!("wrote {}", path.display());
 }

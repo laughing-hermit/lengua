@@ -2145,6 +2145,37 @@ async fn the_aarch64_fast_wc_passes_every_rule() {
     assert!(report.passed(), "{all:#?}");
 }
 
+/// lengua's AArch64 versions of the benchmark's programs pass every rule, as its x86-64 ones do:
+/// what the benchmark measures is lengua's own code.
+#[tokio::test]
+async fn the_aarch64_benchmark_programs_pass_every_rule() {
+    let files = [
+        Syscall::Openat,
+        Syscall::Close,
+        Syscall::Read,
+        Syscall::Write,
+        Syscall::Exit,
+    ];
+    for (path, syscalls) in [
+        (
+            "tests/fixtures/linux-aarch64/add/main.s",
+            &[Syscall::Write, Syscall::Exit][..],
+        ),
+        ("benches/programs/upcase/neon.s", &files[..]),
+        (
+            "benches/programs/shout/neon-one.s",
+            &[Syscall::Read, Syscall::Write, Syscall::Exit][..],
+        ),
+    ] {
+        let text =
+            std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path))
+                .expect("the program");
+        let report = check_full(&text, CpuFeatures::all(), syscalls, None).await;
+        let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+        assert!(report.passed(), "{path}: {all:#?}");
+    }
+}
+
 /// AArch64's fill passes every rule, and is held to its template as x86-64's is: its code and
 /// its constants.
 #[tokio::test]

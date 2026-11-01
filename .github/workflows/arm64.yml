@@ -20,6 +20,10 @@ on:
         description: "Also run the slow ignored tests"
         type: boolean
         default: false
+      benchmarks:
+        description: "Measure lengua against C, C++ and Rust here instead of testing"
+        type: boolean
+        default: false
 
 concurrency:
   group: arm64-${{ github.ref }}
@@ -126,10 +130,17 @@ jobs:
         run: cargo clippy --release --all-targets --locked -- -D warnings
 
       - name: Tests
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.benchmarks) }}
         env:
           LENGUA_PROOF_SECONDS: "60"
           RUST_TEST_THREADS: "2"
         run: cargo test --release --locked --no-fail-fast 2>&1 | tee test.log
+
+      - name: Benchmarks against C, C++ and Rust
+        if: github.event_name == 'workflow_dispatch' && inputs.benchmarks
+        run: |
+          sudo apt-get install -y -q time
+          cargo bench --locked --bench against_rust_and_c 2>&1 | tee bench.log
 
       - name: The slow ignored tests
         if: github.event_name == 'workflow_dispatch' && inputs.ignored
@@ -146,6 +157,8 @@ jobs:
           path: |
             test.log
             ignored.log
+            bench.log
+            BENCHMARKS-aarch64.md
             target/release/lengua-mcp
           retention-days: 7
           if-no-files-found: ignore
