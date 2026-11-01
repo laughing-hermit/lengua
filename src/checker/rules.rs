@@ -664,7 +664,10 @@ impl Checker<'_, '_> {
     }
 
     /// When an indexed access goes through a register that only ever holds the address of one
-    /// data symbol, the bounds check's limit must keep every access inside that symbol.
+    /// data symbol, the bounds check's limit must keep every access inside that symbol. The
+    /// limit is a number, or a register the run before the compare puts a number in, read
+    /// without sign at the compare's width, as the jump after it reads it; any other limit is
+    /// the proof's to hold to the buffer.
     fn check_buffer_size(
         &mut self,
         function: &MappedFunction<'_>,
@@ -673,12 +676,28 @@ impl Checker<'_, '_> {
         check: usize,
         inclusive: bool,
     ) {
-        let Op::Compare {
-            right: isa::Operand::Imm(limit),
-            ..
-        } = function.steps[check].insn.op
-        else {
-            return;
+        let abi = self.program.abi();
+        let limit = match function.steps[check].insn.op {
+            Op::Compare {
+                right: isa::Operand::Imm(limit),
+                ..
+            } => i128::from(limit),
+            Op::Compare {
+                right: isa::Operand::Reg(register),
+                ..
+            } => {
+                let Some((_, value)) = constant_before(function, check, register, abi) else {
+                    return;
+                };
+                let bits = register.bits().min(64);
+                let mask = if bits == 64 {
+                    u64::MAX
+                } else {
+                    (1_u64 << bits) - 1
+                };
+                i128::from(value.cast_unsigned() & mask)
+            }
+            _ => return,
         };
         let Some(memory) = function.steps[index].insn.memory else {
             return;
@@ -697,8 +716,9 @@ impl Checker<'_, '_> {
         let largest_index = if inclusive { limit } else { limit - 1 };
         let width = i64::try_from(memory.width).unwrap_or(1).max(1);
         let first = base_offset + memory.displacement;
-        let last = first + largest_index * i64::from(memory.scale) + width - 1;
-        if first < 0 || last >= size {
+        let last =
+            i128::from(first) + largest_index * i128::from(memory.scale) + i128::from(width) - 1;
+        if first < 0 || last >= i128::from(size) {
             self.violation(
                 Rule::Indirection,
                 function.steps[check].source.line,

@@ -358,7 +358,9 @@ without sign, so a negative index is caught too. `lea` doesn't access memory, so
 
 When the base register holds the address of one of the program's data symbols (every path sets
 it with `lea base, [rip + name]`), the limit must keep every byte of every access inside that
-symbol. For a 16-byte load from an 80-byte buffer, the largest index is 64:
+symbol. The limit is a number, or a register the same run sets to one just before the compare
+(`mov r11d, LEN` and then `cmp ecx, r11d`); a limit in any other register, such as a length
+the function was given, is checked by the proof instead. For a 16-byte load from an 80-byte buffer, the largest index is 64:
 
 ```
     cmp rcx, LINE_BUF_LEN - CHUNK + 1

@@ -2265,3 +2265,60 @@ async fn an_aarch64_constant_may_be_built_16_bits_at_a_time() {
         assert!(!report.passed(), "{why}");
     }
 }
+
+/// A bounds check's limit in a register is held to the buffer when the code right before the
+/// compare puts a constant there, as an immediate limit is: on AArch64, whose compares hold only
+/// 12-bit numbers, that's how a larger buffer is checked. A limit that isn't a constant there is
+/// the proof's to hold, as before.
+#[tokio::test]
+async fn a_bounds_check_against_a_constant_in_a_register_is_held_to_the_buffer() {
+    let x86 = |limit: &str| {
+        with(
+            "    cmp ecx, OUT_BUF_LEN\n",
+            &format!("    mov r11d, {limit}\n    cmp ecx, r11d\n"),
+        )
+    };
+    let aarch64 = |set: &str| {
+        with_aarch64(
+            "    cmp x2, #OUT_BUF_LEN\n",
+            &format!("{set}    cmp x2, x14\n"),
+        )
+    };
+    for text in [
+        x86("OUT_BUF_LEN"),
+        aarch64("    mov x14, #OUT_BUF_LEN\n"),
+        aarch64("    mov x14, #OUT_BUF_LEN & 0xffff\n    movk x14, #OUT_BUF_LEN >> 16, lsl #16\n"),
+        // Not a constant: the proof holds it.
+        aarch64("    mov x14, x9\n"),
+    ] {
+        let report = check(&text).await;
+        let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+        assert!(report.passed(), "{all:#?}");
+    }
+    for (text, compare, access) in [
+        (
+            x86("1000"),
+            "    cmp ecx, r11d\n",
+            "`mov byte ptr [rsi + rcx], dl` reach byte 999 of out_buf, which has 21 bytes",
+        ),
+        (
+            aarch64("    mov x14, #1000\n"),
+            "    cmp x2, x14\n",
+            "`strb w13, [x1, x2]` reach byte 999 of out_buf, which has 21 bytes",
+        ),
+        (
+            aarch64("    mov x14, #OUT_BUF_LEN & 0xffff\n    movk x14, #1, lsl #16\n"),
+            "    cmp x2, x14\n",
+            "reach byte 65556 of out_buf, which has 21 bytes",
+        ),
+        // A negative limit is a huge one to the unsigned jump after the compare.
+        (
+            aarch64("    mov x14, #-1\n"),
+            "    cmp x2, x14\n",
+            "reach byte 18446744073709551614 of out_buf",
+        ),
+    ] {
+        let report = check(&text).await;
+        assert_violation(&report, Rule::Indirection, line_of(&text, compare), access);
+    }
+}

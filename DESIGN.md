@@ -371,7 +371,8 @@ loaded from memory, as lists and trees need, are allowed. Every program in the r
 passes, and a planted bug for each rule is found on its line.
 
 What no rule settles, such as those pointers or an index checked against a length in a
-register, the proof settles on every run it covers. The prover's model holds each run to the
+register that the code just before doesn't set to a constant, the proof settles on every run it
+covers. The prover's model holds each run to the
 memory rules, as a borrow checker would at run time:
 - Each access stays inside the object its pointer was made from: a data symbol, a live frame,
   or one of the program's arguments. The run follows each pointer from where it's made, through

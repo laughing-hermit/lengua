@@ -22,7 +22,8 @@
 //! - **M8, stack size.** The deepest path stays within [`MAX_STACK_BYTES`].
 //!
 //! Threads (M7) have their own pass. What no rule settles, such as a pointer loaded from memory or
-//! an index checked against a length in a register, the proof settles for every input.
+//! an index checked against a length in a register that the code just before doesn't set to a
+//! constant, the proof settles for every input.
 
 use std::collections::{BTreeMap, BTreeSet};
 
