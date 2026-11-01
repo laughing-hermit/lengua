@@ -13,9 +13,10 @@
 //! address no store may change, as x86-64's pushed one is. `ret` must go back where the call came
 //! from, with the stack as the call found it.
 //!
-//! Floating point is [`float`]'s.
+//! Floating point is [`float`]'s, and vectors are [`vector`]'s.
 
 mod float;
+mod vector;
 
 use super::{Cpu, End, Held, Last, Owner, Plan, Return, Step, Stop, unsupported};
 use crate::isa::aarch64::{
@@ -279,7 +280,7 @@ impl Cpu<'_> {
             | Inst::VectorImmediate { .. }
             | Inst::VectorLoadStore { .. }
             | Inst::VectorPair { .. }
-            | Inst::VectorStructures { .. } => Err(unsupported("vectors on AArch64")),
+            | Inst::VectorStructures { .. } => self.execute_vector(inst),
         }
     }
 
@@ -1072,11 +1073,18 @@ impl Cpu<'_> {
             Inst::LoadStore { address, .. }
             | Inst::Pair { address, .. }
             | Inst::FpLoadStore { address, .. }
-            | Inst::FpPair { address, .. } => {
+            | Inst::FpPair { address, .. }
+            | Inst::VectorLoadStore { address, .. }
+            | Inst::VectorPair { address, .. } => {
                 if let Some(base) = moved_base(address) {
                     set(&mut plan, base, owner(self, base));
                 }
             }
+            Inst::VectorStructures {
+                base,
+                step: Some(_),
+                ..
+            } => set(&mut plan, base, owner(self, base)),
             _ => {}
         }
         plan

@@ -1876,6 +1876,46 @@ async fn proves_the_vector_template() {
     assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
 }
 
+/// Vector code, NEON: the AArch64 vector template, the same spec compiled for AArch64, is proven
+/// as x86-64's SSE2 one is: every line it's given, with no solver question; its too-long lines up
+/// to one pipe write; and capitals that stop at `y` are found.
+#[tokio::test]
+async fn proves_the_aarch64_vector_template() {
+    let spec = asset("vector-template-spec.md");
+    let source = asset("linux-aarch64/vector-template.s");
+    let right = machine(&source).await;
+    let shout = block(&spec, 0);
+    let started = Instant::now();
+    let verdict = prove(&right, &shout, &budget(60));
+    eprintln!(
+        "AArch64 vector template B1: {verdict:?} in {:?}",
+        started.elapsed()
+    );
+    assert!(
+        matches!(
+            verdict,
+            Verdict::Proven {
+                bound: None,
+                questions: 0,
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
+    let too_long = block(&spec, 1);
+    let verdict = prove(&right, &too_long, &text_budget());
+    let Verdict::Proven {
+        bound: Some(bound), ..
+    } = &verdict
+    else {
+        panic!("{verdict:?}");
+    };
+    assert_eq!(bound.bytes, PIPE_WRITE - 1);
+    let wrong = machine(&source.replace(".equ ABOVE_Z, 0x7b", ".equ ABOVE_Z, 0x7a")).await;
+    let verdict = prove(&wrong, &shout, &budget(60));
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+}
+
 /// Induction: the streaming template, which capitalizes its input a buffer-full at a time
 /// through fill, is proven for every length its loop's bound allows, far past what any proof
 /// by length reaches; capitals that stop at `y` are still found, and so is a loop that drops

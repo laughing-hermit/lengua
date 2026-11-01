@@ -31,17 +31,19 @@ const REGISTERS: usize = 16;
 /// The V registers a probe works with, v0 to v7, 16 bytes each.
 const FP_REGISTERS: usize = 8;
 
-/// Where the V registers are in a vector and a result: after the registers, NZCV, the cell's two
+/// The memory cell's words: 64 bytes, as much as `ld1` of four registers moves.
+const CELL_WORDS: usize = 8;
+
+/// Where the V registers are in a vector and a result: after the registers, NZCV, the cell's
 /// words and the probe's address (a result's last word unused), at a multiple of 16, as `ldp q`
 /// and `stp q` reach.
-const V_AT: usize = (REGISTERS + 4) * 8;
+const V_AT: usize = (REGISTERS + CELL_WORDS + 2) * 8;
 
-/// Bytes per vector: the registers, NZCV, the cell's two words, the probe's address and the V
+/// Bytes per vector: the registers, NZCV, the cell's words, the probe's address and the V
 /// registers.
 const VECTOR: usize = V_AT + FP_REGISTERS * 16;
 
-/// Bytes per result: the registers, NZCV, the cell's two words, a word unused and the V
-/// registers.
+/// Bytes per result: the registers, NZCV, the cell's words, a word unused and the V registers.
 const RESULT: usize = V_AT + FP_REGISTERS * 16;
 
 /// The conditions, as `b.cond` and `csel` name them.
@@ -178,11 +180,303 @@ fn fp_probes(rng: &mut ChaCha8Rng, list: &mut Vec<Probe>) {
     ]));
 }
 
+/// A vector register a probe works with, v0 to v7, as `arrangement` names its lanes.
+fn v_register(rng: &mut ChaCha8Rng, arrangement: &str) -> String {
+    format!("v{}.{arrangement}", rng.random_range(0..FP_REGISTERS))
+}
+
+/// The vector probes, over every arrangement each instruction takes.
+#[allow(clippy::too_many_lines)]
+fn vector_probes(rng: &mut ChaCha8Rng, list: &mut Vec<Probe>) {
+    // Arrangement, lane bits, and the name of a lane of that size.
+    const ARRANGEMENTS: [(&str, u32, &str); 7] = [
+        ("8b", 8, "b"),
+        ("16b", 8, "b"),
+        ("4h", 16, "h"),
+        ("8h", 16, "h"),
+        ("2s", 32, "s"),
+        ("4s", 32, "s"),
+        ("2d", 64, "d"),
+    ];
+    for (arrangement, bits, lane) in ARRANGEMENTS {
+        let v = |rng: &mut ChaCha8Rng| v_register(rng, arrangement);
+        let mut three = vec![
+            "add", "sub", "cmeq", "cmtst", "cmhi", "cmhs", "cmgt", "cmge", "uqadd", "uqsub",
+            "sqadd", "sqsub", "addp", "zip1", "zip2", "uzp1", "uzp2", "trn1", "trn2",
+        ];
+        if bits < 64 {
+            three.extend([
+                "mul", "umax", "umin", "smax", "smin", "umaxp", "uminp", "smaxp", "sminp",
+            ]);
+        }
+        for op in three {
+            let (d, n, m) = (v(rng), v(rng), v(rng));
+            list.push(probe(&[format!("{op} {d}, {n}, {m}")]));
+        }
+        for op in ["cmeq", "cmgt", "cmge", "cmle", "cmlt"] {
+            let (d, n) = (v(rng), v(rng));
+            list.push(probe(&[format!("{op} {d}, {n}, #0")]));
+        }
+        let mut two = vec!["abs", "neg"];
+        if bits < 64 {
+            two.extend(["cls", "clz", "rev64"]);
+        }
+        if bits <= 16 {
+            two.push("rev32");
+        }
+        for op in two {
+            let (d, n) = (v(rng), v(rng));
+            list.push(probe(&[format!("{op} {d}, {n}")]));
+        }
+        // Shifts by every distance a lane takes, the ends included.
+        for op in ["ushr", "sshr", "usra", "ssra", "sri"] {
+            let (d, n) = (v(rng), v(rng));
+            let amount = rng.random_range(1..=bits);
+            list.push(probe(&[format!("{op} {d}, {n}, #{amount}")]));
+        }
+        for op in ["shl", "sli"] {
+            let (d, n) = (v(rng), v(rng));
+            let amount = rng.random_range(0..bits);
+            list.push(probe(&[format!("{op} {d}, {n}, #{amount}")]));
+        }
+        // A lane, or a general register, in every lane.
+        let lanes = 128 / bits;
+        let (d, n) = (v(rng), rng.random_range(0..FP_REGISTERS));
+        let index = rng.random_range(0..lanes);
+        list.push(probe(&[format!("dup {d}, v{n}.{lane}[{index}]")]));
+        let general = register(rng, bits == 64);
+        let d = v(rng);
+        list.push(probe(&[format!("dup {d}, {general}")]));
+        // Lanes into general registers, and general registers and lanes into lanes.
+        let (n, index) = (
+            rng.random_range(0..FP_REGISTERS),
+            rng.random_range(0..lanes),
+        );
+        let into = register(rng, bits == 64);
+        list.push(probe(&[format!("umov {into}, v{n}.{lane}[{index}]")]));
+        if bits < 64 {
+            let wide = bits == 32 || rng.random();
+            let into = register(rng, wide);
+            list.push(probe(&[format!("smov {into}, v{n}.{lane}[{index}]")]));
+        }
+        let (d, index) = (
+            rng.random_range(0..FP_REGISTERS),
+            rng.random_range(0..lanes),
+        );
+        let from = register(rng, bits == 64);
+        list.push(probe(&[format!("mov v{d}.{lane}[{index}], {from}")]));
+        let (n, from_index) = (
+            rng.random_range(0..FP_REGISTERS),
+            rng.random_range(0..lanes),
+        );
+        list.push(probe(&[format!(
+            "mov v{d}.{lane}[{index}], v{n}.{lane}[{from_index}]"
+        )]));
+    }
+    // The bitwise operations, on bytes.
+    for arrangement in ["8b", "16b"] {
+        let v = |rng: &mut ChaCha8Rng| v_register(rng, arrangement);
+        for op in ["and", "bic", "orr", "orn", "eor", "bsl", "bit", "bif"] {
+            let (d, n, m) = (v(rng), v(rng), v(rng));
+            list.push(probe(&[format!("{op} {d}, {n}, {m}")]));
+        }
+        for op in ["cnt", "not", "rbit", "rev16", "mov"] {
+            let (d, n) = (v(rng), v(rng));
+            list.push(probe(&[format!("{op} {d}, {n}")]));
+        }
+        let (d, n, m) = (v(rng), v(rng), v(rng));
+        let length = if arrangement == "8b" { 8 } else { 16 };
+        list.push(probe(&[format!(
+            "ext {d}, {n}, {m}, #{}",
+            rng.random_range(0..length)
+        )]));
+        // Tables of 1 to 4 registers, indexes from a register of small numbers so some land
+        // inside them.
+        // A list's registers follow each other, kept within v0 to v7.
+        for (count, op) in [(1, "tbl"), (2, "tbx"), (3, "tbl"), (4, "tbx")] {
+            let first = rng.random_range(0..=FP_REGISTERS - count);
+            let table: Vec<String> = (0..count)
+                .map(|at| format!("v{}.16b", first + at))
+                .collect();
+            let (d, m) = (v(rng), rng.random_range(0..FP_REGISTERS));
+            list.push(probe(&[
+                format!("movi v{m}.16b, #{}", rng.random_range(0..80_u32)),
+                format!("{op} {d}, {{ {} }}, v{m}.{arrangement}", table.join(", ")),
+            ]));
+            let (d, m) = (v(rng), v(rng));
+            list.push(probe(&[format!(
+                "{op} {d}, {{ {} }}, {m}",
+                table.join(", ")
+            )]));
+        }
+    }
+    // Widening and narrowing: (narrow, wide, lane bits of the narrow).
+    for (narrow, wide, bits) in [
+        ("8b", "8h", 8),
+        ("16b", "8h", 8),
+        ("4h", "4s", 16),
+        ("8h", "4s", 16),
+        ("2s", "2d", 32),
+        ("4s", "2d", 32),
+    ] {
+        let high = narrow == "16b" || narrow == "8h" || narrow == "4s";
+        let two = if high { "2" } else { "" };
+        let (n, m) = (
+            rng.random_range(0..FP_REGISTERS),
+            rng.random_range(0..FP_REGISTERS),
+        );
+        list.push(probe(&[format!("xtn{two} v{n}.{narrow}, v{m}.{wide}")]));
+        let amount = rng.random_range(1..=bits);
+        list.push(probe(&[format!(
+            "shrn{two} v{n}.{narrow}, v{m}.{wide}, #{amount}"
+        )]));
+        for op in ["ushll", "sshll"] {
+            let amount = rng.random_range(0..bits);
+            list.push(probe(&[format!(
+                "{op}{two} v{m}.{wide}, v{n}.{narrow}, #{amount}"
+            )]));
+        }
+        // Pairwise sums into lanes twice as wide.
+        let pairs = match narrow {
+            "8b" => "4h",
+            "16b" => "8h",
+            "4h" => "2s",
+            "8h" => "4s",
+            "2s" => "1d",
+            _ => "2d",
+        };
+        for op in ["uaddlp", "saddlp"] {
+            list.push(probe(&[format!("{op} v{m}.{pairs}, v{n}.{narrow}")]));
+        }
+    }
+    // Across lanes: (arrangement, scalar, long scalar).
+    for (arrangement, scalar, long) in [
+        ("8b", "b", "h"),
+        ("16b", "b", "h"),
+        ("4h", "h", "s"),
+        ("8h", "h", "s"),
+        ("4s", "s", "d"),
+    ] {
+        let (d, n) = (
+            rng.random_range(0..FP_REGISTERS),
+            rng.random_range(0..FP_REGISTERS),
+        );
+        for op in ["addv", "umaxv", "uminv", "smaxv", "sminv"] {
+            list.push(probe(&[format!("{op} {scalar}{d}, v{n}.{arrangement}")]));
+        }
+        for op in ["uaddlv", "saddlv"] {
+            list.push(probe(&[format!("{op} {long}{d}, v{n}.{arrangement}")]));
+        }
+    }
+    // Numbers into every lane, in each of their forms.
+    let imm = |rng: &mut ChaCha8Rng| rng.random::<u8>();
+    let d = |rng: &mut ChaCha8Rng| rng.random_range(0..FP_REGISTERS);
+    for arrangement in ["8b", "16b"] {
+        list.push(probe(&[format!(
+            "movi v{}.{arrangement}, #{}",
+            d(rng),
+            imm(rng)
+        )]));
+    }
+    for arrangement in ["4h", "8h"] {
+        for shift in [0, 8] {
+            for op in ["movi", "mvni", "orr", "bic"] {
+                list.push(probe(&[format!(
+                    "{op} v{}.{arrangement}, #{}, lsl #{shift}",
+                    d(rng),
+                    imm(rng)
+                )]));
+            }
+        }
+    }
+    for arrangement in ["2s", "4s"] {
+        for shift in [0, 8, 16, 24] {
+            for op in ["movi", "mvni", "orr", "bic"] {
+                list.push(probe(&[format!(
+                    "{op} v{}.{arrangement}, #{}, lsl #{shift}",
+                    d(rng),
+                    imm(rng)
+                )]));
+            }
+        }
+        for shift in [8, 16] {
+            for op in ["movi", "mvni"] {
+                list.push(probe(&[format!(
+                    "{op} v{}.{arrangement}, #{}, msl #{shift}",
+                    d(rng),
+                    imm(rng)
+                )]));
+            }
+        }
+    }
+    let mask: u64 = (0..8)
+        .map(|byte| if rng.random() { 0xff << (8 * byte) } else { 0 })
+        .sum();
+    list.push(probe(&[format!("movi v{}.2d, #{mask:#x}", d(rng))]));
+    list.push(probe(&[format!("movi d{}, #{mask:#x}", d(rng))]));
+    // Loads and stores of whole registers in the cell at x15, 64 bytes.
+    let q = |rng: &mut ChaCha8Rng| rng.random_range(0..FP_REGISTERS);
+    list.push(memory(&[format!("ldr q{}, [x15]", q(rng))]));
+    list.push(memory(&[format!("str q{}, [x15, #48]", q(rng))]));
+    list.push(memory(&[format!("ldur q{}, [x15, #7]", q(rng))]));
+    list.push(memory(&[format!("str q{}, [x15, #16]!", q(rng))]));
+    list.push(memory(&[format!("ldr q{}, [x15], #32", q(rng))]));
+    list.push(memory(&[
+        "mov x14, #2".to_owned(),
+        format!("ldr q{}, [x15, x14, lsl #4]", q(rng)),
+    ]));
+    let first = q(rng);
+    let second = (first + rng.random_range(1..FP_REGISTERS)) % FP_REGISTERS;
+    list.push(memory(&[format!("ldp q{first}, q{second}, [x15, #32]")]));
+    list.push(memory(&[format!("stp q{}, q{}, [x15]", q(rng), q(rng))]));
+    for (count, arrangement) in [(1, "16b"), (2, "8b"), (3, "4s"), (4, "16b"), (4, "1d")] {
+        let first = rng.random_range(0..=FP_REGISTERS - count);
+        let list_text: Vec<String> = (0..count)
+            .map(|at| format!("v{}.{arrangement}", first + at))
+            .collect();
+        let bytes = count
+            * if arrangement == "16b" || arrangement == "4s" {
+                16
+            } else {
+                8
+            };
+        for op in ["ld1", "st1"] {
+            list.push(memory(&[format!(
+                "{op} {{ {} }}, [x15]",
+                list_text.join(", ")
+            )]));
+            list.push(memory(&[format!(
+                "{op} {{ {} }}, [x15], #{bytes}",
+                list_text.join(", ")
+            )]));
+        }
+        list.push(memory(&[
+            "mov x14, #5".to_owned(),
+            format!("ld1 {{ {} }}, [x15], x14", list_text.join(", ")),
+        ]));
+    }
+    // A comparison's lanes counted, as a counting loop does it.
+    list.push(probe(&[
+        "cmeq v0.16b, v1.16b, v2.16b".to_owned(),
+        "ushr v0.16b, v0.16b, #7".to_owned(),
+        "addv b3, v0.16b".to_owned(),
+        "umov w4, v3.b[0]".to_owned(),
+    ]));
+    list.push(probe(&[
+        "cmeq v0.16b, v1.16b, v2.16b".to_owned(),
+        "shrn v0.8b, v0.8h, #4".to_owned(),
+        "fmov x5, d0".to_owned(),
+        "rbit x5, x5".to_owned(),
+        "clz x5, x5".to_owned(),
+    ]));
+}
+
 /// Every probe, its registers and numbers drawn from `rng`.
 #[allow(clippy::too_many_lines)]
 fn probes(rng: &mut ChaCha8Rng) -> Vec<Probe> {
     let mut list = Vec::new();
     fp_probes(rng, &mut list);
+    vector_probes(rng, &mut list);
     for wide in [true, false] {
         let width = if wide { 64 } else { 32 };
         let r = |rng: &mut ChaCha8Rng| register(rng, wide);
@@ -441,17 +735,21 @@ _start:
     madd x23, x22, x24, x23
     adrp x26, cell
     add x26, x26, :lo12:cell
-    ldp x0, x1, [x23, #{}]
-    stp x0, x1, [x26]
-    ldr x0, [x23, #{}]
+{}    ldr x0, [x23, #{}]
     msr nzcv, x0
     ldr x25, [x23, #{}]
 ",
         piece(bytes_in, 0),
         piece(bytes_in, 16),
-        (REGISTERS + 1) * 8,
+        (0..CELL_WORDS / 2)
+            .map(|pair| format!(
+                "    ldp x0, x1, [x23, #{}]\n    stp x0, x1, [x26, #{}]\n",
+                (REGISTERS + 1 + 2 * pair) * 8,
+                pair * 16
+            ))
+            .collect::<String>(),
         REGISTERS * 8,
-        (REGISTERS + 3) * 8,
+        (REGISTERS + 1 + CELL_WORDS) * 8,
     );
     for pair in 0..FP_REGISTERS / 2 {
         source.push_str(&format!(
@@ -491,9 +789,7 @@ _start:
     str x0, [x23, #{}]
     adrp x26, cell
     add x26, x26, :lo12:cell
-    ldp x0, x1, [x26]
-    stp x0, x1, [x23, #{}]
-    adrp x24, results
+{}    adrp x24, results
     add x24, x24, :lo12:results
     mov x26, #{RESULT}
     madd x24, x22, x26, x24
@@ -531,7 +827,13 @@ _start:
 .size _start, .-_start
 ",
         REGISTERS * 8,
-        (REGISTERS + 1) * 8,
+        (0..CELL_WORDS / 2)
+            .map(|pair| format!(
+                "    ldp x0, x1, [x26, #{}]\n    stp x0, x1, [x23, #{}]\n",
+                pair * 16,
+                (REGISTERS + 1 + 2 * pair) * 8
+            ))
+            .collect::<String>(),
         RESULT / 8,
     ));
     for (number, probe) in probes.iter().enumerate() {
@@ -552,7 +854,7 @@ _start:
         ("vectors", capacity * VECTOR),
         ("results", capacity * RESULT),
         ("result", RESULT),
-        ("cell", 16),
+        ("cell", CELL_WORDS * 8),
     ] {
         source.push_str(&format!(
             ".type {name}, @object\n{name}:\n    .zero {size}\n.size {name}, {size}\n.balign 16\n"
@@ -685,19 +987,19 @@ async fn build(source: &str, folder: &std::path::Path) -> (std::path::PathBuf, M
     (executable, machine)
 }
 
-/// Where the model ends: each register, NZCV's flags, the cell's two words and each V register.
+/// Where the model ends: each register, NZCV's flags, the cell's words and each V register.
 struct Ended {
     registers: Vec<u128>,
     flags: Vec<bool>,
-    cell: [u128; 2],
+    cell: [u128; CELL_WORDS],
     vectors: Vec<u128>,
 }
 
-/// One vector's values: the registers, NZCV, the cell's two words and the V registers.
+/// One vector's values: the registers, NZCV, the cell's words and the V registers.
 struct Values {
     registers: [u64; REGISTERS],
     nzcv: u64,
-    cell: [u64; 2],
+    cell: [u64; CELL_WORDS],
     vectors: [u128; FP_REGISTERS],
 }
 
@@ -766,7 +1068,7 @@ fn model(
                 .ok_or_else(|| format!("the model doesn't know {name}"))
         })
         .collect::<Result<_, _>>()?;
-    let mut words = [0; 2];
+    let mut words = [0; CELL_WORDS];
     for (word, slot) in words.iter_mut().enumerate() {
         let mut whole = None;
         for byte in (0..8).rev() {
@@ -859,7 +1161,7 @@ async fn every_aarch64_instruction_matches_the_cpu() {
                 registers[15] = cell_address;
             }
             let nzcv = u64::from(rng.random_range(0_u32..16)) << 28;
-            let cell = [value(&mut rng), value(&mut rng)];
+            let cell: [u64; CELL_WORDS] = std::array::from_fn(|_| value(&mut rng));
             let mut fp = [0; FP_REGISTERS];
             for register in &mut fp {
                 *register = fp_value(&mut rng);
@@ -917,13 +1219,17 @@ async fn every_aarch64_instruction_matches_the_cpu() {
                 .enumerate()
                 .map(|(number, value)| format!("v{number}={value:#x}"))
                 .collect();
+            let cell: Vec<String> = values
+                .cell
+                .iter()
+                .map(|word| format!("{word:#x}"))
+                .collect();
             format!(
-                "`{}` with {} nzcv={:#x} cell={:#x},{:#x} {}",
+                "`{}` with {} nzcv={:#x} cell={} {}",
                 probe.code.join("; "),
                 registers.join(" "),
                 values.nzcv,
-                values.cell[0],
-                values.cell[1],
+                cell.join(","),
                 fp.join(" ")
             )
         };

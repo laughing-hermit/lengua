@@ -252,6 +252,49 @@ async fn the_aarch64_hypotenuse_computes_in_doubles() {
     session.service.cancel().await.expect("close the session");
 }
 
+/// The AArch64 vector template, x86-64's `shout` spec compiled with NEON, passes its tests and is
+/// proven through the server: every line it shouts, with no solver question.
+#[tokio::test]
+async fn the_aarch64_vector_template_is_proven() {
+    let session = if cfg!(target_arch = "aarch64") {
+        Session::proving_for(Protocol::Discover, 120).await
+    } else if common::qemu_runs_aarch64() {
+        Session::emulating_for(Protocol::Discover, "linux-aarch64", 120).await
+    } else {
+        return;
+    };
+    let asset = |path: &str| {
+        std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("plugin/skills/compile/assets")
+                .join(path),
+        )
+        .expect("the asset")
+    };
+    let program = written(
+        &session,
+        [
+            ("spec.md", asset("vector-template-spec.md")),
+            ("main.s", asset("linux-aarch64/vector-template.s")),
+        ],
+    )
+    .await;
+    let report = done(&session, &program).await;
+    assert!(
+        any_line(&report["tests"], "follows every rule and passed all"),
+        "{report}"
+    );
+    assert!(
+        text(&report["proofs"][0]).starts_with("generated B1: proven for every input in range"),
+        "{report}"
+    );
+    let mut arguments = program.arguments();
+    arguments["stdin"] = Value::from("neon shouts too\n");
+    let run = session.call_ok("run", arguments).await;
+    assert_eq!(run["stdout"], "NEON SHOUTS TOO\n", "{run}");
+    session.service.cancel().await.expect("close the session");
+}
+
 /// The AArch64 cat, a streaming filter through `fill`, is proven for every length through the
 /// server, as x86-64's is: natively on an ARM64 computer, and through QEMU here.
 #[tokio::test]
