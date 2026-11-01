@@ -12,6 +12,10 @@
 //! without a slot; once the callee saves x30 in its frame record, that slot is the return
 //! address no store may change, as x86-64's pushed one is. `ret` must go back where the call came
 //! from, with the stack as the call found it.
+//!
+//! Floating point is [`float`]'s.
+
+mod float;
 
 use super::{Cpu, End, Held, Last, Owner, Plan, Return, Step, Stop, unsupported};
 use crate::isa::aarch64::{
@@ -261,7 +265,7 @@ impl Cpu<'_> {
             | Inst::FpMoveImm { .. }
             | Inst::FpConvert { .. }
             | Inst::FpLoadStore { .. }
-            | Inst::FpPair { .. } => Err(unsupported("floating point on AArch64")),
+            | Inst::FpPair { .. } => self.execute_fp(inst),
         }
     }
 
@@ -831,14 +835,15 @@ impl Cpu<'_> {
         }
     }
 
-    /// Stores `value` at `at`, held to what `held` holds; when it's x30 holding the return
-    /// address of the running call, that's where the return address is kept from then on.
+    /// Stores `value` at `at`, held to what `held` holds, from the general register `from` if
+    /// it's one; when it's x30 holding the return address of the running call, that's where the
+    /// return address is kept from then on.
     fn store_to(
         &mut self,
         at: Term,
         held: Option<Held>,
         value: Term,
-        from: A64Reg,
+        from: Option<A64Reg>,
     ) -> Result<(), Stop> {
         let Some(address) = self
             .pool
@@ -852,7 +857,8 @@ impl Cpu<'_> {
             self.reach(held, address, bytes, true, &Self::doing)?;
         }
         self.save(address, value)?;
-        if slot(from) == Some(LINK)
+        if let Some(from) = from
+            && slot(from) == Some(LINK)
             && from.wide
             && let Some(known) = self.pool.constant(value)
             && let Some(back) = self.state.returns.last_mut()
@@ -880,7 +886,7 @@ impl Cpu<'_> {
             } else {
                 value
             };
-            self.store_to(at, held, value, rt)?;
+            self.store_to(at, held, value, Some(rt))?;
         }
         if let Some((base, moved)) = moved {
             self.set_x(base, moved);
@@ -913,8 +919,8 @@ impl Cpu<'_> {
         } else {
             let first_value = self.x(rt);
             let second_value = self.x(rt2);
-            self.store_to(at, held, first_value, rt)?;
-            self.store_to(second, held, second_value, rt2)?;
+            self.store_to(at, held, first_value, Some(rt))?;
+            self.store_to(second, held, second_value, Some(rt2))?;
         }
         if let Some((base, moved)) = moved {
             self.set_x(base, moved);
@@ -1047,7 +1053,12 @@ impl Cpu<'_> {
                     set(&mut plan, base, owner(self, base));
                 }
             }
-            Inst::LoadStore { address, .. } | Inst::Pair { address, .. } => {
+            // A base an access moves keeps its owner, whatever the access moves: a floating-point
+            // register owns no address, so its loads and stores pass none on.
+            Inst::LoadStore { address, .. }
+            | Inst::Pair { address, .. }
+            | Inst::FpLoadStore { address, .. }
+            | Inst::FpPair { address, .. } => {
                 if let Some(base) = moved_base(address) {
                     set(&mut plan, base, owner(self, base));
                 }

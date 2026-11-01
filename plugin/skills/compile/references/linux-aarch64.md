@@ -7,16 +7,18 @@ an x86-64 one testing AArch64 code through QEMU. The rules are the same as x86-6
 [AArch64's fill](../assets/linux-aarch64/fill.s), copied word for word with its constants.
 
 What AArch64 code covers so far, checked, tested and proven as x86-64's is: arguments, whole
-numbers, text, standard input of any length through `fill`, and files and folders. Not yet, so
-a spec that needs them is compiled for x86-64 for now: vectors (NEON), floating point, threads,
-servers and several clients at once, the terminal, and the checksum and crypto instructions.
+numbers, floating point in singles and doubles, text, standard input of any length through
+`fill`, and files and folders. Not yet, so a spec that needs them is compiled for x86-64 for now:
+vectors (NEON), threads, servers and several clients at once, the terminal, and the checksum and
+crypto instructions.
 
 ## The dialect's form
 
 - Line 1 is exactly `.arch armv8-a`, and comments start with `//`, annotations too:
   `// bound: N` after a loop's label, `// returns: result` in a function's header comment.
 - Registers `x0` to `x30`, their low halves `w0` to `w30`, `sp`, and `xzr`; never `x18`, the
-  platform's register on Apple's and Windows' ARM64.
+  platform's register on Apple's and Windows' ARM64. Floating point is in `d0` to `d31` and
+  `s0` to `s31`.
 - An address only as `adrp xD, name` and, on the next line, `add xD, xD, :lo12:name`; no `adr`,
   no literal pool (`ldr x0, =value`), and no `:lo12:` inside a load or store.
 - A number too wide for one `mov` is a `mov` and `movk`s that each name the same constant:
@@ -71,9 +73,10 @@ with `exit`, and keeps what it needs across calls in `x19` to `x28` without savi
 - `bl` puts the return address in `x30`. A function that calls anything but `assert_fail`
   opens with `stp x29, x30, [sp, #-16]!` and closes with `ldp x29, x30, [sp], #16` right before
   its one `ret`.
-- A function must give back `x19` to `x28` (and `sp`) unchanged: save the ones it uses in pairs,
-  `stp x19, x20, [sp, #-16]!` after the opening and `ldp x19, x20, [sp], #16` before the closing,
-  in mirrored order. It may change `x0` to `x17`.
+- A function must give back `x19` to `x28`, `d8` to `d15` (and `sp`) unchanged: save the ones it
+  uses in pairs, `stp x19, x20, [sp, #-16]!` after the opening and `ldp x19, x20, [sp], #16`
+  before the closing, in mirrored order, and `d8` to `d15` the same way after the `x` pairs. It
+  may change `x0` to `x17` and the other `d` registers.
 - `sp` moves only by multiples of 16. `ret` returns through `x30` only; no `blr`, and `br` only
   as a checked jump table's jump.
 
@@ -103,3 +106,34 @@ with `exit`, and keeps what it needs across calls in `x19` to `x28` without savi
   `sub w4, w4, w5, lsl #5` after `cset` of whether it's a letter, with no branch on the byte, which
   keeps a proof's paths to one.
 - Exit codes go from 0 to 255; 134 is lengua's code for a failed assertion.
+
+## Floating-point facts
+
+- Doubles are `d0` to `d31` and singles `s0` to `s31`: the low 64 and 32 bits of the vector
+  registers `v0` to `v31`, and writing one clears the rest of its vector register. Arguments go
+  in `d0` to `d7`, the result in `d0`.
+- `d8` to `d15` are callee-saved: a function that changes one saves it in a pair after its frame
+  record, `stp d8, d9, [sp, #-16]!`, and restores it with `ldp d8, d9, [sp], #16` before
+  `ldp x29, x30, [sp], #16`. A call changes every other one.
+- `scvtf d0, x1` turns a whole number into a double, exactly up to 2^53; `ucvtf` reads it
+  without a sign. `fcvtzs x0, d0` rounds toward zero; for the nearest, ties to even, as `fixed`
+  and `round` round, `frintn d0, d0` first. Out of range `fcvtzs` gives the nearest end, and a
+  NaN gives 0.
+- `fmov d0, #1.5` holds ±16 to 31 sixteenths times 2^-3 to 2^4; any other number comes from a
+  whole one, `mov x1, #100` and `scvtf d1, x1`, or from `.double 100.0` in `.rodata`, read with
+  `adrp`, `add :lo12:` and `ldr d1, [x1]`.
+- After `fcmp d0, d1`, branch with `b.mi` (less), `b.ls` (less or equal), `b.eq` (equal),
+  `b.ge` (greater or equal), `b.gt` (greater), and `b.vs` when either is a NaN: each of these is
+  false for a NaN but `b.vs`. `b.lt`, `b.le`, `b.hi`, `b.hs` and `b.ne` are true for one.
+- "12.34" is 1234 / 100.0: `scvtf` both numbers and `fdiv` once.
+- `fmadd d0, d1, d2, d3` is `d1 × d2 + d3` with one rounding: use it exactly where the tests'
+  formula says `fma(a, b, c)`, and `fmul` then `fadd` for `a * b + c`.
+- Singles work the same way with `s` registers; `fcvt d0, s0` widens a single exactly, and
+  `fcvt s0, d0` rounds a double to the nearest single.
+- Also there: `fabs`, `fneg`, `fsqrt`, `fmax` and `fmin` (a NaN comes through), `fmaxnm` and
+  `fminnm` (a quiet NaN loses to a number), `fnmul`, `fmsub`, `fnmadd`, `fnmsub`, `fcsel`, `fmov`
+  between `d` and `x` registers or `s` and `w`, `frintp`, `frintm`, `frintz` and `frinta`, and
+  `ldr`, `str`, `ldp` and `stp` of `s` and `d` registers.
+- Left out: half precision (`h` registers), whole vector registers (`q` and `v`, which NEON
+  brings later), changes to FPCR (rounding stays nearest, ties to even) and the estimates
+  (`frecpe`, `frsqrte`).

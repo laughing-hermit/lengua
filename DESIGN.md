@@ -1035,7 +1035,15 @@ still to build per target. A new profile must supply:
    pool's own: a digit taken off with `udiv` and `msub`, `n - (n / 10) × 10` one division at a
    time, is the remainder, where x86-64's `div` gives it; and a product's overflow check, its
    high half against its low half's sign, `asr #63`, is the value's sign, which its range settles.
-   CPU feature detection is per CPU too (x86's `is_x86_feature_detected!`).
+   Its floating point (`exec/aarch64/float.rs`) is the pool's float terms, which compute as SSE
+   does, with AArch64's own rules around them where the two CPUs differ: a signaling NaN operand
+   before a quiet one and a positive default NaN, `fmax` and `fmin` passing NaNs on and putting -0
+   below +0, and conversions that saturate, a NaN giving 0. Where the operands' bounds rule those
+   cases out the term is the pool's own, so the hypotenuse example's spec compiled for AArch64 is
+   proven as x86-64's is, step by step the formula's doubles, with no solver question; the
+   `against_a64` harness holds every float instruction to the CPU on NaNs of both kinds, zeros of
+   both signs, subnormals and the ends of each conversion, and whole V registers, so a scalar
+   write clears the rest. CPU feature detection is per CPU too (x86's `is_x86_feature_detected!`).
 4. **Dialect:** the Power of 10 in that CPU's mnemonics and registers, with its reference (today
    `references/linux-x86_64.md` and the x86 parts of `references/power-of-10.md`). The rules
    themselves read only the facts, so they're shared; what's per CPU is the syntax and what the

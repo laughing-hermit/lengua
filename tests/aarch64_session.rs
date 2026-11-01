@@ -199,16 +199,39 @@ async fn the_aarch64_calc_runs_each_case_of_its_table() {
 }
 
 /// The AArch64 hypotenuse, x86-64's example spec unchanged, computes in doubles and passes every
-/// test, its decimals rounded as x86-64's are.
+/// test, its decimals rounded as x86-64's are, and its doubles are proven the formula's for whole
+/// sides and decimal ones.
 #[tokio::test]
 async fn the_aarch64_hypotenuse_computes_in_doubles() {
-    let Some((session, _)) = aarch64_session().await else {
+    let session = if cfg!(target_arch = "aarch64") {
+        Session::proving_for(Protocol::Discover, 120).await
+    } else if common::qemu_runs_aarch64() {
+        Session::emulating_for(Protocol::Discover, "linux-aarch64", 120).await
+    } else {
         return;
     };
     let program = written(&session, aarch64_files("hypotenuse")).await;
     let report = done(&session, &program).await;
     assert!(
         any_line(&report["tests"], "follows every rule and passed all"),
+        "{report}"
+    );
+    for (number, proof) in report["proofs"]
+        .as_array()
+        .expect("the proofs")
+        .iter()
+        .enumerate()
+    {
+        assert!(
+            text(proof).starts_with(&format!(
+                "generated B{}: proven for every input in range",
+                number + 1
+            )),
+            "{report}"
+        );
+    }
+    assert!(
+        text(&report["memory"]).contains("the proofs of B1, B2, B3, B4 and B5 cover"),
         "{report}"
     );
     for (args, stdout) in [

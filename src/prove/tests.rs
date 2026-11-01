@@ -225,6 +225,57 @@ async fn proves_the_aarch64_file_program() {
     assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
 }
 
+/// The AArch64 hypotenuse, x86-64's example spec compiled for AArch64: its doubles are the
+/// formula's step by step, as x86-64's are, for every pair of whole sides the table draws and for
+/// decimal sides over their whole range. Rounding toward zero rather than to the nearest is
+/// caught.
+#[tokio::test]
+async fn proves_the_aarch64_hypotenuse() {
+    if !solvers_installed() {
+        return;
+    }
+    let spec = repository_file("tests/fixtures/linux-aarch64/hypotenuse/spec.md");
+    let source = repository_file("tests/fixtures/linux-aarch64/hypotenuse/main.s");
+    let right = machine(&source).await;
+    for (number, seconds) in [(0, 120), (1, 240)] {
+        let block = block(&spec, number);
+        let started = Instant::now();
+        let verdict = prove(&right, &block, &budget(seconds));
+        eprintln!(
+            "AArch64 hypotenuse block {number}: {verdict:?} in {:?}",
+            started.elapsed()
+        );
+        assert!(
+            matches!(verdict, Verdict::Proven { .. }),
+            "block {number}: {verdict:?}"
+        );
+    }
+    // The scale read from a .double in .rodata is the same double.
+    let constant = crate::checker::tests::from_rodata(&source);
+    let verdict = prove(&machine(&constant).await, &block(&spec, 1), &budget(240));
+    assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
+    // A pointer a floating-point load moves keeps its object: one double past the scale is
+    // caught, rather than taken for assert_message's bytes, which come next.
+    let past = constant.replacen(
+        "    ldr d2, [x2]\n",
+        "    ldr d2, [x2], #8\n    ldr d3, [x2]\n",
+        1,
+    );
+    assert_ne!(past, constant);
+    let verdict = prove(&machine(&past).await, &block(&spec, 0), &budget(120));
+    let Verdict::Counterexample(found) = &verdict else {
+        panic!("{verdict:?}");
+    };
+    let Some(Value::Str(problem)) = found.get(UNSAFE) else {
+        panic!("{found:?}");
+    };
+    assert!(problem.contains("thousand"), "{problem}");
+    let toward_zero = source.replace("    frintn d0, d0\n", "    frintz d0, d0\n");
+    assert_ne!(toward_zero, source);
+    let verdict = prove(&machine(&toward_zero).await, &block(&spec, 0), &budget(120));
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+}
+
 #[test]
 fn splits_ranges_into_digit_pieces() {
     let pieces = cover(&digits_of(1000, 4), &digits_of(1234, 4));

@@ -1947,6 +1947,28 @@ async fn an_aarch64_file_program_passes_every_rule() {
     assert!(report.passed(), "{all:#?}");
 }
 
+/// The AArch64 hypotenuse with its scale, 1000.0, a `.double` in .rodata that `ldr d2` reads,
+/// rather than `scvtf` of a whole number.
+pub(crate) fn from_rodata(text: &str) -> String {
+    let changed = text
+        .replacen(
+            ".type assert_message, @object\n",
+            ".type thousand, @object\nthousand:\n    .double 1000.0\n.size thousand, . - thousand\n\n\
+             .type assert_message, @object\n",
+            1,
+        )
+        .replacen(
+            "    mov x2, #UNITS\n    scvtf d2, x2\n",
+            "    adrp x2, thousand\n    add x2, x2, :lo12:thousand\n    ldr d2, [x2]\n",
+            1,
+        );
+    assert!(
+        changed.contains("    .double 1000.0\n") && changed.contains("    ldr d2, [x2]\n"),
+        "{changed}"
+    );
+    changed
+}
+
 /// An AArch64 floating-point program, the hypotenuse example's spec compiled for AArch64: its
 /// doubles (scvtf, fdiv, fmul, fadd, fsqrt, frintn, fcvtzs) pass every rule. d8 to d15 are
 /// callee-saved, so a function that changes one saves it, in stp pairs after the frame record and
@@ -2010,6 +2032,12 @@ async fn an_aarch64_float_program_passes_every_rule() {
         line_of(&unmirrored, "    ret\n.Lprint_hypotenuse_assert_side_a"),
         "don't mirror its pushes",
     );
+
+    // The scale as a constant in .rodata, read through its address.
+    let constant = from_rodata(&text);
+    let report = check_full(&constant, CpuFeatures::all(), &syscalls, None).await;
+    let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+    assert!(report.passed(), "{all:#?}");
 
     let half = text.replacen("    fadd d0, d0, d1\n", "    fadd h0, h0, h1\n", 1);
     assert_ne!(half, text);

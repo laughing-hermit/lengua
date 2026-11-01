@@ -3,7 +3,8 @@
 //! MXCSR does; a NaN operand comes through quieted, the first one's first; an operation with no
 //! meaning, such as 0 / 0, gives the default NaN; and a conversion to a whole number that doesn't
 //! fit gives the "integer indefinite", only the top bit set. The NaN rules and the indefinite are
-//! x86's: another target brings its own, as AArch64's positive default NaN.
+//! x86's: another target brings its own around these, as AArch64's model does with its positive
+//! default NaN and its saturating conversions.
 
 /// The four operations of two floats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -18,7 +19,7 @@ pub enum FloatOp {
     Div,
 }
 
-/// How a float rounds to a whole float, as `roundsd`'s immediate picks.
+/// How a float rounds to a whole float, as `roundsd`'s immediate picks, or AArch64's `frint`s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Rounding {
     /// To the nearest, ties to even.
@@ -29,6 +30,9 @@ pub enum Rounding {
     Up,
     /// Toward zero.
     Zero,
+    /// To the nearest, ties away from zero: AArch64's `frinta`, which x86-64 has no rounding
+    /// for.
+    Away,
 }
 
 /// What `ucomisd` tells about two floats.
@@ -181,6 +185,7 @@ pub fn round(a: u128, rounding: Rounding, width: u32) -> u128 {
             Rounding::Down => x.floor(),
             Rounding::Up => x.ceil(),
             Rounding::Zero => x.trunc(),
+            Rounding::Away => x.round(),
         },
         width,
     )

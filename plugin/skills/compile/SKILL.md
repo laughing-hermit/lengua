@@ -171,7 +171,8 @@ when its second line says it was compiled for another computer or a CPU feature 
 doesn't protect it: anyone can build main.s outside lengua, so its guarantees hold only for
 programs that `run` runs after `check`. lengua supports two targets so far, Linux on x86-64 and on
 AArch64, the same lengua on each; AArch64 code covers the template's kind of program for now
-(arguments, whole numbers, text, standard input and files), as its reference says. Adding a CPU
+(arguments, whole numbers, floating point, text, standard input and files), as its reference
+says. Adding a CPU
 or OS is set out in [porting.md](references/porting.md).
 
 ## Making it faster

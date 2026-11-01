@@ -72,7 +72,7 @@ impl Cpu<'_> {
     }
 
     /// `value`'s bytes, lowest first, padded with zeros to `bytes`.
-    fn split(&mut self, value: Term, bytes: usize) -> Vec<Term> {
+    pub(super) fn split(&mut self, value: Term, bytes: usize) -> Vec<Term> {
         let width = self.pool.width(value);
         let zero = self.pool.bv(8, 0);
         (0..bytes)
@@ -89,7 +89,7 @@ impl Cpu<'_> {
 
     /// One term of `parts`, lowest first, joined as a balanced tree so a bit of it is reached in
     /// few steps.
-    fn join(&mut self, parts: &[Term]) -> Term {
+    pub(super) fn join(&mut self, parts: &[Term]) -> Term {
         match parts {
             [] => self.pool.bv(8, 0),
             [only] => *only,

@@ -18,7 +18,7 @@ pub mod x86_64;
 #[cfg(test)]
 pub(crate) mod golden;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::collections::BTreeMap;
 use std::fmt;

@@ -1235,7 +1235,8 @@ fn the_solvers_read_floats_as_the_pool_evaluates_them() {
                     Rounding::Down,
                     Rounding::Up,
                     Rounding::Zero,
-                ][round % 4],
+                    Rounding::Away,
+                ][round % 5],
             ),
             _ => pool.float_convert(a, 96 - width),
         };

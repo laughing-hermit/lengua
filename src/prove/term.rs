@@ -4521,6 +4521,7 @@ impl Pool {
                     Rounding::Down => "RTN",
                     Rounding::Up => "RTP",
                     Rounding::Zero => "RTZ",
+                    Rounding::Away => "RNA",
                 };
                 (
                     format!("(fp.roundToIntegral {mode} {})", of(a)),

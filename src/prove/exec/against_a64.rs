@@ -4,9 +4,12 @@
 //! register, flag and memory values and prints where they ended. The model must end the same
 //! every time: AArch64 leaves nothing these instructions do undefined.
 //!
-//! The harness's own code sets the flags with `msr nzcv` and jumps into each probe through a
-//! register, which the dialect doesn't have; only the probes, all in the dialect, run in the
-//! model.
+//! The harness's own code sets the flags with `msr nzcv`, moves whole V registers with `ldp q`
+//! and `stp q`, and jumps into each probe through a register, which the dialect doesn't have;
+//! only the probes, all in the dialect, run in the model. Floating-point probes start from a mix
+//! of NaNs of both kinds, zeros of both signs, infinities, subnormals, ties and the limits of
+//! each conversion, and the whole of each V register is compared, so a scalar write must clear
+//! what's above it.
 
 use std::io::Write as _;
 use std::process::{Command, Stdio};
@@ -16,6 +19,7 @@ use rand::{RngExt, SeedableRng};
 
 use super::{Image, Last, State, Step, step};
 use crate::checker::decode::Machine;
+use crate::isa::aarch64::fp_immediate;
 use crate::platform::Profile;
 use crate::prove::term::Pool;
 use crate::toolchain::Toolchain;
@@ -24,11 +28,21 @@ use crate::toolchain::Toolchain;
 /// that reaches memory.
 const REGISTERS: usize = 16;
 
-/// Bytes per vector: the registers, NZCV, the cell's two words and the probe's address.
-const VECTOR: usize = (REGISTERS + 4) * 8;
+/// The V registers a probe works with, v0 to v7, 16 bytes each.
+const FP_REGISTERS: usize = 8;
 
-/// Bytes per result: the registers, NZCV and the cell's two words.
-const RESULT: usize = (REGISTERS + 3) * 8;
+/// Where the V registers are in a vector and a result: after the registers, NZCV, the cell's two
+/// words and the probe's address (a result's last word unused), at a multiple of 16, as `ldp q`
+/// and `stp q` reach.
+const V_AT: usize = (REGISTERS + 4) * 8;
+
+/// Bytes per vector: the registers, NZCV, the cell's two words, the probe's address and the V
+/// registers.
+const VECTOR: usize = V_AT + FP_REGISTERS * 16;
+
+/// Bytes per result: the registers, NZCV, the cell's two words, a word unused and the V
+/// registers.
+const RESULT: usize = V_AT + FP_REGISTERS * 16;
 
 /// The conditions, as `b.cond` and `csel` name them.
 const CONDITIONS: [&str; 16] = [
@@ -69,10 +83,106 @@ fn register(rng: &mut ChaCha8Rng, wide: bool) -> String {
     format!("{}{number}", if wide { "x" } else { "w" })
 }
 
+/// An s or d register a probe works with, s0 to s7 or d0 to d7.
+fn fp_register(rng: &mut ChaCha8Rng, double: bool) -> String {
+    let number = rng.random_range(0..FP_REGISTERS);
+    format!("{}{number}", if double { "d" } else { "s" })
+}
+
+/// The floating-point probes, of singles and of doubles.
+#[allow(clippy::too_many_lines)]
+fn fp_probes(rng: &mut ChaCha8Rng, list: &mut Vec<Probe>) {
+    for double in [true, false] {
+        let f = |rng: &mut ChaCha8Rng| fp_register(rng, double);
+        for op in [
+            "fadd", "fsub", "fmul", "fdiv", "fmax", "fmin", "fmaxnm", "fminnm", "fnmul",
+        ] {
+            let (d, n, m) = (f(rng), f(rng), f(rng));
+            list.push(probe(&[format!("{op} {d}, {n}, {m}")]));
+        }
+        for op in ["fmadd", "fmsub", "fnmadd", "fnmsub"] {
+            let (d, n, m, a) = (f(rng), f(rng), f(rng), f(rng));
+            list.push(probe(&[format!("{op} {d}, {n}, {m}, {a}")]));
+        }
+        for op in [
+            "fmov", "fabs", "fneg", "fsqrt", "frintn", "frintp", "frintm", "frintz", "frinta",
+        ] {
+            let (d, n) = (f(rng), f(rng));
+            list.push(probe(&[format!("{op} {d}, {n}")]));
+        }
+        let (d, n) = (fp_register(rng, !double), f(rng));
+        list.push(probe(&[format!("fcvt {d}, {n}")]));
+        for op in ["fcmp", "fcmpe"] {
+            let (n, m) = (f(rng), f(rng));
+            list.push(probe(&[format!("{op} {n}, {m}")]));
+            let n = f(rng);
+            list.push(probe(&[format!("{op} {n}, #0.0")]));
+        }
+        for condition in &CONDITIONS[..14] {
+            let (d, n, m) = (f(rng), f(rng), f(rng));
+            list.push(probe(&[format!("fcsel {d}, {n}, {m}, {condition}")]));
+        }
+        let number = fp_immediate(rng.random());
+        let d = f(rng);
+        list.push(probe(&[format!("fmov {d}, #{number:?}")]));
+        // The bits to and from a general register as wide.
+        let (g, n) = (register(rng, double), f(rng));
+        list.push(probe(&[format!("fmov {g}, {n}")]));
+        let (d, g) = (f(rng), register(rng, double));
+        list.push(probe(&[format!("fmov {d}, {g}")]));
+        for wide in [true, false] {
+            for op in ["scvtf", "ucvtf"] {
+                let (d, g) = (f(rng), register(rng, wide));
+                list.push(probe(&[format!("{op} {d}, {g}")]));
+            }
+            for op in ["fcvtzs", "fcvtzu"] {
+                let (g, n) = (register(rng, wide), f(rng));
+                list.push(probe(&[format!("{op} {g}, {n}")]));
+            }
+        }
+        // Loads and stores in the cell at x15, the pairs filling it or half of it.
+        let size = if double { 8 } else { 4 };
+        let shift = if double { 3 } else { 2 };
+        list.push(memory(&[format!("str {}, [x15]", f(rng))]));
+        list.push(memory(&[format!("str {}, [x15, #{size}]", f(rng))]));
+        list.push(memory(&[format!("ldr {}, [x15]", f(rng))]));
+        list.push(memory(&[format!("ldr {}, [x15, #{size}]", f(rng))]));
+        list.push(memory(&[format!("str {}, [x15, #{size}]!", f(rng))]));
+        list.push(memory(&[format!("ldr {}, [x15], #{size}", f(rng))]));
+        list.push(memory(&[
+            "mov x14, #1".to_owned(),
+            format!("ldr {}, [x15, x14, lsl #{shift}]", f(rng)),
+        ]));
+        list.push(memory(&[format!("stp {}, {}, [x15]", f(rng), f(rng))]));
+        // Two registers loaded at once must differ: the same one twice is unpredictable.
+        let first = rng.random_range(0..FP_REGISTERS);
+        let second = (first + rng.random_range(1..FP_REGISTERS)) % FP_REGISTERS;
+        let kind = if double { "d" } else { "s" };
+        list.push(memory(&[format!(
+            "ldp {kind}{first}, {kind}{second}, [x15]"
+        )]));
+    }
+    // A comparison's flags read by a branch-free choice, and whole numbers through doubles and
+    // back.
+    list.push(probe(&[
+        "fcmp d1, d2".to_owned(),
+        "cset w0, mi".to_owned(),
+        "cset w1, lt".to_owned(),
+        "cset w2, vs".to_owned(),
+    ]));
+    list.push(probe(&[
+        "scvtf d0, x1".to_owned(),
+        "fcvtzs x2, d0".to_owned(),
+        "ucvtf s1, w3".to_owned(),
+        "fcvtzu w4, s1".to_owned(),
+    ]));
+}
+
 /// Every probe, its registers and numbers drawn from `rng`.
 #[allow(clippy::too_many_lines)]
 fn probes(rng: &mut ChaCha8Rng) -> Vec<Probe> {
     let mut list = Vec::new();
+    fp_probes(rng, &mut list);
     for wide in [true, false] {
         let width = if wide { 64 } else { 32 };
         let r = |rng: &mut ChaCha8Rng| register(rng, wide);
@@ -343,6 +453,14 @@ _start:
         REGISTERS * 8,
         (REGISTERS + 3) * 8,
     );
+    for pair in 0..FP_REGISTERS / 2 {
+        source.push_str(&format!(
+            "    ldp q{}, q{}, [x23, #{}]\n",
+            pair * 2,
+            pair * 2 + 1,
+            V_AT + pair * 32
+        ));
+    }
     for pair in 0..REGISTERS / 2 {
         source.push_str(&format!(
             "    ldp x{}, x{}, [x23, #{}]\n",
@@ -352,6 +470,14 @@ _start:
         ));
     }
     source.push_str("    br x25\n.Lafter:\n    adrp x23, result\n    add x23, x23, :lo12:result\n");
+    for pair in 0..FP_REGISTERS / 2 {
+        source.push_str(&format!(
+            "    stp q{}, q{}, [x23, #{}]\n",
+            pair * 2,
+            pair * 2 + 1,
+            V_AT + pair * 32
+        ));
+    }
     for pair in 0..REGISTERS / 2 {
         source.push_str(&format!(
             "    stp x{}, x{}, [x23, #{}]\n",
@@ -459,6 +585,84 @@ fn value(rng: &mut ChaCha8Rng) -> u64 {
     }
 }
 
+/// A V register's 128 bits: its low half a double, a single in its low 32 bits, or any bits,
+/// from a mix of edge cases and plain random numbers, and its high half any bits.
+fn fp_value(rng: &mut ChaCha8Rng) -> u128 {
+    const DOUBLES: [u64; 30] = [
+        0,
+        0x8000_0000_0000_0000,
+        0x7FF0_0000_0000_0000,
+        0xFFF0_0000_0000_0000,
+        // AArch64's default NaN, x86-64's, signaling NaNs and a quiet one with a payload.
+        0x7FF8_0000_0000_0000,
+        0xFFF8_0000_0000_0000,
+        0x7FF0_0000_0000_0001,
+        0xFFF4_0000_0000_0000,
+        0x7FFC_0000_0000_0123,
+        0x3FF0_0000_0000_0000,
+        0xBFF0_0000_0000_0000,
+        0x3FE0_0000_0000_0000,
+        0x4004_0000_0000_0000,
+        0xC004_0000_0000_0000,
+        0x3FF8_0000_0000_0000,
+        // Subnormals, the smallest normal and the largest finite.
+        0x0000_0000_0000_0001,
+        0x000F_FFFF_FFFF_FFFF,
+        0x0010_0000_0000_0000,
+        0x7FEF_FFFF_FFFF_FFFF,
+        // The ends of the conversions: 2^63, -2^63, 2^64, just below 2^63, 2^31, 2^32, -2^31,
+        // 2^32 - 0.5, -0.5 and -1.
+        0x43E0_0000_0000_0000,
+        0xC3E0_0000_0000_0000,
+        0x43F0_0000_0000_0000,
+        0x43DF_FFFF_FFFF_FFFF,
+        0x41E0_0000_0000_0000,
+        0x41F0_0000_0000_0000,
+        0xC1E0_0000_0000_0000,
+        0x41EF_FFFF_FFF0_0000,
+        0xBFE0_0000_0000_0000,
+        0xBFF0_0000_0000_0000,
+        0x7E37_E43C_8800_759C,
+    ];
+    const SINGLES: [u32; 22] = [
+        0,
+        0x8000_0000,
+        0x7F80_0000,
+        0xFF80_0000,
+        0x7FC0_0000,
+        0xFFC0_0000,
+        0x7F80_0001,
+        0x7FA0_0000,
+        0x3F80_0000,
+        0xBF80_0000,
+        0x3F00_0000,
+        0x4020_0000,
+        0x0000_0001,
+        0x007F_FFFF,
+        0x0080_0000,
+        0x7F7F_FFFF,
+        // 2^31, 2^32, 2^63, 2^64, -2^31 and just below 2^31.
+        0x4F00_0000,
+        0x4F80_0000,
+        0x5F00_0000,
+        0x5F80_0000,
+        0xCF00_0000,
+        0x4EFF_FFFF,
+    ];
+    let high: u64 = rng.random();
+    let above: u64 = u64::from(rng.random::<u32>()) << 32;
+    let low = match rng.random_range(0..7) {
+        0 | 1 => DOUBLES[rng.random_range(0..DOUBLES.len())],
+        2 => above | u64::from(SINGLES[rng.random_range(0..SINGLES.len())]),
+        3 => rng.random_range(-1.0e6..1.0e6_f64).to_bits(),
+        // Quarters, so ties come up.
+        4 => (f64::from(rng.random_range(-400_i32..400)) / 4.0).to_bits(),
+        5 => above | u64::from((rng.random_range(-1.0e6..1.0e6_f32)).to_bits()),
+        _ => rng.random(),
+    };
+    u128::from(high) << 64 | u128::from(low)
+}
+
 /// Builds the harness and reads it back as the checker's decoder does.
 async fn build(source: &str, folder: &std::path::Path) -> (std::path::PathBuf, Machine) {
     let toolchain = Toolchain::discover().await.expect("llvm-mc and ld.lld");
@@ -481,26 +685,40 @@ async fn build(source: &str, folder: &std::path::Path) -> (std::path::PathBuf, M
     (executable, machine)
 }
 
-/// Where the model ends: each register, NZCV's flags and the cell's two words.
+/// Where the model ends: each register, NZCV's flags, the cell's two words and each V register.
 struct Ended {
     registers: Vec<u128>,
     flags: Vec<bool>,
     cell: [u128; 2],
+    vectors: Vec<u128>,
+}
+
+/// One vector's values: the registers, NZCV, the cell's two words and the V registers.
+struct Values {
+    registers: [u64; REGISTERS],
+    nzcv: u64,
+    cell: [u64; 2],
+    vectors: [u128; FP_REGISTERS],
 }
 
 /// Runs a probe in the model, from `start` to `end`, on one vector's values.
 fn model(
     image: &Image,
     (start, end): (u64, u64),
-    registers: &[u64; REGISTERS],
-    nzcv: u64,
-    cell: [u64; 2],
+    values: &Values,
     cell_address: u64,
 ) -> Result<Ended, String> {
+    let (registers, nzcv, cell) = (&values.registers, values.nzcv, values.cell);
     let mut pool = Pool::default();
     let mut state = State::start(image, &mut pool, &[], &[], Vec::new());
     for (slot, value) in registers.iter().enumerate() {
         state.registers[slot] = pool.bv(64, u128::from(*value));
+    }
+    for (number, value) in values.vectors.iter().enumerate() {
+        let vector = std::rc::Rc::make_mut(&mut state.vectors[number]);
+        for (at, byte) in vector.iter_mut().take(16).enumerate() {
+            *byte = pool.bv(8, (value >> (8 * at)) & 0xff);
+        }
     }
     let bit = |pool: &mut Pool, mask: u64| pool.boolean(nzcv & mask != 0);
     state.sign = bit(&mut pool, 1 << 31);
@@ -563,10 +781,20 @@ fn model(
         }
         *slot = known(&pool, whole.ok_or("no cell")?, "the cell")?;
     }
+    let vectors = (0..FP_REGISTERS)
+        .map(|number| {
+            let mut whole = 0;
+            for (at, byte) in state.vectors[number].iter().take(16).enumerate() {
+                whole |= known(&pool, *byte, &format!("v{number}"))? << (8 * at);
+            }
+            Ok(whole)
+        })
+        .collect::<Result<_, String>>()?;
     Ok(Ended {
         registers,
         flags,
         cell: words,
+        vectors,
     })
 }
 
@@ -632,6 +860,10 @@ async fn every_aarch64_instruction_matches_the_cpu() {
             }
             let nzcv = u64::from(rng.random_range(0_u32..16)) << 28;
             let cell = [value(&mut rng), value(&mut rng)];
+            let mut fp = [0; FP_REGISTERS];
+            for register in &mut fp {
+                *register = fp_value(&mut rng);
+            }
             for word in registers
                 .iter()
                 .chain(&[nzcv])
@@ -640,7 +872,18 @@ async fn every_aarch64_instruction_matches_the_cpu() {
             {
                 input.extend_from_slice(&word.to_le_bytes());
             }
-            vectors.push((number, registers, nzcv, cell));
+            for register in &fp {
+                input.extend_from_slice(&register.to_le_bytes());
+            }
+            vectors.push((
+                number,
+                Values {
+                    registers,
+                    nzcv,
+                    cell,
+                    vectors: fp,
+                },
+            ));
         }
     }
     let mut child = Command::new(&executable)
@@ -658,31 +901,33 @@ async fn every_aarch64_instruction_matches_the_cpu() {
     assert!(output.status.success(), "the harness failed: {output:?}");
     assert_eq!(output.stdout.len(), capacity * RESULT, "every result");
     let mut problems = Vec::new();
-    for (position, (number, registers, nzcv, cell)) in vectors.iter().enumerate() {
+    for (position, (number, values)) in vectors.iter().enumerate() {
         let probe = &probes[*number];
         let real = &output.stdout[position * RESULT..(position + 1) * RESULT];
         let describe = || {
-            let registers: Vec<String> = registers
+            let registers: Vec<String> = values
+                .registers
                 .iter()
                 .enumerate()
                 .map(|(slot, value)| format!("x{slot}={value:#x}"))
                 .collect();
+            let fp: Vec<String> = values
+                .vectors
+                .iter()
+                .enumerate()
+                .map(|(number, value)| format!("v{number}={value:#x}"))
+                .collect();
             format!(
-                "`{}` with {} nzcv={nzcv:#x} cell={:#x},{:#x}",
+                "`{}` with {} nzcv={:#x} cell={:#x},{:#x} {}",
                 probe.code.join("; "),
                 registers.join(" "),
-                cell[0],
-                cell[1]
+                values.nzcv,
+                values.cell[0],
+                values.cell[1],
+                fp.join(" ")
             )
         };
-        let ended = match model(
-            &image,
-            spans[*number],
-            registers,
-            *nzcv,
-            *cell,
-            cell_address,
-        ) {
+        let ended = match model(&image, spans[*number], values, cell_address) {
             Ok(ended) => ended,
             Err(problem) => {
                 problems.push(format!("{}: {problem}", describe()));
@@ -714,6 +959,16 @@ async fn every_aarch64_instruction_matches_the_cpu() {
                 problems.push(format!(
                     "{}: the cell's word {word_number} is {modelled:#x}, the CPU says \
                      {expected:#x}",
+                    describe()
+                ));
+            }
+        }
+        for (number, modelled) in ended.vectors.iter().enumerate() {
+            let at = V_AT / 8 + 2 * number;
+            let expected = u128::from(word(real, at + 1)) << 64 | u128::from(word(real, at));
+            if *modelled != expected {
+                problems.push(format!(
+                    "{}: v{number} is {modelled:#x}, the CPU says {expected:#x}",
                     describe()
                 ));
             }

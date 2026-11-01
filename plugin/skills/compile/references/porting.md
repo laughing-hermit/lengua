@@ -78,8 +78,9 @@ it covers what x86-64 covers, each item with its own hardware's means.
   (2, 3, 4) are new, and the OS edge (5) and the supervisor's registers (6) change in detail.
   Tested under QEMU on an x86-64 Linux computer for everything but the sandbox's exact filter and
   supplies, and on an ARM64 computer or CI runner for those. Checked, tested and proven, as
-  x86-64's code is, for the template's kind of program: arguments, whole numbers, text, standard
-  input of any length through `fill`, and files and folders ([its reference](linux-aarch64.md)).
-  Vectors, floating point, threads, servers, the terminal and the crypto instructions come next.
+  x86-64's code is, for the template's kind of program: arguments, whole numbers, floating point,
+  text, standard input of any length through `fill`, and files and folders
+  ([its reference](linux-aarch64.md)). Vectors, threads, servers, the terminal and the crypto
+  instructions come next.
 - **macOS (ARM64, x86-64)** and **Windows (x86-64, ARM64)** need all six, the OS edge and the
   sandbox most of all, because they forbid the direct syscalls lengua's Linux programs use.
