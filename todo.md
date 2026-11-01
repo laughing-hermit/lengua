@@ -53,18 +53,70 @@ Left for later on this target:
   final length in one shape would let a 64 KiB buffer, C's size, be proven. The design review
   recommended this as its own round (about 1,000 to 1,500 lines).
 
-Not done because a safety filter stopped the work (Claude's own, in Claude Code, 2026-10-31). What
-a stopped reply held is never produced again — not reworded, and not by routing it through other
-models or subagents (the user asked to use Sonnet 5.5 / Haiku 5.5 agents for it; declined, because
-switching models to get around a safety stop is circumvention, whoever runs the subagent). Anything
-a safety filter stops from here on goes on this list, with what it was working toward:
-- **SHA-256 and AES programs.** Replies working toward them were stopped, so there is no SHA-256 or
-  AES program among lengua's own examples and assets, and no proof (by lengua) that such a program
-  meets the `sha256` formula. **The crypto support itself is not blocked:** the SHA and AES CPU
-  instructions are modeled in the prover and probed against this CPU, and the test language has
-  `sha256`, `crc32` and `crc32c`. So a user can write or drop in a standard SHA-256/AES
-  implementation and lengua will check and test it, and a proof against `sha256` can be attempted
-  on that supplied program. Only lengua hand-authoring the bundled example is blocked.
+**The finish line** (decided 2026-11-01, before ARM64 resumes): everything that can be proven is
+proven, however many rounds that takes, except where a concrete, demonstrated reason shows lengua's
+approach can't prove it, which comes back to the user with the evidence. By item:
+- Can: the proof tests that failed only when every slow test ran at once (long proofs now take
+  turns).
+- Likely: mean's decimal means; counts of a part that can overlap itself; the fastest streaming
+  programs for every length.
+- Uncertain, research: sorting at every length and word tallies past a few bytes, which need
+  quantified facts over memory.
+- Not by their nature, so "tested, not proven" is the right final answer: floats computed in
+  another order than the formula's (the results really differ), a folder's listing (the
+  kernel's order), the `sha256` formula (beyond the solvers), and the safety-stopped items below.
+
+### Safety-stopped work, for a software engineer to review
+
+Claude's own safety filter, in Claude Code, stopped some replies. Claude never produces what a
+stopped reply held again: not reworded, and not by routing it through other models or subagents.
+The user asked for Sonnet 5.5 / Haiku 5.5 agents for it on 2026-10-31 and again on 2026-11-01;
+both times that was declined, because switching models to get around a safety stop is
+circumvention, whoever runs the subagent. This list is so an engineer can review it and, if they
+choose, do the work by hand. Each entry says what was stopped, what it was working toward, what
+lengua already has for it, and how to finish and check it. Anything a safety filter stops from
+here on goes here too.
+
+1. **lengua's own SHA-256 example program** (stopped 2026-10-31, several replies).
+   - Working toward: a bundled example, such as `examples/sha256/spec.md` and `main.s`, that prints
+     the SHA-256 digest of standard input, written in lengua's x86-64 dialect.
+   - Already built, not blocked: the CPU's SHA instructions are in the dialect and modeled in the
+     prover (`src/prove/exec/vector/crypto.rs`), checked against this CPU on random values
+     (`src/prove/exec/against_cpu/vectors.rs`); the test language's `sha256(s)` gives each test's
+     expected digest (`src/expr.rs`).
+   - To do it by hand: write spec.md with FIPS 180-4's examples as its examples and a generated
+     block of texts whose output is `{sha256(text)}`; write main.s from the compile skill's
+     templates (input through `fill`, the rules in `references/power-of-10.md`); call `check`.
+   - Expected result: every test runs; the proof says "tested, not proven", since the `sha256`
+     formula is beyond the solvers (above), a limit of its own.
+   - Repository effects: a program in `examples/` is also checked by
+     `every_program_in_the_repository_follows_every_rule` and joins the checker golden's programs
+     (`src/checker/golden.rs`): record it again with `LENGUA_GOLDEN=write`.
+2. **lengua's own AES example program** (stopped 2026-10-31).
+   - Working toward: a bundled example, such as `examples/aes/`, that encrypts with AES-128 using
+     the CPU's AES instructions.
+   - Already built, not blocked: the AES instructions are modeled and checked against the CPU
+     (the same files as above).
+   - To do it by hand: spec.md with FIPS 197's known-answer vectors as its examples. The test
+     language has no AES function, so generated tests need one added (`src/expr.rs`, and
+     `src/prove/formula.rs` for proofs), or the spec keeps to examples.
+   - Expected result: tested; a proof isn't expected.
+3. **Replies stopped on 2026-11-01**, with no work lost: a reply to the request to do items 1 and 2
+   through Sonnet 5.5 / Haiku 5.5 agents, and a reply that went on with item 1's ordinary work (a
+   gate's result), which a new reply then did. The filter can stop replies near this topic even
+   when the work in them is ordinary, so Claude leaves the topic and goes on with unrelated work.
+
+**Not blocked, and safer alternatives Claude does itself.** The crypto support is built: a user can
+write or drop in a standard SHA-256 or AES program and lengua checks and tests it. For a hash over
+input, checked, tested and proven, lengua's own program is a plain checksum, far from the stopped
+topic:
+- CRC-32C, done: `plugin/skills/compile/assets/fast/crc32c`, the checksum iSCSI and ext4 use, is
+  checked, tested, measured against C, C++ and Rust, and proven against `crc32c`.
+- CRC-32, as zip, gzip, PNG and Ethernet use it, could follow: the test language already has
+  `crc32`, but a program computes it in software, a table or a loop of shifts, and the prover would
+  have to read that loop as the formula's chain of byte steps to prove it for every length.
+- Adler-32 (zlib's checksum) and FNV-1a (a hash-table hash) could follow too, each with a function
+  added to the test language.
 
 ## 2. A white paper: lengua is an AI language, not a programming language
 
