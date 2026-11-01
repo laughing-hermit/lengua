@@ -69,7 +69,7 @@ pub fn run_start(function: &MappedFunction<'_>, index: usize) -> usize {
 
 /// The number `mov REG, VALUE` puts in `register` as the last change to it in the straight-line
 /// run before `index`, with REG the register whole or its low 32 bits: where it is, and the
-/// number.
+/// number. On AArch64 that's also a `mov` and the `movk`s right after it, read at the last.
 #[must_use]
 pub fn constant_before(
     function: &MappedFunction<'_>,
@@ -81,14 +81,15 @@ pub fn constant_before(
     (start..index)
         .rev()
         .find_map(|position| {
-            let insn = &function.steps[position].insn;
+            let step = &function.steps[position];
+            let insn = &step.insn;
             if !insn.changes(register, abi) {
                 return None;
             }
-            Some(match insn.op {
-                Op::MovImm { dst, value } if dst.full() == register.full() && dst.bits() >= 32 => {
-                    Some((position, value))
-                }
+            let whole = |dst: Reg| dst.full() == register.full() && dst.bits() >= 32;
+            Some(match (insn.op, &step.source.pieces) {
+                (Op::MovImm { dst, value }, _) if whole(dst) => Some((position, value)),
+                (_, Some(pieces)) if insn.dst.is_some_and(whole) => Some((position, pieces.value)),
                 _ => None,
             })
         })

@@ -247,6 +247,26 @@ impl Checker<'_, '_> {
             each.iter().flatten().flatten().copied().collect()
         };
         let (pushed, popped) = (registers(&pushing), registers(&popping));
+        // A call overwrites the link register, so a function that calls saves it first.
+        if let Some(link) = abi.link {
+            let calls = flow
+                .exits
+                .iter()
+                .any(|exit| matches!(exit, Exit::Call { callee } if callee != ASSERT_FAIL));
+            if calls && !pushed.contains(&link) {
+                self.violation(
+                    Rule::Functions,
+                    function.source.line,
+                    format!(
+                        "{} calls functions but doesn't save {link}, which each call overwrites, \
+                         so its ret couldn't return",
+                        function.name()
+                    ),
+                    "start it with `stp x29, x30, [sp, #-16]!` and end it with `ldp x29, x30, \
+                     [sp], #16` right before ret",
+                );
+            }
+        }
         let saved_region = pushing.len()..ret - popping.len();
         let mut changed = BTreeSet::new();
         for index in saved_region {
@@ -289,9 +309,11 @@ impl Checker<'_, '_> {
     fn red_zone(&mut self, function: &MappedFunction<'_>) {
         let stack_pointer = self.program.abi().stack_pointer;
         for step in &function.steps {
-            let below = step.insn.memory.is_some_and(|memory| {
-                memory.base == Some(stack_pointer) && memory.displacement < 0
-            });
+            // A push moves the stack pointer down first: what it writes is above it.
+            let below = !matches!(step.insn.op, Op::Push(_))
+                && step.insn.memory.is_some_and(|memory| {
+                    memory.base == Some(stack_pointer) && memory.displacement < 0
+                });
             if below {
                 self.violation(
                     Rule::Resources,
@@ -470,7 +492,15 @@ impl Checker<'_, '_> {
                         .steps
                         .get(next + 1)
                         .is_some_and(|after| matches!(after.insn.control, Control::Branch { .. }));
-                    verdict = if is_check && then_jumps {
+                    // AArch64 tests a register and jumps in one instruction: `tbnz x0, #63`, `cbz`.
+                    let tests_and_jumps = matches!(
+                        insn.control,
+                        Control::Branch {
+                            cond: Cond::BitSet(_) | Cond::BitClear(_) | Cond::Zero | Cond::NotZero,
+                            ..
+                        }
+                    );
+                    verdict = if (is_check && then_jumps) || tests_and_jumps {
                         Ok(())
                     } else {
                         Err("rax is used before it's checked")
@@ -1029,20 +1059,29 @@ impl Checker<'_, '_> {
                 self.entered_through_head(steps, flow, head, back);
                 continue;
             }
-            let counter = back
+            let decrement = back
                 .checked_sub(1)
                 .and_then(|index| match steps[index].insn.op {
-                    Op::Decrement { counter } => Some(counter),
+                    Op::Decrement { counter, flags } => Some((counter, flags)),
                     _ => None,
                 });
-            let closes = matches!(
-                steps[back].insn.control,
+            // The jump back reads the flags the decrement set, or tests the counter itself
+            // (AArch64's `cbnz`).
+            let closes = |counter: Reg, flags: bool| match steps[back].insn.control {
                 Control::Branch {
                     cond: Cond::NotEqual,
                     ..
-                }
-            );
-            let Some(counter) = counter.filter(|_| closes) else {
+                } => flags,
+                Control::Branch {
+                    cond: Cond::NotZero,
+                    ..
+                } => steps[back].insn.uses(counter),
+                _ => false,
+            };
+            let counter = decrement
+                .filter(|(counter, flags)| closes(*counter, *flags))
+                .map(|(counter, _)| counter);
+            let Some(counter) = counter else {
                 self.violation(
                     Rule::Loops,
                     line,
@@ -1055,6 +1094,15 @@ impl Checker<'_, '_> {
                 let step = &steps[index];
                 let sets_counter =
                     matches!(step.insn.op, Op::MovImm { dst, .. } if dst.full() == counter);
+                // On AArch64, a `mov` and the `movk`s after it that together make a constant.
+                if let Some(pieces) = &step.source.pieces {
+                    let builds_counter = step.insn.dst.is_some_and(|dst| dst.full() == counter);
+                    return pieces
+                        .name
+                        .is_some()
+                        .then_some(pieces.value)
+                        .filter(|_| builds_counter);
+                }
                 match step.source.operands.get(1) {
                     Some(Operand::Immediate {
                         name: Some(_),

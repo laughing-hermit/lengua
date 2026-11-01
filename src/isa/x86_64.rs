@@ -56,6 +56,7 @@ pub const ABI: Abi = Abi {
     first_argument: x86(Register::RDI),
     assertion_number: x86(Register::EDI),
     worker_slot: x86(Register::RBX),
+    link: None,
     caller_saved: &[
         x86(Register::RAX),
         x86(Register::RCX),
@@ -169,6 +170,7 @@ fn op(instruction: &Instruction, name: &str) -> Op {
         (Mnemonic::Test, _) => Op::Test,
         (Mnemonic::Dec, Some(counter)) => Op::Decrement {
             counter: counter.full(),
+            flags: true,
         },
         (Mnemonic::Sub, Some(counter))
             if second_kind.is_some_and(|kind| kind != OpKind::Register)
@@ -176,6 +178,7 @@ fn op(instruction: &Instruction, name: &str) -> Op {
         {
             Op::Decrement {
                 counter: counter.full(),
+                flags: true,
             }
         }
         (Mnemonic::Push, register) => Op::Push([register.map(Reg::full), None]),

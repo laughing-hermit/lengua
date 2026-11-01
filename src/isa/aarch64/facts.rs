@@ -193,6 +193,7 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
             } else if sub && number == 1 && rd.full() == rn.full() && matches!(rd.gpr, Gpr::R(_)) {
                 Op::Decrement {
                     counter: a64(rd.full()),
+                    flags,
                 }
             } else {
                 Op::Other
@@ -522,6 +523,14 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
             Value::Other,
             Stack::Same,
         ),
+    };
+    // AArch64 faults on an access through sp that isn't a multiple of 16.
+    let stack = match stack {
+        Stack::Moves(bytes) if bytes % 16 != 0 => Stack::Refused(format!(
+            "`{}` moves sp by {bytes} bytes, but sp stays a multiple of 16",
+            mnemonic(inst)
+        )),
+        other => other,
     };
     Insn {
         address,

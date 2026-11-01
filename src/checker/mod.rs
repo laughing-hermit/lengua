@@ -5,6 +5,7 @@
 //! to its line ([`decode`]), builds each function's control flow and stack depths ([`cfg`]), and
 //! checks the rules ([`rules`], [`memory`] and [`threads`]).
 
+pub mod aarch64;
 pub mod cfg;
 pub mod decode;
 pub mod memory;
@@ -22,6 +23,7 @@ mod tests;
 use std::collections::BTreeMap;
 use std::fmt;
 
+use crate::isa::Isa;
 use crate::platform::{CpuFeatures, Profile};
 use crate::spec::Syscall;
 
@@ -39,6 +41,14 @@ pub const PARALLEL_TEMPLATE: &str =
 /// fill, which reads until a buffer is full, the input ends or an end byte arrives; its body
 /// and constants are canonical, so the proof can cover every way the input arrives.
 pub const FILL_TEMPLATE: &str = include_str!("../../plugin/skills/compile/assets/fill.s");
+
+/// The AArch64 template; its assert_fail and assert_message are the canonical ones there.
+pub const AARCH64_TEMPLATE: &str =
+    include_str!("../../plugin/skills/compile/assets/linux-aarch64/main-template.s");
+
+/// AArch64's fill, canonical as x86-64's is.
+pub const AARCH64_FILL_TEMPLATE: &str =
+    include_str!("../../plugin/skills/compile/assets/linux-aarch64/fill.s");
 
 /// At most this many violations are reported at once.
 pub const MAX_VIOLATIONS: usize = 20;
@@ -285,8 +295,11 @@ pub fn check_program(source: &Source, executable: &[u8], context: Context<'_>) -
             )
         })
         .collect();
-    let template = source::parse(TEMPLATE).0;
-    let fill_template = source::parse(FILL_TEMPLATE).0;
+    let (template, fill_template) = match program.isa {
+        Isa::X86_64 => (TEMPLATE, FILL_TEMPLATE),
+        Isa::Aarch64 => (AARCH64_TEMPLATE, AARCH64_FILL_TEMPLATE),
+    };
+    let (template, fill_template) = (source::parse(template).0, source::parse(fill_template).0);
     let mut facts = rules::check(
         &program,
         &flows,
@@ -306,13 +319,25 @@ pub fn check_program(source: &Source, executable: &[u8], context: Context<'_>) -
         machine.writable_executable,
         &mut violations,
     );
-    let parallel_template = source::parse(PARALLEL_TEMPLATE).0;
-    threads::check(
-        &program,
-        &flows,
-        &parallel_template,
-        context.threads,
-        &mut violations,
-    );
+    if program.isa == Isa::X86_64 {
+        let parallel_template = source::parse(PARALLEL_TEMPLATE).0;
+        threads::check(
+            &program,
+            &flows,
+            &parallel_template,
+            context.threads,
+            &mut violations,
+        );
+    } else if threads::used(source) {
+        violations.push(Violation {
+            rule: Rule::Dialect,
+            line: None,
+            problem: "threads aren't in lengua's AArch64 dialect yet".into(),
+            fix: "do the work on the main thread".into(),
+        });
+    }
+    if program.isa == Isa::Aarch64 {
+        violations.iter_mut().for_each(aarch64::in_words);
+    }
     Report::new(violations, Some(facts), source)
 }

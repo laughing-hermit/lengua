@@ -248,7 +248,10 @@ fn the_facts_say_what_each_idiom_does() {
     );
     assert_eq!(
         facts_of("subs x3, x3, #1").op,
-        Op::Decrement { counter: x(3) }
+        Op::Decrement {
+            counter: x(3),
+            flags: true
+        }
     );
     assert_eq!(facts_of("tst x0, #0xf").op, Op::Test);
     let copy = facts_of("mov x1, x2");

@@ -10,9 +10,10 @@ pub mod x86_64;
 use std::fmt;
 
 /// A CPU lengua checks code for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum Isa {
     /// x86-64, in the dialect's Intel syntax.
+    #[default]
     X86_64,
     /// AArch64 (ARMv8-A), in GNU syntax.
     Aarch64,
@@ -248,10 +249,14 @@ pub enum Op {
     },
     /// A test of bits: `test`.
     Test,
-    /// One off a register, as a counted loop's counter goes: `dec r`, `sub r, 1`.
+    /// One off a register, as a counted loop's counter goes: `dec r`, `sub r, 1`, AArch64's
+    /// `subs xR, xR, #1` and `sub xR, xR, #1`.
     Decrement {
         /// The register, whole.
         counter: Reg,
+        /// Whether it sets the flags, which a jump on them then reads: AArch64's `sub`
+        /// doesn't.
+        flags: bool,
     },
     /// A push onto the stack, of these registers (whole) when it pushes registers.
     Push([Option<Reg>; 2]),
@@ -359,6 +364,9 @@ pub struct Abi {
     pub assertion_number: Reg,
     /// The register a worker thread keeps its slot in.
     pub worker_slot: Reg,
+    /// The register a call leaves its return address in, which a function that calls must
+    /// save first: AArch64's x30. None where the call pushes it.
+    pub link: Option<Reg>,
     /// The registers a call may change.
     pub caller_saved: &'static [Reg],
     /// The registers a system call changes.

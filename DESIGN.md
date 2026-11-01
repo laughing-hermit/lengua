@@ -920,11 +920,23 @@ still to build per target. A new profile must supply:
    the decoder's test. AArch64's (`isa/aarch64`) reads machine words and main.s's text alike into
    one canonical form, the architecture's own instruction rather than an alias (`cmp x1, #3` is
    `subs xzr, x1, #3`), and agrees with LLVM on random words of every encoding class the dialect
-   has, refusing every word LLVM refuses.
+   has, refusing every word LLVM refuses. `checker/aarch64.rs` matches main.s to AArch64's
+   machine code as `checker/x86_64.rs` does x86-64's: both read into that form, each line with
+   its names' addresses in the executable, and numbers compared whole, never masked.
 3. **Prover model:** the CPU's instructions in `src/prove/exec` (today an x86 `match`), and CPU
    feature detection (today x86 `is_x86_feature_detected!`).
 4. **Dialect:** the Power of 10 in that CPU's mnemonics and registers, with its reference (today
-   `references/linux-x86_64.md` and the x86 parts of `references/power-of-10.md`).
+   `references/linux-x86_64.md` and the x86 parts of `references/power-of-10.md`). The rules
+   themselves read only the facts, so they're shared; what's per CPU is the syntax and what the
+   dialect allows of it. AArch64's (`checker/aarch64.rs`, and the AArch64 half of
+   `checker/source.rs`): line 1 is `.arch armv8-a` and comments start `//`; no x18, the platform
+   register on Apple's and Windows' ARM64; an address only as `adrp` and, on the next line,
+   `add :lo12:`; an index only as a whole `x` register; `br` only as a checked jump table's jump,
+   and no `blr`, `adr` or literal pool; sp moved only by multiples of 16; x30 saved by every
+   function that calls; loops closed by `subs` and `b.ne` or `sub` and `cbnz`; and a number too
+   wide for one `mov` built from a `mov` and `movk`s that each name the same constant, which
+   together count as `mov xR, #NAME`. Its messages say AArch64's registers and instructions. Its
+   reference comes with the skills.
 5. **The OS edge:** on Linux, the system calls' numbers, the instruction and registers that make
    them, and the ABI's details, which differ between CPUs even on one OS. On AArch64 there is no
    `poll`, only `ppoll`; `clone`'s child-tid argument moves; `struct stat` is 128 bytes with

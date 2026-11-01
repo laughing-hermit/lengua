@@ -29,7 +29,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::cfg::{ASSERT_FAIL, Exit, Flow, constant_before};
 use super::decode::{MappedFunction, Program};
 use super::{Rule, Violation};
-use crate::isa::{Abi, Control, Insn, Op, Operand, Reg, Value};
+use crate::isa::{Abi, Control, Insn, Op, Operand, Reg, Stack, Value};
 use crate::platform::Profile;
 use crate::spec::Syscall;
 
@@ -257,8 +257,12 @@ impl State {
 
 /// Where a function's frame starts: the frame's top is at rsp plus the depth less this, the
 /// return address for every function but `_start`, which has none.
-fn frame_base(function: &MappedFunction<'_>) -> i64 {
-    if function.name() == "_start" { 0 } else { 8 }
+fn frame_base(function: &MappedFunction<'_>, abi: &Abi) -> i64 {
+    if function.name() == "_start" {
+        0
+    } else {
+        abi.return_address
+    }
 }
 
 /// Checks M1 to M6 in every function, each after the functions it calls, then M8 and M6's
@@ -296,7 +300,7 @@ pub fn check(
             if let Exit::Call { callee } = &flow.exits[at]
                 && let Some(summary) = summaries.get(callee)
             {
-                let frame = depth.map(|depth| depth - frame_base(function));
+                let frame = depth.map(|depth| depth - frame_base(function, abi));
                 found.extend(exclusive(
                     &step.source.text,
                     callee,
@@ -467,13 +471,17 @@ fn transfer(
     let abi = program.abi();
     let mut after = before.clone();
     let depth = flow.depth[at];
-    let base = frame_base(function);
+    let base = frame_base(function, abi);
     // Frame bytes this instruction writes: by push, at a constant offset from rsp, or through a
     // pointer to a known place in the frame.
     if let Some(depth) = depth {
         if matches!(insn.op, Op::Push(_)) {
-            let top = depth + 8 - base;
-            after.written.extend((top - 7)..=top);
+            let bytes = match insn.stack {
+                Stack::Moves(bytes) if bytes > 0 => bytes,
+                _ => 8,
+            };
+            let top = depth + bytes - base;
+            after.written.extend((top - bytes + 1)..=top);
         } else if insn.writes_memory && insn.memory.is_none_or(|memory| memory.index.is_none()) {
             let memory_base = insn.memory.and_then(|memory| memory.base);
             let first = match (memory_base, owner_of(before, memory_base)) {
@@ -707,7 +715,7 @@ fn result(
         match operand {
             // The stack pointer itself is the address of the frame's lowest byte.
             Operand::Reg(register) if register == abi.stack_pointer => Owner::Frame {
-                key: depth.map(|depth| depth - frame_base(function)),
+                key: depth.map(|depth| depth - frame_base(function, abi)),
             },
             Operand::Reg(register) => before.get(register),
             Operand::Mem => Owner::Unknown,
@@ -795,7 +803,7 @@ fn address_owner(
         let key = memory
             .index
             .is_none()
-            .then(|| depth.map(|depth| depth - frame_base(function) - displacement))
+            .then(|| depth.map(|depth| depth - frame_base(function, program.abi()) - displacement))
             .flatten();
         return Owner::Frame { key };
     }
@@ -883,6 +891,9 @@ fn access(
     let Some(memory) = insn.memory.filter(|_| accesses_memory(insn)) else {
         return found;
     };
+    if matches!(insn.op, Op::Push(_) | Op::Pop(_)) {
+        return found;
+    }
     let writes = insn.writes_memory;
     let (base, index) = (memory.base, memory.index);
     let unchecked = step.source.unsafe_block.is_some();
@@ -933,7 +944,7 @@ fn access(
     // first byte is.
     let first = match (index, base, owner_of(before, base)) {
         (None, Some(register), _) if register == abi.stack_pointer => {
-            Some(depth.map(|depth| depth - frame_base(function) - memory.displacement))
+            Some(depth.map(|depth| depth - frame_base(function, abi) - memory.displacement))
         }
         (None, _, Owner::Frame { key: Some(key) }) => {
             Some(depth.map(|_| key - memory.displacement))
@@ -943,7 +954,7 @@ fn access(
     if let Some(first) = first {
         if let (Some(depth), Some(first)) = (depth, first) {
             let width = width(insn);
-            let own = depth - frame_base(function);
+            let own = depth - frame_base(function, abi);
             let start = function.name() == "_start";
             let inside = first <= own && first - width + 1 >= 1;
             // _start reads the argument count and strings above its frame.

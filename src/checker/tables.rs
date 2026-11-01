@@ -9,15 +9,25 @@
 //!     jmp rax
 //! ```
 //!
-//! with each entry `.long .Lcase - kinds`. Rule 9 holds the index to the table as it holds any
-//! index to its buffer, so every target is one of the table's labels: control flow stays fixed
-//! and known, and the control flow graph and the proof follow every case.
+//! with each entry `.long .Lcase - kinds`; on AArch64, exactly
+//!
+//! ```text
+//!     adrp x1, kinds
+//!     add x1, x1, :lo12:kinds
+//!     ldrsw x2, [x1, x0, lsl #2]
+//!     add x2, x2, x1
+//!     br x2
+//! ```
+//!
+//! Rule 9 holds the index to the table as it holds any index to its buffer, so every target is
+//! one of the table's labels: control flow stays fixed and known, and the control flow graph and
+//! the proof follow every case.
 
 use std::collections::BTreeMap;
 
 use super::decode::{MappedFunction, Program};
 use super::{Rule, Violation};
-use crate::isa::{Control, Insn, Op, Operand};
+use crate::isa::{Control, Insn, Isa, Op, Operand, Value};
 
 /// A jump through a checked table.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,12 +106,23 @@ pub fn find(
                 rule: Rule::Indirection,
                 line: Some(step.source.line),
                 problem,
-                fix: "jump through a register only through a checked jump table: `cmp` the index \
-                      with the table's length and `jae` away, then `lea rcx, [rip + table]`, \
-                      `movsxd rax, dword ptr [rcx + rax*4]`, `add rax, rcx` and `jmp rax`, with \
-                      the table in .rodata holding `.long .Lcase - table` for labels after the \
-                      jump in the same function"
-                    .into(),
+                fix: match program.isa {
+                    Isa::X86_64 => {
+                        "jump through a register only through a checked jump table: `cmp` the \
+                         index with the table's length and `jae` away, then `lea rcx, [rip + \
+                         table]`, `movsxd rax, dword ptr [rcx + rax*4]`, `add rax, rcx` and `jmp \
+                         rax`, with the table in .rodata holding `.long .Lcase - table` for \
+                         labels after the jump in the same function"
+                    }
+                    Isa::Aarch64 => {
+                        "jump through a register only through a checked jump table: `cmp` the \
+                         index with the table's length and `b.hs` away, then `adrp x1, table`, \
+                         `add x1, x1, :lo12:table`, `ldrsw x2, [x1, x0, lsl #2]`, `add x2, x2, \
+                         x1` and `br x2`, with the table in .rodata holding `.long .Lcase - \
+                         table` for labels after the jump in the same function"
+                    }
+                }
+                .into(),
             }),
         }
     }
@@ -109,7 +130,8 @@ pub fn find(
 }
 
 /// The cases of the jump at `index`, when it and the three steps before it are a checked jump
-/// table's shape.
+/// table's shape: the table's address (on AArch64, the `add` of its `adrp` pair, which the
+/// dialect keeps together), its entry, and the entry added to the address.
 fn cases(
     function: &MappedFunction<'_>,
     program: &Program<'_>,
@@ -136,27 +158,37 @@ fn cases(
     let [Operand::Reg(target)] = function.steps[index].insn.operands[..] else {
         return Err(shape());
     };
-    // add target, base
-    let [Operand::Reg(added), Operand::Reg(base)] = add.insn.operands[..] else {
-        return Err(shape());
+    // add target, base; on AArch64 add target, target, base, unshifted
+    let base = match (program.isa, &add.insn.operands[..], &add.insn.value) {
+        (Isa::X86_64, &[Operand::Reg(added), Operand::Reg(base)], _) if added == target => base,
+        (Isa::Aarch64, _, &Value::Add(Operand::Reg(added), Operand::Reg(base)))
+            if added == target && add.insn.dst == Some(target) =>
+        {
+            base
+        }
+        _ => return Err(shape()),
     };
-    if add.insn.mnemonic != "add" || added != target || base == target {
+    if add.insn.mnemonic != "add" || base == target {
         return Err(shape());
     }
-    // movsxd target, dword ptr [base + index*4]
+    // movsxd target, dword ptr [base + index*4]; on AArch64 ldrsw target, [base, index, lsl #2]
     let loads_entry = load.insn.memory.is_some_and(|memory| {
         memory.base == Some(base)
             && memory.index.is_some()
             && memory.scale == 4
             && memory.displacement == 0
     });
-    if load.insn.mnemonic != "movsxd"
+    let widens = match program.isa {
+        Isa::X86_64 => "movsxd",
+        Isa::Aarch64 => "ldrsw",
+    };
+    if load.insn.mnemonic != widens
         || !matches!(load.insn.operands[..], [Operand::Reg(loaded), Operand::Mem] if loaded == target)
         || !loads_entry
     {
         return Err(shape());
     }
-    // lea base, [rip + table]
+    // lea base, [rip + table]; on AArch64 add base, base, :lo12:table
     if !matches!(lea.insn.op, Op::AddressOf { dst } if dst == base) {
         return Err(shape());
     }

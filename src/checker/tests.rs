@@ -24,17 +24,21 @@ async fn check_full(
     let toolchain = Toolchain::discover()
         .await
         .expect("llvm-mc and ld.lld are installed");
+    let profile = match source.isa {
+        Isa::X86_64 => Profile::LinuxX86_64,
+        Isa::Aarch64 => Profile::LinuxAarch64,
+    };
     let folder = tempfile::tempdir().expect("temporary folder");
     let main = folder.path().join("main.s");
     let object = folder.path().join("main.o");
     let executable = folder.path().join("main");
     std::fs::write(&main, text).expect("write main.s");
     toolchain
-        .assemble(Profile::LinuxX86_64, &main, &object)
+        .assemble(profile, &main, &object)
         .await
         .unwrap_or_else(|error| panic!("assembling failed: {error:?}"));
     toolchain
-        .link(Profile::LinuxX86_64, &object, &executable)
+        .link(profile, &object, &executable)
         .await
         .unwrap_or_else(|error| panic!("linking failed: {error:?}"));
     let bytes = std::fs::read(&executable).expect("read the executable");
@@ -45,7 +49,7 @@ async fn check_full(
             syscalls,
             threads,
             features,
-            profile: Profile::LinuxX86_64,
+            profile,
         },
     )
 }
@@ -1670,4 +1674,594 @@ async fn fill_is_copied_word_for_word_with_its_constants() {
         line_of(&fewer, ".equ MAX_FILL_READS"),
         "MAX_FILL_READS must be 1099511627776",
     );
+}
+
+/// The AArch64 template passes every rule.
+#[tokio::test]
+async fn the_aarch64_template_passes() {
+    let report = check(AARCH64_TEMPLATE).await;
+    assert!(
+        report.violations.is_empty(),
+        "{}",
+        report
+            .violations
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    // The rules read all of it, as they do x86-64's template.
+    let facts = report.facts.expect("the rules ran");
+    assert_eq!(facts.functions, 4);
+    assert_eq!(facts.assertions, 11);
+    assert!(facts.max_stack_bytes >= 48, "{facts:?}");
+    assert!(report.unsafe_blocks.is_empty());
+}
+
+/// The AArch64 template with `old` replaced by `new`, once.
+fn with_aarch64(old: &str, new: &str) -> String {
+    assert!(
+        AARCH64_TEMPLATE.contains(old),
+        "{old:?} isn't in the AArch64 template"
+    );
+    AARCH64_TEMPLATE.replacen(old, new, 1)
+}
+
+/// Each way of breaking the AArch64 dialect is refused at its line, for its rule: each case
+/// replaces `old` with `new`, and the violation is on the line that starts `at`.
+#[tokio::test]
+async fn the_aarch64_dialect_refuses_what_it_should() {
+    let cases: [(&str, &str, &str, Rule, &str); 16] = [
+        // The low bits of one symbol's address on another's page.
+        (
+            "    adrp x1, usage_msg\n    add x1, x1, :lo12:usage_msg\n",
+            "    adrp x1, nan_msg\n    add x1, x1, :lo12:usage_msg\n",
+            "    add x1, x1, :lo12:usage_msg",
+            Rule::Dialect,
+            "isn't right after `adrp` of usage_msg into the same register",
+        ),
+        // A `sub` sets no flags: the `b.ne` after it reads stale ones.
+        (
+            "    subs x3, x3, #1\n    b.ne .Lparse_loop\n",
+            "    sub x3, x3, #1\n    b.ne .Lparse_loop\n",
+            "    b.ne .Lparse_loop",
+            Rule::Loops,
+            "isn't the end of a counted loop",
+        ),
+        (
+            "    stp x29, x30, [sp, #-16]!\n    mov x9, x0\n",
+            "    stp x29, x30, [sp, #-16]!\n    sub sp, sp, #8\n",
+            "    sub sp, sp, #8",
+            Rule::Resources,
+            "but sp stays a multiple of 16",
+        ),
+        (
+            "    ldp x29, x30, [sp], #16\n    ret\n.Lwrite_i64_assert_min:",
+            "    ldp x29, x30, [sp], #16\n    ret x3\n.Lwrite_i64_assert_min:",
+            "    ret x3",
+            Rule::Dialect,
+            "returns through a register other than x30",
+        ),
+        (
+            "    ldr x0, [sp, #16]\n",
+            "    ldr x0, [x1, :lo12:usage_msg]\n",
+            "    ldr x0, [x1, :lo12:usage_msg]",
+            Rule::Dialect,
+            "`:lo12:` goes on the `add` after `adrp`, never inside an address",
+        ),
+        (
+            "    adrp x1, usage_msg\n    add x1, x1, :lo12:usage_msg\n",
+            "    adr x1, usage_msg\n    nop\n",
+            "    adr x1, usage_msg",
+            Rule::Dialect,
+            "adr isn't in the dialect",
+        ),
+        (
+            "    ldr x0, [sp]\n",
+            "    ldr x0, usage_msg\n",
+            "    ldr x0, usage_msg",
+            Rule::Dialect,
+            "its address isn't in brackets",
+        ),
+        (
+            "    mov x9, #0\n",
+            "    mov x18, #0\n",
+            "    mov x18, #0",
+            Rule::Dialect,
+            "uses x18",
+        ),
+        (
+            "    mov x9, #0\n",
+            "# a comment\n    mov x9, #0\n",
+            "# a comment",
+            Rule::Dialect,
+            "`#` comments aren't in the AArch64 dialect",
+        ),
+        (
+            "    add x2, x2, #1\n",
+            "    add x2, x2, #5000\n",
+            "    add x2, x2, #5000",
+            Rule::Dialect,
+            "isn't a number an add can hold",
+        ),
+        (
+            "    svc #0\n",
+            "    svc #1\n",
+            "    svc #1",
+            Rule::Dialect,
+            "Linux takes system calls as `svc #0`",
+        ),
+        (
+            "    bl write_all\n",
+            "    blr x1\n",
+            "    blr x1",
+            Rule::Dialect,
+            "calls through a register",
+        ),
+        (
+            ".arch armv8-a\n",
+            ".arch armv8.2-a\n",
+            ".arch armv8.2-a",
+            Rule::Dialect,
+            "main.s must start with .arch armv8-a",
+        ),
+        // A number from a literal pool, an index widened from its low half, and a jump through
+        // a register that isn't a checked jump table's.
+        (
+            "    mov x9, #0\n",
+            "    ldr x9, =5000\n",
+            "    ldr x9, =5000",
+            Rule::Dialect,
+            "a number from a literal pool isn't in the dialect",
+        ),
+        (
+            "    ldrb w10, [x0, x2]\n",
+            "    ldrb w10, [x0, w2, uxtw]\n",
+            "    ldrb w10, [x0, w2, uxtw]",
+            Rule::Dialect,
+            "widens its index with uxtw",
+        ),
+        (
+            ".Lparse_return:\n    ret\n",
+            ".Lparse_return:\n    br x30\n",
+            "    br x30",
+            Rule::Indirection,
+            "not through a checked jump table",
+        ),
+    ];
+    for (old, new, at, rule, needle) in cases {
+        let text = with_aarch64(old, new);
+        let report = check(&text).await;
+        assert_violation(&report, rule, line_of(&text, at), needle);
+    }
+}
+
+/// Without its frame record, a function that calls can't return.
+#[tokio::test]
+async fn an_aarch64_function_that_calls_saves_x30() {
+    let text = with_aarch64(
+        "write_i64:\n    stp x29, x30, [sp, #-16]!\n",
+        "write_i64:\n",
+    )
+    .replacen(
+        "    ldp x29, x30, [sp], #16\n    ret\n.Lwrite_i64_assert_min:",
+        "    ret\n.Lwrite_i64_assert_min:",
+        1,
+    );
+    let report = check(&text).await;
+    let line = line_of(&text, "write_i64:\n");
+    assert_violation(&report, Rule::Functions, line, "doesn't save x30");
+}
+
+/// A loop may end `sub` and `cbnz` on its counter, which reads no flags.
+#[tokio::test]
+async fn an_aarch64_loop_may_end_with_cbnz() {
+    let text = with_aarch64(
+        "    subs x3, x3, #1\n    b.ne .Lparse_loop\n",
+        "    sub x3, x3, #1\n    cbnz x3, .Lparse_loop\n",
+    );
+    let report = check(&text).await;
+    assert!(
+        report.violations.is_empty(),
+        "{:#?}",
+        report
+            .violations
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    );
+}
+
+/// What the rules say about AArch64 code is said in AArch64's words: no x86-64 register or
+/// instruction in any message, whichever rule speaks.
+#[tokio::test]
+async fn the_aarch64_messages_say_aarch64() {
+    let x86 = [
+        "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rsp", "rbp", "eax", "edi", "[rip", "jae", "jnz",
+        "jmp", "`test ", "lea ", "`call ", "# bound", "# unsafe", "# shared",
+    ];
+    let mutants = [
+        // A result used unchecked, a system call and an exit status not named, a loop counter
+        // set from a bare number, an index unchecked, memory below sp, an assertion's number in
+        // the wrong register, and the canonical assert_fail changed.
+        ("    tbnz x0, #63, .Lstart_not_a_number\n", "    nop\n"),
+        ("    mov x8, #SYS_EXIT\n", "    mov x8, #93\n"),
+        ("    mov w0, #EXIT_OK\n", "    mov w0, #0\n"),
+        ("    mov x3, #MAX_CHARS\n", "    mov x3, #20\n"),
+        ("    cmp x2, #MAX_CHARS\n", "    cmp x1, #MAX_CHARS\n"),
+        ("    mov x9, #0\n", "    str x0, [sp, #-16]\n"),
+        ("    mov w0, #6\n", "    mov w1, #6\n"),
+        ("    mov w0, #1\n", "    mov w0, #9\n"),
+    ];
+    for (old, new) in mutants {
+        let report = check(&with_aarch64(old, new)).await;
+        assert!(!report.violations.is_empty(), "{new:?} breaks no rule");
+        for violation in &report.violations {
+            let text = violation.to_string();
+            for word in x86 {
+                assert!(
+                    !text.contains(word),
+                    "{new:?}: {word:?} in an AArch64 message: {text}"
+                );
+            }
+        }
+    }
+}
+
+/// An AArch64 program that reads with fill: cat over standard input of any length, in
+/// tests/fixtures/linux-aarch64.
+fn aarch64_with_fill() -> String {
+    std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/linux-aarch64/cat/main.s"),
+    )
+    .expect("the fixture")
+}
+
+/// AArch64's fill passes every rule, and is held to its template as x86-64's is: its code and
+/// its constants.
+#[tokio::test]
+async fn aarch64_fill_is_copied_word_for_word_with_its_constants() {
+    let syscalls = [Syscall::Read, Syscall::Write, Syscall::Exit];
+    let text = aarch64_with_fill();
+    let report = check_full(&text, CpuFeatures::all(), &syscalls, None).await;
+    let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+    assert!(report.passed(), "{all:#?}");
+    let facts = report.facts.expect("the rules ran");
+    assert_eq!((facts.functions, facts.assertions), (3, 7), "{facts:?}");
+    assert!(facts.max_stack_bytes >= 32, "{facts:?}");
+
+    let changed = text.replacen(
+        "    subs x2, x2, x0\n    b.eq .Lfill_done\n",
+        "    subs x2, x2, x0\n    cmp x2, #1\n    b.ls .Lfill_done\n",
+        1,
+    );
+    assert_ne!(changed, text);
+    let report = check_full(&changed, CpuFeatures::all(), &syscalls, None).await;
+    assert_violation(
+        &report,
+        Rule::Assertions,
+        line_of(&changed, "fill:"),
+        "fill differs from the template",
+    );
+
+    let fewer = text.replacen(
+        ".equ MAX_FILL_READS, 1099511627776\n",
+        ".equ MAX_FILL_READS, 64\n",
+        1,
+    );
+    assert_ne!(fewer, text);
+    let report = check_full(&fewer, CpuFeatures::all(), &syscalls, None).await;
+    assert_violation(
+        &report,
+        Rule::Constants,
+        line_of(&fewer, ".equ MAX_FILL_READS"),
+        "MAX_FILL_READS must be 1099511627776",
+    );
+}
+
+/// A constant's expression means to lengua what it means to llvm-mc, on either CPU: the same
+/// value for each operator and precedence, `>>` shifting in zeros; and what wouldn't fit in 64
+/// bits is refused.
+#[tokio::test]
+async fn expressions_mean_what_they_mean_to_llvm_mc() {
+    use object::{Object, ObjectSection};
+    let expressions = [
+        "1 + 6 & 3",
+        "2 * 3 >> 1",
+        "1 << 4 + 1",
+        "6 | 1 & 3",
+        "12 & 10 | 1",
+        "1 - 2 & 3",
+        "-1 & 3 + 1",
+        "9 / 2 & 3",
+        "7 & 6 * 1",
+        "N >> 1",
+        "N >> 60",
+        "N << 3",
+        "-N / 3",
+        "N / 3",
+        "(1 + 2) * 3",
+        "A & 0xffff",
+        "A >> 16",
+        "M & 0xffff",
+        "M >> 16 & 0xffff",
+        "(M >> 32) & 0xffff",
+        "M >> 48",
+        "1 << 62",
+        "N & -N",
+        "0x7fffffffffffffff >> 1 | 1",
+        "'a' | 0x20",
+        "A>>16&0xffff",
+    ];
+    let constants: BTreeMap<String, source::Constant> =
+        [("N", -8), ("A", 1_000_000_000), ("M", -1_000_000_000)]
+            .into_iter()
+            .map(|(name, value)| (name.to_owned(), source::Constant { value, line: 0 }))
+            .collect();
+    let toolchain = Toolchain::discover()
+        .await
+        .expect("llvm-mc and ld.lld are installed");
+    for (profile, header) in [
+        (Profile::LinuxX86_64, ".intel_syntax noprefix"),
+        (Profile::LinuxAarch64, ".arch armv8-a"),
+    ] {
+        let mut text = format!("{header}\n.equ N, -8\n.equ A, 1000000000\n.equ M, -1000000000\n");
+        text.push_str(".data\n");
+        for expression in expressions {
+            text.push_str(&format!(".quad {expression}\n"));
+        }
+        let folder = tempfile::tempdir().expect("temporary folder");
+        let (source, object) = (folder.path().join("e.s"), folder.path().join("e.o"));
+        std::fs::write(&source, text).expect("write the expressions");
+        toolchain
+            .assemble(profile, &source, &object)
+            .await
+            .unwrap_or_else(|error| panic!("assembling failed: {error:?}"));
+        let bytes = std::fs::read(&object).expect("read the object");
+        let file = object::File::parse(&*bytes).expect("an object file");
+        let data = file
+            .section_by_name(".data")
+            .and_then(|section| section.data().ok())
+            .expect("its data");
+        let (words, _) = data.as_chunks::<8>();
+        assert_eq!(words.len(), expressions.len());
+        for (expression, word) in expressions.iter().zip(words) {
+            assert_eq!(
+                source::evaluate(expression, &constants),
+                Ok(i64::from_le_bytes(*word)),
+                "{expression} on {profile:?}"
+            );
+        }
+    }
+    for refused in ["1 << 63", "N << 61 << 3", "1 << 64", "1 >> -1", "A * A * A"] {
+        assert!(
+            source::evaluate(refused, &constants).is_err(),
+            "{refused} is read"
+        );
+    }
+}
+
+/// The AArch64 calc fixture, the x86-64 one's spec compiled for AArch64: its `apply` picks its
+/// operator's case through a checked jump table.
+fn aarch64_calc() -> String {
+    std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/linux-aarch64/calc/main.s"),
+    )
+    .expect("calc's AArch64 main.s")
+}
+
+/// The AArch64 calc with the first `old` replaced by `new`.
+fn aarch64_calc_with(old: &str, new: &str) -> String {
+    let calc = aarch64_calc();
+    assert!(calc.contains(old), "{old:?} isn't in the AArch64 calc");
+    calc.replacen(old, new, 1)
+}
+
+/// On AArch64 too, the one jump through a register is a checked jump table's: it passes, with
+/// its cases as the jump's successors, and every other `br` is refused.
+#[tokio::test]
+async fn aarch64_jumps_go_through_registers_only_as_checked_tables() {
+    let report = check(&aarch64_calc()).await;
+    let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+    assert!(report.passed(), "{all:#?}");
+    let facts = report.facts.expect("the rules ran");
+    assert_eq!(facts.tables.len(), 1, "{facts:?}");
+    let (jump, cases) = facts.tables.iter().next().expect("one table");
+    assert_eq!(cases.len(), 4, "{cases:?}");
+    assert!(cases.iter().all(|case| case > jump), "{cases:?}");
+
+    let jump = "    br x11\n";
+    let entries = "    .long .Lapply_multiply - operations\n";
+    let shape = "not through a checked jump table";
+    for (text, rule, at, needle) in [
+        // The index unchecked, or checked against a limit past the table.
+        (
+            aarch64_calc_with("    cmp x9, #OPERATORS\n    b.hs .Lapply_unknown\n", ""),
+            Rule::Indirection,
+            "    ldrsw x11, [x10, x9, lsl #2]\n",
+            "isn't bounds-checked",
+        ),
+        (
+            aarch64_calc_with("    cmp x9, #OPERATORS\n", "    cmp x9, #OPERATORS + 1\n"),
+            Rule::Indirection,
+            "    cmp x9, #OPERATORS + 1\n",
+            "reach byte 19 of operations, which has 16 bytes",
+        ),
+        // Entries naming what isn't a case of this jump.
+        (
+            aarch64_calc_with(entries, "    .long .Lstart_exit - operations\n"),
+            Rule::Indirection,
+            jump,
+            "names .Lstart_exit, which isn't a label of apply",
+        ),
+        (
+            aarch64_calc_with(
+                "    adrp x10, operations\n",
+                ".Lapply_table:\n    adrp x10, operations\n",
+            )
+            .replacen(entries, "    .long .Lapply_table - operations\n", 1),
+            Rule::Indirection,
+            jump,
+            "comes before the jump",
+        ),
+        // A table that can change, isn't only entries, or isn't the table's own distances.
+        (
+            aarch64_calc_with(
+                "// apply's jump table",
+                ".section .data\n// apply's jump table",
+            )
+            .replacen(
+                ".size operations, . - operations\n",
+                ".size operations, . - operations\n.section .rodata\n",
+                1,
+            ),
+            Rule::Immutability,
+            entries,
+            "jump table operations is in writable data",
+        ),
+        (
+            aarch64_calc_with(entries, "    .quad .Lapply_multiply - operations\n"),
+            Rule::Indirection,
+            "    .quad .Lapply_multiply - operations\n",
+            "isn't a jump table's entry",
+        ),
+        (
+            aarch64_calc_with(entries, "    .long .Lapply_multiply - nan_msg\n"),
+            Rule::Indirection,
+            "    .long .Lapply_multiply - nan_msg\n",
+            "isn't a jump table's entry",
+        ),
+        (
+            aarch64_calc_with(
+                "    .long .Lapply_subtract - operations\n",
+                "    .long .Lapply_subtract - operations\n    .long 0\n",
+            ),
+            Rule::Indirection,
+            "    .long 0\n",
+            "mixes numbers with its entries",
+        ),
+        // Any other jump through a register: the target changed after the add, another path
+        // coming in, the entry shifted or added into another register, a load that doesn't
+        // sign-extend, a widened index, or another symbol's address.
+        (
+            aarch64_calc_with(
+                "    add x11, x11, x10\n    br x11\n",
+                "    add x11, x11, x10\n    orr x11, x11, #1\n    br x11\n",
+            ),
+            Rule::Indirection,
+            jump,
+            shape,
+        ),
+        (
+            aarch64_calc_with(
+                "    add x11, x11, x10\n",
+                ".Lapply_into:\n    add x11, x11, x10\n",
+            ),
+            Rule::Indirection,
+            jump,
+            shape,
+        ),
+        (
+            aarch64_calc_with("    add x11, x11, x10\n", "    add x11, x11, x10, lsl #1\n"),
+            Rule::Indirection,
+            jump,
+            shape,
+        ),
+        (
+            aarch64_calc_with("    add x11, x11, x10\n", "    add x12, x11, x10\n"),
+            Rule::Indirection,
+            jump,
+            shape,
+        ),
+        (
+            aarch64_calc_with(
+                "    ldrsw x11, [x10, x9, lsl #2]\n",
+                "    ldr w11, [x10, x9, lsl #2]\n",
+            ),
+            Rule::Indirection,
+            jump,
+            shape,
+        ),
+        (
+            aarch64_calc_with(
+                "    ldrsw x11, [x10, x9, lsl #2]\n",
+                "    ldrsw x11, [x10, w9, sxtw #2]\n",
+            ),
+            Rule::Dialect,
+            "    ldrsw x11, [x10, w9, sxtw #2]\n",
+            "widens its index with sxtw",
+        ),
+        (
+            aarch64_calc_with(
+                "    adrp x10, operations\n    add x10, x10, :lo12:operations\n",
+                "    adrp x10, nan_msg\n    add x10, x10, :lo12:nan_msg\n",
+            ),
+            Rule::Indirection,
+            jump,
+            "jumps through nan_msg, which isn't a jump table",
+        ),
+    ] {
+        let report = check(&text).await;
+        assert_violation(&report, rule, line_of(&text, at), needle);
+        for violation in &report.violations {
+            let text = violation.to_string();
+            assert!(
+                !["jae", "rax", "rcx", "lea ", "movsxd"]
+                    .iter()
+                    .any(|word| text.contains(word)),
+                "an x86-64 word in an AArch64 message: {text}"
+            );
+        }
+    }
+}
+
+/// On AArch64 a number too wide for one `mov` is built 16 bits at a time: a `mov` of its low
+/// bits and `movk`s of the rest, which together are `mov xR, NAME` when every line names the
+/// same constant and they make all of it.
+#[tokio::test]
+async fn an_aarch64_constant_may_be_built_16_bits_at_a_time() {
+    let counter = "    mov x3, #MAX_CHARS\n";
+    for built in [
+        "    mov x3, #MAX_CHARS & 0xffff\n    movk x3, #MAX_CHARS >> 16, lsl #16\n",
+        "    mov w3, #MAX_CHARS & 0xffff\n    movk w3, #(MAX_CHARS >> 16) & 0xffff, lsl #16\n",
+        "    mov x3, #MAX_CHARS & 0xffff\n    movk x3, #MAX_CHARS >> 16, lsl #16\n    movk x3, \
+         #MAX_CHARS >> 32, lsl #32\n    movk x3, #MAX_CHARS >> 48, lsl #48\n",
+    ] {
+        let text = with_aarch64(counter, built);
+        let report = check(&text).await;
+        let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+        assert!(report.passed(), "{built:?}: {all:#?}");
+    }
+    for (built, why) in [
+        (
+            "    mov x3, #MAX_CHARS & 0xffff\n    movk x3, #1, lsl #16\n",
+            "the pieces make 65556, not MAX_CHARS",
+        ),
+        (
+            "    mov x3, #MAX_CHARS & 0xffff\n    movk x3, #MAX_DIGITS >> 16, lsl #16\n",
+            "the pieces name two constants",
+        ),
+        (
+            "    mov x3, #0\n    movk x3, #MAX_CHARS, lsl #0\n",
+            "only the movk names the constant",
+        ),
+        (
+            "    mov x3, #MAX_CHARS & 0xffff\n.Lparse_built:\n    movk x3, #MAX_CHARS >> 16, lsl \
+             #16\n",
+            "another path comes in between the pieces",
+        ),
+    ] {
+        let text = with_aarch64(counter, built);
+        let report = check(&text).await;
+        // The violation is on the loop's first instruction.
+        assert_violation(
+            &report,
+            Rule::Loops,
+            line_of(&text, ".Lparse_loop:") + 1,
+            "the loop counter isn't set by `mov xR, #NAME`",
+        );
+        assert!(!report.passed(), "{why}");
+    }
 }

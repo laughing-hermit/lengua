@@ -64,8 +64,9 @@ fn split(text: &str) -> Result<Vec<&str>, String> {
     Ok(found)
 }
 
-/// A register by its name.
-fn register(name: &str) -> Option<A64Reg> {
+/// A register by its name: `x0` to `x30`, `w0` to `w30`, `sp`, `wsp`, `xzr` or `wzr`.
+#[must_use]
+pub fn register(name: &str) -> Option<A64Reg> {
     let (wide, rest) = match name.as_bytes().first()? {
         b'x' => (true, &name[1..]),
         b'w' => (false, &name[1..]),
@@ -109,6 +110,31 @@ fn encodable(value: u64, width: u32) -> bool {
     })
 }
 
+/// A number written as a literal: decimal, hexadecimal or a character in quotes, maybe negated.
+fn literal(text: &str) -> Option<i64> {
+    let (negative, digits) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest.trim()),
+        None => (false, text),
+    };
+    let value = if let Some(hex) = digits.strip_prefix("0x") {
+        u64::from_str_radix(hex, 16).ok()?.cast_signed()
+    } else if digits.starts_with(|first: char| first.is_ascii_digit()) {
+        digits.parse::<i64>().ok()?
+    } else {
+        let quoted = digits.strip_prefix('\'')?.strip_suffix('\'')?;
+        let mut characters = quoted.chars();
+        match (characters.next(), characters.next()) {
+            (Some(character), None) if character.is_ascii() => i64::from(u32::from(character)),
+            _ => return None,
+        }
+    };
+    Some(if negative {
+        value.wrapping_neg()
+    } else {
+        value
+    })
+}
+
 /// One instruction's text.
 struct Line<'a> {
     mnemonic: &'a str,
@@ -149,37 +175,15 @@ impl Line<'_> {
         }
     }
 
-    /// A number written `#…`: decimal, hexadecimal, a character in quotes, or a constant's name.
+    /// A number written `#…`: decimal, hexadecimal or a character in quotes, maybe negated; or
+    /// anything else the names stand for, such as a constant's name or an expression of them.
     fn number(&self, text: &str) -> Result<i64, String> {
         let bad = || self.problem(&format!("`{text}` isn't a number"));
         let text = text.strip_prefix('#').ok_or_else(bad)?.trim();
-        let (negative, digits) = match text.strip_prefix('-') {
-            Some(rest) => (true, rest.trim()),
-            None => (false, text),
-        };
-        let value = if let Some(hex) = digits.strip_prefix("0x") {
-            u64::from_str_radix(hex, 16)
-                .map_err(|_| bad())?
-                .cast_signed()
-        } else if digits.starts_with(|first: char| first.is_ascii_digit()) {
-            digits.parse::<i64>().map_err(|_| bad())?
-        } else if let Some(quoted) = digits
-            .strip_prefix('\'')
-            .and_then(|rest| rest.strip_suffix('\''))
-        {
-            let mut characters = quoted.chars();
-            match (characters.next(), characters.next()) {
-                (Some(character), None) if character.is_ascii() => i64::from(u32::from(character)),
-                _ => return Err(bad()),
-            }
-        } else {
-            (self.names)(digits).ok_or_else(bad)?
-        };
-        Ok(if negative {
-            value.wrapping_neg()
-        } else {
-            value
-        })
+        match literal(text) {
+            Some(value) => Ok(value),
+            None => (self.names)(text).ok_or_else(bad),
+        }
     }
 
     /// Operand `at`, as a number.

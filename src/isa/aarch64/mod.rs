@@ -139,6 +139,7 @@ pub const ABI: Abi = Abi {
     first_argument: x(0),
     assertion_number: Reg::A64(A64Reg::new(0, false, false)),
     worker_slot: x(19),
+    link: Some(x(30)),
     // x18 is the platform register, which the dialect doesn't use; a call changes x30, the link
     // register, too.
     caller_saved: &[
@@ -757,4 +758,130 @@ pub enum Inst {
     },
     /// `nop`.
     Nop,
+}
+
+impl fmt::Display for Address {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::Offset { base, offset: 0 } => write!(formatter, "[{base}]"),
+            Self::Offset { base, offset } => write!(formatter, "[{base}, #{offset}]"),
+            Self::PreIndex { base, offset } => write!(formatter, "[{base}, #{offset}]!"),
+            Self::PostIndex { base, offset } => write!(formatter, "[{base}], #{offset}"),
+            Self::Register {
+                base,
+                index,
+                extend,
+                shift,
+            } => {
+                let name = match extend {
+                    Extend::Uxtw => "uxtw",
+                    Extend::Lsl => "lsl",
+                    Extend::Sxtw => "sxtw",
+                    Extend::Sxtx => "sxtx",
+                };
+                match (extend, shift) {
+                    (Extend::Lsl, 0) => write!(formatter, "[{base}, {index}]"),
+                    (_, 0) => write!(formatter, "[{base}, {index}, {name}]"),
+                    _ => write!(formatter, "[{base}, {index}, {name} #{shift}]"),
+                }
+            }
+        }
+    }
+}
+
+impl fmt::Display for Inst {
+    /// The canonical form, as LLVM would write it without its aliases.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = facts::mnemonic(self);
+        let shifted = |shift: Shift, amount: u8| {
+            if amount == 0 && shift == Shift::Lsl {
+                String::new()
+            } else {
+                format!(", {} #{amount}", shift.name())
+            }
+        };
+        match *self {
+            Self::AddImm {
+                rd,
+                rn,
+                imm,
+                shift12,
+                ..
+            } => {
+                let shift = if shift12 { ", lsl #12" } else { "" };
+                write!(formatter, "{name} {rd}, {rn}, #{imm}{shift}")
+            }
+            Self::AddShifted {
+                rd,
+                rn,
+                rm,
+                shift,
+                amount,
+                ..
+            }
+            | Self::LogicalShifted {
+                rd,
+                rn,
+                rm,
+                shift,
+                amount,
+                ..
+            } => write!(
+                formatter,
+                "{name} {rd}, {rn}, {rm}{}",
+                shifted(shift, amount)
+            ),
+            Self::LogicalImm { rd, rn, imm, .. } => {
+                write!(formatter, "{name} {rd}, {rn}, #{imm:#x}")
+            }
+            Self::MoveWide { rd, imm, shift, .. } => {
+                let shift = if shift == 0 {
+                    String::new()
+                } else {
+                    format!(", lsl #{shift}")
+                };
+                write!(formatter, "{name} {rd}, #{imm}{shift}")
+            }
+            Self::Bitfield {
+                rd, rn, immr, imms, ..
+            } => write!(formatter, "{name} {rd}, {rn}, #{immr}, #{imms}"),
+            Self::Extract { rd, rn, rm, lsb } => {
+                write!(formatter, "{name} {rd}, {rn}, {rm}, #{lsb}")
+            }
+            Self::Adrp { rd, page: target } | Self::Adr { rd, target } => {
+                write!(formatter, "{name} {rd}, {target:#x}")
+            }
+            Self::Branch { target, .. } | Self::BranchCond { target, .. } => {
+                write!(formatter, "{name} {target:#x}")
+            }
+            Self::CompareBranch { rt, target, .. } => write!(formatter, "{name} {rt}, {target:#x}"),
+            Self::TestBranch {
+                rt, bit, target, ..
+            } => write!(formatter, "{name} {rt}, #{bit}, {target:#x}"),
+            Self::BranchReg { kind, rn } => {
+                if kind == Indirect::Ret && rn.gpr == Gpr::R(30) {
+                    write!(formatter, "{name}")
+                } else {
+                    write!(formatter, "{name} {rn}")
+                }
+            }
+            Self::Svc { imm } => write!(formatter, "{name} #{imm}"),
+            Self::CondSelect {
+                rd, rn, rm, cond, ..
+            } => write!(formatter, "{name} {rd}, {rn}, {rm}, {}", cond.name()),
+            Self::TwoSource { rd, rn, rm, .. } => write!(formatter, "{name} {rd}, {rn}, {rm}"),
+            Self::OneSource { rd, rn, .. } => write!(formatter, "{name} {rd}, {rn}"),
+            Self::ThreeSource {
+                op, rd, rn, rm, ra, ..
+            } => match op {
+                Three::Smulh | Three::Umulh => write!(formatter, "{name} {rd}, {rn}, {rm}"),
+                _ => write!(formatter, "{name} {rd}, {rn}, {rm}, {ra}"),
+            },
+            Self::LoadStore { rt, address, .. } => write!(formatter, "{name} {rt}, {address}"),
+            Self::Pair {
+                rt, rt2, address, ..
+            } => write!(formatter, "{name} {rt}, {rt2}, {address}"),
+            Self::Nop => write!(formatter, "{name}"),
+        }
+    }
 }

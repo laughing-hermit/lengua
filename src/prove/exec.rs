@@ -84,7 +84,7 @@ impl Image {
         let mut instructions = HashMap::new();
         let mut functions = Vec::new();
         for (name, function) in &machine.functions {
-            for instruction in &function.instructions {
+            for instruction in function.x86() {
                 instructions.insert(instruction.ip(), *instruction);
             }
             functions.push((

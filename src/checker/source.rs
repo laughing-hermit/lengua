@@ -8,7 +8,8 @@ use std::collections::BTreeMap;
 
 use iced_x86::Register;
 
-use crate::isa::Reg;
+use crate::isa::aarch64::{self, A64Cond};
+use crate::isa::{Isa, Reg};
 
 use super::{Rule, Violation};
 
@@ -129,6 +130,22 @@ pub struct Instruction {
     pub text: String,
     /// The `# unsafe:` block it's in, by index.
     pub unsafe_block: Option<usize>,
+    /// On AArch64, when the line is a `movk` that adds to the `mov` or `movk` right before it,
+    /// what they put in the register together.
+    pub pieces: Option<Pieces>,
+}
+
+/// What a `mov` and the `movk`s right after it put in their register, read at the last of them:
+/// AArch64 builds a number 16 bits at a time, as `mov x9, #BIG & 0xffff` and then
+/// `movk x9, #BIG >> 16, lsl #16`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pieces {
+    /// The number the register holds after the line.
+    pub value: i64,
+    /// The one constant every line names, when they all name the same one.
+    pub mentions: Option<String>,
+    /// That constant, when the number is all of it: then the lines together are `mov xR, NAME`.
+    pub name: Option<String>,
 }
 
 /// An instruction operand as written.
@@ -145,8 +162,10 @@ pub enum Operand {
     },
     /// A memory operand in brackets.
     Memory(Memory),
-    /// A jump or call target.
+    /// A jump or call target, or a data symbol `adrp` names.
     Target(String),
+    /// A shift, extend or condition, as written: AArch64's `lsl #12`, `asr #63`, `eq`.
+    Modifier(String),
 }
 
 /// A memory operand such as `qword ptr [rbx + rcx*8 + 16]` or `[rip + msg]`.
@@ -182,6 +201,8 @@ pub struct UnsafeBlock {
 /// A parsed main.s.
 #[derive(Debug, Default)]
 pub struct Source {
+    /// The CPU it's written for, as its first line says.
+    pub isa: Isa,
     /// The constants, by name.
     pub constants: BTreeMap<String, Constant>,
     /// The data symbols, in order.
@@ -313,11 +334,14 @@ fn is_branch(mnemonic: &str) -> bool {
 }
 
 /// Splits code from its `#` comment, ignoring `#` inside string and character literals.
-fn split_comment(line: &str) -> (&str, Option<&str>) {
+fn split_comment(line: &str, isa: Isa) -> (&str, Option<&str>) {
     let bytes = line.as_bytes();
     let mut index = 0;
     while index < bytes.len() {
         match bytes[index] {
+            b'/' if isa == Isa::Aarch64 && bytes.get(index + 1) == Some(&b'/') => {
+                return (&line[..index], Some(&line[index + 2..]));
+            }
             b'"' => {
                 index += 1;
                 while index < bytes.len() && bytes[index] != b'"' {
@@ -326,7 +350,7 @@ fn split_comment(line: &str) -> (&str, Option<&str>) {
                 index += 1;
             }
             b'\'' => index += 3,
-            b'#' => return (&line[..index], Some(&line[index + 1..])),
+            b'#' if isa == Isa::X86_64 => return (&line[..index], Some(&line[index + 1..])),
             _ => index += 1,
         }
     }
@@ -410,9 +434,11 @@ fn is_constant_name(text: &str) -> bool {
         && !text.chars().any(|character| character.is_ascii_lowercase())
 }
 
-/// Evaluates an integer expression: numbers, `'c'` characters and constants, with
-/// `+ - * /` and parentheses.
-fn evaluate(text: &str, constants: &BTreeMap<String, Constant>) -> Result<i64, String> {
+/// Evaluates an integer expression: numbers, `'c'` characters and constants, with `+ - * /`,
+/// `& |`, `<< >>` and parentheses, as llvm-mc reads them: `* / << >>` first, then `& |`, then
+/// `+ -`, each from left to right, and `>>` shifting in zeros. A value that doesn't fit in 64
+/// bits, or a shift by less than 0 or more than 63, is refused.
+pub(crate) fn evaluate(text: &str, constants: &BTreeMap<String, Constant>) -> Result<i64, String> {
     struct Expression<'a> {
         tokens: Vec<&'a str>,
         position: usize,
@@ -423,10 +449,10 @@ fn evaluate(text: &str, constants: &BTreeMap<String, Constant>) -> Result<i64, S
             self.tokens.get(self.position).copied()
         }
         fn sum(&mut self) -> Result<i64, String> {
-            let mut value = self.product()?;
+            let mut value = self.bits()?;
             while let Some(op @ ("+" | "-")) = self.peek() {
                 self.position += 1;
-                let right = self.product()?;
+                let right = self.bits()?;
                 value = if op == "+" {
                     value.checked_add(right)
                 } else {
@@ -436,17 +462,40 @@ fn evaluate(text: &str, constants: &BTreeMap<String, Constant>) -> Result<i64, S
             }
             Ok(value)
         }
+        fn bits(&mut self) -> Result<i64, String> {
+            let mut value = self.product()?;
+            while let Some(op @ ("&" | "|")) = self.peek() {
+                self.position += 1;
+                let right = self.product()?;
+                value = if op == "&" {
+                    value & right
+                } else {
+                    value | right
+                };
+            }
+            Ok(value)
+        }
         fn product(&mut self) -> Result<i64, String> {
             let mut value = self.unary()?;
-            while let Some(op @ ("*" | "/")) = self.peek() {
+            while let Some(op @ ("*" | "/" | "<<" | ">>")) = self.peek() {
                 self.position += 1;
                 let right = self.unary()?;
-                value = if op == "*" {
-                    value.checked_mul(right)
-                } else if right == 0 {
-                    return Err("it divides by zero".into());
-                } else {
-                    value.checked_div(right)
+                let shift = || {
+                    u32::try_from(right)
+                        .ok()
+                        .filter(|bits| *bits < 64)
+                        .ok_or_else(|| format!("it shifts by {right}, outside 0 to 63"))
+                };
+                value = match op {
+                    "*" => value.checked_mul(right),
+                    "/" if right == 0 => return Err("it divides by zero".into()),
+                    "/" => value.checked_div(right),
+                    // Only when shifting back gives the value again do no bits fall off the top.
+                    "<<" => {
+                        let bits = shift()?;
+                        Some(value << bits).filter(|shifted| shifted >> bits == value)
+                    }
+                    _ => Some((value.cast_unsigned() >> shift()?).cast_signed()),
                 }
                 .ok_or("the value doesn't fit in 64 bits")?;
             }
@@ -523,6 +572,8 @@ fn evaluate(text: &str, constants: &BTreeMap<String, Constant>) -> Result<i64, S
         } else if rest.starts_with(|first: char| first.is_ascii_alphanumeric() || first == '_') {
             rest.find(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
                 .unwrap_or(rest.len())
+        } else if rest.starts_with("<<") || rest.starts_with(">>") {
+            2
         } else {
             rest.chars().next().map_or(1, char::len_utf8)
         };
@@ -539,6 +590,15 @@ fn evaluate(text: &str, constants: &BTreeMap<String, Constant>) -> Result<i64, S
         None => Ok(value),
         Some(token) => Err(format!("unexpected `{token}`")),
     }
+}
+
+/// The one constant an operand's expression names, if it names exactly one.
+fn mentioned(text: &str, constants: &BTreeMap<String, Constant>) -> Option<String> {
+    let mut names = text
+        .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+        .filter(|word| constants.contains_key(*word));
+    let first = names.next()?;
+    names.all(|other| other == first).then(|| first.to_owned())
 }
 
 /// AVX-512 decorations written after an operand.
@@ -802,7 +862,8 @@ struct Parser {
     function: Option<OpenFunction>,
     data: Option<DataSymbol>,
     globals: Vec<(String, usize)>,
-    seen_intel_syntax: bool,
+    /// Whether the first statement, the line that names the CPU, has been read.
+    seen_header: bool,
 }
 
 impl Parser {
@@ -826,8 +887,17 @@ impl Parser {
     }
 
     fn line(&mut self, number: usize, raw: &str) {
-        let (code, comment) = split_comment(raw);
+        let isa = self.source.isa;
+        let (code, comment) = split_comment(raw, isa);
         let code = code.trim();
+        if isa == Isa::Aarch64 && code.starts_with('#') {
+            self.dialect(
+                number,
+                "`#` comments aren't in the AArch64 dialect, where `#` starts a number",
+                "start comments with //",
+            );
+            return;
+        }
         if contains_outside_literals(code, ";") {
             self.dialect(
                 number,
@@ -840,22 +910,26 @@ impl Parser {
             self.dialect(
                 number,
                 "`/* */` comments aren't in the dialect",
-                "start comments with #",
+                if isa == Isa::X86_64 {
+                    "start comments with #"
+                } else {
+                    "start comments with //"
+                },
             );
             return;
         }
-        // Comments may come first; the first statement sets Intel syntax.
-        if !self.seen_intel_syntax && !code.is_empty() {
-            self.seen_intel_syntax = true;
-            if code != ".intel_syntax noprefix" {
+        // Comments may come first; the first statement names the CPU.
+        if !self.seen_header && !code.is_empty() {
+            self.seen_header = true;
+            let header = header(isa);
+            if code != header {
                 self.dialect(
                     number,
-                    "main.s must start with .intel_syntax noprefix",
-                    "make `.intel_syntax noprefix` the first line, before any directive or \
-                     instruction",
+                    format!("main.s must start with {header}"),
+                    format!("make `{header}` the first line, before any directive or instruction"),
                 );
             }
-            if code.starts_with(".intel_syntax") {
+            if code.starts_with(".intel_syntax") || code.starts_with(".arch") {
                 return;
             }
         }
@@ -1433,6 +1507,10 @@ impl Parser {
             .open_unsafe
             .as_ref()
             .map(|_| open.function.unsafe_blocks.len());
+        if self.source.isa == Isa::Aarch64 {
+            self.aarch64_instruction(number, code, mnemonic, rest, unsafe_block);
+            return;
+        }
         if PREFIXES.contains(&mnemonic.as_str()) {
             self.dialect(
                 number,
@@ -1488,12 +1566,139 @@ impl Parser {
                 zeroing,
                 text: normalize(code),
                 unsafe_block,
+                pieces: None,
             }));
         }
     }
 
+    /// An AArch64 instruction: its operands into the shared form, and the whole line held to
+    /// the dialect's syntax, with any label or symbol standing in for its address.
+    fn aarch64_instruction(
+        &mut self,
+        number: usize,
+        code: &str,
+        mnemonic: String,
+        rest: &str,
+        unsafe_block: Option<usize>,
+    ) {
+        let texts = split_operands(rest);
+        if texts.iter().any(|text| text.is_empty()) {
+            self.dialect(
+                number,
+                "an operand is missing",
+                "write every operand, separated by commas",
+            );
+            return;
+        }
+        let mut operands = Vec::new();
+        for &text in &texts {
+            match aarch64_operand(text, &self.source.constants) {
+                Ok(parsed) => operands.push(parsed),
+                Err(problem) => {
+                    self.dialect(
+                        number,
+                        format!("`{text}`: {problem}"),
+                        "see the operand forms in references/linux-aarch64.md",
+                    );
+                    return;
+                }
+            }
+        }
+        // A constant, or an expression of them, is its value; a label or symbol stands in as 0.
+        let constants = &self.source.constants;
+        let stand_in = |name: &str| Some(evaluate(name, constants).unwrap_or(0));
+        if let Err(problem) = aarch64::text::parse(&mnemonic, rest, 0, &stand_in) {
+            self.dialect(
+                number,
+                problem,
+                "see the instructions and operand forms in references/linux-aarch64.md",
+            );
+            return;
+        }
+        let pieces = (mnemonic == "movk")
+            .then(|| self.pieces(&operands, texts.get(1).copied().unwrap_or_default()))
+            .flatten();
+        if let Some(open) = self.function.as_mut() {
+            open.function.items.push(Item::Instruction(Instruction {
+                line: number,
+                mnemonic,
+                operands,
+                mask: None,
+                zeroing: false,
+                text: normalize(code),
+                unsafe_block,
+                pieces,
+            }));
+        }
+    }
+
+    /// What a `movk` and the `mov` or `movk`s right before it, with no label between, put in
+    /// its register: the `movk` replaces 16 bits of what the line before put there.
+    fn pieces(&self, operands: &[Operand], part_text: &str) -> Option<Pieces> {
+        let constants = &self.source.constants;
+        let [
+            register @ Operand::Register(Reg::A64(written)),
+            Operand::Immediate { value: part, .. },
+            rest @ ..,
+        ] = operands
+        else {
+            return None;
+        };
+        let shift = match rest {
+            [] => 0,
+            [Operand::Modifier(modifier)] => {
+                let amount = modifier.strip_prefix("lsl")?.trim().strip_prefix('#')?;
+                u32::try_from(evaluate(amount, constants).ok()?)
+                    .ok()
+                    .filter(|shift| {
+                        shift % 16 == 0 && *shift < if written.wide { 64 } else { 32 }
+                    })?
+            }
+            _ => return None,
+        };
+        let Some(Item::Instruction(before)) = self.function.as_ref()?.function.items.last() else {
+            return None;
+        };
+        if before.operands.first() != Some(register) {
+            return None;
+        }
+        let (value, mentions) = match (before.mnemonic.as_str(), &before.operands[..]) {
+            ("movk", _) => {
+                let pieces = before.pieces.as_ref()?;
+                (pieces.value, pieces.mentions.clone())
+            }
+            ("mov", [_, Operand::Immediate { value, .. }]) => {
+                let (_, operands) = before.text.split_once(' ')?;
+                let first = split_operands(operands).get(1).copied()?;
+                (*value, mentioned(first, constants))
+            }
+            _ => return None,
+        };
+        let width = if written.wide {
+            u64::MAX
+        } else {
+            u64::from(u32::MAX)
+        };
+        let field = 0xffff_u64 << shift;
+        let value =
+            ((value.cast_unsigned() & !field) | ((part.cast_unsigned() & 0xffff) << shift)) & width;
+        let value = value.cast_signed();
+        let mentions =
+            mentions.filter(|name| mentioned(part_text, constants).as_ref() == Some(name));
+        let name = mentions.clone().filter(|name| {
+            constants
+                .get(name)
+                .is_some_and(|constant| constant.value == value)
+        });
+        Some(Pieces {
+            value,
+            mentions,
+            name,
+        })
+    }
+
     fn finish(mut self, last_line: usize) -> (Source, Vec<Violation>) {
-        if !self.seen_intel_syntax {
+        if !self.seen_header {
             self.dialect(
                 1,
                 "main.s is too short",
@@ -1565,11 +1770,140 @@ impl Parser {
     }
 }
 
+/// The line main.s for `isa` must start with.
+#[must_use]
+pub const fn header(isa: Isa) -> &'static str {
+    match isa {
+        Isa::X86_64 => ".intel_syntax noprefix",
+        Isa::Aarch64 => ".arch armv8-a",
+    }
+}
+
+/// The CPU main.s names in its first statement: AArch64 for `.arch`, x86-64 otherwise.
+#[must_use]
+pub fn isa_of(text: &str) -> Isa {
+    let first = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with('#') && !line.starts_with("//"));
+    if first.is_some_and(|line| line.starts_with(".arch")) {
+        Isa::Aarch64
+    } else {
+        Isa::X86_64
+    }
+}
+
+/// An AArch64 operand in the shared form: a register, a number (`#…`, named when it's exactly
+/// one constant), memory (`[…]`), the low 12 bits of a data symbol's address (`:lo12:name`, as
+/// memory naming the symbol, the way `lea`'s operand does on x86-64), a target or data symbol by
+/// name, or a shift, extend or condition.
+fn aarch64_operand(text: &str, constants: &BTreeMap<String, Constant>) -> Result<Operand, String> {
+    if text.starts_with('=') {
+        return Err(
+            "a number from a literal pool isn't in the dialect: put one in a register \
+                    with `mov xR, #NAME`, or with `mov xR, #NAME & 0xffff` and a `movk` for \
+                    each further 16 bits, such as `movk xR, #NAME >> 16, lsl #16`"
+                .into(),
+        );
+    }
+    if let Some(expression) = text.strip_prefix('#') {
+        let expression = expression.trim();
+        let value = evaluate(expression, constants)?;
+        let name = constants
+            .contains_key(expression)
+            .then(|| expression.to_owned());
+        return Ok(Operand::Immediate { value, name });
+    }
+    if let Some(name) = text.strip_prefix(":lo12:") {
+        let name = name.trim();
+        if !is_identifier(name) {
+            return Err("`:lo12:` names a data symbol".into());
+        }
+        return Ok(Operand::Memory(Memory {
+            size: None,
+            base: None,
+            index: None,
+            scale: 1,
+            displacement: 0,
+            symbol: Some(name.to_owned()),
+            broadcast: false,
+        }));
+    }
+    if text.starts_with('[') {
+        return aarch64_memory(text, constants).map(Operand::Memory);
+    }
+    if let Some(register) = aarch64::text::register(text) {
+        return Ok(Operand::Register(Reg::A64(register)));
+    }
+    if A64Cond::named(text).is_some() || text.contains(char::is_whitespace) {
+        return Ok(Operand::Modifier(text.to_owned()));
+    }
+    if is_identifier(text) || is_local_label(text) {
+        return Ok(Operand::Target(text.to_owned()));
+    }
+    Err("isn't an operand the dialect has".into())
+}
+
+/// An AArch64 memory operand: `[base]`, `[base, #offset]` (with `!` when the base moves first),
+/// or `[base, index{, extend #shift}]`.
+fn aarch64_memory(text: &str, constants: &BTreeMap<String, Constant>) -> Result<Memory, String> {
+    let inside = text.strip_suffix('!').unwrap_or(text).trim_end();
+    let inner = inside
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .ok_or("a memory operand is in brackets")?;
+    let parts = split_operands(inner);
+    if parts.iter().any(|part| part.starts_with(":lo12:")) {
+        return Err(
+            "`:lo12:` goes on the `add` after `adrp`, never inside an address: \
+                    load through the register that add makes"
+                .into(),
+        );
+    }
+    let base = parts
+        .first()
+        .and_then(|name| aarch64::text::register(name))
+        .ok_or("a memory operand starts with its base register")?;
+    let mut memory = Memory {
+        size: None,
+        base: Some(Reg::A64(base)),
+        index: None,
+        scale: 1,
+        displacement: 0,
+        symbol: None,
+        broadcast: false,
+    };
+    match parts.get(1..).unwrap_or_default() {
+        [] => {}
+        [offset] if offset.starts_with('#') => {
+            memory.displacement = evaluate(offset[1..].trim(), constants)?;
+        }
+        [index, rest @ ..] if rest.len() <= 1 => {
+            let index =
+                aarch64::text::register(index).ok_or("a memory operand's index is a register")?;
+            memory.index = Some(Reg::A64(index));
+            if let Some(extend) = rest.first()
+                && let Some((_, amount)) = extend.split_once('#')
+            {
+                let shift = evaluate(amount.trim(), constants)?;
+                memory.scale = 1_u32
+                    .checked_shl(u32::try_from(shift).map_err(|_| "a negative shift")?)
+                    .ok_or("too big a shift")?;
+            }
+        }
+        _ => return Err("a memory operand has a base, then an offset or an index".into()),
+    }
+    Ok(memory)
+}
+
 /// Parses main.s, returning what it found and every layout violation.
 #[must_use]
 pub fn parse(text: &str) -> (Source, Vec<Violation>) {
     let mut parser = Parser {
-        source: Source::default(),
+        source: Source {
+            isa: isa_of(text),
+            ..Source::default()
+        },
         violations: Vec::new(),
         place: Place::Header,
         pending_returns: None,
@@ -1579,7 +1913,7 @@ pub fn parse(text: &str) -> (Source, Vec<Violation>) {
         function: None,
         data: None,
         globals: Vec::new(),
-        seen_intel_syntax: false,
+        seen_header: false,
     };
     let mut last = 1;
     for (index, line) in text.lines().enumerate() {

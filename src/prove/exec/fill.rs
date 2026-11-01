@@ -28,7 +28,7 @@ impl Fill {
     /// fill's places in `image`, when it has a function named fill of the canonical shape.
     pub fn find(image: &Image, machine: &crate::checker::decode::Machine) -> Option<Self> {
         let function = machine.functions.get("fill")?;
-        let instructions = &function.instructions;
+        let instructions = function.x86();
         if instructions.len() < SHAPE.len() {
             return None;
         }

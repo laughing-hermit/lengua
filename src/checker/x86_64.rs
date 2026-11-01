@@ -1055,7 +1055,7 @@ fn missing_feature(instruction: &Instruction, features: CpuFeatures) -> Option<&
 pub fn features_needed(machine: &Machine) -> Vec<&'static str> {
     let mut found: Vec<&'static str> = Vec::new();
     for function in machine.functions.values() {
-        for instruction in &function.instructions {
+        for instruction in function.x86() {
             for feature in instruction.cpuid_features() {
                 if let Needs::Feature(name, _) = needs(*feature)
                     && !found.contains(&name)
@@ -1171,6 +1171,12 @@ pub(super) fn same_instruction(
                 if instruction.near_branch_target() != expected {
                     return Err(format!("operand {position} doesn't land on {name}"));
                 }
+            }
+            // AArch64's: an x86-64 line never has one.
+            Operand::Modifier(text) => {
+                return Err(format!(
+                    "operand {position}, `{text}`, isn't an x86-64 operand"
+                ));
             }
         }
     }

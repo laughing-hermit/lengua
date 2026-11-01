@@ -12,8 +12,8 @@ use super::source::{
     Function as SourceFunction, Instruction as SourceInstruction, Item, Label, Memory, Operand,
     Source,
 };
-use super::{Rule, Violation, x86_64};
-use crate::isa::{Abi, Insn, Isa};
+use super::{Rule, Violation, aarch64 as aarch64_checks, x86_64};
+use crate::isa::{Abi, Insn, Isa, aarch64};
 use crate::platform::CpuFeatures;
 
 /// A function in the executable.
@@ -23,8 +23,54 @@ pub struct MachineFunction {
     pub address: u64,
     /// Its size in bytes.
     pub size: u64,
-    /// Its decoded instructions.
-    pub instructions: Vec<Instruction>,
+    /// Its machine code, as its CPU's decoder reads it.
+    pub code: Code,
+}
+
+/// A function's machine code, as its CPU's decoder reads it.
+#[derive(Debug, Clone)]
+pub enum Code {
+    /// x86-64 instructions, as iced decodes them.
+    X86(Vec<Instruction>),
+    /// AArch64 words, each in the dialect's canonical form or why it isn't in the dialect.
+    Aarch64(Vec<Word>),
+}
+
+/// One AArch64 machine word.
+#[derive(Debug, Clone)]
+pub struct Word {
+    /// Its address.
+    pub address: u64,
+    /// The word.
+    pub bits: u32,
+    /// What it is, or why it isn't in the dialect.
+    pub inst: Result<aarch64::Inst, String>,
+}
+
+impl MachineFunction {
+    /// Its x86-64 instructions: none when it's another CPU's code.
+    #[must_use]
+    pub fn x86(&self) -> &[Instruction] {
+        match &self.code {
+            Code::X86(instructions) => instructions,
+            Code::Aarch64(_) => &[],
+        }
+    }
+
+    /// How many instructions it has.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        match &self.code {
+            Code::X86(instructions) => instructions.len(),
+            Code::Aarch64(words) => words.len(),
+        }
+    }
+
+    /// Whether it has no instructions.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// A data symbol in the executable.
@@ -43,6 +89,8 @@ pub struct MachineData {
 /// The executable's functions and data, by name.
 #[derive(Debug, Clone, Default)]
 pub struct Machine {
+    /// The CPU the code is for, from the executable's header.
+    pub isa: Isa,
     /// Functions.
     pub functions: BTreeMap<String, MachineFunction>,
     /// Data symbols.
@@ -66,7 +114,18 @@ pub struct Machine {
 pub fn read(executable: &[u8]) -> Result<Machine, String> {
     let file = object::File::parse(executable)
         .map_err(|error| format!("can't read the executable: {error}"))?;
-    let mut machine = Machine::default();
+    let mut machine = Machine {
+        isa: match file.architecture() {
+            object::Architecture::X86_64 => Isa::X86_64,
+            object::Architecture::Aarch64 => Isa::Aarch64,
+            other => {
+                return Err(format!(
+                    "it's code for {other:?}, which lengua doesn't check"
+                ));
+            }
+        },
+        ..Machine::default()
+    };
     let both = object::elf::PF_W.0 | object::elf::PF_X.0;
     machine.writable_executable = file.segments().any(|segment| {
         matches!(
@@ -102,25 +161,16 @@ pub fn read(executable: &[u8]) -> Result<Machine, String> {
         match symbol.kind() {
             SymbolKind::Text => {
                 text_ranges.push((symbol.address(), symbol.size(), section.size()));
-                let mut decoder =
-                    Decoder::with_ip(64, &bytes, symbol.address(), DecoderOptions::NONE);
-                let mut instructions = Vec::new();
-                while decoder.can_decode() {
-                    let instruction = decoder.decode();
-                    if instruction.is_invalid() {
-                        return Err(format!(
-                            "{name} holds bytes that aren't an instruction at {:#x}",
-                            instruction.ip()
-                        ));
-                    }
-                    instructions.push(instruction);
-                }
+                let code = match machine.isa {
+                    Isa::X86_64 => Code::X86(x86_instructions(name, &bytes, symbol.address())?),
+                    Isa::Aarch64 => Code::Aarch64(words(name, &bytes, symbol.address())?),
+                };
                 machine.functions.insert(
                     name.to_owned(),
                     MachineFunction {
                         address: symbol.address(),
                         size: symbol.size(),
-                        instructions,
+                        code,
                     },
                 );
             }
@@ -151,6 +201,43 @@ pub fn read(executable: &[u8]) -> Result<Machine, String> {
         ));
     }
     Ok(machine)
+}
+
+/// The x86-64 instructions in `bytes`, the function `name` at `address`.
+fn x86_instructions(name: &str, bytes: &[u8], address: u64) -> Result<Vec<Instruction>, String> {
+    let mut decoder = Decoder::with_ip(64, bytes, address, DecoderOptions::NONE);
+    let mut instructions = Vec::new();
+    while decoder.can_decode() {
+        let instruction = decoder.decode();
+        if instruction.is_invalid() {
+            return Err(format!(
+                "{name} holds bytes that aren't an instruction at {:#x}",
+                instruction.ip()
+            ));
+        }
+        instructions.push(instruction);
+    }
+    Ok(instructions)
+}
+
+/// The AArch64 words in `bytes`, the function `name` at `address`, each decoded.
+fn words(name: &str, bytes: &[u8], address: u64) -> Result<Vec<Word>, String> {
+    let (whole, rest) = bytes.as_chunks::<4>();
+    if !rest.is_empty() {
+        return Err(format!("{name} holds bytes that aren't whole instructions"));
+    }
+    Ok(whole
+        .iter()
+        .zip((address..).step_by(4))
+        .map(|(bytes, address)| {
+            let bits = u32::from_le_bytes(*bytes);
+            Word {
+                address,
+                bits,
+                inst: aarch64::decode::decode(bits, address),
+            }
+        })
+        .collect())
 }
 
 /// One main.s instruction and the machine instruction it became.
@@ -308,13 +395,39 @@ pub fn map<'a>(
         return None;
     }
     let program = Program {
-        isa: Isa::X86_64,
+        isa: machine.isa,
         source,
         functions,
         data: machine.data.clone(),
     };
     for function in &program.functions {
-        let code = &machine.functions[function.name()].instructions;
+        let code = match &machine.functions[function.name()].code {
+            Code::X86(code) => code,
+            Code::Aarch64(words) => {
+                for (step, word) in function.steps.iter().zip(words) {
+                    if let Err(problem) =
+                        aarch64_checks::same_instruction(step, word, function, &program)
+                    {
+                        violations.push(Violation {
+                            rule: Rule::Dialect,
+                            line: Some(step.source.line),
+                            problem: format!(
+                                "`{}` became `{}` in the machine code: {problem}",
+                                step.source.text,
+                                aarch64_checks::display(word)
+                            ),
+                            fix: "write the instruction so it means what the machine does; \
+                                  constants must come from the block at the top and data must \
+                                  be addressed as adrp and add :lo12:"
+                                .into(),
+                        });
+                    }
+                    aarch64_checks::check_instruction(step, word, violations);
+                }
+                aarch64_checks::check_pairs(function, violations);
+                continue;
+            }
+        };
         for (step, instruction) in function.steps.iter().zip(code) {
             if let Err(problem) =
                 x86_64::same_instruction(step, instruction, function, &program, machine)
@@ -345,15 +458,49 @@ fn map_function<'a>(
     violations: &mut Vec<Violation>,
 ) -> Option<MappedFunction<'a>> {
     let sources: Vec<&SourceInstruction> = function.instructions().collect();
+    let steps = match &code.code {
+        Code::X86(instructions) => x86_steps(function, sources, instructions, violations)?,
+        Code::Aarch64(words) => aarch64_checks::steps(function, sources, words, violations)?,
+    };
+    let end = code.address + code.size;
+    let mut labels = Vec::new();
+    let mut index = 0;
+    for item in &function.items {
+        match item {
+            Item::Instruction(_) => index += 1,
+            Item::Label(label) => labels.push(LabelAt {
+                label,
+                index,
+                address: steps.get(index).map_or(end, |step| step.insn.address),
+            }),
+        }
+    }
+    Some(MappedFunction {
+        source: function,
+        address: code.address,
+        end,
+        steps,
+        labels,
+    })
+}
+
+/// The steps of an x86-64 function: each line of main.s with the instruction it became, when
+/// they match line for line, mnemonic for mnemonic.
+fn x86_steps<'a>(
+    function: &'a SourceFunction,
+    sources: Vec<&'a SourceInstruction>,
+    instructions: &[Instruction],
+    violations: &mut Vec<Violation>,
+) -> Option<Vec<Step<'a>>> {
     let first_difference = sources
         .iter()
-        .zip(&code.instructions)
+        .zip(instructions)
         .position(|(source, machine)| {
             x86_64::canonical(&source.mnemonic) != x86_64::mnemonic(machine)
         });
-    if sources.len() != code.instructions.len() || first_difference.is_some() {
-        let index = first_difference.unwrap_or(sources.len().min(code.instructions.len()));
-        let (line, found) = match (sources.get(index), code.instructions.get(index)) {
+    if sources.len() != instructions.len() || first_difference.is_some() {
+        let index = first_difference.unwrap_or(sources.len().min(instructions.len()));
+        let (line, found) = match (sources.get(index), instructions.get(index)) {
             (Some(source), Some(machine)) => (
                 source.line,
                 format!("`{}` became `{}`", source.text, x86_64::display(machine)),
@@ -385,32 +532,14 @@ fn map_function<'a>(
         return None;
     }
     let mut factory = InstructionInfoFactory::new();
-    let steps: Vec<Step<'a>> = sources
-        .into_iter()
-        .zip(&code.instructions)
-        .map(|(source, machine)| Step {
-            source,
-            insn: crate::isa::x86_64::facts(machine, &mut factory),
-        })
-        .collect();
-    let end = code.address + code.size;
-    let mut labels = Vec::new();
-    let mut index = 0;
-    for item in &function.items {
-        match item {
-            Item::Instruction(_) => index += 1,
-            Item::Label(label) => labels.push(LabelAt {
-                label,
-                index,
-                address: steps.get(index).map_or(end, |step| step.insn.address),
-            }),
-        }
-    }
-    Some(MappedFunction {
-        source: function,
-        address: code.address,
-        end,
-        steps,
-        labels,
-    })
+    Some(
+        sources
+            .into_iter()
+            .zip(instructions)
+            .map(|(source, machine)| Step {
+                source,
+                insn: crate::isa::x86_64::facts(machine, &mut factory),
+            })
+            .collect(),
+    )
 }
