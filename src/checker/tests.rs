@@ -807,7 +807,14 @@ async fn every_program_in_the_repository_follows_every_rule() {
     ] {
         programs.push((root.join(spec), benches.join(code)));
     }
-    let features = crate::platform::Machine::detect().features;
+    // On x86-64 each program is held to this CPU's features, as check holds it; on another CPU
+    // the programs can't run, and the checker, which doesn't depend on the computer it runs on,
+    // checks them for every feature.
+    let features = if cfg!(target_arch = "x86_64") {
+        crate::platform::Machine::detect().features
+    } else {
+        CpuFeatures::all()
+    };
     let mut failed = Vec::new();
     for (spec, code) in &programs {
         let spec = crate::spec::parse(&std::fs::read_to_string(spec).expect("a spec"))

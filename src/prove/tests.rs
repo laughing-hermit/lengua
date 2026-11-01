@@ -44,12 +44,17 @@ fn block(spec: &str, index: usize) -> Generated {
     suite.generated[index].clone()
 }
 
+/// A proof's budget of `seconds` on the 16-core computer these tests were tuned on; a computer
+/// with fewer cores, such as a 2-core CI runner, gets proportionally longer, so a proof that
+/// finishes here finishes there too.
 fn budget(seconds: u64) -> Budget {
+    let cores = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    let scale = (16 / cores.max(1)).max(1) as u64;
     Budget {
         max_paths: 64,
         max_shapes: 2000,
         question_ms: 10_000,
-        ..Budget::until(Instant::now() + Duration::from_secs(seconds), false)
+        ..Budget::until(Instant::now() + Duration::from_secs(seconds * scale), false)
     }
 }
 
