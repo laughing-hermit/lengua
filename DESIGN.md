@@ -566,9 +566,12 @@ How the proof works (`src/prove/`):
   so a counterexample anywhere turns up early and the pace of the first ones shows whether the rest
   fit: a block that can't finish says how long it would take. A block may have up to 2,000,000
   combinations, and each gets its share of the proof's five minutes, the time it doesn't use
-  passing on. `examples/add` takes about 30 seconds for 4×10^18 input pairs, the first CSV total
-  Claude Code wrote, 24,696 combinations, about six seconds with no solver question, and the
-  template under a second.
+  passing on. The time is kept inside a shape too, at every branch and before each run's check,
+  so one long shape, as one that takes every final piece at once, can't run past it; a shape
+  still gets 20 seconds from its start, so a quick one begun late, as after a block's mebibyte
+  samples ran, ends. `examples/add` takes about 30 seconds for 4×10^18 input pairs, the first
+  CSV total Claude Code wrote, 24,696 combinations, about six seconds with no solver question,
+  and the template under a second.
 - **Small values in few bits.** A division by a constant is sent to the solvers in the bits its
   dividend's range needs, and so is a count, a sum whose parts are each 0 or 1: a count of 16
   bytes divides and adds as 5 bits whatever width the program and the formula wrote it in, so
@@ -754,9 +757,37 @@ What it covers:
   `min(length - 16j, 16)`), with the loop still running there, is `16j + b < length`. `pairs`
   with a 4 KiB buffer is proven for every length so in under four seconds, against nine minutes
   one final length at a time; the line counter, which masks its last chunk with `bzhi`, with a 64
-  KiB buffer, C's size, in under 30 seconds with no solver question. Where every final piece at
-  once isn't proven, the base goes one length at a time as before. A loop the induction doesn't
-  fit, or whose step doesn't hold, is proven by length as above.
+  KiB buffer, C's size, in under 30 seconds with no solver question. Counts that look back, as
+  `words` does, take every final piece at once too: every text up to a buffer-full from the
+  program's start, and every final piece after a whole buffer-full read from any state at the
+  head, the formula reading that buffer-full's last bytes as a window before the piece. For the
+  program's count and the formula's to be one term: a count's parts have one form, their
+  conjuncts sorted, so the same conditions joined in another order are one part;
+  `(a ∧ c) ∨ (b ∧ c)` is `(a ∨ b) ∧ c`, what two compares under one mask joined by `korq` say of
+  a byte; a mask register's low byte, `low8(1 << n) - 1`, says `b < n` of its bits as the whole
+  mask does; where a part says the length lies in a set, the length's comparisons inside its
+  other conditions are settled by that set, as the word carry into a 64-byte step, bit
+  `min(left, 64) - 1` of the step before's whitespace, is bit 63 where the step runs; and the
+  output check is first settled by the run's own conditions, which a printed number's digit count
+  is, then the run's conditions are rewritten by what settles them, each from its parts. The
+  skill's fast `wc`, 64 bytes a step with AVX-512 masks, each step masked to the bytes left so
+  the last partial step is the same code, is proven so for every length with its 64 KiB buffer in
+  about two minutes with no solver question; one that forgets the byte before each buffer-full or
+  each step, reads the carry from the wrong byte, or counts the bytes past the end is caught.
+  Masking every step costs it about half again the instructions and a third more CPU time than
+  the old shape's separate tail, at the same wall time, since a pipe sets the pace
+  (BENCHMARKS.md, 64 MiB): still ahead of C, C++ and Rust. Where every final piece at once isn't
+  proven, the base goes one length at a time as before. A loop the induction doesn't fit, or
+  whose step doesn't hold, is proven by length as above.
+- What's proven for every length depends on the code's shape, not only on what it computes.
+  Proven: a read loop through `fill` whose loops over each buffer-full leave only where their
+  index reaches the bytes read, and mask each step to the bytes left. Not yet, so proven one
+  final length at a time, as far as the proof's time reaches: a separate routine for the last
+  partial vector at a place the length chooses (tests/fixtures/words, and the fast `wc` before
+  2026-11-01), raw `read`s of any size (a megabyte-at-a-time loop), and byte-at-a-time loops past
+  a few kilobytes, whose counts keep a copy of every part at every byte. So "the fast `wc` is
+  proven" doesn't mean every streaming program is; the compile skill steers toward the shape that
+  is.
 - What the proof ran. A function no run of a proof called, such as a fast path that starts past
   the proof's bound, is named in the proof's line: "the proof never ran crc_block, so what it
   does isn't proven". The CRC-32C asset's three chains join only past 12,288 bytes, so its
@@ -1021,6 +1052,18 @@ still to build per target. A new profile must supply:
    that supplies tests' random bytes and clock (`supervise.rs`, which reads the CPU's registers:
    x86-64's and AArch64's, each in its own small `cpu` module). macOS and Windows have neither;
    each needs its own confinement.
+
+**One product on every target.** A port adds a CPU's or an OS's means, never a different lengua.
+The same spec means the same on each: the same skills, tools, reports, lock and messages (only
+the target's name and hardware facts differ); the same rules, memory safety, tests and proof
+engine (only each CPU's instruction model is its own); and the same limits on every OS. The
+capabilities a spec can name (`- Uses:` standard input and output, files and folders, the
+network, threads, the terminal, the clock, random bytes, sleep, the environment) and what the
+sandbox allows of each are one definition, which each OS enforces with its own means. Where an
+OS can't provide or enforce part of it, that part is cut to what every OS can do, on Linux too,
+so one OS's extra power never makes a spec behave differently. What may differ is the hardware:
+the instructions a CPU has, its vectors' width, its speed. A target is done when it covers what
+x86-64 covers, each item with its own hardware's means (NEON where x86-64 has AVX-512).
 
 **Linux ARM64 is nearest:** the same OS, so the same kinds of system calls, the same sandbox and
 ELF, but 2, 3 and 4 and a new triple are new, and 5 and 6 change in detail (the call numbers, the

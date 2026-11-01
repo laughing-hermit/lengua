@@ -589,6 +589,9 @@ pub struct State {
     /// Where standard input ends, when its length is the input's choice: `stdin` then holds as
     /// many bytes as it can be long, those past the end standing for nothing read.
     stdin_length: Option<Term>,
+    /// Where in `stdin` the text of that length starts: the bytes before it, such as a whole
+    /// buffer-full an induction's base puts first, are there whatever the length.
+    stdin_from: usize,
     /// A loop whose exits that length decides are being merged, while the run goes round it.
     merging: Option<Box<Merging>>,
     /// The pieces standard input arrives in, by length, when it doesn't arrive whole: each read
@@ -774,6 +777,7 @@ impl State {
             stdin: Rc::new(stdin),
             stdin_read: 0,
             stdin_length: None,
+            stdin_from: 0,
             merging: None,
             stdin_pieces: Rc::new(Vec::new()),
             files: Rc::new(BTreeMap::new()),

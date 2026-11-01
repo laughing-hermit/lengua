@@ -59,17 +59,23 @@ const NARROW: [(&str, usize, usize); 2] = [
 
 /// The programs proven by induction here with a smaller buffer than their own, as the prover's
 /// tests prove them: the step over a buffer-full of 4096 symbolic bytes takes the solvers
-/// minutes. Each change is a line of main.s and what it becomes.
-const SMALLER: [(&str, &str, &str); 2] = [
+/// minutes. Each change is a line of main.s and what it becomes, a loop's bound with its
+/// buffer's where it counts the buffer's steps.
+const SMALLER: [(&str, &[(&str, &str)]); 3] = [
     (
         "tests/fixtures/lines/main.s",
-        ".equ BUF_LEN, 4096\n",
-        ".equ BUF_LEN, 256\n",
+        &[(".equ BUF_LEN, 4096\n", ".equ BUF_LEN, 256\n")],
     ),
     (
         "tests/fixtures/words/main.s",
-        ".equ BUF_LEN, 4096\n",
-        ".equ BUF_LEN, 256\n",
+        &[(".equ BUF_LEN, 4096\n", ".equ BUF_LEN, 256\n")],
+    ),
+    (
+        "plugin/skills/compile/assets/fast/wc/main.s",
+        &[
+            (".equ BUF_LEN, 65536\n", ".equ BUF_LEN, 256\n"),
+            ("  # bound: 1024\n", "  # bound: 4\n"),
+        ],
     ),
 ];
 
@@ -196,6 +202,34 @@ fn induction(image: &Image, block: &Generated, listens: bool) -> String {
         Ok(found) => found,
         Err(refused) => return format!("none: {}", reason(&refused.why)),
     };
+    // As the prover does: every final piece up to a buffer-full at once where it can, else the
+    // shortest few one length at a time.
+    let mut whole = block.clone();
+    if let [(_, Generator::Str { min, max, .. })] = whole.vars.as_mut_slice() {
+        *min = (*min).min(1);
+        *max = (*max).min(found.chunk);
+    }
+    let within = Budget {
+        within: true,
+        max_paths: budget(listens)
+            .max_paths
+            .saturating_mul(super::AT_ONCE_PATHS),
+        ..budget(listens)
+    };
+    if let Ok(proven @ Verdict::Proven { bound: None, .. }) =
+        by_length(image, &whole, &within, Some(&found.hook))
+    {
+        return format!(
+            "step holds: {} bytes a time round, reach {}, {} paths, {} questions, lookback {}; \
+             every final piece at once {}",
+            found.chunk,
+            found.reach,
+            found.paths,
+            found.questions,
+            found.lookback,
+            verdict(&proven)
+        );
+    }
     let mut base = block.clone();
     let mut longest = 0;
     if let [(_, Generator::Str { min, max, .. })] = base.vars.as_mut_slice() {
@@ -265,14 +299,17 @@ async fn record() -> String {
             continue;
         };
         // The build its proofs by induction take, with a smaller buffer where it has one.
-        let induced = match SMALLER.iter().find(|(name, ..)| *name == program.name) {
-            Some((_, line, smaller)) => {
-                assert!(program.text.contains(line), "{} has {line:?}", program.name);
-                let text = program.text.replace(line, smaller);
+        let induced = match SMALLER.iter().find(|(name, _)| *name == program.name) {
+            Some((_, changes)) => {
+                let mut text = program.text.clone();
+                for (line, smaller) in *changes {
+                    assert!(text.contains(line), "{} has {line:?}", program.name);
+                    text = text.replace(line, smaller);
+                }
                 let bytes = built(&toolchain, &text)
                     .await
                     .expect("the smaller buffer builds");
-                let _ = writeln!(recording, "  by induction with {}", smaller.trim_end());
+                let _ = writeln!(recording, "  by induction with {}", changes[0].1.trim_end());
                 machine_of(&text, &bytes)
             }
             None => machine.clone(),

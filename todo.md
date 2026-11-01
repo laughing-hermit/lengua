@@ -38,16 +38,10 @@ What lengua is on this target now:
   user's own shell.
 
 Tested, not proven, and each proof line says why: sorting past a few bytes, word tallies past a
-few bytes, floats computed in another order than the formula's, a folder's listing, the `sha256`
-formula, and the benchmark's fastest word count, which reads a megabyte at a time and is proven
-by length.
-
-Left for later on this target:
-- Sorting at every length, which needs quantified facts over memory.
-- The fastest streaming programs proven for every length. The induction's base proves each final
-  length one by one, so its cost grows with the square of the buffer; a base that covers every
-  final length in one shape would let a 64 KiB buffer, C's size, be proven. The design review
-  recommended this as its own round (about 1,000 to 1,500 lines).
+few bytes, floats computed in another order than the formula's, a folder's listing and the
+`sha256` formula. The fastest streaming programs, the benchmark's word count among them, are
+proven for every length with a 64 KiB buffer (the round below); what's left of that, and sorting
+at every length, is past the finish line set at the end of this item.
 
 **Next round: proofs whose cost grows with the input, not its square** (planned 2026-11-01,
 revised after a design review the same day). The fastest streaming programs aren't proven for
@@ -67,17 +61,21 @@ choice, and merges the exits of a loop that leaves on that length, so `pairs` at
 in under four seconds (nine minutes before); and a condition on the length alone is worked out as
 the set of lengths where it holds, so a loop that masks its last chunk with `bzhi` meets the
 formula's guards: the line counter with a 64 KiB buffer, C's size, is proven for every length in
-under 30 seconds with no solver question. Left: counts that look back (`words`, so the fast
-`wc`), whose base reads a buffer-full before the final piece; the fast `wc`'s own shape (a tail
-routine that loads its last vector at a place the length chooses, and raw `read`s of any size);
-and a count built a byte at a time keeps a copy of all its parts at every byte, so a byte loop's
-64 KiB base runs out of memory (counts that share their parts would fix it).
+under 30 seconds with no solver question; and counts that look back take every final piece at
+once after a whole buffer-full, so the skill's fast `wc`, rewritten as `fill` into 64 KiB and one
+loop that masks each 64-byte step to the bytes left, is proven for every length in about two
+minutes with no solver question. Done, so this round's work for x86-64 is complete; what's left
+of it is past the finish line below: a tail routine that loads its last vector at a place the
+length chooses, raw `read`s of any size, and byte loops at 64 KiB, whose counts keep a copy of
+all their parts at every byte (counts that share their parts would fix it).
 
-**The finish line** (decided 2026-11-01, before ARM64 resumes): everything that can be proven is
-proven, however many rounds that takes, except where a concrete, demonstrated reason shows lengua's
-approach can't prove it, which comes back to the user with the evidence. By item:
-- Can: the proof tests that failed only when every slow test ran at once (long proofs now take
-  turns).
+**The finish line, set** (2026-11-01). First "everything that can be proven, however long"; then
+the user set it: "perfect what you can for each target ... a set finish line ... this just needs
+to be a general purpose programming language replacement and improvement". So each target gets a
+concrete line judged by what a general-purpose language replacement needs, not open-ended proof
+research, and x86-64 Linux is done when:
+- Done 2026-11-01: the proof tests that failed only when every slow test ran at once (long proofs
+  take turns).
 - Done 2026-11-01: mean's decimal means, two prices up to a million, proven in about 80 seconds
   with 16 cores, and all six of its blocks through the server in under three minutes. The digits
   the program printed and the formula's had been built two ways, so the solvers compared them:
@@ -89,12 +87,27 @@ approach can't prove it, which comes back to the user with the evidence. By item
   one term (by length: no solver question where the solvers had stopped at 46 bytes); the
   induction learns which register keeps the matcher's phase across a cut from the first time
   round, and proves every later one keeps it (about 2 seconds, no solver question).
-- Likely: the fastest streaming programs for every length, by the next round above.
-- Uncertain, research: sorting at every length and word tallies past a few bytes, which need
-  quantified facts over memory.
-- Not by their nature, so "tested, not proven" is the right final answer: floats computed in
-  another order than the formula's (the results really differ), a folder's listing (the
-  kernel's order), the `sha256` formula (beyond the solvers), and the safety-stopped items below.
+- Done 2026-11-01: the fastest streaming programs for every length. The line counter with a
+  64 KiB buffer in under 30 seconds, and the skill's fast `wc`, rewritten as `fill` into 64 KiB
+  and one AVX-512 loop that masks each step to the bytes left, in about two minutes, both with no
+  solver question; the proof keeps its time within one long shape too. Masking every step costs
+  the `wc` a third more CPU time than its old, unprovable shape at the same wall time, still
+  ahead of C, C++ and Rust (BENCHMARKS.md).
+- Then: the gate, the goldens and the benchmark current, and the skill and DESIGN saying which
+  shapes are proven for every length.
+
+Past the line, so not blocking the next target: programs of these shapes are checked, tested and
+proven up to a length, and each proof line says so.
+- Sorting at every length and word tallies past a few bytes, which need quantified facts over
+  memory.
+- Byte-at-a-time loops at 64 KiB, whose counts keep a copy of every part at every byte (counts
+  that share their parts would fix it).
+- A separate routine for the last partial vector at a place the length chooses (the fast `wc`
+  before 2026-11-01, `tests/fixtures/words`), and raw `read`s of any size.
+
+Not by their nature, so "tested, not proven" is the right final answer: floats computed in
+another order than the formula's (the results really differ), a folder's listing (the kernel's
+order), the `sha256` formula (beyond the solvers), and the safety-stopped items below.
 
 ### Safety-stopped work, for a software engineer to review
 
@@ -176,7 +189,10 @@ So people understand the idea, and so it can stand as a new standard. It explain
 - **How lengua checks the AI's work.**
   - Every test, with fresh random inputs.
   - Its own rules: NASA's Power of 10 for assembly, plus memory safety and its borrow checker.
-  - Proofs that the program is right for every input, confirmed by two independent solvers.
+  - Proofs that the program is right for every input, confirmed by two independent solvers. How
+    far a proof reaches depends on the code's shape, not only on what it computes (DESIGN lists
+    which shapes are proven for every length): "the fast `wc` is proven" isn't "every streaming
+    program is", so the paper says which programs, never that all are.
   - The kernel holding every run to what its spec allows.
 - **Why assembly.** The fastest code for each machine, with nothing between the spec and the CPU.
 - **Why the spec is the mother.**
@@ -189,6 +205,15 @@ So people understand the idea, and so it can stand as a new standard. It explain
 ## 3. The other five targets
 
 macOS on Apple silicon and Intel, Linux on ARM64, and Windows on x86-64 and ARM64.
+
+Every target is the same lengua, never a different product (DESIGN's "One product on every
+target"): the same spec, skills, tools, reports and messages; the same rules, memory safety, tests
+and proof engine; and the same limits on every OS. The capabilities a spec can name, and what the
+sandbox allows of each, are one definition that each OS enforces with its own means; where an OS
+can't provide or enforce part of it, that part is cut to what every OS can do, on Linux too, so
+nothing behaves differently from one OS to another. Only the hardware may differ (its
+instructions, vector widths, speed). Each target's finish line is parity with x86-64's: it's done
+when it covers what x86-64 covers, each item with its own hardware's means.
 
 The spec already travels to all of them: it names no CPU or OS, and `check` enforces that, so the
 source people share is agnostic today. What is per-target is the compiled `main.s` and lengua's
@@ -228,4 +253,5 @@ Windows target profile — the same work as item 3 for that host. See DESIGN's "
 A simple Next.js landing page where people share their specs, never code, and anyone compiles them for their own computer. It promises only what lengua enforces:
 - the spec travels, and every copy compiled from it passes the same checks; it never promises the same program;
 - each computer compiles and checks its own code;
-- main.s is plain text anyone can build outside lengua, so the guarantees hold only through lengua's own `run`.
+- main.s is plain text anyone can build outside lengua, so the guarantees hold only through lengua's own `run`;
+- a proof covers what its line says: for every length only for programs in the shapes DESIGN lists, and up to a length otherwise; never that every program is proven.

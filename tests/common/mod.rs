@@ -198,6 +198,15 @@ impl Session {
         Self::connect(protocol, data_dir, Some(0), None, None, Some(target), None).await
     }
 
+    /// Starts `lengua-mcp` giving each version's proofs `seconds` in all, once no other session
+    /// in the test binary is proving, and keeps the others from proving until it ends: a proof
+    /// that must end within its time, as an induction's, would run out of it beside theirs.
+    pub async fn proving_alone_for(protocol: Protocol, seconds: u64) -> Self {
+        let hold = Some(Proving::Alone(proving().write_owned().await));
+        let data_dir = tempfile::tempdir().expect("create a temporary data folder");
+        Self::connect(protocol, data_dir, Some(seconds), None, None, None, hold).await
+    }
+
     /// Starts `lengua-mcp` with its full time for proofs, once no other session in the test
     /// binary is proving, and keeps the others from proving until it ends.
     pub async fn proving_alone(protocol: Protocol) -> Self {

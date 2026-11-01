@@ -44,7 +44,13 @@ and the CPU features the code needs; never write that line yourself.
    with from one buffer-full to the next (for `"aa"`, whether the last byte is an `a` that starts
    no pair yet), kept as 0 or 1 with `setcc`, `and` and `xor`, without branches; otherwise it
    goes on through longer input as far as its time reaches, where a read loop of your own is proven
-   only up to the 4096 bytes one pipe write holds. A server whose
+   only up to the 4096 bytes one pipe write holds. For a buffer as large as 64 KiB, the proof takes
+   the last buffer-full at every length at once, which needs each loop over a buffer-full to leave
+   only where its index reaches the bytes `fill` read, and to mask each step to the bytes left
+   (`bzhi` of `min(left, 64)` into `k1`), so the last partial step is the same code, as
+   [the fast wc](assets/fast/wc/main.s) does. A separate routine for the last partial vector, at a
+   place the length chooses, is proven only one final length at a time, which a large buffer's
+   proof doesn't finish. A server whose
    spec serves several clients at once starts from
    [the event-loop server](assets/server-template.s) ([its spec](assets/server-template-spec.md)):
    `poll` over the listening socket and a fixed table of connections, a line buffer for each,
@@ -74,12 +80,14 @@ and the CPU features the code needs; never write that line yourself.
    must stay green, and the `cycles` in `performance` of the tests with the largest inputs should
    drop. Editing main.s starts its proof over, so make this pass before waiting for the proof.
    - **Vectors as wide as the CPU allows:** a loop over bytes takes 64 at a time with AVX-512
-     when `machine` lists it (32 with AVX2), and the last partial vector with a masked load
-     (`vmovdqu8 zmm0 {k1}{z}`), never byte by byte. `gcc -O3 -march=native` vectorizes too, so
-     only the widest loop beats it.
+     when `machine` lists it (32 with AVX2), never byte by byte, each step masked to the bytes
+     left so the last partial vector is the same code (a `k1` mask with masked compares, or a
+     masked load, `vmovdqu8 zmm0 {k1}{z}`). `gcc -O3 -march=native` vectorizes too, so only the
+     widest loop beats it.
    - **Break dependency chains:** when each step waits on the one before, as in a checksum or a
      running sum, run two to four independent chains side by side and join them at the end.
-   - **Large pieces:** read and write a megabyte at a time, never a line or a byte per call.
+   - **Large pieces:** read through `fill` into a 64 KiB buffer, the most a pipe hands over at
+     a time, and write in large pieces, never a line or a byte per call.
    - **Input of any length streams:** fill a buffer, process it, keep only what crosses into the
      next buffer-full (such as whether the last byte ended a word), and repeat until `fill`
      returns less than the buffer.
@@ -88,7 +96,8 @@ and the CPU features the code needs; never write that line yourself.
      checked jump table, not a chain of compares (references/power-of-10.md, rule 9).
 
    `assets/fast` holds three checked programs to learn from and copy from, each with its spec:
-   [wc](assets/fast/wc/main.s) counts lines and words 64 bytes a step with AVX-512 masks;
+   [wc](assets/fast/wc/main.s) counts lines and words 64 bytes a step with AVX-512 masks, each
+   step masked to the bytes left, and is proven for every length;
    [crc32c](assets/fast/crc32c/main.s) runs three `crc32` chains side by side and joins them with
    `pclmulqdq`; [histogram](assets/fast/histogram/main.s) spreads its counts over four tables.
    Their `digits` (write a number's decimal digits) can be copied as it is.

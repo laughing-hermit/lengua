@@ -12,18 +12,21 @@
 .equ EXIT_IO_FAILED, 2
 # Error codes returned by functions marked "returns: result"
 .equ ERROR_IO, -5
+# fill's reads at most, and what makes it read to the end
+.equ MAX_FILL_READS, 1099511627776
+.equ READ_TO_END, -1
 # Bytes that matter
 .equ NEWLINE, 10
 .equ SPACE, 32
 .equ TAB, 9
 # Tab through carriage return are the 5 bytes from 9 to 13.
 .equ TAB_TO_CR, 4
-# Sizes and limits
-.equ INPUT_LEN, 1048576
+# A buffer-full of input, the most the main loop takes at a time, and its 64-byte steps
+.equ BUF_LEN, 65536
 .equ VECTOR, 64
-.equ VECTOR_MASK, 63
-.equ CHUNKS, 16384
-.equ MAX_READS, 1099511627776
+.equ STEPS, BUF_LEN / VECTOR
+# The buffer-fulls the main loop takes at most
+.equ MAX_FULLS, 1099511627776
 .equ MAX_DIGITS, 20
 .equ MAX_WRITES, 64
 .equ OUT_LEN, 42
@@ -37,11 +40,11 @@ assert_message:
 
 .section .bss
 
-# One read's worth of standard input.
-.type input, @object
-input:
-    .zero INPUT_LEN
-.size input, . - input
+# One buffer-full of standard input.
+.type buffer, @object
+buffer:
+    .zero BUF_LEN
+.size buffer, . - buffer
 
 # The line it prints: two numbers of up to 20 digits, a space and a newline.
 .type out, @object
@@ -52,48 +55,39 @@ out:
 .text
 .globl _start
 
-# Reads standard input a megabyte at a time, counting newlines and word starts, then prints both.
+# Counts the lines and words of standard input of any length, a buffer-full at a time through
+# fill, and prints both. What crosses from one buffer-full to the next is r14: 1 when the last
+# byte read is whitespace, or nothing has been read.
 .type _start, @function
 _start:
     xor r12d, r12d
     xor r13d, r13d
     mov r14d, 1
-    mov rbx, MAX_READS
-.Lstart_read:  # bound: 1099511627776
-    mov eax, SYS_READ
+    mov rbx, MAX_FULLS
+.Lstart_full:  # bound: 1099511627776
     mov edi, STDIN
-    lea rsi, [rip + input]
-    mov edx, INPUT_LEN
-    syscall
+    lea rsi, [rip + buffer]
+    mov edx, BUF_LEN
+    mov ecx, READ_TO_END
+    call fill
     test rax, rax
     js .Lstart_failed
     jz .Lstart_print
-    cmp rax, INPUT_LEN
+    cmp rax, BUF_LEN
     ja .Lstart_assert_count
     mov r15, rax
-    lea rdi, [rip + input]
-    mov rsi, r15
-    and rsi, -VECTOR
+    lea rdi, [rip + buffer]
+    mov rsi, rax
     mov edx, r14d
-    call count_full
+    call count_piece
     add r12, rax
     add r13, rdx
     mov r14, rcx
-    mov rsi, r15
-    and rsi, VECTOR_MASK
-    jz .Lstart_next
-    lea rdi, [rip + input]
-    add rdi, r15
-    sub rdi, rsi
-    mov edx, r14d
-    call count_tail
-    add r12, rax
-    add r13, rdx
-    mov r14, rcx
-.Lstart_next:
+    cmp r15, BUF_LEN
+    jb .Lstart_print
     dec rbx
-    jnz .Lstart_read
-    jmp .Lstart_assert_reads
+    jnz .Lstart_full
+    jmp .Lstart_assert_fulls
 .Lstart_print:
     mov rdi, r12
     mov rsi, r13
@@ -110,21 +104,21 @@ _start:
 .Lstart_assert_count:
     mov edi, 1
     call assert_fail
-.Lstart_assert_reads:
+.Lstart_assert_fulls:
     mov edi, 2
     call assert_fail
 .size _start, . - _start
 
-# Counts the newlines and word starts in whole 64-byte vectors.
-# In: rdi = the bytes; rsi = how many, a multiple of 64 up to INPUT_LEN; edx = 1 when the byte
-# before them is whitespace (or there is none), else 0.
-# Out: rax = newlines; rdx = word starts; rcx = 1 when the last byte is whitespace, else as given.
-.type count_full, @function
-count_full:
+# Counts the newlines and word starts in a piece of the buffer, 64 bytes a step with AVX-512
+# masks. Each step's bytes past the end are masked off, so the last partial step needs no code
+# of its own, and no step's work depends on where the piece ends but what it counts.
+# In: rdi = the bytes; rsi = how many, 1 to BUF_LEN; edx = 1 when the byte before them is
+# whitespace (or there is none), else 0.
+# Out: rax = newlines; rdx = word starts; rcx = 1 when the last byte is whitespace, else 0.
+.type count_piece, @function
+count_piece:
     test rdi, rdi
-    jz .Lcount_full_assert_bytes
-    cmp rsi, INPUT_LEN
-    ja .Lcount_full_assert_length
+    jz .Lcount_piece_assert_bytes
     mov eax, NEWLINE
     vpbroadcastb zmm1, eax
     mov eax, SPACE
@@ -137,101 +131,61 @@ count_full:
     xor r8d, r8d
     xor r9d, r9d
     xor ecx, ecx
-    mov r11, CHUNKS
-.Lcount_full_loop:  # bound: 16384
+    mov r11, STEPS
+.Lcount_piece_loop:  # bound: 1024
     cmp rcx, rsi
-    jae .Lcount_full_done
-    cmp rcx, INPUT_LEN - VECTOR + 1
-    jae .Lcount_full_assert_index
+    jae .Lcount_piece_done
+    cmp rcx, BUF_LEN - VECTOR + 1
+    jae .Lcount_piece_assert_index
+    # k1: this step's bytes before the end, min(rsi - rcx, 64) of them.
+    mov rax, rsi
+    sub rax, rcx
+    mov edx, VECTOR
+    cmp rax, rdx
+    cmova rax, rdx
+    mov rdx, -1
+    bzhi rdx, rdx, rax
+    kmovq k1, rdx
+    dec eax
     vmovdqu8 zmm0, zmmword ptr [rdi + rcx]
-    vpcmpeqb k2, zmm0, zmm1
-    kmovq rax, k2
-    popcnt rax, rax
-    add r8, rax
-    vpcmpeqb k3, zmm0, zmm2
-    vpsubb zmm5, zmm0, zmm3
-    vpcmpub k4, zmm5, zmm4, 2
-    korq k3, k3, k4
-    kmovq rax, k3
-    lea rdx, [rax + rax]
-    or rdx, r10
-    andn rdx, rax, rdx
-    popcnt rdx, rdx
-    add r9, rdx
-    shr rax, 63
-    mov r10, rax
-    add rcx, VECTOR
-    dec r11
-    jnz .Lcount_full_loop
-.Lcount_full_done:
-    mov rax, r8
-    mov rdx, r9
-    mov rcx, r10
-    ret
-.Lcount_full_assert_bytes:
-    mov edi, 3
-    call assert_fail
-.Lcount_full_assert_length:
-    mov edi, 4
-    call assert_fail
-.Lcount_full_assert_index:
-    mov edi, 5
-    call assert_fail
-.size count_full, . - count_full
-
-# Counts the newlines and word starts in the last 1 to 63 bytes of a read, with a masked load.
-# In: rdi = the bytes; rsi = how many, 1 to 63; edx = 1 when the byte before them is whitespace
-# (or there is none), else 0.
-# Out: rax = newlines; rdx = word starts; rcx = 1 when the last byte is whitespace, else 0.
-.type count_tail, @function
-count_tail:
-    test rdi, rdi
-    jz .Lcount_tail_assert_bytes
-    test rsi, rsi
-    jz .Lcount_tail_assert_empty
-    cmp rsi, VECTOR
-    jae .Lcount_tail_assert_length
-    mov r10d, edx
-    mov r8, -1
-    bzhi r8, r8, rsi
-    kmovq k1, r8
-    vmovdqu8 zmm0 {k1}{z}, zmmword ptr [rdi]
-    mov eax, NEWLINE
-    vpbroadcastb zmm1, eax
-    mov eax, SPACE
-    vpbroadcastb zmm2, eax
-    mov eax, TAB
-    vpbroadcastb zmm3, eax
-    mov eax, TAB_TO_CR
-    vpbroadcastb zmm4, eax
     vpcmpeqb k2 {k1}, zmm0, zmm1
-    kmovq r9, k2
-    popcnt r9, r9
+    kmovq rdx, k2
+    popcnt rdx, rdx
+    add r8, rdx
+    # k3: whitespace, a space or a byte from tab to carriage return.
     vpcmpeqb k3 {k1}, zmm0, zmm2
     vpsubb zmm5, zmm0, zmm3
     vpcmpub k4 {k1}, zmm5, zmm4, 2
     korq k3, k3, k4
-    kmovq rax, k3
-    lea rdx, [rax + rax]
+    kmovq rdx, k3
+    # Whether this step's last byte is whitespace, for the next step.
+    shrx rax, rdx, rax
+    and eax, 1
+    # A word starts at a byte that isn't whitespace where the one before is.
+    add rdx, rdx
     or rdx, r10
-    andn rcx, rax, r8
-    and rdx, rcx
+    kmovq k6, rdx
+    kandnq k5, k3, k1
+    kandq k5, k5, k6
+    kmovq rdx, k5
     popcnt rdx, rdx
-    lea rcx, [rsi - 1]
-    shrx rcx, rax, rcx
-    and ecx, 1
-    mov rax, r9
+    add r9, rdx
+    mov r10, rax
+    add rcx, VECTOR
+    dec r11
+    jnz .Lcount_piece_loop
+.Lcount_piece_done:
+    mov rax, r8
+    mov rdx, r9
+    mov rcx, r10
     ret
-.Lcount_tail_assert_bytes:
-    mov edi, 6
+.Lcount_piece_assert_bytes:
+    mov edi, 3
     call assert_fail
-.Lcount_tail_assert_empty:
-    mov edi, 10
+.Lcount_piece_assert_index:
+    mov edi, 4
     call assert_fail
-.Lcount_tail_assert_length:
-    mov edi, 7
-    call assert_fail
-.size count_tail, . - count_tail
+.size count_piece, . - count_piece
 
 # Prints two whole numbers, a space between them and a newline after, to standard output.
 # In: rdi = the first; rsi = the second.
@@ -350,6 +304,56 @@ write_all:
     mov edi, 21
     call assert_fail
 .size write_all, . - write_all
+
+# Reads from file descriptor edi into the rdx bytes at rsi until they're full, the input ends,
+# or, when ecx is a byte (0 to 255), the last byte read is ecx; with ecx = -1 it reads to the
+# end. However the input arrives, it reads the same.
+# In: edi = the file descriptor, rsi = the buffer, rdx = its size, at least 1, ecx = the end
+# byte or -1.
+# Out: rax = how many bytes it read, or a negative error code.
+# returns: result
+.type fill, @function
+fill:
+    test rsi, rsi
+    jz .Lfill_assert_null
+    test rdx, rdx
+    jz .Lfill_assert_empty
+    mov r8, rdx
+    mov r10d, ecx
+    mov r9, MAX_FILL_READS
+.Lfill_loop:  # bound: 1099511627776
+    mov eax, SYS_READ
+    syscall
+    test rax, rax
+    js .Lfill_return
+    jz .Lfill_done
+    cmp rax, rdx
+    ja .Lfill_assert_count
+    add rsi, rax
+    sub rdx, rax
+    jz .Lfill_done
+    movzx eax, byte ptr [rsi - 1]
+    cmp eax, r10d
+    je .Lfill_done
+    dec r9
+    jnz .Lfill_loop
+    mov rax, ERROR_IO
+    jmp .Lfill_return
+.Lfill_done:
+    mov rax, r8
+    sub rax, rdx
+.Lfill_return:
+    ret
+.Lfill_assert_null:
+    mov edi, 990
+    call assert_fail
+.Lfill_assert_empty:
+    mov edi, 991
+    call assert_fail
+.Lfill_assert_count:
+    mov edi, 992
+    call assert_fail
+.size fill, . - fill
 
 # lengua's assertion handler. check_code compares it word for word: copy it exactly.
 # In: edi = the assertion's number, 1 to 999. Prints "lengua: assertion NNN failed" to

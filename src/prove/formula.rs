@@ -331,8 +331,9 @@ pub fn lookback(expr: &Expr, name: &str) -> Option<usize> {
 /// `expr`, a `len`, `count` or `words` of a text whose length the input chooses: `texts` holds
 /// as many bytes as it can be long, and `lengths` its length, a 64-bit term. Each part counts
 /// where its last byte is inside. A count of a part that overlaps itself reads the text from
-/// `phase` where one is given, as [`count_from`] does. Any other formula of such a text isn't
-/// taken.
+/// `phase` where one is given, as [`count_from`] does; a count that looks back reads `window`,
+/// the bytes just before the text, as [`delta`] does, counting the parts that end inside the
+/// text. Any other formula of such a text isn't taken.
 ///
 /// # Errors
 ///
@@ -343,6 +344,7 @@ pub fn within(
     texts: &BTreeMap<String, Vec<Term>>,
     lengths: &BTreeMap<String, Term>,
     phase: Option<&Phase>,
+    window: &[Term],
 ) -> Result<Formula, String> {
     let refused = || {
         "a formula of a text whose length the input chooses other than len, count \
@@ -367,31 +369,41 @@ pub fn within(
         let at = pool.bv(64, last as u128);
         pool.ult(at, *length)
     };
-    let (parts, high) = match (function, arguments.as_slice()) {
+    // The window and the text, one after the other: each part listed by where it ends in the
+    // text.
+    let read: Vec<Term> = window.iter().chain(bytes).copied().collect();
+    let first = window.len();
+    match (function, arguments.as_slice()) {
         (Function::Len, [_]) => {
             let wide = pool.zero_extend(*length, WIDTH - 64);
             let longest = i128::try_from(longest).map_err(|_| overflow())?;
-            return Ok(Formula::Number(Number::whole(wide, shortest, longest)));
+            Ok(Formula::Number(Number::whole(wide, shortest, longest)))
         }
         (Function::Count, [_, Expr::Literal(Value::Str(part))]) if !part.is_empty() => {
             let part = part.as_bytes();
-            let ends: Vec<Term> = if borderless(part) {
-                (0..bytes.len())
-                    .map(|start| matches_at(pool, bytes, start, part))
-                    .collect()
-            } else {
+            if !borderless(part) {
+                if !window.is_empty() {
+                    return Err("a count of a part that overlaps itself after a window".into());
+                }
                 let start = Phase::start(pool, part);
                 let (ends, _) = matches_from(pool, bytes, part, phase.unwrap_or(&start));
-                // A matcher's match ends at its last byte; a start-indexed one, the part's
-                // length on. From a phase, the first byte may end a match begun before.
+                // A matcher's match ends at its last byte. From a phase, the first byte may end
+                // a match begun before.
                 return guarded_count(pool, &ends, 0, inside, longest_bytes.div_ceil(part.len()));
-            };
-            let back = part.len() - 1;
-            return guarded_count(pool, &ends, back, inside, longest_bytes / part.len());
+            }
+            let ends: Vec<Term> = (first..read.len())
+                .map(|end| match (end + 1).checked_sub(part.len()) {
+                    Some(start) => matches_at(pool, &read, start, part),
+                    None => pool.boolean(false),
+                })
+                .collect();
+            // Matches don't overlap: at most one a part's length, the window's too.
+            let most = (longest_bytes + first) / part.len();
+            guarded_count(pool, &ends, 0, inside, most)
         }
         (Function::Words, [_]) => {
-            let spaces: Vec<Term> = bytes.iter().map(|byte| space(pool, *byte)).collect();
-            let starts: Vec<Term> = (0..bytes.len())
+            let spaces: Vec<Term> = read.iter().map(|byte| space(pool, *byte)).collect();
+            let starts: Vec<Term> = (first..read.len())
                 .map(|index| {
                     let word = pool.bool_not(spaces[index]);
                     if index == 0 {
@@ -401,11 +413,10 @@ pub fn within(
                     }
                 })
                 .collect();
-            (starts, longest_bytes.div_ceil(2))
+            guarded_count(pool, &starts, 0, inside, longest_bytes.div_ceil(2))
         }
-        _ => return Err(refused()),
-    };
-    guarded_count(pool, &parts, 0, inside, high)
+        _ => Err(refused()),
+    }
 }
 
 /// The count of `parts`, each where its last byte, `back` bytes after where it's listed, is
@@ -1583,7 +1594,7 @@ fn transition(part: &[u8], matched: usize, byte: u8) -> usize {
 /// A matcher of `part` as `count` reads a text: how much of `part` the bytes since the last
 /// match end with, one condition for each length from 1 to `part`'s length less one (none of
 /// them means none), and back to none after each match, so matches never overlap.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Phase(Vec<Term>);
 
 impl Phase {
@@ -1801,7 +1812,8 @@ mod tests {
                 .collect();
             for source in formulas {
                 let expr = crate::expr::parse(source).expect("a formula");
-                let Ok(Formula::Number(number)) = within(&mut pool, &expr, &texts, &lengths, None)
+                let Ok(Formula::Number(number)) =
+                    within(&mut pool, &expr, &texts, &lengths, None, &[])
                 else {
                     panic!("{source} of a text of any length");
                 };
@@ -1817,6 +1829,51 @@ mod tests {
                     &all[length..]
                 );
             }
+            // After a window, the bytes just before the text: a count that looks back counts
+            // what ends inside the text, the count of both less the window's own; `len` is the
+            // text's.
+            let before: Vec<u8> = (0..rng.random_range(0..4))
+                .map(|_| alphabet[rng.random_range(0..alphabet.len())])
+                .collect();
+            let window: Vec<Term> = (0..before.len())
+                .map(|index| pool.var(8, &format!("w{index}")))
+                .collect();
+            for (index, byte) in before.iter().enumerate() {
+                values.insert(format!("w{index}"), u128::from(*byte));
+            }
+            let both = String::from_utf8([&before[..], &all[..length]].concat()).expect("ASCII");
+            let alone = String::from_utf8(before.clone()).expect("ASCII");
+            let eval = |expr: &crate::expr::Expr, text: &str| {
+                let env: crate::expr::Env = [("s".to_owned(), Value::Str(text.to_owned()))]
+                    .into_iter()
+                    .collect();
+                match crate::expr::eval(expr, &env) {
+                    Ok(Value::Int(value)) => value,
+                    other => panic!("{other:?}"),
+                }
+            };
+            for source in formulas {
+                let expr = crate::expr::parse(source).expect("a formula");
+                let found = within(&mut pool, &expr, &texts, &lengths, None, &window);
+                let looks_back = lookback(&expr, "s").is_some();
+                let Ok(Formula::Number(number)) = found else {
+                    // A part that overlaps itself counts from a phase, not after a window.
+                    assert!(!looks_back && !window.is_empty(), "{source}: {found:?}");
+                    continue;
+                };
+                let expected = if source == "len(s)" {
+                    length as i128
+                } else {
+                    eval(&expr, &both) - eval(&expr, &alone)
+                };
+                assert_eq!(
+                    pool.evaluate(number.term, &values)
+                        .map(|value| value as i128),
+                    Some(expected),
+                    "{source} of {text:?} after {alone:?}, with {:?} past it",
+                    &all[length..]
+                );
+            }
         }
         // Other formulas of such a text are refused.
         let mut pool = Pool::default();
@@ -1825,7 +1882,7 @@ mod tests {
         let texts: BTreeMap<String, Vec<Term>> = [("s".to_owned(), bytes)].into();
         let lengths: BTreeMap<String, Term> = [("s".to_owned(), size)].into();
         let upper = crate::expr::parse("upper(s)").expect("a formula");
-        assert!(within(&mut pool, &upper, &texts, &lengths, None).is_err());
+        assert!(within(&mut pool, &upper, &texts, &lengths, None, &[]).is_err());
     }
 
     /// The counts an induction admits, with how far back each looks; and on random texts, the

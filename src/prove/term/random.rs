@@ -418,10 +418,15 @@ impl Writer<'_> {
                 let low_mask =
                     Expr::Binary(Op::Sub, Box::new(shifted), Box::new(Expr::Const(width, 1)));
                 let bit = self.rng.random_range(0..width);
-                Expr::ZeroExtend(
-                    Box::new(Expr::Extract(Box::new(low_mask), bit, bit)),
-                    width - 1,
-                )
+                // Sometimes the mask's low bits first, as a byte of a mask register is read,
+                // then one of theirs.
+                let read = if self.rng.random_bool(0.5) {
+                    let top = self.rng.random_range(bit..width);
+                    Expr::Extract(Box::new(low_mask), top, 0)
+                } else {
+                    low_mask
+                };
+                Expr::ZeroExtend(Box::new(Expr::Extract(Box::new(read), bit, bit)), width - 1)
             }
             // Two values that are each 0 or 1, as setcc leaves them, combined bitwise as a
             // program keeps a flag: pending = is_a and not (is_a and pending).

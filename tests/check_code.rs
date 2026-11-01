@@ -471,7 +471,7 @@ async fn a_word_count_is_proven_for_every_length() {
     if !solvers_installed() {
         return;
     }
-    let session = Session::proving_for(Protocol::Discover, 120).await;
+    let session = Session::proving_alone_for(Protocol::Discover, 120).await;
     let program = written(
         &session,
         [
@@ -507,7 +507,7 @@ async fn a_count_of_a_part_that_overlaps_itself_is_proven_for_every_length() {
     if !solvers_installed() {
         return;
     }
-    let session = Session::proving_for(Protocol::Discover, 120).await;
+    let session = Session::proving_alone_for(Protocol::Discover, 120).await;
     let files = ["spec.md", "main.s"].map(|file| (file, fixture("pairs", file)));
     let program = written(&session, files).await;
     let report = session.settle(&program).await;

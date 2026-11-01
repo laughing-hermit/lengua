@@ -333,6 +333,8 @@ pub struct Pool {
     /// The conditions each count counts, sorted, by number.
     counts: Vec<Vec<Term>>,
     count_index: HashMap<Vec<Term>, u32>,
+    /// Each conjunction a count has counted, in its one form ([`Pool::canonical_part`]).
+    canonical_parts: HashMap<Term, Term>,
     /// The values a byte variable is held to by the conditions it's drawn with, such as a
     /// text's characters, for drawing inputs that meet them.
     allowed: HashMap<Term, Vec<u8>>,
@@ -354,6 +356,13 @@ fn mask(width: u32) -> u128 {
         (1_u128 << width) - 1
     }
 }
+
+/// The most terms [`Pool::on_length`] walks in a condition's other conjuncts for comparisons of
+/// the length it settles.
+const MAX_WALKED: usize = 4096;
+
+/// The most conjuncts a count's part is written in one form for ([`Pool::canonical_part`]).
+const MAX_CONJUNCTS: usize = 32;
 
 /// The most intervals a set of a variable's values [`Pool::holds_where`] works out may have.
 const MAX_INTERVALS: usize = 1 << 16;
@@ -1005,11 +1014,13 @@ impl Pool {
     /// How many of `parts`, true/false terms, hold, as a `width`-bit number: a count, the same
     /// term whatever order the parts come in.
     pub fn count(&mut self, width: u32, parts: &[Term]) -> Term {
-        let mut parts: Vec<Term> = parts
-            .iter()
-            .copied()
-            .filter(|part| self.truth(*part) != Some(false))
-            .collect();
+        let mut kept = Vec::with_capacity(parts.len());
+        for part in parts {
+            if self.truth(*part) != Some(false) {
+                kept.push(self.canonical_part(*part));
+            }
+        }
+        let mut parts = kept;
         if parts.len() as u128 > mask(width) {
             // It would wrap: add it up instead.
             let (one, zero) = (self.bv(width, 1), self.bv(width, 0));
@@ -1038,6 +1049,42 @@ impl Pool {
             self.counts.push(parts);
         }
         self.make(Node::Count(number, width), Sort::Bv(width))
+    }
+
+    /// `part`, a condition a count counts, in one form however a program or a formula grouped
+    /// its conjunctions: its conjuncts, sorted, joined in that order. So a part a merge guarded
+    /// by where the input ends and the formula's own guarded part, the same conditions joined
+    /// in another order, are one term. One of more than [`MAX_CONJUNCTS`] conjuncts is kept as
+    /// it is.
+    fn canonical_part(&mut self, part: Term) -> Term {
+        if !matches!(self.node(part), Node::BoolAnd(..)) {
+            return part;
+        }
+        if let Some(found) = self.canonical_parts.get(&part) {
+            return *found;
+        }
+        let mut conjuncts = Vec::new();
+        let mut pending = vec![part];
+        while let Some(current) = pending.pop() {
+            if let Node::BoolAnd(a, b) = *self.node(current) {
+                if conjuncts.len() + pending.len() >= MAX_CONJUNCTS {
+                    self.canonical_parts.insert(part, part);
+                    return part;
+                }
+                pending.extend([a, b]);
+            } else {
+                conjuncts.push(current);
+            }
+        }
+        conjuncts.sort_unstable();
+        conjuncts.dedup();
+        let mut joined = conjuncts[0];
+        for conjunct in &conjuncts[1..] {
+            joined = self.bool_and(joined, *conjunct);
+        }
+        self.canonical_parts.insert(part, joined);
+        self.canonical_parts.insert(joined, joined);
+        joined
     }
 
     /// `op` of two floats, both `width(a)` bits.
@@ -1574,6 +1621,7 @@ impl Pool {
         let range = self.range(x);
         let mut pending = vec![condition];
         let mut said = Vec::new();
+        let mut others = Vec::new();
         let mut set = vec![range];
         while let Some(part) = pending.pop() {
             if let Node::BoolAnd(a, b) = *self.node(part) {
@@ -1583,21 +1631,78 @@ impl Pool {
             if let Some(where_) = self.holds_where(part, x, range) {
                 set = intersect(&set, &where_);
                 said.push(part);
+            } else {
+                others.push(part);
             }
         }
         let Some(&first) = said.first() else {
             return condition;
         };
         let comparison = self.within_intervals(&set, x, range);
-        if said.len() == 1 && comparison == first {
+        // Where the condition holds, x is in the set: comparisons of x inside its other
+        // conjuncts that the set settles are settled, as a choice between a whole step and a
+        // partial one inside what a word's carry says.
+        let mut replaced: HashMap<Term, Term> = HashMap::new();
+        if !set.is_empty() {
+            let facts = self.settled_on(&others, x, range, &set);
+            if !facts.is_empty() {
+                for other in &others {
+                    let read = self.assuming(*other, &facts);
+                    if read != *other {
+                        replaced.insert(*other, read);
+                    }
+                }
+            }
+        }
+        if said.len() == 1 && comparison == first && replaced.is_empty() {
             return condition;
         }
         // The first conjunct about x says all of them do, the rest say nothing more, each in
         // its place: what else the condition says keeps its form, as a formula's would.
         let true_ = self.boolean(true);
-        let mut replaced: HashMap<Term, Term> = said.iter().map(|part| (*part, true_)).collect();
+        for part in &said {
+            replaced.insert(*part, true_);
+        }
         replaced.insert(first, comparison);
         self.conjuncts_replaced(condition, &replaced)
+    }
+
+    /// The comparisons of `x` inside `conditions` that `x` lying in `set` settles: true where
+    /// they hold all through the set, false where nowhere in it. Only terms of more than one
+    /// byte are walked, at most [`MAX_WALKED`] of them, since nothing of one byte speaks of `x`.
+    fn settled_on(
+        &self,
+        conditions: &[Term],
+        x: Term,
+        range: (u128, u128),
+        set: &[(u128, u128)],
+    ) -> HashMap<Term, bool> {
+        let mut facts = HashMap::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut pending = conditions.to_vec();
+        while let Some(term) = pending.pop() {
+            if seen.len() >= MAX_WALKED || !seen.insert(term) {
+                continue;
+            }
+            if !matches!(self.soles[term.index()], Sole::Many) {
+                continue;
+            }
+            if matches!(self.node(term), Node::Ult(..) | Node::Eq(..))
+                && let Some(holds) = self.holds_where(term, x, range)
+            {
+                let both = intersect(set, &holds);
+                if both == set {
+                    facts.insert(term, true);
+                    continue;
+                }
+                if both.is_empty() {
+                    facts.insert(term, false);
+                    continue;
+                }
+            }
+            pending.extend(self.operands(term));
+        }
+        facts
     }
 
     /// `condition` with each of its conjuncts in `replaced` replaced, and the conjunctions
@@ -2939,6 +3044,19 @@ impl Pool {
         self.shift(a, b, Node::Ashr)
     }
 
+    /// `n` where `term`, `width` bits wide, is 1 shifted left by `n`, or that shift's low
+    /// `width` bits.
+    fn shifted_one(&self, term: Term, width: u32) -> Option<Term> {
+        let shift = match *self.node(term) {
+            Node::Extract(inner, high, 0) if high + 1 == width => inner,
+            _ => term,
+        };
+        match *self.node(shift) {
+            Node::Shl(one, n) if self.constant(one) == Some(1) => Some(n),
+            _ => None,
+        }
+    }
+
     /// Bits `low` to `high` of `a`, inclusive.
     pub fn extract(&mut self, a: Term, high: u32, low: u32) -> Term {
         let width = self.width(a);
@@ -2952,13 +3070,14 @@ impl Pool {
         // A bit of the low mask of n bits, (1 << n) - 1 as bzhi builds one, is set where it's
         // below n, and every bit where n is past the width, since 1 shifted that far is 0 and
         // 0 - 1 is every bit: one form for each bit, however the low bits of a sum would fold.
+        // The mask's low bits, the low bits of 1 << n less one, are the same bits: a byte of a
+        // mask register is read so.
         if high == low
             && let Node::Add(shifted, ones) = *self.node(a)
             && self.constant(ones) == Some(mask(width))
-            && let Node::Shl(one, n) = *self.node(shifted)
-            && self.constant(one) == Some(1)
+            && let Some(n) = self.shifted_one(shifted, width)
         {
-            let at = self.bv(width, u128::from(low));
+            let at = self.bv(self.width(n), u128::from(low));
             let below = self.ult(at, n);
             let (set, clear) = (self.bv(1, 1), self.bv(1, 0));
             return self.ite(below, set, clear);
@@ -3980,6 +4099,18 @@ impl Pool {
         if self.negates(a, b) {
             return self.boolean(true);
         }
+        // (x and c) or (y and c) is (x or y) and c: what two compares under one mask, joined as
+        // korq joins them, say of a byte, with the mask said once.
+        if let (&Node::BoolAnd(x1, y1), &Node::BoolAnd(x2, y2)) = (self.node(a), self.node(b)) {
+            for (common, rest) in [(x1, y1), (y1, x1)] {
+                for (other, rest_other) in [(x2, y2), (y2, x2)] {
+                    if common == other {
+                        let either = self.bool_or(rest, rest_other);
+                        return self.bool_and(either, common);
+                    }
+                }
+            }
+        }
         let (a, b) = self.ordered(a, b);
         self.make(Node::BoolOr(a, b), Sort::Bool)
     }
@@ -4530,7 +4661,17 @@ impl Pool {
     /// `term` with each condition `facts` settles replaced by its truth, simplified again: what
     /// it comes to on a run whose branches settled those conditions.
     pub fn assuming(&mut self, term: Term, facts: &HashMap<Term, bool>) -> Term {
-        let mut done: HashMap<Term, Term> = HashMap::new();
+        self.assuming_with(term, facts, &mut HashMap::new())
+    }
+
+    /// [`Self::assuming`], with `done` holding what earlier calls with the same facts worked
+    /// out: terms that share long parts, as a run's conditions on one count do, rewrite them once.
+    pub fn assuming_with(
+        &mut self,
+        term: Term,
+        facts: &HashMap<Term, bool>,
+        done: &mut HashMap<Term, Term>,
+    ) -> Term {
         let mut pending = vec![(term, false)];
         while let Some((current, expanded)) = pending.pop() {
             if done.contains_key(&current) {
@@ -4572,6 +4713,16 @@ impl Pool {
             done.insert(current, result);
         }
         done.get(&term).copied().unwrap_or(term)
+    }
+
+    /// `term` built again with `operands` in place of its own, through the builders; a count's
+    /// operands are its conditions.
+    pub fn with_operands(&mut self, term: Term, operands: &[Term]) -> Term {
+        if let Node::Count(_, width) = *self.node(term) {
+            return self.count(width, operands);
+        }
+        let node = self.node(term).clone();
+        self.rebuild(&node, operands)
     }
 
     /// `node` built again with `operands` in place of its own, through the builders.

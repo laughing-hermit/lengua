@@ -2887,6 +2887,94 @@ async fn proves_every_final_piece_at_once_where_a_loop_leaves_on_the_length() {
     assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
 }
 
+/// The skill's fast word count, 64 bytes a step with AVX-512 masks, each step's bytes past the
+/// end masked off: words look back one byte, so the induction's base reads a buffer-full before
+/// every final piece, and takes every final piece at once after it, its length the input's
+/// choice, as it does every text up to a buffer-full from the program's start. With its own
+/// 64 KiB buffer it's proven for every length with no solver question. A word count that
+/// forgets the byte before each buffer-full, or the byte before each step, reads the carry from
+/// the wrong byte, or counts the bytes past the end, is caught.
+#[tokio::test]
+async fn proves_the_fast_word_count_for_every_length() {
+    if !solvers_installed() {
+        return;
+    }
+    let folder = "plugin/skills/compile/assets/fast/wc/";
+    let spec = repository_file(&format!("{folder}spec.md"));
+    let asset = repository_file(&format!("{folder}main.s"));
+    let block = block(&spec, 0);
+    let right = machine(&asset).await;
+    let started = Instant::now();
+    let verdict = prove(&right, &block, &long_budget());
+    eprintln!(
+        "the fast wc at 64 KiB: {verdict:?} in {:?}",
+        started.elapsed()
+    );
+    assert!(
+        matches!(
+            verdict,
+            Verdict::Proven {
+                bound: None,
+                induction: Some(65536),
+                questions: 0,
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
+    // The mutants with a 4 KiB buffer, whose counterexamples come sooner.
+    let small = asset
+        .replace(".equ BUF_LEN, 65536\n", ".equ BUF_LEN, 4096\n")
+        .replace("  # bound: 1024\n", "  # bound: 64\n");
+    for (from, to) in [
+        (
+            "    mov edx, r14d\n    call count_piece\n",
+            "    mov edx, 1\n    call count_piece\n",
+        ),
+        (
+            "    mov r10, rax\n    add rcx, VECTOR\n",
+            "    add rcx, VECTOR\n",
+        ),
+        ("    kmovq k1, rdx\n    dec eax\n", "    kmovq k1, rdx\n"),
+        ("    cmova rax, rdx\n", "    cmovb rax, rdx\n"),
+    ] {
+        assert!(small.contains(from), "{from:?}");
+        let wrong = machine(&small.replacen(from, to, 1)).await;
+        let verdict = prove(&wrong, &block, &text_budget());
+        assert!(
+            matches!(verdict, Verdict::Counterexample(_)),
+            "{to:?}: {verdict:?}"
+        );
+    }
+}
+
+/// A proof keeps its time even inside one long shape, as the fast word count's base that takes
+/// every final piece at once is: given seconds where it needs minutes, it stops within its
+/// budget and a shape's least time, where once it ran six minutes past.
+#[tokio::test]
+async fn a_proof_keeps_its_time_within_one_long_shape() {
+    if !solvers_installed() {
+        return;
+    }
+    let folder = "plugin/skills/compile/assets/fast/wc/";
+    let spec = repository_file(&format!("{folder}spec.md"));
+    let asset = machine(&repository_file(&format!("{folder}main.s"))).await;
+    let block = block(&spec, 0);
+    let short = budget(10);
+    let given = short.deadline.saturating_duration_since(Instant::now());
+    let started = Instant::now();
+    let verdict = prove(&asset, &block, &short);
+    let took = started.elapsed();
+    assert!(
+        took <= given + MIN_SHAPE_TIME * 2 + Duration::from_secs(20),
+        "{took:?} for {given:?}: {verdict:?}"
+    );
+    assert!(
+        !matches!(verdict, Verdict::Proven { bound: None, .. }),
+        "{verdict:?}"
+    );
+}
+
 /// The line counter with a 64 KiB buffer, C's size: its count loop masks its last chunk by the
 /// bytes left (`bzhi`), and what each byte's mask says of the length comes out as the formula's
 /// `position < length`, so the base takes every final piece at once and the counter is proven

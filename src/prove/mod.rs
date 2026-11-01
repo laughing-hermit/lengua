@@ -211,6 +211,10 @@ const MAX_KNOWN: usize = 200_000;
 struct Witnessed<'a> {
     solvers: &'a mut Solvers,
     deadline: Instant,
+    /// When a branch stops the run for time: the deadline, or the shape's least time from its
+    /// start where that's later, so a short shape begun late still ends and a long one can't
+    /// run far past.
+    hard: Instant,
     /// Each witness's variable values, and every term value computed from them.
     witnesses: Vec<HashMap<Term, u128>>,
     rng: ChaCha8Rng,
@@ -222,10 +226,16 @@ struct Witnessed<'a> {
 }
 
 impl<'a> Witnessed<'a> {
-    fn new(solvers: &'a mut Solvers, deadline: Instant, seed: u64, lazy: bool) -> Self {
+    fn new(
+        solvers: &'a mut Solvers,
+        (deadline, hard): (Instant, Instant),
+        seed: u64,
+        lazy: bool,
+    ) -> Self {
         Self {
             solvers,
             deadline,
+            hard,
             lazy,
             guessed: false,
             // Every variable at the low end of its range, every one at the high end, and two
@@ -277,11 +287,17 @@ fn meets(
     } else {
         None
     };
+    // Past the most it keeps, a witness forgets what it worked out but its variables and its
+    // counts: a branch on a long text's count, as a printed number's digits are, reads the count
+    // again at once rather than every part of it.
     if witness.len() > MAX_KNOWN {
         witness.retain(|term, _| {
             *term == Term::LOW
                 || *term == Term::HIGH
-                || matches!(pool.node(*term), Node::Var { .. } | Node::BoolVar(_))
+                || matches!(
+                    pool.node(*term),
+                    Node::Var { .. } | Node::BoolVar(_) | Node::Count(..)
+                )
         });
     }
     // The newest condition first: it's the one most likely to fail.
@@ -694,18 +710,53 @@ fn settled(pool: &mut Pool, path: &[Term], holds: Term, splits: u32) -> Term {
     settled_with(pool, path, holds, splits, &mut HashMap::new())
 }
 
-/// [`settled`], noting in `derived` the comparisons in `holds` the path settles, beyond the
-/// path's own conditions: the facts that rewrite the path's terms the same way.
-fn settled_with(
+/// `condition`, one of a run's own, as `facts` rewrite what's inside it, never itself: down
+/// through its own negations and conjunctions, each part built again from its operands as the
+/// facts rewrite them, `done` shared by all the run's conditions. Past a few levels it's kept.
+fn rewritten_condition(
     pool: &mut Pool,
-    path: &[Term],
-    holds: Term,
-    splits: u32,
-    derived: &mut HashMap<Term, bool>,
+    condition: Term,
+    facts: &HashMap<Term, bool>,
+    done: &mut HashMap<Term, Term>,
+    depth: usize,
 ) -> Term {
-    if pool.truth(holds).is_some() {
-        return holds;
+    if depth > MAX_REWRITTEN_DEPTH {
+        return condition;
     }
+    match *pool.node(condition) {
+        Node::BoolNot(inner) => {
+            let inner = rewritten_condition(pool, inner, facts, done, depth + 1);
+            pool.bool_not(inner)
+        }
+        Node::BoolAnd(a, b) => {
+            let a = rewritten_condition(pool, a, facts, done, depth + 1);
+            let b = rewritten_condition(pool, b, facts, done, depth + 1);
+            pool.bool_and(a, b)
+        }
+        _ => {
+            let operands = pool.operands(condition);
+            if operands.is_empty() {
+                return condition;
+            }
+            let rebuilt: Vec<Term> = operands
+                .iter()
+                .map(|operand| pool.assuming_with(*operand, facts, done))
+                .collect();
+            if rebuilt == operands {
+                condition
+            } else {
+                pool.with_operands(condition, &rebuilt)
+            }
+        }
+    }
+}
+
+/// How deep in a run's condition's own negations and conjunctions [`rewritten_condition`] goes.
+const MAX_REWRITTEN_DEPTH: usize = 16;
+
+/// What `path`'s conditions say, as facts [`Pool::assuming`] reads: each condition, and each part
+/// of one that's a conjunction, true; what a negated one negates false.
+fn path_facts(pool: &mut Pool, path: &[Term]) -> HashMap<Term, bool> {
     let mut facts = HashMap::new();
     let mut pending = path.to_vec();
     while let Some(condition) = pending.pop() {
@@ -723,7 +774,28 @@ fn settled_with(
             }
         }
     }
-    let mut holds = holds;
+    facts
+}
+
+/// [`settled`], noting in `derived` the comparisons in `holds` the path settles, beyond the
+/// path's own conditions: the facts that rewrite the path's terms the same way.
+fn settled_with(
+    pool: &mut Pool,
+    path: &[Term],
+    holds: Term,
+    splits: u32,
+    derived: &mut HashMap<Term, bool>,
+) -> Term {
+    if pool.truth(holds).is_some() {
+        return holds;
+    }
+    let mut facts = path_facts(pool, path);
+    // The path's own conditions first, which settle a check made of them, such as a printed
+    // number's digit count, at its top, without walking the long counts inside them.
+    let mut holds = pool.assuming(holds, &facts);
+    if pool.truth(holds).is_some() {
+        return holds;
+    }
     let indexed = Indexed::new(pool, path);
     for _ in 0..4 {
         let before = holds;
@@ -809,6 +881,18 @@ const MAX_SEARCH: usize = 400;
 /// checksum or count, gets a few tries, where moving one byte seldom turns it anyway, and a
 /// condition on a few numbers gets [`MAX_SEARCH`].
 const MAX_SEARCH_VALUES: usize = MAX_SEARCH * 64;
+
+/// The least time a shape gets to end once it has begun, past its block's deadline: a shape
+/// that's quick but begun late, as after a mebibyte's samples ran, still ends; a long one stops
+/// this long past at most.
+const MIN_SHAPE_TIME: Duration = Duration::from_secs(20);
+
+/// How many texts drawn at random, as long as what a step that went wrong read, are run from the
+/// program's start for one that shows it.
+const REPLAYED_TEXTS: usize = 8;
+
+/// How many times a proof's paths the base that takes every final piece at once may follow.
+const AT_ONCE_PATHS: usize = 4;
 
 /// Inputs that meet every one of `conditions`, found by moving one variable of the newest of
 /// them in `witness`: to its range's ends and middle, and to the edge where the newest condition
@@ -902,6 +986,11 @@ fn search(
 
 impl Oracle for Witnessed<'_> {
     fn possible(&mut self, pool: &Pool, path: &[Term], condition: Term) -> Result<bool, String> {
+        // A shape that takes every final piece at once can be long without a question: its
+        // time is kept at each branch too.
+        if Instant::now() > self.hard {
+            return Err(OUT_OF_TIME.into());
+        }
         if refuted(pool, path, condition) {
             return Ok(false);
         }
@@ -1818,7 +1907,7 @@ struct Known<'a> {
 /// In an induction's base, what a count placeholder's formula goes on from: the count of what
 /// came before the text, from its least to its most, and, where the count looks back, the bytes
 /// just before the text, after which it counts what the text adds.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Offset {
     before: Term,
     low: i128,
@@ -1858,6 +1947,9 @@ impl Known<'_> {
                 self.texts,
                 lengths,
                 offset.and_then(|offset| offset.phase.as_ref()),
+                offset
+                    .and_then(|offset| offset.window.as_deref())
+                    .unwrap_or_default(),
             ),
             Some(Offset {
                 phase: Some(phase), ..
@@ -2504,11 +2596,31 @@ fn by_induction(
         Ok(found) => found,
         Err(refused) => {
             // A step that went wrong read buffer-fulls which, from the program's start, may
-            // show it wrong outright.
-            if let Some(input) = &refused.input
-                && let Some(verdict) = replay(image, block, input)?
-            {
-                return Ok(Some(verdict));
+            // show it wrong outright. Where its own bytes don't, since what went wrong there
+            // took what the head left too, texts of the same length drawn at random may: a word
+            // across two buffer-fulls, say, which more than half of them have.
+            if let Some(input) = &refused.input {
+                if let Some(verdict) = replay(image, block, input)? {
+                    return Ok(Some(verdict));
+                }
+                if let [(_, Generator::Str { charset, .. })] = block.vars.as_slice()
+                    && let characters = charset
+                        .iter()
+                        .filter_map(|character| u8::try_from(*character).ok())
+                        .filter(u8::is_ascii)
+                        .collect::<Vec<u8>>()
+                    && !characters.is_empty()
+                {
+                    let mut rng = ChaCha8Rng::seed_from_u64(input.len() as u64);
+                    for _ in 0..REPLAYED_TEXTS {
+                        let text: Vec<u8> = (0..input.len())
+                            .map(|_| characters[rng.random_range(0..characters.len())])
+                            .collect();
+                        if let Some(verdict) = replay(image, block, &text)? {
+                            return Ok(Some(verdict));
+                        }
+                    }
+                }
             }
             return Err(refused.why);
         }
@@ -2547,38 +2659,44 @@ fn by_induction(
                 characters: false,
             })
     };
-    if found.lookback == 0 {
-        // The base: whatever a time round leaves, from one byte up to a buffer-full, and the
-        // shortest texts at the start. First every such final piece at once, its length the
-        // input's choice; where that doesn't prove it, one length at a time.
-        let base = texts((*min).min(1), found.chunk);
-        let within = Budget {
-            within: true,
-            ..budget.clone()
-        };
-        // Only counts of the text are written for a text of any length: a mapped text's bytes
-        // would each be a choice by where it ends.
-        let counts = block.stdout.pieces().iter().all(|piece| match piece {
-            Piece::Text(_) => true,
-            Piece::Expr(expr) => {
-                formula::lookback(expr, name).is_some()
-                    || formula::bordered_part(expr, name).is_some()
-            }
-        });
-        let at_once = if counts {
-            by_length(image, &base, &within, Some(&found.hook))
+    // One shape for every final length, where one length at a time would take a buffer-full of
+    // shapes: it may take as many paths as a few of them do, as two numbers printed after a
+    // final piece that fills the buffer or doesn't.
+    let within = Budget {
+        within: true,
+        max_paths: budget.max_paths.saturating_mul(AT_ONCE_PATHS),
+        ..budget.clone()
+    };
+    // Only counts of the text are written for a text of any length: a mapped text's bytes
+    // would each be a choice by where it ends.
+    let counts = block.stdout.pieces().iter().all(|piece| match piece {
+        Piece::Text(_) => true,
+        Piece::Expr(expr) => {
+            formula::lookback(expr, name).is_some() || formula::bordered_part(expr, name).is_some()
+        }
+    });
+    // Every text `shape` gives at once, its length the input's choice; where that doesn't prove
+    // it, one length at a time.
+    let at_once = |shape: &Generated, hook: Option<&exec::induction::Hook>| {
+        let verdict = if counts {
+            by_length(image, shape, &within, hook)
         } else {
             Err("its output isn't counts of the text".into())
         };
-        let verdict = match at_once {
-            Ok(verdict @ Verdict::Proven { bound: None, .. }) => verdict,
+        match verdict {
+            Ok(verdict @ Verdict::Proven { bound: None, .. }) => Ok(verdict),
             other => {
                 if std::env::var_os("LENGUA_PROVE_TRACE").is_some() {
-                    eprintln!("every final piece at once isn't proven: {other:?}");
+                    eprintln!("every length at once isn't proven: {other:?}");
                 }
-                by_length(image, &base, budget, Some(&found.hook))?
+                by_length(image, shape, budget, hook)
             }
-        };
+        }
+    };
+    if found.lookback == 0 {
+        // The base: whatever a time round leaves, from one byte up to a buffer-full, and the
+        // shortest texts at the start: every such final piece at once where it can.
+        let verdict = at_once(&texts((*min).min(1), found.chunk), Some(&found.hook))?;
         let Verdict::Proven {
             shapes,
             paths,
@@ -2615,7 +2733,7 @@ fn by_induction(
     // The inputs of up to a buffer-full, from the program's start: a counterexample there is
     // the program's own.
     let first = if *min <= found.chunk {
-        let verdict = by_length(image, &texts(*min, found.chunk), budget, None)?;
+        let verdict = at_once(&texts(*min, found.chunk), None)?;
         match verdict {
             Verdict::Proven { bound: None, .. } => Some(verdict),
             Verdict::Proven {
@@ -2647,7 +2765,7 @@ fn by_induction(
         None
     };
     // Every final piece after a buffer-full read from any state at the head.
-    let verdict = by_length(image, &texts(1, found.chunk), budget, Some(&found.hook))?;
+    let verdict = at_once(&texts(1, found.chunk), Some(&found.hook))?;
     let Verdict::Proven {
         shapes,
         paths,
@@ -3636,6 +3754,7 @@ fn prove_shape(
     base.path = constraints;
     let networked = !block.server.is_empty() || !block.client.is_empty();
     let began = Instant::now();
+    let limits = (budget.deadline, budget.deadline.max(began + MIN_SHAPE_TIME));
     let questions_before = solvers.solver.as_ref().map_or(0, |solver| solver.questions);
     let holds: &[bool] = if block.clients_at_once {
         &[true, false]
@@ -3655,19 +3774,18 @@ fn prove_shape(
         // asked about after all.
         let careful = start.clone();
         let (runs, guessed) = {
-            let mut oracle = Witnessed::new(solvers, budget.deadline, combination as u64, true);
+            let mut oracle = Witnessed::new(solvers, limits, combination as u64, true);
             let runs = exec::explore(image, start, &mut pool, &mut oracle, budget.max_paths)?;
             (runs, oracle.guessed)
         };
-        let (runs, guessed) = if guessed
-            && runs.iter().any(|run| run.end == Some(End::TooManyPaths))
-        {
-            let mut oracle = Witnessed::new(solvers, budget.deadline, combination as u64, false);
-            let runs = exec::explore(image, careful, &mut pool, &mut oracle, budget.max_paths)?;
-            (runs, false)
-        } else {
-            (runs, guessed)
-        };
+        let (runs, guessed) =
+            if guessed && runs.iter().any(|run| run.end == Some(End::TooManyPaths)) {
+                let mut oracle = Witnessed::new(solvers, limits, combination as u64, false);
+                let runs = exec::explore(image, careful, &mut pool, &mut oracle, budget.max_paths)?;
+                (runs, false)
+            } else {
+                (runs, guessed)
+            };
         // A run that reads a stream with read itself sees the pieces it arrives in: what a
         // test's peer sends is then proven as each of the tests' cuts delivers it.
         if runs.iter().any(|run| run.raw_reads) {
@@ -3845,7 +3963,16 @@ fn check_runs(
             }
             Ok(found)
         };
+    // In the base of an induction whose counts look back: the formulas as the runs' own counts
+    // at the head's second arrival set them, kept while they're the same.
+    let mut own: Option<Known<'_>> = None;
+    // The runs' checks stop for time as a shape's branches do: at the deadline, or the least
+    // time a shape gets from when they start.
+    let hard = budget.deadline.max(Instant::now() + MIN_SHAPE_TIME);
     for run in runs {
+        if budget.cancel.load(Ordering::Relaxed) || Instant::now() > hard {
+            return Err(OUT_OF_TIME.into());
+        }
         // In the base of an induction whose counts look back, the buffer-full each run reads
         // from the head is held to the text's characters too.
         let mut held = held.clone();
@@ -3893,7 +4020,6 @@ fn check_runs(
         }
         // There, the run's own count after that buffer-full is what its final piece's goes on
         // from, and a run that never read the buffer-full must be one no input takes.
-        let own: Known<'_>;
         let known = match known.relative {
             None => known,
             Some(relative) => {
@@ -3934,16 +4060,19 @@ fn check_runs(
                         },
                     );
                 }
-                own = Known {
-                    numbers: known.numbers,
-                    fixed: known.fixed,
-                    texts: known.texts,
-                    lengths: known.lengths,
-                    translated: std::cell::RefCell::new(HashMap::new()),
-                    offsets,
-                    relative: None,
-                };
-                &own
+                // Runs that left the head the same way share their formulas' terms.
+                if own.as_ref().is_none_or(|own| own.offsets != offsets) {
+                    own = Some(Known {
+                        numbers: known.numbers,
+                        fixed: known.fixed,
+                        texts: known.texts,
+                        lengths: known.lengths,
+                        translated: std::cell::RefCell::new(HashMap::new()),
+                        offsets,
+                        relative: None,
+                    });
+                }
+                own.as_ref().ok_or("a run with no formulas")?
             }
         };
         let holds = match &run.end {
@@ -3989,16 +4118,18 @@ fn check_runs(
         let mut derived = HashMap::new();
         let holds = settled_with(pool, &run.path, holds, MAX_CHOICES, &mut derived);
         let broken = pool.bool_not(holds);
-        // The run's own conditions as the same facts rewrite them: a count the program built
-        // before its path said how long the text is, there as the formula's is here.
-        let rewritten: Vec<Term> = if derived.is_empty() {
-            Vec::new()
-        } else {
-            run.path
-                .iter()
-                .map(|condition| pool.assuming(*condition, &derived))
-                .collect()
-        };
+        // The run's own conditions as the same facts rewrite them, each with what the others
+        // say and the comparisons they settle, never with its own facts, which would make it
+        // true: a count the program built before its path said how long the text is, there as
+        // the formula's is here.
+        let mut facts = path_facts(pool, &run.path);
+        facts.extend(derived.iter().map(|(term, truth)| (*term, *truth)));
+        let mut done = HashMap::new();
+        let rewritten: Vec<Term> = run
+            .path
+            .iter()
+            .map(|condition| rewritten_condition(pool, *condition, &facts, &mut done, 0))
+            .collect();
         // Output whose terms are the formulas' own can't break: nothing to ask. Nor can output
         // whose every condition is one of the run's own branches, as a printed number's digit
         // count is the print loop's.

@@ -268,11 +268,26 @@ impl State {
             )
         {
             let lead = crate::prove::text_input(pool, "induction.lead", space, characters);
-            self.path.extend(lead.constraints);
+            // Before a text whose length the input chooses, the check holds every byte of
+            // standard input to the characters, so the path needn't: each branch would meet a
+            // buffer-full of conditions.
+            if self.stdin_length.is_none() {
+                self.path.extend(lead.constraints);
+            }
             let read = self.stdin_read.min(self.stdin.len());
+            // A text whose length the input chooses is read all at once, after the lead.
+            if self.stdin_length.is_some() && read != self.stdin_from {
+                return Err(End::Unsupported(
+                    "a text whose length the input chooses read in part before the read loop"
+                        .into(),
+                ));
+            }
             let mut stdin = self.stdin[..read].to_vec();
             stdin.extend(lead.text);
             stdin.extend_from_slice(&self.stdin[read..]);
+            if self.stdin_length.is_some() {
+                self.stdin_from = read + space;
+            }
             self.stdin = Rc::new(stdin);
         }
         for address in &hook.memory {

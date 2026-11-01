@@ -141,24 +141,31 @@ impl Cpu<'_> {
         // A read's second argument, as fill's own cursor is.
         self.lent(1, cursor, space, true, "read")?;
         let end = u8::try_from(end).ok();
-        let Some((stream, available, after)) = self.stream(fd)? else {
+        let Some((stream, mut available, after)) = self.stream(fd)? else {
             return Ok(None);
         };
         // Standard input of a length the input chooses, none of it read yet and all of it room
         // for the buffer: one read takes all of it, however it's cut, its count that length.
         // Its bytes past that length go in too, standing for whatever the buffer held, which is
-        // anything.
+        // anything. What comes before it, as the buffer-full an induction's base puts first, is
+        // read as any input of its own length is.
         if let (Stream::Stdin, Some(length)) = (stream, self.state.stdin_length)
             && self.state.stdin_read < self.state.stdin.len()
         {
-            let room = usize::try_from(space).unwrap_or(usize::MAX);
-            if end.is_some() || self.state.stdin_read > 0 || room < available.len() {
-                return Err(super::unsupported(
-                    "standard input of a length the input chooses read other than all at once",
-                ));
+            let from = self.state.stdin_from;
+            if self.state.stdin_read < from {
+                available.truncate(from - self.state.stdin_read);
+            } else {
+                let room = usize::try_from(space).unwrap_or(usize::MAX);
+                if end.is_some() || self.state.stdin_read > from || room < available.len() {
+                    return Err(super::unsupported(
+                        "standard input of a length the input chooses read other than all at \
+                         once",
+                    ));
+                }
+                self.take_all(fill, &available, cursor, space, length)?;
+                return Ok(Some(Step::Next));
             }
-            self.take_all(fill, &available, cursor, space, length)?;
-            return Ok(Some(Step::Next));
         }
         let last = usize::try_from(space)
             .unwrap_or(usize::MAX)

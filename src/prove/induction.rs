@@ -476,13 +476,19 @@ fn explore(
     budget: &Budget,
 ) -> Result<Vec<State>, String> {
     let careful = start.clone();
+    let limits = (
+        budget.deadline,
+        budget
+            .deadline
+            .max(std::time::Instant::now() + super::MIN_SHAPE_TIME),
+    );
     let (runs, guessed) = {
-        let mut oracle = Witnessed::new(solvers, budget.deadline, 0, true);
+        let mut oracle = Witnessed::new(solvers, limits, 0, true);
         let runs = exec::explore(image, start, pool, &mut oracle, budget.max_paths)?;
         (runs, oracle.guessed)
     };
     if guessed && runs.iter().any(|run| run.end == Some(End::TooManyPaths)) {
-        let mut oracle = Witnessed::new(solvers, budget.deadline, 0, false);
+        let mut oracle = Witnessed::new(solvers, limits, 0, false);
         return exec::explore(image, careful, pool, &mut oracle, budget.max_paths);
     }
     Ok(runs)
