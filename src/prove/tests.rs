@@ -6,6 +6,53 @@ use super::*;
 use crate::platform::Profile;
 use crate::toolchain::Toolchain;
 
+/// The share of the computer a proof's budget assumes. A proof spreads its work over every core,
+/// and its budget is time on the clock, so a long proof runs alone, as on the computer its budget
+/// was set on, while short ones run side by side. Run all at once, as `--include-ignored` runs
+/// every slow one, the long ones shared the cores and ran out of their time: each passed alone and
+/// failed among the rest.
+static TURNS: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
+/// The budget, in seconds on the clock of the 16-core computer the tests were tuned on, past which
+/// a proof runs alone.
+const ALONE_PAST: u64 = 150;
+
+/// [`super::prove`], in turn with the other proofs, its budget's time counted from its turn.
+fn prove(machine: &Machine, block: &Generated, budget: &Budget) -> Verdict {
+    let asked = Instant::now();
+    let cores = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    let scale = (16 / cores.max(1)).max(1) as u64;
+    let long =
+        budget.deadline.saturating_duration_since(asked) > Duration::from_secs(ALONE_PAST * scale);
+    // The whole computer, or a share of it, held until the proof ends.
+    let (_alone, _shared) = if long {
+        let alone = TURNS
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (Some(alone), None)
+    } else {
+        let shared = TURNS
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (None, Some(shared))
+    };
+    let mut budget = budget.clone();
+    budget.deadline += asked.elapsed();
+    super::prove(machine, block, &budget)
+}
+
+/// [`prove`] with the whole computer, whatever its budget: for a test that asserts how far a proof
+/// gets in its time, which it reaches only with every core.
+fn prove_alone(machine: &Machine, block: &Generated, budget: &Budget) -> Verdict {
+    let asked = Instant::now();
+    let _alone = TURNS
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut budget = budget.clone();
+    budget.deadline += asked.elapsed();
+    super::prove(machine, block, &budget)
+}
+
 async fn machine(source: &str) -> Machine {
     let toolchain = Toolchain::discover().await.expect("llvm-mc and ld.lld");
     let folder = tempfile::tempdir().expect("temporary folder");
@@ -1212,17 +1259,17 @@ async fn proves_the_csv_total_for_every_amount() {
 async fn proves_the_csv_totals_free_text_blocks() {
     let spec = fixture("amounts", "spec.md");
     let machine = machine(&fixture("amounts", "main.s")).await;
-    let verdict = prove(&machine, &block(&spec, 4), &fixture_budget(120));
+    let verdict = prove_alone(&machine, &block(&spec, 4), &fixture_budget(120));
     assert!(
         matches!(verdict, Verdict::Proven { bound: None, .. }),
         "B5: {verdict:?}"
     );
-    let verdict = prove(&machine, &block(&spec, 3), &fixture_budget(60));
+    let verdict = prove_alone(&machine, &block(&spec, 3), &fixture_budget(60));
     assert!(
         matches!(&verdict, Verdict::Proven { bound: Some(bound), .. } if bound.bytes >= 7),
         "B4: {verdict:?}"
     );
-    let verdict = prove(&machine, &block(&spec, 0), &fixture_budget(30));
+    let verdict = prove_alone(&machine, &block(&spec, 0), &fixture_budget(30));
     assert!(
         matches!(verdict, Verdict::Proven { bound: Some(_), .. }),
         "B1: {verdict:?}"
@@ -1939,7 +1986,7 @@ async fn proves_a_tally_for_short_texts() {
     let source = asset("tally-template.s");
     let right = machine(&source).await;
     let tally = block(&spec, 0);
-    let verdict = prove(&right, &tally, &budget(90));
+    let verdict = prove_alone(&right, &tally, &budget(90));
     assert!(
         matches!(&verdict, Verdict::Proven { bound: Some(bound), .. } if bound.bytes >= 3),
         "{verdict:?}"
