@@ -22,7 +22,7 @@ const PER_CLASS: usize = 3000;
 /// Each encoding class the dialect has: its name, the bits that place a word in it, and their
 /// value. The classes whose fields are mostly unallocated fix more bits, so random words land on
 /// instructions.
-const CLASSES: [(&str, u32, u32); 22] = [
+const CLASSES: [(&str, u32, u32); 33] = [
     ("adr and adrp", 0x1f00_0000, 0x1000_0000),
     ("add and sub with a number", 0x1f80_0000, 0x1100_0000),
     ("logical with a bitmask", 0x1f80_0000, 0x1200_0000),
@@ -61,6 +61,29 @@ const CLASSES: [(&str, u32, u32); 22] = [
     ("two sources", 0x7fe0_c000, 0x1ac0_0000),
     ("one source", 0x7fff_e000, 0x5ac0_0000),
     ("three sources", 0x1f00_0000, 0x1b00_0000),
+    ("fp one source", 0xff20_7c00, 0x1e20_4000),
+    ("fp two sources", 0xff20_0c00, 0x1e20_0800),
+    ("fp three sources", 0xff00_0000, 0x1f00_0000),
+    ("fp compare", 0xff20_fc07, 0x1e20_2000),
+    ("fp conditional select", 0xff20_0c00, 0x1e20_0c00),
+    ("fp immediate", 0xff20_1fe0, 0x1e20_1000),
+    ("fp and general register moves", 0x7f20_fc00, 0x1e20_0000),
+    (
+        "fp loads and stores, unsigned offset",
+        0x3f00_0000,
+        0x3d00_0000,
+    ),
+    (
+        "fp loads and stores, unscaled and moving",
+        0x3f20_0000,
+        0x3c00_0000,
+    ),
+    (
+        "fp loads and stores, register offset",
+        0x3f20_0c00,
+        0x3c20_0800,
+    ),
+    ("fp pairs", 0x3c00_0000, 0x2c00_0000),
 ];
 
 /// What LLVM's disassembler says of each word: its text, or none where it refuses the word or

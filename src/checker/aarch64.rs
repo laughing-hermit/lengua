@@ -170,6 +170,18 @@ fn registers(inst: &Inst) -> Vec<A64Reg> {
             rt, rt2, address, ..
         } => [vec![rt, rt2], address_registers(address)].concat(),
         Inst::Branch { .. } | Inst::BranchCond { .. } | Inst::Svc { .. } | Inst::Nop => Vec::new(),
+        // A floating-point instruction's general registers: what it moves to or from one, and
+        // its address's.
+        Inst::FpConvert { gpr, .. } => vec![gpr],
+        Inst::FpLoadStore { address, .. } | Inst::FpPair { address, .. } => {
+            address_registers(address)
+        }
+        Inst::FpOneSource { .. }
+        | Inst::FpTwoSource { .. }
+        | Inst::FpThreeSource { .. }
+        | Inst::FpCompare { .. }
+        | Inst::FpCondSelect { .. }
+        | Inst::FpMoveImm { .. } => Vec::new(),
     }
 }
 
@@ -212,6 +224,19 @@ pub(super) fn check_instruction(step: &Step<'_>, word: &Word, violations: &mut V
         Inst::Adr { .. } => refuse(
             format!("`{text}`: adr isn't in the dialect"),
             "make an address with `adrp xN, name` followed by `add xN, xN, :lo12:name`",
+        ),
+        Inst::FpOneSource { .. }
+        | Inst::FpTwoSource { .. }
+        | Inst::FpThreeSource { .. }
+        | Inst::FpCompare { .. }
+        | Inst::FpCondSelect { .. }
+        | Inst::FpMoveImm { .. }
+        | Inst::FpConvert { .. }
+        | Inst::FpLoadStore { .. }
+        | Inst::FpPair { .. } => refuse(
+            format!("`{text}`: floating point isn't in lengua's AArch64 dialect yet"),
+            "compute in whole numbers, or compile the spec for x86-64, whose dialect has floating \
+             point",
         ),
         Inst::BranchReg {
             kind: Indirect::Blr,

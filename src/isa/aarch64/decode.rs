@@ -4,8 +4,8 @@
 //! disassembler is its test.
 
 use super::{
-    A64Cond, A64Reg, Access, Address, Extend, Field, Indirect, Inst, Logic, One, Select, Shift,
-    Three, Two, Wide,
+    A64Cond, A64Reg, Access, Address, Extend, Field, FpConversion, FpOne, FpReg, FpThree, FpTwo,
+    Indirect, Inst, Logic, One, Select, Shift, Three, Two, Wide,
 };
 
 /// Bits `high` down to `low` of `word`.
@@ -40,7 +40,8 @@ pub fn decode(word: u32, address: u64) -> Result<Inst, String> {
         0b1010 | 0b1011 => branch(word, address),
         0b0100 | 0b0110 | 0b1100 | 0b1110 => load_store(word),
         0b0101 | 0b1101 => register(word),
-        // Scalable vectors, floating point and vectors, and what's unallocated.
+        0b1111 => floating(word),
+        // Scalable vectors, vectors, and what's unallocated.
         _ => Err(outside(word)),
     }
 }
@@ -263,9 +264,13 @@ fn branch(word: u32, address: u64) -> Result<Inst, String> {
 
 /// Loads and stores of general-purpose registers.
 fn load_store(word: u32) -> Result<Inst, String> {
-    // Floating-point and vector registers aren't in the dialect.
+    // Floating-point registers: singles and doubles, never vectors.
     if bit(word, 26) {
-        return Err(outside(word));
+        return match bits(word, 29, 27) {
+            0b111 => fp_single(word),
+            0b101 => fp_pair(word),
+            _ => Err(outside(word)),
+        };
     }
     match bits(word, 29, 27) {
         0b111 => single(word),
@@ -316,6 +321,24 @@ fn single(word: u32) -> Result<Inst, String> {
     };
     let base = A64Reg::new(bits(word, 9, 5), true, true);
     let rt = A64Reg::new(bits(word, 4, 0), wide, false);
+    let address = single_address(word, size)?;
+    // A base that moves and is also the register transferred has no defined result.
+    if let Address::PreIndex { .. } | Address::PostIndex { .. } = address
+        && base.gpr == rt.gpr
+    {
+        return Err(outside(word));
+    }
+    Ok(Inst::LoadStore {
+        access,
+        rt,
+        address,
+    })
+}
+
+/// The address of a load or store of one register `1 << size` bytes wide: an unsigned offset
+/// scaled by the size, an unscaled one, a base moving before or after, or a register's index.
+fn single_address(word: u32, size: u32) -> Result<Address, String> {
+    let base = A64Reg::new(bits(word, 9, 5), true, true);
     let address = if bit(word, 24) {
         // An unsigned offset, scaled by the size.
         let offset = i64::from(bits(word, 21, 10)) << size;
@@ -357,16 +380,242 @@ fn single(word: u32) -> Result<Inst, String> {
         // Atomics and pointer authentication.
         return Err(outside(word));
     };
-    // A base that moves and is also the register transferred has no defined result.
-    if let Address::PreIndex { .. } | Address::PostIndex { .. } = address
-        && base.gpr == rt.gpr
-    {
+    Ok(address)
+}
+
+/// A load or store of one floating-point register: a single (`size` 10) or a double (11), `opc`
+/// 00 to store and 01 to load.
+fn fp_single(word: u32) -> Result<Inst, String> {
+    let size = bits(word, 31, 30);
+    let double = match size {
+        0b10 => false,
+        0b11 => true,
+        // Bytes, halves and whole vectors.
+        _ => return Err(outside(word)),
+    };
+    let load = match bits(word, 23, 22) {
+        0b00 => false,
+        0b01 => true,
+        _ => return Err(outside(word)),
+    };
+    let rt = FpReg {
+        number: u8::try_from(bits(word, 4, 0)).map_err(|_| outside(word))?,
+        double,
+    };
+    let address = single_address(word, size)?;
+    Ok(Inst::FpLoadStore { load, rt, address })
+}
+
+/// A load or store of two floating-point registers: `opc` 00 singles or 01 doubles.
+fn fp_pair(word: u32) -> Result<Inst, String> {
+    let load = bit(word, 22);
+    let (double, scale) = match bits(word, 31, 30) {
+        0b00 => (false, 4),
+        0b01 => (true, 8),
+        // Whole vectors.
+        _ => return Err(outside(word)),
+    };
+    let offset = signed(bits(word, 21, 15), 7) * scale;
+    let base = A64Reg::new(bits(word, 9, 5), true, true);
+    let register = |number: u32| -> Result<FpReg, String> {
+        Ok(FpReg {
+            number: u8::try_from(number).map_err(|_| outside(word))?,
+            double,
+        })
+    };
+    let (rt, rt2) = (register(bits(word, 4, 0))?, register(bits(word, 14, 10))?);
+    let address = match bits(word, 24, 23) {
+        0b01 => Address::PostIndex { base, offset },
+        0b10 => Address::Offset { base, offset },
+        0b11 => Address::PreIndex { base, offset },
+        // Pairs that hint the cache isn't needed.
+        _ => return Err(outside(word)),
+    };
+    // Two loads into one register have no defined result.
+    if load && rt.number == rt2.number {
         return Err(outside(word));
     }
-    Ok(Inst::LoadStore {
-        access,
+    Ok(Inst::FpPair {
+        load,
         rt,
+        rt2,
         address,
+    })
+}
+
+/// Scalar floating point on singles and doubles, never halves: data processing with one, two or
+/// three sources, compares, selects, immediates, and moves to and from general registers.
+fn floating(word: u32) -> Result<Inst, String> {
+    // Vectors, and the forms that set flags or are unallocated.
+    if bit(word, 30) || bit(word, 29) {
+        return Err(outside(word));
+    }
+    let double = match bits(word, 23, 22) {
+        0b00 => false,
+        0b01 => true,
+        _ => return Err(outside(word)),
+    };
+    let reg = |number: u32| FpReg {
+        number: (number & 31) as u8,
+        double,
+    };
+    let (rd, rn, rm) = (bits(word, 4, 0), bits(word, 9, 5), bits(word, 20, 16));
+    if bits(word, 28, 24) == 0b1_1111 {
+        if bit(word, 31) {
+            return Err(outside(word));
+        }
+        let op = match (bit(word, 21), bit(word, 15)) {
+            (false, false) => FpThree::Madd,
+            (false, true) => FpThree::Msub,
+            (true, false) => FpThree::Nmadd,
+            (true, true) => FpThree::Nmsub,
+        };
+        return Ok(Inst::FpThreeSource {
+            op,
+            rd: reg(rd),
+            rn: reg(rn),
+            rm: reg(rm),
+            ra: reg(bits(word, 14, 10)),
+        });
+    }
+    // Conversions to and from fixed point have bit 21 clear.
+    if bits(word, 28, 24) != 0b1_1110 || !bit(word, 21) {
+        return Err(outside(word));
+    }
+    if bits(word, 15, 10) == 0 {
+        return conversion(word, double);
+    }
+    // Only a conversion names a general register's width in bit 31.
+    if bit(word, 31) {
+        return Err(outside(word));
+    }
+    match bits(word, 11, 10) {
+        0b10 => {
+            let op = match bits(word, 15, 12) {
+                0 => FpTwo::Mul,
+                1 => FpTwo::Div,
+                2 => FpTwo::Add,
+                3 => FpTwo::Sub,
+                4 => FpTwo::Max,
+                5 => FpTwo::Min,
+                6 => FpTwo::MaxNm,
+                7 => FpTwo::MinNm,
+                8 => FpTwo::Nmul,
+                _ => return Err(outside(word)),
+            };
+            Ok(Inst::FpTwoSource {
+                op,
+                rd: reg(rd),
+                rn: reg(rn),
+                rm: reg(rm),
+            })
+        }
+        0b11 => Ok(Inst::FpCondSelect {
+            rd: reg(rd),
+            rn: reg(rn),
+            rm: reg(rm),
+            cond: A64Cond::from_bits(bits(word, 15, 12)),
+        }),
+        // fccmp and fccmpe.
+        0b01 => Err(outside(word)),
+        _ => {
+            if bit(word, 12) {
+                // An immediate: its 5 bits below must be zero.
+                if bits(word, 9, 5) != 0 {
+                    return Err(outside(word));
+                }
+                Ok(Inst::FpMoveImm {
+                    rd: reg(rd),
+                    imm8: (bits(word, 20, 13) & 0xff) as u8,
+                })
+            } else if bit(word, 13) {
+                if bits(word, 15, 14) != 0 {
+                    return Err(outside(word));
+                }
+                let (zero, signaling) = match bits(word, 4, 0) {
+                    0b0_0000 => (false, false),
+                    0b0_1000 => (true, false),
+                    0b1_0000 => (false, true),
+                    0b1_1000 => (true, true),
+                    _ => return Err(outside(word)),
+                };
+                // Compared with zero, the second register's field is ignored, as LLVM reads it.
+                Ok(Inst::FpCompare {
+                    rn: reg(rn),
+                    rm: (!zero).then(|| reg(rm)),
+                    signaling,
+                })
+            } else if bit(word, 14) {
+                one_fp(word, double, reg(rd), reg(rn))
+            } else {
+                Err(outside(word))
+            }
+        }
+    }
+}
+
+/// One floating-point source: the operation in bits 20 to 15.
+fn one_fp(word: u32, double: bool, rd: FpReg, rn: FpReg) -> Result<Inst, String> {
+    let op = match bits(word, 20, 15) {
+        0 => FpOne::Mov,
+        1 => FpOne::Abs,
+        2 => FpOne::Neg,
+        3 => FpOne::Sqrt,
+        // To a single, from a double; to a double, from a single.
+        4 if double => {
+            return Ok(Inst::FpOneSource {
+                op: FpOne::Cvt,
+                rd: FpReg {
+                    number: rd.number,
+                    double: false,
+                },
+                rn,
+            });
+        }
+        5 if !double => {
+            return Ok(Inst::FpOneSource {
+                op: FpOne::Cvt,
+                rd: FpReg {
+                    number: rd.number,
+                    double: true,
+                },
+                rn,
+            });
+        }
+        8 => FpOne::RintNearest,
+        9 => FpOne::RintUp,
+        10 => FpOne::RintDown,
+        11 => FpOne::RintZero,
+        12 => FpOne::RintAway,
+        _ => return Err(outside(word)),
+    };
+    Ok(Inst::FpOneSource { op, rd, rn })
+}
+
+/// A move between a floating-point register and a general one: `sf` the general register's
+/// width, `rmode` and `opcode` which.
+fn conversion(word: u32, double: bool) -> Result<Inst, String> {
+    let wide = bit(word, 31);
+    let fp = |number: u32| FpReg {
+        number: (number & 31) as u8,
+        double,
+    };
+    let gpr = |number: u32| A64Reg::new(number, wide, false);
+    let (rd, rn) = (bits(word, 4, 0), bits(word, 9, 5));
+    let (op, fp_reg, gpr_reg) = match (bits(word, 20, 19), bits(word, 18, 16)) {
+        (0b00, 0b010) => (FpConversion::Scvtf, fp(rd), gpr(rn)),
+        (0b00, 0b011) => (FpConversion::Ucvtf, fp(rd), gpr(rn)),
+        (0b11, 0b000) => (FpConversion::Fcvtzs, fp(rn), gpr(rd)),
+        (0b11, 0b001) => (FpConversion::Fcvtzu, fp(rn), gpr(rd)),
+        // The bits, between registers as wide: a single and a w register, a double and an x.
+        (0b00, 0b110) if wide == double => (FpConversion::ToGeneral, fp(rn), gpr(rd)),
+        (0b00, 0b111) if wide == double => (FpConversion::FromGeneral, fp(rd), gpr(rn)),
+        _ => return Err(outside(word)),
+    };
+    Ok(Inst::FpConvert {
+        op,
+        fp: fp_reg,
+        gpr: gpr_reg,
     })
 }
 

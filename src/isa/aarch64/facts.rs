@@ -2,7 +2,9 @@
 //! reads and writes, how control leaves it, its memory operand, what it does to the stack, the
 //! idiom it is, and what it puts in its destination.
 
-use super::{A64Cond, A64Reg, Address, Gpr, Indirect, Inst, Logic, Wide};
+use super::{
+    A64Cond, A64Reg, Address, FpConversion, FpOne, FpThree, FpTwo, Gpr, Indirect, Inst, Logic, Wide,
+};
 use crate::isa::{Cond, Control, Insn, MemRef, Op, Operand, Reg, RegSet, Stack, Value};
 
 /// `register` as an operand: the zero register is the number 0, which holds no address.
@@ -162,6 +164,65 @@ pub fn mnemonic(inst: &Inst) -> String {
             (false, _) => "stp",
         },
         Inst::Nop => "nop",
+        Inst::FpOneSource { op, .. } => match op {
+            FpOne::Mov => "fmov",
+            FpOne::Abs => "fabs",
+            FpOne::Neg => "fneg",
+            FpOne::Sqrt => "fsqrt",
+            FpOne::Cvt => "fcvt",
+            FpOne::RintNearest => "frintn",
+            FpOne::RintUp => "frintp",
+            FpOne::RintDown => "frintm",
+            FpOne::RintZero => "frintz",
+            FpOne::RintAway => "frinta",
+        },
+        Inst::FpTwoSource { op, .. } => match op {
+            FpTwo::Mul => "fmul",
+            FpTwo::Div => "fdiv",
+            FpTwo::Add => "fadd",
+            FpTwo::Sub => "fsub",
+            FpTwo::Max => "fmax",
+            FpTwo::Min => "fmin",
+            FpTwo::MaxNm => "fmaxnm",
+            FpTwo::MinNm => "fminnm",
+            FpTwo::Nmul => "fnmul",
+        },
+        Inst::FpThreeSource { op, .. } => match op {
+            FpThree::Madd => "fmadd",
+            FpThree::Msub => "fmsub",
+            FpThree::Nmadd => "fnmadd",
+            FpThree::Nmsub => "fnmsub",
+        },
+        Inst::FpCompare { signaling, .. } => {
+            if *signaling {
+                "fcmpe"
+            } else {
+                "fcmp"
+            }
+        }
+        Inst::FpCondSelect { .. } => "fcsel",
+        Inst::FpMoveImm { .. } => "fmov",
+        Inst::FpConvert { op, .. } => match op {
+            FpConversion::Scvtf => "scvtf",
+            FpConversion::Ucvtf => "ucvtf",
+            FpConversion::Fcvtzs => "fcvtzs",
+            FpConversion::Fcvtzu => "fcvtzu",
+            FpConversion::ToGeneral | FpConversion::FromGeneral => "fmov",
+        },
+        Inst::FpLoadStore { load, .. } => {
+            if *load {
+                "ldr"
+            } else {
+                "str"
+            }
+        }
+        Inst::FpPair { load, .. } => {
+            if *load {
+                "ldp"
+            } else {
+                "stp"
+            }
+        }
     };
     name.to_owned()
 }
@@ -523,6 +584,24 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
             Value::Other,
             Stack::Same,
         ),
+        // Floating point: refused by the dialect for now, so no facts yet.
+        Inst::FpOneSource { .. }
+        | Inst::FpTwoSource { .. }
+        | Inst::FpThreeSource { .. }
+        | Inst::FpCompare { .. }
+        | Inst::FpCondSelect { .. }
+        | Inst::FpMoveImm { .. }
+        | Inst::FpConvert { .. }
+        | Inst::FpLoadStore { .. }
+        | Inst::FpPair { .. } => (
+            Control::Next,
+            None,
+            Vec::new(),
+            None,
+            Op::Other,
+            Value::Other,
+            Stack::Same,
+        ),
     };
     // AArch64 faults on an access through sp that isn't a multiple of 16.
     let stack = match stack {
@@ -710,6 +789,16 @@ impl Facts {
                 }
             }
             Inst::BranchCond { .. } | Inst::Nop => {}
+            // Floating point: refused by the dialect for now, so no facts yet.
+            Inst::FpOneSource { .. }
+            | Inst::FpTwoSource { .. }
+            | Inst::FpThreeSource { .. }
+            | Inst::FpCompare { .. }
+            | Inst::FpCondSelect { .. }
+            | Inst::FpMoveImm { .. }
+            | Inst::FpConvert { .. }
+            | Inst::FpLoadStore { .. }
+            | Inst::FpPair { .. } => {}
         }
     }
 

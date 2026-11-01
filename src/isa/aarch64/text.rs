@@ -6,8 +6,8 @@
 
 use super::decode::bitmask;
 use super::{
-    A64Cond, A64Reg, Access, Address, Extend, Field, Gpr, Indirect, Inst, Logic, One, Select,
-    Shift, Three, Two, Wide,
+    A64Cond, A64Reg, Access, Address, Extend, Field, FpConversion, FpOne, FpReg, FpThree, FpTwo,
+    Gpr, Indirect, Inst, Logic, One, Select, Shift, Three, Two, Wide,
 };
 
 /// What a name in an operand stands for: a constant's value, or a label's or data symbol's
@@ -89,6 +89,24 @@ pub fn register(name: &str) -> Option<A64Reg> {
     }
 }
 
+/// A floating-point register by its name: `s0` to `s31`, or `d0` to `d31`.
+#[must_use]
+pub fn fp_register(name: &str) -> Option<FpReg> {
+    let (double, digits) = match name.as_bytes().first()? {
+        b's' => (false, &name[1..]),
+        b'd' => (true, &name[1..]),
+        _ => return None,
+    };
+    if digits.is_empty()
+        || !digits.bytes().all(|byte| byte.is_ascii_digit())
+        || (digits != "0" && digits.starts_with('0'))
+    {
+        return None;
+    }
+    let number: u8 = digits.parse().ok()?;
+    (number <= 31).then_some(FpReg { number, double })
+}
+
 /// The register's width in bits.
 const fn width(register: A64Reg) -> u32 {
     if register.wide { 64 } else { 32 }
@@ -163,6 +181,235 @@ impl Line<'_> {
             .get(at)
             .and_then(|operand| register(operand))
             .ok_or_else(|| self.problem(&format!("operand {} isn't a register", at + 1)))
+    }
+
+    /// Operand `at`, a floating-point register.
+    fn fp(&self, at: usize) -> Result<FpReg, String> {
+        self.operands
+            .get(at)
+            .and_then(|operand| fp_register(operand))
+            .ok_or_else(|| {
+                self.problem(&format!(
+                    "operand {} isn't a floating-point register",
+                    at + 1
+                ))
+            })
+    }
+
+    /// Operand `at`, a floating-point register as wide as `double` says.
+    fn fp_as(&self, at: usize, double: bool) -> Result<FpReg, String> {
+        let found = self.fp(at)?;
+        if found.double == double {
+            Ok(found)
+        } else {
+            Err(self.problem("its registers aren't all one width"))
+        }
+    }
+
+    /// The line as a floating-point instruction, or none where it isn't one: its mnemonic is a
+    /// floating-point operation's, or it loads or stores an `s` or `d` register.
+    fn floating(&self) -> Option<Result<Inst, String>> {
+        let first_fp = self
+            .operands
+            .first()
+            .is_some_and(|operand| fp_register(operand).is_some());
+        Some(match self.mnemonic {
+            "ldr" | "str" | "ldur" | "stur" if first_fp => self.fp_load_store(),
+            "ldp" | "stp" if first_fp => self.fp_pair(),
+            "fmov" => self.fmov(),
+            "fabs" | "fneg" | "fsqrt" | "fcvt" | "frintn" | "frintp" | "frintm" | "frintz"
+            | "frinta" => self.fp_one(),
+            "fmul" | "fdiv" | "fadd" | "fsub" | "fmax" | "fmin" | "fmaxnm" | "fminnm" | "fnmul" => {
+                self.fp_two()
+            }
+            "fmadd" | "fmsub" | "fnmadd" | "fnmsub" => self.fp_three(),
+            "fcmp" | "fcmpe" => self.fp_compare(),
+            "fcsel" => self.fp_select(),
+            "scvtf" | "ucvtf" | "fcvtzs" | "fcvtzu" => self.fp_convert(),
+            _ => return None,
+        })
+    }
+
+    fn fp_one(&self) -> Result<Inst, String> {
+        self.count(2)?;
+        let op = match self.mnemonic {
+            "fabs" => FpOne::Abs,
+            "fneg" => FpOne::Neg,
+            "fsqrt" => FpOne::Sqrt,
+            "fcvt" => FpOne::Cvt,
+            "frintn" => FpOne::RintNearest,
+            "frintp" => FpOne::RintUp,
+            "frintm" => FpOne::RintDown,
+            "frintz" => FpOne::RintZero,
+            _ => FpOne::RintAway,
+        };
+        let rd = self.fp(0)?;
+        let rn = if op == FpOne::Cvt {
+            // To the other width.
+            self.fp_as(1, !rd.double)?
+        } else {
+            self.fp_as(1, rd.double)?
+        };
+        Ok(Inst::FpOneSource { op, rd, rn })
+    }
+
+    fn fp_two(&self) -> Result<Inst, String> {
+        self.count(3)?;
+        let op = match self.mnemonic {
+            "fmul" => FpTwo::Mul,
+            "fdiv" => FpTwo::Div,
+            "fadd" => FpTwo::Add,
+            "fsub" => FpTwo::Sub,
+            "fmax" => FpTwo::Max,
+            "fmin" => FpTwo::Min,
+            "fmaxnm" => FpTwo::MaxNm,
+            "fminnm" => FpTwo::MinNm,
+            _ => FpTwo::Nmul,
+        };
+        let rd = self.fp(0)?;
+        Ok(Inst::FpTwoSource {
+            op,
+            rd,
+            rn: self.fp_as(1, rd.double)?,
+            rm: self.fp_as(2, rd.double)?,
+        })
+    }
+
+    fn fp_three(&self) -> Result<Inst, String> {
+        self.count(4)?;
+        let op = match self.mnemonic {
+            "fmadd" => FpThree::Madd,
+            "fmsub" => FpThree::Msub,
+            "fnmadd" => FpThree::Nmadd,
+            _ => FpThree::Nmsub,
+        };
+        let rd = self.fp(0)?;
+        Ok(Inst::FpThreeSource {
+            op,
+            rd,
+            rn: self.fp_as(1, rd.double)?,
+            rm: self.fp_as(2, rd.double)?,
+            ra: self.fp_as(3, rd.double)?,
+        })
+    }
+
+    fn fp_compare(&self) -> Result<Inst, String> {
+        self.count(2)?;
+        let rn = self.fp(0)?;
+        let rm = match self.operands.get(1).copied() {
+            Some("#0.0" | "#0") => None,
+            _ => Some(self.fp_as(1, rn.double)?),
+        };
+        Ok(Inst::FpCompare {
+            rn,
+            rm,
+            signaling: self.mnemonic == "fcmpe",
+        })
+    }
+
+    fn fp_select(&self) -> Result<Inst, String> {
+        self.count(4)?;
+        let rd = self.fp(0)?;
+        Ok(Inst::FpCondSelect {
+            rd,
+            rn: self.fp_as(1, rd.double)?,
+            rm: self.fp_as(2, rd.double)?,
+            cond: self.cond(3)?,
+        })
+    }
+
+    /// `fmov` between floating-point registers, of a number, or of the bits to or from a
+    /// general register as wide.
+    fn fmov(&self) -> Result<Inst, String> {
+        self.count(2)?;
+        let (first, second) = (self.operands[0], self.operands[1]);
+        if let Some(rd) = fp_register(first) {
+            if let Some(rn) = fp_register(second) {
+                if rn.double != rd.double {
+                    return Err(self.problem("its registers aren't all one width"));
+                }
+                return Ok(Inst::FpOneSource {
+                    op: FpOne::Mov,
+                    rd,
+                    rn,
+                });
+            }
+            if let Some(gpr) = register(second) {
+                if gpr.wide != rd.double {
+                    return Err(self.problem("its registers aren't all one width"));
+                }
+                return Ok(Inst::FpConvert {
+                    op: FpConversion::FromGeneral,
+                    fp: rd,
+                    gpr,
+                });
+            }
+            let value: f64 = second
+                .strip_prefix('#')
+                .and_then(|number| number.parse().ok())
+                .ok_or_else(|| self.problem("operand 2 isn't a register or a number"))?;
+            let imm8 = (0..=255_u8)
+                .find(|imm8| super::fp_immediate(*imm8) == value)
+                .ok_or_else(|| self.problem("its number isn't one fmov can hold"))?;
+            return Ok(Inst::FpMoveImm { rd, imm8 });
+        }
+        let gpr = self.reg(0)?;
+        let fp = self.fp(1)?;
+        if gpr.wide != fp.double {
+            return Err(self.problem("its registers aren't all one width"));
+        }
+        Ok(Inst::FpConvert {
+            op: FpConversion::ToGeneral,
+            fp,
+            gpr,
+        })
+    }
+
+    fn fp_convert(&self) -> Result<Inst, String> {
+        self.count(2)?;
+        let to_fp = matches!(self.mnemonic, "scvtf" | "ucvtf");
+        let op = match self.mnemonic {
+            "scvtf" => FpConversion::Scvtf,
+            "ucvtf" => FpConversion::Ucvtf,
+            "fcvtzs" => FpConversion::Fcvtzs,
+            _ => FpConversion::Fcvtzu,
+        };
+        let (fp, gpr) = if to_fp {
+            (self.fp(0)?, self.reg(1)?)
+        } else {
+            (self.fp(1)?, self.reg(0)?)
+        };
+        Ok(Inst::FpConvert { op, fp, gpr })
+    }
+
+    fn fp_load_store(&self) -> Result<Inst, String> {
+        let unscaled = self.mnemonic.starts_with("ldur") || self.mnemonic.starts_with("stur");
+        let load = self.mnemonic.starts_with("ld");
+        let rt = self.fp(0)?;
+        let address = self.address(1, if rt.double { 8 } else { 4 })?;
+        if unscaled && !matches!(address, Address::Offset { .. }) {
+            return Err(self.problem("an unscaled access takes only an offset"));
+        }
+        Ok(Inst::FpLoadStore { load, rt, address })
+    }
+
+    fn fp_pair(&self) -> Result<Inst, String> {
+        let load = self.mnemonic == "ldp";
+        let rt = self.fp(0)?;
+        let rt2 = self.fp_as(1, rt.double)?;
+        let address = self.address(2, if rt.double { 8 } else { 4 })?;
+        if matches!(address, Address::Register { .. }) {
+            return Err(self.problem("a pair's address takes only an offset"));
+        }
+        if load && rt.number == rt2.number {
+            return Err(self.problem("it loads one register twice, which has no defined result"));
+        }
+        Ok(Inst::FpPair {
+            load,
+            rt,
+            rt2,
+            address,
+        })
     }
 
     /// Operand `at`, as a register of `wide`'s width.
@@ -248,6 +495,9 @@ impl Line<'_> {
     }
 
     fn instruction(&self) -> Result<Inst, String> {
+        if let Some(floating) = self.floating() {
+            return floating;
+        }
         let mnemonic = self.mnemonic;
         if let Some(name) = mnemonic.strip_prefix("b.") {
             self.count(1)?;

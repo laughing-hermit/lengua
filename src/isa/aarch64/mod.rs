@@ -31,6 +31,94 @@ pub enum Gpr {
     Zr,
 }
 
+/// A floating-point register at the width an instruction names it: `s` (32 bits) or `d` (64),
+/// the low part of the vector register of its number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FpReg {
+    /// Which of the 32, v0 to v31.
+    pub number: u8,
+    /// Whether it's named as a double, `d`, rather than a single, `s`.
+    pub double: bool,
+}
+
+/// A floating-point operation of one source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FpOne {
+    /// `fmov`: a copy.
+    Mov,
+    /// `fabs`.
+    Abs,
+    /// `fneg`.
+    Neg,
+    /// `fsqrt`.
+    Sqrt,
+    /// `fcvt`: to the other width, `rd`'s.
+    Cvt,
+    /// `frintn`: to the nearest whole number, ties to even.
+    RintNearest,
+    /// `frintp`: up.
+    RintUp,
+    /// `frintm`: down.
+    RintDown,
+    /// `frintz`: toward zero.
+    RintZero,
+    /// `frinta`: to the nearest, ties away from zero.
+    RintAway,
+}
+
+/// A floating-point operation of two sources.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FpTwo {
+    /// `fmul`.
+    Mul,
+    /// `fdiv`.
+    Div,
+    /// `fadd`.
+    Add,
+    /// `fsub`.
+    Sub,
+    /// `fmax`.
+    Max,
+    /// `fmin`.
+    Min,
+    /// `fmaxnm`: a number over a NaN.
+    MaxNm,
+    /// `fminnm`.
+    MinNm,
+    /// `fnmul`: the product negated.
+    Nmul,
+}
+
+/// A fused multiply and add, rounded once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FpThree {
+    /// `fmadd`: `ra + rn × rm`.
+    Madd,
+    /// `fmsub`: `ra - rn × rm`.
+    Msub,
+    /// `fnmadd`: `-ra - rn × rm`.
+    Nmadd,
+    /// `fnmsub`: `-ra + rn × rm`.
+    Nmsub,
+}
+
+/// A move between a floating-point register and a general one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FpConversion {
+    /// `scvtf`: a signed whole number to floating point.
+    Scvtf,
+    /// `ucvtf`: an unsigned one.
+    Ucvtf,
+    /// `fcvtzs`: to a signed whole number, toward zero, saturating.
+    Fcvtzs,
+    /// `fcvtzu`: to an unsigned one.
+    Fcvtzu,
+    /// `fmov` of the bits to the general register.
+    ToGeneral,
+    /// `fmov` of the bits from the general register.
+    FromGeneral,
+}
+
 /// A general-purpose register at the width an instruction names it: `x` (64 bits) or `w` (32).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct A64Reg {
@@ -62,6 +150,23 @@ impl A64Reg {
             wide: true,
         }
     }
+}
+
+impl fmt::Display for FpReg {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let kind = if self.double { 'd' } else { 's' };
+        write!(formatter, "{kind}{}", self.number)
+    }
+}
+
+/// The number `fmov`'s 8 bits encode: a sign, an exponent from -3 to 4 and four bits of fraction,
+/// `(-1)^s × (16 + fraction) / 16 × 2^exponent`, as the architecture's `VFPExpandImm` reads them.
+#[must_use]
+pub fn fp_immediate(imm8: u8) -> f64 {
+    let sign = if imm8 & 0x80 == 0 { 1.0 } else { -1.0 };
+    let exponent = i32::from((imm8 >> 4) & 7 ^ 4) - 3;
+    let fraction = f64::from(16 + u32::from(imm8 & 0x0f)) / 16.0;
+    sign * fraction * 2_f64.powi(exponent)
 }
 
 impl fmt::Display for A64Reg {
@@ -756,6 +861,95 @@ pub enum Inst {
         /// writes back.
         address: Address,
     },
+    /// `fmov`/`fabs`/`fneg`/`fsqrt`/`fcvt`/`frint*`: one floating-point source.
+    FpOneSource {
+        /// The operation.
+        op: FpOne,
+        /// Where the result goes.
+        rd: FpReg,
+        /// The operand.
+        rn: FpReg,
+    },
+    /// `fmul`/`fdiv`/`fadd`/`fsub`/`fmax`/`fmin`/`fmaxnm`/`fminnm`/`fnmul`.
+    FpTwoSource {
+        /// The operation.
+        op: FpTwo,
+        /// Where the result goes.
+        rd: FpReg,
+        /// The first operand.
+        rn: FpReg,
+        /// The second.
+        rm: FpReg,
+    },
+    /// `fmadd`/`fmsub`/`fnmadd`/`fnmsub`.
+    FpThreeSource {
+        /// The operation.
+        op: FpThree,
+        /// Where the result goes.
+        rd: FpReg,
+        /// The first factor.
+        rn: FpReg,
+        /// The second.
+        rm: FpReg,
+        /// What's added.
+        ra: FpReg,
+    },
+    /// `fcmp`/`fcmpe`, with a register or zero.
+    FpCompare {
+        /// The first operand.
+        rn: FpReg,
+        /// The second, or none for `#0.0`.
+        rm: Option<FpReg>,
+        /// `fcmpe`: a quiet NaN signals too.
+        signaling: bool,
+    },
+    /// `fcsel`.
+    FpCondSelect {
+        /// Where the result goes.
+        rd: FpReg,
+        /// What it is when the condition holds.
+        rn: FpReg,
+        /// What it is when it doesn't.
+        rm: FpReg,
+        /// The condition.
+        cond: A64Cond,
+    },
+    /// `fmov` of a number its 8 bits encode.
+    FpMoveImm {
+        /// Where it goes.
+        rd: FpReg,
+        /// The encoded number: sign, 3 bits of exponent, 4 of fraction.
+        imm8: u8,
+    },
+    /// `scvtf`/`ucvtf`/`fcvtzs`/`fcvtzu`, and `fmov` of the bits between register files.
+    FpConvert {
+        /// The operation.
+        op: FpConversion,
+        /// The floating-point register.
+        fp: FpReg,
+        /// The general one.
+        gpr: A64Reg,
+    },
+    /// A load or store of one floating-point register.
+    FpLoadStore {
+        /// A load, or a store.
+        load: bool,
+        /// The register loaded or stored.
+        rt: FpReg,
+        /// The address.
+        address: Address,
+    },
+    /// `ldp`/`stp` of two floating-point registers, next to each other in memory.
+    FpPair {
+        /// A load, or a store.
+        load: bool,
+        /// The first register, at the address.
+        rt: FpReg,
+        /// The second, right after it.
+        rt2: FpReg,
+        /// The address.
+        address: Address,
+    },
     /// `nop`.
     Nop,
 }
@@ -882,6 +1076,33 @@ impl fmt::Display for Inst {
                 rt, rt2, address, ..
             } => write!(formatter, "{name} {rt}, {rt2}, {address}"),
             Self::Nop => write!(formatter, "{name}"),
+            Self::FpOneSource { rd, rn, .. } => write!(formatter, "{name} {rd}, {rn}"),
+            Self::FpTwoSource { rd, rn, rm, .. } => write!(formatter, "{name} {rd}, {rn}, {rm}"),
+            Self::FpThreeSource { rd, rn, rm, ra, .. } => {
+                write!(formatter, "{name} {rd}, {rn}, {rm}, {ra}")
+            }
+            Self::FpCompare { rn, rm, .. } => match rm {
+                Some(rm) => write!(formatter, "{name} {rn}, {rm}"),
+                None => write!(formatter, "{name} {rn}, #0.0"),
+            },
+            Self::FpCondSelect { rd, rn, rm, cond } => {
+                write!(formatter, "{name} {rd}, {rn}, {rm}, {}", cond.name())
+            }
+            Self::FpMoveImm { rd, imm8 } => {
+                write!(formatter, "{name} {rd}, #{:.8}", fp_immediate(imm8))
+            }
+            Self::FpConvert { op, fp, gpr } => match op {
+                FpConversion::Scvtf | FpConversion::Ucvtf | FpConversion::FromGeneral => {
+                    write!(formatter, "{name} {fp}, {gpr}")
+                }
+                FpConversion::Fcvtzs | FpConversion::Fcvtzu | FpConversion::ToGeneral => {
+                    write!(formatter, "{name} {gpr}, {fp}")
+                }
+            },
+            Self::FpLoadStore { rt, address, .. } => write!(formatter, "{name} {rt}, {address}"),
+            Self::FpPair {
+                rt, rt2, address, ..
+            } => write!(formatter, "{name} {rt}, {rt2}, {address}"),
         }
     }
 }

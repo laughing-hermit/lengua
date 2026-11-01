@@ -253,6 +253,15 @@ impl Cpu<'_> {
                 address,
             } => self.pair(load, signed, rt, rt2, address),
             Inst::Nop => Ok(Step::Next),
+            Inst::FpOneSource { .. }
+            | Inst::FpTwoSource { .. }
+            | Inst::FpThreeSource { .. }
+            | Inst::FpCompare { .. }
+            | Inst::FpCondSelect { .. }
+            | Inst::FpMoveImm { .. }
+            | Inst::FpConvert { .. }
+            | Inst::FpLoadStore { .. }
+            | Inst::FpPair { .. } => Err(unsupported("floating point on AArch64")),
         }
     }
 
