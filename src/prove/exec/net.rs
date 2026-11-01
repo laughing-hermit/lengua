@@ -289,9 +289,7 @@ impl Cpu<'_> {
             Some(true) => {}
             None => {
                 let mut other = self.state.clone();
-                other.registers[0] = self.pool.bv(64, u128::from(returning(-EACCES)));
-                other.registers[1] = self.pool.bv(64, u128::from(self.instruction.next_ip()));
-                other.registers[11] = self.pool.bv(64, 0x202);
+                other.returns(self.pool, returning(-EACCES), self.next);
                 refused = Some(other);
             }
         }
@@ -563,7 +561,7 @@ impl Cpu<'_> {
             }
             states = next;
         }
-        let after = self.instruction.next_ip();
+        let after = self.next;
         let mut choices = Vec::new();
         let mut any = false;
         for mut state in states {
@@ -583,9 +581,7 @@ impl Cpu<'_> {
                 let value = self.pool.bv(16, value);
                 self.save(at + 6, value)?;
             }
-            self.state.registers[0] = self.pool.bv(64, u128::from(ready));
-            self.state.registers[1] = self.pool.bv(64, u128::from(after));
-            self.state.registers[11] = self.pool.bv(64, 0x202);
+            self.state.returns(self.pool, ready, after);
             self.state.rip = after;
             std::mem::swap(self.state, &mut state);
             let advanced = state.peers != self.state.peers;
@@ -707,9 +703,7 @@ impl Cpu<'_> {
 
     /// Sets a system call's result and the registers the kernel changes, and goes on.
     pub(super) fn finish_call(&mut self, result: u64) -> Result<Step, Stop> {
-        self.state.registers[0] = self.pool.bv(64, u128::from(result));
-        self.state.registers[1] = self.pool.bv(64, u128::from(self.instruction.next_ip()));
-        self.state.registers[11] = self.pool.bv(64, 0x202);
+        self.state.returns(self.pool, result, self.next);
         Ok(Step::Next)
     }
 
@@ -850,7 +844,7 @@ impl super::State {
         }
         key.push(self.returns.len() as u64);
         for back in &self.returns {
-            key.extend([back.slot, back.back, back.callee, back.frame]);
+            key.extend([back.top, back.back, back.callee, back.frame]);
         }
         key.extend(self.owners.iter().map(|held| owner(*held)));
         key.push(self.pointers.len() as u64);

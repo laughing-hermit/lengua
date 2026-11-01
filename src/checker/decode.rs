@@ -57,6 +57,15 @@ impl MachineFunction {
         }
     }
 
+    /// Its AArch64 words, when it's AArch64 code.
+    #[must_use]
+    pub fn words(&self) -> &[Word] {
+        match &self.code {
+            Code::Aarch64(words) => words,
+            Code::X86(_) => &[],
+        }
+    }
+
     /// How many instructions it has.
     #[must_use]
     pub fn len(&self) -> usize {

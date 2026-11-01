@@ -80,11 +80,11 @@ impl Fold {
 #[derive(Debug, Clone)]
 pub struct Snapshot {
     /// The general registers.
-    pub registers: [Term; 16],
+    pub registers: [Term; super::SLOTS],
     memory: Memory,
     vectors: Vec<Rc<[Term; VECTOR_BYTES]>>,
     masks: [Term; 8],
-    owners: [Option<Owner>; 16],
+    owners: [Option<Owner>; super::SLOTS],
     pointers: BTreeMap<u64, Owner>,
     returns: Vec<Return>,
     threads: u64,
@@ -102,7 +102,7 @@ pub struct Snapshot {
 #[derive(Debug, Clone)]
 pub struct Second {
     /// The general registers.
-    pub registers: [Term; 16],
+    pub registers: [Term; super::SLOTS],
     /// What that buffer-full changed, for a run that reads two from the head.
     pub changes: Option<Changes>,
     /// How much it had written to standard output.
@@ -192,7 +192,10 @@ impl State {
         };
         if let Some(characters) = &hook.feed
             && self.stdin_read == 0
-            && let Some(space) = constant(pool, self.registers[2])
+            && let Some(space) = constant(
+                pool,
+                self.registers[super::fill::FillAbi::of(self.isa).space],
+            )
         {
             let fulls = usize::try_from(hook.fulls()).unwrap_or(1);
             let input =
@@ -201,7 +204,10 @@ impl State {
             self.stdin = Rc::new(input.text);
         }
         if let Some(characters) = &hook.lead
-            && let Some(space) = constant(pool, self.registers[2])
+            && let Some(space) = constant(
+                pool,
+                self.registers[super::fill::FillAbi::of(self.isa).space],
+            )
         {
             let lead = crate::prove::text_input(pool, "induction.lead", space, characters);
             self.path.extend(lead.constraints);
@@ -220,7 +226,7 @@ impl State {
         // The stack below the head's stack pointer holds what earlier calls left, which differs
         // from one time round to the next: nothing there can be read before it's written.
         let stack = pool
-            .constant(self.registers[4])
+            .constant(self.registers[super::calls::Convention::of(self.isa).stack])
             .and_then(|value| u64::try_from(value).ok());
         if let Some(stack) = stack {
             let bottom = STACK_TOP - STACK_SIZE;
@@ -280,7 +286,8 @@ impl State {
         // stands where the one it replaces stood.
         let same_calls = self.returns.len() == start.returns.len()
             && self.returns.iter().zip(&start.returns).all(|(now, then)| {
-                (now.slot, now.back, now.callee) == (then.slot, then.back, then.callee)
+                (now.top, now.saved, now.back, now.callee)
+                    == (then.top, then.saved, then.back, then.callee)
             });
         if !same_calls {
             changes.other.push(
@@ -299,9 +306,10 @@ impl State {
         let same_owner = |now: Option<Owner>, then: Option<Owner>| {
             frame(now, &self.returns) == frame(then, &start.returns)
         };
+        let stack = super::calls::Convention::of(self.isa).stack;
         for (number, (now, then)) in self.registers.iter().zip(&start.registers).enumerate() {
             if now != then
-                || (number != 4 && !same_owner(self.owners[number], start.owners[number]))
+                || (number != stack && !same_owner(self.owners[number], start.owners[number]))
             {
                 changes.registers.insert(number);
             }

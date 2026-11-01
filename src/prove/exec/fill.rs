@@ -4,7 +4,46 @@
 //! byte that has arrived, or else when its buffer is full or the input has ended.
 
 use super::{Cpu, End, Image, State, Step, Stop};
+use crate::isa::Isa;
 use crate::prove::term::Term;
+
+/// Where a CPU's fill keeps what it works with at its loop's head, as the slots of the prover's
+/// registers: x86-64's in rdi, rsi, rdx, r10 and r9, AArch64's in x9, x1, x2, w11 and x12.
+#[derive(Debug)]
+pub(super) struct FillAbi {
+    /// The file descriptor it reads.
+    pub(super) fd: usize,
+    /// Where the next read goes.
+    pub(super) cursor: usize,
+    /// How much room is left.
+    pub(super) space: usize,
+    /// The end byte, or -1 for none.
+    pub(super) end: usize,
+    /// How many reads it has left.
+    pub(super) counter: usize,
+}
+
+impl FillAbi {
+    /// `isa`'s.
+    pub(super) const fn of(isa: Isa) -> &'static Self {
+        match isa {
+            Isa::X86_64 => &Self {
+                fd: 7,
+                cursor: 6,
+                space: 2,
+                end: 10,
+                counter: 9,
+            },
+            Isa::Aarch64 => &Self {
+                fd: 9,
+                cursor: 1,
+                space: 2,
+                end: 11,
+                counter: 12,
+            },
+        }
+    }
+}
 
 /// Where fill's code is, found by its canonical shape.
 #[derive(Debug, Clone, Copy)]
@@ -81,15 +120,16 @@ impl Cpu<'_> {
     /// loop as code, as for a read that fails.
     pub(super) fn fill(&mut self, fill: Fill) -> Result<Option<Step>, Stop> {
         let registers = self.state.registers;
+        let roles = FillAbi::of(self.image.isa);
         let constant = |pool: &crate::prove::term::Pool, term: Term| {
             pool.constant(term)
                 .and_then(|value| u64::try_from(value).ok())
         };
         let (Some(fd), Some(cursor), Some(space), Some(end)) = (
-            constant(self.pool, registers[7]),
-            constant(self.pool, registers[6]),
-            constant(self.pool, registers[2]),
-            constant(self.pool, registers[10]),
+            constant(self.pool, registers[roles.fd]),
+            constant(self.pool, registers[roles.cursor]),
+            constant(self.pool, registers[roles.space]),
+            constant(self.pool, registers[roles.end]),
         ) else {
             return Ok(None);
         };
@@ -98,7 +138,8 @@ impl Cpu<'_> {
             return Ok(None);
         }
         // Its reads may fill all the space it's given, whatever arrives.
-        self.lent(iced_x86::Register::RSI, cursor, space, true, "read")?;
+        // A read's second argument, as fill's own cursor is.
+        self.lent(1, cursor, space, true, "read")?;
         let end = u8::try_from(end).ok();
         let Some((stream, available, after)) = self.stream(fd)? else {
             return Ok(None);
@@ -222,14 +263,17 @@ impl Cpu<'_> {
             Stream::Connection(number) => self.consume(*number, taken),
         }
         let taken = taken as u64;
-        self.state.registers[6] = self.pool.bv(64, u128::from(cursor + taken));
-        self.state.registers[2] = self.pool.bv(64, u128::from(space - taken));
-        // What the reads leave: the kernel's rcx and r11, and a loop count that depends on how
-        // the input was cut.
-        self.state.registers[1] = self.pool.bv(64, u128::from(fill.after_call));
-        self.state.registers[11] = self.pool.bv(64, 0x202);
+        let roles = FillAbi::of(self.image.isa);
+        self.state.registers[roles.cursor] = self.pool.bv(64, u128::from(cursor + taken));
+        self.state.registers[roles.space] = self.pool.bv(64, u128::from(space - taken));
+        // What the reads leave: on x86-64 the kernel's rcx and r11, and a loop count that depends
+        // on how the input was cut.
+        if self.image.isa == Isa::X86_64 {
+            self.state.registers[1] = self.pool.bv(64, u128::from(fill.after_call));
+            self.state.registers[11] = self.pool.bv(64, 0x202);
+        }
         let count = self.pool.len();
-        self.state.registers[9] = self.pool.var(64, &format!("fill{count}.reads"));
+        self.state.registers[roles.counter] = self.pool.var(64, &format!("fill{count}.reads"));
         self.state.rip = fill.done;
         Ok(())
     }

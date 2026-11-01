@@ -932,8 +932,8 @@ fn model(
             Err(end) => return Err(format!("the model stopped: {end:?}")),
         }
     }
-    let registers = state
-        .registers
+    // x86-64's sixteen, rax to r15, of the model's slots.
+    let registers = state.registers[..16]
         .iter()
         .enumerate()
         .map(|(slot, register)| {

@@ -18,7 +18,8 @@ use iced_x86::{ConditionCode, Instruction, Mnemonic, OpKind, Register};
 
 use super::term::{Pool, Term};
 use crate::checker::decode::Machine;
-use crate::syscalls::x86_64 as syscalls;
+use crate::isa::{Isa, aarch64};
+use calls::{Call, Convention};
 
 /// The address of `argc` when `_start` begins.
 pub const STACK_TOP: u64 = 0x7ffd_0000_0000;
@@ -46,6 +47,10 @@ const MAX_PLACES: u128 = 256;
 /// The bytes of a vector register: a zmm register's 512 bits.
 const VECTOR_BYTES: usize = 64;
 
+/// The general registers' slots, as many as AArch64's x0 to x30 and sp; x86-64 uses the first
+/// sixteen, rax to r15.
+const SLOTS: usize = 32;
+
 /// A range of addresses the program may use.
 #[derive(Debug, Clone, Copy)]
 struct Region {
@@ -57,6 +62,8 @@ struct Region {
 /// The program as loaded: its instructions by address, and its memory.
 pub struct Image {
     instructions: HashMap<u64, Instruction>,
+    /// AArch64's instructions, by address, in the dialect's canonical form.
+    words: HashMap<u64, aarch64::Inst>,
     regions: Vec<Region>,
     initial: HashMap<u64, u8>,
     entry: u64,
@@ -74,18 +81,34 @@ pub struct Image {
     /// Whether some run has called each function, as `functions` lists them: a proof says
     /// nothing of code no run reached.
     entered: Vec<AtomicBool>,
+    /// The CPU whose code it is.
+    isa: Isa,
 }
 
 impl Image {
+    /// The details of Linux's ABI on its CPU.
+    fn linux(&self) -> &'static crate::syscalls::LinuxAbi {
+        match self.isa {
+            Isa::X86_64 => &crate::syscalls::x86_64::ABI,
+            Isa::Aarch64 => &crate::syscalls::aarch64::ABI,
+        }
+    }
+
     /// Loads the functions and data the decoder read from the executable.
     #[must_use]
     pub fn new(machine: &Machine) -> Option<Self> {
         let entry = machine.functions.get("_start")?.address;
         let mut instructions = HashMap::new();
+        let mut words = HashMap::new();
         let mut functions = Vec::new();
         for (name, function) in &machine.functions {
             for instruction in function.x86() {
                 instructions.insert(instruction.ip(), *instruction);
+            }
+            for word in function.words() {
+                if let Ok(inst) = word.inst {
+                    words.insert(word.address, inst);
+                }
             }
             functions.push((
                 function.address,
@@ -125,6 +148,7 @@ impl Image {
         let entered = functions.iter().map(|_| AtomicBool::new(false)).collect();
         let mut image = Self {
             instructions,
+            words,
             regions,
             initial,
             entry,
@@ -144,6 +168,7 @@ impl Image {
                 .collect(),
             fill: None,
             entered,
+            isa: machine.isa,
         };
         image.fill = fill::Fill::find(&image, machine);
         Some(image)
@@ -357,7 +382,7 @@ impl Plan {
 
     /// Brings `state`'s owners up to date, after the instruction left it, from `before`, its
     /// registers before.
-    fn apply(&self, state: &mut State, before: &[Term; 16]) {
+    fn apply(&self, state: &mut State, before: &[Term; SLOTS]) {
         for (owner, (now, then)) in state
             .owners
             .iter_mut()
@@ -378,7 +403,7 @@ impl Plan {
     }
 
     /// The same for every state `step` leaves.
-    fn apply_all(&self, state: &mut State, step: &mut Step, before: &[Term; 16]) {
+    fn apply_all(&self, state: &mut State, step: &mut Step, before: &[Term; SLOTS]) {
         self.apply(state, before);
         match step {
             Step::Next => {}
@@ -398,11 +423,20 @@ enum Name {
     Chosen(Vec<Term>),
 }
 
-/// A return address on the stack: where it is, where it returns to, the function called, and
-/// the call's number, which names the callee's frame.
+/// A call that hasn't returned: where its callee's frame starts, where its return address is
+/// kept, where it returns to, the function called, and the call's number, which names the
+/// callee's frame. x86-64's `call` pushes the return address, so it's on the stack from the start
+/// and the callee's frame lies below it; AArch64's `bl` keeps it in x30, until the callee saves x30
+/// in its frame record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Return {
-    slot: u64,
+    /// The top of the callee's frame: the stack pointer once the call was made.
+    top: u64,
+    /// The bytes the call itself put on the stack above the frame: 8 on x86-64, for the return
+    /// address, and none on AArch64.
+    pushed: u64,
+    /// Where the return address is kept in memory, while it is: no store may change it.
+    saved: Option<u64>,
     back: u64,
     callee: u64,
     frame: u64,
@@ -413,14 +447,14 @@ struct Return {
 /// does. What the waiting thread had in its registers, flags and calls, and where it goes on.
 #[derive(Debug, Clone)]
 struct Suspended {
-    registers: [Term; 16],
+    registers: [Term; SLOTS],
     last: Last,
     flags: [Term; 5],
     vectors: Vec<Rc<[Term; VECTOR_BYTES]>>,
     masks: [Term; 8],
     rip: u64,
     returns: Vec<Return>,
-    owners: [Option<Owner>; 16],
+    owners: [Option<Owner>; SLOTS],
     stack_top: Option<u64>,
     base_frame: u64,
     /// Where the kernel clears the started thread's id as it ends (`CLONE_CHILD_CLEARTID`).
@@ -443,7 +477,9 @@ struct Frame {
 /// One run's state.
 #[derive(Debug, Clone)]
 pub struct State {
-    registers: [Term; 16],
+    /// The CPU whose code runs.
+    isa: Isa,
+    registers: [Term; SLOTS],
     last: Last,
     carry: Term,
     zero: Term,
@@ -541,7 +577,7 @@ pub struct State {
     /// Where each general register's pointer was made, while it holds a pointer the run
     /// followed there: through lea, moves, pushes and pops, and adding numbers to it. rsp's is
     /// always the running call's frame.
-    owners: [Option<Owner>; 16],
+    owners: [Option<Owner>; SLOTS],
     /// The owner of the pointer last stored whole at an address, while none of its bytes has
     /// changed since.
     pointers: BTreeMap<u64, Owner>,
@@ -578,20 +614,12 @@ const O_ACCMODE: u64 = 3;
 const O_WRONLY: u64 = 1;
 const O_CREAT: u64 = 0o100;
 const O_TRUNC: u64 = 0o1000;
-/// Flags that change nothing the model tracks: no controlling terminal, large files, closing on
-/// exec.
-const O_HARMLESS: u64 = syscalls::ABI.o_harmless;
 const ENOENT: i64 = 2;
 const EEXIST: i64 = 17;
 const ENOTDIR: i64 = 20;
 const EISDIR: i64 = 21;
 const ENOTEMPTY: i64 = 39;
-const O_DIRECTORY: u64 = syscalls::ABI.o_directory;
 const AT_REMOVEDIR: u64 = 0x200;
-/// The bytes of `struct stat`, and where its kind and size are.
-const STAT_LEN: u64 = syscalls::ABI.stat_len;
-const STAT_MODE: u64 = syscalls::ABI.stat_mode;
-const STAT_SIZE: u64 = syscalls::ABI.stat_size;
 /// A regular file that its owner may read and write and others may read.
 const REGULAR_FILE: u128 = 0o100_644;
 const EBADF: i64 = 9;
@@ -631,7 +659,8 @@ impl State {
         let zero_byte = pool.bv(8, 0);
         let no = pool.boolean(false);
         let mut state = Self {
-            registers: [zero; 16],
+            isa: image.isa,
+            registers: [zero; SLOTS],
             last: Last::Other,
             carry: no,
             zero: no,
@@ -682,7 +711,7 @@ impl State {
             raw_cuts: 0,
             returns: Vec::new(),
             calls: 0,
-            owners: [None; 16],
+            owners: [None; SLOTS],
             pointers: BTreeMap::new(),
             suspended: Vec::new(),
             threads: 0,
@@ -746,7 +775,7 @@ impl State {
                 state.pointers.insert(address, Owner::Argument(string + 1));
             }
         }
-        state.registers[4] = pool.bv(64, u128::from(STACK_TOP));
+        state.registers[Convention::of(image.isa).stack] = pool.bv(64, u128::from(STACK_TOP));
         state
     }
 
@@ -888,6 +917,15 @@ impl State {
 
     /// The owner of the pointer in `register`, a 64-bit general register, where the run
     /// followed it.
+    /// The owner of what slot `slot` holds: the stack pointer's is the function's frame.
+    fn owner_of_slot(&self, slot: usize, stack: usize) -> Option<Owner> {
+        if slot == stack {
+            Some(Owner::Frame(self.frame()))
+        } else {
+            self.owners.get(slot).copied().flatten()
+        }
+    }
+
     fn owner(&self, register: Register) -> Option<Owner> {
         if register.size() != 8 {
             return None;
@@ -959,9 +997,38 @@ fn unsupported(text: impl Into<String>) -> Stop {
 }
 
 /// Runs one step of `state`.
+/// The instruction a step runs: x86-64's as iced decoded it, or AArch64's word, which is four
+/// bytes long; where it is, and where the next one is.
+#[derive(Clone, Copy)]
+struct Running<'a> {
+    instruction: &'a Instruction,
+    word: Option<aarch64::Inst>,
+    at: u64,
+    next: u64,
+}
+
 fn step(image: &Image, state: &mut State, pool: &mut Pool) -> Result<Step, Stop> {
-    let Some(instruction) = image.instructions.get(&state.rip).copied() else {
-        return Err(End::Signal("SIGSEGV"));
+    let none = Instruction::default();
+    let (instruction, word, next) = match image.isa {
+        Isa::X86_64 => {
+            let Some(instruction) = image.instructions.get(&state.rip).copied() else {
+                return Err(End::Signal("SIGSEGV"));
+            };
+            let next = instruction.next_ip();
+            (instruction, None, next)
+        }
+        Isa::Aarch64 => {
+            let Some(word) = image.words.get(&state.rip).copied() else {
+                return Err(End::Signal("SIGSEGV"));
+            };
+            (none, Some(word), state.rip + 4)
+        }
+    };
+    let running = Running {
+        instruction: &instruction,
+        word,
+        at: state.rip,
+        next,
     };
     state.steps += 1;
     if state.steps > MAX_STEPS {
@@ -981,21 +1048,22 @@ fn step(image: &Image, state: &mut State, pool: &mut Pool) -> Result<Step, Stop>
         && state.every_cut
         && fill.at_head(state.rip)
     {
-        // fill moves rsi through the buffer it was lent.
+        // fill moves its cursor through the buffer it was lent.
+        let cursor = fill::FillAbi::of(image.isa).cursor;
         let plan = Plan {
-            registers: [Some((6, state.owners[6])), None],
+            registers: [Some((cursor, state.owners[cursor])), None],
             store: None,
         };
-        let mut cpu = Cpu::new(image, state, pool, &instruction);
+        let mut cpu = Cpu::new(image, state, pool, running);
         if let Some(mut step) = cpu.fill(fill)? {
             plan.apply_all(state, &mut step, &before);
             return Ok(step);
         }
     }
-    let next = instruction.next_ip();
     state.rip = next;
-    let below = pool.constant(state.registers[4]);
-    let mut cpu = Cpu::new(image, state, pool, &instruction);
+    let stack = Convention::of(state.isa).stack;
+    let below = pool.constant(state.registers[stack]);
+    let mut cpu = Cpu::new(image, state, pool, running);
     let plan = cpu.plan();
     let mut step = cpu.execute();
     if let Ok(step) = &mut step {
@@ -1003,7 +1071,7 @@ fn step(image: &Image, state: &mut State, pool: &mut Pool) -> Result<Step, Stop>
     }
     // Stack the instruction released, by pop, ret or add rsp, is gone: reading it again before
     // writing it reads nothing written.
-    if let (Some(below), Some(above)) = (below, pool.constant(state.registers[4]))
+    if let (Some(below), Some(above)) = (below, pool.constant(state.registers[stack]))
         && let (Ok(below), Ok(above)) = (u64::try_from(below), u64::try_from(above))
         && let (below, above) = (below.max(STACK_TOP - STACK_SIZE), above.min(STACK_TOP))
         && below < above
@@ -1048,7 +1116,14 @@ impl State {
             Some(other) => format!("{other:?}"),
             None => "running".to_owned(),
         };
-        let registers: Vec<String> = self.registers.iter().map(|term| value(*term)).collect();
+        let used = match self.isa {
+            Isa::X86_64 => 16,
+            Isa::Aarch64 => SLOTS,
+        };
+        let registers: Vec<String> = self.registers[..used]
+            .iter()
+            .map(|term| value(*term))
+            .collect();
         let flags: Vec<String> = [self.carry, self.zero, self.sign, self.overflow, self.parity]
             .iter()
             .map(|term| value(*term))
@@ -1071,12 +1146,32 @@ impl State {
     }
 }
 
+impl State {
+    /// A system call's return: `result` where the program reads it, and the registers the kernel
+    /// changes, for the run to go on at `next`. On x86-64 that's rax, and rcx and r11, which
+    /// hold where it goes on and the flags; on AArch64, only x0.
+    pub(super) fn returns(&mut self, pool: &mut Pool, result: u64, next: u64) {
+        self.registers[0] = pool.bv(64, u128::from(result));
+        if self.isa == Isa::X86_64 {
+            self.registers[1] = pool.bv(64, u128::from(next));
+            self.registers[11] = pool.bv(64, 0x202);
+        }
+    }
+}
+
 /// One instruction being executed on a state.
 struct Cpu<'a> {
     image: &'a Image,
     state: &'a mut State,
     pool: &'a mut Pool,
+    /// The x86-64 instruction running, on x86-64.
     instruction: &'a Instruction,
+    /// The AArch64 instruction running, on AArch64.
+    word: Option<aarch64::Inst>,
+    /// Where the instruction running is.
+    at: u64,
+    /// Where the next one is.
+    next: u64,
 }
 
 impl<'a> Cpu<'a> {
@@ -1084,13 +1179,16 @@ impl<'a> Cpu<'a> {
         image: &'a Image,
         state: &'a mut State,
         pool: &'a mut Pool,
-        instruction: &'a Instruction,
+        running: Running<'a>,
     ) -> Self {
         Self {
             image,
             state,
             pool,
-            instruction,
+            instruction: running.instruction,
+            word: running.word,
+            at: running.at,
+            next: running.next,
         }
     }
 
@@ -1187,11 +1285,11 @@ impl<'a> Cpu<'a> {
 
     /// What the instruction running does, for a report: the function and the instruction.
     fn doing(&self) -> String {
-        format!(
-            "in {}, `{}`",
-            self.image.function_at(self.instruction.ip()),
-            self.instruction
-        )
+        let function = self.image.function_at(self.at);
+        match self.word {
+            Some(word) => format!("in {function}, `{word}`"),
+            None => format!("in {function}, `{}`", self.instruction),
+        }
     }
 
     /// The live frames, the newest first; `_start`'s reaches over the array of the program's
@@ -1199,21 +1297,21 @@ impl<'a> Cpu<'a> {
     fn frames(&self) -> Vec<Frame> {
         let Some(mut low) = self
             .pool
-            .constant(self.state.registers[4])
+            .constant(self.state.registers[Convention::of(self.image.isa).stack])
             .and_then(|rsp| u64::try_from(rsp).ok())
         else {
             return Vec::new();
         };
         let mut frames = Vec::new();
-        let mut running = self.instruction.ip();
+        let mut running = self.at;
         for back in self.state.returns.iter().rev() {
             frames.push(Frame {
                 low,
-                top: back.slot,
+                top: back.top,
                 running,
                 number: back.frame,
             });
-            low = back.slot + 8;
+            low = back.top + back.pushed;
             running = back.back;
         }
         let top = self.state.stack_top.unwrap_or_else(|| {
@@ -1315,12 +1413,10 @@ impl<'a> Cpu<'a> {
     /// Where `address` is, for a report: in a data symbol, a frame, a return address, or the
     /// program's arguments.
     fn describe(&self, address: u64) -> String {
-        if let Some(back) = self
-            .state
-            .returns
-            .iter()
-            .find(|back| (back.slot..back.slot + 8).contains(&address))
-        {
+        if let Some(back) = self.state.returns.iter().find(|back| {
+            back.saved
+                .is_some_and(|saved| (saved..saved + 8).contains(&address))
+        }) {
             return format!(
                 "the return address of {}",
                 self.image.function_at(back.callee)
@@ -1440,6 +1536,9 @@ impl<'a> Cpu<'a> {
 
     /// How the instruction about to run passes owners on, from the state before it.
     fn plan(&mut self) -> Plan {
+        if self.word.is_some() {
+            return Plan::default();
+        }
         let instruction = self.instruction;
         let mut plan = Plan::default();
         let register = |operand: u32| {
@@ -1545,9 +1644,11 @@ impl<'a> Cpu<'a> {
 
     /// Checks a buffer of `count` bytes at `buffer`, lent to the kernel in `register` by the
     /// system call `call`.
+    /// The `count` bytes at `buffer` that a system call's argument `argument` (from 0) lends the
+    /// kernel, to read or, when `writing`, to write.
     fn lent(
         &mut self,
-        register: Register,
+        argument: usize,
         buffer: u64,
         count: u64,
         writing: bool,
@@ -1562,9 +1663,10 @@ impl<'a> Cpu<'a> {
                 cpu.image.function_at(cpu.instruction.ip())
             )
         };
+        let convention = Convention::of(self.image.isa);
         let held = self
             .state
-            .owner(register)
+            .owner_of_slot(convention.arguments[argument], convention.stack)
             .map_or(Held::Pointer(buffer), Held::Owner);
         self.reach(held, buffer, count, writing, &what)
     }
@@ -1588,7 +1690,10 @@ impl<'a> Cpu<'a> {
                     .iter()
                     .flat_map(|thread| &thread.returns),
             )
-            .find(|back| address < back.slot + 8 && back.slot < end)
+            .find(|back| {
+                back.saved
+                    .is_some_and(|saved| address < saved + 8 && saved < end)
+            })
         {
             return Err(End::Unsafe(format!(
                 "{} writes over the return address of {}",
@@ -1976,6 +2081,11 @@ impl<'a> Cpu<'a> {
     }
 
     fn execute(&mut self) -> Result<Step, Stop> {
+        if self.word.is_some() {
+            return Err(unsupported(
+                "AArch64's instructions, which lengua's prover has no model of yet",
+            ));
+        }
         let instruction = self.instruction;
         let mnemonic = instruction.mnemonic();
         match mnemonic {
@@ -2223,7 +2333,9 @@ impl<'a> Cpu<'a> {
                 self.image.enter(instruction.near_branch_target());
                 self.state.calls += 1;
                 self.state.returns.push(Return {
-                    slot,
+                    top: slot,
+                    pushed: 8,
+                    saved: Some(slot),
                     back: instruction.next_ip(),
                     callee: instruction.near_branch_target(),
                     frame: self.state.calls,
@@ -2236,7 +2348,7 @@ impl<'a> Cpu<'a> {
                 let target = self.pop()?;
                 let target = self.constant(target)?;
                 match self.state.returns.pop() {
-                    Some(back) if back.slot == slot && back.back == target => {}
+                    Some(back) if back.saved == Some(slot) && back.back == target => {}
                     _ => {
                         return Err(End::Unsafe(format!(
                             "{} returns somewhere its caller didn't call it from",
@@ -2280,7 +2392,7 @@ impl<'a> Cpu<'a> {
     /// The checker matched the table to the jump and rule 9 holds its index to the table, but a
     /// target that could be anything else still ends the proof, so it rests on neither.
     fn table_jump(&mut self) -> Result<Step, Stop> {
-        let ip = self.instruction.ip();
+        let ip = self.at;
         let target = self.read(0, 64)?;
         let Some(cases) = self.image.tables.get(&ip) else {
             return Err(unsupported(
@@ -2665,20 +2777,21 @@ impl<'a> Cpu<'a> {
 
     /// `openat` on a name the input may choose: each test file it can be, or none.
     fn open_chosen(&mut self) -> Result<Step, Stop> {
-        let registers = self.state.registers;
-        let (folder, flags) = (registers[7], registers[2]);
+        let arguments = Convention::of(self.image.isa).arguments;
+        let (folder, flags) = (
+            self.state.registers[arguments[0]],
+            self.state.registers[arguments[2]],
+        );
         let flags = self.constant(flags)? & 0xffff_ffff;
-        if flags & O_DIRECTORY != 0 {
+        if flags & self.image.linux().o_directory != 0 {
             return Err(unsupported(
                 "listing a folder, whose entries the kernel gives in an order of its own",
             ));
         }
-        let bytes = match self.name_or_choice(folder, Register::RSI, "openat")? {
+        let bytes = match self.name_or_choice(folder, 1, "openat")? {
             Name::Known(name) => {
                 let result = self.open_name(name, flags)?;
-                self.state.registers[0] = self.pool.bv(64, u128::from(result));
-                self.state.registers[1] = self.pool.bv(64, u128::from(self.instruction.next_ip()));
-                self.state.registers[11] = self.pool.bv(64, 0x202);
+                self.state.returns(self.pool, result, self.next);
                 return Ok(Step::Next);
             }
             Name::Chosen(bytes) => bytes,
@@ -2688,9 +2801,12 @@ impl<'a> Cpu<'a> {
 
     /// `openat` of `name` with `flags`, as the working folder stands.
     fn open_name(&mut self, name: String, flags: u64) -> Result<u64, Stop> {
+        // Flags that change nothing the model tracks: no controlling terminal, large files,
+        // closing on exec.
+        let harmless = self.image.linux().o_harmless;
         let writing = match flags & O_ACCMODE {
-            0 if flags & !O_ACCMODE & !O_HARMLESS == 0 => false,
-            O_WRONLY if flags & !O_ACCMODE & !O_HARMLESS & !O_TRUNC == O_CREAT => true,
+            0 if flags & !O_ACCMODE & !harmless == 0 => false,
+            O_WRONLY if flags & !O_ACCMODE & !harmless & !O_TRUNC == O_CREAT => true,
             _ => return Err(unsupported(format!("opening a file with flags {flags:#o}"))),
         };
         if self.state.is_folder(&name) {
@@ -2724,7 +2840,7 @@ impl<'a> Cpu<'a> {
 
     /// The name a call is given in the working folder: a NUL-terminated path relative to it,
     /// which the model follows only inside it.
-    fn name_at(&mut self, folder: Term, path: Register, call: &str) -> Result<String, Stop> {
+    fn name_at(&mut self, folder: Term, path: usize, call: &str) -> Result<String, Stop> {
         match self.name_or_choice(folder, path, call)? {
             Name::Known(name) => Ok(name),
             Name::Chosen(_) => Err(unsupported(format!(
@@ -2735,19 +2851,14 @@ impl<'a> Cpu<'a> {
 
     /// The name a call is given, or, where the input chooses its bytes, those bytes: the
     /// length is the shape's, so only which bytes is open.
-    fn name_or_choice(
-        &mut self,
-        folder: Term,
-        register: Register,
-        call: &str,
-    ) -> Result<Name, Stop> {
+    fn name_or_choice(&mut self, folder: Term, argument: usize, call: &str) -> Result<Name, Stop> {
         // The kernel reads the folder as an int.
         if self.constant(folder)? & 0xffff_ffff != AT_FDCWD {
             return Err(unsupported(format!(
                 "{call} other than in the working folder"
             )));
         }
-        let path = self.state.registers[slot(register).unwrap_or(6)];
+        let path = self.state.registers[Convention::of(self.image.isa).arguments[argument]];
         let start = self.constant(path)?;
         let mut address = start;
         let mut bytes = Vec::new();
@@ -2770,7 +2881,7 @@ impl<'a> Cpu<'a> {
             }
             address += 1;
         }
-        self.lent(register, start, bytes.len() as u64 + 1, false, call)?;
+        self.lent(argument, start, bytes.len() as u64 + 1, false, call)?;
         let known: Option<Vec<u8>> = bytes
             .iter()
             .map(|byte| {
@@ -2801,7 +2912,7 @@ impl<'a> Cpu<'a> {
     /// each noting where it stopped short.
     fn read_every_count(&mut self, buffer: u64, most: u64) -> Result<Step, Stop> {
         let original = self.state.clone();
-        let next = self.instruction.next_ip();
+        let next = self.next;
         let yes = self.pool.boolean(true);
         let mut choices = Vec::new();
         for taken in 1..=most {
@@ -2819,9 +2930,7 @@ impl<'a> Cpu<'a> {
                     {
                         self.state.raw_cuts |= 1 << (self.state.stdin_read - 1);
                     }
-                    self.state.registers[0] = self.pool.bv(64, u128::from(taken));
-                    self.state.registers[1] = self.pool.bv(64, u128::from(next));
-                    self.state.registers[11] = self.pool.bv(64, 0x202);
+                    self.state.returns(self.pool, taken, next);
                 }
                 Err(stop) => self.state.end = Some(stop),
             }
@@ -2875,7 +2984,7 @@ impl<'a> Cpu<'a> {
         }
         outcomes.push((none, None));
         let original = self.state.clone();
-        let next = self.instruction.next_ip();
+        let next = self.next;
         let mut choices = Vec::new();
         for (condition, name) in outcomes {
             if self.pool.truth(condition) == Some(false) {
@@ -2890,9 +2999,7 @@ impl<'a> Cpu<'a> {
             };
             match opened {
                 Ok(result) => {
-                    self.state.registers[0] = self.pool.bv(64, u128::from(result));
-                    self.state.registers[1] = self.pool.bv(64, u128::from(next));
-                    self.state.registers[11] = self.pool.bv(64, 0x202);
+                    self.state.returns(self.pool, result, next);
                 }
                 Err(stop) => self.state.end = Some(stop),
             }
@@ -2905,7 +3012,9 @@ impl<'a> Cpu<'a> {
     /// `fstat(fd, details)`: an open file's kind and size, the file's own; the kernel's other
     /// numbers, such as its device, owner and times, are any value.
     fn file_details(&mut self, fd: u64, buffer: u64) -> Result<u64, Stop> {
-        self.lent(Register::RSI, buffer, STAT_LEN, true, "fstat")?;
+        // The bytes of `struct stat`, and where its kind and size are, on this CPU.
+        let linux = self.image.linux();
+        self.lent(1, buffer, linux.stat_len, true, "fstat")?;
         let Some(open) = self.state.open.get(&fd).cloned() else {
             if fd <= 2 {
                 return Err(unsupported("the details of standard input or output"));
@@ -2914,14 +3023,14 @@ impl<'a> Cpu<'a> {
         };
         let size = self.state.file(&open.name).map_or(0, <[Term]>::len);
         let fresh = self.pool.len();
-        for offset in 0..STAT_LEN {
+        for offset in 0..linux.stat_len {
             let byte = self.pool.var(8, &format!("stat{fresh}.{offset}"));
             self.save(buffer + offset, byte)?;
         }
         let mode = self.pool.bv(32, REGULAR_FILE);
-        self.save(buffer + STAT_MODE, mode)?;
+        self.save(buffer + linux.stat_mode, mode)?;
         let size = self.pool.bv(64, size as u128);
-        self.save(buffer + STAT_SIZE, size)?;
+        self.save(buffer + linux.stat_size, size)?;
         Ok(0)
     }
 
@@ -3019,7 +3128,7 @@ impl<'a> Cpu<'a> {
         let tid = FIRST_TID + self.state.threads;
         let id = self.pool.bv(32, u128::from(tid));
         self.save(parent_tid, id)?;
-        let next = self.instruction.next_ip();
+        let next = self.next;
         let (next_term, flags_word) = (self.pool.bv(64, u128::from(next)), self.pool.bv(64, 0x202));
         let mut waiting = registers;
         waiting[0] = self.pool.bv(64, u128::from(tid));
@@ -3087,22 +3196,24 @@ impl<'a> Cpu<'a> {
     }
 
     fn syscall(&mut self) -> Result<Step, Stop> {
-        let raw = self.state.registers[0];
+        let convention = Convention::of(self.image.isa);
+        let raw = self.state.registers[convention.number];
         let raw = self
             .pool
             .constant(raw)
             .ok_or_else(|| unsupported("a system call chosen by the input"))?;
-        // The numbers below are x86-64 Linux's, from `crate::syscalls::x86_64`: this is the x86-64
-        // prover.
-        let number = i64::try_from(raw).ok();
-        let registers = self.state.registers;
-        let (rdi, rsi, rdx) = (registers[7], registers[6], registers[2]);
-        let result = match number {
-            Some(syscalls::READ) => {
+        // Each CPU's numbers, read from its own table as what the call does.
+        let call = i64::try_from(raw)
+            .ok()
+            .and_then(|number| Call::of(self.image.isa, number));
+        let arguments = convention.arguments.map(|slot| self.state.registers[slot]);
+        let (rdi, rsi, rdx) = (arguments[0], arguments[1], arguments[2]);
+        let result = match call {
+            Some(Call::Read) => {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 let buffer = self.constant(rsi)?;
                 let count = self.constant(rdx)?;
-                self.lent(Register::RSI, buffer, count, true, "read")?;
+                self.lent(1, buffer, count, true, "read")?;
                 if fd == 0 {
                     self.state.raw_reads = true;
                     // A pipe hands over at most 4096 bytes whole; past that, how the input
@@ -3168,24 +3279,24 @@ impl<'a> Cpu<'a> {
                     (-EBADF).cast_unsigned()
                 }
             }
-            Some(syscalls::WRITE)
+            Some(Call::Write)
                 if self
                     .connection_of(self.constant(rdi)? & 0xffff_ffff)
                     .is_ok() =>
             {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 let (buffer, count) = (self.constant(rsi)?, self.constant(rdx)?);
-                self.lent(Register::RSI, buffer, count, false, "write")?;
+                self.lent(1, buffer, count, false, "write")?;
                 match self.connection_of(fd) {
                     Ok(Some(number)) => self.send(number, buffer, count, 0)?,
                     _ => self.not_connected(),
                 }
             }
-            Some(syscalls::WRITE) => {
+            Some(Call::Write) => {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 let buffer = self.constant(rsi)?;
                 let count = self.constant(rdx)?;
-                self.lent(Register::RSI, buffer, count, false, "write")?;
+                self.lent(1, buffer, count, false, "write")?;
                 // Standard output or error, a file open for writing, or nothing that can be.
                 let target = match fd {
                     1 | 2 => Some(None),
@@ -3215,7 +3326,7 @@ impl<'a> Cpu<'a> {
                     }
                 }
             }
-            Some(syscalls::CLOSE) => {
+            Some(Call::Close) => {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 if self.state.open.remove(&fd).is_some() || self.close_socket(fd) {
                     0
@@ -3223,7 +3334,7 @@ impl<'a> Cpu<'a> {
                     (-EBADF).cast_unsigned()
                 }
             }
-            Some(syscalls::SOCKET) => {
+            Some(Call::Socket) => {
                 let (domain, kind, protocol) = (
                     self.constant(rdi)? & 0xffff_ffff,
                     self.constant(rsi)? & 0xffff_ffff,
@@ -3231,11 +3342,11 @@ impl<'a> Cpu<'a> {
                 );
                 self.socket(domain, kind, protocol)?
             }
-            Some(syscalls::CONNECT) => {
+            Some(Call::Connect) => {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 let address = self.constant(rsi)?;
                 self.lent(
-                    Register::RSI,
+                    1,
                     address,
                     self.constant(rdx)? & 0xffff_ffff,
                     false,
@@ -3243,32 +3354,30 @@ impl<'a> Cpu<'a> {
                 )?;
                 return self.connect(fd, address);
             }
-            Some(syscalls::ACCEPT | syscalls::ACCEPT4) => {
+            Some(Call::Accept | Call::Accept4) => {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 let (address, length) = (self.constant(rsi)?, self.constant(rdx)?);
-                if number == Some(syscalls::ACCEPT4)
-                    && self.constant(registers[10])? & !0o2_000_000 != 0
-                {
+                if call == Some(Call::Accept4) && self.constant(arguments[3])? & !0o2_000_000 != 0 {
                     return Err(unsupported(
                         "accepting a connection with flags beyond close-on-exec",
                     ));
                 }
                 if address != 0 {
-                    self.lent(Register::RSI, address, 16, true, "accept")?;
-                    self.lent(Register::RDX, length, 4, true, "accept")?;
+                    self.lent(1, address, 16, true, "accept")?;
+                    self.lent(2, length, 4, true, "accept")?;
                 }
                 self.accept(fd, address, length)?
             }
-            Some(syscalls::SENDTO | syscalls::RECVFROM) => {
+            Some(Call::Sendto | Call::Recvfrom) => {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 let (buffer, count) = (self.constant(rsi)?, self.constant(rdx)?);
-                let flags = self.constant(registers[10])? & 0xffff_ffff;
-                if self.constant(registers[8])? != 0 {
+                let flags = self.constant(arguments[3])? & 0xffff_ffff;
+                if self.constant(arguments[4])? != 0 {
                     return Err(unsupported("sending to or receiving from a named address"));
                 }
-                let sending = number == Some(syscalls::SENDTO);
+                let sending = call == Some(Call::Sendto);
                 let call = if sending { "sendto" } else { "recvfrom" };
-                self.lent(Register::RSI, buffer, count, !sending, call)?;
+                self.lent(1, buffer, count, !sending, call)?;
                 match self.connection_of(fd) {
                     Err(()) => (-EBADF).cast_unsigned(),
                     Ok(None) => self.not_connected(),
@@ -3283,40 +3392,40 @@ impl<'a> Cpu<'a> {
                     }
                 }
             }
-            Some(syscalls::SHUTDOWN) => {
+            Some(Call::Shutdown) => {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 let how = self.constant(rsi)? & 0xffff_ffff;
                 self.shutdown(fd, how)?
             }
-            Some(syscalls::OPENAT) => return self.open_chosen(),
-            Some(syscalls::FSTAT) => {
+            Some(Call::Openat) => return self.open_chosen(),
+            Some(Call::Fstat) => {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 let buffer = self.constant(rsi)?;
                 self.file_details(fd, buffer)?
             }
-            Some(syscalls::GETDENTS64) => {
+            Some(Call::Getdents64) => {
                 return Err(unsupported(
                     "listing a folder, whose entries the kernel gives in an order of its own",
                 ));
             }
-            Some(syscalls::MKDIRAT) => {
-                let name = self.name_at(rdi, Register::RSI, "mkdirat")?;
+            Some(Call::Mkdirat) => {
+                let name = self.name_at(rdi, 1, "mkdirat")?;
                 self.make_folder(name)
             }
-            Some(syscalls::UNLINKAT) => {
-                let name = self.name_at(rdi, Register::RSI, "unlinkat")?;
+            Some(Call::Unlinkat) => {
+                let name = self.name_at(rdi, 1, "unlinkat")?;
                 let flags = self.constant(rdx)? & 0xffff_ffff;
                 self.remove(name, flags)?
             }
-            Some(syscalls::RENAMEAT) => {
-                let from = self.name_at(rdi, Register::RSI, "renameat")?;
-                let to = self.name_at(rdx, Register::R10, "renameat")?;
+            Some(Call::Renameat) => {
+                let from = self.name_at(rdi, 1, "renameat")?;
+                let to = self.name_at(rdx, 3, "renameat")?;
                 self.rename(from, to)?
             }
             // The test's readings, as the supervisor gives them, the last one repeating.
-            Some(syscalls::CLOCK_GETTIME) if !self.state.clock.is_empty() => {
+            Some(Call::ClockGettime) if !self.state.clock.is_empty() => {
                 let buffer = self.constant(rsi)?;
-                self.lent(Register::RSI, buffer, 16, true, "clock_gettime")?;
+                self.lent(1, buffer, 16, true, "clock_gettime")?;
                 let readings = Rc::clone(&self.state.clock);
                 let index = self.state.readings_used.min(readings.len() - 1);
                 let (seconds, nanoseconds) = readings[index];
@@ -3326,10 +3435,10 @@ impl<'a> Cpu<'a> {
                 0
             }
             // The test's bytes, as the supervisor gives them: zeros past their end.
-            Some(syscalls::GETRANDOM) if self.state.random.is_some() => {
+            Some(Call::Getrandom) if self.state.random.is_some() => {
                 let buffer = self.constant(rdi)?;
                 let count = self.constant(rsi)?;
-                self.lent(Register::RDI, buffer, count, true, "getrandom")?;
+                self.lent(0, buffer, count, true, "getrandom")?;
                 let flags = self.constant(rdx)?;
                 if flags & !7 != 0 || flags & 6 == 6 {
                     (-EINVAL).cast_unsigned()
@@ -3352,13 +3461,13 @@ impl<'a> Cpu<'a> {
                 }
             }
             // Values the kernel chooses: any at all, a fresh variable for each.
-            Some(syscalls::CLOCK_GETTIME) => {
+            Some(Call::ClockGettime) => {
                 let clock = self.constant(rdi)? & 0xffff_ffff;
                 if !matches!(clock, 0 | 1) {
                     return Err(unsupported(format!("reading clock {clock}")));
                 }
                 let buffer = self.constant(rsi)?;
-                self.lent(Register::RSI, buffer, 16, true, "clock_gettime")?;
+                self.lent(1, buffer, 16, true, "clock_gettime")?;
                 let fresh = self.pool.len();
                 let seconds =
                     self.pool
@@ -3370,10 +3479,10 @@ impl<'a> Cpu<'a> {
                 self.save(buffer + 8, nanoseconds)?;
                 0
             }
-            Some(syscalls::GETRANDOM) => {
+            Some(Call::Getrandom) => {
                 let buffer = self.constant(rdi)?;
                 let count = self.constant(rsi)?;
-                self.lent(Register::RDI, buffer, count, true, "getrandom")?;
+                self.lent(0, buffer, count, true, "getrandom")?;
                 if count > 256 {
                     return Err(unsupported("getrandom for more than 256 bytes at once"));
                 }
@@ -3386,33 +3495,33 @@ impl<'a> Cpu<'a> {
             }
             // A sleep ends at once: what the program does next doesn't depend on how long it
             // slept. It reads the time it's given, and may write what's left of it.
-            Some(syscalls::CLOCK_NANOSLEEP) => {
+            Some(Call::ClockNanosleep) => {
                 let request = self.constant(rdx)?;
-                self.lent(Register::RDX, request, 16, false, "clock_nanosleep")?;
+                self.lent(2, request, 16, false, "clock_nanosleep")?;
                 self.load(request, 16)?;
-                let left = self.constant(registers[10])?;
+                let left = self.constant(arguments[3])?;
                 if left != 0 {
-                    self.lent(Register::R10, left, 16, true, "clock_nanosleep")?;
+                    self.lent(3, left, 16, true, "clock_nanosleep")?;
                 }
                 0
             }
-            Some(syscalls::CLONE) => return self.start_thread(),
+            Some(Call::Clone) => return self.start_thread(),
             // A thread's end: the kernel clears its id and wakes whoever waits on it, and the
             // thread that started it goes on.
-            Some(syscalls::EXIT) if !self.state.suspended.is_empty() => return self.end_thread(),
-            Some(syscalls::EXIT | syscalls::EXIT_GROUP) => {
+            Some(Call::Exit) if !self.state.suspended.is_empty() => return self.end_thread(),
+            Some(Call::Exit | Call::ExitGroup) => {
                 let status = self.pool.extract(rdi, 7, 0);
                 return Err(End::Exit(status));
             }
             // A wait for a thread to end. Threads run to their end as they start, so its id is
             // already cleared: the word no longer holds what the waiter saw.
-            Some(syscalls::FUTEX) => {
+            Some(Call::Futex) => {
                 let (word, operation) = (self.constant(rdi)?, self.constant(rsi)? & 0xffff_ffff);
                 // FUTEX_WAIT, with or without FUTEX_PRIVATE_FLAG.
                 if operation & !128 != 0 {
                     return Err(unsupported(format!("futex operation {operation}")));
                 }
-                self.lent(Register::RDI, word, 4, false, "futex")?;
+                self.lent(0, word, 4, false, "futex")?;
                 let now = self.load(word, 4)?;
                 let seen = self.pool.extract(rdx, 31, 0);
                 if self.pool.constant(now) == self.pool.constant(seen) {
@@ -3425,10 +3534,10 @@ impl<'a> Cpu<'a> {
             // A wait for the next key: as in a test, standard input has all arrived, so it always
             // has a key to read, or its end. A server's poll over its connections is beyond the
             // model.
-            Some(syscalls::POLL) => {
+            Some(Call::Poll) => {
                 let (table, count) = (self.constant(rdi)?, self.constant(rsi)?);
                 let waits_for_input = count == 1 && {
-                    self.lent(Register::RDI, table, POLLFD_LEN, true, "poll")?;
+                    self.lent(0, table, POLLFD_LEN, true, "poll")?;
                     let descriptor = self.load(table, 4)?;
                     self.pool.constant(descriptor) == Some(0)
                 };
@@ -3439,7 +3548,7 @@ impl<'a> Cpu<'a> {
                     if count == 0 || count > 1024 {
                         return Err(unsupported(format!("poll over {count} descriptors")));
                     }
-                    self.lent(Register::RDI, table, count * POLLFD_LEN, true, "poll")?;
+                    self.lent(0, table, count * POLLFD_LEN, true, "poll")?;
                     if self.constant(rdx)? & 0xffff_ffff != 0xffff_ffff {
                         return Err(unsupported(
                             "poll over connections with a time limit, rather than until one is \
@@ -3459,7 +3568,7 @@ impl<'a> Cpu<'a> {
             }
             // As in a test, standard input, output and error are never a terminal: its mode
             // can't be read or set, and the program goes on as from a pipe.
-            Some(syscalls::IOCTL) => {
+            Some(Call::Ioctl) => {
                 if self.constant(rdi)? & 0xffff_ffff > 2 {
                     return Err(unsupported("ioctl on a file or a connection"));
                 }
@@ -3467,9 +3576,7 @@ impl<'a> Cpu<'a> {
             }
             _ => return Err(unsupported(format!("system call {raw}"))),
         };
-        self.state.registers[0] = self.pool.bv(64, u128::from(result));
-        self.state.registers[1] = self.pool.bv(64, u128::from(self.instruction.next_ip()));
-        self.state.registers[11] = self.pool.bv(64, 0x202);
+        self.state.returns(self.pool, result, self.next);
         Ok(Step::Next)
     }
 }
@@ -3578,6 +3685,7 @@ fn unwritten_stack(at: u64) -> bool {
 }
 
 mod bits;
+mod calls;
 mod fill;
 pub mod induction;
 mod logs;
