@@ -1093,9 +1093,14 @@ the target's name and hardware facts differ); the same rules, memory safety, tes
 engine (only each CPU's instruction model is its own); and the same limits on every OS. The
 capabilities a spec can name (`- Uses:` standard input and output, files and folders, the
 network, threads, the terminal, the clock, random bytes, sleep, the environment) and what the
-sandbox allows of each are one definition, which each OS enforces with its own means. Where an
-OS can't provide or enforce part of it, that part is cut to what every OS can do, on Linux too,
-so one OS's extra power never makes a spec behave differently. What may differ is the hardware:
+sandbox allows of each are one definition, which each OS enforces with its own means. Any limit
+one OS or CPU has is every target's limit, a limit being anything a spec or its user can observe:
+what a program may do, how it behaves, and what lengua promises of it. Each OS keeps those
+promises with its own means, and lengua's own checks of the code are one, the same on every OS.
+Where an OS can't provide part of the definition, or nothing there can keep one of its promises,
+that part is cut on every OS, Linux too, so one OS's extra power never makes a spec behave
+differently. An OS's sandbox that can't police something cuts nothing while another means keeps
+the same promise there. What may differ is the hardware:
 the instructions a CPU has, its vectors' width, its speed. A target is done when it covers what
 x86-64 covers, each item with its own hardware's means (NEON where x86-64 has AVX-512).
 

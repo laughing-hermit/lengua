@@ -210,9 +210,13 @@ macOS on Apple silicon and Intel, Linux on ARM64, and Windows on x86-64 and ARM6
 Every target is the same lengua, never a different product (DESIGN's "One product on every
 target"): the same spec, skills, tools, reports and messages; the same rules, memory safety, tests
 and proof engine; and the same limits on every OS. The capabilities a spec can name, and what the
-sandbox allows of each, are one definition that each OS enforces with its own means; where an OS
-can't provide or enforce part of it, that part is cut to what every OS can do, on Linux too, so
-nothing behaves differently from one OS to another. Only the hardware may differ (its
+sandbox allows of each, are one definition that each OS enforces with its own means. In the
+user's words (2026-11-01), "any limit per OS and cpu is a limit 4 all targets", for equality in
+experience: a limit being anything a spec or its user can observe, what a program may do, how it
+behaves, and what lengua promises of it. Each OS keeps those promises with its own means, lengua's
+own checks of the code among them; where an OS can't provide part of the definition, or nothing
+there can keep one of its promises, that part is cut on every OS, Linux too, so nothing behaves
+differently from one OS to another. Only the hardware may differ (its
 instructions, vector widths, speed). Each target's finish line is parity with x86-64's: it's done
 when it covers what x86-64 covers, each item with its own hardware's means.
 
@@ -259,6 +263,33 @@ one needs.
   directly, as lengua's programs do; a program must go through the system library (libSystem,
   ntdll), which lengua never checked, and there is no seccomp or Landlock. So those four targets
   need a different model of the program's edge with the OS and a different sandbox.
+- **Linux held to macOS's and Windows's limits now, not when they arrive.** Linux allows more than
+  macOS and Windows do, which is why the user set the same limits on every OS (2026-11-01): a spec
+  that works on Linux must work on the stricter OSes too. So each place a spec can observe Linux's
+  extra freedom gets checked against both OSes' documentation and, where one can't do it, cut on
+  Linux too, in its tests and sandbox. To audit:
+  - file and folder names: Windows refuses `< > : " | ? * \`, control characters, a trailing dot
+    or space, and `CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9` and `LPT1` to `LPT9` with any
+    extension; macOS and Windows ignore case by default, and macOS ignores Unicode normalization,
+    so names that differ only so are one file there; names are UTF-8 on macOS and UTF-16 on
+    Windows, never just any bytes;
+  - path lengths: 260 characters on Windows unless long paths are on, 1024 bytes on macOS;
+  - arguments and the environment: Windows passes UTF-16, so both must be valid Unicode, and its
+    environment names ignore case;
+  - open files: macOS's default limit is 256;
+  - a write to a closed pipe: a signal on Linux and macOS, an error on Windows;
+  - an open file renamed or removed: Windows refuses it;
+  - the order a folder lists in: each file system has its own;
+  - the network: Windows's sandbox for apps (AppContainer) can't hold a program to one port, and
+    blocks the local network by default. Today the proof takes Landlock's refusal of other ports
+    as given, so the promise rests on Linux's kernel. To keep it on every OS by the same means, a
+    `connect` to a port the spec doesn't name becomes a failure of the check on every target,
+    Linux included, with Landlock (and Windows's filtering platform, if it can) a second guard.
+    Servers already never bind: the launcher hands them their socket, which Windows can do too.
+    Only if nothing keeps the promise on some OS is the network cut everywhere.
+
+  Per-target code, such as x86-64 Linux's red zone or Windows's stack probes, isn't such a limit:
+  only what a spec can observe is.
 
 The plugin itself (skills plus one MCP server) is agnostic in its skills, which are markdown and
 install the same on every host. Its server is a native binary, built per host, and today builds
