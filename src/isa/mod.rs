@@ -4,6 +4,7 @@
 //! The rules are written once, over these facts, with each CPU's calling convention in its
 //! [`Abi`].
 
+pub mod aarch64;
 pub mod x86_64;
 
 use std::fmt;
@@ -13,6 +14,8 @@ use std::fmt;
 pub enum Isa {
     /// x86-64, in the dialect's Intel syntax.
     X86_64,
+    /// AArch64 (ARMv8-A), in GNU syntax.
+    Aarch64,
 }
 
 impl Isa {
@@ -21,6 +24,7 @@ impl Isa {
     pub const fn abi(self) -> &'static Abi {
         match self {
             Self::X86_64 => &x86_64::ABI,
+            Self::Aarch64 => &aarch64::ABI,
         }
     }
 }
@@ -30,6 +34,8 @@ impl Isa {
 pub enum Reg {
     /// An x86-64 register, as iced names it.
     X86(iced_x86::Register),
+    /// An AArch64 general-purpose register.
+    A64(aarch64::A64Reg),
 }
 
 impl Reg {
@@ -38,6 +44,7 @@ impl Reg {
     pub fn full(self) -> Self {
         match self {
             Self::X86(register) => Self::X86(register.full_register()),
+            Self::A64(register) => Self::A64(register.full()),
         }
     }
 
@@ -46,15 +53,24 @@ impl Reg {
     pub fn bits(self) -> usize {
         match self {
             Self::X86(register) => register.size() * 8,
+            Self::A64(register) => {
+                if register.wide {
+                    64
+                } else {
+                    32
+                }
+            }
         }
     }
 
     /// Its place in a [`RegSet`], the same for every width of it: general-purpose and vector
-    /// registers, and x86's mask registers. Other registers, such as flags, have none.
+    /// registers, and x86's mask registers. Other registers, such as flags, have none, nor does
+    /// AArch64's zero register, which holds nothing.
     #[must_use]
     pub fn slot(self) -> Option<u32> {
         match self {
             Self::X86(register) => x86_64::slot(register),
+            Self::A64(register) => aarch64::slot(register),
         }
     }
 }
@@ -66,6 +82,7 @@ impl fmt::Display for Reg {
                 let name = format!("{register:?}");
                 formatter.write_str(&name.to_ascii_lowercase())
             }
+            Self::A64(register) => write!(formatter, "{register}"),
         }
     }
 }
@@ -157,6 +174,16 @@ pub enum Cond {
     LessEqual,
     /// Greater, with sign.
     Greater,
+    /// The register tested is zero: AArch64's `cbz`.
+    Zero,
+    /// The register tested isn't zero: `cbnz`.
+    NotZero,
+    /// This bit of the register tested is clear: `tbz`.
+    BitClear(u8),
+    /// This bit of the register tested is set: `tbnz`.
+    BitSet(u8),
+    /// Always (AArch64's `b.al` and `b.nv`).
+    Always,
     /// Any other condition, such as x86's `jrcxz` and `loop`.
     Other,
 }
@@ -319,9 +346,9 @@ pub struct Abi {
     /// The register that chooses a system call.
     pub syscall_number: Reg,
     /// The registers a system call takes its arguments in, in order.
-    pub syscall_arguments: [Reg; 6],
+    pub syscall_arguments: &'static [Reg],
     /// The registers a function takes its arguments in, in order.
-    pub arguments: [Reg; 6],
+    pub arguments: &'static [Reg],
     /// The register a result comes back in.
     pub result: Reg,
     /// The registers a function returns in: what an address in its frame mustn't leave by.

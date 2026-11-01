@@ -183,7 +183,7 @@ impl Summary {
                 | Syscall::Shutdown,
             ) => (&[], &[]),
             // clone, futex, or a call the rules refuse.
-            None => return Self::every(&abi.syscall_arguments),
+            None => return Self::every(abi.syscall_arguments),
         };
         let registers = |positions: &[usize]| -> BTreeSet<Reg> {
             positions
@@ -389,8 +389,8 @@ fn lent(
                 Exit::Call { callee } => summaries
                     .get(callee)
                     .cloned()
-                    .unwrap_or_else(|| Summary::every(&abi.arguments)),
-                _ => Summary::every(&abi.arguments),
+                    .unwrap_or_else(|| Summary::every(abi.arguments)),
+                _ => Summary::every(abi.arguments),
             }),
             Control::Syscall => Some(Summary::syscall(
                 constant_before(function, at, abi.syscall_number, abi).map(|(_, number)| number),
@@ -418,7 +418,7 @@ fn states(
     let start = function.name() == "_start";
     let mut entry = State::unknown(abi);
     if !start {
-        for register in abi.arguments {
+        for &register in abi.arguments {
             entry.set(
                 register,
                 Owner::Argument {

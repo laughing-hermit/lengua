@@ -1075,7 +1075,7 @@ pub fn features_needed(machine: &Machine) -> Vec<&'static str> {
 fn iced(register: Option<Reg>) -> Register {
     match register {
         Some(Reg::X86(register)) => register,
-        None => Register::None,
+        Some(Reg::A64(_)) | None => Register::None,
     }
 }
 

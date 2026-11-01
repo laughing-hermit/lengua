@@ -914,10 +914,13 @@ still to build per target. A new profile must supply:
    CPU's calling convention (`isa::Abi`). x86-64's facts come from iced-x86 (`isa/x86_64.rs`),
    and its matching of main.s to the machine code, line by line, and its lists of instructions and
    CPU features, from `checker/x86_64.rs`; `checker/decode.rs` reads the ELF through the `object`
-   crate for any CPU. For a new CPU lengua decodes exactly its dialect's subset itself (Round 9
-   does so for AArch64): anything outside it is refused by construction, the matching of main.s to
-   the machine code stays lengua's own reading rather than LLVM agreeing with itself, and LLVM's
-   disassembler serves as the decoder's test.
+   crate for any CPU. For a new CPU lengua decodes exactly its dialect's subset itself: anything
+   outside it is refused by construction, the matching of main.s to the machine code stays
+   lengua's own reading rather than LLVM agreeing with itself, and LLVM's disassembler serves as
+   the decoder's test. AArch64's (`isa/aarch64`) reads machine words and main.s's text alike into
+   one canonical form, the architecture's own instruction rather than an alias (`cmp x1, #3` is
+   `subs xzr, x1, #3`), and agrees with LLVM on random words of every encoding class the dialect
+   has, refusing every word LLVM refuses.
 3. **Prover model:** the CPU's instructions in `src/prove/exec` (today an x86 `match`), and CPU
    feature detection (today x86 `is_x86_feature_detected!`).
 4. **Dialect:** the Power of 10 in that CPU's mnemonics and registers, with its reference (today

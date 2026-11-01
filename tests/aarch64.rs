@@ -217,8 +217,10 @@ fn the_aarch64_template_does_what_its_spec_says() {
     }
 }
 
-#[test]
-fn aarch64_fill_and_assert_fail_behave_as_on_x86_64() {
+/// fill's constants and function, assert_fail and its message, and a driver: with no
+/// arguments it copies standard input up to a newline a read ends with; with one, it fails
+/// assertion 123.
+fn fill_program() -> String {
     let template = asset("main-template.s");
     let fill = asset("fill.s");
     let between = |text: &str, start: &str, end: &str| -> String {
@@ -226,10 +228,7 @@ fn aarch64_fill_and_assert_fail_behave_as_on_x86_64() {
         let to = from + text[from..].find(end).expect("the end") + end.len();
         format!("{}\n", &text[from..to])
     };
-    // fill's constants and function, assert_fail and its message, and a driver: with no
-    // arguments it copies standard input up to a newline a read ends with; with one, it fails
-    // assertion 123.
-    let source = format!(
+    format!(
         ".arch armv8-a\n{constants}\n.section .rodata\n{message}\n.section .bss\n\
          .type buf, @object\nbuf:\n    .zero 64\n.size buf, . - buf\n\n.text\n.globl _start\n\
          .type _start, @function\n_start:\n    ldr x0, [sp]\n    cmp x0, #2\n    b.eq .Lassert\n\
@@ -250,7 +249,12 @@ fn aarch64_fill_and_assert_fail_behave_as_on_x86_64() {
             ".type assert_fail, @function",
             ".size assert_fail, . - assert_fail"
         ),
-    );
+    )
+}
+
+#[test]
+fn aarch64_fill_and_assert_fail_behave_as_on_x86_64() {
+    let source = fill_program();
     let folder = tempfile::tempdir().expect("temporary folder");
     let executable = build(folder.path(), &source);
     for ((name, written), (_, built)) in source_functions(&source)
@@ -291,4 +295,66 @@ fn aarch64_fill_and_assert_fail_behave_as_on_x86_64() {
         run(&executable, &[], &[]),
         (String::new(), String::new(), Some(0))
     );
+}
+
+/// The words of an executable's `.text`, each with its address.
+fn text_words(executable: &Path) -> Vec<(u64, u32)> {
+    use object::{Object, ObjectSection};
+    let bytes = std::fs::read(executable).expect("the executable");
+    let file = object::File::parse(&*bytes).expect("an ELF file");
+    let text = file.section_by_name(".text").expect("a .text section");
+    let data = text.data().expect("its bytes");
+    let (words, _) = data.as_chunks::<4>();
+    words
+        .iter()
+        .zip((text.address()..).step_by(4))
+        .map(|(word, address)| (address, u32::from_le_bytes(*word)))
+        .collect()
+}
+
+/// Every word of the AArch64 templates is in the dialect: lengua's decoder reads each, and reads
+/// it as LLVM's disassembler does, through lengua's parser.
+#[test]
+fn every_template_word_is_in_the_dialect() {
+    use lengua::isa::aarch64::{decode::decode, text::parse};
+    let folder = tempfile::tempdir().expect("temporary folder");
+    for (name, source) in [
+        ("main-template.s", asset("main-template.s")),
+        ("the fill program", fill_program()),
+    ] {
+        let place = folder.path().join(name.replace(' ', "-"));
+        std::fs::create_dir_all(&place).expect("a folder");
+        let executable = build(&place, &source);
+        let words = text_words(&executable);
+        assert!(words.len() > 50, "{name}: {} words", words.len());
+        for (address, word) in words {
+            let decoded =
+                decode(word, address).unwrap_or_else(|why| panic!("{name} at {address:#x}: {why}"));
+            let [a, b, c, d] = word.to_le_bytes();
+            let output =
+                Command::new("llvm-mc")
+                    .args(["--disassemble", "--triple=aarch64-unknown-linux-gnu"])
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .spawn()
+                    .and_then(|mut child| {
+                        child.stdin.take().expect("its input").write_all(
+                            format!("{a:#04x} {b:#04x} {c:#04x} {d:#04x}\n").as_bytes(),
+                        )?;
+                        child.wait_with_output()
+                    })
+                    .expect("llvm-mc");
+            let text = String::from_utf8_lossy(&output.stdout);
+            let code = text
+                .lines()
+                .find(|line| line.starts_with('\t'))
+                .and_then(|line| line.split("//").next())
+                .unwrap_or_default()
+                .trim();
+            let (mnemonic, operands) = code.split_once('\t').unwrap_or((code, ""));
+            let parsed = parse(mnemonic.trim(), operands.trim(), address, &|_| None)
+                .unwrap_or_else(|why| panic!("{name} at {address:#x}: {why}"));
+            assert_eq!(decoded, parsed, "{name} at {address:#x}: `{code}`");
+        }
+    }
 }

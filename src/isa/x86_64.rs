@@ -35,7 +35,7 @@ pub const ABI: Abi = Abi {
     stack_pointer: x86(Register::RSP),
     return_address: 8,
     syscall_number: x86(Register::RAX),
-    syscall_arguments: [
+    syscall_arguments: &[
         x86(Register::RDI),
         x86(Register::RSI),
         x86(Register::RDX),
@@ -43,7 +43,7 @@ pub const ABI: Abi = Abi {
         x86(Register::R8),
         x86(Register::R9),
     ],
-    arguments: [
+    arguments: &[
         x86(Register::RDI),
         x86(Register::RSI),
         x86(Register::RDX),
