@@ -1,14 +1,15 @@
 ---
 name: compile
-description: Compiles a lengua program's spec.md into main.s, x86-64 assembly for this computer (integer, vector and floating-point instructions) that passes every test in the spec, in lengua's dialect checked against the lengua Power of 10 (NASA's rules adapted for assembly). Use after check records the spec, when the lengua check tool says to write main.s or reports problems in it, when someone shares a spec to build on this computer, or when the user asks for a faster program. Ends when check says done, with a short report to the user.
+description: Compiles a lengua program's spec.md into main.s, assembly for this computer's target, Linux on x86-64 or AArch64 (integer, vector and floating-point instructions) that passes every test in the spec, in lengua's dialect checked against the lengua Power of 10 (NASA's rules adapted for assembly). Use after check records the spec, when the lengua check tool says to write main.s or reports problems in it, when someone shares a spec to build on this computer, or when the user asks for a faster program. Ends when check says done, with a short report to the user.
 license: Apache-2.0
 compatibility: Needs the lengua MCP server from the lengua plugin, on Linux x86-64 with LLVM (llvm-mc and ld.lld).
 ---
 
 # Compile a lengua spec
 
-`main.s` is the program: x86-64 assembly for Linux that you compile from `spec.md`. You are the
-compiler. lengua checks your translation: it assembles `main.s`, reads the machine code back,
+`main.s` is the program: assembly for this computer's target, Linux on x86-64 or on AArch64,
+that you compile from `spec.md`; the first word of `check`'s `machine` line names the target,
+`linux-x86_64` or `linux-aarch64`. You are the compiler. lengua checks your translation: it assembles `main.s`, reads the machine code back,
 matches it to `main.s` line by line, checks the lengua Power of 10, then runs every test in the
 spec and proves what it can. Nothing runs before every rule passes. Once a check passes, lengua
 writes main.s's second line itself, naming the spec it was compiled from, this computer's target
@@ -27,7 +28,9 @@ and the CPU features the code needs; never write that line yourself.
    each to the part's current code, and says which to copy again when the part changes. Never
    rewrite what a part already does.
 3. Write `<path>/main.s` in the shape of [the template](assets/main-template.s): its first line
-   is `.intel_syntax noprefix`, and `assert_fail` and `assert_message` are copied word for word;
+   is `.intel_syntax noprefix`, and `assert_fail` and `assert_message` are copied word for word
+   (on `linux-aarch64`, [the AArch64 template](assets/linux-aarch64/main-template.s), whose first
+   line is `.arch armv8-a`, and [its fill](assets/linux-aarch64/fill.s));
    the rest is the program. The template is a complete, checked program that prints the negative
    of a number ([its spec](assets/template-spec.md)); its `parse_i64`, `write_i64` and
    `write_all` can be reused as they are. To read a whole input, a reply, or a request up to the
@@ -65,8 +68,9 @@ and the CPU features the code needs; never write that line yourself.
    choice made for each input byte with `cmov` or `setcc`, not a branch, keeps the proof
    to one path; a branch per byte doubles the paths with each byte, and the proof stops early.
 4. Write the code by [the rules](references/power-of-10.md), with
-   [the Linux x86-64 reference](references/linux-x86_64.md) for system calls, the program's start
-   and the calling convention. Write it correct first; speed comes in step 6.
+   [the Linux x86-64 reference](references/linux-x86_64.md), or on `linux-aarch64`
+   [the Linux AArch64 reference](references/linux-aarch64.md), for system calls, the program's
+   start, the calling convention and the dialect's form there. Write it correct first; speed comes in step 6.
 5. Call `check` with `path`. It checks the rules first and lists each violation as
    `rule N (name) main.s:LINE: problem. Fix: …`. Then it runs every test: each behavior's example,
    and the generated tests with fresh random inputs (boundary values first). A failure shows the
@@ -165,8 +169,10 @@ spec. A `main.s` that comes along in a copied folder is checked from scratch bef
 when its second line says it was compiled for another computer or a CPU feature this one lacks,
 `check` says so, and you compile the spec again for this one. lengua's line names the code, it
 doesn't protect it: anyone can build main.s outside lengua, so its guarantees hold only for
-programs that `run` runs after `check`. lengua supports one target so far, Linux x86-64; adding a
-CPU or OS is set out in [porting.md](references/porting.md).
+programs that `run` runs after `check`. lengua supports two targets so far, Linux on x86-64 and on
+AArch64, the same lengua on each; AArch64 code covers the template's kind of program for now
+(arguments, whole numbers, text, standard input and files), as its reference says. Adding a CPU
+or OS is set out in [porting.md](references/porting.md).
 
 ## Making it faster
 

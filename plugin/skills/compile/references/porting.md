@@ -61,12 +61,25 @@ short name and the syscall-number table). Each new target needs:
    which reads the CPU's registers); macOS and Windows each need their own confinement. macOS
    also needs the binary code-signed (ad-hoc via `ld64.lld`) before it will run.
 
+## One product on every target
+
+A port adds a CPU's or an OS's means, never a different lengua. The same spec means the same on
+every target: the same skills, tools, reports and messages; the same rules, memory safety, tests
+and proof engine; and the same limits on every OS. The capabilities a spec can name, and what the
+sandbox allows of each, are one definition that each OS enforces with its own means; where an OS
+can't provide or enforce part of it, that part is cut to what every OS can do, on Linux too. Only
+the hardware may differ: its instructions, its vectors' width, its speed. A target is done when
+it covers what x86-64 covers, each item with its own hardware's means.
+
 ## Order of targets
 
-- **Linux ARM64 is nearest:** the same OS, so the same kinds of system calls, the same sandbox
-  (seccomp, Landlock) and ELF; but its decoder, prover model, dialect and triple (2, 3, 4) are new,
-  and the OS edge (5) and the supervisor's registers (6) change in detail. Tested under QEMU on an
-  x86-64 Linux computer for everything but the sandbox's exact filter and supplies, and on an
-  ARM64 computer or CI runner for those.
+- **Linux ARM64 is nearest, and under way:** the same OS, so the same kinds of system calls, the
+  same sandbox (seccomp, Landlock) and ELF; but its decoder, prover model, dialect and triple
+  (2, 3, 4) are new, and the OS edge (5) and the supervisor's registers (6) change in detail.
+  Tested under QEMU on an x86-64 Linux computer for everything but the sandbox's exact filter and
+  supplies, and on an ARM64 computer or CI runner for those. Checked, tested and proven, as
+  x86-64's code is, for the template's kind of program: arguments, whole numbers, text, standard
+  input of any length through `fill`, and files and folders ([its reference](linux-aarch64.md)).
+  Vectors, floating point, threads, servers, the terminal and the crypto instructions come next.
 - **macOS (ARM64, x86-64)** and **Windows (x86-64, ARM64)** need all six, the OS edge and the
   sandbox most of all, because they forbid the direct syscalls lengua's Linux programs use.
