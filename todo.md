@@ -4,7 +4,8 @@ In order. Each item starts when the one before it is done.
 
 ## 1. Perfect lengua for this target (x86-64 Linux)
 
-Marked done on 2026-10-31, then reopened the same day. Round 7: word counts proven for every
+Done on 2026-11-01: every part of the finish line set below is met (first marked done on
+2026-10-31, then reopened the same day). Round 7: word counts proven for every
 length, hash tables with word tallies, and checked jump tables (dialect 4) are done; the fastest
 word count proven for every length is deferred (below). Round 8 told the portability story straight
 and wrote the porting contract (DESIGN's "Porting a target"). The direction, decided 2026-10-31:
@@ -93,8 +94,8 @@ research, and x86-64 Linux is done when:
   solver question; the proof keeps its time within one long shape too. Masking every step costs
   the `wc` a third more CPU time than its old, unprovable shape at the same wall time, still
   ahead of C, C++ and Rust (BENCHMARKS.md).
-- Then: the gate, the goldens and the benchmark current, and the skill and DESIGN saying which
-  shapes are proven for every length.
+- Done 2026-11-01 (`0334548`, CI green): the gate, the goldens and the benchmark current, and
+  the skill and DESIGN saying which shapes are proven for every length.
 
 Past the line, so not blocking the next target: programs of these shapes are checked, tested and
 proven up to a length, and each proof line says so.
