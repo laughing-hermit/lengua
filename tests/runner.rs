@@ -629,6 +629,185 @@ async fn run_on(executable: &Path, syscalls: &[Allowed], net: &Net) -> Run {
     run(launcher(), job, Limits::default()).await.expect("run")
 }
 
+/// Opens the file `f` until it can't, and exits with how many it opened, modulo 256.
+fn opens_until_it_cant() -> String {
+    program(
+        "    xor r12d, r12d\n1:\n    mov eax, 257\n    mov edi, -100\n    \
+         lea rsi, [rip + name]\n    xor edx, edx\n    xor r10d, r10d\n    syscall\n    \
+         test rax, rax\n    js 2f\n    inc r12\n    cmp r12, 10000\n    jb 1b\n2:\n    \
+         mov rdi, r12\n    mov eax, 60\n    syscall",
+        ".data\nname:\n    .asciz \"f\"",
+    )
+}
+
+#[tokio::test]
+async fn a_program_holds_as_many_open_files_on_every_system() {
+    let folder = tempfile::tempdir().expect("temporary folder");
+    let opener = build(folder.path(), "opener", &opens_until_it_cant()).await;
+    let files = BTreeMap::from([("f".to_owned(), "x".to_owned())]);
+    let run = run_with(
+        &opener,
+        &[],
+        b"",
+        &files,
+        &file_syscalls(),
+        Limits::default(),
+    )
+    .await;
+    // lengua's limit, less standard input, output and error.
+    let opened = lengua::runner::OPEN_FILES - 3;
+    assert_eq!(
+        run.end,
+        End::Exited(i32::try_from(opened % 256).expect("a byte")),
+        "{run:?}"
+    );
+}
+
+/// The calls of a spec that uses files, all of them.
+fn all_file_syscalls() -> Vec<Allowed> {
+    Profile::LinuxX86_64.allowed_syscalls(
+        &[
+            Syscall::Read,
+            Syscall::Write,
+            Syscall::Openat,
+            Syscall::Close,
+            Syscall::Getdents64,
+            Syscall::Mkdirat,
+            Syscall::Unlinkat,
+            Syscall::Renameat,
+            Syscall::Exit,
+        ],
+        false,
+    )
+}
+
+/// Makes the file `name` (`O_WRONLY | O_CREAT`) and exits with the error number it got, or 0.
+fn makes(name: &str) -> String {
+    program(
+        "    mov eax, 257\n    mov edi, -100\n    lea rsi, [rip + name]\n    mov edx, 0x41\n    \
+         mov r10d, 420\n    syscall\n    test rax, rax\n    jns 1f\n    neg eax\n    \
+         mov edi, eax\n    mov eax, 60\n    syscall\n1:\n    xor edi, edi\n    mov eax, 60\n    \
+         syscall",
+        &format!(".data\nname:\n    .asciz \"{name}\""),
+    )
+}
+
+#[tokio::test]
+async fn a_program_gets_only_names_every_system_takes() {
+    let folder = tempfile::tempdir().expect("temporary folder");
+    let calls = all_file_syscalls();
+    let none = BTreeMap::new();
+    for (name, errno) in [
+        ("notes.txt", 0),
+        ("CON.txt", 22),
+        ("a:b", 22),
+        ("ends.", 22),
+        ("\\303(", 84),
+    ] {
+        let maker = build(folder.path(), "maker", &makes(name)).await;
+        let run = run_with(&maker, &[], b"", &none, &calls, Limits::default()).await;
+        assert_eq!(run.end, End::Exited(errno), "{name}: {run:?}");
+        if errno == 0 {
+            assert!(
+                run.files
+                    .as_ref()
+                    .is_ok_and(|files| files.contains_key(name))
+            );
+        } else {
+            assert!(
+                run.files.as_ref().is_ok_and(BTreeMap::is_empty),
+                "{name}: nothing made, {run:?}"
+            );
+        }
+    }
+    // A new name that differs only in case from one in its folder is one file on macOS and
+    // Windows: refused.
+    let maker = build(folder.path(), "maker", &makes("Readme.txt")).await;
+    let readme = BTreeMap::from([("README.txt".to_owned(), "hi".to_owned())]);
+    let run = run_with(&maker, &[], b"", &readme, &calls, Limits::default()).await;
+    assert_eq!(run.end, End::Exited(17), "EEXIST: {run:?}");
+}
+
+#[tokio::test]
+async fn an_open_file_is_neither_renamed_nor_removed() {
+    let folder = tempfile::tempdir().expect("temporary folder");
+    // Opens `f`, then removes it (or, with `rename`, renames it to `g`) while it's open, and
+    // exits with the error number that got, or 0.
+    let holds = |rename: bool| {
+        let second = if rename {
+            "    mov eax, 264\n    mov edi, -100\n    lea rsi, [rip + name]\n    mov edx, -100\n    \
+             lea r10, [rip + other]\n    syscall"
+        } else {
+            "    mov eax, 263\n    mov edi, -100\n    lea rsi, [rip + name]\n    xor edx, edx\n    \
+             syscall"
+        };
+        program(
+            &format!(
+                "    mov eax, 257\n    mov edi, -100\n    lea rsi, [rip + name]\n    \
+                 xor edx, edx\n    xor r10d, r10d\n    syscall\n{second}\n    test rax, rax\n    \
+                 jns 1f\n    neg eax\n    mov edi, eax\n    mov eax, 60\n    syscall\n1:\n    \
+                 xor edi, edi\n    mov eax, 60\n    syscall"
+            ),
+            ".data\nname:\n    .asciz \"f\"\nother:\n    .asciz \"g\"",
+        )
+    };
+    let files = BTreeMap::from([("f".to_owned(), "x".to_owned())]);
+    let calls = all_file_syscalls();
+    for rename in [false, true] {
+        let holder = build(folder.path(), "holder", &holds(rename)).await;
+        let run = run_with(&holder, &[], b"", &files, &calls, Limits::default()).await;
+        assert_eq!(run.end, End::Exited(16), "EBUSY, rename {rename}: {run:?}");
+        assert!(
+            run.files.as_ref().is_ok_and(|left| left.contains_key("f")),
+            "{run:?}"
+        );
+    }
+}
+
+/// Lists its folder and prints the first entry's name.
+fn lists_first() -> String {
+    program(
+        "    mov eax, 257\n    mov edi, -100\n    lea rsi, [rip + here]\n    mov edx, 0x10000\n    \
+         xor r10d, r10d\n    syscall\n    mov rdi, rax\n    mov eax, 217\n    \
+         lea rsi, [rip + buffer]\n    mov edx, 4096\n    syscall\n    \
+         lea rsi, [rip + buffer + 19]\n    xor edx, edx\n2:\n    cmp byte ptr [rsi + rdx], 0\n    \
+         je 3f\n    inc rdx\n    jmp 2b\n3:\n    mov eax, 1\n    mov edi, 1\n    syscall\n    \
+         xor edi, edi\n    mov eax, 60\n    syscall",
+        ".data\nhere:\n    .asciz \".\"\n.bss\nbuffer:\n    .zero 4096",
+    )
+}
+
+#[tokio::test]
+async fn a_tests_second_run_lists_folders_the_other_way_round() {
+    let folder = tempfile::tempdir().expect("temporary folder");
+    let lister = build(folder.path(), "lister", &lists_first()).await;
+    let files = BTreeMap::from([
+        ("a".to_owned(), "1".to_owned()),
+        ("b".to_owned(), "2".to_owned()),
+    ]);
+    let calls = all_file_syscalls();
+    let job = |reversed| Job {
+        files: &files,
+        reversed,
+        ..Job::new(&lister, &[], b"", &calls)
+    };
+    let first = run(launcher(), job(false), Limits::default())
+        .await
+        .expect("run");
+    let turned = run(launcher(), job(true), Limits::default())
+        .await
+        .expect("run");
+    assert!(first.listed && turned.listed, "{first:?} {turned:?}");
+    assert_ne!(
+        first.stdout, turned.stdout,
+        "the first entry is the last one now"
+    );
+    // A program that never lists says so.
+    let maker = build(folder.path(), "maker", &makes("x")).await;
+    let made = run_with(&maker, &[], b"", &files, &calls, Limits::default()).await;
+    assert!(!made.listed, "{made:?}");
+}
+
 #[tokio::test]
 async fn a_program_never_holds_the_network() {
     let folder = tempfile::tempdir().expect("temporary folder");

@@ -219,7 +219,9 @@ product Claude puts it at about two-thirds. What's left, most important first:
    NASA's rule against allocating after start leaves out by design. Each such service is one
    definition that every OS must be able to provide (item 3's limits).
 3. **Linux held to macOS's and Windows's limits:** item 3's audit, every item a limit to
-   establish by the strict rule (2026-11-02). The network is done (2026-11-02): no program
+   establish by the strict rule (2026-11-02), done on both Linux targets on 2026-11-02 (names,
+   lengths, arguments and environment, open files, closed pipes, open files renamed or removed,
+   listing order). The network is done (2026-11-02): no program
    connects by itself, on either Linux target; lengua makes each connection its spec names before
    the program starts and hands it over as descriptor 4, 5 and on, as it binds a server's port.
    What that leaves for later: a program gets one connection to each place its spec names, made
@@ -365,19 +367,36 @@ one needs.
   extra freedom gets checked against both OSes' documentation and, where one can't do it, cut on
   Linux too, in its tests and sandbox. By the strict rule (2026-11-02), every item below is a
   limit to establish on Linux, both CPUs, before macOS or Windows arrive; none is waived because
-  a Linux means, lengua's checks included, could keep it. To audit:
-  - file and folder names: Windows refuses `< > : " | ? * \`, control characters, a trailing dot
-    or space, and `CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9` and `LPT1` to `LPT9` with any
-    extension; macOS and Windows ignore case by default, and macOS ignores Unicode normalization,
-    so names that differ only so are one file there; names are UTF-8 on macOS and UTF-16 on
-    Windows, never just any bytes;
-  - path lengths: 260 characters on Windows unless long paths are on, 1024 bytes on macOS;
-  - arguments and the environment: Windows passes UTF-16, so both must be valid Unicode, and its
-    environment names ignore case;
-  - open files: macOS's default limit is 256;
-  - a write to a closed pipe: a signal on Linux and macOS, an error on Windows;
-  - an open file renamed or removed: Windows refuses it;
-  - the order a folder lists in: each file system has its own;
+  a Linux means, lengua's checks included, could keep it. Done on both Linux targets
+  (2026-11-02), each checked against Microsoft's and Apple's own documentation; each limit has a
+  test on both CPUs, and the means are lengua's supervisor (`src/names.rs`, `src/supervise.rs`),
+  the launcher and the spec's checks:
+  - file and folder names, done: what Windows refuses (`< > : " | ? * \`, control characters, a
+    trailing dot or space, and `CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`, `LPT1` to `LPT9` and
+    their superscript forms, with any extension) gets `EINVAL`; a name that isn't UTF-8 of
+    characters Unicode 9.0 assigned (macOS's APFS refuses the rest) gets `EILSEQ`; a new name that
+    differs only in case or Unicode normalization from one in its folder gets `EEXIST`. The
+    supervisor checks each `openat`, `mkdirat`, `unlinkat` and `renameat` in tests and real runs,
+    the prover gives the same answers (a name the input chooses is split on Windows's ASCII rules,
+    and one that may hold other characters is tested, not proven), and the spec's own test files
+    are held to the same rules. Under QEMU, which the supervisor can't follow, the names a run
+    leaves are checked afterwards. Not modeled: Windows's 8.3 short names, which a long name can
+    collide with where they're on;
+  - path lengths, done: a name past 255 bytes or a path past 1,023 (macOS's `PATH_MAX`) gets
+    `ENAMETOOLONG`; lengua's Windows programs would use NT paths, which have no 260 limit;
+  - arguments and the environment, done: Unicode only (the CLI refuses an argument that isn't);
+    the arguments take at most 32,000 characters of Windows's 32,767-character command line,
+    counted as Windows quotes them, and each variable at most 32,767; names that differ only in
+    case are one variable, so a spec or a run can't give both;
+  - open files, done: every program holds at most 4,352 at once on every target (macOS's default
+    of 256 rises to that within its `OPEN_MAX` of 10,240; enough for a server's 4,096 clients);
+  - a write to a closed pipe, done: an error (`EPIPE`) on every target, as on Windows, never a
+    signal;
+  - an open file renamed or removed, done: `EBUSY` on every target, as Windows refuses it (it
+    allows it only with every handle sharing delete, and never on FAT);
+  - the order a folder lists in, done: no system promises one, so a test whose program listed a
+    folder runs again with each listing turned round by the supervisor, and fails if its result
+    changes; listings stay tested, not proven;
   - the network, done 2026-11-02: Windows's sandbox for apps (AppContainer) can't hold a program
     to one port, blocks the local network by default, and reaches this computer's own address
     only with an administrator's exemption, so a program's own `connect`, which Linux held to the

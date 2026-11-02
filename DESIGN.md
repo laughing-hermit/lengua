@@ -205,6 +205,22 @@ spec allows:
   (a socketpair on Linux and macOS, a pipe or socket handle on Windows), and none of them must
   police the program's own connections: the strict rule of one product on every target
   (below);
+- a program that uses files is held to the names every system takes, by lengua's supervisor,
+  which stops each `openat`, `mkdirat`, `unlinkat` and `renameat` and reads its name
+  (`src/names.rs`): a name Windows refuses (its characters `< > : " \ | ? *`, controls, a dot or
+  space at the end, or a device name it reserves, such as `CON` or `com1.txt`) gets `EINVAL`; one
+  that isn't UTF-8 of characters Unicode 9.0 assigned, which macOS's APFS refuses, `EILSEQ`; a
+  name past 255 bytes or a path past 1,023 (macOS's `PATH_MAX`), `ENAMETOOLONG`; a new name that
+  differs only in case or Unicode normalization from another in its folder, one file on macOS and
+  Windows, `EEXIST`; and a file renamed or removed while the program holds it open, which Windows
+  refuses, `EBUSY`. The supervisor also notes whether the program listed a folder: a test whose
+  program did runs again with each listing turned round, since no system promises an order, and
+  fails if its result changes. The prover gives the same answers for names it knows, and splits
+  a name the input chooses on Windows's ASCII rules;
+- the program holds at most 4,352 files open (one number on every target, within macOS's
+  `OPEN_MAX`); its arguments take at most 32,000 characters of Windows's command line and its
+  environment's names are unique ignoring case, or it doesn't start; and a write to a closed
+  pipe or connection returns `EPIPE` rather than raising SIGPIPE, as on Windows;
 - seccomp kills it at any system call its spec doesn't list (plus `write` and `exit`, which
   `assert_fail` may always make);
 - resource limits cap the files it writes (64 MiB in tests) and leave no core files.

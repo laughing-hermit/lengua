@@ -584,7 +584,9 @@ fn file_name_problem(name: &str) -> Option<String> {
             "`{name}` must stay inside the working folder: no `..`, `.` or empty parts"
         ));
     }
-    None
+    // Every system's names: what Windows and macOS refuse, every target refuses.
+    crate::names::broken(name.as_bytes())
+        .map(|broken| format!("{}; give it a name every system takes", broken.why))
 }
 
 /// Problems with a test's file names: bad names, too many files, or a name used both as a file
@@ -610,39 +612,31 @@ fn file_set_problems<'n>(names: impl Iterator<Item = &'n String>) -> Vec<String>
                 "`{name}` is a file, so `{inside}` can't be inside it"
             ));
         }
+        // macOS and Windows take names that differ only in case or normalization as one file.
+        if let Some(other) = names
+            .iter()
+            .find(|other| *other > name && crate::names::clashes(name, other))
+        {
+            problems.push(format!(
+                "`{name}` and `{other}` differ only in case or Unicode normalization, which \
+                 macOS and Windows take as one file; give them names that differ otherwise"
+            ));
+        }
     }
     problems
 }
 
-/// Linux refuses to start a program with an argument longer than this.
-pub const MAX_ARG_BYTES: usize = 128 * 1024;
-
-/// lengua keeps a program's arguments together under this, well inside Linux's limit.
-pub const MAX_ARGS_BYTES: usize = 1024 * 1024;
-
-/// Why Linux couldn't start a run with these arguments, if it couldn't.
+/// Why not every system could start a run with these arguments, if it couldn't: they take more
+/// of Windows's command line than lengua gives them (`runner::MAX_ARGUMENTS`), on every system.
 fn oversized_args(case: &Case) -> Option<String> {
-    let total: usize = case.args.iter().map(String::len).sum();
-    if let Some((index, arg)) = case
-        .args
-        .iter()
-        .enumerate()
-        .find(|(_, arg)| arg.len() > MAX_ARG_BYTES)
-    {
-        return Some(format!(
-            "with {}, argument {} is {} bytes, but an argument holds at most {MAX_ARG_BYTES} \
-             bytes on this computer; narrow the range, or pass long text on standard input or in \
-             a file",
-            describe_inputs(&case.inputs),
-            index + 1,
-            arg.len()
-        ));
-    }
-    (total > MAX_ARGS_BYTES).then(|| {
+    let taken = crate::runner::arguments_length(&case.args);
+    (taken > crate::runner::MAX_ARGUMENTS).then(|| {
         format!(
-            "with {}, the arguments total {total} bytes, over lengua's limit of {MAX_ARGS_BYTES}; \
-             pass long text on standard input",
-            describe_inputs(&case.inputs)
+            "with {}, the arguments take {taken} characters of a command line, over the {} \
+             lengua gives them on every system, Windows's limit; narrow the range, or pass long \
+             text on standard input or in a file",
+            describe_inputs(&case.inputs),
+            crate::runner::MAX_ARGUMENTS
         )
     })
 }
@@ -1670,6 +1664,19 @@ impl<'a> Checker<'a> {
                      `the environment`; add it there, or drop the variables"
                 ),
             );
+        }
+        // Windows takes names that differ only in case as one variable, so every system does.
+        let mut seen = BTreeMap::new();
+        for variable in env.keys() {
+            if let Some(other) = seen.insert(variable.to_uppercase(), variable) {
+                self.problem(
+                    Some(line),
+                    format!(
+                        "{name} sets `{other}` and `{variable}`, which differ only in case: Windows \
+                         takes them as one variable, so lengua does on every system; keep one"
+                    ),
+                );
+            }
         }
         for variable in env.keys() {
             let mut characters = variable.chars();
@@ -3152,6 +3159,16 @@ Prints the hour of the day in UTC, from `0` to `23`, for a reader numbered from 
             &edit(&greet, "variable `HOME`", "variable `2HOME`"),
             "a name holds only letters, digits and `_`",
         );
+        // Windows takes names that differ only in case as one variable.
+        assert_problem(
+            &edit(
+                &greet,
+                "- Given the environment variable `HOME` set to `/home/ada`",
+                "- Given the environment variable `HOME` set to `/home/ada`\n- And the \
+                 environment variable `home` set to `/home/bob`",
+            ),
+            "differ only in case",
+        );
     }
 
     #[test]
@@ -3401,7 +3418,7 @@ Halves a price between {purpose}.
     }
 
     #[test]
-    fn arguments_stay_within_this_computers_limits() {
+    fn arguments_stay_within_every_systems_limits() {
         let spec = |generator: &str| {
             format!(
                 "---
@@ -3433,10 +3450,14 @@ Prints the length of a word of `1` to `200000` letters.
         let problems = tests_of(&spec(r#"string(1, 200000, "abc")"#))
             .expect_err("a 200000-byte argument was accepted");
         assert!(
-            problems.iter().any(|problem| problem
-                .contains("an argument holds at most 131072 bytes on this computer")),
+            problems
+                .iter()
+                .any(|problem| problem.contains("over the 32000 lengua gives them on every system")),
             "{problems:#?}"
         );
+        // Within Windows's command line, every system takes it.
+        tests_of(&spec(r#"string(1, 30000, "abc")"#).replace("`200000`", "`30000`"))
+            .expect("a 30000-character argument fits");
         assert!(
             problems.iter().all(|problem| problem.len() < 2000),
             "messages shorten long values: {problems:#?}"

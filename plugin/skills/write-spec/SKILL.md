@@ -100,7 +100,13 @@ by one concrete example in its steps, and its generated tests try that rule with
 - **Files:** a program works only on files in the folder it runs in, named relative to it; it
   can't reach other files at all. Within it, it can read, write, list folders, read a file's
   size, make and remove folders, and delete and rename files. Purpose states the largest file it reads in backticks, like any
-  other range, and what happens when a file is missing.
+  other range, and what happens when a file is missing. Names are held to what every system
+  takes, so a test's files must be too: no `< > : " \ | ? *`, no name ending in a dot or a
+  space, none of Windows's device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`, `LPT1` to
+  `LPT9`, with any extension), at most 255 bytes, and never two names in one folder that differ
+  only in case. A program can't rename or remove a file it holds open, and its result must not
+  depend on the order a folder lists in, which differs between file systems: sort what it
+  lists.
 - **What it uses:** under `# Constraints`, ``- Uses: …`` names what the program needs beyond
   writing its output and exiting, from `standard input`, `files`, `the clock`, `random bytes` and
   `the environment` (its environment variables: only those a test, or the user's run, gives it),

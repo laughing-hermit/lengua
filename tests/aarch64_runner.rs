@@ -215,6 +215,96 @@ async fn connections_are_handed_over_from_descriptor_4() {
     assert_eq!(ended.end, End::Exited(32), "{ended:?}");
 }
 
+/// AArch64: makes `CON.txt`, which Windows reserves, and exits with the error it got; 99 if x1,
+/// which the supervisor makes null to refuse the call, didn't come back as it was.
+const AARCH64_MAKES_A_DEVICE_NAME: &str = "\
+.arch armv8-a
+.text
+.globl _start
+_start:
+    adrp x19, name
+    add x19, x19, :lo12:name
+    mov x0, #-100
+    mov x1, x19
+    mov x2, #0x41
+    mov x3, #420
+    mov x8, #56
+    svc #0
+    cmp x1, x19
+    b.ne 2f
+    tbz x0, #63, 1f
+    neg x0, x0
+    mov x8, #93
+    svc #0
+1:
+    mov x0, #0
+    mov x8, #93
+    svc #0
+2:
+    mov x0, #99
+    mov x8, #93
+    svc #0
+.data
+name:
+    .asciz \"CON.txt\"
+";
+
+/// AArch64: opens `f`, removes it while it's open, and exits with the error that got, or 0.
+const AARCH64_REMOVES_AN_OPEN_FILE: &str = "\
+.arch armv8-a
+.text
+.globl _start
+_start:
+    mov x0, #-100
+    adrp x1, name
+    add x1, x1, :lo12:name
+    mov x2, #0
+    mov x3, #0
+    mov x8, #56
+    svc #0
+    mov x0, #-100
+    adrp x1, name
+    add x1, x1, :lo12:name
+    mov x2, #0
+    mov x8, #35
+    svc #0
+    tbz x0, #63, 1f
+    neg x0, x0
+    mov x8, #93
+    svc #0
+1:
+    mov x0, #0
+    mov x8, #93
+    svc #0
+.data
+name:
+    .asciz \"f\"
+";
+
+#[tokio::test]
+async fn names_are_held_to_every_system_on_arm64_too() {
+    let folder = tempfile::tempdir().expect("a folder");
+    let calls = syscalls(&[
+        Syscall::Openat,
+        Syscall::Close,
+        Syscall::Unlinkat,
+        Syscall::Write,
+        Syscall::Exit,
+    ]);
+    let device = build(folder.path(), "device", AARCH64_MAKES_A_DEVICE_NAME).await;
+    let job = Job::new(&device, &[], b"", &calls);
+    let refused = run(launcher(), job, Limits::default()).await.expect("run");
+    assert_eq!(refused.end, End::Exited(22), "EINVAL, x1 kept: {refused:?}");
+    let remover = build(folder.path(), "remover", AARCH64_REMOVES_AN_OPEN_FILE).await;
+    let files = std::collections::BTreeMap::from([("f".to_owned(), "x".to_owned())]);
+    let job = Job {
+        files: &files,
+        ..Job::new(&remover, &[], b"", &calls)
+    };
+    let busy = run(launcher(), job, Limits::default()).await.expect("run");
+    assert_eq!(busy.end, End::Exited(16), "EBUSY: {busy:?}");
+}
+
 #[tokio::test]
 async fn tests_supply_the_random_bytes_and_the_clock() {
     let folder = tempfile::tempdir().expect("temporary folder");

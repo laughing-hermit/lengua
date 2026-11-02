@@ -674,6 +674,11 @@ const MAX_ANSWER: u64 = 8 * 1024 * 1024;
 /// Runs one test, with the test's own server or client when it has one, and says what went
 /// wrong, if anything. `delivery` cuts what the test's server and client send into pieces, as a
 /// network may deliver them; `emulated` runs the program as QEMU's user mode runs it here.
+///
+/// A run that listed a folder runs again with each listing turned round: no system promises an
+/// order, each file system has its own, so a result that changes with the order is wrong on
+/// some system, and the test fails. Under QEMU, which the supervisor can't follow, the names the
+/// program left are held to every system's afterwards instead.
 #[allow(clippy::too_many_arguments)]
 async fn check_one(
     launcher: &Path,
@@ -684,6 +689,55 @@ async fn check_one(
     delivery: Delivery,
     assertions: &BTreeMap<i64, usize>,
     emulated: bool,
+) -> io::Result<(Run, Option<String>)> {
+    let (run, mut problem) = check_one_way(
+        launcher, program, test, syscalls, network, delivery, assertions, emulated, false,
+    )
+    .await?;
+    if emulated && problem.is_none() {
+        problem = left_names_problem(&run);
+    }
+    if problem.is_none() && run.listed {
+        let (_, turned) = check_one_way(
+            launcher, program, test, syscalls, network, delivery, assertions, emulated, true,
+        )
+        .await?;
+        if let Some(turned) = turned {
+            problem = Some(format!(
+                "with its folder's entries listed the other way round, {turned}: each file \
+                 system lists a folder in an order of its own, so a result must not depend on \
+                 it; sort the entries first"
+            ));
+        }
+    }
+    Ok((run, problem))
+}
+
+/// The names a program left that some system refuses, where nothing held its calls to them.
+fn left_names_problem(run: &Run) -> Option<String> {
+    let files = run.files.as_ref().ok()?;
+    files.keys().chain(run.folders.iter()).find_map(|name| {
+        crate::names::broken(name.as_bytes()).map(|broken| {
+            format!(
+                "it left {name}, a name not every system takes: {}",
+                broken.why
+            )
+        })
+    })
+}
+
+/// [`check_one`], once: with each folder listing turned round when `reversed`.
+#[allow(clippy::too_many_arguments)]
+async fn check_one_way(
+    launcher: &Path,
+    program: &Path,
+    test: &Test<'_>,
+    syscalls: &[Allowed],
+    network: &Network,
+    delivery: Delivery,
+    assertions: &BTreeMap<i64, usize>,
+    emulated: bool,
+    reversed: bool,
 ) -> io::Result<(Run, Option<String>)> {
     let supply = crate::supply::Supply::parse(test.random, test.clock).unwrap_or_default();
     let args = test.args.to_vec();
@@ -718,6 +772,7 @@ async fn check_one(
         net: Some(&net),
         stdin_pieces: &stdin_pieces,
         emulated,
+        reversed,
         ..Job::new(program, &args, stdin.as_bytes(), syscalls)
     };
     let now = crate::expect::now();
@@ -1487,6 +1542,7 @@ mod tests {
             supplied: None,
             random_asked: None,
             connections: Vec::new(),
+            listed: false,
         }
     }
 

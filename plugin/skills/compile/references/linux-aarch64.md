@@ -100,6 +100,16 @@ errno), so test it right away with `tbnz x0, #63, error`.
 | `ioctl` | 29 | `x0` 0, `x1` `TCGETS` (0x5401) or `TCSETS` (0x5402), `x2` 36 bytes of the terminal's mode | 0, or an error when standard input isn't a terminal |
 | `exit` | 93 | `w0` status | doesn't return |
 
+Names: lengua holds every name a program gives `openat`, `mkdirat`, `unlinkat` and `renameat` to
+what every system takes, so a name Windows refuses (`< > : " \ | ? *`, a control character, a
+dot or space at the end, `CON`, `NUL.txt`, `com1` and the other device names) returns `EINVAL`
+(-22); one that isn't UTF-8 of characters Unicode 9.0 assigned, `EILSEQ` (-84); one past 255
+bytes or a path past 1,023, `ENAMETOOLONG` (-36); a new name that differs only in case from one
+in its folder, `EEXIST` (-17); and renaming or removing a file the program holds open, `EBUSY`
+(-16). A program holds at most 4,352 files open. A folder lists in no set order, and a test
+runs a program that lists one again with the order turned round, so sort entries before
+acting on their order.
+
 AArch64 has no `poll`: `ppoll` is the wait, with x86-64's `poll` table. Its time is a pointer, so
 "until one is ready" is `x2` 0, not -1, and the kernel writes the time left back into the 16
 bytes it read: keep them in `.bss` and set them again before each wait, as

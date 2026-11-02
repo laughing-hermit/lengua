@@ -15,6 +15,7 @@ pub mod hash;
 pub mod header;
 pub mod isa;
 pub mod lock;
+pub mod names;
 pub mod platform;
 pub mod prove;
 pub mod runner;

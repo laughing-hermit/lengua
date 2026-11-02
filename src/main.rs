@@ -45,7 +45,19 @@ fn main() -> ExitCode {
         .with_ansi(false)
         .init();
 
-    let data_dir = match parse_args(std::env::args().skip(1)) {
+    // Every system passes Unicode arguments, as Windows's UTF-16 does: lengua takes no others.
+    let arguments: Result<Vec<String>, _> = std::env::args_os()
+        .skip(1)
+        .map(std::ffi::OsString::into_string)
+        .collect();
+    let Ok(arguments) = arguments else {
+        eprintln!(
+            "lengua-mcp: an argument isn't Unicode text, which not every system can pass on, so \
+             lengua takes none"
+        );
+        return ExitCode::from(REFUSED);
+    };
+    let data_dir = match parse_args(arguments.into_iter()) {
         Ok(Command::Serve(data_dir)) => data_dir,
         Ok(Command::Run(data_dir, request)) => return run_from_shell(&data_dir, &request),
         Ok(Command::Version) => {

@@ -1052,6 +1052,47 @@ impl State {
             .collect()
     }
 
+    /// Whether some system would refuse `name` for a file call, as lengua's supervisor does in a
+    /// run (`crate::names`): the error number, when it would. A new name (`creates`) may not
+    /// differ only in case or normalization from another in its folder, and a name a call
+    /// renames or removes (`removes`) may not be open.
+    #[must_use]
+    pub fn refused(&self, name: &str, creates: bool, removes: bool) -> Option<i64> {
+        if let Some(broken) = crate::names::broken(name.as_bytes()) {
+            return Some(broken.errno);
+        }
+        if creates {
+            let (folder, last) = name
+                .rsplit_once('/')
+                .map_or(("", name), |(folder, last)| (folder, last));
+            let inside = if folder.is_empty() {
+                String::new()
+            } else {
+                format!("{folder}/")
+            };
+            let clash = self
+                .files
+                .keys()
+                .chain(self.written.keys())
+                .chain(self.folders_before.iter())
+                .chain(&self.made)
+                .filter_map(|other| other.strip_prefix(&inside))
+                .filter(|rest| !rest.contains('/'))
+                .any(|rest| {
+                    let full = format!("{inside}{rest}");
+                    (self.file(&full).is_some() || self.is_folder(&full))
+                        && crate::names::clashes(last, rest)
+                });
+            if clash {
+                return Some(crate::names::EEXIST);
+            }
+        }
+        if removes && self.open.values().any(|open| open.name == name) {
+            return Some(crate::names::EBUSY);
+        }
+        None
+    }
+
     /// Whether the folder holding `name` is there: the working folder, or a folder in it.
     fn parent_is_there(&self, name: &str) -> bool {
         name.rsplit_once('/')
@@ -2988,7 +3029,10 @@ impl<'a> Cpu<'a> {
         }
         let bytes = match self.name_or_choice(folder, 1, "openat")? {
             Name::Known(name) => {
-                let result = self.open_name(name, flags)?;
+                let result = match self.state.refused(&name, flags & O_CREAT != 0, false) {
+                    Some(errno) => (-errno).cast_unsigned(),
+                    None => self.open_name(name, flags)?,
+                };
                 self.state.returns(self.pool, result, self.next);
                 return Ok(Step::Next);
             }
@@ -3180,18 +3224,46 @@ impl<'a> Cpu<'a> {
                 "a file name the input chooses that may leave the working folder",
             ));
         }
-        outcomes.push((none, None));
+        // Where it's none of the test's, the name is held to every system's as a run holds it:
+        // past every system's length, refused whole; Windows's ASCII rules, a split. A byte
+        // past ASCII would need UTF-8's and Unicode's rules, which only a run checks.
+        if self.pool.truth(none) != Some(false) {
+            if bytes.len() > crate::names::MAX_NAME {
+                self.state.returns(
+                    self.pool,
+                    (-crate::names::ENAMETOOLONG).cast_unsigned(),
+                    self.next,
+                );
+                return Ok(Step::Next);
+            }
+            if bytes.iter().any(|byte| self.pool.range(*byte).1 >= 0x80) {
+                return Err(unsupported(
+                    "a file name the input chooses that may hold characters past ASCII, which \
+                     lengua's naming rules check when it runs",
+                ));
+            }
+        }
+        let broken = self.breaks_windows_rules(bytes);
+        let fine = self.pool.bool_not(broken);
+        let missing = self.pool.bool_and(none, fine);
+        let refused = self.pool.bool_and(none, broken);
+        outcomes.push((missing, None));
         let original = self.state.clone();
         let next = self.next;
         let mut choices = Vec::new();
-        for (condition, name) in outcomes {
+        for (condition, name) in outcomes
+            .into_iter()
+            .map(|(condition, name)| (condition, name.map(Ok)))
+            .chain([(refused, Some(Err(crate::names::EINVAL)))])
+        {
             if self.pool.truth(condition) == Some(false) {
                 continue;
             }
             let mut outcome = original.clone();
             std::mem::swap(self.state, &mut outcome);
             let opened = match name {
-                Some(name) => self.open_name(name, flags),
+                Some(Ok(name)) => self.open_name(name, flags),
+                Some(Err(errno)) => Ok((-errno).cast_unsigned()),
                 None if flags & O_ACCMODE == 0 => Ok((-ENOENT).cast_unsigned()),
                 None => Err(unsupported("making a file the input names")),
             };
@@ -3205,6 +3277,70 @@ impl<'a> Cpu<'a> {
             choices.push((condition, outcome));
         }
         Ok(Step::Choose(choices))
+    }
+
+    /// Whether a name of these ASCII bytes breaks one of Windows's rules (`crate::names`): a
+    /// control character or one of `< > : " \ | ? *`, a dot or space at the end, or a device
+    /// name Windows reserves, with any extension, in any case.
+    fn breaks_windows_rules(&mut self, bytes: &[Term]) -> Term {
+        let mut broken = Vec::new();
+        let space = self.pool.bv(8, 0x20);
+        for byte in bytes {
+            broken.push(self.pool.ult(*byte, space));
+            for refused in *b"<>:\"\\|?*" {
+                let value = self.pool.bv(8, u128::from(refused));
+                broken.push(self.pool.eq(*byte, value));
+            }
+        }
+        if let Some(last) = bytes.last() {
+            for ending in *b". " {
+                let value = self.pool.bv(8, u128::from(ending));
+                broken.push(self.pool.eq(*last, value));
+            }
+        }
+        // Whether the bytes from `at` spell `word` in any case.
+        let spells = |pool: &mut Pool, at: usize, word: &[u8]| -> Term {
+            let mut letters = Vec::new();
+            for (offset, wanted) in word.iter().enumerate() {
+                let byte = bytes[at + offset];
+                let upper = pool.bv(8, u128::from(*wanted));
+                let lower = pool.bv(8, u128::from(wanted.to_ascii_lowercase()));
+                let as_upper = pool.eq(byte, upper);
+                let as_lower = pool.eq(byte, lower);
+                letters.push(pool.bool_or(as_upper, as_lower));
+            }
+            pool.all(&letters)
+        };
+        // A stem of `stem` letters, alone or before a dot.
+        let ends_stem = |pool: &mut Pool, stem: usize| -> Option<Term> {
+            match bytes.len() {
+                length if length == stem => Some(pool.boolean(true)),
+                length if length > stem => {
+                    let dot = pool.bv(8, u128::from(b'.'));
+                    Some(pool.eq(bytes[stem], dot))
+                }
+                _ => None,
+            }
+        };
+        if let Some(ended) = ends_stem(self.pool, 3) {
+            for device in [b"CON", b"PRN", b"AUX", b"NUL"] {
+                let named = spells(self.pool, 0, device);
+                broken.push(self.pool.bool_and(named, ended));
+            }
+        }
+        if let Some(ended) = ends_stem(self.pool, 4) {
+            let one = self.pool.bv(8, u128::from(b'1'));
+            let nine = self.pool.bv(8, u128::from(b'9'));
+            let low = self.pool.ule(one, bytes[3]);
+            let high = self.pool.ule(bytes[3], nine);
+            let digit = self.pool.bool_and(low, high);
+            for device in [b"COM", b"LPT"] {
+                let named = spells(self.pool, 0, device);
+                let numbered = self.pool.bool_and(named, digit);
+                broken.push(self.pool.bool_and(numbered, ended));
+            }
+        }
+        self.pool.any(&broken)
     }
 
     /// `fstat(fd, details)`: an open file's kind and size, the file's own; the kernel's other
@@ -3598,19 +3734,33 @@ impl<'a> Cpu<'a> {
                     "listing a folder, whose entries the kernel gives in an order of its own",
                 ));
             }
+            // Each name held to every system's, as lengua's supervisor holds it in a run.
             Some(Call::Mkdirat) => {
                 let name = self.name_at(rdi, 1, "mkdirat")?;
-                self.make_folder(name)
+                match self.state.refused(&name, true, false) {
+                    Some(errno) => (-errno).cast_unsigned(),
+                    None => self.make_folder(name),
+                }
             }
             Some(Call::Unlinkat) => {
                 let name = self.name_at(rdi, 1, "unlinkat")?;
                 let flags = self.constant(rdx)? & 0xffff_ffff;
-                self.remove(name, flags)?
+                match self.state.refused(&name, false, true) {
+                    Some(errno) => (-errno).cast_unsigned(),
+                    None => self.remove(name, flags)?,
+                }
             }
             Some(Call::Renameat) => {
                 let from = self.name_at(rdi, 1, "renameat")?;
                 let to = self.name_at(rdx, 3, "renameat")?;
-                self.rename(from, to)?
+                let refused = self
+                    .state
+                    .refused(&from, false, true)
+                    .or_else(|| self.state.refused(&to, true, true));
+                match refused {
+                    Some(errno) => (-errno).cast_unsigned(),
+                    None => self.rename(from, to)?,
+                }
             }
             // The test's readings, as the supervisor gives them, the last one repeating.
             Some(Call::ClockGettime) if !self.state.clock.is_empty() => {

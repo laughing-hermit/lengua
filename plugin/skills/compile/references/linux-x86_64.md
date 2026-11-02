@@ -44,6 +44,16 @@ File descriptors 0, 1 and 2 are standard input, output and error. `openat` flags
 is 420 in decimal. `write` and `read` may move fewer bytes than asked, so loop until done, as the
 template's `write_all` does.
 
+Names: lengua holds every name a program gives `openat`, `mkdirat`, `unlinkat` and `renameat` to
+what every system takes, so a name Windows refuses (`< > : " \ | ? *`, a control character, a
+dot or space at the end, `CON`, `NUL.txt`, `com1` and the other device names) returns `EINVAL`
+(-22); one that isn't UTF-8 of characters Unicode 9.0 assigned, `EILSEQ` (-84); one past 255
+bytes or a path past 1,023, `ENAMETOOLONG` (-36); a new name that differs only in case from one
+in its folder, `EEXIST` (-17); and renaming or removing a file the program holds open, `EBUSY`
+(-16). A program holds at most 4,352 files open. A folder lists in no set order, and a test
+runs a program that lists one again with the order turned round, so sort entries before
+acting on their order.
+
 The network: a program never connects or binds. lengua makes each connection its spec names
 before the program starts and hands it over, the first `- Network: connects to …` place on file
 descriptor 4, the next on 5, and so on (`.equ CONNECTION, 4`); a server gets its listening socket

@@ -7,9 +7,17 @@
 //! Bytes asked for past the end of the supply are zeros, so a program may draw in batches of any
 //! size: only the bytes it uses decide its output. The last clock reading repeats.
 //!
-//! It reads the launcher's process id and the supply on standard input, says
-//! `attached` once it traces the launcher, and when the program ends says `ok` and how many
-//! random bytes the program asked for, or what went wrong.
+//! For a program that uses files it also holds each name a call is given to what every system
+//! takes (`crate::names`): a name some system refuses, or a new name that differs only in case
+//! or normalization from one in its folder, gets the same error on every system, and so does a
+//! file renamed or removed while the program holds it open, which Windows refuses. It notes
+//! whether the program listed a folder, and on a test's second run turns each listing round, so
+//! a result that depends on the order a file system lists in is found.
+//!
+//! It reads the launcher's process id, its mode (`plain`, `files` or `files reversed`) and the
+//! supply on standard input, says
+//! `attached` once it traces the launcher, and when the program ends says `ok`, how many random
+//! bytes the program asked for and whether it listed a folder (1 or 0), or what went wrong.
 
 use std::io::Write as _;
 use std::process::ExitCode;
@@ -49,11 +57,13 @@ pub fn supervise() -> ExitCode {
 mod traced {
     use std::collections::HashMap;
     use std::io::{IoSlice, Read as _};
+    use std::os::unix::fs::MetadataExt as _;
+    use std::path::{Path, PathBuf};
     use std::process::ExitCode;
 
     use nix::errno::Errno;
     use nix::sys::ptrace::{self, Event, Options};
-    use nix::sys::uio::{RemoteIoVec, process_vm_writev};
+    use nix::sys::uio::{RemoteIoVec, process_vm_readv, process_vm_writev};
     use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
     use nix::unistd::Pid;
 
@@ -75,9 +85,19 @@ mod traced {
                 let pid = pid
                     .parse()
                     .map_err(|_| format!("{pid:?} isn't a process id"))?;
-                Ok((Pid::from_raw(pid), Supply::decode(rest)?))
+                let (mode, supply) = rest.split_once('\n').ok_or("no mode")?;
+                let files = match mode {
+                    "plain" => None,
+                    "files" => Some(FileRules::default()),
+                    "files reversed" => Some(FileRules {
+                        reversed: true,
+                        listed: false,
+                    }),
+                    other => return Err(format!("{other:?} isn't a mode")),
+                };
+                Ok((Pid::from_raw(pid), files, Supply::decode(supply)?))
             });
-        let (leader, supply) = match parsed {
+        let (leader, files, supply) = match parsed {
             Ok(parsed) => parsed,
             Err(problem) => {
                 say(&format!("error: {problem}"));
@@ -101,6 +121,7 @@ mod traced {
         say("attached");
         let mut supervisor = Supervisor {
             leader,
+            files,
             supply,
             random_used: 0,
             readings_used: 0,
@@ -113,15 +134,33 @@ mod traced {
 
     struct Supervisor {
         leader: Pid,
+        /// For a program that uses files: what it holds their names to.
+        files: Option<FileRules>,
         supply: Supply,
         /// Random bytes the program has asked for, supplied or past the supply.
         random_used: usize,
         readings_used: usize,
         /// Whether the launcher has become the program: its own calls before then run for real.
         started: bool,
-        /// The answers to land at their calls' exits, by the task making each call, with its
-        /// registers as the program left them.
-        landing: HashMap<Pid, (i64, cpu::Registers)>,
+        /// What to do at each call's exit, by the task making the call.
+        landing: HashMap<Pid, Landing>,
+    }
+
+    /// What the supervisor does for a program's files.
+    #[derive(Debug, Default)]
+    struct FileRules {
+        /// Whether it turns each folder listing round, for a test's second run.
+        reversed: bool,
+        /// Whether the program has listed a folder.
+        listed: bool,
+    }
+
+    /// What the supervisor does at a call's exit.
+    enum Landing {
+        /// Puts the answer in the result register, the registers as the program left them.
+        Answer(i64, Box<cpu::Registers>),
+        /// Turns round the entries `getdents64` wrote into the buffer at this address.
+        Reverse(u64),
     }
 
     /// How a call the supervisor answers is kept from doing anything in the kernel, where the CPU
@@ -132,6 +171,9 @@ mod traced {
         ZeroCount,
         /// A clock that doesn't exist, for `clock_gettime` and `clock_nanosleep`.
         MissingClock,
+        /// No path at all, for a call on a name lengua refuses: the kernel answers `EFAULT` at
+        /// once, and the refusal lands.
+        NullPath,
     }
 
     /// How the stopped task goes on.
@@ -168,8 +210,15 @@ mod traced {
                     }
                     // A call's exit, where its answer lands.
                     WaitStatus::PtraceSyscall(task) => {
-                        if let Some((result, left)) = self.landing.remove(&task) {
-                            cpu::land(task, result, &left);
+                        match self.landing.remove(&task) {
+                            Some(Landing::Answer(result, left)) => cpu::land(task, result, &left),
+                            Some(Landing::Reverse(buffer)) => {
+                                if let Some(filled) = cpu::result(task).filter(|filled| *filled > 0)
+                                {
+                                    reverse_entries(task, buffer, filled);
+                                }
+                            }
+                            None => {}
                         }
                         let _ = ptrace::cont(task, None);
                     }
@@ -191,7 +240,8 @@ mod traced {
                     _ => {}
                 }
             }
-            format!("ok {}", self.random_used)
+            let listed = self.files.as_ref().is_some_and(|files| files.listed);
+            format!("ok {} {}", self.random_used, u8::from(listed))
         }
 
         /// Answers the call `task` is stopped at in place of the kernel, or lets the kernel make
@@ -200,8 +250,40 @@ mod traced {
             let Ok(registers) = ptrace::getregs(task) else {
                 return Resume::On;
             };
-            let [first, second, third, ..] = cpu::arguments(&registers);
-            let (result, harmless) = match i64::try_from(cpu::number(&registers)) {
+            let arguments = cpu::arguments(&registers);
+            let [first, second, third, ..] = arguments;
+            let call = i64::try_from(cpu::number(&registers));
+            if let (Ok(call), Some(files)) = (call, self.files.as_mut()) {
+                if call == syscalls::GETDENTS64 {
+                    files.listed = true;
+                    if files.reversed {
+                        self.landing.insert(task, Landing::Reverse(second));
+                        return Resume::ToExit;
+                    }
+                    return Resume::On;
+                }
+                if [
+                    syscalls::OPENAT,
+                    syscalls::MKDIRAT,
+                    syscalls::UNLINKAT,
+                    syscalls::RENAMEAT,
+                ]
+                .contains(&call)
+                {
+                    let Some(errno) = check_names(task, self.leader, call, arguments) else {
+                        return Resume::On;
+                    };
+                    return match cpu::answer(task, registers, -errno, Some(Harmless::NullPath)) {
+                        Some(left) => {
+                            self.landing
+                                .insert(task, Landing::Answer(-errno, Box::new(left)));
+                            Resume::ToExit
+                        }
+                        None => Resume::On,
+                    };
+                }
+            }
+            let (result, harmless) = match call {
                 Ok(syscalls::GETRANDOM) => (
                     self.random(task, first, second, third),
                     Some(Harmless::ZeroCount),
@@ -214,7 +296,8 @@ mod traced {
             };
             match cpu::answer(task, registers, result, harmless) {
                 Some(left) => {
-                    self.landing.insert(task, (result, left));
+                    self.landing
+                        .insert(task, Landing::Answer(result, Box::new(left)));
                     Resume::ToExit
                 }
                 None => Resume::On,
@@ -266,6 +349,159 @@ mod traced {
                 Err(errno) => -(errno as i64),
             }
         }
+    }
+
+    /// The error a file call on a name lengua refuses gets, or `None` when the kernel may make
+    /// it: `openat`, `mkdirat` and `unlinkat` give a folder and a path, `renameat` two of each.
+    fn check_names(task: Pid, leader: Pid, call: i64, arguments: [u64; 6]) -> Option<i64> {
+        const O_CREAT: u64 = 0o100;
+        match call {
+            syscalls::OPENAT => check_name(
+                task,
+                leader,
+                arguments[0],
+                arguments[1],
+                arguments[2] & O_CREAT != 0,
+                false,
+            ),
+            syscalls::MKDIRAT => check_name(task, leader, arguments[0], arguments[1], true, false),
+            syscalls::UNLINKAT => check_name(task, leader, arguments[0], arguments[1], false, true),
+            syscalls::RENAMEAT => check_name(task, leader, arguments[0], arguments[1], false, true)
+                .or_else(|| check_name(task, leader, arguments[2], arguments[3], true, true)),
+            _ => None,
+        }
+    }
+
+    /// The error for the path at `address`, in the folder `folder` names: a name some system
+    /// refuses; when `creates`, a name that differs only in case or normalization from another
+    /// in its folder; when `removes`, a file the program holds open. `None` lets the kernel
+    /// decide, as it does for a path it can't read.
+    fn check_name(
+        task: Pid,
+        leader: Pid,
+        folder: u64,
+        address: u64,
+        creates: bool,
+        removes: bool,
+    ) -> Option<i64> {
+        let path = match read_path(task, address)? {
+            Some(path) => path,
+            None => return Some(crate::names::ENAMETOOLONG),
+        };
+        if let Some(broken) = crate::names::broken(&path) {
+            return Some(broken.errno);
+        }
+        let text = std::str::from_utf8(&path).ok()?;
+        let place = resolve(task, folder, text)?;
+        if creates {
+            let trimmed = text.trim_end_matches('/');
+            let name = trimmed.rsplit('/').next().unwrap_or(trimmed);
+            let within = place.parent().map(Path::to_path_buf)?;
+            if let Ok(entries) = std::fs::read_dir(within) {
+                for entry in entries.flatten() {
+                    if let Some(other) = entry.file_name().to_str()
+                        && crate::names::clashes(name, other)
+                    {
+                        return Some(crate::names::EEXIST);
+                    }
+                }
+            }
+        }
+        if removes && held_open(leader, &place) {
+            return Some(crate::names::EBUSY);
+        }
+        None
+    }
+
+    /// The path in `task`'s memory at `address`, up to its NUL: `Some(None)` when it runs past
+    /// every system's longest, `None` when it can't be read.
+    fn read_path(task: Pid, address: u64) -> Option<Option<Vec<u8>>> {
+        let base = usize::try_from(address).ok().filter(|base| *base != 0)?;
+        let mut bytes = Vec::new();
+        // A page at a time, so a path near the end of the program's memory still reads.
+        let mut at = base;
+        while bytes.len() <= crate::names::MAX_PATH {
+            let room = 4096 - at % 4096;
+            let mut chunk = vec![0_u8; room];
+            let remote = [RemoteIoVec {
+                base: at,
+                len: room,
+            }];
+            let read = process_vm_readv(task, &mut [std::io::IoSliceMut::new(&mut chunk)], &remote)
+                .ok()
+                .filter(|read| *read > 0)?;
+            if let Some(end) = chunk[..read].iter().position(|byte| *byte == 0) {
+                bytes.extend_from_slice(&chunk[..end]);
+                return Some(Some(bytes));
+            }
+            bytes.extend_from_slice(&chunk[..read]);
+            at += read;
+        }
+        Some(None)
+    }
+
+    /// Where `path` is for `task`, from the folder `folder` names: its working folder for
+    /// `AT_FDCWD`, or a folder it holds open.
+    fn resolve(task: Pid, folder: u64, path: &str) -> Option<PathBuf> {
+        if path.starts_with('/') {
+            return Some(PathBuf::from(path));
+        }
+        // The kernel reads the folder as an int.
+        let folder = (folder & 0xffff_ffff) as u32 as i32;
+        let base = if folder == -100 {
+            PathBuf::from(format!("/proc/{task}/cwd"))
+        } else {
+            PathBuf::from(format!("/proc/{task}/fd/{folder}"))
+        };
+        Some(base.join(path))
+    }
+
+    /// Whether the program whose leader is `leader` holds the file or folder at `place` open.
+    fn held_open(leader: Pid, place: &Path) -> bool {
+        let Ok(target) = std::fs::symlink_metadata(place) else {
+            return false;
+        };
+        let Ok(open) = std::fs::read_dir(format!("/proc/{leader}/fd")) else {
+            return false;
+        };
+        open.flatten().any(|entry| {
+            std::fs::metadata(entry.path())
+                .is_ok_and(|held| held.dev() == target.dev() && held.ino() == target.ino())
+        })
+    }
+
+    /// Turns round the folder entries `getdents64` wrote: `filled` bytes at `buffer`, each
+    /// entry a record whose length is at 16, so the program reads them last to first.
+    fn reverse_entries(task: Pid, buffer: u64, filled: i64) {
+        let (Ok(base), Ok(length)) = (usize::try_from(buffer), usize::try_from(filled)) else {
+            return;
+        };
+        let mut bytes = vec![0_u8; length];
+        let remote = [RemoteIoVec { base, len: length }];
+        if process_vm_readv(task, &mut [std::io::IoSliceMut::new(&mut bytes)], &remote).ok()
+            != Some(length)
+        {
+            return;
+        }
+        let mut records = Vec::new();
+        let mut at = 0;
+        while at + 19 <= length {
+            let size = usize::from(u16::from_le_bytes([bytes[at + 16], bytes[at + 17]]));
+            if size == 0 || at + size > length {
+                return;
+            }
+            records.push(&bytes[at..at + size]);
+            at += size;
+        }
+        if at != length {
+            return;
+        }
+        let turned: Vec<u8> = records
+            .iter()
+            .rev()
+            .flat_map(|record| record.iter().copied())
+            .collect();
+        let _ = write_to(task, buffer, &turned);
     }
 
     /// Writes `bytes` into `task`'s memory at `address`, as the kernel would: only where the
@@ -327,6 +563,13 @@ mod traced {
 
         /// x86-64's answers never wait for a call's exit.
         pub(super) fn land(_: Pid, _: i64, _: &Registers) {}
+
+        /// What a call returned, at its exit.
+        pub(super) fn result(task: Pid) -> Option<i64> {
+            ptrace::getregs(task)
+                .ok()
+                .map(|registers| registers.rax.cast_signed())
+        }
     }
 
     /// AArch64: a stopped call's number is in x8 and its arguments in x0 to x5, and its result
@@ -370,9 +613,17 @@ mod traced {
             match harmless? {
                 Harmless::ZeroCount => changed.regs[1] = 0,
                 Harmless::MissingClock => changed.regs[0] = NO_CLOCK,
+                Harmless::NullPath => changed.regs[1] = 0,
             }
             ptrace::setregs(task, changed).ok()?;
             Some(registers)
+        }
+
+        /// What a call returned, at its exit.
+        pub(super) fn result(task: Pid) -> Option<i64> {
+            ptrace::getregs(task)
+                .ok()
+                .map(|registers| registers.regs[0].cast_signed())
         }
 
         /// At the call's exit: `result` in x0, and x1 as the program left it.

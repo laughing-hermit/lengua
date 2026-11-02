@@ -41,7 +41,9 @@ use crate::connect::{self, Made, Reach, Relay};
 use crate::platform::{Allowed, Pin};
 use crate::supervise::SUPERVISE_FLAG;
 use crate::supply::Supply;
-use crate::syscalls::host::{CLOCK_GETTIME, CLOCK_NANOSLEEP, GETRANDOM};
+use crate::syscalls::host::{
+    CLOCK_GETTIME, CLOCK_NANOSLEEP, GETDENTS64, GETRANDOM, MKDIRAT, OPENAT, RENAMEAT, UNLINKAT,
+};
 
 /// The command-line flag that starts the binary as a launcher.
 pub const LAUNCH_FLAG: &str = "--launch";
@@ -51,6 +53,95 @@ const LAUNCH_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The most bytes a file may hold when tests run: writing past it stops the program.
 pub const TEST_FILE_LIMIT: u64 = 64 * 1024 * 1024;
+
+/// The most files, connections and folders a program holds open at once, the same on every
+/// target: within macOS's `OPEN_MAX` of 10,240, which macOS's own default of 256 may be raised
+/// to, and above the 4,096 clients a server may take at once, with room for its listener, its
+/// connections and its files.
+pub const OPEN_FILES: u64 = 4352;
+
+/// The most UTF-16 code units Windows takes in a program's command line, its terminating NUL
+/// included, and in one environment variable: every target holds a run to them.
+pub const MAX_COMMAND_LINE: usize = 32_767;
+
+/// The most the arguments may take of that command line, quoted as Windows quotes them, each
+/// after a space: the rest is the program's path, so the limit is the same wherever it runs.
+pub const MAX_ARGUMENTS: usize = 32_000;
+
+/// How much of a Windows command line `args` take, quoted as Windows quotes them (when empty or
+/// holding a space or a tab, with the backslashes before a quote, and before a closing quote,
+/// doubled and each quote escaped), each after a space: UTF-16 code units.
+#[must_use]
+pub fn arguments_length(args: &[String]) -> usize {
+    let quoted = |part: &str| -> usize {
+        let quote = part.is_empty() || part.contains([' ', '\t']);
+        let mut length = if quote { 2 } else { 0 };
+        let mut backslashes = 0;
+        for character in part.chars() {
+            if character == '\\' {
+                backslashes += 1;
+            } else {
+                if character == '"' {
+                    length += backslashes + 1;
+                }
+                backslashes = 0;
+            }
+            length += character.len_utf16();
+        }
+        if quote {
+            length += backslashes;
+        }
+        length
+    };
+    args.iter().map(|arg| 1 + quoted(arg)).sum()
+}
+
+/// Why `args` and `env` couldn't reach a program the same on every system, if they couldn't.
+/// Windows passes both as UTF-16 text, so neither may hold a NUL (Rust's strings are Unicode
+/// already); its command line holds at most [`MAX_COMMAND_LINE`] code units, of which the
+/// arguments take at most [`MAX_ARGUMENTS`], and each `NAME=value` as many; and its variables'
+/// names ignore case, so two names may not differ only so.
+///
+/// # Errors
+///
+/// Says which argument or variable can't.
+pub fn portable_run(args: &[String], env: &BTreeMap<String, String>) -> Result<(), String> {
+    if let Some(arg) = args.iter().find(|arg| arg.contains('\0')) {
+        return Err(format!(
+            "the argument {arg:?} holds a NUL, which no system passes on"
+        ));
+    }
+    let line = arguments_length(args);
+    if line > MAX_ARGUMENTS {
+        return Err(format!(
+            "its arguments take {line} characters of a command line, and lengua gives them at \
+             most {MAX_ARGUMENTS} of the {MAX_COMMAND_LINE} Windows takes, on every system"
+        ));
+    }
+    let mut seen: BTreeMap<String, &str> = BTreeMap::new();
+    for (name, value) in env {
+        if name.is_empty() || name.contains(['=', '\0']) || value.contains('\0') {
+            return Err(format!(
+                "the environment variable {name:?} can't be passed on: a name holds no `=` and \
+                 neither holds a NUL"
+            ));
+        }
+        let size = name.encode_utf16().count() + 1 + value.encode_utf16().count() + 1;
+        if size > MAX_COMMAND_LINE {
+            return Err(format!(
+                "the environment variable {name} holds {size} characters, and Windows takes at \
+                 most {MAX_COMMAND_LINE} in one, so lengua holds every system to that"
+            ));
+        }
+        if let Some(other) = seen.insert(name.to_uppercase(), name) {
+            return Err(format!(
+                "the environment variables {other} and {name} differ only in case, which Windows \
+                 takes as one variable, so lengua takes them as one on every system: keep one"
+            ));
+        }
+    }
+    Ok(())
+}
 
 /// How long and how loud a program may run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,6 +204,9 @@ pub struct Job<'a> {
     /// neither the supervisor nor the CPU's counters can follow it. Landlock and the limits
     /// hold as on any run.
     pub emulated: bool,
+    /// Whether each folder listing comes turned round, last entry first, as a test's second run
+    /// has it, to find a result that depends on the order a file system lists in.
+    pub reversed: bool,
 }
 
 impl<'a> Job<'a> {
@@ -140,6 +234,7 @@ impl<'a> Job<'a> {
             net: None,
             stdin_file: None,
             emulated: false,
+            reversed: false,
         }
     }
 }
@@ -222,6 +317,8 @@ pub struct Run {
     pub random_asked: Option<usize>,
     /// What became of each connection lengua made for it, in order.
     pub connections: Vec<Made>,
+    /// Whether it listed a folder, where lengua's supervisor follows its file calls.
+    pub listed: bool,
 }
 
 /// The most files read back from a working folder after a run.
@@ -465,12 +562,12 @@ impl Started {
         self.connected.held.clear();
         let stdout = self.stdout.await.map_err(io::Error::other)??;
         let stderr = self.stderr.await.map_err(io::Error::other)??;
-        let (supplied, random_asked) = match self.supervisor.as_mut() {
+        let (supplied, random_asked, listed) = match self.supervisor.as_mut() {
             Some((supervisor, lines)) => match supervisor_verdict(supervisor, lines).await {
-                Ok(asked) => (None, Some(asked)),
-                Err(problem) => (Some(problem), None),
+                Ok((asked, listed)) => (None, Some(asked), listed),
+                Err(problem) => (Some(problem), None, false),
             },
-            None => (None, None),
+            None => (None, None, false),
         };
         let [instructions, cycles, cpu_time_ns] =
             self.counters.each_mut().map(|counter| match end {
@@ -497,6 +594,7 @@ impl Started {
             supplied,
             random_asked,
             connections: std::mem::take(&mut self.connected.made),
+            listed,
         })
     }
 }
@@ -706,6 +804,7 @@ async fn launch_job(
     scratch: &Path,
     streams: [Stdio; 3],
 ) -> io::Result<Launched> {
+    portable_run(job.args, job.env).map_err(io::Error::other)?;
     let socket = scratch.join("go");
     let listener = UnixListener::bind(&socket)?;
     let net = job.net.cloned().unwrap_or_default();
@@ -752,9 +851,29 @@ async fn launch_job(
     if sleeps {
         traced.push(CLOCK_NANOSLEEP);
     }
-    let watched = supply.is_some() || sleeps;
+    // A program that uses files has its names held to what every system takes, and its listings
+    // watched, by the supervisor, in tests and real runs alike, where it can follow them.
+    let files = !job.emulated
+        && crate::supervise::AVAILABLE
+        && job
+            .syscalls
+            .iter()
+            .any(|allowed| FILE_CALLS.contains(&allowed.number));
+    if files {
+        traced.extend(
+            FILE_CALLS
+                .into_iter()
+                .filter(|call| job.syscalls.iter().any(|allowed| allowed.number == *call)),
+        );
+    }
+    let watched = supply.is_some() || sleeps || files;
     let nothing_supplied = Supply::default();
-    let supply = supply.or_else(|| sleeps.then_some(&nothing_supplied));
+    let supply = supply.or_else(|| (sleeps || files).then_some(&nothing_supplied));
+    let mode = match (files, job.reversed) {
+        (false, _) => "plain",
+        (true, false) => "files",
+        (true, true) => "files reversed",
+    };
     let syscalls: Vec<String> = if job.emulated {
         vec![EMULATED.to_owned()]
     } else {
@@ -831,7 +950,7 @@ async fn launch_job(
     // The launcher has let the supervisor trace it; now it may, before the program starts.
     let supervisor = match (supervisor.take(), supply) {
         (Some(mut supervisor), Some(supply)) => {
-            let lines = attach_supervisor(&mut supervisor, pid, supply).await?;
+            let lines = attach_supervisor(&mut supervisor, pid, mode, supply).await?;
             Some((supervisor, lines))
         }
         _ => None,
@@ -939,6 +1058,7 @@ async fn send_go(
 async fn attach_supervisor(
     supervisor: &mut tokio::process::Child,
     launcher: i32,
+    mode: &str,
     supply: &Supply,
 ) -> io::Result<SupervisorLines> {
     use tokio::io::AsyncBufReadExt as _;
@@ -947,7 +1067,7 @@ async fn attach_supervisor(
         .take()
         .ok_or_else(|| io::Error::other("no supervisor stdin"))?;
     input
-        .write_all(format!("{launcher}\n{}", supply.encode()).as_bytes())
+        .write_all(format!("{launcher}\n{mode}\n{}", supply.encode()).as_bytes())
         .await?;
     drop(input);
     let output = supervisor
@@ -970,21 +1090,28 @@ async fn attach_supervisor(
 }
 
 /// What the supervisor found once the program ended: how many random bytes the program asked
-/// for, or what went wrong.
+/// for and whether it listed a folder, or what went wrong.
 async fn supervisor_verdict(
     supervisor: &mut tokio::process::Child,
     lines: &mut SupervisorLines,
-) -> Result<usize, String> {
+) -> Result<(usize, bool), String> {
     let last = tokio::time::timeout(LAUNCH_TIMEOUT, lines.next_line()).await;
     let _ = supervisor.kill().await;
+    let found = |line: &str| -> Option<(usize, bool)> {
+        let (asked, listed) = line.strip_prefix("ok ")?.split_once(' ')?;
+        Some((asked.parse().ok()?, listed == "1"))
+    };
     match last {
-        Ok(Ok(Some(line))) => match line.strip_prefix("ok ").map(str::parse) {
-            Some(Ok(asked)) => Ok(asked),
-            _ => Err(line.strip_prefix("error: ").unwrap_or(&line).to_owned()),
-        },
+        Ok(Ok(Some(line))) => {
+            found(&line).ok_or_else(|| line.strip_prefix("error: ").unwrap_or(&line).to_owned())
+        }
         _ => Err("lengua's test supervisor stopped before the program ended".into()),
     }
 }
+
+/// The file calls whose names lengua's supervisor holds to what every system takes, and the
+/// listing it watches.
+const FILE_CALLS: [i64; 5] = [OPENAT, MKDIRAT, UNLINKAT, RENAMEAT, GETDENTS64];
 
 /// A program's environment as the launcher's argument: each `NAME=value` in hex, joined by
 /// commas, or `none`. Only the program gets it, never the launcher, which runs before its
@@ -1536,6 +1663,15 @@ fn confine(
     // A crash leaves no core file behind.
     rustix::process::setrlimit(rustix::process::Resource::Core, limit(0))
         .map_err(|error| format!("core file limit: {error}"))?;
+    // The files it holds at once: one number on every target.
+    rustix::process::setrlimit(rustix::process::Resource::Nofile, limit(OPEN_FILES)).map_err(
+        |error| {
+            format!(
+                "this computer won't let a program hold {OPEN_FILES} open files, lengua's limit \
+                 on every system ({error}); raise the hard limit (`ulimit -Hn`)"
+            )
+        },
+    )?;
     let arch = TargetArch::try_from(std::env::consts::ARCH)
         .map_err(|error| format!("seccomp: {error}"))?;
     if emulated {
@@ -1594,6 +1730,41 @@ fn confine(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_run_takes_only_what_every_system_can_pass_on() {
+        let none = BTreeMap::new();
+        let args = |list: &[&str]| list.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+        assert_eq!(portable_run(&args(&["a", "b c"]), &none), Ok(()));
+        let nul = portable_run(&args(&["a\0b"]), &none).expect_err("a NUL");
+        assert!(nul.contains("NUL"), "{nul}");
+        // The arguments' share of Windows's command line, each after a space, quotes and all.
+        let fits = "x".repeat(MAX_ARGUMENTS - 1);
+        assert_eq!(portable_run(std::slice::from_ref(&fits), &none), Ok(()));
+        let long = portable_run(&[format!("{fits}x")], &none).expect_err("too long");
+        assert!(long.contains("at most 32000"), "{long}");
+        // Quoted, an argument with a space takes two more.
+        let spaced = format!("{} ", "y".repeat(MAX_ARGUMENTS - 4));
+        assert_eq!(
+            arguments_length(std::slice::from_ref(&spaced)),
+            MAX_ARGUMENTS
+        );
+        assert!(portable_run(&[format!("{spaced}y")], &none).is_err());
+        // A quote and the backslashes before it each take one more.
+        assert_eq!(arguments_length(&args(&["a\\\"b"])), 1 + 3 + 3);
+        let env = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+            pairs
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                .collect()
+        };
+        assert_eq!(portable_run(&[], &env(&[("HOME", "/h")])), Ok(()));
+        let cased = portable_run(&[], &env(&[("Path", "a"), ("PATH", "b")]))
+            .expect_err("names that differ in case");
+        assert!(cased.contains("differ only in case"), "{cased}");
+        assert!(portable_run(&[], &env(&[("A=B", "c")])).is_err());
+        assert!(portable_run(&[], &env(&[("A", "c\0d")])).is_err());
+    }
 
     #[test]
     fn the_environment_reaches_the_launcher_as_one_argument() {
