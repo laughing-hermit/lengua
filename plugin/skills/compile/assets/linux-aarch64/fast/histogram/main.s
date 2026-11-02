@@ -13,10 +13,11 @@
 // Error codes returned by functions marked "returns: result"
 .equ ERROR_IO, -5
 // Eight tables of 256 counts each, eight bytes a step, the k-th byte of each step into table k,
-// so the bytes of a step never wait on one counter.
+// so the bytes of a step never wait on one counter. Each table starts 2048 + 72 bytes after the
+// one before, so a value's eight counts never share their place in a 4 KiB page.
 .equ VALUES, 256
-.equ TABLE_BYTES, 2048
-.equ COUNTS_LEN, 16384
+.equ TABLE_STRIDE, 2120
+.equ COUNTS_LEN, 16960
 .equ EIGHT, 8
 // Sizes and limits: a read's bytes at most, with a step's room past the last, so a step's
 // check is one on its start
@@ -123,13 +124,13 @@ _start:
 count_bytes:
     cmp x1, #READ_LEN
     b.hi .Lcount_bytes_assert_length
-    add x3, x2, #TABLE_BYTES
-    add x4, x3, #TABLE_BYTES
-    add x5, x4, #TABLE_BYTES
-    add x6, x5, #TABLE_BYTES
-    add x7, x6, #TABLE_BYTES
-    add x10, x7, #TABLE_BYTES
-    add x13, x10, #TABLE_BYTES
+    add x3, x2, #TABLE_STRIDE
+    add x4, x3, #TABLE_STRIDE
+    add x5, x4, #TABLE_STRIDE
+    add x6, x5, #TABLE_STRIDE
+    add x7, x6, #TABLE_STRIDE
+    add x10, x7, #TABLE_STRIDE
+    add x13, x10, #TABLE_STRIDE
     // The last place an eight starts, below 0 when there's none.
     sub x17, x1, #EIGHT
     mov x9, #0
@@ -296,19 +297,19 @@ count_of:
     b.hs .Lcount_of_assert_value
     add x9, x0, x1, lsl #3
     ldr x0, [x9]
-    ldr x10, [x9, #TABLE_BYTES]
+    ldr x10, [x9, #TABLE_STRIDE]
     add x0, x0, x10
-    ldr x10, [x9, #2 * TABLE_BYTES]
+    ldr x10, [x9, #2 * TABLE_STRIDE]
     add x0, x0, x10
-    ldr x10, [x9, #3 * TABLE_BYTES]
+    ldr x10, [x9, #3 * TABLE_STRIDE]
     add x0, x0, x10
-    ldr x10, [x9, #4 * TABLE_BYTES]
+    ldr x10, [x9, #4 * TABLE_STRIDE]
     add x0, x0, x10
-    ldr x10, [x9, #5 * TABLE_BYTES]
+    ldr x10, [x9, #5 * TABLE_STRIDE]
     add x0, x0, x10
-    ldr x10, [x9, #6 * TABLE_BYTES]
+    ldr x10, [x9, #6 * TABLE_STRIDE]
     add x0, x0, x10
-    ldr x10, [x9, #7 * TABLE_BYTES]
+    ldr x10, [x9, #7 * TABLE_STRIDE]
     add x0, x0, x10
     ret
 .Lcount_of_assert_counts:
