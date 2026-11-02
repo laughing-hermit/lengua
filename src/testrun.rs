@@ -1065,17 +1065,29 @@ async fn talk_at_once(port: u16, exchanges: &[Exchange], now: i128) -> Result<()
 }
 
 /// Whether the program is waiting for the next connection, in `accept4` on file descriptor 3,
-/// or, serving clients at once, in `poll`, checked for up to half a second.
+/// or, serving clients at once, in `poll` or `ppoll`, checked for up to half a second. The
+/// numbers are this computer's: an AArch64 server here, emulated, waits in QEMU's own calls.
 async fn waiting_for_connections(pid: i32) -> bool {
     let path = format!("/proc/{pid}/syscall");
     for _ in 0..100 {
         match tokio::fs::read_to_string(&path).await {
-            Ok(call) if call.starts_with("288 0x3 ") || call.starts_with("7 ") => return true,
+            Ok(call) if waits_for_connections(&call) => return true,
             Ok(_) => tokio::time::sleep(Duration::from_millis(5)).await,
             Err(_) => return false,
         }
     }
     false
+}
+
+/// Whether `call`, a line of `/proc/PID/syscall`, is a wait for connections: `accept4` on
+/// descriptor 3, or `poll` or `ppoll`, by this computer's numbers.
+fn waits_for_connections(call: &str) -> bool {
+    use crate::syscalls::host;
+    let accepting = format!("{} 0x3 ", host::ACCEPT4);
+    let mut waits = vec![format!("{} ", host::PPOLL)];
+    #[cfg(target_arch = "x86_64")]
+    waits.push(format!("{} ", host::POLL));
+    call.starts_with(&accepting) || waits.iter().any(|wait| call.starts_with(wait.as_str()))
 }
 
 /// How long a shown text may be.

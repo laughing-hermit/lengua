@@ -1683,26 +1683,43 @@ async fn fill_is_copied_word_for_word_with_its_constants() {
     );
 }
 
-/// Every AArch64 asset passes every rule, held to the calls its own spec names, as x86-64's are.
+/// Every AArch64 asset and fixture passes every rule, held to the calls its own spec names, as
+/// x86-64's are.
 #[tokio::test]
 async fn every_aarch64_asset_follows_every_rule() {
-    let assets =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("plugin/skills/compile/assets");
-    let mut failed = Vec::new();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let assets = root.join("plugin/skills/compile/assets");
+    let mut programs = Vec::new();
     for (spec, code) in [
         ("template-spec.md", "linux-aarch64/main-template.s"),
         ("vector-template-spec.md", "linux-aarch64/vector-template.s"),
         ("stream-template-spec.md", "linux-aarch64/stream-template.s"),
         ("tally-template-spec.md", "linux-aarch64/tally-template.s"),
+        ("server-template-spec.md", "linux-aarch64/server-template.s"),
+        (
+            "terminal-template-spec.md",
+            "linux-aarch64/terminal-template.s",
+        ),
         ("fast/wc/spec.md", "linux-aarch64/fast/wc/main.s"),
     ] {
-        let spec = crate::spec::parse(&std::fs::read_to_string(assets.join(spec)).expect("a spec"))
-            .unwrap_or_else(|problems| panic!("{spec}: {problems:?}"));
-        let text = std::fs::read_to_string(assets.join(code)).expect("a program");
+        programs.push((assets.join(spec), assets.join(code)));
+    }
+    // Each fixture is a folder of spec.md and main.s.
+    for entry in std::fs::read_dir(root.join("tests/fixtures/linux-aarch64")).expect("fixtures") {
+        let path = entry.expect("an entry").path();
+        if path.join("main.s").is_file() {
+            programs.push((path.join("spec.md"), path.join("main.s")));
+        }
+    }
+    let mut failed = Vec::new();
+    for (spec, code) in &programs {
+        let spec = crate::spec::parse(&std::fs::read_to_string(spec).expect("a spec"))
+            .unwrap_or_else(|problems| panic!("{}: {problems:?}", spec.display()));
+        let text = std::fs::read_to_string(code).expect("a program");
         let report = check_full(&text, CpuFeatures::all(), &spec.syscalls, spec.threads).await;
         if !report.passed() {
             let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
-            failed.push(format!("{code}: {all:#?}"));
+            failed.push(format!("{}: {all:#?}", code.display()));
         }
     }
     assert!(failed.is_empty(), "{}", failed.join("\n"));

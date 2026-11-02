@@ -281,7 +281,13 @@ one needs.
   x86-64's `add`. Floating point on vectors too, as x86-64's packed doubles and singles have it:
   singles two or four at a time and doubles two at a time, each lane as its scalar form computes
   it, held to QEMU and ARM64 silicon; the hypotenuse with both sides in one vector of doubles is
-  proven as the scalar one is. Left of R12: the benchmarks on ARM64 hardware. Left of R10, skipped for
+  proven as the scalar one is; the benchmarks ran on ARM64 hardware (BENCHMARKS-aarch64.md).
+  Then x86-64's other templates, from their specs unchanged: the streaming filter (proven for
+  every length), the word tally (a hash table and a merge sort, proven for short texts), and
+  checked jump tables proven case by case. R13 (2026-11-02): servers, clients and the terminal,
+  with `ppoll` (AArch64 has no `poll`) in the prover, whose time the kernel writes back: the
+  event-loop server proven in every order its clients' steps come in, the key reader, and the
+  echo server and fetch client, each as x86-64's is. Left of R10, skipped for
   now at the user's word (2026-11-01) so
   it costs nothing: 4 to 6 real interactive Claude Code sessions compiling specs for AArch64 from
   one request each, and one for x86-64 as a regression check; they run on the user's Claude
@@ -289,8 +295,8 @@ one needs.
   so:
   - an install package for ARM64 Linux computers (today's release and installer are x86-64 only,
     and the ARM64 server is built only on CI);
-  - ARM64 benchmarks against C, C++ and Rust, and SVE past the line;
-  - threads; networking and servers; the terminal; the crypto and checksum instructions.
+  - SVE, past the line;
+  - threads; the crypto and checksum instructions, and the histogram and crc32c benchmarks.
 - **macOS and Windows need more than a new CPU.** They don't allow a program to call the OS
   directly, as lengua's programs do; a program must go through the system library (libSystem,
   ntdll), which lengua never checked, and there is no seccomp or Landlock. So those four targets

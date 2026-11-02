@@ -1737,6 +1737,61 @@ out:
 }
 
 /// An echo of standard input, with `extra` run first once the input is at least 10 bytes.
+/// The echo server on AArch64, its spec unchanged, reads its line with fill and is proven as
+/// x86-64's is, however the network cuts the line; one read in place of fill, reading to the end,
+/// and never closing a connection are found.
+#[tokio::test]
+async fn proves_the_aarch64_echo_server() {
+    let spec = repository_file("tests/fixtures/linux-aarch64/echo/spec.md");
+    let source = repository_file("tests/fixtures/linux-aarch64/echo/main.s");
+    let block = block(&spec, 0);
+    let right = machine(&source).await;
+    let verdict = prove(&right, &block, &network_budget(true));
+    assert!(
+        matches!(
+            verdict,
+            Verdict::Proven {
+                bound: None,
+                questions: 0,
+                cut_any_way: true,
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
+    let once = source.replacen(
+        "    mov w3, #NEWLINE\n    bl fill\n",
+        "    mov x8, #SYS_READ\n    svc #0\n",
+        1,
+    );
+    assert_ne!(once, source);
+    let verdict = prove(&machine(&once).await, &block, &network_budget(true));
+    let Verdict::Counterexample(found) = &verdict else {
+        panic!("{verdict:?}");
+    };
+    assert_ne!(
+        found.get(DELIVERY),
+        Some(&Value::Str(Delivery::Whole.describe())),
+        "{found:?}"
+    );
+    let to_the_end = source.replacen(
+        "    mov w3, #NEWLINE\n    bl fill\n",
+        "    mov w3, #-1\n    bl fill\n",
+        1,
+    );
+    assert_ne!(to_the_end, source);
+    let verdict = prove(&machine(&to_the_end).await, &block, &network_budget(true));
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+    let open = source.replacen(
+        "    mov x0, x19\n    mov x8, #SYS_CLOSE\n    svc #0\n",
+        "    mov x0, #0\n",
+        1,
+    );
+    assert_ne!(open, source);
+    let verdict = prove(&machine(&open).await, &block, &network_budget(true));
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+}
+
 fn echo(extra: &str) -> String {
     format!(
         "    .intel_syntax noprefix
@@ -2397,6 +2452,29 @@ async fn proves_a_program_for_the_terminal() {
     }
 }
 
+/// The terminal template on AArch64, the same spec compiled for it, proves as x86-64's does: its
+/// mode can't be read or set, and its wait for the next key, a `ppoll` with a tenth of a second
+/// the kernel reads, always finds one, or the input's end.
+#[tokio::test]
+async fn proves_an_aarch64_program_for_the_terminal() {
+    let spec = asset("terminal-template-spec.md");
+    let machine = machine(&asset("linux-aarch64/terminal-template.s")).await;
+    for index in 0..2 {
+        let verdict = prove(&machine, &block(&spec, index), &text_budget());
+        assert!(
+            matches!(
+                verdict,
+                Verdict::Proven {
+                    bound: None,
+                    questions: 0,
+                    ..
+                }
+            ),
+            "block {index}: {verdict:?}"
+        );
+    }
+}
+
 /// The CRC-32C asset's own spec, every text up to the 4096 bytes a proof covers.
 #[tokio::test]
 #[ignore = "slow: 4097 lengths of text"]
@@ -2628,6 +2706,56 @@ async fn proves_a_server_for_clients_at_once() {
     assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
 }
 
+/// The event-loop server on AArch64, the same spec compiled for it, waits with `ppoll` and is
+/// proven as x86-64's is: one client for every line, in every order its steps can come in between
+/// polls; two at once as far as the time goes. Serving the first slot alone, and never closing a
+/// connection, are found.
+#[tokio::test]
+async fn proves_the_aarch64_server_for_clients_at_once() {
+    if !solvers_installed() {
+        return;
+    }
+    let spec = asset("server-template-spec.md");
+    let source = asset("linux-aarch64/server-template.s");
+    let right = machine(&source).await;
+    let (one, two) = (block(&spec, 0), block(&spec, 1));
+    let budget = |seconds| Budget {
+        max_shapes: 100_000,
+        listens: true,
+        ..budget(seconds)
+    };
+    let verdict = prove(&right, &one, &budget(60));
+    assert!(
+        matches!(verdict, Verdict::Proven { bound: None, .. }),
+        "{verdict:?}"
+    );
+    for block in [&one, &two] {
+        let samples: Vec<crate::testfile::Case> =
+            block.cases(1).take(24).filter_map(Result::ok).collect();
+        let found = agrees(&right, &samples, true).expect("the model agrees with the samples");
+        assert!(found.is_none(), "{found:?}");
+    }
+    let verdict = prove(&right, &two, &budget(20));
+    assert!(
+        matches!(&verdict, Verdict::Proven { bound: Some(bound), .. } if bound.bytes >= 8),
+        "{verdict:?}"
+    );
+    let first_slot = source.replace(
+        "    mov x20, #CLIENTS\n.Lserve_clients_slot:",
+        "    mov x20, #1\n.Lserve_clients_slot:",
+    );
+    assert_ne!(first_slot, source);
+    let verdict = prove(&machine(&first_slot).await, &two, &budget(60));
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+    let open = source.replace(
+        "    mov w0, w11\n    mov x8, #SYS_CLOSE\n    svc #0\n",
+        "    mov x0, #0\n",
+    );
+    assert_ne!(open, source);
+    let verdict = prove(&machine(&open).await, &one, &budget(60));
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+}
+
 /// A server on the network: the line-echo server reads its line with fill, so it answers every
 /// client's line however the network cuts it; one that reads once in place of fill, or never
 /// closes a connection and so waits on a client that waits for it, is found.
@@ -2784,6 +2912,56 @@ async fn proves_the_fetch_client() {
         source.replacen(
             "    mov ecx, -1\n    call fill\n",
             "    mov eax, SYS_READ\n    syscall\n",
+            1,
+        ),
+    ] {
+        assert_ne!(wrong, source);
+        let verdict = prove(&machine(&wrong).await, &fetch, &network_budget(false));
+        assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+    }
+}
+
+/// The fetch client on AArch64, its spec unchanged: its argument errors are proven for every
+/// port, and its fetch for every path and body, port and delivery, as x86-64's are; a request with
+/// the wrong version, or one cut short before reading the reply, is found.
+#[tokio::test]
+async fn proves_the_aarch64_fetch_client() {
+    let spec = repository_file("tests/fixtures/linux-aarch64/fetch/spec.md")
+        .replacen(
+            "path holds `1` to `100` characters",
+            "path holds `1` to `100` characters (tests: `6` and `11`)",
+            1,
+        )
+        .replacen("`string(1, 100, ", "`string(1, 6, ", 1)
+        .replacen("`string(0, 65000, ", "`string(0, 11, ", 1);
+    let source = repository_file("tests/fixtures/linux-aarch64/fetch/main.s");
+    let right = machine(&source).await;
+    for index in 0..3 {
+        let verdict = prove(&right, &block(&spec, index), &network_budget(false));
+        assert!(
+            matches!(
+                verdict,
+                Verdict::Proven {
+                    bound: None,
+                    questions: 0,
+                    cut_any_way: true,
+                    ..
+                }
+            ),
+            "block {index}: {verdict:?}"
+        );
+    }
+    let fetch = block(&spec, 0);
+    for wrong in [
+        source.replacen(
+            ".ascii \" HTTP/1.0\\r\\n\\r\\n\"",
+            ".ascii \" HTTP/1.1\\r\\n\\r\\n\"",
+            1,
+        ),
+        source.replacen(".equ VERSION_LEN, 13", ".equ VERSION_LEN, 11", 1),
+        source.replacen(
+            "    mov w3, #-1\n    bl fill\n",
+            "    mov x8, #SYS_READ\n    svc #0\n",
             1,
         ),
     ] {

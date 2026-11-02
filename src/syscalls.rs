@@ -51,6 +51,9 @@ pub mod x86_64 {
     pub const FSTAT: i64 = 5;
     /// `poll`, a wait until a descriptor is ready.
     pub const POLL: i64 = 7;
+    /// `ppoll`, the same wait with a time as seconds and nanoseconds: no x86-64 program's, but
+    /// the call QEMU waits in for an AArch64 program's `ppoll` here.
+    pub const PPOLL: i64 = 271;
     /// `lseek`, move a file offset.
     pub const LSEEK: i64 = 8;
     /// `rt_sigaction`, which the launcher makes between confining itself and becoming the
@@ -400,6 +403,7 @@ mod tests {
             (host::GETRANDOM, libc::SYS_getrandom),
             (host::CLOCK_NANOSLEEP, libc::SYS_clock_nanosleep),
             (host::ACCEPT4, libc::SYS_accept4),
+            (host::PPOLL, libc::SYS_ppoll),
             (host::RT_SIGPROCMASK, libc::SYS_rt_sigprocmask),
         ];
         for (ours, theirs) in numbers {

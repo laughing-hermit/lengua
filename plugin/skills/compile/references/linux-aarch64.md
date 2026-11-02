@@ -9,9 +9,9 @@ an x86-64 one testing AArch64 code through QEMU. The rules are the same as x86-6
 What AArch64 code covers so far, checked, tested and proven as x86-64's is: arguments, whole
 numbers, floating point in singles and doubles, vectors of whole numbers and of floats (NEON),
 text, standard input of any length through `fill`, files and folders, hash tables and word
-tallies, sorting, and checked jump tables. Not yet, so a spec
-that needs them is compiled for x86-64 for now: threads, servers and several clients at once,
-the terminal, and the checksum and crypto instructions.
+tallies, sorting, checked jump tables, servers (one client at a time or several at once), clients
+of a server on this computer, and the terminal. Not yet, so a spec that needs them is compiled
+for x86-64 for now: threads, and the checksum and crypto instructions.
 
 ## Templates
 
@@ -28,6 +28,11 @@ x86-64's is.
   [its spec](../assets/tally-template-spec.md): values the x86-64 form keeps on the stack stay in
   `x19` to `x28`, and constants too wide for `cmp`, such as `MAX_WORDS`, sit in a register built
   with `mov` and `movk`.
+- [The event-loop server](../assets/linux-aarch64/server-template.s) serves up to 8 clients at
+  once with `ppoll`, from [its spec](../assets/server-template-spec.md), proven in every order
+  its clients' steps can come in.
+- [The key reader](../assets/linux-aarch64/terminal-template.s) reads keys one at a time with no
+  echo, from [its spec](../assets/terminal-template-spec.md).
 - [The fast `wc`](../assets/linux-aarch64/fast/wc/main.s) counts lines and words 16 bytes a step,
   each step masked to the bytes left, proven for every length with a 64 KiB buffer.
 
@@ -49,8 +54,10 @@ x86-64's is.
 What the spec names under `# Constraints` decides the calls a program may make, as on x86-64:
 `write`, `exit` and `exit_group` always; `read` for `standard input`; `openat`, `read`, `write`,
 `lseek`, `close`, `fstat`, `getdents64`, `mkdirat`, `unlinkat` and `renameat` for `files`;
-`clock_gettime` and `clock_nanosleep` for `the clock`; `getrandom` for `random bytes`. The kernel
-refuses any other.
+`clock_gettime` and `clock_nanosleep` for `the clock`; `getrandom` for `random bytes`; `socket`,
+`connect`, `sendto`, `close` and `read` for the network, `accept4` on the listening socket lengua
+hands a server as descriptor 3, and `ppoll` for a server of several clients at once; `ioctl` and
+`ppoll` for the terminal. The kernel refuses any other.
 
 `mov x8, #SYS_NAME` picks the call, the arguments go in `x0` to `x5`, and `svc #0` runs it. It
 returns in `x0` and changes nothing else. A result from -4095 to -1 is an error (the negative
@@ -71,7 +78,20 @@ errno), so test it right away with `tbnz x0, #63, error`.
 | `clock_gettime` | 113 | `x0` clock (0 the time of day, 1 a clock that only moves forward), `x1` 16 bytes for seconds then nanoseconds | 0 or an error |
 | `clock_nanosleep` | 115 | `x0` clock, `x1` 0, `x2` 16 bytes of how long | 0 or an error |
 | `getrandom` | 278 | `x0` buffer, `x1` count, `x2` 0 | bytes filled or an error |
+| `socket` | 198 | `x0` 2 (`AF_INET`), `x1` 1 (`SOCK_STREAM`), `x2` 0 | the socket or an error |
+| `connect` | 203 | `x0` the socket, `x1` 16 bytes of address (family, port high byte first, 127.0.0.1), `x2` 16 | 0 or an error |
+| `accept4` | 242 | `x0` 3, `x1` to `x3` 0 | the connection or an error |
+| `sendto` | 206 | `x0` the connection, `x1` bytes, `x2` count, `x3` 0x4000 (`MSG_NOSIGNAL`), `x4` and `x5` 0 | bytes sent or an error |
+| `ppoll` | 73 | `x0` a table of 8-byte entries (descriptor, events, events that came), `x1` how many, `x2` 0 to wait until one is ready, or 16 bytes of how long, `x3` 0 | how many are ready, 0 when the time ran out, or an error |
+| `ioctl` | 29 | `x0` 0, `x1` `TCGETS` (0x5401) or `TCSETS` (0x5402), `x2` 36 bytes of the terminal's mode | 0, or an error when standard input isn't a terminal |
 | `exit` | 93 | `w0` status | doesn't return |
+
+AArch64 has no `poll`: `ppoll` is the wait, with x86-64's `poll` table. Its time is a pointer, so
+"until one is ready" is `x2` 0, not -1, and the kernel writes the time left back into the 16
+bytes it read: keep them in `.bss` and set them again before each wait, as
+[the terminal template](../assets/linux-aarch64/terminal-template.s) does. A native kernel
+skips the write to `.rodata`, but QEMU refuses the wait. The port in `connect`'s address goes high byte first: `rev16 w12, w10`
+turns a port in `w10` around.
 
 ## Program start
 

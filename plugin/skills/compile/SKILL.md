@@ -63,8 +63,10 @@ and the CPU features the code needs; never write that line yourself.
    [the event-loop server](assets/server-template.s) ([its spec](assets/server-template-spec.md)):
    `poll` over the listening socket and a fixed table of connections, a line buffer for each,
    and answering each client as its request completes; its proof follows the clients' steps in
-   every order between polls. A program for the terminal starts from
-   [the key reader](assets/terminal-template.s) ([its spec](assets/terminal-template-spec.md)):
+   every order between polls; on AArch64 [its form](assets/linux-aarch64/server-template.s)
+   waits with `ppoll`. A program for the terminal starts from
+   [the key reader](assets/terminal-template.s) ([its spec](assets/terminal-template-spec.md); on
+   AArch64 [its form](assets/linux-aarch64/terminal-template.s)):
    keys one at a time with no echo, a wait for the next key, and the terminal set back at the
    end. A program that counts or looks things up by key starts from
    [the word tally](assets/tally-template.s) ([its spec](assets/tally-template-spec.md); on

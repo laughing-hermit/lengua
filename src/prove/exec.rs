@@ -791,6 +791,8 @@ const ENOTTY: i64 = 25;
 const EAGAIN: i64 = 11;
 /// The bytes of one `struct pollfd`, and its event for something to read.
 const POLLFD_LEN: u64 = 8;
+/// The bytes of a time as the kernel reads one: seconds, then nanoseconds, 8 bytes each.
+const TIMESPEC_LEN: u64 = 16;
 const POLLIN: u128 = 1;
 
 /// The general-purpose register a register is part of, 0 for rax to 15 for r15.
@@ -3729,8 +3731,23 @@ impl<'a> Cpu<'a> {
             // A wait for the next key: as in a test, standard input has all arrived, so it always
             // has a key to read, or its end. A server's poll over its connections is beyond the
             // model.
-            Some(Call::Poll) => {
+            Some(call @ (Call::Poll | Call::Ppoll)) => {
                 let (table, count) = (self.constant(rdi)?, self.constant(rsi)?);
+                // ppoll's time limit is a pointer to how long, none meaning until one is ready,
+                // which the kernel reads and then leaves the time left in; its signal mask is
+                // what the dialect leaves out.
+                let (until_ready, left_at) = if call == Call::Ppoll {
+                    if self.constant(arguments[3])? != 0 {
+                        return Err(unsupported("ppoll with a signal mask"));
+                    }
+                    let limit = self.constant(rdx)?;
+                    if limit != 0 {
+                        self.lent(2, limit, TIMESPEC_LEN, true, "ppoll")?;
+                    }
+                    (Some(limit == 0), (limit != 0).then_some(limit))
+                } else {
+                    (None, None)
+                };
                 let waits_for_input = count == 1 && {
                     self.lent(0, table, POLLFD_LEN, true, "poll")?;
                     let descriptor = self.load(table, 4)?;
@@ -3744,7 +3761,11 @@ impl<'a> Cpu<'a> {
                         return Err(unsupported(format!("poll over {count} descriptors")));
                     }
                     self.lent(0, table, count * POLLFD_LEN, true, "poll")?;
-                    if self.constant(rdx)? & 0xffff_ffff != 0xffff_ffff {
+                    let forever = match until_ready {
+                        Some(forever) => forever,
+                        None => self.constant(rdx)? & 0xffff_ffff == 0xffff_ffff,
+                    };
+                    if !forever {
                         return Err(unsupported(
                             "poll over connections with a time limit, rather than until one is \
                              ready",
@@ -3759,6 +3780,14 @@ impl<'a> Cpu<'a> {
                 }
                 let ready = self.pool.bv(16, POLLIN);
                 self.save(table + 6, ready)?;
+                // The time ppoll left, which the proof knows nothing of.
+                if let Some(limit) = left_at {
+                    let fresh = self.pool.len();
+                    for offset in 0..TIMESPEC_LEN {
+                        let byte = self.pool.var(8, &format!("ppoll{fresh}.{offset}"));
+                        self.save(limit + offset, byte)?;
+                    }
+                }
                 1
             }
             // As in a test, standard input, output and error are never a terminal: its mode

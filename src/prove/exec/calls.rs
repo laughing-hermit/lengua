@@ -17,6 +17,9 @@ pub(super) enum Call {
     Fstat,
     /// `poll`, which AArch64 doesn't have.
     Poll,
+    /// `ppoll`, AArch64's only wait: `poll`'s table and count, then how long as a pointer to
+    /// seconds and nanoseconds, none meaning until one is ready, and a signal mask.
+    Ppoll,
     /// `ioctl`.
     Ioctl,
     /// `socket`.
@@ -90,8 +93,9 @@ impl Call {
                 (x86_64::RENAMEAT, Self::Renameat),
                 (x86_64::GETRANDOM, Self::Getrandom),
             ],
-            // No `poll`: AArch64 waits with `ppoll`, which the prover doesn't follow yet.
+            // No `poll`: AArch64 waits with `ppoll`.
             Isa::Aarch64 => &[
+                (aarch64::PPOLL, Self::Ppoll),
                 (aarch64::READ, Self::Read),
                 (aarch64::WRITE, Self::Write),
                 (aarch64::CLOSE, Self::Close),

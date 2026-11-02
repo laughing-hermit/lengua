@@ -1053,7 +1053,11 @@ still to build per target. A new profile must supply:
    condition, so a program's tests of bytes are the formula's conditions, and `addv` of lanes
    that are each 0 or 1 is the pool's count, as x86-64's `popcnt` of a mask is. A float lane is
    its scalar instruction's term, so the hypotenuse with both sides in one vector of doubles is
-   proven as the scalar one is; `fmaxv` reduces in the architecture's pairs. Its loops end
+   proven as the scalar one is; `fmaxv` reduces in the architecture's pairs. An access at a place
+   the input chooses is held to the object its own CPU's base register holds (`Through`), so a
+   hash table on AArch64 goes through its log of stores as x86-64's does. `ppoll`, AArch64's only
+   wait, is `poll` with a time limit the kernel reads and then writes the time left into, which the
+   proof takes as unknown. Its loops end
    with `subs` and `b.ne`, or `sub` and `cbnz`, which the proof finds as it finds x86-64's `dec`
    and `jnz`, so a loop over a buffer-full that leaves where its index reaches the bytes read has
    its exits merged into one run. Two rules of the pool's met NEON's mask of the bytes left, the

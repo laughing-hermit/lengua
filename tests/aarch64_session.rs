@@ -377,6 +377,72 @@ async fn the_aarch64_tally_template_passes_its_tests() {
     session.service.cancel().await.expect("close the session");
 }
 
+/// The AArch64 event-loop server and key reader, x86-64's specs compiled for AArch64 with
+/// `ppoll`, pass their tests through the server: clients at once on the listening socket lengua
+/// hands the server, and keys from standard input as from a pipe.
+#[tokio::test]
+async fn the_aarch64_server_and_terminal_templates_pass_their_tests() {
+    let session = if cfg!(target_arch = "aarch64") {
+        Session::proving_for(Protocol::Discover, 60).await
+    } else if common::qemu_runs_aarch64() {
+        Session::emulating_for(Protocol::Discover, "linux-aarch64", 60).await
+    } else {
+        return;
+    };
+    let asset = |path: &str| {
+        std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("plugin/skills/compile/assets")
+                .join(path),
+        )
+        .expect("the asset")
+    };
+    for (spec, code) in [
+        ("server-template-spec.md", "linux-aarch64/server-template.s"),
+        (
+            "terminal-template-spec.md",
+            "linux-aarch64/terminal-template.s",
+        ),
+    ] {
+        let program = written(
+            &session,
+            [("spec.md", asset(spec)), ("main.s", asset(code))],
+        )
+        .await;
+        let report = done(&session, &program).await;
+        assert!(
+            any_line(&report["tests"], "follows every rule and passed all"),
+            "{code}: {report}"
+        );
+    }
+    session.service.cancel().await.expect("close the session");
+}
+
+/// The AArch64 echo server and fetch client, x86-64's examples compiled for AArch64, pass their
+/// tests through the server: a server whose clients the tests bring, and a client of the tests'
+/// own server, whose connection lengua holds to this computer. Natively every test runs; under
+/// QEMU, which has no supervisor to hold a connection, the client's tests that connect are left to
+/// an ARM64 computer, as the report says.
+#[tokio::test]
+async fn the_aarch64_echo_and_fetch_pass_their_tests() {
+    let native = cfg!(target_arch = "aarch64");
+    let session = if native {
+        Session::proving_for(Protocol::Discover, 60).await
+    } else if common::qemu_runs_aarch64() {
+        Session::emulating_for(Protocol::Discover, "linux-aarch64", 60).await
+    } else {
+        return;
+    };
+    for name in ["echo", "fetch"] {
+        let program = written(&session, aarch64_files(name)).await;
+        let report = done(&session, &program).await;
+        eprintln!("{name}: {}", report["tests"]);
+        let passed = any_line(&report["tests"], "follows every rule and passed all");
+        assert!(passed || (!native && name == "fetch"), "{name}: {report}");
+    }
+    session.service.cancel().await.expect("close the session");
+}
+
 /// The AArch64 cat, a streaming filter through `fill`, is proven for every length through the
 /// server, as x86-64's is: natively on an ARM64 computer, and through QEMU here.
 #[tokio::test]
