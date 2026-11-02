@@ -115,9 +115,9 @@ _start:
     bl assert_fail
 .size _start, . - _start
 
-// Adds each byte to the count of its value, eight at a step, each byte loaded on its own, the
-// k-th byte of each step into table k, so neighboring bytes never wait on one counter. It stops
-// before the last bytes, fewer than eight, for count_rest.
+// Adds each byte to the count of its value, eight at a step, the k-th byte of each step into
+// table k, so neighboring bytes never wait on one counter. It stops before the last bytes,
+// fewer than eight, for count_rest.
 // In: x0 = the bytes; x1 = how many, up to READ_LEN; x2 = the eight tables, COUNTS_LEN bytes.
 // Out: x0 = how many it added, a multiple of eight.
 .type count_bytes, @function
@@ -140,38 +140,37 @@ count_bytes:
     b.gt .Lcount_bytes_done
     cmp x9, #READ_LEN
     b.hs .Lcount_bytes_assert_index
-    // unsafe: the step's eight bytes are inside, x9 + 8 at most x1, at most READ_LEN; each
-    // index is one byte, 0 to 255, and each table holds 256 counts
-    add x12, x0, x9
-    ldrb w15, [x12]
+    ldr x14, [x0, x9]
+    // unsafe: each index is one byte, 0 to 255, and each table holds 256 counts
+    and x15, x14, #0xff
     ldr x16, [x2, x15, lsl #3]
     add x16, x16, #1
     str x16, [x2, x15, lsl #3]
-    ldrb w15, [x12, #1]
+    ubfx x15, x14, #8, #8
     ldr x16, [x3, x15, lsl #3]
     add x16, x16, #1
     str x16, [x3, x15, lsl #3]
-    ldrb w15, [x12, #2]
+    ubfx x15, x14, #16, #8
     ldr x16, [x4, x15, lsl #3]
     add x16, x16, #1
     str x16, [x4, x15, lsl #3]
-    ldrb w15, [x12, #3]
+    ubfx x15, x14, #24, #8
     ldr x16, [x5, x15, lsl #3]
     add x16, x16, #1
     str x16, [x5, x15, lsl #3]
-    ldrb w15, [x12, #4]
+    ubfx x15, x14, #32, #8
     ldr x16, [x6, x15, lsl #3]
     add x16, x16, #1
     str x16, [x6, x15, lsl #3]
-    ldrb w15, [x12, #5]
+    ubfx x15, x14, #40, #8
     ldr x16, [x7, x15, lsl #3]
     add x16, x16, #1
     str x16, [x7, x15, lsl #3]
-    ldrb w15, [x12, #6]
+    ubfx x15, x14, #48, #8
     ldr x16, [x10, x15, lsl #3]
     add x16, x16, #1
     str x16, [x10, x15, lsl #3]
-    ldrb w15, [x12, #7]
+    lsr x15, x14, #56
     ldr x16, [x13, x15, lsl #3]
     add x16, x16, #1
     str x16, [x13, x15, lsl #3]
