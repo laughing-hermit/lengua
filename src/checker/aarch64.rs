@@ -158,6 +158,7 @@ pub(super) fn same_instruction(
 /// Every register the instruction names.
 fn registers(inst: &Inst) -> Vec<A64Reg> {
     match *inst {
+        Inst::Crypto { .. } => Vec::new(),
         Inst::Sve(sve) => match sve {
             Sve::Whilelo { rn, rm, .. } => vec![rn, rm],
             Sve::Access { base, index, .. } => vec![base, index],
@@ -273,6 +274,17 @@ pub(super) fn check_instruction(
         refuse(
             format!("`{text}` needs CRC, which this CPU doesn't have"),
             "compute the checksum in software, as from a table, on a CPU without CRC",
+        );
+    }
+    if let Inst::Crypto { op, .. } = inst
+        && !(if op.aes() { features.aes } else { features.sha })
+    {
+        refuse(
+            format!(
+                "`{text}` needs the {} extension, which this CPU doesn't have",
+                if op.aes() { "AES" } else { "SHA2" }
+            ),
+            "do without the CPU's AES or SHA instructions on this CPU",
         );
     }
     if matches!(inst, Inst::Sve(_)) && features.sve == 0 {
@@ -574,6 +586,8 @@ pub fn features_needed(
             let name = match inst {
                 Inst::Crc { .. } => Some("crc"),
                 Inst::Pmull { rn, .. } if crate::isa::aarch64::pmull_wide(*rn) => Some("pmull"),
+                Inst::Crypto { op, .. } if op.aes() => Some("aes"),
+                Inst::Crypto { .. } => Some("sha"),
                 Inst::Sve(_) => SVE_LENGTHS
                     .get(usize::from(features.sve / 16).wrapping_sub(1))
                     .copied(),
@@ -596,6 +610,8 @@ pub fn cpu_has(name: &str, cpu: &CpuFeatures) -> Option<bool> {
     match name {
         "crc" => Some(cpu.crc),
         "pmull" => Some(cpu.pmull),
+        "aes" => Some(cpu.aes),
+        "sha" => Some(cpu.sha),
         _ => {
             let place = SVE_LENGTHS.iter().position(|known| *known == name)?;
             Some(usize::from(cpu.sve) == 16 * (place + 1))

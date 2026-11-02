@@ -1107,7 +1107,11 @@ still to build per target. A new profile must supply:
    its scalar instruction's term, so the hypotenuse with both sides in one vector of doubles is
    proven as the scalar one is; `fmaxv` reduces in the architecture's pairs. Its carry-less
 multiply, `pmull` and `pmull2` of bytes or of doublewords, is x86-64's `pclmulqdq` product, one
-model for both (`carry_less` in `exec.rs`). Its SVE (`exec/aarch64/sve.rs`, the integer subset
+model for both (`carry_less` in `exec.rs`). Its AES and SHA instructions (`exec/aarch64/crypto.rs`)
+are the architecture's pseudocode built from x86-64's pieces of the same algorithms: `aese` is
+x86-64's last round of the two XORed with no key, `aesmc` its MixColumns, and SHA's rounds and
+message steps its words' functions, each held to QEMU's CPU and silicon by `against_a64`. Its SVE
+(`exec/aarch64/sve.rs`, the integer subset
 of bytes a streaming loop needs) keeps each Z register, the CPU's length of bytes up to 64, in the
 vector registers' 64 bytes and each predicate as a condition for each byte; `whilelo`'s lanes are
 the bytes left, a load or store reaches only its active lanes, held to the longest vector's

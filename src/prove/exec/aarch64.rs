@@ -15,6 +15,7 @@
 //!
 //! Floating point is [`float`]'s, and vectors are [`vector`]'s.
 
+mod crypto;
 mod float;
 mod sve;
 mod vector;
@@ -288,6 +289,7 @@ impl Cpu<'_> {
             | Inst::FpLoadStore { .. }
             | Inst::FpPair { .. } => self.execute_fp(inst),
             Inst::Sve(sve) => self.execute_sve(sve),
+            Inst::Crypto { op, rd, rn, rm } => self.execute_crypto(op, rd, rn, rm),
             Inst::VectorThree { .. }
             | Inst::Pmull { .. }
             | Inst::VectorTwo { .. }

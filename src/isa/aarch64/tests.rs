@@ -23,7 +23,7 @@ const PER_CLASS: usize = 3000;
 /// Each encoding class the dialect has: its name, the bits that place a word in it, and their
 /// value. The classes whose fields are mostly unallocated fix more bits, so random words land on
 /// instructions.
-const CLASSES: [(&str, u32, u32); 79] = [
+const CLASSES: [(&str, u32, u32); 82] = [
     ("adr and adrp", 0x1f00_0000, 0x1000_0000),
     ("add and sub with a number", 0x1f80_0000, 0x1100_0000),
     ("logical with a bitmask", 0x1f80_0000, 0x1200_0000),
@@ -149,6 +149,9 @@ const CLASSES: [(&str, u32, u32); 79] = [
     ("sve cntb", 0xff30_ffe0, 0x0420_e3e0),
     ("sve insr", 0xff3f_fc00, 0x0524_3800),
     ("sve lastb", 0xff3f_e000, 0x0521_a000),
+    ("aes", 0xffff_cc00, 0x4e28_4800),
+    ("sha of three registers", 0xffe0_8c00, 0x5e00_0000),
+    ("sha of two registers", 0xffff_cc00, 0x5e28_0800),
 ];
 
 /// What LLVM's disassembler says of each word: its text, or none where it refuses the word or
@@ -159,7 +162,7 @@ fn llvm(words: &[u32]) -> Option<Vec<Option<String>>> {
             "--disassemble",
             "--triple=aarch64-unknown-linux-gnu",
             // AES brings the doublewords' pmull, which LLVM puts under it.
-            "--mattr=+crc,+aes,+sve",
+            "--mattr=+crc,+aes,+sve,+sha2",
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -659,6 +662,20 @@ const VECTOR_LINES: &[&str] = &[
     "insr z0.b, w1",
     "insr z0.b, wzr",
     "lastb w0, p0, z1.b",
+    "aese v0.16b, v1.16b",
+    "aesd v2.16b, v3.16b",
+    "aesmc v4.16b, v5.16b",
+    "aesimc v31.16b, v30.16b",
+    "sha1c q0, s1, v2.4s",
+    "sha1p q3, s4, v5.4s",
+    "sha1m q6, s7, v8.4s",
+    "sha1h s9, s10",
+    "sha1su0 v11.4s, v12.4s, v13.4s",
+    "sha1su1 v14.4s, v15.4s",
+    "sha256h q16, q17, v18.4s",
+    "sha256h2 q19, q20, v21.4s",
+    "sha256su0 v22.4s, v23.4s",
+    "sha256su1 v24.4s, v25.4s, v26.4s",
 ];
 
 #[test]
@@ -679,7 +696,7 @@ fn assembled(lines: &[&str]) -> Option<Vec<u32>> {
     let mut child = Command::new("llvm-mc")
         .args([
             "--triple=aarch64-unknown-linux-gnu",
-            "--mattr=+aes,+sve",
+            "--mattr=+aes,+sve,+sha2",
             "--show-encoding",
         ])
         .stdin(Stdio::piped())

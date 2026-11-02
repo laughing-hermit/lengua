@@ -54,22 +54,22 @@ const SHA1_K: [u32; 4] = [0x5A82_7999, 0x6ED9_EBA1, 0x8F1B_BCDC, 0xCA62_C1D6];
 
 impl Cpu<'_> {
     /// Four bytes, lowest first, as one 32-bit word.
-    fn word(&mut self, bytes: &[Term]) -> Term {
+    pub(in crate::prove::exec) fn word(&mut self, bytes: &[Term]) -> Term {
         self.join(bytes)
     }
 
     /// 16 bytes as their four 32-bit words, word 0 the lowest.
-    fn words(&mut self, bytes: &[Term]) -> [Term; 4] {
+    pub(in crate::prove::exec) fn words(&mut self, bytes: &[Term]) -> [Term; 4] {
         [0, 1, 2, 3].map(|at| self.word(&bytes[4 * at..4 * at + 4]))
     }
 
     /// Four words back into 16 bytes.
-    fn unwords(&mut self, words: [Term; 4]) -> Vec<Term> {
+    pub(in crate::prove::exec) fn unwords(&mut self, words: [Term; 4]) -> Vec<Term> {
         words.iter().flat_map(|word| self.split(*word, 4)).collect()
     }
 
     /// A 32-bit word rotated right by `by`.
-    fn rotate_right(&mut self, word: Term, by: u32) -> Term {
+    pub(in crate::prove::exec) fn rotate_right(&mut self, word: Term, by: u32) -> Term {
         let (right, left) = (
             self.pool.bv(32, u128::from(by)),
             self.pool.bv(32, u128::from(32 - by)),
@@ -80,18 +80,18 @@ impl Cpu<'_> {
     }
 
     /// A word shifted right by `by`, zeros coming in.
-    fn shift_right(&mut self, word: Term, by: u32) -> Term {
+    pub(in crate::prove::exec) fn shift_right(&mut self, word: Term, by: u32) -> Term {
         let amount = self.pool.bv(32, u128::from(by));
         self.pool.lshr(word, amount)
     }
 
-    fn xor3(&mut self, a: Term, b: Term, c: Term) -> Term {
+    pub(in crate::prove::exec) fn xor3(&mut self, a: Term, b: Term, c: Term) -> Term {
         let ab = self.pool.xor(a, b);
         self.pool.xor(ab, c)
     }
 
     /// `Ch(e, f, g)`: f where e's bit is set, g where it's clear.
-    fn choose(&mut self, e: Term, f: Term, g: Term) -> Term {
+    pub(in crate::prove::exec) fn choose(&mut self, e: Term, f: Term, g: Term) -> Term {
         let ef = self.pool.and(e, f);
         let not_e = self.pool.not(e);
         let eg = self.pool.and(not_e, g);
@@ -99,7 +99,7 @@ impl Cpu<'_> {
     }
 
     /// `Maj(a, b, c)`: each bit as most of the three are.
-    fn majority(&mut self, a: Term, b: Term, c: Term) -> Term {
+    pub(in crate::prove::exec) fn majority(&mut self, a: Term, b: Term, c: Term) -> Term {
         let (ab, ac, bc) = (
             self.pool.and(a, b),
             self.pool.and(a, c),
@@ -108,7 +108,7 @@ impl Cpu<'_> {
         self.xor3(ab, ac, bc)
     }
 
-    fn sum(&mut self, terms: &[Term]) -> Term {
+    pub(in crate::prove::exec) fn sum(&mut self, terms: &[Term]) -> Term {
         self.pool.sum(32, terms)
     }
 
@@ -153,7 +153,11 @@ impl Cpu<'_> {
     }
 
     /// MixColumns, or InvMixColumns, on the four columns of a 16-byte state.
-    fn mix_columns(&mut self, state: &[Term], inverse: bool) -> Vec<Term> {
+    pub(in crate::prove::exec) fn mix_columns(
+        &mut self,
+        state: &[Term],
+        inverse: bool,
+    ) -> Vec<Term> {
         let matrix: [[u8; 4]; 4] = if inverse {
             [
                 [14, 11, 13, 9],
@@ -181,7 +185,13 @@ impl Cpu<'_> {
     /// One AES round on a 16-byte lane, as `aesenc` (`last` without MixColumns) or, `decrypt`,
     /// `aesdec` computes it: ShiftRows and SubBytes, or their inverses, then MixColumns or its
     /// inverse, then the round key.
-    fn aes_round(&mut self, state: &[Term], key: &[Term], decrypt: bool, last: bool) -> Vec<Term> {
+    pub(in crate::prove::exec) fn aes_round(
+        &mut self,
+        state: &[Term],
+        key: &[Term],
+        decrypt: bool,
+        last: bool,
+    ) -> Vec<Term> {
         let mut shifted = Vec::with_capacity(16);
         for column in 0..4 {
             for row in 0..4 {

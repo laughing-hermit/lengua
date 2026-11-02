@@ -267,11 +267,13 @@ pub struct CpuFeatures {
     pub avx512vpopcntdq: bool,
     /// VEX-encoded dot products (`vpdpbusd` on AVX registers).
     pub avxvnni: bool,
-    /// AES rounds on 128-bit lanes (`aesenc`, `aesdec`, …).
+    /// AES rounds on 128-bit lanes (`aesenc`, `aesdec`, …), and on AArch64 its AES extension
+    /// (`aese`, `aesd`, `aesmc`, `aesimc`).
     pub aes: bool,
     /// AES rounds on 256-bit and 512-bit registers (`vaesenc ymm0, …`).
     pub vaes: bool,
-    /// SHA-1 and SHA-256 rounds (`sha256rnds2`, …).
+    /// SHA-1 and SHA-256 rounds (`sha256rnds2`, …), and on AArch64 its SHA2 extension
+    /// (`sha1c`, `sha256h` and the rest).
     pub sha: bool,
     /// Carry-less multiplication (`pclmulqdq`), for CRCs and hashes.
     pub pclmulqdq: bool,
@@ -363,6 +365,8 @@ impl Target {
             Some(_) => CpuFeatures {
                 crc: true,
                 pmull: true,
+                aes: true,
+                sha: true,
                 sve: emulated_sve_bytes(),
                 ..CpuFeatures::default()
             },
@@ -575,6 +579,8 @@ fn cpu_features() -> CpuFeatures {
     CpuFeatures {
         crc: has_crc(),
         pmull: has_pmull(),
+        aes: has_aes(),
+        sha: has_sha2(),
         sve: sve_bytes(),
         ..CpuFeatures::default()
     }
@@ -685,6 +691,31 @@ fn has_pmull() -> bool {
 /// No other CPU has AArch64's `pmull`.
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 const fn has_pmull() -> bool {
+    false
+}
+
+/// Whether this ARM64 CPU has the AES instructions (`aese` and the rest).
+#[cfg(target_arch = "aarch64")]
+fn has_aes() -> bool {
+    std::arch::is_aarch64_feature_detected!("aes")
+}
+
+/// No other CPU has AArch64's AES instructions.
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+const fn has_aes() -> bool {
+    false
+}
+
+/// Whether this ARM64 CPU has the SHA-1 and SHA-256 instructions (`sha1c`, `sha256h` and the
+/// rest), the SHA2 extension.
+#[cfg(target_arch = "aarch64")]
+fn has_sha2() -> bool {
+    std::arch::is_aarch64_feature_detected!("sha2")
+}
+
+/// No other CPU has AArch64's SHA instructions.
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+const fn has_sha2() -> bool {
     false
 }
 

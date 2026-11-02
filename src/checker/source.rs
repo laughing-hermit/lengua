@@ -1204,7 +1204,7 @@ impl Parser {
             // one), and `sve` for the scalable vectors' subset.
             ".arch_extension"
                 if self.source.isa == Isa::Aarch64
-                    && matches!(arguments, "crc" | "aes" | "sve") => {}
+                    && matches!(arguments, "crc" | "aes" | "sha2" | "sve") => {}
             ".macro" | ".endm" | ".rept" | ".irp" | ".irpc" | ".endr" | ".if" | ".ifdef"
             | ".ifndef" | ".else" | ".endif" | ".include" | ".incbin" | ".set" => self.violation(
                 Rule::Constants,

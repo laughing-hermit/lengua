@@ -1794,6 +1794,51 @@ async fn aarch64_pmull_needs_a_cpu_with_pmull() {
     );
 }
 
+/// AArch64's AES and SHA instructions are held to a CPU with the AES and SHA2 extensions, as
+/// x86-64's are to one with AES-NI and SHA.
+#[tokio::test]
+async fn aarch64_aes_and_sha_need_a_cpu_with_them() {
+    let text = crate::checker::AARCH64_TEMPLATE
+        .replacen(
+            ".arch armv8-a\n",
+            ".arch armv8-a\n.arch_extension aes\n.arch_extension sha2\n",
+            1,
+        )
+        .replacen(
+            "_start:\n",
+            "_start:\n    aese v0.16b, v1.16b\n    sha256h q0, q1, v2.4s\n",
+            1,
+        );
+    let syscalls = [Syscall::Write, Syscall::Exit];
+    let without = CpuFeatures {
+        aes: false,
+        sha: false,
+        ..CpuFeatures::all()
+    };
+    let report = check_full(&text, without, &syscalls, None).await;
+    assert_violation(
+        &report,
+        Rule::Dialect,
+        line_of(&text, "    aese v0.16b, v1.16b"),
+        "needs the AES extension, which this CPU doesn't have",
+    );
+    assert_violation(
+        &report,
+        Rule::Dialect,
+        line_of(&text, "    sha256h q0, q1, v2.4s"),
+        "needs the SHA2 extension, which this CPU doesn't have",
+    );
+    let with = check_full(&text, CpuFeatures::all(), &syscalls, None).await;
+    assert!(
+        !with
+            .violations
+            .iter()
+            .any(|violation| violation.problem.contains("extension")),
+        "{:?}",
+        with.violations
+    );
+}
+
 /// Threads on AArch64 are held to the same rules as x86-64's: the canonical functions copied
 /// word for word from AArch64's template, a worker reaching only its own slot through x19, and
 /// threads only where the spec allows them.

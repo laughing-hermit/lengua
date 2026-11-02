@@ -2136,16 +2136,21 @@ fn machine_line(machine: &Machine, target: &Target) -> String {
             .into_iter()
             .filter(|(name, present)| {
                 *present == serde_json::Value::Bool(true)
-                    && !["crc", "pmull"].contains(&name.as_str())
+                    && !["crc", "pmull", "sve"].contains(&name.as_str())
             })
             .map(|(name, _)| name.replace("sse4_", "sse4."))
             .collect::<Vec<_>>(),
-        _ => [("crc", available.crc), ("pmull", available.pmull)]
-            .into_iter()
-            .filter(|(_, present)| *present)
-            .map(|(name, _)| name.to_owned())
-            .chain((available.sve > 0).then(|| format!("sve (vectors of {} bytes)", available.sve)))
-            .collect(),
+        _ => [
+            ("crc", available.crc),
+            ("pmull", available.pmull),
+            ("aes", available.aes),
+            ("sha", available.sha),
+        ]
+        .into_iter()
+        .filter(|(_, present)| *present)
+        .map(|(name, _)| name.to_owned())
+        .chain((available.sve > 0).then(|| format!("sve (vectors of {} bytes)", available.sve)))
+        .collect(),
     };
     format!(
         "{}, {}; main.s may use the base instructions{}",

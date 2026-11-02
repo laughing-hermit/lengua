@@ -37,6 +37,9 @@ fn outside(word: u32) -> String {
 ///
 /// Why the word isn't in the dialect's subset.
 pub fn decode(word: u32, address: u64) -> Result<Inst, String> {
+    if let Some((op, rd, rn, rm)) = super::crypto::decode(word) {
+        return Ok(Inst::Crypto { op, rd, rn, rm });
+    }
     match bits(word, 28, 25) {
         0b1000 | 0b1001 => immediate(word, address),
         0b1010 | 0b1011 => branch(word, address),

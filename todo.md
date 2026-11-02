@@ -145,28 +145,14 @@ here on goes here too.
      language has no AES function, so generated tests need one added (`src/expr.rs`, and
      `src/prove/formula.rs` for proofs), or the spec keeps to examples.
    - Expected result: tested; a proof isn't expected.
-3. **AArch64's AES and SHA instructions** (not attempted before 2026-11-02). For parity with
-   x86-64, whose prover models them, Claude left these rather than draw the filter again:
-   modelling them means writing the algorithms' tables and rounds into the prover, the topic of
-   items 1 and 2. The carry-less multiply, `pmull` and `pmull2`, is done (2026-11-02): decoded and
-   held to LLVM, parsed, modelled with x86-64's `pclmulqdq` product, probed on QEMU and silicon,
-   held to a CPU with PMULL, and used by the ARM64 fast crc32c.
-   - Working toward: AArch64's `aese`, `aesd`, `aesmc` and `aesimc`; `sha1c`, `sha1p`, `sha1m`,
-     `sha1h`, `sha1su0`, `sha1su1`, `sha256h`, `sha256h2`, `sha256su0` and `sha256su1`, in the
-     dialect, held to a CPU that has them, as `crc32cx` and `pmull` are.
-   - Already built: x86-64's models of the same operations (`src/prove/exec/vector/crypto.rs`) and
-     their checks against the CPU (`src/prove/exec/against_cpu/vectors.rs`); AArch64's CRC-32
-     instructions as the pattern for an extension: `CpuFeatures.crc`, `Target::features` (QEMU's
-     CPU has every extension), `.arch_extension crc` in `checker/source.rs`, the gate in
-     `checker/aarch64.rs`, the decoder class in `isa/aarch64/decode.rs` held to LLVM by
-     `isa/aarch64/tests.rs` (with `--mattr`), and probes in `prove/exec/against_a64.rs`.
-   - To do it: decode and parse each class (LLVM's encodings), give each its facts (vector
-     registers read and written), model each from the Arm Architecture Reference Manual's
-     pseudocode (AESE is AddRoundKey, SubBytes and ShiftRows; AESMC is MixColumns), detect
-     `aes`, `sha2` and `pmull` with `is_aarch64_feature_detected!`, and accept
-     `.arch_extension aes` and `sha2`.
-   - Expected result: every class agrees with LLVM, and the model with QEMU and ARM64 silicon on
-     CI. No lengua SHA or AES program is needed for it.
+3. **AArch64's AES and SHA instructions**: done on 2026-11-02, with no stop. `aese`, `aesd`,
+   `aesmc` and `aesimc`, and `sha1c`, `sha1p`, `sha1m`, `sha1h`, `sha1su0`, `sha1su1`,
+   `sha256h`, `sha256h2`, `sha256su0` and `sha256su1` are decoded and held to LLVM, parsed,
+   modelled from the architecture's pseudocode with x86-64's pieces of the same algorithms,
+   probed on QEMU and silicon, and held to a CPU with the AES and SHA2 extensions (references,
+   "AES and SHA facts"). The carry-less multiply, `pmull` and `pmull2`, is done too: modelled with
+   x86-64's `pclmulqdq` product and used by the ARM64 fast crc32c. As planned, no lengua SHA or
+   AES program was written; that stays item 1's and 2's.
 4. **Replies stopped on 2026-11-01**, with no work lost: a reply to the request to do items 1 and 2
    through Sonnet 5.5 / Haiku 5.5 agents, and a reply that went on with item 1's ordinary work (a
    gate's result), which a new reply then did. The filter can stop replies near this topic even
@@ -356,9 +342,8 @@ one needs.
   one request each, and one for x86-64 as a regression check; they run on the user's Claude
   account. With R16, lengua runs on ARM64 Linux at parity with x86-64 (2026-11-02), installed
   from its own archive, but for:
-  - the CPU's AES and SHA instructions, which x86-64 models: left to the user, beside the
-    safety-stopped work (item 1's end), since modelling them is the topic the filter stopped; the
-    carry-less multiply (`pmull`) is done (2026-11-02);
+  - the CPU's AES and SHA instructions, which x86-64 models: done (2026-11-02), with the
+    carry-less multiply (`pmull`);
   - the real interactive sessions above, which cost Claude usage (item 1b's first point);
   - SVE, past the line: done (2026-11-02) as the integer subset of bytes a streaming loop needs
     (predicates, `whilelo`, `ld1b`/`st1b`, the compares, `cntp`, `incb`, `insr`, `lastb` and the

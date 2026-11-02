@@ -8,6 +8,7 @@
 //! #61, #60`. Only the dialect's subset has a form at all: anything else is refused, by
 //! construction.
 
+pub mod crypto;
 pub mod decode;
 pub mod facts;
 pub mod sve;
@@ -1043,6 +1044,17 @@ pub enum Inst {
     /// An SVE instruction of the dialect's subset: predicates, Z registers of the CPU's length,
     /// and their loads and stores.
     Sve(sve::Sve),
+    /// An AES or SHA instruction (the AES and SHA2 extensions), of whole V registers.
+    Crypto {
+        /// The operation.
+        op: crypto::Crypto,
+        /// The destination, which most also read.
+        rd: u8,
+        /// The second register.
+        rn: u8,
+        /// The third, for the three-register SHA instructions; 0 otherwise.
+        rm: u8,
+    },
     /// The carry-less products of two vectors' lanes, polynomials over GF(2): `pmull v0.8h,
     /// v1.8b, v2.8b`, each pair of bytes' product in a halfword, or `pmull v0.1q, v1.1d, v2.1d`,
     /// the doublewords' product in all 128 bits (the PMULL extension). `pmull2` takes the upper
@@ -1239,6 +1251,7 @@ impl fmt::Display for Inst {
         };
         match *self {
             Self::Sve(sve) => write!(formatter, "{sve}"),
+            Self::Crypto { op, rd, rn, rm } => crypto::write(formatter, op, rd, rn, rm),
             Self::AddImm {
                 rd,
                 rn,

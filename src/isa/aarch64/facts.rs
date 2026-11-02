@@ -96,6 +96,7 @@ const fn cond(cond: A64Cond) -> Cond {
 pub fn mnemonic(inst: &Inst) -> String {
     let name = match inst {
         Inst::Sve(sve) => sve.mnemonic(),
+        Inst::Crypto { op, .. } => op.name(),
         Inst::AddImm { sub, flags, .. } | Inst::AddShifted { sub, flags, .. } => {
             match (sub, flags) {
                 (false, false) => "add",
@@ -342,6 +343,21 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
     let a64 = Reg::A64;
     let (control, dst, operands, memory, op, value, stack) = match *inst {
         Inst::Sve(sve) => sve_facts(sve),
+        Inst::Crypto { op, rd, rn, rm } => {
+            let mut operands = vec![v_operand(rd), v_operand(rn)];
+            if op.three() {
+                operands.push(v_operand(rm));
+            }
+            (
+                Control::Next,
+                Some(v(rd)),
+                operands,
+                None,
+                Op::Other,
+                Value::Other,
+                Stack::Same,
+            )
+        }
         Inst::AddImm {
             sub,
             flags,
@@ -1177,6 +1193,16 @@ impl Facts {
         let x = |number| A64Reg::new(number, true, false);
         match *inst {
             Inst::Sve(sve) => self.read_sve(sve),
+            Inst::Crypto { op, rd, rn, rm } => {
+                if op.reads_destination() {
+                    self.reads_v(rd);
+                }
+                self.reads_v(rn);
+                if op.three() {
+                    self.reads_v(rm);
+                }
+                self.writes_v(rd);
+            }
             Inst::AddImm { rd, rn, .. }
             | Inst::LogicalImm { rd, rn, .. }
             | Inst::OneSource { rd, rn, .. } => {

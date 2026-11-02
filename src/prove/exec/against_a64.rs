@@ -558,6 +558,32 @@ fn probes(rng: &mut ChaCha8Rng) -> Vec<Probe> {
             list.push(probe(&[format!("{op} v{d}.{to}, {n}, {m}")]));
         }
     }
+    // AES's and SHA's instructions, of whole vectors.
+    let v = |rng: &mut ChaCha8Rng| rng.random_range(0..FP_REGISTERS);
+    for _ in 0..3 {
+        for op in ["aese", "aesd", "aesmc", "aesimc"] {
+            let (d, n) = (v(rng), v(rng));
+            list.push(probe(&[format!("{op} v{d}.16b, v{n}.16b")]));
+        }
+        for op in ["sha1c", "sha1p", "sha1m"] {
+            let (d, n, m) = (v(rng), v(rng), v(rng));
+            list.push(probe(&[format!("{op} q{d}, s{n}, v{m}.4s")]));
+        }
+        let (d, n) = (v(rng), v(rng));
+        list.push(probe(&[format!("sha1h s{d}, s{n}")]));
+        for op in ["sha1su0", "sha256su1"] {
+            let (d, n, m) = (v(rng), v(rng), v(rng));
+            list.push(probe(&[format!("{op} v{d}.4s, v{n}.4s, v{m}.4s")]));
+        }
+        for op in ["sha1su1", "sha256su0"] {
+            let (d, n) = (v(rng), v(rng));
+            list.push(probe(&[format!("{op} v{d}.4s, v{n}.4s")]));
+        }
+        for op in ["sha256h", "sha256h2"] {
+            let (d, n, m) = (v(rng), v(rng), v(rng));
+            list.push(probe(&[format!("{op} q{d}, q{n}, v{m}.4s")]));
+        }
+    }
     fp_probes(rng, &mut list);
     vector_probes(rng, &mut list);
     vector_float_probes(rng, &mut list);
@@ -789,6 +815,7 @@ fn harness(probes: &[Probe], capacity: usize) -> String {
         ".arch armv8-a
 .arch_extension crc
 .arch_extension aes
+.arch_extension sha2
 .text
 .globl _start
 .type _start, @function

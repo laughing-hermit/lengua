@@ -11,8 +11,8 @@ numbers, floating point in singles and doubles, vectors of whole numbers and of 
 text, standard input of any length through `fill`, files and folders, hash tables and word
 tallies, sorting, checked jump tables, servers (one client at a time or several at once), clients
 of a server on this computer, the terminal, threads, CRC-32 checksums with the CPU's
-instructions, carry-less multiplication (`pmull`), and SVE's scalable vectors of bytes. Not yet,
-so a spec that needs them is compiled for x86-64 for now: the CPU's AES and SHA instructions.
+instructions, carry-less multiplication (`pmull`), the CPU's AES and SHA instructions, and SVE's
+scalable vectors of bytes.
 
 ## Templates
 
@@ -250,6 +250,22 @@ with `exit`, and keeps what it needs across calls in `x19` to `x28` without savi
   `frecps`, `frsqrts`, `fmulx`), the conversions that round otherwise than toward zero (round
   first with an `frint`), the interleaving `ld2` to `ld4`, and the single-lane loads. SVE has its
   own section below.
+
+## AES and SHA facts
+
+- AArch64's AES and SHA instructions are extensions: write `.arch_extension aes` and
+  `.arch_extension sha2` with the others, and check holds them to a CPU that has them (`aes` and
+  `sha` on the machine line).
+- AES, a round at a time on a vector of 16 bytes: `aese v0.16b, v1.16b` XORs the key in v1 into
+  the state in v0, then SubBytes and ShiftRows; `aesmc v0.16b, v0.16b` is MixColumns, so a round
+  is `aese` then `aesmc`, and the last `aese` then an `eor` of the last key. `aesd` and `aesimc`
+  are the inverse.
+- SHA-1 and SHA-256, four rounds at a time: `sha1c q0, s1, v2.4s` (and `sha1p`, `sha1m`, each
+  with its round function) takes the state's a to d in q0, e in s1, and the message words with
+  their constants added in v2; `sha1h s1, s0` rotates a word; `sha1su0` and `sha1su1` step the
+  message schedule. `sha256h q0, q1, v2.4s` and `sha256h2 q1, q2, v2.4s` take the state's two
+  halves, and `sha256su0` and `sha256su1` its schedule. The test language's `sha256` checks
+  what a program computes with them.
 
 ## SVE facts
 

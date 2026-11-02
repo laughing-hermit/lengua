@@ -6,6 +6,7 @@
 
 use super::decode::bitmask;
 
+mod crypto;
 mod sve;
 mod vector;
 
@@ -517,6 +518,9 @@ impl Line<'_> {
     }
 
     fn instruction(&self) -> Result<Inst, String> {
+        if let Some(crypto) = self.crypto() {
+            return crypto;
+        }
         if let Some(sve) = self.sve() {
             return sve;
         }
