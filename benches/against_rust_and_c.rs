@@ -233,8 +233,13 @@ fn workloads() -> Vec<Workload> {
                 "lengua",
                 "plugin/skills/compile/assets/fast/histogram/main.s",
             )],
-            lengua_aarch64: &[],
-            about_aarch64: "",
+            lengua_aarch64: &[(
+                "lengua",
+                "plugin/skills/compile/assets/linux-aarch64/fast/histogram/main.s",
+            )],
+            about_aarch64: "Counts each byte value of 64 MiB on standard input. Every version \
+                            spreads neighboring bytes over four tables; lengua's takes four \
+                            bytes a step, one into each.",
             others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
             args: Vec::new(),
             stdin: large.clone(),
@@ -248,8 +253,13 @@ fn workloads() -> Vec<Workload> {
                     lengua's version runs three chains side by side and joins them with \
                     carry-less multiplies.",
             lengua: &[("lengua", "plugin/skills/compile/assets/fast/crc32c/main.s")],
-            lengua_aarch64: &[],
-            about_aarch64: "",
+            lengua_aarch64: &[(
+                "lengua",
+                "plugin/skills/compile/assets/linux-aarch64/fast/crc32c/main.s",
+            )],
+            about_aarch64: "The CRC-32C of 64 MiB on standard input. Every version uses the \
+                            CPU's crc32cx instruction 8 bytes at a time, one chain that waits \
+                            on itself.",
             others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
             args: Vec::new(),
             stdin: large,

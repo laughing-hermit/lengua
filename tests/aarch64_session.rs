@@ -482,6 +482,52 @@ async fn the_aarch64_parallel_template_passes_its_tests() {
     session.service.cancel().await.expect("close the session");
 }
 
+/// The benchmark's own AArch64 programs, the fast wc, crc32c and histogram, each with its
+/// spec, pass every check through the server, as x86-64's do.
+#[tokio::test]
+async fn the_aarch64_benchmarks_own_programs_pass_their_checks() {
+    let session = if cfg!(target_arch = "aarch64") {
+        Session::proving_for(Protocol::Discover, 60).await
+    } else if common::qemu_runs_aarch64() {
+        Session::emulating_for(Protocol::Discover, "linux-aarch64", 60).await
+    } else {
+        return;
+    };
+    let assets =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("plugin/skills/compile/assets");
+    for workload in ["wc", "crc32c", "histogram"] {
+        let read = |path: std::path::PathBuf| {
+            std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+        };
+        let program = written(
+            &session,
+            [
+                (
+                    "spec.md",
+                    read(assets.join("fast").join(workload).join("spec.md")),
+                ),
+                (
+                    "main.s",
+                    read(
+                        assets
+                            .join("linux-aarch64/fast")
+                            .join(workload)
+                            .join("main.s"),
+                    ),
+                ),
+            ],
+        )
+        .await;
+        let report = done(&session, &program).await;
+        assert!(
+            any_line(&report["tests"], "follows every rule and passed all"),
+            "{workload}: {report}"
+        );
+    }
+    session.service.cancel().await.expect("close the session");
+}
+
 /// The AArch64 cat, a streaming filter through `fill`, is proven for every length through the
 /// server, as x86-64's is: natively on an ARM64 computer, and through QEMU here.
 #[tokio::test]

@@ -1,7 +1,15 @@
 /* crc32c in C: the CRC-32C (Castagnoli) of standard input, in hex, with the CPU's crc32
-   instruction 8 bytes at a time. */
-#include <nmmintrin.h>
+   instruction 8 bytes at a time: x86-64's crc32, or AArch64's crc32cx. */
 #include <stdint.h>
+#if defined(__aarch64__)
+#include <arm_acle.h>
+#define CRC_WORD(crc, word) __crc32cd((uint32_t)(crc), (word))
+#define CRC_BYTE(crc, byte) __crc32cb((uint32_t)(crc), (byte))
+#else
+#include <nmmintrin.h>
+#define CRC_WORD(crc, word) _mm_crc32_u64((crc), (word))
+#define CRC_BYTE(crc, byte) _mm_crc32_u8((uint32_t)(crc), (byte))
+#endif
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -22,10 +30,10 @@ int main(void) {
         for (; i + 8 <= got; i += 8) {
             uint64_t word;
             memcpy(&word, buffer + i, 8);
-            crc = _mm_crc32_u64(crc, word);
+            crc = CRC_WORD(crc, word);
         }
         for (; i < got; i++) {
-            crc = _mm_crc32_u8((uint32_t)crc, buffer[i]);
+            crc = CRC_BYTE(crc, buffer[i]);
         }
     }
     printf("%u\n", (uint32_t)~crc);

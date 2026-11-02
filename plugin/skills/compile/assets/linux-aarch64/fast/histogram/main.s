@@ -1,0 +1,386 @@
+.arch armv8-a
+
+// System calls (Linux AArch64)
+.equ SYS_READ, 63
+.equ SYS_WRITE, 64
+.equ SYS_EXIT, 93
+// File descriptors
+.equ STDIN, 0
+.equ STDOUT, 1
+// Exit codes
+.equ EXIT_OK, 0
+.equ EXIT_IO_FAILED, 2
+// Error codes returned by functions marked "returns: result"
+.equ ERROR_IO, -5
+// Four tables of 256 counts each, so neighboring bytes never wait on the same counter, four
+// bytes a step, one into each.
+.equ VALUES, 256
+.equ TABLE_BYTES, 2048
+.equ COUNTS_LEN, 8192
+.equ FOUR, 4
+.equ FOURS, 262145
+// Sizes and limits
+.equ INPUT_LEN, 1048576
+.equ FOUR_SCAN, INPUT_LEN - FOUR + 1
+.equ MAX_READS, 1099511627776
+.equ MAX_DIGITS, 20
+.equ MAX_WRITES, 64
+.equ NEWLINE, 10
+.equ SPACE, 32
+// At most 256 lines of a 3-digit value, a space, a 20-digit count and a newline.
+.equ OUT_LEN, 6400
+
+.section .rodata
+
+.type assert_message, @object
+assert_message:
+    .ascii "lengua: assertion 000 failed\n"
+.size assert_message, . - assert_message
+
+.section .bss
+
+// Standard input as it comes.
+.type input, @object
+input:
+    .zero INPUT_LEN
+.size input, . - input
+
+// The four tables of counts, one after another.
+.type counts, @object
+counts:
+    .zero COUNTS_LEN
+.size counts, . - counts
+
+// Every line it prints, built from the end.
+.type out, @object
+out:
+    .zero OUT_LEN
+.size out, . - out
+
+.text
+.globl _start
+
+// Counts each byte value of standard input, a read at a time, then prints the values that occur.
+.type _start, @function
+_start:
+    mov x19, #MAX_READS
+.Lstart_read:  // bound: 1099511627776
+    mov x0, #STDIN
+    adrp x1, input
+    add x1, x1, :lo12:input
+    mov x2, #INPUT_LEN
+    mov x8, #SYS_READ
+    svc #0
+    tbnz x0, #63, .Lstart_failed
+    cbz x0, .Lstart_print
+    cmp x0, #INPUT_LEN
+    b.hi .Lstart_assert_count
+    mov x1, x0
+    adrp x0, input
+    add x0, x0, :lo12:input
+    adrp x2, counts
+    add x2, x2, :lo12:counts
+    bl count_bytes
+    subs x19, x19, #1
+    b.ne .Lstart_read
+    b .Lstart_assert_reads
+.Lstart_print:
+    adrp x0, counts
+    add x0, x0, :lo12:counts
+    bl print_histogram
+    tbnz x0, #63, .Lstart_failed
+    mov w0, #EXIT_OK
+    b .Lstart_exit
+.Lstart_failed:
+    mov w0, #EXIT_IO_FAILED
+.Lstart_exit:
+    mov x8, #SYS_EXIT
+    svc #0
+.Lstart_assert_count:
+    mov w0, #1
+    bl assert_fail
+.Lstart_assert_reads:
+    mov w0, #2
+    bl assert_fail
+.size _start, . - _start
+
+// Adds each byte to the count of its value, four at a step, one into each of the four tables.
+// In: x0 = the bytes; x1 = how many, up to INPUT_LEN; x2 = the four tables, COUNTS_LEN bytes.
+.type count_bytes, @function
+count_bytes:
+    stp x29, x30, [sp, #-16]!
+    cbz x0, .Lcount_bytes_assert_bytes
+    cbz x2, .Lcount_bytes_assert_counts
+    cmp x1, #INPUT_LEN
+    b.hi .Lcount_bytes_assert_length
+    add x3, x2, #TABLE_BYTES
+    add x4, x3, #TABLE_BYTES
+    add x5, x4, #TABLE_BYTES
+    mov x9, #0
+    mov x11, #FOURS & 0xffff
+    movk x11, #FOURS >> 16, lsl #16
+.Lcount_bytes_four:  // bound: 262145
+    add x12, x9, #FOUR
+    cmp x12, x1
+    b.hi .Lcount_bytes_rest
+    // The last place four bytes start, too wide for cmp's number, held in a register.
+    mov x13, #FOUR_SCAN & 0xffff
+    movk x13, #FOUR_SCAN >> 16, lsl #16
+    cmp x9, x13
+    b.hs .Lcount_bytes_assert_index
+    ldr w14, [x0, x9]
+    // unsafe: each index is one byte, 0 to 255, and each table holds 256 counts
+    and x15, x14, #0xff
+    ldr x16, [x2, x15, lsl #3]
+    add x16, x16, #1
+    str x16, [x2, x15, lsl #3]
+    ubfx x15, x14, #8, #8
+    ldr x16, [x3, x15, lsl #3]
+    add x16, x16, #1
+    str x16, [x3, x15, lsl #3]
+    ubfx x15, x14, #16, #8
+    ldr x16, [x4, x15, lsl #3]
+    add x16, x16, #1
+    str x16, [x4, x15, lsl #3]
+    lsr x15, x14, #24
+    ldr x16, [x5, x15, lsl #3]
+    add x16, x16, #1
+    str x16, [x5, x15, lsl #3]
+    // end unsafe
+    add x9, x9, #FOUR
+    subs x11, x11, #1
+    b.ne .Lcount_bytes_four
+    b .Lcount_bytes_assert_fours
+.Lcount_bytes_rest:
+    add x0, x0, x9
+    sub x1, x1, x9
+    bl count_rest
+    ldp x29, x30, [sp], #16
+    ret
+.Lcount_bytes_assert_bytes:
+    mov w0, #6
+    bl assert_fail
+.Lcount_bytes_assert_counts:
+    mov w0, #7
+    bl assert_fail
+.Lcount_bytes_assert_length:
+    mov w0, #8
+    bl assert_fail
+.Lcount_bytes_assert_index:
+    mov w0, #9
+    bl assert_fail
+.Lcount_bytes_assert_fours:
+    mov w0, #10
+    bl assert_fail
+.size count_bytes, . - count_bytes
+
+// Adds the last bytes, fewer than four, to the counts of their values in the first table.
+// In: x0 = the bytes; x1 = how many, 0 to 3; x2 = the four tables, COUNTS_LEN bytes.
+.type count_rest, @function
+count_rest:
+    cbz x2, .Lcount_rest_assert_counts
+    cmp x1, #FOUR
+    b.hs .Lcount_rest_assert_length
+    mov x9, #0
+    mov x11, #FOUR
+.Lcount_rest_loop:  // bound: 4
+    cmp x9, x1
+    b.hs .Lcount_rest_done
+    cmp x9, #FOUR
+    b.hs .Lcount_rest_assert_index
+    ldrb w15, [x0, x9]
+    // unsafe: the index is one byte, 0 to 255, and the table holds 256 counts
+    ldr x16, [x2, x15, lsl #3]
+    add x16, x16, #1
+    str x16, [x2, x15, lsl #3]
+    // end unsafe
+    add x9, x9, #1
+    subs x11, x11, #1
+    b.ne .Lcount_rest_loop
+.Lcount_rest_done:
+    ret
+.Lcount_rest_assert_counts:
+    mov w0, #11
+    bl assert_fail
+.Lcount_rest_assert_length:
+    mov w0, #14
+    bl assert_fail
+.Lcount_rest_assert_index:
+    mov w0, #15
+    bl assert_fail
+.size count_rest, . - count_rest
+
+// Prints a line for each byte value that occurs, smallest first: the value, a space, the count.
+// In: x0 = the four tables of counts.
+// Out: x0 = 0, or a negative error code.
+// returns: result
+.type print_histogram, @function
+print_histogram:
+    stp x29, x30, [sp, #-16]!
+    stp x19, x20, [sp, #-16]!
+    stp x21, x22, [sp, #-16]!
+    stp x23, x24, [sp, #-16]!
+    cbz x0, .Lprint_histogram_assert_counts
+    mov x19, x0
+    adrp x20, out
+    add x20, x20, :lo12:out
+    mov x9, #OUT_LEN
+    add x20, x20, x9
+    mov x21, x20
+    mov x22, #VALUES - 1
+    mov x23, #VALUES
+.Lprint_histogram_loop:  // bound: 256
+    cmp x22, #VALUES
+    b.hs .Lprint_histogram_assert_value
+    add x9, x19, x22, lsl #3
+    ldr x10, [x9]
+    ldr x11, [x9, #TABLE_BYTES]
+    add x10, x10, x11
+    ldr x11, [x9, #2 * TABLE_BYTES]
+    add x10, x10, x11
+    ldr x11, [x9, #3 * TABLE_BYTES]
+    add x10, x10, x11
+    cbz x10, .Lprint_histogram_next
+    mov w11, #NEWLINE
+    strb w11, [x21, #-1]!
+    mov x0, x10
+    mov x1, x21
+    bl digits
+    mov w11, #SPACE
+    strb w11, [x0, #-1]!
+    mov x1, x0
+    mov x0, x22
+    bl digits
+    mov x21, x0
+.Lprint_histogram_next:
+    sub x22, x22, #1
+    subs x23, x23, #1
+    b.ne .Lprint_histogram_loop
+    subs x2, x20, x21
+    b.eq .Lprint_histogram_empty
+    mov x1, x21
+    mov x0, #STDOUT
+    bl write_all
+    tbnz x0, #63, .Lprint_histogram_return
+.Lprint_histogram_empty:
+    mov x0, #0
+.Lprint_histogram_return:
+    ldp x23, x24, [sp], #16
+    ldp x21, x22, [sp], #16
+    ldp x19, x20, [sp], #16
+    ldp x29, x30, [sp], #16
+    ret
+.Lprint_histogram_assert_counts:
+    mov w0, #12
+    bl assert_fail
+.Lprint_histogram_assert_value:
+    mov w0, #13
+    bl assert_fail
+.size print_histogram, . - print_histogram
+
+// Writes a whole number's decimal digits just before a place in memory.
+// In: x0 = the number; x1 = where the digits end.
+// Out: x0 = where they start.
+.type digits, @function
+digits:
+    cbz x1, .Ldigits_assert_end
+    mov x9, x0
+    mov x10, #10
+    mov x11, #MAX_DIGITS
+.Ldigits_loop:  // bound: 20
+    udiv x12, x9, x10
+    msub x13, x12, x10, x9
+    add w13, w13, #48
+    strb w13, [x1, #-1]!
+    mov x9, x12
+    cbz x9, .Ldigits_done
+    subs x11, x11, #1
+    b.ne .Ldigits_loop
+    b .Ldigits_assert_digits
+.Ldigits_done:
+    mov x0, x1
+    ret
+.Ldigits_assert_end:
+    mov w0, #20
+    bl assert_fail
+.Ldigits_assert_digits:
+    mov w0, #21
+    bl assert_fail
+.size digits, . - digits
+
+// Writes x2 bytes from x1 to file descriptor x0, retrying partial writes.
+// In: x0 = the file descriptor, x1 = the bytes, x2 = how many, at least 1.
+// Out: x0 = 0, or a negative error code.
+// returns: result
+.type write_all, @function
+write_all:
+    cbz x1, .Lwrite_all_assert_null
+    cbz x2, .Lwrite_all_assert_empty
+    mov x9, x0
+    mov x10, #MAX_WRITES
+.Lwrite_all_loop:  // bound: 64
+    mov x0, x9
+    mov x8, #SYS_WRITE
+    svc #0
+    tbnz x0, #63, .Lwrite_all_return
+    cmp x0, x2
+    b.hi .Lwrite_all_assert_count
+    add x1, x1, x0
+    subs x2, x2, x0
+    b.eq .Lwrite_all_done
+    subs x10, x10, #1
+    b.ne .Lwrite_all_loop
+    mov x0, #ERROR_IO
+    b .Lwrite_all_return
+.Lwrite_all_done:
+    mov x0, #0
+.Lwrite_all_return:
+    ret
+.Lwrite_all_assert_null:
+    mov w0, #30
+    bl assert_fail
+.Lwrite_all_assert_empty:
+    mov w0, #31
+    bl assert_fail
+.Lwrite_all_assert_count:
+    mov w0, #32
+    bl assert_fail
+.size write_all, . - write_all
+
+// lengua's assertion handler. check compares it word for word: copy it exactly.
+// In: w0 = the assertion's number, 1 to 999. Prints "lengua: assertion NNN failed" to
+// standard error and ends the program, every thread of it, with code 134.
+.type assert_fail, @function
+assert_fail:
+    sub sp, sp, #32
+    adrp x1, assert_message
+    add x1, x1, :lo12:assert_message
+    ldp x2, x3, [x1]
+    stp x2, x3, [sp]
+    ldr x2, [x1, #16]
+    str x2, [sp, #16]
+    ldr w2, [x1, #24]
+    str w2, [sp, #24]
+    ldrb w2, [x1, #28]
+    strb w2, [sp, #28]
+    mov w2, #100
+    udiv w3, w0, w2
+    msub w0, w3, w2, w0
+    add w3, w3, #48
+    strb w3, [sp, #18]
+    mov w2, #10
+    udiv w3, w0, w2
+    msub w0, w3, w2, w0
+    add w3, w3, #48
+    strb w3, [sp, #19]
+    add w0, w0, #48
+    strb w0, [sp, #20]
+    mov x0, #2
+    mov x1, sp
+    mov x2, #29
+    mov x8, #64
+    svc #0
+    mov x0, #134
+    mov x8, #94
+    svc #0
+.size assert_fail, . - assert_fail

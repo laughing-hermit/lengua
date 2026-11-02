@@ -1703,6 +1703,10 @@ async fn every_aarch64_asset_follows_every_rule() {
         ("fast/wc/spec.md", "linux-aarch64/fast/wc/main.s"),
         ("fast/crc32c/spec.md", "linux-aarch64/fast/crc32c/main.s"),
         (
+            "fast/histogram/spec.md",
+            "linux-aarch64/fast/histogram/main.s",
+        ),
+        (
             "parallel-template-spec.md",
             "linux-aarch64/parallel-template.s",
         ),
