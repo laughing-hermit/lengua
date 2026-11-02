@@ -1196,6 +1196,8 @@ impl Parser {
                 ".intel_syntax appears again",
                 "write it once, at the top",
             ),
+            // AArch64's CRC-32 instructions, which check holds to a CPU that has them.
+            ".arch_extension" if self.source.isa == Isa::Aarch64 && arguments == "crc" => {}
             ".macro" | ".endm" | ".rept" | ".irp" | ".irpc" | ".endr" | ".if" | ".ifdef"
             | ".ifndef" | ".else" | ".endif" | ".include" | ".incbin" | ".set" => self.violation(
                 Rule::Constants,

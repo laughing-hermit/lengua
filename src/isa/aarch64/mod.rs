@@ -855,6 +855,21 @@ pub enum Inst {
         /// The condition.
         cond: A64Cond,
     },
+    /// `crc32b` to `crc32x`, and `crc32cb` to `crc32cx`: a CRC-32 state in a `w` register, taking
+    /// `size` bytes of data from the lowest, one CRC step each, in the IEEE polynomial or, with
+    /// `castagnoli`, CRC-32C's.
+    Crc {
+        /// CRC-32C's polynomial, as x86-64's `crc32` uses, rather than the IEEE one.
+        castagnoli: bool,
+        /// How many bytes of data: 1, 2, 4 or 8.
+        size: u8,
+        /// Where the new state goes.
+        rd: A64Reg,
+        /// The state.
+        rn: A64Reg,
+        /// The data: a `w` register, or an `x` register for 8 bytes.
+        rm: A64Reg,
+    },
     /// `udiv`/`sdiv`/`lslv`/`lsrv`/`asrv`/`rorv`.
     TwoSource {
         /// The operation.
@@ -1263,7 +1278,9 @@ impl fmt::Display for Inst {
             Self::CondSelect {
                 rd, rn, rm, cond, ..
             } => write!(formatter, "{name} {rd}, {rn}, {rm}, {}", cond.name()),
-            Self::TwoSource { rd, rn, rm, .. } => write!(formatter, "{name} {rd}, {rn}, {rm}"),
+            Self::TwoSource { rd, rn, rm, .. } | Self::Crc { rd, rn, rm, .. } => {
+                write!(formatter, "{name} {rd}, {rn}, {rm}")
+            }
             Self::OneSource { rd, rn, .. } => write!(formatter, "{name} {rd}, {rn}"),
             Self::ThreeSource {
                 op, rd, rn, rm, ra, ..

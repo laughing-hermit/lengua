@@ -431,7 +431,7 @@ pub fn map<'a>(
                                 .into(),
                         });
                     }
-                    aarch64_checks::check_instruction(step, word, violations);
+                    aarch64_checks::check_instruction(step, word, features, violations);
                 }
                 aarch64_checks::check_pairs(function, violations);
                 continue;

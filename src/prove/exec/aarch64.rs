@@ -23,7 +23,7 @@ use crate::isa::aarch64::{
     A64Cond, A64Reg, Access, Address, Extend, Field, Gpr, Indirect, Inst, Logic, One, Select,
     Shift, Three, Two, Wide,
 };
-use crate::prove::term::Term;
+use crate::prove::term::{CASTAGNOLI, Term, ZLIB};
 
 /// sp's slot.
 const SP: usize = 31;
@@ -233,6 +233,25 @@ impl Cpu<'_> {
             Inst::TwoSource { op, rd, rn, rm } => {
                 let value = self.two_source(op, rd, rn, rm);
                 self.set_x(rd, value);
+                Ok(Step::Next)
+            }
+            // The state takes the data's bytes from the lowest, one CRC step each, as x86-64's
+            // crc32 does.
+            Inst::Crc {
+                castagnoli,
+                size,
+                rd,
+                rn,
+                rm,
+            } => {
+                let poly = if castagnoli { CASTAGNOLI } else { ZLIB };
+                let data = self.x(rm);
+                let mut state = self.x(rn);
+                for byte in 0..u32::from(size) {
+                    let part = self.pool.extract(data, byte * 8 + 7, byte * 8);
+                    state = self.pool.crc(state, part, poly);
+                }
+                self.set_x(rd, state);
                 Ok(Step::Next)
             }
             Inst::OneSource { op, rd, rn } => {

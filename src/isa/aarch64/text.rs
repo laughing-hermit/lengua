@@ -689,6 +689,8 @@ impl Line<'_> {
             "mul" | "mneg" | "smull" | "umull" | "smnegl" | "umnegl" => self.product(),
             "ldp" | "stp" | "ldpsw" => self.pair(),
             "ldar" => self.load_acquire(),
+            "crc32b" | "crc32h" | "crc32w" | "crc32x" | "crc32cb" | "crc32ch" | "crc32cw"
+            | "crc32cx" => self.crc(),
             _ => self.load_store(),
         }
     }
@@ -1381,6 +1383,32 @@ impl Line<'_> {
             access,
             rt,
             address,
+        })
+    }
+
+    /// The CRC-32 steps: a state in `w` registers and data of 1, 2, 4 or 8 bytes, in an `x`
+    /// register only for 8.
+    fn crc(&self) -> Result<Inst, String> {
+        self.count(3)?;
+        let name = self.mnemonic;
+        let size = match name.chars().last() {
+            Some('b') => 1,
+            Some('h') => 2,
+            Some('w') => 4,
+            _ => 8,
+        };
+        let (rd, rn, rm) = (self.reg(0)?, self.reg(1)?, self.reg(2)?);
+        if rd.wide || rn.wide || rm.wide != (size == 8) {
+            return Err(self.problem(
+                "a CRC's state is in w registers, and its data in an x register only for 8 bytes",
+            ));
+        }
+        Ok(Inst::Crc {
+            castagnoli: name.starts_with("crc32c"),
+            size,
+            rd,
+            rn,
+            rm,
         })
     }
 

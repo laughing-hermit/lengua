@@ -23,7 +23,7 @@ const PER_CLASS: usize = 3000;
 /// Each encoding class the dialect has: its name, the bits that place a word in it, and their
 /// value. The classes whose fields are mostly unallocated fix more bits, so random words land on
 /// instructions.
-const CLASSES: [(&str, u32, u32); 56] = [
+const CLASSES: [(&str, u32, u32); 57] = [
     ("adr and adrp", 0x1f00_0000, 0x1000_0000),
     ("add and sub with a number", 0x1f80_0000, 0x1100_0000),
     ("logical with a bitmask", 0x1f80_0000, 0x1200_0000),
@@ -120,13 +120,18 @@ const CLASSES: [(&str, u32, u32); 56] = [
     ("fp pairwise into a scalar", 0xff3f_cc00, 0x7e30_c800),
     ("vector fmov", 0x9ff8_fc00, 0x0f00_f400),
     ("ldar", 0xbfff_fc00, 0x88df_fc00),
+    ("crc32 and crc32c", 0x7fe0_e000, 0x1ac0_4000),
 ];
 
 /// What LLVM's disassembler says of each word: its text, or none where it refuses the word or
 /// warns that its result isn't defined.
 fn llvm(words: &[u32]) -> Option<Vec<Option<String>>> {
     let mut child = Command::new("llvm-mc")
-        .args(["--disassemble", "--triple=aarch64-unknown-linux-gnu"])
+        .args([
+            "--disassemble",
+            "--triple=aarch64-unknown-linux-gnu",
+            "--mattr=+crc",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

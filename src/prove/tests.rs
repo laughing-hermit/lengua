@@ -2508,6 +2508,43 @@ async fn proves_an_aarch64_program_for_the_terminal() {
     }
 }
 
+/// The CRC-32C asset on AArch64, one chain of crc32cx then crc32cb, meets the formula's chain of
+/// byte steps, so each text proves without a question to the solvers, as x86-64's does.
+#[tokio::test]
+async fn proves_the_aarch64_crc32c_checksum() {
+    let spec = asset("fast/crc32c/spec.md")
+        .replace("Tests give it up to `1048576`", "Tests give it up to `100`")
+        .replace("string(0, 1048576,", "string(0, 100,");
+    assert!(spec.contains("string(0, 100,"), "{spec}");
+    let right = machine(&asset("linux-aarch64/fast/crc32c/main.s")).await;
+    let verdict = prove(&right, &block(&spec, 0), &text_budget());
+    assert!(
+        matches!(
+            &verdict,
+            Verdict::Proven {
+                bound: None,
+                questions: 0,
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
+}
+
+/// The AArch64 CRC-32C asset's own spec, every text up to the 4096 bytes a proof covers.
+#[tokio::test]
+#[ignore = "slow: 4097 lengths of text"]
+async fn proves_the_aarch64_crc32c_checksum_up_to_the_bound() {
+    let block = block(&asset("fast/crc32c/spec.md"), 0);
+    let machine = machine(&asset("linux-aarch64/fast/crc32c/main.s")).await;
+    let budget = Budget {
+        max_shapes: 100_000,
+        ..budget(300)
+    };
+    let verdict = prove(&machine, &block, &budget);
+    assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
+}
+
 /// The CRC-32C asset's own spec, every text up to the 4096 bytes a proof covers.
 #[tokio::test]
 #[ignore = "slow: 4097 lengths of text"]

@@ -9,6 +9,7 @@ use crate::isa::aarch64::{
     A64Reg, Address, Extend, Gpr, Indirect, Inst, Source, Writeback, facts, text,
 };
 use crate::isa::{Insn, MemRef, Op, Reg, Value};
+use crate::platform::CpuFeatures;
 
 /// The word's canonical form, or the word itself when it isn't in the dialect, for messages.
 #[must_use]
@@ -164,7 +165,8 @@ fn registers(inst: &Inst) -> Vec<A64Reg> {
         | Inst::LogicalShifted { rd, rn, rm, .. }
         | Inst::Extract { rd, rn, rm, .. }
         | Inst::CondSelect { rd, rn, rm, .. }
-        | Inst::TwoSource { rd, rn, rm, .. } => vec![rd, rn, rm],
+        | Inst::TwoSource { rd, rn, rm, .. }
+        | Inst::Crc { rd, rn, rm, .. } => vec![rd, rn, rm],
         Inst::ThreeSource { rd, rn, rm, ra, .. } => vec![rd, rn, rm, ra],
         Inst::MoveWide { rd, .. } | Inst::Adrp { rd, .. } | Inst::Adr { rd, .. } => vec![rd],
         Inst::CompareBranch { rt, .. } | Inst::TestBranch { rt, .. } => vec![rt],
@@ -228,7 +230,12 @@ fn address_registers(address: Address) -> Vec<A64Reg> {
 }
 
 /// What the dialect allows of the instruction the line became.
-pub(super) fn check_instruction(step: &Step<'_>, word: &Word, violations: &mut Vec<Violation>) {
+pub(super) fn check_instruction(
+    step: &Step<'_>,
+    word: &Word,
+    features: CpuFeatures,
+    violations: &mut Vec<Violation>,
+) {
     let Ok(inst) = &word.inst else {
         return;
     };
@@ -250,6 +257,12 @@ pub(super) fn check_instruction(step: &Step<'_>, word: &Word, violations: &mut V
             format!("`{text}` uses x18, the platform register on Apple's and Windows' ARM64"),
             "use another register: x0 to x15 for values that live within a function, x19 to x28 \
              for ones that live across calls",
+        );
+    }
+    if matches!(inst, Inst::Crc { .. }) && !features.crc {
+        refuse(
+            format!("`{text}` needs CRC, which this CPU doesn't have"),
+            "compute the checksum in software, as from a table, on a CPU without CRC",
         );
     }
     match *inst {

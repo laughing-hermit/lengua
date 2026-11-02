@@ -145,7 +145,28 @@ here on goes here too.
      language has no AES function, so generated tests need one added (`src/expr.rs`, and
      `src/prove/formula.rs` for proofs), or the spec keeps to examples.
    - Expected result: tested; a proof isn't expected.
-3. **Replies stopped on 2026-11-01**, with no work lost: a reply to the request to do items 1 and 2
+3. **AArch64's AES, SHA and carry-less multiply instructions** (not attempted, 2026-11-02). For
+   parity with x86-64, whose prover models them, Claude left these rather than draw the filter
+   again: modelling them means writing the algorithms' tables and rounds into the prover, the
+   topic of items 1 and 2.
+   - Working toward: AArch64's `aese`, `aesd`, `aesmc` and `aesimc`; `sha1c`, `sha1p`, `sha1m`,
+     `sha1h`, `sha1su0`, `sha1su1`, `sha256h`, `sha256h2`, `sha256su0` and `sha256su1`; and
+     `pmull`/`pmull2` (carry-less multiply, not itself crypto, but part of the AES extension), in
+     the dialect, held to a CPU that has them, as `crc32cx` is (2026-11-02).
+   - Already built: x86-64's models of the same operations (`src/prove/exec/vector/crypto.rs`) and
+     their checks against the CPU (`src/prove/exec/against_cpu/vectors.rs`); AArch64's CRC-32
+     instructions as the pattern for an extension: `CpuFeatures.crc`, `Target::features` (QEMU's
+     CPU has every extension), `.arch_extension crc` in `checker/source.rs`, the gate in
+     `checker/aarch64.rs`, the decoder class in `isa/aarch64/decode.rs` held to LLVM by
+     `isa/aarch64/tests.rs` (with `--mattr`), and probes in `prove/exec/against_a64.rs`.
+   - To do it: decode and parse each class (LLVM's encodings), give each its facts (vector
+     registers read and written), model each from the Arm Architecture Reference Manual's
+     pseudocode (AESE is AddRoundKey, SubBytes and ShiftRows; AESMC is MixColumns), detect
+     `aes`, `sha2` and `pmull` with `is_aarch64_feature_detected!`, and accept
+     `.arch_extension aes` and `sha2`.
+   - Expected result: every class agrees with LLVM, and the model with QEMU and ARM64 silicon on
+     CI. No lengua SHA or AES program is needed for it.
+4. **Replies stopped on 2026-11-01**, with no work lost: a reply to the request to do items 1 and 2
    through Sonnet 5.5 / Haiku 5.5 agents, and a reply that went on with item 1's ordinary work (a
    gate's result), which a new reply then did. The filter can stop replies near this topic even
    when the work in them is ordinary, so Claude leaves the topic and goes on with unrelated work.
@@ -290,7 +311,9 @@ one needs.
   echo server and fetch client, each as x86-64's is. R14 (2026-11-02): threads, the parallel
   template with clone, futex and `ldar` (the join's load-acquire, as glibc's pthread_join reads
   the id on ARM64), proven on several threads and held to x86-64's thread rules, which now read
-  each CPU's registers. Left of R10, skipped for
+  each CPU's registers. R15 (2026-11-02): the CRC-32 instructions, `crc32cx` and the rest, held to
+  a CPU that has them as x86-64's extensions are, and the fast crc32c from its spec unchanged,
+  proven with no solver question as x86-64's is. Left of R10, skipped for
   now at the user's word (2026-11-01) so
   it costs nothing: 4 to 6 real interactive Claude Code sessions compiling specs for AArch64 from
   one request each, and one for x86-64 as a regression check; they run on the user's Claude
@@ -299,7 +322,10 @@ one needs.
   - an install package for ARM64 Linux computers (today's release and installer are x86-64 only,
     and the ARM64 server is built only on CI);
   - SVE, past the line;
-  - the crypto and checksum instructions, and the histogram and crc32c benchmarks.
+  - the histogram and crc32c benchmarks;
+  - the CPU's AES, SHA and carry-less multiply instructions, which x86-64 models: left to the
+    user, beside the safety-stopped work (item 1's end), since modelling them is the topic the
+    filter stopped.
 - **macOS and Windows need more than a new CPU.** They don't allow a program to call the OS
   directly, as lengua's programs do; a program must go through the system library (libSystem,
   ntdll), which lengua never checked, and there is no seccomp or Landlock. So those four targets

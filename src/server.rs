@@ -726,7 +726,7 @@ impl LenguaServer {
                     checker::Context {
                         syscalls: &spec.syscalls,
                         threads: spec.threads,
-                        features: machine.features,
+                        features: target.features(&machine),
                         profile,
                     },
                 );
@@ -2096,12 +2096,16 @@ fn cost_line(cost: &testrun::Cost) -> String {
 
 /// The machine in one line: the target, its cores, and the CPU extensions main.s may use.
 fn machine_line(machine: &Machine, target: &Target) -> String {
-    let features = match serde_json::to_value(machine.features) {
+    let available = target.features(machine);
+    let features = match serde_json::to_value(available) {
         Ok(serde_json::Value::Object(features)) if target.profile.isa() == Isa::X86_64 => features
             .into_iter()
-            .filter(|(_, present)| *present == serde_json::Value::Bool(true))
+            .filter(|(name, present)| {
+                *present == serde_json::Value::Bool(true) && name.as_str() != "crc"
+            })
             .map(|(name, _)| name.replace("sse4_", "sse4."))
             .collect::<Vec<_>>(),
+        _ if available.crc => vec!["crc".to_owned()],
         _ => Vec::new(),
     };
     format!(
@@ -2663,7 +2667,8 @@ mod tests {
         assert!(!line.contains('\n'), "{line}");
         assert!(!line.contains("sse4_"), "{line}");
         assert!(line.starts_with(native.profile.name()), "{line}");
-        // Under QEMU, the target comes first and says what runs it, with no x86-64 extensions.
+        // Under QEMU, the target comes first and says what runs it, with the emulated CPU's
+        // extensions, never x86-64's.
         let emulated = Target {
             profile: Profile::LinuxAarch64,
             emulator: Some(Emulator {
@@ -2678,10 +2683,12 @@ mod tests {
             )),
             "{line}"
         );
+        // QEMU's CPU has every extension, of which the dialect allows AArch64's CRC-32.
         assert!(
-            line.ends_with("main.s may use the base instructions"),
+            line.ends_with("main.s may use the base instructions and crc"),
             "{line}"
         );
+        assert!(!line.contains("avx") && !line.contains("sse"), "{line}");
     }
 
     /// main.s's first line says which CPU's code it is; code for another stops check.

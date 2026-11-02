@@ -160,6 +160,18 @@ pub fn mnemonic(inst: &Inst) -> String {
             super::Select::Csinv => "csinv",
             super::Select::Csneg => "csneg",
         },
+        Inst::Crc {
+            castagnoli, size, ..
+        } => match (castagnoli, size) {
+            (false, 1) => "crc32b",
+            (false, 2) => "crc32h",
+            (false, 4) => "crc32w",
+            (false, _) => "crc32x",
+            (true, 1) => "crc32cb",
+            (true, 2) => "crc32ch",
+            (true, 4) => "crc32cw",
+            (true, _) => "crc32cx",
+        },
         Inst::TwoSource { op, .. } => match op {
             super::Two::Udiv => "udiv",
             super::Two::Sdiv => "sdiv",
@@ -496,7 +508,8 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
         ),
         Inst::Extract { rd, rn, rm, .. }
         | Inst::CondSelect { rd, rn, rm, .. }
-        | Inst::TwoSource { rd, rn, rm, .. } => (
+        | Inst::TwoSource { rd, rn, rm, .. }
+        | Inst::Crc { rd, rn, rm, .. } => (
             Control::Next,
             Some(a64(rd)),
             vec![operand(rd), operand(rn), operand(rm)],
@@ -1065,7 +1078,8 @@ impl Facts {
             | Inst::LogicalShifted { rd, rn, rm, .. }
             | Inst::Extract { rd, rn, rm, .. }
             | Inst::CondSelect { rd, rn, rm, .. }
-            | Inst::TwoSource { rd, rn, rm, .. } => {
+            | Inst::TwoSource { rd, rn, rm, .. }
+            | Inst::Crc { rd, rn, rm, .. } => {
                 self.reads_register(rn);
                 self.reads_register(rm);
                 self.writes_register(rd);

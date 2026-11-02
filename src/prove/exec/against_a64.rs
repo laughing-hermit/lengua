@@ -531,6 +531,14 @@ fn probes(rng: &mut ChaCha8Rng) -> Vec<Probe> {
         let rt = register(rng, wide);
         list.push(memory(&[format!("ldar {rt}, [x15]")]));
     }
+    // The CRC-32 steps of each size, in both polynomials.
+    for op in [
+        "crc32b", "crc32h", "crc32w", "crc32x", "crc32cb", "crc32ch", "crc32cw", "crc32cx",
+    ] {
+        let (d, n) = (register(rng, false), register(rng, false));
+        let m = register(rng, op.ends_with('x'));
+        list.push(probe(&[format!("{op} {d}, {n}, {m}")]));
+    }
     fp_probes(rng, &mut list);
     vector_probes(rng, &mut list);
     vector_float_probes(rng, &mut list);
@@ -760,6 +768,7 @@ fn harness(probes: &[Probe], capacity: usize) -> String {
     let bytes_in = capacity * VECTOR;
     let mut source = format!(
         ".arch armv8-a
+.arch_extension crc
 .text
 .globl _start
 .type _start, @function

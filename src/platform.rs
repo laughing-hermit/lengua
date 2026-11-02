@@ -284,6 +284,8 @@ pub struct CpuFeatures {
     pub vpclmulqdq: bool,
     /// Galois-field byte operations (`gf2p8affineqb`, `gf2p8mulb`).
     pub gfni: bool,
+    /// AArch64's CRC-32 instructions (`crc32cx` and the rest), optional before ARMv8.1.
+    pub crc: bool,
 }
 
 impl CpuFeatures {
@@ -321,6 +323,7 @@ impl CpuFeatures {
             pclmulqdq: true,
             vpclmulqdq: true,
             gfni: true,
+            crc: true,
         }
     }
 }
@@ -344,6 +347,19 @@ pub struct Target {
 }
 
 impl Target {
+    /// The CPU features main.s may use on this target: this computer's, or under QEMU the
+    /// emulated CPU's, which has AArch64's CRC-32 instructions.
+    #[must_use]
+    pub fn features(&self, machine: &Machine) -> CpuFeatures {
+        match self.emulator {
+            None => machine.features,
+            Some(_) => CpuFeatures {
+                crc: true,
+                ..CpuFeatures::default()
+            },
+        }
+    }
+
     /// The session's target: this computer's own, unless `requested`, the developer's
     /// `LENGUA_TARGET`, names another that QEMU's user mode runs here. Emulation is for
     /// developing lengua; the target of a session that isn't asked for one is always this
@@ -539,12 +555,28 @@ fn cpu_features() -> CpuFeatures {
         pclmulqdq: std::arch::is_x86_feature_detected!("pclmulqdq"),
         vpclmulqdq: std::arch::is_x86_feature_detected!("vpclmulqdq"),
         gfni: std::arch::is_x86_feature_detected!("gfni"),
+        crc: false,
     }
 }
 
 #[cfg(not(target_arch = "x86_64"))]
 fn cpu_features() -> CpuFeatures {
-    CpuFeatures::default()
+    CpuFeatures {
+        crc: has_crc(),
+        ..CpuFeatures::default()
+    }
+}
+
+/// Whether this ARM64 CPU has the CRC-32 instructions.
+#[cfg(target_arch = "aarch64")]
+fn has_crc() -> bool {
+    std::arch::is_aarch64_feature_detected!("crc")
+}
+
+/// No other CPU has AArch64's CRC-32 instructions.
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+const fn has_crc() -> bool {
+    false
 }
 
 #[cfg(test)]

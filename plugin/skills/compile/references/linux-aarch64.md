@@ -10,8 +10,9 @@ What AArch64 code covers so far, checked, tested and proven as x86-64's is: argu
 numbers, floating point in singles and doubles, vectors of whole numbers and of floats (NEON),
 text, standard input of any length through `fill`, files and folders, hash tables and word
 tallies, sorting, checked jump tables, servers (one client at a time or several at once), clients
-of a server on this computer, the terminal, and threads. Not yet, so a spec that needs them is
-compiled for x86-64 for now: the checksum and crypto instructions.
+of a server on this computer, the terminal, threads, and CRC-32 checksums with the CPU's
+instructions. Not yet, so a spec that needs them is compiled for x86-64 for now: the CPU's AES,
+SHA and carry-less multiply instructions.
 
 ## Templates
 
@@ -42,6 +43,9 @@ x86-64's is.
   worker's result can't be read before the id shows it ended: loads on ARM64 can pass each
   other. `ldar` of a whole `w` or `x` register from a base with no offset is the dialect's only
   ordered access.
+- [The fast crc32c](../assets/linux-aarch64/fast/crc32c/main.s) prints standard input's CRC-32C
+  from [its spec](../assets/fast/crc32c/spec.md), 8 bytes a step with `crc32cx` and the rest with
+  `crc32cb`.
 - [The fast `wc`](../assets/linux-aarch64/fast/wc/main.s) counts lines and words 16 bytes a step,
   each step masked to the bytes left, proven for every length with a 64 KiB buffer.
 
@@ -141,6 +145,18 @@ with `exit`, and keeps what it needs across calls in `x19` to `x28` without savi
 - **Assertions:** `mov w0, #N` and `bl assert_fail`, each number reached from one place, at least
   two a function on average, and below 990, fill's own.
 - **Exit codes:** `mov w0, #EXIT_NAME`.
+
+## CRC-32 facts
+
+- The CRC-32 instructions are an extension: write `.arch_extension crc` on the line after
+  `.arch armv8-a`, and check holds them to a CPU that has them, as the machine line lists (`crc`;
+  QEMU's CPU has them).
+- `crc32cx w0, w0, x13` takes 8 bytes of x13 into the CRC-32C state in w0, lowest byte first, as
+  x86-64's `crc32 rax, qword ptr […]` does; `crc32cb`, `crc32ch` and `crc32cw` take 1, 2 and 4
+  bytes from a `w` register. `crc32b` to `crc32x` are the same in the IEEE polynomial, zip's and
+  PNG's. The state starts as all ones and ends inverted (`mvn w0, w20`).
+- A step's 8-byte load is checked on its start: give the buffer 8 bytes past its last, so
+  `cmp x10, #BUFFER_FULL` and `b.hi` hold it inside, as the fast crc32c does.
 
 ## Integer facts
 

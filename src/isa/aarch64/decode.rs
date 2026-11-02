@@ -774,6 +774,20 @@ fn register(word: u32) -> Result<Inst, String> {
             Ok(Inst::OneSource { op, rd, rn })
         }
         0b0110 if !bit(word, 29) => {
+            // CRC-32: sf 0 0 11010110 Rm 010 C sz Rn Rd, an x register only for 8 bytes' data.
+            if amount >> 3 == 0b010 {
+                let size = bits(word, 11, 10);
+                if bit(word, 31) != (size == 3) {
+                    return Err(outside(word));
+                }
+                return Ok(Inst::Crc {
+                    castagnoli: bit(word, 12),
+                    size: 1 << size,
+                    rd: A64Reg::new(bits(word, 4, 0), false, false),
+                    rn: A64Reg::new(bits(word, 9, 5), false, false),
+                    rm: A64Reg::new(bits(word, 20, 16), size == 3, false),
+                });
+            }
             // Two sources: sf 0 0 11010110 Rm opcode Rn Rd.
             let op = match amount {
                 0b00_0010 => Two::Udiv,

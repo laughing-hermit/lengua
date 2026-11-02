@@ -1701,6 +1701,7 @@ async fn every_aarch64_asset_follows_every_rule() {
             "linux-aarch64/terminal-template.s",
         ),
         ("fast/wc/spec.md", "linux-aarch64/fast/wc/main.s"),
+        ("fast/crc32c/spec.md", "linux-aarch64/fast/crc32c/main.s"),
         (
             "parallel-template-spec.md",
             "linux-aarch64/parallel-template.s",
@@ -1727,6 +1728,28 @@ async fn every_aarch64_asset_follows_every_rule() {
         }
     }
     assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// AArch64's CRC-32 instructions are held to a CPU that has them, as x86-64's extensions are.
+#[tokio::test]
+async fn aarch64_crc_needs_a_cpu_with_crc() {
+    let text = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("plugin/skills/compile/assets/linux-aarch64/fast/crc32c/main.s"),
+    )
+    .expect("the program");
+    let syscalls = [Syscall::Read, Syscall::Write, Syscall::Exit];
+    let without = CpuFeatures {
+        crc: false,
+        ..CpuFeatures::all()
+    };
+    let report = check_full(&text, without, &syscalls, None).await;
+    assert_violation(
+        &report,
+        Rule::Dialect,
+        line_of(&text, "    crc32cx w0, w0, x13"),
+        "needs CRC, which this CPU doesn't have",
+    );
 }
 
 /// Threads on AArch64 are held to the same rules as x86-64's: the canonical functions copied
