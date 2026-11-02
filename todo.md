@@ -210,13 +210,18 @@ product Claude puts it at about two-thirds. What's left, most important first:
    existing library, so there's no HTTPS, database, compression or GUI, and memory is fixed up
    front from the spec's limits. HTTPS is the gap most programs hit. A way that keeps lengua's
    guarantees: the launcher, which already hands a server its socket, does TLS on it in Rust
-   (rustls), outside the program, so the program holds no crypto; a client's connection to a
-   named HTTPS host could go through the launcher the same way. Each such service is one
-   definition that every OS must be able to provide (item 3's limits).
+   (rustls), outside the program, so the program holds no crypto. Since 2026-11-02 lengua makes
+   every client connection itself and hands it over (below), to this computer or to a computer
+   the spec names, so a database or another server's own protocol is in reach; TLS on those
+   connections is next. Each such service is one definition that every OS must be able to
+   provide (item 3's limits).
 3. **Linux held to macOS's and Windows's limits:** item 3's audit, every item a limit to
-   establish by the strict rule (2026-11-02). The network first: a client's own `connect` rests
-   on Linux's sandbox and tracer, which Windows lacks, so it moves to the launcher (as servers'
-   sockets did) or is cut.
+   establish by the strict rule (2026-11-02). The network is done (2026-11-02): no program
+   connects by itself, on either Linux target; lengua makes each connection its spec names before
+   the program starts and hands it over as descriptor 4, 5 and on, as it binds a server's port.
+   What that leaves for later: a program gets one connection to each place its spec names, made
+   before it starts, so one that needs a connection for each client it serves (a proxy) or several
+   to one place needs a service of its own.
 4. **Hardening.** A red-team pass: programs written to escape the sandbox, to fool the rules or
    the memory checks, or to pass a proof they shouldn't; and fuzzing of everything the checker
    reads (main.s, the spec, the built ELF).
@@ -370,21 +375,19 @@ one needs.
   - a write to a closed pipe: a signal on Linux and macOS, an error on Windows;
   - an open file renamed or removed: Windows refuses it;
   - the order a folder lists in: each file system has its own;
-  - the network, first: Windows's sandbox for apps (AppContainer) can't hold a program to one
-    port, blocks the local network by default, and reaches this computer's own address only with
-    an administrator's exemption. Today a client program makes its own `connect`, held to the
-    spec's ports by Landlock and to this computer by lengua's supervisor, so the promise rests on
-    Linux's kernel and a tracer Windows doesn't have. By the strict rule, that is Linux's extra
-    freedom, not a promise kept: a program's own `connect` goes on every target, Linux included.
-    What keeps the network everywhere is reshaping it as servers already are, where the program
-    never binds and the launcher hands it its socket: the launcher, outside the sandbox, opens each
-    connection the spec names (host and port) and hands it over, so on every OS the program itself
-    holds no network at all, which AppContainer can enforce too (to check on Windows: a connected
-    socket handed into an AppContainer, and loopback). The same launcher service is how TLS would
-    come (item 1b's reach). Until it exists, a client's own `connect` (the fetch example, the
-    references' network calls) is the gap to close on both Linux targets: build the launcher's
-    connections, or cut it. Only if no OS can hand over a connection is the network cut
-    everywhere.
+  - the network, done 2026-11-02: Windows's sandbox for apps (AppContainer) can't hold a program
+    to one port, blocks the local network by default, and reaches this computer's own address
+    only with an administrator's exemption, so a program's own `connect`, which Linux held to the
+    spec's ports by Landlock and to this computer by lengua's tracer, was Linux's extra freedom.
+    Now no program connects by itself on either Linux target: lengua makes each connection the
+    spec names (a TCP port of this computer, or of a computer it names) before the program
+    starts, outside the sandbox, and hands the program its end of a local stream that lengua
+    relays, so the program holds no network at all, which every OS's sandbox can enforce (on
+    Windows the program's end would be a pipe or socket handle, to confirm when Windows lands).
+    seccomp allows no `socket` or `connect`, and Landlock no connection or binding of the
+    program's own. `on any computer`, where the program chose its address, is cut everywhere: a
+    spec names the computer. A connection lengua couldn't make comes ended, the same on every
+    OS, and every write to a closed pipe or connection is an error, not a signal.
 
   Per-target code, such as x86-64 Linux's red zone or Windows's stack probes, isn't such a limit:
   only what a spec can observe is.

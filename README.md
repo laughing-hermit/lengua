@@ -19,8 +19,9 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 > stays inside it. It covers whole numbers, exact decimals, floating point in double and single
 > precision with fused multiply-add, vectors from SSE2 to AVX-512, hashing and checksums, files
 > and folders, environment variables, fork-join threads, waiting, the clock and random bytes
-> (which tests supply, so such output is exact), the terminal, TCP clients and servers on the
-> ports a spec names, for other computers and many clients at once when it says so, and `switch`es
+> (which tests supply, so such output is exact), the terminal, TCP clients of the places a spec
+> names, whose connections lengua makes and hands over, servers on the port it names, for other
+> computers and many clients at once when it says so, and `switch`es
 > as checked jump tables. The kernel holds every run to what its spec allows. lengua proves
 > programs right for every input, not just
 > the tested ones, over whole numbers, decimals, choices, texts beyond ASCII and text formulas,
@@ -105,8 +106,9 @@ serving on its spec's port until you stop it. lengua runs only a program whose s
 checked; otherwise it says why and exits with 125.
 
 Every run is confined by the kernel: the program can use only what its spec names (standard
-input, files, the clock, random bytes, environment variables, the network ports it lists), and
-touch files only in the folder it runs in.
+input, files, the clock, random bytes, environment variables), touch files only in the folder it
+runs in, and hold no network of its own: lengua makes each connection its spec names before it
+starts and hands it over, and binds a server's port for it.
 
 Share a program by sharing its spec, the source of truth: anyone's agent compiles it for their own
 computer, and lengua checks that copy there. Each copy is compiled afresh, so copies pass the same
@@ -143,10 +145,10 @@ Complete programs, each with its spec, tests included, and its assembly:
 - [`examples/dice`](examples/dice) rolls a fair die from the computer's random bytes. Its tests
   supply the bytes, so every roll is checked exactly, and the proof covers every pair of first
   bytes;
-- [`examples/fetch`](examples/fetch) fetches a page from a web server on this computer over
-  HTTP/1.0, and [`examples/echo`](examples/echo) is a line-echo server. Their tests bring their
-  own server and client, and lengua keeps each to the ports its spec names and to this computer;
-  both read with `fill`, so each is proven however the network cuts what it reads;
+- [`examples/fetch`](examples/fetch) fetches a page from the web server on this computer's port
+  8080 over HTTP/1.0, through the connection lengua makes for it, and
+  [`examples/echo`](examples/echo) is a line-echo server. Their tests bring their own server and
+  client; both read with `fill`, so each is proven however the network cuts what it reads;
 - [`examples/count`](examples/count) counts lines and words like `wc -lw`. Claude Code wrote it
   through lengua from one plain request in an interactive session; on a 4 GiB file it ran at
   15.8 GB/s, ahead of hand-written AVX-512 C, 12 times faster than plain C and 25 times faster

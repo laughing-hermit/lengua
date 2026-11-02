@@ -166,7 +166,9 @@ seconds. A program that works on files runs in a folder of the user's: pass it a
 name the files in `args` relative to it; the program can't touch anything outside it. A server
 starts in the background on its spec's port and `run` returns its address: try it with your own
 tools, such as `curl` or `nc`, then call `run` with `stop: true` to stop it and see what it
-printed. A program that connects reaches only the ports its spec names.
+printed. A program that connects gets its connections from lengua, made before it starts to the
+places its spec names, and reaches nothing else; `run`'s report says which it made, and why one
+couldn't be.
 
 ### Shared specs
 

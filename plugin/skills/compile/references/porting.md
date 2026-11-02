@@ -58,8 +58,12 @@ short name and the syscall-number table). Each new target needs:
    instead.
 6. **The runner and sandbox** (the per-host part) — on Linux, seccomp and Landlock
    (`runner.rs`) and the supervisor that supplies tests' random bytes and clock (`supervise.rs`,
-   which reads the CPU's registers); macOS and Windows each need their own confinement. macOS
-   also needs the binary code-signed (ad-hoc via `ld64.lld`) before it will run.
+   which reads the CPU's registers); macOS and Windows each need their own confinement. The
+   network needs none of a sandbox's own policing: lengua's runner makes each connection a spec
+   names and hands the program its end of a local stream (a Unix socket pair on Linux, from
+   descriptor 4; a pipe or socket handle on Windows), as it binds a server's port, so a target's
+   sandbox only has to keep the program off the network altogether. macOS also needs the binary
+   code-signed (ad-hoc via `ld64.lld`) before it will run.
 
 ## One product on every target
 

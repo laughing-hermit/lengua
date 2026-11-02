@@ -111,18 +111,23 @@ by one concrete example in its steps, and its generated tests try that rule with
   is fixed by the spec's limits. lengua holds the program to this line when it runs, so it's a promise the user can rely
   on, and it means the same on every kind of computer. `# Constraints` holds only `- Uses:`,
   `- Network:` and `- Threads:` lines; anything else goes in Purpose.
-- **Network:** plain TCP, on ports the spec names, to this computer only unless the line ends
-  with `on any computer`. lengua refuses every other port and every other computer when the
-  program runs. Choose the ports yourself, without asking: a spec can't allow "any port", so
-  when the request leaves the port to the user, as "given a port" does, list the ports such
-  programs usually use, such as 80, 3000, 5000, 8000, 8080 and 8888 for local web servers, and
-  name them in your final report with an offer to change them. Write `on any computer` only when
-  the user asks to reach other computers, and say so in your report.
-  - A program that opens connections says `- Network: connects to TCP port 8080` (or `ports 80
-    and 8080`). The address and port it reaches come from its arguments or input, as numbers
-    (`127.0.0.1`), since lengua programs don't look up names. Don't have the program refuse other
-    ports itself: lengua holds it to the spec's ports when it runs, and its tests talk over a
-    free port of their own, so a program that checks for 8080 can't be tested.
+- **Network:** plain TCP, to the places the spec names, and nothing else. A program never opens
+  a connection itself: lengua makes each one its spec names before the program starts and hands
+  it over, so it's the same on every kind of computer. Choose the places yourself, without
+  asking: a spec can't allow "any port" or "any computer", so when the request leaves the port
+  to the user, as "given a port" does, pick the one such programs usually use, such as 8080 for a
+  local web server, and name it in your final report with an offer to change it.
+  - A program that talks to a server says `- Network: connects to TCP port 8080` for one on this
+    computer, or `- Network: connects to TCP port 443 on example.com` for another computer, named
+    as DNS writes it (or by address, never `localhost`: a port alone is this computer's). A line
+    may name several ports, as `ports 80 and 8080`, and a spec several lines, up to 16
+    connections. Each is one connection, made before the program starts, in the order the lines
+    name them; the program reads and writes the first on descriptor 4, the next on 5, and so on.
+    With nothing listening there, the program gets that connection already ended: its first
+    read gives the end and its first write fails. Give such a program a behavior for it, as
+    fetch's "Says when the server can't be reached", with ``- And no server on port `8080` ``.
+    The program needs no port or address in its arguments; the person running it can't point
+    it elsewhere.
   - A server says `- Network: listens on TCP port 8080`: lengua listens on that port and hands
     the program its connections, and its behaviors may end with ``- And it keeps serving``
     instead of an exit code. Only programs on this computer can
@@ -135,9 +140,9 @@ by one concrete example in its steps, and its generated tests try that rule with
     server can see, such as its newline, its blank line or a stated length: clients such as curl
     and browsers keep their side of the connection open until they have the answer, so a server
     that waits for them to close waits forever.
-  - In the final report, tell the user in plain words what the program may reach, such as "it can
-    open TCP connections to port 8080 on this computer; lengua refuses every other port and every
-    other computer."
+  - In the final report, tell the user in plain words what the program may reach, such as "it
+    talks to TCP port 8080 on this computer, through a connection lengua makes for it before it
+    starts; it can reach nothing else."
 - **Websites and APIs:** lengua programs speak plain TCP, not HTTPS. A program that needs a
   website's data reads it from standard input or a file; you fetch it with your own tools and
   pass it in, and tell the user the line for their shell, such as `curl -s URL | ./program`.

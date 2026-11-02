@@ -50,8 +50,9 @@ only `- Uses:`, `- Network:` and `- Threads:` under Constraints); the write-spec
 style.
 
 **A spec names what the program uses, not system calls:** `- Uses:` lists `standard input`,
-`files`, `the clock`, `random bytes` and `the environment`, `- Network:` the ports it connects to
-or listens on, and `- Threads:` how many cores it may use. Each target maps them to its own
+`files`, `the clock`, `random bytes` and `the environment`, `- Network:` the places it connects
+to (a TCP port of this computer, or of a computer it names) and the port it listens on, and
+`- Threads:` how many cores it may use. Each target maps them to its own
 system calls, so the same spec means the same on every computer. A program gets environment
 variables only through `the environment`, and only those its test or the user's `run` names. They
 reach the program alone: lengua's launcher, which runs before the program's confinement, gets
@@ -182,14 +183,22 @@ one, or for `run` a folder of the user's files), a time limit (2 s per test, 10 
 
 Before it becomes the program, the launcher confines itself, so the kernel enforces what the
 spec allows:
-- Landlock lets the program touch files only inside its working folder, execute only itself, use
-  no network but the ports its spec names, and signal no other process;
-- Landlock's network rules know ports, not computers, so for a program that may reach only this
-  computer, which is every program whose spec doesn't say `on any computer`, lengua's supervisor
-  stops each `connect`, reads where it goes, and refuses any computer but this one with
-  `EACCES`, as Landlock refuses a port. The port list is then never a way off this computer.
-  Workers make no system calls and write only their own slots, so no other thread can change the
-  address between the check and the call;
+- Landlock lets the program touch files only inside its working folder, execute only itself,
+  make no network connection and bind no port at all, and signal no other process;
+- the program holds no network of its own. lengua makes each connection its spec names before
+  the program starts, outside its confinement (a TCP port of this computer, tried on 127.0.0.1
+  and then ::1, or of a computer the spec names), and hands it over as file descriptor 4, 5 and
+  on, in the spec's order, as it binds a server's port and hands it the listening socket as
+  descriptor 3. The program's end is a local stream that lengua relays to the place both ways:
+  what the place sends arrives on it, the place's end of sending is the program's end of input,
+  and the program's `shutdown` of its sending side is the place's. A connection lengua couldn't
+  make, or one the place broke off, is shut both ways, so a read gives 0 once what had arrived
+  is read and a write fails with `EPIPE`; lengua keeps its end open until the program ends, so
+  the end is never a reset. The program can't tell a refusal from a break; `run` reports which
+  happened. The same holds on every system, since any sandbox can hand a program a local stream
+  (a socketpair on Linux and macOS, a pipe or socket handle on Windows), and none of them must
+  police the program's own connections: the strict rule of one product on every target
+  (below);
 - seccomp kills it at any system call its spec doesn't list (plus `write` and `exit`, which
   `assert_fail` may always make);
 - resource limits cap the files it writes (64 MiB in tests) and leave no core files.
@@ -204,7 +213,7 @@ supervisor; the supervisor writes the test's bytes or reading into the program's
 `process_vm_writev` and skips the kernel's call, so the program sees the test's values. On
 AArch64 a call can't be skipped without a register set nix gives no safe way to write
 (`NT_ARM_SYSTEM_CALL`), so the supervisor makes the kernel's call harmless instead (`getrandom`
-for no bytes, a clock that doesn't exist, descriptor -1 for a refused `connect`), lets it return
+for no bytes, a clock that doesn't exist), lets it return
 at once, and at its exit puts the answer in x0 and the count it changed back in x1; every other
 register stays as the program left it. A test of a program that may sleep has the supervisor
 too: it ends each `clock_nanosleep` at once,
@@ -517,11 +526,11 @@ How the proof works (`src/prove/`):
   text up to 5 bytes in two minutes, both solvers settling where two words' slots meet, and a
   tally that forgets to note a word in its index, or puts tied words in the wrong order, is
   found.
-- **The network is the tests' own peers.** A program that connects reaches only the test
-  server's port, an input from 1 to 65535 since the kernel chooses it; any other port is
-  refused, as the test's rules refuse it, and so is any other computer. The server waits for exactly what it must receive, so
-  a read before the program has sent all of it waits forever: the run fails, as a real one times
-  out. A server program takes the test client's connections on its listener in order; taking
+- **The network is the tests' own peers.** Each connection the spec names is made before the
+  program starts, at its own descriptor: answered by the test's server for it, which speaks on
+  the program's own stream, or handed over ended when the test has no server there. The server
+  waits for exactly what it must receive, so a read before the program has sent all of it waits
+  forever: the run fails, as a real one times out. A server program takes the test client's connections on its listener in order; taking
   the next before closing the last waits forever too, and with none left the program is serving.
   The test's client behaves as curl and browsers do: it sends, keeps its side open until the
   program starts answering, then closes it and reads the rest. So a server that reads to the end
@@ -885,11 +894,10 @@ What it covers:
   chooses splits the run: one for each test file or folder it can be, with its bytes those on
   the run's path, and one where it's none of them and the file isn't there. A folder's listing
   (`getdents64`) is tested, not proven.
-- The network: `socket`, `connect`, `accept4` and `accept` on the listener, `read`, `write`,
-  `sendto`, `recvfrom`, `shutdown` and `close` on TCP connections over IPv4 on this computer.
-  The echo server is proven for every line and delivery; fetch's argument errors for every
-  port, and its fetch for every path with every body up to about 140 bytes in its share of the
-  time.
+- The network: `accept4` and `accept` on the listener, and `read`, `write`, `sendto`,
+  `recvfrom`, `shutdown` and `close` on the connections lengua made or the program took. The
+  echo server is proven for every line and delivery; fetch for every path with every body up to
+  about 140 bytes in its share of the time, and for a server it can't reach.
 
 - Threads: `parallel_for`'s `clone` starts a thread that runs to its end at once, on the stack
   it's given and with a first frame of its own, while the thread that started it waits; its
@@ -926,7 +934,7 @@ Rust share: everything a program may touch must be something the checker can acc
 | The terminal | `termios`, `poll`, `TIOCGWINSZ` | crossterm and the like | Under `the terminal`: `ioctl` on standard input, output or error for its mode (`TCGETS`, `TCSETS`) and its window's size, and nothing else, and `poll` to wait for a key. Tests give the keys as standard input, a pipe, where the mode can't be set, so a program goes on as from a pipe, and `\e` writes escape sequences; the proof models the same. `lengua-mcp run` puts the terminal back as it found it when the program ends, however it ends (`assets/terminal-template.s`) |
 | Left out, by design | `fork`/`exec`, `malloc`, recursion, function pointers | `std::process`, `Box`/`Vec`, recursion, `dyn` | Running other programs (their code isn't checked); allocating while running (rule 3: buffers and arenas in `.bss`, sized from the spec, cost nothing until touched, and input of any length streams through `fill`); recursion and function pointers (rules 1 and 9: explicit stacks, and dispatch by comparison) |
 | Clock, random | `time()`, `rand()` | `Instant`, `SystemTime`, `rand` | Capabilities the spec names, `the clock` and `random bytes` (on this target `clock_gettime` and `getrandom`), enforced by the kernel like the rest. Tests supply the bytes and readings, so output that depends on them is exact, and the prover covers every value the test's variables can take; without a supply, a rule such as "a number from 1 to 6" (`{any(1, 6)}`) checks the output, and the prover treats the kernel's values as any value |
-| Network | Sockets | `std::net` | Plain TCP on the ports the spec names, to this computer unless the spec says `on any computer`. seccomp allows only TCP sockets (no UDP, raw or local ones), `sendto` without an address, and `accept4` on descriptor 3; Landlock lets `connect` reach only the spec's ports, and lengua's supervisor only this computer. A server never binds: the launcher listens on its port, on the loopback unless the spec says `for any computer`, and hands it the socket as descriptor 3, and only its accept loop, or its loop around `poll`, may run forever (`# bound: forever`, NASA's exception). A server serves one client at a time unless its spec says `up to N clients at once`: then seccomp allows `poll`, the event loop C servers use, over a fixed table of connections (`assets/server-template.s`), and a test whose clients connect at once makes each wait for another's answer, so a server that serves one at a time fails; the proof follows a server that polls through every order its clients' steps can come in, and through the test's own. Tests bring their own server or client on a free loopback port; websites and APIs go through the agent's own tools, which pass the data in |
+| Network | Sockets | `std::net` | Plain TCP to the places the spec names, each a TCP port of this computer or of a computer it names. The program never opens a socket or connects: lengua makes each connection before it starts and hands it over as descriptors 4, 5 and on, relaying it both ways, and one it couldn't make comes ended. seccomp allows no `socket` or `connect`, `sendto` only without an address, and `accept4` only on descriptor 3; Landlock allows no TCP connection or binding of the program's own. A server never binds: the launcher listens on its port, on the loopback unless the spec says `for any computer`, and hands it the socket as descriptor 3, and only its accept loop, or its loop around `poll`, may run forever (`# bound: forever`, NASA's exception). A server serves one client at a time unless its spec says `up to N clients at once`: then seccomp allows `poll`, the event loop C servers use, over a fixed table of connections (`assets/server-template.s`), and a test whose clients connect at once makes each wait for another's answer, so a server that serves one at a time fails; the proof follows a server that polls through every order its clients' steps can come in, and through the test's own. A test's servers speak on the program's own connections, and its clients connect to the program's listener on a free loopback port. Each `connects to` line names one connection to each place, at most 16 |
 
 A worker gets its index and its slot. It and every function it calls write only their own stack
 frames and the slot, which it keeps in `rbx`, inside bounds checks; they make no system calls; and
@@ -994,8 +1002,8 @@ machine line starts `linux-aarch64 (emulated by qemu-aarch64 10.2.2 on linux-x86
 each run keeps Landlock, the file and core limits and the time and output limits, and the kernel
 stops the calls QEMU never needs to make, such as tracing, mounts, namespaces, modules and
 io_uring; but the spec's exact filter, the supervisor and the counters would see QEMU, not the
-program. So tests that need the supervisor (supplied random bytes or clock, instant sleeps, a
-server of the test's whose connections lengua checks) are reported as not run there, nothing is
+program. So tests that need the supervisor (supplied random bytes or clock, instant sleeps) are
+reported as not run there; a client's tests run, since lengua makes its connections. Nothing is
 measured, and the reply says what held the runs. lengua.lock records what ran the tests
 (`emulator = "qemu-aarch64 10.2.2"`), and `run` won't run code tested one way in a session of
 the other. lengua's line in main.s is the target CPU's comment, `// lengua: …` on AArch64. Distribution is then: one server build per host OS,
@@ -1118,6 +1126,16 @@ cut on every target, Linux too. So one OS's extra power, or its sandbox's, never
 behave differently. What may differ is the hardware:
 the instructions a CPU has, its vectors' width, its speed. A target is done when it covers what
 x86-64 covers, each item with its own hardware's means (NEON where x86-64 has AVX-512).
+
+The network shows the rule at work. A program's own `connect` could be held to its spec's ports
+on Linux (Landlock) and to this computer (lengua's tracer), but Windows's sandbox for apps can't
+hold a program to one port, reaches this computer's own address only with an administrator's
+exemption, and has no tracer. So since 2026-11-02 no program connects by itself, on any target:
+lengua makes each connection its spec names and hands it over, as it binds a server's port, and
+the program holds no network at all, which every sandbox can enforce. `on any computer`, where
+the program chose its address, is gone on every target; a spec names each computer instead.
+Every write to a closed pipe or connection is an error (`EPIPE`) rather than a signal, as on
+Windows: the launcher keeps SIGPIPE ignored into the program.
 
 **Linux ARM64 is nearest:** the same OS, so the same kinds of system calls, the same sandbox and
 ELF, but 2, 3 and 4 and a new triple are new, and 5 and 6 change in detail (the call numbers, the

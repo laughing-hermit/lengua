@@ -6,9 +6,10 @@ What the spec names under `# Constraints` decides the calls a program may make o
 `write`, `exit` and `exit_group` always; `read` for `standard input`; `openat`, `read`, `write`,
 `lseek`, `close`, `fstat`, `getdents64`, `mkdirat`, `unlinkat` and `renameat` for `files`; `clock_gettime` and `clock_nanosleep` (to wait) for `the
 clock`; `getrandom` for `random bytes`; none for `the environment`, which is on the stack at the
-start; `read`, `ioctl` and `poll` for `the terminal`; `socket` and `connect` for `- Network:
-connects to …`, `accept4` for `- Network: listens on …`, with `poll` for `up to N clients at
-once`, and `read`, `close`, `shutdown` and `sendto` for either. The kernel refuses any other.
+start; `read`, `ioctl` and `poll` for `the terminal`; `read`, `close`, `shutdown` and `sendto`
+on the connections lengua makes for `- Network: connects to …`, and on the ones a server takes
+with `accept4` for `- Network: listens on …`, with `poll` for `up to N clients at once`. No
+program opens a socket or connects: the kernel refuses `socket`, `connect` and any other call.
 
 `mov eax, SYS_NAME` picks the call, the arguments go in `rdi`, `rsi`, `rdx`, `r10`, `r8` and `r9`
 (`r10`, not `rcx`), and `syscall` runs it. It returns in `rax` and changes `rcx` and `r11`; every
@@ -32,8 +33,6 @@ test it right away with `test rax, rax` and `js`.
 | `exit_group` | 231 | `edi` status | doesn't return |
 | `openat` | 257 | `edi` -100 (the current folder), `rsi` NUL-terminated path, `edx` flags, `r10d` mode | a file descriptor or an error |
 | `getrandom` | 318 | `rdi` buffer, `rsi` count, `edx` flags (0) | bytes filled, all of them for up to 256, or an error |
-| `socket` | 41 | `edi` 2 (IPv4) or 10 (IPv6), `esi` 1 (a stream), `edx` 0 | a file descriptor or an error |
-| `connect` | 42 | `edi` the socket, `rsi` the address, `edx` its length (16 for IPv4) | 0 or an error; `EACCES` (-13) for a port the spec doesn't name |
 | `sendto` | 44 | `edi` the connection, `rsi` bytes, `rdx` count, `r10d` 0x4000 (`MSG_NOSIGNAL`), `r8` 0, `r9` 0 | bytes sent or an error |
 | `shutdown` | 48 | `edi` the connection, `esi` 1 to stop sending | 0 or an error |
 | `accept4` | 288 | `edi` 3, `rsi` 0, `rdx` 0, `r10d` 0 | the next connection's file descriptor, or an error |
@@ -45,13 +44,16 @@ File descriptors 0, 1 and 2 are standard input, output and error. `openat` flags
 is 420 in decimal. `write` and `read` may move fewer bytes than asked, so loop until done, as the
 template's `write_all` does.
 
-The network: an IPv4 address for `connect` is 16 bytes, a `.short` 2, the port in network byte
-order (`rol ax, 8` swaps a port's two bytes), the four address bytes (`127, 0, 0, 1`), then 8
-zero bytes. A server never binds or listens: lengua gives it the listening socket as file
-descriptor 3, and it takes each connection with `accept4`, reads until it has the request, answers
-with `sendto` and `MSG_NOSIGNAL` (with `write`, a client that hangs up early would kill it with
-SIGPIPE), and closes the connection. A client reads until `read` returns 0, when the server has
-closed its side. Data can arrive in pieces, so never assume one `read` gets it all.
+The network: a program never connects or binds. lengua makes each connection its spec names
+before the program starts and hands it over, the first `- Network: connects to …` place on file
+descriptor 4, the next on 5, and so on (`.equ CONNECTION, 4`); a server gets its listening socket
+as descriptor 3 and takes each connection with `accept4`. A client sends on its connection with
+`write` or `sendto`, reads until `read` returns 0, when the server has closed its side, and may
+`shutdown` its sending side when it's done. A connection lengua couldn't make comes ended: its
+first `read` gives 0 and its first write fails with `EPIPE` (-32), never a signal, so a client
+that sends first finds a server it can't reach on its first write. A server reads until it has
+the request, answers, and closes the connection. Data can arrive in pieces, so never assume one
+`read` gets it all.
 
 The terminal: keys one at a time with no echo take the terminal's mode with `TCGETS`, its local
 flags (the 4 bytes at 12) without `ICANON` (2) and `ECHO` (8), `VMIN` (the byte at 23) 1 and

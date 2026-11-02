@@ -68,9 +68,10 @@ x86-64's is.
 What the spec names under `# Constraints` decides the calls a program may make, as on x86-64:
 `write`, `exit` and `exit_group` always; `read` for `standard input`; `openat`, `read`, `write`,
 `lseek`, `close`, `fstat`, `getdents64`, `mkdirat`, `unlinkat` and `renameat` for `files`;
-`clock_gettime` and `clock_nanosleep` for `the clock`; `getrandom` for `random bytes`; `socket`,
-`connect`, `sendto`, `close` and `read` for the network, `accept4` on the listening socket lengua
-hands a server as descriptor 3, and `ppoll` for a server of several clients at once; `ioctl` and
+`clock_gettime` and `clock_nanosleep` for `the clock`; `getrandom` for `random bytes`; `read`,
+`write`, `sendto`, `shutdown` and `close` on the connections lengua makes and hands over from
+descriptor 4, `accept4` on the listening socket lengua hands a server as descriptor 3, and
+`ppoll` for a server of several clients at once (never `socket` or `connect`); `ioctl` and
 `ppoll` for the terminal; `clone`, `futex` and `exit` for threads, only through the parallel
 template's `parallel_for`. The kernel refuses any other.
 
@@ -93,8 +94,6 @@ errno), so test it right away with `tbnz x0, #63, error`.
 | `clock_gettime` | 113 | `x0` clock (0 the time of day, 1 a clock that only moves forward), `x1` 16 bytes for seconds then nanoseconds | 0 or an error |
 | `clock_nanosleep` | 115 | `x0` clock, `x1` 0, `x2` 16 bytes of how long | 0 or an error |
 | `getrandom` | 278 | `x0` buffer, `x1` count, `x2` 0 | bytes filled or an error |
-| `socket` | 198 | `x0` 2 (`AF_INET`), `x1` 1 (`SOCK_STREAM`), `x2` 0 | the socket or an error |
-| `connect` | 203 | `x0` the socket, `x1` 16 bytes of address (family, port high byte first, 127.0.0.1), `x2` 16 | 0 or an error |
 | `accept4` | 242 | `x0` 3, `x1` to `x3` 0 | the connection or an error |
 | `sendto` | 206 | `x0` the connection, `x1` bytes, `x2` count, `x3` 0x4000 (`MSG_NOSIGNAL`), `x4` and `x5` 0 | bytes sent or an error |
 | `ppoll` | 73 | `x0` a table of 8-byte entries (descriptor, events, events that came), `x1` how many, `x2` 0 to wait until one is ready, or 16 bytes of how long, `x3` 0 | how many are ready, 0 when the time ran out, or an error |
@@ -105,8 +104,9 @@ AArch64 has no `poll`: `ppoll` is the wait, with x86-64's `poll` table. Its time
 "until one is ready" is `x2` 0, not -1, and the kernel writes the time left back into the 16
 bytes it read: keep them in `.bss` and set them again before each wait, as
 [the terminal template](../assets/linux-aarch64/terminal-template.s) does. A native kernel
-skips the write to `.rodata`, but QEMU refuses the wait. The port in `connect`'s address goes high byte first: `rev16 w12, w10`
-turns a port in `w10` around.
+skips the write to `.rodata`, but QEMU refuses the wait. A client's connections are lengua's,
+made before it starts, from descriptor 4 in its spec's order, as on x86-64; one lengua couldn't
+make comes ended, so its first read gives 0 and its first write fails with `EPIPE` (-32).
 
 ## Program start
 

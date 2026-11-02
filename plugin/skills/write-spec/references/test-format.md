@@ -29,8 +29,8 @@ reported with the phrasing to write instead. Values go in backticks, with `\n`, 
 | ``the environment variable `NAME` set to TEXT`` | That variable, for a spec that uses `the environment`; it gets no others |
 | ``the clock at `1735689600` `` | What the program reads from the clock, in seconds since 1970; ``then `1735689601` `` adds a later reading |
 | ``the random bytes `fc` and `2a` `` | The random bytes the program asks the computer for, one byte of hex a value |
-| ``a server on port `8080` that receives TEXT and replies TEXT`` | The test's own server, one step a connection, for a program that connects; the port is the spec's |
-| ``no server on port `9` `` | Nothing listening there |
+| ``a server on port `8080` that receives TEXT and replies TEXT`` | The test's own server on the program's connection to that port, one a connection; ``a server at `example.com` on port `443` …`` when two places share a port, and ``a server that receives …`` when the spec names one |
+| ``no server on port `8080` `` | That connection handed over already ended: its first read gives the end, and its first write fails |
 | ``a client that sends TEXT`` | The test's own client, one step a connection, for a program that serves |
 
 **When:** `the program runs`, once.
@@ -56,9 +56,8 @@ terminal's sequences) and `\\` stand for those characters. ``followed by a newli
 ``- Given standard input holding `a` repeated `4096` times followed by `x` `` is 4096 `a`s and an
 `x`, up to 8 MiB a value. Several printing steps print one after another.
 
-A program that connects learns the test server's port from its arguments or input: the spec's
-own port there, as in ``- Given the arguments `8080` and `/` ``, becomes the free port the test's
-server listens on.
+A program that connects needs no port in its arguments or input: lengua makes each connection
+its spec names before the program starts, and the test's server for it answers there.
 
 ## Generated tests
 
@@ -136,14 +135,14 @@ a pipe; every wait for a key finds one, or the end of the input.
 ## The network
 
 A spec that says `- Network: connects to TCP port N` or `- Network: listens on TCP port N` gets
-tests with their own server or client, on the loopback, on a free port of their own: never the
-spec's port, which lengua allows only for `run`.
+tests with their own servers or client: never the real places, which only `run` reaches.
 
-- **A program that connects** gets the test's server: it takes each connection, reads exactly
-  what it receives (failing at the first byte that differs), sends its reply, closes its side,
-  and expects nothing more. The program learns the port from its arguments or input: the spec's
-  own port given whole as an argument, in the example or a generated test, is the test server's
-  port, which lengua fills in. In tests, the program can connect to that port alone.
+- **A program that connects** gets each connection its spec names from lengua before it starts,
+  at descriptor 4 and on in the spec's order, in tests as in `run`. A test's server step stands
+  in for one of them: it reads exactly what the program sends there (failing at the first byte
+  that differs), sends its reply, closes its side, and expects nothing more. A connection a test
+  gives no server comes ended, as one lengua couldn't make does in a run: its first read gives
+  the end and its first write fails. One server a connection.
 - **A program that serves** gets its listening socket from lengua, in every test. The test's
   client connects once a connection and behaves as curl and browsers do: it
   sends its text and keeps its side of the connection open until the program starts answering
