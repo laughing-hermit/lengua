@@ -128,6 +128,11 @@ by one concrete example in its steps, and its generated tests try that rule with
     fetch's "Says when the server can't be reached", with ``- And no server on port `8080` ``.
     The program needs no port or address in its arguments; the person running it can't point
     it elsewhere.
+  - `over TLS` at the end of a line that names a computer, as in `- Network: connects to TCP
+    port 443 on api.example.com over TLS`, has lengua do TLS on that connection: it checks the
+    computer's certificate against the same roots on every computer, and the program sends and
+    reads plain bytes, so an HTTPS client speaks plain HTTP on its descriptor. TLS needs the
+    computer's name, so never `over TLS` for this computer.
   - A server says `- Network: listens on TCP port 8080`: lengua listens on that port and hands
     the program its connections, and its behaviors may end with ``- And it keeps serving``
     instead of an exit code. Only programs on this computer can
@@ -143,9 +148,14 @@ by one concrete example in its steps, and its generated tests try that rule with
   - In the final report, tell the user in plain words what the program may reach, such as "it
     talks to TCP port 8080 on this computer, through a connection lengua makes for it before it
     starts; it can reach nothing else."
-- **Websites and APIs:** lengua programs speak plain TCP, not HTTPS. A program that needs a
-  website's data reads it from standard input or a file; you fetch it with your own tools and
-  pass it in, and tell the user the line for their shell, such as `curl -s URL | ./program`.
+- **Websites and APIs:** a program reaches a website or an API itself, over HTTPS, with `-
+  Network: connects to TCP port 443 on api.example.com over TLS`: it sends a plain HTTP request
+  on its connection, with the `Host:` line HTTP/1.1 needs, and reads the response, as `fetch`
+  does on this computer's port. Ask for `Connection: close` (or use HTTP/1.0) so the server ends
+  the response by closing, unless the program reads `Content-Length`. Its tests stand a server of
+  their own in for the site, as for any connection, so give them the exchanges the site would
+  give. Each site is one line, and the program can reach no other; when the user wants any URL,
+  say that a lengua program reaches only the sites its spec names, and offer to name them.
 - **Output from random bytes or the clock** is best made exact. Purpose says how the program
   turns them into output ("the roll is the first byte below `252`, modulo 6, plus 1"), and the
   behavior gives them as its scene: ``- Given the random bytes `fc` and `2a` `` or

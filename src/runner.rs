@@ -721,7 +721,7 @@ async fn launch_job(
     for reach in &net.connections {
         pairs.push(connect::pair()?);
         making.push(match reach {
-            Reach::ThisComputer(_) | Reach::Host(..) => {
+            Reach::ThisComputer(_) | Reach::Host(..) | Reach::Tls(..) => {
                 let reach = reach.clone();
                 Some(tokio::spawn(async move { connect::make(&reach).await }))
             }

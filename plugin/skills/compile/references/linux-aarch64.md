@@ -106,7 +106,8 @@ bytes it read: keep them in `.bss` and set them again before each wait, as
 [the terminal template](../assets/linux-aarch64/terminal-template.s) does. A native kernel
 skips the write to `.rodata`, but QEMU refuses the wait. A client's connections are lengua's,
 made before it starts, from descriptor 4 in its spec's order, as on x86-64; one lengua couldn't
-make comes ended, so its first read gives 0 and its first write fails with `EPIPE` (-32).
+make comes ended, so its first read gives 0 and its first write fails with `EPIPE` (-32). A
+connection `over TLS` is plain bytes to the program: lengua does the TLS.
 
 ## Program start
 

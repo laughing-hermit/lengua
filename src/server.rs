@@ -2412,6 +2412,7 @@ async fn runnable(
             .iter()
             .map(|place| match &place.host {
                 None => crate::connect::Reach::ThisComputer(place.port),
+                Some(host) if place.tls => crate::connect::Reach::Tls(host.clone(), place.port),
                 Some(host) => crate::connect::Reach::Host(host.clone(), place.port),
             })
             .collect(),

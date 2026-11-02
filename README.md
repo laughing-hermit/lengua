@@ -20,7 +20,8 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 > precision with fused multiply-add, vectors from SSE2 to AVX-512, hashing and checksums, files
 > and folders, environment variables, fork-join threads, waiting, the clock and random bytes
 > (which tests supply, so such output is exact), the terminal, TCP clients of the places a spec
-> names, whose connections lengua makes and hands over, servers on the port it names, for other
+> names, whose connections lengua makes and hands over, with TLS for HTTPS done by lengua so the
+> program holds no crypto, servers on the port it names, for other
 > computers and many clients at once when it says so, and `switch`es
 > as checked jump tables. The kernel holds every run to what its spec allows. lengua proves
 > programs right for every input, not just

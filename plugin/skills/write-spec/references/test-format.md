@@ -142,7 +142,9 @@ tests with their own servers or client: never the real places, which only `run` 
   in for one of them: it reads exactly what the program sends there (failing at the first byte
   that differs), sends its reply, closes its side, and expects nothing more. A connection a test
   gives no server comes ended, as one lengua couldn't make does in a run: its first read gives
-  the end and its first write fails. One server a connection.
+  the end and its first write fails. One server a connection. A connection `over TLS` is tested
+  the same way, in plain bytes: lengua does the TLS only in a run, where the program can't tell
+  the difference.
 - **A program that serves** gets its listening socket from lengua, in every test. The test's
   client connects once a connection and behaves as curl and browsers do: it
   sends its text and keeps its side of the connection open until the program starts answering

@@ -117,15 +117,19 @@ pub struct Endpoint {
     pub host: Option<String>,
     /// Its TCP port.
     pub port: u16,
+    /// Whether lengua does TLS on it, checking the computer's certificate, so the program reads
+    /// and writes plain bytes: `over TLS`, which needs a named computer.
+    pub tls: bool,
 }
 
 impl Endpoint {
-    /// In words: `TCP port 8080 of this computer`, `TCP port 443 on example.com`.
+    /// In words: `TCP port 8080 of this computer`, `TCP port 443 on example.com over TLS`.
     #[must_use]
     pub fn describe(&self) -> String {
+        let over = if self.tls { " over TLS" } else { "" };
         match &self.host {
-            None => format!("TCP port {} of this computer", self.port),
-            Some(host) => format!("TCP port {} on {host}", self.port),
+            None => format!("TCP port {} of this computer{over}", self.port),
+            Some(host) => format!("TCP port {} on {host}{over}", self.port),
         }
     }
 }
@@ -1491,6 +1495,7 @@ impl Parser {
         // A server is reached from this computer, unless the line says any computer:
         // `listens on TCP port 8080 for any computer`. A client's connections go where the line
         // says, to this computer when it names none: `connects to TCP port 443 on example.com`.
+        let mut over_tls = false;
         let (numbers, host) = if listens {
             match numbers
                 .strip_suffix("for any computer")
@@ -1510,6 +1515,20 @@ impl Parser {
                 ),
             }
         } else {
+            // `over TLS`: lengua does TLS on the connection, which needs the computer's name.
+            let (numbers, tls) = match numbers.strip_suffix("over tls") {
+                Some(rest) => (rest.trim_end().trim_end_matches(',').trim_end(), true),
+                None => (numbers, false),
+            };
+            if tls && !numbers.contains(" on ") {
+                self.problem(
+                    Some(number),
+                    "TLS checks a computer's certificate by its name: name the computer, as in \
+                     `- Network: connects to TCP port 443 on example.com over TLS`",
+                );
+                return;
+            }
+            over_tls = tls;
             match numbers.split_once(" on ") {
                 Some((_, "any computer" | "any computers")) => {
                     self.problem(
@@ -1517,6 +1536,14 @@ impl Parser {
                         "a program connects only where its spec says, and lengua makes each \
                          connection for it: name the computer, as in `- Network: connects to TCP \
                          port 443 on example.com`, or leave it out for this computer",
+                    );
+                    return;
+                }
+                Some((_, "this computer")) if tls => {
+                    self.problem(
+                        Some(number),
+                        "TLS checks a computer's certificate by its name: name the computer, as \
+                         in `- Network: connects to TCP port 443 on example.com over TLS`",
                     );
                     return;
                 }
@@ -1559,6 +1586,7 @@ impl Parser {
                     let endpoint = Endpoint {
                         host: host.clone(),
                         port: *port,
+                        tls: over_tls,
                     };
                     if self.network.connections.contains(&endpoint) {
                         self.problem(
@@ -2333,7 +2361,11 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
             "- Network: connects to TCP ports `80` and 8080.",
         );
         let spec = parse(&client).expect("valid spec");
-        let here = |port| Endpoint { host: None, port };
+        let here = |port| Endpoint {
+            host: None,
+            port,
+            tls: false,
+        };
         assert_eq!(
             spec.network.connections,
             [here(80), here(8080)],
@@ -2355,8 +2387,31 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
         let there = |port| Endpoint {
             host: Some("example.com".into()),
             port,
+            tls: false,
         };
         assert_eq!(elsewhere.network.connections, [there(80), there(8080)]);
+        // Over TLS, lengua checks the computer's certificate by its name and does the TLS.
+        let secure =
+            parse(&client.replace("ports `80` and 8080.", "port 443 on example.com over TLS."))
+                .expect("valid spec");
+        assert_eq!(
+            secure.network.connections,
+            [Endpoint {
+                host: Some("example.com".into()),
+                port: 443,
+                tls: true,
+            }]
+        );
+        assert_eq!(
+            secure.network.connections[0].describe(),
+            "TCP port 443 on example.com over TLS"
+        );
+        for unnamed in ["port 443 over TLS.", "port 443 on this computer over TLS."] {
+            assert_problem(
+                &client.replace("ports `80` and 8080.", unnamed),
+                "TLS checks a computer's certificate by its name",
+            );
+        }
         let address = parse(&client.replace("8080.", "8080 on 192.0.2.7.")).expect("valid spec");
         assert_eq!(
             address.network.connections[0].host.as_deref(),

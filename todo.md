@@ -210,11 +210,14 @@ product Claude puts it at about two-thirds. What's left, most important first:
    existing library, so there's no HTTPS, database, compression or GUI, and memory is fixed up
    front from the spec's limits. HTTPS is the gap most programs hit. A way that keeps lengua's
    guarantees: the launcher, which already hands a server its socket, does TLS on it in Rust
-   (rustls), outside the program, so the program holds no crypto. Since 2026-11-02 lengua makes
+   (rustls), outside the program, so the program holds no crypto. Done 2026-11-02: lengua makes
    every client connection itself and hands it over (below), to this computer or to a computer
-   the spec names, so a database or another server's own protocol is in reach; TLS on those
-   connections is next. Each such service is one definition that every OS must be able to
-   provide (item 3's limits).
+   the spec names, so a database or another server's own protocol is in reach, and `over TLS`
+   has lengua do TLS on a named computer's connection (rustls with ring, Mozilla's roots built
+   in, the same on every system), so HTTPS is in reach and the program speaks plain HTTP. Not
+   done: a launcher service for compression or a GUI, and memory sized at run time, which
+   NASA's rule against allocating after start leaves out by design. Each such service is one
+   definition that every OS must be able to provide (item 3's limits).
 3. **Linux held to macOS's and Windows's limits:** item 3's audit, every item a limit to
    establish by the strict rule (2026-11-02). The network is done (2026-11-02): no program
    connects by itself, on either Linux target; lengua makes each connection its spec names before

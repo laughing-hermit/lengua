@@ -51,7 +51,8 @@ as descriptor 3 and takes each connection with `accept4`. A client sends on its 
 `write` or `sendto`, reads until `read` returns 0, when the server has closed its side, and may
 `shutdown` its sending side when it's done. A connection lengua couldn't make comes ended: its
 first `read` gives 0 and its first write fails with `EPIPE` (-32), never a signal, so a client
-that sends first finds a server it can't reach on its first write. A server reads until it has
+that sends first finds a server it can't reach on its first write. A connection `over TLS` is
+plain bytes to the program too: lengua does the TLS. A server reads until it has
 the request, answers, and closes the connection. Data can arrive in pieces, so never assume one
 `read` gets it all.
 

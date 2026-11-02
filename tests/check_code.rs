@@ -1258,6 +1258,26 @@ async fn the_fetch_client_talks_to_the_tests_server() {
 }
 
 #[tokio::test]
+async fn a_client_over_tls_is_tested_in_plain_bytes() {
+    // fetch, pointed at a named computer over TLS: lengua would do the TLS in a run, so its
+    // tests' stand-in server speaks the plain bytes the program sends and reads.
+    let session = session().await;
+    let spec = example("fetch", "spec.md")
+        .replace(
+            "- Network: connects to TCP port 8080",
+            "- Network: connects to TCP port 443 on example.com over TLS",
+        )
+        .replace("on port `8080`", "on port `443`");
+    let program = written(
+        &session,
+        [("spec.md", spec), ("main.s", example("fetch", "main.s"))],
+    )
+    .await;
+    done(&session, &program).await;
+    session.service.cancel().await.expect("close the session");
+}
+
+#[tokio::test]
 async fn the_benchmarks_own_programs_pass_their_checks() {
     // The skill's fast programs, which the benchmark measures on 64 MiB, each with its own spec
     // and tests.
