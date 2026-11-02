@@ -371,6 +371,10 @@ pub struct Pool {
     /// The values a byte variable is held to by the conditions it's drawn with, such as a
     /// text's characters, for drawing inputs that meet them.
     allowed: HashMap<Term, Vec<u8>>,
+    /// The terms bytes were split from, by those bytes lowest first, where a byte simplified so
+    /// that joining them again wouldn't give the term back: the low byte of a sum is the sum of
+    /// its parts' low bytes.
+    split_from: HashMap<Vec<Term>, Term>,
 }
 
 /// The smallest all-ones number at least `value`: the range an or or xor stays in.
@@ -679,6 +683,18 @@ impl Pool {
             Sort::Bv(width) => width,
             Sort::Bool => 0,
         }
+    }
+
+    /// Remembers that `parts`, lowest first, are `whole`'s bytes, so joining them gives `whole`
+    /// back: a value stored to memory or a vector register and read back whole is the value.
+    pub fn remember_split(&mut self, parts: &[Term], whole: Term) {
+        self.split_from.insert(parts.to_vec(), whole);
+    }
+
+    /// The term `parts`, lowest first, were split from, where [`Self::remember_split`] holds it.
+    #[must_use]
+    pub fn split_of(&self, parts: &[Term]) -> Option<Term> {
+        self.split_from.get(parts).copied()
     }
 
     /// How many terms exist.

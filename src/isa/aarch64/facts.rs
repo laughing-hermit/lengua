@@ -4,7 +4,7 @@
 
 use super::{
     A64Cond, A64Reg, Address, FpConversion, FpOne, FpReg, FpThree, FpTwo, Gpr, Indirect, Inst,
-    Logic, Source, VImmediate, VThree, VTwo, Wide, Writeback,
+    Logic, Source, VImmediate, VThree, Wide, Writeback,
 };
 use crate::isa::{BaseMove, Cond, Control, Insn, MemRef, Op, Operand, Reg, RegSet, Stack, Value};
 
@@ -269,7 +269,7 @@ pub fn mnemonic(inst: &Inst) -> String {
                 op.name()
             }
         }
-        Inst::VectorTwo { op, rd, .. } => op.name(*rd),
+        Inst::VectorTwo { op, rd, rn } => op.name(*rd, *rn),
         Inst::VectorAcross { op, .. } => op.name(),
         Inst::VectorShift { op, rd, rn, .. } => op.name(*rd, *rn),
         Inst::VectorPermute { op, .. } => op.name(),
@@ -1200,7 +1200,7 @@ impl Facts {
             }
             Inst::VectorTwo { op, rd, rn } => {
                 self.reads_v(rn.number);
-                if op == VTwo::Xtn && rd.arrangement.whole() {
+                if op.reads_destination(rd) {
                     self.reads_v(rd.number);
                 }
                 self.writes_v(rd.number);

@@ -113,6 +113,14 @@ fn not_one_doubleword(arrangement: Arrangement) -> bool {
     arrangement != Arrangement::D1
 }
 
+/// Whether `arrangement` is one of floats: two or four singles, or two doubles.
+fn float_lanes(arrangement: Arrangement) -> bool {
+    matches!(
+        arrangement,
+        Arrangement::S2 | Arrangement::S4 | Arrangement::D2
+    )
+}
+
 impl Line<'_> {
     /// Operand `at`, as a vector register.
     fn v(&self, at: usize) -> Result<VReg, String> {
@@ -152,7 +160,31 @@ impl Line<'_> {
             .get(1)
             .is_some_and(|operand| operand.starts_with('#'));
         let zero_last = self.operands.len() == 3 && self.operands.last() == Some(&"#0");
+        let float_zero_last =
+            self.operands.len() == 3 && matches!(self.operands.last(), Some(&("#0.0" | "#0")));
+        let two_operands = self.operands.len() == 2;
         Some(match self.mnemonic {
+            "fmov" if any_vector && number_second => self.float_immediate(),
+            "fcmeq" | "fcmgt" | "fcmge" | "fcmle" | "fcmlt" if any_vector && float_zero_last => {
+                self.float_compare_zero()
+            }
+            "fabs" | "fneg" | "fsqrt" | "frintn" | "frinta" | "frintp" | "frintm" | "frintz"
+            | "fcvtzs" | "fcvtzu" | "scvtf" | "ucvtf" | "fcvtl" | "fcvtl2" | "fcvtn" | "fcvtn2"
+                if any_vector =>
+            {
+                self.float_two()
+            }
+            "fmaxv" | "fminv" | "fmaxnmv" | "fminnmv" => self.float_across(),
+            "faddp" | "fmaxp" | "fminp" | "fmaxnmp" | "fminnmp" if any_vector && two_operands => {
+                self.float_across()
+            }
+            "fadd" | "fsub" | "fmul" | "fdiv" | "fmax" | "fmin" | "fmaxnm" | "fminnm" | "fabd"
+            | "faddp" | "fmaxp" | "fminp" | "fmaxnmp" | "fminnmp" | "fmla" | "fmls" | "fcmeq"
+            | "fcmge" | "fcmgt" | "fcmle" | "fcmlt" | "facge" | "facgt" | "facle" | "faclt"
+                if any_vector =>
+            {
+                self.float_three()
+            }
             "ldr" | "str" | "ldur" | "stur" if first_q => self.q_load_store(),
             "ldp" | "stp" if first_q => self.q_pair(),
             "ld1" | "st1" => self.structures(),
@@ -255,6 +287,161 @@ impl Line<'_> {
             return Err(self.problem("it doesn't take these doublewords"));
         }
         Ok(Inst::VectorThree { op, rd, rn, rm })
+    }
+
+    /// The operations of two vectors of floats, all three arrangements one: singles, or two
+    /// doubles.
+    fn float_three(&self) -> Result<Inst, String> {
+        self.count(3)?;
+        let (rd, first, second) = (self.v(0)?, self.v(1)?, self.v(2)?);
+        // The comparisons below and at most are the others with their operands swapped.
+        let (op, rn, rm) = match self.mnemonic {
+            "fadd" => (VThree::Fadd, first, second),
+            "fsub" => (VThree::Fsub, first, second),
+            "fmul" => (VThree::Fmul, first, second),
+            "fdiv" => (VThree::Fdiv, first, second),
+            "fmax" => (VThree::Fmax, first, second),
+            "fmin" => (VThree::Fmin, first, second),
+            "fmaxnm" => (VThree::Fmaxnm, first, second),
+            "fminnm" => (VThree::Fminnm, first, second),
+            "fabd" => (VThree::Fabd, first, second),
+            "faddp" => (VThree::Faddp, first, second),
+            "fmaxp" => (VThree::Fmaxp, first, second),
+            "fminp" => (VThree::Fminp, first, second),
+            "fmaxnmp" => (VThree::Fmaxnmp, first, second),
+            "fminnmp" => (VThree::Fminnmp, first, second),
+            "fmla" => (VThree::Fmla, first, second),
+            "fmls" => (VThree::Fmls, first, second),
+            "fcmeq" => (VThree::Fcmeq, first, second),
+            "fcmge" => (VThree::Fcmge, first, second),
+            "fcmgt" => (VThree::Fcmgt, first, second),
+            "fcmle" => (VThree::Fcmge, second, first),
+            "fcmlt" => (VThree::Fcmgt, second, first),
+            "facge" => (VThree::Facge, first, second),
+            "facgt" => (VThree::Facgt, first, second),
+            "facle" => (VThree::Facge, second, first),
+            _ => (VThree::Facgt, second, first),
+        };
+        let arrangement = rd.arrangement;
+        if rn.arrangement != arrangement
+            || rm.arrangement != arrangement
+            || !float_lanes(arrangement)
+        {
+            return Err(self.problem("its vectors aren't one arrangement of floats: 2s, 4s or 2d"));
+        }
+        Ok(Inst::VectorThree { op, rd, rn, rm })
+    }
+
+    /// The comparisons of each float with zero.
+    fn float_compare_zero(&self) -> Result<Inst, String> {
+        self.count(3)?;
+        let (rd, rn) = (self.v(0)?, self.v(1)?);
+        let op = match self.mnemonic {
+            "fcmeq" => VTwo::Fcmeq0,
+            "fcmgt" => VTwo::Fcmgt0,
+            "fcmge" => VTwo::Fcmge0,
+            "fcmle" => VTwo::Fcmle0,
+            _ => VTwo::Fcmlt0,
+        };
+        if rd.arrangement != rn.arrangement || !float_lanes(rd.arrangement) {
+            return Err(self.problem("its vectors aren't one arrangement of floats: 2s, 4s or 2d"));
+        }
+        Ok(Inst::VectorTwo { op, rd, rn })
+    }
+
+    /// The operations on one vector of floats, and the conversions between floats and whole
+    /// numbers as wide, and between singles and doubles.
+    fn float_two(&self) -> Result<Inst, String> {
+        self.count(2)?;
+        let (rd, rn) = (self.v(0)?, self.v(1)?);
+        let op = match self.mnemonic {
+            "fabs" => VTwo::Fabs,
+            "fneg" => VTwo::Fneg,
+            "fsqrt" => VTwo::Fsqrt,
+            "frintn" => VTwo::Frintn,
+            "frinta" => VTwo::Frinta,
+            "frintp" => VTwo::Frintp,
+            "frintm" => VTwo::Frintm,
+            "frintz" => VTwo::Frintz,
+            "fcvtzs" => VTwo::Fcvtzs,
+            "fcvtzu" => VTwo::Fcvtzu,
+            "scvtf" => VTwo::Scvtf,
+            "ucvtf" => VTwo::Ucvtf,
+            "fcvtl" | "fcvtl2" => VTwo::Fcvtl,
+            _ => VTwo::Fcvtn,
+        };
+        let high = self.mnemonic.ends_with('2');
+        let fits = match op {
+            // Two singles, the low ones or with fcvtl2 the high ones, as two doubles.
+            VTwo::Fcvtl => {
+                rd.arrangement == Arrangement::D2 && rn.arrangement == Arrangement::new(2, high)
+            }
+            VTwo::Fcvtn => {
+                rn.arrangement == Arrangement::D2 && rd.arrangement == Arrangement::new(2, high)
+            }
+            _ => rd.arrangement == rn.arrangement && float_lanes(rd.arrangement),
+        };
+        if !fits {
+            return Err(self.problem("its vectors aren't arrangements of floats it takes"));
+        }
+        Ok(Inst::VectorTwo { op, rd, rn })
+    }
+
+    /// A vector's floats into one scalar: four singles' largest or smallest, or two floats'
+    /// sum, largest or smallest.
+    fn float_across(&self) -> Result<Inst, String> {
+        self.count(2)?;
+        let rn = self.v(1)?;
+        let rd = self
+            .operands
+            .first()
+            .and_then(|operand| scalar(operand))
+            .ok_or_else(|| self.problem("operand 1 isn't a scalar such as s0"))?;
+        let op = match self.mnemonic {
+            "fmaxv" => VAcross::Fmaxv,
+            "fminv" => VAcross::Fminv,
+            "fmaxnmv" => VAcross::Fmaxnmv,
+            "fminnmv" => VAcross::Fminnmv,
+            "faddp" => VAcross::Faddp,
+            "fmaxp" => VAcross::Fmaxp,
+            "fminp" => VAcross::Fminp,
+            "fmaxnmp" => VAcross::Fmaxnmp,
+            _ => VAcross::Fminnmp,
+        };
+        let fits = if self.mnemonic.ends_with('v') {
+            rn.arrangement == Arrangement::S4 && rd.size == 2
+        } else {
+            matches!(
+                (rn.arrangement, rd.size),
+                (Arrangement::S2, 2) | (Arrangement::D2, 3)
+            )
+        };
+        if !fits {
+            return Err(self.problem("its scalar and vector aren't sizes it takes"));
+        }
+        Ok(Inst::VectorAcross { op, rd, rn })
+    }
+
+    /// `fmov` of a float into every lane.
+    fn float_immediate(&self) -> Result<Inst, String> {
+        self.count(2)?;
+        let rd = self.v(0)?;
+        if !float_lanes(rd.arrangement) {
+            return Err(self.problem("its vector isn't an arrangement of floats: 2s, 4s or 2d"));
+        }
+        let value: f64 = self.operands[1]
+            .strip_prefix('#')
+            .and_then(|number| number.parse().ok())
+            .ok_or_else(|| self.problem("operand 2 isn't a number"))?;
+        let imm8 = (0..=255_u8)
+            .find(|imm8| super::super::fp_immediate(*imm8) == value)
+            .ok_or_else(|| self.problem("its number isn't one fmov can hold"))?;
+        Ok(Inst::VectorImmediate {
+            op: VImmediate::Fmov,
+            rd,
+            imm8,
+            expand: Expand::Float,
+        })
     }
 
     /// The comparisons of each lane with zero.

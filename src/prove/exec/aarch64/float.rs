@@ -139,7 +139,7 @@ impl Cpu<'_> {
     }
 
     /// What `test` says of `a` and `b`: settled where their bounds settle it.
-    fn fp_test(&mut self, test: FloatTest, a: Term, b: Term) -> Term {
+    pub(super) fn fp_test(&mut self, test: FloatTest, a: Term, b: Term) -> Term {
         let settled = self
             .pool
             .float_bounds(a)
@@ -233,7 +233,7 @@ impl Cpu<'_> {
     }
 
     /// `fmov`, `fabs`, `fneg`, `fsqrt`, `fcvt` to a float `to` bits wide, and the `frint`s.
-    fn fp_one(&mut self, op: FpOne, a: Term, to: u32) -> Term {
+    pub(super) fn fp_one(&mut self, op: FpOne, a: Term, to: u32) -> Term {
         let width = self.pool.width(a);
         match op {
             FpOne::Mov => a,
@@ -259,7 +259,7 @@ impl Cpu<'_> {
     }
 
     /// The operations of two floats.
-    fn fp_two(&mut self, op: FpTwo, a: Term, b: Term) -> Term {
+    pub(super) fn fp_two(&mut self, op: FpTwo, a: Term, b: Term) -> Term {
         let binary = |cpu: &mut Self, op| {
             let sse = cpu.pool.float(op, a, b);
             cpu.arm_nans(sse, &[a, b])
@@ -282,7 +282,7 @@ impl Cpu<'_> {
     }
 
     /// `fmax` or `fmin`: a NaN comes through; of two zeros, +0 is the larger.
-    fn max_min(&mut self, max: bool, a: Term, b: Term) -> Term {
+    pub(super) fn max_min(&mut self, max: bool, a: Term, b: Term) -> Term {
         let below = self.fp_test(FloatTest::Less, a, b);
         let above = self.fp_test(FloatTest::Less, b, a);
         // Equal floats have the same bits but for zeros, whose signs this combines.
@@ -304,7 +304,7 @@ impl Cpu<'_> {
     /// `fmaxnm` or `fminnm`: a quiet NaN beside anything but another quiet NaN loses, as an
     /// infinity on the losing side would, so the other operand comes out, quieted if it's a
     /// signaling NaN.
-    fn max_min_number(&mut self, max: bool, a: Term, b: Term) -> Term {
+    pub(super) fn max_min_number(&mut self, max: bool, a: Term, b: Term) -> Term {
         let chosen = self.max_min(max, a, b);
         let (a_quiet, b_quiet) = (self.is_quiet_nan(a), self.is_quiet_nan(b));
         let (a_loud, b_loud) = (self.pool.bool_not(a_quiet), self.pool.bool_not(b_quiet));
@@ -323,7 +323,7 @@ impl Cpu<'_> {
     /// `fmadd`, `fmsub`, `fnmadd` and `fnmsub` of `n` × `m` and `a`, rounded once: the addend
     /// and the first factor negated first as each says, a NaN's sign with them, and the addend
     /// first of the NaNs.
-    fn fp_fused(&mut self, op: FpThree, n: Term, m: Term, a: Term) -> Term {
+    pub(super) fn fp_fused(&mut self, op: FpThree, n: Term, m: Term, a: Term) -> Term {
         let (addend, first) = match op {
             FpThree::Madd => (a, n),
             FpThree::Msub => (a, self.negated(n)),
@@ -400,7 +400,7 @@ impl Cpu<'_> {
     }
 
     /// `ucvtf`: a whole number without a sign as the nearest float of `width` bits.
-    fn unsigned_to_float(&mut self, number: Term, width: u32) -> Term {
+    pub(super) fn unsigned_to_float(&mut self, number: Term, width: u32) -> Term {
         let from = self.pool.width(number);
         if from < 64 {
             let wide = self.pool.zero_extend(number, 64 - from);
@@ -427,7 +427,7 @@ impl Cpu<'_> {
     /// `fcvtzs`: `a` truncated to a signed whole number of `to` bits, saturating at either end,
     /// and 0 for a NaN. x86-64's conversion, the pool's, gives the most negative number for a NaN
     /// or a number out of range: AArch64's too for one too low.
-    fn whole_signed(&mut self, a: Term, to: u32) -> Term {
+    pub(super) fn whole_signed(&mut self, a: Term, to: u32) -> Term {
         let width = self.pool.width(a);
         let whole = self.pool.float_to_int(a, to, true);
         let limit = self.fp_constant(2_f64.powi(i32::try_from(to).unwrap_or(64) - 1), width);
@@ -441,7 +441,7 @@ impl Cpu<'_> {
 
     /// `fcvtzu`: `a` truncated to a whole number of `to` bits without a sign, saturating at
     /// either end, and 0 for a NaN.
-    fn whole_unsigned(&mut self, a: Term, to: u32) -> Term {
+    pub(super) fn whole_unsigned(&mut self, a: Term, to: u32) -> Term {
         let width = self.pool.width(a);
         let zero_float = self.pool.bv(width, 0);
         let negative = self.fp_test(FloatTest::Less, a, zero_float);

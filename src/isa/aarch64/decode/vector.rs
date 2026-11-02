@@ -91,6 +91,9 @@ fn three_same(word: u32) -> Result<Inst, String> {
     let (q, u, size) = (bit(word, 30), bit(word, 29), bits(word, 23, 22));
     let opcode = bits(word, 15, 11);
     let (rd, rn, rm) = (number(word, 0), number(word, 5), number(word, 16));
+    if opcode >= 0b1_1000 {
+        return float_three(word);
+    }
     if opcode == 0b0_0011 {
         // The bitwise operations, whose size field picks the operation.
         let op = match (u, size) {
@@ -161,10 +164,112 @@ fn three_same(word: u32) -> Result<Inst, String> {
     })
 }
 
+/// The lanes of floats, singles or doubles as `double` says: doubles only two at a time.
+fn floats(double: bool, q: bool, word: u32) -> Result<Arrangement, String> {
+    if double && !q {
+        return Err(outside(word));
+    }
+    Ok(Arrangement::new(2 + u32::from(double), q))
+}
+
+/// Three same of floats: 0 Q U 01110 a sz 1 Rm 11 opcode 1 Rn Rd, `sz` choosing doubles. Not
+/// `fmulx`, `frecps` or `frsqrts`, whose results the architecture leaves to estimates.
+fn float_three(word: u32) -> Result<Inst, String> {
+    let (q, u, a, double) = (bit(word, 30), bit(word, 29), bit(word, 23), bit(word, 22));
+    let op = match (bits(word, 15, 11), u, a) {
+        (0b1_1000, false, false) => VThree::Fmaxnm,
+        (0b1_1000, false, true) => VThree::Fminnm,
+        (0b1_1001, false, false) => VThree::Fmla,
+        (0b1_1001, false, true) => VThree::Fmls,
+        (0b1_1010, false, false) => VThree::Fadd,
+        (0b1_1010, false, true) => VThree::Fsub,
+        (0b1_1100, false, false) => VThree::Fcmeq,
+        (0b1_1110, false, false) => VThree::Fmax,
+        (0b1_1110, false, true) => VThree::Fmin,
+        (0b1_1000, true, false) => VThree::Fmaxnmp,
+        (0b1_1000, true, true) => VThree::Fminnmp,
+        (0b1_1010, true, false) => VThree::Faddp,
+        (0b1_1010, true, true) => VThree::Fabd,
+        (0b1_1011, true, false) => VThree::Fmul,
+        (0b1_1100, true, false) => VThree::Fcmge,
+        (0b1_1100, true, true) => VThree::Fcmgt,
+        (0b1_1101, true, false) => VThree::Facge,
+        (0b1_1101, true, true) => VThree::Facgt,
+        (0b1_1110, true, false) => VThree::Fmaxp,
+        (0b1_1110, true, true) => VThree::Fminp,
+        (0b1_1111, true, false) => VThree::Fdiv,
+        _ => return Err(outside(word)),
+    };
+    let arrangement = floats(double, q, word)?;
+    Ok(Inst::VectorThree {
+        op,
+        rd: v(number(word, 0), arrangement),
+        rn: v(number(word, 5), arrangement),
+        rm: v(number(word, 16), arrangement),
+    })
+}
+
+/// Two-register miscellaneous of floats: 0 Q U 01110 a sz 10000 opcode 10 Rn Rd. Not the
+/// conversions that round otherwise than toward zero, `frintx`, `frinti` or the estimates.
+fn float_two(word: u32) -> Option<Result<Inst, String>> {
+    let (q, u, a, double) = (bit(word, 30), bit(word, 29), bit(word, 23), bit(word, 22));
+    let (rd, rn) = (number(word, 0), number(word, 5));
+    let op = match (bits(word, 16, 12), u, a) {
+        (0b0_1100, false, true) => VTwo::Fcmgt0,
+        (0b0_1100, true, true) => VTwo::Fcmge0,
+        (0b0_1101, false, true) => VTwo::Fcmeq0,
+        (0b0_1101, true, true) => VTwo::Fcmle0,
+        (0b0_1110, false, true) => VTwo::Fcmlt0,
+        (0b0_1111, false, true) => VTwo::Fabs,
+        (0b0_1111, true, true) => VTwo::Fneg,
+        // Between singles and doubles: the doubles always two, the singles the low two or,
+        // with Q, the high two.
+        (0b1_0110 | 0b1_0111, false, false) => {
+            if !double {
+                return Some(Err(outside(word)));
+            }
+            let (singles, doubles) = (Arrangement::new(2, q), Arrangement::D2);
+            return Some(Ok(if bit(word, 12) {
+                Inst::VectorTwo {
+                    op: VTwo::Fcvtl,
+                    rd: v(rd, doubles),
+                    rn: v(rn, singles),
+                }
+            } else {
+                Inst::VectorTwo {
+                    op: VTwo::Fcvtn,
+                    rd: v(rd, singles),
+                    rn: v(rn, doubles),
+                }
+            }));
+        }
+        (0b1_1000, false, false) => VTwo::Frintn,
+        (0b1_1000, false, true) => VTwo::Frintp,
+        (0b1_1000, true, false) => VTwo::Frinta,
+        (0b1_1001, false, false) => VTwo::Frintm,
+        (0b1_1001, false, true) => VTwo::Frintz,
+        (0b1_1011, false, true) => VTwo::Fcvtzs,
+        (0b1_1011, true, true) => VTwo::Fcvtzu,
+        (0b1_1101, false, false) => VTwo::Scvtf,
+        (0b1_1101, true, false) => VTwo::Ucvtf,
+        (0b1_1111, true, true) => VTwo::Fsqrt,
+        (0b0_1100..=0b0_1111 | 0b1_1000..=0b1_1111, _, _) => return Some(Err(outside(word))),
+        _ => return None,
+    };
+    Some(floats(double, q, word).map(|arrangement| Inst::VectorTwo {
+        op,
+        rd: v(rd, arrangement),
+        rn: v(rn, arrangement),
+    }))
+}
+
 /// Two-register miscellaneous: 0 Q U 01110 size 10000 opcode 10 Rn Rd.
 fn two_misc(word: u32) -> Result<Inst, String> {
     let (q, u, size) = (bit(word, 30), bit(word, 29), bits(word, 23, 22));
     let (rd, rn) = (number(word, 0), number(word, 5));
+    if let Some(float) = float_two(word) {
+        return float;
+    }
     let same = |op| {
         let arrangement = Arrangement::new(size, q);
         Ok(Inst::VectorTwo {
@@ -217,6 +322,26 @@ fn two_misc(word: u32) -> Result<Inst, String> {
 /// Across lanes: 0 Q U 01110 size 11000 opcode 10 Rn Rd.
 fn across(word: u32) -> Result<Inst, String> {
     let (q, u, size) = (bit(word, 30), bit(word, 29), bits(word, 23, 22));
+    if u && matches!(bits(word, 16, 12), 0b0_1100 | 0b0_1111) {
+        // Floats: four singles only.
+        if bit(word, 22) || !q {
+            return Err(outside(word));
+        }
+        let op = match (bits(word, 16, 12), bit(word, 23)) {
+            (0b0_1100, false) => VAcross::Fmaxnmv,
+            (0b0_1100, true) => VAcross::Fminnmv,
+            (_, false) => VAcross::Fmaxv,
+            (_, true) => VAcross::Fminv,
+        };
+        return Ok(Inst::VectorAcross {
+            op,
+            rd: Scalar {
+                number: number(word, 0),
+                size: 2,
+            },
+            rn: v(number(word, 5), Arrangement::S4),
+        });
+    }
     // Words come four at a time; doublewords never.
     if size == 3 || (size == 2 && !q) {
         return Err(outside(word));
@@ -238,6 +363,32 @@ fn across(word: u32) -> Result<Inst, String> {
             size: size + u32::from(op.long()),
         },
         rn: v(number(word, 5), Arrangement::new(size, q)),
+    })
+}
+
+/// Scalar pairwise of floats: 01 1 11110 a sz 11000 opcode 10 Rn Rd, a vector's two floats
+/// into one: two singles in the low half, or two doubles.
+pub(super) fn pairwise(word: u32) -> Result<Inst, String> {
+    if !bit(word, 29) {
+        return Err(outside(word));
+    }
+    let op = match (bits(word, 16, 12), bit(word, 23)) {
+        (0b0_1100, false) => VAcross::Fmaxnmp,
+        (0b0_1100, true) => VAcross::Fminnmp,
+        (0b0_1101, false) => VAcross::Faddp,
+        (0b0_1111, false) => VAcross::Fmaxp,
+        (0b0_1111, true) => VAcross::Fminp,
+        _ => return Err(outside(word)),
+    };
+    let double = bit(word, 22);
+    let size = 2 + u32::from(double);
+    Ok(Inst::VectorAcross {
+        op,
+        rd: Scalar {
+            number: number(word, 0),
+            size,
+        },
+        rn: v(number(word, 5), Arrangement::new(size, double)),
     })
 }
 
@@ -355,7 +506,9 @@ fn modified_immediate(word: u32) -> Result<Inst, String> {
         ),
         // A doubleword of whole bytes: `movi d0, #…` alone, or `movi v0.2d, #…`.
         (0b1110, true) => (VImmediate::Movi, 3, Expand::Bytes),
-        // fmov of a float into every lane.
+        // A float in every lane: singles, or two doubles.
+        (0b1111, false) => (VImmediate::Fmov, 2, Expand::Float),
+        (0b1111, true) if q => (VImmediate::Fmov, 3, Expand::Float),
         _ => return Err(outside(word)),
     };
     Ok(Inst::VectorImmediate {

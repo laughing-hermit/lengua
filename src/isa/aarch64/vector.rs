@@ -242,6 +242,49 @@ pub enum VThree {
     Bit,
     /// `bif`: the first's bits into the destination where the second's are clear.
     Bif,
+    /// `fadd`: the lanes as floats, singles or doubles, added. Each float operation on vectors
+    /// rounds to the nearest and treats NaNs, zeros and subnormals as its scalar form does.
+    Fadd,
+    /// `fsub`
+    Fsub,
+    /// `fmul`
+    Fmul,
+    /// `fdiv`
+    Fdiv,
+    /// `fmax`: a NaN comes through; of two zeros, +0 is the larger.
+    Fmax,
+    /// `fmin`
+    Fmin,
+    /// `fmaxnm`: a quiet NaN loses to a number.
+    Fmaxnm,
+    /// `fminnm`
+    Fminnm,
+    /// `fabd`: the difference's magnitude.
+    Fabd,
+    /// `faddp`: the sums of neighbouring lanes, as `addp` places them.
+    Faddp,
+    /// `fmaxp`
+    Fmaxp,
+    /// `fminp`
+    Fminp,
+    /// `fmaxnmp`
+    Fmaxnmp,
+    /// `fminnmp`
+    Fminnmp,
+    /// `fmla`: each product added to the destination's lane, rounded once.
+    Fmla,
+    /// `fmls`: each product subtracted from the destination's lane, rounded once.
+    Fmls,
+    /// `fcmeq`: all ones where the lanes are equal floats; a NaN equals nothing.
+    Fcmeq,
+    /// `fcmge`
+    Fcmge,
+    /// `fcmgt`
+    Fcmgt,
+    /// `facge`: the magnitudes compared.
+    Facge,
+    /// `facgt`
+    Facgt,
 }
 
 impl VThree {
@@ -279,7 +322,57 @@ impl VThree {
             Self::Bsl => "bsl",
             Self::Bit => "bit",
             Self::Bif => "bif",
+            Self::Fadd => "fadd",
+            Self::Fsub => "fsub",
+            Self::Fmul => "fmul",
+            Self::Fdiv => "fdiv",
+            Self::Fmax => "fmax",
+            Self::Fmin => "fmin",
+            Self::Fmaxnm => "fmaxnm",
+            Self::Fminnm => "fminnm",
+            Self::Fabd => "fabd",
+            Self::Faddp => "faddp",
+            Self::Fmaxp => "fmaxp",
+            Self::Fminp => "fminp",
+            Self::Fmaxnmp => "fmaxnmp",
+            Self::Fminnmp => "fminnmp",
+            Self::Fmla => "fmla",
+            Self::Fmls => "fmls",
+            Self::Fcmeq => "fcmeq",
+            Self::Fcmge => "fcmge",
+            Self::Fcmgt => "fcmgt",
+            Self::Facge => "facge",
+            Self::Facgt => "facgt",
         }
+    }
+
+    /// Whether its lanes are floats: singles or doubles.
+    #[must_use]
+    pub const fn float(self) -> bool {
+        matches!(
+            self,
+            Self::Fadd
+                | Self::Fsub
+                | Self::Fmul
+                | Self::Fdiv
+                | Self::Fmax
+                | Self::Fmin
+                | Self::Fmaxnm
+                | Self::Fminnm
+                | Self::Fabd
+                | Self::Faddp
+                | Self::Fmaxp
+                | Self::Fminp
+                | Self::Fmaxnmp
+                | Self::Fminnmp
+                | Self::Fmla
+                | Self::Fmls
+                | Self::Fcmeq
+                | Self::Fcmge
+                | Self::Fcmgt
+                | Self::Facge
+                | Self::Facgt
+        )
     }
 
     /// Whether it works on the register's bits whatever its lanes, so its arrangement is
@@ -302,7 +395,10 @@ impl VThree {
     /// Whether it reads the destination as well as its two sources.
     #[must_use]
     pub const fn reads_destination(self) -> bool {
-        matches!(self, Self::Bsl | Self::Bit | Self::Bif)
+        matches!(
+            self,
+            Self::Bsl | Self::Bit | Self::Bif | Self::Fmla | Self::Fmls
+        )
     }
 }
 
@@ -346,12 +442,51 @@ pub enum VTwo {
     /// `xtn`: each lane's low half, into the destination's low half; `xtn2` into its high half,
     /// keeping the low.
     Xtn,
+    /// `fabs`: each float's sign cleared.
+    Fabs,
+    /// `fneg`: each float's sign flipped.
+    Fneg,
+    /// `fsqrt`
+    Fsqrt,
+    /// `frintn`: each float to a whole number, the nearest, ties to even.
+    Frintn,
+    /// `frinta`: the nearest, ties away from zero.
+    Frinta,
+    /// `frintp`: up.
+    Frintp,
+    /// `frintm`: down.
+    Frintm,
+    /// `frintz`: toward zero.
+    Frintz,
+    /// `fcvtzs`: each float to a whole number as wide, toward zero, saturating, a NaN 0.
+    Fcvtzs,
+    /// `fcvtzu`: the same without a sign.
+    Fcvtzu,
+    /// `scvtf`: each whole number to the nearest float as wide.
+    Scvtf,
+    /// `ucvtf`: the same without a sign.
+    Ucvtf,
+    /// `fcmeq …, #0.0`: all ones where a float is zero, of either sign.
+    Fcmeq0,
+    /// `fcmgt …, #0.0`
+    Fcmgt0,
+    /// `fcmge …, #0.0`
+    Fcmge0,
+    /// `fcmle …, #0.0`
+    Fcmle0,
+    /// `fcmlt …, #0.0`
+    Fcmlt0,
+    /// `fcvtl`: the low two singles as doubles; `fcvtl2` the high two.
+    Fcvtl,
+    /// `fcvtn`: each double as a single, into the destination's low half; `fcvtn2` into its
+    /// high half, keeping the low.
+    Fcvtn,
 }
 
 impl VTwo {
-    /// Its mnemonic, as LLVM writes it for a destination of `rd`.
+    /// Its mnemonic, as LLVM writes it for a destination of `rd` and a source of `rn`.
     #[must_use]
-    pub const fn name(self, rd: VReg) -> &'static str {
+    pub const fn name(self, rd: VReg, rn: VReg) -> &'static str {
         match self {
             Self::Cnt => "cnt",
             Self::Not => "mvn",
@@ -372,16 +507,80 @@ impl VTwo {
             Self::Saddlp => "saddlp",
             Self::Xtn if rd.arrangement.whole() => "xtn2",
             Self::Xtn => "xtn",
+            Self::Fabs => "fabs",
+            Self::Fneg => "fneg",
+            Self::Fsqrt => "fsqrt",
+            Self::Frintn => "frintn",
+            Self::Frinta => "frinta",
+            Self::Frintp => "frintp",
+            Self::Frintm => "frintm",
+            Self::Frintz => "frintz",
+            Self::Fcvtzs => "fcvtzs",
+            Self::Fcvtzu => "fcvtzu",
+            Self::Scvtf => "scvtf",
+            Self::Ucvtf => "ucvtf",
+            Self::Fcmeq0 => "fcmeq",
+            Self::Fcmgt0 => "fcmgt",
+            Self::Fcmge0 => "fcmge",
+            Self::Fcmle0 => "fcmle",
+            Self::Fcmlt0 => "fcmlt",
+            Self::Fcvtl if rn.arrangement.whole() => "fcvtl2",
+            Self::Fcvtl => "fcvtl",
+            Self::Fcvtn if rd.arrangement.whole() => "fcvtn2",
+            Self::Fcvtn => "fcvtn",
         }
     }
 
-    /// Whether it compares each lane with zero, written with a last operand `#0`.
+    /// Whether it compares each lane with zero, written with a last operand `#0`, or `#0.0` for
+    /// floats.
     #[must_use]
     pub const fn with_zero(self) -> bool {
         matches!(
             self,
-            Self::Cmeq0 | Self::Cmgt0 | Self::Cmge0 | Self::Cmle0 | Self::Cmlt0
+            Self::Cmeq0
+                | Self::Cmgt0
+                | Self::Cmge0
+                | Self::Cmle0
+                | Self::Cmlt0
+                | Self::Fcmeq0
+                | Self::Fcmgt0
+                | Self::Fcmge0
+                | Self::Fcmle0
+                | Self::Fcmlt0
         )
+    }
+
+    /// Whether its lanes are floats, on either side.
+    #[must_use]
+    pub const fn float(self) -> bool {
+        matches!(
+            self,
+            Self::Fabs
+                | Self::Fneg
+                | Self::Fsqrt
+                | Self::Frintn
+                | Self::Frinta
+                | Self::Frintp
+                | Self::Frintm
+                | Self::Frintz
+                | Self::Fcvtzs
+                | Self::Fcvtzu
+                | Self::Scvtf
+                | Self::Ucvtf
+                | Self::Fcmeq0
+                | Self::Fcmgt0
+                | Self::Fcmge0
+                | Self::Fcmle0
+                | Self::Fcmlt0
+                | Self::Fcvtl
+                | Self::Fcvtn
+        )
+    }
+
+    /// Whether it keeps part of its destination: `xtn2` and `fcvtn2` keep the low half.
+    #[must_use]
+    pub const fn reads_destination(self, rd: VReg) -> bool {
+        matches!(self, Self::Xtn | Self::Fcvtn) && rd.arrangement.whole()
     }
 }
 
@@ -402,6 +601,25 @@ pub enum VAcross {
     Uaddlv,
     /// `saddlv`: the same with a sign.
     Saddlv,
+    /// `fmaxv`: the largest of four singles, as `fmax` picks, pairs first: the larger of the
+    /// low two's and the high two's.
+    Fmaxv,
+    /// `fminv`
+    Fminv,
+    /// `fmaxnmv`
+    Fmaxnmv,
+    /// `fminnmv`
+    Fminnmv,
+    /// `faddp` into a scalar: a vector's two floats added.
+    Faddp,
+    /// `fmaxp` into a scalar
+    Fmaxp,
+    /// `fminp` into a scalar
+    Fminp,
+    /// `fmaxnmp` into a scalar
+    Fmaxnmp,
+    /// `fminnmp` into a scalar
+    Fminnmp,
 }
 
 impl VAcross {
@@ -416,7 +634,33 @@ impl VAcross {
             Self::Sminv => "sminv",
             Self::Uaddlv => "uaddlv",
             Self::Saddlv => "saddlv",
+            Self::Fmaxv => "fmaxv",
+            Self::Fminv => "fminv",
+            Self::Fmaxnmv => "fmaxnmv",
+            Self::Fminnmv => "fminnmv",
+            Self::Faddp => "faddp",
+            Self::Fmaxp => "fmaxp",
+            Self::Fminp => "fminp",
+            Self::Fmaxnmp => "fmaxnmp",
+            Self::Fminnmp => "fminnmp",
         }
+    }
+
+    /// Whether its lanes are floats.
+    #[must_use]
+    pub const fn float(self) -> bool {
+        matches!(
+            self,
+            Self::Fmaxv
+                | Self::Fminv
+                | Self::Fmaxnmv
+                | Self::Fminnmv
+                | Self::Faddp
+                | Self::Fmaxp
+                | Self::Fminp
+                | Self::Fmaxnmp
+                | Self::Fminnmp
+        )
     }
 
     /// Whether its result is twice as wide as a lane.
@@ -536,6 +780,8 @@ pub enum VImmediate {
     Orr,
     /// `bic`: its bits cleared from every lane.
     Bic,
+    /// `fmov`: a float in every lane.
+    Fmov,
 }
 
 impl VImmediate {
@@ -547,6 +793,7 @@ impl VImmediate {
             Self::Mvni => "mvni",
             Self::Orr => "orr",
             Self::Bic => "bic",
+            Self::Fmov => "fmov",
         }
     }
 }
@@ -558,6 +805,9 @@ pub enum Expand {
     Lsl(u8),
     /// Shifted left by 8 or 16 bits, ones coming in: `msl #8`.
     Msl(u8),
+    /// A float of the lane's width, as `fmov` holds one: a sign, an exponent from -3 to 4 and
+    /// four bits of fraction, the architecture's `VFPExpandImm`.
+    Float,
     /// Each bit a byte of all ones or all zeros: `movi` of a 64-bit mask.
     Bytes,
 }
@@ -580,6 +830,21 @@ impl Expand {
                     bit += 1;
                 }
                 value
+            }
+            Self::Float => {
+                let (exponent_bits, fraction_bits) = if width == 32 { (8, 23) } else { (11, 52) };
+                // The exponent: bit 6 inverted, then bit 6 repeated, then bits 5 and 4.
+                let six = (imm >> 6) & 1;
+                let mut exponent = (six ^ 1) << (exponent_bits - 1);
+                let mut copy = 0;
+                while copy < exponent_bits - 3 {
+                    exponent |= six << (exponent_bits - 2 - copy);
+                    copy += 1;
+                }
+                exponent |= (imm >> 4) & 3;
+                let sign = (imm >> 7) & 1;
+                let fraction = (imm & 0xf) << (fraction_bits - 4);
+                (sign << (width - 1)) | (exponent << fraction_bits) | fraction
             }
         };
         if width >= 64 {

@@ -207,7 +207,7 @@ file, that loop takes 4 times fewer cycles than `gcc -O3 -march=native`, where t
 takes more instructions than C. Memory the program touches costs kernel time too, a page fault
 per 4 KiB: work in place where the rules allow it. For floating point, packed instructions do 2
 to 8 doubles at once, or 4 to 16 singles, as long as each element's steps stay in the formula's
-order.
+order; on AArch64, NEON's do 2 doubles or 4 singles (`fmul v0.2d, v1.2d, v2.2d`).
 
 When the spec allows threads (`- Threads: up to N`), split heavy work across cores with
 `parallel_for`: [the parallel template](assets/parallel-template.s) (with

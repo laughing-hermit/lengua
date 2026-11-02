@@ -12,6 +12,7 @@ use rand::{RngExt, SeedableRng};
 
 use super::decode::decode;
 use super::text::parse;
+use super::vector::Expand;
 
 /// Where every word is taken to be: branch targets are relative to it.
 const ADDRESS: u64 = 0x40_1000;
@@ -22,7 +23,7 @@ const PER_CLASS: usize = 3000;
 /// Each encoding class the dialect has: its name, the bits that place a word in it, and their
 /// value. The classes whose fields are mostly unallocated fix more bits, so random words land on
 /// instructions.
-const CLASSES: [(&str, u32, u32); 48] = [
+const CLASSES: [(&str, u32, u32); 55] = [
     ("adr and adrp", 0x1f00_0000, 0x1000_0000),
     ("add and sub with a number", 0x1f80_0000, 0x1100_0000),
     ("logical with a bitmask", 0x1f80_0000, 0x1200_0000),
@@ -111,6 +112,13 @@ const CLASSES: [(&str, u32, u32); 48] = [
         0x3ca0_0800,
     ),
     ("q pairs", 0xfe00_0000, 0xac00_0000),
+    ("vector fp three same", 0x9f20_c400, 0x0e20_c400),
+    ("vector fp two-register misc", 0x9f3f_8c00, 0x0e21_8800),
+    ("vector fp compares with zero", 0x9f3f_cc00, 0x0e20_c800),
+    ("fcvtl and fcvtn", 0x9fbf_ec00, 0x0e21_6800),
+    ("vector fp across lanes", 0xbf7f_cc00, 0x2e30_c800),
+    ("fp pairwise into a scalar", 0xff3f_cc00, 0x7e30_c800),
+    ("vector fmov", 0x9ff8_fc00, 0x0f00_f400),
 ];
 
 /// What LLVM's disassembler says of each word: its text, or none where it refuses the word or
@@ -390,6 +398,12 @@ fn the_facts_say_what_each_idiom_does() {
     );
     let select = facts_of("bsl v0.16b, v1.16b, v2.16b");
     assert!(select.uses(d(0)) && select.uses(d(1)) && select.changes(d(0), &ABI));
+    // A fused multiply-add's destination is its addend; fcvtn2 keeps the low half.
+    let fused = facts_of("fmla v0.2d, v1.2d, v2.2d");
+    assert!(fused.uses(d(0)) && fused.uses(d(2)) && fused.changes(d(0), &ABI));
+    assert!(!facts_of("fmul v0.2d, v1.2d, v2.2d").uses(d(0)));
+    assert!(facts_of("fcvtn2 v0.4s, v1.2d").uses(d(0)));
+    assert!(!facts_of("fcvtn v0.2s, v1.2d").uses(d(0)));
     assert!(!facts_of("orr v0.16b, v1.16b, v2.16b").uses(d(0)));
     let loads = facts_of("ld1 {v30.16b-v1.16b}, [x1], #64");
     assert!(
@@ -499,7 +513,82 @@ const VECTOR_LINES: &[&str] = &[
     "ld1 {v0.16b-v3.16b}, [x1], #64",
     "ld1 {v0.16b, v1.16b}, [sp], x2",
     "st1 {v31.1d, v0.1d}, [x1], #16",
+    // Floats: singles and doubles, the aliases LLVM accepts with operands swapped included.
+    "fadd v0.4s, v1.4s, v2.4s",
+    "fadd v0.2d, v1.2d, v2.2d",
+    "fadd v0.2s, v1.2s, v2.2s",
+    "fsub v3.2d, v4.2d, v5.2d",
+    "fmul v0.4s, v1.4s, v31.4s",
+    "fdiv v0.2d, v1.2d, v2.2d",
+    "fmax v0.4s, v1.4s, v2.4s",
+    "fmin v0.2d, v1.2d, v2.2d",
+    "fmaxnm v0.4s, v1.4s, v2.4s",
+    "fminnm v0.2d, v1.2d, v2.2d",
+    "fabd v0.4s, v1.4s, v2.4s",
+    "faddp v0.4s, v1.4s, v2.4s",
+    "fmaxp v0.2d, v1.2d, v2.2d",
+    "fminp v0.2s, v1.2s, v2.2s",
+    "fmaxnmp v0.4s, v1.4s, v2.4s",
+    "fminnmp v0.2d, v1.2d, v2.2d",
+    "fmla v0.2d, v1.2d, v2.2d",
+    "fmls v0.4s, v1.4s, v2.4s",
+    "fcmeq v0.4s, v1.4s, v2.4s",
+    "fcmge v0.2d, v1.2d, v2.2d",
+    "fcmgt v0.4s, v1.4s, v2.4s",
+    "fcmle v0.4s, v1.4s, v2.4s",
+    "fcmlt v0.2d, v1.2d, v2.2d",
+    "facge v0.4s, v1.4s, v2.4s",
+    "facgt v0.2d, v1.2d, v2.2d",
+    "facle v0.4s, v1.4s, v2.4s",
+    "faclt v0.2d, v1.2d, v2.2d",
+    "fabs v0.4s, v1.4s",
+    "fneg v0.2d, v1.2d",
+    "fsqrt v0.2s, v1.2s",
+    "frintn v0.2d, v1.2d",
+    "frinta v0.4s, v1.4s",
+    "frintp v0.2d, v1.2d",
+    "frintm v0.4s, v1.4s",
+    "frintz v0.2d, v1.2d",
+    "fcvtzs v0.4s, v1.4s",
+    "fcvtzu v0.2d, v1.2d",
+    "scvtf v0.4s, v1.4s",
+    "ucvtf v0.2d, v1.2d",
+    "fcmeq v0.4s, v1.4s, #0.0",
+    "fcmge v0.2d, v1.2d, #0.0",
+    "fcmgt v0.4s, v1.4s, #0.0",
+    "fcmle v0.2d, v1.2d, #0.0",
+    "fcmlt v0.2s, v1.2s, #0.0",
+    "fcvtl v0.2d, v1.2s",
+    "fcvtl2 v0.2d, v1.4s",
+    "fcvtn v0.2s, v1.2d",
+    "fcvtn2 v0.4s, v1.2d",
+    "fmaxv s0, v1.4s",
+    "fminv s0, v1.4s",
+    "fmaxnmv s0, v1.4s",
+    "fminnmv s0, v1.4s",
+    "faddp s0, v1.2s",
+    "faddp d0, v1.2d",
+    "fmaxp d0, v1.2d",
+    "fminp s0, v1.2s",
+    "fmaxnmp d0, v1.2d",
+    "fminnmp s0, v1.2s",
+    "fmov v0.4s, #1.0",
+    "fmov v0.2s, #-2.5",
+    "fmov v0.2d, #0.125",
 ];
+
+#[test]
+fn a_vector_fmov_holds_the_float_its_bits_say() {
+    for imm8 in 0..=255_u8 {
+        let number = super::fp_immediate(imm8);
+        let single = Expand::Float.value(imm8, 32);
+        let double = Expand::Float.value(imm8, 64);
+        #[allow(clippy::cast_possible_truncation)] // Exact: every such number is a single.
+        let expected_single = u64::from((number as f32).to_bits());
+        assert_eq!(single, expected_single, "{imm8:#04x} as a single");
+        assert_eq!(double, number.to_bits(), "{imm8:#04x} as a double");
+    }
+}
 
 /// The words `llvm-mc` assembles `lines` into, one each, or none where it isn't installed.
 fn assembled(lines: &[&str]) -> Option<Vec<u32>> {

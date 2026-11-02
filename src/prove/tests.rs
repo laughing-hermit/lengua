@@ -227,8 +227,8 @@ async fn proves_the_aarch64_file_program() {
 
 /// The AArch64 hypotenuse, x86-64's example spec compiled for AArch64: its doubles are the
 /// formula's step by step, as x86-64's are, for every pair of whole sides the table draws and for
-/// decimal sides over their whole range. Rounding toward zero rather than to the nearest is
-/// caught.
+/// decimal sides over their whole range, on vectors of two doubles too. Rounding toward zero
+/// rather than to the nearest is caught, and so is a vector lane read for another.
 #[tokio::test]
 async fn proves_the_aarch64_hypotenuse() {
     if !solvers_installed() {
@@ -273,6 +273,22 @@ async fn proves_the_aarch64_hypotenuse() {
     let toward_zero = source.replace("    frintn d0, d0\n", "    frintz d0, d0\n");
     assert_ne!(toward_zero, source);
     let verdict = prove(&machine(&toward_zero).await, &block(&spec, 0), &budget(120));
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+    // On vectors, both sides in one of two doubles, each step rounds as the scalar one does: the
+    // same double, so the same proofs. The scale taken from the lane above it, which holds 0, is
+    // caught.
+    let vectors = crate::checker::tests::on_vectors(&source);
+    let on_vectors = machine(&vectors).await;
+    for (number, seconds) in [(0, 120), (1, 240)] {
+        let verdict = prove(&on_vectors, &block(&spec, number), &budget(seconds));
+        assert!(
+            matches!(verdict, Verdict::Proven { .. }),
+            "on vectors, block {number}: {verdict:?}"
+        );
+    }
+    let other_lane = vectors.replace("    dup v1.2d, v2.d[0]\n", "    dup v1.2d, v2.d[1]\n");
+    assert_ne!(other_lane, vectors);
+    let verdict = prove(&machine(&other_lane).await, &block(&spec, 0), &budget(120));
     assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
 }
 

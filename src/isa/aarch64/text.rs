@@ -205,9 +205,10 @@ impl Line<'_> {
                 )
             } else if other('q') || vreg(operand).is_some() {
                 format!(
-                    "operand {}: floating point on vectors isn't in the dialect yet: use s or d \
+                    "operand {}: `{}` has no form on vectors in the dialect: use s or d \
                      registers",
-                    at + 1
+                    at + 1,
+                    self.mnemonic
                 )
             } else {
                 format!("operand {} isn't a floating-point register", at + 1)

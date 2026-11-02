@@ -8,7 +8,7 @@ use std::rc::Rc;
 use iced_x86::{EncodingKind, Mnemonic, OpKind, Register};
 
 use super::{Cpu, Last, Step, Stop, VECTOR_BYTES, unsupported};
-use crate::prove::term::Term;
+use crate::prove::term::{Node, Term};
 
 mod crypto;
 mod float;
@@ -75,7 +75,7 @@ impl Cpu<'_> {
     pub(super) fn split(&mut self, value: Term, bytes: usize) -> Vec<Term> {
         let width = self.pool.width(value);
         let zero = self.pool.bv(8, 0);
-        (0..bytes)
+        let parts: Vec<Term> = (0..bytes)
             .map(|at| {
                 let low = u32::try_from(at * 8).unwrap_or(u32::MAX);
                 if low + 8 <= width {
@@ -84,7 +84,22 @@ impl Cpu<'_> {
                     zero
                 }
             })
-            .collect()
+            .collect();
+        // Where a byte isn't a plain part of the value, as the low byte of a sum isn't, joining
+        // them wouldn't give it back: the pool remembers it.
+        let whole = (width / 8) as usize;
+        if width.is_multiple_of(8)
+            && (2..=bytes).contains(&whole)
+            && self.pool.constant(value).is_none()
+        {
+            let simplified = parts[..whole].iter().any(|part| {
+                !matches!(*self.pool.node(*part), Node::Extract(inner, ..) if inner == value)
+            });
+            if simplified {
+                self.pool.remember_split(&parts[..whole], value);
+            }
+        }
+        parts
     }
 
     /// One term of `parts`, lowest first, joined as a balanced tree so a bit of it is reached in
@@ -94,6 +109,9 @@ impl Cpu<'_> {
             [] => self.pool.bv(8, 0),
             [only] => *only,
             _ => {
+                if let Some(whole) = self.pool.split_of(parts) {
+                    return whole;
+                }
                 let half = parts.len() / 2;
                 let low = self.join(&parts[..half]);
                 let high = self.join(&parts[half..]);

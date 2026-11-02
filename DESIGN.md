@@ -1048,10 +1048,12 @@ still to build per target. A new profile must supply:
    proven as x86-64's is, step by step the formula's doubles, with no solver question; the
    `against_a64` harness holds every float instruction to the CPU on NaNs of both kinds, zeros of
    both signs, subnormals and the ends of each conversion, and whole V registers, so a scalar
-   write clears the rest. Its vectors (`exec/aarch64/vector.rs`, NEON's integer instructions) are
+   write clears the rest. Its vectors (`exec/aarch64/vector.rs`, NEON's instructions) are
    lanes over the V registers' bytes: a comparison's lane is a choice of all ones or zero on its
    condition, so a program's tests of bytes are the formula's conditions, and `addv` of lanes
-   that are each 0 or 1 is the pool's count, as x86-64's `popcnt` of a mask is. Its loops end
+   that are each 0 or 1 is the pool's count, as x86-64's `popcnt` of a mask is. A float lane is
+   its scalar instruction's term, so the hypotenuse with both sides in one vector of doubles is
+   proven as the scalar one is; `fmaxv` reduces in the architecture's pairs. Its loops end
    with `subs` and `b.ne`, or `sub` and `cbnz`, which the proof finds as it finds x86-64's `dec`
    and `jnz`, so a loop over a buffer-full that leaves where its index reaches the bytes read has
    its exits merged into one run. Two rules of the pool's met NEON's mask of the bytes left, the

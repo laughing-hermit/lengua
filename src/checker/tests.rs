@@ -1969,8 +1969,38 @@ pub(crate) fn from_rodata(text: &str) -> String {
     changed
 }
 
+/// The AArch64 hypotenuse with both sides in one vector of two doubles: converted, divided by the
+/// scale and squared lane by lane, then the two squares added by `faddp`. Each step rounds as the
+/// scalar one does, so it computes the same double.
+pub(crate) fn on_vectors(text: &str) -> String {
+    let changed = text.replacen(
+        "    scvtf d0, x0
+    fdiv d0, d0, d2
+    scvtf d1, x1
+    fdiv d1, d1, d2
+    \
+         fmul d0, d0, d0
+    fmul d1, d1, d1
+    fadd d0, d0, d1
+",
+        "    fmov d0, x0
+    mov v0.d[1], x1
+    scvtf v0.2d, v0.2d
+    dup v1.2d, v2.d[0]
+    \
+         fdiv v0.2d, v0.2d, v1.2d
+    fmul v0.2d, v0.2d, v0.2d
+    faddp d0, v0.2d
+",
+        1,
+    );
+    assert!(changed.contains("    faddp d0, v0.2d\n"), "{changed}");
+    changed
+}
+
 /// An AArch64 floating-point program, the hypotenuse example's spec compiled for AArch64: its
-/// doubles (scvtf, fdiv, fmul, fadd, fsqrt, frintn, fcvtzs) pass every rule. d8 to d15 are
+/// doubles (scvtf, fdiv, fmul, fadd, fsqrt, frintn, fcvtzs) pass every rule, and so do they on
+/// vectors. d8 to d15 are
 /// callee-saved, so a function that changes one saves it, in stp pairs after the frame record and
 /// restored in mirror order, as x19 to x28 are; half precision isn't in the dialect.
 #[tokio::test]
@@ -1982,6 +2012,10 @@ async fn an_aarch64_float_program_passes_every_rule() {
     )
     .expect("the fixture");
     let report = check_full(&text, CpuFeatures::all(), &syscalls, None).await;
+    let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+    assert!(report.passed(), "{all:#?}");
+    let vectors = on_vectors(&text);
+    let report = check_full(&vectors, CpuFeatures::all(), &syscalls, None).await;
     let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
     assert!(report.passed(), "{all:#?}");
 
@@ -2053,7 +2087,7 @@ async fn an_aarch64_float_program_passes_every_rule() {
 
 /// The AArch64 vector template, x86-64's `shout` spec compiled with NEON, passes every rule. Its
 /// 16-byte loads and stores are held to their buffer as x86-64's are, a V register a function
-/// changes from v8 to v15 is saved as d8 to d15 are, and x18, widened indexes and floating point
+/// changes from v8 to v15 is saved as d8 to d15 are, and x18, widened indexes and half precision
 /// on vectors stay out.
 #[tokio::test]
 async fn the_aarch64_vector_template_passes_every_rule() {
@@ -2098,10 +2132,10 @@ async fn the_aarch64_vector_template_passes_every_rule() {
         ),
         (
             "    sub v0.16b, v0.16b, v4.16b\n",
-            "    fadd v0.4s, v0.4s, v4.4s\n",
+            "    fadd v0.8h, v0.8h, v4.8h\n",
             Rule::Dialect,
-            "    fadd v0.4s",
-            "floating point on vectors isn't in the dialect yet",
+            "    fadd v0.8h",
+            "aren't one arrangement of floats",
         ),
     ];
     for (from, to, rule, at, needle) in cases {

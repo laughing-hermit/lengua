@@ -185,6 +185,57 @@ fn v_register(rng: &mut ChaCha8Rng, arrangement: &str) -> String {
     format!("v{}.{arrangement}", rng.random_range(0..FP_REGISTERS))
 }
 
+/// The probes of floats on vectors: singles two or four at a time and doubles two at a time,
+/// each instruction in every arrangement it takes.
+fn vector_float_probes(rng: &mut ChaCha8Rng, list: &mut Vec<Probe>) {
+    for arrangement in ["2s", "4s", "2d"] {
+        let v = |rng: &mut ChaCha8Rng| v_register(rng, arrangement);
+        for op in [
+            "fadd", "fsub", "fmul", "fdiv", "fmax", "fmin", "fmaxnm", "fminnm", "fabd", "faddp",
+            "fmaxp", "fminp", "fmaxnmp", "fminnmp", "fmla", "fmls", "fcmeq", "fcmge", "fcmgt",
+            "facge", "facgt",
+        ] {
+            let (d, n, m) = (v(rng), v(rng), v(rng));
+            list.push(probe(&[format!("{op} {d}, {n}, {m}")]));
+        }
+        for op in [
+            "fabs", "fneg", "fsqrt", "frintn", "frinta", "frintp", "frintm", "frintz", "fcvtzs",
+            "fcvtzu", "scvtf", "ucvtf",
+        ] {
+            let (d, n) = (v(rng), v(rng));
+            list.push(probe(&[format!("{op} {d}, {n}")]));
+        }
+        for op in ["fcmeq", "fcmge", "fcmgt", "fcmle", "fcmlt"] {
+            let (d, n) = (v(rng), v(rng));
+            list.push(probe(&[format!("{op} {d}, {n}, #0.0")]));
+        }
+        let number = fp_immediate(rng.random());
+        let d = v(rng);
+        list.push(probe(&[format!("fmov {d}, #{number:?}")]));
+    }
+    // Between singles and doubles, each half.
+    for (op, to, from) in [
+        ("fcvtl", "2d", "2s"),
+        ("fcvtl2", "2d", "4s"),
+        ("fcvtn", "2s", "2d"),
+        ("fcvtn2", "4s", "2d"),
+    ] {
+        let (d, n) = (v_register(rng, to), v_register(rng, from));
+        list.push(probe(&[format!("{op} {d}, {n}")]));
+    }
+    // Four singles into one, and two floats into a scalar.
+    for op in ["fmaxv", "fminv", "fmaxnmv", "fminnmv"] {
+        let (d, n) = (rng.random_range(0..FP_REGISTERS), v_register(rng, "4s"));
+        list.push(probe(&[format!("{op} s{d}, {n}")]));
+    }
+    for op in ["faddp", "fmaxp", "fminp", "fmaxnmp", "fminnmp"] {
+        let (d, n) = (rng.random_range(0..FP_REGISTERS), v_register(rng, "2s"));
+        list.push(probe(&[format!("{op} s{d}, {n}")]));
+        let (d, n) = (rng.random_range(0..FP_REGISTERS), v_register(rng, "2d"));
+        list.push(probe(&[format!("{op} d{d}, {n}")]));
+    }
+}
+
 /// The vector probes, over every arrangement each instruction takes.
 #[allow(clippy::too_many_lines)]
 fn vector_probes(rng: &mut ChaCha8Rng, list: &mut Vec<Probe>) {
@@ -477,6 +528,7 @@ fn probes(rng: &mut ChaCha8Rng) -> Vec<Probe> {
     let mut list = Vec::new();
     fp_probes(rng, &mut list);
     vector_probes(rng, &mut list);
+    vector_float_probes(rng, &mut list);
     for wide in [true, false] {
         let width = if wide { 64 } else { 32 };
         let r = |rng: &mut ChaCha8Rng| register(rng, wide);
@@ -887,8 +939,8 @@ fn value(rng: &mut ChaCha8Rng) -> u64 {
     }
 }
 
-/// A V register's 128 bits: its low half a double, a single in its low 32 bits, or any bits,
-/// from a mix of edge cases and plain random numbers, and its high half any bits.
+/// A V register's 128 bits: each half a double, two singles, or any bits, from a mix of edge
+/// cases and plain random numbers, so a vector's every lane meets them.
 fn fp_value(rng: &mut ChaCha8Rng) -> u128 {
     const DOUBLES: [u64; 30] = [
         0,
@@ -951,17 +1003,25 @@ fn fp_value(rng: &mut ChaCha8Rng) -> u128 {
         0xCF00_0000,
         0x4EFF_FFFF,
     ];
-    let high: u64 = rng.random();
-    let above: u64 = u64::from(rng.random::<u32>()) << 32;
-    let low = match rng.random_range(0..7) {
-        0 | 1 => DOUBLES[rng.random_range(0..DOUBLES.len())],
-        2 => above | u64::from(SINGLES[rng.random_range(0..SINGLES.len())]),
-        3 => rng.random_range(-1.0e6..1.0e6_f64).to_bits(),
-        // Quarters, so ties come up.
-        4 => (f64::from(rng.random_range(-400_i32..400)) / 4.0).to_bits(),
-        5 => above | u64::from((rng.random_range(-1.0e6..1.0e6_f32)).to_bits()),
-        _ => rng.random(),
+    let single = |rng: &mut ChaCha8Rng| -> u64 {
+        u64::from(match rng.random_range(0..4) {
+            0 | 1 => SINGLES[rng.random_range(0..SINGLES.len())],
+            2 => rng.random_range(-1.0e6..1.0e6_f32).to_bits(),
+            // Quarters, so ties come up.
+            _ => (f32::from(rng.random_range(-400_i16..400)) / 4.0).to_bits(),
+        })
     };
+    let half = |rng: &mut ChaCha8Rng| -> u64 {
+        match rng.random_range(0..6) {
+            0 | 1 => DOUBLES[rng.random_range(0..DOUBLES.len())],
+            2 => rng.random_range(-1.0e6..1.0e6_f64).to_bits(),
+            3 => (f64::from(rng.random_range(-400_i32..400)) / 4.0).to_bits(),
+            4 => (single(rng) << 32) | single(rng),
+            _ => rng.random(),
+        }
+    };
+    let low = half(rng);
+    let high = half(rng);
     u128::from(high) << 64 | u128::from(low)
 }
 

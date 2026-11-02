@@ -8,10 +8,10 @@ use std::rc::Rc;
 
 use super::super::{Cpu, Step, Stop};
 use crate::isa::aarch64::{
-    A64Reg, Address, Arrangement, Expand, Inst, Lane, Scalar, Source, VAcross, VImmediate,
-    VPermute, VReg, VShift, VThree, VTwo, Writeback,
+    A64Reg, Address, Arrangement, Expand, FpOne, FpThree, FpTwo, Inst, Lane, Scalar, Source,
+    VAcross, VImmediate, VPermute, VReg, VShift, VThree, VTwo, Writeback,
 };
-use crate::prove::term::Term;
+use crate::prove::term::{FloatTest, Term};
 
 /// The bytes of a V register.
 const V_BYTES: usize = 16;
@@ -212,6 +212,9 @@ impl Cpu<'_> {
     /// The operations of two vectors' lanes.
     fn v_three(&mut self, op: VThree, rd: VReg, rn: VReg, rm: VReg) -> Vec<Term> {
         let (a, b) = (self.v_lanes(rn), self.v_lanes(rm));
+        if op.float() {
+            return self.v_float_three(op, rd, &a, &b);
+        }
         if op.bitwise() {
             let d = self.v_lanes(rd);
             return (0..a.len())
@@ -453,6 +456,25 @@ impl Cpu<'_> {
                     })
                     .collect()
             }
+            VTwo::Fabs
+            | VTwo::Fneg
+            | VTwo::Fsqrt
+            | VTwo::Frintn
+            | VTwo::Frinta
+            | VTwo::Frintp
+            | VTwo::Frintm
+            | VTwo::Frintz
+            | VTwo::Fcvtzs
+            | VTwo::Fcvtzu
+            | VTwo::Scvtf
+            | VTwo::Ucvtf
+            | VTwo::Fcmeq0
+            | VTwo::Fcmgt0
+            | VTwo::Fcmge0
+            | VTwo::Fcmle0
+            | VTwo::Fcmlt0
+            | VTwo::Fcvtl
+            | VTwo::Fcvtn => self.v_float_two(op, rd, &a),
             VTwo::Xtn => {
                 let narrow = width / 2;
                 let narrowed: Vec<Term> = a
@@ -470,6 +492,189 @@ impl Cpu<'_> {
                 }
             }
         }
+    }
+
+    /// One float operation of `x` and `y`, a lane of each, as its scalar form computes it.
+    fn v_float_lane(&mut self, op: VThree, x: Term, y: Term) -> Term {
+        match op {
+            VThree::Fadd | VThree::Faddp => self.fp_two(FpTwo::Add, x, y),
+            VThree::Fsub => self.fp_two(FpTwo::Sub, x, y),
+            VThree::Fmul => self.fp_two(FpTwo::Mul, x, y),
+            VThree::Fdiv => self.fp_two(FpTwo::Div, x, y),
+            VThree::Fmax | VThree::Fmaxp => self.max_min(true, x, y),
+            VThree::Fmin | VThree::Fminp => self.max_min(false, x, y),
+            VThree::Fmaxnm | VThree::Fmaxnmp => self.max_min_number(true, x, y),
+            VThree::Fminnm | VThree::Fminnmp => self.max_min_number(false, x, y),
+            // The difference's magnitude: its sign cleared, a NaN's too.
+            VThree::Fabd => {
+                let difference = self.fp_two(FpTwo::Sub, x, y);
+                self.fp_one(FpOne::Abs, difference, 0)
+            }
+            _ => {
+                let width = self.pool.width(x);
+                let (x, y) = if matches!(op, VThree::Facge | VThree::Facgt) {
+                    (self.fp_one(FpOne::Abs, x, 0), self.fp_one(FpOne::Abs, y, 0))
+                } else {
+                    (x, y)
+                };
+                // Every comparison is false where either is a NaN.
+                let holds = match op {
+                    VThree::Fcmeq => self.fp_test(FloatTest::Equal, x, y),
+                    VThree::Fcmgt | VThree::Facgt => self.fp_test(FloatTest::Less, y, x),
+                    _ => {
+                        let above = self.fp_test(FloatTest::Less, y, x);
+                        let equal = self.fp_test(FloatTest::Equal, x, y);
+                        self.pool.bool_or(above, equal)
+                    }
+                };
+                self.v_mask_where(holds, width)
+            }
+        }
+    }
+
+    /// The operations of two vectors of floats, `a` and `b` their lanes: each lane with its
+    /// own, or neighbouring lanes paired as `addp` pairs them, or each product added to or
+    /// subtracted from the destination's lane, rounded once.
+    fn v_float_three(&mut self, op: VThree, rd: VReg, a: &[Term], b: &[Term]) -> Vec<Term> {
+        match op {
+            VThree::Faddp | VThree::Fmaxp | VThree::Fminp | VThree::Fmaxnmp | VThree::Fminnmp => {
+                let pairs: Vec<(Term, Term)> = a
+                    .chunks(2)
+                    .chain(b.chunks(2))
+                    .map(|pair| (pair[0], pair[1]))
+                    .collect();
+                pairs
+                    .into_iter()
+                    .map(|(x, y)| self.v_float_lane(op, x, y))
+                    .collect()
+            }
+            VThree::Fmla | VThree::Fmls => {
+                let d = self.v_lanes(rd);
+                let fused = if op == VThree::Fmla {
+                    FpThree::Madd
+                } else {
+                    FpThree::Msub
+                };
+                (0..a.len())
+                    .map(|at| self.fp_fused(fused, a[at], b[at], d[at]))
+                    .collect()
+            }
+            _ => a
+                .iter()
+                .zip(b)
+                .map(|(x, y)| self.v_float_lane(op, *x, *y))
+                .collect(),
+        }
+    }
+
+    /// The operations on one vector of floats, `a` its lanes, and the conversions between
+    /// floats and whole numbers as wide, and between singles and doubles.
+    fn v_float_two(&mut self, op: VTwo, rd: VReg, a: &[Term]) -> Vec<Term> {
+        let one = |cpu: &mut Self, op: FpOne| -> Vec<Term> {
+            a.iter().map(|lane| cpu.fp_one(op, *lane, 0)).collect()
+        };
+        match op {
+            VTwo::Fabs => one(self, FpOne::Abs),
+            VTwo::Fneg => one(self, FpOne::Neg),
+            VTwo::Fsqrt => one(self, FpOne::Sqrt),
+            VTwo::Frintn => one(self, FpOne::RintNearest),
+            VTwo::Frinta => one(self, FpOne::RintAway),
+            VTwo::Frintp => one(self, FpOne::RintUp),
+            VTwo::Frintm => one(self, FpOne::RintDown),
+            VTwo::Frintz => one(self, FpOne::RintZero),
+            VTwo::Fcvtzs => a
+                .iter()
+                .map(|lane| {
+                    let width = self.pool.width(*lane);
+                    self.whole_signed(*lane, width)
+                })
+                .collect(),
+            VTwo::Fcvtzu => a
+                .iter()
+                .map(|lane| {
+                    let width = self.pool.width(*lane);
+                    self.whole_unsigned(*lane, width)
+                })
+                .collect(),
+            VTwo::Scvtf => a
+                .iter()
+                .map(|lane| {
+                    let width = self.pool.width(*lane);
+                    self.pool.float_from_int(*lane, width)
+                })
+                .collect(),
+            VTwo::Ucvtf => a
+                .iter()
+                .map(|lane| {
+                    let width = self.pool.width(*lane);
+                    self.unsigned_to_float(*lane, width)
+                })
+                .collect(),
+            // Two singles, the low ones or with fcvtl2 the high ones, as two doubles.
+            VTwo::Fcvtl => a[a.len() - 2..]
+                .iter()
+                .map(|lane| self.fp_one(FpOne::Cvt, *lane, 64))
+                .collect(),
+            VTwo::Fcvtn => {
+                let narrowed: Vec<Term> = a
+                    .iter()
+                    .map(|lane| self.fp_one(FpOne::Cvt, *lane, 32))
+                    .collect();
+                if rd.arrangement.whole() {
+                    // fcvtn2 keeps the low half.
+                    let mut kept = self.v_lanes(rd);
+                    kept.truncate(narrowed.len());
+                    kept.extend(narrowed);
+                    kept
+                } else {
+                    narrowed
+                }
+            }
+            // The comparisons with zero, either sign of it, false for a NaN.
+            _ => a
+                .iter()
+                .map(|lane| {
+                    let width = self.pool.width(*lane);
+                    let zero = self.pool.bv(width, 0);
+                    let holds = match op {
+                        VTwo::Fcmeq0 => self.fp_test(FloatTest::Equal, *lane, zero),
+                        VTwo::Fcmgt0 => self.fp_test(FloatTest::Less, zero, *lane),
+                        VTwo::Fcmlt0 => self.fp_test(FloatTest::Less, *lane, zero),
+                        VTwo::Fcmge0 => {
+                            let above = self.fp_test(FloatTest::Less, zero, *lane);
+                            let equal = self.fp_test(FloatTest::Equal, *lane, zero);
+                            self.pool.bool_or(above, equal)
+                        }
+                        _ => {
+                            let below = self.fp_test(FloatTest::Less, *lane, zero);
+                            let equal = self.fp_test(FloatTest::Equal, *lane, zero);
+                            self.pool.bool_or(below, equal)
+                        }
+                    };
+                    self.v_mask_where(holds, width)
+                })
+                .collect(),
+        }
+    }
+
+    /// A vector's floats into one: four singles reduced in pairs, the low two's and the high
+    /// two's results then together, as the architecture's `Reduce` does, or two floats.
+    fn v_float_across(&mut self, op: VAcross, a: &[Term]) -> Term {
+        let each = match op {
+            VAcross::Fmaxv | VAcross::Fmaxp => VThree::Fmax,
+            VAcross::Fminv | VAcross::Fminp => VThree::Fmin,
+            VAcross::Fmaxnmv | VAcross::Fmaxnmp => VThree::Fmaxnm,
+            VAcross::Fminnmv | VAcross::Fminnmp => VThree::Fminnm,
+            _ => VThree::Fadd,
+        };
+        let mut level = a.to_vec();
+        while level.len() > 1 {
+            level = level
+                .chunks(2)
+                .map(|pair| self.v_float_lane(each, pair[0], pair[1]))
+                .collect();
+        }
+        level[0]
     }
 
     /// `value`, `by` bits wider, with copies of its sign or with zeros.
@@ -499,6 +704,9 @@ impl Cpu<'_> {
     fn v_across(&mut self, op: VAcross, rd: Scalar, rn: VReg) -> Term {
         let a = self.v_lanes(rn);
         let width = rn.arrangement.lane_bits();
+        if op.float() {
+            return self.v_float_across(op, &a);
+        }
         match op {
             VAcross::Addv => self.v_sum(width, &a),
             VAcross::Uaddlv => {
@@ -690,7 +898,7 @@ impl Cpu<'_> {
         let value = u128::from(expand.value(imm8, width));
         let lanes = rd.arrangement.lanes() as usize;
         match op {
-            VImmediate::Movi => vec![self.pool.bv(width, value); lanes],
+            VImmediate::Movi | VImmediate::Fmov => vec![self.pool.bv(width, value); lanes],
             VImmediate::Mvni => vec![self.pool.bv(width, !value & ones(width)); lanes],
             VImmediate::Orr | VImmediate::Bic => {
                 let number = self.pool.bv(

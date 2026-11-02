@@ -7,10 +7,10 @@ an x86-64 one testing AArch64 code through QEMU. The rules are the same as x86-6
 [AArch64's fill](../assets/linux-aarch64/fill.s), copied word for word with its constants.
 
 What AArch64 code covers so far, checked, tested and proven as x86-64's is: arguments, whole
-numbers, floating point in singles and doubles, vectors of whole numbers (NEON), text, standard
-input of any length through `fill`, and files and folders. Not yet, so a spec that needs them is
-compiled for x86-64 for now: floating point on vectors, threads, servers and several clients at
-once, the terminal, and the checksum and crypto instructions.
+numbers, floating point in singles and doubles, vectors of whole numbers and of floats (NEON),
+text, standard input of any length through `fill`, and files and folders. Not yet, so a spec
+that needs them is compiled for x86-64 for now: threads, servers and several clients at once,
+the terminal, and the checksum and crypto instructions.
 
 ## The dialect's form
 
@@ -139,8 +139,22 @@ with `exit`, and keeps what it needs across calls in `x19` to `x28` without savi
   `v4` names.
 - [The vector template](../assets/linux-aarch64/vector-template.s) finds a newline and
   capitalizes a line 16 bytes at a time, from [its spec](../assets/vector-template-spec.md).
-- Not in the dialect yet: floating point on vectors (`fadd v0.4s`), the interleaving `ld2` to
-  `ld4`, the single-lane loads, and SVE.
+- Floats on vectors are singles two or four at a time (`v0.2s`, `v0.4s`) or doubles two at a
+  time (`v0.2d`), each lane computed as the scalar instruction computes it, NaNs and zeros' signs
+  included: `fadd`, `fsub`, `fmul`, `fdiv`, `fmax`, `fmin`, `fmaxnm`, `fminnm`, `fabd`, `fmla`
+  and `fmls` (fused, the destination the addend), `fabs`, `fneg`, `fsqrt`, `frintn`, `frinta`,
+  `frintp`, `frintm`, `frintz`. Comparisons give all ones or zero, false for a NaN: `fcmeq`,
+  `fcmge`, `fcmgt`, the magnitudes' `facge` and `facgt`, and each with `#0.0`. Lanes convert to
+  and from whole numbers as wide (`fcvtzs`, `fcvtzu`, `scvtf`, `ucvtf`), and between singles and
+  doubles (`fcvtl`, `fcvtl2`, `fcvtn`, `fcvtn2`). `faddp`, `fmaxp`, `fminp`, `fmaxnmp` and
+  `fminnmp` pair neighbouring lanes, or two lanes into a scalar (`faddp d0, v0.2d`); `fmaxv`,
+  `fminv`, `fmaxnmv` and `fminnmv` reduce four singles. `fmov v0.4s, #1.0` puts a number `fmov`
+  can hold in every lane.
+- Two numbers as one vector of doubles: `fmov d0, x0`, then `mov v0.d[1], x1`, then `scvtf
+  v0.2d, v0.2d`; a scalar in every lane: `dup v1.2d, v2.d[0]`.
+- Not in the dialect: half precision (`v0.8h` of floats), the estimates (`frecpe`, `frsqrte`,
+  `frecps`, `frsqrts`, `fmulx`), the conversions that round otherwise than toward zero (round
+  first with an `frint`), the interleaving `ld2` to `ld4`, the single-lane loads, and SVE.
 
 ## Floating-point facts
 

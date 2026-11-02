@@ -457,6 +457,14 @@ fn fp_pair(word: u32) -> Result<Inst, String> {
 /// Scalar floating point on singles and doubles, never halves: data processing with one, two or
 /// three sources, compares, selects, immediates, and moves to and from general registers.
 fn floating(word: u32) -> Result<Inst, String> {
+    // A vector's two floats into a scalar: 01 U 11110 size 11000 opcode 10 Rn Rd.
+    if bits(word, 31, 30) == 0b01
+        && bits(word, 28, 24) == 0b1_1110
+        && bits(word, 21, 17) == 0b1_1000
+        && bits(word, 11, 10) == 0b10
+    {
+        return vector::pairwise(word);
+    }
     // Vectors, and the forms that set flags or are unallocated.
     if bit(word, 30) || bit(word, 29) {
         return Err(outside(word));

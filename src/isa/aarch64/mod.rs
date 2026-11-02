@@ -1306,7 +1306,8 @@ impl fmt::Display for Inst {
                 write!(formatter, "{name} {rd}, {rn}, {rm}")
             }
             Self::VectorTwo { op, rd, rn } if op.with_zero() => {
-                write!(formatter, "{name} {rd}, {rn}, #0")
+                let zero = if op.float() { "#0.0" } else { "#0" };
+                write!(formatter, "{name} {rd}, {rn}, {zero}")
             }
             Self::VectorTwo { rd, rn, .. } => write!(formatter, "{name} {rd}, {rn}"),
             Self::VectorAcross { rd, rn, .. } => write!(formatter, "{name} {rd}, {rn}"),
@@ -1339,6 +1340,9 @@ impl fmt::Display for Inst {
                     rd.to_string()
                 };
                 match expand {
+                    Expand::Float => {
+                        write!(formatter, "{name} {register}, #{:.8}", fp_immediate(imm8))
+                    }
                     Expand::Bytes => write!(
                         formatter,
                         "{name} {register}, #{:#018x}",
