@@ -8,9 +8,16 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 version="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$root/Cargo.toml" | head -n 1)"
 cpu="$(uname -m)"
+# The program the archive is checked with: add, from one spec, compiled for each CPU.
 case "$cpu" in
-    x86_64) label="x86-64" ;;
-    aarch64) label="ARM64" ;;
+    x86_64)
+        label="x86-64"
+        example="$root/examples/add"
+        ;;
+    aarch64)
+        label="ARM64"
+        example="$root/tests/fixtures/linux-aarch64/add"
+        ;;
     *)
         echo "release.sh builds lengua for Linux x86-64 or ARM64; this computer is $cpu." >&2
         exit 1
@@ -57,5 +64,5 @@ test -x "$check/installed/server/lengua-mcp"
 if command -v claude > /dev/null; then
     claude plugin validate "$unpacked/plugin" --strict
 fi
-python3 "$root/scripts/release-check.py" "$unpacked/plugin/server/lengua-mcp" "$root/examples/add"
+python3 "$root/scripts/release-check.py" "$unpacked/plugin/server/lengua-mcp" "$example"
 echo "Built dist/$name.tar.gz ($(du -h "$root/dist/$name.tar.gz" | cut -f1))"
