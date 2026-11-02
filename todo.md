@@ -173,6 +173,36 @@ the checksums show lengua's kind of proof but don't replace SHA-256 or AES:
 - that still takes SHA-256 or AES, which a user can supply and lengua checks and tests (items 1 and
   2 above), or the engineer's hand-written examples once they exist.
 
+## 1b. A good product, on both Linux targets
+
+Set by the user on 2026-11-01: the goal is a good product, not only the finish lines set so far.
+Claude first brings Linux ARM64 to parity with x86-64 (item 3's rounds R12 to R16), then stops;
+the user takes on what follows, for both Linux targets. x86-64 meets its line (item 1), and as a
+product Claude puts it at about two-thirds. What's left, most important first:
+
+1. **Evidence that it works for people today.** Nobody has measured the end-to-end success rate
+   since many changes landed: one request in real interactive Claude Code, a passing program out.
+   A suite of 10 to 15 sessions over representative specs on each Linux target (ARM64's on an
+   ARM64 computer), run through `scripts/interactive-session.py`, at about $2 of Claude usage
+   each. Record each session's result, rounds and time, and fix what fails.
+2. **Reach.** lengua builds self-contained tools, filters and servers, but no program can use an
+   existing library, so there's no HTTPS, database, compression or GUI, and memory is fixed up
+   front from the spec's limits. HTTPS is the gap most programs hit. A way that keeps lengua's
+   guarantees: the launcher, which already hands a server its socket, does TLS on it in Rust
+   (rustls), outside the program, so the program holds no crypto; a client's connection to a
+   named HTTPS host could go through the launcher the same way. Each such service is one
+   definition that every OS must be able to provide (item 3's limits).
+3. **Linux held to macOS's and Windows's limits:** item 3's audit.
+4. **Hardening.** A red-team pass: programs written to escape the sandbox, to fool the rules or
+   the memory checks, or to pass a proof they shouldn't; and fuzzing of everything the checker
+   reads (main.s, the spec, the built ELF).
+5. **Shipping to others.** A public release with the installer for both Linux targets (R16 brings
+   ARM64's), the plugin listed where agent plugins are found, the white paper (item 2) and the
+   site (item 4).
+
+Also open: item 1's list past its line, and the safety-stopped work at item 1's end, which Claude
+leaves to the user.
+
 ## 2. A white paper: lengua is an AI language, not a programming language
 
 So people understand the idea, and so it can stand as a new standard. It explains:
