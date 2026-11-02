@@ -38,6 +38,10 @@ pub const TEMPLATE: &str = include_str!("../../plugin/skills/compile/assets/main
 pub const PARALLEL_TEMPLATE: &str =
     include_str!("../../plugin/skills/compile/assets/parallel-template.s");
 
+/// AArch64's parallel template: the same threads in AArch64's instructions.
+pub const PARALLEL_TEMPLATE_AARCH64: &str =
+    include_str!("../../plugin/skills/compile/assets/linux-aarch64/parallel-template.s");
+
 /// fill, which reads until a buffer is full, the input ends or an end byte arrives; its body
 /// and constants are canonical, so the proof can cover every way the input arrives.
 pub const FILL_TEMPLATE: &str = include_str!("../../plugin/skills/compile/assets/fill.s");
@@ -319,23 +323,18 @@ pub fn check_program(source: &Source, executable: &[u8], context: Context<'_>) -
         machine.writable_executable,
         &mut violations,
     );
-    if program.isa == Isa::X86_64 {
-        let parallel_template = source::parse(PARALLEL_TEMPLATE).0;
-        threads::check(
-            &program,
-            &flows,
-            &parallel_template,
-            context.threads,
-            &mut violations,
-        );
-    } else if threads::used(source) {
-        violations.push(Violation {
-            rule: Rule::Dialect,
-            line: None,
-            problem: "threads aren't in lengua's AArch64 dialect yet".into(),
-            fix: "do the work on the main thread".into(),
-        });
-    }
+    let parallel_template = source::parse(match program.isa {
+        Isa::X86_64 => PARALLEL_TEMPLATE,
+        Isa::Aarch64 => PARALLEL_TEMPLATE_AARCH64,
+    })
+    .0;
+    threads::check(
+        &program,
+        &flows,
+        &parallel_template,
+        context.threads,
+        &mut violations,
+    );
     if program.isa == Isa::Aarch64 {
         violations.iter_mut().for_each(aarch64::in_words);
     }

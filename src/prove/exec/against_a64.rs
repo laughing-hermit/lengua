@@ -526,6 +526,11 @@ fn vector_probes(rng: &mut ChaCha8Rng, list: &mut Vec<Probe>) {
 #[allow(clippy::too_many_lines)]
 fn probes(rng: &mut ChaCha8Rng) -> Vec<Probe> {
     let mut list = Vec::new();
+    // A load-acquire of a word and of a doubleword from the cell.
+    for wide in [true, false] {
+        let rt = register(rng, wide);
+        list.push(memory(&[format!("ldar {rt}, [x15]")]));
+    }
     fp_probes(rng, &mut list);
     vector_probes(rng, &mut list);
     vector_float_probes(rng, &mut list);

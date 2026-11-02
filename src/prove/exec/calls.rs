@@ -139,6 +139,11 @@ pub(super) struct Convention {
     pub(super) arguments: [usize; 6],
     /// The stack pointer, whose owner is the function's own frame.
     pub(super) stack: usize,
+    /// Which argument of `clone` is where the kernel clears the thread's id at its end.
+    pub(super) child_tid: usize,
+    /// The registers the call instruction itself changes, besides the result: x86-64's `syscall`
+    /// leaves the return address in rcx and the flags in r11.
+    pub(super) clobbered: Option<(usize, usize)>,
 }
 
 impl Convention {
@@ -156,6 +161,8 @@ const X86_64: Convention = Convention {
     number: 0,
     arguments: [7, 6, 2, 10, 8, 9],
     stack: 4,
+    child_tid: 3,
+    clobbered: Some((1, 11)),
 };
 
 /// AArch64: the number in x8, the arguments in x0 to x5; sp is slot 31.
@@ -163,4 +170,6 @@ const AARCH64: Convention = Convention {
     number: 8,
     arguments: [0, 1, 2, 3, 4, 5],
     stack: 31,
+    child_tid: 4,
+    clobbered: None,
 };

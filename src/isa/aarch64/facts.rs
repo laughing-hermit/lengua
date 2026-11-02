@@ -186,6 +186,7 @@ pub fn mnemonic(inst: &Inst) -> String {
             super::Three::Smulh => "smulh",
             super::Three::Umulh => "umulh",
         },
+        Inst::LoadStore { access, .. } if access.acquire => "ldar",
         Inst::LoadStore { access, .. } => match (access.load, access.size, access.signed) {
             (true, 1, false) => "ldrb",
             (true, 2, false) => "ldrh",

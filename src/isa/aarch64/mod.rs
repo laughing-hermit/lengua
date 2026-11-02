@@ -678,6 +678,10 @@ pub struct Access {
     pub size: u8,
     /// Whether a load sign-extends what it reads.
     pub signed: bool,
+    /// `ldar`: a load-acquire, which later loads can't pass, so a thread's id read cleared by
+    /// the kernel comes before the result the thread left. Only of a whole `w` or `x`, from a
+    /// base with no offset.
+    pub acquire: bool,
 }
 
 /// One AArch64 instruction of the dialect's subset, in its canonical form.

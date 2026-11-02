@@ -1701,6 +1701,10 @@ async fn every_aarch64_asset_follows_every_rule() {
             "linux-aarch64/terminal-template.s",
         ),
         ("fast/wc/spec.md", "linux-aarch64/fast/wc/main.s"),
+        (
+            "parallel-template-spec.md",
+            "linux-aarch64/parallel-template.s",
+        ),
     ] {
         programs.push((assets.join(spec), assets.join(code)));
     }
@@ -1723,6 +1727,65 @@ async fn every_aarch64_asset_follows_every_rule() {
         }
     }
     assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// Threads on AArch64 are held to the same rules as x86-64's: the canonical functions copied
+/// word for word from AArch64's template, a worker reaching only its own slot through x19, and
+/// threads only where the spec allows them.
+#[tokio::test]
+async fn aarch64_threads_follow_the_rules() {
+    let spec = |text: &str| crate::spec::parse(text).expect("the spec");
+    let root =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("plugin/skills/compile/assets");
+    let allowed =
+        spec(&std::fs::read_to_string(root.join("parallel-template-spec.md")).expect("a spec"));
+    let text =
+        std::fs::read_to_string(root.join("linux-aarch64/parallel-template.s")).expect("a program");
+    let report = check_full(
+        &text,
+        CpuFeatures::all(),
+        &allowed.syscalls,
+        allowed.threads,
+    )
+    .await;
+    assert!(report.passed(), "{:#?}", report.violations);
+    let cases = [
+        (
+            "    mov x21, #THREADS\n.Lparallel_for_start:",
+            "    mov x21, #THREADS - 1\n.Lparallel_for_start:",
+            Rule::Resources,
+            "parallel_for:",
+            "parallel_for differs from the template",
+        ),
+        (
+            "    str q0, [x19, x14]\n",
+            "    adrp x13, slots\n    add x13, x13, :lo12:slots\n    str q0, [x13, x14]\n",
+            Rule::Races,
+            "    add x13, x13, :lo12:slots",
+            "on a worker thread, where other threads write their parts of it",
+        ),
+    ];
+    for (from, to, rule, at, needle) in cases {
+        let changed = text.replacen(from, to, 1);
+        assert_ne!(changed, text, "{to}");
+        let report = check_full(
+            &changed,
+            CpuFeatures::all(),
+            &allowed.syscalls,
+            allowed.threads,
+        )
+        .await;
+        assert_violation(&report, rule, line_of(&changed, at), needle);
+    }
+    let report = check_full(&text, CpuFeatures::all(), &allowed.syscalls, None).await;
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|violation| violation.problem.contains("spec.md doesn't allow threads")),
+        "{:#?}",
+        report.violations
+    );
 }
 
 /// The AArch64 template passes every rule.

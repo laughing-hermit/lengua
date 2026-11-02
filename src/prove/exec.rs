@@ -3305,15 +3305,17 @@ impl<'a> Cpu<'a> {
     ///
     /// [`Profile::CLONE_FLAGS`]: crate::platform::Profile::CLONE_FLAGS
     fn start_thread(&mut self) -> Result<Step, Stop> {
+        let convention = Convention::of(self.image.isa);
         let registers = self.state.registers;
-        let flags = self.constant(registers[7])?;
+        let argument = |number: usize| registers[convention.arguments[number]];
+        let flags = self.constant(argument(0))?;
         if flags != crate::platform::Profile::CLONE_FLAGS {
             return Err(unsupported(format!("clone with flags {flags:#x}")));
         }
         let (stack, parent_tid, child_tid) = (
-            self.constant(registers[6])?,
-            self.constant(registers[2])?,
-            self.constant(registers[10])?,
+            self.constant(argument(1))?,
+            self.constant(argument(2))?,
+            self.constant(argument(convention.child_tid))?,
         );
         self.state.threads += 1;
         let tid = FIRST_TID + self.state.threads;
@@ -3323,8 +3325,10 @@ impl<'a> Cpu<'a> {
         let (next_term, flags_word) = (self.pool.bv(64, u128::from(next)), self.pool.bv(64, 0x202));
         let mut waiting = registers;
         waiting[0] = self.pool.bv(64, u128::from(tid));
-        waiting[1] = next_term;
-        waiting[11] = flags_word;
+        if let Some((back, flags_at)) = convention.clobbered {
+            waiting[back] = next_term;
+            waiting[flags_at] = flags_word;
+        }
         let state = &mut *self.state;
         state.suspended.push(Suspended {
             registers: waiting,
@@ -3345,12 +3349,14 @@ impl<'a> Cpu<'a> {
             base_frame: state.base_frame,
             clear_at: child_tid,
         });
-        // The new thread: the same registers but rax, 0, and rsp, its own stack, with no calls
-        // yet and a first frame of its own.
+        // The new thread: the same registers but the result, 0, and the stack pointer, its own
+        // stack, with no calls yet and a first frame of its own.
         state.registers[0] = self.pool.bv(64, 0);
-        state.registers[1] = next_term;
-        state.registers[4] = self.pool.bv(64, u128::from(stack));
-        state.registers[11] = flags_word;
+        if let Some((back, flags_at)) = convention.clobbered {
+            state.registers[back] = next_term;
+            state.registers[flags_at] = flags_word;
+        }
+        state.registers[convention.stack] = self.pool.bv(64, u128::from(stack));
         state.stack_top = Some(stack);
         state.calls += 1;
         state.base_frame = state.calls;

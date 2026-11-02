@@ -6,11 +6,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::cfg::{ASSERT_FAIL, Exit, Flow, deepest, run_start};
+use super::cfg::{ASSERT_FAIL, Exit, Flow, constant_before, deepest, run_start};
 use super::decode::{MappedFunction, Program};
 use super::source::Source;
 use super::{Rule, Violation};
-use crate::isa::{Abi, Cond, Control, MemRef, Op, Operand};
+use crate::isa::{Abi, Cond, Control, MemRef, Op, Operand, Value};
 use crate::spec::MAX_THREADS;
 
 /// The canonical functions, copied word for word from the parallel template.
@@ -422,6 +422,11 @@ impl Checker<'_, '_> {
             let Some(memory) = insn.memory else {
                 continue;
             };
+            // The function's own saves and restores make its frame and undo it, as x86-64's
+            // push and pop do, rather than reaching into it.
+            if matches!(insn.op, Op::Push(_) | Op::Pop(_)) {
+                continue;
+            }
             // M7: other threads write the per-thread data, so a worker reaches only its own part,
             // through rbx: never through the symbol's address.
             if memory.pc_relative
@@ -447,7 +452,7 @@ impl Checker<'_, '_> {
             let written = memory.writes;
             match memory.base {
                 Some(base) if base == abi.stack_pointer => {
-                    let frame = flow.depth[index].map_or(0, |depth| depth - 8);
+                    let frame = flow.depth[index].map_or(0, |depth| depth - abi.return_address);
                     self.inside(function, index, frame, "its own stack frame");
                 }
                 Some(base) if base == abi.worker_slot => {
@@ -541,7 +546,8 @@ impl Checker<'_, '_> {
     }
 }
 
-/// Where worker copies its slot into rbx: `mov rbx, rsi` before any label or call.
+/// Where worker copies its slot into the worker's register (x86-64's rbx, AArch64's x19) from its
+/// second argument: `mov rbx, rsi` before any label or call.
 fn slot_copy(function: &MappedFunction<'_>, flow: &Flow, abi: &Abi) -> Option<usize> {
     function
         .steps
@@ -551,11 +557,11 @@ fn slot_copy(function: &MappedFunction<'_>, flow: &Flow, abi: &Abi) -> Option<us
             run_start(function, *index) == 0 && !matches!(flow.exits[*index], Exit::Call { .. })
         })
         .find(|(_, step)| {
-            step.insn.mnemonic == "mov"
+            matches!(step.insn.op, Op::Move)
+                && step.insn.dst == Some(abi.worker_slot)
                 && matches!(
-                    step.insn.operands[..],
-                    [Operand::Reg(slot), Operand::Reg(lent)]
-                        if slot == abi.worker_slot && lent == abi.arguments[1]
+                    step.insn.value,
+                    Value::Copy(Operand::Reg(lent)) if lent == abi.arguments[1]
                 )
         })
         .map(|(index, _)| index)
@@ -572,11 +578,20 @@ fn index_limit(
     let register = access.index?.full();
     for position in (run_start(function, index)..index).rev() {
         let candidate = &function.steps[position].insn;
+        // The limit a number, or a register holding a named constant, as AArch64 holds one too
+        // wide for `cmp`.
         if let Op::Compare {
             left: Operand::Reg(left),
-            right: Operand::Imm(limit),
+            right,
         } = candidate.op
             && left.full() == register
+            && let Some(limit) = match right {
+                Operand::Imm(limit) => Some(limit),
+                Operand::Reg(holder) => {
+                    constant_before(function, position, holder, abi).map(|(_, value)| value)
+                }
+                _ => None,
+            }
         {
             let Control::Branch { cond, .. } = function.steps.get(position + 1)?.insn.control
             else {

@@ -216,8 +216,9 @@ order; on AArch64, NEON's do 2 doubles or 4 singles (`fmul v0.2d, v1.2d, v2.2d`)
 
 When the spec allows threads (`- Threads: up to N`), split heavy work across cores with
 `parallel_for`: [the parallel template](assets/parallel-template.s) (with
-[its spec](assets/parallel-template-spec.md)) capitalizes up to a megabyte on 16 threads, each
-worker filling its own slot. Copy its thread code word for word, follow "Threads" in
+[its spec](assets/parallel-template-spec.md); on AArch64
+[its form](assets/linux-aarch64/parallel-template.s)) capitalizes up to a megabyte on 16
+threads, each worker filling its own slot. Copy its thread code word for word, follow "Threads" in
 [the rules](references/power-of-10.md), and compare the time on the clock, which threads
 shorten. Starting a thread costs tens of microseconds, so give each one at least a few hundred
 kilobytes of vector work: on a megabyte, one 64-byte loop is as fast as sixteen threads.

@@ -279,7 +279,25 @@ fn load_store(word: u32) -> Result<Inst, String> {
     match bits(word, 29, 27) {
         0b111 => single(word),
         0b101 => pair(word),
-        // Exclusives, literal loads, memory copies.
+        // Of the exclusives and ordered accesses, ldar of a w or x register: size 1x 001000 1 1 0
+        // 11111 1 11111 Rn Rt.
+        0b001 if word & 0xbfff_fc00 == 0x88df_fc00 => {
+            let wide = bit(word, 30);
+            Ok(Inst::LoadStore {
+                access: Access {
+                    load: true,
+                    size: if wide { 8 } else { 4 },
+                    signed: false,
+                    acquire: true,
+                },
+                rt: A64Reg::new(bits(word, 4, 0), wide, false),
+                address: Address::Offset {
+                    base: A64Reg::new(bits(word, 9, 5), true, true),
+                    offset: 0,
+                },
+            })
+        }
+        // The other exclusives, literal loads, memory copies.
         _ => Err(outside(word)),
     }
 }
@@ -293,6 +311,7 @@ fn single(word: u32) -> Result<Inst, String> {
                 load: false,
                 size: 1 << size,
                 signed: false,
+                acquire: false,
             },
             size == 3,
         ),
@@ -301,6 +320,7 @@ fn single(word: u32) -> Result<Inst, String> {
                 load: true,
                 size: 1 << size,
                 signed: false,
+                acquire: false,
             },
             size == 3,
         ),
@@ -309,6 +329,7 @@ fn single(word: u32) -> Result<Inst, String> {
                 load: true,
                 size: 1 << size,
                 signed: true,
+                acquire: false,
             },
             true,
         ),
@@ -317,6 +338,7 @@ fn single(word: u32) -> Result<Inst, String> {
                 load: true,
                 size: 1 << size,
                 signed: true,
+                acquire: false,
             },
             false,
         ),

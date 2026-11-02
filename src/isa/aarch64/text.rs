@@ -688,6 +688,7 @@ impl Line<'_> {
             }
             "mul" | "mneg" | "smull" | "umull" | "smnegl" | "umnegl" => self.product(),
             "ldp" | "stp" | "ldpsw" => self.pair(),
+            "ldar" => self.load_acquire(),
             _ => self.load_store(),
         }
     }
@@ -1308,46 +1309,55 @@ impl Line<'_> {
                 load: true,
                 size: if wide { 8 } else { 4 },
                 signed: false,
+                acquire: false,
             },
             ("str", wide) => Access {
                 load: false,
                 size: if wide { 8 } else { 4 },
                 signed: false,
+                acquire: false,
             },
             ("ldrb", false) => Access {
                 load: true,
                 size: 1,
                 signed: false,
+                acquire: false,
             },
             ("ldrh", false) => Access {
                 load: true,
                 size: 2,
                 signed: false,
+                acquire: false,
             },
             ("strb", false) => Access {
                 load: false,
                 size: 1,
                 signed: false,
+                acquire: false,
             },
             ("strh", false) => Access {
                 load: false,
                 size: 2,
                 signed: false,
+                acquire: false,
             },
             ("ldrsb", _) => Access {
                 load: true,
                 size: 1,
                 signed: true,
+                acquire: false,
             },
             ("ldrsh", _) => Access {
                 load: true,
                 size: 2,
                 signed: true,
+                acquire: false,
             },
             ("ldrsw", true) => Access {
                 load: true,
                 size: 4,
                 signed: true,
+                acquire: false,
             },
             _ => {
                 return Err(self.problem(&format!(
@@ -1366,6 +1376,28 @@ impl Line<'_> {
                 "its base moves and is also the register it transfers, which has no defined \
                  result",
             ));
+        }
+        Ok(Inst::LoadStore {
+            access,
+            rt,
+            address,
+        })
+    }
+
+    /// `ldar`: a load-acquire of a whole `w` or `x` register, from a base register with no
+    /// offset.
+    fn load_acquire(&self) -> Result<Inst, String> {
+        self.count(2)?;
+        let rt = self.reg(0)?;
+        let access = Access {
+            load: true,
+            size: if rt.wide { 8 } else { 4 },
+            signed: false,
+            acquire: true,
+        };
+        let address = self.address(1, access.size)?;
+        if !matches!(address, Address::Offset { offset: 0, .. }) {
+            return Err(self.problem("ldar takes only a base register, `[x1]`"));
         }
         Ok(Inst::LoadStore {
             access,

@@ -373,7 +373,45 @@ pub(super) fn check_pairs(function: &MappedFunction<'_>, violations: &mut Vec<Vi
 
 /// The rules' messages say x86-64's instructions and registers; on AArch64 these phrases say
 /// AArch64's instead, longest first so a long phrase is replaced before a shorter one inside it.
-const WORDS: [(&str, &str); 42] = [
+const WORDS: [(&str, &str); 51] = [
+    (
+        "it gets its index in rdi and its slot in rsi, and returns a result in rax",
+        "it gets its index in x0 and its slot in x1, and returns a result in x0",
+    ),
+    (
+        "keep rbx as worker sets it, `mov rbx, rsi` before any call; use other registers for \
+         everything else",
+        "keep x19 as worker sets it, `mov x19, x1` before any call; use other registers for \
+         everything else",
+    ),
+    (
+        "a worker writes only its own stack, [rsp + …], and its slot, [rbx + …]",
+        "a worker writes only its own stack, [sp, …], and its slot, [x19, …]",
+    ),
+    (
+        "write results into the slot, [rbx + …], or return them in rax",
+        "write results into the slot, [x19, …], or return them in x0",
+    ),
+    (
+        "start worker with `push rbx`, then `mov rbx, rsi`",
+        "start worker with `stp x19, x20, [sp, #-16]!`, then `mov x19, x1`",
+    ),
+    (
+        "a worker reaches only its own slot, through rbx, as worker sets it",
+        "a worker reaches only its own slot, through x19, as worker sets it",
+    ),
+    (
+        "changes rbx, which holds the worker's slot",
+        "changes x19, which holds the worker's slot",
+    ),
+    (
+        "uses rbx before it holds the slot",
+        "uses x19 before it holds the slot",
+    ),
+    (
+        "assets/parallel-template.s",
+        "assets/linux-aarch64/parallel-template.s",
+    ),
     (
         "push callee-saved registers (rbx, rbp, r12-r15) at the start and pop them in reverse order \
          right before ret",

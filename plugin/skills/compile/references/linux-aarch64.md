@@ -10,8 +10,8 @@ What AArch64 code covers so far, checked, tested and proven as x86-64's is: argu
 numbers, floating point in singles and doubles, vectors of whole numbers and of floats (NEON),
 text, standard input of any length through `fill`, files and folders, hash tables and word
 tallies, sorting, checked jump tables, servers (one client at a time or several at once), clients
-of a server on this computer, and the terminal. Not yet, so a spec that needs them is compiled
-for x86-64 for now: threads, and the checksum and crypto instructions.
+of a server on this computer, the terminal, and threads. Not yet, so a spec that needs them is
+compiled for x86-64 for now: the checksum and crypto instructions.
 
 ## Templates
 
@@ -33,6 +33,15 @@ x86-64's is.
   its clients' steps can come in.
 - [The key reader](../assets/linux-aarch64/terminal-template.s) reads keys one at a time with no
   echo, from [its spec](../assets/terminal-template-spec.md).
+- [The parallel template](../assets/linux-aarch64/parallel-template.s) capitalizes up to a
+  megabyte on up to 16 threads, from [its spec](../assets/parallel-template-spec.md). Copy its
+  `parallel_for`, `start_worker` and `join_worker`, their data and constants word for word, as on
+  x86-64; `worker` keeps its slot in `x19`, set by `mov x19, x1` after saving x19, and writes
+  only its stack and its slot. AArch64's `clone` takes where to clear the thread's id in `x4`, not
+  x86-64's fourth argument, and `join_worker` reads the id with `ldar`, a load-acquire, so the
+  worker's result can't be read before the id shows it ended: loads on ARM64 can pass each
+  other. `ldar` of a whole `w` or `x` register from a base with no offset is the dialect's only
+  ordered access.
 - [The fast `wc`](../assets/linux-aarch64/fast/wc/main.s) counts lines and words 16 bytes a step,
   each step masked to the bytes left, proven for every length with a 64 KiB buffer.
 
@@ -57,7 +66,8 @@ What the spec names under `# Constraints` decides the calls a program may make, 
 `clock_gettime` and `clock_nanosleep` for `the clock`; `getrandom` for `random bytes`; `socket`,
 `connect`, `sendto`, `close` and `read` for the network, `accept4` on the listening socket lengua
 hands a server as descriptor 3, and `ppoll` for a server of several clients at once; `ioctl` and
-`ppoll` for the terminal. The kernel refuses any other.
+`ppoll` for the terminal; `clone`, `futex` and `exit` for threads, only through the parallel
+template's `parallel_for`. The kernel refuses any other.
 
 `mov x8, #SYS_NAME` picks the call, the arguments go in `x0` to `x5`, and `svc #0` runs it. It
 returns in `x0` and changes nothing else. A result from -4095 to -1 is an error (the negative

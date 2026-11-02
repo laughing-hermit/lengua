@@ -443,6 +443,45 @@ async fn the_aarch64_echo_and_fetch_pass_their_tests() {
     session.service.cancel().await.expect("close the session");
 }
 
+/// The AArch64 parallel template, x86-64's spec compiled for AArch64 with clone, futex and ldar,
+/// passes its tests through the server: a megabyte capitalized on up to 16 threads.
+#[tokio::test]
+async fn the_aarch64_parallel_template_passes_its_tests() {
+    let session = if cfg!(target_arch = "aarch64") {
+        Session::proving_for(Protocol::Discover, 60).await
+    } else if common::qemu_runs_aarch64() {
+        Session::emulating_for(Protocol::Discover, "linux-aarch64", 60).await
+    } else {
+        return;
+    };
+    let asset = |path: &str| {
+        std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("plugin/skills/compile/assets")
+                .join(path),
+        )
+        .expect("the asset")
+    };
+    let program = written(
+        &session,
+        [
+            ("spec.md", asset("parallel-template-spec.md")),
+            ("main.s", asset("linux-aarch64/parallel-template.s")),
+        ],
+    )
+    .await;
+    let report = done(&session, &program).await;
+    assert!(
+        any_line(&report["tests"], "follows every rule and passed all"),
+        "{report}"
+    );
+    let mut arguments = program.arguments();
+    arguments["stdin"] = Value::from("threads, too\n");
+    let run = session.call_ok("run", arguments).await;
+    assert_eq!(run["stdout"], "THREADS, TOO\n", "{run}");
+    session.service.cancel().await.expect("close the session");
+}
+
 /// The AArch64 cat, a streaming filter through `fill`, is proven for every length through the
 /// server, as x86-64's is: natively on an ARM64 computer, and through QEMU here.
 #[tokio::test]

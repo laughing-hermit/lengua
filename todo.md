@@ -287,7 +287,10 @@ one needs.
   checked jump tables proven case by case. R13 (2026-11-02): servers, clients and the terminal,
   with `ppoll` (AArch64 has no `poll`) in the prover, whose time the kernel writes back: the
   event-loop server proven in every order its clients' steps come in, the key reader, and the
-  echo server and fetch client, each as x86-64's is. Left of R10, skipped for
+  echo server and fetch client, each as x86-64's is. R14 (2026-11-02): threads, the parallel
+  template with clone, futex and `ldar` (the join's load-acquire, as glibc's pthread_join reads
+  the id on ARM64), proven on several threads and held to x86-64's thread rules, which now read
+  each CPU's registers. Left of R10, skipped for
   now at the user's word (2026-11-01) so
   it costs nothing: 4 to 6 real interactive Claude Code sessions compiling specs for AArch64 from
   one request each, and one for x86-64 as a regression check; they run on the user's Claude
@@ -296,7 +299,7 @@ one needs.
   - an install package for ARM64 Linux computers (today's release and installer are x86-64 only,
     and the ARM64 server is built only on CI);
   - SVE, past the line;
-  - threads; the crypto and checksum instructions, and the histogram and crc32c benchmarks.
+  - the crypto and checksum instructions, and the histogram and crc32c benchmarks.
 - **macOS and Windows need more than a new CPU.** They don't allow a program to call the OS
   directly, as lengua's programs do; a program must go through the system library (libSystem,
   ntdll), which lengua never checked, and there is no seccomp or Landlock. So those four targets
