@@ -1083,11 +1083,10 @@ async fn waiting_for_connections(pid: i32) -> bool {
 /// descriptor 3, or `poll` or `ppoll`, by this computer's numbers.
 fn waits_for_connections(call: &str) -> bool {
     use crate::syscalls::host;
-    let accepting = format!("{} 0x3 ", host::ACCEPT4);
-    let mut waits = vec![format!("{} ", host::PPOLL)];
-    #[cfg(target_arch = "x86_64")]
-    waits.push(format!("{} ", host::POLL));
-    call.starts_with(&accepting) || waits.iter().any(|wait| call.starts_with(wait.as_str()))
+    call.starts_with(&format!("{} 0x3 ", host::ACCEPT4))
+        || host::WAITS
+            .iter()
+            .any(|number| call.starts_with(&format!("{number} ")))
 }
 
 /// How long a shown text may be.

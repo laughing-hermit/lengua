@@ -54,6 +54,8 @@ pub mod x86_64 {
     /// `ppoll`, the same wait with a time as seconds and nanoseconds: no x86-64 program's, but
     /// the call QEMU waits in for an AArch64 program's `ppoll` here.
     pub const PPOLL: i64 = 271;
+    /// The calls a process waits in for descriptors to be ready.
+    pub const WAITS: [i64; 2] = [POLL, PPOLL];
     /// `lseek`, move a file offset.
     pub const LSEEK: i64 = 8;
     /// `rt_sigaction`, which the launcher makes between confining itself and becoming the
@@ -171,6 +173,8 @@ pub mod aarch64 {
     pub const WRITE: i64 = 64;
     /// `ppoll`, a wait until a descriptor is ready, for a time a `timespec` gives.
     pub const PPOLL: i64 = 73;
+    /// The calls a process waits in for descriptors to be ready: `ppoll` alone.
+    pub const WAITS: [i64; 1] = [PPOLL];
     /// `fstat`, an open file's size and kind.
     pub const FSTAT: i64 = 80;
     /// `exit`, end the calling thread.
