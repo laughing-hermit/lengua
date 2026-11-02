@@ -10,6 +10,7 @@
 
 pub mod decode;
 pub mod facts;
+pub mod sve;
 pub mod text;
 pub mod vector;
 
@@ -1039,6 +1040,9 @@ pub enum Inst {
         /// The second.
         rm: VReg,
     },
+    /// An SVE instruction of the dialect's subset: predicates, Z registers of the CPU's length,
+    /// and their loads and stores.
+    Sve(sve::Sve),
     /// The carry-less products of two vectors' lanes, polynomials over GF(2): `pmull v0.8h,
     /// v1.8b, v2.8b`, each pair of bytes' product in a halfword, or `pmull v0.1q, v1.1d, v2.1d`,
     /// the doublewords' product in all 128 bits (the PMULL extension). `pmull2` takes the upper
@@ -1234,6 +1238,7 @@ impl fmt::Display for Inst {
             }
         };
         match *self {
+            Self::Sve(sve) => write!(formatter, "{sve}"),
             Self::AddImm {
                 rd,
                 rn,

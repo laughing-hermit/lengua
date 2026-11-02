@@ -81,7 +81,20 @@ async fn machine(source: &str) -> Machine {
     // Which symbol each [rip + name] names, and each checked jump table's cases, as the server
     // passes them on.
     let (parsed, _) = crate::checker::check_layout(source);
-    let features = crate::platform::Machine::detect().features;
+    // The CPU that runs it: this one, or under QEMU the emulated one, with its SVE length.
+    let host = crate::platform::Machine::detect();
+    let features = if profile == Profile::LinuxAarch64 && !cfg!(target_arch = "aarch64") {
+        crate::platform::Target {
+            profile,
+            emulator: Some(crate::platform::Emulator {
+                name: "qemu-aarch64".into(),
+            }),
+        }
+        .features(&host)
+    } else {
+        host.features
+    };
+    machine.sve_bytes = features.sve;
     if let Some(program) = crate::checker::decode::map(&parsed, &machine, features, &mut Vec::new())
     {
         machine.named = program.named_symbols();
@@ -3594,6 +3607,74 @@ async fn proves_the_aarch64_fast_word_count_for_every_length() {
             "    cmhs v22.16b, v22.16b, v16.16b\n",
         ),
         ("    csel x4, x4, x5, lo\n", "    csel x4, x5, x4, lo\n"),
+    ] {
+        assert!(small.contains(from), "{from:?}");
+        let wrong = machine(&small.replacen(from, to, 1)).await;
+        let verdict = prove(&wrong, &block, &text_budget());
+        assert!(
+            matches!(verdict, Verdict::Counterexample(_)),
+            "{to:?}: {verdict:?}"
+        );
+    }
+}
+
+/// The fast word count with SVE, the same spec: fill into 64 KiB, and one loop of a vector a
+/// step whose lanes `whilelo` makes the bytes left, is proven for every length at the CPU's
+/// vector length, as the NEON one is. Its mutants, with a 4 KiB buffer, are caught: a piece that
+/// forgets the whitespace before it, a step that forgets the one before it, every lane taken
+/// past the end, and a step that skips a vector.
+#[tokio::test]
+async fn proves_the_aarch64_sve_word_count_for_every_length() {
+    if !solvers_installed() {
+        return;
+    }
+    let assets = "plugin/skills/compile/assets/";
+    let spec = repository_file(&format!("{assets}fast/wc/spec.md"));
+    let asset = repository_file(&format!("{assets}linux-aarch64/fast/wc-sve/main.s"));
+    let mut right = machine(&asset).await;
+    if let Some(bytes) = std::env::var("LENGUA_TRY_SVE_BYTES")
+        .ok()
+        .and_then(|bytes| bytes.parse().ok())
+    {
+        right.sve_bytes = bytes;
+    }
+    if right.sve_bytes == 0 {
+        eprintln!("skipped: neither this CPU nor QEMU's here has SVE");
+        return;
+    }
+    let block = block(&spec, 0);
+    let started = Instant::now();
+    let verdict = prove(&right, &block, &long_budget());
+    eprintln!(
+        "the AArch64 SVE wc at 64 KiB, vectors of {} bytes: {verdict:?} in {:?}",
+        right.sve_bytes,
+        started.elapsed()
+    );
+    assert!(
+        matches!(
+            verdict,
+            Verdict::Proven {
+                bound: None,
+                induction: Some(65536),
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
+    let small = asset
+        .replace(".equ BUF_LEN, 65536\n", ".equ BUF_LEN, 4096\n")
+        .replace("  // bound: 4096\n", "  // bound: 256\n");
+    for (from, to) in [
+        (
+            "    mov x2, x23\n    bl count_piece\n",
+            "    mov x2, #0xff\n    bl count_piece\n",
+        ),
+        ("    mov w12, w13\n", ""),
+        (
+            "    ld1b { z0.b }, p0/z, [x0, x10]\n",
+            "    ptrue p0.b\n    ld1b { z0.b }, p0/z, [x0, x10]\n",
+        ),
+        ("    incb x10\n", "    incb x10, all, mul #2\n"),
     ] {
         assert!(small.contains(from), "{from:?}");
         let wrong = machine(&small.replacen(from, to, 1)).await;

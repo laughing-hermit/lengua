@@ -29,6 +29,9 @@ pub struct Facts {
     pub functions: usize,
     /// The CPU features beyond the x86-64 baseline its instructions need.
     pub features: Vec<&'static str>,
+    /// The length of SVE's vectors on the CPU it was checked for, in bytes, for its proofs:
+    /// 0 where it has none.
+    pub sve_bytes: u16,
     /// The data symbol each `[rip + name]` operand names, by its instruction's address.
     pub named: BTreeMap<u64, String>,
     /// The cases' addresses of each jump through a checked table, by the jump's address.
@@ -133,6 +136,7 @@ pub fn check(
         assertions,
         functions,
         features: Vec::new(),
+        sve_bytes: 0,
         named: BTreeMap::new(),
         tables: BTreeMap::new(),
     }

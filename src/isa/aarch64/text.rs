@@ -6,12 +6,14 @@
 
 use super::decode::bitmask;
 
+mod sve;
 mod vector;
 
 use super::{
     A64Cond, A64Reg, Access, Address, Extend, Field, FpConversion, FpOne, FpReg, FpThree, FpTwo,
     Gpr, Indirect, Inst, Logic, One, Select, Shift, Three, Two, Wide,
 };
+pub use sve::{is_predicate, z_register};
 pub use vector::{lane, q_register, quadword, scalar, vreg};
 
 /// What a name in an operand stands for: a constant's value, or a label's or data symbol's
@@ -515,6 +517,9 @@ impl Line<'_> {
     }
 
     fn instruction(&self) -> Result<Inst, String> {
+        if let Some(sve) = self.sve() {
+            return sve;
+        }
         if let Some(vector) = self.vector() {
             return vector;
         }

@@ -227,14 +227,22 @@ fn workloads() -> Vec<Workload> {
                 ("lengua", "plugin/skills/compile/assets/fast/wc/main.s"),
                 ("lengua, by Claude Code", "examples/count/main.s"),
             ],
-            lengua_aarch64: &[(
-                "lengua",
-                "plugin/skills/compile/assets/linux-aarch64/fast/wc/main.s",
-            )],
+            lengua_aarch64: &[
+                (
+                    "lengua",
+                    "plugin/skills/compile/assets/linux-aarch64/fast/wc/main.s",
+                ),
+                (
+                    "lengua with SVE",
+                    "plugin/skills/compile/assets/linux-aarch64/fast/wc-sve/main.s",
+                ),
+            ],
             about_aarch64: "Counts the lines and words of 64 MiB on standard input, as `wc -lw` \
                             does. C, C++ and Rust compare each byte with the one before it, \
-                            which compilers can vectorize. lengua's version takes 16 bytes a \
-                            step with NEON, each step masked to the bytes left.",
+                            which compilers can vectorize. lengua's versions take 16 bytes a \
+                            step with NEON, each step masked to the bytes left, and with SVE a \
+                            vector a step, as long as the CPU makes it, each step's lanes the \
+                            bytes left from whilelo.",
             others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
             args: Vec::new(),
             stdin: large.clone(),
@@ -249,10 +257,17 @@ fn workloads() -> Vec<Workload> {
                 "lengua",
                 "plugin/skills/compile/assets/fast/histogram/main.s",
             )],
-            lengua_aarch64: &[(
-                "lengua",
-                "plugin/skills/compile/assets/linux-aarch64/fast/histogram/main.s",
-            )],
+            // Two tries at the histogram's stalls, measured beside it (todo.md, the ARM64
+            // histogram): each counter's address taken once, for loads and stores of a base
+            // alone, and that four bytes at a time, their loads, adds and stores together.
+            lengua_aarch64: &[
+                (
+                    "lengua",
+                    "plugin/skills/compile/assets/linux-aarch64/fast/histogram/main.s",
+                ),
+                ("lengua, try A", "benches/programs/histogram/lengua-try-a.s"),
+                ("lengua, try C", "benches/programs/histogram/lengua-try-c.s"),
+            ],
             about_aarch64: "Counts each byte value of 64 MiB on standard input. C, C++ and \
                             Rust spread neighboring bytes over four tables; lengua's takes \
                             eight bytes a step, one into each of eight tables.",
@@ -341,7 +356,12 @@ fn lengua_versions(workload: &Workload) -> &'static [(&'static str, &'static str
 
 async fn build(workload: &Workload, toolchain: &Toolchain, folder: &Path) -> Vec<Version> {
     let mut versions = Vec::new();
+    // An SVE version runs only on a CPU with SVE.
+    let sve = Machine::detect().features.sve > 0;
     for (number, (label, source)) in lengua_versions(workload).iter().enumerate() {
+        if source.contains("-sve/") && !sve {
+            continue;
+        }
         let (object, executable) = (
             folder.join(format!("{}-{number}.o", workload.name)),
             folder.join(format!("{}-lengua-{number}", workload.name)),

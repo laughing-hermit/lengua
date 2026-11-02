@@ -17,8 +17,8 @@
 // CRC-32C starts from all ones and ends inverted.
 .equ CRC_START, 0xFFFFFFFF
 // Reads fill the buffer from where the last stopped; each block is folded once it's whole, and
-// a full buffer, all folded, fills again from its front.
-.equ BUFFER_FULL, 1048576
+// a full buffer, all folded, fills again from its front. A pipe's 64 KiB fills it at once.
+.equ BUFFER_FULL, 65536
 // A block: a chain of crc32cx takes its first HALF bytes while carry-less multiplies fold the
 // HALF after them, 64 bytes of each a step.
 .equ HALF, 16384
@@ -161,7 +161,7 @@ crc_blocks:
     mov x20, x2
     mov x21, x3
     mov x22, #BLOCKS
-.Lcrc_blocks_block:  // bound: 32
+.Lcrc_blocks_block:  // bound: 2
     add x9, x20, #BLOCK
     cmp x9, x21
     b.hi .Lcrc_blocks_done

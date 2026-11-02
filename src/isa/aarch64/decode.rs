@@ -44,7 +44,10 @@ pub fn decode(word: u32, address: u64) -> Result<Inst, String> {
         0b0101 | 0b1101 => register(word),
         0b0111 => vector::vector(word),
         0b1111 => floating(word),
-        // Scalable vectors, and what's unallocated.
+        0b0010 => super::sve::decode(word)
+            .map(Inst::Sve)
+            .ok_or_else(|| outside(word)),
+        // What's unallocated.
         _ => Err(outside(word)),
     }
 }

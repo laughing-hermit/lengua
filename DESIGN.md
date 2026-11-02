@@ -1107,7 +1107,18 @@ still to build per target. A new profile must supply:
    its scalar instruction's term, so the hypotenuse with both sides in one vector of doubles is
    proven as the scalar one is; `fmaxv` reduces in the architecture's pairs. Its carry-less
 multiply, `pmull` and `pmull2` of bytes or of doublewords, is x86-64's `pclmulqdq` product, one
-model for both (`carry_less` in `exec.rs`). An access at a place
+model for both (`carry_less` in `exec.rs`). Its SVE (`exec/aarch64/sve.rs`, the integer subset
+of bytes a streaming loop needs) keeps each Z register, the CPU's length of bytes up to 64, in the
+vector registers' 64 bytes and each predicate as a condition for each byte; `whilelo`'s lanes are
+the bytes left, a load or store reaches only its active lanes, held to the longest vector's
+width as the rules hold it, and the flags are the architecture's predicate test. A NEON write
+clears the bytes above its 16. A proof runs at the CPU's vector length (the kernel's, or under
+QEMU the length a four-instruction program measures), holds for that length alone, and the
+lock's needs say it (`sve16` to `sve64`), which `run` holds the CPU to. Its `against_a64` harness
+holds every SVE instruction to the CPU with Z and P registers of its length, and
+[the SVE wc](plugin/skills/compile/assets/linux-aarch64/fast/wc-sve/main.s) is proven for every
+length with a 64 KiB buffer at 16-byte vectors and at 64, about 100 seconds each, with no solver
+question, its loop leaving where its index reaches the bytes read as the NEON one's does. An access at a place
    the input chooses is held to the object its own CPU's base register holds (`Through`), so a
    hash table on AArch64 goes through its log of stores as x86-64's does. `ppoll`, AArch64's only
    wait, is `poll` with a time limit the kernel reads and then writes the time left into, which the

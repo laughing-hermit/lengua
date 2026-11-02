@@ -109,8 +109,9 @@ and the CPU features the code needs; never write that line yourself.
 
    `assets/fast` holds three checked programs to learn from and copy from, each with its spec:
    [wc](assets/fast/wc/main.s) counts lines and words 64 bytes a step with AVX-512 masks, each
-   step masked to the bytes left, and is proven for every length, as is
-   [its NEON form](assets/linux-aarch64/fast/wc/main.s) for AArch64;
+   step masked to the bytes left, and is proven for every length, as are
+   [its NEON form](assets/linux-aarch64/fast/wc/main.s) for AArch64 and
+   [its SVE form](assets/linux-aarch64/fast/wc-sve/main.s);
    [crc32c](assets/fast/crc32c/main.s) runs three `crc32` chains side by side and joins them with
    `pclmulqdq`, and [its AArch64 form](assets/linux-aarch64/fast/crc32c/main.s) one `crc32cx`
    chain beside `pmull` folds on the vector units; [histogram](assets/fast/histogram/main.s) spreads its counts over four tables.

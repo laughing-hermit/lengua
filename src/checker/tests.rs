@@ -1701,6 +1701,7 @@ async fn every_aarch64_asset_follows_every_rule() {
             "linux-aarch64/terminal-template.s",
         ),
         ("fast/wc/spec.md", "linux-aarch64/fast/wc/main.s"),
+        ("fast/wc/spec.md", "linux-aarch64/fast/wc-sve/main.s"),
         ("fast/crc32c/spec.md", "linux-aarch64/fast/crc32c/main.s"),
         (
             "fast/histogram/spec.md",

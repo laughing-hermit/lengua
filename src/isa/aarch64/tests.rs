@@ -23,7 +23,7 @@ const PER_CLASS: usize = 3000;
 /// Each encoding class the dialect has: its name, the bits that place a word in it, and their
 /// value. The classes whose fields are mostly unallocated fix more bits, so random words land on
 /// instructions.
-const CLASSES: [(&str, u32, u32); 58] = [
+const CLASSES: [(&str, u32, u32); 79] = [
     ("adr and adrp", 0x1f00_0000, 0x1000_0000),
     ("add and sub with a number", 0x1f80_0000, 0x1100_0000),
     ("logical with a bitmask", 0x1f80_0000, 0x1200_0000),
@@ -122,6 +122,33 @@ const CLASSES: [(&str, u32, u32); 58] = [
     ("ldar", 0xbfff_fc00, 0x88df_fc00),
     ("crc32 and crc32c", 0x7fe0_e000, 0x1ac0_4000),
     ("pmull and pmull2", 0xbf20_fc00, 0x0e20_e000),
+    // SVE's: the fields an element size or a pattern takes are left to vary where the dialect
+    // has one of them, so most words of a class are in it.
+    ("sve ptrue", 0xff3e_fff0, 0x2518_e3e0),
+    ("sve whilelo", 0xff20_ec10, 0x2520_0c00),
+    ("sve predicate logic", 0xff30_c000, 0x2500_4000),
+    ("sve cntp", 0xff3f_c200, 0x2520_8000),
+    ("sve ld1b", 0xffe0_e000, 0xa400_4000),
+    ("sve st1b", 0xffe0_e000, 0xe400_4000),
+    ("sve compares of vectors", 0xff20_4000, 0x2400_0000),
+    (
+        "sve compares with unsigned numbers",
+        0xff20_0000,
+        0x2420_0000,
+    ),
+    ("sve compares with signed numbers", 0xff20_4000, 0x2500_0000),
+    ("sve add and sub", 0xff20_e000, 0x0420_0000),
+    ("sve bitwise", 0xff20_fc00, 0x0420_3000),
+    ("sve cnt", 0xff3f_e000, 0x041a_a000),
+    ("sve sel", 0xff20_c000, 0x0520_c000),
+    ("sve dup of a number", 0xff3f_c000, 0x2538_c000),
+    ("sve dup of a register", 0xff3f_fc00, 0x0520_3800),
+    ("sve cpy of a number", 0xff30_8000, 0x0510_0000),
+    ("sve uaddv", 0xff3f_e000, 0x0401_2000),
+    ("sve incb", 0xff30_fbe0, 0x0430_e3e0),
+    ("sve cntb", 0xff30_ffe0, 0x0420_e3e0),
+    ("sve insr", 0xff3f_fc00, 0x0524_3800),
+    ("sve lastb", 0xff3f_e000, 0x0521_a000),
 ];
 
 /// What LLVM's disassembler says of each word: its text, or none where it refuses the word or
@@ -132,7 +159,7 @@ fn llvm(words: &[u32]) -> Option<Vec<Option<String>>> {
             "--disassemble",
             "--triple=aarch64-unknown-linux-gnu",
             // AES brings the doublewords' pmull, which LLVM puts under it.
-            "--mattr=+crc,+aes",
+            "--mattr=+crc,+aes,+sve",
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -587,6 +614,51 @@ const VECTOR_LINES: &[&str] = &[
     "pmull2 v31.8h, v30.16b, v29.16b",
     "pmull v0.1q, v1.1d, v2.1d",
     "pmull2 v7.1q, v8.2d, v9.2d",
+    "ptrue p0.b",
+    "whilelo p1.b, x10, x2",
+    "whilelo p2.b, xzr, x3",
+    "and p0.b, p1/z, p2.b, p3.b",
+    "bic p4.b, p5/z, p6.b, p7.b",
+    "eor p8.b, p9/z, p10.b, p11.b",
+    "orr p12.b, p13/z, p14.b, p15.b",
+    "not p0.b, p1/z, p2.b",
+    "mov p0.b, p1/z, p2.b",
+    "mov p3.b, p4.b",
+    "cntp x5, p1, p2.b",
+    "ld1b { z0.b }, p0/z, [x1, x10]",
+    "st1b { z31.b }, p7, [x2, x3]",
+    "cmpeq p1.b, p0/z, z0.b, z1.b",
+    "cmpne p1.b, p0/z, z0.b, #10",
+    "cmphs p1.b, p0/z, z0.b, #9",
+    "cmplo p2.b, p0/z, z0.b, #14",
+    "cmphi p3.b, p1/z, z4.b, z5.b",
+    "cmplo p3.b, p1/z, z4.b, z5.b",
+    "cmple p3.b, p1/z, z4.b, z5.b",
+    "cmpge p1.b, p0/z, z0.b, #-16",
+    "cmplt p1.b, p0/z, z0.b, #15",
+    "add z0.b, z1.b, z2.b",
+    "sub z3.b, z4.b, z5.b",
+    "and z0.d, z1.d, z2.d",
+    "bic z0.d, z1.d, z2.d",
+    "mov z6.d, z7.d",
+    "cnt z0.b, p0/m, z1.b",
+    "sel z0.b, p8, z1.b, z2.b",
+    "mov z0.b, p1/m, z3.b",
+    "mov z0.b, #10",
+    "dup z1.b, #-1",
+    "mov z2.b, w3",
+    "dup z2.b, w4",
+    "mov z0.b, p0/z, #1",
+    "mov z0.b, p0/m, #-128",
+    "cpy z0.b, p0/z, #1",
+    "uaddv d0, p0, z1.b",
+    "incb x10",
+    "incb x10, all, mul #4",
+    "cntb x0",
+    "cntb x0, all, mul #16",
+    "insr z0.b, w1",
+    "insr z0.b, wzr",
+    "lastb w0, p0, z1.b",
 ];
 
 #[test]
@@ -607,7 +679,7 @@ fn assembled(lines: &[&str]) -> Option<Vec<u32>> {
     let mut child = Command::new("llvm-mc")
         .args([
             "--triple=aarch64-unknown-linux-gnu",
-            "--mattr=+aes",
+            "--mattr=+aes,+sve",
             "--show-encoding",
         ])
         .stdin(Stdio::piped())

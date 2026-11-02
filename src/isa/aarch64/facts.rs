@@ -2,6 +2,7 @@
 //! reads and writes, how control leaves it, its memory operand, what it does to the stack, the
 //! idiom it is, and what it puts in its destination.
 
+use super::sve::{Against, Sve};
 use super::{
     A64Cond, A64Reg, Address, FpConversion, FpOne, FpReg, FpThree, FpTwo, Gpr, Indirect, Inst,
     Logic, Source, VImmediate, VThree, Wide, Writeback,
@@ -94,6 +95,7 @@ const fn cond(cond: A64Cond) -> Cond {
 #[must_use]
 pub fn mnemonic(inst: &Inst) -> String {
     let name = match inst {
+        Inst::Sve(sve) => sve.mnemonic(),
         Inst::AddImm { sub, flags, .. } | Inst::AddShifted { sub, flags, .. } => {
             match (sub, flags) {
                 (false, false) => "add",
@@ -339,6 +341,7 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
     facts.read(inst);
     let a64 = Reg::A64;
     let (control, dst, operands, memory, op, value, stack) = match *inst {
+        Inst::Sve(sve) => sve_facts(sve),
         Inst::AddImm {
             sub,
             flags,
@@ -986,6 +989,103 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
 }
 
 /// The memory operand of an access to `width` bytes at `place`.
+/// The facts of an SVE instruction. Its predicates aren't registers the rules follow; its Z
+/// registers are the V registers they extend, and a load or store is held to
+/// [`crate::platform::SVE_MAX_BYTES`], the longest vector, so it fits on every CPU.
+fn sve_facts(
+    sve: Sve,
+) -> (
+    Control,
+    Option<Reg>,
+    Vec<Operand>,
+    Option<MemRef>,
+    Op,
+    Value,
+    Stack,
+) {
+    let a64 = Reg::A64;
+    let general = |register: A64Reg| Operand::Reg(a64(register));
+    let vector = |dst: u8, sources: &[u8]| {
+        let mut operands = vec![v_operand(dst)];
+        operands.extend(sources.iter().map(|source| v_operand(*source)));
+        (
+            Control::Next,
+            Some(v(dst)),
+            operands,
+            None,
+            Op::Other,
+            Value::Other,
+            Stack::Same,
+        )
+    };
+    let plain = |dst: Option<Reg>, operands: Vec<Operand>| {
+        (
+            Control::Next,
+            dst,
+            operands,
+            None,
+            Op::Other,
+            Value::Other,
+            Stack::Same,
+        )
+    };
+    match sve {
+        Sve::Ptrue { .. } | Sve::PredLogic { .. } => plain(None, Vec::new()),
+        Sve::Whilelo { rn, rm, .. } => plain(None, vec![general(rn), general(rm)]),
+        Sve::Cntp { rd, .. } | Sve::Count { rd, .. } | Sve::Lastb { rd, .. } => {
+            plain(Some(a64(rd)), vec![general(rd)])
+        }
+        Sve::Access {
+            store,
+            zt,
+            base,
+            index,
+            ..
+        } => (
+            Control::Next,
+            (!store).then_some(v(zt)),
+            vec![v_operand(zt), Operand::Mem],
+            Some(MemRef {
+                base: Some(a64(base)),
+                index: Some(a64(index)),
+                scale: 1,
+                displacement: 0,
+                pc_relative: false,
+                width: u64::from(crate::platform::SVE_MAX_BYTES),
+                reads: !store,
+                writes: store,
+                base_moves: None,
+            }),
+            Op::Other,
+            if store { Value::Other } else { Value::Load },
+            Stack::Same,
+        ),
+        Sve::Compare { zn, against, .. } => {
+            let mut operands = vec![v_operand(zn)];
+            if let Against::Vector(zm) = against {
+                operands.push(v_operand(zm));
+            }
+            plain(None, operands)
+        }
+        Sve::Arith { zd, zn, zm, .. }
+        | Sve::Logic { zd, zn, zm, .. }
+        | Sve::Sel { zd, zn, zm, .. } => vector(zd, &[zn, zm]),
+        Sve::Cnt { zd, zn, .. } => vector(zd, &[zn]),
+        Sve::DupImm { zd, .. } | Sve::Cpy { zd, .. } => vector(zd, &[]),
+        Sve::DupReg { zd, rn } => {
+            let mut facts = vector(zd, &[]);
+            facts.2.push(general(rn));
+            facts
+        }
+        Sve::Uaddv { vd, zn, .. } => vector(vd, &[zn]),
+        Sve::Insr { zdn, rm } => {
+            let mut facts = vector(zdn, &[]);
+            facts.2.push(general(rm));
+            facts
+        }
+    }
+}
+
 fn memory(place: Address, width: u64, load: bool) -> MemRef {
     let (base, index, scale, displacement) = match place {
         Address::Offset { base, offset } | Address::PreIndex { base, offset } => {
@@ -1076,6 +1176,7 @@ impl Facts {
     fn read(&mut self, inst: &Inst) {
         let x = |number| A64Reg::new(number, true, false);
         match *inst {
+            Inst::Sve(sve) => self.read_sve(sve),
             Inst::AddImm { rd, rn, .. }
             | Inst::LogicalImm { rd, rn, .. }
             | Inst::OneSource { rd, rn, .. } => {
@@ -1340,6 +1441,80 @@ impl Facts {
                         self.reads_v(register);
                     }
                 }
+            }
+        }
+    }
+
+    /// Gathers what an SVE instruction reads and writes of the registers the rules follow.
+    fn read_sve(&mut self, sve: Sve) {
+        match sve {
+            Sve::Ptrue { .. } | Sve::PredLogic { .. } => {}
+            Sve::Whilelo { rn, rm, .. } => {
+                self.reads_register(rn);
+                self.reads_register(rm);
+            }
+            Sve::Cntp { rd, .. } | Sve::Count { add: false, rd, .. } => self.writes_register(rd),
+            Sve::Count { add: true, rd, .. } => {
+                self.reads_register(rd);
+                self.writes_register(rd);
+            }
+            Sve::Access {
+                store,
+                zt,
+                base,
+                index,
+                ..
+            } => {
+                self.reads_register(base);
+                self.reads_register(index);
+                if store {
+                    self.reads_v(zt);
+                } else {
+                    self.writes_v(zt);
+                }
+            }
+            Sve::Compare { zn, against, .. } => {
+                self.reads_v(zn);
+                if let Against::Vector(zm) = against {
+                    self.reads_v(zm);
+                }
+            }
+            Sve::Arith { zd, zn, zm, .. }
+            | Sve::Logic { zd, zn, zm, .. }
+            | Sve::Sel { zd, zn, zm, .. } => {
+                self.reads_v(zn);
+                self.reads_v(zm);
+                self.writes_v(zd);
+            }
+            Sve::Cnt { zd, zn, .. } => {
+                // The inactive lanes keep the destination's bytes.
+                self.reads_v(zd);
+                self.reads_v(zn);
+                self.writes_v(zd);
+            }
+            Sve::DupImm { zd, .. } => self.writes_v(zd),
+            Sve::Cpy { zd, merge, .. } => {
+                if merge {
+                    self.reads_v(zd);
+                }
+                self.writes_v(zd);
+            }
+            Sve::DupReg { zd, rn } => {
+                self.reads_register(rn);
+                self.writes_v(zd);
+            }
+            Sve::Uaddv { vd, zn, .. } => {
+                self.reads_v(zn);
+                self.writes_v(vd);
+            }
+            Sve::Insr { zdn, rm } => {
+                self.reads_v(zdn);
+                self.reads_register(rm);
+                self.writes_v(zdn);
+            }
+            Sve::Lastb { rd, zn, .. } => {
+                self.reads_v(zn);
+                self.writes_register(rd);
             }
         }
     }

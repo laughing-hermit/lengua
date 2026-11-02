@@ -201,6 +201,8 @@ pub struct Image {
     entered: Vec<AtomicBool>,
     /// The CPU whose code it is.
     isa: Isa,
+    /// The length of SVE's vectors on the CPU it runs on, in bytes; 0 for none.
+    sve_bytes: u16,
 }
 
 impl Image {
@@ -303,6 +305,7 @@ impl Image {
             loops,
             entered,
             isa: machine.isa,
+            sve_bytes: machine.sve_bytes,
         };
         image.fill = fill::Fill::find(&image, machine);
         Some(image)
@@ -646,6 +649,9 @@ pub struct State {
     vectors: Vec<Rc<[Term; VECTOR_BYTES]>>,
     /// The mask registers k0 to k7, 64 bits each.
     masks: [Term; 8],
+    /// AArch64's predicates p0 to p15, a condition for each byte of a Z register, shared with
+    /// the runs a fork made until one writes it.
+    predicates: Vec<Rc<[Term; VECTOR_BYTES]>>,
     /// The bytes written or read so far.
     pub memory: Memory,
     /// The value last stored whole at an address, while none of its bytes has changed since:
@@ -838,6 +844,10 @@ impl State {
                 (0..32).map(|_| Rc::clone(&zeros)).collect()
             },
             masks: [zero; 8],
+            predicates: {
+                let none = Rc::new([no; VECTOR_BYTES]);
+                (0..16).map(|_| Rc::clone(&none)).collect()
+            },
             memory: Memory::default(),
             stored: BTreeMap::new(),
             hook: None,

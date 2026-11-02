@@ -16,6 +16,7 @@
 //! Floating point is [`float`]'s, and vectors are [`vector`]'s.
 
 mod float;
+mod sve;
 mod vector;
 
 use super::{Cpu, End, Held, Last, Owner, Plan, Return, Step, Stop, Through, unsupported};
@@ -286,6 +287,7 @@ impl Cpu<'_> {
             | Inst::FpConvert { .. }
             | Inst::FpLoadStore { .. }
             | Inst::FpPair { .. } => self.execute_fp(inst),
+            Inst::Sve(sve) => self.execute_sve(sve),
             Inst::VectorThree { .. }
             | Inst::Pmull { .. }
             | Inst::VectorTwo { .. }

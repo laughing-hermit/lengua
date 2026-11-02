@@ -119,11 +119,16 @@ impl Cpu<'_> {
         self.join(&parts)
     }
 
-    /// Sets the s or d register to `value`, which clears the rest of its V register.
+    /// Sets the s or d register to `value`, which clears the rest of its V register and the Z
+    /// register above it.
     fn set_v(&mut self, register: FpReg, value: Term) {
         let parts = self.split(value, V_BYTES);
+        let zero = self.pool.bv(8, 0);
         let vector = Rc::make_mut(&mut self.state.vectors[usize::from(register.number)]);
         vector[..V_BYTES].copy_from_slice(&parts);
+        for byte in &mut vector[V_BYTES..] {
+            *byte = zero;
+        }
     }
 
     /// `value` as a float of `width` bits, exactly: every number this module makes one of is a

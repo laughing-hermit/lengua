@@ -701,9 +701,11 @@ impl LenguaServer {
                 ),
             )));
         }
-        // Code compiled for another computer is compiled again for this one.
+        // Code compiled for another computer is compiled again for this one: the target's CPU,
+        // under QEMU the emulated one's.
+        let features = target.features(&machine);
         if let Some(elsewhere) =
-            Header::of(&code).and_then(|header| header.elsewhere(profile, &machine.features))
+            Header::of(&code).and_then(|header| header.elsewhere(profile, &features))
         {
             return Ok(Json(CheckReport::problems(
                 "code_problems",
@@ -1392,6 +1394,7 @@ impl LenguaServer {
         if let Some(facts) = &code.report.facts {
             decoded.named.clone_from(&facts.named);
             decoded.tables.clone_from(&facts.tables);
+            decoded.sve_bytes = facts.sve_bytes;
         }
         let spec = &code.spec;
         let deadline = Instant::now() + proof_time();
@@ -2141,6 +2144,7 @@ fn machine_line(machine: &Machine, target: &Target) -> String {
             .into_iter()
             .filter(|(_, present)| *present)
             .map(|(name, _)| name.to_owned())
+            .chain((available.sve > 0).then(|| format!("sve (vectors of {} bytes)", available.sve)))
             .collect(),
     };
     format!(
@@ -2396,6 +2400,18 @@ async fn runnable(
             mode(stamp.emulator.as_deref()),
             profile.name(),
             mode(here)
+        ));
+    }
+    // Nor does a program checked for a CPU with an extension this one lacks, or proven at
+    // another SVE vector length, which a proof holds for alone.
+    let checked_for = Header {
+        spec: String::new(),
+        target: stamp.target.clone(),
+        features: stamp.features.clone(),
+    };
+    if let Some(elsewhere) = checked_for.elsewhere(profile, &target.features(&machine)) {
+        return Err(format!(
+            "{elsewhere}, so it won't run. Call check with path {folder} to check it here."
         ));
     }
     let built = build(&code, profile).await?;
@@ -2728,9 +2744,9 @@ mod tests {
             "{line}"
         );
         // QEMU's CPU has every extension, of which the dialect allows AArch64's CRC-32 and its
-        // carry-less multiply.
+        // carry-less multiply, and SVE at the vector length it runs with.
         assert!(
-            line.ends_with("main.s may use the base instructions and crc, pmull"),
+            line.contains("main.s may use the base instructions and crc, pmull"),
             "{line}"
         );
         assert!(!line.contains("avx") && !line.contains("sse"), "{line}");

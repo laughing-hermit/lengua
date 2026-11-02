@@ -494,17 +494,32 @@ async fn the_aarch64_benchmarks_own_programs_pass_their_checks() {
     };
     let assets =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("plugin/skills/compile/assets");
-    for workload in ["wc", "crc32c", "histogram"] {
+    // The SVE wc where this CPU, or QEMU's, has SVE; its spec is the wc's.
+    let sve = lengua::platform::Target {
+        profile: lengua::platform::Profile::LinuxAarch64,
+        emulator: (!cfg!(target_arch = "aarch64")).then(|| lengua::platform::Emulator {
+            name: "qemu-aarch64".into(),
+        }),
+    }
+    .features(&lengua::platform::Machine::detect())
+    .sve > 0;
+    let workloads: &[&str] = if sve {
+        &["wc", "crc32c", "histogram", "wc-sve"]
+    } else {
+        &["wc", "crc32c", "histogram"]
+    };
+    for workload in workloads {
         let read = |path: std::path::PathBuf| {
             std::fs::read_to_string(&path)
                 .unwrap_or_else(|error| panic!("{}: {error}", path.display()))
         };
+        let spec_of = workload.trim_end_matches("-sve");
         let program = written(
             &session,
             [
                 (
                     "spec.md",
-                    read(assets.join("fast").join(workload).join("spec.md")),
+                    read(assets.join("fast").join(spec_of).join("spec.md")),
                 ),
                 (
                     "main.s",

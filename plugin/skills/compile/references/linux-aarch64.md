@@ -11,8 +11,8 @@ numbers, floating point in singles and doubles, vectors of whole numbers and of 
 text, standard input of any length through `fill`, files and folders, hash tables and word
 tallies, sorting, checked jump tables, servers (one client at a time or several at once), clients
 of a server on this computer, the terminal, threads, CRC-32 checksums with the CPU's
-instructions, and carry-less multiplication (`pmull`). Not yet, so a spec that needs them is
-compiled for x86-64 for now: the CPU's AES and SHA instructions.
+instructions, carry-less multiplication (`pmull`), and SVE's scalable vectors of bytes. Not yet,
+so a spec that needs them is compiled for x86-64 for now: the CPU's AES and SHA instructions.
 
 ## Templates
 
@@ -248,7 +248,45 @@ with `exit`, and keeps what it needs across calls in `x19` to `x28` without savi
   v0.2d, v0.2d`; a scalar in every lane: `dup v1.2d, v2.d[0]`.
 - Not in the dialect: half precision (`v0.8h` of floats), the estimates (`frecpe`, `frsqrte`,
   `frecps`, `frsqrts`, `fmulx`), the conversions that round otherwise than toward zero (round
-  first with an `frint`), the interleaving `ld2` to `ld4`, the single-lane loads, and SVE.
+  first with an `frint`), the interleaving `ld2` to `ld4`, and the single-lane loads. SVE has its
+  own section below.
+
+## SVE facts
+
+- SVE's vectors are as long as the CPU makes them, 16 to 256 bytes: 16 on GitHub's ARM64
+  runners (Neoverse N2), 64 under QEMU here; lengua's model holds up to 64. When the CPU has SVE
+  the machine line says so, with the length. Write `.arch_extension sve` with the other extension
+  lines. A proof holds at the length it ran at: the lock records it, and `run` refuses a CPU with
+  another until check runs there.
+- The dialect's SVE is the integer subset of bytes a streaming loop needs: every element is a
+  byte (`z0.b`), but for the bitwise operations of whole registers, written as doublewords (`and
+  z0.d, z1.d, z2.d`, `orr`, `eor`, `bic`, and `mov z0.d, z1.d`). A NEON write clears the Z
+  register above its 16 bytes, as the CPU does; z8 to z15's low halves are d8 to d15, which a call
+  keeps.
+- Predicates p0 to p15 hold a bit for each byte. A load, a store, a compare, `cnt`, `uaddv` and
+  `lastb` take a governing predicate of p0 to p7: `p0/z` zeros the inactive lanes, `p0/m` keeps
+  them.
+- A loop over a piece: `whilelo p0.b, x10, x1` makes the lanes the bytes left and sets the
+  flags, so `b.eq` leaves when none is left; `incb x10` steps the index a vector. `ld1b { z0.b },
+  p0/z, [x0, x10]` loads the active lanes and zeros the rest; `st1b { z0.b }, p0, [x0, x10]`
+  stores them. The rules hold every SVE access to 64 bytes, the longest vector, so it fits every
+  CPU: give the buffer 64 bytes of room past its last, and `cmp x10, #BUF_LEN` with `b.hs` to an
+  assertion before the access, as [the SVE wc](../assets/linux-aarch64/fast/wc-sve/main.s) does.
+- A compare sets a predicate's lanes where `p0` is active: `cmpeq p1.b, p0/z, z0.b, #10`, with
+  numbers from -16 to 15 for `eq`, `ne`, `ge`, `gt`, `lt` and `le` and from 0 to 127 for `hs`,
+  `hi`, `lo` and `ls`, or against a vector's lanes (`mov z18.b, #32` first). Its flags say of
+  its result what `whilelo`'s do. Predicates join with `and`, `orr`, `eor` and `bic p0.b, p1/z,
+  p2.b, p3.b`, and `not p0.b, p1/z, p2.b`; `cntp x5, p0, p1.b` counts the lanes active in both.
+- A vector's bytes: `mov z1.b, #10`, `mov z1.b, w3`, `mov z1.b, p2/z, #-1` (a number in the active
+  lanes, zero elsewhere), `sel z0.b, p0, z1.b, z2.b`, `add` and `sub`, `cnt z0.b, p0/m, z1.b`
+  (each byte's set bits), `uaddv d0, p0, z1.b` (the active bytes' sum, in d0), `insr z1.b, w12`
+  (each lane moved up one, w12's byte in lane 0, as the byte before a step), `lastb w13, p0,
+  z1.b` (the last active lane's byte), and `cntb x0` (the vector's length).
+- Not in the dialect: elements wider than a byte, first-fault and gathering loads, the
+  first-fault register, the flag-setting forms of predicate logic (`ands`, `ptrues`), and SVE's
+  other instructions.
+- [The SVE wc](../assets/linux-aarch64/fast/wc-sve/main.s) counts lines and words a vector a
+  step, from [the wc's spec](../assets/fast/wc/spec.md), proven for every length.
 
 ## Floating-point facts
 

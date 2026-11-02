@@ -1200,9 +1200,11 @@ impl Parser {
             ),
             // AArch64's CRC-32 instructions, which check holds to a CPU that has them.
             // `crc` for the CRC-32 instructions, `aes` for the doublewords' `pmull`, which LLVM
-            // puts under it; of the AES extension's instructions, the dialect has only that one.
+            // puts under it (of the AES extension's instructions, the dialect has only that
+            // one), and `sve` for the scalable vectors' subset.
             ".arch_extension"
-                if self.source.isa == Isa::Aarch64 && matches!(arguments, "crc" | "aes") => {}
+                if self.source.isa == Isa::Aarch64
+                    && matches!(arguments, "crc" | "aes" | "sve") => {}
             ".macro" | ".endm" | ".rept" | ".irp" | ".irpc" | ".endr" | ".if" | ".ifdef"
             | ".ifndef" | ".else" | ".endif" | ".include" | ".incbin" | ".set" => self.violation(
                 Rule::Constants,
@@ -1871,6 +1873,14 @@ fn aarch64_operand(text: &str, constants: &BTreeMap<String, Constant>) -> Result
     }
     if let Some(scalar) = aarch64::text::scalar(text) {
         return Ok(whole(scalar.number));
+    }
+    // SVE's: a Z register as the V register it extends; a predicate, which no rule follows, as
+    // written.
+    if let Some(number) = aarch64::text::z_register(text) {
+        return Ok(whole(number));
+    }
+    if aarch64::text::is_predicate(text) {
+        return Ok(Operand::Modifier(text.to_owned()));
     }
     // A list of vector registers, as written: `{ v0.16b, v1.16b }`.
     if text.starts_with('{') && text.ends_with('}') {

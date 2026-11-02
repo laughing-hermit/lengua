@@ -11,6 +11,8 @@
 //! each conversion, and the whole of each V register is compared, so a scalar write must clear
 //! what's above it.
 
+mod sve;
+
 use std::io::Write as _;
 use std::process::{Command, Stdio};
 

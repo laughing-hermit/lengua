@@ -312,7 +312,11 @@ pub fn check_program(source: &Source, executable: &[u8], context: Context<'_>) -
         [&template, &fill_template],
         &mut violations,
     );
-    facts.features = x86_64::features_needed(&machine);
+    facts.features = match program.isa {
+        Isa::X86_64 => x86_64::features_needed(&machine),
+        Isa::Aarch64 => aarch64::features_needed(&machine, context.features),
+    };
+    facts.sve_bytes = context.features.sve;
     facts.named = program.named_symbols();
     facts.tables = tables::addresses(&program, &jumps);
     memory::check(

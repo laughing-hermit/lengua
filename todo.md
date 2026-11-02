@@ -360,7 +360,13 @@ one needs.
     safety-stopped work (item 1's end), since modelling them is the topic the filter stopped; the
     carry-less multiply (`pmull`) is done (2026-11-02);
   - the real interactive sessions above, which cost Claude usage (item 1b's first point);
-  - SVE, past the line;
+  - SVE, past the line: done (2026-11-02) as the integer subset of bytes a streaming loop needs
+    (predicates, `whilelo`, `ld1b`/`st1b`, the compares, `cntp`, `incb`, `insr`, `lastb` and the
+    rest; the references' SVE facts). Its decoder agrees with LLVM, its model with QEMU's CPU at
+    64-byte vectors (and the N2's at 16 on CI); a proof holds at the vector length it ran at,
+    which the lock records and `run` holds the CPU to; and an SVE word count is proven for every
+    length at 16 and at 64 bytes. Left: elements wider than a byte, vectors past 64 bytes (no
+    CPU known has them), and first-fault and gathering loads, outside the dialect;
   - the histogram's speed. Measured on GitHub's ARM64 runner (BENCHMARKS-aarch64.md, 2026-11-02),
     lengua is ahead or level in cycles and CPU time on every program but this one (add 114×
     fewer cycles, hypotenuse 100×, wc 2.5×, upcase 1.5×, shout 1.3×), which takes 115.6M cycles to C's
@@ -368,14 +374,17 @@ one needs.
     measured: 8 bytes a step into 8 tables, which cut its instructions 26% to level with Rust's
     but its cycles only 4% (it stays at about 1.72 cycles a byte to C's and Rust's 1.41, so the
     cost is per byte); the tables spaced off the 4 KiB pattern, no change; each byte loaded with
-    ldrb as C and Rust do, slower (120.1M), reverted. Next would be reading the CPU's own stall
-    counters on the runner, which the benchmark doesn't record yet. The crc32c, after taking 64
-    bytes a step and each read as it comes, is level with Rust in cycles and CPU time (9.05M to
+    ldrb as C and Rust do, slower (120.1M), reverted. The benchmark now records the CPU's own
+    stall counters (2026-11-02): lengua's histogram has 5.4M front-end stall cycles to C's 1.4M
+    and 26.3M back-end ones to C's 16.4M, with more L1 data refills (135K to 78K) and fewer
+    mispredicts; two tries at it, measured beside it, follow. The crc32c, after taking 64 bytes
+    a step and each read as it comes, was level with Rust in cycles and CPU time (9.05M to
     9.02M); it couldn't lead as x86-64's does without the carry-less multiply, since one crc32cx
     chain already keeps the CRC unit busy. With `pmull` in (2026-11-02) it runs that chain over
-    half of each 32 KiB block while `pmull` folds the other half on the vector units. Its wall time trails C's (0.7 to 0.8×)
-    because the benchmark feeds 64 MiB through a pipe on a 2-core machine, where the faster
-    programs, lengua and Rust alike, wait on the writer.
+    half of each 32 KiB block while `pmull` folds the other half on the vector units: 6.17M
+    cycles to Rust's 8.99M, 1.5× fewer. Its wall time trails C's (0.7 to 0.8×) because the
+    benchmark feeds 64 MiB through a pipe on a 2-core machine, where the faster programs, lengua
+    and Rust alike, wait on the writer.
 - **macOS and Windows need more than a new CPU.** They don't allow a program to call the OS
   directly, as lengua's programs do; a program must go through the system library (libSystem,
   ntdll), which lengua never checked, and there is no seccomp or Landlock. So those four targets

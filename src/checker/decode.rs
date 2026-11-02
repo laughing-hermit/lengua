@@ -113,6 +113,9 @@ pub struct Machine {
     /// Each checked jump table's `jmp`, by address, and the addresses of its cases in the
     /// table's order, once the checker has found them (see [`super::tables`]); empty until then.
     pub tables: BTreeMap<u64, Vec<u64>>,
+    /// The length of SVE's vectors on the CPU the program runs on, in bytes, for the proof to
+    /// run SVE's instructions at; 0 where it has none.
+    pub sve_bytes: u16,
 }
 
 /// Reads the functions and data symbols of a linked ELF executable and decodes the functions.

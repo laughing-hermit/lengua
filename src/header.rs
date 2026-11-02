@@ -71,17 +71,34 @@ impl Header {
                 profile.name()
             ));
         }
+        let has = |name: &str| match profile.isa() {
+            Isa::X86_64 => x86_64::cpu_has(name, cpu),
+            Isa::Aarch64 => crate::checker::aarch64::cpu_has(name, cpu),
+        };
         let lacking: Vec<&str> = self
             .features
             .iter()
-            .filter(|name| x86_64::cpu_has(name, cpu) == Some(false))
+            .filter(|name| has(name) == Some(false))
             .map(String::as_str)
             .collect();
         (!lacking.is_empty()).then(|| {
-            format!(
-                "main.s was compiled for a CPU with {}, which this computer's CPU lacks",
-                lacking.join(", ")
-            )
+            let sve = lacking.iter().find_map(|name| name.strip_prefix("sve"));
+            match sve {
+                // A proof of SVE code holds at the vector length it ran at.
+                Some(bytes) => format!(
+                    "main.s was proven with SVE vectors of {bytes} bytes, and this computer's CPU \
+                     {}",
+                    if cpu.sve == 0 {
+                        "has no SVE".to_owned()
+                    } else {
+                        format!("has {}-byte vectors", cpu.sve)
+                    }
+                ),
+                None => format!(
+                    "main.s was compiled for a CPU with {}, which this computer's CPU lacks",
+                    lacking.join(", ")
+                ),
+            }
         })
     }
 }

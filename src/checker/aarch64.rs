@@ -5,6 +5,7 @@
 use super::decode::{MappedFunction, Program, Step, Word};
 use super::source::{Function as SourceFunction, Instruction as SourceInstruction, Operand};
 use super::{Rule, Violation};
+use crate::isa::aarch64::sve::Sve;
 use crate::isa::aarch64::{
     A64Reg, Address, Extend, Gpr, Indirect, Inst, Source, Writeback, facts, text,
 };
@@ -157,6 +158,14 @@ pub(super) fn same_instruction(
 /// Every register the instruction names.
 fn registers(inst: &Inst) -> Vec<A64Reg> {
     match *inst {
+        Inst::Sve(sve) => match sve {
+            Sve::Whilelo { rn, rm, .. } => vec![rn, rm],
+            Sve::Access { base, index, .. } => vec![base, index],
+            Sve::Cntp { rd, .. } | Sve::Count { rd, .. } | Sve::Lastb { rd, .. } => vec![rd],
+            Sve::DupReg { rn, .. } => vec![rn],
+            Sve::Insr { rm, .. } => vec![rm],
+            _ => Vec::new(),
+        },
         Inst::AddImm { rd, rn, .. }
         | Inst::LogicalImm { rd, rn, .. }
         | Inst::Bitfield { rd, rn, .. }
@@ -264,6 +273,16 @@ pub(super) fn check_instruction(
         refuse(
             format!("`{text}` needs CRC, which this CPU doesn't have"),
             "compute the checksum in software, as from a table, on a CPU without CRC",
+        );
+    }
+    if matches!(inst, Inst::Sve(_)) && features.sve == 0 {
+        refuse(
+            format!(
+                "`{text}` is SVE, which this CPU doesn't have, or with vectors past the {} bytes \
+                 lengua's model holds",
+                crate::platform::SVE_MAX_BYTES
+            ),
+            "use NEON's 16-byte vectors, which every ARM64 CPU has",
         );
     }
     if let Inst::Pmull { rn, .. } = inst
@@ -531,5 +550,55 @@ pub(super) fn in_words(violation: &mut Violation) {
     for (x86, arm) in WORDS {
         violation.problem = violation.problem.replace(x86, arm);
         violation.fix = violation.fix.replace(x86, arm);
+    }
+}
+
+/// SVE's names in a program's needs, by its vector length: what it was proven at, 16, 32, 48 or
+/// 64 bytes.
+const SVE_LENGTHS: [&str; 4] = ["sve16", "sve32", "sve48", "sve64"];
+
+/// The CPU extensions an AArch64 program's instructions need beyond the base, each once: `crc`,
+/// `pmull`, and SVE as `sve` with the vector length its proof ran at, since a proof holds for
+/// that length alone.
+#[must_use]
+pub fn features_needed(
+    machine: &crate::checker::decode::Machine,
+    features: CpuFeatures,
+) -> Vec<&'static str> {
+    let mut found: Vec<&'static str> = Vec::new();
+    for function in machine.functions.values() {
+        for word in function.words() {
+            let Ok(inst) = &word.inst else {
+                continue;
+            };
+            let name = match inst {
+                Inst::Crc { .. } => Some("crc"),
+                Inst::Pmull { rn, .. } if crate::isa::aarch64::pmull_wide(*rn) => Some("pmull"),
+                Inst::Sve(_) => SVE_LENGTHS
+                    .get(usize::from(features.sve / 16).wrapping_sub(1))
+                    .copied(),
+                _ => None,
+            };
+            if let Some(name) = name
+                && !found.contains(&name)
+            {
+                found.push(name);
+            }
+        }
+    }
+    found
+}
+
+/// Whether `cpu` has the AArch64 extension `name` names, as [`features_needed`] names them, or
+/// none for a name that isn't one.
+#[must_use]
+pub fn cpu_has(name: &str, cpu: &CpuFeatures) -> Option<bool> {
+    match name {
+        "crc" => Some(cpu.crc),
+        "pmull" => Some(cpu.pmull),
+        _ => {
+            let place = SVE_LENGTHS.iter().position(|known| *known == name)?;
+            Some(usize::from(cpu.sve) == 16 * (place + 1))
+        }
     }
 }

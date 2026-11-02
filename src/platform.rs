@@ -284,7 +284,14 @@ pub struct CpuFeatures {
     /// AArch64's carry-less multiply of doublewords (`pmull v0.1q, v1.1d, v2.1d`), part of its
     /// crypto extension; the byte form is in every ARM64 CPU.
     pub pmull: bool,
+    /// AArch64's scalable vectors, SVE: their length in bytes, 16 to 256, or 0 where the CPU
+    /// has none. lengua's model holds up to [`SVE_MAX_BYTES`], so a longer one is none to it.
+    pub sve: u16,
 }
+
+/// The longest SVE vector lengua's model holds, in bytes: 512 bits, as an x86-64 zmm register
+/// is. Its rules hold every SVE access to this width, so a program fits every CPU's length.
+pub const SVE_MAX_BYTES: u16 = 64;
 
 impl CpuFeatures {
     /// Every feature present, for tests and documentation.
@@ -323,6 +330,7 @@ impl CpuFeatures {
             gfni: true,
             crc: true,
             pmull: true,
+            sve: SVE_MAX_BYTES,
         }
     }
 }
@@ -355,6 +363,7 @@ impl Target {
             Some(_) => CpuFeatures {
                 crc: true,
                 pmull: true,
+                sve: emulated_sve_bytes(),
                 ..CpuFeatures::default()
             },
         }
@@ -557,6 +566,7 @@ fn cpu_features() -> CpuFeatures {
         gfni: std::arch::is_x86_feature_detected!("gfni"),
         crc: false,
         pmull: false,
+        sve: 0,
     }
 }
 
@@ -565,8 +575,93 @@ fn cpu_features() -> CpuFeatures {
     CpuFeatures {
         crc: has_crc(),
         pmull: has_pmull(),
+        sve: sve_bytes(),
         ..CpuFeatures::default()
     }
+}
+
+/// This ARM64 CPU's SVE vector length in bytes, as the kernel gives this process and its
+/// children, or 0 where it has none or a length past the model's.
+#[cfg(target_arch = "aarch64")]
+fn sve_bytes() -> u16 {
+    if !std::arch::is_aarch64_feature_detected!("sve") {
+        return 0;
+    }
+    rustix::thread::sve_vector_length_configuration()
+        .ok()
+        .and_then(|config| u16::try_from(config.vector_length_in_bytes).ok())
+        .filter(|bytes| *bytes <= SVE_MAX_BYTES)
+        .unwrap_or(0)
+}
+
+/// No other CPU has SVE.
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+const fn sve_bytes() -> u16 {
+    0
+}
+
+/// The SVE vector length QEMU gives the AArch64 programs it runs here, in bytes, or 0 where it
+/// can't be told or is past the model's: measured once by running a program of four
+/// instructions, `cntb x0`, `lsr x0, x0, #4`, and an exit with x0, which says it in 16 bytes.
+fn emulated_sve_bytes() -> u16 {
+    static FOUND: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+    *FOUND.get_or_init(|| {
+        let Ok(folder) = tempfile::tempdir() else {
+            return 0;
+        };
+        let path = folder.path().join("vector-length");
+        let written = std::fs::write(&path, sve_probe()).and_then(|()| {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
+        });
+        if written.is_err() {
+            return 0;
+        }
+        std::process::Command::new(&path)
+            .env_clear()
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .ok()
+            .and_then(|status| status.code())
+            .and_then(|sixteens| u16::try_from(sixteens).ok())
+            .map(|sixteens| sixteens * 16)
+            .filter(|bytes| (16..=SVE_MAX_BYTES).contains(bytes))
+            .unwrap_or(0)
+    })
+}
+
+/// A static AArch64 Linux executable that exits with its SVE vector length over 16: an ELF
+/// header, one segment, and the four instructions.
+fn sve_probe() -> Vec<u8> {
+    const BASE: u64 = 0x40_0000;
+    const CODE_AT: u64 = 64 + 56;
+    let code: [u32; 4] = [0x0420_e3e0, 0xd344_fc00, 0xd280_0ba8, 0xd400_0001];
+    let size = CODE_AT + 16;
+    let mut elf = Vec::with_capacity(136);
+    elf.extend_from_slice(b"\x7fELF");
+    elf.extend_from_slice(&[2, 1, 1, 0]);
+    elf.extend_from_slice(&[0; 8]);
+    elf.extend_from_slice(&2_u16.to_le_bytes());
+    elf.extend_from_slice(&183_u16.to_le_bytes());
+    elf.extend_from_slice(&1_u32.to_le_bytes());
+    elf.extend_from_slice(&(BASE + CODE_AT).to_le_bytes());
+    elf.extend_from_slice(&64_u64.to_le_bytes());
+    elf.extend_from_slice(&0_u64.to_le_bytes());
+    elf.extend_from_slice(&0_u32.to_le_bytes());
+    for half in [64_u16, 56, 1, 0, 0, 0] {
+        elf.extend_from_slice(&half.to_le_bytes());
+    }
+    elf.extend_from_slice(&1_u32.to_le_bytes());
+    elf.extend_from_slice(&5_u32.to_le_bytes());
+    for word in [0, BASE, BASE, size, size, 0x1000_u64] {
+        elf.extend_from_slice(&word.to_le_bytes());
+    }
+    for instruction in code {
+        elf.extend_from_slice(&instruction.to_le_bytes());
+    }
+    elf
 }
 
 /// Whether this ARM64 CPU has the CRC-32 instructions.
@@ -596,6 +691,25 @@ const fn has_pmull() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The four-instruction program tells SVE's vector length where AArch64 programs run, under
+    /// QEMU or natively: a multiple of 16 bytes the model holds, or 0 where there's no SVE.
+    #[test]
+    fn the_probe_tells_sves_vector_length() {
+        let bytes = emulated_sve_bytes();
+        assert!(
+            bytes == 0 || (bytes.is_multiple_of(16) && bytes <= SVE_MAX_BYTES),
+            "{bytes}"
+        );
+        let runs_aarch64 = cfg!(target_arch = "aarch64")
+            || std::fs::read_to_string("/proc/sys/fs/binfmt_misc/qemu-aarch64")
+                .is_ok_and(|entry| entry.starts_with("enabled"));
+        if runs_aarch64 && cfg!(target_arch = "x86_64") {
+            // QEMU's CPU has SVE.
+            assert!(bytes >= 16, "{bytes}");
+        }
+        assert_eq!(sve_probe().len(), 136);
+    }
 
     #[test]
     fn the_aarch64_profile_has_its_own_names_and_calls() {
