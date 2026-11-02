@@ -332,7 +332,21 @@ one needs.
     user, beside the safety-stopped work (item 1's end), since modelling them is the topic the
     filter stopped;
   - the real interactive sessions above, which cost Claude usage (item 1b's first point);
-  - SVE, past the line.
+  - SVE, past the line;
+  - the histogram's speed. Measured on GitHub's ARM64 runner (BENCHMARKS-aarch64.md, 2026-11-02),
+    lengua is ahead or level in cycles and CPU time on every program but this one (add 114×
+    fewer cycles, hypotenuse 100×, wc 2.5×, upcase 1.5×, shout 1.3×), which takes 115.6M cycles to C's
+    94.7M and Rust's 95.2M (0.8×; 0.9× in CPU and wall time), where x86-64's is level. Tried, each
+    measured: 8 bytes a step into 8 tables, which cut its instructions 26% to level with Rust's
+    but its cycles only 4% (it stays at about 1.72 cycles a byte to C's and Rust's 1.41, so the
+    cost is per byte); the tables spaced off the 4 KiB pattern, no change; each byte loaded with
+    ldrb as C and Rust do, slower (120.1M), reverted. Next would be reading the CPU's own stall
+    counters on the runner, which the benchmark doesn't record yet. The crc32c, after taking 64
+    bytes a step and each read as it comes, is level with Rust in cycles and CPU time (9.05M to
+    9.02M); it can't lead as x86-64's does without the carry-less multiply (PMULL, above), since
+    one crc32cx chain already keeps the CRC unit busy. Its wall time trails C's (0.7 to 0.8×)
+    because the benchmark feeds 64 MiB through a pipe on a 2-core machine, where the faster
+    programs, lengua and Rust alike, wait on the writer.
 - **macOS and Windows need more than a new CPU.** They don't allow a program to call the OS
   directly, as lengua's programs do; a program must go through the system library (libSystem,
   ntdll), which lengua never checked, and there is no seccomp or Landlock. So those four targets
