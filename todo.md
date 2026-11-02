@@ -224,12 +224,29 @@ product Claude puts it at about two-thirds. What's left, most important first:
    listing order). The network is done (2026-11-02): no program
    connects by itself, on either Linux target; lengua makes each connection its spec names before
    the program starts and hands it over as descriptor 4, 5 and on, as it binds a server's port.
-   What that leaves for later: a program gets one connection to each place its spec names, made
-   before it starts, so one that needs a connection for each client it serves (a proxy) or several
-   to one place needs a service of its own.
-4. **Hardening.** A red-team pass: programs written to escape the sandbox, to fool the rules or
-   the memory checks, or to pass a proof they shouldn't; and fuzzing of everything the checker
-   reads (main.s, the spec, the built ELF).
+   What that leaves for later, each a capability the cut took, to bring back in a shape every OS
+   keeps the same way:
+   - **A computer the person running the program names.** Today a program reaches only the
+     computers its spec names, so a curl-, ssh- or database-client-like tool, whose user types the
+     host, can't be built. A way that keeps the promise on every OS: a line such as `- Network:
+     connects to TCP port 443 on the computer its first argument names` (`over TLS` too), where
+     lengua reads that argument before the program starts, holds it to a computer's name or
+     address (never this computer, as for a named host), and makes the connection there; the
+     program sees the same argument, for its `Host:` line. Its tests' server stands in for any
+     value the argument takes. The person running it chooses the host, as they choose its files.
+   - **A connection for each client a program serves**, as a proxy needs, or several to one place:
+     connections made on demand, which needs a way to ask lengua for one that every OS's sandbox
+     can carry (a descriptor handed over on request), so a service of its own.
+4. **Hardening.** Fuzzing and mutation testing are done on both Linux targets (2026-11-02; DESIGN,
+   "Every reader is fuzzed"). Every reader, the built executable included, is fuzzed, a short pass
+   with every test and a long one by hand, both clean after one fix; every proven example's and
+   template's mutants are caught, or change nothing a spec can see; and the one gap it found,
+   tests never cutting standard input into pieces, is closed. Left:
+   - the red-team pass, programs written to escape the sandbox, fool the rules or the memory
+     checks, or pass a proof they shouldn't, which the safety filter stopped while it was being
+     planned (2026-11-02; see "What Opus 5.5 didn't allow");
+   - the mutants tested and not proven, most at the 60-second proof budget, which a sharper test
+     each would catch outright.
 5. **Shipping to others.** A public release with the installer for both Linux targets (R16 brings
    ARM64's), the plugin listed where agent plugins are found, the white paper (item 2) and the
    site (item 4).

@@ -558,7 +558,9 @@ How the proof works (`src/prove/`):
   program starts answering, then closes it and reads the rest. So a server that reads to the end
   of the request before answering waits forever, in the proof as in the tests. What a peer sends
   arrives whole, in the tests' three pieces (the first byte, up to the middle, the rest), or with
-  two of those pieces together, each a shape of its own; through `fill`, every way at once (see
+  two of those pieces together, each a shape of its own; standard input too arrives in those
+  three pieces on every other generated run, so a program that reads it as if it came whole fails
+  a test even where its proof doesn't finish, which mutation testing found; through `fill`, every way at once (see
   below). A run passes when it made exactly the test's connections, sent each server exactly
   what it waits for, answered each client as the test says, and is serving at the end when the
   test says so. A counterexample is run for real with the same delivery. Two texts, a port and
@@ -691,6 +693,21 @@ Trust:
   - *Output conditions* (`src/prove/outputs.rs`): printed numbers, with and without text
     around them and from print loops shaped like the template's, must be accepted exactly when
     the bytes are the formula's text, never for leading zeros, a lost sign or a wrong digit.
+- **Every reader is fuzzed, and the proofs are mutation-tested.** A seeded fuzzer
+  (`src/fuzz.rs`) gives every reader lengua has random bytes and the repository's own specs and
+  programs changed, cut, doubled and spliced: spec.md and its tests, main.s for each CPU and its
+  header, the test language's formulas, the lock, the executable lengua built, and the AArch64
+  decoder's machine words. None may panic or take 5 seconds. A short pass runs with every test
+  and a long one, 40,000 inputs a reader, by hand; the first found a panic, a letter past ASCII in
+  the search for text outside quotes, now fixed. Mutation testing (`tests/mutation.rs`, by hand)
+  changes each proven example and template on both CPUs one way at a time, a number moved by
+  one, a branch's condition flipped or a named constant moved by one, and checks each mutant: of
+  86 (2026-11-02), 44 broke a rule, 31 failed a test, 7 were tested and not proven, and none
+  that changes what a spec can see came out proven. The four that came out proven change
+  nothing a spec can see (a limit past the spec's longest line, a jump to the next line, a byte
+  the input never holds, and a write that never fails short), each listed with why. One of the
+  seven was wrong only when standard input arrives in pieces, which tests then never did; now
+  every other generated run cuts it.
 
 What it covers:
 - Inputs: `int(lo, hi)`, and `decimal(lo, hi)` as digits around a point. Each value of a

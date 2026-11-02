@@ -372,7 +372,9 @@ fn contains_outside_literals(text: &str, needle: &str) -> bool {
                 index += 1;
             }
             b'\'' => index += 3,
-            _ if text[index..].starts_with(needle) => return true,
+            // Bytes, not text: a character literal skipped by its length in bytes, or a letter
+            // past ASCII, can leave `index` inside a character.
+            _ if bytes[index..].starts_with(needle.as_bytes()) => return true,
             _ => index += 1,
         }
     }
@@ -1969,6 +1971,21 @@ pub fn parse(text: &str) -> (Source, Vec<Violation>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Found by fuzzing: a letter past ASCII where a register goes, or in a character literal,
+    /// put the scan for a needle inside a character, which panicked.
+    #[test]
+    fn a_letter_past_ascii_never_breaks_the_reader() {
+        for line in [
+            "    msub x7, x6, x\u{e5}, x0",
+            "    mov al, '\u{e9}'",
+            "    mov eax, \u{e9}\u{e9}\u{e9}",
+            ".arch armv8-a\n    ldr x\u{1f600}, [sp]",
+        ] {
+            let _ = parse(line);
+            assert!(!contains_outside_literals(line, "//"));
+        }
+    }
 
     const TEMPLATE: &str = include_str!("../../plugin/skills/compile/assets/main-template.s");
 

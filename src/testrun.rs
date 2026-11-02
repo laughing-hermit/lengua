@@ -759,11 +759,18 @@ async fn check_one_way(
         // Tests serve on the loopback, whoever the spec serves.
         serve_anywhere: false,
     };
-    // Standard input arrives whole, except where a proof found a cut that matters.
+    // Standard input arrives as the run's delivery cuts it: whole, in the pieces every other
+    // generated run sends, or where a proof found a cut that matters. So a program that reads it
+    // as if it came whole fails, even where its proof doesn't finish.
     let stdin_pieces = match delivery {
-        Delivery::At(_) | Delivery::Cuts(_) => delivery.cuts(stdin.len()),
-        _ => Vec::new(),
+        Delivery::Whole => Vec::new(),
+        _ => delivery.cuts(stdin.len()),
     };
+    let pieced = stdin_pieces.len() > 1
+        && matches!(
+            delivery,
+            Delivery::Pieces | Delivery::FirstTwo | Delivery::LastTwo
+        );
     let job = Job {
         files: test.files,
         folders: test.folders,
@@ -846,6 +853,15 @@ async fn check_one_way(
         (Some(network), Some(rest)) => Some(format!("{network}; {rest}")),
         (network, rest) => network.or(rest),
     };
+    // A run whose standard input came in pieces says so: a program that reads it as if it came
+    // whole fails only then.
+    let problem = problem.map(|problem| {
+        if pieced {
+            format!("standard input arriving {}: {problem}", delivery.describe())
+        } else {
+            problem
+        }
+    });
     Ok((run, problem))
 }
 
@@ -1431,7 +1447,8 @@ pub async fn run_tests(
                         Err(unfit) => return Ok((this, Drawn::Unfit(unfit))),
                     };
                     let test = Owned::Case(case);
-                    // Every other run, the test's server and client send in pieces.
+                    // Every other run, standard input and the test's server and client send in
+                    // pieces.
                     let delivery = if this % 2 == 1 {
                         Delivery::Pieces
                     } else {

@@ -2826,6 +2826,38 @@ async fn proves_the_aarch64_server_for_clients_at_once() {
     assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
 }
 
+/// One read of its own in place of fill is right only when both lines arrive in one read: with
+/// at most 8 bytes left, the proof takes every count a read can return and finds a short one.
+#[tokio::test]
+async fn a_raw_read_of_short_input_is_proven_for_every_count() {
+    if std::process::Command::new("z3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let spec = repository_file("tests/fixtures/second/spec.md");
+    let fixture = repository_file("tests/fixtures/second/main.s");
+    let raw = fixture.replacen(
+        "    mov ecx, NEWLINE\n    call fill\n",
+        "    mov eax, SYS_READ\n    syscall\n",
+        1,
+    );
+    assert_ne!(raw, fixture);
+    let verdict = prove(&machine(&raw).await, &block(&spec, 0), &budget(60));
+    let Verdict::Counterexample(found) = &verdict else {
+        panic!("{verdict:?}");
+    };
+    let Some(Value::Str(delivery)) = found.get(crate::prove::DELIVERY) else {
+        panic!("{found:?}");
+    };
+    assert!(
+        delivery.starts_with("in pieces, cut after byte"),
+        "{delivery}"
+    );
+}
+
 /// A server on the network: the line-echo server reads its line with fill, so it answers every
 /// client's line however the network cuts it; one that reads once in place of fill, or never
 /// closes a connection and so waits on a client that waits for it, is found.

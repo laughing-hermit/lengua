@@ -1423,17 +1423,40 @@ async fn long_text_is_proven_up_to_the_bound() {
     session.service.cancel().await.expect("close the session");
 }
 
+/// second's spec with a short first line and a long second one, so the tests' own pieces of
+/// standard input, cut after its first byte and at its middle, never end a read right after the
+/// first line: only the proof's cuts do.
+fn second_with_lines_the_tests_cut_past() -> String {
+    let spec = fixture("second", "spec.md");
+    let changed = spec
+        .replace(
+            "Each line is `1` to `20`\nlowercase letters followed by a newline.",
+            "The first line is `1` to `5`\nlowercase letters and the second `12` to `20`, each \
+             followed by a newline.",
+        )
+        .replace("`ab\\ncd\\n`", "`ab\\nijklmnopqrst\\n`")
+        .replace("prints `cd` followed", "prints `ijklmnopqrst` followed")
+        .replacen("string(1, 20,", "string(1, 5,", 1)
+        .replacen("string(1, 20,", "string(12, 20,", 1);
+    assert!(changed.contains("string(12, 20,"), "{changed}");
+    assert!(changed.contains("`ab\\nijklmnopqrst\\n`"), "{changed}");
+    changed
+}
+
 #[tokio::test]
 async fn a_cut_only_the_proof_tries_is_found_and_run_for_real() {
     // second reads both lines with one fill, which stops at the first newline a read ends
-    // with: right whenever both lines arrive together, as they do in the tests. The proof takes
-    // every cut and finds the one after the first line, and a real run with standard input cut
-    // there confirms it.
+    // with: right whenever no read ends right after the first line, as none of the tests' own
+    // pieces do with these lengths. The proof takes every cut and finds the one after the first
+    // line, and a real run with standard input cut there confirms it.
     if !solvers_installed() {
         return;
     }
     let session = Session::proving(Protocol::Discover).await;
-    let files = ["spec.md", "main.s"].map(|file| (file, fixture("second", file)));
+    let files = [
+        ("spec.md", second_with_lines_the_tests_cut_past()),
+        ("main.s", fixture("second", "main.s")),
+    ];
     let program = written(&session, files).await;
     let problems = failed(&session, &program).await;
     assert!(
@@ -1460,14 +1483,12 @@ async fn a_cut_only_the_proof_tries_is_found_and_run_for_real() {
 }
 
 #[tokio::test]
-async fn a_raw_read_of_short_input_is_proven_for_every_count() {
+async fn a_raw_read_fails_when_standard_input_arrives_in_pieces() {
     // second with one read of its own in place of fill: right only when both lines arrive in
-    // one read. With at most 8 bytes left, the proof takes every count a read can return,
-    // finds a short one, and a real run with standard input cut there confirms it.
-    if !solvers_installed() {
-        return;
-    }
-    let session = Session::proving(Protocol::Discover).await;
+    // one read, as a pipe doesn't promise. Every other generated run sends standard input in
+    // pieces, the first byte alone, so the tests find it (the proof's every count of a read is
+    // held in the prover's own tests).
+    let session = session().await;
     let raw = fixture("second", "main.s").replacen(
         "    mov ecx, NEWLINE\n    call fill\n",
         "    mov eax, SYS_READ\n    syscall\n",
@@ -1481,11 +1502,10 @@ async fn a_raw_read_of_short_input_is_proven_for_every_count() {
     .await;
     let problems = failed(&session, &program).await;
     assert!(
-        problems.contains("the proof found inputs the tests didn't try where main.s is wrong"),
-        "{problems}"
-    );
-    assert!(
-        problems.contains("standard input arriving in pieces, cut after byte"),
+        problems.contains(
+            "standard input arriving in three pieces: the first byte, up to the middle, and the \
+             rest:"
+        ),
         "{problems}"
     );
     session.service.cancel().await.expect("close the session");

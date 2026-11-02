@@ -11,6 +11,8 @@ pub mod connect;
 pub mod data_dir;
 pub mod expect;
 pub mod expr;
+#[cfg(test)]
+mod fuzz;
 pub mod hash;
 pub mod header;
 pub mod isa;

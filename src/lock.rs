@@ -341,7 +341,7 @@ struct CodeTable {
     emulator: Option<String>,
 }
 
-fn parse_body(body: &str) -> Result<Lock, LockError> {
+pub(crate) fn parse_body(body: &str) -> Result<Lock, LockError> {
     let malformed = |detail: &str| LockError::Malformed(detail.to_owned());
     let version = toml::from_str::<VersionOnly>(body)
         .map_err(|_| malformed("it isn't valid TOML"))?
