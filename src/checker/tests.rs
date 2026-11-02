@@ -1683,6 +1683,31 @@ async fn fill_is_copied_word_for_word_with_its_constants() {
     );
 }
 
+/// Every AArch64 asset passes every rule, held to the calls its own spec names, as x86-64's are.
+#[tokio::test]
+async fn every_aarch64_asset_follows_every_rule() {
+    let assets =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("plugin/skills/compile/assets");
+    let mut failed = Vec::new();
+    for (spec, code) in [
+        ("template-spec.md", "linux-aarch64/main-template.s"),
+        ("vector-template-spec.md", "linux-aarch64/vector-template.s"),
+        ("stream-template-spec.md", "linux-aarch64/stream-template.s"),
+        ("tally-template-spec.md", "linux-aarch64/tally-template.s"),
+        ("fast/wc/spec.md", "linux-aarch64/fast/wc/main.s"),
+    ] {
+        let spec = crate::spec::parse(&std::fs::read_to_string(assets.join(spec)).expect("a spec"))
+            .unwrap_or_else(|problems| panic!("{spec}: {problems:?}"));
+        let text = std::fs::read_to_string(assets.join(code)).expect("a program");
+        let report = check_full(&text, CpuFeatures::all(), &spec.syscalls, spec.threads).await;
+        if !report.passed() {
+            let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+            failed.push(format!("{code}: {all:#?}"));
+        }
+    }
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
 /// The AArch64 template passes every rule.
 #[tokio::test]
 async fn the_aarch64_template_passes() {

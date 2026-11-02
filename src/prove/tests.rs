@@ -1051,6 +1051,50 @@ async fn proves_each_case_a_jump_table_can_take() {
     );
 }
 
+/// The AArch64 calc's checked jump table (`adrp`, `ldrsw`, `br`): the proof follows every case
+/// the input can reach through it, as x86-64's does, and finds a table whose entries send an
+/// operator to the wrong case.
+#[tokio::test]
+async fn proves_each_case_an_aarch64_jump_table_can_take() {
+    if !solvers_installed() {
+        return;
+    }
+    let calc = repository_file("tests/fixtures/linux-aarch64/calc/main.s");
+    let right = machine(&calc).await;
+    assert_eq!(right.tables.len(), 1, "{:?}", right.tables);
+    let verdict = prove(&right, &block(CHOSEN_OPERATOR, 0), &budget(120));
+    assert!(
+        matches!(verdict, Verdict::Proven { paths, .. } if paths >= 3),
+        "{verdict:?}"
+    );
+    let spec = repository_file("tests/fixtures/linux-aarch64/calc/spec.md");
+    let verdict = prove(&right, &block(&spec, 4), &budget(120));
+    assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
+    let table = "    .long .Lapply_add - operations\n    .long .Lapply_unknown - operations\n    \
+                 .long .Lapply_subtract - operations\n";
+    let swapped = calc.replacen(
+        table,
+        &table
+            .replace("apply_add", "apply_SWAPPED")
+            .replace("apply_subtract", "apply_add")
+            .replace("apply_SWAPPED", "apply_subtract"),
+        1,
+    );
+    assert_ne!(swapped, calc, "the entries were swapped");
+    let verdict = prove(
+        &machine(&swapped).await,
+        &block(CHOSEN_OPERATOR, 0),
+        &budget(120),
+    );
+    let Verdict::Counterexample(values) = &verdict else {
+        panic!("{verdict:?}");
+    };
+    assert!(
+        matches!(values.get("op"), Some(Value::Str(op)) if op == "+" || op == "-"),
+        "{values:?}"
+    );
+}
+
 /// A jump table indexed by a byte of the input that only its `cmp` and `jae` bound, so the index
 /// can reach past the table and out of the program's memory: the proof reads only the places
 /// inside the table and asks the solvers whether any input reaches further. By `xor` the index
@@ -2000,6 +2044,67 @@ async fn proves_a_stream_for_every_length_by_induction() {
     );
 }
 
+/// The streaming template on AArch64, the same spec compiled with NEON, is proven for every
+/// length by induction over its read loop, as x86-64's is; capitals that stop at `y`, a loop that
+/// capitalizes only the first buffer-full, and a bound of four buffer-fulls are caught as they are
+/// there.
+#[tokio::test]
+async fn proves_the_aarch64_stream_for_every_length_by_induction() {
+    if !solvers_installed() {
+        return;
+    }
+    let spec = asset("stream-template-spec.md");
+    let source = asset("linux-aarch64/stream-template.s");
+    let right = machine(&source).await;
+    let shout = block(&spec, 0);
+    let verdict = prove(&right, &shout, &text_budget());
+    assert!(
+        matches!(
+            verdict,
+            Verdict::Proven {
+                bound: None,
+                induction: Some(4096),
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
+    let wrong = machine(&source.replace(".equ ABOVE_Z, 0x7b", ".equ ABOVE_Z, 0x7a")).await;
+    let verdict = prove(&wrong, &shout, &text_budget());
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+    let first_only = machine(
+        &source
+            .replace(
+                "    mov x19, #MAX_FULLS\n",
+                "    mov x21, #0\n    mov x19, #MAX_FULLS\n",
+            )
+            .replace(
+                "    bl shout\n",
+                "    cbnz x21, .Lstart_shouted\n    bl shout\n.Lstart_shouted:\n    mov x21, #1\n",
+            ),
+    )
+    .await;
+    let verdict = prove(&first_only, &shout, &text_budget());
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+    let four = machine(&source.replace(".equ MAX_FULLS, 1099511627776", ".equ MAX_FULLS, 4")).await;
+    let verdict = prove(&four, &shout, &text_budget());
+    assert!(
+        matches!(
+            &verdict,
+            Verdict::Proven {
+                bound: Some(Bound {
+                    bytes: 12288,
+                    more: true,
+                    ..
+                }),
+                induction: Some(4096),
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
+}
+
 /// Induction over counts: a line count kept in a register, grown by each buffer-full's
 /// newlines, 16 bytes at a time, is proven for every length the spec allows; a count that
 /// misses the last chunk of each buffer-full is found.
@@ -2180,6 +2285,48 @@ async fn proves_a_tally_for_short_texts() {
         "    mov rdi, r12\n",
     );
     for (from, to) in mutants.into_iter().chain([unmasked]) {
+        let wrong = source.replacen(from, to, 1);
+        assert_ne!(wrong, source, "{from}");
+        let verdict = prove(&machine(&wrong).await, &tally, &budget(60));
+        assert!(
+            matches!(verdict, Verdict::Counterexample(_)),
+            "{from}: {verdict:?}"
+        );
+    }
+}
+
+/// The word tally on AArch64, the same spec compiled for it, is proven for short texts as
+/// x86-64's is, through the table's log of stores; the same three mutants are found. Slow for the
+/// same reason (`--ignored`).
+#[tokio::test]
+#[ignore = "minutes of solver work on hash collisions"]
+async fn proves_the_aarch64_tally_for_short_texts() {
+    if !solvers_installed() {
+        return;
+    }
+    let spec = asset("tally-template-spec.md");
+    let source = asset("linux-aarch64/tally-template.s");
+    let right = machine(&source).await;
+    let tally = block(&spec, 0);
+    let verdict = prove_alone(&right, &tally, &budget(90));
+    assert!(
+        matches!(&verdict, Verdict::Proven { bound: Some(bound), .. } if bound.bytes >= 3),
+        "{verdict:?}"
+    );
+    for (from, to) in [
+        // Every word new: its slot never takes its entry's number.
+        (
+            "    str w10, [x22, x23, lsl #2]\n",
+            "    str wzr, [x22, x23, lsl #2]\n",
+        ),
+        // Ties in reverse byte order.
+        (
+            "    add x0, x2, x12\n    add x2, x2, x13\n",
+            "    add x0, x2, x13\n    add x2, x2, x12\n",
+        ),
+        // The hash used whole as a slot, which the probe's bounds check stops.
+        ("    and x4, x0, #SLOT_MASK\n", "    mov x4, x0\n"),
+    ] {
         let wrong = source.replacen(from, to, 1);
         assert_ne!(wrong, source, "{from}");
         let verdict = prove(&machine(&wrong).await, &tally, &budget(60));

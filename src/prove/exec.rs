@@ -503,6 +503,16 @@ enum Held {
     Pointer(u64),
 }
 
+/// What an access whose place the input chooses goes through, to hold it to its object: x86-64's
+/// memory operand, asked when it's needed, or what an AArch64 access's base register holds.
+#[derive(Debug, Clone, Copy)]
+enum Through {
+    /// The running x86-64 instruction's memory operand.
+    X86,
+    /// An AArch64 access's base, as [`Cpu::held_a64`] found it.
+    Held(Option<Held>),
+}
+
 /// How an instruction passes owners on: the registers it sets, each with its value's owner, at
 /// most two as `xchg` sets, and the pointer it stores whole, if any. Every other register it
 /// changes holds no pointer the run follows.
@@ -1653,6 +1663,14 @@ impl<'a> Cpu<'a> {
     /// made from, or else the object its base, or its index where the base holds no address,
     /// points into. `None` for `[rip + name]`, which rule 6 holds to the symbol main.s names,
     /// and for constant offsets from rsp, which M3 holds to the frame.
+    /// What `through` says an access is held to.
+    fn held_through(&mut self, through: Through) -> Option<Held> {
+        match through {
+            Through::X86 => self.held(),
+            Through::Held(held) => held,
+        }
+    }
+
     fn held(&mut self) -> Option<Held> {
         let instruction = self.instruction;
         if instruction.is_ip_rel_memory_operand()
@@ -1871,11 +1889,17 @@ impl<'a> Cpu<'a> {
     /// when there are few and each holds `bytes` bytes the access may use. A place outside the
     /// object the operand's pointer points into is an obligation: the proof asks whether the
     /// input can choose it.
-    fn places(&mut self, address: Term, bytes: u32, writing: bool) -> Result<Vec<u64>, Stop> {
+    fn places(
+        &mut self,
+        address: Term,
+        bytes: u32,
+        writing: bool,
+        through: Through,
+    ) -> Result<Vec<u64>, Stop> {
         let range = self.pool.range(address);
         // An address that's a sum of multiples of 2^s lands only every 2^s bytes.
         let stride = self.pool.stride(address);
-        let held = self.held();
+        let held = self.held_through(through);
         let places = match self.every_place(range, stride, bytes, writing) {
             Ok(places) => places,
             Err(why) => {
@@ -1980,12 +2004,12 @@ impl<'a> Cpu<'a> {
 
     /// A load from an address the input chooses: the value at each place it can be, chosen by
     /// the address, so a table indexed by an input byte is a function of the byte.
-    fn load_anywhere(&mut self, address: Term, bytes: u32) -> Result<Term, Stop> {
-        if let Some(object) = self.spread(address, bytes, false)? {
+    fn load_anywhere(&mut self, address: Term, bytes: u32, through: Through) -> Result<Term, Stop> {
+        if let Some(object) = self.spread(address, bytes, false, through)? {
             let index = self.log_of(&object)?;
             return Ok(self.logged_value(index, address, bytes));
         }
-        let places = self.places(address, bytes, false)?;
+        let places = self.places(address, bytes, false, through)?;
         let mut value: Option<Term> = None;
         for place in places.into_iter().rev() {
             let here = self.load(place, bytes)?;
@@ -2003,14 +2027,14 @@ impl<'a> Cpu<'a> {
 
     /// A store to an address the input chooses: each place it can be keeps what it held unless
     /// the address is that place.
-    fn save_anywhere(&mut self, address: Term, value: Term) -> Result<(), Stop> {
+    fn save_anywhere(&mut self, address: Term, value: Term, through: Through) -> Result<(), Stop> {
         let bytes = self.pool.width(value) / 8;
-        if let Some(object) = self.spread(address, bytes, true)? {
+        if let Some(object) = self.spread(address, bytes, true, through)? {
             let index = self.log_of(&object)?;
             self.log_value(index, address, value);
             return Ok(());
         }
-        for place in self.places(address, bytes, true)? {
+        for place in self.places(address, bytes, true, through)? {
             let constant = self.pool.bv(64, u128::from(place));
             let chosen = self.pool.eq(address, constant);
             for offset in 0..bytes {
@@ -2058,7 +2082,7 @@ impl<'a> Cpu<'a> {
                     }
                     Err(_) => {
                         let address = self.effective_address()?;
-                        self.load_anywhere(address, bytes)
+                        self.load_anywhere(address, bytes, Through::X86)
                     }
                 }
             }
@@ -2091,7 +2115,7 @@ impl<'a> Cpu<'a> {
                 }
                 Err(_) => {
                     let address = self.effective_address()?;
-                    self.save_anywhere(address, value)
+                    self.save_anywhere(address, value, Through::X86)
                 }
             },
             _ => Err(unsupported(

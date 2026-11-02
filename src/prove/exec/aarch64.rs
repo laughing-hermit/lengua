@@ -18,7 +18,7 @@
 mod float;
 mod vector;
 
-use super::{Cpu, End, Held, Last, Owner, Plan, Return, Step, Stop, unsupported};
+use super::{Cpu, End, Held, Last, Owner, Plan, Return, Step, Stop, Through, unsupported};
 use crate::isa::aarch64::{
     A64Cond, A64Reg, Access, Address, Extend, Field, Gpr, Indirect, Inst, Logic, One, Select,
     Shift, Three, Two, Wide,
@@ -846,7 +846,7 @@ impl Cpu<'_> {
                 }
                 self.load(address, bytes)
             }
-            None => self.load_anywhere(at, bytes),
+            None => self.load_anywhere(at, bytes, Through::Held(held)),
         }
     }
 
@@ -865,7 +865,7 @@ impl Cpu<'_> {
             .constant(at)
             .and_then(|value| u64::try_from(value).ok())
         else {
-            return self.save_anywhere(at, value);
+            return self.save_anywhere(at, value, Through::Held(held));
         };
         if let Some(held) = held {
             let bytes = u64::from(self.pool.width(value) / 8);

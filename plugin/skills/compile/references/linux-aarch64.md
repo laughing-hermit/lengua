@@ -8,9 +8,28 @@ an x86-64 one testing AArch64 code through QEMU. The rules are the same as x86-6
 
 What AArch64 code covers so far, checked, tested and proven as x86-64's is: arguments, whole
 numbers, floating point in singles and doubles, vectors of whole numbers and of floats (NEON),
-text, standard input of any length through `fill`, and files and folders. Not yet, so a spec
+text, standard input of any length through `fill`, files and folders, hash tables and word
+tallies, sorting, and checked jump tables. Not yet, so a spec
 that needs them is compiled for x86-64 for now: threads, servers and several clients at once,
 the terminal, and the checksum and crypto instructions.
+
+## Templates
+
+Each is x86-64's template compiled for AArch64 from the same spec, checked, tested and proven as
+x86-64's is.
+- [The template](../assets/linux-aarch64/main-template.s) prints the negative of a number.
+- [The vector template](../assets/linux-aarch64/vector-template.s) shouts a line 16 bytes at a
+  time with NEON.
+- [The streaming template](../assets/linux-aarch64/stream-template.s) capitalizes standard input
+  of any length a 4 KiB buffer-full at a time through `fill`, from
+  [its spec](../assets/stream-template-spec.md), and is proven for every length.
+- [The word tally](../assets/linux-aarch64/tally-template.s) counts words through a hash table
+  of a million slots and sorts them with a merge sort, from
+  [its spec](../assets/tally-template-spec.md): values the x86-64 form keeps on the stack stay in
+  `x19` to `x28`, and constants too wide for `cmp`, such as `MAX_WORDS`, sit in a register built
+  with `mov` and `movk`.
+- [The fast `wc`](../assets/linux-aarch64/fast/wc/main.s) counts lines and words 16 bytes a step,
+  each step masked to the bytes left, proven for every length with a 64 KiB buffer.
 
 ## The dialect's form
 

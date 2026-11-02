@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
-use super::{Cpu, End, Held, MAX_PLACES, Object, Owner, PAGE, State, Stop, unsupported};
+use super::{Cpu, End, Held, MAX_PLACES, Object, Owner, PAGE, State, Stop, Through, unsupported};
 use crate::prove::term::{Pool, Term};
 
 /// The most bytes of an object, as its log begins, that may hold other than its common value.
@@ -157,6 +157,7 @@ impl Cpu<'_> {
         address: Term,
         bytes: u32,
         writing: bool,
+        through: Through,
     ) -> Result<Option<Object>, Stop> {
         let (low, high) = self.pool.range(address);
         let (step, _) = self.pool.stride(address);
@@ -164,7 +165,7 @@ impl Cpu<'_> {
             return Ok(None);
         }
         let too_many = || unsupported("an address that depends on the input in more than 256 ways");
-        let Some(Held::Owner(owner @ Owner::Symbol(_))) = self.held() else {
+        let Some(Held::Owner(owner @ Owner::Symbol(_))) = self.held_through(through) else {
             return Err(too_many());
         };
         let object = self.owned(owner).ok_or_else(too_many)?;

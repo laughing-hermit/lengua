@@ -38,7 +38,9 @@ and the CPU features the code needs; never write that line yourself.
    word with its three constants: the proof then covers every way the input can arrive, cut into
    any pieces. To stream input larger than a buffer, call `fill` again for each buffer-full, with
    `ecx` -1, as [the streaming filter](assets/stream-template.s) does
-   ([its spec](assets/stream-template-spec.md)): where each buffer-full's output is its bytes
+   ([its spec](assets/stream-template-spec.md); on AArch64
+   [its NEON form](assets/linux-aarch64/stream-template.s), `w3` -1): where each buffer-full's
+   output is its bytes
    mapped one by one (`upper`, `lower`, `tr`), or counts kept in registers and printed at the
    end (`len`, `words`, `count` of a part such as `"\n"` or `"\r\n"`), the proof covers every
    length by induction over the loop, whatever the program keeps of the last buffer-full (such
@@ -65,7 +67,8 @@ and the CPU features the code needs; never write that line yourself.
    [the key reader](assets/terminal-template.s) ([its spec](assets/terminal-template-spec.md)):
    keys one at a time with no echo, a wait for the next key, and the terminal set back at the
    end. A program that counts or looks things up by key starts from
-   [the word tally](assets/tally-template.s) ([its spec](assets/tally-template-spec.md)): a hash
+   [the word tally](assets/tally-template.s) ([its spec](assets/tally-template-spec.md); on
+   AArch64 [its form](assets/linux-aarch64/tally-template.s)): a hash
    table of a million slots by FNV-1a with linear probing, its entries in the order the keys first
    appear, sorted by a merge sort to print, so printing walks the entries, never the slots. A
    choice made for each input byte with `cmov` or `setcc`, not a branch, keeps the proof

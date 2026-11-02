@@ -295,6 +295,88 @@ async fn the_aarch64_vector_template_is_proven() {
     session.service.cancel().await.expect("close the session");
 }
 
+/// The AArch64 streaming template, x86-64's `shout-stream` spec compiled with NEON, passes its
+/// tests and is proven for every length through the server, as x86-64's is.
+#[tokio::test]
+async fn the_aarch64_stream_template_is_proven() {
+    let session = if cfg!(target_arch = "aarch64") {
+        Session::proving_for(Protocol::Discover, 120).await
+    } else if common::qemu_runs_aarch64() {
+        Session::emulating_for(Protocol::Discover, "linux-aarch64", 120).await
+    } else {
+        return;
+    };
+    let asset = |path: &str| {
+        std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("plugin/skills/compile/assets")
+                .join(path),
+        )
+        .expect("the asset")
+    };
+    let program = written(
+        &session,
+        [
+            ("spec.md", asset("stream-template-spec.md")),
+            ("main.s", asset("linux-aarch64/stream-template.s")),
+        ],
+    )
+    .await;
+    let report = done(&session, &program).await;
+    assert!(
+        any_line(&report["tests"], "follows every rule and passed all"),
+        "{report}"
+    );
+    assert!(
+        text(&report["proofs"][0]).contains("every length by induction over its read loop"),
+        "{report}"
+    );
+    let mut arguments = program.arguments();
+    arguments["stdin"] = Value::from("a stream\nof lines\n");
+    let run = session.call_ok("run", arguments).await;
+    assert_eq!(run["stdout"], "A STREAM\nOF LINES\n", "{run}");
+    session.service.cancel().await.expect("close the session");
+}
+
+/// The AArch64 word tally, x86-64's tally spec compiled for AArch64 (a hash table and a merge
+/// sort), passes every test, inputs of a megabyte included, as x86-64's does.
+#[tokio::test]
+async fn the_aarch64_tally_template_passes_its_tests() {
+    let session = if cfg!(target_arch = "aarch64") {
+        Session::proving_for(Protocol::Discover, 30).await
+    } else if common::qemu_runs_aarch64() {
+        Session::emulating_for(Protocol::Discover, "linux-aarch64", 30).await
+    } else {
+        return;
+    };
+    let asset = |path: &str| {
+        std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("plugin/skills/compile/assets")
+                .join(path),
+        )
+        .expect("the asset")
+    };
+    let program = written(
+        &session,
+        [
+            ("spec.md", asset("tally-template-spec.md")),
+            ("main.s", asset("linux-aarch64/tally-template.s")),
+        ],
+    )
+    .await;
+    let report = done(&session, &program).await;
+    assert!(
+        any_line(&report["tests"], "follows every rule and passed all"),
+        "{report}"
+    );
+    let mut arguments = program.arguments();
+    arguments["stdin"] = Value::from("the cat and the\tdog the cat\n");
+    let run = session.call_ok("run", arguments).await;
+    assert_eq!(run["stdout"], "3 the\n2 cat\n1 and\n1 dog\n", "{run}");
+    session.service.cancel().await.expect("close the session");
+}
+
 /// The AArch64 cat, a streaming filter through `fill`, is proven for every length through the
 /// server, as x86-64's is: natively on an ARM64 computer, and through QEMU here.
 #[tokio::test]
