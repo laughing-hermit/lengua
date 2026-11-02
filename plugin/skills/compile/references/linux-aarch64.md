@@ -44,7 +44,8 @@ x86-64's is.
   other. `ldar` of a whole `w` or `x` register from a base with no offset is the dialect's only
   ordered access.
 - [The fast crc32c](../assets/linux-aarch64/fast/crc32c/main.s) prints standard input's CRC-32C
-  from [its spec](../assets/fast/crc32c/spec.md), 8 bytes a step with `crc32cx` and the rest with
+  from [its spec](../assets/fast/crc32c/spec.md), each read's bytes as they come: 64 bytes a step
+  with `ldp` and `crc32cx` while that many are left, then 8 bytes a step, and the rest with
   `crc32cb`.
 - [The fast `wc`](../assets/linux-aarch64/fast/wc/main.s) counts lines and words 16 bytes a step,
   each step masked to the bytes left, proven for every length with a 64 KiB buffer.
@@ -157,6 +158,11 @@ with `exit`, and keeps what it needs across calls in `x19` to `x28` without savi
   PNG's. The state starts as all ones and ends inverted (`mvn w0, w20`).
 - A step's 8-byte load is checked on its start: give the buffer 8 bytes past its last, so
   `cmp x10, #BUFFER_FULL` and `b.hi` hold it inside, as the fast crc32c does.
+- One chain of `crc32cx` ran at one a cycle on GitHub's ARM64 runners (Neoverse N2), whose CRC
+  unit hands each result straight to the next, so there the loop's own instructions are what slow
+  it: take 64 bytes a step, `ldp x14, x15, [x13, #16]` through a pointer `add` moved into the
+  buffer, as the fast crc32c does. A load through a moved pointer has no index for `cmp` to
+  check: its bounds are the proof's to show.
 
 ## Integer facts
 

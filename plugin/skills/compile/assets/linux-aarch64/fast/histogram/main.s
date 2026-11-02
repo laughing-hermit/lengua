@@ -12,16 +12,17 @@
 .equ EXIT_IO_FAILED, 2
 // Error codes returned by functions marked "returns: result"
 .equ ERROR_IO, -5
-// Four tables of 256 counts each, so neighboring bytes never wait on the same counter, four
-// bytes a step, one into each.
+// Eight tables of 256 counts each, eight bytes a step, the k-th byte of each step into table k,
+// so the bytes of a step never wait on one counter.
 .equ VALUES, 256
 .equ TABLE_BYTES, 2048
-.equ COUNTS_LEN, 8192
-.equ FOUR, 4
-.equ FOURS, 262145
-// Sizes and limits
-.equ INPUT_LEN, 1048576
-.equ FOUR_SCAN, INPUT_LEN - FOUR + 1
+.equ COUNTS_LEN, 16384
+.equ EIGHT, 8
+// Sizes and limits: a read's bytes at most, with a step's room past the last, so a step's
+// check is one on its start
+.equ READ_LEN, 1048576
+.equ INPUT_LEN, READ_LEN + EIGHT
+.equ EIGHTS, READ_LEN / EIGHT
 .equ MAX_READS, 1099511627776
 .equ MAX_DIGITS, 20
 .equ MAX_WRITES, 64
@@ -45,7 +46,7 @@ input:
     .zero INPUT_LEN
 .size input, . - input
 
-// The four tables of counts, one after another.
+// The eight tables of counts, one after another.
 .type counts, @object
 counts:
     .zero COUNTS_LEN
@@ -68,19 +69,28 @@ _start:
     mov x0, #STDIN
     adrp x1, input
     add x1, x1, :lo12:input
-    mov x2, #INPUT_LEN
+    mov x2, #READ_LEN
     mov x8, #SYS_READ
     svc #0
     tbnz x0, #63, .Lstart_failed
     cbz x0, .Lstart_print
-    cmp x0, #INPUT_LEN
+    cmp x0, #READ_LEN
     b.hi .Lstart_assert_count
+    mov x20, x0
     mov x1, x0
     adrp x0, input
     add x0, x0, :lo12:input
     adrp x2, counts
     add x2, x2, :lo12:counts
     bl count_bytes
+    // The last bytes, fewer than eight, into the first table.
+    sub x1, x20, x0
+    adrp x9, input
+    add x9, x9, :lo12:input
+    add x0, x9, x0
+    adrp x2, counts
+    add x2, x2, :lo12:counts
+    bl count_rest
     subs x19, x19, #1
     b.ne .Lstart_read
     b .Lstart_assert_reads
@@ -104,31 +114,32 @@ _start:
     bl assert_fail
 .size _start, . - _start
 
-// Adds each byte to the count of its value, four at a step, one into each of the four tables.
-// In: x0 = the bytes; x1 = how many, up to INPUT_LEN; x2 = the four tables, COUNTS_LEN bytes.
+// Adds each byte to the count of its value, eight at a step, the k-th byte of each step into
+// table k, so neighboring bytes never wait on one counter. It stops before the last bytes,
+// fewer than eight, for count_rest.
+// In: x0 = the bytes; x1 = how many, up to READ_LEN; x2 = the eight tables, COUNTS_LEN bytes.
+// Out: x0 = how many it added, a multiple of eight.
 .type count_bytes, @function
 count_bytes:
-    stp x29, x30, [sp, #-16]!
-    cbz x0, .Lcount_bytes_assert_bytes
-    cbz x2, .Lcount_bytes_assert_counts
-    cmp x1, #INPUT_LEN
+    cmp x1, #READ_LEN
     b.hi .Lcount_bytes_assert_length
     add x3, x2, #TABLE_BYTES
     add x4, x3, #TABLE_BYTES
     add x5, x4, #TABLE_BYTES
+    add x6, x5, #TABLE_BYTES
+    add x7, x6, #TABLE_BYTES
+    add x10, x7, #TABLE_BYTES
+    add x13, x10, #TABLE_BYTES
+    // The last place an eight starts, below 0 when there's none.
+    sub x17, x1, #EIGHT
     mov x9, #0
-    mov x11, #FOURS & 0xffff
-    movk x11, #FOURS >> 16, lsl #16
-.Lcount_bytes_four:  // bound: 262145
-    add x12, x9, #FOUR
-    cmp x12, x1
-    b.hi .Lcount_bytes_rest
-    // The last place four bytes start, too wide for cmp's number, held in a register.
-    mov x13, #FOUR_SCAN & 0xffff
-    movk x13, #FOUR_SCAN >> 16, lsl #16
-    cmp x9, x13
+    mov x11, #EIGHTS
+.Lcount_bytes_eights:  // bound: 131072
+    cmp x9, x17
+    b.gt .Lcount_bytes_done
+    cmp x9, #READ_LEN
     b.hs .Lcount_bytes_assert_index
-    ldr w14, [x0, x9]
+    ldr x14, [x0, x9]
     // unsafe: each index is one byte, 0 to 255, and each table holds 256 counts
     and x15, x14, #0xff
     ldr x16, [x2, x15, lsl #3]
@@ -142,51 +153,54 @@ count_bytes:
     ldr x16, [x4, x15, lsl #3]
     add x16, x16, #1
     str x16, [x4, x15, lsl #3]
-    lsr x15, x14, #24
+    ubfx x15, x14, #24, #8
     ldr x16, [x5, x15, lsl #3]
     add x16, x16, #1
     str x16, [x5, x15, lsl #3]
+    ubfx x15, x14, #32, #8
+    ldr x16, [x6, x15, lsl #3]
+    add x16, x16, #1
+    str x16, [x6, x15, lsl #3]
+    ubfx x15, x14, #40, #8
+    ldr x16, [x7, x15, lsl #3]
+    add x16, x16, #1
+    str x16, [x7, x15, lsl #3]
+    ubfx x15, x14, #48, #8
+    ldr x16, [x10, x15, lsl #3]
+    add x16, x16, #1
+    str x16, [x10, x15, lsl #3]
+    lsr x15, x14, #56
+    ldr x16, [x13, x15, lsl #3]
+    add x16, x16, #1
+    str x16, [x13, x15, lsl #3]
     // end unsafe
-    add x9, x9, #FOUR
+    add x9, x9, #EIGHT
     subs x11, x11, #1
-    b.ne .Lcount_bytes_four
-    b .Lcount_bytes_assert_fours
-.Lcount_bytes_rest:
-    add x0, x0, x9
-    sub x1, x1, x9
-    bl count_rest
-    ldp x29, x30, [sp], #16
+    b.ne .Lcount_bytes_eights
+.Lcount_bytes_done:
+    mov x0, x9
     ret
-.Lcount_bytes_assert_bytes:
-    mov w0, #6
-    bl assert_fail
-.Lcount_bytes_assert_counts:
-    mov w0, #7
-    bl assert_fail
 .Lcount_bytes_assert_length:
     mov w0, #8
     bl assert_fail
 .Lcount_bytes_assert_index:
     mov w0, #9
     bl assert_fail
-.Lcount_bytes_assert_fours:
-    mov w0, #10
-    bl assert_fail
 .size count_bytes, . - count_bytes
 
-// Adds the last bytes, fewer than four, to the counts of their values in the first table.
-// In: x0 = the bytes; x1 = how many, 0 to 3; x2 = the four tables, COUNTS_LEN bytes.
+// Adds the last bytes, fewer than eight, to the counts of their values in the first table.
+// In: x0 = the bytes; x1 = how many, 0 to 7; x2 = the eight tables, COUNTS_LEN bytes.
 .type count_rest, @function
 count_rest:
     cbz x2, .Lcount_rest_assert_counts
-    cmp x1, #FOUR
+    cmp x1, #EIGHT
     b.hs .Lcount_rest_assert_length
     mov x9, #0
-    mov x11, #FOUR
-.Lcount_rest_loop:  // bound: 4
+    mov x11, #EIGHT
+.Lcount_rest_loop:  // bound: 8
     cmp x9, x1
     b.hs .Lcount_rest_done
-    cmp x9, #FOUR
+    cmp x9, #EIGHT
     b.hs .Lcount_rest_assert_index
     ldrb w15, [x0, x9]
     // unsafe: the index is one byte, 0 to 255, and the table holds 256 counts
@@ -211,7 +225,7 @@ count_rest:
 .size count_rest, . - count_rest
 
 // Prints a line for each byte value that occurs, smallest first: the value, a space, the count.
-// In: x0 = the four tables of counts.
+// In: x0 = the eight tables of counts.
 // Out: x0 = 0, or a negative error code.
 // returns: result
 .type print_histogram, @function
@@ -232,18 +246,12 @@ print_histogram:
 .Lprint_histogram_loop:  // bound: 256
     cmp x22, #VALUES
     b.hs .Lprint_histogram_assert_value
-    add x9, x19, x22, lsl #3
-    ldr x10, [x9]
-    ldr x11, [x9, #TABLE_BYTES]
-    add x10, x10, x11
-    ldr x11, [x9, #2 * TABLE_BYTES]
-    add x10, x10, x11
-    ldr x11, [x9, #3 * TABLE_BYTES]
-    add x10, x10, x11
-    cbz x10, .Lprint_histogram_next
+    mov x0, x19
+    mov x1, x22
+    bl count_of
+    cbz x0, .Lprint_histogram_next
     mov w11, #NEWLINE
     strb w11, [x21, #-1]!
-    mov x0, x10
     mov x1, x21
     bl digits
     mov w11, #SPACE
@@ -277,6 +285,39 @@ print_histogram:
     mov w0, #13
     bl assert_fail
 .size print_histogram, . - print_histogram
+
+// The count of one byte value: its counts in the eight tables, added.
+// In: x0 = the eight tables, COUNTS_LEN bytes; x1 = the value, 0 to 255.
+// Out: x0 = its count.
+.type count_of, @function
+count_of:
+    cbz x0, .Lcount_of_assert_counts
+    cmp x1, #VALUES
+    b.hs .Lcount_of_assert_value
+    add x9, x0, x1, lsl #3
+    ldr x0, [x9]
+    ldr x10, [x9, #TABLE_BYTES]
+    add x0, x0, x10
+    ldr x10, [x9, #2 * TABLE_BYTES]
+    add x0, x0, x10
+    ldr x10, [x9, #3 * TABLE_BYTES]
+    add x0, x0, x10
+    ldr x10, [x9, #4 * TABLE_BYTES]
+    add x0, x0, x10
+    ldr x10, [x9, #5 * TABLE_BYTES]
+    add x0, x0, x10
+    ldr x10, [x9, #6 * TABLE_BYTES]
+    add x0, x0, x10
+    ldr x10, [x9, #7 * TABLE_BYTES]
+    add x0, x0, x10
+    ret
+.Lcount_of_assert_counts:
+    mov w0, #16
+    bl assert_fail
+.Lcount_of_assert_value:
+    mov w0, #17
+    bl assert_fail
+.size count_of, . - count_of
 
 // Writes a whole number's decimal digits just before a place in memory.
 // In: x0 = the number; x1 = where the digits end.

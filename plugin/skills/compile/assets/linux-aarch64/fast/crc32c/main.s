@@ -13,19 +13,18 @@
 .equ EXIT_IO_FAILED, 2
 // Error codes returned by functions marked "returns: result"
 .equ ERROR_IO, -5
-// fill's reads at most, and what makes it read to the end
-.equ MAX_FILL_READS, 1099511627776
-.equ READ_TO_END, -1
 // CRC-32C starts from all ones and ends inverted.
 .equ CRC_START, 0xFFFFFFFF
-// A buffer-full of input, the 8 bytes crc32cx takes a step, and a step's room past the last
-// byte, so a step's check is one on the start of its 8 bytes
+// A read's bytes at most; 64 a step while that many are left, 8 to crc32cx, then 8 a step;
+// and a step's room past the last byte, so an 8-byte step's check is one on its start
 .equ BUFFER_FULL, 1048576
+.equ BLOCK, 64
+.equ BLOCKS, BUFFER_FULL / BLOCK
 .equ STEP, 8
-.equ STEPS, BUFFER_FULL / STEP
+.equ BLOCK_STEPS, BLOCK / STEP
 .equ INPUT_LEN, BUFFER_FULL + STEP
-// The buffer-fulls the main loop takes at most
-.equ MAX_FULLS, 1099511627776
+// The reads the main loop takes at most
+.equ MAX_READS, 1099511627776
 // Printing a number
 .equ MAX_DIGITS, 19
 .equ MAX_WRITES, 64
@@ -41,7 +40,7 @@ assert_message:
 
 .section .bss
 
-// One buffer-full of standard input, with a step's room after it.
+// One read of standard input, with a step's room after it.
 .type input, @object
 input:
     .zero INPUT_LEN
@@ -56,32 +55,32 @@ out_buf:
 .text
 .globl _start
 
-// Reads standard input a buffer-full at a time, its CRC-32C state carried from one to the next,
-// and prints the checksum in decimal.
+// Reads standard input a read at a time and takes each read's bytes into the CRC-32C state as
+// they come, so it works while more arrive; then prints the checksum in decimal.
 .type _start, @function
 _start:
     mov w20, #CRC_START
-    mov x19, #MAX_FULLS
+    mov x19, #MAX_READS
 .Lstart_read:  // bound: 1099511627776
     mov x0, #STDIN
     adrp x1, input
     add x1, x1, :lo12:input
     mov x2, #BUFFER_FULL
-    mov w3, #READ_TO_END
-    bl fill
+    mov x8, #SYS_READ
+    svc #0
     tbnz x0, #63, .Lstart_failed
     cbz x0, .Lstart_done
-    mov x21, x0
+    cmp x0, #BUFFER_FULL
+    b.hi .Lstart_assert_count
+    mov x2, x0
     mov w0, w20
     adrp x1, input
     add x1, x1, :lo12:input
-    mov x2, x21
     bl crc_bytes
     mov w20, w0
-    cmp x21, #BUFFER_FULL
-    b.lo .Lstart_done
     subs x19, x19, #1
     b.ne .Lstart_read
+    b .Lstart_assert_reads
 .Lstart_done:
     mvn w0, w20
     bl write_i64
@@ -93,9 +92,17 @@ _start:
 .Lstart_exit:
     mov x8, #SYS_EXIT
     svc #0
+.Lstart_assert_count:
+    mov w0, #1
+    bl assert_fail
+.Lstart_assert_reads:
+    mov w0, #5
+    bl assert_fail
 .size _start, . - _start
 
-// Takes bytes into a CRC-32C state: 8 at a time with crc32cx, then the rest one at a time.
+// Takes bytes into a CRC-32C state with crc32cx, 8 bytes each: 64 bytes a step, loaded in
+// pairs, while that many are left, then 8 bytes a step, then the rest one at a time. A core
+// passes each crc32cx's result straight to the next, so one chain keeps its CRC unit busy.
 // In: w0 = the state, x1 = the bytes, in a buffer of INPUT_LEN, x2 = how many, at most
 // BUFFER_FULL.
 // Out: w0 = the state after them.
@@ -104,8 +111,30 @@ crc_bytes:
     cmp x2, #BUFFER_FULL
     b.hi .Lcrc_bytes_assert_length
     mov x10, #0
-    mov x11, #STEPS
-.Lcrc_bytes_steps:  // bound: 131072
+    mov x11, #BLOCKS
+.Lcrc_bytes_blocks:  // bound: 16384
+    add x12, x10, #BLOCK
+    cmp x12, x2
+    b.hi .Lcrc_bytes_words
+    add x13, x1, x10
+    ldp x14, x15, [x13]
+    crc32cx w0, w0, x14
+    crc32cx w0, w0, x15
+    ldp x14, x15, [x13, #16]
+    crc32cx w0, w0, x14
+    crc32cx w0, w0, x15
+    ldp x14, x15, [x13, #32]
+    crc32cx w0, w0, x14
+    crc32cx w0, w0, x15
+    ldp x14, x15, [x13, #48]
+    crc32cx w0, w0, x14
+    crc32cx w0, w0, x15
+    mov x10, x12
+    subs x11, x11, #1
+    b.ne .Lcrc_bytes_blocks
+.Lcrc_bytes_words:
+    mov x11, #BLOCK_STEPS
+.Lcrc_bytes_steps:  // bound: 8
     add x12, x10, #STEP
     cmp x12, x2
     b.hi .Lcrc_bytes_tail
@@ -244,54 +273,6 @@ write_all:
     mov w0, #12
     bl assert_fail
 .size write_all, . - write_all
-
-// Reads from file descriptor x0 into the x2 bytes at x1 until they're full, the input ends,
-// or, when w3 is a byte (0 to 255), the last byte read is w3; with w3 = -1 it reads to the
-// end. However the input arrives, it reads the same.
-// In: x0 = the file descriptor, x1 = the buffer, x2 = its size, at least 1, w3 = the end
-// byte or -1.
-// Out: x0 = how many bytes it read, or a negative error code.
-// returns: result
-.type fill, @function
-fill:
-    cbz x1, .Lfill_assert_null
-    cbz x2, .Lfill_assert_empty
-    mov x9, x0
-    mov x10, x2
-    mov w11, w3
-    mov x12, #MAX_FILL_READS
-.Lfill_loop:  // bound: 1099511627776
-    mov x0, x9
-    mov x8, #SYS_READ
-    svc #0
-    tbnz x0, #63, .Lfill_return
-    cbz x0, .Lfill_done
-    cmp x0, x2
-    b.hi .Lfill_assert_count
-    add x1, x1, x0
-    subs x2, x2, x0
-    b.eq .Lfill_done
-    ldurb w13, [x1, #-1]
-    cmp w13, w11
-    b.eq .Lfill_done
-    subs x12, x12, #1
-    b.ne .Lfill_loop
-    mov x0, #ERROR_IO
-    b .Lfill_return
-.Lfill_done:
-    sub x0, x10, x2
-.Lfill_return:
-    ret
-.Lfill_assert_null:
-    mov w0, #990
-    bl assert_fail
-.Lfill_assert_empty:
-    mov w0, #991
-    bl assert_fail
-.Lfill_assert_count:
-    mov w0, #992
-    bl assert_fail
-.size fill, . - fill
 
 // lengua's assertion handler. check compares it word for word: copy it exactly.
 // In: w0 = the assertion's number, 1 to 999. Prints "lengua: assertion NNN failed" to

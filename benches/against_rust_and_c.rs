@@ -237,9 +237,9 @@ fn workloads() -> Vec<Workload> {
                 "lengua",
                 "plugin/skills/compile/assets/linux-aarch64/fast/histogram/main.s",
             )],
-            about_aarch64: "Counts each byte value of 64 MiB on standard input. Every version \
-                            spreads neighboring bytes over four tables; lengua's takes four \
-                            bytes a step, one into each.",
+            about_aarch64: "Counts each byte value of 64 MiB on standard input. C, C++ and \
+                            Rust spread neighboring bytes over four tables; lengua's takes \
+                            eight bytes a step, one into each of eight tables.",
             others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
             args: Vec::new(),
             stdin: large.clone(),
@@ -258,8 +258,9 @@ fn workloads() -> Vec<Workload> {
                 "plugin/skills/compile/assets/linux-aarch64/fast/crc32c/main.s",
             )],
             about_aarch64: "The CRC-32C of 64 MiB on standard input. Every version uses the \
-                            CPU's crc32cx instruction 8 bytes at a time, one chain that waits \
-                            on itself.",
+                            CPU's crc32cx instruction 8 bytes at a time in one chain, which an \
+                            Arm core runs at one a cycle; lengua's loads 64 bytes a step, in \
+                            pairs, and takes each read's bytes as they come.",
             others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
             args: Vec::new(),
             stdin: large,
