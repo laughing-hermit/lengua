@@ -539,6 +539,23 @@ fn probes(rng: &mut ChaCha8Rng) -> Vec<Probe> {
         let m = register(rng, op.ends_with('x'));
         list.push(probe(&[format!("{op} {d}, {n}, {m}")]));
     }
+    // The carry-less multiplies: bytes to halfwords, and doublewords to a quadword, of the lower
+    // half and of the upper.
+    for (op, from, to) in [
+        ("pmull", "8b", "8h"),
+        ("pmull2", "16b", "8h"),
+        ("pmull", "1d", "1q"),
+        ("pmull2", "2d", "1q"),
+    ] {
+        for _ in 0..4 {
+            let (d, n, m) = (
+                rng.random_range(0..FP_REGISTERS),
+                v_register(rng, from),
+                v_register(rng, from),
+            );
+            list.push(probe(&[format!("{op} v{d}.{to}, {n}, {m}")]));
+        }
+    }
     fp_probes(rng, &mut list);
     vector_probes(rng, &mut list);
     vector_float_probes(rng, &mut list);
@@ -769,6 +786,7 @@ fn harness(probes: &[Probe], capacity: usize) -> String {
     let mut source = format!(
         ".arch armv8-a
 .arch_extension crc
+.arch_extension aes
 .text
 .globl _start
 .type _start, @function

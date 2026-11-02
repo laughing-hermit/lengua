@@ -684,6 +684,18 @@ pub struct Access {
     pub acquire: bool,
 }
 
+/// Whether a `pmull`'s operand is doublewords, the PMULL extension's form, rather than bytes.
+#[must_use]
+pub const fn pmull_wide(operand: VReg) -> bool {
+    matches!(operand.arrangement, Arrangement::D1 | Arrangement::D2)
+}
+
+/// Whether a `pmull`'s operand is its register's upper half: `pmull2`.
+#[must_use]
+pub const fn pmull_upper(operand: VReg) -> bool {
+    matches!(operand.arrangement, Arrangement::B16 | Arrangement::D2)
+}
+
 /// One AArch64 instruction of the dialect's subset, in its canonical form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Inst {
@@ -1027,6 +1039,18 @@ pub enum Inst {
         /// The second.
         rm: VReg,
     },
+    /// The carry-less products of two vectors' lanes, polynomials over GF(2): `pmull v0.8h,
+    /// v1.8b, v2.8b`, each pair of bytes' product in a halfword, or `pmull v0.1q, v1.1d, v2.1d`,
+    /// the doublewords' product in all 128 bits (the PMULL extension). `pmull2` takes the upper
+    /// half of each operand, its arrangement `16b` or `2d`.
+    Pmull {
+        /// Where the products go, the whole V register.
+        rd: u8,
+        /// The first operand: bytes (`8b`, `16b`) or doublewords (`1d`, `2d`).
+        rn: VReg,
+        /// The second, arranged as the first.
+        rm: VReg,
+    },
     /// One vector's lanes: `cnt v0.16b, v1.16b`, the comparisons with zero, and the widening and
     /// narrowing ones, whose two arrangements differ.
     VectorTwo {
@@ -1325,6 +1349,10 @@ impl fmt::Display for Inst {
             }
             Self::VectorThree { rd, rn, rm, .. } | Self::VectorPermute { rd, rn, rm, .. } => {
                 write!(formatter, "{name} {rd}, {rn}, {rm}")
+            }
+            Self::Pmull { rd, rn, rm } => {
+                let product = if pmull_wide(rn) { "1q" } else { "8h" };
+                write!(formatter, "{name} v{rd}.{product}, {rn}, {rm}")
             }
             Self::VectorTwo { op, rd, rn } if op.with_zero() => {
                 let zero = if op.float() { "#0.0" } else { "#0" };

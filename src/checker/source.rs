@@ -1199,7 +1199,10 @@ impl Parser {
                 "write it once, at the top",
             ),
             // AArch64's CRC-32 instructions, which check holds to a CPU that has them.
-            ".arch_extension" if self.source.isa == Isa::Aarch64 && arguments == "crc" => {}
+            // `crc` for the CRC-32 instructions, `aes` for the doublewords' `pmull`, which LLVM
+            // puts under it; of the AES extension's instructions, the dialect has only that one.
+            ".arch_extension"
+                if self.source.isa == Isa::Aarch64 && matches!(arguments, "crc" | "aes") => {}
             ".macro" | ".endm" | ".rept" | ".irp" | ".irpc" | ".endr" | ".if" | ".ifdef"
             | ".ifndef" | ".else" | ".endif" | ".include" | ".incbin" | ".set" => self.violation(
                 Rule::Constants,
@@ -1862,7 +1865,8 @@ fn aarch64_operand(text: &str, constants: &BTreeMap<String, Constant>) -> Result
     if let Some(lane) = aarch64::text::lane(text) {
         return Ok(whole(lane.number));
     }
-    if let Some(number) = aarch64::text::q_register(text) {
+    if let Some(number) = aarch64::text::q_register(text).or_else(|| aarch64::text::quadword(text))
+    {
         return Ok(whole(number));
     }
     if let Some(scalar) = aarch64::text::scalar(text) {

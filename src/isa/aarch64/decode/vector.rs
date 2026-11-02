@@ -21,6 +21,23 @@ const fn v(number: u8, arrangement: Arrangement) -> VReg {
     }
 }
 
+/// `pmull` and `pmull2`: bytes to halfwords (size 0), or doublewords to a quadword (size 3, the
+/// PMULL extension); sizes 1 and 2 aren't instructions.
+fn pmull(word: u32) -> Result<Inst, String> {
+    let q = bit(word, 30);
+    let size = match bits(word, 23, 22) {
+        0 => 0,
+        3 => 3,
+        _ => return Err(outside(word)),
+    };
+    let arrangement = Arrangement::new(size, q);
+    Ok(Inst::Pmull {
+        rd: number(word, 0),
+        rn: v(number(word, 5), arrangement),
+        rm: v(number(word, 16), arrangement),
+    })
+}
+
 /// A vector word, bits 28 to 25 being 0111: three same, two-register miscellaneous, across
 /// lanes, copy, permute, extract, table lookup, modified immediate and shift by immediate.
 pub(super) fn vector(word: u32) -> Result<Inst, String> {
@@ -50,7 +67,10 @@ pub(super) fn vector(word: u32) -> Result<Inst, String> {
                 _ => Err(outside(word)),
             };
         }
-        // Three different, which the dialect doesn't have.
+        // Three different: of them, the dialect has only the carry-less multiply.
+        if bits(word, 11, 10) == 0 && !u && bits(word, 15, 12) == 0b1110 {
+            return pmull(word);
+        }
         return Err(outside(word));
     }
     if bit(word, 15) {

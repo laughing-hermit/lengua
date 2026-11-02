@@ -287,6 +287,7 @@ impl Cpu<'_> {
             | Inst::FpLoadStore { .. }
             | Inst::FpPair { .. } => self.execute_fp(inst),
             Inst::VectorThree { .. }
+            | Inst::Pmull { .. }
             | Inst::VectorTwo { .. }
             | Inst::VectorAcross { .. }
             | Inst::VectorShift { .. }

@@ -12,7 +12,7 @@ use super::{
     A64Cond, A64Reg, Access, Address, Extend, Field, FpConversion, FpOne, FpReg, FpThree, FpTwo,
     Gpr, Indirect, Inst, Logic, One, Select, Shift, Three, Two, Wide,
 };
-pub use vector::{lane, q_register, scalar, vreg};
+pub use vector::{lane, q_register, quadword, scalar, vreg};
 
 /// What a name in an operand stands for: a constant's value, or a label's or data symbol's
 /// address.

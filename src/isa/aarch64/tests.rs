@@ -23,7 +23,7 @@ const PER_CLASS: usize = 3000;
 /// Each encoding class the dialect has: its name, the bits that place a word in it, and their
 /// value. The classes whose fields are mostly unallocated fix more bits, so random words land on
 /// instructions.
-const CLASSES: [(&str, u32, u32); 57] = [
+const CLASSES: [(&str, u32, u32); 58] = [
     ("adr and adrp", 0x1f00_0000, 0x1000_0000),
     ("add and sub with a number", 0x1f80_0000, 0x1100_0000),
     ("logical with a bitmask", 0x1f80_0000, 0x1200_0000),
@@ -121,6 +121,7 @@ const CLASSES: [(&str, u32, u32); 57] = [
     ("vector fmov", 0x9ff8_fc00, 0x0f00_f400),
     ("ldar", 0xbfff_fc00, 0x88df_fc00),
     ("crc32 and crc32c", 0x7fe0_e000, 0x1ac0_4000),
+    ("pmull and pmull2", 0xbf20_fc00, 0x0e20_e000),
 ];
 
 /// What LLVM's disassembler says of each word: its text, or none where it refuses the word or
@@ -130,7 +131,8 @@ fn llvm(words: &[u32]) -> Option<Vec<Option<String>>> {
         .args([
             "--disassemble",
             "--triple=aarch64-unknown-linux-gnu",
-            "--mattr=+crc",
+            // AES brings the doublewords' pmull, which LLVM puts under it.
+            "--mattr=+crc,+aes",
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -581,6 +583,10 @@ const VECTOR_LINES: &[&str] = &[
     "fmov v0.4s, #1.0",
     "fmov v0.2s, #-2.5",
     "fmov v0.2d, #0.125",
+    "pmull v0.8h, v1.8b, v2.8b",
+    "pmull2 v31.8h, v30.16b, v29.16b",
+    "pmull v0.1q, v1.1d, v2.1d",
+    "pmull2 v7.1q, v8.2d, v9.2d",
 ];
 
 #[test]
@@ -599,7 +605,11 @@ fn a_vector_fmov_holds_the_float_its_bits_say() {
 /// The words `llvm-mc` assembles `lines` into, one each, or none where it isn't installed.
 fn assembled(lines: &[&str]) -> Option<Vec<u32>> {
     let mut child = Command::new("llvm-mc")
-        .args(["--triple=aarch64-unknown-linux-gnu", "--show-encoding"])
+        .args([
+            "--triple=aarch64-unknown-linux-gnu",
+            "--mattr=+aes",
+            "--show-encoding",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

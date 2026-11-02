@@ -1756,6 +1756,43 @@ async fn aarch64_crc_needs_a_cpu_with_crc() {
     );
 }
 
+/// AArch64's carry-less multiply of doublewords is held to a CPU with the PMULL extension, as
+/// x86-64's pclmulqdq is to one with PCLMUL; its bytes' form is in every ARM64 CPU.
+#[tokio::test]
+async fn aarch64_pmull_needs_a_cpu_with_pmull() {
+    let text = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("plugin/skills/compile/assets/linux-aarch64/fast/crc32c/main.s"),
+    )
+    .expect("the program");
+    let syscalls = [Syscall::Read, Syscall::Write, Syscall::Exit];
+    let without = CpuFeatures {
+        pmull: false,
+        ..CpuFeatures::all()
+    };
+    let report = check_full(&text, without, &syscalls, None).await;
+    assert_violation(
+        &report,
+        Rule::Dialect,
+        line_of(&text, "    pmull v16.1q, v0.1d, v24.1d"),
+        "needs the PMULL extension, which this CPU doesn't have",
+    );
+    let bytes = text.replacen(
+        "    pmull v16.1q, v0.1d, v24.1d",
+        "    pmull v16.8h, v0.8b, v24.8b",
+        1,
+    );
+    let report = check_full(&bytes, without, &syscalls, None).await;
+    assert!(
+        !report
+            .violations
+            .iter()
+            .any(|violation| violation.problem.contains("pmull v16.8h, v0.8b, v24.8b")),
+        "{:?}",
+        report.violations
+    );
+}
+
 /// Threads on AArch64 are held to the same rules as x86-64's: the canonical functions copied
 /// word for word from AArch64's template, a worker reaching only its own slot through x19, and
 /// threads only where the spec allows them.

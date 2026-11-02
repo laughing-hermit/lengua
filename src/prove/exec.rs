@@ -1398,6 +1398,30 @@ struct Cpu<'a> {
     next: u64,
 }
 
+/// The carry-less product of `a` and `b`, two `width`-bit polynomials over GF(2), in `2 *
+/// width` bits: x86-64's `pclmulqdq` and AArch64's `pmull` alike.
+pub(crate) fn carry_less(pool: &mut Pool, a: Term, b: Term, width: u32) -> Term {
+    let wide = pool.zero_extend(a, width);
+    let mut product = pool.bv(2 * width, 0);
+    for at in 0..width {
+        let bit = pool.extract(b, at, at);
+        let amount = pool.bv(2 * width, u128::from(at));
+        let shifted = pool.shl(wide, amount);
+        let term = match pool.constant(bit) {
+            Some(0) => continue,
+            Some(_) => shifted,
+            None => {
+                let one = pool.bv(1, 1);
+                let set = pool.eq(bit, one);
+                let zero = pool.bv(2 * width, 0);
+                pool.ite(set, shifted, zero)
+            }
+        };
+        product = pool.xor(product, term);
+    }
+    product
+}
+
 impl<'a> Cpu<'a> {
     fn new(
         image: &'a Image,

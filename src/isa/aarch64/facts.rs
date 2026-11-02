@@ -283,6 +283,13 @@ pub fn mnemonic(inst: &Inst) -> String {
             }
         }
         Inst::VectorTwo { op, rd, rn } => op.name(*rd, *rn),
+        Inst::Pmull { rn, .. } => {
+            if super::pmull_upper(*rn) {
+                "pmull2"
+            } else {
+                "pmull"
+            }
+        }
         Inst::VectorAcross { op, .. } => op.name(),
         Inst::VectorShift { op, rd, rn, .. } => op.name(*rd, *rn),
         Inst::VectorPermute { op, .. } => op.name(),
@@ -816,6 +823,15 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
             Value::Other,
             Stack::Same,
         ),
+        Inst::Pmull { rd, rn, rm } => (
+            Control::Next,
+            Some(v(rd)),
+            vec![v_operand(rd), v_operand(rn.number), v_operand(rm.number)],
+            None,
+            Op::Other,
+            Value::Other,
+            Stack::Same,
+        ),
         Inst::VectorAcross { rd, rn, .. } => (
             Control::Next,
             Some(v(rd.number)),
@@ -1212,6 +1228,11 @@ impl Facts {
                     self.reads_v(rd.number);
                 }
                 self.writes_v(rd.number);
+            }
+            Inst::Pmull { rd, rn, rm } => {
+                self.reads_v(rn.number);
+                self.reads_v(rm.number);
+                self.writes_v(rd);
             }
             Inst::VectorTwo { op, rd, rn } => {
                 self.reads_v(rn.number);

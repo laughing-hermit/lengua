@@ -221,25 +221,7 @@ impl Cpu<'_> {
 
     /// The carry-less product of two 64-bit polynomials over GF(2), 128 bits wide.
     fn carry_less(&mut self, a: Term, b: Term) -> Term {
-        let wide = self.pool.zero_extend(a, 64);
-        let mut product = self.pool.bv(128, 0);
-        for at in 0..64 {
-            let bit = self.pool.extract(b, at, at);
-            let amount = self.pool.bv(128, u128::from(at));
-            let shifted = self.pool.shl(wide, amount);
-            let term = match self.pool.constant(bit) {
-                Some(0) => continue,
-                Some(_) => shifted,
-                None => {
-                    let one = self.pool.bv(1, 1);
-                    let set = self.pool.eq(bit, one);
-                    let zero = self.pool.bv(128, 0);
-                    self.pool.ite(set, shifted, zero)
-                }
-            };
-            product = self.pool.xor(product, term);
-        }
-        product
+        super::super::carry_less(self.pool, a, b, 64)
     }
 
     /// The two sources of a VEX or EVEX instruction, or of legacy SSE's destination and source.

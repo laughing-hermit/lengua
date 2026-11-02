@@ -281,6 +281,9 @@ pub struct CpuFeatures {
     pub gfni: bool,
     /// AArch64's CRC-32 instructions (`crc32cx` and the rest), optional before ARMv8.1.
     pub crc: bool,
+    /// AArch64's carry-less multiply of doublewords (`pmull v0.1q, v1.1d, v2.1d`), part of its
+    /// crypto extension; the byte form is in every ARM64 CPU.
+    pub pmull: bool,
 }
 
 impl CpuFeatures {
@@ -319,6 +322,7 @@ impl CpuFeatures {
             vpclmulqdq: true,
             gfni: true,
             crc: true,
+            pmull: true,
         }
     }
 }
@@ -343,13 +347,14 @@ pub struct Target {
 
 impl Target {
     /// The CPU features main.s may use on this target: this computer's, or under QEMU the
-    /// emulated CPU's, which has AArch64's CRC-32 instructions.
+    /// emulated CPU's, which has AArch64's CRC-32 instructions and its carry-less multiply.
     #[must_use]
     pub fn features(&self, machine: &Machine) -> CpuFeatures {
         match self.emulator {
             None => machine.features,
             Some(_) => CpuFeatures {
                 crc: true,
+                pmull: true,
                 ..CpuFeatures::default()
             },
         }
@@ -551,6 +556,7 @@ fn cpu_features() -> CpuFeatures {
         vpclmulqdq: std::arch::is_x86_feature_detected!("vpclmulqdq"),
         gfni: std::arch::is_x86_feature_detected!("gfni"),
         crc: false,
+        pmull: false,
     }
 }
 
@@ -558,6 +564,7 @@ fn cpu_features() -> CpuFeatures {
 fn cpu_features() -> CpuFeatures {
     CpuFeatures {
         crc: has_crc(),
+        pmull: has_pmull(),
         ..CpuFeatures::default()
     }
 }
@@ -571,6 +578,18 @@ fn has_crc() -> bool {
 /// No other CPU has AArch64's CRC-32 instructions.
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 const fn has_crc() -> bool {
+    false
+}
+
+/// Whether this ARM64 CPU multiplies doublewords carry-less, `pmull`'s 1Q form.
+#[cfg(target_arch = "aarch64")]
+fn has_pmull() -> bool {
+    std::arch::is_aarch64_feature_detected!("pmull")
+}
+
+/// No other CPU has AArch64's `pmull`.
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+const fn has_pmull() -> bool {
     false
 }
 

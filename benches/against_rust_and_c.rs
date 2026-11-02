@@ -14,12 +14,26 @@ use std::time::{Duration, Instant};
 
 use lengua::platform::{Machine, Profile};
 use lengua::toolchain::Toolchain;
-use perf_event::events::{Event, Hardware, Software};
+use perf_event::events::{Event, Hardware, Raw, Software};
 use perf_event::{Builder, Counter, ReadFormat};
 
 /// Runs per version, after warming up; the report gives each measure's median.
 const RUNS: usize = 41;
 const WARM_UP: usize = 3;
+
+/// Where an ARM64 core's cycles go while it waits, by the Arm architecture's common event
+/// numbers, which the report gives for each large workload from a second pass of runs, so they
+/// don't share the CPU's counters with the first: cycles the front end gave the core nothing to
+/// do, cycles the back end couldn't take more, the share of those spent waiting on memory, refills
+/// of the L1 data cache, and branches mispredicted.
+const STALLS: [(&str, u64); 5] = [
+    ("front-end stall cycles", 0x23),
+    ("back-end stall cycles", 0x24),
+    ("back-end stalls on memory", 0x4005),
+    ("L1 data refills", 0x03),
+    ("mispredicted branches", 0x10),
+];
+const STALL_RUNS: usize = 11;
 
 /// The flags each compiler gets: everything for speed on this CPU.
 const RUSTC_FLAGS: [&str; 12] = [
@@ -72,6 +86,8 @@ struct Version {
 /// The medians of one version's runs.
 #[derive(Debug, Default)]
 struct Measures {
+    /// [`STALLS`]' counts, where they were recorded.
+    stalls: Vec<Option<u64>>,
     instructions: Option<u64>,
     cycles: Option<u64>,
     cpu_time: Option<Duration>,
@@ -257,10 +273,11 @@ fn workloads() -> Vec<Workload> {
                 "lengua",
                 "plugin/skills/compile/assets/linux-aarch64/fast/crc32c/main.s",
             )],
-            about_aarch64: "The CRC-32C of 64 MiB on standard input. Every version uses the \
+            about_aarch64: "The CRC-32C of 64 MiB on standard input. C, C++ and Rust use the \
                             CPU's crc32cx instruction 8 bytes at a time in one chain, which an \
-                            Arm core runs at one a cycle; lengua's loads 64 bytes a step, in \
-                            pairs, and takes each read's bytes as they come.",
+                            Arm core runs at one a cycle; lengua's runs that chain over half of \
+                            each 32 KiB block while carry-less multiplies (pmull) fold the other \
+                            half on the vector units, and joins the two.",
             others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
             args: Vec::new(),
             stdin: large,
@@ -384,6 +401,8 @@ fn exact(counter: &mut Counter) -> Option<u64> {
 
 /// One run's measures and output.
 struct Sample {
+    /// The raw events' counts, when the run counted those instead.
+    raw: Vec<Option<u64>>,
     instructions: Option<u64>,
     cycles: Option<u64>,
     cpu_time: Option<Duration>,
@@ -394,7 +413,7 @@ struct Sample {
 
 /// Runs `version` once in `folder`. A shell waits on a pipe so the counters can be attached
 /// before it execs the program; they count from that exec on.
-fn run(version: &Version, workload: &Workload, folder: &Path) -> Sample {
+fn run(version: &Version, workload: &Workload, folder: &Path, raw: &[u64]) -> Sample {
     let go = folder.join("go");
     if !go.exists() {
         let made = Command::new("mkfifo").arg(&go).status().expect("mkfifo");
@@ -414,12 +433,18 @@ fn run(version: &Version, workload: &Workload, folder: &Path) -> Sample {
         .spawn()
         .expect("start the shell");
     let pid = i32::try_from(child.id()).expect("a process id");
-    let mut counters = [
-        attach(Hardware::INSTRUCTIONS, pid, false),
-        attach(Hardware::CPU_CYCLES, pid, false),
-        attach(Software::TASK_CLOCK, pid, true)
-            .or_else(|| attach(Software::TASK_CLOCK, pid, false)),
-    ];
+    let mut counters: Vec<Option<Counter>> = if raw.is_empty() {
+        vec![
+            attach(Hardware::INSTRUCTIONS, pid, false),
+            attach(Hardware::CPU_CYCLES, pid, false),
+            attach(Software::TASK_CLOCK, pid, true)
+                .or_else(|| attach(Software::TASK_CLOCK, pid, false)),
+        ]
+    } else {
+        raw.iter()
+            .map(|code| attach(Raw::new(*code), pid, false))
+            .collect()
+    };
     let mut input = child.stdin.take().expect("its input");
     let bytes = workload.stdin.clone();
     let writer = std::thread::spawn(move || {
@@ -436,10 +461,17 @@ fn run(version: &Version, workload: &Workload, folder: &Path) -> Sample {
     let output = child.wait_with_output().expect("the program ends");
     let wall_time = started.elapsed();
     let _ = writer.join();
-    let [instructions, cycles, cpu_time] = counters
-        .each_mut()
-        .map(|counter| counter.as_mut().and_then(exact));
+    let counts: Vec<Option<u64>> = counters
+        .iter_mut()
+        .map(|counter| counter.as_mut().and_then(exact))
+        .collect();
+    let (instructions, cycles, cpu_time, raw) = if raw.is_empty() {
+        (counts[0], counts[1], counts[2], Vec::new())
+    } else {
+        (None, None, None, counts)
+    };
     Sample {
+        raw,
         instructions,
         cycles,
         cpu_time: cpu_time.map(Duration::from_nanos),
@@ -487,7 +519,7 @@ fn measure(version: &Version, workload: &Workload, folder: &Path, expected: &[u8
     }
     let mut samples = Vec::new();
     for round in 0..WARM_UP + RUNS {
-        let sample = run(version, workload, folder);
+        let sample = run(version, workload, folder, &[]);
         assert_eq!(
             sample.status,
             Some(0),
@@ -512,7 +544,19 @@ fn measure(version: &Version, workload: &Workload, folder: &Path, expected: &[u8
     let peaks: Vec<u64> = (0..5)
         .filter_map(|_| peak_kib(version, workload, folder))
         .collect();
+    let stalls = if ARM64 && workload.stdin.len() >= LARGE {
+        let codes: Vec<u64> = STALLS.iter().map(|(_, code)| *code).collect();
+        let runs: Vec<Sample> = (0..STALL_RUNS)
+            .map(|_| run(version, workload, folder, &codes))
+            .collect();
+        (0..codes.len())
+            .map(|event| median(runs.iter().filter_map(|run| run.raw[event]).collect()))
+            .collect()
+    } else {
+        Vec::new()
+    };
     Measures {
+        stalls,
         instructions: median(samples.iter().filter_map(|s| s.instructions).collect()),
         cycles: median(samples.iter().filter_map(|s| s.cycles).collect()),
         cpu_time: median(samples.iter().filter_map(|s| s.cpu_time).collect()),
@@ -653,6 +697,14 @@ async fn main() {
         GCC_FLAGS.join(" "),
         GCC_FLAGS.join(" "),
     );
+    if ARM64 {
+        let _ = writeln!(
+            report,
+            "- Stall and event counts, for each large workload: the Arm architecture's common \
+             events (STALL_FRONTEND, STALL_BACKEND, STALL_BACKEND_MEM, L1D_CACHE_REFILL, \
+             BR_MIS_PRED), in user space, each the median of {STALL_RUNS} more runs."
+        );
+    }
     for workload in workloads() {
         if lengua_versions(&workload).is_empty() {
             let _ = write!(
@@ -718,6 +770,27 @@ async fn main() {
             &|m| m.cycles.map_or_else(missing, thousands),
             &|m| m.cycles.map(|value| value as f64),
         ));
+        if measured.iter().any(|measures| !measures.stalls.is_empty()) {
+            for (event, (name, _)) in STALLS.iter().enumerate() {
+                report.push_str(&row(
+                    name,
+                    &|m| {
+                        m.stalls
+                            .get(event)
+                            .copied()
+                            .flatten()
+                            .map_or_else(missing, thousands)
+                    },
+                    &|m| {
+                        m.stalls
+                            .get(event)
+                            .copied()
+                            .flatten()
+                            .map(|value| value as f64)
+                    },
+                ));
+            }
+        }
         report.push_str(&row(
             "CPU time",
             &|m| m.cpu_time.map_or_else(missing, micros),

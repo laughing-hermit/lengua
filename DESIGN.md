@@ -293,7 +293,9 @@ normal flow: once the tests are green, one pass for the widest vectors the CPU h
 loads for tails), independent chains where each step would wait on the last, large reads and
 writes, and streaming for input of any length. `assets/fast` holds checked programs for each
 pattern, which the benchmark measures: a word count 64 bytes a step with AVX-512 masks, a CRC-32C
-that runs three `crc32` chains and joins them with `pclmulqdq`, and a four-table histogram. The
+that runs three `crc32` chains and joins them with `pclmulqdq` (on ARM64, whose CRC unit one
+chain already keeps busy, one `crc32cx` chain beside `pmull` folds on the vector units), and a
+four-table histogram. The
 fork-join template works in place: input lands straight in the workers' slots, which halves the
 memory a threaded program touches. Each program processes what each `read` returns as it comes,
 so its work overlaps the writer filling the pipe.
@@ -1103,7 +1105,9 @@ still to build per target. A new profile must supply:
    condition, so a program's tests of bytes are the formula's conditions, and `addv` of lanes
    that are each 0 or 1 is the pool's count, as x86-64's `popcnt` of a mask is. A float lane is
    its scalar instruction's term, so the hypotenuse with both sides in one vector of doubles is
-   proven as the scalar one is; `fmaxv` reduces in the architecture's pairs. An access at a place
+   proven as the scalar one is; `fmaxv` reduces in the architecture's pairs. Its carry-less
+multiply, `pmull` and `pmull2` of bytes or of doublewords, is x86-64's `pclmulqdq` product, one
+model for both (`carry_less` in `exec.rs`). An access at a place
    the input chooses is held to the object its own CPU's base register holds (`Through`), so a
    hash table on AArch64 goes through its log of stores as x86-64's does. `ppoll`, AArch64's only
    wait, is `poll` with a time limit the kernel reads and then writes the time left into, which the

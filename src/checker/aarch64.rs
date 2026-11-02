@@ -207,6 +207,7 @@ fn registers(inst: &Inst) -> Vec<A64Reg> {
             _ => vec![base],
         },
         Inst::VectorThree { .. }
+        | Inst::Pmull { .. }
         | Inst::VectorTwo { .. }
         | Inst::VectorAcross { .. }
         | Inst::VectorShift { .. }
@@ -263,6 +264,16 @@ pub(super) fn check_instruction(
         refuse(
             format!("`{text}` needs CRC, which this CPU doesn't have"),
             "compute the checksum in software, as from a table, on a CPU without CRC",
+        );
+    }
+    if let Inst::Pmull { rn, .. } = inst
+        && crate::isa::aarch64::pmull_wide(*rn)
+        && !features.pmull
+    {
+        refuse(
+            format!("`{text}` needs the PMULL extension, which this CPU doesn't have"),
+            "multiply bytes with `pmull v0.8h, v1.8b, v2.8b`, which every ARM64 CPU has, or do \
+             without carry-less multiplication",
         );
     }
     match *inst {

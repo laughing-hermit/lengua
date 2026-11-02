@@ -145,14 +145,15 @@ here on goes here too.
      language has no AES function, so generated tests need one added (`src/expr.rs`, and
      `src/prove/formula.rs` for proofs), or the spec keeps to examples.
    - Expected result: tested; a proof isn't expected.
-3. **AArch64's AES, SHA and carry-less multiply instructions** (not attempted, 2026-11-02). For
-   parity with x86-64, whose prover models them, Claude left these rather than draw the filter
-   again: modelling them means writing the algorithms' tables and rounds into the prover, the
-   topic of items 1 and 2.
+3. **AArch64's AES and SHA instructions** (not attempted before 2026-11-02). For parity with
+   x86-64, whose prover models them, Claude left these rather than draw the filter again:
+   modelling them means writing the algorithms' tables and rounds into the prover, the topic of
+   items 1 and 2. The carry-less multiply, `pmull` and `pmull2`, is done (2026-11-02): decoded and
+   held to LLVM, parsed, modelled with x86-64's `pclmulqdq` product, probed on QEMU and silicon,
+   held to a CPU with PMULL, and used by the ARM64 fast crc32c.
    - Working toward: AArch64's `aese`, `aesd`, `aesmc` and `aesimc`; `sha1c`, `sha1p`, `sha1m`,
-     `sha1h`, `sha1su0`, `sha1su1`, `sha256h`, `sha256h2`, `sha256su0` and `sha256su1`; and
-     `pmull`/`pmull2` (carry-less multiply, not itself crypto, but part of the AES extension), in
-     the dialect, held to a CPU that has them, as `crc32cx` is (2026-11-02).
+     `sha1h`, `sha1su0`, `sha1su1`, `sha256h`, `sha256h2`, `sha256su0` and `sha256su1`, in the
+     dialect, held to a CPU that has them, as `crc32cx` and `pmull` are.
    - Already built: x86-64's models of the same operations (`src/prove/exec/vector/crypto.rs`) and
      their checks against the CPU (`src/prove/exec/against_cpu/vectors.rs`); AArch64's CRC-32
      instructions as the pattern for an extension: `CpuFeatures.crc`, `Target::features` (QEMU's
@@ -355,9 +356,9 @@ one needs.
   one request each, and one for x86-64 as a regression check; they run on the user's Claude
   account. With R16, lengua runs on ARM64 Linux at parity with x86-64 (2026-11-02), installed
   from its own archive, but for:
-  - the CPU's AES, SHA and carry-less multiply instructions, which x86-64 models: left to the
-    user, beside the safety-stopped work (item 1's end), since modelling them is the topic the
-    filter stopped;
+  - the CPU's AES and SHA instructions, which x86-64 models: left to the user, beside the
+    safety-stopped work (item 1's end), since modelling them is the topic the filter stopped; the
+    carry-less multiply (`pmull`) is done (2026-11-02);
   - the real interactive sessions above, which cost Claude usage (item 1b's first point);
   - SVE, past the line;
   - the histogram's speed. Measured on GitHub's ARM64 runner (BENCHMARKS-aarch64.md, 2026-11-02),
@@ -370,8 +371,9 @@ one needs.
     ldrb as C and Rust do, slower (120.1M), reverted. Next would be reading the CPU's own stall
     counters on the runner, which the benchmark doesn't record yet. The crc32c, after taking 64
     bytes a step and each read as it comes, is level with Rust in cycles and CPU time (9.05M to
-    9.02M); it can't lead as x86-64's does without the carry-less multiply (PMULL, above), since
-    one crc32cx chain already keeps the CRC unit busy. Its wall time trails C's (0.7 to 0.8×)
+    9.02M); it couldn't lead as x86-64's does without the carry-less multiply, since one crc32cx
+    chain already keeps the CRC unit busy. With `pmull` in (2026-11-02) it runs that chain over
+    half of each 32 KiB block while `pmull` folds the other half on the vector units. Its wall time trails C's (0.7 to 0.8×)
     because the benchmark feeds 64 MiB through a pipe on a 2-core machine, where the faster
     programs, lengua and Rust alike, wait on the writer.
 - **macOS and Windows need more than a new CPU.** They don't allow a program to call the OS

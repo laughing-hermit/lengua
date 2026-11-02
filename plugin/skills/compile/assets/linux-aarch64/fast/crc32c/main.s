@@ -1,5 +1,6 @@
 .arch armv8-a
 .arch_extension crc
+.arch_extension aes
 
 // System calls (Linux AArch64)
 .equ SYS_READ, 63
@@ -15,13 +16,22 @@
 .equ ERROR_IO, -5
 // CRC-32C starts from all ones and ends inverted.
 .equ CRC_START, 0xFFFFFFFF
-// A read's bytes at most; 64 a step while that many are left, 8 to crc32cx, then 8 a step;
-// and a step's room past the last byte, so an 8-byte step's check is one on its start
+// Reads fill the buffer from where the last stopped; each block is folded once it's whole, and
+// a full buffer, all folded, fills again from its front.
 .equ BUFFER_FULL, 1048576
-.equ BLOCK, 64
+// A block: a chain of crc32cx takes its first HALF bytes while carry-less multiplies fold the
+// HALF after them, 64 bytes of each a step.
+.equ HALF, 16384
+.equ BLOCK, 32768
 .equ BLOCKS, BUFFER_FULL / BLOCK
+.equ VECTORS, 64
+.equ FOLDS, HALF / VECTORS - 1
+// The bytes after the last whole block: 64 a step while that many are left, 8 to crc32cx, then
+// 8 a step; and a step's room past the last byte, so an 8-byte step's check is one on its start
+.equ RUN, 64
+.equ RUNS, BLOCK / RUN
 .equ STEP, 8
-.equ BLOCK_STEPS, BLOCK / STEP
+.equ RUN_STEPS, RUN / STEP
 .equ INPUT_LEN, BUFFER_FULL + STEP
 // The reads the main loop takes at most
 .equ MAX_READS, 1099511627776
@@ -33,6 +43,21 @@
 
 .section .rodata
 
+// What carry-less multiplies move by, each x to a power mod the CRC-32C polynomial,
+// bit-reflected, so a fold, or a crc32cx of the product, finishes the move: a vector's low and
+// high doublewords past 64 bytes more, x^(512+64-33) and x^(512-33); past 16 more, x^(128+64-33)
+// and x^(128-33); and the chain's state past HALF bytes less 8, x^(8 * (HALF - 8) - 33), into a
+// vector's low doubleword, whose crc32cx and the 8 bytes after it move it the rest.
+.type fold_numbers, @object
+fold_numbers:
+    .quad 0x740eef02
+    .quad 0x9e4addf8
+    .quad 0xf20c0dfe
+    .quad 0x493c7d27
+    .quad 0x3c8b3748
+    .quad 0
+.size fold_numbers, . - fold_numbers
+
 .type assert_message, @object
 assert_message:
     .ascii "lengua: assertion 000 failed\n"
@@ -40,7 +65,7 @@ assert_message:
 
 .section .bss
 
-// One read of standard input, with a step's room after it.
+// Standard input as it comes, with a step's room after it.
 .type input, @object
 input:
     .zero INPUT_LEN
@@ -55,34 +80,53 @@ out_buf:
 .text
 .globl _start
 
-// Reads standard input a read at a time and takes each read's bytes into the CRC-32C state as
-// they come, so it works while more arrive; then prints the checksum in decimal.
+// Reads standard input into the buffer as it comes, folding each block into the CRC-32C state
+// once it's whole, so it works while more arrive; then takes the bytes after the last block and
+// prints the checksum in decimal.
 .type _start, @function
 _start:
     mov w20, #CRC_START
+    mov x21, #0
+    mov x22, #0
     mov x19, #MAX_READS
 .Lstart_read:  // bound: 1099511627776
     mov x0, #STDIN
     adrp x1, input
     add x1, x1, :lo12:input
+    add x1, x1, x21
     mov x2, #BUFFER_FULL
+    sub x2, x2, x21
     mov x8, #SYS_READ
     svc #0
     tbnz x0, #63, .Lstart_failed
     cbz x0, .Lstart_done
-    cmp x0, #BUFFER_FULL
+    cmp x0, x2
     b.hi .Lstart_assert_count
-    mov x2, x0
+    add x21, x21, x0
     mov w0, w20
     adrp x1, input
     add x1, x1, :lo12:input
-    bl crc_bytes
+    mov x2, x22
+    mov x3, x21
+    bl crc_blocks
     mov w20, w0
+    mov x22, x1
+    cmp x21, #BUFFER_FULL
+    b.lo .Lstart_next
+    mov x21, #0
+    mov x22, #0
+.Lstart_next:
     subs x19, x19, #1
     b.ne .Lstart_read
     b .Lstart_assert_reads
 .Lstart_done:
-    mvn w0, w20
+    mov w0, w20
+    adrp x1, input
+    add x1, x1, :lo12:input
+    mov x2, x22
+    mov x3, x21
+    bl crc_bytes
+    mvn w0, w0
     bl write_i64
     tbnz x0, #63, .Lstart_failed
     mov w0, #EXIT_OK
@@ -100,21 +144,168 @@ _start:
     bl assert_fail
 .size _start, . - _start
 
-// Takes bytes into a CRC-32C state with crc32cx, 8 bytes each: 64 bytes a step, loaded in
-// pairs, while that many are left, then 8 bytes a step, then the rest one at a time. A core
-// passes each crc32cx's result straight to the next, so one chain keeps its CRC unit busy.
-// In: w0 = the state, x1 = the bytes, in a buffer of INPUT_LEN, x2 = how many, at most
-// BUFFER_FULL.
+// Folds each whole block of the buffer not yet folded into a CRC-32C state.
+// In: w0 = the state, x1 = the buffer, input, x2 = how many of its bytes are folded, a multiple
+// of BLOCK, x3 = how many it holds, from x2 up to BUFFER_FULL.
+// Out: w0 = the state after the blocks, x1 = how many bytes are folded after them.
+.type crc_blocks, @function
+crc_blocks:
+    stp x29, x30, [sp, #-16]!
+    stp x19, x20, [sp, #-16]!
+    stp x21, x22, [sp, #-16]!
+    cmp x3, #BUFFER_FULL
+    b.hi .Lcrc_blocks_assert_length
+    cmp x2, x3
+    b.hi .Lcrc_blocks_assert_folded
+    mov x19, x1
+    mov x20, x2
+    mov x21, x3
+    mov x22, #BLOCKS
+.Lcrc_blocks_block:  // bound: 32
+    add x9, x20, #BLOCK
+    cmp x9, x21
+    b.hi .Lcrc_blocks_done
+    add x1, x19, x20
+    bl crc_block
+    add x20, x20, #BLOCK
+    subs x22, x22, #1
+    b.ne .Lcrc_blocks_block
+.Lcrc_blocks_done:
+    mov x1, x20
+    ldp x21, x22, [sp], #16
+    ldp x19, x20, [sp], #16
+    ldp x29, x30, [sp], #16
+    ret
+.Lcrc_blocks_assert_length:
+    mov w0, #13
+    bl assert_fail
+.Lcrc_blocks_assert_folded:
+    mov w0, #14
+    bl assert_fail
+.size crc_blocks, . - crc_blocks
+
+// Folds one block into a CRC-32C state as two parts side by side, so the CRC unit and the
+// vector units work at once: a chain of crc32cx takes the block's first HALF bytes, 64 a step,
+// while carry-less multiplies fold the HALF after them into four vectors of 16 bytes, 64 bytes a
+// step. Then crc_join joins the two.
+// In: w0 = the state; x1 = the block's bytes, BLOCK of them.
+// Out: w0 = the state after them.
+.type crc_block, @function
+crc_block:
+    stp x29, x30, [sp, #-16]!
+    cbz x1, .Lcrc_block_assert_bytes
+    adrp x9, fold_numbers
+    add x9, x9, :lo12:fold_numbers
+    ld1 { v24.2d, v25.2d, v26.2d }, [x9]
+    add x6, x1, #HALF
+    ld1 { v0.16b, v1.16b, v2.16b, v3.16b }, [x6], #64
+    mov x7, #FOLDS
+.Lcrc_block_step:  // bound: 255
+    ld1 { v4.16b, v5.16b, v6.16b, v7.16b }, [x6], #64
+    ldp x9, x10, [x1]
+    pmull v16.1q, v0.1d, v24.1d
+    pmull2 v0.1q, v0.2d, v24.2d
+    pmull v17.1q, v1.1d, v24.1d
+    pmull2 v1.1q, v1.2d, v24.2d
+    crc32cx w0, w0, x9
+    crc32cx w0, w0, x10
+    ldp x11, x12, [x1, #16]
+    pmull v18.1q, v2.1d, v24.1d
+    pmull2 v2.1q, v2.2d, v24.2d
+    pmull v19.1q, v3.1d, v24.1d
+    pmull2 v3.1q, v3.2d, v24.2d
+    crc32cx w0, w0, x11
+    crc32cx w0, w0, x12
+    ldp x13, x14, [x1, #32]
+    eor v0.16b, v0.16b, v16.16b
+    eor v1.16b, v1.16b, v17.16b
+    eor v2.16b, v2.16b, v18.16b
+    eor v3.16b, v3.16b, v19.16b
+    crc32cx w0, w0, x13
+    crc32cx w0, w0, x14
+    ldp x15, x16, [x1, #48]
+    eor v0.16b, v0.16b, v4.16b
+    eor v1.16b, v1.16b, v5.16b
+    eor v2.16b, v2.16b, v6.16b
+    eor v3.16b, v3.16b, v7.16b
+    crc32cx w0, w0, x15
+    crc32cx w0, w0, x16
+    add x1, x1, #VECTORS
+    subs x7, x7, #1
+    b.ne .Lcrc_block_step
+    ldp x9, x10, [x1]
+    crc32cx w0, w0, x9
+    crc32cx w0, w0, x10
+    ldp x11, x12, [x1, #16]
+    crc32cx w0, w0, x11
+    crc32cx w0, w0, x12
+    ldp x13, x14, [x1, #32]
+    crc32cx w0, w0, x13
+    crc32cx w0, w0, x14
+    ldp x15, x16, [x1, #48]
+    crc32cx w0, w0, x15
+    crc32cx w0, w0, x16
+    bl crc_join
+    ldp x29, x30, [sp], #16
+    ret
+.Lcrc_block_assert_bytes:
+    mov w0, #17
+    bl assert_fail
+.size crc_block, . - crc_block
+
+// Joins a block's two parts into the CRC-32C state after it: folds the four vectors into the
+// last, puts the chain's state there too, moved past the vectors' bytes by a carry-less
+// multiply, and takes the CRC of the last vector's 16 bytes from a state of 0.
+// In: w0 = the chain's state after the block's first half; v0 to v3 = the vectors its second
+// half folded into; v25 = what moves a vector past 16 bytes more; v26 = what moves the chain's
+// state past HALF bytes less 8, in its low doubleword.
+// Out: w0 = the state after the block.
+.type crc_join, @function
+crc_join:
+    pmull v16.1q, v0.1d, v25.1d
+    pmull2 v17.1q, v0.2d, v25.2d
+    eor v1.16b, v1.16b, v16.16b
+    eor v1.16b, v1.16b, v17.16b
+    pmull v16.1q, v1.1d, v25.1d
+    pmull2 v17.1q, v1.2d, v25.2d
+    eor v2.16b, v2.16b, v16.16b
+    eor v2.16b, v2.16b, v17.16b
+    pmull v16.1q, v2.1d, v25.1d
+    pmull2 v17.1q, v2.2d, v25.2d
+    eor v3.16b, v3.16b, v16.16b
+    eor v3.16b, v3.16b, v17.16b
+    fmov d16, x0
+    pmull v16.1q, v16.1d, v26.1d
+    eor v3.16b, v3.16b, v16.16b
+    fmov x9, d3
+    umov x10, v3.d[1]
+    mov w0, #0
+    crc32cx w0, w0, x9
+    crc32cx w0, w0, x10
+    ret
+.size crc_join, . - crc_join
+
+// Takes the bytes from x2 to x3 of the buffer into a CRC-32C state with crc32cx, 8 bytes each:
+// 64 bytes a step, loaded in pairs, while that many are left, then 8 bytes a step, then the rest
+// one at a time. A core passes each crc32cx's result straight to the next, so one chain keeps
+// its CRC unit busy.
+// In: w0 = the state, x1 = the buffer, input, x2 = the first byte's place, x3 = the end's, from
+// x2 up to BUFFER_FULL and less than a block past x2.
 // Out: w0 = the state after them.
 .type crc_bytes, @function
 crc_bytes:
-    cmp x2, #BUFFER_FULL
+    cmp x3, #BUFFER_FULL
     b.hi .Lcrc_bytes_assert_length
-    mov x10, #0
-    mov x11, #BLOCKS
-.Lcrc_bytes_blocks:  // bound: 16384
-    add x12, x10, #BLOCK
-    cmp x12, x2
+    cmp x2, x3
+    b.hi .Lcrc_bytes_assert_start
+    sub x9, x3, x2
+    cmp x9, #BLOCK
+    b.hs .Lcrc_bytes_assert_block
+    mov x10, x2
+    mov x11, #RUNS
+.Lcrc_bytes_runs:  // bound: 512
+    add x12, x10, #RUN
+    cmp x12, x3
     b.hi .Lcrc_bytes_words
     add x13, x1, x10
     ldp x14, x15, [x13]
@@ -131,12 +322,12 @@ crc_bytes:
     crc32cx w0, w0, x15
     mov x10, x12
     subs x11, x11, #1
-    b.ne .Lcrc_bytes_blocks
+    b.ne .Lcrc_bytes_runs
 .Lcrc_bytes_words:
-    mov x11, #BLOCK_STEPS
+    mov x11, #RUN_STEPS
 .Lcrc_bytes_steps:  // bound: 8
     add x12, x10, #STEP
-    cmp x12, x2
+    cmp x12, x3
     b.hi .Lcrc_bytes_tail
     cmp x10, #BUFFER_FULL
     b.hi .Lcrc_bytes_assert_step
@@ -148,7 +339,7 @@ crc_bytes:
 .Lcrc_bytes_tail:
     mov x11, #STEP
 .Lcrc_bytes_bytes:  // bound: 8
-    cmp x10, x2
+    cmp x10, x3
     b.hs .Lcrc_bytes_return
     cmp x10, #BUFFER_FULL
     b.hs .Lcrc_bytes_assert_byte
@@ -167,6 +358,12 @@ crc_bytes:
     bl assert_fail
 .Lcrc_bytes_assert_byte:
     mov w0, #4
+    bl assert_fail
+.Lcrc_bytes_assert_start:
+    mov w0, #15
+    bl assert_fail
+.Lcrc_bytes_assert_block:
+    mov w0, #16
     bl assert_fail
 .size crc_bytes, . - crc_bytes
 

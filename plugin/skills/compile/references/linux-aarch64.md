@@ -10,9 +10,9 @@ What AArch64 code covers so far, checked, tested and proven as x86-64's is: argu
 numbers, floating point in singles and doubles, vectors of whole numbers and of floats (NEON),
 text, standard input of any length through `fill`, files and folders, hash tables and word
 tallies, sorting, checked jump tables, servers (one client at a time or several at once), clients
-of a server on this computer, the terminal, threads, and CRC-32 checksums with the CPU's
-instructions. Not yet, so a spec that needs them is compiled for x86-64 for now: the CPU's AES,
-SHA and carry-less multiply instructions.
+of a server on this computer, the terminal, threads, CRC-32 checksums with the CPU's
+instructions, and carry-less multiplication (`pmull`). Not yet, so a spec that needs them is
+compiled for x86-64 for now: the CPU's AES and SHA instructions.
 
 ## Templates
 
@@ -174,6 +174,18 @@ with `exit`, and keeps what it needs across calls in `x19` to `x28` without savi
   it: take 64 bytes a step, `ldp x14, x15, [x13, #16]` through a pointer `add` moved into the
   buffer, as the fast crc32c does. A load through a moved pointer has no index for `cmp` to
   check: its bounds are the proof's to show.
+- `pmull v0.1q, v1.1d, v2.1d` multiplies v1's and v2's low doublewords as polynomials over GF(2),
+  carries dropped, into all 16 bytes of v0, as x86-64's `pclmulqdq` does; `pmull2 v0.1q, v1.2d,
+  v2.2d` multiplies their high ones. That form is the PMULL extension, which LLVM files under AES:
+  write `.arch_extension aes` after `.arch_extension crc`, and check holds it to a CPU that has it
+  (`pmull` on the machine line). The bytes' form, `pmull v0.8h, v1.8b, v2.8b` and `pmull2 v0.8h,
+  v1.16b, v2.16b`, eight products of bytes into halfwords, is in every ARM64 CPU.
+- Past the CRC unit's one a cycle, the vector units take a share: the fast crc32c runs its chain
+  over the first half of each 32 KiB block while `pmull` and `pmull2` fold the second half into
+  four vectors, 64 bytes a step, then folds the four into one, takes its CRC with two `crc32cx`
+  from a state of 0, and joins the chain's state to it, moved past the half by one more `pmull`
+  and a `crc32cx`. What each fold multiplies by is a power of x mod the polynomial, bit-reflected,
+  in `.rodata`.
 
 ## Integer facts
 

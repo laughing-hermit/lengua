@@ -2132,12 +2132,16 @@ fn machine_line(machine: &Machine, target: &Target) -> String {
         Ok(serde_json::Value::Object(features)) if target.profile.isa() == Isa::X86_64 => features
             .into_iter()
             .filter(|(name, present)| {
-                *present == serde_json::Value::Bool(true) && name.as_str() != "crc"
+                *present == serde_json::Value::Bool(true)
+                    && !["crc", "pmull"].contains(&name.as_str())
             })
             .map(|(name, _)| name.replace("sse4_", "sse4."))
             .collect::<Vec<_>>(),
-        _ if available.crc => vec!["crc".to_owned()],
-        _ => Vec::new(),
+        _ => [("crc", available.crc), ("pmull", available.pmull)]
+            .into_iter()
+            .filter(|(_, present)| *present)
+            .map(|(name, _)| name.to_owned())
+            .collect(),
     };
     format!(
         "{}, {}; main.s may use the base instructions{}",
@@ -2723,9 +2727,10 @@ mod tests {
             )),
             "{line}"
         );
-        // QEMU's CPU has every extension, of which the dialect allows AArch64's CRC-32.
+        // QEMU's CPU has every extension, of which the dialect allows AArch64's CRC-32 and its
+        // carry-less multiply.
         assert!(
-            line.ends_with("main.s may use the base instructions and crc"),
+            line.ends_with("main.s may use the base instructions and crc, pmull"),
             "{line}"
         );
         assert!(!line.contains("avx") && !line.contains("sse"), "{line}");

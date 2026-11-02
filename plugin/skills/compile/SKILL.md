@@ -112,7 +112,8 @@ and the CPU features the code needs; never write that line yourself.
    step masked to the bytes left, and is proven for every length, as is
    [its NEON form](assets/linux-aarch64/fast/wc/main.s) for AArch64;
    [crc32c](assets/fast/crc32c/main.s) runs three `crc32` chains side by side and joins them with
-   `pclmulqdq`; [histogram](assets/fast/histogram/main.s) spreads its counts over four tables.
+   `pclmulqdq`, and [its AArch64 form](assets/linux-aarch64/fast/crc32c/main.s) one `crc32cx`
+   chain beside `pmull` folds on the vector units; [histogram](assets/fast/histogram/main.s) spreads its counts over four tables.
    Their `digits` (write a number's decimal digits) can be copied as it is.
 7. Once every test passes, `check` proves the program in the background, and within about 20 seconds
    it says `done`. Each line of `proofs` says what's proven, how far, or why not, and a proof still

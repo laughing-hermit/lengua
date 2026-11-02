@@ -45,6 +45,10 @@ impl Cpu<'_> {
                 let lanes = self.v_two(op, rd, rn);
                 self.v_set_lanes(rd, &lanes);
             }
+            Inst::Pmull { rd, rn, rm } => {
+                let bytes = self.v_pmull(rn, rm);
+                self.set_v_bytes(rd, &bytes);
+            }
             Inst::VectorAcross { op, rd, rn } => {
                 let value = self.v_across(op, rd, rn);
                 self.v_set_scalar(rd, value);
@@ -143,6 +147,44 @@ impl Cpu<'_> {
     }
 
     /// V`number`'s 16 bytes, lowest first.
+    /// `pmull` and `pmull2`: the carry-less product of each pair of lanes, bytes into halfwords
+    /// or doublewords into all 128 bits, from the low half of each operand or, for `pmull2`,
+    /// the high half. The 16 bytes of the result.
+    fn v_pmull(&mut self, rn: VReg, rm: VReg) -> Vec<Term> {
+        let (a, b) = (self.v_bytes(rn.number), self.v_bytes(rm.number));
+        let half = if crate::isa::aarch64::pmull_upper(rn) {
+            8
+        } else {
+            0
+        };
+        let mut out = Vec::with_capacity(V_BYTES);
+        if crate::isa::aarch64::pmull_wide(rn) {
+            let x = self.join_bytes(&a[half..half + 8]);
+            let y = self.join_bytes(&b[half..half + 8]);
+            let product = crate::prove::exec::carry_less(self.pool, x, y, 64);
+            for at in 0..16 {
+                out.push(self.pool.extract(product, 8 * at + 7, 8 * at));
+            }
+        } else {
+            for lane in 0..8 {
+                let product =
+                    crate::prove::exec::carry_less(self.pool, a[half + lane], b[half + lane], 8);
+                out.push(self.pool.extract(product, 7, 0));
+                out.push(self.pool.extract(product, 15, 8));
+            }
+        }
+        out
+    }
+
+    /// Bytes, the lowest first, as one number.
+    fn join_bytes(&mut self, bytes: &[Term]) -> Term {
+        let mut value = bytes[bytes.len() - 1];
+        for byte in bytes[..bytes.len() - 1].iter().rev() {
+            value = self.pool.concat(value, *byte);
+        }
+        value
+    }
+
     fn v_bytes(&self, number: u8) -> Vec<Term> {
         self.state.vectors[usize::from(number)][..V_BYTES].to_vec()
     }

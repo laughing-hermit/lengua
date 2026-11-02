@@ -73,6 +73,12 @@ pub fn q_register(text: &str) -> Option<u8> {
     number(&format!("v{}", text.strip_prefix('q')?))
 }
 
+/// A whole V register as one quadword, as `pmull` names its product: `v0.1q` to `v31.1q`.
+#[must_use]
+pub fn quadword(text: &str) -> Option<u8> {
+    number(text.strip_suffix(".1q")?)
+}
+
 /// A list of registers, `{ v0.16b, v1.16b }` or `{ v0.16b-v1.16b }`, as its first register, how
 /// many there are, and their one arrangement: each register the one after the last, wrapping
 /// from v31 to v0.
@@ -211,6 +217,7 @@ impl Line<'_> {
             {
                 self.vector_two()
             }
+            "pmull" | "pmull2" if any_vector => self.pmull(),
             "add" | "sub" | "mul" | "uqadd" | "uqsub" | "sqadd" | "sqsub" | "cmeq" | "cmtst"
             | "cmhi" | "cmhs" | "cmgt" | "cmge" | "cmle" | "cmlt" | "cmlo" | "cmls" | "umax"
             | "umin" | "smax" | "smin" | "addp" | "umaxp" | "uminp" | "smaxp" | "sminp" | "and"
@@ -221,6 +228,40 @@ impl Line<'_> {
             }
             _ => return None,
         })
+    }
+
+    /// `pmull` and `pmull2`: `pmull v0.8h, v1.8b, v2.8b` and `pmull2 v0.8h, v1.16b, v2.16b`,
+    /// bytes to halfwords; `pmull v0.1q, v1.1d, v2.1d` and `pmull2 v0.1q, v1.2d, v2.2d`,
+    /// doublewords to a quadword.
+    fn pmull(&self) -> Result<Inst, String> {
+        self.count(3)?;
+        let (rn, rm) = (self.v(1)?, self.v(2)?);
+        let upper = self.mnemonic == "pmull2";
+        let product = match (rn.arrangement, upper) {
+            (Arrangement::B8, false) | (Arrangement::B16, true) => "8h",
+            (Arrangement::D1, false) | (Arrangement::D2, true) => "1q",
+            _ => {
+                return Err(self.problem(
+                    "pmull multiplies 8b or 1d lanes, and pmull2 the upper half's 16b or 2d",
+                ));
+            }
+        };
+        if rm.arrangement != rn.arrangement {
+            return Err(self.problem("its two operands aren't one arrangement"));
+        }
+        let rd = if product == "1q" {
+            quadword(self.operands[0])
+        } else {
+            vreg(self.operands[0])
+                .filter(|rd| rd.arrangement == Arrangement::H8)
+                .map(|rd| rd.number)
+        }
+        .ok_or_else(|| {
+            self.problem(&format!(
+                "its products go in a vector of {product}, v0.{product} to v31.{product}"
+            ))
+        })?;
+        Ok(Inst::Pmull { rd, rn, rm })
     }
 
     /// The operations of two vectors, all three arrangements one.
