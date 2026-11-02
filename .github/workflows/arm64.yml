@@ -24,6 +24,10 @@ on:
         description: "Measure lengua against C, C++ and Rust here instead of testing"
         type: boolean
         default: false
+      release:
+        description: "Build and check the release archive for ARM64 Linux instead of testing"
+        type: boolean
+        default: false
 
 concurrency:
   group: arm64-${{ github.ref }}
@@ -130,7 +134,7 @@ jobs:
         run: cargo clippy --release --all-targets --locked -- -D warnings
 
       - name: Tests
-        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.benchmarks) }}
+        if: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.benchmarks || inputs.release)) }}
         env:
           LENGUA_PROOF_SECONDS: "60"
           RUST_TEST_THREADS: "2"
@@ -141,6 +145,10 @@ jobs:
         run: |
           sudo apt-get install -y -q time
           cargo bench --locked --bench against_rust_and_c 2>&1 | tee bench.log
+
+      - name: The release archive for ARM64 Linux
+        if: github.event_name == 'workflow_dispatch' && inputs.release
+        run: scripts/release.sh
 
       - name: The slow ignored tests
         if: github.event_name == 'workflow_dispatch' && inputs.ignored
@@ -160,5 +168,7 @@ jobs:
             bench.log
             BENCHMARKS-aarch64.md
             target/release/lengua-mcp
+            dist/*.tar.gz
+            dist/*.sha256
           retention-days: 7
           if-no-files-found: ignore

@@ -313,19 +313,20 @@ one needs.
   the id on ARM64), proven on several threads and held to x86-64's thread rules, which now read
   each CPU's registers. R15 (2026-11-02): the CRC-32 instructions, `crc32cx` and the rest, held to
   a CPU that has them as x86-64's extensions are, and the fast crc32c from its spec unchanged,
-  proven with no solver question as x86-64's is. Left of R10, skipped for
+  proven with no solver question as x86-64's is. Then the benchmark's last two programs on AArch64,
+  histogram and crc32c, with C, C++ and Rust's crc32c using AArch64's instruction too, and R16
+  (2026-11-02): the release archive per CPU, the installer taking x86-64 or ARM64 and refusing an
+  archive built for the other, and the ARM64 archive built and checked on GitHub's ARM64 runners. Left of R10, skipped for
   now at the user's word (2026-11-01) so
   it costs nothing: 4 to 6 real interactive Claude Code sessions compiling specs for AArch64 from
   one request each, and one for x86-64 as a regression check; they run on the user's Claude
-  account. Until the rounds after it land, lengua doesn't "run on ARM64", and nothing should say
-  so:
-  - an install package for ARM64 Linux computers (today's release and installer are x86-64 only,
-    and the ARM64 server is built only on CI);
-  - SVE, past the line;
-  - the histogram and crc32c benchmarks;
+  account. With R16, lengua runs on ARM64 Linux at parity with x86-64 (2026-11-02), installed
+  from its own archive, but for:
   - the CPU's AES, SHA and carry-less multiply instructions, which x86-64 models: left to the
     user, beside the safety-stopped work (item 1's end), since modelling them is the topic the
-    filter stopped.
+    filter stopped;
+  - the real interactive sessions above, which cost Claude usage (item 1b's first point);
+  - SVE, past the line.
 - **macOS and Windows need more than a new CPU.** They don't allow a program to call the OS
   directly, as lengua's programs do; a program must go through the system library (libSystem,
   ntdll), which lengua never checked, and there is no seccomp or Landlock. So those four targets

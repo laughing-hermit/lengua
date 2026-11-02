@@ -24,8 +24,15 @@ for arg in "$@"; do
     esac
 done
 
-if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != x86_64 ]; then
-    echo "lengua runs on Linux x86-64 for now; this is $(uname -s) $(uname -m)." >&2
+cpu=$(uname -m)
+if [ "$(uname -s)" != Linux ] || { [ "$cpu" != x86_64 ] && [ "$cpu" != aarch64 ]; }; then
+    echo "lengua runs on Linux x86-64 and ARM64 for now; this is $(uname -s) $cpu." >&2
+    exit 1
+fi
+# An archive's server is built for one CPU, which its CPU file names.
+built=$(cat "$here/CPU" 2>/dev/null || echo "$cpu")
+if [ "$built" != "$cpu" ]; then
+    echo "This is lengua for Linux $built, and this computer is $cpu: use the $cpu archive." >&2
     exit 1
 fi
 

@@ -58,10 +58,11 @@ scripts/build-plugin.sh
 This builds the server and installs it at `plugin/server/lengua-mcp`, where both plugin manifests
 expect it. Run it again after every change to the Rust code.
 
-`scripts/release.sh` builds an archive that installs with no Rust toolchain,
-`dist/lengua-<version>-x86_64-linux.tar.gz`, and checks it as a user would get it. Unpack it
-anywhere and run its `install.sh`, which checks what lengua needs and says how to install
-anything missing.
+`scripts/release.sh` builds an archive for this computer's CPU that installs with no Rust
+toolchain, `dist/lengua-<version>-x86_64-linux.tar.gz` or `dist/lengua-<version>-aarch64-linux.tar.gz`,
+and checks it as a user would get it; the ARM64 one is built on GitHub's ARM64 runners too (the
+workflow's `release` run). Unpack it anywhere and run its `install.sh`, which checks what lengua
+needs, says how to install anything missing, and refuses an archive built for another CPU.
 
 ## Use it
 

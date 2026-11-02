@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
-# Builds the release archive, dist/lengua-<version>-x86_64-linux.tar.gz: the plugin with its
-# server built, install.sh and a short README. Then checks it as a user gets it: unpacked in a
-# fresh folder, validated, and a program taken from its spec to done through its own server and
-# run from a shell. Nothing is published or pushed.
+# Builds the release archive for this computer's CPU, dist/lengua-<version>-<cpu>-linux.tar.gz
+# (x86_64 or aarch64): the plugin with its server built, install.sh and a short README. Then
+# checks it as a user gets it: unpacked in a fresh folder, validated, and a program taken from its
+# spec to done through its own server and run from a shell. Nothing is published or pushed.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 version="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$root/Cargo.toml" | head -n 1)"
-name="lengua-$version-x86_64-linux"
+cpu="$(uname -m)"
+case "$cpu" in
+    x86_64) label="x86-64" ;;
+    aarch64) label="ARM64" ;;
+    *)
+        echo "release.sh builds lengua for Linux x86-64 or ARM64; this computer is $cpu." >&2
+        exit 1
+        ;;
+esac
+name="lengua-$version-$cpu-linux"
 "$root/scripts/build-plugin.sh"
 
 stage="$(mktemp -d)"
@@ -20,8 +29,10 @@ done
 install -D -m 0755 "$root/plugin/server/lengua-mcp" "$stage/$name/plugin/server/lengua-mcp"
 install -m 0755 "$root/scripts/install.sh" "$stage/$name/install.sh"
 install -m 0644 "$root/LICENSE" "$stage/$name/LICENSE"
+# The CPU the server is built for, which install.sh holds the computer to.
+printf '%s\n' "$cpu" > "$stage/$name/CPU"
 cat > "$stage/$name/README.md" <<EOF
-# lengua $version for Linux x86-64
+# lengua $version for Linux $label
 
 lengua is an AI language: an agent writes a program's spec in plain words, compiles it to
 assembly for this computer, and lengua checks, tests and proves what it compiled.
