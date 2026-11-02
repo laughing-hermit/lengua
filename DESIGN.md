@@ -1103,17 +1103,19 @@ still to build per target. A new profile must supply:
 **One product on every target.** A port adds a CPU's or an OS's means, never a different lengua.
 The same spec means the same on each: the same skills, tools, reports, lock and messages (only
 the target's name and hardware facts differ); the same rules, memory safety, tests and proof
-engine (only each CPU's instruction model is its own); and the same limits on every OS. The
+engine (only each CPU's instruction model is its own); and the same limits on every target. The
 capabilities a spec can name (`- Uses:` standard input and output, files and folders, the
 network, threads, the terminal, the clock, random bytes, sleep, the environment) and what the
-sandbox allows of each are one definition, which each OS enforces with its own means. Any limit
-one OS or CPU has is every target's limit, a limit being anything a spec or its user can observe:
-what a program may do, how it behaves, and what lengua promises of it. Each OS keeps those
-promises with its own means, and lengua's own checks of the code are one, the same on every OS.
-Where an OS can't provide part of the definition, or nothing there can keep one of its promises,
-that part is cut on every OS, Linux too, so one OS's extra power never makes a spec behave
-differently. An OS's sandbox that can't police something cuts nothing while another means keeps
-the same promise there. What may differ is the hardware:
+sandbox allows of each are one definition. Every limit one target has, from its OS or its CPU,
+is every target's limit, whatever their assembly or their OS's permissions: the user's rule,
+made strict on 2026-11-02, so lengua is the same product regardless. A limit is anything a spec
+or its user can observe: what a program may do, how it behaves, what it's refused and when, and
+what lengua promises of it. No target is excused a limit because something else of its own,
+lengua's checks included, could keep the same promise there: where one OS can't keep a promise
+the way another does (its sandbox can't police something, say), every target takes on that OS's
+limit, and either the capability is reshaped so every OS keeps it the same way, or that part is
+cut on every target, Linux too. So one OS's extra power, or its sandbox's, never makes a spec
+behave differently. What may differ is the hardware:
 the instructions a CPU has, its vectors' width, its speed. A target is done when it covers what
 x86-64 covers, each item with its own hardware's means (NEON where x86-64 has AVX-512).
 

@@ -65,14 +65,16 @@ short name and the syscall-number table). Each new target needs:
 
 A port adds a CPU's or an OS's means, never a different lengua. The same spec means the same on
 every target: the same skills, tools, reports and messages; the same rules, memory safety, tests
-and proof engine; and the same limits on every OS. The capabilities a spec can name, and what the
-sandbox allows of each, are one definition that each OS enforces with its own means. Any limit
-one OS or CPU has is every target's limit, a limit being anything a spec or its user can observe:
-what a program may do, how it behaves, and what lengua promises of it. Each OS keeps those
-promises with its own means, lengua's own checks of the code among them; where an OS can't provide
-part of the definition, or nothing there can keep one of its promises, that part is cut on every
-OS, Linux too. Only the hardware may differ: its instructions, its vectors' width, its speed. A target is done when
-it covers what x86-64 covers, each item with its own hardware's means.
+and proof engine; and the same limits on every target. The capabilities a spec can name, and what
+the sandbox allows of each, are one definition. Every limit one target has, from its OS or its
+CPU, is every target's, whatever their assembly or their OS's permissions: a limit being anything
+a spec or its user can observe, what a program may do, how it behaves, what it's refused and
+when, and what lengua promises of it. No target is excused a limit because something else of its
+own, lengua's checks included, could keep the same promise there: where one OS can't keep a
+promise the way another does, every target takes on its limit, and the capability is reshaped so
+every OS keeps it the same way, or that part is cut on every target, Linux too. Only the hardware
+may differ: its instructions, its vectors' width, its speed. A target is done when it covers what
+x86-64 covers, each item with its own hardware's means.
 
 ## Order of targets
 

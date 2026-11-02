@@ -213,7 +213,10 @@ product Claude puts it at about two-thirds. What's left, most important first:
    (rustls), outside the program, so the program holds no crypto; a client's connection to a
    named HTTPS host could go through the launcher the same way. Each such service is one
    definition that every OS must be able to provide (item 3's limits).
-3. **Linux held to macOS's and Windows's limits:** item 3's audit.
+3. **Linux held to macOS's and Windows's limits:** item 3's audit, every item a limit to
+   establish by the strict rule (2026-11-02). The network first: a client's own `connect` rests
+   on Linux's sandbox and tracer, which Windows lacks, so it moves to the launcher (as servers'
+   sockets did) or is cut.
 4. **Hardening.** A red-team pass: programs written to escape the sandbox, to fool the rules or
    the memory checks, or to pass a proof they shouldn't; and fuzzing of everything the checker
    reads (main.s, the spec, the built ELF).
@@ -263,11 +266,14 @@ target"): the same spec, skills, tools, reports and messages; the same rules, me
 and proof engine; and the same limits on every OS. The capabilities a spec can name, and what the
 sandbox allows of each, are one definition that each OS enforces with its own means. In the
 user's words (2026-11-01), "any limit per OS and cpu is a limit 4 all targets", for equality in
-experience: a limit being anything a spec or its user can observe, what a program may do, how it
-behaves, and what lengua promises of it. Each OS keeps those promises with its own means, lengua's
-own checks of the code among them; where an OS can't provide part of the definition, or nothing
-there can keep one of its promises, that part is cut on every OS, Linux too, so nothing behaves
-differently from one OS to another. Only the hardware may differ (its
+experience; made strict on 2026-11-02: every limit on one target is established on all targets,
+whatever their assembly or their OS's permissions, so it's the same product regardless. A limit is
+anything a spec or its user can observe: what a program may do, how it behaves, what it's refused
+and when, and what lengua promises of it. No target is excused a limit because something else of
+its own, lengua's checks included, could keep the same promise there: where one OS can't keep a
+promise the way another does, every target takes on its limit, and the capability is reshaped so
+every OS keeps it the same way, or that part is cut on every target, Linux too. Only the hardware
+may differ (its
 instructions, vector widths, speed). Each target's finish line is parity with x86-64's: it's done
 when it covers what x86-64 covers, each item with its own hardware's means.
 
@@ -335,7 +341,9 @@ one needs.
   macOS and Windows do, which is why the user set the same limits on every OS (2026-11-01): a spec
   that works on Linux must work on the stricter OSes too. So each place a spec can observe Linux's
   extra freedom gets checked against both OSes' documentation and, where one can't do it, cut on
-  Linux too, in its tests and sandbox. To audit:
+  Linux too, in its tests and sandbox. By the strict rule (2026-11-02), every item below is a
+  limit to establish on Linux, both CPUs, before macOS or Windows arrive; none is waived because
+  a Linux means, lengua's checks included, could keep it. To audit:
   - file and folder names: Windows refuses `< > : " | ? * \`, control characters, a trailing dot
     or space, and `CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9` and `LPT1` to `LPT9` with any
     extension; macOS and Windows ignore case by default, and macOS ignores Unicode normalization,
@@ -348,13 +356,21 @@ one needs.
   - a write to a closed pipe: a signal on Linux and macOS, an error on Windows;
   - an open file renamed or removed: Windows refuses it;
   - the order a folder lists in: each file system has its own;
-  - the network: Windows's sandbox for apps (AppContainer) can't hold a program to one port, and
-    blocks the local network by default. Today the proof takes Landlock's refusal of other ports
-    as given, so the promise rests on Linux's kernel. To keep it on every OS by the same means, a
-    `connect` to a port the spec doesn't name becomes a failure of the check on every target,
-    Linux included, with Landlock (and Windows's filtering platform, if it can) a second guard.
-    Servers already never bind: the launcher hands them their socket, which Windows can do too.
-    Only if nothing keeps the promise on some OS is the network cut everywhere.
+  - the network, first: Windows's sandbox for apps (AppContainer) can't hold a program to one
+    port, blocks the local network by default, and reaches this computer's own address only with
+    an administrator's exemption. Today a client program makes its own `connect`, held to the
+    spec's ports by Landlock and to this computer by lengua's supervisor, so the promise rests on
+    Linux's kernel and a tracer Windows doesn't have. By the strict rule, that is Linux's extra
+    freedom, not a promise kept: a program's own `connect` goes on every target, Linux included.
+    What keeps the network everywhere is reshaping it as servers already are, where the program
+    never binds and the launcher hands it its socket: the launcher, outside the sandbox, opens each
+    connection the spec names (host and port) and hands it over, so on every OS the program itself
+    holds no network at all, which AppContainer can enforce too (to check on Windows: a connected
+    socket handed into an AppContainer, and loopback). The same launcher service is how TLS would
+    come (item 1b's reach). Until it exists, a client's own `connect` (the fetch example, the
+    references' network calls) is the gap to close on both Linux targets: build the launcher's
+    connections, or cut it. Only if no OS can hand over a connection is the network cut
+    everywhere.
 
   Per-target code, such as x86-64 Linux's red zone or Windows's stack probes, isn't such a limit:
   only what a spec can observe is.
