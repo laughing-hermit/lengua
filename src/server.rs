@@ -2376,6 +2376,7 @@ async fn runnable(
     let net = Net {
         connect: spec.network.connects.clone(),
         anywhere: spec.network.anywhere,
+        connections: Vec::new(),
         listen: spec.network.listens,
         serve_anywhere: spec.network.serves_anywhere,
     };

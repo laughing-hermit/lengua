@@ -7,6 +7,7 @@
 //! and runs them. See `DESIGN.md` at the repository root for every design decision.
 
 pub mod checker;
+pub mod connect;
 pub mod data_dir;
 pub mod expect;
 pub mod expr;

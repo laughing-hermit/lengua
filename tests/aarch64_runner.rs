@@ -11,8 +11,9 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use lengua::connect::Reach;
 use lengua::platform::{Allowed, Profile};
-use lengua::runner::{End, Job, Limits, Run, run};
+use lengua::runner::{End, Job, Limits, Net, Run, run, start};
 use lengua::spec::Syscall;
 use lengua::supply::Supply;
 use lengua::toolchain::Toolchain;
@@ -107,6 +108,114 @@ const DRAW_AND_CLOCK: [Syscall; 4] = [
     Syscall::Write,
     Syscall::Exit,
 ];
+
+/// AArch64: reads up to 64 bytes from its connection, prints them, answers `ok` on it, and
+/// exits.
+const AARCH64_ANSWERS_OK: &str = "\
+.arch armv8-a
+.text
+.globl _start
+_start:
+    adrp x19, buffer
+    add x19, x19, :lo12:buffer
+    mov x0, #4
+    mov x1, x19
+    mov x2, #64
+    mov x8, #63
+    svc #0
+    mov x2, x0
+    mov x0, #1
+    mov x1, x19
+    mov x8, #64
+    svc #0
+    adrp x1, ok
+    add x1, x1, :lo12:ok
+    mov x0, #4
+    mov x2, #2
+    mov x8, #64
+    svc #0
+    mov x0, #0
+    mov x8, #93
+    svc #0
+.data
+ok:
+    .ascii \"ok\"
+.bss
+buffer:
+    .zero 64
+";
+
+/// AArch64: reads its connection, then writes on it, and exits with the read's result less
+/// the write's: 0 and -EPIPE give 32. A SIGPIPE would kill it instead.
+const AARCH64_ENDED: &str = "\
+.arch armv8-a
+.text
+.globl _start
+_start:
+    adrp x19, buffer
+    add x19, x19, :lo12:buffer
+    mov x0, #4
+    mov x1, x19
+    mov x2, #64
+    mov x8, #63
+    svc #0
+    mov x20, x0
+    mov x0, #4
+    mov x1, x19
+    mov x2, #2
+    mov x8, #64
+    svc #0
+    sub x0, x20, x0
+    mov x8, #93
+    svc #0
+.bss
+buffer:
+    .zero 64
+";
+
+/// A program's connections, as lengua hands them over: descriptors 4 and on.
+fn connected(connections: Vec<Reach>) -> Net {
+    Net {
+        connect: Vec::new(),
+        anywhere: false,
+        connections,
+        listen: None,
+        serve_anywhere: false,
+    }
+}
+
+#[tokio::test]
+async fn connections_are_handed_over_from_descriptor_4() {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let folder = tempfile::tempdir().expect("a folder");
+    let client = build(folder.path(), "client", AARCH64_ANSWERS_OK).await;
+    let calls = syscalls(&[Syscall::Read, Syscall::Write, Syscall::Exit]);
+    let net = connected(vec![Reach::Peer]);
+    let job = Job {
+        net: Some(&net),
+        ..Job::new(&client, &[], b"", &calls)
+    };
+    let mut started = start(launcher(), job, Limits::default())
+        .await
+        .expect("start");
+    let (_, mut stream) = started.take_peers().remove(0);
+    stream.write_all(b"hello").await.expect("send");
+    let mut answer = Vec::new();
+    stream.read_to_end(&mut answer).await.expect("the answer");
+    assert_eq!(answer, b"ok");
+    let answered = started.wait().await.expect("wait");
+    assert_eq!(answered.end, End::Exited(0), "{answered:?}");
+    assert_eq!(answered.stdout, b"hello");
+    // Ended both ways: a read gives 0, and a write fails with EPIPE rather than a signal.
+    let ended = build(folder.path(), "ended", AARCH64_ENDED).await;
+    let nowhere = connected(vec![Reach::Nowhere]);
+    let job = Job {
+        net: Some(&nowhere),
+        ..Job::new(&ended, &[], b"", &calls)
+    };
+    let ended = run(launcher(), job, Limits::default()).await.expect("run");
+    assert_eq!(ended.end, End::Exited(32), "{ended:?}");
+}
 
 #[tokio::test]
 async fn tests_supply_the_random_bytes_and_the_clock() {

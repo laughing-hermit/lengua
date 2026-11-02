@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use lengua::connect::Reach;
 use lengua::platform::{Allowed, Profile};
 use lengua::runner::{End, Job, Limits, Net, Run, run, start};
 use lengua::spec::{Syscall, Use};
@@ -638,6 +639,7 @@ async fn programs_connect_only_to_approved_ports() {
     let approved = Net {
         connect: vec![port],
         anywhere: false,
+        connections: Vec::new(),
         listen: None,
         serve_anywhere: false,
     };
@@ -645,6 +647,7 @@ async fn programs_connect_only_to_approved_ports() {
     let other = Net {
         connect: vec![port.wrapping_add(1).max(1)],
         anywhere: false,
+        connections: Vec::new(),
         listen: None,
         serve_anywhere: false,
     };
@@ -726,6 +729,7 @@ async fn servers_take_connections_on_descriptor_3() {
     let net = Net {
         connect: Vec::new(),
         anywhere: false,
+        connections: Vec::new(),
         listen: Some(0),
         serve_anywhere: false,
     };
@@ -792,6 +796,173 @@ async fn servers_take_connections_on_descriptor_3() {
         .expect("start");
     assert!(started.port().is_some());
     assert_eq!(started.stop().await.expect("stop").end, End::Stopped);
+}
+
+/// A program's connections, as lengua hands them over: `connections` at descriptors 4 and on,
+/// after a listener at 3 when `listen` is set.
+fn connected(connections: Vec<Reach>, listen: bool) -> Net {
+    Net {
+        connect: Vec::new(),
+        anywhere: false,
+        connections,
+        listen: listen.then_some(0),
+        serve_anywhere: false,
+    }
+}
+
+/// Reads up to 64 bytes from its connection, prints them, answers `ok` on it, and exits.
+fn answers_ok() -> String {
+    program(
+        "    xor eax, eax\n    mov edi, 4\n    lea rsi, [rip + buffer]\n    mov edx, 64\n    \
+         syscall\n    mov rdx, rax\n    mov eax, 1\n    mov edi, 1\n    \
+         lea rsi, [rip + buffer]\n    syscall\n    mov eax, 1\n    mov edi, 4\n    \
+         lea rsi, [rip + ok]\n    mov edx, 2\n    syscall\n    mov eax, 60\n    xor edi, edi\n    \
+         syscall",
+        ".data\nok:\n    .ascii \"ok\"\n.bss\nbuffer:\n    .zero 64",
+    )
+}
+
+#[tokio::test]
+async fn connections_are_handed_over_from_descriptor_4() {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let folder = tempfile::tempdir().expect("temporary folder");
+    let client = build(folder.path(), "client", &answers_ok()).await;
+    let calls = network_syscalls(&[Syscall::Read, Syscall::Write, Syscall::Exit]);
+    // The test's own server speaks on the program's stream itself.
+    let net = connected(vec![Reach::Peer], false);
+    let job = Job {
+        net: Some(&net),
+        ..Job::new(&client, &[], b"", &calls)
+    };
+    let mut started = start(launcher(), job, Limits::default())
+        .await
+        .expect("start");
+    let mut peers = started.take_peers();
+    assert_eq!(peers.len(), 1);
+    let (number, mut stream) = peers.remove(0);
+    assert_eq!(number, 0);
+    stream.write_all(b"hello").await.expect("send");
+    let mut answer = Vec::new();
+    stream.read_to_end(&mut answer).await.expect("the answer");
+    assert_eq!(answer, b"ok", "and then the end, as the program exits");
+    let run = started.wait().await.expect("wait");
+    assert_eq!(run.end, End::Exited(0), "{run:?}");
+    assert_eq!(run.stdout, b"hello");
+
+    // A port of this computer: lengua connects to it and relays both ways.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("a free port");
+    let port = listener.local_addr().expect("an address").port();
+    let place = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("lengua's connection");
+        stream.write_all(b"hello").await.expect("send");
+        let mut answer = Vec::new();
+        stream.read_to_end(&mut answer).await.expect("the answer");
+        answer
+    });
+    let net = connected(vec![Reach::ThisComputer(port)], false);
+    let run = run_on(&client, &calls, &net).await;
+    assert_eq!(run.end, End::Exited(0), "{run:?}");
+    assert_eq!(run.stdout, b"hello");
+    assert_eq!(place.await.expect("the place"), b"ok");
+    assert_eq!(run.connections.len(), 1);
+    assert_eq!(run.connections[0].problem, None);
+}
+
+#[tokio::test]
+async fn a_connection_lengua_couldnt_make_is_ended_both_ways() {
+    let folder = tempfile::tempdir().expect("temporary folder");
+    // Reads its connection, then writes on it, and exits with the read's result less the
+    // write's: 0 and -EPIPE give 32. A SIGPIPE would kill it instead.
+    let ended = build(
+        folder.path(),
+        "ended",
+        &program(
+            "    xor eax, eax\n    mov edi, 4\n    lea rsi, [rip + buffer]\n    mov edx, 64\n    \
+             syscall\n    mov r12, rax\n    mov eax, 1\n    mov edi, 4\n    \
+             lea rsi, [rip + buffer]\n    mov edx, 2\n    syscall\n    sub r12, rax\n    \
+             mov rdi, r12\n    mov eax, 60\n    syscall",
+            ".bss\nbuffer:\n    .zero 64",
+        ),
+    )
+    .await;
+    let calls = network_syscalls(&[Syscall::Read, Syscall::Write, Syscall::Exit]);
+    let nowhere = connected(vec![Reach::Nowhere], false);
+    let run = run_on(&ended, &calls, &nowhere).await;
+    assert_eq!(run.end, End::Exited(32), "{run:?}");
+    // A port nothing listens on is the same to the program; the report says why.
+    let free = std::net::TcpListener::bind("127.0.0.1:0").expect("a free port");
+    let port = free.local_addr().expect("an address").port();
+    drop(free);
+    let refused = connected(vec![Reach::ThisComputer(port)], false);
+    let run = run_on(&ended, &calls, &refused).await;
+    assert_eq!(run.end, End::Exited(32), "{run:?}");
+    assert!(
+        run.connections[0].problem.is_some(),
+        "{:?}",
+        run.connections
+    );
+}
+
+#[tokio::test]
+async fn each_connection_has_its_own_number() {
+    let folder = tempfile::tempdir().expect("temporary folder");
+    // Closes descriptors 3, 4 and 5, and exits with a bit for each that was open.
+    let numbers = build(
+        folder.path(),
+        "numbers",
+        &program(
+            "    mov eax, 3\n    mov edi, 3\n    syscall\n    mov r12, rax\n    mov eax, 3\n    \
+             mov edi, 4\n    syscall\n    mov r13, rax\n    mov eax, 3\n    mov edi, 5\n    \
+             syscall\n    mov r14, rax\n    xor edi, edi\n    test r12, r12\n    jnz 1f\n    \
+             or edi, 1\n1:\n    test r13, r13\n    jnz 2f\n    or edi, 2\n2:\n    \
+             test r14, r14\n    jnz 3f\n    or edi, 4\n3:\n    mov eax, 60\n    syscall",
+            "",
+        ),
+    )
+    .await;
+    let calls = network_syscalls(&[Syscall::Close, Syscall::Exit]);
+    let client = connected(vec![Reach::Nowhere], false);
+    assert_eq!(run_on(&numbers, &calls, &client).await.end, End::Exited(2));
+    let two = connected(vec![Reach::Nowhere, Reach::Nowhere], false);
+    assert_eq!(run_on(&numbers, &calls, &two).await.end, End::Exited(6));
+    let server = connected(vec![Reach::Nowhere, Reach::Nowhere], true);
+    assert_eq!(run_on(&numbers, &calls, &server).await.end, End::Exited(7));
+}
+
+#[tokio::test]
+async fn what_a_program_sends_last_reaches_its_place() {
+    use tokio::io::AsyncReadExt as _;
+    let folder = tempfile::tempdir().expect("temporary folder");
+    // Sends 256 KiB and exits at once.
+    let sender = build(
+        folder.path(),
+        "sender",
+        &program(
+            "    mov eax, 1\n    mov edi, 4\n    lea rsi, [rip + big]\n    mov edx, 262144\n    \
+             syscall\n    mov eax, 60\n    xor edi, edi\n    syscall",
+            ".bss\nbig:\n    .zero 262144",
+        ),
+    )
+    .await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("a free port");
+    let port = listener.local_addr().expect("an address").port();
+    let place = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("lengua's connection");
+        // Slow to read, as a busy server is.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let mut got = Vec::new();
+        stream.read_to_end(&mut got).await.expect("everything");
+        got.len()
+    });
+    let calls = network_syscalls(&[Syscall::Write, Syscall::Exit]);
+    let net = connected(vec![Reach::ThisComputer(port)], false);
+    let run = run_on(&sender, &calls, &net).await;
+    assert_eq!(run.end, End::Exited(0), "{run:?}");
+    assert_eq!(place.await.expect("the place"), 262_144);
 }
 
 /// Runs the template's tests, with `edit` applied to its spec, `workers` at a time.
@@ -1040,6 +1211,108 @@ async fn build_aarch64(folder: &Path, name: &str, source: &str) -> PathBuf {
         .await
         .expect("link");
     executable
+}
+
+/// AArch64: reads up to 64 bytes from its connection, prints them, answers `ok` on it, and
+/// exits.
+const AARCH64_ANSWERS_OK: &str = "\
+.arch armv8-a
+.text
+.globl _start
+_start:
+    adrp x19, buffer
+    add x19, x19, :lo12:buffer
+    mov x0, #4
+    mov x1, x19
+    mov x2, #64
+    mov x8, #63
+    svc #0
+    mov x2, x0
+    mov x0, #1
+    mov x1, x19
+    mov x8, #64
+    svc #0
+    adrp x1, ok
+    add x1, x1, :lo12:ok
+    mov x0, #4
+    mov x2, #2
+    mov x8, #64
+    svc #0
+    mov x0, #0
+    mov x8, #93
+    svc #0
+.data
+ok:
+    .ascii \"ok\"
+.bss
+buffer:
+    .zero 64
+";
+
+/// AArch64: reads its connection, then writes on it, and exits with the read's result less
+/// the write's: 0 and -EPIPE give 32. A SIGPIPE would kill it instead.
+const AARCH64_ENDED: &str = "\
+.arch armv8-a
+.text
+.globl _start
+_start:
+    adrp x19, buffer
+    add x19, x19, :lo12:buffer
+    mov x0, #4
+    mov x1, x19
+    mov x2, #64
+    mov x8, #63
+    svc #0
+    mov x20, x0
+    mov x0, #4
+    mov x1, x19
+    mov x2, #2
+    mov x8, #64
+    svc #0
+    sub x0, x20, x0
+    mov x8, #93
+    svc #0
+.bss
+buffer:
+    .zero 64
+";
+
+/// QEMU's user mode leaves the connections where lengua put them, and the launcher's ignored
+/// SIGPIPE ignored.
+#[tokio::test]
+async fn an_emulated_program_gets_its_connections_too() {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    if !qemu_runs_aarch64() {
+        return;
+    }
+    let scratch = tempfile::tempdir().expect("a folder");
+    let client = build_aarch64(scratch.path(), "client", AARCH64_ANSWERS_OK).await;
+    let net = connected(vec![Reach::Peer], false);
+    let job = Job {
+        net: Some(&net),
+        emulated: true,
+        ..Job::new(&client, &[], b"", &[])
+    };
+    let mut started = start(launcher(), job, Limits::default())
+        .await
+        .expect("start");
+    let (_, mut stream) = started.take_peers().remove(0);
+    stream.write_all(b"hello").await.expect("send");
+    let mut answer = Vec::new();
+    stream.read_to_end(&mut answer).await.expect("the answer");
+    assert_eq!(answer, b"ok");
+    let answered = started.wait().await.expect("wait");
+    assert_eq!(answered.end, End::Exited(0), "{answered:?}");
+    assert_eq!(answered.stdout, b"hello");
+    let ended = build_aarch64(scratch.path(), "ended", AARCH64_ENDED).await;
+    let nowhere = connected(vec![Reach::Nowhere], false);
+    let job = Job {
+        net: Some(&nowhere),
+        emulated: true,
+        ..Job::new(&ended, &[], b"", &[])
+    };
+    let ended = run(launcher(), job, Limits::default()).await.expect("run");
+    assert_eq!(ended.end, End::Exited(32), "{ended:?}");
 }
 
 /// A program QEMU's user mode runs is held by Landlock and the limits as any program is: it

@@ -15,8 +15,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
-use std::io::{self, Read as _, Write as _};
-use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
+use std::io::{self, Write as _};
+use std::os::unix::process::ExitStatusExt as _;
 use std::path::Path;
 use std::process::{ExitCode, Stdio};
 use std::time::Duration;
@@ -37,6 +37,7 @@ use tokio::net::UnixListener;
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
+use crate::connect::{self, Made, Reach, Relay};
 use crate::platform::{Allowed, Pin};
 use crate::supervise::SUPERVISE_FLAG;
 use crate::supply::Supply;
@@ -219,6 +220,8 @@ pub struct Run {
     pub supplied: Option<String>,
     /// How many random bytes the program asked for, when the test supplied them.
     pub random_asked: Option<usize>,
+    /// What became of each connection lengua made for it, in order.
+    pub connections: Vec<Made>,
 }
 
 /// The most files read back from a working folder after a run.
@@ -256,6 +259,9 @@ pub struct Net {
     /// each connection's address and refuses any computer but this one, which the kernel's
     /// port rules can't.
     pub anywhere: bool,
+    /// The connections lengua makes for the program before it starts and hands it, in order,
+    /// as descriptors 4, 5 and on.
+    pub connections: Vec<Reach>,
     /// The port lengua listens on for the program and hands it as file descriptor 3, or 0 for
     /// any free one; `None` for a program that doesn't serve.
     pub listen: Option<u16>,
@@ -268,16 +274,20 @@ impl Net {
     /// Whether the program uses the network at all.
     #[must_use]
     pub fn is_used(&self) -> bool {
-        !self.connect.is_empty() || self.listen.is_some()
+        !self.connect.is_empty() || !self.connections.is_empty() || self.listen.is_some()
     }
 
-    /// The launcher's argument: `none`, or `connect=80,8080` and `listen=0` (`listen_any=8080`
-    /// for every address), joined by `;`.
+    /// The launcher's argument: `none`, or `connect=80,8080`, `connections=2` and `listen=0`
+    /// (`listen_any=8080` for every address), joined by `;`. The launcher needs only how many
+    /// connections it gets, not where they go.
     fn encode(&self) -> String {
         let mut parts = Vec::new();
         if !self.connect.is_empty() {
             let ports: Vec<String> = self.connect.iter().map(u16::to_string).collect();
             parts.push(format!("connect={}", ports.join(",")));
+        }
+        if !self.connections.is_empty() {
+            parts.push(format!("connections={}", self.connections.len()));
         }
         if let Some(port) = self.listen {
             let listen = if self.serve_anywhere {
@@ -293,7 +303,25 @@ impl Net {
             parts.join(";")
         }
     }
+}
 
+/// The network as the launcher learns it from its argument: the ports the program may connect
+/// to itself, how many connections lengua hands it, and its listener.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Handover {
+    connect: Vec<u16>,
+    connections: usize,
+    listen: Option<u16>,
+    serve_anywhere: bool,
+}
+
+impl Handover {
+    /// Whether the program uses the network at all.
+    fn is_used(&self) -> bool {
+        !self.connect.is_empty() || self.connections > 0 || self.listen.is_some()
+    }
+
+    /// Reads what [`Net::encode`] wrote.
     fn decode(text: &str) -> Result<Self, String> {
         let mut net = Self::default();
         let bad = || format!("{text:?} isn't a network setting");
@@ -303,6 +331,13 @@ impl Net {
                     for port in ports.split(',') {
                         net.connect.push(port.parse().map_err(|_| bad())?);
                     }
+                }
+                Some(("connections", count)) => {
+                    net.connections = count
+                        .parse()
+                        .ok()
+                        .filter(|count| (1..=connect::MAX_CONNECTIONS).contains(count))
+                        .ok_or_else(bad)?;
                 }
                 Some(("listen", port)) => net.listen = Some(port.parse().map_err(|_| bad())?),
                 Some(("listen_any", port)) => {
@@ -338,12 +373,26 @@ pub struct Started {
     stderr: tokio::task::JoinHandle<io::Result<Vec<u8>>>,
     overflowed: mpsc::Receiver<()>,
     supervisor: Option<(tokio::process::Child, SupervisorLines)>,
+    connected: Connected,
     /// The fresh working folder to read back, when it isn't one of the user's.
     work: Option<std::path::PathBuf>,
     _scratch: tempfile::TempDir,
 }
 
 type SupervisorLines = tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>;
+
+/// lengua's ends of the connections it made for a running program.
+#[derive(Default)]
+struct Connected {
+    /// The ones it relays to their places.
+    relays: Vec<Relay>,
+    /// The ones it handed over already ended, held until the program ends.
+    held: Vec<tokio::net::UnixStream>,
+    /// The test's own servers' ends, by the connection's number in the spec, from 0.
+    peers: Vec<(usize, tokio::net::UnixStream)>,
+    /// What became of each, in order.
+    made: Vec<Made>,
+}
 
 impl Started {
     /// The program's process id.
@@ -356,6 +405,18 @@ impl Started {
     #[must_use]
     pub const fn port(&self) -> Option<u16> {
         self.port
+    }
+
+    /// lengua's ends of the connections that go to the test's own servers, each with its
+    /// connection's number in the spec, from 0: the test's server speaks on them.
+    pub fn take_peers(&mut self) -> Vec<(usize, tokio::net::UnixStream)> {
+        std::mem::take(&mut self.connected.peers)
+    }
+
+    /// What became of each connection lengua made for the program, in order.
+    #[must_use]
+    pub fn connections(&self) -> &[Made] {
+        &self.connected.made
     }
 
     /// Waits for the program to end, stopping it at the time or output limit.
@@ -411,6 +472,12 @@ impl Started {
             }
         };
         self.writer.abort();
+        // What the program sent last on its connections reaches their places; then lengua's
+        // ends close, now that nothing can read them as a reset.
+        for relay in &mut self.connected.relays {
+            relay.finish().await;
+        }
+        self.connected.held.clear();
         let stdout = self.stdout.await.map_err(io::Error::other)??;
         let stderr = self.stderr.await.map_err(io::Error::other)??;
         let (supplied, random_asked) = match self.supervisor.as_mut() {
@@ -444,6 +511,7 @@ impl Started {
             files,
             supplied,
             random_asked,
+            connections: std::mem::take(&mut self.connected.made),
         })
     }
 }
@@ -479,6 +547,7 @@ pub async fn start(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<
         port,
         supervisor,
         counters,
+        connected,
     } = launch_job(launcher, &job, &limits, &folder, scratch.path(), streams).await?;
     let began = std::time::Instant::now();
 
@@ -537,6 +606,7 @@ pub async fn start(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<
         stderr,
         overflowed,
         supervisor,
+        connected,
         work: job.folder.is_none().then_some(work),
         _scratch: scratch,
     })
@@ -575,6 +645,7 @@ pub async fn attached(launcher: &Path, job: Job<'_>) -> io::Result<End> {
         pid,
         port,
         supervisor,
+        mut connected,
         ..
     } = launch_job(launcher, &job, &limits, &folder, scratch.path(), streams).await?;
     if let Some(port) = port {
@@ -582,6 +653,16 @@ pub async fn attached(launcher: &Path, job: Job<'_>) -> io::Result<End> {
             eprintln!("lengua-mcp: serving on port {port} of every address of this computer");
         } else {
             eprintln!("lengua-mcp: serving on 127.0.0.1:{port}");
+        }
+    }
+    // The program can't tell a place that refused it from one that broke off; its user can.
+    for made in &connected.made {
+        if let Some(problem) = &made.problem {
+            eprintln!(
+                "lengua-mcp: couldn't connect to {} ({problem}), so the program got that \
+                 connection already ended",
+                made.place
+            );
         }
     }
     let program = rustix::process::Pid::from_raw(pid);
@@ -599,6 +680,10 @@ pub async fn attached(launcher: &Path, job: Job<'_>) -> io::Result<End> {
             _ = terminate.recv() => forward(rustix::process::Signal::TERM),
         }
     };
+    for relay in &mut connected.relays {
+        relay.finish().await;
+    }
+    connected.held.clear();
     if let Some((mut supervisor, _)) = supervisor {
         let _ = supervisor.wait().await;
     }
@@ -623,6 +708,7 @@ struct Launched {
     port: Option<u16>,
     supervisor: Option<(tokio::process::Child, SupervisorLines)>,
     counters: [Option<Counter>; 3],
+    connected: Connected,
 }
 
 /// Starts `job` through `launcher` in `folder`, with `streams` as its standard input, output and
@@ -638,6 +724,25 @@ async fn launch_job(
     let socket = scratch.join("go");
     let listener = UnixListener::bind(&socket)?;
     let net = job.net.cloned().unwrap_or_default();
+    if net.connections.len() > connect::MAX_CONNECTIONS {
+        return Err(io::Error::other(format!(
+            "a program gets at most {} connections",
+            connect::MAX_CONNECTIONS
+        )));
+    }
+    // Each connection's two ends, and the ones lengua makes, made while the launcher starts.
+    let mut pairs = Vec::new();
+    let mut making = Vec::new();
+    for reach in &net.connections {
+        pairs.push(connect::pair()?);
+        making.push(match reach {
+            Reach::ThisComputer(_) | Reach::Host(..) => {
+                let reach = reach.clone();
+                Some(tokio::spawn(async move { connect::make(&reach).await }))
+            }
+            Reach::Peer | Reach::Nowhere => None,
+        });
+    }
     // The supervisor checks where a program that may reach only this computer connects; under
     // QEMU it would see QEMU's own calls, and on some CPUs it doesn't run yet. The tests that
     // need it aren't run there.
@@ -774,7 +879,46 @@ async fn launch_job(
                 .or_else(|| attach(Software::TASK_CLOCK, pid, false)),
         ]
     };
-    go.write_all(&[1]).await?;
+    // Every connection is made, or found not to be, before the program starts: its first read
+    // or write on one never depends on how soon lengua got through.
+    let mut connected = Connected::default();
+    let mut ends = Vec::new();
+    for (number, ((pair, reach), making)) in pairs
+        .into_iter()
+        .zip(&net.connections)
+        .zip(making)
+        .enumerate()
+    {
+        ends.push(pair.program);
+        let place = reach.describe();
+        let problem = match (reach, making) {
+            (Reach::Peer, _) => {
+                connected.peers.push((number, pair.lengua));
+                None
+            }
+            (_, Some(making)) => match making.await.map_err(|error| error.to_string()) {
+                Ok(Ok(stream)) => {
+                    connected.relays.push(Relay::start(pair.lengua, stream));
+                    None
+                }
+                Ok(Err(problem)) | Err(problem) => {
+                    connect::shut(&pair.lengua);
+                    connected.held.push(pair.lengua);
+                    Some(problem)
+                }
+            },
+            (_, None) => {
+                connect::shut(&pair.lengua);
+                connected.held.push(pair.lengua);
+                Some("nothing listens there".to_owned())
+            }
+        };
+        connected.made.push(Made { place, problem });
+    }
+    send_go(&go, &ends).await?;
+    // The program's ends are its own now: lengua's copies go, so the program's exit is the end
+    // of what it sends.
+    drop(ends);
     drop(go);
     Ok(Launched {
         child,
@@ -782,7 +926,43 @@ async fn launch_job(
         port,
         supervisor,
         counters,
+        connected,
     })
+}
+
+/// Tells the launcher to go on, handing it the program's ends of its connections.
+async fn send_go(
+    go: &tokio::net::UnixStream,
+    ends: &[std::os::unix::net::UnixStream],
+) -> io::Result<()> {
+    use std::mem::MaybeUninit;
+    use std::os::fd::AsFd;
+
+    use rustix::net::{SendAncillaryBuffer, SendAncillaryMessage, SendFlags};
+    let descriptors: Vec<_> = ends.iter().map(AsFd::as_fd).collect();
+    loop {
+        go.writable().await?;
+        let mut space =
+            [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(connect::MAX_CONNECTIONS))];
+        let mut control = SendAncillaryBuffer::new(&mut space);
+        if !descriptors.is_empty() && !control.push(SendAncillaryMessage::ScmRights(&descriptors)) {
+            return Err(io::Error::other("too many connections to hand over"));
+        }
+        let sent = go.try_io(tokio::io::Interest::WRITABLE, || {
+            rustix::net::sendmsg(
+                go,
+                &[io::IoSlice::new(&[1])],
+                &mut control,
+                SendFlags::empty(),
+            )
+            .map_err(io::Error::from)
+        });
+        match sent {
+            Ok(_) => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 /// Gives the supervisor the launcher's process id and the supply, and waits until it traces the
@@ -988,7 +1168,7 @@ pub fn launch(mut args: impl Iterator<Item = OsString>) -> ExitCode {
         eprintln!("lengua-mcp: the environment isn't one lengua wrote");
         return ExitCode::from(127);
     };
-    let net = match Net::decode(&network.to_string_lossy()) {
+    let net = match Handover::decode(&network.to_string_lossy()) {
         Ok(net) => net,
         Err(problem) => {
             eprintln!("lengua-mcp: {problem}");
@@ -1019,17 +1199,27 @@ pub fn launch(mut args: impl Iterator<Item = OsString>) -> ExitCode {
         eprintln!("lengua-mcp: couldn't let the supervisor trace the program: {error}");
         return ExitCode::from(127);
     }
-    let mut go = [0_u8; 1];
     let signalled = std::os::unix::net::UnixStream::connect(&socket).and_then(|mut stream| {
         if let Some(listener) = &listener {
             stream.write_all(&listener.local_addr()?.port().to_be_bytes())?;
         }
-        stream.read_exact(&mut go)
+        receive_go(&stream)
     });
-    if let Err(error) = signalled {
-        eprintln!("lengua-mcp: no go signal from the server: {error}");
-        return ExitCode::from(127);
-    }
+    let ends = match signalled {
+        Ok(ends) => ends,
+        Err(error) => {
+            eprintln!("lengua-mcp: no go signal from the server: {error}");
+            return ExitCode::from(127);
+        }
+    };
+    // Each connection at its own number, from 4, kept open into the program.
+    let connections = match place_connections(ends, net.connections) {
+        Ok(connections) => connections,
+        Err(problem) => {
+            eprintln!("lengua-mcp: {problem}");
+            return ExitCode::from(127);
+        }
+    };
     let confined = parse_confinement(&syscalls, &file_limit).and_then(
         |(syscalls, traced, file_limit, emulated)| {
             confine(
@@ -1046,17 +1236,121 @@ pub fn launch(mut args: impl Iterator<Item = OsString>) -> ExitCode {
         eprintln!("lengua-mcp: couldn't confine the program: {problem}");
         return ExitCode::from(127);
     }
-    // The program's own variables reach it only now: the launcher itself ran with none.
-    let error = std::process::Command::new(&program)
-        .args(&rest)
-        .env_clear()
-        .envs(environment)
-        .exec();
+    // The program's own variables reach it only now: the launcher itself ran with none. It
+    // keeps the launcher's ignored SIGPIPE, which std's `Command` would set back: a write to a
+    // closed pipe or connection is an error on every target, as Windows makes it, not a signal.
+    let error = become_program(&program, &rest, &environment);
+    drop(connections);
     eprintln!(
         "lengua-mcp: couldn't start {}: {error}",
         Path::new(&program).display()
     );
     ExitCode::from(127)
+}
+
+/// Replaces this process with `program`, given `args` and only `environment`, keeping what the
+/// launcher set up: its confinement, its descriptors and its ignored SIGPIPE. Returns only when
+/// it can't.
+fn become_program(
+    program: &OsString,
+    args: &[OsString],
+    environment: &[(String, String)],
+) -> String {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt as _;
+    let text = |bytes: &[u8]| CString::new(bytes).map_err(|_| "a NUL in its arguments".to_owned());
+    let made = || -> Result<(CString, Vec<CString>, Vec<CString>), String> {
+        let path = text(program.as_bytes())?;
+        let mut argv = vec![path.clone()];
+        for arg in args {
+            argv.push(text(arg.as_bytes())?);
+        }
+        let mut envp = Vec::new();
+        for (name, value) in environment {
+            envp.push(text(format!("{name}={value}").as_bytes())?);
+        }
+        Ok((path, argv, envp))
+    };
+    let (path, argv, envp) = match made() {
+        Ok(made) => made,
+        Err(problem) => return problem,
+    };
+    // The signals the launcher blocked, none, are blocked for the program too: start it with
+    // none, as std's `Command` would.
+    let _ = nix::sys::signal::sigprocmask(
+        nix::sys::signal::SigmaskHow::SIG_SETMASK,
+        Some(&nix::sys::signal::SigSet::empty()),
+        None,
+    );
+    match nix::unistd::execve(&path, &argv, &envp) {
+        Ok(never) => match never {},
+        Err(errno) => io::Error::from(errno).to_string(),
+    }
+}
+
+/// Reads the server's go signal, and the program's ends of its connections with it.
+fn receive_go(stream: &std::os::unix::net::UnixStream) -> io::Result<Vec<std::os::fd::OwnedFd>> {
+    use std::mem::MaybeUninit;
+
+    use rustix::net::{RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags};
+    let mut go = [0_u8; 1];
+    let mut space =
+        [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(connect::MAX_CONNECTIONS))];
+    let mut control = RecvAncillaryBuffer::new(&mut space);
+    let received = rustix::net::recvmsg(
+        stream,
+        &mut [io::IoSliceMut::new(&mut go)],
+        &mut control,
+        RecvFlags::CMSG_CLOEXEC,
+    )?;
+    if received.bytes != 1 {
+        return Err(io::Error::other("the server ended without one"));
+    }
+    let mut ends = Vec::new();
+    for message in control.drain() {
+        if let RecvAncillaryMessage::ScmRights(descriptors) = message {
+            ends.extend(descriptors);
+        }
+    }
+    Ok(ends)
+}
+
+/// Puts each of the program's connections at its own number, from
+/// [`connect::FIRST_DESCRIPTOR`] in order, kept open across `exec`; checks there are `count`.
+fn place_connections(
+    ends: Vec<std::os::fd::OwnedFd>,
+    count: usize,
+) -> Result<Vec<std::os::fd::OwnedFd>, String> {
+    use std::os::fd::AsRawFd as _;
+    if ends.len() != count {
+        return Err(format!(
+            "the server handed over {} connections, not {count}",
+            ends.len()
+        ));
+    }
+    // Out of the way first, so nothing holds a number a connection needs.
+    let aside = ends
+        .iter()
+        .map(|end| rustix::io::fcntl_dupfd_cloexec(end, 1000))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("couldn't keep the connections: {error}"))?;
+    drop(ends);
+    let mut placed = Vec::new();
+    for (index, end) in aside.iter().enumerate() {
+        let wanted = connect::FIRST_DESCRIPTOR + i32::try_from(index).unwrap_or(i32::MAX);
+        let moved = rustix::io::fcntl_dupfd_cloexec(end, wanted)
+            .map_err(|error| format!("couldn't keep the connections: {error}"))?;
+        if moved.as_raw_fd() != wanted {
+            return Err(format!(
+                "connection {} isn't file descriptor {wanted}",
+                index + 1
+            ));
+        }
+        rustix::io::fcntl_setfd(&moved, rustix::io::FdFlags::empty())
+            .map_err(|error| format!("couldn't keep the connections open: {error}"))?;
+        placed.push(moved);
+    }
+    Ok(placed)
 }
 
 /// Listens on `port` of the loopback (any free port for 0) with file descriptor 3, kept open
@@ -1251,7 +1545,7 @@ fn confine(
     syscalls: &[Allowed],
     traced: &[i64],
     file_limit: Option<u64>,
-    net: &Net,
+    net: &Handover,
     emulated: bool,
 ) -> Result<(), String> {
     let abi = ABI::V6;

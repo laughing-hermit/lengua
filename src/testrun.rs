@@ -716,6 +716,7 @@ async fn check_one(
     let net = Net {
         connect: port.into_iter().collect(),
         anywhere: false,
+        connections: Vec::new(),
         listen: network.listens.map(|_| 0),
         // Tests serve on the loopback, whoever the spec serves.
         serve_anywhere: false,
@@ -1500,6 +1501,7 @@ mod tests {
             folders: BTreeSet::new(),
             supplied: None,
             random_asked: None,
+            connections: Vec::new(),
         }
     }
 
