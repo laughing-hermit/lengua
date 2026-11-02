@@ -382,6 +382,16 @@ impl Checker<'_, '_> {
                             ),
                         )
                     }
+                    None if crate::syscalls::connects(profile, number) => (
+                        "a program never connects by itself: lengua makes each connection its \
+                         spec names before the program starts and hands it over, as file \
+                         descriptors 4, 5 and on, in the order of `- Network: connects to …`"
+                            .to_owned(),
+                        "take out the socket and connect calls, and read and write the \
+                         connection lengua hands over: descriptor 4 for the first place spec.md \
+                         names"
+                            .to_owned(),
+                    ),
                     None => (
                         format!(
                             "system call {number} isn't one the spec allows (it allows {})",

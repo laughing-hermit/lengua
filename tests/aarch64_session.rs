@@ -419,10 +419,9 @@ async fn the_aarch64_server_and_terminal_templates_pass_their_tests() {
 }
 
 /// The AArch64 echo server and fetch client, x86-64's examples compiled for AArch64, pass their
-/// tests through the server: a server whose clients the tests bring, and a client of the tests'
-/// own server, whose connection lengua holds to this computer. Natively every test runs; under
-/// QEMU, which has no supervisor to hold a connection, the client's tests that connect are left to
-/// an ARM64 computer, as the report says.
+/// tests through the server: a server whose clients the tests bring, and a client whose
+/// connection lengua makes and hands over, answered by the test's own server. Every test runs,
+/// natively and under QEMU alike: lengua's connections need no supervisor.
 #[tokio::test]
 async fn the_aarch64_echo_and_fetch_pass_their_tests() {
     let native = cfg!(target_arch = "aarch64");
@@ -438,7 +437,7 @@ async fn the_aarch64_echo_and_fetch_pass_their_tests() {
         let report = done(&session, &program).await;
         eprintln!("{name}: {}", report["tests"]);
         let passed = any_line(&report["tests"], "follows every rule and passed all");
-        assert!(passed || (!native && name == "fetch"), "{name}: {report}");
+        assert!(passed, "{name}: {report}");
     }
     session.service.cancel().await.expect("close the session");
 }

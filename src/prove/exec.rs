@@ -3544,26 +3544,6 @@ impl<'a> Cpu<'a> {
                     (-EBADF).cast_unsigned()
                 }
             }
-            Some(Call::Socket) => {
-                let (domain, kind, protocol) = (
-                    self.constant(rdi)? & 0xffff_ffff,
-                    self.constant(rsi)? & 0xffff_ffff,
-                    self.constant(rdx)? & 0xffff_ffff,
-                );
-                self.socket(domain, kind, protocol)?
-            }
-            Some(Call::Connect) => {
-                let fd = self.constant(rdi)? & 0xffff_ffff;
-                let address = self.constant(rsi)?;
-                self.lent(
-                    1,
-                    address,
-                    self.constant(rdx)? & 0xffff_ffff,
-                    false,
-                    "connect",
-                )?;
-                return self.connect(fd, address);
-            }
             Some(Call::Accept | Call::Accept4) => {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 let (address, length) = (self.constant(rsi)?, self.constant(rdx)?);

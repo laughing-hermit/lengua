@@ -22,7 +22,7 @@ use std::process::{ExitCode, Stdio};
 use std::time::Duration;
 
 use landlock::{
-    ABI, Access as _, AccessFs, AccessNet, NetPort, PathBeneath, PathFd, Ruleset, RulesetAttr as _,
+    ABI, Access as _, AccessFs, AccessNet, PathBeneath, PathFd, Ruleset, RulesetAttr as _,
     RulesetCreatedAttr as _, RulesetStatus, Scope,
 };
 use seccompiler::{
@@ -41,7 +41,7 @@ use crate::connect::{self, Made, Reach, Relay};
 use crate::platform::{Allowed, Pin};
 use crate::supervise::SUPERVISE_FLAG;
 use crate::supply::Supply;
-use crate::syscalls::host::{CLOCK_GETTIME, CLOCK_NANOSLEEP, CONNECT, GETRANDOM};
+use crate::syscalls::host::{CLOCK_GETTIME, CLOCK_NANOSLEEP, GETRANDOM};
 
 /// The command-line flag that starts the binary as a launcher.
 pub const LAUNCH_FLAG: &str = "--launch";
@@ -250,15 +250,10 @@ fn exact_count(counter: &mut Counter) -> Option<u64> {
     (data.time_running() == data.time_enabled()).then(|| data.count())
 }
 
-/// The network a run may use.
+/// The network a run may use. The program itself holds none: lengua makes its connections and
+/// binds its listener, and hands them over.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Net {
-    /// TCP ports the program may connect to.
-    pub connect: Vec<u16>,
-    /// Whether it may connect to other computers on them: otherwise lengua's supervisor reads
-    /// each connection's address and refuses any computer but this one, which the kernel's
-    /// port rules can't.
-    pub anywhere: bool,
     /// The connections lengua makes for the program before it starts and hands it, in order,
     /// as descriptors 4, 5 and on.
     pub connections: Vec<Reach>,
@@ -274,18 +269,14 @@ impl Net {
     /// Whether the program uses the network at all.
     #[must_use]
     pub fn is_used(&self) -> bool {
-        !self.connect.is_empty() || !self.connections.is_empty() || self.listen.is_some()
+        !self.connections.is_empty() || self.listen.is_some()
     }
 
-    /// The launcher's argument: `none`, or `connect=80,8080`, `connections=2` and `listen=0`
-    /// (`listen_any=8080` for every address), joined by `;`. The launcher needs only how many
-    /// connections it gets, not where they go.
+    /// The launcher's argument: `none`, or `connections=2` and `listen=0` (`listen_any=8080`
+    /// for every address), joined by `;`. The launcher needs only how many connections it gets,
+    /// not where they go.
     fn encode(&self) -> String {
         let mut parts = Vec::new();
-        if !self.connect.is_empty() {
-            let ports: Vec<String> = self.connect.iter().map(u16::to_string).collect();
-            parts.push(format!("connect={}", ports.join(",")));
-        }
         if !self.connections.is_empty() {
             parts.push(format!("connections={}", self.connections.len()));
         }
@@ -305,11 +296,10 @@ impl Net {
     }
 }
 
-/// The network as the launcher learns it from its argument: the ports the program may connect
-/// to itself, how many connections lengua hands it, and its listener.
+/// The network as the launcher learns it from its argument: how many connections lengua hands
+/// the program, and its listener.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct Handover {
-    connect: Vec<u16>,
     connections: usize,
     listen: Option<u16>,
     serve_anywhere: bool,
@@ -318,7 +308,7 @@ struct Handover {
 impl Handover {
     /// Whether the program uses the network at all.
     fn is_used(&self) -> bool {
-        !self.connect.is_empty() || self.connections > 0 || self.listen.is_some()
+        self.connections > 0 || self.listen.is_some()
     }
 
     /// Reads what [`Net::encode`] wrote.
@@ -327,11 +317,6 @@ impl Handover {
         let bad = || format!("{text:?} isn't a network setting");
         for part in text.split(';').filter(|part| *part != "none") {
             match part.split_once('=') {
-                Some(("connect", ports)) => {
-                    for port in ports.split(',') {
-                        net.connect.push(port.parse().map_err(|_| bad())?);
-                    }
-                }
                 Some(("connections", count)) => {
                     net.connections = count
                         .parse()
@@ -743,16 +728,6 @@ async fn launch_job(
             Reach::Peer | Reach::Nowhere => None,
         });
     }
-    // The supervisor checks where a program that may reach only this computer connects; under
-    // QEMU it would see QEMU's own calls, and on some CPUs it doesn't run yet. The tests that
-    // need it aren't run there.
-    if (job.emulated || !crate::supervise::AVAILABLE) && !net.connect.is_empty() && !net.anywhere {
-        return Err(io::Error::other(
-            "the program may connect only to this computer, which lengua checks where its \
-             supervisor can follow the program's own calls: not under QEMU, and not yet on \
-             this CPU",
-        ));
-    }
     let supply = job
         .supply
         .filter(|supply| !supply.is_empty() && !job.emulated);
@@ -767,12 +742,6 @@ async fn launch_job(
         }
         traced
     });
-    // A program may reach only this computer unless its spec says any computer: the
-    // supervisor reads where each connection goes, since the kernel's rules are by port alone.
-    let local = !net.connect.is_empty() && !net.anywhere;
-    if local {
-        traced.push(CONNECT);
-    }
     // A test's sleeps end at once; a real run's take as long as they say.
     let sleeps = job.supply.is_some()
         && !job.emulated
@@ -783,9 +752,9 @@ async fn launch_job(
     if sleeps {
         traced.push(CLOCK_NANOSLEEP);
     }
-    let watched = supply.is_some() || local || sleeps;
+    let watched = supply.is_some() || sleeps;
     let nothing_supplied = Supply::default();
-    let supply = supply.or_else(|| (local || sleeps).then_some(&nothing_supplied));
+    let supply = supply.or_else(|| sleeps.then_some(&nothing_supplied));
     let syscalls: Vec<String> = if job.emulated {
         vec![EMULATED.to_owned()]
     } else {
@@ -862,7 +831,7 @@ async fn launch_job(
     // The launcher has let the supervisor trace it; now it may, before the program starts.
     let supervisor = match (supervisor.take(), supply) {
         (Some(mut supervisor), Some(supply)) => {
-            let lines = attach_supervisor(&mut supervisor, pid, supply, local).await?;
+            let lines = attach_supervisor(&mut supervisor, pid, supply).await?;
             Some((supervisor, lines))
         }
         _ => None,
@@ -971,16 +940,14 @@ async fn attach_supervisor(
     supervisor: &mut tokio::process::Child,
     launcher: i32,
     supply: &Supply,
-    local: bool,
 ) -> io::Result<SupervisorLines> {
     use tokio::io::AsyncBufReadExt as _;
     let mut input = supervisor
         .stdin
         .take()
         .ok_or_else(|| io::Error::other("no supervisor stdin"))?;
-    let reach = if local { "local" } else { "any" };
     input
-        .write_all(format!("{launcher}\n{reach}\n{}", supply.encode()).as_bytes())
+        .write_all(format!("{launcher}\n{}", supply.encode()).as_bytes())
         .await?;
     drop(input);
     let output = supervisor
@@ -1474,9 +1441,6 @@ fn pin_rules(pin: Pin) -> Result<Vec<SeccompRule>, seccompiler::BackendError> {
     let condition = |argument, length, operator, value| {
         SeccompCondition::new(argument, length, operator, value)
     };
-    const SOCK_STREAM: u64 = 1;
-    // Everything but SOCK_NONBLOCK and SOCK_CLOEXEC, which only change how it waits and closes.
-    const SOCKET_TYPE: u64 = 0xFFF7_F7FF;
     const MSG_NOSIGNAL: u64 = 0x4000;
     match pin {
         Pin::Any => Ok(Vec::new()),
@@ -1486,21 +1450,6 @@ fn pin_rules(pin: Pin) -> Result<Vec<SeccompRule>, seccompiler::BackendError> {
             SeccompCmpOp::Eq,
             value,
         )?])?]),
-        // AF_INET or AF_INET6, a stream, and protocol 0 or IPPROTO_TCP: never UDP, raw or
-        // local sockets, or MPTCP.
-        Pin::TcpSocket => {
-            let mut rules = Vec::new();
-            for domain in [2, 10] {
-                for protocol in [0, 6] {
-                    rules.push(SeccompRule::new(vec![
-                        condition(0, Dword, SeccompCmpOp::Eq, domain)?,
-                        condition(1, Dword, SeccompCmpOp::MaskedEq(SOCKET_TYPE), SOCK_STREAM)?,
-                        condition(2, Dword, SeccompCmpOp::Eq, protocol)?,
-                    ])?);
-                }
-            }
-            Ok(rules)
-        }
         Pin::ListeningSocket => Ok(vec![SeccompRule::new(vec![condition(
             0,
             Dword,
@@ -1563,23 +1512,16 @@ fn confine(
                 AccessFs::Execute | AccessFs::ReadFile,
             ))
         })
-        // TCP connections only to the ports the spec names; binding none, since a server's
-        // socket is already listening.
-        .and_then(|ruleset| {
-            ruleset.add_rules(
-                net.connect
-                    .iter()
-                    .map(|port| Ok(NetPort::new(*port, AccessNet::ConnectTcp))),
-            )
-        })
+        // No TCP connection or binding at all: lengua makes the program's connections and
+        // binds a server's socket before it starts.
         .and_then(|ruleset| ruleset.restrict_self())
         .map_err(|error| format!("Landlock: {error}"))?;
-    // A program on the network relies on Landlock for its ports: a kernel that can't hold it
-    // to them doesn't run it.
+    // A program on the network is held off connecting or binding by Landlock as well as
+    // seccomp: a kernel that can't hold it so doesn't run it.
     if net.is_used() && status.ruleset != RulesetStatus::FullyEnforced {
         return Err(
-            "this kernel can't hold the program to the ports its spec names; Landlock needs \
-             Linux 6.7 or newer"
+            "this kernel can't hold the program off the network by Landlock; that needs Linux \
+             6.7 or newer"
                 .into(),
         );
     }

@@ -1169,9 +1169,6 @@ enum Part {
     Delivery(Delivery),
 }
 
-/// The test server's port in the samples the model is checked against.
-const SAMPLE_PORT: &str = "40000";
-
 /// The name a counterexample gives the delivery it was found with.
 pub const DELIVERY: &str = "(delivery)";
 
@@ -2917,11 +2914,6 @@ fn by_length(
         };
         each.push((name.clone(), these));
     }
-    // The test server's port, which the kernel chooses: any port at all.
-    if !block.server.is_empty() && !block.vars.iter().any(|(name, _)| name == "port") {
-        let any = Generator::Int { lo: 1, hi: 65535 };
-        each.push(("port".to_owned(), parts("port", &any, 0)?));
-    }
     // What a test's peer sends arrives whole or cut, each way the tests' runs and the merges of
     // their pieces cut it; through fill, every way at once.
     if (!block.server.is_empty() || !block.client.is_empty()) && !image.has_fill() {
@@ -3251,14 +3243,20 @@ fn talks(
                 .into(),
         );
     }
-    if made.len() != block.server.len()
+    // The connections lengua made: each answered by a test's server must have sent exactly what
+    // that server waits for. An ended one takes nothing.
+    let answered: Vec<_> = made.iter().filter(|connection| !connection.ended).collect();
+    if answered.len() != block.server.len()
         || taken.len() != block.client.len()
         || block.serves != ended_serving
     {
         return Ok(pool.boolean(false));
     }
     let mut checks = Vec::new();
-    for (connection, wanted) in made.iter().zip(receives) {
+    for connection in answered {
+        let Some(wanted) = receives.get(connection.exchange) else {
+            return Ok(pool.boolean(false));
+        };
         if connection.sent.len() != wanted.len() {
             return Ok(pool.boolean(false));
         }
@@ -3610,13 +3608,19 @@ fn prove_shape(
     let receives: Vec<Vec<Term>> = block
         .server
         .iter()
-        .map(|(wanted, _)| pattern_bytes(&mut pool, wanted, &inputs))
+        .map(|(_, wanted, _)| pattern_bytes(&mut pool, wanted, &inputs))
         .collect::<Result<_, _>>()?;
     let replies: Vec<Vec<Term>> = block
         .server
         .iter()
-        .map(|(_, reply)| pattern_bytes(&mut pool, reply, &inputs))
+        .map(|(_, _, reply)| pattern_bytes(&mut pool, reply, &inputs))
         .collect::<Result<_, _>>()?;
+    // Each connection the spec names is made before the program starts: answered by the test's
+    // server for it, or ended.
+    let made = made_connections(
+        block.connections,
+        block.server.iter().map(|(connection, _, _)| *connection),
+    );
     let sends: Vec<(Vec<Term>, bool)> = block
         .client
         .iter()
@@ -3627,22 +3631,17 @@ fn prove_shape(
             ))
         })
         .collect::<Result<_, String>>()?;
-    let port = numbers
-        .get("port")
-        .filter(|_| !block.server.is_empty())
-        .map(|number| number.term);
     // Clients at once take their steps in every order, and also with each but the newest
     // holding its last byte until every newer client has its answer, as the test's do: then a
     // server that waits on one client while another waits on it is caught.
     let newest = sends.len().saturating_sub(1);
     let network_for = |delivery: Delivery, hold: bool| exec::net::Network {
-        port,
         server: receives
             .iter()
             .zip(&replies)
             .map(|(wanted, reply)| (wanted.clone(), cut(reply, delivery)))
             .collect(),
-        made: Vec::new(),
+        made: made.clone(),
         client: sends
             .iter()
             .enumerate()
@@ -4203,10 +4202,21 @@ fn within(
         .map_err(|error| Stop::Unproven(format!("the solver failed: {error}")))
 }
 
-/// A sample's text as the model takes it: the test server's port, which a real run's kernel
-/// chooses, is one for the samples.
+/// The connections lengua makes before a test's program starts, in the spec's order: each the
+/// place in the test's servers of the one that answers it, or `None` for one handed over ended.
+fn made_connections(count: usize, answering: impl Iterator<Item = usize>) -> Vec<Option<usize>> {
+    let mut made = vec![None; count];
+    for (server, connection) in answering.enumerate() {
+        if let Some(slot) = made.get_mut(connection) {
+            *slot = Some(server);
+        }
+    }
+    made
+}
+
+/// A sample's text as the model takes it.
 fn sample_text(text: &str) -> String {
-    text.replace(crate::testfile::PORT_TEXT, SAMPLE_PORT)
+    text.to_owned()
 }
 
 /// The state a sample's run starts in: its arguments, input, files, folders, environment,
@@ -4239,6 +4249,10 @@ fn sample_start(
             )
         })
         .collect();
+    let made = made_connections(
+        case.connections,
+        case.server.iter().map(|reply| reply.connection),
+    );
     let client = case
         .client
         .iter()
@@ -4263,10 +4277,8 @@ fn sample_start(
         })
         .collect();
     let network = exec::net::Network {
-        port: (!case.server.is_empty())
-            .then(|| pool.bv(WIDTH, SAMPLE_PORT.parse().unwrap_or(40000))),
         server,
-        made: Vec::new(),
+        made,
         client,
         listening: listens,
         at_once: case.clients_at_once,
@@ -4378,12 +4390,19 @@ pub fn agrees(
             && case.folders_after.iter().all(|name| run.is_folder(name));
         // The network as the test's peers saw it: what the server received, what the client
         // was answered, and a server still serving when it should be.
-        let made: Vec<_> = run.connections.iter().filter(|c| !c.accepted).collect();
+        let answered: Vec<_> = run
+            .connections
+            .iter()
+            .filter(|c| !c.accepted && !c.ended)
+            .collect();
         let taken: Vec<_> = run.connections.iter().filter(|c| c.accepted).collect();
-        let talked = made.len() == case.server.len()
+        let talked = answered.len() == case.server.len()
             && taken.len() == case.client.len()
-            && made.iter().zip(&case.server).all(|(connection, reply)| {
-                text(&connection.sent).is_some_and(|sent| sent == fill(&reply.receives).as_bytes())
+            && answered.iter().all(|connection| {
+                case.server.get(connection.exchange).is_some_and(|reply| {
+                    text(&connection.sent)
+                        .is_some_and(|sent| sent == fill(&reply.receives).as_bytes())
+                })
             })
             && taken
                 .iter()

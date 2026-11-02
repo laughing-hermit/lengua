@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use lengua::connect::Reach;
-use lengua::platform::{Allowed, Profile};
+use lengua::platform::{Allowed, Pin, Profile};
 use lengua::runner::{End, Job, Limits, Net, Run, run, start};
 use lengua::spec::{Syscall, Use};
 use lengua::supply::Supply;
@@ -630,82 +630,27 @@ async fn run_on(executable: &Path, syscalls: &[Allowed], net: &Net) -> Run {
 }
 
 #[tokio::test]
-async fn programs_connect_only_to_approved_ports() {
+async fn a_program_never_holds_the_network() {
     let folder = tempfile::tempdir().expect("temporary folder");
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a free port");
     let port = listener.local_addr().expect("an address").port();
     let client = build(folder.path(), "client", &connects_to(port)).await;
-    let calls = network_syscalls(&[Syscall::Socket, Syscall::Connect, Syscall::Exit]);
-    let approved = Net {
-        connect: vec![port],
-        anywhere: false,
-        connections: Vec::new(),
-        listen: None,
-        serve_anywhere: false,
-    };
-    assert_eq!(run_on(&client, &calls, &approved).await.end, End::Exited(0));
-    let other = Net {
-        connect: vec![port.wrapping_add(1).max(1)],
-        anywhere: false,
-        connections: Vec::new(),
-        listen: None,
-        serve_anywhere: false,
-    };
+    // Even with lengua making a connection there for it, its own socket is a call no spec
+    // allows: stopped.
+    let net = connected(vec![Reach::ThisComputer(port)], false);
+    let calls = network_syscalls(&[Syscall::Read, Syscall::Sendto, Syscall::Exit]);
+    assert_eq!(run_on(&client, &calls, &net).await.end, End::Signaled(31));
+    // Were seccomp to let it open one, Landlock would still hold it off connecting anywhere.
+    let mut raw = network_syscalls(&[Syscall::Exit]);
+    raw.extend([41, 42].map(|number| Allowed {
+        number,
+        pin: Pin::Any,
+    }));
     assert_eq!(
-        run_on(&client, &calls, &other).await.end,
+        run_on(&client, &raw, &net).await.end,
         End::Exited(13),
-        "EACCES: the kernel refuses a port the spec doesn't name"
+        "EACCES: Landlock allows no program a connection of its own"
     );
-    // A UDP socket isn't TCP: stopped.
-    let udp = build(
-        folder.path(),
-        "udp",
-        &program(
-            "    mov eax, 41\n    mov edi, 2\n    mov esi, 2\n    xor edx, edx\n    syscall\n    \
-             mov eax, 60\n    xor edi, edi\n    syscall",
-            "",
-        ),
-    )
-    .await;
-    assert_eq!(run_on(&udp, &calls, &approved).await.end, End::Signaled(31));
-    // Another computer on an approved port: lengua refuses it, unless the spec says any
-    // computer, when the kernel lets the connection try.
-    let elsewhere = build(
-        folder.path(),
-        "elsewhere",
-        &connects_to_host(port, [192, 0, 2, 1]),
-    )
-    .await;
-    assert_eq!(
-        run_on(&elsewhere, &calls, &approved).await.end,
-        End::Exited(13),
-        "EACCES: lengua refuses a computer other than this one"
-    );
-    let anywhere = Net {
-        anywhere: true,
-        ..approved.clone()
-    };
-    let tried = run_on(&elsewhere, &calls, &anywhere).await;
-    assert_ne!(tried.end, End::Exited(13), "{tried:?}");
-}
-
-/// A program that connects to `host` on `port`, without waiting long, and exits with the
-/// error number.
-fn connects_to_host(port: u16, host: [u8; 4]) -> String {
-    program(
-        "    mov eax, 41\n    mov edi, 2\n    mov esi, 0x801\n    xor edx, edx\n    syscall\n    \
-         mov r12, rax\n    mov eax, 42\n    mov rdi, r12\n    lea rsi, [rip + address]\n    \
-         mov edx, 16\n    syscall\n    neg eax\n    mov edi, eax\n    mov eax, 60\n    syscall",
-        &format!(
-            ".data\naddress:\n    .word 2\n    .byte {}, {}\n    .byte {}, {}, {}, {}\n    .zero 8",
-            port >> 8,
-            port & 0xff,
-            host[0],
-            host[1],
-            host[2],
-            host[3]
-        ),
-    )
 }
 
 #[tokio::test]
@@ -727,8 +672,6 @@ async fn servers_take_connections_on_descriptor_3() {
     .await;
     let calls = network_syscalls(&[Syscall::Accept4, Syscall::Write, Syscall::Exit]);
     let net = Net {
-        connect: Vec::new(),
-        anywhere: false,
         connections: Vec::new(),
         listen: Some(0),
         serve_anywhere: false,
@@ -802,8 +745,6 @@ async fn servers_take_connections_on_descriptor_3() {
 /// after a listener at 3 when `listen` is set.
 fn connected(connections: Vec<Reach>, listen: bool) -> Net {
     Net {
-        connect: Vec::new(),
-        anywhere: false,
         connections,
         listen: listen.then_some(0),
         serve_anywhere: false,

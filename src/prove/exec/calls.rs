@@ -22,10 +22,6 @@ pub(super) enum Call {
     Ppoll,
     /// `ioctl`.
     Ioctl,
-    /// `socket`.
-    Socket,
-    /// `connect`.
-    Connect,
     /// `accept`.
     Accept,
     /// `accept4`.
@@ -73,8 +69,6 @@ impl Call {
                 (x86_64::FSTAT, Self::Fstat),
                 (x86_64::POLL, Self::Poll),
                 (x86_64::IOCTL, Self::Ioctl),
-                (x86_64::SOCKET, Self::Socket),
-                (x86_64::CONNECT, Self::Connect),
                 (x86_64::ACCEPT, Self::Accept),
                 (x86_64::ACCEPT4, Self::Accept4),
                 (x86_64::SENDTO, Self::Sendto),
@@ -101,8 +95,6 @@ impl Call {
                 (aarch64::CLOSE, Self::Close),
                 (aarch64::FSTAT, Self::Fstat),
                 (aarch64::IOCTL, Self::Ioctl),
-                (aarch64::SOCKET, Self::Socket),
-                (aarch64::CONNECT, Self::Connect),
                 (aarch64::ACCEPT, Self::Accept),
                 (aarch64::ACCEPT4, Self::Accept4),
                 (aarch64::SENDTO, Self::Sendto),

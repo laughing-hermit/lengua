@@ -15,11 +15,12 @@ use tokio::io::AsyncWriteExt as _;
 use serde::Serialize;
 
 use crate::checker::source::{Item, Operand, Source};
+use crate::connect::Reach;
 use crate::platform::Allowed;
 use crate::runner::{self, End, Job, Limits, Net, Run};
 use crate::spec::ASSERTION_EXIT_CODE;
 use crate::spec::Network;
-use crate::testfile::{Case, Example, Exchange, PORT_TEXT, Reply};
+use crate::testfile::{Case, Example, Exchange, Reply};
 use crate::testfile::{TestSuite, describe_inputs};
 
 /// The longest a program's tests may take together.
@@ -165,8 +166,6 @@ fn needs_the_supervisor(test: &Test<'_>, setting: Setting) -> Option<&'static st
         Some("random bytes the test supplies")
     } else if !test.clock.is_empty() {
         Some("a clock the test sets")
-    } else if !test.server.is_empty() {
-        Some("a server of the test's, whose connections lengua checks")
     } else if setting.sleeps {
         Some("sleeps the test ends at once")
     } else {
@@ -687,36 +686,21 @@ async fn check_one(
     emulated: bool,
 ) -> io::Result<(Run, Option<String>)> {
     let supply = crate::supply::Supply::parse(test.random, test.clock).unwrap_or_default();
-    // The test's own server listens before the program starts, on a free port of its own.
-    let server = if test.server.is_empty() {
-        None
-    } else {
-        Some(tokio::net::TcpListener::bind("127.0.0.1:0").await?)
-    };
-    let port = server
-        .as_ref()
-        .map(tokio::net::TcpListener::local_addr)
-        .transpose()?
-        .map(|address| address.port());
-    let fill = |text: &str| match port {
-        Some(port) => text.replace(PORT_TEXT, &port.to_string()),
-        None => text.to_owned(),
-    };
-    let args: Vec<String> = test.args.iter().map(|arg| fill(arg)).collect();
-    let stdin = fill(test.stdin);
-    let fill_files = |files: &BTreeMap<String, String>| -> BTreeMap<String, String> {
-        files
-            .iter()
-            .map(|(name, contents)| (name.clone(), fill(contents)))
-            .collect()
-    };
-    let (files, files_after) = (fill_files(test.files), fill_files(test.files_after));
-    // A test's program reaches only the test's own server, on this computer, whatever its spec
-    // allows a real run.
+    let args = test.args.to_vec();
+    let stdin = test.stdin;
+    // A test's program reaches only the test's own servers: each connection its spec names is
+    // answered by the test's server for it, or handed over ended when the test has none.
+    let connections = (0..network.connections.len())
+        .map(|number| {
+            if test.server.iter().any(|reply| reply.connection == number) {
+                Reach::Peer
+            } else {
+                Reach::Nowhere
+            }
+        })
+        .collect();
     let net = Net {
-        connect: port.into_iter().collect(),
-        anywhere: false,
-        connections: Vec::new(),
+        connections,
         listen: network.listens.map(|_| 0),
         // Tests serve on the loopback, whoever the spec serves.
         serve_anywhere: false,
@@ -727,7 +711,7 @@ async fn check_one(
         _ => Vec::new(),
     };
     let job = Job {
-        files: &files,
+        files: test.files,
         folders: test.folders,
         env: test.env,
         supply: Some(&supply),
@@ -737,26 +721,28 @@ async fn check_one(
         ..Job::new(program, &args, stdin.as_bytes(), syscalls)
     };
     let now = crate::expect::now();
-    let started = runner::start(launcher, job, Limits::default()).await?;
+    let mut started = runner::start(launcher, job, Limits::default()).await?;
     let mut problem = None;
-    let run = if let Some(listener) = server {
-        let replies: Vec<Reply> = test
-            .server
-            .iter()
-            .map(|reply| Reply {
-                receives: fill(&reply.receives),
-                replies: fill(&reply.replies),
-            })
-            .collect();
-        let peer = tokio::spawn(serve(listener, replies, delivery));
-        let run = started.wait().await?;
-        problem = match tokio::time::timeout(PEER_TIMEOUT, peer).await {
-            Ok(Ok(result)) => result.err(),
-            Ok(Err(error)) => Some(format!("the test's server failed: {error}")),
-            Err(_) => Some("the program ended before it finished with the test's server".into()),
-        };
-        run
-    } else if let Some(port) = started
+    // The test's servers speak on the program's own connections, each from the start.
+    let servers: Vec<_> = started
+        .take_peers()
+        .into_iter()
+        .map(|(number, stream)| {
+            let reply = test
+                .server
+                .iter()
+                .find(|reply| reply.connection == number)
+                .cloned();
+            let on = match network.connections.get(number) {
+                Some(place) if network.connections.len() > 1 => {
+                    format!(" on its connection to {}", place.describe())
+                }
+                _ => String::new(),
+            };
+            tokio::spawn(serve(stream, reply, delivery, on))
+        })
+        .collect();
+    let run = if let Some(port) = started
         .port()
         .filter(|_| !test.client.is_empty() || test.serves)
     {
@@ -780,13 +766,20 @@ async fn check_one(
     } else {
         started.wait().await?
     };
-    let (stdout, stderr) = (fill(test.stdout), fill(test.stderr));
+    for server in servers {
+        let found = match tokio::time::timeout(PEER_TIMEOUT, server).await {
+            Ok(Ok(result)) => result.err(),
+            Ok(Err(error)) => Some(format!("the test's server failed: {error}")),
+            Err(_) => Some("the program ended before it finished with the test's server".into()),
+        };
+        problem = problem.or(found);
+    }
     let expected = Expected {
-        stdout: &stdout,
-        stderr: &stderr,
+        stdout: test.stdout,
+        stderr: test.stderr,
         exit_code: test.exit_code,
-        files: &files,
-        files_after: &files_after,
+        files: test.files,
+        files_after: test.files_after,
         folders: test.folders,
         gone: test.gone,
         folders_after: test.folders_after,
@@ -822,74 +815,66 @@ async fn send(
     Ok(())
 }
 
-/// The test's own server: for each connection, reads exactly what the program must send,
-/// replies, closes its side, and expects nothing more.
+/// The test's own server on one of the program's connections, which lengua made before the
+/// program started: reads exactly what the program must send, replies, closes its side, and
+/// expects nothing more. `on` names the connection when the program has more than one.
 async fn serve(
-    listener: tokio::net::TcpListener,
-    replies: Vec<Reply>,
+    stream: tokio::net::UnixStream,
+    reply: Option<Reply>,
     delivery: Delivery,
+    on: String,
 ) -> Result<(), String> {
     use tokio::io::AsyncReadExt as _;
-    let many = replies.len() > 1;
-    for (index, reply) in replies.iter().enumerate() {
-        let on = if many {
-            format!(" on connection {}", index + 1)
-        } else {
-            String::new()
-        };
-        let (mut stream, _) = tokio::time::timeout(PEER_TIMEOUT, listener.accept())
+    let Some(reply) = reply else {
+        return Ok(());
+    };
+    let (mut reader, mut writer) = stream.into_split();
+    let expected = reply.receives.as_bytes();
+    let mut got = Vec::new();
+    let mut chunk = vec![0_u8; 64 * 1024];
+    while got.len() < expected.len() {
+        let want = (expected.len() - got.len()).min(chunk.len());
+        let read = tokio::time::timeout(PEER_TIMEOUT, reader.read(&mut chunk[..want]))
             .await
-            .map_err(|_| format!("the program didn't connect to the test's server{on}"))?
-            .map_err(|error| format!("the test's server couldn't take a connection: {error}"))?;
-        let expected = reply.receives.as_bytes();
-        let mut got = Vec::new();
-        let mut chunk = vec![0_u8; 64 * 1024];
-        while got.len() < expected.len() {
-            let want = (expected.len() - got.len()).min(chunk.len());
-            let read = tokio::time::timeout(PEER_TIMEOUT, stream.read(&mut chunk[..want]))
-                .await
-                .map_err(|_| {
-                    format!(
-                        "the program sent {} and then waited{on}, but the test's server expects \
-                         {}",
-                        show(&got),
-                        show(expected)
-                    )
-                })?
-                .map_err(|error| format!("reading from the program{on} failed: {error}"))?;
-            if read == 0 {
-                return Err(format!(
-                    "the program sent {} and closed the connection{on}, but the test's server \
-                     expects {}",
+            .map_err(|_| {
+                format!(
+                    "the program sent {} and then waited{on}, but the test's server expects {}",
                     show(&got),
                     show(expected)
-                ));
-            }
-            got.extend_from_slice(&chunk[..read]);
-            if !expected.starts_with(&got) {
-                return Err(format!(
-                    "the program sent {}{on}, but the test's server expects {}",
-                    show(&got),
-                    show(expected)
-                ));
-            }
-        }
-        let (mut reader, mut writer) = stream.into_split();
-        // The program may close as soon as it has its answer, so a failed send is its doing.
-        let _ = send(&mut writer, reply.replies.as_bytes(), delivery).await;
-        let _ = writer.shutdown().await;
-        let mut extra = Vec::new();
-        let _ = tokio::time::timeout(
-            PEER_TIMEOUT,
-            (&mut reader).take(MAX_ANSWER).read_to_end(&mut extra),
-        )
-        .await;
-        if !extra.is_empty() {
+                )
+            })?
+            .map_err(|error| format!("reading from the program{on} failed: {error}"))?;
+        if read == 0 {
             return Err(format!(
-                "after the test's server replied{on}, the program sent {} more",
-                show(&extra)
+                "the program sent {} and closed the connection{on}, but the test's server \
+                 expects {}",
+                show(&got),
+                show(expected)
             ));
         }
+        got.extend_from_slice(&chunk[..read]);
+        if !expected.starts_with(&got) {
+            return Err(format!(
+                "the program sent {}{on}, but the test's server expects {}",
+                show(&got),
+                show(expected)
+            ));
+        }
+    }
+    // The program may close as soon as it has its answer, so a failed send is its doing.
+    let _ = send(&mut writer, reply.replies.as_bytes(), delivery).await;
+    let _ = writer.shutdown().await;
+    let mut extra = Vec::new();
+    let _ = tokio::time::timeout(
+        PEER_TIMEOUT,
+        (&mut reader).take(MAX_ANSWER).read_to_end(&mut extra),
+    )
+    .await;
+    if !extra.is_empty() {
+        return Err(format!(
+            "after the test's server replied{on}, the program sent {} more",
+            show(&extra)
+        ));
     }
     Ok(())
 }

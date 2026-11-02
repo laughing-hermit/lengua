@@ -131,7 +131,6 @@ impl Profile {
             .map(|syscall| Allowed {
                 number: self.syscall_number(*syscall),
                 pin: match syscall {
-                    Syscall::Socket => Pin::TcpSocket,
                     Syscall::Accept4 => Pin::ListeningSocket,
                     Syscall::Sendto => Pin::NoAddress,
                     Syscall::Ioctl => Pin::Terminal,
@@ -180,8 +179,6 @@ pub enum Pin {
     Any,
     /// Exactly this first argument: `clone` with `parallel_for`'s flags.
     First(u64),
-    /// `socket` for TCP over IPv4 or IPv6, and nothing else: no UDP, raw or local sockets.
-    TcpSocket,
     /// `accept4` on file descriptor 3, the listening socket lengua bound for the program.
     ListeningSocket,
     /// `sendto` on a connection: no address, and no flag but `MSG_NOSIGNAL`, so it can't open a
@@ -200,7 +197,6 @@ impl Pin {
         match self {
             Self::Any => String::new(),
             Self::First(argument) => format!(":{argument}"),
-            Self::TcpSocket => ":tcp".into(),
             Self::ListeningSocket => ":listening".into(),
             Self::NoAddress => ":noaddress".into(),
             Self::Terminal => ":terminal".into(),
@@ -211,7 +207,6 @@ impl Pin {
     #[must_use]
     pub fn decode(text: &str) -> Option<Self> {
         match text {
-            "tcp" => Some(Self::TcpSocket),
             "listening" => Some(Self::ListeningSocket),
             "noaddress" => Some(Self::NoAddress),
             "terminal" => Some(Self::Terminal),

@@ -78,15 +78,14 @@ pub fn folder_of_link(link: &str) -> String {
 /// pages of `.bss`, and `poll` goes through all of them on every wake.
 pub const MAX_AT_ONCE: u32 = 4096;
 
-/// What a spec lets a program do on the network: plain TCP, on the ports it names.
+/// What a spec lets a program do on the network: plain TCP to the places it names, and a port
+/// it serves on.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Network {
-    /// The ports it may connect to, by number address: on this computer only, unless
-    /// `anywhere`.
-    pub connects: Vec<u16>,
-    /// Whether it may connect to other computers too, which its spec says with `on any
-    /// computer`.
-    pub anywhere: bool,
+    /// The connections it gets, in order. lengua makes each before the program starts and
+    /// hands it over as file descriptors 4, 5 and on, so the program never connects by itself
+    /// and holds no network of its own, on every kind of computer.
+    pub connections: Vec<Endpoint>,
     /// The port it serves on. lengua binds it and hands the program the listening socket as
     /// file descriptor 3, so the program never binds or listens itself.
     pub listens: Option<u16>,
@@ -104,8 +103,60 @@ impl Network {
     /// Whether the program uses the network at all.
     #[must_use]
     pub fn is_used(&self) -> bool {
-        !self.connects.is_empty() || self.listens.is_some()
+        !self.connections.is_empty() || self.listens.is_some()
     }
+}
+
+/// The most connections a spec may name.
+pub const MAX_CONNECTIONS: usize = crate::connect::MAX_CONNECTIONS;
+
+/// One connection a spec names: a TCP port of this computer, or of another computer.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Endpoint {
+    /// The computer, by name or address, in lower case; `None` for this computer.
+    pub host: Option<String>,
+    /// Its TCP port.
+    pub port: u16,
+}
+
+impl Endpoint {
+    /// In words: `TCP port 8080 of this computer`, `TCP port 443 on example.com`.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        match &self.host {
+            None => format!("TCP port {} of this computer", self.port),
+            Some(host) => format!("TCP port {} on {host}", self.port),
+        }
+    }
+}
+
+/// Why `host` can't be a connection's computer, if it can't: it must be a computer's name, as
+/// DNS writes it, or an address of another computer.
+fn host_problem(host: &str) -> Option<String> {
+    let this = "a port alone is this computer's: leave the computer out, as in `- Network: \
+                connects to TCP port 8080`";
+    if let Ok(address) = host.parse::<std::net::IpAddr>() {
+        return (address.is_loopback() || address.is_unspecified())
+            .then(|| format!("`{host}` is this computer; {this}"));
+    }
+    if host == "localhost" || host.ends_with(".localhost") {
+        return Some(format!("`{host}` is this computer; {this}"));
+    }
+    let label_ok = |label: &str| {
+        (1..=63).contains(&label.len())
+            && label
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+    };
+    let name = host.strip_suffix('.').unwrap_or(host);
+    (name.len() > 253 || !name.split('.').all(label_ok)).then(|| {
+        format!(
+            "`{host}` isn't a computer's name or address: write a name as DNS does, such as \
+             `example.com`, or an address such as `192.0.2.7`"
+        )
+    })
 }
 
 impl Spec {
@@ -449,10 +500,6 @@ pub enum Syscall {
     ClockNanosleep,
     /// Fill a buffer with random bytes from the kernel.
     Getrandom,
-    /// Open a TCP socket, for a program that connects.
-    Socket,
-    /// Connect a socket to a port the spec names.
-    Connect,
     /// Take the next connection on file descriptor 3, for a program that serves.
     Accept4,
     /// End one direction of a connection.
@@ -469,7 +516,7 @@ pub enum Syscall {
 
 impl Syscall {
     /// Every system call a spec may allow.
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 20] = [
         Self::Read,
         Self::Write,
         Self::Openat,
@@ -485,8 +532,6 @@ impl Syscall {
         Self::ClockGettime,
         Self::ClockNanosleep,
         Self::Getrandom,
-        Self::Socket,
-        Self::Connect,
         Self::Accept4,
         Self::Shutdown,
         Self::Sendto,
@@ -495,14 +540,7 @@ impl Syscall {
     ];
 
     /// The calls only a program on the network may make.
-    pub const NETWORK: [Self; 6] = [
-        Self::Socket,
-        Self::Connect,
-        Self::Accept4,
-        Self::Shutdown,
-        Self::Sendto,
-        Self::Poll,
-    ];
+    pub const NETWORK: [Self; 4] = [Self::Accept4, Self::Shutdown, Self::Sendto, Self::Poll];
 
     /// The Linux name, as written in specs.
     #[must_use]
@@ -523,8 +561,6 @@ impl Syscall {
             Self::ClockGettime => "clock_gettime",
             Self::ClockNanosleep => "clock_nanosleep",
             Self::Getrandom => "getrandom",
-            Self::Socket => "socket",
-            Self::Connect => "connect",
             Self::Accept4 => "accept4",
             Self::Shutdown => "shutdown",
             Self::Sendto => "sendto",
@@ -1399,11 +1435,13 @@ impl Parser {
         self.uses = Some(uses);
     }
 
-    /// `- Network: connects to TCP ports 80 and 8080` or `- Network: listens on TCP port 8080`.
+    /// `- Network: connects to TCP ports 80 and 8080`, `- Network: connects to TCP port 443 on
+    /// example.com` or `- Network: listens on TCP port 8080`.
     fn network_line(&mut self, number: usize, rest: &str) {
         let usage = "write `- Network: connects to TCP port 8080` (or `ports 80 and 8080`) for a \
-                     program that opens connections, or `- Network: listens on TCP port 8080` \
-                     for one that serves them";
+                     program that talks to a server on this computer, `- Network: connects to \
+                     TCP port 443 on example.com` for one on another computer, or `- Network: \
+                     listens on TCP port 8080` for one that serves";
         let rest = rest.trim().trim_end_matches('.').replace('`', "");
         let mut lower = rest.to_ascii_lowercase();
         // `, up to 64 clients at once`: a server of several clients at once.
@@ -1443,35 +1481,57 @@ impl Parser {
             .strip_prefix("connects to tcp ports")
             .or_else(|| lower.strip_prefix("connects to tcp port"))
         {
-            (false, numbers)
+            (false, numbers.trim())
         } else if let Some(numbers) = lower.strip_prefix("listens on tcp port") {
-            (true, numbers)
+            (true, numbers.trim())
         } else {
             self.problem(Some(number), usage);
             return;
         };
-        // Connections reach this computer, and come from it, unless the line says any
-        // computer: `connects to TCP port 443 on any computer`, `listens on TCP port 8080 for any
-        // computer`.
-        let numbers = numbers.trim();
-        let (numbers, anywhere) = match numbers
-            .strip_suffix("on any computer")
-            .or_else(|| numbers.strip_suffix("for any computer"))
-        {
-            Some(ports) => (ports, true),
-            None => (
-                numbers
-                    .strip_suffix("on this computer")
-                    .or_else(|| numbers.strip_suffix("for this computer"))
-                    .unwrap_or(numbers),
-                false,
-            ),
-        };
-        if listens {
-            self.network.serves_anywhere |= anywhere;
+        // A server is reached from this computer, unless the line says any computer:
+        // `listens on TCP port 8080 for any computer`. A client's connections go where the line
+        // says, to this computer when it names none: `connects to TCP port 443 on example.com`.
+        let (numbers, host) = if listens {
+            match numbers
+                .strip_suffix("for any computer")
+                .or_else(|| numbers.strip_suffix("on any computer"))
+            {
+                Some(ports) => {
+                    self.network.serves_anywhere = true;
+                    (ports.trim(), None)
+                }
+                None => (
+                    numbers
+                        .strip_suffix("for this computer")
+                        .or_else(|| numbers.strip_suffix("on this computer"))
+                        .unwrap_or(numbers)
+                        .trim(),
+                    None,
+                ),
+            }
         } else {
-            self.network.anywhere |= anywhere;
-        }
+            match numbers.split_once(" on ") {
+                Some((_, "any computer" | "any computers")) => {
+                    self.problem(
+                        Some(number),
+                        "a program connects only where its spec says, and lengua makes each \
+                         connection for it: name the computer, as in `- Network: connects to TCP \
+                         port 443 on example.com`, or leave it out for this computer",
+                    );
+                    return;
+                }
+                Some((ports, "this computer")) => (ports.trim(), None),
+                Some((ports, host)) => {
+                    let host = host.trim().to_owned();
+                    if let Some(problem) = host_problem(&host) {
+                        self.problem(Some(number), problem);
+                        return;
+                    }
+                    (ports.trim(), Some(host))
+                }
+                None => (numbers, None),
+            }
+        };
         let ports: Option<Vec<u16>> = numbers
             .split(',')
             .flat_map(|part| part.split(" and "))
@@ -1496,9 +1556,31 @@ impl Parser {
             ),
             (false, Some(ports)) => {
                 for port in ports {
-                    if !self.network.connects.contains(port) {
-                        self.network.connects.push(*port);
+                    let endpoint = Endpoint {
+                        host: host.clone(),
+                        port: *port,
+                    };
+                    if self.network.connections.contains(&endpoint) {
+                        self.problem(
+                            Some(number),
+                            format!(
+                                "{} is named twice; a program gets one connection to each place \
+                                 its spec names, so keep it once",
+                                endpoint.describe()
+                            ),
+                        );
+                        return;
                     }
+                    self.network.connections.push(endpoint);
+                }
+                if self.network.connections.len() > MAX_CONNECTIONS {
+                    self.problem(
+                        Some(number),
+                        format!(
+                            "a program gets at most {MAX_CONNECTIONS} connections; name the \
+                             places it talks to"
+                        ),
+                    );
                 }
             }
         }
@@ -1581,9 +1663,6 @@ impl Parser {
         for found in uses {
             allowed.extend(found.syscalls());
         }
-        if !self.network.connects.is_empty() {
-            allowed.extend([Syscall::Socket, Syscall::Connect]);
-        }
         if self.network.listens.is_some() {
             allowed.push(Syscall::Accept4);
         }
@@ -1642,7 +1721,18 @@ fn allowed_calls_rewrite(listed: &str) -> String {
             call
         })
         .collect();
-    let networked = calls.iter().any(|call| Syscall::NETWORK.contains(call));
+    // `socket` and `connect` were a client's own calls; lengua makes its connections now, but
+    // the line is a network program's all the same.
+    let connects = listed
+        .split(',')
+        .flat_map(|part| part.split(" and "))
+        .any(|name| {
+            matches!(
+                name.trim().trim_end_matches('.').trim_matches('`').trim(),
+                "socket" | "connect"
+            )
+        });
+    let networked = connects || calls.iter().any(|call| Syscall::NETWORK.contains(call));
     let opens = calls.contains(&Syscall::Openat);
     for call in calls {
         match Use::of(call) {
@@ -2243,21 +2333,62 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
             "- Network: connects to TCP ports `80` and 8080.",
         );
         let spec = parse(&client).expect("valid spec");
-        assert_eq!(spec.network.connects, [80, 8080]);
-        assert_eq!(spec.network.listens, None);
-        assert!(
-            !spec.network.anywhere,
+        let here = |port| Endpoint { host: None, port };
+        assert_eq!(
+            spec.network.connections,
+            [here(80), here(8080)],
             "this computer, unless the spec says otherwise"
         );
-        assert!(
-            spec.syscalls.contains(&Syscall::Connect) && !spec.syscalls.contains(&Syscall::Accept4)
+        assert_eq!(spec.network.listens, None);
+        // lengua makes the connections: the program never opens a socket or connects.
+        assert!(!spec.syscalls.contains(&Syscall::Accept4));
+        for call in [
+            Syscall::Read,
+            Syscall::Sendto,
+            Syscall::Shutdown,
+            Syscall::Close,
+        ] {
+            assert!(spec.syscalls.contains(&call), "{call:?}");
+        }
+        let elsewhere =
+            parse(&client.replace("8080.", "8080 on Example.com.")).expect("valid spec");
+        let there = |port| Endpoint {
+            host: Some("example.com".into()),
+            port,
+        };
+        assert_eq!(elsewhere.network.connections, [there(80), there(8080)]);
+        let address = parse(&client.replace("8080.", "8080 on 192.0.2.7.")).expect("valid spec");
+        assert_eq!(
+            address.network.connections[0].host.as_deref(),
+            Some("192.0.2.7")
         );
-        let anywhere =
-            parse(&client.replace("8080.", "8080 on any computer.")).expect("valid spec");
-        assert_eq!(anywhere.network.connects, [80, 8080]);
-        assert!(anywhere.network.anywhere);
-        let here = parse(&client.replace("8080.", "8080 on this computer.")).expect("valid spec");
-        assert!(!here.network.anywhere);
+        let here_too =
+            parse(&client.replace("8080.", "8080 on this computer.")).expect("valid spec");
+        assert_eq!(here_too.network.connections, spec.network.connections);
+        // The program no longer picks where it connects: the spec names the computer.
+        assert_problem(
+            &client.replace("8080.", "8080 on any computer."),
+            "name the computer",
+        );
+        for this in ["localhost", "127.0.0.1", "::1"] {
+            assert_problem(
+                &client.replace("8080.", &format!("8080 on {this}.")),
+                "is this computer",
+            );
+        }
+        assert_problem(
+            &client.replace("8080.", "8080 on exa_mple.com."),
+            "isn't a computer's name",
+        );
+        assert_problem(
+            &client.replace("ports `80` and 8080", "ports 80 and 80"),
+            "is named twice",
+        );
+        let many: Vec<String> = (1..=17).map(|port| port.to_string()).collect();
+        assert_problem(
+            &client.replace("ports `80` and 8080", &format!("ports {}", many.join(", "))),
+            "at most 16 connections",
+        );
         let server = ADD
             .replace("- Uses: nothing", "- Network: listens on TCP port 7007")
             .replace("- And it exits with code `0`", "- And it keeps serving");
@@ -2289,14 +2420,14 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
                 .expect("valid spec");
             assert_eq!(open.network.listens, Some(7007));
             assert!(
-                open.network.serves_anywhere && !open.network.anywhere,
+                open.network.serves_anywhere && open.network.connections.is_empty(),
                 "{any}"
             );
         }
         assert!(spec.behaviors[0].serves);
         assert!(!spec.behaviors[1].serves);
         assert!(
-            spec.syscalls.contains(&Syscall::Accept4) && !spec.syscalls.contains(&Syscall::Connect)
+            spec.syscalls.contains(&Syscall::Accept4) && spec.syscalls.contains(&Syscall::Sendto)
         );
         assert_problem(
             &ADD.replace("- And it exits with code `0`", "- And it keeps serving"),

@@ -7,11 +7,7 @@
 //! Bytes asked for past the end of the supply are zeros, so a program may draw in batches of any
 //! size: only the bytes it uses decide its output. The last clock reading repeats.
 //!
-//! For a program that may reach only this computer, it also reads where each `connect` goes and
-//! refuses any other computer with `EACCES`, as the kernel refuses a port the spec doesn't name:
-//! the kernel's network rules know ports, not computers.
-//!
-//! It reads the launcher's process id, `local` or `any`, and the supply on standard input, says
+//! It reads the launcher's process id and the supply on standard input, says
 //! `attached` once it traces the launcher, and when the program ends says `ok` and how many
 //! random bytes the program asked for, or what went wrong.
 
@@ -22,8 +18,7 @@ use std::process::ExitCode;
 pub const SUPERVISE_FLAG: &str = "--supervise";
 
 /// Whether the supervisor runs on this computer's CPU: it reads and rewrites a stopped call's
-/// registers, x86-64's and AArch64's. Where it doesn't, tests that need it aren't run, and a
-/// program that may connect only to this computer doesn't run either.
+/// registers, x86-64's and AArch64's. Where it doesn't, tests that need it aren't run.
 pub const AVAILABLE: bool = cfg!(any(target_arch = "x86_64", target_arch = "aarch64"));
 
 fn say(line: &str) {
@@ -58,7 +53,7 @@ mod traced {
 
     use nix::errno::Errno;
     use nix::sys::ptrace::{self, Event, Options};
-    use nix::sys::uio::{RemoteIoVec, process_vm_readv, process_vm_writev};
+    use nix::sys::uio::{RemoteIoVec, process_vm_writev};
     use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
     use nix::unistd::Pid;
 
@@ -80,15 +75,9 @@ mod traced {
                 let pid = pid
                     .parse()
                     .map_err(|_| format!("{pid:?} isn't a process id"))?;
-                let (reach, supply) = rest.split_once('\n').ok_or("no reach")?;
-                let local = match reach {
-                    "local" => true,
-                    "any" => false,
-                    other => return Err(format!("{other:?} isn't a reach")),
-                };
-                Ok((Pid::from_raw(pid), local, Supply::decode(supply)?))
+                Ok((Pid::from_raw(pid), Supply::decode(rest)?))
             });
-        let (leader, local, supply) = match parsed {
+        let (leader, supply) = match parsed {
             Ok(parsed) => parsed,
             Err(problem) => {
                 say(&format!("error: {problem}"));
@@ -112,7 +101,6 @@ mod traced {
         say("attached");
         let mut supervisor = Supervisor {
             leader,
-            local,
             supply,
             random_used: 0,
             readings_used: 0,
@@ -125,8 +113,6 @@ mod traced {
 
     struct Supervisor {
         leader: Pid,
-        /// Whether the program may connect only to this computer.
-        local: bool,
         supply: Supply,
         /// Random bytes the program has asked for, supplied or past the supply.
         random_used: usize,
@@ -146,8 +132,6 @@ mod traced {
         ZeroCount,
         /// A clock that doesn't exist, for `clock_gettime` and `clock_nanosleep`.
         MissingClock,
-        /// A file descriptor that doesn't exist, for `connect`.
-        MissingDescriptor,
     }
 
     /// How the stopped task goes on.
@@ -226,10 +210,6 @@ mod traced {
                     (self.clock(task, second), Some(Harmless::MissingClock))
                 }
                 Ok(syscalls::CLOCK_NANOSLEEP) => (0, Some(Harmless::MissingClock)),
-                Ok(syscalls::CONNECT) if self.local => match reaches_this_computer(task, second) {
-                    true => return Resume::On,
-                    false => (-(Errno::EACCES as i64), Some(Harmless::MissingDescriptor)),
-                },
                 _ => (-(Errno::ENOSYS as i64), None),
             };
             match cpu::answer(task, registers, result, harmless) {
@@ -285,35 +265,6 @@ mod traced {
                 }
                 Err(errno) => -(errno as i64),
             }
-        }
-    }
-
-    /// Whether the socket address at `address` in `task`'s memory is this computer: 127.0.0.0/8 in
-    /// IPv4, and `::1` or an IPv4 one mapped into IPv6. An address that can't be read isn't.
-    fn reaches_this_computer(task: Pid, address: u64) -> bool {
-        let mut bytes = [0_u8; 24];
-        let Ok(base) = usize::try_from(address) else {
-            return false;
-        };
-        let remote = [RemoteIoVec {
-            base,
-            len: bytes.len(),
-        }];
-        // An IPv4 address is 16 bytes, an IPv6 one 28; the first 24 hold every byte checked.
-        let read = process_vm_readv(task, &mut [std::io::IoSliceMut::new(&mut bytes)], &remote)
-            .unwrap_or(0);
-        let family = u16::from_le_bytes([bytes[0], bytes[1]]);
-        match family {
-            2 if read >= 8 => bytes[4] == 127,
-            10 if read >= 24 => {
-                let host = &bytes[8..24];
-                let loopback = host[..15].iter().all(|byte| *byte == 0) && host[15] == 1;
-                let mapped = host[..10].iter().all(|byte| *byte == 0)
-                    && host[10..12] == [0xff, 0xff]
-                    && host[12] == 127;
-                loopback || mapped
-            }
-            _ => false,
         }
     }
 
@@ -419,7 +370,6 @@ mod traced {
             match harmless? {
                 Harmless::ZeroCount => changed.regs[1] = 0,
                 Harmless::MissingClock => changed.regs[0] = NO_CLOCK,
-                Harmless::MissingDescriptor => changed.regs[0] = u64::MAX,
             }
             ptrace::setregs(task, changed).ok()?;
             Some(registers)

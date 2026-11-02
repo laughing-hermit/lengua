@@ -176,8 +176,6 @@ buffer:
 /// A program's connections, as lengua hands them over: descriptors 4 and on.
 fn connected(connections: Vec<Reach>) -> Net {
     Net {
-        connect: Vec::new(),
-        anywhere: false,
         connections,
         listen: None,
         serve_anywhere: false,

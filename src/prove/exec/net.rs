@@ -1,8 +1,8 @@
-//! The network as a test sets it up: its own server, which the program connects to on the
-//! port the kernel chose, or its own client, which connects to the program's listener. Each
-//! peer behaves as the test runner's does: the server reads exactly what it must receive before
-//! it replies, and the client sends, closes its side, and waits for the program to close. What
-//! the peer sends arrives in the pieces the run's delivery cuts it into.
+//! The network as a test sets it up: its own servers, each on one of the connections lengua made
+//! for the program before it started, or its own client, which connects to the program's
+//! listener. Each peer behaves as the test runner's does: the server reads exactly what it must
+//! receive before it replies, and the client sends, closes its side, and waits for the program
+//! to close. What the peer sends arrives in the pieces the run's delivery cuts it into.
 
 use std::rc::Rc;
 
@@ -12,8 +12,6 @@ use crate::prove::term::Term;
 /// The test's network for one run.
 #[derive(Debug, Clone, Default)]
 pub struct Network {
-    /// The test server's port, an input, when the test has a server.
-    pub port: Option<Term>,
     /// The test server's connections in order: what it must receive, and its reply in the
     /// pieces it arrives in.
     pub server: Vec<(Vec<Term>, Vec<Vec<Term>>)>,
@@ -212,13 +210,8 @@ fn idle(state: &super::State) -> End {
 }
 
 const AF_INET: u128 = 2;
-const SOCK_STREAM: u64 = 1;
-const SOCK_CLOEXEC: u64 = 0o2_000_000;
 const MSG_NOSIGNAL: u64 = 0x4000;
-const EACCES: i64 = 13;
 const ENOTCONN: i64 = 107;
-const EISCONN: i64 = 106;
-const ECONNREFUSED: i64 = 111;
 const EBADF: i64 = 9;
 const EPIPE: i64 = 32;
 
@@ -237,103 +230,6 @@ impl Cpu<'_> {
                     && !(self.state.network.listening && *fd == 3)
             })
             .unwrap_or(3)
-    }
-
-    /// `socket`: a TCP socket over IPv4.
-    pub(super) fn socket(&mut self, domain: u64, kind: u64, protocol: u64) -> Result<u64, Stop> {
-        if domain != 2 || kind & !SOCK_CLOEXEC != SOCK_STREAM || !matches!(protocol, 0 | 6) {
-            return Err(unsupported("a socket other than TCP over IPv4"));
-        }
-        let fd = self.free_descriptor();
-        self.state.sockets.insert(fd, None);
-        Ok(fd)
-    }
-
-    /// `connect`: to this computer, on the test server's port; the kernel refuses any other
-    /// port, as the test's rules allow only that one. Splits where the port depends on the
-    /// input.
-    pub(super) fn connect(&mut self, fd: u64, address: u64) -> Result<Step, Stop> {
-        let Some(socket) = self.state.sockets.get(&fd).copied() else {
-            let result = returning(-EBADF);
-            return self.finish_call(result);
-        };
-        if socket.is_some() {
-            let result = returning(-EISCONN);
-            return self.finish_call(result);
-        }
-        let family = self.load(address, 2)?;
-        if self.pool.constant(family) != Some(AF_INET) {
-            return Err(unsupported("connecting to an address that isn't IPv4"));
-        }
-        let (high, low) = (self.load(address + 2, 1)?, self.load(address + 3, 1)?);
-        let port = self.pool.concat(high, low);
-        // A test's program reaches this computer only: lengua refuses any other, and the test's
-        // server is at 127.0.0.1.
-        let host = self.load(address + 4, 4)?;
-        match self.pool.constant(host) {
-            Some(0x0100_007f) => {}
-            Some(other) if other & 0xff == 127 => {
-                let result = returning(-ECONNREFUSED);
-                return self.finish_call(result);
-            }
-            Some(_) => {
-                let result = returning(-EACCES);
-                return self.finish_call(result);
-            }
-            None => return Err(unsupported("connecting to a computer the input chooses")),
-        }
-        let connected = self
-            .state
-            .connections
-            .iter()
-            .filter(|connection| !connection.accepted)
-            .count();
-        let Some(server) = self.state.network.port else {
-            let result = returning(-EACCES);
-            return self.finish_call(result);
-        };
-        if connected >= self.state.network.server.len() {
-            let result = returning(-ECONNREFUSED);
-            return self.finish_call(result);
-        }
-        let wanted = self.pool.extract(server, 15, 0);
-        let same = self.pool.eq(port, wanted);
-        if std::env::var_os("LENGUA_PROVE_EXPLAIN").is_some() && self.pool.truth(same).is_none() {
-            eprintln!(
-                "connect compares {} with {}",
-                self.pool.sketch(port, 12),
-                self.pool.sketch(wanted, 12)
-            );
-        }
-        let mut refused = None;
-        match self.pool.truth(same) {
-            Some(false) => {
-                let result = returning(-EACCES);
-                return self.finish_call(result);
-            }
-            Some(true) => {}
-            None => {
-                let mut other = self.state.clone();
-                other.returns(self.pool, returning(-EACCES), self.next);
-                refused = Some(other);
-            }
-        }
-        let number = self.state.connections.len();
-        self.state.connections.push(Connection {
-            exchange: connected,
-            accepted: false,
-            ended: false,
-            sent: Vec::new(),
-            finished: false,
-            piece: 0,
-            taken: 0,
-        });
-        self.state.sockets.insert(fd, Some(number));
-        self.finish_call(0)?;
-        Ok(match refused {
-            Some(other) => Step::Split(same, Box::new(other)),
-            None => Step::Next,
-        })
     }
 
     /// `accept4` on the listener: the test client's next connection, once the program has
@@ -741,12 +637,6 @@ impl Cpu<'_> {
             Some(None) => true,
             None => false,
         }
-    }
-
-    /// Sets a system call's result and the registers the kernel changes, and goes on.
-    pub(super) fn finish_call(&mut self, result: u64) -> Result<Step, Stop> {
-        self.state.returns(self.pool, result, self.next);
-        Ok(Step::Next)
     }
 
     /// The not-connected error, for a socket used before it's connected.

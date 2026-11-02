@@ -135,8 +135,6 @@ pub mod x86_64 {
             Syscall::ClockGettime => CLOCK_GETTIME,
             Syscall::ClockNanosleep => CLOCK_NANOSLEEP,
             Syscall::Getrandom => GETRANDOM,
-            Syscall::Socket => SOCKET,
-            Syscall::Connect => CONNECT,
             Syscall::Accept4 => ACCEPT4,
             Syscall::Shutdown => SHUTDOWN,
             Syscall::Sendto => SENDTO,
@@ -242,8 +240,6 @@ pub mod aarch64 {
             Syscall::ClockGettime => CLOCK_GETTIME,
             Syscall::ClockNanosleep => CLOCK_NANOSLEEP,
             Syscall::Getrandom => GETRANDOM,
-            Syscall::Socket => SOCKET,
-            Syscall::Connect => CONNECT,
             Syscall::Accept4 => ACCEPT4,
             Syscall::Shutdown => SHUTDOWN,
             Syscall::Sendto => SENDTO,
@@ -251,6 +247,17 @@ pub mod aarch64 {
             Syscall::Ioctl => IOCTL,
         }
     }
+}
+
+/// Whether `number` is `socket` or `connect` on `profile`'s CPU: the calls a program never makes
+/// itself, since lengua makes its connections and hands them over.
+#[must_use]
+pub fn connects(profile: crate::platform::Profile, number: i64) -> bool {
+    let [socket, connect] = match profile {
+        crate::platform::Profile::LinuxX86_64 => [x86_64::SOCKET, x86_64::CONNECT],
+        crate::platform::Profile::LinuxAarch64 => [aarch64::SOCKET, aarch64::CONNECT],
+    };
+    number == socket || number == connect
 }
 
 /// This computer's table, for the runtime, which runs programs here.

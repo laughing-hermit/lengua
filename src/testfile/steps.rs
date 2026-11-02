@@ -12,7 +12,8 @@
 //! - ``an empty folder `name` ``
 //! - ``the clock at `seconds` ``, with ``then `seconds` `` for later readings
 //! - ``the random bytes `fc` and `2a` ``
-//! - ``a server on port `8080` that receives TEXT and replies TEXT``, ``no server on port `1` ``
+//! - ``a server on port `8080` that receives TEXT and replies TEXT``, with ``at `example.com` ``
+//!   before `on port` for a computer the spec names, ``no server on port `8080` ``
 //! - ``a client that sends TEXT``, and `the clients connect at once` for clients that overlap
 //!
 //! When: `the program runs`.
@@ -34,10 +35,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    ClientTable, ExampleTable, OutlineRow, OutlineSteps, PORT_TEXT, Problem, Repeat, Rule,
-    ServerTable, Text, TextPart, Written, unescape,
+    ClientTable, ExampleTable, OutlineRow, OutlineSteps, Problem, Repeat, Rule, ServerTable, Text,
+    TextPart, Written, unescape,
 };
-use crate::spec::{Behavior, Keyword, Outline, Spec, Step, Token};
+use crate::spec::{Behavior, Endpoint, Keyword, Outline, Spec, Step, Token};
 
 /// The column of a table that gives its row's number of runs, not a variable.
 const RUNS: &str = "runs";
@@ -71,7 +72,7 @@ enum Mode {
 ///
 /// Each step lengua can't read, with the phrasing to write instead.
 pub(super) fn example(behavior: &Behavior, spec: &Spec) -> Result<ExampleTable, Vec<Problem>> {
-    read(&behavior.steps, behavior, Mode::Example).map(|reading| reading.example(spec))
+    read(&behavior.steps, behavior, Mode::Example, spec).map(Reading::example)
 }
 
 /// The generated tests `outline` describes: its steps as templates, and its table's rows.
@@ -85,7 +86,7 @@ pub(super) fn generated(
     spec: &Spec,
 ) -> Result<(OutlineSteps, Vec<OutlineRow>), Vec<Problem>> {
     let mut problems = Vec::new();
-    let reading = read(&outline.steps, behavior, Mode::Generated)
+    let reading = read(&outline.steps, behavior, Mode::Generated, spec)
         .map_err(|found| problems.extend(found))
         .ok();
     let mut seen = BTreeSet::new();
@@ -101,9 +102,7 @@ pub(super) fn generated(
         }
     }
     match reading {
-        Some(reading) if problems.is_empty() => {
-            Ok((reading.outline(outline.line, spec), rows(outline)))
-        }
+        Some(reading) if problems.is_empty() => Ok((reading.outline(outline.line), rows(outline))),
         _ => Err(problems),
     }
 }
@@ -133,13 +132,19 @@ fn rows(outline: &Outline) -> Vec<OutlineRow> {
 }
 
 /// Reads `steps` in `mode`, reporting each step it can't read with its rewrite.
-fn read(steps: &[Step], behavior: &Behavior, mode: Mode) -> Result<Reading, Vec<Problem>> {
+fn read(
+    steps: &[Step],
+    behavior: &Behavior,
+    mode: Mode,
+    spec: &Spec,
+) -> Result<Reading, Vec<Problem>> {
     let whose = match mode {
         Mode::Example => behavior.id.to_string(),
         Mode::Generated => format!("{}'s generated tests", behavior.id),
     };
     let mut reading = Reading {
         mode,
+        places: spec.network.connections.clone(),
         ..Reading::default()
     };
     let mut problems = Vec::new();
@@ -187,6 +192,12 @@ fn read(steps: &[Step], behavior: &Behavior, mode: Mode) -> Result<Reading, Vec<
             });
         }
     }
+    for (line, problem) in std::mem::take(&mut reading.found) {
+        problems.push(Problem {
+            line: Some(line),
+            message: format!("{whose}: {problem}"),
+        });
+    }
     if reading.client.len() != reading.answers.len() {
         problems.push(Problem {
             line: steps.first().map(|step| step.line),
@@ -230,6 +241,10 @@ struct Reading {
     serves: bool,
     /// The line of the step that first wrote each field, for problems in generated tests.
     lines: BTreeMap<String, usize>,
+    /// The connections the spec names, which the test's servers stand in for.
+    places: Vec<Endpoint>,
+    /// What's wrong with steps that read well, with each one's line.
+    found: Vec<(usize, String)>,
 }
 
 impl Reading {
@@ -259,7 +274,14 @@ impl Reading {
             return at.end();
         }
         if at.words(&["no", "server"]) || at.words(&["nothing", "listening"]) {
-            // The test's own server simply isn't there: any port it names is the spec's.
+            // The connection to the place it names is handed over already ended.
+            let host = at.is("at").then(|| at.value()).flatten();
+            let port = (at.words(&["on", "port"]) || at.words(&["there", "on", "port"]))
+                .then(|| at.value())
+                .flatten();
+            if port.is_some() || host.is_some() {
+                self.connection(host.as_deref(), port.as_deref());
+            }
             return Some(());
         }
         if at.is("the") {
@@ -332,17 +354,39 @@ impl Reading {
             return at.end();
         }
         if at.words(&["a", "server"]) {
-            if at.words(&["on", "port"]) {
-                at.value()?;
-            }
+            let host = if at.is("at") { Some(at.value()?) } else { None };
+            let port = if at.words(&["on", "port"]) {
+                Some(at.value()?)
+            } else {
+                None
+            };
             at.word("that")?;
             at.word("receives")?;
             let receives = text(&mut at, mode)?;
             at.word("and")?;
             at.word("replies")?;
             let replies = text(&mut at, mode)?;
+            let connection = self.connection(host.as_deref(), port.as_deref());
+            if self
+                .server
+                .iter()
+                .any(|server| server.connection == connection && !self.places.is_empty())
+            {
+                let place = self.places[connection].describe();
+                self.found.push((
+                    self.line,
+                    format!(
+                        "it has two servers for its connection to {place}; a program gets one \
+                         connection to each place its spec names, so keep one"
+                    ),
+                ));
+            }
             self.wrote(format!("server.{}", self.server.len()));
-            self.server.push(ServerTable { receives, replies });
+            self.server.push(ServerTable {
+                connection,
+                receives,
+                replies,
+            });
             return at.end();
         }
         if at.words(&["a", "client", "that", "sends"]) {
@@ -426,25 +470,82 @@ impl Reading {
         at.end()
     }
 
-    /// The arguments, where the spec's own port, given whole to a program that reaches the
-    /// test's server, is that server's port.
-    fn args(&mut self, spec: &Spec) -> Vec<Text> {
-        let ports: Vec<String> = spec.network.connects.iter().map(u16::to_string).collect();
-        let reaches = !self.server.is_empty();
-        std::mem::take(&mut self.args)
-            .into_iter()
-            .map(|arg| match arg {
-                Text::Plain(arg) if reaches && ports.contains(&arg) => {
-                    Text::Plain(PORT_TEXT.to_owned())
-                }
-                other => other,
+    /// Which of the spec's connections a server step, or a step with no server, names: by its
+    /// port, and its computer where two places share the port; the only connection when it
+    /// names neither. A name the spec doesn't have is noted as a problem. A spec with no
+    /// connections at all is told so once, by the test's own check.
+    fn connection(&mut self, host: Option<&str>, port: Option<&str>) -> usize {
+        if self.places.is_empty() {
+            return 0;
+        }
+        // A generated test's value can be a template, which the spec's names can't settle.
+        if port.is_some_and(|port| port.contains('{'))
+            || host.is_some_and(|host| host.contains('{'))
+        {
+            return 0;
+        }
+        let host = host.map(str::to_ascii_lowercase);
+        let wanted = port.map(|port| port.trim().parse::<u16>());
+        let matching: Vec<usize> = (0..self.places.len())
+            .filter(|index| {
+                let place = &self.places[*index];
+                let port_matches = match &wanted {
+                    Some(Ok(port)) => place.port == *port,
+                    Some(Err(_)) => false,
+                    None => true,
+                };
+                let host_matches = host.as_ref().is_none_or(|host| {
+                    place.host.as_deref() == Some(host.as_str())
+                        || (host == "this computer" && place.host.is_none())
+                });
+                port_matches && host_matches
             })
-            .collect()
+            .collect();
+        match matching.as_slice() {
+            [index] => *index,
+            [] => {
+                let named = match (&host, port) {
+                    (Some(host), Some(port)) => format!("TCP port {port} on {host}"),
+                    (None, Some(port)) => format!("TCP port {port}"),
+                    (Some(host), None) => host.clone(),
+                    (None, None) => "a place".into(),
+                };
+                self.found.push((
+                    self.line,
+                    format!(
+                        "spec.md connects to no {named}: its server stands in for one of the \
+                         connections `- Network: connects to …` names ({})",
+                        self.named_places()
+                    ),
+                ));
+                0
+            }
+            _ => {
+                self.found.push((
+                    self.line,
+                    format!(
+                        "spec.md connects to more than one place on that port ({}): say which, \
+                         as in `a server at `example.com` on port `443` that receives …`",
+                        self.named_places()
+                    ),
+                ));
+                0
+            }
+        }
+    }
+
+    /// The spec's connections in words.
+    fn named_places(&self) -> String {
+        self.places
+            .iter()
+            .map(Endpoint::describe)
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 
     /// The example the steps describe.
-    fn example(mut self, spec: &Spec) -> ExampleTable {
-        let args = self.args(spec);
+    fn example(mut self) -> ExampleTable {
+        let args = std::mem::take(&mut self.args);
         let client = self
             .client
             .into_iter()
@@ -472,8 +573,8 @@ impl Reading {
 
     /// The generated tests the steps under the heading on `line` describe, each template with
     /// the line of its step.
-    fn outline(mut self, line: usize, spec: &Spec) -> OutlineSteps {
-        let args = self.args(spec);
+    fn outline(mut self, line: usize) -> OutlineSteps {
+        let args = std::mem::take(&mut self.args);
         let lines = std::mem::take(&mut self.lines);
         let at = |field: &str| lines.get(field).copied().unwrap_or(line);
         let written = |text: Text, field: &str| Written {
@@ -520,6 +621,7 @@ impl Reading {
                 .map(|(index, reply)| {
                     let field = format!("server.{index}");
                     (
+                        reply.connection,
                         written(reply.receives, &field),
                         written(reply.replies, &field),
                     )
@@ -944,17 +1046,72 @@ mod tests {
     #[test]
     fn reads_the_network_and_the_supply() {
         let read = table(
-            "- Given the arguments `8080` and `/hello`\n- And a server on port `8080` that \
-             receives `GET /hello HTTP/1.0\\r\\n\\r\\n` and replies `HTTP/1.0 200 OK\\r\\n\\r\\nhi`\n\
-             - When the program runs\n- Then it prints `hi`\n- And it exits with code `0`",
+            "- Given the argument `/hello`\n- And a server on port `8080` that receives `GET \
+             /hello HTTP/1.0\\r\\n\\r\\n` and replies `HTTP/1.0 200 OK\\r\\n\\r\\nhi`\n- When \
+             the program runs\n- Then it prints `hi`\n- And it exits with code `0`",
             "- Network: connects to TCP port 8080",
         );
         let args: Vec<String> = read.args.iter().map(plain).collect();
-        assert_eq!(args, [PORT_TEXT, "/hello"]);
+        assert_eq!(
+            args,
+            ["/hello"],
+            "the program needs no port: lengua connects it"
+        );
         assert_eq!(
             plain(&read.server[0].receives),
             "GET /hello HTTP/1.0\r\n\r\n"
         );
+        assert_eq!(read.server[0].connection, 0);
+        // A server stands in for the connection its port, and its computer, name; with one
+        // connection it needs to name neither.
+        let read = table(
+            "- Given a server on port `8080` that receives `a` and replies `b`\n- And a server \
+             at `example.com` on port `80` that receives `c` and replies `d`\n- When the program \
+             runs\n- Then it prints `bd`\n- And it exits with code `0`",
+            "- Network: connects to TCP ports 80 and 8080\n- Network: connects to TCP port 80 on \
+             example.com",
+        );
+        let connections: Vec<usize> = read.server.iter().map(|server| server.connection).collect();
+        assert_eq!(connections, [1, 2]);
+        let read = table(
+            "- Given a server that receives `a` and replies `b`\n- When the program runs\n- Then \
+             it prints `b`\n- And it exits with code `0`",
+            "- Network: connects to TCP port 443 on example.com",
+        );
+        assert_eq!(read.server[0].connection, 0);
+        let problems = |steps: &str, constraints: &str| {
+            let spec = spec_with(steps, constraints);
+            example(&spec.behaviors[0], &spec)
+                .expect_err("a problem")
+                .into_iter()
+                .map(|problem| problem.message)
+                .collect::<Vec<_>>()
+                .join("; ")
+        };
+        let ends = "\n- When the program runs\n- Then it prints `b`\n- And it exits with code `0`";
+        let found = problems(
+            &format!("- Given a server on port `9` that receives `a` and replies `b`{ends}"),
+            "- Network: connects to TCP port 8080",
+        );
+        assert!(found.contains("connects to no TCP port 9"), "{found}");
+        let found = problems(
+            &format!("- Given no server on port `9`{ends}"),
+            "- Network: connects to TCP port 8080",
+        );
+        assert!(found.contains("connects to no TCP port 9"), "{found}");
+        let found = problems(
+            &format!(
+                "- Given a server on port `80` that receives `a` and replies `b`\n- And a server \
+                 on port `80` that receives `a` and replies `b`{ends}"
+            ),
+            "- Network: connects to TCP port 80",
+        );
+        assert!(found.contains("two servers for its connection"), "{found}");
+        let found = problems(
+            &format!("- Given a server on port `80` that receives `a` and replies `b`{ends}"),
+            "- Network: connects to TCP port 80\n- Network: connects to TCP port 80 on example.com",
+        );
+        assert!(found.contains("say which"), "{found}");
 
         let read = table(
             "- Given the random bytes `fc` and `2a`\n- And the clock at `1735689600`\n- \

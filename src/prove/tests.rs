@@ -2939,9 +2939,9 @@ async fn proves_the_echo_server() {
     assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
 }
 
-/// A client on the network: fetch's argument errors are proven for every port, and its fetch for
-/// every path and body, port and delivery; a request with the wrong version, or one cut short
-/// before reading the reply, is found.
+/// A client on the network, through the connection lengua makes for it: fetch is proven for
+/// every path and body and every delivery, and so is a server it can't reach, for every path; a
+/// request with the wrong version, or one cut short before reading the reply, is found.
 #[tokio::test]
 async fn proves_the_fetch_client() {
     let spec = repository_file("examples/fetch/spec.md")
@@ -2954,7 +2954,7 @@ async fn proves_the_fetch_client() {
         .replacen("`string(0, 65000, ", "`string(0, 11, ", 1);
     let source = repository_file("examples/fetch/main.s");
     let right = machine(&source).await;
-    for index in 0..3 {
+    for index in 0..2 {
         let verdict = prove(&right, &block(&spec, index), &network_budget(false));
         // The reply is read with fill: proven however the network cuts it.
         assert!(
@@ -2991,9 +2991,9 @@ async fn proves_the_fetch_client() {
     }
 }
 
-/// The fetch client on AArch64, its spec unchanged: its argument errors are proven for every
-/// port, and its fetch for every path and body, port and delivery, as x86-64's are; a request with
-/// the wrong version, or one cut short before reading the reply, is found.
+/// The fetch client on AArch64, its spec unchanged: proven for every path and body and every
+/// delivery, and for a server it can't reach, as x86-64's is; a request with the wrong version,
+/// or one cut short before reading the reply, is found.
 #[tokio::test]
 async fn proves_the_aarch64_fetch_client() {
     let spec = repository_file("tests/fixtures/linux-aarch64/fetch/spec.md")
@@ -3006,7 +3006,7 @@ async fn proves_the_aarch64_fetch_client() {
         .replacen("`string(0, 65000, ", "`string(0, 11, ", 1);
     let source = repository_file("tests/fixtures/linux-aarch64/fetch/main.s");
     let right = machine(&source).await;
-    for index in 0..3 {
+    for index in 0..2 {
         let verdict = prove(&right, &block(&spec, index), &network_budget(false));
         assert!(
             matches!(

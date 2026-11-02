@@ -1208,35 +1208,52 @@ async fn the_echo_server_answers_the_tests_client() {
 
 #[tokio::test]
 async fn the_fetch_client_talks_to_the_tests_server() {
-    // A client: the test's own server listens on a free port, which the example names as
-    // {port}, and the kernel lets the program connect to that port alone.
+    // A client: lengua makes its connection before it starts, to the test's own server in its
+    // tests and to this computer's port 8080 in a run, and hands it over as descriptor 4.
     let session = session().await;
     let program = written(&session, example_files("fetch")).await;
     done(&session, &program).await;
-    // run reaches a real server on a port the spec approves, and no other.
-    let refused = session
-        .call_ok("run", with_args(&program, &["9", "/"]))
-        .await;
-    assert_eq!(refused["exit_code"], 3, "{refused}");
-    if let Ok(listener) = tokio::net::TcpListener::bind("127.0.0.1:8080").await {
-        let server = tokio::spawn(async move {
-            use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-            let (mut stream, _) = listener.accept().await.expect("accept");
-            let mut request = vec![0_u8; 64];
-            let read = stream.read(&mut request).await.expect("read");
-            request.truncate(read);
-            stream
-                .write_all(b"HTTP/1.0 200 OK\r\n\r\nfrom 8080")
-                .await
-                .expect("reply");
-            request
-        });
-        let fetched = session
-            .call_ok("run", with_args(&program, &["8080", "/hi"]))
-            .await;
-        assert_eq!(fetched["stdout"], "from 8080", "{fetched}");
-        assert_eq!(server.await.expect("served"), b"GET /hi HTTP/1.0\r\n\r\n");
+    // Only where nothing else holds port 8080 here.
+    if std::net::TcpListener::bind("127.0.0.1:8080").is_err() {
+        eprintln!("skipped the runs: something on this computer holds port 8080");
+        session.service.cancel().await.expect("close the session");
+        return;
     }
+    // With nothing there, the program gets its connection already ended, and the report says
+    // why.
+    let refused = session.call_ok("run", with_args(&program, &["/"])).await;
+    assert_eq!(refused["exit_code"], 3, "{refused}");
+    assert_eq!(
+        refused["connections"][0]["place"], "port 8080 of this computer",
+        "{refused}"
+    );
+    assert!(
+        refused["connections"][0]["problem"].is_string(),
+        "{refused}"
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:8080")
+        .await
+        .expect("port 8080");
+    let server = tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let (mut stream, _) = listener.accept().await.expect("accept");
+        let mut request = Vec::new();
+        let mut chunk = [0_u8; 64];
+        while !request.ends_with(b"\r\n\r\n") {
+            let read = stream.read(&mut chunk).await.expect("read");
+            assert!(read > 0, "the request ended early: {request:?}");
+            request.extend_from_slice(&chunk[..read]);
+        }
+        stream
+            .write_all(b"HTTP/1.0 200 OK\r\n\r\nfrom 8080")
+            .await
+            .expect("reply");
+        request
+    });
+    let fetched = session.call_ok("run", with_args(&program, &["/hi"])).await;
+    assert_eq!(fetched["stdout"], "from 8080", "{fetched}");
+    assert!(fetched["connections"][0]["problem"].is_null(), "{fetched}");
+    assert_eq!(server.await.expect("served"), b"GET /hi HTTP/1.0\r\n\r\n");
     session.service.cancel().await.expect("close the session");
 }
 

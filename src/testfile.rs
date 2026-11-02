@@ -27,12 +27,9 @@ const MAX_PROBLEMS: usize = 20;
 /// variable of that name.
 const NOW: &str = "now";
 
-/// The built-in variable for the port of the test's own server, when a block declares no
-/// variable of that name. It renders as [`PORT_TEXT`], which the runner fills in.
+/// The variable that was once the test server's port. A program no longer needs one: lengua
+/// makes its connections. A block that uses it without declaring it is told so.
 const PORT: &str = "port";
-
-/// Where a test names its own server's port: the runner writes the real one in its place.
-pub const PORT_TEXT: &str = "{port}";
 
 /// A spec's checked tests.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,7 +73,7 @@ pub struct Example {
     pub random: Option<String>,
     /// What its `clock_gettime` calls read, in seconds; empty when the kernel's clock answers.
     pub clock: Vec<String>,
-    /// The test's own server, one entry a connection, for a program that connects.
+    /// The test's own servers, each standing in for one of the spec's connections.
     pub server: Vec<Reply>,
     /// The test's own client, one entry a connection, for a program that serves.
     pub client: Vec<Exchange>,
@@ -85,12 +82,18 @@ pub struct Example {
     pub clients_at_once: bool,
     /// Whether the program must still be serving at the end, instead of exiting.
     pub serves: bool,
+    /// How many connections the spec names: lengua hands the program each, at descriptors 4
+    /// and on, answered by one of the test's servers or ended.
+    pub connections: usize,
 }
 
-/// What the test's own server does with one connection from the program: it reads exactly
+/// What the test's own server does on one of the program's connections: it reads exactly
 /// `receives`, sends `replies`, closes its side, and expects nothing more.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Reply {
+    /// The spec's connection it stands in for, by its place in `- Network: connects to …`,
+    /// from 0.
+    pub connection: usize,
     /// What the program must send.
     pub receives: String,
     /// What the server sends back.
@@ -154,8 +157,9 @@ pub struct Generated {
     pub random: Option<Template>,
     /// The clock reading templates.
     pub clock: Vec<Template>,
-    /// The test server's templates, one pair a connection: what it receives, what it replies.
-    pub server: Vec<(Template, Template)>,
+    /// The test server's templates, one a connection: the spec's connection it stands in for,
+    /// from 0, what it receives and what it replies.
+    pub server: Vec<(usize, Template, Template)>,
     /// The test client's templates, one pair a connection: what it sends, what it receives.
     pub client: Vec<(Template, Template)>,
     /// Whether the test's clients connect at once, each still sending while another must be
@@ -163,6 +167,9 @@ pub struct Generated {
     pub clients_at_once: bool,
     /// Whether the program must still be serving at the end, instead of exiting.
     pub serves: bool,
+    /// How many connections the spec names: lengua hands the program each, at descriptors 4
+    /// and on, answered by one of the test's servers or ended.
+    pub connections: usize,
 }
 
 /// A generated block runs every combination of its values when there are at most this many…
@@ -211,7 +218,7 @@ pub struct Case {
     pub random: Option<String>,
     /// What its `clock_gettime` calls read, in seconds; empty when the kernel's clock answers.
     pub clock: Vec<String>,
-    /// The test's own server, one entry a connection.
+    /// The test's own servers, each standing in for one of the spec's connections.
     pub server: Vec<Reply>,
     /// The test's own client, one entry a connection.
     pub client: Vec<Exchange>,
@@ -220,6 +227,9 @@ pub struct Case {
     pub clients_at_once: bool,
     /// Whether the program must still be serving at the end, instead of exiting.
     pub serves: bool,
+    /// How many connections the spec names: lengua hands the program each, at descriptors 4
+    /// and on, answered by one of the test's servers or ended.
+    pub connections: usize,
 }
 
 impl Case {
@@ -286,7 +296,7 @@ impl Generated {
             .chain([&self.stdin])
             .chain(self.files.values())
             .chain(self.clock.iter().filter(|_| clock))
-            .chain(self.server.iter().map(|(_, replies)| replies))
+            .chain(self.server.iter().map(|(_, _, replies)| replies))
             .chain(self.client.iter().map(|(sends, _)| sends))
             .flat_map(Template::variables)
             .collect()
@@ -303,7 +313,7 @@ impl Generated {
             .into_iter()
             .chain(self.files_after.values())
             .chain(formula)
-            .chain(self.server.iter().map(|(receives, _)| receives))
+            .chain(self.server.iter().map(|(_, receives, _)| receives))
             .chain(self.client.iter().map(|(_, receives)| receives))
     }
 
@@ -315,7 +325,7 @@ impl Generated {
             .chain([&self.stdin])
             .chain(self.files.values())
             .chain(self.clock.iter())
-            .chain(self.server.iter().map(|(_, replies)| replies))
+            .chain(self.server.iter().map(|(_, _, replies)| replies))
             .chain(self.client.iter().map(|(sends, _)| sends))
     }
 
@@ -337,9 +347,6 @@ impl Generated {
         let mut with_built_ins = inputs.clone();
         if !inputs.contains_key(NOW) {
             with_built_ins.insert(NOW.to_owned(), Value::Int(now));
-        }
-        if !inputs.contains_key(PORT) {
-            with_built_ins.insert(PORT.to_owned(), Value::Str(PORT_TEXT.to_owned()));
         }
         let inputs = &with_built_ins;
         let render_files = |files: &BTreeMap<String, Template>, field| {
@@ -398,8 +405,9 @@ impl Generated {
         let server = self
             .server
             .iter()
-            .map(|(receives, replies)| {
+            .map(|(connection, receives, replies)| {
                 Ok(Reply {
+                    connection: *connection,
                     receives: receives.render(inputs)?,
                     replies: replies.render(inputs)?,
                 })
@@ -436,6 +444,7 @@ impl Generated {
             client,
             clients_at_once: self.clients_at_once,
             serves: self.serves,
+            connections: self.connections,
         })
     }
 
@@ -690,6 +699,8 @@ struct ExampleTable {
 /// What the test's own server does on one connection: it receives exactly this, then replies.
 #[derive(Debug)]
 struct ServerTable<T> {
+    /// The spec's connection it stands in for, from 0.
+    connection: usize,
     receives: T,
     replies: T,
 }
@@ -809,7 +820,7 @@ struct OutlineSteps {
     folders_after: BTreeSet<String>,
     random: Option<Written>,
     clock: Vec<Written>,
-    server: Vec<(Written, Written)>,
+    server: Vec<(usize, Written, Written)>,
     client: Vec<(Written, Written)>,
     clients_at_once: bool,
     /// The exit code as written: a number or a formula.
@@ -1173,6 +1184,7 @@ impl<'a> Checker<'a> {
                 .server
                 .into_iter()
                 .map(|table| Reply {
+                    connection: table.connection,
                     receives: expand("what the server receives", table.receives, false),
                     replies: expand("what the server replies", table.replies, false),
                 })
@@ -1209,20 +1221,6 @@ impl<'a> Checker<'a> {
                     at_once: table.clients_at_once.then_some(client.len()),
                 },
             );
-            let uses_port = args
-                .iter()
-                .chain([&stdin])
-                .chain(files.values())
-                .any(|text| text.contains(PORT_TEXT));
-            if uses_port && server.is_empty() {
-                self.problem(
-                    Some(line),
-                    format!(
-                        "{name} names {PORT_TEXT}, the port of the test's own server, but has no \
-                         server; add `- And a server that receives `…` and replies `…``"
-                    ),
-                );
-            }
             examples.push(Example {
                 id,
                 line,
@@ -1243,6 +1241,7 @@ impl<'a> Checker<'a> {
                 client,
                 clients_at_once: table.clients_at_once,
                 serves: behavior.serves,
+                connections: self.spec.network.connections.len(),
             });
         }
         examples
@@ -1402,11 +1401,12 @@ impl<'a> Checker<'a> {
             .iter()
             .map(|reading| template("clock", reading))
             .collect();
-        let server: Option<Vec<(Template, Template)>> = steps
+        let server: Option<Vec<(usize, Template, Template)>> = steps
             .server
             .iter()
-            .map(|(receives, replies)| {
+            .map(|(connection, receives, replies)| {
                 Some((
+                    *connection,
                     template("server.receives", receives)?,
                     template("server.replies", replies)?,
                 ))
@@ -1505,18 +1505,19 @@ impl<'a> Checker<'a> {
             client: client?,
             clients_at_once: steps.clients_at_once,
             serves: steps.serves,
+            connections: self.spec.network.connections.len(),
         })
     }
 
     /// A test has its own server only for a program that connects, and its own client, or
     /// expects the program to keep serving, only for one that serves.
     fn check_peers(&mut self, line: usize, name: &str, peers: Peers<'_>) {
-        if peers.server && self.spec.network.connects.is_empty() {
+        if peers.server && self.spec.network.connections.is_empty() {
             self.problem(
                 Some(line),
                 format!(
-                    "{name} has a server for the program to connect to, but spec.md doesn't say \
-                     where it may connect: add `- Network: connects to TCP port {}` under \
+                    "{name} has a server for the program to talk to, but spec.md doesn't say \
+                     where the program connects: add `- Network: connects to TCP port {}` under \
                      `# Constraints`",
                     peers.port.unwrap_or("N")
                 ),
@@ -1835,7 +1836,7 @@ impl<'a> Checker<'a> {
                 block
                     .server
                     .iter()
-                    .map(|(_, replies)| ("server.replies", replies)),
+                    .map(|(_, _, replies)| ("server.replies", replies)),
             )
             .chain(
                 block
@@ -1859,22 +1860,20 @@ impl<'a> Checker<'a> {
             }
             inputs.extend(template.variables());
         }
-        // `port` is the test server's, filled in when the test runs.
-        let port_built_in = !declared.contains(PORT);
+        // `port` was the test server's port, which a program no longer needs.
         let uses_port = block
             .given()
             .chain(block.outputs())
             .any(|template| template.variables().contains(PORT));
-        if port_built_in && uses_port && block.server.is_empty() {
+        if uses_port && !declared.contains(PORT) {
             self.problem(
                 Some(line),
                 format!(
-                    "{name} uses port, the port of the test's own server, but has no server; \
-                     add `- And a server on port `…` that receives `…` and replies `…``"
+                    "{name} uses {{port}}, once the port of the test's own server: a program \
+                     doesn't need one any more, since lengua makes its connections and hands \
+                     them over; take {{port}} out, or give it a column of its own"
                 ),
             );
-        }
-        if port_built_in {
             inputs.remove(PORT);
         }
         if let Some(random) = &block.random {
@@ -1949,7 +1948,7 @@ impl<'a> Checker<'a> {
             );
         }
         for var in used.difference(&declared) {
-            if (now_built_in && var == NOW) || (port_built_in && var == PORT) {
+            if (now_built_in && var == NOW) || var == PORT {
                 continue;
             }
             self.problem(
@@ -1978,7 +1977,7 @@ impl<'a> Checker<'a> {
             || block
                 .server
                 .iter()
-                .any(|(receives, _)| receives.has_placeholders())
+                .any(|(_, receives, _)| receives.has_placeholders())
             || block
                 .client
                 .iter()
@@ -2332,7 +2331,7 @@ fn bind(block: &Generated, example: &Example) -> Result<Env, String> {
             block
                 .server
                 .iter()
-                .map(|(_, replies)| replies)
+                .map(|(_, _, replies)| replies)
                 .zip(example.server.iter().map(|reply| &reply.replies)),
         )
         .chain(
@@ -2347,14 +2346,6 @@ fn bind(block: &Generated, example: &Example) -> Result<Env, String> {
             "what it gives the program must be bare variables, as in args".to_owned()
         })?;
         pairs.push((pattern, text.as_str()));
-    }
-    // The test server's port reads as its stand-in, as the steps' port argument does.
-    let uses_port = block
-        .given()
-        .chain(block.outputs())
-        .any(|template| template.variables().contains(PORT));
-    if uses_port && !generators.contains_key(PORT) {
-        env.insert(PORT.to_owned(), Value::Str(PORT_TEXT.to_owned()));
     }
     let mut solutions = Vec::new();
     solve(&pairs, 0, &generators, &mut env, &mut solutions);

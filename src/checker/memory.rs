@@ -169,7 +169,7 @@ impl Summary {
             // The old name and the new.
             Some(Syscall::Renameat) => (&[1, 3], &[]),
             Some(Syscall::Accept4) => (&[1, 2], &[1, 2]),
-            Some(Syscall::Write | Syscall::Openat | Syscall::Connect) => (&[1], &[]),
+            Some(Syscall::Write | Syscall::Openat) => (&[1], &[]),
             Some(Syscall::Sendto) => (&[1, 4], &[]),
             // The table of descriptors, whose events the kernel writes back.
             Some(Syscall::Poll) => (&[0], &[0]),
@@ -180,7 +180,6 @@ impl Summary {
                 | Syscall::Lseek
                 | Syscall::Exit
                 | Syscall::ExitGroup
-                | Syscall::Socket
                 | Syscall::Shutdown,
             ) => (&[], &[]),
             // clone, futex, or a call the rules refuse.

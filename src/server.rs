@@ -456,6 +456,29 @@ pub struct RunReport {
     /// What held the run, when QEMU's user mode ran it for the target's CPU.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub emulated: Option<String>,
+    /// The connections lengua made for the program before it started, when its spec names any.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub connections: Vec<ConnectionReport>,
+}
+
+/// One connection lengua made for a program, or couldn't.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct ConnectionReport {
+    /// Where it goes, in words.
+    pub place: String,
+    /// Why lengua couldn't make it, when it couldn't: the program got it already ended, so its
+    /// reads end at once and its writes fail.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub problem: Option<String>,
+}
+
+impl ConnectionReport {
+    fn of(made: &crate::connect::Made) -> Self {
+        Self {
+            place: made.place.clone(),
+            problem: made.problem.clone(),
+        }
+    }
 }
 
 /// What `run` reports about a program that has ended.
@@ -478,6 +501,11 @@ fn ended_report(
         wall_time_us: result.wall_time_ns / 1000,
         serving: None,
         emulated: None,
+        connections: result
+            .connections
+            .iter()
+            .map(ConnectionReport::of)
+            .collect(),
     }
 }
 
@@ -508,6 +536,11 @@ impl LenguaServer {
             .await
             .map_err(|error| format!("couldn't start the server: {error}"))?;
         let address = format!("127.0.0.1:{}", started.port().unwrap_or(0));
+        let connections = started
+            .connections()
+            .iter()
+            .map(ConnectionReport::of)
+            .collect();
         let id = STARTS.fetch_add(1, Ordering::Relaxed);
         background.insert(
             folder.path().to_path_buf(),
@@ -544,6 +577,7 @@ impl LenguaServer {
             wall_time_us: 0,
             serving: Some(address),
             emulated: None,
+            connections,
         })
     }
 }
@@ -768,8 +802,9 @@ impl LenguaServer {
             when lengua.lock shows that spec.md and main.s are exactly the versions that were \
             recorded and checked, and a fresh build of main.s is byte for byte the \
             executable check tested. The program gets an empty environment, 10 seconds and \
-            8 MiB of output, and lengua lets it use only what its spec names, \
-            connect only to the ports it names, and touch files only inside its working folder: \
+            8 MiB of output, and lengua lets it use only what its spec names, reach only the \
+            places it names, through connections lengua makes for it before it starts, and touch \
+            files only inside its working folder: \
             an empty temporary folder, or `folder`. A server starts in the background on its \
             spec's port and run returns its address; call run with stop: true to stop it and get \
             what it printed (it also stops after ten minutes or when the session ends). path: \
@@ -1564,17 +1599,13 @@ impl LenguaServer {
         mut values: BTreeMap<String, expr::Value>,
         kernel_values: bool,
     ) -> (String, bool) {
-        // The delivery it was found with, and the port the kernel chooses, aren't the test's
-        // inputs: a real run is given the delivery and picks its port.
+        // The delivery it was found with isn't the test's input: a real run is given it.
         let delivery = match values.remove(prove::DELIVERY) {
             Some(expr::Value::Str(found)) => {
                 testrun::Delivery::described(&found).unwrap_or(testrun::Delivery::Whole)
             }
             _ => testrun::Delivery::Whole,
         };
-        if !block.server.is_empty() && !block.vars.iter().any(|(name, _)| name == "port") {
-            values.remove("port");
-        }
         let networked = !block.server.is_empty() || !block.client.is_empty();
         let broken_rule = match values.remove(prove::UNSAFE) {
             Some(expr::Value::Str(problem)) => Some(problem),
@@ -2372,11 +2403,18 @@ async fn runnable(
         ));
     }
     let syscalls = profile.allowed_syscalls(&spec.syscalls, spec.threads.is_some());
-    // The ports the spec names, and for a server, its own port on the loopback.
+    // The connections the spec names, which lengua makes for the program, and for a server, its
+    // own port on the loopback.
     let net = Net {
-        connect: spec.network.connects.clone(),
-        anywhere: spec.network.anywhere,
-        connections: Vec::new(),
+        connections: spec
+            .network
+            .connections
+            .iter()
+            .map(|place| match &place.host {
+                None => crate::connect::Reach::ThisComputer(place.port),
+                Some(host) => crate::connect::Reach::Host(host.clone(), place.port),
+            })
+            .collect(),
         listen: spec.network.listens,
         serve_anywhere: spec.network.serves_anywhere,
     };

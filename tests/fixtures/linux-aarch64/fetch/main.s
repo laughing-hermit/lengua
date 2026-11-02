@@ -4,29 +4,22 @@
 .equ SYS_READ, 63
 .equ SYS_WRITE, 64
 .equ SYS_CLOSE, 57
-.equ SYS_SOCKET, 198
-.equ SYS_CONNECT, 203
 .equ SYS_EXIT, 93
 // File descriptors
 .equ STDOUT, 1
 .equ STDERR, 2
-// Sockets: TCP over IPv4
-.equ AF_INET, 2
-.equ SOCK_STREAM, 1
+// The connection lengua makes to the server before the program starts: its first, 4.
+.equ CONNECTION, 4
 // Exit codes
 .equ EXIT_OK, 0
 .equ EXIT_USAGE, 1
-.equ EXIT_BAD_PORT, 2
 .equ EXIT_UNREACHABLE, 3
 .equ EXIT_WRITE_FAILED, 4
 // Error codes returned by functions marked "returns: result"
 .equ ERROR_IO, -5
 .equ ERROR_INVALID, -22
 // Sizes and limits
-.equ ARGC_EXPECTED, 3
-.equ PORT_MIN, 1
-.equ PORT_MAX, 65535
-.equ MAX_CHARS, 20
+.equ ARGC_EXPECTED, 2
 .equ MAX_WRITES, 64
 .equ PATH_MAX, 100
 .equ PATH_SCAN, 101
@@ -36,28 +29,20 @@
 .equ RESPONSE_LEN, 65536
 // fill's limit on reads, as fill.s has it
 .equ MAX_FILL_READS, 1099511627776
-.equ ADDRESS_LEN, 16
-.equ ADDRESS_PAD, 8
 // The blank line ending a response's headers, "\r\n\r\n", read as one 32-bit word, and the
 // places a word of it can start in the response.
 .equ HEADER_END, 0x0a0d0a0d
 .equ HEADER_END_BYTES, 4
 .equ BODY_SCAN, RESPONSE_LEN - HEADER_END_BYTES + 1
-.equ USAGE_MSG_LEN, 27
-.equ BAD_PORT_MSG_LEN, 16
+.equ USAGE_MSG_LEN, 20
 .equ UNREACHABLE_MSG_LEN, 30
 
 .section .rodata
 
 .type usage_msg, @object
 usage_msg:
-    .ascii "usage: fetch <port> <path>\n"
+    .ascii "usage: fetch <path>\n"
 .size usage_msg, . - usage_msg
-
-.type bad_port_msg, @object
-bad_port_msg:
-    .ascii "error: bad port\n"
-.size bad_port_msg, . - bad_port_msg
 
 .type unreachable_msg, @object
 unreachable_msg:
@@ -79,17 +64,6 @@ version:
 assert_message:
     .ascii "lengua: assertion 000 failed\n"
 .size assert_message, . - assert_message
-
-.section .data
-
-// The server's address: IPv4, its port (set before connecting), 127.0.0.1.
-.type address, @object
-address:
-    .short AF_INET
-    .short 0
-    .byte 127, 0, 0, 1
-    .zero ADDRESS_PAD
-.size address, . - address
 
 .section .bss
 
@@ -115,23 +89,12 @@ _start:
     cmp x9, #ARGC_EXPECTED
     b.ne .Lstart_usage
     ldr x0, [sp, #16]
-    cbz x0, .Lstart_assert_port
-    bl parse_i64
-    tbnz x0, #63, .Lstart_bad_port
-    cmp x1, #PORT_MIN
-    b.lt .Lstart_bad_port
-    mov x9, #PORT_MAX
-    cmp x1, x9
-    b.gt .Lstart_bad_port
-    mov x19, x1
-    ldr x0, [sp, #24]
     cbz x0, .Lstart_assert_path
     adrp x1, request
     add x1, x1, :lo12:request
     bl build_request
     tbnz x0, #63, .Lstart_usage
     mov x2, x1
-    mov x0, x19
     adrp x1, request
     add x1, x1, :lo12:request
     adrp x3, response
@@ -151,13 +114,6 @@ _start:
     bl complain
     mov w0, #EXIT_USAGE
     b .Lstart_exit
-.Lstart_bad_port:
-    adrp x1, bad_port_msg
-    add x1, x1, :lo12:bad_port_msg
-    mov x2, #BAD_PORT_MSG_LEN
-    bl complain
-    mov w0, #EXIT_BAD_PORT
-    b .Lstart_exit
 .Lstart_unreachable:
     adrp x1, unreachable_msg
     add x1, x1, :lo12:unreachable_msg
@@ -170,9 +126,6 @@ _start:
 .Lstart_exit:
     mov x8, #SYS_EXIT
     svc #0
-.Lstart_assert_port:
-    mov w0, #1
-    bl assert_fail
 .Lstart_assert_path:
     mov w0, #2
     bl assert_fail
@@ -301,9 +254,9 @@ build_request:
     bl assert_fail
 .size build_request, . - build_request
 
-// Sends a request to a port on this computer and reads the whole response, until the server
-// closes the connection.
-// In: x0 = the port; x1 = the request; x2 = its length; x3 = a buffer of RESPONSE_LEN bytes.
+// Sends a request on the connection lengua made to the server, and reads the whole response,
+// until the server closes the connection.
+// In: x1 = the request; x2 = its length; x3 = a buffer of RESPONSE_LEN bytes.
 // Out: x0 = 0 and x1 = the response's length, or a negative error code.
 // returns: result
 .type fetch_page, @function
@@ -316,28 +269,23 @@ fetch_page:
     mov x20, x1
     mov x21, x2
     mov x22, x3
-    bl connect_local
-    tbnz x0, #63, .Lfetch_page_return
-    mov x19, x0
-    mov x1, x20
-    mov x2, x21
+    mov x0, #CONNECTION
     bl write_all
     tbnz x0, #63, .Lfetch_page_close
-    mov x0, x19
+    mov x0, #CONNECTION
     mov x1, x22
     bl receive
     tbnz x0, #63, .Lfetch_page_close
     mov x20, x1
 .Lfetch_page_close:
     mov x21, x0
-    mov x0, x19
+    mov x0, #CONNECTION
     mov x8, #SYS_CLOSE
     svc #0
     tbnz x0, #63, .Lfetch_page_result
 .Lfetch_page_result:
     mov x0, x21
     mov x1, x20
-.Lfetch_page_return:
     ldp x21, x22, [sp], #16
     ldp x19, x20, [sp], #16
     ldp x29, x30, [sp], #16
@@ -349,55 +297,6 @@ fetch_page:
     mov w0, #8
     bl assert_fail
 .size fetch_page, . - fetch_page
-
-// Opens a TCP connection to a port on this computer, 127.0.0.1.
-// In: x0 = the port, from PORT_MIN to PORT_MAX.
-// Out: x0 = the connection's file descriptor, or a negative error code.
-// returns: result
-.type connect_local, @function
-connect_local:
-    cbz x0, .Lconnect_local_assert_port
-    mov x9, #PORT_MAX
-    cmp x0, x9
-    b.hi .Lconnect_local_assert_port_max
-    mov x10, x0
-    mov x0, #AF_INET
-    mov x1, #SOCK_STREAM
-    mov x2, #0
-    mov x8, #SYS_SOCKET
-    svc #0
-    tbnz x0, #63, .Lconnect_local_return
-    mov x11, x0
-    // The port in the network's byte order, high byte first.
-    rev16 w12, w10
-    adrp x13, address
-    add x13, x13, :lo12:address
-    strh w12, [x13, #2]
-    mov x0, x11
-    mov x1, x13
-    mov x2, #ADDRESS_LEN
-    mov x8, #SYS_CONNECT
-    svc #0
-    tbnz x0, #63, .Lconnect_local_failed
-    mov x0, x11
-    b .Lconnect_local_return
-.Lconnect_local_failed:
-    mov x14, x0
-    mov x0, x11
-    mov x8, #SYS_CLOSE
-    svc #0
-    tbnz x0, #63, .Lconnect_local_closed
-.Lconnect_local_closed:
-    mov x0, x14
-.Lconnect_local_return:
-    ret
-.Lconnect_local_assert_port:
-    mov w0, #9
-    bl assert_fail
-.Lconnect_local_assert_port_max:
-    mov w0, #10
-    bl assert_fail
-.size connect_local, . - connect_local
 
 // Reads from a connection until the server closes it, into a buffer of RESPONSE_LEN bytes.
 // In: x0 = the connection; x1 = the buffer.
@@ -469,63 +368,6 @@ find_body:
     mov w0, #17
     bl assert_fail
 .size find_body, . - find_body
-
-// Parses a decimal whole number with an optional leading minus sign.
-// In: x0 = a NUL-terminated string.
-// Out: x0 = 0 and x1 = the number, or x0 = ERROR_INVALID when the text isn't a number
-// between -9223372036854775807 and 9223372036854775807.
-// returns: result
-.type parse_i64, @function
-parse_i64:
-    cbz x0, .Lparse_assert_null
-    mov x9, #0
-    ldrb w10, [x0]
-    cmp w10, #'-'
-    b.ne .Lparse_digits
-    mov x9, #1
-    add x0, x0, #1
-.Lparse_digits:
-    ldrb w10, [x0]
-    cbz w10, .Lparse_invalid
-    mov x1, #0
-    mov x2, #0
-    mov x11, #10
-    mov x3, #MAX_CHARS
-.Lparse_loop:  // bound: 20
-    cmp x2, #MAX_CHARS
-    b.hs .Lparse_assert_index
-    ldrb w10, [x0, x2]
-    cbz w10, .Lparse_end
-    sub w10, w10, #'0'
-    cmp w10, #9
-    b.hi .Lparse_invalid
-    mul x12, x1, x11
-    smulh x13, x1, x11
-    cmp x13, x12, asr #63
-    b.ne .Lparse_invalid
-    adds x1, x12, x10
-    b.vs .Lparse_invalid
-    add x2, x2, #1
-    subs x3, x3, #1
-    b.ne .Lparse_loop
-    b .Lparse_invalid
-.Lparse_end:
-    cbz x9, .Lparse_positive
-    neg x1, x1
-.Lparse_positive:
-    mov x0, #0
-    b .Lparse_return
-.Lparse_invalid:
-    mov x0, #ERROR_INVALID
-.Lparse_return:
-    ret
-.Lparse_assert_null:
-    mov w0, #13
-    bl assert_fail
-.Lparse_assert_index:
-    mov w0, #14
-    bl assert_fail
-.size parse_i64, . - parse_i64
 
 // Writes x2 bytes from x1 to file descriptor x0, retrying partial writes.
 // In: x0 = the file descriptor, x1 = the bytes, x2 = how many, at least 1.
