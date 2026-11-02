@@ -986,6 +986,13 @@ impl State {
     /// The same state with the test's network: its server or client, as `network` says.
     #[must_use]
     pub fn with_network(mut self, network: net::Network) -> Self {
+        // The connections lengua made before the program started, each at its own number.
+        for (index, script) in network.made.iter().enumerate() {
+            let number = self.connections.len();
+            self.connections.push(net::Connection::made(*script));
+            let fd = u64::try_from(crate::connect::FIRST_DESCRIPTOR).unwrap_or(4) + index as u64;
+            self.sockets.insert(fd, Some(number));
+        }
         self.network = Rc::new(network);
         self
     }
@@ -4439,6 +4446,67 @@ mod tests {
                 .loop_at(image.fill_head().expect("fill"))
                 .map(|found| found.counter),
             Some(9)
+        );
+    }
+
+    /// A program that sends `ok` on its first connection, prints what comes back, and exits
+    /// with the number its write returned less 2: 0 when the write went through.
+    const SENDS_ON_ITS_CONNECTION: &str = ".intel_syntax noprefix\n.globl _start\n.text\n\
+        .type _start, @function\n_start:\n    mov eax, 1\n    mov edi, 4\n    \
+        lea rsi, [rip + ok]\n    mov edx, 2\n    syscall\n    lea r12, [rax - 2]\n    \
+        xor eax, eax\n    mov edi, 4\n    lea rsi, [rip + buffer]\n    mov edx, 64\n    \
+        syscall\n    mov rdx, rax\n    mov eax, 1\n    mov edi, 1\n    \
+        lea rsi, [rip + buffer]\n    syscall\n    mov rdi, r12\n    mov eax, 60\n    \
+        syscall\n.size _start, . - _start\n.data\n.type ok, @object\nok:\n    .ascii \"ok\"\n\
+        .size ok, . - ok\n.bss\n.type buffer, @object\nbuffer:\n    .zero 64\n\
+        .size buffer, . - buffer\n";
+
+    #[tokio::test]
+    async fn the_connections_lengua_makes_are_open_at_the_start() {
+        let image = image(SENDS_ON_ITS_CONNECTION).await;
+        let mut pool = Pool::default();
+        let text = |pool: &Pool, terms: &[Term]| {
+            terms
+                .iter()
+                .map(|term| {
+                    char::from(u8::try_from(pool.constant(*term).expect("a byte")).expect("a byte"))
+                })
+                .collect::<String>()
+        };
+        // Answered by the test's server: it takes `ok`, then replies `hello`.
+        let ok = bytes(&mut pool, b"ok");
+        let hello = bytes(&mut pool, b"hello");
+        let network = net::Network {
+            server: vec![(ok, vec![hello])],
+            made: vec![Some(0)],
+            ..net::Network::default()
+        };
+        let start = State::start(&image, &mut pool, &[], &[], Vec::new()).with_network(network);
+        let mut runs = explore(&image, start, &mut pool, &mut Concrete, 4).expect("concrete");
+        assert_eq!(runs.len(), 1);
+        let answered = runs.remove(0);
+        assert_eq!(text(&pool, &answered.stdout), "hello");
+        assert_eq!(text(&pool, &answered.connections[0].sent), "ok");
+        assert!(
+            matches!(answered.end, Some(End::Exit(status)) if pool.constant(status) == Some(0)),
+            "{:?}",
+            answered.end
+        );
+        // Handed over ended: the write fails with EPIPE, so it exits with -34 & 255, and the
+        // read gives nothing.
+        let network = net::Network {
+            made: vec![None],
+            ..net::Network::default()
+        };
+        let start = State::start(&image, &mut pool, &[], &[], Vec::new()).with_network(network);
+        let mut runs = explore(&image, start, &mut pool, &mut Concrete, 4).expect("concrete");
+        let ended = runs.remove(0);
+        assert_eq!(text(&pool, &ended.stdout), "");
+        assert!(ended.connections[0].sent.is_empty());
+        assert!(
+            matches!(ended.end, Some(End::Exit(status)) if pool.constant(status) == Some(222)),
+            "{:?}",
+            ended.end
         );
     }
 

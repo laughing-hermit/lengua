@@ -3642,6 +3642,7 @@ fn prove_shape(
             .zip(&replies)
             .map(|(wanted, reply)| (wanted.clone(), cut(reply, delivery)))
             .collect(),
+        made: Vec::new(),
         client: sends
             .iter()
             .enumerate()
@@ -4265,6 +4266,7 @@ fn sample_start(
         port: (!case.server.is_empty())
             .then(|| pool.bv(WIDTH, SAMPLE_PORT.parse().unwrap_or(40000))),
         server,
+        made: Vec::new(),
         client,
         listening: listens,
         at_once: case.clients_at_once,

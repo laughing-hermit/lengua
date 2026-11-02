@@ -17,6 +17,10 @@ pub struct Network {
     /// The test server's connections in order: what it must receive, and its reply in the
     /// pieces it arrives in.
     pub server: Vec<(Vec<Term>, Vec<Vec<Term>>)>,
+    /// The connections lengua makes before the program starts, at descriptors 4 and on in
+    /// order: each the place in `server` of the test's server that answers it, or `None` for
+    /// one handed over already ended.
+    pub made: Vec<Option<usize>>,
     /// The test client's connections in order.
     pub client: Vec<Client>,
     /// Whether the program has its listener at file descriptor 3.
@@ -68,6 +72,9 @@ pub struct Connection {
     pub exchange: usize,
     /// Whether the program accepted it, rather than connected.
     pub accepted: bool,
+    /// Whether lengua handed it over already ended, as a connection it couldn't make: reads
+    /// give 0 and writes fail with `EPIPE`.
+    pub ended: bool,
     /// What the program sent on it.
     pub sent: Vec<Term>,
     /// Whether the program has finished with it: closed it, or shut its sending side.
@@ -75,6 +82,23 @@ pub struct Connection {
     /// The next piece to arrive, and how much of it the program has read.
     piece: usize,
     taken: usize,
+}
+
+impl Connection {
+    /// A connection lengua made before the program started: answered by the test server's
+    /// connection `script` in [`Network::server`], or ended when there's none.
+    #[must_use]
+    pub fn made(script: Option<usize>) -> Self {
+        Self {
+            exchange: script.unwrap_or(0),
+            accepted: false,
+            ended: script.is_none(),
+            sent: Vec::new(),
+            finished: false,
+            piece: 0,
+            taken: 0,
+        }
+    }
 }
 
 /// The bytes of one `struct pollfd`, and the events poll is asked for: something to read, and
@@ -196,6 +220,7 @@ const ENOTCONN: i64 = 107;
 const EISCONN: i64 = 106;
 const ECONNREFUSED: i64 = 111;
 const EBADF: i64 = 9;
+const EPIPE: i64 = 32;
 
 /// A system call's result as the register value it leaves.
 const fn returning(value: i64) -> u64 {
@@ -297,6 +322,7 @@ impl Cpu<'_> {
         self.state.connections.push(Connection {
             exchange: connected,
             accepted: false,
+            ended: false,
             sent: Vec::new(),
             finished: false,
             piece: 0,
@@ -367,6 +393,7 @@ impl Cpu<'_> {
         self.state.connections.push(Connection {
             exchange,
             accepted: true,
+            ended: false,
             sent: Vec::new(),
             finished: false,
             piece: 0,
@@ -405,6 +432,9 @@ impl Cpu<'_> {
         if flags & !MSG_NOSIGNAL != 0 {
             return Err(unsupported(format!("sending with flags {flags:#x}")));
         }
+        if self.state.connections[number].ended {
+            return Ok(returning(-EPIPE));
+        }
         if count > 1 << 20 {
             return Err(unsupported("sending more than a mebibyte at once"));
         }
@@ -419,10 +449,13 @@ impl Cpu<'_> {
     /// has arrived, or 0 once the peer has closed its side. Reading the test server's reply
     /// before sending all it must receive waits forever: the server waits too.
     pub(super) fn receive(&mut self, number: usize, buffer: u64, count: u64) -> Result<u64, Stop> {
-        if self.state.peers.is_some() {
+        let connection = self.state.connections[number].clone();
+        if connection.ended {
+            return Ok(0);
+        }
+        if self.state.peers.is_some() && connection.accepted {
             return self.receive_polled(number, buffer, count);
         }
-        let connection = self.state.connections[number].clone();
         let network = std::rc::Rc::clone(&self.state.network);
         let pieces = if connection.accepted {
             let client = &network.client[connection.exchange];
@@ -600,12 +633,15 @@ impl Cpu<'_> {
     /// Everything yet to arrive on a connection, and whether the peer then waits with its side
     /// open: the test's client, before the program has answered anything.
     pub(super) fn unread(&self, number: usize) -> Result<(Vec<Term>, bool), Stop> {
-        if self.state.peers.is_some() {
+        let connection = &self.state.connections[number];
+        if connection.ended {
+            return Ok((Vec::new(), false));
+        }
+        if self.state.peers.is_some() && connection.accepted {
             return Err(unsupported(
                 "fill on a connection of a server that polls, which waits on that client alone",
             ));
         }
-        let connection = &self.state.connections[number];
         let network = &self.state.network;
         let (pieces, waits) = if connection.accepted {
             let client = &network.client[connection.exchange];
@@ -637,6 +673,9 @@ impl Cpu<'_> {
     /// How many bytes of what the peer sends on a connection the program has read so far.
     pub(super) fn consumed(&self, number: usize) -> usize {
         let connection = &self.state.connections[number];
+        if connection.ended {
+            return 0;
+        }
         let network = &self.state.network;
         let pieces = if connection.accepted {
             &network.client[connection.exchange].pieces
@@ -655,6 +694,9 @@ impl Cpu<'_> {
     pub(super) fn consume(&mut self, number: usize, mut count: usize) {
         let network = std::rc::Rc::clone(&self.state.network);
         let connection = &mut self.state.connections[number];
+        if connection.ended {
+            return;
+        }
         let pieces = if connection.accepted {
             &network.client[connection.exchange].pieces
         } else {
