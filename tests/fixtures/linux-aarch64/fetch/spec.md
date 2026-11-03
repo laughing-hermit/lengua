@@ -53,5 +53,23 @@ the program exits with code 3; if writing the output fails, it exits with code 4
 |---|
 | `string(1, 100, "/abcdefghijklmnopqrstuvwxyz0123456789-._~")` |
 
+## B4: Exits with code 4 when its output can't be written
+- Given the argument `/hello`
+- And a server on port `8080` that receives `GET /hello HTTP/1.0\r\n\r\n` and replies `HTTP/1.0 200 OK\r\n\r\nhello world`
+- And standard output is closed
+- When the program runs
+- Then it exits with code `4`
+
+### For any `path` and `body`
+- Given the argument `{path}`
+- And a server on port `8080` that receives `GET {path} HTTP/1.0\r\n\r\n` and replies `HTTP/1.0 200 OK\r\n\r\n{body}`
+- And standard output is closed
+- When the program runs
+- Then it exits with code `4`
+
+| path | body |
+|---|---|
+| `string(1, 100, "/abcdefghijklmnopqrstuvwxyz0123456789-._~")` | `string(1, 65000, "abcdefghijklmnopqrstuvwxyz \n")` |
+
 # Constraints
 - Network: connects to TCP port 8080

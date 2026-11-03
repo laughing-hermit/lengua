@@ -2853,7 +2853,8 @@ fn replay(image: &Image, block: &Generated, input: &[u8]) -> Result<Option<Verdi
     };
     let mut pool = Pool::default();
     let stdin = exec::bytes(&mut pool, case.stdin.as_bytes());
-    let start = State::start(image, &mut pool, &[], &[], stdin);
+    let start =
+        State::start(image, &mut pool, &[], &[], stdin).with_stdout_closed(case.stdout_closed);
     let mut runs = exec::explore(image, start, &mut pool, &mut exec::Concrete, 2)?;
     let Some(run) = runs.pop() else {
         return Ok(None);
@@ -3672,7 +3673,8 @@ fn prove_shape(
     let mut base = State::start(image, &mut pool, &args, &env, stdin)
         .with_files(files)
         .with_folders(block.folders.clone())
-        .with_supply(random, clock);
+        .with_supply(random, clock)
+        .with_stdout_closed(block.stdout_closed);
     if every_cut {
         base = base.for_every_cut();
     }
@@ -4306,6 +4308,7 @@ fn sample_start(
         .with_folders(case.folders.clone())
         .with_supply(random, clock)
         .with_network(network)
+        .with_stdout_closed(case.stdout_closed)
 }
 
 /// Runs the prover's model of the code on concrete inputs that the real program has passed, and

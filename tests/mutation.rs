@@ -5,7 +5,8 @@
 //! one that changes nothing a spec can see, which its report shows for a person to judge.
 //!
 //! Slow (a check of every mutant, its proofs included), so it's ignored: run it by hand, or on
-//! CI's dispatch, with `--ignored every_proven_programs_mutants_are_caught`.
+//! CI's dispatch, with `--ignored every_proven_programs_mutants_are_caught`, and
+//! `LENGUA_MUTATE_ONLY` to run some programs alone.
 
 mod common;
 
@@ -21,7 +22,9 @@ const MUTANTS: usize = 8;
 const PROOF_SECONDS: u64 = 60;
 
 /// Mutants that change nothing a spec can see, each with why: they come out proven, rightly.
-/// Found by this test's first run, 2026-11-02; any other survivor fails it.
+/// Found by this test's first run, 2026-11-02; any other survivor fails it. write_all's error
+/// test flipped came out proven too, until a test could close standard output (2026-11-02):
+/// now the write fails, and that test catches it.
 const EQUIVALENT: &[(&str, &str)] = &[
     (
         "examples/echo/main.s L15:const+1",
@@ -32,13 +35,8 @@ const EQUIVALENT: &[(&str, &str)] = &[
         "a jump to the very next line, flipped",
     ),
     (
-        "tests/fixtures/linux-aarch64/cat/main.s L18:const+1",
+        "tests/fixtures/linux-aarch64/cat-stream/main.s L18:const+1",
         "fill's end byte 0, which the spec's input never holds",
-    ),
-    (
-        "tests/fixtures/linux-aarch64/cat/main.s L148:cond",
-        "write_all's error test flipped: it differs only for a write that fails or falls short, \
-         which a blocking write to a pipe doesn't",
     ),
 ];
 
@@ -194,10 +192,17 @@ fn fate(report: &Value) -> Fate {
     }
 }
 
-/// Every mutant of each of `programs`, checked in `session`: the survivors, described.
+/// Every mutant of each of `programs`, checked in `session`: the survivors, described. With
+/// `LENGUA_MUTATE_ONLY` set to a comma-separated list, only the programs whose main.s path
+/// contains one of its parts, so a program just added can be run alone.
 async fn survivors(session: &Session, programs: &[(&str, &str)]) -> Vec<String> {
+    let only = std::env::var("LENGUA_MUTATE_ONLY").ok();
+    let wanted = |code: &str| {
+        only.as_deref()
+            .is_none_or(|only| only.split(',').any(|part| code.contains(part)))
+    };
     let mut survived = Vec::new();
-    for (spec, code) in programs {
+    for (spec, code) in programs.iter().filter(|(_, code)| wanted(code)) {
         let (spec_text, code_text) = (read(spec), read(code));
         let mut tally = std::collections::BTreeMap::new();
         for (name, mutant) in mutants(&code_text) {
@@ -238,6 +243,10 @@ async fn every_proven_programs_mutants_are_caught() {
                         "plugin/skills/compile/assets/main-template.s",
                     ),
                     ("tests/fixtures/cat/spec.md", "tests/fixtures/cat/main.s"),
+                    (
+                        "tests/fixtures/cat-stream/spec.md",
+                        "tests/fixtures/cat-stream/main.s",
+                    ),
                 ],
             )
             .await,
@@ -257,10 +266,16 @@ async fn every_proven_programs_mutants_are_caught() {
                 format!("tests/fixtures/linux-aarch64/{name}/main.s"),
             )
         };
-        let programs: Vec<(String, String)> = ["add", "upcase", "fetch", "echo", "cat"]
-            .into_iter()
-            .map(fixture)
-            .collect();
+        let mut programs: Vec<(String, String)> =
+            ["add", "upcase", "fetch", "echo", "cat", "cat-stream"]
+                .into_iter()
+                .map(fixture)
+                .collect();
+        // The template, as x86-64's is among its programs.
+        programs.push((
+            "plugin/skills/compile/assets/template-spec.md".to_owned(),
+            "plugin/skills/compile/assets/linux-aarch64/main-template.s".to_owned(),
+        ));
         let borrowed: Vec<(&str, &str)> = programs
             .iter()
             .map(|(spec, code)| (spec.as_str(), code.as_str()))

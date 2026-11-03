@@ -58,8 +58,11 @@ by one concrete example in its steps, and its generated tests try that rule with
   short, at most `4096` bytes each (long text goes on standard input or in a file, so the program
   takes it the same way on every computer), and numbers within 64 bits. If the program reads
   or writes, Purpose says which exit code it uses when reading or writing fails, without
-  backticks (tests can't make those fail), such as: If writing the output fails, the program
-  exits with code 2.
+  backticks, such as: If writing the output fails, the program exits with code 2. Give a
+  program that prints to standard output a behavior for that code, with ``- And standard output
+  is closed`` and ``- Then it exits with code `2` ``, and inputs that make it print something:
+  tests can make standard output fail, as a closed pipe does, but not reading, nor writing a
+  file.
 - **Decimals** are written with a point, in Purpose too: `0.00` to `999.99` means two places.
   **Exact decimals** such as money (`12.50`) are computed exactly, in whole cents; say in words
   how a result rounds when it has more places than it prints ("half a cent rounds away from
@@ -103,8 +106,9 @@ by one concrete example in its steps, and its generated tests try that rule with
   other range, and what happens when a file is missing. Names are held to what every system
   takes, so a test's files must be too: no `< > : " \ | ? *`, no name ending in a dot or a
   space, none of Windows's device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`, `LPT1` to
-  `LPT9`, with any extension), at most 255 bytes, and never two names in one folder that differ
-  only in case. A program can't rename or remove a file it holds open, and its result must not
+  `LPT9`, with any extension), no short name's shape (eight characters at most ending in `~` and
+  digits, such as `REPORT~1.TXT`), at most 255 bytes, and never two names in one folder that
+  differ only in case. A program can't rename or remove a file it holds open, and its result must not
   depend on the order a folder lists in, which differs between file systems: sort what it
   lists.
 - **What it uses:** under `# Constraints`, ``- Uses: …`` names what the program needs beyond
@@ -133,7 +137,16 @@ by one concrete example in its steps, and its generated tests try that rule with
     read gives the end and its first write fails. Give such a program a behavior for it, as
     fetch's "Says when the server can't be reached", with ``- And no server on port `8080` ``.
     The program needs no port or address in its arguments; the person running it can't point
-    it elsewhere.
+    it elsewhere, unless the spec lets them name the computer.
+  - A tool whose user types the computer, as with curl, an ssh or a database client, says so:
+    `- Network: connects to TCP port 443 on the computer its first argument names` (`second` to
+    `ninth` for another argument, and `over TLS` too). lengua reads that argument when the
+    program starts and connects there; an argument that names this computer or no computer, or
+    a computer that doesn't answer, gives the program the connection already ended, as for a
+    named computer. The program still gets the argument, for its `Host:` line. Its tests' server
+    stands in for the connection whatever the argument says, so give the argument values like
+    `example.com` in the tests, and a behavior for a computer it can't reach. The person running
+    it chooses only the computer; the port stays the spec's.
   - `over TLS` at the end of a line that names a computer, as in `- Network: connects to TCP
     port 443 on api.example.com over TLS`, has lengua do TLS on that connection: it checks the
     computer's certificate against the same roots on every computer, and the program sends and

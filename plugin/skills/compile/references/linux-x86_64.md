@@ -46,7 +46,8 @@ template's `write_all` does.
 
 Names: lengua holds every name a program gives `openat`, `mkdirat`, `unlinkat` and `renameat` to
 what every system takes, so a name Windows refuses (`< > : " \ | ? *`, a control character, a
-dot or space at the end, `CON`, `NUL.txt`, `com1` and the other device names) returns `EINVAL`
+dot or space at the end, `CON`, `NUL.txt`, `com1` and the other device names, and a short
+name's shape such as `REPORT~1.TXT`, by which Windows can open another file) returns `EINVAL`
 (-22); one that isn't UTF-8 of characters Unicode 9.0 assigned, `EILSEQ` (-84); one past 255
 bytes or a path past 1,023, `ENAMETOOLONG` (-36); a new name that differs only in case from one
 in its folder, `EEXIST` (-17); and renaming or removing a file the program holds open, `EBUSY`
@@ -62,7 +63,9 @@ as descriptor 3 and takes each connection with `accept4`. A client sends on its 
 `shutdown` its sending side when it's done. A connection lengua couldn't make comes ended: its
 first `read` gives 0 and its first write fails with `EPIPE` (-32), never a signal, so a client
 that sends first finds a server it can't reach on its first write. A connection `over TLS` is
-plain bytes to the program too: lengua does the TLS. A server reads until it has
+plain bytes to the program too: lengua does the TLS. A connection to the computer an argument
+names is made the same way, before the program starts, so the program only reads the argument,
+for its `Host:` line, never to connect. A server reads until it has
 the request, answers, and closes the connection. Data can arrive in pieces, so never assume one
 `read` gets it all.
 

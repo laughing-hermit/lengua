@@ -674,6 +674,9 @@ pub struct State {
     /// The pieces standard input arrives in, by length, when it doesn't arrive whole: each read
     /// gets at most what its piece has left.
     stdin_pieces: Rc<Vec<usize>>,
+    /// Whether standard output is closed, a pipe nobody reads: every write to it fails with
+    /// `EPIPE`, as the test's own run has it.
+    stdout_closed: bool,
     /// The files in the working folder before the run, by name.
     files: Rc<BTreeMap<String, Vec<Term>>>,
     /// The files the run created or replaced, by name, with everything written to them.
@@ -792,6 +795,8 @@ const AT_REMOVEDIR: u64 = 0x200;
 /// A regular file that its owner may read and write and others may read.
 const REGULAR_FILE: u128 = 0o100_644;
 const EBADF: i64 = 9;
+/// `EPIPE`: a write to a pipe nobody reads, such as a closed standard output.
+const EPIPE: i64 = 32;
 const EINVAL: i64 = 22;
 const ENOTTY: i64 = 25;
 const EAGAIN: i64 = 11;
@@ -863,6 +868,7 @@ impl State {
             stdin_from: 0,
             merging: None,
             stdin_pieces: Rc::new(Vec::new()),
+            stdout_closed: false,
             files: Rc::new(BTreeMap::new()),
             written: BTreeMap::new(),
             folders_before: Rc::new(BTreeSet::new()),
@@ -983,6 +989,14 @@ impl State {
     #[must_use]
     pub fn with_folders(mut self, folders: BTreeSet<String>) -> Self {
         self.folders_before = Rc::new(folders);
+        self
+    }
+
+    /// The same state with standard output closed, or not: a pipe nobody reads, so every write
+    /// to it fails with `EPIPE`.
+    #[must_use]
+    pub fn with_stdout_closed(mut self, closed: bool) -> Self {
+        self.stdout_closed = closed;
         self
     }
 
@@ -3314,8 +3328,8 @@ impl<'a> Cpu<'a> {
     }
 
     /// Whether a name of these ASCII bytes breaks one of Windows's rules (`crate::names`): a
-    /// control character or one of `< > : " \ | ? *`, a dot or space at the end, or a device
-    /// name Windows reserves, with any extension, in any case.
+    /// control character or one of `< > : " \ | ? *`, a dot or space at the end, a device name
+    /// Windows reserves, with any extension, in any case, or a short name's shape.
     fn breaks_windows_rules(&mut self, bytes: &[Term]) -> Term {
         let mut broken = Vec::new();
         let space = self.pool.bv(8, 0x20);
@@ -3374,6 +3388,7 @@ impl<'a> Cpu<'a> {
                 broken.push(self.pool.bool_and(numbered, ended));
             }
         }
+        broken.push(short_name_shape(self.pool, bytes));
         self.pool.any(&broken)
     }
 
@@ -3677,17 +3692,19 @@ impl<'a> Cpu<'a> {
                 let buffer = self.constant(rsi)?;
                 let count = self.constant(rdx)?;
                 self.lent(1, buffer, count, false, "write")?;
-                // Standard output or error, a file open for writing, or nothing that can be.
+                // Standard output or error, a file open for writing, or nothing that can be. A
+                // closed standard output takes nothing: the write fails, as on a pipe nobody reads.
                 let target = match fd {
-                    1 | 2 => Some(None),
+                    1 if self.state.stdout_closed => Err(EPIPE),
+                    1 | 2 => Ok(None),
                     _ => match self.state.open.get(&fd) {
-                        Some(open) if open.writing => Some(Some(open.name.clone())),
-                        _ => None,
+                        Some(open) if open.writing => Ok(Some(open.name.clone())),
+                        _ => Err(EBADF),
                     },
                 };
                 match target {
-                    None => (-EBADF).cast_unsigned(),
-                    Some(file) => {
+                    Err(errno) => (-errno).cast_unsigned(),
+                    Ok(file) => {
                         for offset in 0..count {
                             let byte = self.load(buffer + offset, 1)?;
                             match (&file, fd) {
@@ -4525,6 +4542,52 @@ mod vector;
 #[cfg(all(test, target_arch = "x86_64"))]
 mod against_cpu;
 
+/// Whether a name of these ASCII bytes has the shape of a Windows short name
+/// (`crate::names::short_name_shape`): a stem of at most eight ending in `~` and digits,
+/// then, if any, one dot and one to three more. The name's length is known, so each place
+/// its dot and its `~` can be is a case.
+fn short_name_shape(pool: &mut Pool, bytes: &[Term]) -> Term {
+    let length = bytes.len();
+    if length > crate::names::SHORT_STEM + 1 + crate::names::SHORT_EXTENSION {
+        return pool.boolean(false);
+    }
+    let dot = pool.bv(8, u128::from(b'.'));
+    let tilde = pool.bv(8, u128::from(b'~'));
+    let zero = pool.bv(8, u128::from(b'0'));
+    let nine = pool.bv(8, u128::from(b'9'));
+    let mut cases = Vec::new();
+    // Where the stem ends: at the name's end, with no dot, or at its one dot.
+    for stem in 1..=length.min(crate::names::SHORT_STEM) {
+        let extension = length - stem;
+        if extension == 1 || extension > crate::names::SHORT_EXTENSION + 1 {
+            continue;
+        }
+        let mut dots = Vec::new();
+        for (at, byte) in bytes.iter().enumerate() {
+            let is_dot = pool.eq(*byte, dot);
+            dots.push(if at == stem {
+                is_dot
+            } else {
+                pool.bool_not(is_dot)
+            });
+        }
+        let mut tildes = Vec::new();
+        for at in 0..stem.saturating_sub(1) {
+            let mut parts = vec![pool.eq(bytes[at], tilde)];
+            for byte in &bytes[at + 1..stem] {
+                let low = pool.ule(zero, *byte);
+                let high = pool.ule(*byte, nine);
+                parts.push(pool.bool_and(low, high));
+            }
+            tildes.push(pool.all(&parts));
+        }
+        let separated = pool.all(&dots);
+        let ended = pool.any(&tildes);
+        cases.push(pool.bool_and(separated, ended));
+    }
+    pool.any(&cases)
+}
+
 // It runs a harness of AArch64 instructions on an AArch64 CPU: this computer's, or QEMU's.
 #[cfg(test)]
 mod against_a64;
@@ -4534,6 +4597,62 @@ mod tests {
     use super::*;
     use crate::platform::Profile;
     use crate::toolchain::Toolchain;
+
+    /// The proof's short-name shape, on names whose bytes are known, gives the run's answer
+    /// (`crate::names::short_name_shape`) for every name of up to thirteen bytes it's tried on.
+    #[test]
+    fn the_short_name_shape_the_proof_tests_is_the_runs() {
+        let mut names = vec![
+            "REPORT~1.TXT",
+            "progra~1",
+            "a~12",
+            "~1",
+            "AB12~1.tx",
+            "backup~.txt",
+            "notes~old.txt",
+            "a~1.text",
+            "a~1.b.c",
+            "a1~",
+            "report1.txt",
+            "ABCDEFG~1.T",
+            "ABCDEF~1.TXT",
+            "A~1.",
+            "A~1.B",
+            ".txt",
+            "~",
+            "~~1",
+            "a~1~2",
+            "x.y~1",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+        // Every arrangement of a few telling bytes, up to five long.
+        let alphabet = *b"a~1.";
+        for length in 1..=5 {
+            for mut code in 0..alphabet.len().pow(length) {
+                let mut name = String::new();
+                for _ in 0..length {
+                    name.push(char::from(alphabet[code % alphabet.len()]));
+                    code /= alphabet.len();
+                }
+                names.push(name);
+            }
+        }
+        for name in names {
+            let mut pool = Pool::default();
+            let bytes: Vec<Term> = name
+                .bytes()
+                .map(|byte| pool.bv(8, u128::from(byte)))
+                .collect();
+            let shape = short_name_shape(&mut pool, &bytes);
+            assert_eq!(
+                pool.truth(shape),
+                Some(crate::names::short_name_shape(&name)),
+                "{name}"
+            );
+        }
+    }
 
     /// Builds `source` and loads it.
     async fn image(source: &str) -> Image {

@@ -1,7 +1,8 @@
 //! The names every system takes for files and folders. lengua holds a program on every target
 //! to what the strictest of them allows, so a spec that works on one works on all of them:
-//! Windows refuses some characters, device names and endings in a name and takes names that
-//! differ only in case as one; macOS's APFS takes only UTF-8 names of characters Unicode 9.0
+//! Windows refuses some characters, device names and endings in a name, takes names that
+//! differ only in case as one, and can open a file by a short name such as `REPORT~1.TXT`
+//! that it gave a long one; macOS's APFS takes only UTF-8 names of characters Unicode 9.0
 //! assigned, and takes names that differ only in case or in Unicode normalization as one; and
 //! each caps a name's and a path's length. A program that asks for a name some system refuses
 //! gets an error on every system, the same one.
@@ -158,7 +159,44 @@ fn broken_name(name: &[u8]) -> Option<Broken> {
             format!("`{text}`: Windows reserves {device}, with any extension, in every folder"),
         ));
     }
+    if short_name_shape(text) {
+        return Some(Broken::new(
+            EINVAL,
+            format!(
+                "`{text}` has the shape of a Windows short (8.3) name, which there can name \
+                 another file, one Windows gave that short name too"
+            ),
+        ));
+    }
     None
+}
+
+/// The longest stem and extension of a Windows short (8.3) name, in characters.
+pub const SHORT_STEM: usize = 8;
+/// See [`SHORT_STEM`].
+pub const SHORT_EXTENSION: usize = 3;
+
+/// Whether `name` has the shape of a Windows short name, such as `REPORT~1.TXT` or `progra~1`:
+/// at most eight characters ending in `~` and digits, then, if any, one dot and one to three
+/// more. Where short names are on, Windows gives each long name one of that shape, and opens the
+/// long-named file by it, so such a name there may reach another file: refused on every system.
+#[must_use]
+pub fn short_name_shape(name: &str) -> bool {
+    let (stem, extension) = match name.split_once('.') {
+        Some((stem, extension)) => (stem, Some(extension)),
+        None => (name, None),
+    };
+    if extension.is_some_and(|extension| {
+        extension.is_empty()
+            || extension.contains('.')
+            || extension.chars().count() > SHORT_EXTENSION
+    }) {
+        return false;
+    }
+    stem.chars().count() <= SHORT_STEM
+        && stem.rsplit_once('~').is_some_and(|(_, digits)| {
+            !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+        })
 }
 
 /// Whether macOS's APFS takes `character` in a name: Unicode 9.0 assigned it.
@@ -244,6 +282,31 @@ mod tests {
             "COM\u{b9}",
         ] {
             assert_eq!(errno(path), Some(EINVAL), "{path}");
+        }
+    }
+
+    #[test]
+    fn windows_short_names_are_refused_everywhere() {
+        for path in [
+            "REPORT~1.TXT",
+            "progra~1",
+            "a~12",
+            "~1",
+            "folder/DATA~3.CSV",
+            "AB12~1.tx",
+        ] {
+            assert_eq!(errno(path), Some(EINVAL), "{path}");
+        }
+        for path in [
+            "backup~.txt",
+            "notes~old.txt",
+            "longername~1.txt",
+            "a~1.text",
+            "a~1.b.c",
+            "a1~",
+            "report1.txt",
+        ] {
+            assert_eq!(errno(path), None, "{path}");
         }
     }
 

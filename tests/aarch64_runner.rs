@@ -215,8 +215,8 @@ async fn connections_are_handed_over_from_descriptor_4() {
     assert_eq!(ended.end, End::Exited(32), "{ended:?}");
 }
 
-/// AArch64: makes `CON.txt`, which Windows reserves, and exits with the error it got; 99 if x1,
-/// which the supervisor makes null to refuse the call, didn't come back as it was.
+/// AArch64: makes `NAME` (`CON.txt`, which Windows reserves, say), and exits with the error it
+/// got; 99 if x1, which the supervisor makes null to refuse the call, didn't come back as it was.
 const AARCH64_MAKES_A_DEVICE_NAME: &str = "\
 .arch armv8-a
 .text
@@ -246,7 +246,7 @@ _start:
     svc #0
 .data
 name:
-    .asciz \"CON.txt\"
+    .asciz \"NAME\"
 ";
 
 /// AArch64: opens `f`, removes it while it's open, and exits with the error that got, or 0.
@@ -291,10 +291,18 @@ async fn names_are_held_to_every_system_on_arm64_too() {
         Syscall::Write,
         Syscall::Exit,
     ]);
-    let device = build(folder.path(), "device", AARCH64_MAKES_A_DEVICE_NAME).await;
-    let job = Job::new(&device, &[], b"", &calls);
-    let refused = run(launcher(), job, Limits::default()).await.expect("run");
-    assert_eq!(refused.end, End::Exited(22), "EINVAL, x1 kept: {refused:?}");
+    // A device Windows reserves, and a short name's shape, which Windows can open another file by.
+    for name in ["CON.txt", "REPORT~1.TXT"] {
+        let code = AARCH64_MAKES_A_DEVICE_NAME.replace("NAME", name);
+        let device = build(folder.path(), "device", &code).await;
+        let job = Job::new(&device, &[], b"", &calls);
+        let refused = run(launcher(), job, Limits::default()).await.expect("run");
+        assert_eq!(
+            refused.end,
+            End::Exited(22),
+            "{name}: EINVAL, x1 kept: {refused:?}"
+        );
+    }
     let remover = build(folder.path(), "remover", AARCH64_REMOVES_AN_OPEN_FILE).await;
     let files = std::collections::BTreeMap::from([("f".to_owned(), "x".to_owned())]);
     let job = Job {

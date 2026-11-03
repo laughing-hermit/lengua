@@ -51,6 +51,16 @@ pub enum Reach {
     /// A port of the computer with this name, over TLS: lengua checks its certificate for the
     /// name and does the TLS, so the program sends and reads plain bytes.
     Tls(String, u16),
+    /// A port of the computer the program's argument `index`, from 1, names, over TLS when
+    /// `tls`: [`resolved`] reads it when the program starts.
+    Argument {
+        /// Which argument, from 1.
+        index: usize,
+        /// The port.
+        port: u16,
+        /// Whether over TLS.
+        tls: bool,
+    },
     /// The test's own server, which speaks on the program's stream itself.
     Peer,
     /// Nowhere: the connection is handed over already ended, as one lengua couldn't make is.
@@ -65,6 +75,10 @@ impl Reach {
             Self::ThisComputer(port) => format!("port {port} of this computer"),
             Self::Host(host, port) => format!("{host}:{port}"),
             Self::Tls(host, port) => format!("{host}:{port} over TLS"),
+            Self::Argument { index, port, tls } => format!(
+                "port {port} of the computer argument {index} names{}",
+                if *tls { ", over TLS" } else { "" }
+            ),
             Self::Peer => "the test's server".into(),
             Self::Nowhere => "nowhere".into(),
         }
@@ -169,7 +183,48 @@ pub(crate) async fn make_with(
                 .unwrap_or_else(|_| Err(no_answer()))?;
             Ok(Box::new(stream))
         }
+        Reach::Argument { index, .. } => Err(format!(
+            "the computer argument {index} names wasn't read from the program's arguments"
+        )),
         Reach::Peer | Reach::Nowhere => Err("there's nothing there".into()),
+    }
+}
+
+/// Where `reach` goes in a run given `args`, the program's arguments: the computer an argument
+/// names, read now, before the program starts, and any other place as it is. An argument that's
+/// missing, or names this computer or no computer at all, is a connection lengua can't make, and
+/// the error says why; the program then gets the connection already ended, as for a computer
+/// that doesn't answer.
+///
+/// # Errors
+///
+/// Why lengua can't connect where the argument says.
+pub fn resolved(reach: &Reach, args: &[String]) -> Result<Reach, String> {
+    let Reach::Argument { index, port, tls } = reach else {
+        return Ok(reach.clone());
+    };
+    let Some(given) = index.checked_sub(1).and_then(|at| args.get(at)) else {
+        return Err(format!(
+            "the program has no argument {index}, which names the computer its connection on \
+             port {port} goes to"
+        ));
+    };
+    let host = given.to_ascii_lowercase();
+    match crate::spec::host_kind(&host) {
+        crate::spec::HostKind::Other => Ok(if *tls {
+            Reach::Tls(host, *port)
+        } else {
+            Reach::Host(host, *port)
+        }),
+        crate::spec::HostKind::ThisComputer => Err(format!(
+            "argument {index}, `{}`, is this computer, which a connection to the computer an \
+             argument names never goes to",
+            given.escape_debug()
+        )),
+        crate::spec::HostKind::NotAName => Err(format!(
+            "argument {index}, `{}`, isn't a computer's name or address",
+            given.escape_debug()
+        )),
     }
 }
 
@@ -281,6 +336,53 @@ mod tests {
 
     /// A TLS server for `localhost` on a free port of this computer, with a certificate of its
     /// own, and a client that trusts that certificate alone.
+    /// A computer an argument names is read when the program starts: a name or another
+    /// computer's address goes there, over TLS when the spec says so; an argument that's missing,
+    /// names this computer, or names nothing is a connection lengua can't make.
+    #[test]
+    fn the_computer_an_argument_names_is_read_when_the_program_starts() {
+        let typed = |index, tls| Reach::Argument {
+            index,
+            port: 443,
+            tls,
+        };
+        let args = |given: &[&str]| {
+            given
+                .iter()
+                .map(|arg| (*arg).to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            resolved(&typed(1, true), &args(&["Example.COM"])),
+            Ok(Reach::Tls("example.com".into(), 443))
+        );
+        assert_eq!(
+            resolved(&typed(2, false), &args(&["-v", "192.0.2.7"])),
+            Ok(Reach::Host("192.0.2.7".into(), 443))
+        );
+        assert_eq!(
+            resolved(&Reach::ThisComputer(8080), &[]),
+            Ok(Reach::ThisComputer(8080)),
+            "every other place as it is"
+        );
+        let problem = |reach, given: &[&str]| {
+            resolved(&reach, &args(given)).expect_err("a connection lengua can't make")
+        };
+        assert!(problem(typed(2, false), &["example.com"]).contains("no argument 2"));
+        for this in ["localhost", "127.0.0.1", "::1", "0.0.0.0", "app.localhost"] {
+            assert!(
+                problem(typed(1, true), &[this]).contains("is this computer"),
+                "{this}"
+            );
+        }
+        for nothing in ["", "two words", "a_b.com", "-rf", "x..y"] {
+            assert!(
+                problem(typed(1, false), &[nothing]).contains("isn't a computer's name"),
+                "{nothing:?}"
+            );
+        }
+    }
+
     fn server_and_trust() -> (tokio_rustls::TlsAcceptor, Arc<rustls::ClientConfig>) {
         let made = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()])
             .expect("a certificate");

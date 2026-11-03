@@ -700,6 +700,7 @@ async fn a_program_gets_only_names_every_system_takes() {
     for (name, errno) in [
         ("notes.txt", 0),
         ("CON.txt", 22),
+        ("REPORT~1.TXT", 22),
         ("a:b", 22),
         ("ends.", 22),
         ("\\303(", 84),
@@ -1023,6 +1024,37 @@ async fn a_connection_lengua_couldnt_make_is_ended_both_ways() {
         "{:?}",
         run.connections
     );
+    // So is the computer an argument names, where the argument is missing or names this
+    // computer: lengua reads it before the program starts, and the report says why.
+    let typed = connected(
+        vec![Reach::Argument {
+            index: 1,
+            port,
+            tls: false,
+        }],
+        false,
+    );
+    for (args, why) in [
+        (vec![], "no argument 1"),
+        (vec!["localhost".to_owned()], "is this computer"),
+    ] {
+        let job = Job {
+            net: Some(&typed),
+            ..Job::new(&ended, &args, b"", &calls)
+        };
+        let typed_run = lengua::runner::run(launcher(), job, Limits::default())
+            .await
+            .expect("run");
+        assert_eq!(typed_run.end, End::Exited(32), "{typed_run:?}");
+        assert!(
+            typed_run.connections[0]
+                .problem
+                .as_deref()
+                .is_some_and(|problem| problem.contains(why)),
+            "{why}: {:?}",
+            typed_run.connections
+        );
+    }
 }
 
 #[tokio::test]
@@ -1205,7 +1237,7 @@ async fn runs_at_once_report_what_runs_one_at_a_time_do() {
         alone.passed() && together.passed(),
         "{alone:?} {together:?}"
     );
-    assert_eq!(alone.runs, 3 + 200 + 50);
+    assert_eq!(alone.runs, 4 + 200 + 50 + 20);
     assert_eq!(together.runs, alone.runs);
     let shape = |outcome: &lengua::testrun::Outcome| -> Vec<(String, usize, String)> {
         outcome
@@ -1215,12 +1247,13 @@ async fn runs_at_once_report_what_runs_one_at_a_time_do() {
             .collect()
     };
     assert_eq!(shape(&together), shape(&alone));
+    // The examples first, B1 to B4, then the generated blocks.
     assert!(
-        together.costs[3].timed.starts_with("its largest input, "),
+        together.costs[4].timed.starts_with("its largest input, "),
         "{:?}",
-        together.costs[3]
+        together.costs[4]
     );
-    assert!(together.costs[3].timed.ends_with("run alone 5 times"));
+    assert!(together.costs[4].timed.ends_with("run alone 5 times"));
 
     // A wrong formula for large numbers and a wrong example: the same failures, in the same
     // order, naming the block's first failing run.

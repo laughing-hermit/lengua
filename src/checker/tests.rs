@@ -2135,7 +2135,7 @@ async fn the_aarch64_messages_say_aarch64() {
 fn aarch64_with_fill() -> String {
     std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/linux-aarch64/cat/main.s"),
+            .join("tests/fixtures/linux-aarch64/cat-stream/main.s"),
     )
     .expect("the fixture")
 }

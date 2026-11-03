@@ -32,6 +32,7 @@ reported with the phrasing to write instead. Values go in backticks, with `\n`, 
 | ``a server on port `8080` that receives TEXT and replies TEXT`` | The test's own server on the program's connection to that port, one a connection; ``a server at `example.com` on port `443` …`` when two places share a port, and ``a server that receives …`` when the spec names one |
 | ``no server on port `8080` `` | That connection handed over already ended: its first read gives the end, and its first write fails |
 | ``a client that sends TEXT`` | The test's own client, one step a connection, for a program that serves |
+| `standard output is closed` | Standard output as a pipe nobody reads, as after `prog \| head -1` has read its line: every write to it fails with `EPIPE`, never a signal. The behavior then says only its exit code and what it prints to standard error |
 
 **When:** `the program runs`, once.
 
@@ -144,7 +145,8 @@ tests with their own servers or client: never the real places, which only `run` 
   gives no server comes ended, as one lengua couldn't make does in a run: its first read gives
   the end and its first write fails. One server a connection. A connection `over TLS` is tested
   the same way, in plain bytes: lengua does the TLS only in a run, where the program can't tell
-  the difference.
+  the difference. So is one to the computer an argument names: the test's server stands in for
+  it whatever the argument says, and only `run` reads the argument and connects there.
 - **A program that serves** gets its listening socket from lengua, in every test. The test's
   client connects once a connection and behaves as curl and browsers do: it
   sends its text and keeps its side of the connection open until the program starts answering

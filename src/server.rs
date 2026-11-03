@@ -2435,10 +2435,17 @@ async fn runnable(
             .network
             .connections
             .iter()
-            .map(|place| match &place.host {
-                None => crate::connect::Reach::ThisComputer(place.port),
-                Some(host) if place.tls => crate::connect::Reach::Tls(host.clone(), place.port),
-                Some(host) => crate::connect::Reach::Host(host.clone(), place.port),
+            .map(|place| match (&place.host, place.argument) {
+                (_, Some(index)) => crate::connect::Reach::Argument {
+                    index,
+                    port: place.port,
+                    tls: place.tls,
+                },
+                (None, None) => crate::connect::Reach::ThisComputer(place.port),
+                (Some(host), None) if place.tls => {
+                    crate::connect::Reach::Tls(host.clone(), place.port)
+                }
+                (Some(host), None) => crate::connect::Reach::Host(host.clone(), place.port),
             })
             .collect(),
         listen: spec.network.listens,

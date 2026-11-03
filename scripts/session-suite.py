@@ -57,10 +57,12 @@ def screen(name):
 
 
 def outcome(folder):
-    """What the program's lock says: none, passed (check tested it), and its proofs."""
-    lock = folder / "lengua.lock"
-    if not lock.exists():
+    """What the program's lock says, in the folder or a program folder the agent made in it:
+    none, passed (check tested it), and its proofs."""
+    locks = sorted(folder.glob("**/lengua.lock"), key=lambda path: path.stat().st_mtime)
+    if not locks:
         return "no lock", ""
+    lock = locks[-1]
     text = lock.read_text()
     if "[code]" not in text:
         return "spec only", ""
@@ -71,21 +73,46 @@ def outcome(folder):
         f"bounded {bounded.group(1)}" if bounded and bounded.group(1) else "") if part)
 
 
+def flat(text):
+    """The screen's words without their spaces, lowercase, as the terminal's drawing leaves
+    some words joined."""
+    return re.sub(r"\s+", "", text).lower()
+
+
+def trust(name, seconds=40):
+    """Answers the new folder's trust prompt, which starts on "No, exit", with "Yes", before
+    anything is typed: text typed into the prompt would answer it."""
+    for _ in range(seconds):
+        time.sleep(1)
+        shown = flat(screen(name))
+        if "trust" in shown and "folder" in shown:
+            session("keys", name, "Down", "Enter")
+            break
+    time.sleep(3)
+
+
+def sent(name, tries=4):
+    """Presses Enter again while the request has no transcript yet: an Enter typed while
+    Claude Code is still starting is lost, leaving the request in the input box."""
+    for _ in range(tries):
+        time.sleep(8)
+        if session("transcript", name).strip() != "None":
+            return
+        session("keys", name, "Enter")
+
+
 def answer(name, shown):
     """Answers what the screen asks, as a person who wants the program would; returns whether
     it answered something."""
-    tail = shown[-2500:]
-    if "Do you trust" in tail or "trust the files" in tail:
-        session("keys", name, "Down", "Enter")
-        return True
-    if "Do you want to" in tail and "1. Yes" in tail:
+    tail = flat(shown[-2500:])
+    if "doyouwantto" in tail and "1.yes" in tail:
         # "Yes, and don't ask again" where it's offered, else "Yes".
-        if "2. Yes" in tail:
+        if "2.yes" in tail:
             session("keys", name, "Down", "Enter")
         else:
             session("keys", name, "Enter")
         return True
-    if re.search(r"❯\s*1\.", tail) and ("Enter to select" in tail or "to navigate" in tail):
+    if "❯1." in tail and ("entertoselect" in tail or "tonavigate" in tail):
         session("keys", name, "Enter")
         return True
     return False
@@ -103,10 +130,9 @@ def run(number, request, target, claude_args, results):
         env_note = f" (LENGUA_TARGET={target})"
     started = time.monotonic()
     session("start", name, str(folder), *claude_args)
-    time.sleep(8)
-    answer(name, screen(name))
-    time.sleep(2)
+    trust(name)
     session("type", name, request)
+    sent(name)
     turns, quiet = 1, 0
     while time.monotonic() - started < LIMIT:
         reply = session("wait", name, "25")

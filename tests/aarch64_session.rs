@@ -78,7 +78,7 @@ async fn aarch64_code_is_checked_and_tested() {
     let Some((session, emulated)) = aarch64_session().await else {
         return;
     };
-    let program = written(&session, aarch64_files("cat")).await;
+    let program = written(&session, aarch64_files("cat-stream")).await;
     let report = done(&session, &program).await;
     assert!(
         any_line(&report["tests"], "follows every rule and passed all"),
@@ -553,7 +553,7 @@ async fn aarch64_code_is_proven() {
     } else {
         return;
     };
-    let program = written(&session, aarch64_files("cat")).await;
+    let program = written(&session, aarch64_files("cat-stream")).await;
     let report = session.settle(&program).await;
     assert_eq!(report["state"], "done", "{report}");
     let proof = text(&report["proofs"][0]);
@@ -561,5 +561,282 @@ async fn aarch64_code_is_proven() {
         proof.starts_with("generated B1: proven for every input in range"),
         "{report}"
     );
+    session.service.cancel().await.expect("close the session");
+}
+
+/// Every program folder of `root`'s `folders`, each with a main.s: its name and path.
+fn programs(root: &std::path::Path, folders: &[&str]) -> Vec<(String, std::path::PathBuf)> {
+    let mut found = Vec::new();
+    for folder in folders {
+        for entry in std::fs::read_dir(root.join(folder)).expect("a folder") {
+            let path = entry.expect("an entry").path();
+            if path.join("main.s").is_file()
+                && let Some(name) = path.file_name().and_then(|name| name.to_str())
+            {
+                found.push((name.to_owned(), path.clone()));
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// The x86-64 fixtures with no AArch64 twin, and why: the safety filter stopped the reply that
+/// was writing `total`'s on 2026-11-02, and `amounts`, its near-copy, was left for the engineer
+/// who ports it, so as not to draw the filter again (todo.md's list of what Opus 5.5 didn't allow).
+const UNPORTED: [&str; 2] = ["total", "amounts"];
+
+/// Every x86-64 example and fixture has its AArch64 twin, compiled from the very same spec, and
+/// every AArch64 fixture its x86-64 one: one product on both Linux targets, only the hardware
+/// differing.
+#[test]
+fn every_program_has_its_twin_on_the_other_cpu() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let x86 = programs(root, &["examples", "tests/fixtures"]);
+    let arm = programs(root, &["tests/fixtures/linux-aarch64"]);
+    let mut problems = Vec::new();
+    for (name, folder) in &x86 {
+        if UNPORTED.contains(&name.as_str()) {
+            continue;
+        }
+        match arm.iter().find(|(other, _)| other == name) {
+            None => problems.push(format!("{name}: no AArch64 twin")),
+            Some((_, twin)) => {
+                let spec = |folder: &std::path::Path| std::fs::read(folder.join("spec.md")).ok();
+                if spec(folder) != spec(twin) {
+                    problems.push(format!("{name}: its AArch64 twin's spec differs"));
+                }
+            }
+        }
+    }
+    for (name, _) in &arm {
+        if !x86.iter().any(|(other, _)| other == name) {
+            problems.push(format!("{name}: no x86-64 twin"));
+        }
+    }
+    assert!(problems.is_empty(), "{problems:#?}");
+}
+
+/// Every AArch64 twin follows every rule and passes its tests through the server.
+#[tokio::test]
+async fn every_aarch64_twin_passes_its_checks() {
+    let Some((session, _)) = aarch64_session().await else {
+        return;
+    };
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for (name, folder) in programs(root, &["tests/fixtures/linux-aarch64"]) {
+        let read = |file: &str| {
+            std::fs::read_to_string(folder.join(file))
+                .unwrap_or_else(|error| panic!("{name}/{file}: {error}"))
+        };
+        let program = written(
+            &session,
+            [("spec.md", read("spec.md")), ("main.s", read("main.s"))],
+        )
+        .await;
+        let report = session.settle(&program).await;
+        if name == "second" {
+            // Wrong by design, as x86-64's is: one fill reads both lines only when no read ends
+            // right after the first, and the tests' own pieces of standard input find it.
+            assert_eq!(report["state"], "tests_failed", "{name}: {report}");
+            continue;
+        }
+        assert_eq!(report["state"], "done", "{name}: {report}");
+        assert!(
+            any_line(&report["tests"], "follows every rule and passed all"),
+            "{name}: {report}"
+        );
+    }
+    session.service.cancel().await.expect("close the session");
+}
+
+/// Checks until the job ends, which must be with failed tests; returns the problems.
+async fn failed(session: &Session, program: &Program) -> String {
+    let report = session.settle(program).await;
+    assert_eq!(report["state"], "tests_failed", "{report}");
+    report["problems"]
+        .as_array()
+        .map(|problems| {
+            problems
+                .iter()
+                .map(|problem| text(problem).to_owned())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
+}
+
+/// second's spec with a short first line and a long second one, so the tests' own pieces of
+/// standard input never end a read right after the first line: only the proof's cuts do, as
+/// x86-64's check_code tests it.
+fn second_with_lines_the_tests_cut_past() -> String {
+    let spec = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/linux-aarch64/second/spec.md"),
+    )
+    .expect("the spec");
+    let changed = spec
+        .replace(
+            "Each line is `1` to `20`\nlowercase letters followed by a newline.",
+            "The first line is `1` to `5`\nlowercase letters and the second `12` to `20`, each \
+             followed by a newline.",
+        )
+        .replace("`ab\\ncd\\n`", "`ab\\nijklmnopqrst\\n`")
+        .replace("prints `cd` followed", "prints `ijklmnopqrst` followed")
+        .replacen("string(1, 20,", "string(1, 5,", 1)
+        .replacen("string(1, 20,", "string(12, 20,", 1);
+    assert!(changed.contains("string(12, 20,"), "{changed}");
+    assert!(changed.contains("`ab\\nijklmnopqrst\\n`"), "{changed}");
+    changed
+}
+
+/// As on x86-64: AArch64's second reads both lines with one fill, which stops at the first
+/// newline a read ends with. The proof takes every cut and finds the one after the first line,
+/// and a real run with standard input cut there confirms it; reading to the end instead is
+/// proven however standard input arrives.
+#[tokio::test]
+async fn a_cut_only_the_proof_tries_is_found_and_run_for_real_on_aarch64() {
+    let session = if cfg!(target_arch = "aarch64") {
+        Session::proving_for(Protocol::Discover, 120).await
+    } else if common::qemu_runs_aarch64() {
+        Session::emulating_for(Protocol::Discover, "linux-aarch64", 120).await
+    } else {
+        return;
+    };
+    let code = aarch64_files("second")[1].1.clone();
+    let program = written(
+        &session,
+        [
+            ("spec.md", second_with_lines_the_tests_cut_past()),
+            ("main.s", code.clone()),
+        ],
+    )
+    .await;
+    let problems = failed(&session, &program).await;
+    assert!(
+        problems.contains("the proof found inputs the tests didn't try where main.s is wrong"),
+        "{problems}"
+    );
+    assert!(
+        problems.contains("standard input arriving in two pieces, cut after byte"),
+        "{problems}"
+    );
+    let whole = code.replacen(
+        "    mov w3, #NEWLINE\n    bl fill\n",
+        "    mov w3, #-1\n    bl fill\n",
+        1,
+    );
+    assert_ne!(whole, code);
+    program.write("main.s", &whole);
+    let report = done(&session, &program).await;
+    assert!(
+        text(&report["proofs"][0]).ends_with("standard input arriving cut into pieces any way"),
+        "{report}"
+    );
+    session.service.cancel().await.expect("close the session");
+}
+
+/// As on x86-64: AArch64's add, whose B4 closes its standard output, exits with the code its spec
+/// promises when writing fails, and one that exits with another code fails it.
+#[tokio::test]
+async fn a_closed_standard_output_fails_every_write_on_aarch64() {
+    let Some((session, _)) = aarch64_session().await else {
+        return;
+    };
+    let [(_, spec), (_, code)] = aarch64_files("add");
+    assert!(spec.contains("- And standard output is closed"), "add's B4");
+    let program = written(&session, [("spec.md", spec), ("main.s", code.clone())]).await;
+    done(&session, &program).await;
+    let wrong = code.replacen(".equ EXIT_WRITE_FAILED, 3", ".equ EXIT_WRITE_FAILED, 4", 1);
+    assert_ne!(wrong, code);
+    program.write("main.s", &wrong);
+    let problems = failed(&session, &program).await;
+    assert!(problems.contains("B4"), "{problems}");
+    session.service.cancel().await.expect("close the session");
+}
+
+/// As on x86-64: AArch64's fetch with its server's computer named by its first argument passes
+/// its tests, which stand in for any value the argument takes, and a real run reads the argument
+/// first: `/hello` names no computer, so the connection comes ended and fetch exits with 3.
+#[tokio::test]
+async fn a_connection_to_the_computer_an_argument_names_on_aarch64() {
+    let Some((session, _)) = aarch64_session().await else {
+        return;
+    };
+    let [(_, spec), code] = aarch64_files("fetch");
+    let typed = spec.replace(
+        "- Network: connects to TCP port 8080",
+        "- Network: connects to TCP port 8080 on the computer its first argument names",
+    );
+    assert_ne!(typed, spec);
+    let program = written(&session, [("spec.md", typed), code]).await;
+    done(&session, &program).await;
+    let run = session
+        .call_ok("run", with_args(&program, &["/hello"]))
+        .await;
+    assert_eq!(run["exit_code"], 3, "{run}");
+    assert!(
+        text(&run["connections"][0]["problem"]).contains("isn't a computer's name"),
+        "{run}"
+    );
+    session.service.cancel().await.expect("close the session");
+}
+
+/// As on x86-64: second with one read of its own in place of fill is right only when both lines
+/// arrive in one read, and the tests, which send standard input in pieces, find it.
+#[tokio::test]
+async fn a_raw_read_fails_when_standard_input_arrives_in_pieces_on_aarch64() {
+    let Some((session, _)) = aarch64_session().await else {
+        return;
+    };
+    let [spec, (_, code)] = aarch64_files("second");
+    let raw = code.replacen(
+        "    mov w3, #NEWLINE\n    bl fill\n",
+        "    mov x8, #SYS_READ\n    svc #0\n",
+        1,
+    );
+    assert_ne!(raw, code);
+    let program = written(&session, [spec, ("main.s", raw)]).await;
+    let problems = failed(&session, &program).await;
+    assert!(
+        problems.contains(
+            "standard input arriving in three pieces: the first byte, up to the middle, and the \
+             rest:"
+        ),
+        "{problems}"
+    );
+    session.service.cancel().await.expect("close the session");
+}
+
+/// One folder's check, for porting a program: `LENGUA_CHECK_FOLDER` names it.
+#[tokio::test]
+#[ignore = "checks the folder LENGUA_CHECK_FOLDER names: by hand"]
+async fn check_one_aarch64_folder() {
+    let Ok(folder) = std::env::var("LENGUA_CHECK_FOLDER") else {
+        return;
+    };
+    // LENGUA_CHECK_NATIVE checks it as this computer's own program: an x86-64 twin on x86-64.
+    let native = std::env::var_os("LENGUA_CHECK_NATIVE").is_some();
+    let session = if cfg!(target_arch = "aarch64") || native {
+        Session::proving_for(Protocol::Discover, 60).await
+    } else if common::qemu_runs_aarch64() {
+        Session::emulating_for(Protocol::Discover, "linux-aarch64", 60).await
+    } else {
+        return;
+    };
+    let folder = std::path::PathBuf::from(folder);
+    let read = |file: &str| std::fs::read_to_string(folder.join(file)).expect("the file");
+    let program = written(
+        &session,
+        [("spec.md", read("spec.md")), ("main.s", read("main.s"))],
+    )
+    .await;
+    let report = session.settle(&program).await;
+    println!("PORT state: {}", report["state"]);
+    for field in ["problems", "tests", "proofs"] {
+        for line in report[field].as_array().into_iter().flatten() {
+            println!("PORT {field}: {}", text(line));
+        }
+    }
     session.service.cancel().await.expect("close the session");
 }

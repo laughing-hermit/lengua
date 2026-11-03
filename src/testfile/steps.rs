@@ -15,6 +15,7 @@
 //! - ``a server on port `8080` that receives TEXT and replies TEXT``, with ``at `example.com` ``
 //!   before `on port` for a computer the spec names, ``no server on port `8080` ``
 //! - ``a client that sends TEXT``, and `the clients connect at once` for clients that overlap
+//! - `standard output is closed`, a pipe nobody reads, so every write to it fails with `EPIPE`
 //!
 //! When: `the program runs`.
 //!
@@ -50,7 +51,7 @@ const GIVEN_PHRASES: &str = "`Given the arguments `…` and `…``, `Given no ar
      the clock at `…``, `Given the \
      random bytes `…``, `Given a server on port \
      `…` that receives `…` and replies `…``, `Given a client that sends `…``, `And the clients \
-     connect at once`";
+     connect at once`, `And standard output is closed`";
 const THEN_PHRASES: &str = "`Then it prints `…``, `Then it prints `…` to standard error`, \
      `Then it prints nothing`, `Then it prints text matching `rule``, `Then the file `name` \
      holds `…``, `Then there is no file `name``, `Then there is a folder `name``, `Then the \
@@ -235,6 +236,8 @@ struct Reading {
     server: Vec<ServerTable<Text>>,
     client: Vec<Text>,
     clients_at_once: bool,
+    /// Whether its standard output is closed, so every write to it fails.
+    stdout_closed: bool,
     answers: Vec<Text>,
     /// A generated test's exit code as written: a number or a formula.
     exit_code: Option<String>,
@@ -260,6 +263,13 @@ impl Reading {
         if at.words(&["the", "clients", "connect", "at", "once"]) {
             self.wrote("clients_at_once".into());
             self.clients_at_once = true;
+            return at.end();
+        }
+        // `standard output is closed`: a pipe nobody reads, as after `prog | head -1` has read
+        // its line, so every write to it fails with `EPIPE`, never a signal.
+        if at.words(&["standard", "output", "is", "closed"]) {
+            self.wrote("stdout_closed".into());
+            self.stdout_closed = true;
             return at.end();
         }
         if at.words(&["no", "arguments"])
@@ -427,6 +437,14 @@ impl Reading {
                 text(&mut at, mode)?
             };
             match stream(&mut at)? {
+                Stream::Out if self.stdout_closed => {
+                    self.found.push((
+                        self.line,
+                        "its standard output is closed, so it prints nothing there: say what it \
+                         prints to standard error, and its exit code"
+                            .into(),
+                    ));
+                }
                 Stream::Out => {
                     self.wrote("stdout".into());
                     self.stdout.push(printed);
@@ -496,7 +514,9 @@ impl Reading {
                 };
                 let host_matches = host.as_ref().is_none_or(|host| {
                     place.host.as_deref() == Some(host.as_str())
-                        || (host == "this computer" && place.host.is_none())
+                        || (host == "this computer"
+                            && place.host.is_none()
+                            && place.argument.is_none())
                 });
                 port_matches && host_matches
             })
@@ -568,6 +588,7 @@ impl Reading {
             server: self.server,
             client,
             clients_at_once: self.clients_at_once,
+            stdout_closed: self.stdout_closed,
         }
     }
 
@@ -638,6 +659,7 @@ impl Reading {
                 })
                 .collect(),
             clients_at_once: self.clients_at_once,
+            stdout_closed: self.stdout_closed,
             exit_code: self.exit_code.map(|code| Written {
                 text: code,
                 line: at("exit_code"),
@@ -972,6 +994,29 @@ mod tests {
             Text::Plain(plain) => plain.clone(),
             other => panic!("{other:?}"),
         }
+    }
+
+    /// `standard output is closed` makes every write to it fail, so a behavior with it says what
+    /// the program prints to standard error and its exit code, never what it prints to standard
+    /// output.
+    #[test]
+    fn a_closed_standard_output_takes_no_output() {
+        let read = table(
+            "- Given the arguments `2` and `3`\n- And standard output is closed\n- When the \
+             program runs\n- Then it exits with code `3`",
+            "",
+        );
+        assert!(read.stdout_closed);
+        let spec = spec_with(
+            "- Given the arguments `2` and `3`\n- And standard output is closed\n- When the \
+             program runs\n- Then it prints `5`\n- And it exits with code `3`",
+            "",
+        );
+        let problems = example(&spec.behaviors[0], &spec).expect_err("output it can't print");
+        assert!(
+            format!("{problems:?}").contains("its standard output is closed"),
+            "{problems:?}"
+        );
     }
 
     #[test]

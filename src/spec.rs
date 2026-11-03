@@ -110,11 +110,18 @@ impl Network {
 /// The most connections a spec may name.
 pub const MAX_CONNECTIONS: usize = crate::connect::MAX_CONNECTIONS;
 
-/// One connection a spec names: a TCP port of this computer, or of another computer.
+/// One connection a spec names: a TCP port of this computer, of another computer, or of the
+/// computer one of the program's arguments names.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Endpoint {
-    /// The computer, by name or address, in lower case; `None` for this computer.
+    /// The computer, by name or address, in lower case; `None` for this computer, or for the
+    /// one an argument names.
     pub host: Option<String>,
+    /// Which of the program's arguments, from 1, names the computer, when the spec says so:
+    /// `on the computer its first argument names`. lengua reads that argument when the program
+    /// starts and connects there, as a curl-like tool's user types the computer; its tests' server
+    /// stands in for any value the argument takes.
+    pub argument: Option<usize>,
     /// Its TCP port.
     pub port: u16,
     /// Whether lengua does TLS on it, checking the computer's certificate, so the program reads
@@ -127,24 +134,59 @@ impl Endpoint {
     #[must_use]
     pub fn describe(&self) -> String {
         let over = if self.tls { " over TLS" } else { "" };
-        match &self.host {
-            None => format!("TCP port {} of this computer{over}", self.port),
-            Some(host) => format!("TCP port {} on {host}{over}", self.port),
+        match (&self.host, self.argument) {
+            (_, Some(index)) => format!(
+                "TCP port {} on the computer its {} argument names{over}",
+                self.port,
+                ORDINALS[index - 1]
+            ),
+            (None, None) => format!("TCP port {} of this computer{over}", self.port),
+            (Some(host), None) => format!("TCP port {} on {host}{over}", self.port),
         }
     }
 }
 
-/// Why `host` can't be a connection's computer, if it can't: it must be a computer's name, as
-/// DNS writes it, or an address of another computer.
-fn host_problem(host: &str) -> Option<String> {
-    let this = "a port alone is this computer's: leave the computer out, as in `- Network: \
-                connects to TCP port 8080`";
+/// The arguments a connection's computer can come from, by their place: `first` to `ninth`.
+const ORDINALS: [&str; 9] = [
+    "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth",
+];
+
+/// Which argument, from 1, `place` says names the computer: `the computer its first argument
+/// names`; `None` for anything else.
+fn argument_named(place: &str) -> Option<usize> {
+    let ordinal = place
+        .strip_prefix("the computer its ")?
+        .strip_suffix(" argument names")?;
+    ORDINALS
+        .iter()
+        .position(|word| *word == ordinal)
+        .map(|at| at + 1)
+}
+
+/// What a computer's name or address names: another computer, this one, or nothing a
+/// connection can go to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostKind {
+    /// Another computer, by a name as DNS writes it or by its address.
+    Other,
+    /// This computer: its loopback, `localhost`, or every address at once.
+    ThisComputer,
+    /// Neither a computer's name nor an address.
+    NotAName,
+}
+
+/// What `host`, in lower case, names.
+#[must_use]
+pub fn host_kind(host: &str) -> HostKind {
     if let Ok(address) = host.parse::<std::net::IpAddr>() {
-        return (address.is_loopback() || address.is_unspecified())
-            .then(|| format!("`{host}` is this computer; {this}"));
+        return if address.is_loopback() || address.is_unspecified() {
+            HostKind::ThisComputer
+        } else {
+            HostKind::Other
+        };
     }
     if host == "localhost" || host.ends_with(".localhost") {
-        return Some(format!("`{host}` is this computer; {this}"));
+        return HostKind::ThisComputer;
     }
     let label_ok = |label: &str| {
         (1..=63).contains(&label.len())
@@ -155,12 +197,27 @@ fn host_problem(host: &str) -> Option<String> {
             && !label.ends_with('-')
     };
     let name = host.strip_suffix('.').unwrap_or(host);
-    (name.len() > 253 || !name.split('.').all(label_ok)).then(|| {
-        format!(
+    if name.len() > 253 || !name.split('.').all(label_ok) {
+        HostKind::NotAName
+    } else {
+        HostKind::Other
+    }
+}
+
+/// Why `host` can't be a connection's computer, if it can't: it must be a computer's name, as
+/// DNS writes it, or an address of another computer.
+fn host_problem(host: &str) -> Option<String> {
+    match host_kind(host) {
+        HostKind::Other => None,
+        HostKind::ThisComputer => Some(format!(
+            "`{host}` is this computer; a port alone is this computer's: leave the computer out, \
+             as in `- Network: connects to TCP port 8080`"
+        )),
+        HostKind::NotAName => Some(format!(
             "`{host}` isn't a computer's name or address: write a name as DNS does, such as \
              `example.com`, or an address such as `192.0.2.7`"
-        )
-    })
+        )),
+    }
 }
 
 impl Spec {
@@ -1494,8 +1551,10 @@ impl Parser {
         };
         // A server is reached from this computer, unless the line says any computer:
         // `listens on TCP port 8080 for any computer`. A client's connections go where the line
-        // says, to this computer when it names none: `connects to TCP port 443 on example.com`.
+        // says, to this computer when it names none: `connects to TCP port 443 on example.com`,
+        // or `on the computer its first argument names`.
         let mut over_tls = false;
+        let mut argument = None;
         let (numbers, host) = if listens {
             match numbers
                 .strip_suffix("for any computer")
@@ -1548,6 +1607,18 @@ impl Parser {
                     return;
                 }
                 Some((ports, "this computer")) => (ports.trim(), None),
+                Some((ports, place)) if place.starts_with("the computer its ") => {
+                    let Some(index) = argument_named(place.trim()) else {
+                        self.problem(
+                            Some(number),
+                            "name the argument by its place, from first to ninth: `- Network: \
+                             connects to TCP port 443 on the computer its first argument names`",
+                        );
+                        return;
+                    };
+                    argument = Some(index);
+                    (ports.trim(), None)
+                }
                 Some((ports, host)) => {
                     let host = host.trim().to_owned();
                     if let Some(problem) = host_problem(&host) {
@@ -1585,6 +1656,7 @@ impl Parser {
                 for port in ports {
                     let endpoint = Endpoint {
                         host: host.clone(),
+                        argument,
                         port: *port,
                         tls: over_tls,
                     };
@@ -2363,6 +2435,7 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
         let spec = parse(&client).expect("valid spec");
         let here = |port| Endpoint {
             host: None,
+            argument: None,
             port,
             tls: false,
         };
@@ -2386,6 +2459,7 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
             parse(&client.replace("8080.", "8080 on Example.com.")).expect("valid spec");
         let there = |port| Endpoint {
             host: Some("example.com".into()),
+            argument: None,
             port,
             tls: false,
         };
@@ -2398,6 +2472,7 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
             secure.network.connections,
             [Endpoint {
                 host: Some("example.com".into()),
+                argument: None,
                 port: 443,
                 tls: true,
             }]
@@ -2406,6 +2481,35 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
             secure.network.connections[0].describe(),
             "TCP port 443 on example.com over TLS"
         );
+        // The computer one of its arguments names, as a curl-like tool's user types it: lengua
+        // reads the argument when the program starts.
+        let typed = parse(&client.replace(
+            "ports `80` and 8080.",
+            "port 443 on the computer its second argument names over TLS.",
+        ))
+        .expect("valid spec");
+        assert_eq!(
+            typed.network.connections,
+            [Endpoint {
+                host: None,
+                argument: Some(2),
+                port: 443,
+                tls: true,
+            }]
+        );
+        assert_eq!(
+            typed.network.connections[0].describe(),
+            "TCP port 443 on the computer its second argument names over TLS"
+        );
+        for unknown in [
+            "port 443 on the computer its tenth argument names.",
+            "port 443 on the computer its argument names.",
+        ] {
+            assert_problem(
+                &client.replace("ports `80` and 8080.", unknown),
+                "name the argument by its place",
+            );
+        }
         for unnamed in ["port 443 over TLS.", "port 443 on this computer over TLS."] {
             assert_problem(
                 &client.replace("ports `80` and 8080.", unnamed),

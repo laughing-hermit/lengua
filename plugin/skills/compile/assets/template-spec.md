@@ -47,5 +47,21 @@ negative. If writing the output fails, the program exits with code 3.
 |---|---|
 | `choice("12x", "abc", "", "-", "--5", "+5", "1-2", "9223372036854775808", "-9223372036854775808")` | 50 |
 
+## B4: Exits with code 3 when its output can't be written
+- Given the argument `7`
+- And standard output is closed
+- When the program runs
+- Then it exits with code `3`
+
+### For any `n`
+- Given the argument `{n}`
+- And standard output is closed
+- When the program runs
+- Then it exits with code `3`
+
+| n | runs |
+|---|---|
+| `int(-9223372036854775807, 9223372036854775807)` | 20 |
+
 # Constraints
 - Uses: nothing

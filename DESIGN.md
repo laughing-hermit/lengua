@@ -151,7 +151,11 @@ so a program may draw in batches of any size. Where a test doesn't supply them, 
 what the program chooses: `{any(lo, hi)}` is any whole number in that
 range, written plainly, and `now` (the second a run starts) may bound one. Inside lengua a rule
 travels in the expected text as a marker between Unicode noncharacters, which a spec can't hold,
-so expected output stays text everywhere and only matching reads the markers.
+so expected output stays text everywhere and only matching reads the markers. A test can close
+the program's standard output (`- And standard output is closed`), a pipe nobody reads as after
+`prog | head -1`, so every write to it fails with `EPIPE`, never a signal, and the exit code a
+spec promises when writing fails is tested and proven like any other; the prover's write then
+returns the same error.
 
 `check` ties the generated tests to the behaviors above them: generator limits are numbers the
 spec's Purpose states, and args and stdin hold bare variables so each behavior's example can be
@@ -187,7 +191,10 @@ spec allows:
   make no network connection and bind no port at all, and signal no other process;
 - the program holds no network of its own. lengua makes each connection its spec names before
   the program starts, outside its confinement (a TCP port of this computer, tried on 127.0.0.1
-  and then ::1, or of a computer the spec names), and hands it over as file descriptor 4, 5 and
+  and then ::1, of a computer the spec names, or of the computer one of the program's arguments
+  names, which lengua reads as the program starts, as a curl-like tool's user types the host; an
+  argument naming this computer or no computer gives a connection lengua couldn't make, and the
+  tests' server stands in for any value), and hands it over as file descriptor 4, 5 and
   on, in the spec's order, as it binds a server's port and hands it the listening socket as
   descriptor 3. The program's end is a local stream that lengua relays to the place both ways:
   what the place sends arrives on it, the place's end of sending is the program's end of input,
@@ -208,7 +215,8 @@ spec allows:
 - a program that uses files is held to the names every system takes, by lengua's supervisor,
   which stops each `openat`, `mkdirat`, `unlinkat` and `renameat` and reads its name
   (`src/names.rs`): a name Windows refuses (its characters `< > : " \ | ? *`, controls, a dot or
-  space at the end, or a device name it reserves, such as `CON` or `com1.txt`) gets `EINVAL`; one
+  space at the end, a device name it reserves, such as `CON` or `com1.txt`, or the shape of a
+  short (8.3) name, such as `REPORT~1.TXT`, by which Windows can open another file) gets `EINVAL`; one
   that isn't UTF-8 of characters Unicode 9.0 assigned, which macOS's APFS refuses, `EILSEQ`; a
   name past 255 bytes or a path past 1,023 (macOS's `PATH_MAX`), `ENAMETOOLONG`; a new name that
   differs only in case or Unicode normalization from another in its folder, one file on macOS and
@@ -703,13 +711,18 @@ Trust:
   and a long one, 40,000 inputs a reader, by hand; the first found a panic, a letter past ASCII in
   the search for text outside quotes, now fixed. Mutation testing (`tests/mutation.rs`, by hand)
   changes each proven example and template on both CPUs one way at a time, a number moved by
-  one, a branch's condition flipped or a named constant moved by one, and checks each mutant: of
-  86 (2026-11-02), 44 broke a rule, 31 failed a test, 7 were tested and not proven, and none
-  that changes what a spec can see came out proven. The four that came out proven change
-  nothing a spec can see (a limit past the spec's longest line, a jump to the next line, a byte
-  the input never holds, and a write that never fails short), each listed with why. One of the
-  seven was wrong only when standard input arrives in pieces, which tests then never did; now
-  every other generated run cuts it.
+  one, a branch's condition flipped or a named constant moved by one, and checks each mutant,
+  the same programs on both CPUs: of 110 (2026-11-02), 55 broke a rule, 47 failed a test, 5 were
+  tested and not proven, and none that changes what a spec can see came out proven. The three
+  that came out proven change nothing a spec can see (a limit past the spec's longest line, a
+  jump to the next line, and a byte the input never holds), each listed with why, and neither do
+  the five tested and not proven (an output file's close skipped after a write that worked, a
+  file write's error test flipped where no write falls short, an error code returned only after
+  5,001 reads, which can't happen, a buffer a byte past the spec's 5,000, and a close's error
+  test flipped where both ways go on to the same line). The runs found two gaps, both closed:
+  tests never cut standard input into pieces, and no test could make writing fail, so a
+  program's exit code for a failed write, and write_all's error test flipped, went uncaught; now
+  every other generated run cuts standard input, and a test can close standard output.
 
 What it covers:
 - Inputs: `int(lo, hi)`, and `decimal(lo, hi)` as digits around a point. Each value of a
@@ -975,7 +988,7 @@ Rust share: everything a program may touch must be something the checker can acc
 | The terminal | `termios`, `poll`, `TIOCGWINSZ` | crossterm and the like | Under `the terminal`: `ioctl` on standard input, output or error for its mode (`TCGETS`, `TCSETS`) and its window's size, and nothing else, and `poll` to wait for a key. Tests give the keys as standard input, a pipe, where the mode can't be set, so a program goes on as from a pipe, and `\e` writes escape sequences; the proof models the same. `lengua-mcp run` puts the terminal back as it found it when the program ends, however it ends (`assets/terminal-template.s`) |
 | Left out, by design | `fork`/`exec`, `malloc`, recursion, function pointers | `std::process`, `Box`/`Vec`, recursion, `dyn` | Running other programs (their code isn't checked); allocating while running (rule 3: buffers and arenas in `.bss`, sized from the spec, cost nothing until touched, and input of any length streams through `fill`); recursion and function pointers (rules 1 and 9: explicit stacks, and dispatch by comparison) |
 | Clock, random | `time()`, `rand()` | `Instant`, `SystemTime`, `rand` | Capabilities the spec names, `the clock` and `random bytes` (on this target `clock_gettime` and `getrandom`), enforced by the kernel like the rest. Tests supply the bytes and readings, so output that depends on them is exact, and the prover covers every value the test's variables can take; without a supply, a rule such as "a number from 1 to 6" (`{any(1, 6)}`) checks the output, and the prover treats the kernel's values as any value |
-| Network | Sockets | `std::net` | Plain TCP to the places the spec names, each a TCP port of this computer or of a computer it names, and TLS on a named computer's when the line says `over TLS`, done by lengua outside the program. The program never opens a socket or connects: lengua makes each connection before it starts and hands it over as descriptors 4, 5 and on, relaying it both ways, and one it couldn't make comes ended. seccomp allows no `socket` or `connect`, `sendto` only without an address, and `accept4` only on descriptor 3; Landlock allows no TCP connection or binding of the program's own. A server never binds: the launcher listens on its port, on the loopback unless the spec says `for any computer`, and hands it the socket as descriptor 3, and only its accept loop, or its loop around `poll`, may run forever (`# bound: forever`, NASA's exception). A server serves one client at a time unless its spec says `up to N clients at once`: then seccomp allows `poll`, the event loop C servers use, over a fixed table of connections (`assets/server-template.s`), and a test whose clients connect at once makes each wait for another's answer, so a server that serves one at a time fails; the proof follows a server that polls through every order its clients' steps can come in, and through the test's own. A test's servers speak on the program's own connections, and its clients connect to the program's listener on a free loopback port. Each `connects to` line names one connection to each place, at most 16 |
+| Network | Sockets | `std::net` | Plain TCP to the places the spec names, each a TCP port of this computer, of a computer it names, or of the computer an argument names, and TLS on a named computer's when the line says `over TLS`, done by lengua outside the program. The program never opens a socket or connects: lengua makes each connection before it starts and hands it over as descriptors 4, 5 and on, relaying it both ways, and one it couldn't make comes ended. seccomp allows no `socket` or `connect`, `sendto` only without an address, and `accept4` only on descriptor 3; Landlock allows no TCP connection or binding of the program's own. A server never binds: the launcher listens on its port, on the loopback unless the spec says `for any computer`, and hands it the socket as descriptor 3, and only its accept loop, or its loop around `poll`, may run forever (`# bound: forever`, NASA's exception). A server serves one client at a time unless its spec says `up to N clients at once`: then seccomp allows `poll`, the event loop C servers use, over a fixed table of connections (`assets/server-template.s`), and a test whose clients connect at once makes each wait for another's answer, so a server that serves one at a time fails; the proof follows a server that polls through every order its clients' steps can come in, and through the test's own. A test's servers speak on the program's own connections, and its clients connect to the program's listener on a free loopback port. Each `connects to` line names one connection to each place, at most 16 |
 
 A worker gets its index and its slot. It and every function it calls write only their own stack
 frames and the slot, which it keeps in `rbx`, inside bounds checks; they make no system calls; and
@@ -1183,7 +1196,14 @@ limit, and either the capability is reshaped so every OS keeps it the same way, 
 cut on every target, Linux too. So one OS's extra power, or its sandbox's, never makes a spec
 behave differently. What may differ is the hardware:
 the instructions a CPU has, its vectors' width, its speed. A target is done when it covers what
-x86-64 covers, each item with its own hardware's means (NEON where x86-64 has AVX-512).
+x86-64 covers, each item with its own hardware's means (NEON where x86-64 has AVX-512). The two
+Linux targets hold each other to it program by program: every x86-64 example and fixture has an
+AArch64 twin compiled from the very same spec, under `tests/fixtures/linux-aarch64`, and every
+AArch64 one its x86-64 twin; a test checks the pairs and their specs, and another puts every
+AArch64 twin through the server, where each follows every rule and passes its tests (`second`
+fails its tests on both CPUs, by design). The two without one, `total` and `amounts`, are on
+todo.md's list of what Opus 5.5 didn't allow. The mutation test covers the same programs on both
+CPUs, x86-64's under its own decoder and ARM64's under QEMU or on ARM64.
 
 The network shows the rule at work. A program's own `connect` could be held to its spec's ports
 on Linux (Landlock) and to this computer (lengua's tracer), but Windows's sandbox for apps can't

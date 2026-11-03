@@ -216,7 +216,7 @@ async fn add_goes_from_request_to_done_in_both_protocols() {
             example("main.s").lines().count() + 1
         );
         assert_eq!(
-            done["tests"][0], "main.s follows every rule and passed all 253 test runs",
+            done["tests"][0], "main.s follows every rule and passed all 274 test runs",
             "{done}"
         );
         assert!(

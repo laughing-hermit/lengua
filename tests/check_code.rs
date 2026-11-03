@@ -131,7 +131,7 @@ async fn the_template_passes_its_tests_and_is_stamped() {
     program.write("main.s", &asset("main-template.s"));
     let report = done(&session, &program).await;
     assert_eq!(
-        report["tests"][0], "main.s follows every rule and passed all 253 test runs",
+        report["tests"][0], "main.s follows every rule and passed all 274 test runs",
         "{report}"
     );
     let costs = report["performance"]
@@ -139,8 +139,8 @@ async fn the_template_passes_its_tests_and_is_stamped() {
         .expect("what each test cost");
     assert_eq!(
         costs.len(),
-        5,
-        "3 examples and 2 generated blocks: {report}"
+        7,
+        "4 examples and 3 generated blocks: {report}"
     );
     assert!(
         text(&costs[0]).starts_with("example B1: 1 run")
@@ -149,8 +149,8 @@ async fn the_template_passes_its_tests_and_is_stamped() {
     );
     // The times come from the block's largest input, run alone: the minus sign and 19 digits.
     assert!(
-        text(&costs[3]).starts_with("generated B1: 200 runs")
-            && text(&costs[3]).contains("its largest input, 20 bytes, run alone 5 times"),
+        text(&costs[4]).starts_with("generated B1: 200 runs")
+            && text(&costs[4]).contains("its largest input, 20 bytes, run alone 5 times"),
         "{report}"
     );
     assert_eq!(
@@ -576,8 +576,9 @@ async fn small_ranges_run_every_value() {
     assert_eq!(
         report["tests"],
         json!([
-            "main.s follows every rule and passed all 254 test runs",
-            "generated B1 tried every value of n in its range (all 201)"
+            "main.s follows every rule and passed all 456 test runs",
+            "generated B1 tried every value of n in its range (all 201)",
+            "generated B4 tried every value of n in its range (all 201)"
         ]),
         "{report}"
     );
@@ -733,7 +734,7 @@ async fn the_template_is_proven_for_every_input() {
     let report = done(&session, &program).await;
     // B3's bad inputs come from choice(…), each proven in turn.
     let proofs = report["proofs"].as_array().expect("proofs");
-    assert_eq!(proofs.len(), 2, "{report}");
+    assert_eq!(proofs.len(), 3, "{report}");
     assert!(
         proofs
             .iter()
@@ -741,7 +742,7 @@ async fn the_template_is_proven_for_every_input() {
         "{report}"
     );
     let lock = program.read("lengua.lock").expect("the lock");
-    assert!(lock.contains("proven = [\"B1\", \"B3\"]"), "{lock}");
+    assert!(lock.contains("proven = [\"B1\", \"B3\", \"B4\"]"), "{lock}");
     // Every step settles by the terms alone: the program's parse and the formula's number are
     // one sum.
     assert!(
@@ -766,7 +767,10 @@ async fn the_template_is_proven_for_every_input() {
     );
     let relocked = program.read("lengua.lock").expect("the lock");
     assert_ne!(lock, relocked);
-    assert!(relocked.contains("proven = [\"B1\", \"B3\"]"), "{relocked}");
+    assert!(
+        relocked.contains("proven = [\"B1\", \"B3\", \"B4\"]"),
+        "{relocked}"
+    );
     session.service.cancel().await.expect("close the session");
 }
 
@@ -1416,10 +1420,14 @@ async fn long_text_is_proven_up_to_the_bound() {
     // The lock records it apart from full proofs.
     let lock = program.read("lengua.lock").expect("the lock");
     assert!(lock.contains("proven = []"), "{lock}");
-    assert!(
-        lock.contains("bounded = [{ id = \"B1\", bytes = 4096, of = 5000, more = false }]"),
-        "{lock}"
-    );
+    for id in ["B1", "B2"] {
+        assert!(
+            lock.contains(&format!(
+                "{{ id = \"{id}\", bytes = 4096, of = 5000, more = false }}"
+            )),
+            "{lock}"
+        );
+    }
     session.service.cancel().await.expect("close the session");
 }
 
@@ -1477,6 +1485,75 @@ async fn a_cut_only_the_proof_tries_is_found_and_run_for_real() {
     let report = done(&session, &program).await;
     assert!(
         text(&report["proofs"][0]).ends_with("standard input arriving cut into pieces any way"),
+        "{report}"
+    );
+    session.service.cancel().await.expect("close the session");
+}
+
+/// add's spec promises code 3 when writing its output fails, and its B4 shows it with
+/// `- And standard output is closed`: a pipe nobody reads, as after `prog | head -1`. Every write
+/// then fails with EPIPE, never a signal, so the program passes, proven, and one that exits with
+/// another code fails the test that closes its output.
+#[tokio::test]
+async fn a_closed_standard_output_fails_every_write() {
+    if !solvers_installed() {
+        return;
+    }
+    let session = Session::proving(Protocol::Discover).await;
+    let spec = example("add", "spec.md");
+    assert!(spec.contains("- And standard output is closed"), "add's B4");
+    let program = written(
+        &session,
+        [
+            ("spec.md", spec.clone()),
+            ("main.s", example("add", "main.s")),
+        ],
+    )
+    .await;
+    let report = done(&session, &program).await;
+    assert!(
+        report["proofs"].as_array().is_some_and(|proofs| proofs
+            .iter()
+            .any(|line| text(line).starts_with("generated B4: proven for every input in range"))),
+        "{report}"
+    );
+    let wrong = example("add", "main.s").replacen(
+        ".equ EXIT_WRITE_FAILED, 3",
+        ".equ EXIT_WRITE_FAILED, 4",
+        1,
+    );
+    assert_ne!(wrong, example("add", "main.s"));
+    program.write("main.s", &wrong);
+    let problems = failed(&session, &program).await;
+    assert!(problems.contains("B4"), "{problems}");
+    session.service.cancel().await.expect("close the session");
+}
+
+/// fetch with its server's computer named by its first argument, as a curl-like tool's user
+/// types the host: its tests' server stands in for any value the argument takes, so it passes,
+/// and a real run reads the argument before the program starts. `/hello` names no computer, so
+/// the program gets its connection already ended and says it can't reach the server, and the
+/// run says why.
+#[tokio::test]
+async fn a_connection_to_the_computer_an_argument_names() {
+    let session = session().await;
+    let spec = example("fetch", "spec.md").replace(
+        "- Network: connects to TCP port 8080",
+        "- Network: connects to TCP port 8080 on the computer its first argument names",
+    );
+    assert_ne!(spec, example("fetch", "spec.md"));
+    let program = written(
+        &session,
+        [("spec.md", spec), ("main.s", example("fetch", "main.s"))],
+    )
+    .await;
+    done(&session, &program).await;
+    let report = session
+        .call_ok("run", with_args(&program, &["/hello"]))
+        .await;
+    assert_eq!(report["exit_code"], 3, "{report}");
+    assert!(
+        text(&report["connections"][0]["problem"]).contains("isn't a computer's name"),
         "{report}"
     );
     session.service.cancel().await.expect("close the session");
@@ -1563,8 +1640,9 @@ async fn programs_on_the_network_are_proven() {
             "path holds `1` to `100` characters (tests: `6` and `11`)",
             1,
         )
-        .replacen("`string(1, 100, ", "`string(1, 6, ", 1)
-        .replacen("`string(0, 65000, ", "`string(0, 11, ", 1);
+        .replace("`string(1, 100, ", "`string(1, 6, ")
+        .replace("`string(0, 65000, ", "`string(0, 11, ")
+        .replace("`string(1, 65000, ", "`string(1, 11, ");
     let fetch = written(
         &session,
         [("spec.md", spec), ("main.s", example("fetch", "main.s"))],

@@ -80,6 +80,9 @@ pub struct Example {
     /// Whether the test's clients connect at once, each still sending while another must be
     /// answered, rather than one after another.
     pub clients_at_once: bool,
+    /// Whether the program's standard output is closed, a pipe nobody reads: every write to it
+    /// fails with `EPIPE`, as after `prog | head -1` has read its line.
+    pub stdout_closed: bool,
     /// Whether the program must still be serving at the end, instead of exiting.
     pub serves: bool,
     /// How many connections the spec names: lengua hands the program each, at descriptors 4
@@ -165,6 +168,9 @@ pub struct Generated {
     /// Whether the test's clients connect at once, each still sending while another must be
     /// answered, rather than one after another.
     pub clients_at_once: bool,
+    /// Whether the program's standard output is closed, a pipe nobody reads: every write to it
+    /// fails with `EPIPE`, as after `prog | head -1` has read its line.
+    pub stdout_closed: bool,
     /// Whether the program must still be serving at the end, instead of exiting.
     pub serves: bool,
     /// How many connections the spec names: lengua hands the program each, at descriptors 4
@@ -225,6 +231,9 @@ pub struct Case {
     /// Whether the test's clients connect at once, each still sending while another must be
     /// answered, rather than one after another.
     pub clients_at_once: bool,
+    /// Whether the program's standard output is closed, a pipe nobody reads: every write to it
+    /// fails with `EPIPE`, as after `prog | head -1` has read its line.
+    pub stdout_closed: bool,
     /// Whether the program must still be serving at the end, instead of exiting.
     pub serves: bool,
     /// How many connections the spec names: lengua hands the program each, at descriptors 4
@@ -443,6 +452,7 @@ impl Generated {
             server,
             client,
             clients_at_once: self.clients_at_once,
+            stdout_closed: self.stdout_closed,
             serves: self.serves,
             connections: self.connections,
         })
@@ -688,6 +698,7 @@ struct ExampleTable {
     server: Vec<ServerTable<Text>>,
     client: Vec<ClientTable<Text>>,
     clients_at_once: bool,
+    stdout_closed: bool,
 }
 
 /// What the test's own server does on one connection: it receives exactly this, then replies.
@@ -817,6 +828,7 @@ struct OutlineSteps {
     server: Vec<(usize, Written, Written)>,
     client: Vec<(Written, Written)>,
     clients_at_once: bool,
+    stdout_closed: bool,
     /// The exit code as written: a number or a formula.
     exit_code: Option<Written>,
     serves: bool,
@@ -1234,6 +1246,7 @@ impl<'a> Checker<'a> {
                 server,
                 client,
                 clients_at_once: table.clients_at_once,
+                stdout_closed: table.stdout_closed,
                 serves: behavior.serves,
                 connections: self.spec.network.connections.len(),
             });
@@ -1498,6 +1511,7 @@ impl<'a> Checker<'a> {
             server: server?,
             client: client?,
             clients_at_once: steps.clients_at_once,
+            stdout_closed: steps.stdout_closed,
             serves: steps.serves,
             connections: self.spec.network.connections.len(),
         })

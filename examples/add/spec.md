@@ -47,5 +47,21 @@ writing the output fails, the program exits with code 3.
 |---|---|---|
 | `int(-1000000000, 1000000000)` | `choice("x", "", "-", "1.5", "1000000001", "-1000000001", "9223372036854775808")` | 50 |
 
+## B4: Exits with code 3 when its output can't be written
+- Given the arguments `2` and `3`
+- And standard output is closed
+- When the program runs
+- Then it exits with code `3`
+
+### For any `a` and `b`
+- Given the arguments `{a}` and `{b}`
+- And standard output is closed
+- When the program runs
+- Then it exits with code `3`
+
+| a | b | runs |
+|---|---|---|
+| `int(-1000000000, 1000000000)` | `int(-1000000000, 1000000000)` | 20 |
+
 # Constraints
 - Uses: nothing

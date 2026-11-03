@@ -207,6 +207,9 @@ pub struct Job<'a> {
     /// Whether each folder listing comes turned round, last entry first, as a test's second run
     /// has it, to find a result that depends on the order a file system lists in.
     pub reversed: bool,
+    /// Whether its standard output is a pipe nobody reads, as after `prog | head -1` has read its
+    /// line: every write to it fails with `EPIPE`, never a signal, since SIGPIPE stays ignored.
+    pub stdout_closed: bool,
 }
 
 impl<'a> Job<'a> {
@@ -235,6 +238,7 @@ impl<'a> Job<'a> {
             stdin_file: None,
             emulated: false,
             reversed: false,
+            stdout_closed: false,
         }
     }
 }
@@ -623,7 +627,15 @@ pub async fn start(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<
         Some(path) => Stdio::from(std::fs::File::open(path)?),
         None => Stdio::piped(),
     };
-    let streams = [input, Stdio::piped(), Stdio::piped()];
+    // A closed standard output is a pipe whose reader has gone before the program starts.
+    let output = if job.stdout_closed {
+        let (reader, writer) = std::io::pipe()?;
+        drop(reader);
+        Stdio::from(writer)
+    } else {
+        Stdio::piped()
+    };
+    let streams = [input, output, Stdio::piped()];
     let Launched {
         mut child,
         pid,
@@ -635,10 +647,10 @@ pub async fn start(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<
     let began = std::time::Instant::now();
 
     let input = child.stdin.take();
-    let output = child
-        .stdout
-        .take()
-        .ok_or_else(|| io::Error::other("no stdout pipe"))?;
+    let output = child.stdout.take();
+    if output.is_none() && !job.stdout_closed {
+        return Err(io::Error::other("no stdout pipe"));
+    }
     let errors = child
         .stderr
         .take()
@@ -675,7 +687,10 @@ pub async fn start(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<
         }
     });
     let (overflow, overflowed) = mpsc::channel::<()>(2);
-    let stdout = tokio::spawn(read_capped(output, limits.max_output, overflow.clone()));
+    let stdout = match output {
+        Some(output) => tokio::spawn(read_capped(output, limits.max_output, overflow.clone())),
+        None => tokio::spawn(async { Ok(Vec::new()) }),
+    };
     let stderr = tokio::spawn(read_capped(errors, limits.max_output, overflow));
     Ok(Started {
         child,
@@ -814,17 +829,21 @@ async fn launch_job(
             connect::MAX_CONNECTIONS
         )));
     }
-    // Each connection's two ends, and the ones lengua makes, made while the launcher starts.
+    // Each connection's two ends, and the ones lengua makes, made while the launcher starts. A
+    // computer an argument names is read from the arguments now.
     let mut pairs = Vec::new();
     let mut making = Vec::new();
+    let mut places = Vec::new();
     for reach in &net.connections {
         pairs.push(connect::pair()?);
-        making.push(match reach {
-            Reach::ThisComputer(_) | Reach::Host(..) | Reach::Tls(..) => {
-                let reach = reach.clone();
+        let resolved = connect::resolved(reach, job.args);
+        places.push(resolved.as_ref().unwrap_or(reach).describe());
+        making.push(match resolved {
+            Ok(reach @ (Reach::ThisComputer(_) | Reach::Host(..) | Reach::Tls(..))) => {
                 Some(tokio::spawn(async move { connect::make(&reach).await }))
             }
-            Reach::Peer | Reach::Nowhere => None,
+            Ok(Reach::Argument { .. } | Reach::Peer | Reach::Nowhere) => None,
+            Err(problem) => Some(tokio::spawn(async move { Err(problem) })),
         });
     }
     let supply = job
@@ -971,14 +990,14 @@ async fn launch_job(
     // or write on one never depends on how soon lengua got through.
     let mut connected = Connected::default();
     let mut ends = Vec::new();
-    for (number, ((pair, reach), making)) in pairs
+    for (number, (((pair, reach), making), place)) in pairs
         .into_iter()
         .zip(&net.connections)
         .zip(making)
+        .zip(places)
         .enumerate()
     {
         ends.push(pair.program);
-        let place = reach.describe();
         let problem = match (reach, making) {
             (Reach::Peer, _) => {
                 connected.peers.push((number, pair.lengua));

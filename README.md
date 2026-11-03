@@ -5,7 +5,7 @@ language: you describe a program in plain words, and your AI agent is the compil
 two files. `spec.md` is the source: what the program does, as behaviors shown by examples, with
 the tests that try each one, in plain markdown anyone can read and share: an idea file, in
 Andrej Karpathy's words, that anyone's agent builds out for their own computer. `main.s` is the fastest
-x86-64 assembly the agent can compile from it for your computer, and it's disposable: the spec is
+assembly the agent can compile from it for your computer, x86-64 or ARM64, and it's disposable: the spec is
 what you keep and share. That assembly must pass every
 test and an adapted NASA "Power of 10" rule set, and lengua validates each step of the
 translation; the one step no machine can check, your request to the spec, comes back to you in
@@ -15,12 +15,13 @@ match. See [DESIGN.md](DESIGN.md) for how and why.
 lengua is an [Agent Plugin](https://agent-plugins.org): two skills and an MCP server, using only
 open standards, so it works in Claude Code, Codex, Cursor and other agent harnesses.
 
-> Status: dialect 4 on Linux x86-64, with memory rules that check every address has an owner and
+> Status: dialect 4 on Linux, x86-64 and ARM64, with memory rules that check every address has an owner and
 > stays inside it. It covers whole numbers, exact decimals, floating point in double and single
 > precision with fused multiply-add, vectors from SSE2 to AVX-512, hashing and checksums, files
 > and folders, environment variables, fork-join threads, waiting, the clock and random bytes
 > (which tests supply, so such output is exact), the terminal, TCP clients of the places a spec
-> names, whose connections lengua makes and hands over, with TLS for HTTPS done by lengua so the
+> names, or of the computer an argument names as with curl, whose connections lengua makes and
+> hands over, with TLS for HTTPS done by lengua so the
 > program holds no crypto, servers on the port it names, for other
 > computers and many clients at once when it says so, and `switch`es
 > as checked jump tables. The kernel holds every run to what its spec allows. lengua proves
@@ -44,7 +45,7 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 
 ## Requirements
 
-- Linux on x86-64
+- Linux on x86-64 or ARM64 (AArch64)
 - Rust 1.89 or newer (to build the server)
 - LLVM's assembler and linker: `sudo dnf install llvm lld` (Fedora) or `sudo apt install llvm lld`
   (Debian/Ubuntu)

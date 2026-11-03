@@ -616,6 +616,7 @@ struct Test<'a> {
     server: &'a [Reply],
     client: &'a [Exchange],
     clients_at_once: bool,
+    stdout_closed: bool,
     serves: bool,
 }
 
@@ -638,6 +639,7 @@ impl<'a> Test<'a> {
             server: &example.server,
             client: &example.client,
             clients_at_once: example.clients_at_once,
+            stdout_closed: example.stdout_closed,
             serves: example.serves,
         }
     }
@@ -660,6 +662,7 @@ impl<'a> Test<'a> {
             server: &case.server,
             client: &case.client,
             clients_at_once: case.clients_at_once,
+            stdout_closed: case.stdout_closed,
             serves: case.serves,
         }
     }
@@ -780,6 +783,7 @@ async fn check_one_way(
         stdin_pieces: &stdin_pieces,
         emulated,
         reversed,
+        stdout_closed: test.stdout_closed,
         ..Job::new(program, &args, stdin.as_bytes(), syscalls)
     };
     let now = crate::expect::now();

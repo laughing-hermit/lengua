@@ -182,8 +182,8 @@ async fn proves_the_aarch64_streaming_filter_for_every_length() {
     if !solvers_installed() {
         return;
     }
-    let spec = repository_file("tests/fixtures/linux-aarch64/cat/spec.md");
-    let source = repository_file("tests/fixtures/linux-aarch64/cat/main.s");
+    let spec = repository_file("tests/fixtures/linux-aarch64/cat-stream/spec.md");
+    let source = repository_file("tests/fixtures/linux-aarch64/cat-stream/main.s");
     let machine = machine(&source).await;
     let block = block(&spec, 0);
     let started = Instant::now();

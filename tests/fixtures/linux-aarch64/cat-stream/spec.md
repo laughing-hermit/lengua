@@ -25,5 +25,21 @@ program exits with code 3; if writing the output fails, with code 4.
 |---|
 | `string(0, 9000, "abehlo \n")` |
 
+## B2: Exits with code 4 when its output can't be written
+- Given standard input holding `hello`
+- And standard output is closed
+- When the program runs
+- Then it exits with code `4`
+
+### For any `text`
+- Given standard input holding `{text}`
+- And standard output is closed
+- When the program runs
+- Then it exits with code `{if(len(text) == 0, 0, 4)}`
+
+| text |
+|---|
+| `string(0, 9000, "abehlo \n")` |
+
 # Constraints
 - Uses: standard input

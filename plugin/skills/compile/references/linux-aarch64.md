@@ -102,7 +102,8 @@ errno), so test it right away with `tbnz x0, #63, error`.
 
 Names: lengua holds every name a program gives `openat`, `mkdirat`, `unlinkat` and `renameat` to
 what every system takes, so a name Windows refuses (`< > : " \ | ? *`, a control character, a
-dot or space at the end, `CON`, `NUL.txt`, `com1` and the other device names) returns `EINVAL`
+dot or space at the end, `CON`, `NUL.txt`, `com1` and the other device names, and a short
+name's shape such as `REPORT~1.TXT`, by which Windows can open another file) returns `EINVAL`
 (-22); one that isn't UTF-8 of characters Unicode 9.0 assigned, `EILSEQ` (-84); one past 255
 bytes or a path past 1,023, `ENAMETOOLONG` (-36); a new name that differs only in case from one
 in its folder, `EEXIST` (-17); and renaming or removing a file the program holds open, `EBUSY`
@@ -117,7 +118,9 @@ bytes it read: keep them in `.bss` and set them again before each wait, as
 skips the write to `.rodata`, but QEMU refuses the wait. A client's connections are lengua's,
 made before it starts, from descriptor 4 in its spec's order, as on x86-64; one lengua couldn't
 make comes ended, so its first read gives 0 and its first write fails with `EPIPE` (-32). A
-connection `over TLS` is plain bytes to the program: lengua does the TLS.
+connection `over TLS` is plain bytes to the program: lengua does the TLS. One to the computer an
+argument names is made the same way, before the program starts: the program only reads the
+argument, for its `Host:` line, never to connect.
 
 ## Program start
 
