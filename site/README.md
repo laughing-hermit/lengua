@@ -1,7 +1,7 @@
 # lengua specs
 
 A small Next.js site where people share lengua specs, never code, and anyone compiles them for
-their own computer. It's built and run locally; lengua is private for now, so it isn't deployed.
+their own computer. It's built and run locally, and isn't deployed yet.
 
 ```sh
 npm ci --ignore-scripts

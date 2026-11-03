@@ -1370,7 +1370,9 @@ allocation while running, recursion, function pointers, and running other progra
 
 Two targets are done, as one product: Linux on x86-64, checked on this machine, and Linux on
 ARM64, checked here under QEMU and natively on GitHub's ARM64 runners, every x86-64 program with
-its AArch64 twin. The other four of the top six, macOS and Windows on x86-64 and ARM64, need
+its AArch64 twin. CI builds lengua natively on all six of GitHub's runners, Linux, macOS and
+Windows on both CPUs (`.github/workflows/targets.yml`), and tests both Linux targets there; the
+macOS and Windows builds stop at the Linux-only sandbox until their ports. The other four of the top six, macOS and Windows on x86-64 and ARM64, need
 those computers and more than a new CPU, since they forbid the direct system calls lengua's
 programs make and have neither seccomp nor Landlock: each is a profile with its own decoder,
 prover model, dialect reference, runner and sandbox, as "Porting a target" sets out, and each

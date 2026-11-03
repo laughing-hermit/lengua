@@ -1,6 +1,6 @@
 # lengua: an AI language, not a programming language
 
-*A white paper, November 2026. Private for now.*
+*A white paper, November 2026. lengua is a work in progress.*
 
 ## Summary
 

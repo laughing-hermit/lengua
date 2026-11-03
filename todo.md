@@ -9,7 +9,7 @@ Windows's limits, Windows's short names among them; fuzzing and mutation testing
 that closes standard output so a promise about failed writes is tested and proven; ARM64's
 carry-less multiply, AES and SHA instructions and SVE; the ARM64 histogram ahead of C and Rust; a
 twin of every program on the other CPU; stall counts in both CPUs' benchmarks; the session suites
-(SESSIONS.md); the white paper (WHITEPAPER.md, private); and the site for sharing specs (`site/`,
+(SESSIONS.md); the white paper (WHITEPAPER.md); and the site for sharing specs (`site/`,
 built and run locally).
 The record of that work is in the git history, DESIGN.md, README.md, SESSIONS.md and the
 BENCHMARKS files.
@@ -119,12 +119,14 @@ the checksums show lengua's kind of proof but don't replace SHA-256 or AES:
 - **The ARM64 twin of the `amounts` fixture**, a near-copy of `total` (item 5 above), left rather
   than draw the filter again on the same program. To finish it: as item 5, then take `amounts`
   off `UNPORTED` in `tests/aarch64_session.rs`.
-- **The other four targets: macOS and Windows, each on x86-64 and on ARM64.** They need macOS and
-  Windows computers to develop and test on, and this one is Linux; GitHub's free minutes, with
-  macOS's counted ten times on a private repository, can't carry a port's development. They're
-  also more than a new CPU: neither OS lets a program call the kernel directly, as lengua's
-  programs do, and neither has seccomp or Landlock, so each needs a new model of the program's
-  edge with the OS (libSystem, ntdll) and a new sandbox. DESIGN's "Porting a target" lists what
+- **The other four targets: macOS and Windows, each on x86-64 and on ARM64.** Each OS is a port
+  of its own, not started in this run: neither lets a program call the kernel directly, as
+  lengua's programs do, and neither has seccomp or Landlock, so each needs a new model of the
+  program's edge with the OS (libSystem, ntdll) and a new sandbox. Their CPUs are done: x86-64's
+  and AArch64's decoders and prover models carry over. The six-runner workflow
+  (`.github/workflows/targets.yml`) builds lengua natively on all six of GitHub's runners, free
+  since the repository went public (2026-11-02), and tests it where it runs: on macOS and
+  Windows the build stops at the Linux-only sandbox, which is where each port starts. DESIGN's "Porting a target" lists what
   each target must supply; every limit the Linux targets hold is already theirs (DESIGN's "One
   product on every target"), so a port adds means, never a different lengua. The plugin's
   server, a native binary, is the same work for each host.
@@ -143,7 +145,8 @@ the checksums show lengua's kind of proof but don't replace SHA-256 or AES:
   at 64 KiB, whose counts keep a copy of every part at every byte (counts that share their parts
   would fix it); a routine for the last partial vector at a place the length chooses, and raw
   `read`s of any size. Research, past the line.
-- **The public release**: lengua stays private at the user's word ("lengua needs to be private,
-  not public for time being"). `scripts/release.sh` builds the archive for either Linux CPU, and
-  it installs and runs locally; publishing it, listing the plugin where agent plugins are found,
-  and deploying the site wait for the owner.
+- **The public release.** The repository is public since 2026-11-02, a work in progress, at the
+  user's word. `scripts/release.sh` builds the archive for either Linux CPU, and it installs and
+  runs locally; publishing it as a release, choosing a license (the repository has none yet, so
+  it's all rights reserved), listing the plugin where agent plugins are found, and deploying the
+  site wait for the owner.
