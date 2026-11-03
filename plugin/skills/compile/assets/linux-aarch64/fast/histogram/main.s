@@ -116,21 +116,17 @@ _start:
 .size _start, . - _start
 
 // Adds each byte to the count of its value, eight at a step, the k-th byte of each step into
-// table k, so neighboring bytes never wait on one counter. It stops before the last bytes,
-// fewer than eight, for count_rest.
+// table k, so neighboring bytes never wait on one counter. Four bytes at a time, their counts'
+// addresses come first, then their loads, adds and stores together, each table reached from x2
+// by its offset: so the core has four counts in flight, where one at a time stalled it, as the
+// CPU's own counters showed (todo.md). It stops before the last bytes, fewer than eight, for
+// count_rest.
 // In: x0 = the bytes; x1 = how many, up to READ_LEN; x2 = the eight tables, COUNTS_LEN bytes.
 // Out: x0 = how many it added, a multiple of eight.
 .type count_bytes, @function
 count_bytes:
     cmp x1, #READ_LEN
     b.hi .Lcount_bytes_assert_length
-    add x3, x2, #TABLE_STRIDE
-    add x4, x3, #TABLE_STRIDE
-    add x5, x4, #TABLE_STRIDE
-    add x6, x5, #TABLE_STRIDE
-    add x7, x6, #TABLE_STRIDE
-    add x10, x7, #TABLE_STRIDE
-    add x13, x10, #TABLE_STRIDE
     // The last place an eight starts, below 0 when there's none.
     sub x17, x1, #EIGHT
     mov x9, #0
@@ -142,38 +138,46 @@ count_bytes:
     b.hs .Lcount_bytes_assert_index
     ldr x14, [x0, x9]
     // unsafe: each index is one byte, 0 to 255, and each table holds 256 counts
-    and x15, x14, #0xff
-    ldr x16, [x2, x15, lsl #3]
-    add x16, x16, #1
-    str x16, [x2, x15, lsl #3]
-    ubfx x15, x14, #8, #8
-    ldr x16, [x3, x15, lsl #3]
-    add x16, x16, #1
-    str x16, [x3, x15, lsl #3]
-    ubfx x15, x14, #16, #8
-    ldr x16, [x4, x15, lsl #3]
-    add x16, x16, #1
-    str x16, [x4, x15, lsl #3]
-    ubfx x15, x14, #24, #8
-    ldr x16, [x5, x15, lsl #3]
-    add x16, x16, #1
-    str x16, [x5, x15, lsl #3]
-    ubfx x15, x14, #32, #8
-    ldr x16, [x6, x15, lsl #3]
-    add x16, x16, #1
-    str x16, [x6, x15, lsl #3]
-    ubfx x15, x14, #40, #8
-    ldr x16, [x7, x15, lsl #3]
-    add x16, x16, #1
-    str x16, [x7, x15, lsl #3]
-    ubfx x15, x14, #48, #8
-    ldr x16, [x10, x15, lsl #3]
-    add x16, x16, #1
-    str x16, [x10, x15, lsl #3]
-    lsr x15, x14, #56
-    ldr x16, [x13, x15, lsl #3]
-    add x16, x16, #1
-    str x16, [x13, x15, lsl #3]
+    and x3, x14, #0xff
+    ubfx x4, x14, #8, #8
+    ubfx x5, x14, #16, #8
+    ubfx x6, x14, #24, #8
+    add x3, x2, x3, lsl #3
+    add x4, x2, x4, lsl #3
+    add x5, x2, x5, lsl #3
+    add x6, x2, x6, lsl #3
+    ldr x7, [x3]
+    ldr x8, [x4, #TABLE_STRIDE]
+    ldr x10, [x5, #2 * TABLE_STRIDE]
+    ldr x12, [x6, #3 * TABLE_STRIDE]
+    add x7, x7, #1
+    add x8, x8, #1
+    add x10, x10, #1
+    add x12, x12, #1
+    str x7, [x3]
+    str x8, [x4, #TABLE_STRIDE]
+    str x10, [x5, #2 * TABLE_STRIDE]
+    str x12, [x6, #3 * TABLE_STRIDE]
+    ubfx x3, x14, #32, #8
+    ubfx x4, x14, #40, #8
+    ubfx x5, x14, #48, #8
+    lsr x6, x14, #56
+    add x3, x2, x3, lsl #3
+    add x4, x2, x4, lsl #3
+    add x5, x2, x5, lsl #3
+    add x6, x2, x6, lsl #3
+    ldr x7, [x3, #4 * TABLE_STRIDE]
+    ldr x8, [x4, #5 * TABLE_STRIDE]
+    ldr x10, [x5, #6 * TABLE_STRIDE]
+    ldr x12, [x6, #7 * TABLE_STRIDE]
+    add x7, x7, #1
+    add x8, x8, #1
+    add x10, x10, #1
+    add x12, x12, #1
+    str x7, [x3, #4 * TABLE_STRIDE]
+    str x8, [x4, #5 * TABLE_STRIDE]
+    str x10, [x5, #6 * TABLE_STRIDE]
+    str x12, [x6, #7 * TABLE_STRIDE]
     // end unsafe
     add x9, x9, #EIGHT
     subs x11, x11, #1

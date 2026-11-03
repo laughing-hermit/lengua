@@ -14,25 +14,48 @@ use std::time::{Duration, Instant};
 
 use lengua::platform::{Machine, Profile};
 use lengua::toolchain::Toolchain;
-use perf_event::events::{Event, Hardware, Raw, Software};
+use perf_event::events::{Cache, CacheId, CacheOp, CacheResult, Event, Hardware, Raw, Software};
 use perf_event::{Builder, Counter, ReadFormat};
 
 /// Runs per version, after warming up; the report gives each measure's median.
 const RUNS: usize = 41;
 const WARM_UP: usize = 3;
 
-/// Where an ARM64 core's cycles go while it waits, by the Arm architecture's common event
-/// numbers, which the report gives for each large workload from a second pass of runs, so they
-/// don't share the CPU's counters with the first: cycles the front end gave the core nothing to
-/// do, cycles the back end couldn't take more, the share of those spent waiting on memory, refills
-/// of the L1 data cache, and branches mispredicted.
-const STALLS: [(&str, u64); 5] = [
-    ("front-end stall cycles", 0x23),
-    ("back-end stall cycles", 0x24),
-    ("back-end stalls on memory", 0x4005),
-    ("L1 data refills", 0x03),
-    ("mispredicted branches", 0x10),
+/// Where a core's cycles go while it waits, which the report gives for each large workload from a
+/// second pass of runs, so they don't share the CPU's counters with the first: cycles the front
+/// end gave the core nothing to do, cycles the back end couldn't take more, the share of those
+/// spent waiting on memory, misses in the L1 data cache, and branches mispredicted. The same
+/// events on both CPUs, Linux's generic ones, which on ARM64 the kernel counts with the Arm
+/// architecture's common events (STALL_FRONTEND, STALL_BACKEND, L1D_CACHE_REFILL, BR_MIS_PRED);
+/// waiting on memory is Arm's STALL_BACKEND_MEM alone, as no generic event names it. A CPU that
+/// doesn't count one shows a dash.
+const STALLS: [(&str, Stall); 5] = [
+    (
+        "front-end stall cycles",
+        Stall::Generic(Hardware::STALLED_CYCLES_FRONTEND),
+    ),
+    (
+        "back-end stall cycles",
+        Stall::Generic(Hardware::STALLED_CYCLES_BACKEND),
+    ),
+    ("back-end stalls on memory", Stall::Arm(0x4005)),
+    ("L1 data misses", Stall::L1dMisses),
+    (
+        "mispredicted branches",
+        Stall::Generic(Hardware::BRANCH_MISSES),
+    ),
 ];
+
+/// One of [`STALLS`]' events.
+#[derive(Clone, Copy)]
+enum Stall {
+    /// One of Linux's generic hardware events.
+    Generic(Hardware),
+    /// Reads that missed the L1 data cache, Linux's generic cache event.
+    L1dMisses,
+    /// An Arm common event's number, counted on ARM64 alone.
+    Arm(u64),
+}
 const STALL_RUNS: usize = 11;
 
 /// The flags each compiler gets: everything for speed on this CPU.
@@ -257,20 +280,14 @@ fn workloads() -> Vec<Workload> {
                 "lengua",
                 "plugin/skills/compile/assets/fast/histogram/main.s",
             )],
-            // Two tries at the histogram's stalls, measured beside it (todo.md, the ARM64
-            // histogram): each counter's address taken once, for loads and stores of a base
-            // alone, and that four bytes at a time, their loads, adds and stores together.
-            lengua_aarch64: &[
-                (
-                    "lengua",
-                    "plugin/skills/compile/assets/linux-aarch64/fast/histogram/main.s",
-                ),
-                ("lengua, try A", "benches/programs/histogram/lengua-try-a.s"),
-                ("lengua, try C", "benches/programs/histogram/lengua-try-c.s"),
-            ],
+            lengua_aarch64: &[(
+                "lengua",
+                "plugin/skills/compile/assets/linux-aarch64/fast/histogram/main.s",
+            )],
             about_aarch64: "Counts each byte value of 64 MiB on standard input. C, C++ and \
                             Rust spread neighboring bytes over four tables; lengua's takes \
-                            eight bytes a step, one into each of eight tables.",
+                            eight bytes a step, one into each of eight tables, four bytes' \
+                            loads, adds and stores together.",
             others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
             args: Vec::new(),
             stdin: large.clone(),
@@ -414,6 +431,23 @@ fn attach<E: Event>(event: E, pid: i32, with_kernel: bool) -> Option<Counter> {
     builder.build().ok()
 }
 
+/// A counter of `stall` for process `pid`, where this CPU counts it.
+fn attach_stall(stall: Stall, pid: i32) -> Option<Counter> {
+    match stall {
+        Stall::Generic(event) => attach(event, pid, false),
+        Stall::L1dMisses => attach(
+            Cache {
+                which: CacheId::L1D,
+                operation: CacheOp::READ,
+                result: CacheResult::MISS,
+            },
+            pid,
+            false,
+        ),
+        Stall::Arm(code) => ARM64.then(|| attach(Raw::new(code), pid, false)).flatten(),
+    }
+}
+
 fn exact(counter: &mut Counter) -> Option<u64> {
     let data = counter.read_full().ok()?;
     (data.time_running() == data.time_enabled()).then(|| data.count())
@@ -421,8 +455,8 @@ fn exact(counter: &mut Counter) -> Option<u64> {
 
 /// One run's measures and output.
 struct Sample {
-    /// The raw events' counts, when the run counted those instead.
-    raw: Vec<Option<u64>>,
+    /// [`STALLS`]' counts, when the run counted those instead.
+    stalls: Vec<Option<u64>>,
     instructions: Option<u64>,
     cycles: Option<u64>,
     cpu_time: Option<Duration>,
@@ -433,7 +467,7 @@ struct Sample {
 
 /// Runs `version` once in `folder`. A shell waits on a pipe so the counters can be attached
 /// before it execs the program; they count from that exec on.
-fn run(version: &Version, workload: &Workload, folder: &Path, raw: &[u64]) -> Sample {
+fn run(version: &Version, workload: &Workload, folder: &Path, stalls: &[Stall]) -> Sample {
     let go = folder.join("go");
     if !go.exists() {
         let made = Command::new("mkfifo").arg(&go).status().expect("mkfifo");
@@ -453,7 +487,7 @@ fn run(version: &Version, workload: &Workload, folder: &Path, raw: &[u64]) -> Sa
         .spawn()
         .expect("start the shell");
     let pid = i32::try_from(child.id()).expect("a process id");
-    let mut counters: Vec<Option<Counter>> = if raw.is_empty() {
+    let mut counters: Vec<Option<Counter>> = if stalls.is_empty() {
         vec![
             attach(Hardware::INSTRUCTIONS, pid, false),
             attach(Hardware::CPU_CYCLES, pid, false),
@@ -461,8 +495,9 @@ fn run(version: &Version, workload: &Workload, folder: &Path, raw: &[u64]) -> Sa
                 .or_else(|| attach(Software::TASK_CLOCK, pid, false)),
         ]
     } else {
-        raw.iter()
-            .map(|code| attach(Raw::new(*code), pid, false))
+        stalls
+            .iter()
+            .map(|stall| attach_stall(*stall, pid))
             .collect()
     };
     let mut input = child.stdin.take().expect("its input");
@@ -485,13 +520,13 @@ fn run(version: &Version, workload: &Workload, folder: &Path, raw: &[u64]) -> Sa
         .iter_mut()
         .map(|counter| counter.as_mut().and_then(exact))
         .collect();
-    let (instructions, cycles, cpu_time, raw) = if raw.is_empty() {
+    let (instructions, cycles, cpu_time, stalls) = if stalls.is_empty() {
         (counts[0], counts[1], counts[2], Vec::new())
     } else {
         (None, None, None, counts)
     };
     Sample {
-        raw,
+        stalls,
         instructions,
         cycles,
         cpu_time: cpu_time.map(Duration::from_nanos),
@@ -564,13 +599,13 @@ fn measure(version: &Version, workload: &Workload, folder: &Path, expected: &[u8
     let peaks: Vec<u64> = (0..5)
         .filter_map(|_| peak_kib(version, workload, folder))
         .collect();
-    let stalls = if ARM64 && workload.stdin.len() >= LARGE {
-        let codes: Vec<u64> = STALLS.iter().map(|(_, code)| *code).collect();
+    let stalls = if workload.stdin.len() >= LARGE {
+        let events: Vec<Stall> = STALLS.iter().map(|(_, stall)| *stall).collect();
         let runs: Vec<Sample> = (0..STALL_RUNS)
-            .map(|_| run(version, workload, folder, &codes))
+            .map(|_| run(version, workload, folder, &events))
             .collect();
-        (0..codes.len())
-            .map(|event| median(runs.iter().filter_map(|run| run.raw[event]).collect()))
+        (0..events.len())
+            .map(|event| median(runs.iter().filter_map(|run| run.stalls[event]).collect()))
             .collect()
     } else {
         Vec::new()
@@ -717,14 +752,19 @@ async fn main() {
         GCC_FLAGS.join(" "),
         GCC_FLAGS.join(" "),
     );
-    if ARM64 {
-        let _ = writeln!(
-            report,
-            "- Stall and event counts, for each large workload: the Arm architecture's common \
-             events (STALL_FRONTEND, STALL_BACKEND, STALL_BACKEND_MEM, L1D_CACHE_REFILL, \
-             BR_MIS_PRED), in user space, each the median of {STALL_RUNS} more runs."
-        );
-    }
+    let _ = writeln!(
+        report,
+        "- Stall and event counts, for each large workload: Linux's generic events for front-end \
+         and back-end stall cycles, L1 data cache read misses and mispredicted branches{}, in user \
+         space, each the median of {STALL_RUNS} more runs; a dash where this CPU doesn't count \
+         one.",
+        if ARM64 {
+            " (the Arm architecture's common events STALL_FRONTEND, STALL_BACKEND, \
+             L1D_CACHE_REFILL and BR_MIS_PRED), and STALL_BACKEND_MEM for the stalls on memory"
+        } else {
+            ""
+        }
+    );
     for workload in workloads() {
         if lengua_versions(&workload).is_empty() {
             let _ = write!(
