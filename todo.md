@@ -147,6 +147,5 @@ the checksums show lengua's kind of proof but don't replace SHA-256 or AES:
   `read`s of any size. Research, past the line.
 - **The public release.** The repository is public since 2026-11-02, a work in progress, at the
   user's word. `scripts/release.sh` builds the archive for either Linux CPU, and it installs and
-  runs locally; publishing it as a release, choosing a license (the repository has none yet, so
-  it's all rights reserved), listing the plugin where agent plugins are found, and deploying the
-  site wait for the owner.
+  runs locally, under the Apache License 2.0 (LICENSE); publishing it as a release, listing the
+  plugin where agent plugins are found, and deploying the site wait for the owner.

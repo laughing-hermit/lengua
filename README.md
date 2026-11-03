@@ -200,4 +200,11 @@ cargo test --release -- --ignored        # the slow proof of examples/add
 
 ## License
 
-[Apache-2.0](LICENSE)
+[Apache-2.0](LICENSE). lengua's server links only permissively licensed crates (MIT, Apache-2.0,
+BSD, ISC, Zlib and Unicode's, with Mozilla's root certificates under CDLA-Permissive-2.0; r-efi's
+LGPL is one of three licenses it offers, the others MIT and Apache-2.0). The tools it runs are
+separate programs, also permissive: LLVM's assembler and linker (Apache-2.0 with the LLVM
+exception), z3 (MIT) and cvc5 (BSD-3-Clause; its `-gpl` builds aren't used). Only tests here use
+QEMU (GPL-2.0), as a separate program, and GCC builds only the benchmark's C and C++. The programs
+lengua builds use no library at all. The site's Next.js brings an optional image library, sharp,
+whose libvips is LGPL-3.0, which the site doesn't use.
