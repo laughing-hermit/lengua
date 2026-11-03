@@ -114,8 +114,8 @@ jobs:
         run: |
           uname -a
           nproc
-          grep -m1 "model name" /proc/cpuinfo
-          grep -o -m1 "avx512[a-z]*" /proc/cpuinfo | sort -u | tr '\n' ' '; echo
+          grep -m1 "model name" /proc/cpuinfo || true
+          echo "AVX-512: $(grep -o "avx512[a-z]*" /proc/cpuinfo | sort -u | tr '\n' ' ' || true)"
           echo "LSMs: $(cat /sys/kernel/security/lsm 2>/dev/null || echo unknown)"
           echo "ptrace_scope: $(cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null || echo none)"
           sudo sysctl kernel.perf_event_paranoid=1 || true
