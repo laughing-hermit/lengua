@@ -1333,6 +1333,11 @@ pub fn launch(mut args: impl Iterator<Item = OsString>) -> ExitCode {
             return ExitCode::from(127);
         }
     };
+    // Nothing else reaches the program: no descriptor a parent of lengua's left open.
+    if let Err(problem) = close_strays(listener.is_some(), connections.len()) {
+        eprintln!("lengua-mcp: {problem}");
+        return ExitCode::from(127);
+    }
     let confined = parse_confinement(&syscalls, &file_limit).and_then(
         |(syscalls, traced, file_limit, emulated)| {
             confine(
@@ -1359,6 +1364,28 @@ pub fn launch(mut args: impl Iterator<Item = OsString>) -> ExitCode {
         Path::new(&program).display()
     );
     ExitCode::from(127)
+}
+
+/// Closes every descriptor the launcher holds that the program isn't handed: all but standard
+/// input, output and error, a server's listener (3) and its connections (4 and on). lengua's
+/// own descriptors close on exec, but one a parent of lengua's left open without that flag, a
+/// harness or a CI runner, would otherwise reach the program, outside its confinement.
+fn close_strays(listening: bool, connections: usize) -> Result<(), String> {
+    let first = connect::FIRST_DESCRIPTOR;
+    let last = first + i32::try_from(connections).unwrap_or(i32::MAX);
+    let kept = |fd: i32| fd <= 2 || (fd == 3 && listening) || (first..last).contains(&fd);
+    let open: Vec<i32> = std::fs::read_dir("/proc/self/fd")
+        .map_err(|error| format!("couldn't list the launcher's descriptors: {error}"))?
+        .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse().ok())
+        .collect();
+    for fd in open.into_iter().filter(|fd| !kept(*fd)) {
+        // The listing's own descriptor has closed already.
+        match nix::unistd::close(fd) {
+            Ok(()) | Err(nix::errno::Errno::EBADF) => {}
+            Err(error) => return Err(format!("couldn't close descriptor {fd}: {error}")),
+        }
+    }
+    Ok(())
 }
 
 /// Replaces this process with `program`, given `args` and only `environment`, keeping what the

@@ -281,6 +281,35 @@ name:
     .asciz \"f\"
 ";
 
+/// As on x86-64: a descriptor lengua's parent left open never reaches the program, so its write
+/// to that number fails with EBADF.
+#[tokio::test]
+async fn a_descriptor_lengua_s_parent_left_open_never_reaches_the_program_on_arm64() {
+    use std::os::fd::AsRawFd as _;
+    let folder = tempfile::tempdir().expect("a folder");
+    let outside = folder.path().join("outside");
+    let stray = std::fs::File::create(&outside).expect("a file");
+    rustix::io::fcntl_setfd(&stray, rustix::io::FdFlags::empty()).expect("kept across exec");
+    let code = format!(
+        ".arch armv8-a\n.text\n.globl _start\n_start:\n    mov x0, #{}\n    adrp x1, byte\n    \
+         add x1, x1, :lo12:byte\n    mov x2, #1\n    mov x8, #64\n    svc #0\n    neg x0, x0\n    \
+         mov x8, #93\n    svc #0\n.data\nbyte:\n    .ascii \"x\"\n",
+        stray.as_raw_fd()
+    );
+    let writer = build(folder.path(), "writer", &code).await;
+    let calls = syscalls(&[Syscall::Write, Syscall::Exit]);
+    let run = run(
+        launcher(),
+        Job::new(&writer, &[], b"", &calls),
+        Limits::default(),
+    )
+    .await
+    .expect("run");
+    assert_eq!(run.end, End::Exited(9), "EBADF: {run:?}");
+    assert!(std::fs::read(&outside).expect("the file").is_empty());
+    drop(stray);
+}
+
 #[tokio::test]
 async fn names_are_held_to_every_system_on_arm64_too() {
     let folder = tempfile::tempdir().expect("a folder");

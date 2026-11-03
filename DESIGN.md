@@ -189,6 +189,10 @@ Before it becomes the program, the launcher confines itself, so the kernel enfor
 spec allows:
 - Landlock lets the program touch files only inside its working folder, execute only itself,
   make no network connection and bind no port at all, and signal no other process;
+- the program gets no descriptor but its standard input, output and error, a server's listener
+  and its connections: the launcher closes every other one it holds before it confines the
+  program, so one a parent of lengua's left open, a harness or a CI runner, never reaches it
+  (Landlock holds paths, not descriptors already open; GitHub's x86-64 runner showed two);
 - the program holds no network of its own. lengua makes each connection its spec names before
   the program starts, outside its confinement (a TCP port of this computer, tried on 127.0.0.1
   and then ::1, of a computer the spec names, or of the computer one of the program's arguments

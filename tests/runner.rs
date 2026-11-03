@@ -233,6 +233,39 @@ async fn gives_an_empty_environment_and_closed_stdin() {
     assert_eq!(echo.end, End::Exited(0));
 }
 
+/// A descriptor a parent of lengua's left open without close-on-exec, as a harness or a CI runner
+/// can, never reaches the program: the launcher closes every descriptor it doesn't hand over, so
+/// the program's write to that number fails with EBADF, and the file outside its folder is left
+/// as it was. (Landlock holds paths, not descriptors already open.)
+#[tokio::test]
+async fn a_descriptor_lengua_s_parent_left_open_never_reaches_the_program() {
+    use std::os::fd::AsRawFd as _;
+    let folder = tempfile::tempdir().expect("temporary folder");
+    let outside = folder.path().join("outside");
+    let stray = std::fs::File::create(&outside).expect("a file");
+    rustix::io::fcntl_setfd(&stray, rustix::io::FdFlags::empty()).expect("kept across exec");
+    let writer = build(
+        folder.path(),
+        "writer",
+        &program(
+            &format!(
+                "    mov eax, 1\n    mov edi, {}\n    lea rsi, [rip + byte]\n    mov edx, 1\n    \
+                 syscall\n    neg eax\n    mov edi, eax\n    mov eax, 60\n    syscall",
+                stray.as_raw_fd()
+            ),
+            ".data\nbyte:\n    .ascii \"x\"",
+        ),
+    )
+    .await;
+    let run = run_simply(&writer, &[], b"").await;
+    assert_eq!(run.end, End::Exited(9), "EBADF: {run:?}");
+    assert!(
+        std::fs::read(&outside).expect("the file").is_empty(),
+        "nothing written outside"
+    );
+    drop(stray);
+}
+
 #[tokio::test]
 async fn reports_signals() {
     let folder = tempfile::tempdir().expect("temporary folder");
@@ -480,10 +513,14 @@ async fn tests_supply_the_random_bytes_and_the_clock() {
     assert_eq!(result.end, End::Exited(4), "{result:?}");
     let expected = [vec![1, 2, 3, 4], time(5, 0), time(7, 1)].concat();
     assert_eq!(result.stdout, expected);
-    assert!(
-        result.instructions.is_some_and(|count| count < 40),
-        "{result:?}"
-    );
+    // The program's own instructions, where the computer has the CPU's counters: a virtual
+    // machine without them, as GitHub's x86-64 runners are, counts none.
+    if counters_here() {
+        assert!(
+            result.instructions.is_some_and(|count| count < 40),
+            "{result:?}"
+        );
+    }
 
     // The last reading repeats.
     let one_reading = Supply::parse(Some("01020304"), &["5".into()]).expect("a supply");
@@ -619,6 +656,14 @@ fn connects_to(port: u16) -> String {
 
 fn network_syscalls(calls: &[Syscall]) -> Vec<Allowed> {
     Profile::LinuxX86_64.allowed_syscalls(calls, false)
+}
+
+/// Whether this computer lets a process count its CPU's instructions: a virtual machine may not
+/// give it the counters at all.
+fn counters_here() -> bool {
+    perf_event::Builder::new(perf_event::events::Hardware::INSTRUCTIONS)
+        .build()
+        .is_ok()
 }
 
 async fn run_on(executable: &Path, syscalls: &[Allowed], net: &Net) -> Run {

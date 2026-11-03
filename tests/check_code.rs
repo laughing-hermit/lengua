@@ -468,7 +468,8 @@ async fn the_tally_block_passes_its_checks() {
 /// proof's base finishes in the test's time.
 #[tokio::test]
 async fn a_word_count_is_proven_for_every_length() {
-    if !solvers_installed() {
+    // The fast word count is AVX-512 code.
+    if !solvers_installed() || !has_avx512() {
         return;
     }
     let session = Session::proving_alone_for(Protocol::Discover, 120).await;
