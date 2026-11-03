@@ -1352,8 +1352,8 @@ finished with no question, every test passing and every call under 45 seconds, f
 list prices; twelve phrasings of a request all chose write-spec first. A word-frequency count
 followed the same way: from one request with no question, a 1,034-line hash-table program with
 every test passing, in about eight minutes for about $2. BENCHMARKS.md, measured
-the same day, has lengua's best ahead of or level with C, C++ and Rust on every workload and
-measure, with 2.5 to 3.1 times less memory.
+again on 2026-11-02, has lengua's best ahead of or level with C, C++ and Rust on every workload in
+cycles, CPU time and wall time, with 2.5 to 3.3 times less memory.
 
 Interactive round 5 (2026-11-02) ran a suite of twelve requests on each Linux target, from a
 two-number add to an HTTPS fetch, a multi-client server, threads and the terminal, each typed into

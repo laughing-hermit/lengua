@@ -141,7 +141,8 @@ them and the CPU has to be trusted either.
 The agent writes for the person's own CPU and uses what it has: AVX-512 on an x86-64 computer
 that has it, NEON or SVE on ARM64. On lengua's benchmarks against C, C++ and Rust compiled for
 speed on the same computer (BENCHMARKS.md for x86-64, BENCHMARKS-aarch64.md for ARM64), lengua's
-best is ahead of or level with them on every x86-64 workload, with 2.5 to 3.1 times less memory.
+best is ahead of or level with them on every x86-64 workload in cycles, CPU time and wall time,
+with 2.5 to 3.3 times less memory.
 
 ## Why the spec is the mother
 

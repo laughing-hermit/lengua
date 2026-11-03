@@ -171,11 +171,11 @@ the memory:
 
 | Workload | Cycles | CPU time | Wall time | Peak memory |
 |---|---|---|---|---|
-| `add`, mostly starting and exiting | 121× fewer | 3.2× less | 2.3× less | 2.6× less |
-| `hypotenuse`, a square root in doubles | 97× fewer | 2.1× less | 1.8× less | 3.0× less |
-| Capitalize a 1 MiB file | 5.1× fewer | 1.4× less | 1.4× less | 2.8× less |
-| Capitalize 1 MiB of standard input | 5.6× fewer | 2.2× less | 1.5× less | 2.7× less |
-| Count lines and words of 64 MiB (Claude Code's version) | 13.9× fewer | 1.7× less | 1.2× less | 3.1× less |
+| `add`, mostly starting and exiting | 125× fewer | 3.3× less | 2.4× less | 2.6× less |
+| `hypotenuse`, a square root in doubles | 98× fewer | 1.9× less | 1.4× less | 2.9× less |
+| Capitalize a 1 MiB file | 5.1× fewer | 1.3× less | 1.3× less | 2.8× less |
+| Capitalize 1 MiB of standard input | 5.1× fewer | 1.7× less | 1.3× less | 2.8× less |
+| Count lines and words of 64 MiB (Claude Code's version) | 13.8× fewer | 1.6× less | 1.3× less | 3.3× less |
 | CRC-32C of 64 MiB | 2.9× fewer | level | level | 3.1× less |
 | Byte histogram of 64 MiB | level | level | level | 2.5× less |
 
@@ -184,7 +184,9 @@ The baselines are written the way a performance-minded programmer would: the CRC
 lengua wins by using the CPU fully: 64 bytes a step with AVX-512, three `crc32` chains side by
 side, no C library and no runtime. The histogram is limited by one memory update per byte in
 every language. On 64 MiB through a pipe, the kernel's copying is most of the wall time, so a 3×
-lead in the program's own cycles shows as level on the clock. Measured 2026-10-31.
+lead in the program's own cycles shows as level on the clock. Measured 2026-11-02, with where the
+cycles go (stalls, L1 misses, mispredicted branches) for each large workload; BENCHMARKS-aarch64.md
+measures the same programs on GitHub's ARM64 runner.
 
 ## Develop
 
