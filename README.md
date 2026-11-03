@@ -36,12 +36,12 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 > confirmed by two independent solvers, z3 and cvc5, and most proofs need none: the terms settle
 > every step. `lengua.lock` records what's proven. Programs build on programs: a spec links to the
 > specs of the parts it uses, so a folder of programs is a graph of two-file nodes, as an OKF
-> bundle is, and `check` holds each program to its parts' current code. In ten scenarios in real
-> Claude Code sessions, from a web server to a sort, every program came from one request, with no
-> question. Next, as [todo.md](todo.md) has it: a white paper on lengua as an AI language; the
-> other five of the top CPU and OS targets, each a profile with its own decoder, prover model and
-> runner (LLVM gives the assembler and linkers for every target, but not the checks, proofs or
-> sandbox); and a site for sharing specs.
+> bundle is, and `check` holds each program to its parts' current code. In real Claude Code
+> sessions, twelve requests on each Linux target from an add to an HTTPS fetch, every program came
+> from one request ([SESSIONS.md](SESSIONS.md)). Linux on ARM64 is the same product, every example
+> with its AArch64 twin; [WHITEPAPER.md](WHITEPAPER.md) says what lengua is, and `site/` is a local
+> site for sharing specs. What's left for people, the work the safety filter stopped or that was
+> skipped (macOS and Windows among it), is in [todo.md](todo.md).
 
 ## Requirements
 

@@ -1355,15 +1355,26 @@ every test passing, in about eight minutes for about $2. BENCHMARKS.md, measured
 the same day, has lengua's best ahead of or level with C, C++ and Rust on every workload and
 measure, with 2.5 to 3.1 times less memory.
 
-Tested, not proven, for now: sorting and `uniq` past a few bytes, floats computed in another
-order than the formula's, a folder's listing, and the SHA and AES instructions.
+Interactive round 5 (2026-11-02) ran a suite of twelve requests on each Linux target, from a
+two-number add to an HTTPS fetch, a multi-client server, threads and the terminal, each typed into
+a real Claude Code session with the plugin (SESSIONS.md): on x86-64 all twelve passed from one
+request each, and on ARM64, compiled for AArch64 and checked under QEMU, all twelve passed too.
+
+Tested, not proven, for now: sorting and `uniq` past a few bytes and word tallies past a few
+bytes, which need quantified facts over memory; byte loops at 64 KiB, whose counts keep a copy
+of every part at every byte; a routine for the last partial vector at a place the length chooses,
+and raw `read`s of any size; floats computed in another order than the formula's, a folder's
+listing, and the SHA and AES instructions. Each proof line says which.
 Left out of the dialect on purpose: gathers and scatters, whose addresses can't be bounds-checked,
 allocation while running, recursion, function pointers, and running other programs.
 
-All of it is checked on this machine (x86-64 Linux). The long-term goal is the top six CPU and OS
-targets; they come next, in the order Platforms gives. The spec is agnostic and travels today, and
-LLVM assembles and links for every target, but each target is a profile with its own decoder,
-prover model, dialect reference and runner, as "Porting a target" sets out — not a flag, and for
-macOS and Windows not even the same shape, since they forbid the direct system calls lengua's
-programs make. After the targets, a simple site where people share specs: the spec travels, each
-computer compiles it for itself, and code is checked again wherever it runs.
+Two targets are done, as one product: Linux on x86-64, checked on this machine, and Linux on
+ARM64, checked here under QEMU and natively on GitHub's ARM64 runners, every x86-64 program with
+its AArch64 twin. The other four of the top six, macOS and Windows on x86-64 and ARM64, need
+those computers and more than a new CPU, since they forbid the direct system calls lengua's
+programs make and have neither seccomp nor Landlock: each is a profile with its own decoder,
+prover model, dialect reference, runner and sandbox, as "Porting a target" sets out, and each
+already holds every limit the Linux targets do. The white paper (WHITEPAPER.md) says what lengua
+is and isn't, and a site where people share specs (`site/`) runs locally: the spec travels, each
+computer compiles it for itself, and code is checked again wherever it runs. todo.md holds only
+what's left for people.
