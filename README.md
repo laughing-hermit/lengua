@@ -17,7 +17,8 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 
 > Status: dialect 4 on Linux, x86-64 and ARM64, with memory rules that check every address has an owner and
 > stays inside it. It covers whole numbers, exact decimals, floating point in double and single
-> precision with fused multiply-add, vectors from SSE2 to AVX-512, hashing and checksums, files
+> precision with fused multiply-add, vectors from SSE2 to AVX-512 and from NEON to SVE,
+> hashing and checksums, files
 > and folders, environment variables, fork-join threads, waiting, the clock and random bytes
 > (which tests supply, so such output is exact), the terminal, TCP clients of the places a spec
 > names, or of the computer an argument names as with curl, whose connections lengua makes and
@@ -29,7 +30,7 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 > the tested ones, over whole numbers, decimals, choices, texts beyond ASCII and text formulas,
 > checksums, files and the network, servers that poll in every order their clients' steps can come
 > in, threads, and floats computed in the formula's order, in integer, bit, vector and float code
-> from SSE2 to AVX-512, and over texts as long as the spec's lengths and the proof's time reach,
+> from SSE2 to AVX-512 and from NEON to SVE, and over texts as long as the spec's lengths and the proof's time reach,
 > and further with `prove_further`; a filter or a count that streams its input a buffer-full at a
 > time is proven for every length, by induction over its read loop. Programs that read with the
 > skill's `fill` are proven however their input arrives, cut into any pieces. Each solver step is

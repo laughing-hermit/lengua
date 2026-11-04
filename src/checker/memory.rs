@@ -983,7 +983,7 @@ fn access(
                     Some(Op::Push(registers)) if registers.contains(&Some(link))
                 )
             });
-            if inside && saves_link && first - width + 1 <= LINK_BYTES {
+            if inside && saves_link && first - width < LINK_BYTES {
                 found.push((
                     Rule::Lifetimes,
                     format!(

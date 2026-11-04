@@ -34,6 +34,14 @@ on:
         description: "Stop the slow ignored tests after this many seconds, keeping where they stood (stall.txt)"
         type: string
         default: ""
+      benchmarks:
+        description: "Measure lengua against C, C++ and Rust here on Linux x86-64 instead of testing"
+        type: boolean
+        default: false
+      release:
+        description: "Build and check the release archive for x86-64 Linux instead of testing"
+        type: boolean
+        default: false
 
 concurrency:
   group: targets-${{ github.ref }}-${{ github.event_name }}-${{ inputs.check_folder }}
@@ -114,6 +122,47 @@ jobs:
           path: |
             target/release/lengua-mcp
             target/release/lengua-mcp.exe
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # Formatting is the same on every target, so it is checked once, beside the tests of both CPUs
+  # rather than in front of them: a difference never hides a test result. When there is one, the
+  # patch that formats it is kept (fmt.patch), to apply with git.
+  format:
+    name: format
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust ${{ env.RUST_VERSION }}
+        run: |
+          if ! command -v rustup; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --profile minimal --default-toolchain none
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt
+          rustup default "$RUST_VERSION"
+
+      - name: Format
+        run: |
+          if ! cargo fmt --check; then
+            cargo fmt
+            git diff > fmt.patch
+            exit 1
+          fi
+
+      - name: Keep the patch
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fmt-patch-${{ github.run_number }}
+          path: fmt.patch
           retention-days: 7
           if-no-files-found: ignore
 
@@ -204,11 +253,22 @@ jobs:
         run: cargo clippy --release --all-targets --locked -- -D warnings
 
       - name: Tests
+        if: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.benchmarks || inputs.release)) }}
         env:
           LENGUA_PROOF_SECONDS: "60"
           RUST_TEST_THREADS: "2"
           FILTER: ${{ github.event_name == 'workflow_dispatch' && inputs.filter || '' }}
         run: cargo test --release --locked --no-fail-fast $FILTER 2>&1 | tee test.log
+
+      - name: Benchmarks against C, C++ and Rust
+        if: github.event_name == 'workflow_dispatch' && inputs.benchmarks
+        run: |
+          sudo apt-get install -y -q time
+          cargo bench --locked --bench against_rust_and_c 2>&1 | tee bench.log
+
+      - name: The release archive for x86-64 Linux
+        if: github.event_name == 'workflow_dispatch' && inputs.release
+        run: scripts/release.sh
 
       - name: The slow ignored tests
         if: github.event_name == 'workflow_dispatch' && inputs.ignored
@@ -226,7 +286,7 @@ jobs:
             bash -c "$tests"
           fi
 
-      - name: Keep the log
+      - name: Keep the logs and the server
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -235,5 +295,10 @@ jobs:
             test.log
             ignored.log
             stall.txt
+            bench.log
+            BENCHMARKS.md
+            target/release/lengua-mcp
+            dist/*.tar.gz
+            dist/*.sha256
           retention-days: 7
           if-no-files-found: ignore

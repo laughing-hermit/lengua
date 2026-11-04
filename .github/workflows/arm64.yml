@@ -1,8 +1,8 @@
 name: arm64
 
 # Linux ARM64 on ARM64 hardware: the native sandbox (the spec's own system call filter, Landlock,
-# the supervisor), the CPU's counters, and every test that runs there. x86-64 is tested by the
-# local gate.
+# the supervisor), the CPU's counters, and every test that runs there. x86-64 is tested the same
+# way by targets.yml, which also checks the formatting both CPUs share.
 on:
   push:
     paths:
@@ -138,9 +138,6 @@ jobs:
             target
           key: cargo-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-${{ env.RUST_VERSION }}-
-
-      - name: Format
-        run: cargo fmt --check
 
       - name: Clippy
         run: cargo clippy --release --all-targets --locked -- -D warnings

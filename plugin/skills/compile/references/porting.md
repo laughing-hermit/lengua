@@ -35,15 +35,16 @@ optimizer would rewrite the instructions the prover just checked.
 
 ## What a new target profile must supply
 
-A profile lives in `src/platform.rs` (today one variant, `LinuxX86_64`, holding the triple, the
-short name and the syscall-number table). Each new target needs:
+A profile lives in `src/platform.rs` (today two variants, `LinuxX86_64` and `LinuxAarch64`, each
+holding the triple, the short name and the syscall-number table). Each new target needs:
 
 1. **Toolchain** — the LLVM triple, the linker (`ld.lld` for ELF/Linux, `ld64.lld` for
    Mach-O/macOS, `lld-link` for COFF/Windows), its flags and the object format. `toolchain.rs`
    `link()` hardcodes `ld.lld` and ELF today, so it must learn to select these. Every
    instruction must link as written: on AArch64, `ld.lld` rewrites `adrp` + `add :lo12:` pairs
    into `nop` + `adr` unless it's given `--no-relax`, which would break the line-for-line match.
-2. **Decoder** — a decoder for the CPU's machine code (today iced-x86, x86 only, reading ELF).
+2. **Decoder** — a decoder for the CPU's machine code (today iced-x86 for x86-64 and lengua's
+   own for AArch64, both reading ELF).
    For a new CPU, lengua decodes exactly its dialect's subset itself, so anything outside it is
    refused by construction, and tests that decoder against LLVM's disassembler.
 3. **Prover model** — the CPU's instructions in `src/prove/exec`, and CPU-feature detection.
@@ -82,15 +83,17 @@ x86-64 covers, each item with its own hardware's means.
 
 ## Order of targets
 
-- **Linux ARM64 is nearest, and under way:** the same OS, so the same kinds of system calls, the
-  same sandbox (seccomp, Landlock) and ELF; but its decoder, prover model, dialect and triple
-  (2, 3, 4) are new, and the OS edge (5) and the supervisor's registers (6) change in detail.
-  Tested under QEMU on an x86-64 Linux computer for everything but the sandbox's exact filter and
-  supplies, and on an ARM64 computer or CI runner for those. Checked, tested and proven, as
-  x86-64's code is, for the template's kind of program: arguments, whole numbers, floating point,
-  vectors of whole numbers and of floats (NEON), text, standard input of any length through
-  `fill`, and files and folders ([its reference](linux-aarch64.md)); its fast `wc` is proven for
-  every length with a 64 KiB buffer, as x86-64's is. Threads, servers, the terminal and the
-  crypto instructions come next.
+- **Linux ARM64 is done**, and is the pattern for the rest: the same OS, so the same kinds of
+  system calls, the same sandbox (seccomp, Landlock) and ELF; its decoder, prover model, dialect
+  and triple (2, 3, 4) are its own, and the OS edge (5) and the supervisor's registers (6) change
+  in detail. Tested under QEMU on an x86-64 Linux computer for everything but the sandbox's exact
+  filter and supplies, and on an ARM64 computer or CI runner for those. It covers what x86-64
+  covers, checked, tested and proven as x86-64's code is: arguments, whole numbers, floating
+  point, vectors (NEON, and SVE's scalable bytes), text, standard input of any length through
+  `fill`, files and folders, hash tables, sorting, servers and clients, the terminal, threads,
+  and the CPU's CRC, carry-less multiply, AES and SHA instructions ([its
+  reference](linux-aarch64.md)); its fast `wc` is proven for every length with a 64 KiB buffer,
+  as x86-64's is. Each example and fixture has its twin on the other CPU, compiled from the very
+  same spec (`tests/aarch64_session.rs`'s twin test).
 - **macOS (ARM64, x86-64)** and **Windows (x86-64, ARM64)** need all six, the OS edge and the
   sandbox most of all, because they forbid the direct syscalls lengua's Linux programs use.

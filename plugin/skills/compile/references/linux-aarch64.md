@@ -48,7 +48,12 @@ x86-64's is.
   with `ldp` and `crc32cx` while that many are left, then 8 bytes a step, and the rest with
   `crc32cb`.
 - [The fast `wc`](../assets/linux-aarch64/fast/wc/main.s) counts lines and words 16 bytes a step,
-  each step masked to the bytes left, proven for every length with a 64 KiB buffer.
+  each step masked to the bytes left, proven for every length with a 64 KiB buffer;
+  [its SVE form](../assets/linux-aarch64/fast/wc-sve/main.s) does it in the scalable vectors the
+  CPU has.
+- [The fast histogram](../assets/linux-aarch64/fast/histogram/main.s) counts the bytes of
+  standard input into eight tables of 256 counts, eight bytes a step, the k-th byte of each step
+  into table k, so a step's bytes never wait on one counter.
 
 ## The dialect's form
 
@@ -93,12 +98,14 @@ errno), so test it right away with `tbnz x0, #63, error`.
 | `renameat` | 38 | `x0` `AT_FDCWD`, `x1` the old name, `x2` `AT_FDCWD`, `x3` the new name | 0 or an error |
 | `clock_gettime` | 113 | `x0` clock (0 the time of day, 1 a clock that only moves forward), `x1` 16 bytes for seconds then nanoseconds | 0 or an error |
 | `clock_nanosleep` | 115 | `x0` clock, `x1` 0, `x2` 16 bytes of how long | 0 or an error |
-| `getrandom` | 278 | `x0` buffer, `x1` count, `x2` 0 | bytes filled or an error |
+| `getrandom` | 278 | `x0` buffer, `x1` count, `x2` 0 | bytes filled, all of them for up to 256, or an error |
 | `accept4` | 242 | `x0` 3, `x1` to `x3` 0 | the connection or an error |
 | `sendto` | 206 | `x0` the connection, `x1` bytes, `x2` count, `x3` 0x4000 (`MSG_NOSIGNAL`), `x4` and `x5` 0 | bytes sent or an error |
 | `ppoll` | 73 | `x0` a table of 8-byte entries (descriptor, events, events that came), `x1` how many, `x2` 0 to wait until one is ready, or 16 bytes of how long, `x3` 0 | how many are ready, 0 when the time ran out, or an error |
-| `ioctl` | 29 | `x0` 0, `x1` `TCGETS` (0x5401) or `TCSETS` (0x5402), `x2` 36 bytes of the terminal's mode | 0, or an error when standard input isn't a terminal |
+| `shutdown` | 210 | `x0` the connection, `x1` 1 to stop sending | 0 or an error |
+| `ioctl` | 29 | `x0` 0, 1 or 2; `x1` 0x5401 (`TCGETS`) to read the terminal's mode or 0x5402 (`TCSETS`) to set it, with `x2` its 36 bytes, or 0x5413 (`TIOCGWINSZ`) for the window's rows and columns, 2 bytes each, in `x2`'s 8 bytes | 0, or -25 (`ENOTTY`) when it isn't a terminal, as in every test; the kernel refuses any other request |
 | `exit` | 93 | `w0` status | doesn't return |
+| `exit_group` | 94 | `w0` status | doesn't return |
 
 Names: lengua holds every name a program gives `openat`, `mkdirat`, `unlinkat` and `renameat` to
 what every system takes, so a name Windows refuses (`< > : " \ | ? *`, a control character, a
@@ -122,6 +129,27 @@ connection `over TLS` is plain bytes to the program: lengua does the TLS. One to
 argument names is made the same way, before the program starts: the program only reads the
 argument, for its `Host:` line, never to connect.
 
+The terminal: keys one at a time with no echo take the terminal's mode with `TCGETS`, its local
+flags (the 4 bytes at 12) without `ICANON` (2) and `ECHO` (8), `VMIN` (the byte at 23) 1 and
+`VTIME` (at 22) 0, set with `TCSETS`; the mode as found goes back at the end, as
+[the terminal template](../assets/linux-aarch64/terminal-template.s) does. When `TCGETS` fails,
+as it does in every test, where standard input is a pipe, keys come as they are and nothing
+changes. `ppoll` on standard input with a time waits for the next key, a game's tick when none
+comes. Arrows and other special keys are escape sequences of several bytes, such as 27, 91, 65
+for up, and `\033[…` sequences move the cursor, clear the screen and color text.
+
+Random bytes and the clock: tests usually supply them in place of the kernel's, so output that
+depends on them can be checked exactly. Draw the random bytes the spec's Purpose says how to use,
+in any batch size: bytes asked for past what a test supplies are zeros, so only the bytes the
+program uses decide its output. Each `clock_gettime` call reads the test's next reading, and the
+last one repeats. Check both results like any call's.
+
+Files: open an input with `openat` (`AT_FDCWD`, name, `O_RDONLY`), and create or replace an output
+with `O_WRONLY | O_CREAT | O_TRUNC` (0x241) and mode 420; `close` each when done. Name files
+relative to the working folder. The kernel lets a program open files only inside that folder, so
+any other path fails with `EACCES` (-13); a missing file fails with `ENOENT` (-2). Each error is
+a behavior the spec names, with its own exit code.
+
 ## Program start
 
 At `_start` the stack holds the arguments, and `sp` is 16-byte aligned:
@@ -131,9 +159,15 @@ At `_start` the stack holds the arguments, and `sp` is 16-byte aligned:
 | `[sp]` | `argc`, the number of arguments including the program's path |
 | `[sp, #8]` | `argv[0]`, the program's path |
 | `[sp, #16]` | `argv[1]`, the first argument, and so on |
+| `[sp, #8 * (argc + 1)]` | 0, the end of the list |
+| `[sp, #8 * (argc + 2)]` | the environment: a pointer to each variable's `NAME=value`, then 0 |
 
-Each argument is a NUL-terminated string, read-only. `_start` has no return address: it ends
-with `exit`, and keeps what it needs across calls in `x19` to `x28` without saving them.
+Each argument and variable is a NUL-terminated string, read-only. A program gets environment
+variables only when its spec uses `the environment`, and then only those its test or the user's
+run gives; otherwise the list is empty. lengua runs programs in a working folder of their own: an
+empty temporary folder, or the user's folder when they ask to run the program on their files.
+`_start` has no return address: it ends with `exit`, and keeps what it needs across calls in `x19`
+to `x28` without saving them.
 
 ## Calling convention (AAPCS64)
 
@@ -158,7 +192,14 @@ with `exit`, and keeps what it needs across calls in `x19` to `x28` without savi
 - **Results:** the first instruction to touch `x0` after a call to a `// returns: result`
   function, or after `svc`, is `tbnz x0, #63, …`, `cmp x0, #0` with `b.lt`, or `cbz`/`cbnz x0`.
 - **Assertions:** `mov w0, #N` and `bl assert_fail`, each number reached from one place, at least
-  two a function on average, and below 990, fill's own.
+  two a function on average, numbered 1 to 899 as on x86-64 (901 and up are the thread code's, and
+  fill's own are 990 to 992).
+- **Checked jump tables:** a `switch` over a dense range of small numbers jumps through a table
+  of the function's own labels in `.rodata` (`.long .Lcase - table` entries), the index bounds-
+  checked as any index is, as the calculator fixture does:
+  `sub w9, w9, #FIRST`, `cmp x9, #COUNT`, `b.hs .Lunknown`, `adrp x10, table`,
+  `add x10, x10, :lo12:table`, `ldrsw x11, [x10, x9, lsl #2]`, `add x11, x11, x10`, `br x11`
+  ([x86-64's form](power-of-10.md) in AArch64's instructions).
 - **Exit codes:** `mov w0, #EXIT_NAME`.
 
 ## CRC-32 facts

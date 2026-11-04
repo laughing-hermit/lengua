@@ -22,7 +22,7 @@ A program is two files, plus lengua's own record of them:
 | File | Written by | Purpose |
 |---|---|---|
 | `spec.md` | the AI, from the person's request | The source of truth, the mother of everything else, and the only file people share: natural language, Given/When/Then behaviors with IDs whose steps are their example tests, the generated tests under each behavior, and what the program uses. An [Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledge-format) (OKF) concept document, the same on every target |
-| `main.s` | the AI, compiling the spec | x86-64 assembly in the lengua dialect for one target. It's disposable: each computer compiles its own from the spec. Once it passes, lengua writes its second line, naming the version of the spec it was compiled from, the target and the CPU features it needs |
+| `main.s` | the AI, compiling the spec | x86-64 or AArch64 assembly in the lengua dialect for one target. It's disposable: each computer compiles its own from the spec. Once it passes, lengua writes its second line, naming the version of the spec it was compiled from, the target and the CPU features it needs |
 | `lengua.lock` | only the lengua server | This computer's record: the person's requests for the build in progress, SHA-256 of both files and of the checked executable, the target and features, a combined fingerprint, which tests are proven for every input on that executable, and a signature. It isn't shared |
 
 **Workflow:** request → spec, tests included (recorded with the person's words; nothing waits for
@@ -314,7 +314,8 @@ so its work overlaps the writer filling the pipe.
 
 What lengua doesn't do for speed is give up a check: bounds checks stay unless a reported
 `# unsafe:` block shows they can't fail, every loop is bounded, and vector code is tested
-exhaustively at its edges by the generated tests (the prover doesn't model vectors yet).
+exhaustively at its edges by the generated tests, and proven wherever the prover models its
+instructions (see the vector instructions it follows, below).
 
 ## What lengua does, and what it leaves to the agent
 

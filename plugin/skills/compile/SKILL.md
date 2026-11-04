@@ -2,7 +2,7 @@
 name: compile
 description: Compiles a lengua program's spec.md into main.s, assembly for this computer's target, Linux on x86-64 or AArch64 (integer, vector and floating-point instructions) that passes every test in the spec, in lengua's dialect checked against the lengua Power of 10 (NASA's rules adapted for assembly). Use after check records the spec, when the lengua check tool says to write main.s or reports problems in it, when someone shares a spec to build on this computer, or when the user asks for a faster program. Ends when check says done, with a short report to the user.
 license: Apache-2.0
-compatibility: Needs the lengua MCP server from the lengua plugin, on Linux x86-64 with LLVM (llvm-mc and ld.lld).
+compatibility: Needs the lengua MCP server from the lengua plugin, on Linux x86-64 or ARM64 with LLVM (llvm-mc and ld.lld).
 ---
 
 # Compile a lengua spec
@@ -114,7 +114,8 @@ and the CPU features the code needs; never write that line yourself.
    [its SVE form](assets/linux-aarch64/fast/wc-sve/main.s);
    [crc32c](assets/fast/crc32c/main.s) runs three `crc32` chains side by side and joins them with
    `pclmulqdq`, and [its AArch64 form](assets/linux-aarch64/fast/crc32c/main.s) one `crc32cx`
-   chain beside `pmull` folds on the vector units; [histogram](assets/fast/histogram/main.s) spreads its counts over four tables.
+   chain beside `pmull` folds on the vector units; [histogram](assets/fast/histogram/main.s) spreads its counts over four tables,
+   and [its AArch64 form](assets/linux-aarch64/fast/histogram/main.s) over eight.
    Their `digits` (write a number's decimal digits) can be copied as it is.
 7. Once every test passes, `check` proves the program in the background, and within about 20 seconds
    it says `done`. Each line of `proofs` says what's proven, how far, or why not, and a proof still
@@ -183,9 +184,8 @@ when its second line says it was compiled for another computer or a CPU feature 
 `check` says so, and you compile the spec again for this one. lengua's line names the code, it
 doesn't protect it: anyone can build main.s outside lengua, so its guarantees hold only for
 programs that `run` runs after `check`. lengua supports two targets so far, Linux on x86-64 and on
-AArch64, the same lengua on each; AArch64 code covers the template's kind of program for now
-(arguments, whole numbers, floating point, vectors, text, standard input and files), as its
-reference says. Adding a CPU
+AArch64, the same lengua on each: every rule, limit and capability of one is the other's, and each
+example and fixture has its twin on the other CPU, compiled from the very same spec. Adding a CPU
 or OS is set out in [porting.md](references/porting.md).
 
 ## Making it faster
