@@ -88,12 +88,14 @@ input:
 .size input, . - input
 
 # The key's 16 bytes.
+# shared: _start passes it to expand_key; parse_input decodes the key line into it
 .type key, @object
 key:
     .zero KEY_LEN
 .size key, . - key
 
 # The data's bytes, up to 4096 blocks.
+# shared: parse_input decodes the data into it; _start passes it to encrypt_blocks
 .type plain, @object
 plain:
     .zero PLAIN_LEN
@@ -112,6 +114,7 @@ round_keys:
 .size round_keys, . - round_keys
 
 # The ciphertext in hexadecimal and a newline.
+# shared: print_hex fills it with digits and write_line adds the newline and writes it
 .type out, @object
 out:
     .zero OUT_LEN
@@ -515,17 +518,10 @@ print_hex:
     jnz .Lprint_hex_loop
     jmp .Lprint_hex_assert_steps
 .Lprint_hex_done:
-    lea r10, [rsi + rsi]
-    cmp r10, HEX_MAX
-    ja .Lprint_hex_assert_end
-    mov byte ptr [r9 + r10], NEWLINE
-    lea rdx, [r10 + 1]
-    mov rsi, r9
-    mov edi, STDOUT
-    call write_all
+    lea rdi, [rsi + rsi]
+    call write_line
     test rax, rax
     js .Lprint_hex_return
-    xor eax, eax
 .Lprint_hex_return:
     add rsp, 8
     ret
@@ -550,10 +546,38 @@ print_hex:
 .Lprint_hex_assert_steps:
     mov edi, 26
     call assert_fail
-.Lprint_hex_assert_end:
+.size print_hex, . - print_hex
+
+# Writes the hex digits in out, a newline after them, to standard output.
+# In: rdi = how many digits, 1 to HEX_MAX.
+# Out: rax = 0, or a negative error code.
+# returns: result
+.type write_line, @function
+write_line:
+    sub rsp, 8
+    test rdi, rdi
+    jz .Lwrite_line_assert_empty
+    cmp rdi, HEX_MAX
+    ja .Lwrite_line_assert_end
+    lea r9, [rip + out]
+    mov byte ptr [r9 + rdi], NEWLINE
+    lea rdx, [rdi + 1]
+    mov rsi, r9
+    mov edi, STDOUT
+    call write_all
+    test rax, rax
+    js .Lwrite_line_return
+    xor eax, eax
+.Lwrite_line_return:
+    add rsp, 8
+    ret
+.Lwrite_line_assert_empty:
+    mov edi, 33
+    call assert_fail
+.Lwrite_line_assert_end:
     mov edi, 27
     call assert_fail
-.size print_hex, . - print_hex
+.size write_line, . - write_line
 
 # Reads from file descriptor edi into the rdx bytes at rsi until they're full, the input ends,
 # or, when ecx is a byte (0 to 255), the last byte read is ecx; with ecx = -1 it reads to the
