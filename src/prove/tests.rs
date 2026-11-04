@@ -3856,7 +3856,11 @@ fn lines_with_bzhi(source: &str) -> String {
         ),
         (
             assembly(&["pmovmskb edx, xmm0", "popcnt edx, edx"]),
-            assembly(&["pmovmskb edx, xmm0", "bzhi edx, edx, r9d", "popcnt edx, edx"]),
+            assembly(&[
+                "pmovmskb edx, xmm0",
+                "bzhi edx, edx, r9d",
+                "popcnt edx, edx",
+            ]),
         ),
     ];
     let mut text = source.to_owned();
@@ -3925,7 +3929,10 @@ async fn proves_a_count_masked_with_bzhi_for_every_length() {
     let right = machine(&source).await;
     let started = Instant::now();
     let verdict = prove(&right, &block, &long_budget());
-    eprintln!("lines with bzhi at 64 KiB: {verdict:?} in {:?}", started.elapsed());
+    eprintln!(
+        "lines with bzhi at 64 KiB: {verdict:?} in {:?}",
+        started.elapsed()
+    );
     assert!(
         matches!(
             verdict,
