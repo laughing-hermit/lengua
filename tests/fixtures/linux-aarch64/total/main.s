@@ -35,7 +35,7 @@
 .equ NUM_BUF_LEN, 24
 .equ MAX_NUM_CHARS, 24
 .equ NEWLINE, 10
-.equ COMMA, ','
+.equ COMMA, 44
 .equ POINT, 46
 .equ USAGE_MSG_LEN, 24
 .equ OPEN_MSG_LEN, 24
@@ -118,35 +118,24 @@ _start:
     mov w0, #EXIT_OK
     b .Lstart_exit
 .Lstart_usage:
-    mov x0, #STDERR
-    adrp x1, usage_msg
-    add x1, x1, :lo12:usage_msg
-    mov x2, #USAGE_MSG_LEN
-    bl write_all
+    adrp x0, usage_msg
+    add x0, x0, :lo12:usage_msg
+    mov x1, #USAGE_MSG_LEN
+    bl report
     tbnz x0, #63, .Lstart_write_failed
     mov w0, #EXIT_USAGE
     b .Lstart_exit
 .Lstart_open_failed:
-    mov x0, #STDERR
-    adrp x1, open_msg
-    add x1, x1, :lo12:open_msg
-    mov x2, #OPEN_MSG_LEN
-    bl write_all
+    adrp x0, open_msg
+    add x0, x0, :lo12:open_msg
+    mov x1, #OPEN_MSG_LEN
+    bl report
     tbnz x0, #63, .Lstart_write_failed
     mov w0, #EXIT_OPEN_FAILED
     b .Lstart_exit
 .Lstart_bad_line:
-    mov x19, x1
-    mov x0, #STDERR
-    adrp x1, bad_msg
-    add x1, x1, :lo12:bad_msg
-    mov x2, #BAD_MSG_LEN
-    bl write_all
-    tbnz x0, #63, .Lstart_write_failed
-    mov x0, x19
-    mov x1, #NO_PLACES
-    mov x2, #STDERR
-    bl write_decimal
+    mov x0, x1
+    bl report_bad_line
     tbnz x0, #63, .Lstart_write_failed
     mov w0, #EXIT_BAD_LINE
     b .Lstart_exit
@@ -162,6 +151,54 @@ _start:
     mov w0, #1
     bl assert_fail
 .size _start, . - _start
+
+// Prints a message to standard error.
+// In: x0 = the message; x1 = its length.
+// Out: x0 = 0, or a negative error code.
+// returns: result
+.type report, @function
+report:
+    stp x29, x30, [sp, #-16]!
+    cbz x0, .Lreport_assert_null
+    mov x2, x1
+    mov x1, x0
+    mov x0, #STDERR
+    bl write_all
+    tbnz x0, #63, .Lreport_return
+    mov x0, #0
+.Lreport_return:
+    ldp x29, x30, [sp], #16
+    ret
+.Lreport_assert_null:
+    mov w0, #26
+    bl assert_fail
+.size report, . - report
+
+// Prints "total: bad line " and a line number, then a newline, to standard error.
+// In: x0 = the line number.
+// Out: x0 = 0, or a negative error code.
+// returns: result
+.type report_bad_line, @function
+report_bad_line:
+    stp x29, x30, [sp, #-16]!
+    stp x19, x20, [sp, #-16]!
+    mov x19, x0
+    adrp x0, bad_msg
+    add x0, x0, :lo12:bad_msg
+    mov x1, #BAD_MSG_LEN
+    bl report
+    tbnz x0, #63, .Lreport_bad_line_return
+    mov x0, x19
+    mov x1, #NO_PLACES
+    mov x2, #STDERR
+    bl write_decimal
+    tbnz x0, #63, .Lreport_bad_line_return
+    mov x0, #0
+.Lreport_bad_line_return:
+    ldp x19, x20, [sp], #16
+    ldp x29, x30, [sp], #16
+    ret
+.size report_bad_line, . - report_bad_line
 
 // Reads from a file descriptor until the input ends or the buffer is full.
 // In: x0 = the file descriptor, x1 = the buffer, x2 = its size, at least 1.

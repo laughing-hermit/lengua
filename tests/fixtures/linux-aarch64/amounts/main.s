@@ -32,6 +32,7 @@
 .equ MAX_DIGITS, 19
 .equ MAX_WRITES, 64
 .equ NEWLINE, 10
+.equ COMMA, 44
 .equ AMOUNT_LEN, 6
 .equ AMOUNT_HEAD, 0x756f6d61
 .equ AMOUNT_TAIL, 0x746e
@@ -228,7 +229,7 @@ find_column:
     cmp x3, x1
     b.hs .Lfind_column_not_found
     ldrb w9, [x0, x3]
-    cmp w9, #','
+    cmp w9, #COMMA
     b.eq .Lfind_column_end_field
     cmp w9, #NEWLINE
     b.ne .Lfind_column_next
@@ -407,7 +408,7 @@ find_field:
     add x3, x3, #1
     cmp w5, #NEWLINE
     b.eq .Lfind_field_missing
-    cmp w5, #','
+    cmp w5, #COMMA
     b.ne .Lfind_field_next
     subs x4, x4, #1
     b.eq .Lfind_field_found
@@ -525,7 +526,7 @@ parse_cents:
     cmp x3, x1
     b.hs .Lcents_parse_ok
     ldrb w7, [x0, x3]
-    cmp w7, #','
+    cmp w7, #COMMA
     b.eq .Lcents_parse_ok
     cmp w7, #NEWLINE
     b.ne .Lcents_parse_bad
