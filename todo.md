@@ -34,23 +34,36 @@ limit, test and proof on x86-64 and on ARM64, one byte-identical spec for each p
 rule held: had the filter stopped a reply, that item would have stopped and been recorded here,
 never routed around through other models or subagents. It stopped none.
 
-1. **lengua's own SHA-256 example: done.** `examples/sha256/` (spec.md and main.s) prints the
-   SHA-256 digest of standard input with the CPU's `sha256rnds2`, `sha256msg1` and `sha256msg2`;
-   the spec has FIPS 180-4's vectors (abc, the empty text, the 448-bit message) and generated
-   blocks whose output is `{sha256(text)}`, with the block-boundary lengths (0, 50 to 70, 118 to
-   134, 4090 to 4102) stated and tested. Its twin `tests/fixtures/linux-aarch64/sha256/` has the
-   same spec bytes and uses `sha256h`, `sha256h2`, `sha256su0`, `sha256su1`. Both reach `done`
-   (x86-64: 1204 test runs). Proof: "tested, not proven", as expected; `palignr`, which the
-   schedule uses on x86-64, isn't modelled by the prover either, so a proof isn't near.
-2. **lengua's own AES example: done.** `examples/aes/` encrypts hex data (32 to 131072 digits) with
-   a 128-bit key, block by block (ECB), with `aesenc`, `aesenclast` and the key schedule from
-   `aesenclast` and rotated words; bad input exits 3 with "aes: bad input". The test language got
-   `aes128(key, data)` (`src/aes.rs`, a software AES with FIPS 197 and SP 800-38A unit tests;
-   `src/expr.rs`; documented in the write-spec skill's test-format.md), so the spec's generated
-   blocks test every length against it. The twin `tests/fixtures/linux-aarch64/aes/` uses `aese`,
-   `aesmc`, `tbl`, `ext`. Both `done` with 1406 test runs; proof "tested, not proven". ECB is the
-   mode the spec states because the spec is a function of the data alone; it shows the
-   instructions, it isn't a product for hiding data.
+1. **lengua's own SHA-256 example: done, in plain integer code on both CPUs, with the instructions
+   as fast tiers.** `examples/sha256/` (spec.md and main.s) prints the SHA-256 digest of standard
+   input with rotates, adds and xors alone (SSE2 only to copy the state), so it runs on every
+   x86-64 computer: a schedule loop of 16 big-endian loads and 48 words, and a round function that
+   keeps a and e as lists in time order, so a round moves no register. The form with the CPU's
+   `sha256rnds2`, `sha256msg1` and `sha256msg2` is the fast tier
+   `plugin/skills/compile/assets/fast/sha256-ni/`, beside a spec.md of the same bytes. The spec
+   has FIPS 180-4's vectors (abc, the empty text, the 448-bit message) and generated blocks whose
+   output is `{sha256(text)}`, with the block-boundary lengths (0, 50 to 70, 118 to 134, 4090 to
+   4102) stated and tested. Its twin `tests/fixtures/linux-aarch64/sha256/` has the same spec
+   bytes and is `ror`, `eor` and `add`, NEON only to reverse bytes and copy the state, its lists
+   growing downward; the tier `linux-aarch64/fast/sha256-sha2/` uses `sha256h`, `sha256h2`,
+   `sha256su0`, `sha256su1`. Every form reaches `done` with 1204 test runs. Proof: "tested, not
+   proven", as expected: the prover doesn't model the test function `sha256`, and a hash's proof
+   fills the memory first (below).
+2. **lengua's own AES example: done, in plain integer code on both CPUs, with the instructions as
+   fast tiers.** `examples/aes/` encrypts hex data (32 to 131072 digits) with a 128-bit key, block
+   by block (ECB); bad input exits 3 with "aes: bad input". The key schedule goes through the
+   S-box and each round a column at a time through one table of 256 words (SubBytes, ShiftRows and
+   MixColumns together, the word rotated for rows 1 to 3; the S-box is that table's byte 1, which
+   the last round and the key schedule use), so it runs on every x86-64 computer. The form with
+   `aesenc`, `aesenclast` and the key schedule from `aesenclast` and rotated words is the fast tier
+   `plugin/skills/compile/assets/fast/aes-ni/`, beside a spec.md of the same bytes. The test
+   language got `aes128(key, data)` (`src/aes.rs`, a software AES with FIPS 197 and SP 800-38A unit
+   tests; `src/expr.rs`; documented in the write-spec skill's test-format.md), so the spec's
+   generated blocks test every length against it. The twin `tests/fixtures/linux-aarch64/aes/` is
+   the same program with `ror` and `ubfx`; its tier `linux-aarch64/fast/aes-aes/` uses `aese`,
+   `aesmc`, `tbl`, `ext`. Every form `done` with 1406 test runs; proof "tested, not proven". ECB
+   is the mode the spec states because the spec is a function of the data alone; it shows the
+   algorithm, it isn't a product for hiding data.
 3. **Replies stopped on 2026-11-01**: nothing to do; no work was lost.
 4. **The hardening pass's red-team part: done, defensively.** `tests/red_team.rs` (one table of
    attempts with a cell for each target, which replaced `adversarial.rs` and `adversarial_aarch64.rs`,
@@ -96,6 +109,38 @@ remembered (`src/prove/term.rs`), a run asks whether the proof's time is up ever
 a hash has no branch on its input to ask at (`Oracle::in_time`, `src/prove/exec.rs`), and the
 model's concrete runs of the tests' samples stop at the block's deadline (`agrees_until`,
 `src/prove/mod.rs`). Each has a unit test; the check no longer hangs.
+
+**The software SHA-256's proof filled a runner's memory, found and fixed (2026-11-04).** With the
+SHA-256 twins in plain integer code, the one-folder check of the ARM64 twin killed its job three
+times (exit code 143, no artifacts, the stall report lost with the machine). A line of memory use
+every 10 seconds in the job's log (`scripts/stall-report.sh`) showed `lengua-mcp` growing 250 MB a
+second to 15 GB of the runner's 16 GB within a minute of the proofs starting, and the stall
+report's stacks showed all four proof workers deep in `Pool::extract`, pushing low-bit extractions
+down the sums of a hash's rounds. The watchdog (`src/prove/watch.rs`) only ever stopped a solver.
+Three steps were needed, each shown by a run. First, `explore` asked the oracle whether the
+computer still had room each time its pool had grown by 50,000 terms (`Oracle::has_room`). The
+check then ended `done` (runs 41882085670, 41883380507), but the guard's message never showed in
+the log and the runner's free memory still fell to 232 MB and 213 MB: one extraction through a
+hash's whole history makes terms by the million between two steps of that loop. Second, the pool
+looks itself (`Pool::look_at_the_memory`, in `make` and `extract`, each 50,000 terms and kept
+extractions it adds): a pool short of memory answers every extraction with zeros at once,
+`explore` ends the run at its next step, and `prove_shape`, `check_runs` and the induction step
+accept nothing from such a pool, so the zeros never make a proof (one unit test on the pool, one
+on `explore`, one on `watch::is_short_for`). That fired in a check (run 41888807170: three
+warnings in the server's log, at 15.6, 23.0 and 23.3 million terms, and a proof ending "the
+computer ran low on memory"), but the runner still fell from 4.8 GB free to 0.2 GB between two
+samples ten seconds apart, probably in the doubling of pools' tables. Third, "short" for a pool
+now means below the floor and twice its own size (256 bytes a term, as measured): run 41890097057
+logged four warnings (9.75, 12.7, 12.7 and 19.8 million terms), ended `done` with 1204 test runs,
+and the runner never had less than 6.6 GB free at a sample. The rule is conservative: the x86-64
+AES check (run 41890269784) stopped five proofs at about 22.5 million terms and kept
+extractions, when the server held 2.4 GB and 12.5 GB were still free, since each counts for 256
+bytes and an extraction's entry takes much less; counting them apart would stop later. (The
+four last blocks, the bad inputs, were proven in that run, for 31, 1, 1 and 1 input combinations,
+and out of time in runs 41884704060 and 41891739265; why they differ was not looked into.) Why
+the pool grows so fast on a hash of several blocks, and whether the extraction can stop short of
+the sums' whole history, is not looked into: a change to `Pool::extract` for an engineer, with the
+prover's goldens at hand.
 
 **Found by the parity audit (2026-11-04), fixed in this run.** The user asked that the two Linux
 targets be the same product, so after the five items four read-only agents compared them for
@@ -144,8 +189,18 @@ both sides, which were checked against the code before anything was changed. Fix
 **Not blocked, and safer alternatives.** The crypto support is built: a user can
 write or drop in a standard SHA-256 or AES program and lengua checks and tests it. For a value
 computed from the input, checked, tested and proven, lengua's own program can be a plain checksum:
-- CRC-32C, done: `plugin/skills/compile/assets/fast/crc32c`, the checksum iSCSI and ext4 use, is
-  checked, tested, measured against C, C++ and Rust, and proven against `crc32c`.
+- CRC-32C, done on both CPUs, a baseline form each and a fast tier each: the checksum iSCSI and
+  ext4 use. `plugin/skills/compile/assets/fast/crc32c` is the form that runs on every computer of
+  the target, from the very same spec: on x86-64 SSE4.2's `crc32`, one chain, 8 bytes a step (the
+  x86-64 baseline holds SSE4.2, so it needs no table), proven against `crc32c` for every text up
+  to 1,520 to 1,897 bytes in a runner's minute (runs 41884709896, 41876392984) and further with
+  `prove_further`; on ARM64, where the CRC
+  instructions are an extension before ARMv8.1, a table of 256 words a byte at a time, which the
+  prover reads for texts of one byte in a minute and the tests check beyond (the prover reads the
+  table lookup as terms of its own and the formula's chain of CRC steps meets it only at one
+  byte). The tiers are `fast/crc32c-pclmul` (three `crc32` chains joined with `pclmulqdq`) and
+  `linux-aarch64/fast/crc32c-crc` (`crc32cx` beside `pmull` folds), checked, tested, measured
+  against C, C++ and Rust, and proven against `crc32c` up to 4,096 bytes.
 - CRC-32, as zip, gzip, PNG and Ethernet use it, could follow: the test language already has
   `crc32`, but a program computes it in software, a table or a loop of shifts, and the prover would
   have to read that loop as the formula's chain of byte steps to prove it for every length.
@@ -161,7 +216,8 @@ the checksums show lengua's kind of proof but don't replace SHA-256 or AES:
 - they're not for a program that must resist an attacker, such as checking that a download wasn't
   tampered with, or keeping data secret;
 - that still takes SHA-256 or AES, which a user can supply and lengua checks and tests (`examples/sha256`
-  and `examples/aes` show the instructions, not a product that resists an attacker).
+  and `examples/aes` show the algorithms, and their fast tiers the instructions, not a product that
+  resists an attacker).
 
 ## What's left for parity and coherence between the two Linux targets
 
@@ -254,8 +310,10 @@ and proofs. ARM64 already has that (NEON, and SVE as an extra); x86-64 doesn't. 
 - **What uses AVX-512BW on x86-64:** the fast `wc` (`assets/fast/wc`, one function, `count_piece`,
   64 bytes a step with `k` masks, its last partial step masked in the same loop, 64 KiB through
   `fill`), `examples/count` (128 bytes a step, a full-step and a masked-tail routine, 256 KiB raw
-  reads), `tests/fixtures/padded` and `words`, and `fast/crc32c` in one function only (`move_front`,
-  a masked 64-byte copy its proof never reaches). `fast/histogram` has none but is gated with them.
+  reads), `tests/fixtures/padded` and `words`, and the PCLMULQDQ form of the CRC-32C in one
+  function only (`move_front`, a masked 64-byte copy its proof never reaches; that form is the
+  tier `fast/crc32c-pclmul` now, with `move_front` scalar, and the shipped `fast/crc32c` is
+  SSE4.2's `crc32` and needs no AVX-512). `fast/histogram` has none but is gated with them.
   The three benchmark-only AVX-512 programs (`upcase`, `shout`, `shout` on one thread) already
   have SSE2 siblings (`examples/upcase`, the parallel template). No x86-64 program uses `ymm`,
   though the compile skill tells the agent to use AVX2 when the machine line lists it.
@@ -340,14 +398,19 @@ each later port adds one column. Make each guarantee a failing test:
    what the owner decides to add; ARM64: ARMv8.0 with NEON; Apple's and Qualcomm's ARM64 chips: what
    they all have) and rule-check every shipped example, fixture and asset against it; a program
    that needs more must be a named fast tier beside a baseline sibling with the same spec. The
-   AVX-512 case would have failed the day it was added. It also flags programs that break it
-   today: `examples/sha256` and `examples/aes` need SHA-NI and AES-NI on x86-64 and the ARMv8
-   crypto extensions on ARM64, which older Intel chips and some ARM64 boards lack, and `crc32c`
-   needs SSE4.2 and PCLMUL (and the CRC extension on ARM64). Each needs a software baseline form,
-   or to be classed as a fast tier with one. *Built for the two Linux targets:*
+   AVX-512 case would have failed the day it was added. It also flagged programs that broke it:
+   `examples/sha256` and `examples/aes` needed SHA-NI and AES-NI on x86-64 and the ARMv8 crypto
+   extensions on ARM64, which older Intel chips and some ARM64 boards lack, and `crc32c` needed
+   SSE4.2 and PCLMUL (and the CRC extension on ARM64). *Built for the two Linux targets:*
    `CpuFeatures::baseline(profile)` (`src/platform.rs`) is the table, exhaustive over `Profile`,
    and `tests/baseline.rs` holds every shipped `main.s` of every target in `Profile::ALL` to it,
-   on either CPU's runner; what it found is "Baseline debt" below.
+   on either CPU's runner; what it found is "Baseline debt" below. Done for these three programs on
+   both CPUs: each has a baseline form on its target's baseline (plain integer code; SSE4.2's
+   `crc32` on x86-64; a table on ARM64), and the forms that use the extensions are the fast tiers
+   `fast/sha256-ni`, `fast/aes-ni`, `fast/crc32c-pclmul` and, on ARM64,
+   `linux-aarch64/fast/sha256-sha2`, `aes-aes` and `crc32c-crc`, each with a spec.md of the
+   baseline's bytes (`tests/crypto_forms.rs` holds the spec, the baseline and the tiers to
+   account).
 3. **The porting list as an executable conformance suite.** DESIGN's "Porting a target" becomes
    the set of tests every target must pass natively: the rules, the red team, the mutation test,
    the sandbox limits, the session behaviors, every example and fixture through the server.

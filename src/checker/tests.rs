@@ -818,7 +818,12 @@ async fn every_program_in_the_repository_follows_every_rule() {
             .unwrap_or_else(|problems| panic!("{}: {problems:?}", spec.display()));
         let text = std::fs::read_to_string(code).expect("a program");
         let needs_more = text.contains("vpcmpub") || text.contains("zmm");
-        let features = if needs_more && !features.avx512bw {
+        // The fast tiers of SHA-256, AES and the CRC-32C use instructions an older CPU lacks
+        // (SHA, AES-NI, PCLMULQDQ): their rules don't depend on the computer either.
+        let crypto = ["sha256rnds2", "aesenc", "pclmulqdq"]
+            .iter()
+            .any(|name| text.contains(name));
+        let features = if (needs_more && !features.avx512bw) || crypto {
             CpuFeatures::all()
         } else {
             features
@@ -2098,6 +2103,18 @@ async fn every_aarch64_asset_follows_every_rule() {
         ("fast/wc/spec.md", "linux-aarch64/fast/wc-sve/main.s"),
         ("fast/crc32c/spec.md", "linux-aarch64/fast/crc32c/main.s"),
         (
+            "fast/crc32c/spec.md",
+            "linux-aarch64/fast/crc32c-crc/main.s",
+        ),
+        (
+            "linux-aarch64/fast/sha256-sha2/spec.md",
+            "linux-aarch64/fast/sha256-sha2/main.s",
+        ),
+        (
+            "linux-aarch64/fast/aes-aes/spec.md",
+            "linux-aarch64/fast/aes-aes/main.s",
+        ),
+        (
             "fast/histogram/spec.md",
             "linux-aarch64/fast/histogram/main.s",
         ),
@@ -2134,7 +2151,7 @@ async fn every_aarch64_asset_follows_every_rule() {
 async fn aarch64_crc_needs_a_cpu_with_crc() {
     let text = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("plugin/skills/compile/assets/linux-aarch64/fast/crc32c/main.s"),
+            .join("plugin/skills/compile/assets/linux-aarch64/fast/crc32c-crc/main.s"),
     )
     .expect("the program");
     let syscalls = [Syscall::Read, Syscall::Write, Syscall::Exit];
@@ -2157,7 +2174,7 @@ async fn aarch64_crc_needs_a_cpu_with_crc() {
 async fn aarch64_pmull_needs_a_cpu_with_pmull() {
     let text = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("plugin/skills/compile/assets/linux-aarch64/fast/crc32c/main.s"),
+            .join("plugin/skills/compile/assets/linux-aarch64/fast/crc32c-crc/main.s"),
     )
     .expect("the program");
     let syscalls = [Syscall::Read, Syscall::Write, Syscall::Exit];

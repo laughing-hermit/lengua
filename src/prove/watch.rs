@@ -22,6 +22,11 @@ const WORTH_STOPPING: u64 = 64 << 20;
 pub const LOW_MEMORY: &str = "the computer ran low on memory, so lengua stopped this proof's \
                               solver";
 
+/// Why a proof whose own terms grew too large for the free memory stopped: there may be
+/// gigabytes free still, but by the pool's estimated size not enough for its tables to double.
+pub const OUT_OF_MEMORY: &str =
+    "the proof's terms grew too large for the memory the computer has free, so lengua stopped it";
+
 /// The solvers running, by process id, and those the watchdog stopped.
 struct Solvers {
     running: BTreeSet<u32>,
@@ -61,6 +66,71 @@ const fn floor(total: u64) -> u64 {
         sixteenth
     } else {
         512 << 20
+    }
+}
+
+/// Whether free memory is below the floor proofs leave. A proof's own terms, not only its
+/// solvers, can fill the memory: a hash of the input makes them by the million, and by then the
+/// kernel's out-of-memory killer would end whatever it picks.
+#[must_use]
+pub fn is_low() -> bool {
+    is_short_for(0)
+}
+
+/// What a term takes with the entries kept for it, in bytes, as GitHub's ARM64 runner measured it:
+/// 15.6 million came to about 4 GB.
+pub const BYTES_PER_TERM: u64 = 256;
+
+/// Whether free memory is below the floor proofs leave, plus twice what a pool of `bytes` holds
+/// already. A pool's tables double when they fill, which takes about their size again for a
+/// moment, and the proof's other workers grow theirs the same way at the same time: pools that
+/// waited for the floor itself took a runner from 4.8 GB free to 0.2 GB between two samples ten
+/// seconds apart, probably in such doublings.
+#[must_use]
+pub fn is_short_for(bytes: u64) -> bool {
+    pretending()
+        || memory().is_some_and(|(available, total)| {
+            available < floor(total).saturating_add(bytes.saturating_mul(2))
+        })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Whether a test has made this thread see a computer with no memory left.
+    static NO_MEMORY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether a test has made this thread see a computer with no memory left.
+#[cfg(test)]
+fn pretending() -> bool {
+    NO_MEMORY.get()
+}
+
+/// Only a test pretends: a proof always looks at the computer it runs on.
+#[cfg(not(test))]
+const fn pretending() -> bool {
+    false
+}
+
+/// A test's pretence that the computer has no memory left, for the proofs on its thread until
+/// this is dropped.
+#[cfg(test)]
+pub struct NoMemoryForTest;
+
+#[cfg(test)]
+impl NoMemoryForTest {
+    /// Starts the pretence; it lasts as long as the value returned.
+    #[must_use]
+    pub fn pretend() -> Self {
+        NO_MEMORY.set(true);
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for NoMemoryForTest {
+    fn drop(&mut self) {
+        NO_MEMORY.set(false);
     }
 }
 
@@ -198,6 +268,16 @@ mod tests {
         assert_eq!(floor(32 << 30), 2 << 30);
         assert!(workers(16) >= 1);
         assert_eq!(workers(1), 1);
+    }
+
+    /// A pool needs the floor and room to double twice over: none has room for a pool the size of
+    /// the address space, and a test can make a thread see a computer with no memory at all.
+    #[test]
+    fn a_pool_that_may_double_needs_room_for_it() {
+        assert!(is_short_for(u64::MAX));
+        let pretence = NoMemoryForTest::pretend();
+        assert!(is_low() && is_short_for(0));
+        drop(pretence);
     }
 
     /// A proof worker yields: its priority drops below normal, and a solver it starts inherits it.

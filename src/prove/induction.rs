@@ -795,6 +795,11 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
                 budget,
                 chunk,
             )?;
+            // What the pool made after finding the memory short is nothing to go on: the step
+            // isn't shown.
+            if pool.out_of_room() {
+                return Err(super::watch::OUT_OF_MEMORY.into());
+            }
             let mut folds = hook.folds.clone();
             for fold in folds.values_mut() {
                 fold.most = reach;

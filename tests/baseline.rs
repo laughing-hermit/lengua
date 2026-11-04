@@ -86,28 +86,10 @@ const PLACES: PerTarget<Places> = PerTarget {
 const DEBT: PerTarget<&[Debt]> = PerTarget {
     linux_x86_64: &[
         Debt {
-            program: "examples/aes/main.s",
-            needs: &["AES-NI"],
-            sibling: "a software AES over SSE2 and SSSE3, from the same spec; the AES-NI form \
-                      stays as a fast tier",
-        },
-        Debt {
             program: "examples/count/main.s",
             needs: &["AVX-512BW", "BMI1", "BMI2"],
             sibling: "the same count in SSE2, 16 bytes a step, on the new fast wc's count_piece \
                       with a 64 KiB buffer as its twin has",
-        },
-        Debt {
-            program: "examples/sha256/main.s",
-            needs: &["SHA"],
-            sibling: "a software SHA-256 over the base instructions, from the same spec; the \
-                      SHA-NI form stays as a fast tier",
-        },
-        Debt {
-            program: "plugin/skills/compile/assets/fast/crc32c/main.s",
-            needs: &["AVX-512BW", "BMI2", "PCLMULQDQ"],
-            sibling: "crc32c over SSE4.2's crc32 alone: its chains joined without pclmulqdq and \
-                      move_front as scalar copies; the PCLMULQDQ form stays as a fast tier",
         },
         Debt {
             program: "plugin/skills/compile/assets/fast/wc/main.s",
@@ -130,26 +112,7 @@ const DEBT: PerTarget<&[Debt]> = PerTarget {
             sibling: "words in SSE2, on the new fast wc's count_piece",
         },
     ],
-    linux_aarch64: &[
-        Debt {
-            program: "tests/fixtures/linux-aarch64/aes/main.s",
-            needs: &["aes"],
-            sibling: "a software AES over NEON's base instructions, from the same spec; the AES \
-                      extension's form stays as a fast tier",
-        },
-        Debt {
-            program: "tests/fixtures/linux-aarch64/sha256/main.s",
-            needs: &["sha"],
-            sibling: "a software SHA-256 over the base instructions, from the same spec; the \
-                      SHA2 extension's form stays as a fast tier",
-        },
-        Debt {
-            program: "plugin/skills/compile/assets/linux-aarch64/fast/crc32c/main.s",
-            needs: &["crc", "pmull"],
-            sibling: "a software CRC-32C, by table or by bits; the CRC and PMULL form stays as a \
-                      fast tier",
-        },
-    ],
+    linux_aarch64: &[],
 };
 
 /// The programs that need more than the baseline and have their baseline sibling: fast tiers,
@@ -172,12 +135,44 @@ const TIERS: PerTarget<&[Tier]> = PerTarget {
             needs: &["AVX-512BW"],
             sibling: "examples/upcase/main.s",
         },
+        Tier {
+            program: "plugin/skills/compile/assets/fast/aes-ni/main.s",
+            needs: &["AES-NI"],
+            sibling: "examples/aes/main.s",
+        },
+        Tier {
+            program: "plugin/skills/compile/assets/fast/crc32c-pclmul/main.s",
+            needs: &["PCLMULQDQ"],
+            sibling: "plugin/skills/compile/assets/fast/crc32c/main.s",
+        },
+        Tier {
+            program: "plugin/skills/compile/assets/fast/sha256-ni/main.s",
+            needs: &["SHA"],
+            sibling: "examples/sha256/main.s",
+        },
     ],
-    linux_aarch64: &[Tier {
-        program: "plugin/skills/compile/assets/linux-aarch64/fast/wc-sve/main.s",
-        needs: &["sve"],
-        sibling: "plugin/skills/compile/assets/linux-aarch64/fast/wc/main.s",
-    }],
+    linux_aarch64: &[
+        Tier {
+            program: "plugin/skills/compile/assets/linux-aarch64/fast/aes-aes/main.s",
+            needs: &["aes"],
+            sibling: "tests/fixtures/linux-aarch64/aes/main.s",
+        },
+        Tier {
+            program: "plugin/skills/compile/assets/linux-aarch64/fast/crc32c-crc/main.s",
+            needs: &["crc", "pmull"],
+            sibling: "plugin/skills/compile/assets/linux-aarch64/fast/crc32c/main.s",
+        },
+        Tier {
+            program: "plugin/skills/compile/assets/linux-aarch64/fast/sha256-sha2/main.s",
+            needs: &["sha"],
+            sibling: "tests/fixtures/linux-aarch64/sha256/main.s",
+        },
+        Tier {
+            program: "plugin/skills/compile/assets/linux-aarch64/fast/wc-sve/main.s",
+            needs: &["sve"],
+            sibling: "plugin/skills/compile/assets/linux-aarch64/fast/wc/main.s",
+        },
+    ],
 };
 
 /// The benchmark's own variants, which are not shipped: they are what lengua's speed is measured

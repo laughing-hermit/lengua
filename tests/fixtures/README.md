@@ -42,3 +42,12 @@ fixture here and of each program in `examples/`, 29 in all, each compiled from t
 and a program added on either CPU comes with its twin. One test,
 `every_program_passes_its_checks_on_every_target` (tests/every_program.rs), takes them all
 through the server on each target a computer runs.
+
+**`sha256` and `aes` are baseline forms.** The twins `linux-aarch64/sha256` and `linux-aarch64/aes`,
+like `examples/sha256` and `examples/aes`, are plain integer code (rotates, adds and xors, a table
+of 256 words for AES) that runs on every computer of its CPU; the forms that use the CPU's SHA and
+AES instructions are fast tiers in the compile skill's assets (`fast/sha256-ni` and `fast/aes-ni`;
+on ARM64 `linux-aarch64/fast/sha256-sha2` and `fast/aes-aes`), each beside the very same
+`spec.md`. `tests/crypto_forms.rs` holds that to account: the same spec bytes in every form, a
+baseline that uses nothing beyond its CPU's baseline, and the tiers through the server where the
+CPU has what they use.

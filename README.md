@@ -141,12 +141,15 @@ Complete programs, each with its spec, tests included, and its assembly:
   duplicates, comparing 8 bytes at a time. Claude Code wrote it through lengua from one plain
   request; its errors are proven, and its sorting for every input up to 6 bytes, as far as its
   comparisons' paths go, and tested beyond;
-- [`examples/sha256`](examples/sha256) prints the SHA-256 digest of its input with the CPU's SHA
-  instructions, on both Linux CPUs from one spec, tested against the standard's vectors and at
-  every block boundary, not proven;
-- [`examples/aes`](examples/aes) encrypts hex data with a hex key, AES-128 block by block, with
-  the CPU's AES instructions, on both Linux CPUs from one spec, tested against the standard's
-  vectors, not proven. It shows the instructions; it isn't a security product;
+- [`examples/sha256`](examples/sha256) prints the SHA-256 digest of its input in plain integer
+  code that runs on every computer of its target, on both Linux CPUs from one spec, tested
+  against the standard's vectors and at every block boundary, not proven. The forms that use the
+  CPU's SHA instructions are the fast tiers `fast/sha256-ni` and `fast/sha256-sha2` in the compile
+  skill's assets, from the very same spec;
+- [`examples/aes`](examples/aes) encrypts hex data with a hex key, AES-128 block by block, in
+  plain integer code and a table, on both Linux CPUs from one spec, tested against the standard's
+  vectors, not proven; the CPU's AES instructions are the fast tiers `fast/aes-ni` and
+  `fast/aes-aes`. It isn't a security product;
 - [`examples/greet`](examples/greet) greets whoever the `NAME` environment variable names. It
   gets only the variables its tests, or your `run`, give it;
 - [`examples/archive`](examples/archive) moves a file into an `archive` folder, making the folder

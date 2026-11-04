@@ -305,9 +305,12 @@ normal flow: once the tests are green, one pass for the widest vectors the CPU h
 loads for tails), independent chains where each step would wait on the last, large reads and
 writes, and streaming for input of any length. `assets/fast` holds checked programs for each
 pattern, which the benchmark measures: a word count 64 bytes a step with AVX-512 masks, a CRC-32C
-that runs three `crc32` chains and joins them with `pclmulqdq` (on ARM64, whose CRC unit one
-chain already keeps busy, one `crc32cx` chain beside `pmull` folds on the vector units), and a
-four-table histogram. The
+that runs three `crc32` chains and joins them with `pclmulqdq` (its fast tier `crc32c-pclmul`; on
+ARM64, whose CRC unit one chain already keeps busy, one `crc32cx` chain beside `pmull` folds on
+the vector units, the tier `crc32c-crc`), and a four-table histogram. SHA-256, AES-128 and
+CRC-32C each also have a baseline form that runs on every computer of its target and is the
+shipped one, the instructions' forms being named fast tiers beside it from the very same spec:
+`sha256-ni` and `aes-ni` on x86-64, `sha256-sha2` and `aes-aes` on ARM64. The
 fork-join template works in place: input lands straight in the workers' slots, which halves the
 memory a threaded program touches. Each program processes what each `read` returns as it comes,
 so its work overlaps the writer filling the pipe.
@@ -641,7 +644,17 @@ How the proof works (`src/prove/`):
   1 GiB each for. A watchdog stops the solver holding the most whenever free memory falls below a
   sixteenth of all there is, so a hard question ends its proof as "not proven: the computer ran
   low on memory" instead of the kernel's out-of-memory killer ending whatever it picks, such as
-  the session the agent runs in. Each proof worker, and every solver it starts, runs ten steps
+  the session the agent runs in. A run of the model that makes terms by the million, a hash in
+  plain integer code (the ARM64 SHA-256 twin filled a 16 GB runner in a minute), asks the same
+  question each time its pool has grown by 50,000 terms and ends the same way. The run's loop
+  can't be the only one to ask, since a single extraction through a hash's whole history makes
+  terms by the million between two steps: the pool itself looks each time it has made or kept
+  50,000 more, and once it found the memory short it answers every extraction with zeros at
+  once, the run ends at its next step, and no shape or step of such a pool counts as proven.
+  Short, for a pool, is below the floor and twice the pool's own size more, since its tables
+  double when they fill, and pools that waited for the floor itself took a 16 GB runner from
+  4.8 GB free to 0.2 GB between two samples ten seconds apart, probably in such doublings.
+  Each proof worker, and every solver it starts, runs ten steps
   below normal priority, so a proof takes only the cores nothing else wants: the user's own work,
   and the server answering the agent, always come first.
 
@@ -861,7 +874,7 @@ What it covers:
   is.
 - What the proof ran. A function no run of a proof called, such as a fast path that starts past
   the proof's bound, is named in the proof's line: "the proof never ran crc_block, so what it
-  does isn't proven". The CRC-32C asset's three chains join only past 12,288 bytes, so its
+  does isn't proven". The CRC-32C fast tier's three chains join only past 12,288 bytes, so its
   proof covers the byte-at-a-time path alone, and says so.
 - Formulas: whole numbers (`+ - * / %` including chains of divisions, `abs`, `min`, `max`, `if`,
   and `scaled(x, places)` for a decimal's digits), printed plainly or with `places(x, k)`; and
@@ -967,8 +980,8 @@ What it covers:
   input by 64 KiB a thread starts no thread on the 4096 bytes a proof covers, and its proof says
   it never ran `start_worker` or `join_worker`.
 
-Not yet: the `sha256` formula, which the SHA instructions now run under but no formula yet
-meets; a CRC joined by `pclmulqdq`, which runs but builds other terms than the chain of steps;
+Not yet: the `sha256` formula, which the SHA-256 programs, in plain integer code and with the SHA
+instructions, run under but no formula yet meets; a CRC joined by `pclmulqdq`, which runs but builds other terms than the chain of steps;
 `sort` and `uniq` of texts over 8 bytes, and `tally` of texts over 8 (shorter ones are a choice
 of texts, as sorted ones are); a float printed as the test language writes it on its own, its shortest exact digits, rather than
 with `fixed`; and `tr` that changes a character's width in bytes (`tr` beyond ASCII is proven
@@ -1419,7 +1432,7 @@ Tested, not proven, for now: sorting and `uniq` past a few bytes and word tallie
 bytes, which need quantified facts over memory; byte loops at 64 KiB, whose counts keep a copy
 of every part at every byte; a routine for the last partial vector at a place the length chooses,
 and raw `read`s of any size; floats computed in another order than the formula's, a folder's
-listing, and the SHA and AES instructions. Each proof line says which.
+listing, and SHA-256 and AES, in plain integer code and with the instructions. Each proof line says which.
 Left out of the dialect on purpose: gathers and scatters, whose addresses can't be bounds-checked,
 allocation while running, recursion, function pointers, and running other programs.
 

@@ -3831,6 +3831,11 @@ fn prove_shape(
             combination,
             networked.then_some(delivery),
         )?;
+        // What the pool made after finding the memory short is nothing to go on: none of its
+        // shape is proven.
+        if pool.out_of_room() {
+            return Err(watch::OUT_OF_MEMORY.into());
+        }
         if std::env::var_os("LENGUA_PROVE_TRACE").is_some() {
             eprintln!(
                 "shape {combination}: {count} runs, {questions} questions exploring in \
@@ -3981,6 +3986,9 @@ fn check_runs(
     for run in runs {
         if budget.cancel.load(Ordering::Relaxed) || Instant::now() > hard {
             return Err(OUT_OF_TIME.into());
+        }
+        if pool.out_of_room() {
+            return Err(watch::OUT_OF_MEMORY.into());
         }
         // In the base of an induction whose counts look back, the buffer-full each run reads
         // from the head is held to the text's characters too.

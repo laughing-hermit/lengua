@@ -4021,6 +4021,22 @@ pub trait Oracle {
     fn in_time(&self) -> Result<(), String> {
         Ok(())
     }
+
+    /// Whether the computer still has the memory a proof needs. [`explore`] asks each time its
+    /// pool has grown by tens of thousands of terms, so a run that makes terms by the million
+    /// ends before the kernel's out-of-memory killer ends whatever it picks, the session the
+    /// agent runs in among it.
+    ///
+    /// # Errors
+    ///
+    /// Fails when free memory is below the floor the watchdog keeps.
+    fn has_room(&self) -> Result<(), String> {
+        if super::watch::is_low() {
+            tracing::warn!("free memory ran low: a run's loop stops its proof");
+            return Err(super::watch::OUT_OF_MEMORY.into());
+        }
+        Ok(())
+    }
 }
 
 /// A run that left a loop whose exits are merged: the condition it left on, whether the run was
@@ -4439,6 +4455,7 @@ pub fn explore(
     start.polled = Rc::default();
     let mut pending = vec![start];
     let mut finished = Vec::new();
+    let mut looked = pool.len();
     while let Some(mut state) = pending.pop() {
         if finished.len() + pending.len() > max_runs {
             state.end = Some(End::TooManyPaths);
@@ -4460,8 +4477,18 @@ pub fn explore(
             if state.steps.is_multiple_of(STEPS_BETWEEN_TIME_CHECKS) {
                 oracle.in_time()?;
             }
+            if pool.len() >= looked + super::term::TERMS_BETWEEN_MEMORY_LOOKS {
+                looked = pool.len();
+                oracle.has_room()?;
+            }
             let obligations = state.obligations.len();
             let stepped = step(image, &mut state, pool);
+            // A step can make terms by the million in one extraction, between two looks of this
+            // loop's: the pool looks as it grows, and what it made after finding the memory
+            // short is nothing to go on.
+            if pool.out_of_room() {
+                return Err(super::watch::OUT_OF_MEMORY.into());
+            }
             // While a loop's exits are merged, the run that stays must meet what it meets only
             // where it's still in the loop.
             if let Some(alive) = state.merging.as_ref().map(|merging| merging.alive)
@@ -4881,6 +4908,73 @@ mod tests {
                       subs x1, x1, #1\n    b.ne .Lround\n    mov x8, #93\n    mov x0, #0\n    \
                       svc #0\n.size _start, . - _start\n";
         keeps_the_proofs_time_without_a_branch(Profile::LinuxAarch64, source).await;
+    }
+
+    /// An oracle with no branch to decide, which says the computer has no memory left the first
+    /// time it's asked.
+    struct NoRoomAtTheFirstLook(std::cell::Cell<u32>);
+
+    impl Oracle for NoRoomAtTheFirstLook {
+        fn possible(&mut self, _: &Pool, _: &[Term], _: Term) -> Result<bool, String> {
+            Err("a concrete run reached a branch that depends on something unknown".into())
+        }
+
+        fn has_room(&self) -> Result<(), String> {
+            self.0.set(self.0.get() + 1);
+            Err("no room".into())
+        }
+    }
+
+    /// A run that makes a new number every step ends with the computer's memory, though it never
+    /// asks the oracle about a branch: a hash of the input, all straight-line code over unknown
+    /// values, makes terms by the million, and the steps alone don't bound them.
+    async fn keeps_the_memory_without_a_branch(profile: Profile, source: &str) {
+        let image = image_for(profile, source).await;
+        let mut pool = Pool::default();
+        let start = State::start(&image, &mut pool, &[], &[], Vec::new());
+        let mut oracle = NoRoomAtTheFirstLook(std::cell::Cell::new(0));
+        let result = explore(&image, start, &mut pool, &mut oracle, 2);
+        assert_eq!(result.err().as_deref(), Some("no room"));
+        assert_eq!(oracle.0.get(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_run_that_fills_the_pool_keeps_the_memory_on_x86_64() {
+        let source = ".intel_syntax noprefix\n.globl _start\n.text\n.type _start, @function\n\
+                      _start:\n    mov rcx, 1000000\n.Lround:\n    dec rcx\n    jnz .Lround\n    \
+                      mov eax, 60\n    xor edi, edi\n    syscall\n.size _start, . - _start\n";
+        keeps_the_memory_without_a_branch(Profile::LinuxX86_64, source).await;
+    }
+
+    #[tokio::test]
+    async fn a_run_that_fills_the_pool_keeps_the_memory_on_aarch64() {
+        let source = ".arch armv8-a\n.globl _start\n.text\n.type _start, @function\n\
+                      _start:\n    mov x1, #0x4240\n    movk x1, #0xf, lsl #16\n.Lround:\n    \
+                      subs x1, x1, #1\n    b.ne .Lround\n    mov x8, #93\n    mov x0, #0\n    \
+                      svc #0\n.size _start, . - _start\n";
+        keeps_the_memory_without_a_branch(Profile::LinuxAarch64, source).await;
+    }
+
+    /// A run on a pool that found the memory short ends at its next step, though the oracle
+    /// never has to ask: one step can make the terms by the million in a single extraction, far
+    /// between two looks of the loop's, and what the pool made after that is nothing to go on.
+    #[tokio::test]
+    async fn a_run_on_a_pool_that_found_the_memory_short_ends_at_its_next_step() {
+        let source = ".intel_syntax noprefix\n.globl _start\n.text\n.type _start, @function\n\
+                      _start:\n    mov eax, 60\n    xor edi, edi\n    syscall\n\
+                      .size _start, . - _start\n";
+        let image = image_for(Profile::LinuxX86_64, source).await;
+        let _no_memory = crate::prove::watch::NoMemoryForTest::pretend();
+        let mut pool = Pool::default();
+        let start = State::start(&image, &mut pool, &[], &[], Vec::new());
+        let one = pool.bv(32, 1);
+        while !pool.out_of_room() {
+            let next = pool.var(32, &format!("b{}", pool.len()));
+            let _ = pool.add(next, one);
+        }
+        let result = explore(&image, start, &mut pool, &mut Concrete, 2);
+        let why = result.err();
+        assert_eq!(why.as_deref(), Some(crate::prove::watch::OUT_OF_MEMORY));
     }
 
     /// fill's function from assets/fill.s, as main.s copies it.

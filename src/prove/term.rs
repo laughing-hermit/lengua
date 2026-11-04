@@ -377,6 +377,11 @@ pub struct Pool {
     split_from: HashMap<Vec<Term>, Term>,
     /// Each extraction made, by the term, its high bit and its low bit ([`Pool::extract`]).
     extracted: HashMap<(Term, u32, u32), Term>,
+    /// How many terms and extractions the pool held when the computer's free memory was last
+    /// looked at ([`Pool::out_of_room`]).
+    looked_at: usize,
+    /// Whether that look found free memory below the floor proofs leave.
+    short_of_memory: bool,
 }
 
 /// The smallest all-ones number at least `value`: the range an or or xor stays in.
@@ -405,6 +410,13 @@ const MAX_CONJUNCTS: usize = 32;
 
 /// The most intervals a set of a variable's values [`Pool::holds_where`] works out may have.
 const MAX_INTERVALS: usize = 1 << 16;
+
+/// How many terms and kept extractions a pool grows by between looks at the computer's free
+/// memory. A term is a few hundred bytes, and code over unknown values with no branch to decide,
+/// such as a hash of the input, makes them by the million: in a single extraction, which walks
+/// the hash's whole history, as much as in the many steps that run it. So the pool looks as it
+/// grows, and the run on it does too.
+pub const TERMS_BETWEEN_MEMORY_LOOKS: usize = 50_000;
 
 /// A question [`Pool::holds_where`] answers of a part of a condition: the values of a variable
 /// where a condition holds, or where a value is below a constant, unsigned.
@@ -711,6 +723,35 @@ impl Pool {
         self.nodes.is_empty()
     }
 
+    /// Whether the computer's free memory was below the floor proofs leave, and the room the
+    /// pool's own tables need to double ([`watch::is_short_for`](super::watch::is_short_for)),
+    /// when the pool last looked, which it does each time it has grown by
+    /// [`TERMS_BETWEEN_MEMORY_LOOKS`] terms and extractions. From then on every extraction
+    /// answers zeros without walking anything, so
+    /// the walk through a hash's history that was filling the memory ends, and a run on the
+    /// pool must end at its next step: what it has made since is nothing to rely on.
+    #[must_use]
+    pub fn out_of_room(&self) -> bool {
+        self.short_of_memory
+    }
+
+    /// Looks at the computer's free memory if the pool has grown by
+    /// [`TERMS_BETWEEN_MEMORY_LOOKS`] since the last look, and keeps what it saw: a pool that
+    /// found it short looks no more.
+    fn look_at_the_memory(&mut self) {
+        let size = self.nodes.len() + self.extracted.len();
+        if !self.short_of_memory && size >= self.looked_at + TERMS_BETWEEN_MEMORY_LOOKS {
+            self.looked_at = size;
+            if super::watch::is_short_for(size as u64 * super::watch::BYTES_PER_TERM) {
+                self.short_of_memory = true;
+                tracing::warn!(
+                    terms = size,
+                    "free memory is short for the pool: it stops, and its proof with it"
+                );
+            }
+        }
+    }
+
     /// The constant value of a bit-vector term, if it's a constant.
     #[must_use]
     pub fn constant(&self, term: Term) -> Option<u128> {
@@ -880,6 +921,7 @@ impl Pool {
                 Sort::Bool => self.boolean(range.0 == 1),
             };
         }
+        self.look_at_the_memory();
         let term = Term(u32::try_from(self.nodes.len()).unwrap_or(u32::MAX));
         let signed_range = match sort {
             Sort::Bv(width) => self.signed_range_of(&node, width, range),
@@ -3324,11 +3366,15 @@ impl Pool {
     /// term, such as a hash's rounds make, takes a time exponential in its depth when each way
     /// down to a term is walked again.
     pub fn extract(&mut self, a: Term, high: u32, low: u32) -> Term {
+        if self.short_of_memory {
+            return self.bv(high - low + 1, 0);
+        }
         if let Some(term) = self.extracted.get(&(a, high, low)) {
             return *term;
         }
         let term = self.extract_uncached(a, high, low);
         self.extracted.insert((a, high, low), term);
+        self.look_at_the_memory();
         term
     }
 
@@ -5229,6 +5275,34 @@ mod tests {
             began.elapsed() < std::time::Duration::from_secs(5),
             "took {:?}",
             began.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_pool_that_finds_the_memory_short_answers_every_extraction_at_once() {
+        let _no_memory = crate::prove::watch::NoMemoryForTest::pretend();
+        let mut pool = Pool::default();
+        let one = pool.bv(32, 1);
+        let mut last = one;
+        assert!(
+            !pool.out_of_room(),
+            "the pool looks as it grows, not before"
+        );
+        // Terms by the tens of thousands, as a hash's rounds make them: every sum is a new one.
+        for step in 0..TERMS_BETWEEN_MEMORY_LOOKS {
+            let next = pool.var(32, &format!("b{step}"));
+            last = pool.add(next, one);
+        }
+        assert!(pool.out_of_room(), "{} terms, and no look", pool.len());
+        // What it is asked now is answered with zeros of the width, and no term is walked.
+        let before = pool.len();
+        let bits = pool.extract(last, 15, 4);
+        assert_eq!(pool.width(bits), 12);
+        assert_eq!(pool.constant(bits), Some(0));
+        assert!(
+            pool.len() <= before + 1,
+            "{} new terms",
+            pool.len() - before
         );
     }
 

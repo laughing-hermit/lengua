@@ -1,6 +1,9 @@
 .arch armv8-a
-.arch_extension crc
-.arch_extension aes
+
+// CRC-32C in plain integer code, a byte at a time through a table of 256 words, so it runs on every
+// ARM64 computer, with or without the CRC32 instructions (an extension before ARMv8.1). The form
+// that uses crc32cx and pmull, from the very same spec, is
+// plugin/skills/compile/assets/linux-aarch64/fast/crc32c-crc.
 
 // System calls (Linux AArch64)
 .equ SYS_READ, 63
@@ -14,49 +17,93 @@
 .equ EXIT_IO_FAILED, 2
 // Error codes returned by functions marked "returns: result"
 .equ ERROR_IO, -5
+// fill's constants
+.equ MAX_FILL_READS, 1099511627776
+.equ READ_TO_END, -1
 // CRC-32C starts from all ones and ends inverted.
 .equ CRC_START, 0xFFFFFFFF
-// Reads fill the buffer from where the last stopped; each block is folded once it's whole, and
-// a full buffer, all folded, fills again from its front. A pipe's 64 KiB fills it at once.
-.equ BUFFER_FULL, 65536
-// A block: a chain of crc32cx takes its first HALF bytes while carry-less multiplies fold the
-// HALF after them, 64 bytes of each a step.
-.equ HALF, 16384
-.equ BLOCK, 32768
-.equ BLOCKS, BUFFER_FULL / BLOCK
-.equ VECTORS, 64
-.equ FOLDS, HALF / VECTORS - 1
-// The bytes after the last whole block: 64 a step while that many are left, 8 to crc32cx, then
-// 8 a step; and a step's room past the last byte, so an 8-byte step's check is one on its start
-.equ RUN, 64
-.equ RUNS, BLOCK / RUN
-.equ STEP, 8
-.equ RUN_STEPS, RUN / STEP
-.equ INPUT_LEN, BUFFER_FULL + STEP
-// The reads the main loop takes at most
-.equ MAX_READS, 1099511627776
-// Printing a number
-.equ MAX_DIGITS, 19
+// Sizes and limits: standard input is folded in pieces of INPUT_LEN bytes, a byte at a step
+.equ INPUT_LEN, 65536
+.equ BYTE_STEPS, INPUT_LEN + 1
+.equ TABLE_ENTRIES, 256
+.equ MAX_FULLS, 1099511627776
+// Printing the checksum
 .equ MAX_WRITES, 64
-.equ OUT_BUF_LEN, 21
+.equ MAX_DIGITS, 19
 .equ NEWLINE, 10
+.equ OUT_BUF_LEN, 21
 
 .section .rodata
 
-// What carry-less multiplies move by, each x to a power mod the CRC-32C polynomial,
-// bit-reflected, so a fold, or a crc32cx of the product, finishes the move: a vector's low and
-// high doublewords past 64 bytes more, x^(512+64-33) and x^(512-33); past 16 more, x^(128+64-33)
-// and x^(128-33); and the chain's state past HALF bytes less 8, x^(8 * (HALF - 8) - 33), into a
-// vector's low doubleword, whose crc32cx and the 8 bytes after it move it the rest.
-.type fold_numbers, @object
-fold_numbers:
-    .quad 0x740eef02
-    .quad 0x9e4addf8
-    .quad 0xf20c0dfe
-    .quad 0x493c7d27
-    .quad 0x3c8b3748
-    .quad 0
-.size fold_numbers, . - fold_numbers
+// The CRC-32C of each byte value: the byte through eight steps of the reflected polynomial
+// 0x82f63b78.
+.type crc_table, @object
+crc_table:
+    .long 0x00000000, 0xf26b8303, 0xe13b70f7, 0x1350f3f4
+    .long 0xc79a971f, 0x35f1141c, 0x26a1e7e8, 0xd4ca64eb
+    .long 0x8ad958cf, 0x78b2dbcc, 0x6be22838, 0x9989ab3b
+    .long 0x4d43cfd0, 0xbf284cd3, 0xac78bf27, 0x5e133c24
+    .long 0x105ec76f, 0xe235446c, 0xf165b798, 0x030e349b
+    .long 0xd7c45070, 0x25afd373, 0x36ff2087, 0xc494a384
+    .long 0x9a879fa0, 0x68ec1ca3, 0x7bbcef57, 0x89d76c54
+    .long 0x5d1d08bf, 0xaf768bbc, 0xbc267848, 0x4e4dfb4b
+    .long 0x20bd8ede, 0xd2d60ddd, 0xc186fe29, 0x33ed7d2a
+    .long 0xe72719c1, 0x154c9ac2, 0x061c6936, 0xf477ea35
+    .long 0xaa64d611, 0x580f5512, 0x4b5fa6e6, 0xb93425e5
+    .long 0x6dfe410e, 0x9f95c20d, 0x8cc531f9, 0x7eaeb2fa
+    .long 0x30e349b1, 0xc288cab2, 0xd1d83946, 0x23b3ba45
+    .long 0xf779deae, 0x05125dad, 0x1642ae59, 0xe4292d5a
+    .long 0xba3a117e, 0x4851927d, 0x5b016189, 0xa96ae28a
+    .long 0x7da08661, 0x8fcb0562, 0x9c9bf696, 0x6ef07595
+    .long 0x417b1dbc, 0xb3109ebf, 0xa0406d4b, 0x522bee48
+    .long 0x86e18aa3, 0x748a09a0, 0x67dafa54, 0x95b17957
+    .long 0xcba24573, 0x39c9c670, 0x2a993584, 0xd8f2b687
+    .long 0x0c38d26c, 0xfe53516f, 0xed03a29b, 0x1f682198
+    .long 0x5125dad3, 0xa34e59d0, 0xb01eaa24, 0x42752927
+    .long 0x96bf4dcc, 0x64d4cecf, 0x77843d3b, 0x85efbe38
+    .long 0xdbfc821c, 0x2997011f, 0x3ac7f2eb, 0xc8ac71e8
+    .long 0x1c661503, 0xee0d9600, 0xfd5d65f4, 0x0f36e6f7
+    .long 0x61c69362, 0x93ad1061, 0x80fde395, 0x72966096
+    .long 0xa65c047d, 0x5437877e, 0x4767748a, 0xb50cf789
+    .long 0xeb1fcbad, 0x197448ae, 0x0a24bb5a, 0xf84f3859
+    .long 0x2c855cb2, 0xdeeedfb1, 0xcdbe2c45, 0x3fd5af46
+    .long 0x7198540d, 0x83f3d70e, 0x90a324fa, 0x62c8a7f9
+    .long 0xb602c312, 0x44694011, 0x5739b3e5, 0xa55230e6
+    .long 0xfb410cc2, 0x092a8fc1, 0x1a7a7c35, 0xe811ff36
+    .long 0x3cdb9bdd, 0xceb018de, 0xdde0eb2a, 0x2f8b6829
+    .long 0x82f63b78, 0x709db87b, 0x63cd4b8f, 0x91a6c88c
+    .long 0x456cac67, 0xb7072f64, 0xa457dc90, 0x563c5f93
+    .long 0x082f63b7, 0xfa44e0b4, 0xe9141340, 0x1b7f9043
+    .long 0xcfb5f4a8, 0x3dde77ab, 0x2e8e845f, 0xdce5075c
+    .long 0x92a8fc17, 0x60c37f14, 0x73938ce0, 0x81f80fe3
+    .long 0x55326b08, 0xa759e80b, 0xb4091bff, 0x466298fc
+    .long 0x1871a4d8, 0xea1a27db, 0xf94ad42f, 0x0b21572c
+    .long 0xdfeb33c7, 0x2d80b0c4, 0x3ed04330, 0xccbbc033
+    .long 0xa24bb5a6, 0x502036a5, 0x4370c551, 0xb11b4652
+    .long 0x65d122b9, 0x97baa1ba, 0x84ea524e, 0x7681d14d
+    .long 0x2892ed69, 0xdaf96e6a, 0xc9a99d9e, 0x3bc21e9d
+    .long 0xef087a76, 0x1d63f975, 0x0e330a81, 0xfc588982
+    .long 0xb21572c9, 0x407ef1ca, 0x532e023e, 0xa145813d
+    .long 0x758fe5d6, 0x87e466d5, 0x94b49521, 0x66df1622
+    .long 0x38cc2a06, 0xcaa7a905, 0xd9f75af1, 0x2b9cd9f2
+    .long 0xff56bd19, 0x0d3d3e1a, 0x1e6dcdee, 0xec064eed
+    .long 0xc38d26c4, 0x31e6a5c7, 0x22b65633, 0xd0ddd530
+    .long 0x0417b1db, 0xf67c32d8, 0xe52cc12c, 0x1747422f
+    .long 0x49547e0b, 0xbb3ffd08, 0xa86f0efc, 0x5a048dff
+    .long 0x8ecee914, 0x7ca56a17, 0x6ff599e3, 0x9d9e1ae0
+    .long 0xd3d3e1ab, 0x21b862a8, 0x32e8915c, 0xc083125f
+    .long 0x144976b4, 0xe622f5b7, 0xf5720643, 0x07198540
+    .long 0x590ab964, 0xab613a67, 0xb831c993, 0x4a5a4a90
+    .long 0x9e902e7b, 0x6cfbad78, 0x7fab5e8c, 0x8dc0dd8f
+    .long 0xe330a81a, 0x115b2b19, 0x020bd8ed, 0xf0605bee
+    .long 0x24aa3f05, 0xd6c1bc06, 0xc5914ff2, 0x37faccf1
+    .long 0x69e9f0d5, 0x9b8273d6, 0x88d28022, 0x7ab90321
+    .long 0xae7367ca, 0x5c18e4c9, 0x4f48173d, 0xbd23943e
+    .long 0xf36e6f75, 0x0105ec76, 0x12551f82, 0xe03e9c81
+    .long 0x34f4f86a, 0xc69f7b69, 0xd5cf889d, 0x27a40b9e
+    .long 0x79b737ba, 0x8bdcb4b9, 0x988c474d, 0x6ae7c44e
+    .long 0xbe2da0a5, 0x4c4623a6, 0x5f16d052, 0xad7d5351
+.size crc_table, . - crc_table
 
 .type assert_message, @object
 assert_message:
@@ -65,13 +112,13 @@ assert_message:
 
 .section .bss
 
-// Standard input as it comes, with a step's room after it.
+// One piece of standard input, as it comes.
 .type input, @object
 input:
     .zero INPUT_LEN
 .size input, . - input
 
-// The checksum's digits and newline.
+// The checksum's digits and a newline.
 .type out_buf, @object
 out_buf:
     .zero OUT_BUF_LEN
@@ -80,53 +127,36 @@ out_buf:
 .text
 .globl _start
 
-// Reads standard input into the buffer as it comes, folding each block into the CRC-32C state
-// once it's whole, so it works while more arrive; then takes the bytes after the last block and
-// prints the checksum in decimal.
+// Folds standard input into the checksum a piece at a time, as the pieces come, and prints it.
 .type _start, @function
 _start:
-    mov w20, #CRC_START
-    mov x21, #0
-    mov x22, #0
-    mov x19, #MAX_READS
-.Lstart_read:  // bound: 1099511627776
+    mov w21, #CRC_START
+    mov x19, #MAX_FULLS
+.Lstart_full:  // bound: 1099511627776
     mov x0, #STDIN
     adrp x1, input
     add x1, x1, :lo12:input
-    add x1, x1, x21
-    mov x2, #BUFFER_FULL
-    sub x2, x2, x21
-    mov x8, #SYS_READ
-    svc #0
+    mov x2, #INPUT_LEN
+    mov w3, #READ_TO_END
+    bl fill
     tbnz x0, #63, .Lstart_failed
-    cbz x0, .Lstart_done
-    cmp x0, x2
+    cbz x0, .Lstart_print
+    cmp x0, #INPUT_LEN
     b.hi .Lstart_assert_count
-    add x21, x21, x0
-    mov w0, w20
+    mov x20, x0
+    mov w0, w21
     adrp x1, input
     add x1, x1, :lo12:input
-    mov x2, x22
-    mov x3, x21
-    bl crc_blocks
-    mov w20, w0
-    mov x22, x1
-    cmp x21, #BUFFER_FULL
-    b.lo .Lstart_next
-    mov x21, #0
-    mov x22, #0
-.Lstart_next:
-    subs x19, x19, #1
-    b.ne .Lstart_read
-    b .Lstart_assert_reads
-.Lstart_done:
-    mov w0, w20
-    adrp x1, input
-    add x1, x1, :lo12:input
-    mov x2, x22
-    mov x3, x21
+    mov x2, x20
     bl crc_bytes
-    mvn w0, w0
+    mov w21, w0
+    cmp x20, #INPUT_LEN
+    b.lo .Lstart_print
+    subs x19, x19, #1
+    b.ne .Lstart_full
+    b .Lstart_assert_fulls
+.Lstart_print:
+    mvn w0, w21
     bl write_i64
     tbnz x0, #63, .Lstart_failed
     mov w0, #EXIT_OK
@@ -139,231 +169,53 @@ _start:
 .Lstart_assert_count:
     mov w0, #1
     bl assert_fail
-.Lstart_assert_reads:
-    mov w0, #5
+.Lstart_assert_fulls:
+    mov w0, #2
     bl assert_fail
 .size _start, . - _start
 
-// Folds each whole block of the buffer not yet folded into a CRC-32C state.
-// In: w0 = the state, x1 = the buffer, input, x2 = how many of its bytes are folded, a multiple
-// of BLOCK, x3 = how many it holds, from x2 up to BUFFER_FULL.
-// Out: w0 = the state after the blocks, x1 = how many bytes are folded after them.
-.type crc_blocks, @function
-crc_blocks:
-    stp x29, x30, [sp, #-16]!
-    stp x19, x20, [sp, #-16]!
-    stp x21, x22, [sp, #-16]!
-    cmp x3, #BUFFER_FULL
-    b.hi .Lcrc_blocks_assert_length
-    cmp x2, x3
-    b.hi .Lcrc_blocks_assert_folded
-    mov x19, x1
-    mov x20, x2
-    mov x21, x3
-    mov x22, #BLOCKS
-.Lcrc_blocks_block:  // bound: 2
-    add x9, x20, #BLOCK
-    cmp x9, x21
-    b.hi .Lcrc_blocks_done
-    add x1, x19, x20
-    bl crc_block
-    add x20, x20, #BLOCK
-    subs x22, x22, #1
-    b.ne .Lcrc_blocks_block
-.Lcrc_blocks_done:
-    mov x1, x20
-    ldp x21, x22, [sp], #16
-    ldp x19, x20, [sp], #16
-    ldp x29, x30, [sp], #16
-    ret
-.Lcrc_blocks_assert_length:
-    mov w0, #13
-    bl assert_fail
-.Lcrc_blocks_assert_folded:
-    mov w0, #14
-    bl assert_fail
-.size crc_blocks, . - crc_blocks
-
-// Folds one block into a CRC-32C state as two parts side by side, so the CRC unit and the
-// vector units work at once: a chain of crc32cx takes the block's first HALF bytes, 64 a step,
-// while carry-less multiplies fold the HALF after them into four vectors of 16 bytes, 64 bytes a
-// step. Then crc_join joins the two.
-// In: w0 = the state; x1 = the block's bytes, BLOCK of them.
-// Out: w0 = the state after them.
-.type crc_block, @function
-crc_block:
-    stp x29, x30, [sp, #-16]!
-    cbz x1, .Lcrc_block_assert_bytes
-    adrp x9, fold_numbers
-    add x9, x9, :lo12:fold_numbers
-    ld1 { v24.2d, v25.2d, v26.2d }, [x9]
-    add x6, x1, #HALF
-    ld1 { v0.16b, v1.16b, v2.16b, v3.16b }, [x6], #64
-    mov x7, #FOLDS
-.Lcrc_block_step:  // bound: 255
-    ld1 { v4.16b, v5.16b, v6.16b, v7.16b }, [x6], #64
-    ldp x9, x10, [x1]
-    pmull v16.1q, v0.1d, v24.1d
-    pmull2 v0.1q, v0.2d, v24.2d
-    pmull v17.1q, v1.1d, v24.1d
-    pmull2 v1.1q, v1.2d, v24.2d
-    crc32cx w0, w0, x9
-    crc32cx w0, w0, x10
-    ldp x11, x12, [x1, #16]
-    pmull v18.1q, v2.1d, v24.1d
-    pmull2 v2.1q, v2.2d, v24.2d
-    pmull v19.1q, v3.1d, v24.1d
-    pmull2 v3.1q, v3.2d, v24.2d
-    crc32cx w0, w0, x11
-    crc32cx w0, w0, x12
-    ldp x13, x14, [x1, #32]
-    eor v0.16b, v0.16b, v16.16b
-    eor v1.16b, v1.16b, v17.16b
-    eor v2.16b, v2.16b, v18.16b
-    eor v3.16b, v3.16b, v19.16b
-    crc32cx w0, w0, x13
-    crc32cx w0, w0, x14
-    ldp x15, x16, [x1, #48]
-    eor v0.16b, v0.16b, v4.16b
-    eor v1.16b, v1.16b, v5.16b
-    eor v2.16b, v2.16b, v6.16b
-    eor v3.16b, v3.16b, v7.16b
-    crc32cx w0, w0, x15
-    crc32cx w0, w0, x16
-    add x1, x1, #VECTORS
-    subs x7, x7, #1
-    b.ne .Lcrc_block_step
-    ldp x9, x10, [x1]
-    crc32cx w0, w0, x9
-    crc32cx w0, w0, x10
-    ldp x11, x12, [x1, #16]
-    crc32cx w0, w0, x11
-    crc32cx w0, w0, x12
-    ldp x13, x14, [x1, #32]
-    crc32cx w0, w0, x13
-    crc32cx w0, w0, x14
-    ldp x15, x16, [x1, #48]
-    crc32cx w0, w0, x15
-    crc32cx w0, w0, x16
-    bl crc_join
-    ldp x29, x30, [sp], #16
-    ret
-.Lcrc_block_assert_bytes:
-    mov w0, #17
-    bl assert_fail
-.size crc_block, . - crc_block
-
-// Joins a block's two parts into the CRC-32C state after it: folds the four vectors into the
-// last, puts the chain's state there too, moved past the vectors' bytes by a carry-less
-// multiply, and takes the CRC of the last vector's 16 bytes from a state of 0.
-// In: w0 = the chain's state after the block's first half; v0 to v3 = the vectors its second
-// half folded into; v25 = what moves a vector past 16 bytes more; v26 = what moves the chain's
-// state past HALF bytes less 8, in its low doubleword.
-// Out: w0 = the state after the block.
-.type crc_join, @function
-crc_join:
-    pmull v16.1q, v0.1d, v25.1d
-    pmull2 v17.1q, v0.2d, v25.2d
-    eor v1.16b, v1.16b, v16.16b
-    eor v1.16b, v1.16b, v17.16b
-    pmull v16.1q, v1.1d, v25.1d
-    pmull2 v17.1q, v1.2d, v25.2d
-    eor v2.16b, v2.16b, v16.16b
-    eor v2.16b, v2.16b, v17.16b
-    pmull v16.1q, v2.1d, v25.1d
-    pmull2 v17.1q, v2.2d, v25.2d
-    eor v3.16b, v3.16b, v16.16b
-    eor v3.16b, v3.16b, v17.16b
-    fmov d16, x0
-    pmull v16.1q, v16.1d, v26.1d
-    eor v3.16b, v3.16b, v16.16b
-    fmov x9, d3
-    umov x10, v3.d[1]
-    mov w0, #0
-    crc32cx w0, w0, x9
-    crc32cx w0, w0, x10
-    ret
-.size crc_join, . - crc_join
-
-// Takes the bytes from x2 to x3 of the buffer into a CRC-32C state with crc32cx, 8 bytes each:
-// 64 bytes a step, loaded in pairs, while that many are left, then 8 bytes a step, then the rest
-// one at a time. A core passes each crc32cx's result straight to the next, so one chain keeps
-// its CRC unit busy.
-// In: w0 = the state, x1 = the buffer, input, x2 = the first byte's place, x3 = the end's, from
-// x2 up to BUFFER_FULL and less than a block past x2.
-// Out: w0 = the state after them.
+// Folds bytes into a CRC-32C state, a byte at a time: the state's low byte xor the byte picks a
+// word of the table, which is xored with the state moved down a byte.
+// In: w0 = the state; x1 = the bytes; x2 = how many, up to INPUT_LEN.
+// Out: w0 = the new state.
 .type crc_bytes, @function
 crc_bytes:
-    cmp x3, #BUFFER_FULL
+    cbz x1, .Lcrc_bytes_assert_bytes
+    cmp x2, #INPUT_LEN
     b.hi .Lcrc_bytes_assert_length
-    cmp x2, x3
-    b.hi .Lcrc_bytes_assert_start
-    sub x9, x3, x2
-    cmp x9, #BLOCK
-    b.hs .Lcrc_bytes_assert_block
-    mov x10, x2
-    mov x11, #RUNS
-.Lcrc_bytes_runs:  // bound: 512
-    add x12, x10, #RUN
-    cmp x12, x3
-    b.hi .Lcrc_bytes_words
-    add x13, x1, x10
-    ldp x14, x15, [x13]
-    crc32cx w0, w0, x14
-    crc32cx w0, w0, x15
-    ldp x14, x15, [x13, #16]
-    crc32cx w0, w0, x14
-    crc32cx w0, w0, x15
-    ldp x14, x15, [x13, #32]
-    crc32cx w0, w0, x14
-    crc32cx w0, w0, x15
-    ldp x14, x15, [x13, #48]
-    crc32cx w0, w0, x14
-    crc32cx w0, w0, x15
-    mov x10, x12
-    subs x11, x11, #1
-    b.ne .Lcrc_bytes_runs
-.Lcrc_bytes_words:
-    mov x11, #RUN_STEPS
-.Lcrc_bytes_steps:  // bound: 8
-    add x12, x10, #STEP
-    cmp x12, x3
-    b.hi .Lcrc_bytes_tail
-    cmp x10, #BUFFER_FULL
-    b.hi .Lcrc_bytes_assert_step
-    ldr x13, [x1, x10]
-    crc32cx w0, w0, x13
-    add x10, x10, #STEP
-    subs x11, x11, #1
-    b.ne .Lcrc_bytes_steps
-.Lcrc_bytes_tail:
-    mov x11, #STEP
-.Lcrc_bytes_bytes:  // bound: 8
-    cmp x10, x3
-    b.hs .Lcrc_bytes_return
-    cmp x10, #BUFFER_FULL
-    b.hs .Lcrc_bytes_assert_byte
-    ldrb w13, [x1, x10]
-    crc32cb w0, w0, w13
-    add x10, x10, #1
-    subs x11, x11, #1
-    b.ne .Lcrc_bytes_bytes
-.Lcrc_bytes_return:
+    adrp x9, crc_table
+    add x9, x9, :lo12:crc_table
+    mov x3, #0
+    mov x4, #BYTE_STEPS & 0xffff
+    movk x4, #BYTE_STEPS >> 16, lsl #16
+.Lcrc_bytes_loop:  // bound: 65537
+    cmp x3, x2
+    b.hs .Lcrc_bytes_done
+    cmp x3, #INPUT_LEN
+    b.hs .Lcrc_bytes_assert_index
+    ldrb w5, [x1, x3]
+    eor w5, w5, w0
+    and w5, w5, #255
+    cmp x5, #TABLE_ENTRIES
+    b.hs .Lcrc_bytes_assert_table
+    ldr w6, [x9, x5, lsl #2]
+    eor w0, w6, w0, lsr #8
+    add x3, x3, #1
+    subs x4, x4, #1
+    b.ne .Lcrc_bytes_loop
+.Lcrc_bytes_done:
     ret
-.Lcrc_bytes_assert_length:
-    mov w0, #2
-    bl assert_fail
-.Lcrc_bytes_assert_step:
+.Lcrc_bytes_assert_bytes:
     mov w0, #3
     bl assert_fail
-.Lcrc_bytes_assert_byte:
+.Lcrc_bytes_assert_length:
     mov w0, #4
     bl assert_fail
-.Lcrc_bytes_assert_start:
-    mov w0, #15
+.Lcrc_bytes_assert_index:
+    mov w0, #5
     bl assert_fail
-.Lcrc_bytes_assert_block:
-    mov w0, #16
+.Lcrc_bytes_assert_table:
+    mov w0, #13
     bl assert_fail
 .size crc_bytes, . - crc_bytes
 
@@ -470,6 +322,54 @@ write_all:
     mov w0, #12
     bl assert_fail
 .size write_all, . - write_all
+
+// Reads from file descriptor x0 into the x2 bytes at x1 until they're full, the input ends,
+// or, when w3 is a byte (0 to 255), the last byte read is w3; with w3 = -1 it reads to the
+// end. However the input arrives, it reads the same.
+// In: x0 = the file descriptor, x1 = the buffer, x2 = its size, at least 1, w3 = the end
+// byte or -1.
+// Out: x0 = how many bytes it read, or a negative error code.
+// returns: result
+.type fill, @function
+fill:
+    cbz x1, .Lfill_assert_null
+    cbz x2, .Lfill_assert_empty
+    mov x9, x0
+    mov x10, x2
+    mov w11, w3
+    mov x12, #MAX_FILL_READS
+.Lfill_loop:  // bound: 1099511627776
+    mov x0, x9
+    mov x8, #SYS_READ
+    svc #0
+    tbnz x0, #63, .Lfill_return
+    cbz x0, .Lfill_done
+    cmp x0, x2
+    b.hi .Lfill_assert_count
+    add x1, x1, x0
+    subs x2, x2, x0
+    b.eq .Lfill_done
+    ldurb w13, [x1, #-1]
+    cmp w13, w11
+    b.eq .Lfill_done
+    subs x12, x12, #1
+    b.ne .Lfill_loop
+    mov x0, #ERROR_IO
+    b .Lfill_return
+.Lfill_done:
+    sub x0, x10, x2
+.Lfill_return:
+    ret
+.Lfill_assert_null:
+    mov w0, #990
+    bl assert_fail
+.Lfill_assert_empty:
+    mov w0, #991
+    bl assert_fail
+.Lfill_assert_count:
+    mov w0, #992
+    bl assert_fail
+.size fill, . - fill
 
 // lengua's assertion handler. check compares it word for word: copy it exactly.
 // In: w0 = the assertion's number, 1 to 999. Prints "lengua: assertion NNN failed" to

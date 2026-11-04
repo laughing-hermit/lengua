@@ -1,5 +1,10 @@
 .intel_syntax noprefix
 
+# CRC-32C with the crc32 instruction of SSE4.2, one chain, 8 bytes a step: it runs on every x86-64
+# computer that has SSE4.2, which lengua's x86-64 baseline holds. The form that runs three chains
+# side by side and joins them with pclmulqdq, from the very same spec, is
+# plugin/skills/compile/assets/fast/crc32c-pclmul.
+
 # System calls (Linux x86-64)
 .equ SYS_READ, 0
 .equ SYS_WRITE, 1
@@ -12,39 +17,22 @@
 .equ EXIT_IO_FAILED, 2
 # Error codes returned by functions marked "returns: result"
 .equ ERROR_IO, -5
+# fill's constants
+.equ MAX_FILL_READS, 1099511627776
+.equ READ_TO_END, -1
 # CRC-32C starts from all ones and ends inverted.
 .equ CRC_START, 0xFFFFFFFF
-# Three chains of BLOCK bytes each, joined after every BLOCK3 bytes.
-.equ BLOCK, 4096
-.equ BLOCK3, 12288
+# Sizes and limits: standard input is folded in pieces of INPUT_LEN bytes, 8 bytes a step
+.equ INPUT_LEN, 65536
+.equ MAX_FULLS, 1099511627776
 .equ STEP, 8
-.equ STEPS, 512
-.equ STEPS_REST, 1536
-.equ BLOCKS, 86
-# Sizes and limits
-.equ INPUT_LEN, 1048576
-.equ MAX_READS, 1099511627776
-.equ VECTOR, 64
-.equ MOVES, 193
+.equ WORD_STEPS, 8193
 .equ MAX_DIGITS, 20
 .equ MAX_WRITES, 64
 .equ NEWLINE, 10
 .equ OUT_LEN, 11
 
 .section .rodata
-
-# x^(8 * 2 * BLOCK - 33) and x^(8 * BLOCK - 33) mod the CRC-32C polynomial, bit-reflected: a
-# carry-less multiply by one and a crc32 of the product move a chain's state past 2 * BLOCK or
-# BLOCK more bytes.
-.type shift_two, @object
-shift_two:
-    .quad 0x54a86326
-.size shift_two, . - shift_two
-
-.type shift_one, @object
-shift_one:
-    .quad 0x82f89c77
-.size shift_one, . - shift_one
 
 .type assert_message, @object
 assert_message:
@@ -53,7 +41,7 @@ assert_message:
 
 .section .bss
 
-# Standard input as it comes, after the bytes kept from the last read.
+# One piece of standard input, as it comes.
 .type input, @object
 input:
     .zero INPUT_LEN
@@ -68,51 +56,36 @@ out:
 .text
 .globl _start
 
-# Reads standard input as it comes, folding whole blocks into the checksum and keeping the rest
-# for the next read, then prints the checksum.
+# Folds standard input into the checksum a piece at a time, as the pieces come, and prints it.
 .type _start, @function
 _start:
     mov r12d, CRC_START
-    xor r13d, r13d
-    mov rbx, MAX_READS
-.Lstart_read:  # bound: 1099511627776
-    mov eax, SYS_READ
+    mov rbx, MAX_FULLS
+.Lstart_full:  # bound: 1099511627776
     mov edi, STDIN
     lea rsi, [rip + input]
-    add rsi, r13
     mov edx, INPUT_LEN
-    sub edx, r13d
-    syscall
+    mov ecx, READ_TO_END
+    call fill
     test rax, rax
     js .Lstart_failed
-    jz .Lstart_finish
-    add r13, rax
-    cmp r13, INPUT_LEN
+    jz .Lstart_print
+    cmp rax, INPUT_LEN
     ja .Lstart_assert_count
+    mov r13, rax
     mov edi, r12d
     lea rsi, [rip + input]
     mov rdx, r13
-    call crc_blocks
+    call crc_bytes
     mov r12d, eax
-    sub r13, rdx
-    jz .Lstart_next
-    test rdx, rdx
-    jz .Lstart_next
-    lea rdi, [rip + input]
-    lea rsi, [rdi + rdx]
-    mov rdx, r13
-    call move_front
-.Lstart_next:
+    cmp r13, INPUT_LEN
+    jb .Lstart_print
     dec rbx
-    jnz .Lstart_read
-    jmp .Lstart_assert_reads
-.Lstart_finish:
+    jnz .Lstart_full
+    jmp .Lstart_assert_fulls
+.Lstart_print:
+    not r12d
     mov edi, r12d
-    lea rsi, [rip + input]
-    mov rdx, r13
-    call crc_rest
-    not eax
-    mov edi, eax
     call print_number
     test rax, rax
     js .Lstart_failed
@@ -126,10 +99,63 @@ _start:
 .Lstart_assert_count:
     mov edi, 1
     call assert_fail
-.Lstart_assert_reads:
+.Lstart_assert_fulls:
     mov edi, 2
     call assert_fail
 .size _start, . - _start
+
+# Folds bytes into a CRC-32C state, 8 at a time and then one at a time.
+# In: edi = the state; rsi = the bytes; rdx = how many, up to INPUT_LEN.
+# Out: eax = the new state.
+.type crc_bytes, @function
+crc_bytes:
+    test rsi, rsi
+    jz .Lcrc_bytes_assert_bytes
+    cmp rdx, INPUT_LEN
+    ja .Lcrc_bytes_assert_length
+    mov eax, edi
+    xor ecx, ecx
+    mov r9, WORD_STEPS
+.Lcrc_bytes_words:  # bound: 8193
+    lea r10, [rcx + STEP]
+    cmp r10, rdx
+    ja .Lcrc_bytes_tail
+    cmp rcx, INPUT_LEN - STEP + 1
+    jae .Lcrc_bytes_assert_word
+    crc32 rax, qword ptr [rsi + rcx]
+    add rcx, STEP
+    dec r9
+    jnz .Lcrc_bytes_words
+    jmp .Lcrc_bytes_assert_words
+.Lcrc_bytes_tail:
+    mov r9, STEP
+.Lcrc_bytes_byte:  # bound: 8
+    cmp rcx, rdx
+    jae .Lcrc_bytes_done
+    cmp rcx, INPUT_LEN
+    jae .Lcrc_bytes_assert_byte
+    crc32 eax, byte ptr [rsi + rcx]
+    inc rcx
+    dec r9
+    jnz .Lcrc_bytes_byte
+.Lcrc_bytes_done:
+    ret
+.Lcrc_bytes_assert_bytes:
+    mov edi, 3
+    call assert_fail
+.Lcrc_bytes_assert_length:
+    mov edi, 4
+    call assert_fail
+.Lcrc_bytes_assert_word:
+    mov edi, 5
+    call assert_fail
+.Lcrc_bytes_assert_words:
+    mov edi, 6
+    call assert_fail
+.Lcrc_bytes_assert_byte:
+    mov edi, 7
+    call assert_fail
+.size crc_bytes, . - crc_bytes
 
 # Prints a whole number from 0 to 4294967295 and a newline to standard output.
 # In: edi = the number.
@@ -158,205 +184,9 @@ print_number:
     add rsp, 8
     ret
 .Lprint_number_assert_digits:
-    mov edi, 3
-    call assert_fail
-.size print_number, . - print_number
-
-# Copies the bytes still to fold to the front of the buffer, a vector at a time.
-# In: rdi = where they go; rsi = where they are, at least BLOCK3 bytes after rdi; rdx = how many,
-# fewer than BLOCK3.
-.type move_front, @function
-move_front:
-    test rdi, rdi
-    jz .Lmove_front_assert_to
-    test rsi, rsi
-    jz .Lmove_front_assert_from
-    cmp rdx, BLOCK3
-    jae .Lmove_front_assert_length
-    xor ecx, ecx
-    mov r8, MOVES
-.Lmove_front_loop:  # bound: 193
-    cmp rcx, rdx
-    jae .Lmove_front_done
-    mov rax, rdx
-    sub rax, rcx
-    mov r9, -1
-    cmp rax, VECTOR
-    jae .Lmove_front_whole
-    bzhi r9, r9, rax
-.Lmove_front_whole:
-    kmovq k1, r9
-    cmp rcx, BLOCK3
-    jae .Lmove_front_assert_index
-    vmovdqu8 zmm0 {k1}{z}, zmmword ptr [rsi + rcx]
-    vmovdqu8 zmmword ptr [rdi + rcx] {k1}, zmm0
-    add rcx, VECTOR
-    dec r8
-    jnz .Lmove_front_loop
-.Lmove_front_done:
-    ret
-.Lmove_front_assert_to:
-    mov edi, 4
-    call assert_fail
-.Lmove_front_assert_from:
-    mov edi, 5
-    call assert_fail
-.Lmove_front_assert_length:
-    mov edi, 16
-    call assert_fail
-.Lmove_front_assert_index:
-    mov edi, 17
-    call assert_fail
-.size move_front, . - move_front
-
-# Folds every whole block of BLOCK3 bytes into a CRC-32C state, three chains at a time.
-# In: edi = the state; rsi = the bytes; rdx = how many, up to INPUT_LEN.
-# Out: eax = the new state; rdx = how many bytes it folded, a multiple of BLOCK3.
-.type crc_blocks, @function
-crc_blocks:
-    push rbx
-    push r12
-    push r13
-    push r14
-    sub rsp, 8
-    test rsi, rsi
-    jz .Lcrc_blocks_assert_bytes
-    cmp rdx, INPUT_LEN
-    ja .Lcrc_blocks_assert_length
-    mov eax, edi
-    mov rbx, rsi
-    mov r12, rdx
-    xor r14d, r14d
-    mov r13, BLOCKS
-.Lcrc_blocks_loop:  # bound: 86
-    cmp r12, BLOCK3
-    jb .Lcrc_blocks_done
-    mov edi, eax
-    mov rsi, rbx
-    call crc_block
-    add rbx, BLOCK3
-    sub r12, BLOCK3
-    add r14, BLOCK3
-    dec r13
-    jnz .Lcrc_blocks_loop
-    jmp .Lcrc_blocks_assert_blocks
-.Lcrc_blocks_done:
-    mov rdx, r14
-    add rsp, 8
-    pop r14
-    pop r13
-    pop r12
-    pop rbx
-    ret
-.Lcrc_blocks_assert_bytes:
-    mov edi, 6
-    call assert_fail
-.Lcrc_blocks_assert_length:
-    mov edi, 7
-    call assert_fail
-.Lcrc_blocks_assert_blocks:
     mov edi, 8
     call assert_fail
-.size crc_blocks, . - crc_blocks
-
-# Folds BLOCK3 bytes into a CRC-32C state as three chains of BLOCK bytes, which the CPU runs side
-# by side, then joins them by moving the first two past the bytes after them.
-# In: edi = the state; rsi = the bytes, at least BLOCK3 of them.
-# Out: eax = the new state.
-.type crc_block, @function
-crc_block:
-    test rsi, rsi
-    jz .Lcrc_block_assert_bytes
-    mov eax, edi
-    xor r8d, r8d
-    xor r9d, r9d
-    xor ecx, ecx
-    mov r10, STEPS
-.Lcrc_block_loop:  # bound: 512
-    cmp rcx, BLOCK - STEP + 1
-    jae .Lcrc_block_assert_index
-    crc32 rax, qword ptr [rsi + rcx]
-    crc32 r8, qword ptr [rsi + rcx + BLOCK]
-    crc32 r9, qword ptr [rsi + rcx + 2 * BLOCK]
-    add rcx, STEP
-    dec r10
-    jnz .Lcrc_block_loop
-    movq xmm0, rax
-    movq xmm1, qword ptr [rip + shift_two]
-    pclmulqdq xmm0, xmm1, 0
-    movq rax, xmm0
-    xor edx, edx
-    crc32 rdx, rax
-    movq xmm0, r8
-    movq xmm1, qword ptr [rip + shift_one]
-    pclmulqdq xmm0, xmm1, 0
-    movq r8, xmm0
-    xor r10d, r10d
-    crc32 r10, r8
-    mov eax, r9d
-    xor eax, edx
-    xor eax, r10d
-    ret
-.Lcrc_block_assert_bytes:
-    mov edi, 9
-    call assert_fail
-.Lcrc_block_assert_index:
-    mov edi, 10
-    call assert_fail
-.size crc_block, . - crc_block
-
-# Folds fewer than BLOCK3 bytes into a CRC-32C state, 8 at a time and then one at a time.
-# In: edi = the state; rsi = the bytes; rdx = how many, fewer than BLOCK3.
-# Out: eax = the new state.
-.type crc_rest, @function
-crc_rest:
-    test rsi, rsi
-    jz .Lcrc_rest_assert_bytes
-    cmp rdx, BLOCK3
-    jae .Lcrc_rest_assert_length
-    mov eax, edi
-    xor ecx, ecx
-    mov r9, STEPS_REST
-.Lcrc_rest_words:  # bound: 1536
-    lea r10, [rcx + STEP]
-    cmp r10, rdx
-    ja .Lcrc_rest_bytes
-    cmp rcx, BLOCK3 - STEP + 1
-    jae .Lcrc_rest_assert_word
-    crc32 rax, qword ptr [rsi + rcx]
-    add rcx, STEP
-    dec r9
-    jnz .Lcrc_rest_words
-    jmp .Lcrc_rest_assert_words
-.Lcrc_rest_bytes:
-    mov r9, STEP
-.Lcrc_rest_byte:  # bound: 8
-    cmp rcx, rdx
-    jae .Lcrc_rest_done
-    cmp rcx, BLOCK3
-    jae .Lcrc_rest_assert_byte
-    crc32 eax, byte ptr [rsi + rcx]
-    inc rcx
-    dec r9
-    jnz .Lcrc_rest_byte
-.Lcrc_rest_done:
-    ret
-.Lcrc_rest_assert_bytes:
-    mov edi, 11
-    call assert_fail
-.Lcrc_rest_assert_length:
-    mov edi, 12
-    call assert_fail
-.Lcrc_rest_assert_word:
-    mov edi, 13
-    call assert_fail
-.Lcrc_rest_assert_words:
-    mov edi, 14
-    call assert_fail
-.Lcrc_rest_assert_byte:
-    mov edi, 15
-    call assert_fail
-.size crc_rest, . - crc_rest
+.size print_number, . - print_number
 
 # Writes a whole number's decimal digits just before a place in memory.
 # In: rdi = the number; rsi = where the digits end.
@@ -383,12 +213,62 @@ digits:
     mov rax, rsi
     ret
 .Ldigits_assert_end:
-    mov edi, 20
+    mov edi, 9
     call assert_fail
 .Ldigits_assert_digits:
-    mov edi, 21
+    mov edi, 10
     call assert_fail
 .size digits, . - digits
+
+# Reads from file descriptor edi into the rdx bytes at rsi until they're full, the input ends,
+# or, when ecx is a byte (0 to 255), the last byte read is ecx; with ecx = -1 it reads to the
+# end. However the input arrives, it reads the same.
+# In: edi = the file descriptor, rsi = the buffer, rdx = its size, at least 1, ecx = the end
+# byte or -1.
+# Out: rax = how many bytes it read, or a negative error code.
+# returns: result
+.type fill, @function
+fill:
+    test rsi, rsi
+    jz .Lfill_assert_null
+    test rdx, rdx
+    jz .Lfill_assert_empty
+    mov r8, rdx
+    mov r10d, ecx
+    mov r9, MAX_FILL_READS
+.Lfill_loop:  # bound: 1099511627776
+    mov eax, SYS_READ
+    syscall
+    test rax, rax
+    js .Lfill_return
+    jz .Lfill_done
+    cmp rax, rdx
+    ja .Lfill_assert_count
+    add rsi, rax
+    sub rdx, rax
+    jz .Lfill_done
+    movzx eax, byte ptr [rsi - 1]
+    cmp eax, r10d
+    je .Lfill_done
+    dec r9
+    jnz .Lfill_loop
+    mov rax, ERROR_IO
+    jmp .Lfill_return
+.Lfill_done:
+    mov rax, r8
+    sub rax, rdx
+.Lfill_return:
+    ret
+.Lfill_assert_null:
+    mov edi, 990
+    call assert_fail
+.Lfill_assert_empty:
+    mov edi, 991
+    call assert_fail
+.Lfill_assert_count:
+    mov edi, 992
+    call assert_fail
+.size fill, . - fill
 
 # Writes rdx bytes from rsi to file descriptor edi, retrying partial writes.
 # In: edi = the file descriptor, rsi = the bytes, rdx = how many, at least 1.

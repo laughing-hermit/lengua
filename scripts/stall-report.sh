@@ -31,7 +31,17 @@ job=$!
 ) &
 watcher=$!
 
+# A line of memory use every 10 seconds in the job's own log, so a machine that dies mid-run
+# still says how it was going (the stall report above is lost with it).
+(
+  while sleep 10; do
+    echo "memory: $(free -m | awk 'NR == 2 { print $3 " MB used, " $7 " MB available" }');" \
+      "largest: $(ps -eo rss,etime,comm --sort=-rss | sed -n 2,4p | tr -s ' ' | tr '\n' ';')"
+  done
+) &
+meter=$!
+
 wait "$job"
 status=$?
-kill "$watcher" 2>/dev/null || true
+kill "$watcher" "$meter" 2>/dev/null || true
 exit "$status"

@@ -1,5 +1,8 @@
 .arch armv8-a
-.arch_extension sha2
+
+// SHA-256 in plain integer code (rotates, adds and xors) and NEON for the byte order and the
+// copies, so it runs on every ARM64 computer. The form that uses the CPU's SHA2 instructions,
+// from the very same spec, is plugin/skills/compile/assets/linux-aarch64/fast/sha256-sha2.
 
 // System calls (Linux AArch64)
 .equ SYS_READ, 63
@@ -24,8 +27,10 @@
 .equ STATE_WORDS, 8
 .equ STATE_LEN, 32
 .equ SCHEDULE_LEN, 256
-.equ EXTEND_STEPS, 12
-.equ ROUND_STEPS, 16
+.equ EXTEND_STEPS, 48
+.equ ROUND_STEPS, 64
+.equ WORK_A_LEN, 272
+.equ WORK_E_LEN, 272
 .equ PADDED_LEN, 128
 .equ LENGTH_AT_ONE, 56
 .equ LENGTH_AT_TWO, 120
@@ -99,6 +104,22 @@ state:
 schedule:
     .zero SCHEDULE_LEN
 .size schedule, . - schedule
+
+// The working variable a of every round, newest first: the words of a list that grows downward.
+// The state's a, b, c and d are its last four words before the first round; round t reads four
+// words (a, b, c, d) and writes the next a in the word before them. After the 64th round the
+// first four words are the new a, b, c and d. rounds owns it and lends sha_round the place of
+// each round.
+.type work_a, @object
+work_a:
+    .zero WORK_A_LEN
+.size work_a, . - work_a
+
+// The working variable e of every round, newest first, as work_a keeps a: e, f, g and h last.
+.type work_e, @object
+work_e:
+    .zero WORK_E_LEN
+.size work_e, . - work_e
 
 // The last one or two blocks: the message's tail, a 1 bit, zeros and its length in bits.
 .type padded, @object
@@ -231,8 +252,9 @@ hash_blocks:
     bl assert_fail
 .size hash_blocks, . - hash_blocks
 
-// Lays out one block's 64-word message schedule: the block's 16 words, then the other 48, four
-// at a time.
+// Lays out one block's 64-word message schedule, with plain integer code: the block's 16 words,
+// big-endian (NEON reverses the bytes of four words at a time), then each of the other 48 from
+// four before it: W[t] = sigma1(W[t-2]) + W[t-7] + sigma0(W[t-15]) + W[t-16].
 // In: x0 = the block, 64 bytes.
 .type schedule_words, @function
 schedule_words:
@@ -251,23 +273,30 @@ schedule_words:
     ldr q0, [x0, #48]
     rev32 v0.16b, v0.16b
     str q0, [x2, #48]
-    add x9, x2, #16
-    add x10, x2, #32
-    add x11, x2, #48
+    add x9, x2, #4
+    add x10, x2, #36
+    add x11, x2, #56
     add x12, x2, #64
     mov x3, #0
     mov x4, #EXTEND_STEPS
-.Lschedule_words_loop:  // bound: 12
-    cmp x3, #SCHEDULE_LEN - 80 + 1
+.Lschedule_words_loop:  // bound: 48
+    cmp x3, #SCHEDULE_LEN - 64 - 4 + 1
     b.hs .Lschedule_words_assert_index
-    ldr q0, [x2, x3]
-    ldr q1, [x9, x3]
-    ldr q2, [x10, x3]
-    ldr q3, [x11, x3]
-    sha256su0 v0.4s, v1.4s
-    sha256su1 v0.4s, v2.4s, v3.4s
-    str q0, [x12, x3]
-    add x3, x3, #16
+    ldr w5, [x11, x3]
+    ror w6, w5, #17
+    eor w6, w6, w5, ror #19
+    eor w6, w6, w5, lsr #10
+    ldr w5, [x9, x3]
+    ror w7, w5, #7
+    eor w7, w7, w5, ror #18
+    eor w7, w7, w5, lsr #3
+    add w6, w6, w7
+    ldr w7, [x10, x3]
+    add w6, w6, w7
+    ldr w7, [x2, x3]
+    add w6, w6, w7
+    str w6, [x12, x3]
+    add x3, x3, #4
     subs x4, x4, #1
     b.ne .Lschedule_words_loop
     ret
@@ -279,46 +308,101 @@ schedule_words:
     bl assert_fail
 .size schedule_words, . - schedule_words
 
-// Runs the 64 rounds on the message schedule, four at a time with the CPU's SHA instructions,
-// and adds the result to the state.
+// Runs the 64 rounds on the message schedule, one at a time, and adds the result to the state.
+// The working variables of a round are the start of two lists that grow downward in memory
+// (work_a and work_e), not eight registers that each round moves: the state's words are copied
+// in as they stand, as the last four of each list, and the first four come out.
 // In: x0 = the state, eight 32-bit words.
 .type rounds, @function
 rounds:
+    stp x29, x30, [sp, #-16]!
+    stp x19, x20, [sp, #-16]!
+    stp x21, x22, [sp, #-16]!
+    stp x23, x24, [sp, #-16]!
     cbz x0, .Lrounds_assert_state
-    ldr q0, [x0]
-    ldr q1, [x0, #16]
-    mov v6.16b, v0.16b
-    mov v7.16b, v1.16b
-    adrp x2, schedule
-    add x2, x2, :lo12:schedule
-    adrp x3, k_table
-    add x3, x3, :lo12:k_table
-    mov x4, #0
-    mov x5, #ROUND_STEPS
-.Lrounds_loop:  // bound: 16
-    cmp x4, #SCHEDULE_LEN - 16 + 1
-    b.hs .Lrounds_assert_index
-    ldr q4, [x2, x4]
-    ldr q5, [x3, x4]
-    add v4.4s, v4.4s, v5.4s
-    mov v2.16b, v0.16b
-    sha256h q0, q1, v4.4s
-    sha256h2 q1, q2, v4.4s
-    add x4, x4, #16
-    subs x5, x5, #1
+    mov x19, x0
+    adrp x21, work_a
+    add x21, x21, :lo12:work_a
+    adrp x22, work_e
+    add x22, x22, :lo12:work_e
+    ldr q0, [x19]
+    str q0, [x21, #256]
+    ldr q0, [x19, #16]
+    str q0, [x22, #256]
+    add x21, x21, #256
+    add x22, x22, #256
+    adrp x23, k_table
+    add x23, x23, :lo12:k_table
+    adrp x24, schedule
+    add x24, x24, :lo12:schedule
+    mov x20, #ROUND_STEPS
+.Lrounds_loop:  // bound: 64
+    sub x21, x21, #4
+    sub x22, x22, #4
+    mov x0, x21
+    mov x1, x22
+    mov x2, x23
+    mov x3, x24
+    bl sha_round
+    add x23, x23, #4
+    add x24, x24, #4
+    subs x20, x20, #1
     b.ne .Lrounds_loop
-    add v0.4s, v0.4s, v6.4s
-    add v1.4s, v1.4s, v7.4s
-    str q0, [x0]
-    str q1, [x0, #16]
+    ldr q0, [x21]
+    ldr q1, [x19]
+    add v0.4s, v0.4s, v1.4s
+    str q0, [x19]
+    ldr q0, [x22]
+    ldr q1, [x19, #16]
+    add v0.4s, v0.4s, v1.4s
+    str q0, [x19, #16]
+    ldp x23, x24, [sp], #16
+    ldp x21, x22, [sp], #16
+    ldp x19, x20, [sp], #16
+    ldp x29, x30, [sp], #16
     ret
 .Lrounds_assert_state:
     mov w0, #9
     bl assert_fail
-.Lrounds_assert_index:
-    mov w0, #10
-    bl assert_fail
 .size rounds, . - rounds
+
+// One round of the compression function, the sum of its two halves:
+// T1 = h + Sigma1(e) + Ch(e, f, g) + K[t] + W[t] and T2 = Sigma0(a) + Maj(a, b, c), then
+// a = T1 + T2 and e = d + T1.
+// In: x0 = the place in work_a for the new a, the word before the round's a, b, c and d; x1 =
+// the same in work_e, for the new e and the round's e, f, g and h; x2 = K[t]; x3 = W[t].
+.type sha_round, @function
+sha_round:
+    ldp w4, w5, [x0, #4]
+    ldp w6, w7, [x0, #12]
+    ldp w8, w9, [x1, #4]
+    ldp w10, w11, [x1, #12]
+    ldr w12, [x2]
+    ldr w13, [x3]
+    ror w14, w8, #6
+    eor w14, w14, w8, ror #11
+    eor w14, w14, w8, ror #25
+    eor w15, w9, w10
+    and w15, w15, w8
+    eor w15, w15, w10
+    add w14, w14, w15
+    add w14, w14, w11
+    add w14, w14, w12
+    add w14, w14, w13
+    ror w15, w4, #2
+    eor w15, w15, w4, ror #13
+    eor w15, w15, w4, ror #22
+    orr w12, w4, w5
+    and w12, w12, w6
+    and w13, w4, w5
+    orr w12, w12, w13
+    add w15, w15, w12
+    add w7, w7, w14
+    str w7, [x1]
+    add w15, w15, w14
+    str w15, [x0]
+    ret
+.size sha_round, . - sha_round
 
 // Pads the message's last bytes with a 1 bit, zeros and its length in bits, and hashes the one or
 // two blocks that makes. It runs once, so padded still holds zeros.

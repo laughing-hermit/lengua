@@ -1,5 +1,9 @@
 .intel_syntax noprefix
 
+# AES-128 in plain integer code and a table of 256 words, so it runs on every x86-64 computer. The
+# form that uses the CPU's AES instructions, from the very same spec, is
+# plugin/skills/compile/assets/fast/aes-ni.
+
 # System calls (Linux x86-64)
 .equ SYS_READ, 0
 .equ SYS_WRITE, 1
@@ -35,6 +39,8 @@
 .equ OUT_LEN, 131073
 .equ EXPAND_STEPS, 10
 .equ ROUNDS_MIDDLE, 9
+.equ CURRENT_LEN, 32
+.equ TABLE_ENTRIES, 256
 .equ BLOCK_MASK, 31
 .equ NEWLINE, 10
 .equ BAD_MSG_LEN, 15
@@ -47,12 +53,77 @@ bad_msg:
     .ascii "aes: bad input\n"
 .size bad_msg, . - bad_msg
 
-# Moves the last word of a round key, rotated by a byte, into all four words: the first step of
-# the key schedule.
-.type rotate_mask, @object
-rotate_mask:
-    .byte 13, 14, 15, 12, 13, 14, 15, 12, 13, 14, 15, 12, 13, 14, 15, 12
-.size rotate_mask, . - rotate_mask
+# SubBytes and MixColumns in one table, for the byte in row 0 of a column. S is the S-box; each
+# word holds, from its lowest byte, 2 * S[x], S[x], S[x] and 3 * S[x] (products in GF(2^8)), so
+# the bytes in rows 1, 2 and 3 use the same word rotated left by 8, 16 and 24 bits, and S[x]
+# itself is the word's byte 1.
+.type te0, @object
+te0:
+    .long 0xa56363c6, 0x847c7cf8, 0x997777ee, 0x8d7b7bf6
+    .long 0x0df2f2ff, 0xbd6b6bd6, 0xb16f6fde, 0x54c5c591
+    .long 0x50303060, 0x03010102, 0xa96767ce, 0x7d2b2b56
+    .long 0x19fefee7, 0x62d7d7b5, 0xe6abab4d, 0x9a7676ec
+    .long 0x45caca8f, 0x9d82821f, 0x40c9c989, 0x877d7dfa
+    .long 0x15fafaef, 0xeb5959b2, 0xc947478e, 0x0bf0f0fb
+    .long 0xecadad41, 0x67d4d4b3, 0xfda2a25f, 0xeaafaf45
+    .long 0xbf9c9c23, 0xf7a4a453, 0x967272e4, 0x5bc0c09b
+    .long 0xc2b7b775, 0x1cfdfde1, 0xae93933d, 0x6a26264c
+    .long 0x5a36366c, 0x413f3f7e, 0x02f7f7f5, 0x4fcccc83
+    .long 0x5c343468, 0xf4a5a551, 0x34e5e5d1, 0x08f1f1f9
+    .long 0x937171e2, 0x73d8d8ab, 0x53313162, 0x3f15152a
+    .long 0x0c040408, 0x52c7c795, 0x65232346, 0x5ec3c39d
+    .long 0x28181830, 0xa1969637, 0x0f05050a, 0xb59a9a2f
+    .long 0x0907070e, 0x36121224, 0x9b80801b, 0x3de2e2df
+    .long 0x26ebebcd, 0x6927274e, 0xcdb2b27f, 0x9f7575ea
+    .long 0x1b090912, 0x9e83831d, 0x742c2c58, 0x2e1a1a34
+    .long 0x2d1b1b36, 0xb26e6edc, 0xee5a5ab4, 0xfba0a05b
+    .long 0xf65252a4, 0x4d3b3b76, 0x61d6d6b7, 0xceb3b37d
+    .long 0x7b292952, 0x3ee3e3dd, 0x712f2f5e, 0x97848413
+    .long 0xf55353a6, 0x68d1d1b9, 0x00000000, 0x2cededc1
+    .long 0x60202040, 0x1ffcfce3, 0xc8b1b179, 0xed5b5bb6
+    .long 0xbe6a6ad4, 0x46cbcb8d, 0xd9bebe67, 0x4b393972
+    .long 0xde4a4a94, 0xd44c4c98, 0xe85858b0, 0x4acfcf85
+    .long 0x6bd0d0bb, 0x2aefefc5, 0xe5aaaa4f, 0x16fbfbed
+    .long 0xc5434386, 0xd74d4d9a, 0x55333366, 0x94858511
+    .long 0xcf45458a, 0x10f9f9e9, 0x06020204, 0x817f7ffe
+    .long 0xf05050a0, 0x443c3c78, 0xba9f9f25, 0xe3a8a84b
+    .long 0xf35151a2, 0xfea3a35d, 0xc0404080, 0x8a8f8f05
+    .long 0xad92923f, 0xbc9d9d21, 0x48383870, 0x04f5f5f1
+    .long 0xdfbcbc63, 0xc1b6b677, 0x75dadaaf, 0x63212142
+    .long 0x30101020, 0x1affffe5, 0x0ef3f3fd, 0x6dd2d2bf
+    .long 0x4ccdcd81, 0x140c0c18, 0x35131326, 0x2fececc3
+    .long 0xe15f5fbe, 0xa2979735, 0xcc444488, 0x3917172e
+    .long 0x57c4c493, 0xf2a7a755, 0x827e7efc, 0x473d3d7a
+    .long 0xac6464c8, 0xe75d5dba, 0x2b191932, 0x957373e6
+    .long 0xa06060c0, 0x98818119, 0xd14f4f9e, 0x7fdcdca3
+    .long 0x66222244, 0x7e2a2a54, 0xab90903b, 0x8388880b
+    .long 0xca46468c, 0x29eeeec7, 0xd3b8b86b, 0x3c141428
+    .long 0x79dedea7, 0xe25e5ebc, 0x1d0b0b16, 0x76dbdbad
+    .long 0x3be0e0db, 0x56323264, 0x4e3a3a74, 0x1e0a0a14
+    .long 0xdb494992, 0x0a06060c, 0x6c242448, 0xe45c5cb8
+    .long 0x5dc2c29f, 0x6ed3d3bd, 0xefacac43, 0xa66262c4
+    .long 0xa8919139, 0xa4959531, 0x37e4e4d3, 0x8b7979f2
+    .long 0x32e7e7d5, 0x43c8c88b, 0x5937376e, 0xb76d6dda
+    .long 0x8c8d8d01, 0x64d5d5b1, 0xd24e4e9c, 0xe0a9a949
+    .long 0xb46c6cd8, 0xfa5656ac, 0x07f4f4f3, 0x25eaeacf
+    .long 0xaf6565ca, 0x8e7a7af4, 0xe9aeae47, 0x18080810
+    .long 0xd5baba6f, 0x887878f0, 0x6f25254a, 0x722e2e5c
+    .long 0x241c1c38, 0xf1a6a657, 0xc7b4b473, 0x51c6c697
+    .long 0x23e8e8cb, 0x7cdddda1, 0x9c7474e8, 0x211f1f3e
+    .long 0xdd4b4b96, 0xdcbdbd61, 0x868b8b0d, 0x858a8a0f
+    .long 0x907070e0, 0x423e3e7c, 0xc4b5b571, 0xaa6666cc
+    .long 0xd8484890, 0x05030306, 0x01f6f6f7, 0x120e0e1c
+    .long 0xa36161c2, 0x5f35356a, 0xf95757ae, 0xd0b9b969
+    .long 0x91868617, 0x58c1c199, 0x271d1d3a, 0xb99e9e27
+    .long 0x38e1e1d9, 0x13f8f8eb, 0xb398982b, 0x33111122
+    .long 0xbb6969d2, 0x70d9d9a9, 0x898e8e07, 0xa7949433
+    .long 0xb69b9b2d, 0x221e1e3c, 0x92878715, 0x20e9e9c9
+    .long 0x49cece87, 0xff5555aa, 0x78282850, 0x7adfdfa5
+    .long 0x8f8c8c03, 0xf8a1a159, 0x80898909, 0x170d0d1a
+    .long 0xdabfbf65, 0x31e6e6d7, 0xc6424284, 0xb86868d0
+    .long 0xc3414182, 0xb0999929, 0x772d2d5a, 0x110f0f1e
+    .long 0xcbb0b07b, 0xfc5454a8, 0xd6bbbb6d, 0x3a16162c
+.size te0, . - te0
 
 # The round constants, one in each word.
 .type rcon_table, @object
@@ -112,6 +183,14 @@ cipher:
 round_keys:
     .zero ROUND_KEYS_LEN
 .size round_keys, . - round_keys
+
+# The block being encrypted: its four words twice over, so that the four words from any word on
+# (the ones ShiftRows brings into a column) are next to each other.
+# shared: encrypt_block sets it, aes_round replaces it, and column and last_column read it
+.type current, @object
+current:
+    .zero CURRENT_LEN
+.size current, . - current
 
 # The ciphertext in hexadecimal and a newline.
 # shared: print_hex fills it with digits and write_line adds the newline and writes it
@@ -361,39 +440,46 @@ hex_value:
     ret
 .size hex_value, . - hex_value
 
-# Expands a key into the 11 round keys, with the CPU's AES instructions.
+# Expands a key into the 11 round keys, a word at a time: each round key's first word is the
+# previous round key's first word xor SubWord(RotWord(its last word)) xor the round constant, and
+# each other word the word before it xor the one four words back.
 # In: rdi = the key, 16 bytes; rsi = where the round keys go, ROUND_KEYS_LEN bytes.
 .type expand_key, @function
 expand_key:
+    push rbx
+    push r12
+    push r13
     test rdi, rdi
     jz .Lexpand_key_assert_key
     test rsi, rsi
     jz .Lexpand_key_assert_keys
-    movdqu xmm1, xmmword ptr [rdi]
-    movdqu xmmword ptr [rsi], xmm1
-    movdqu xmm6, xmmword ptr [rip + rotate_mask]
-    lea r9, [rip + rcon_table]
-    xor ecx, ecx
-    mov r8, EXPAND_STEPS
+    movdqu xmm0, xmmword ptr [rdi]
+    movdqu xmmword ptr [rsi], xmm0
+    mov r12, rsi
+    xor r13d, r13d
+    mov rbx, EXPAND_STEPS
 .Lexpand_key_loop:  # bound: 10
-    cmp rcx, RCON_TABLE_LEN - 16 + 1
+    cmp r13, ROUND_KEYS_LEN - 32 + 1
     jae .Lexpand_key_assert_index
-    movdqu xmm5, xmmword ptr [r9 + rcx]
-    movdqu xmm2, xmm1
-    pshufb xmm2, xmm6
-    aesenclast xmm2, xmm5
-    movdqu xmm3, xmm1
-    pslldq xmm3, 4
-    pxor xmm1, xmm3
-    pslldq xmm3, 4
-    pxor xmm1, xmm3
-    pslldq xmm3, 4
-    pxor xmm1, xmm3
-    pxor xmm1, xmm2
-    movdqu xmmword ptr [rsi + rcx + 16], xmm1
-    add rcx, 16
-    dec r8
+    mov edi, dword ptr [r12 + r13 + 12]
+    ror edi, 8
+    call sub_word
+    lea rdx, [rip + rcon_table]
+    xor eax, dword ptr [rdx + r13]
+    xor eax, dword ptr [r12 + r13]
+    mov dword ptr [r12 + r13 + 16], eax
+    xor eax, dword ptr [r12 + r13 + 4]
+    mov dword ptr [r12 + r13 + 20], eax
+    xor eax, dword ptr [r12 + r13 + 8]
+    mov dword ptr [r12 + r13 + 24], eax
+    xor eax, dword ptr [r12 + r13 + 12]
+    mov dword ptr [r12 + r13 + 28], eax
+    add r13, 16
+    dec rbx
     jnz .Lexpand_key_loop
+    pop r13
+    pop r12
+    pop rbx
     ret
 .Lexpand_key_assert_key:
     mov edi, 9
@@ -406,11 +492,66 @@ expand_key:
     call assert_fail
 .size expand_key, . - expand_key
 
-# Encrypts blocks of 16 bytes one at a time: the first round key, nine rounds and the last.
+# SubWord: the S-box applied to each byte of a word, which is byte 1 of the table's words.
+# In: edi = the word.
+# Out: eax = the word with each byte replaced.
+.type sub_word, @function
+sub_word:
+    lea r9, [rip + te0]
+    movzx edx, dil
+    cmp rdx, TABLE_ENTRIES
+    jae .Lsub_word_assert_row0
+    movzx eax, byte ptr [r9 + rdx*4 + 1]
+    mov edx, edi
+    shr edx, 8
+    movzx edx, dl
+    cmp rdx, TABLE_ENTRIES
+    jae .Lsub_word_assert_row1
+    movzx ecx, byte ptr [r9 + rdx*4 + 1]
+    shl ecx, 8
+    or eax, ecx
+    mov edx, edi
+    shr edx, 16
+    movzx edx, dl
+    cmp rdx, TABLE_ENTRIES
+    jae .Lsub_word_assert_row2
+    movzx ecx, byte ptr [r9 + rdx*4 + 1]
+    shl ecx, 16
+    or eax, ecx
+    mov edx, edi
+    shr edx, 24
+    cmp rdx, TABLE_ENTRIES
+    jae .Lsub_word_assert_row3
+    movzx ecx, byte ptr [r9 + rdx*4 + 1]
+    shl ecx, 24
+    or eax, ecx
+    ret
+.Lsub_word_assert_row0:
+    mov edi, 35
+    call assert_fail
+.Lsub_word_assert_row1:
+    mov edi, 36
+    call assert_fail
+.Lsub_word_assert_row2:
+    mov edi, 37
+    call assert_fail
+.Lsub_word_assert_row3:
+    mov edi, 38
+    call assert_fail
+.size sub_word, . - sub_word
+
+# Encrypts blocks of 16 bytes one at a time.
 # In: rdi = the round keys; rsi = the blocks; rdx = where the encrypted blocks go; rcx = how
 # many blocks, up to MAX_BLOCKS.
 .type encrypt_blocks, @function
 encrypt_blocks:
+    push rbx
+    push rbp
+    push r12
+    push r13
+    push r14
+    push r15
+    sub rsp, 8
     test rdi, rdi
     jz .Lencrypt_blocks_assert_keys
     test rsi, rsi
@@ -419,38 +560,34 @@ encrypt_blocks:
     jz .Lencrypt_blocks_assert_out
     cmp rcx, MAX_BLOCKS
     ja .Lencrypt_blocks_assert_count
-    movdqu xmm1, xmmword ptr [rdi]
-    movdqu xmm7, xmmword ptr [rdi + 160]
-    mov r9, rcx
-    shl r9, 4
-    xor r10d, r10d
-    mov r11, BLOCK_STEPS
+    mov r12, rdi
+    mov r13, rsi
+    mov r14, rdx
+    mov r15, rcx
+    shl r15, 4
+    xor ebx, ebx
+    mov rbp, BLOCK_STEPS
 .Lencrypt_blocks_block:  # bound: 4097
-    cmp r10, r9
+    cmp rbx, r15
     jae .Lencrypt_blocks_done
-    cmp r10, PLAIN_LEN - 16 + 1
+    cmp rbx, PLAIN_LEN - 16 + 1
     jae .Lencrypt_blocks_assert_index
-    movdqu xmm0, xmmword ptr [rsi + r10]
-    pxor xmm0, xmm1
-    mov eax, 16
-    mov r8, ROUNDS_MIDDLE
-.Lencrypt_blocks_round:  # bound: 9
-    cmp rax, ROUND_KEYS_LEN - 16 + 1
-    jae .Lencrypt_blocks_assert_round
-    movdqu xmm2, xmmword ptr [rdi + rax]
-    aesenc xmm0, xmm2
-    add rax, 16
-    dec r8
-    jnz .Lencrypt_blocks_round
-    aesenclast xmm0, xmm7
-    cmp r10, CIPHER_LEN - 16 + 1
-    jae .Lencrypt_blocks_assert_out_index
-    movdqu xmmword ptr [rdx + r10], xmm0
-    add r10, 16
-    dec r11
+    mov rdi, r12
+    lea rsi, [r13 + rbx]
+    lea rdx, [r14 + rbx]
+    call encrypt_block
+    add rbx, 16
+    dec rbp
     jnz .Lencrypt_blocks_block
     jmp .Lencrypt_blocks_assert_steps
 .Lencrypt_blocks_done:
+    add rsp, 8
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbp
+    pop rbx
     ret
 .Lencrypt_blocks_assert_keys:
     mov edi, 12
@@ -467,16 +604,264 @@ encrypt_blocks:
 .Lencrypt_blocks_assert_index:
     mov edi, 16
     call assert_fail
-.Lencrypt_blocks_assert_round:
-    mov edi, 17
-    call assert_fail
-.Lencrypt_blocks_assert_out_index:
-    mov edi, 18
-    call assert_fail
 .Lencrypt_blocks_assert_steps:
     mov edi, 19
     call assert_fail
 .size encrypt_blocks, . - encrypt_blocks
+
+# Encrypts one block: the first round key added, nine rounds and the last, which has no
+# MixColumns.
+# In: rdi = the round keys; rsi = the block, 16 bytes; rdx = where the encrypted block goes.
+.type encrypt_block, @function
+encrypt_block:
+    push rbx
+    push r12
+    push r13
+    test rdi, rdi
+    jz .Lencrypt_block_assert_keys
+    test rsi, rsi
+    jz .Lencrypt_block_assert_block
+    test rdx, rdx
+    jz .Lencrypt_block_assert_out
+    mov rbx, rdi
+    mov r12, rdx
+    movdqu xmm0, xmmword ptr [rsi]
+    movdqu xmm1, xmmword ptr [rbx]
+    pxor xmm0, xmm1
+    movdqu xmmword ptr [rip + current], xmm0
+    movdqu xmmword ptr [rip + current + 16], xmm0
+    mov r13, ROUNDS_MIDDLE
+.Lencrypt_block_round:  # bound: 9
+    add rbx, 16
+    mov rdi, rbx
+    call aes_round
+    dec r13
+    jnz .Lencrypt_block_round
+    add rbx, 16
+    mov rdi, rbx
+    mov rsi, r12
+    call last_round
+    pop r13
+    pop r12
+    pop rbx
+    ret
+.Lencrypt_block_assert_keys:
+    mov edi, 17
+    call assert_fail
+.Lencrypt_block_assert_block:
+    mov edi, 18
+    call assert_fail
+.Lencrypt_block_assert_out:
+    mov edi, 39
+    call assert_fail
+.size encrypt_block, . - encrypt_block
+
+# One round that isn't the last: the four columns of the new block, each from the old, then both
+# copies of the block replaced.
+# In: rdi = the round key, 16 bytes.
+.type aes_round, @function
+aes_round:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    test rdi, rdi
+    jz .Laes_round_assert_key
+    mov r15, rdi
+    xor edi, edi
+    mov esi, dword ptr [r15]
+    call column
+    mov ebx, eax
+    mov edi, 4
+    mov esi, dword ptr [r15 + 4]
+    call column
+    mov r12d, eax
+    mov edi, 8
+    mov esi, dword ptr [r15 + 8]
+    call column
+    mov r13d, eax
+    mov edi, 12
+    mov esi, dword ptr [r15 + 12]
+    call column
+    mov r14d, eax
+    mov dword ptr [rip + current], ebx
+    mov dword ptr [rip + current + 4], r12d
+    mov dword ptr [rip + current + 8], r13d
+    mov dword ptr [rip + current + 12], r14d
+    mov dword ptr [rip + current + 16], ebx
+    mov dword ptr [rip + current + 20], r12d
+    mov dword ptr [rip + current + 24], r13d
+    mov dword ptr [rip + current + 28], r14d
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+.Laes_round_assert_key:
+    mov edi, 40
+    call assert_fail
+.size aes_round, . - aes_round
+
+# One column of a round that isn't the last, with SubBytes, ShiftRows, MixColumns and the round
+# key's word in one: the byte of row r comes from the word r columns on, goes through the table
+# and is rotated left by 8 * r bits.
+# In: edi = 4 times the column, 0 to 12; esi = the round key's word for that column.
+# Out: eax = the column's new word.
+.type column, @function
+column:
+    lea r8, [rip + current]
+    lea r9, [rip + te0]
+    cmp rdi, CURRENT_LEN - 16 + 1
+    jae .Lcolumn_assert_index
+    mov eax, dword ptr [r8 + rdi]
+    movzx edx, al
+    cmp rdx, TABLE_ENTRIES
+    jae .Lcolumn_assert_row0
+    mov ecx, dword ptr [r9 + rdx*4]
+    mov eax, dword ptr [r8 + rdi + 4]
+    shr eax, 8
+    movzx edx, al
+    cmp rdx, TABLE_ENTRIES
+    jae .Lcolumn_assert_row1
+    mov edx, dword ptr [r9 + rdx*4]
+    rol edx, 8
+    xor ecx, edx
+    mov eax, dword ptr [r8 + rdi + 8]
+    shr eax, 16
+    movzx edx, al
+    cmp rdx, TABLE_ENTRIES
+    jae .Lcolumn_assert_row2
+    mov edx, dword ptr [r9 + rdx*4]
+    rol edx, 16
+    xor ecx, edx
+    mov eax, dword ptr [r8 + rdi + 12]
+    shr eax, 24
+    cmp rax, TABLE_ENTRIES
+    jae .Lcolumn_assert_row3
+    mov edx, dword ptr [r9 + rax*4]
+    rol edx, 24
+    xor ecx, edx
+    xor ecx, esi
+    mov eax, ecx
+    ret
+.Lcolumn_assert_index:
+    mov edi, 41
+    call assert_fail
+.Lcolumn_assert_row0:
+    mov edi, 42
+    call assert_fail
+.Lcolumn_assert_row1:
+    mov edi, 43
+    call assert_fail
+.Lcolumn_assert_row2:
+    mov edi, 44
+    call assert_fail
+.Lcolumn_assert_row3:
+    mov edi, 45
+    call assert_fail
+.size column, . - column
+
+# The last round: SubBytes, ShiftRows and the last round key, the four columns written to the
+# encrypted block.
+# In: rdi = the last round key, 16 bytes; rsi = where the encrypted block goes.
+.type last_round, @function
+last_round:
+    push rbx
+    push r12
+    sub rsp, 8
+    test rdi, rdi
+    jz .Llast_round_assert_key
+    test rsi, rsi
+    jz .Llast_round_assert_out
+    mov rbx, rdi
+    mov r12, rsi
+    xor edi, edi
+    mov esi, dword ptr [rbx]
+    call last_column
+    mov dword ptr [r12], eax
+    mov edi, 4
+    mov esi, dword ptr [rbx + 4]
+    call last_column
+    mov dword ptr [r12 + 4], eax
+    mov edi, 8
+    mov esi, dword ptr [rbx + 8]
+    call last_column
+    mov dword ptr [r12 + 8], eax
+    mov edi, 12
+    mov esi, dword ptr [rbx + 12]
+    call last_column
+    mov dword ptr [r12 + 12], eax
+    add rsp, 8
+    pop r12
+    pop rbx
+    ret
+.Llast_round_assert_key:
+    mov edi, 46
+    call assert_fail
+.Llast_round_assert_out:
+    mov edi, 47
+    call assert_fail
+.size last_round, . - last_round
+
+# One column of the last round: the bytes ShiftRows brings into it go through the S-box, which is
+# byte 1 of the table's words, and the round key's word is added.
+# In: edi = 4 times the column, 0 to 12; esi = the round key's word for that column.
+# Out: eax = the column's new word.
+.type last_column, @function
+last_column:
+    lea r8, [rip + current]
+    lea r9, [rip + te0]
+    cmp rdi, CURRENT_LEN - 16 + 1
+    jae .Llast_column_assert_index
+    mov eax, dword ptr [r8 + rdi]
+    movzx edx, al
+    cmp rdx, TABLE_ENTRIES
+    jae .Llast_column_assert_row0
+    movzx ecx, byte ptr [r9 + rdx*4 + 1]
+    mov eax, dword ptr [r8 + rdi + 4]
+    shr eax, 8
+    movzx edx, al
+    cmp rdx, TABLE_ENTRIES
+    jae .Llast_column_assert_row1
+    movzx edx, byte ptr [r9 + rdx*4 + 1]
+    shl edx, 8
+    or ecx, edx
+    mov eax, dword ptr [r8 + rdi + 8]
+    shr eax, 16
+    movzx edx, al
+    cmp rdx, TABLE_ENTRIES
+    jae .Llast_column_assert_row2
+    movzx edx, byte ptr [r9 + rdx*4 + 1]
+    shl edx, 16
+    or ecx, edx
+    mov eax, dword ptr [r8 + rdi + 12]
+    shr eax, 24
+    cmp rax, TABLE_ENTRIES
+    jae .Llast_column_assert_row3
+    movzx edx, byte ptr [r9 + rax*4 + 1]
+    shl edx, 24
+    or ecx, edx
+    xor ecx, esi
+    mov eax, ecx
+    ret
+.Llast_column_assert_index:
+    mov edi, 48
+    call assert_fail
+.Llast_column_assert_row0:
+    mov edi, 49
+    call assert_fail
+.Llast_column_assert_row1:
+    mov edi, 50
+    call assert_fail
+.Llast_column_assert_row2:
+    mov edi, 51
+    call assert_fail
+.Llast_column_assert_row3:
+    mov edi, 52
+    call assert_fail
+.size last_column, . - last_column
 
 # Prints bytes as lowercase hexadecimal digits and a newline.
 # In: rdi = the bytes; rsi = how many, up to DATA_BYTES.

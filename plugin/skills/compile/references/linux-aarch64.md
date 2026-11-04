@@ -43,10 +43,21 @@ x86-64's is.
   worker's result can't be read before the id shows it ended: loads on ARM64 can pass each
   other. `ldar` of a whole `w` or `x` register from a base with no offset is the dialect's only
   ordered access.
-- [The fast crc32c](../assets/linux-aarch64/fast/crc32c/main.s) prints standard input's CRC-32C
-  from [its spec](../assets/fast/crc32c/spec.md), each read's bytes as they come: 64 bytes a step
-  with `ldp` and `crc32cx` while that many are left, then 8 bytes a step, and the rest with
-  `crc32cb`.
+- [The crc32c](../assets/linux-aarch64/fast/crc32c/main.s) prints standard input's CRC-32C from
+  [its spec](../assets/fast/crc32c/spec.md) with no CRC32 instruction, which only ARMv8.1 and
+  later have, so it runs on every ARM64 computer: a byte at a time through a table of 256 words,
+  a 64 KiB piece of standard input at a time through `fill`.
+- [The crc32c-crc tier](../assets/linux-aarch64/fast/crc32c-crc/main.s), beside a `spec.md` that
+  is the same bytes, is the form for a CPU that lists `crc` and `pmull` on the machine line, each
+  read's bytes as they come: 64 bytes a step with `ldp` and `crc32cx` while that many are left,
+  then 8 bytes a step, and the rest with `crc32cb`.
+- [The sha256-sha2](../assets/linux-aarch64/fast/sha256-sha2/main.s) and
+  [aes-aes](../assets/linux-aarch64/fast/aes-aes/main.s) tiers are the SHA-256 and AES-128
+  programs with the SHA2 and AES instructions, for a CPU that lists `sha` or `aes` on the machine
+  line, each beside a `spec.md` of the same bytes as its baseline's. The baselines, plain integer
+  code that runs everywhere (`tests/fixtures/linux-aarch64/sha256` and `aes` in the repository),
+  are `ror` and `eor` with a rotated register, `ubfx` for a byte and, for AES, a table of 256
+  words.
 - [The fast `wc`](../assets/linux-aarch64/fast/wc/main.s) counts lines and words 16 bytes a step,
   each step masked to the bytes left, proven for every length with a 64 KiB buffer;
   [its SVE form](../assets/linux-aarch64/fast/wc-sve/main.s) does it in the scalable vectors the
@@ -226,11 +237,11 @@ only where `machine` lists the extension. `check` refuses an instruction the mac
   bytes from a `w` register. `crc32b` to `crc32x` are the same in the IEEE polynomial, zip's and
   PNG's. The state starts as all ones and ends inverted (`mvn w0, w20`).
 - A step's 8-byte load is checked on its start: give the buffer 8 bytes past its last, so
-  `cmp x10, #BUFFER_FULL` and `b.hi` hold it inside, as the fast crc32c does.
+  `cmp x10, #BUFFER_FULL` and `b.hi` hold it inside, as the crc32c-crc tier does.
 - One chain of `crc32cx` ran at one a cycle on GitHub's ARM64 runners (Neoverse N2), whose CRC
   unit hands each result straight to the next, so there the loop's own instructions are what slow
   it: take 64 bytes a step, `ldp x14, x15, [x13, #16]` through a pointer `add` moved into the
-  buffer, as the fast crc32c does. A load through a moved pointer has no index for `cmp` to
+  buffer, as the crc32c-crc tier does. A load through a moved pointer has no index for `cmp` to
   check: its bounds are the proof's to show.
 - `pmull v0.1q, v1.1d, v2.1d` multiplies v1's and v2's low doublewords as polynomials over GF(2),
   carries dropped, into all 16 bytes of v0, as x86-64's `pclmulqdq` does; `pmull2 v0.1q, v1.2d,
@@ -238,7 +249,7 @@ only where `machine` lists the extension. `check` refuses an instruction the mac
   write `.arch_extension aes` after `.arch_extension crc`, and check holds it to a CPU that has it
   (`pmull` on the machine line). The bytes' form, `pmull v0.8h, v1.8b, v2.8b` and `pmull2 v0.8h,
   v1.16b, v2.16b`, eight products of bytes into halfwords, is in every ARM64 CPU.
-- Past the CRC unit's one a cycle, the vector units take a share: the fast crc32c runs its chain
+- Past the CRC unit's one a cycle, the vector units take a share: the crc32c-crc tier runs its chain
   over the first half of each 32 KiB block while `pmull` and `pmull2` fold the second half into
   four vectors, 64 bytes a step, then folds the four into one, takes its CRC with two `crc32cx`
   from a state of 0, and joins the chain's state to it, moved past the half by one more `pmull`

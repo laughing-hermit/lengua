@@ -300,10 +300,13 @@ fn workloads() -> Vec<Workload> {
                     `crc32` instruction 8 bytes at a time, one chain that waits on itself; \
                     lengua's version runs three chains side by side and joins them with \
                     carry-less multiplies.",
-            lengua: &[("lengua", "plugin/skills/compile/assets/fast/crc32c/main.s")],
+            lengua: &[(
+                "lengua",
+                "plugin/skills/compile/assets/fast/crc32c-pclmul/main.s",
+            )],
             lengua_aarch64: &[(
                 "lengua",
-                "plugin/skills/compile/assets/linux-aarch64/fast/crc32c/main.s",
+                "plugin/skills/compile/assets/linux-aarch64/fast/crc32c-crc/main.s",
             )],
             about_aarch64: "The CRC-32C of 64 MiB on standard input. C, C++ and Rust use the \
                             CPU's crc32cx instruction 8 bytes at a time in one chain, which an \

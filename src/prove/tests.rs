@@ -2542,15 +2542,15 @@ async fn proves_an_aarch64_program_for_the_terminal() {
     }
 }
 
-/// The CRC-32C asset on AArch64, one chain of crc32cx then crc32cb, meets the formula's chain of
-/// byte steps, so each text proves without a question to the solvers, as x86-64's does.
+/// The CRC-32C fast tier on AArch64, one chain of crc32cx then crc32cb, meets the formula's chain
+/// of byte steps, so each text proves without a question to the solvers, as x86-64's does.
 #[tokio::test]
 async fn proves_the_aarch64_crc32c_checksum() {
     let spec = asset("fast/crc32c/spec.md")
         .replace("Tests give it up to `1048576`", "Tests give it up to `100`")
         .replace("string(0, 1048576,", "string(0, 100,");
     assert!(spec.contains("string(0, 100,"), "{spec}");
-    let right = machine(&asset("linux-aarch64/fast/crc32c/main.s")).await;
+    let right = machine(&asset("linux-aarch64/fast/crc32c-crc/main.s")).await;
     let verdict = prove(&right, &block(&spec, 0), &text_budget());
     assert!(
         matches!(
@@ -2565,12 +2565,12 @@ async fn proves_the_aarch64_crc32c_checksum() {
     );
 }
 
-/// The AArch64 CRC-32C asset's own spec, every text up to the 4096 bytes a proof covers.
+/// The AArch64 CRC-32C fast tier's own spec, every text up to the 4096 bytes a proof covers.
 #[tokio::test]
 #[ignore = "slow: 4097 lengths of text"]
 async fn proves_the_aarch64_crc32c_checksum_up_to_the_bound() {
     let block = block(&asset("fast/crc32c/spec.md"), 0);
-    let machine = machine(&asset("linux-aarch64/fast/crc32c/main.s")).await;
+    let machine = machine(&asset("linux-aarch64/fast/crc32c-crc/main.s")).await;
     let budget = Budget {
         max_shapes: 100_000,
         ..budget(300)
@@ -2579,11 +2579,11 @@ async fn proves_the_aarch64_crc32c_checksum_up_to_the_bound() {
     assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
 }
 
-/// The CRC-32C asset's own spec, every text up to the 4096 bytes a proof covers.
+/// The CRC-32C fast tier's own spec, every text up to the 4096 bytes a proof covers.
 #[tokio::test]
 #[ignore = "slow: 4097 lengths of text"]
 async fn proves_the_crc32c_checksum_up_to_the_bound() {
-    let folder = "plugin/skills/compile/assets/fast/crc32c/";
+    let folder = "plugin/skills/compile/assets/fast/crc32c-pclmul/";
     let block = block(&repository_file(&format!("{folder}spec.md")), 0);
     let machine = machine(&repository_file(&format!("{folder}main.s"))).await;
     let started = Instant::now();
@@ -2596,11 +2596,11 @@ async fn proves_the_crc32c_checksum_up_to_the_bound() {
     assert!(matches!(verdict, Verdict::Proven { .. }), "{verdict:?}");
 }
 
-/// The CRC-32C asset: `crc32` over 8 bytes at a time, then over single bytes, meets the
+/// The CRC-32C fast tier: `crc32` over 8 bytes at a time, then over single bytes, meets the
 /// formula's chain of byte steps, so each text proves without a question to the solvers.
 #[tokio::test]
 async fn proves_the_crc32c_checksum() {
-    let folder = "plugin/skills/compile/assets/fast/crc32c/";
+    let folder = "plugin/skills/compile/assets/fast/crc32c-pclmul/";
     let spec = repository_file(&format!("{folder}spec.md"))
         .replace("Tests give it up to `1048576`", "Tests give it up to `100`")
         .replace("string(0, 1048576,", "string(0, 100,");

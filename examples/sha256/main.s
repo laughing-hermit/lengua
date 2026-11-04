@@ -1,5 +1,9 @@
 .intel_syntax noprefix
 
+# SHA-256 in plain integer code (rotates, adds and xors) and SSE2, so it runs on every x86-64
+# computer. The form that uses the CPU's SHA instructions, from the very same spec, is
+# plugin/skills/compile/assets/fast/sha256-ni.
+
 # System calls (Linux x86-64)
 .equ SYS_READ, 0
 .equ SYS_WRITE, 1
@@ -23,8 +27,11 @@
 .equ STATE_WORDS, 8
 .equ STATE_LEN, 32
 .equ SCHEDULE_LEN, 256
-.equ EXTEND_STEPS, 12
-.equ ROUND_STEPS, 16
+.equ LOAD_STEPS, 16
+.equ EXTEND_STEPS, 48
+.equ ROUND_STEPS, 64
+.equ WORK_A_LEN, 272
+.equ WORK_E_LEN, 272
 .equ PADDED_LEN, 128
 .equ LENGTH_AT_ONE, 56
 .equ LENGTH_AT_TWO, 120
@@ -68,12 +75,6 @@ initial_state:
     .long 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
 .size initial_state, . - initial_state
 
-# Reverses the bytes of each 32-bit word: the message's words are big-endian.
-.type bswap_mask, @object
-bswap_mask:
-    .byte 3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12
-.size bswap_mask, . - bswap_mask
-
 .type hex_digits, @object
 hex_digits:
     .ascii "0123456789abcdef"
@@ -99,11 +100,26 @@ state:
 .size state, . - state
 
 # The 64 words of one block's message schedule.
-# shared: schedule_words writes it and rounds reads it, one block at a time
+# shared: schedule_words writes it and sha_round reads it, one block at a time
 .type schedule, @object
 schedule:
     .zero SCHEDULE_LEN
 .size schedule, . - schedule
+
+# The working variable a of every round, in time order: d, c, b and a before the first round,
+# then the a each round makes. Round t reads words t to t + 3 (d, c, b, a) and writes word t + 4.
+# shared: rounds sets the first four words and reads the last four; sha_round writes the rest
+.type work_a, @object
+work_a:
+    .zero WORK_A_LEN
+.size work_a, . - work_a
+
+# The working variable e of every round, in time order, as work_a keeps a: h, g, f and e first.
+# shared: rounds sets the first four words and reads the last four; sha_round writes the rest
+.type work_e, @object
+work_e:
+    .zero WORK_E_LEN
+.size work_e, . - work_e
 
 # The last one or two blocks: the message's tail, a 1 bit, zeros and its length in bits.
 .type padded, @object
@@ -234,45 +250,54 @@ hash_blocks:
     call assert_fail
 .size hash_blocks, . - hash_blocks
 
-# Lays out one block's 64-word message schedule: the block's 16 words, then the other 48, four
-# at a time.
+# Lays out one block's 64-word message schedule, with plain integer code: the block's 16 words,
+# big-endian, then each of the other 48 from four before it:
+# W[t] = sigma1(W[t-2]) + W[t-7] + sigma0(W[t-15]) + W[t-16].
 # In: rdi = the block, 64 bytes.
 .type schedule_words, @function
 schedule_words:
     test rdi, rdi
     jz .Lschedule_words_assert_block
     lea rdx, [rip + schedule]
-    movdqu xmm15, xmmword ptr [rip + bswap_mask]
-    movdqu xmm0, xmmword ptr [rdi]
-    pshufb xmm0, xmm15
-    movdqu xmmword ptr [rdx], xmm0
-    movdqu xmm0, xmmword ptr [rdi + 16]
-    pshufb xmm0, xmm15
-    movdqu xmmword ptr [rdx + 16], xmm0
-    movdqu xmm0, xmmword ptr [rdi + 32]
-    pshufb xmm0, xmm15
-    movdqu xmmword ptr [rdx + 32], xmm0
-    movdqu xmm0, xmmword ptr [rdi + 48]
-    pshufb xmm0, xmm15
-    movdqu xmmword ptr [rdx + 48], xmm0
+    xor ecx, ecx
+    mov r8, LOAD_STEPS
+.Lschedule_words_load:  # bound: 16
+    cmp rcx, BLOCK_BYTES - 4 + 1
+    jae .Lschedule_words_assert_load
+    mov eax, dword ptr [rdi + rcx]
+    bswap eax
+    mov dword ptr [rdx + rcx], eax
+    add rcx, 4
+    dec r8
+    jnz .Lschedule_words_load
     xor ecx, ecx
     mov r8, EXTEND_STEPS
-.Lschedule_words_loop:  # bound: 12
-    cmp rcx, SCHEDULE_LEN - 80 + 1
+.Lschedule_words_extend:  # bound: 48
+    cmp rcx, SCHEDULE_LEN - 64 - 4 + 1
     jae .Lschedule_words_assert_index
-    movdqu xmm0, xmmword ptr [rdx + rcx]
-    movdqu xmm1, xmmword ptr [rdx + rcx + 16]
-    sha256msg1 xmm0, xmm1
-    movdqu xmm2, xmmword ptr [rdx + rcx + 48]
-    movdqu xmm3, xmmword ptr [rdx + rcx + 32]
-    movdqu xmm4, xmm2
-    palignr xmm4, xmm3, 4
-    paddd xmm0, xmm4
-    sha256msg2 xmm0, xmm2
-    movdqu xmmword ptr [rdx + rcx + 64], xmm0
-    add rcx, 16
+    mov eax, dword ptr [rdx + rcx + 56]
+    mov r9d, eax
+    ror r9d, 17
+    mov r10d, eax
+    ror r10d, 19
+    xor r9d, r10d
+    shr eax, 10
+    xor r9d, eax
+    mov eax, dword ptr [rdx + rcx + 4]
+    mov r10d, eax
+    ror r10d, 7
+    mov r11d, eax
+    ror r11d, 18
+    xor r10d, r11d
+    shr eax, 3
+    xor r10d, eax
+    add r9d, r10d
+    add r9d, dword ptr [rdx + rcx + 36]
+    add r9d, dword ptr [rdx + rcx]
+    mov dword ptr [rdx + rcx + 64], r9d
+    add rcx, 4
     dec r8
-    jnz .Lschedule_words_loop
+    jnz .Lschedule_words_extend
     ret
 .Lschedule_words_assert_block:
     mov edi, 7
@@ -280,57 +305,115 @@ schedule_words:
 .Lschedule_words_assert_index:
     mov edi, 8
     call assert_fail
+.Lschedule_words_assert_load:
+    mov edi, 21
+    call assert_fail
 .size schedule_words, . - schedule_words
 
-# Runs the 64 rounds on the message schedule, four at a time with the CPU's SHA instructions,
-# and adds the result to the state.
+# Runs the 64 rounds on the message schedule, one at a time, and adds the result to the state.
+# The working variables of a round are the end of two lists in time order (work_a, work_e), not
+# eight registers that each round moves: the state's words go in reversed, and the last four of
+# each list come out, reversed again.
 # In: rdi = the state, eight 32-bit words.
 .type rounds, @function
 rounds:
+    push rbx
+    push r12
+    push r13
     test rdi, rdi
     jz .Lrounds_assert_state
-    movdqu xmm1, xmmword ptr [rdi]
-    movdqu xmm2, xmmword ptr [rdi + 16]
-    pshufd xmm1, xmm1, 0xB1
-    pshufd xmm2, xmm2, 0x1B
-    movdqu xmm3, xmm1
-    palignr xmm1, xmm2, 8
-    pblendw xmm2, xmm3, 0xF0
-    movdqu xmm6, xmm1
-    movdqu xmm7, xmm2
-    lea rdx, [rip + schedule]
-    lea rsi, [rip + k_table]
-    xor ecx, ecx
-    mov r8, ROUND_STEPS
-.Lrounds_loop:  # bound: 16
-    cmp rcx, SCHEDULE_LEN - 16 + 1
-    jae .Lrounds_assert_index
-    movdqu xmm0, xmmword ptr [rdx + rcx]
-    movdqu xmm4, xmmword ptr [rsi + rcx]
-    paddd xmm0, xmm4
-    sha256rnds2 xmm2, xmm1
-    pshufd xmm0, xmm0, 0x0E
-    sha256rnds2 xmm1, xmm2
-    add rcx, 16
-    dec r8
+    mov r12, rdi
+    movdqu xmm0, xmmword ptr [r12]
+    pshufd xmm0, xmm0, 0x1B
+    movdqu xmmword ptr [rip + work_a], xmm0
+    movdqu xmm0, xmmword ptr [r12 + 16]
+    pshufd xmm0, xmm0, 0x1B
+    movdqu xmmword ptr [rip + work_e], xmm0
+    xor r13d, r13d
+    mov rbx, ROUND_STEPS
+.Lrounds_loop:  # bound: 64
+    mov rdi, r13
+    call sha_round
+    add r13, 4
+    dec rbx
     jnz .Lrounds_loop
-    paddd xmm1, xmm6
-    paddd xmm2, xmm7
-    pshufd xmm3, xmm1, 0x1B
-    pshufd xmm2, xmm2, 0xB1
-    movdqu xmm1, xmm3
-    pblendw xmm1, xmm2, 0xF0
-    palignr xmm2, xmm3, 8
-    movdqu xmmword ptr [rdi], xmm1
-    movdqu xmmword ptr [rdi + 16], xmm2
+    movdqu xmm0, xmmword ptr [rip + work_a + 256]
+    pshufd xmm0, xmm0, 0x1B
+    movdqu xmm1, xmmword ptr [r12]
+    paddd xmm0, xmm1
+    movdqu xmmword ptr [r12], xmm0
+    movdqu xmm0, xmmword ptr [rip + work_e + 256]
+    pshufd xmm0, xmm0, 0x1B
+    movdqu xmm1, xmmword ptr [r12 + 16]
+    paddd xmm0, xmm1
+    movdqu xmmword ptr [r12 + 16], xmm0
+    pop r13
+    pop r12
+    pop rbx
     ret
 .Lrounds_assert_state:
     mov edi, 9
     call assert_fail
-.Lrounds_assert_index:
-    mov edi, 10
-    call assert_fail
 .size rounds, . - rounds
+
+# One round of the compression function, the sum of its two halves:
+# T1 = h + Sigma1(e) + Ch(e, f, g) + K[t] + W[t] and T2 = Sigma0(a) + Maj(a, b, c), then
+# a = T1 + T2 and e = d + T1; the other six variables are the words before them in time order.
+# In: rdi = 4 times the round's number, 0 to 252: its place in work_a and work_e (d at that
+# place and a four words on, h and e likewise), in k_table and in schedule.
+.type sha_round, @function
+sha_round:
+    lea rsi, [rip + work_a]
+    lea rdx, [rip + work_e]
+    lea r8, [rip + k_table]
+    lea r9, [rip + schedule]
+    cmp rdi, WORK_A_LEN - 20 + 1
+    jae .Lsha_round_assert_index
+    mov eax, dword ptr [rdx + rdi + 12]
+    mov ecx, eax
+    ror ecx, 6
+    mov r10d, eax
+    ror r10d, 11
+    xor ecx, r10d
+    mov r10d, eax
+    ror r10d, 25
+    xor ecx, r10d
+    mov r10d, dword ptr [rdx + rdi + 8]
+    mov r11d, dword ptr [rdx + rdi + 4]
+    xor r10d, r11d
+    and r10d, eax
+    xor r10d, r11d
+    add ecx, r10d
+    add ecx, dword ptr [rdx + rdi]
+    add ecx, dword ptr [r8 + rdi]
+    add ecx, dword ptr [r9 + rdi]
+    mov eax, dword ptr [rsi + rdi + 12]
+    mov r10d, eax
+    ror r10d, 2
+    mov r11d, eax
+    ror r11d, 13
+    xor r10d, r11d
+    mov r11d, eax
+    ror r11d, 22
+    xor r10d, r11d
+    mov r8d, dword ptr [rsi + rdi + 8]
+    mov r9d, dword ptr [rsi + rdi + 4]
+    mov r11d, eax
+    or r11d, r8d
+    and r11d, r9d
+    and eax, r8d
+    or r11d, eax
+    add r10d, r11d
+    mov eax, dword ptr [rsi + rdi]
+    add eax, ecx
+    mov dword ptr [rdx + rdi + 16], eax
+    add ecx, r10d
+    mov dword ptr [rsi + rdi + 16], ecx
+    ret
+.Lsha_round_assert_index:
+    mov edi, 22
+    call assert_fail
+.size sha_round, . - sha_round
 
 # Pads the message's last bytes with a 1 bit, zeros and its length in bits, and hashes the one or
 # two blocks that makes. It runs once, so padded still holds zeros.

@@ -113,16 +113,35 @@ and the CPU features the code needs; never write that line yourself.
    - **Many cases on one small number** (an operator's character, a state machine's state): one
      checked jump table, not a chain of compares (references/power-of-10.md, rule 9).
 
-   `assets/fast` holds three checked programs to learn from and copy from, each with its spec:
+   `assets/fast` holds checked programs to learn from and copy from, each with its spec:
    [wc](assets/fast/wc/main.s) counts lines and words 64 bytes a step with AVX-512 masks, each
    step masked to the bytes left, and is proven for every length, as are
    [its NEON form](assets/linux-aarch64/fast/wc/main.s) for AArch64 and
    [its SVE form](assets/linux-aarch64/fast/wc-sve/main.s);
-   [crc32c](assets/fast/crc32c/main.s) runs three `crc32` chains side by side and joins them with
-   `pclmulqdq`, and [its AArch64 form](assets/linux-aarch64/fast/crc32c/main.s) one `crc32cx`
-   chain beside `pmull` folds on the vector units; [histogram](assets/fast/histogram/main.s) spreads its counts over four tables,
+   [crc32c-pclmul](assets/fast/crc32c-pclmul/main.s) runs three `crc32` chains side by side and
+   joins them with `pclmulqdq`, and [its AArch64 form](assets/linux-aarch64/fast/crc32c-crc/main.s)
+   one `crc32cx` chain beside `pmull` folds on the vector units; [histogram](assets/fast/histogram/main.s) spreads its counts over four tables,
    and [its AArch64 form](assets/linux-aarch64/fast/histogram/main.s) over eight.
    Their `digits` (write a number's decimal digits) can be copied as it is.
+
+   **A baseline form, and fast tiers beside it.** Every program has a form that runs on every
+   computer of its target, and where a CPU's optional instructions make it faster, a tier named
+   for the extension it needs, from the very same spec; pick a tier when `machine` lists the
+   extension, never as the only way to get the behavior. The baseline of x86-64 is SSE2 to SSE4.2
+   and POPCNT, of AArch64 ARMv8.0 with NEON: no SHA, AES, PCLMUL, CRC32 or PMULL instructions,
+   no AVX, no SVE. For the checksums and ciphers: [crc32c](assets/fast/crc32c/main.s) is one
+   `crc32` chain of SSE4.2, 8 bytes a step, proven for every text as far as the proof's time
+   reaches (a minute reached 1,520 and 1,897 bytes on two of GitHub's runners), and on AArch64
+   [its baseline](assets/linux-aarch64/fast/crc32c/main.s) is a table of 256 words a byte at a
+   time, which the prover reads for texts of one byte and the tests check beyond; SHA-256 and
+   AES-128 are plain integer code, rotates and adds, with a table of 256 words for AES (the
+   repository's `examples/sha256` and `examples/aes`, and their AArch64 twins in
+   `tests/fixtures/linux-aarch64`), and their tiers are
+   [sha256-ni](assets/fast/sha256-ni/main.s) and [aes-ni](assets/fast/aes-ni/main.s), on AArch64
+   [sha256-sha2](assets/linux-aarch64/fast/sha256-sha2/main.s) and
+   [aes-aes](assets/linux-aarch64/fast/aes-aes/main.s), each beside a `spec.md` that is its
+   baseline's, byte for byte. Their programs are tested, not proven: the prover doesn't model the
+   test functions `sha256` and `aes128`.
 7. Once every test passes, `check` proves the program in the background, and within about 20 seconds
    it says `done`. Each line of `proofs` says what's proven, how far, or why not, and a proof still
    running says how far it has got: the proofs go on for up to five minutes, lengua records each in
