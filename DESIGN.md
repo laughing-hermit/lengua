@@ -1080,8 +1080,10 @@ runner — the machines to build and run them on come from CI and emulation.
 `src/platform.rs`'s `Profile` holds the triple, the short name and the linker's flags, and
 through `src/syscalls.rs` each CPU's Linux: its system call numbers and the details of the ABI
 that differ (`struct stat`'s layout, `O_DIRECTORY`, `poll` or only `ppoll`), pinned against the
-kernel's headers and the C library. Linux on x86-64 and on AArch64 have both; the rest below is
-still to build per target. A new profile must supply:
+kernel's headers and the C library. Beside them `CpuFeatures::baseline(profile)` holds the
+target's baseline feature set, the CPU extensions every machine of it has (see "One product on
+every target" below). Linux on x86-64 and on AArch64 have both; the rest below is still to build
+per target. A new profile must supply:
 
 1. **Toolchain:** the LLVM triple, the linker binary, its flags and the object format. Today
    `toolchain.rs` `link()` hardcodes `ld.lld` and ELF; macOS needs `ld64.lld` and Mach-O, Windows
@@ -1227,13 +1229,36 @@ limit, and either the capability is reshaped so every OS keeps it the same way, 
 cut on every target, Linux too. So one OS's extra power, or its sandbox's, never makes a spec
 behave differently. What may differ is the hardware:
 the instructions a CPU has, its vectors' width, its speed. A target is done when it covers what
-x86-64 covers, each item with its own hardware's means (NEON where x86-64 has AVX-512). The two
+x86-64 covers, each item with its own hardware's means (NEON where x86-64 has SSE, SVE where it
+has AVX-512). The two
 Linux targets hold each other to it program by program: every x86-64 example and fixture has an
 AArch64 twin compiled from the very same spec, under `tests/fixtures/linux-aarch64`, and every
 AArch64 one its x86-64 twin; a test checks the pairs and their specs, and another puts every
 program of each target through the server, where each follows every rule and passes its tests
 (`second` fails its tests on both CPUs, by design). The mutation test covers the same programs on
 both CPUs, x86-64's under its own decoder and ARM64's under QEMU or on ARM64.
+
+**Each target has a baseline, and every program runs on it.** The hardware may differ, but a
+spec's behavior never depends on an optional CPU extension, so every program lengua ships has a
+form that runs on every machine of its target. `CpuFeatures::baseline(profile)` (`src/platform.rs`)
+says what that is, the owner's decision, which the owner may change: on x86-64 SSE2 with SSE3,
+SSSE3, SSE4.1, SSE4.2 and POPCNT (Windows 11 24H2 requires SSE4.2 and POPCNT, and every GitHub
+runner and every Intel Mac has them), and on ARM64 ARMv8.0-A with NEON and floating point and
+nothing optional (no CRC-32, PMULL, AES, SHA, LSE atomics or SVE). An extension beyond it (BMI,
+AVX2, AVX-512, SVE, the CPUs' crypto and CRC instructions) is a **fast tier**: a program of its
+own, named for the extension (`wc-sve` beside `wc`), beside its baseline sibling and from the very
+same `spec.md`, the same bytes on both CPUs since a spec names no CPU, so the same tests and
+proofs hold for both. The agent starts from the baseline form and takes a tier only when the
+machine line lists its extension, so a computer without AVX-512 has every program to learn from
+and copy, and a port to macOS or Windows inherits no gap. `tests/baseline.rs` makes it a failing
+test for every target in `Profile::ALL`: it rule-checks every shipped `main.s` (the examples, the
+fixtures, the skill's templates and fast programs, and the benchmark's variants, listed apart)
+against the target's baseline, and a program that needs more must be listed in `TIERS`, with its
+baseline sibling written, passing and from the same spec, or in `DEBT`, with the sibling planned
+(todo.md's "Baseline debt"). The test fails for a program that needs more and isn't listed, for a
+listing that names the wrong extensions, and for a listed program that now passes, so the debt
+only shrinks. A new target brings its baseline (the `match` on `Profile` stops compiling without
+it) and the test then holds its programs to it.
 
 The network shows the rule at work. A program's own `connect` could be held to its spec's ports
 on Linux (Landlock) and to this computer (lengua's tracer), but Windows's sandbox for apps can't

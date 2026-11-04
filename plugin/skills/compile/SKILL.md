@@ -19,7 +19,13 @@ and the CPU features the code needs; never write that line yourself.
 
 1. Read `<path>/spec.md`: its behaviors, and the generated tests under them. The last `check`
    reply's `machine` lists the CPU extensions main.s may use, such as BMI, POPCNT, LZCNT, ADX,
-   MOVBE, AVX2 or AVX-512.
+   MOVBE, AVX2 or AVX-512. **Write for the baseline first**, the instructions every machine of
+   the target has: SSE2 with SSE3, SSSE3, SSE4.1, SSE4.2 and POPCNT on x86-64, and ARMv8.0-A with
+   NEON and floating point on AArch64, with nothing optional (no CRC, PMULL, AES, SHA or SVE).
+   Take an extension `machine` lists only in step 6, for speed. lengua's own programs are held
+   to the same rule: a program that needs an extension is a fast tier, named for it (`wc-sve`),
+   beside a baseline form from the very same spec, and the tier is the one to start from only
+   where `machine` lists its extension.
 2. Plan the functions before writing them: at most 60 instructions each (rule 4), so `_start`
    checks the arguments and calls the functions that do the work. When the spec builds on parts
    (`- Builds on:`), each part must be done first: call `check` on its folder until it is. Then

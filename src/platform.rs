@@ -218,8 +218,9 @@ impl Pin {
     }
 }
 
-/// CPU instruction-set extensions beyond the x86-64 baseline (which includes SSE2). Programs may
-/// use an extension's instructions only when this CPU has it.
+/// CPU instruction-set extensions beyond what every x86-64 CPU has, SSE2. Programs may use an
+/// extension's instructions only when this CPU has it. What a target's programs may count on
+/// every machine having is its baseline, [`CpuFeatures::baseline`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct CpuFeatures {
     /// BMI1 bit manipulation (`andn`, `bextr`, `blsi`, `blsmsk`, `blsr`, `tzcnt`).
@@ -336,6 +337,35 @@ impl CpuFeatures {
             crc: true,
             pmull: true,
             sve: SVE_MAX_BYTES,
+        }
+    }
+
+    /// The target's baseline: the extensions every machine of `profile` has, and so all that a
+    /// program lengua ships for the target may rely on. An instruction beyond it belongs to a fast
+    /// tier, a program of its own beside a baseline sibling that meets the very same spec, which
+    /// an agent picks only where the machine line lists the extension (DESIGN.md, "One product on
+    /// every target"). `tests/baseline.rs` holds every shipped program to it.
+    ///
+    /// - Linux on x86-64: SSE2, which every x86-64 CPU has, with SSE3, SSSE3, SSE4.1, SSE4.2 and
+    ///   POPCNT. Windows 11 24H2 requires a CPU with SSE4.2 and POPCNT, and every Intel Mac and
+    ///   every GitHub runner has them. BMI1, BMI2, LZCNT, AVX and what follows are not in it.
+    /// - Linux on AArch64: ARMv8.0-A with NEON and floating point, and nothing optional: no
+    ///   CRC-32, PMULL, AES, SHA-1 or SHA-2, atomics (LSE) or SVE.
+    ///
+    /// The owner decided both sets and may change them here. A machine that lacks its target's
+    /// baseline is outside what lengua is written for.
+    #[must_use]
+    pub fn baseline(profile: Profile) -> Self {
+        match profile {
+            Profile::LinuxX86_64 => Self {
+                popcnt: true,
+                sse3: true,
+                ssse3: true,
+                sse4_1: true,
+                sse4_2: true,
+                ..Self::default()
+            },
+            Profile::LinuxAarch64 => Self::default(),
         }
     }
 }
@@ -865,5 +895,63 @@ mod tests {
             model_name_from_cpuinfo(arm).as_deref(),
             Some("CPU implementer 0x41, part 0xd0c")
         );
+    }
+
+    /// The baseline in the checker's own names for extensions, which `tests/baseline.rs` asks
+    /// about: x86-64's has SSE3 to SSE4.2 and POPCNT and none of what the shipped programs use
+    /// beyond them, ARM64's has nothing optional.
+    #[test]
+    fn the_baseline_is_named_in_the_checkers_extensions() {
+        use crate::checker::{aarch64, x86_64};
+        let x86 = CpuFeatures::baseline(Profile::LinuxX86_64);
+        for name in ["SSE3", "SSSE3", "SSE4.1", "SSE4.2", "POPCNT"] {
+            assert_eq!(x86_64::cpu_has(name, &x86), Some(true), "{name}");
+        }
+        for name in [
+            "BMI1",
+            "BMI2",
+            "LZCNT",
+            "ADX",
+            "MOVBE",
+            "AVX",
+            "AVX2",
+            "FMA",
+            "AVX-512F",
+            "AVX-512BW",
+            "AES-NI",
+            "SHA",
+            "PCLMULQDQ",
+            "GFNI",
+        ] {
+            assert_eq!(x86_64::cpu_has(name, &x86), Some(false), "{name}");
+        }
+        let arm = CpuFeatures::baseline(Profile::LinuxAarch64);
+        for name in [
+            "crc", "pmull", "aes", "sha", "sve16", "sve32", "sve48", "sve64",
+        ] {
+            assert_eq!(aarch64::cpu_has(name, &arm), Some(false), "{name}");
+        }
+        assert_eq!(arm, CpuFeatures::default());
+    }
+
+    /// This computer has everything its target's baseline names, as every machine of the target
+    /// must: the claim the baseline rests on, checked on the hardware each run is on.
+    #[test]
+    fn this_computer_has_its_targets_baseline() {
+        let machine = Machine::detect();
+        let Some(profile) = machine.profile else {
+            crate::skiplog::note("this computer isn't a target lengua builds for");
+            return;
+        };
+        let json = |features: CpuFeatures| {
+            serde_json::to_value(features).expect("features are plain data")
+        };
+        let have = json(machine.features);
+        let floor = json(CpuFeatures::baseline(profile));
+        for (name, needed) in floor.as_object().expect("features are an object") {
+            if *needed == serde_json::Value::Bool(true) {
+                assert_eq!(have[name], serde_json::Value::Bool(true), "{name}");
+            }
+        }
     }
 }

@@ -131,17 +131,31 @@ the program on their files. `_start` has no return address: it ends with `exit`.
   digit's character into its value.
 - Exit codes go from 0 to 255; 134 is lengua's code for a failed assertion.
 
+## The baseline
+
+The baseline is what every x86-64 machine lengua is written for has: SSE2, SSE3, SSSE3, SSE4.1,
+SSE4.2 (with its `crc32`) and POPCNT, so `pcmpeqb`, `pmovmskb`, `pshufb`, `pminud`, `pcmpgtq`,
+`popcnt` and `crc32` are all in it. Write for it first. Everything else the `machine` line lists
+is an extension: BMI1 and BMI2 (`andn`, `tzcnt`, `bzhi`, `shrx`), LZCNT, ADX, MOVBE, AVX, AVX2,
+FMA, AVX-512, AES-NI, SHA, PCLMULQDQ, VAES and GFNI. A program that needs one is a fast tier: a
+program of its own, named for the extension, beside the baseline form and from the very same
+spec, which you start from only where `machine` lists the extension. `check` refuses an
+instruction the machine lacks (`needs BMI2, which this CPU doesn't have`), and lengua's own
+programs are held to the baseline by `tests/baseline.rs`.
+
 ## Vector facts
 
-- Every x86-64 CPU has SSE2: 16 `xmm` registers of 16 bytes. AVX2 adds 32-byte `ymm` forms
-  (`vpaddb ymm0, ymm1, ymm2`) and AVX-512 64-byte `zmm` forms, 32 vector registers and the mask
-  registers `k0` to `k7`; a `check` reply's `machine` lists which this CPU has.
+- Every x86-64 CPU has SSE2: 16 `xmm` registers of 16 bytes, and the baseline adds SSE3 to
+  SSE4.2. AVX2 adds 32-byte `ymm` forms (`vpaddb ymm0, ymm1, ymm2`) and AVX-512 64-byte `zmm`
+  forms, 32 vector registers and the mask registers `k0` to `k7`; they are fast tiers, and a
+  `check` reply's `machine` lists which this CPU has.
 - No vector or mask register is callee-saved: after a `call` they hold anything. System calls keep
   them.
 - Spread a byte over a register without data: `mov eax, 0x0a0a0a0a`, `movd xmm1, eax`,
   `pshufd xmm1, xmm1, 0`. With AVX2: `vpbroadcastb ymm1, xmm1`.
 - Find bytes 16 at a time: `pcmpeqb xmm0, xmm1` sets each matching byte to `0xff`, `pmovmskb
-  eax, xmm0` gathers one bit per byte, and `bsf` or `tzcnt` gives the first match's index.
+  eax, xmm0` gathers one bit per byte, and `bsf` (or, with BMI1, `tzcnt`) gives the first match's
+  index.
 - Byte compares are signed (`pcmpgtb`): ASCII letters are below `0x80`, so they compare as
   expected.
 - SSE instructions that read 16 bytes of memory need it aligned, except `movdqu` and `lddqu`; the

@@ -344,7 +344,10 @@ each later port adds one column. Make each guarantee a failing test:
    today: `examples/sha256` and `examples/aes` need SHA-NI and AES-NI on x86-64 and the ARMv8
    crypto extensions on ARM64, which older Intel chips and some ARM64 boards lack, and `crc32c`
    needs SSE4.2 and PCLMUL (and the CRC extension on ARM64). Each needs a software baseline form,
-   or to be classed as a fast tier with one.
+   or to be classed as a fast tier with one. *Built for the two Linux targets:*
+   `CpuFeatures::baseline(profile)` (`src/platform.rs`) is the table, exhaustive over `Profile`,
+   and `tests/baseline.rs` holds every shipped `main.s` of every target in `Profile::ALL` to it,
+   on either CPU's runner; what it found is "Baseline debt" below.
 3. **The porting list as an executable conformance suite.** DESIGN's "Porting a target" becomes
    the set of tests every target must pass natively: the rules, the red team, the mutation test,
    the sandbox limits, the session behaviors, every example and fixture through the server.
@@ -397,6 +400,53 @@ natively on both runners:
 - *5, visible coverage: done* (`lengua::skiplog` and the run's summary). Every skip of the new
   tests notes its reason, and the log no longer mixes the notes of tests that skip at once (a
   note is one write).
+
+### Baseline debt
+
+What `tests/baseline.rs` found on 2026-11-04, when it first held every shipped `main.s` to its
+target's baseline (x86-64: SSE2 with SSE3, SSSE3, SSE4.1, SSE4.2 and POPCNT; ARM64: ARMv8.0-A with
+NEON and floating point, nothing optional). The `DEBT` list in the test is this list, with the
+extensions each program needs exactly as the checker names them: the test fails for a program that
+needs more and isn't listed, for an entry that names other extensions, and for a listed program
+that now runs on the baseline, so the list only shrinks. Whoever writes a baseline sibling, from
+the very same `spec.md`, removes the entry; where the extension's form stays as a fast tier beside
+it, the entry moves to `TIERS`, which the test holds to a sibling that exists, needs nothing beyond
+the baseline and shares the spec's bytes.
+
+x86-64, 8 of its 39 shipped programs:
+- `examples/aes`: AES-NI. Sibling: a software AES over SSE2 and SSSE3 (`pshufb` is baseline), the
+  AES-NI form kept as a tier beside it.
+- `examples/sha256`: SHA. Sibling: a software SHA-256 over the base instructions, the SHA-NI form
+  kept as a tier.
+- `examples/count`: AVX-512BW, BMI1, BMI2. Sibling: the same count in SSE2, 16 bytes a step, on
+  the new fast `wc`'s `count_piece`, with a 64 KiB buffer as its ARM64 twin has.
+- `tests/fixtures/words` and `tests/fixtures/padded`: AVX-512BW, BMI1, BMI2. Siblings: SSE2 forms
+  on `count_piece`, changing only the start.
+- `tests/fixtures/lines`: BMI2 (`bzhi`). Sibling: the same loop with base shifts and masks in
+  place of `bzhi`.
+- `plugin/skills/compile/assets/fast/wc`: AVX-512BW, BMI2. Sibling: `fast/wc` in SSE2, 16 bytes a
+  step, the AVX-512 file moving to `fast/wc-avx512` as ARM64's `wc-sve` sits beside its `wc`.
+- `plugin/skills/compile/assets/fast/crc32c`: AVX-512BW, BMI2, PCLMULQDQ (`crc32` itself is SSE4.2,
+  now baseline). Sibling: `crc32c` on `crc32` alone, its chains joined another way and
+  `move_front` as scalar copies, the PCLMULQDQ form kept as a tier.
+
+ARM64, 3 of its 40 shipped programs:
+- `tests/fixtures/linux-aarch64/aes`: `aes`. Sibling: a software AES over NEON's base
+  instructions, the AES-extension form kept as a tier.
+- `tests/fixtures/linux-aarch64/sha256`: `sha`. Sibling: a software SHA-256 over the base
+  instructions, the SHA2-extension form kept as a tier.
+- `plugin/skills/compile/assets/linux-aarch64/fast/crc32c`: `crc`, `pmull`. Sibling: a software
+  CRC-32C by table or by bits, the CRC and PMULL form kept as a tier.
+
+Already tiers beside a written baseline sibling (`TIERS`): ARM64's `fast/wc-sve` (`sve`) beside
+`fast/wc`, and, benchmark-only and listed apart (`BENCH_ONLY`), x86-64's `benches/programs`
+`shout/avx512.s`, `shout/avx512-one.s` and `upcase/avx512.s` (AVX-512BW) beside the parallel
+template and `examples/upcase`. ARM64's two benchmark variants are NEON, on the baseline.
+
+Not done by the test: the stamp lengua writes into `main.s` and `lengua.lock` (`needs SSE4.2, …`)
+still lists SSE3 to SSE4.2 and POPCNT as extensions, since the checker's own floor is SSE2
+(`Facts.features`); leaving the baseline out of the stamp is a change to the checker's facts and
+their goldens.
 
 ## Skipped, and why
 

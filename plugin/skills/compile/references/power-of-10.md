@@ -76,15 +76,17 @@ point in double and single precision:
   `setCC`
 - `jmp`, every `jCC`, `call ret syscall nop`
 
-When the CPU has them (the `machine` line of a `check` reply lists its features): BMI1 (`andn bextr blsi blsmsk blsr
-tzcnt`), BMI2 (`bzhi mulx pdep pext rorx sarx shlx shrx`), POPCNT (`popcnt`), LZCNT (`lzcnt`),
-ADX (`adcx adox`) and MOVBE (`movbe`).
+POPCNT (`popcnt`) is in the x86-64 baseline, which every machine has. The rest only when the CPU
+has them (the `machine` line of a `check` reply lists its features): BMI1 (`andn bextr blsi blsmsk
+blsr tzcnt`), BMI2 (`bzhi mulx pdep pext rorx sarx shlx shrx`), LZCNT (`lzcnt`), ADX (`adcx adox`)
+and MOVBE (`movbe`).
 
 ### Vectors
 
 Integer vector instructions on `xmm` (16 bytes), `ymm` (32) and `zmm` (64) registers. SSE2 is in
-every x86-64 CPU; the rest only when `check`'s `machine` lists them: SSE3, SSSE3, SSE4.1, SSE4.2, AVX, AVX2
-and AVX-512 (F, BW, CD, DQ, VL, VBMI, VBMI2, VNNI, BITALG, VPOPCNTDQ):
+every x86-64 CPU, and SSE3, SSSE3, SSE4.1 and SSE4.2 are in lengua's baseline, which every machine
+has; the rest only when `check`'s `machine` lists them: AVX, AVX2 and AVX-512 (F, BW, CD, DQ, VL,
+VBMI, VBMI2, VNNI, BITALG, VPOPCNTDQ):
 
 - loads and stores: `movdqu`, `vmovdqu` (and `vmovdqu8` … `vmovdqu64`), `lddqu`; between
   general-purpose and vector registers: `movd`, `movq`, `pextrb`…`pextrq`, `pinsrb`…`pinsrq`,

@@ -36,7 +36,8 @@ optimizer would rewrite the instructions the prover just checked.
 ## What a new target profile must supply
 
 A profile lives in `src/platform.rs` (today two variants, `LinuxX86_64` and `LinuxAarch64`, each
-holding the triple, the short name and the syscall-number table). Each new target needs:
+holding the triple, the short name, the syscall-number table and the baseline feature set, below).
+Each new target needs:
 
 1. **Toolchain** — the LLVM triple, the linker (`ld.lld` for ELF/Linux, `ld64.lld` for
    Mach-O/macOS, `lld-link` for COFF/Windows), its flags and the object format. `toolchain.rs`
@@ -66,6 +67,31 @@ holding the triple, the short name and the syscall-number table). Each new targe
    sandbox only has to keep the program off the network altogether. macOS also needs the binary
    code-signed (ad-hoc via `ld64.lld`) before it will run.
 
+## The baseline
+
+A profile also fixes the target's **baseline feature set**: the CPU extensions every machine of the
+target has. `CpuFeatures::baseline(profile)` names it, and the `match` on `Profile` stops compiling
+until a new target has one. Choose the lowest set that every machine the target's OS runs on has,
+and write down why:
+- Linux on x86-64: SSE2, which every x86-64 CPU has, with SSE3, SSSE3, SSE4.1, SSE4.2 and POPCNT.
+  Windows 11 24H2 requires SSE4.2 and POPCNT, and every GitHub runner and every Intel Mac has
+  them. BMI1, BMI2, LZCNT, AVX, AVX2, AVX-512, AES-NI, SHA and PCLMULQDQ are not in it.
+- Linux on AArch64: ARMv8.0-A with NEON and floating point, and nothing optional: no CRC-32, PMULL,
+  AES, SHA-1 or SHA-2, LSE atomics or SVE. The ports to macOS and Windows on ARM64 will fix theirs
+  from what all of those chips have, with the owner.
+
+Every program lengua ships for a target has a form that runs on its baseline, so no behavior of a
+spec depends on an optional extension, and a computer without AVX-512 or SVE has every program to
+learn from and copy. An extension beyond the baseline is a **fast tier**: a program of its own,
+named for the extension (`wc-sve` beside `wc`), beside its baseline sibling and from the very same
+`spec.md`, so the same tests and proofs hold for both. The agent picks the tier from the `machine`
+line's features, and the baseline form on any other computer. `tests/baseline.rs` holds a new
+target to it from its first program: it rule-checks every shipped `main.s` of every target in
+`Profile::ALL` against that target's baseline, and a program that needs more must be listed as a
+tier, with its sibling written, or as a debt, with its sibling planned (`DEBT`, and todo.md's
+"Baseline debt"); the test fails for a program that needs more and isn't listed, and for a listed
+one that now passes, so the debt only shrinks.
+
 ## One product on every target
 
 A port adds a CPU's or an OS's means, never a different lengua. The same spec means the same on
@@ -78,7 +104,8 @@ when, and what lengua promises of it. No target is excused a limit because somet
 own, lengua's checks included, could keep the same promise there: where one OS can't keep a
 promise the way another does, every target takes on its limit, and the capability is reshaped so
 every OS keeps it the same way, or that part is cut on every target, Linux too. Only the hardware
-may differ: its instructions, its vectors' width, its speed. A target is done when it covers what
+may differ: its instructions, its vectors' width, its speed, and never so that a spec's behavior
+depends on an optional extension (the baseline, above). A target is done when it covers what
 x86-64 covers, each item with its own hardware's means.
 
 ## Order of targets

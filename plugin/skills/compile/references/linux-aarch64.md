@@ -202,6 +202,20 @@ to `x28` without saving them.
   ([x86-64's form](power-of-10.md) in AArch64's instructions).
 - **Exit codes:** `mov w0, #EXIT_NAME`.
 
+## The baseline
+
+The baseline is what every ARM64 machine lengua is written for has: ARMv8.0-A with NEON and
+floating point, and nothing optional. Write for it first: NEON's 16-byte vectors, the integer and
+floating-point instructions above, and `.arch armv8-a` alone. Everything else the `machine` line
+lists is an extension: the CRC-32 instructions (`crc`), the carry-less multiply of doublewords
+(`pmull`), the AES instructions (`aes`), the SHA-1 and SHA-2 instructions (`sha`) and SVE (`sve`,
+with the vector length). A program that needs one writes `.arch_extension` for it on the line
+after `.arch armv8-a` and is a fast tier: a program of its own, named for the extension (the SVE
+`wc` is `wc-sve`), beside the baseline form and from the very same spec, which you start from
+only where `machine` lists the extension. `check` refuses an instruction the machine lacks
+(`needs CRC, which this CPU doesn't have`), and lengua's own programs are held to the baseline by
+`tests/baseline.rs`.
+
 ## CRC-32 facts
 
 - The CRC-32 instructions are an extension: write `.arch_extension crc` on the line after
