@@ -4907,6 +4907,23 @@ mod tests {
         )
     }
 
+    /// [`fill_program`] for AArch64: the same program in its instructions.
+    fn fill_program_aarch64(fill: &str, capacity: u32, end: i32) -> String {
+        format!(
+            ".arch armv8-a\n.equ SYS_READ, 63\n.equ ERROR_IO, -5\n\
+             .equ MAX_FILL_READS, 1099511627776\n.globl _start\n.text\n\
+             .type _start, @function\n_start:\n    mov x0, #0\n    adrp x1, buffer\n    \
+             add x1, x1, :lo12:buffer\n    mov x2, #{capacity}\n    mov w3, #{end}\n    \
+             bl fill\n    mov x19, x0\n    tbnz x0, #63, .Lstart_exit\n    mov x2, x0\n    \
+             mov x0, #1\n    adrp x1, buffer\n    add x1, x1, :lo12:buffer\n    mov x8, #64\n    \
+             svc #0\n.Lstart_exit:\n    mov x0, x19\n    mov x8, #93\n    svc #0\n\
+             .size _start, . - _start\n{fill}\n\
+             .type assert_fail, @function\nassert_fail:\n    mov x0, #134\n    mov x8, #93\n    \
+             svc #0\n.size assert_fail, . - assert_fail\n.bss\n.type buffer, @object\n\
+             buffer:\n    .zero 16\n.size buffer, 16\n"
+        )
+    }
+
     /// Every way `length` bytes can arrive: each list of piece lengths that adds up to it.
     fn every_cut_of(length: usize) -> Vec<Vec<usize>> {
         if length == 0 {
@@ -4964,13 +4981,8 @@ mod tests {
             .collect()
     }
 
-    /// fill read as a whole gives exactly what its code gives, over every way its input can be
-    /// cut: every input of up to 5 bytes of `a` and newlines, every capacity up to 7, with a
-    /// newline as the end byte and with none. Bugs planted in its code each give something the
-    /// whole doesn't.
     #[tokio::test]
     async fn fill_read_whole_is_its_code_for_every_cut() {
-        let canonical = fill_function(crate::checker::FILL_TEMPLATE);
         let mutants = [
             (
                 "reads every piece at the buffer's start",
@@ -4993,6 +5005,59 @@ mod tests {
                 "    lea rax, [r8 + 1]\n    sub rax, rdx\n",
             ),
         ];
+        fill_read_whole_is_its_code(
+            Profile::LinuxX86_64,
+            fill_function(crate::checker::FILL_TEMPLATE),
+            fill_program,
+            mutants,
+        )
+        .await;
+    }
+
+    /// The same test on AArch64, in its own `fill`, with the same four bugs planted in it.
+    #[tokio::test]
+    async fn fill_read_whole_is_its_code_for_every_cut_on_aarch64() {
+        let mutants = [
+            (
+                "reads every piece at the buffer's start",
+                "    add x1, x1, x0\n",
+                "",
+            ),
+            (
+                "stops a byte short of full",
+                "    subs x2, x2, x0\n    b.eq .Lfill_done\n",
+                "    subs x2, x2, x0\n    cmp x2, #1\n    b.ls .Lfill_done\n",
+            ),
+            (
+                "checks the byte after the last",
+                "ldurb w13, [x1, #-1]",
+                "ldrb w13, [x1]",
+            ),
+            (
+                "counts one byte too many",
+                "    sub x0, x10, x2\n",
+                "    sub x0, x10, x2\n    add x0, x0, #1\n",
+            ),
+        ];
+        fill_read_whole_is_its_code(
+            Profile::LinuxAarch64,
+            fill_function(crate::checker::AARCH64_FILL_TEMPLATE),
+            fill_program_aarch64,
+            mutants,
+        )
+        .await;
+    }
+
+    /// fill read as a whole gives exactly what its code gives, over every way its input can be
+    /// cut: every input of up to 5 bytes of `a` and newlines, every capacity up to 7, with a
+    /// newline as the end byte and with none. Bugs planted in its code each give something the
+    /// whole doesn't. `program` makes the test program around `canonical`, a CPU's own fill.
+    async fn fill_read_whole_is_its_code(
+        profile: Profile,
+        canonical: &str,
+        program: fn(&str, u32, i32) -> String,
+        mutants: [(&str, &str, &str); 4],
+    ) {
         let inputs: Vec<Vec<u8>> = (0..=5_u32)
             .flat_map(|length| {
                 (0..1_u32 << length).map(move |bits| {
@@ -5005,13 +5070,13 @@ mod tests {
         let mut caught = [false; 4];
         for capacity in 1..=7 {
             for end in [i32::from(b'\n'), -1] {
-                let whole = image(&fill_program(canonical, capacity, end)).await;
+                let whole = image_for(profile, &program(canonical, capacity, end)).await;
                 assert!(whole.has_fill(), "the canonical fill is found");
                 let mut planted = Vec::new();
                 for (_, from, to) in mutants {
                     let mutant = canonical.replacen(from, to, 1);
                     assert_ne!(mutant, canonical);
-                    planted.push(image(&fill_program(&mutant, capacity, end)).await);
+                    planted.push(image_for(profile, &program(&mutant, capacity, end)).await);
                 }
                 for input in &inputs {
                     let summary = outcomes(&whole, input, None);

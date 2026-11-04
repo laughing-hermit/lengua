@@ -935,6 +935,23 @@ async fn proves_the_csv_totals_24696_combinations() {
     );
 }
 
+/// The model's runs of the tests' samples are part of the proof's time: with it up, they stop and
+/// the proof is "ran out of time", where it used to run each sample to the end.
+#[tokio::test]
+async fn the_models_runs_of_the_samples_stop_when_the_proofs_time_is_up() {
+    let machine = machine(&fixture("total", "main.s")).await;
+    let block = block(&fixture("total", "spec.md"), 0);
+    let samples: Vec<crate::testfile::Case> =
+        block.cases(1).take(4).filter_map(Result::ok).collect();
+    let up = Instant::now();
+    let result = agrees_until(&machine, &samples, false, up);
+    assert_eq!(result.err().as_deref(), Some(OUT_OF_TIME));
+    // With the time there, the same samples agree, as before.
+    let in_time = Instant::now() + Duration::from_secs(600);
+    let found = agrees_until(&machine, &samples, false, in_time).expect("the model agrees");
+    assert!(found.is_none(), "{found:?}");
+}
+
 /// Where the CSV total's proof spends its time: a few combinations, one at a time, with
 /// `LENGUA_PROVE_TRACE=1` for each one's questions.
 #[tokio::test]

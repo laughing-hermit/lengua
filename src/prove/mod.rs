@@ -4331,6 +4331,43 @@ pub fn agrees(
     cases: &[crate::testfile::Case],
     listens: bool,
 ) -> Result<Option<Verdict>, String> {
+    agrees_until(
+        machine,
+        cases,
+        listens,
+        Instant::now() + Duration::from_secs(24 * 60 * 60),
+    )
+}
+
+/// A concrete run's oracle that also keeps the proof's time: a run through code with no branch on
+/// its inputs, such as a hash of them, asks it nothing else.
+struct ConcreteUntil(Instant);
+
+impl Oracle for ConcreteUntil {
+    fn possible(&mut self, pool: &Pool, path: &[Term], condition: Term) -> Result<bool, String> {
+        exec::Concrete.possible(pool, path, condition)
+    }
+
+    fn in_time(&self) -> Result<(), String> {
+        if Instant::now() > self.0 {
+            return Err(OUT_OF_TIME.into());
+        }
+        Ok(())
+    }
+}
+
+/// [`agrees`], giving up at `deadline`: the model's runs of the samples are part of the proof's
+/// time, and a hash of a long sample takes minutes of it.
+///
+/// # Errors
+///
+/// Describes the first disagreement, what the model can't run, or that the time is up.
+pub fn agrees_until(
+    machine: &Machine,
+    cases: &[crate::testfile::Case],
+    listens: bool,
+    deadline: Instant,
+) -> Result<Option<Verdict>, String> {
     let image = Image::new(machine).ok_or("the program has no _start")?;
     // Smallest first: once one is too long for the model to follow, the larger ones are too.
     let mut cases: Vec<&crate::testfile::Case> = cases.iter().collect();
@@ -4343,7 +4380,7 @@ pub fn agrees(
         let mut pool = Pool::default();
         let fill = sample_text;
         let start = sample_start(&image, &mut pool, case, listens);
-        let mut runs = exec::explore(&image, start, &mut pool, &mut exec::Concrete, 2)?;
+        let mut runs = exec::explore(&image, start, &mut pool, &mut ConcreteUntil(deadline), 2)?;
         let run = runs.pop().ok_or("the model didn't run")?;
         if let Some(End::Unsafe(problem)) = &run.end {
             let mut values = case.inputs.clone();

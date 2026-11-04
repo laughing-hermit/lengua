@@ -1485,7 +1485,7 @@ impl LenguaServer {
                 block.cases(1).take(24).filter_map(Result::ok).collect();
             let (machine, owned) = (decoded.clone(), block.clone());
             let verdict = tokio::task::spawn_blocking(move || {
-                prove::agrees(&machine, &samples, listens)
+                prove::agrees_until(&machine, &samples, listens, budget.deadline)
                     .map(|found| found.unwrap_or_else(|| prove::prove(&machine, &owned, &budget)))
             })
             .await
