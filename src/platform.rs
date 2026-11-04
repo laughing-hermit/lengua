@@ -20,6 +20,11 @@ pub enum Profile {
 }
 
 impl Profile {
+    /// Every target lengua exists on. Four more are planned (macOS and Windows, each on x86-64
+    /// and ARM64); a new profile is added here, to [`crate::targets::PerTarget`] and to every
+    /// `match` on a profile, none of which compiles until it is.
+    pub const ALL: [Self; 2] = [Self::LinuxX86_64, Self::LinuxAarch64];
+
     /// The profile for an OS/arch pair as reported by `std::env::consts`, if supported.
     #[must_use]
     pub fn for_target(os: &str, arch: &str) -> Option<Self> {
@@ -33,9 +38,7 @@ impl Profile {
     /// The profile a short name, such as `linux-aarch64`, names.
     #[must_use]
     pub fn from_name(name: &str) -> Option<Self> {
-        [Self::LinuxX86_64, Self::LinuxAarch64]
-            .into_iter()
-            .find(|profile| profile.name() == name)
+        Self::ALL.into_iter().find(|profile| profile.name() == name)
     }
 
     /// The CPU whose instructions its programs are.

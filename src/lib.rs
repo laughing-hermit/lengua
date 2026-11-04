@@ -29,6 +29,7 @@ pub mod state;
 pub mod supervise;
 pub mod supply;
 pub mod syscalls;
+pub mod targets;
 pub mod testdiff;
 pub mod testfile;
 pub mod testrun;
