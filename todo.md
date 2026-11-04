@@ -52,9 +52,10 @@ never routed around through other models or subagents. It stopped none.
    mode the spec states because the spec is a function of the data alone; it shows the
    instructions, it isn't a product for hiding data.
 3. **Replies stopped on 2026-11-01**: nothing to do; no work was lost.
-4. **The hardening pass's red-team part: done, defensively.** `tests/adversarial.rs` (x86-64) and
-   `tests/adversarial_aarch64.rs` (ARM64, on ARM64 hardware) take the template and make one change
-   each that tries to get past lengua; every attempt must be refused or never stamped `done`:
+4. **The hardening pass's red-team part: done, defensively.** `tests/red_team.rs` (one table of
+   attempts with a cell for each target, which replaced `adversarial.rs` and `adversarial_aarch64.rs`,
+   two copies that had drifted apart) takes each target's template and makes one change each that
+   tries to get past lengua; every attempt must be refused or never stamped `done`:
    system calls the spec doesn't allow, a system call number chosen by a register or label, reads
    past a buffer, an unchecked or late index, an address from a plain number or a pointer read from
    memory, writes to read-only data, a changed return address, loops the rules miscount, recursion,
@@ -80,9 +81,10 @@ never routed around through other models or subagents. It stopped none.
      re-recorded.
    - Every other attempt is refused up front on both CPUs.
 5. **The ARM64 twins of `total` and `amounts`: done.** `tests/fixtures/linux-aarch64/total/` and
-   `amounts/`, each spec copied unchanged; `UNPORTED` is gone from `tests/aarch64_session.rs`, so
-   `every_program_has_its_twin_on_the_other_cpu` and `every_aarch64_twin_passes_its_checks` now
-   cover every fixture. Both reach `done` on ARM64 hardware.
+   `amounts/`, each spec copied unchanged; `UNPORTED` is gone, so
+   `every_program_has_its_twin_on_the_other_cpu` and `every_program_passes_its_checks_on_every_target`
+   (tests/every_program.rs, which took the place of the per-CPU all-programs tests) now cover every
+   fixture. Both reach `done` on ARM64 hardware.
 
 **The ARM64 SHA-256 stall, found and fixed.** The one-folder check of the ARM64 SHA-256 twin ran
 past the job's 90 minutes twice, while the same twin passed the full suite (which gives proofs no
@@ -124,8 +126,8 @@ both sides, which were checked against the code before anything was changed. Fix
   instructions, an assertion reached from two places) and was exempted from the repository-wide
   rules test, while its ARM64 twin passed them all. It is rewritten (`load_file`, `report`,
   `report_bad_line`), the exemption is gone, and `tests/every_program.rs` checks every x86-64
-  example and fixture through the server, as `every_aarch64_twin_passes_its_checks` does for
-  ARM64. Both CPUs now give `total` the same 426 test runs and the same proof lines.
+  example and fixture through the server, and every ARM64 twin, in one test for both CPUs. Both
+  CPUs now give `total` the same 426 test runs and the same proof lines.
 - **The fill model** (the soundness check behind "cut any way" proofs) was compared with the real
   `fill` for every way its input can be cut, with four planted bugs, only on x86-64; the same test
   now runs on AArch64's `fill` (`src/prove/exec.rs`).
@@ -167,24 +169,25 @@ I know of no case where the two CPUs give different answers. What's left is plac
 is checked or modelled less than the other, found by the 2026-11-04 parity audit (the ones fixed
 in this run are listed above), heaviest first:
 
-1. **Tests.** The biggest gap.
-   - *Sandbox.* ARM64 has about 8 native tests against x86-64's 25. It lacks a test that a program
-     holds no network, that connections hand over by their rules, or that a refused one is
-     reported; the limits made identical on every system (time, output, environment, signals,
-     files, open files, names, rename, listing), the clone-flag pin, spec approval of the clock
-     and random bytes, and the supervisor's failure paths and threads: all pinned on x86-64 only.
-   - *Checker fixtures.* ARM64 now has planted-bug fixtures for the memory rules M1 to M6 and M8
-     (`aarch64_memory_rules_find_each_planted_bug`), but still lacks the rest of what x86-64 has
-     in `src/checker/tests.rs`: one address lent twice for writing (M4,
-     `one_address_is_never_lent_twice_for_writing`), `the_stack_is_tracked_exactly`, the thread
-     rules (M7), and about half of the Power of 10 rules' fixtures. Each is a one-line edit of the
-     ARM64 template (`with_aarch64`); the saved-return-address gap is what their absence cost.
+1. **Tests.** The biggest gap, narrowed on 2026-11-04 by writing each case once, as a table with a
+   cell for each target (see "Keeping five or six targets the same product" below): the sandbox's
+   limits (ARM64 had 8 native tests against x86-64's 25, and now both run the same 31), the red
+   team, the memory rules' planted bugs and the all-programs test run natively on both runners.
+   What is left:
+   - *Checker fixtures.* The planted memory bugs are one table (`PLANTED`, `src/checker/tests.rs`,
+     a cell for each CPU), but ARM64 still lacks the rest of what x86-64 has there: one address
+     lent twice for writing (M4, `one_address_is_never_lent_twice_for_writing`),
+     `the_stack_is_tracked_exactly`, the thread rules (M7), and about half of the Power of 10
+     rules' fixtures. Each is a one-line edit of the ARM64 template (`with_aarch64`); the
+     saved-return-address gap is what their absence cost.
    - *Prover tests.* ARM64's prover is tested on 7 of the 29 twins, x86-64's on about 20 programs,
      and its memory-bug tests are x86-only.
    - *Other x86-only coverage.* The checker's and the prover's golden recordings; executor tests
-     of loop detection, connections and sleep; session behaviors beyond check-to-done; and the
-     unmodified AArch64 template has its rules checked but goes through `check` to `done` in no
-     test but the ignored mutation test.
+     of loop detection, connections and sleep; the 56 session tests of `tests/check_code.rs` and
+     `tests/e2e.rs` against ARM64's 17 in `tests/aarch64_session.rs` (the missing ones are named
+     in `DEBT`, `tests/parity_inventory.rs`, which lists every test file still made for one CPU);
+     and the unmodified AArch64 template has its rules checked but goes through `check` to `done`
+     in no test but the ignored mutation test.
 2. **Prover reach.**
    - *x86-64's prover* can't follow dozens of vector instructions the ARM64 prover models
      (`palignr`, `pblendw`, `punpck*`, `pack*`, saturating and widening arithmetic, string
@@ -360,6 +363,40 @@ each later port adds one column. Make each guarantee a failing test:
    new target breaks every table until its cell is filled, a `wip/**` branch gets no push run, a
    dispatch doesn't build the matrix, and macOS and Windows build in `unported.yml` (weekly and on
    request).
+
+**Where items 1, 3, 4 and 5 stand (2026-11-04).** Built for the two Linux targets, and run
+natively on both runners:
+- *1, one suite for all targets: begun.* Each of these is a table with a `PerTarget` cell for every
+  target (`src/targets.rs`), so a new target breaks the build until its cells exist, and an
+  attempt that a CPU can't write says why: the red team (`tests/red_team.rs`, which replaced
+  `adversarial.rs` and `adversarial_aarch64.rs`: their 41 attempts each, as 42 rows, with
+  x86-64's `openat` added); the planted memory bugs (`PLANTED` in `src/checker/tests.rs`: 19
+  bugs, check-only, so every runner checks both CPUs' cells; x86-64 gained the return address
+  written at a function's start and through a pointer, ARM64 the frame lent to a function that
+  only reads it); every program of each target through the server (`tests/every_program.rs`,
+  where a program for an extension the CPU lacks is skipped with a note); and the sandbox's
+  limits (`tests/limits.rs`, 31 tests, each program an assembly source per CPU, built for both
+  CPUs on every runner and run on its own). Left: the four test files still made for one CPU,
+  which `tests/parity_inventory.rs` lists in `DEBT` with what each lacks on the other CPU:
+  `check_code.rs` and `e2e.rs` (56 x86-64 session tests) and `aarch64_session.rs` and
+  `aarch64.rs` (21 ARM64 ones). Making them tables means writing ARM64 session cases for about 40
+  x86-64 ones (and x86-64 ones for `aarch64.rs`'s three standalone tests), program by program.
+- *3, the porting list as an executable conformance suite: begun.* The rules, the red team, every
+  program through the server and the sandbox's limits are tables both runners run natively.
+  `parity_inventory.rs` fails when a target has no job that runs `cargo test` on a runner of its
+  own CPU, and when a new test file is made for one target; DESIGN's "Porting a target" item 7
+  says which suites a new target must pass. Left: the mutation test (ignored, by dispatch) and
+  the session behaviors, which are the `DEBT` files above.
+- *4, limits tested on each OS: done for the two Linux targets.* `tests/limits.rs` pins names
+  Windows refuses (`EINVAL`), names that aren't UTF-8 (`EILSEQ`), a name or a path too long
+  (`ENAMETOOLONG`), a name that differs only in case (`EEXIST`), a file held open (`EBUSY`), the
+  4,352 open files, the listing turned round on a second run, the time, output, environment and
+  signal limits, the spec's approval of the clock and random bytes, the clone-flag pin, a
+  network no program holds, and the supervisor's failure paths and threads. A later port adds a
+  column; what only that OS can keep (a name its own file system refuses) is for its runner.
+- *5, visible coverage: done* (`lengua::skiplog` and the run's summary). Every skip of the new
+  tests notes its reason, and the log no longer mixes the notes of tests that skip at once (a
+  note is one write).
 
 ## Skipped, and why
 

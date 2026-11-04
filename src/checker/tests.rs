@@ -2,6 +2,7 @@
 //! for its rule and line.
 
 use super::*;
+use crate::targets::PerTarget;
 use crate::toolchain::Toolchain;
 
 /// What the template's spec allows.
@@ -859,171 +860,566 @@ async fn workers_never_race() {
     }
 }
 
-/// Memory safety: a bug planted for each memory rule is found, on its line.
+/// Where a planted bug's violation is reported.
+#[derive(Debug, Clone, Copy)]
+enum At {
+    /// On the first line that starts with this text.
+    Line(&'static str),
+    /// On the `ret` right after the first line that starts with this text: an address that is
+    /// returned is reported where it is returned.
+    Ret(&'static str),
+    /// On no line of its own: the stack's size is the program's.
+    Nowhere,
+}
+
+/// A bug planted in a target's template: `old`, which the template has, becomes `new`, and the
+/// rules must report a violation of `rule` whose text contains `needle`, `at` the line.
+#[derive(Debug, Clone, Copy)]
+struct Planted {
+    old: &'static str,
+    new: &'static str,
+    at: At,
+    rule: Rule,
+    needle: &'static str,
+}
+
+/// What one target does with a planted bug.
+#[derive(Debug, Clone, Copy)]
+enum Cell {
+    /// The bug is planted in the target's template.
+    Plant(Planted),
+    /// The bug can't be written on this CPU, for this reason of its hardware.
+    NotApplicable(&'static str),
+}
+
+/// The bugs planted for the memory rules, each with a cell for every target: a target added to
+/// lengua breaks this table until its cells are filled, and a row can't be left out of one
+/// target without saying why that CPU can't have it.
+const PLANTED: &[(&str, PerTarget<Cell>)] = &[
+    (
+        "a bounds check of part of the index (M2)",
+        PerTarget {
+            linux_x86_64: Cell::Plant(Planted {
+                old: ".Lparse_loop:  # bound: 20\n    cmp rcx, MAX_CHARS\n",
+                new: ".Lparse_loop:  # bound: 20\n    cmp ecx, MAX_CHARS\n",
+                at: At::Line("    cmp ecx, MAX_CHARS"),
+                rule: Rule::Bounds,
+                needle: "compares only the low 32 bits of rcx",
+            }),
+            linux_aarch64: Cell::Plant(Planted {
+                old: ".Lparse_loop:  // bound: 20\n    cmp x2, #MAX_CHARS\n",
+                new: ".Lparse_loop:  // bound: 20\n    cmp w2, #MAX_CHARS\n",
+                at: At::Line("    cmp w2, #MAX_CHARS"),
+                rule: Rule::Bounds,
+                needle: "compares only the low 32 bits",
+            }),
+        },
+    ),
+    (
+        "a bounds check with a negative limit (M2)",
+        PerTarget {
+            linux_x86_64: Cell::Plant(Planted {
+                old: ".Lparse_loop:  # bound: 20\n    cmp rcx, MAX_CHARS\n",
+                new: ".Lparse_loop:  # bound: 20\n    cmp rcx, -1\n",
+                at: At::Line("    cmp rcx, -1"),
+                rule: Rule::Bounds,
+                needle: "compares with -1, which an unsigned jump reads as a huge number",
+            }),
+            linux_aarch64: Cell::NotApplicable(
+                "AArch64's `cmp` takes an unsigned 12-bit number, so a limit of -1 can't be \
+                 written as one: the assembler turns `cmp x2, #-1` into `cmn x2, #1`, an add",
+            ),
+        },
+    ),
+    (
+        "a bit test whose offset is a register (M2)",
+        PerTarget {
+            linux_x86_64: Cell::Plant(Planted {
+                old: "    movzx edx, byte ptr [rdi + rcx]\n",
+                new: "    movzx edx, byte ptr [rdi + rcx]\n    bt qword ptr [rdi], rcx\n",
+                at: At::Line("    bt qword ptr [rdi], rcx"),
+                rule: Rule::Bounds,
+                needle: "tests a bit in memory at an offset in a register",
+            }),
+            linux_aarch64: Cell::NotApplicable(
+                "AArch64 has no instruction that tests a bit in memory at a register's offset: its \
+                 loads and stores take byte addresses, and `tbz` and `tbnz` test a bit of a \
+                 register",
+            ),
+        },
+    ),
+    (
+        "an address made from a plain number (M1)",
+        PerTarget {
+            linux_x86_64: Cell::Plant(Planted {
+                old: ".Lstart_usage:\n",
+                new: ".Lstart_usage:\n    mov esi, MAX_WRITES\n    mov byte ptr [rsi], 0\n",
+                at: At::Line("    mov byte ptr [rsi], 0"),
+                rule: Rule::Owners,
+                needle: "holds a plain number here, not a pointer",
+            }),
+            linux_aarch64: Cell::Plant(Planted {
+                old: ".Lstart_usage:\n",
+                new: ".Lstart_usage:\n    mov x1, #MAX_WRITES\n    strb wzr, [x1]\n",
+                at: At::Line("    strb wzr, [x1]"),
+                rule: Rule::Owners,
+                needle: "holds a plain number here, not a pointer",
+            }),
+        },
+    ),
+    (
+        "a constant offset one byte past a symbol (M2)",
+        PerTarget {
+            linux_x86_64: Cell::Plant(Planted {
+                old: ".Lstart_write_failed:\n",
+                new: concat!(
+                    ".Lstart_write_failed:\n",
+                    "    lea rsi, [rip + out_buf]\n",
+                    "    mov byte ptr [rsi + OUT_BUF_LEN], 0\n"
+                ),
+                at: At::Line("    mov byte ptr [rsi + OUT_BUF_LEN], 0"),
+                rule: Rule::Bounds,
+                needle: "reaches byte 21 of out_buf, which has 21 bytes",
+            }),
+            linux_aarch64: Cell::Plant(Planted {
+                old: ".Lstart_write_failed:\n",
+                new: concat!(
+                    ".Lstart_write_failed:\n",
+                    "    adrp x1, out_buf\n",
+                    "    add x1, x1, :lo12:out_buf\n",
+                    "    strb wzr, [x1, #OUT_BUF_LEN]\n"
+                ),
+                at: At::Line("    strb wzr, [x1, #OUT_BUF_LEN]"),
+                rule: Rule::Bounds,
+                needle: "reaches byte 21 of out_buf, which has 21 bytes",
+            }),
+        },
+    ),
+    (
+        "a direct reference one byte past a symbol (M2): the next symbol starts there",
+        PerTarget {
+            linux_x86_64: Cell::Plant(Planted {
+                old: ".Lstart_write_failed:\n",
+                new: concat!(
+                    ".Lstart_write_failed:\n",
+                    "    movzx eax, byte ptr [rip + usage_msg + USAGE_MSG_LEN]\n"
+                ),
+                at: At::Line("    movzx eax, byte ptr [rip + usage_msg + USAGE_MSG_LEN]"),
+                rule: Rule::Scope,
+                needle: "reaches 1 byte past the end of usage_msg, which has 18 bytes",
+            }),
+            linux_aarch64: Cell::NotApplicable(
+                "AArch64 has no access relative to the program counter with a displacement: an \
+                 address is `adrp` of the bare symbol and `add :lo12:`, and the offset is the \
+                 load's, which the next row plants",
+            ),
+        },
+    ),
+    (
+        "a pointer just past a symbol's end, as main.s makes it (M2)",
+        PerTarget {
+            linux_x86_64: Cell::Plant(Planted {
+                old: ".Lstart_write_failed:\n",
+                new: concat!(
+                    ".Lstart_write_failed:\n",
+                    "    lea rsi, [rip + usage_msg + USAGE_MSG_LEN]\n",
+                    "    movzx eax, byte ptr [rsi]\n"
+                ),
+                at: At::Line("    movzx eax, byte ptr [rsi]"),
+                rule: Rule::Bounds,
+                needle: "reaches byte 18 of usage_msg, which has 18 bytes",
+            }),
+            linux_aarch64: Cell::Plant(Planted {
+                old: ".Lstart_write_failed:\n",
+                new: concat!(
+                    ".Lstart_write_failed:\n",
+                    "    adrp x1, usage_msg\n",
+                    "    add x1, x1, :lo12:usage_msg\n",
+                    "    ldrb w2, [x1, #USAGE_MSG_LEN]\n"
+                ),
+                at: At::Line("    ldrb w2, [x1, #USAGE_MSG_LEN]"),
+                rule: Rule::Bounds,
+                needle: "reaches byte 18 of usage_msg, which has 18 bytes",
+            }),
+        },
+    ),
+    (
+        "an address in the frame, returned (M3)",
+        PerTarget {
+            linux_x86_64: Cell::Plant(Planted {
+                old: ".Lparse_return:\n    ret\n",
+                new: ".Lparse_return:\n    lea rdx, [rsp]\n    ret\n",
+                at: At::Ret("    lea rdx, [rsp]"),
+                rule: Rule::Lifetimes,
+                needle: "returns an address in its own frame in rdx",
+            }),
+            linux_aarch64: Cell::Plant(Planted {
+                old: ".Lwrite_i64_return:\n    ldp x29, x30, [sp], #16\n",
+                new: concat!(
+                    ".Lwrite_i64_return:\n",
+                    "    mov x1, sp\n",
+                    "    ldp x29, x30, [sp], #16\n"
+                ),
+                at: At::Ret("    ldp x29, x30, [sp], #16"),
+                rule: Rule::Lifetimes,
+                needle: "returns an address in its own frame",
+            }),
+        },
+    ),
+    (
+        "an address in the frame, stored where it outlives the function (M3)",
+        PerTarget {
+            linux_x86_64: Cell::Plant(Planted {
+                old: ".Lparse_return:\n    ret\n",
+                new: concat!(
+                    ".Lparse_return:\n",
+                    "    lea rcx, [rsp]\n",
+                    "    mov qword ptr [rip + out_buf], rcx\n",
+                    "    ret\n"
+                ),
+                at: At::Line("    mov qword ptr [rip + out_buf], rcx"),
+                rule: Rule::Lifetimes,
+                needle: "an address in this function's frame, outside the frame",
+            }),
+            linux_aarch64: Cell::Plant(Planted {
+                old: ".Lwrite_i64_return:\n    ldp x29, x30, [sp], #16\n",
+                new: concat!(
+                    ".Lwrite_i64_return:\n",
+                    "    mov x1, sp\n",
+                    "    adrp x2, out_buf\n",
+                    "    add x2, x2, :lo12:out_buf\n",
+                    "    str x1, [x2]\n",
+                    "    ldp x29, x30, [sp], #16\n"
+                ),
+                at: At::Line("    str x1, [x2]"),
+                rule: Rule::Lifetimes,
+                needle: "an address in this function's frame, outside the frame",
+            }),
+        },
+    ),
+    (
+        "a read past the frame, into the caller's (M3)",
+        PerTarget {
+            linux_x86_64: Cell::Plant(Planted {
+                old: "parse_i64:\n",
+                new: "parse_i64:\n    mov r10, qword ptr [rsp + 8]\n",
+                at: At::Line("    mov r10, qword ptr [rsp + 8]"),
+                rule: Rule::Lifetimes,
+                needle: "into its return address or its caller's frame",
+            }),
+            linux_aarch64: Cell::Plant(Planted {
+                old: "parse_i64:\n",
+                new: "parse_i64:\n    ldr x10, [sp, #8]\n",
+                at: At::Line("    ldr x10, [sp, #8]"),
+                rule: Rule::Lifetimes,
+                needle: "into its return address or its caller's frame",
+            }),
+        },
+    ),
+    (
+        "a pointer to a known place in the frame, written past the frame (M3)",
+        PerTarget {
+            linux_x86_64: Cell::Plant(Planted {
+                old: ".Lwrite_i64_return:\n    add rsp, 8\n",
+                new: concat!(
+                    ".Lwrite_i64_return:\n",
+                    "    lea rcx, [rsp + 8]\n",
+                    "    mov byte ptr [rcx], 0\n",
+                    "    add rsp, 8\n"
+                ),
+                at: At::Line("    mov byte ptr [rcx], 0"),
+                rule: Rule::Lifetimes,
+                needle: "reaches past this function's frame of 8 bytes, into its return address",
+            }),
+            linux_aarch64: Cell::Plant(Planted {
+                old: ".Lwrite_i64_return:\n    ldp x29, x30, [sp], #16\n",
+                new: concat!(
+                    ".Lwrite_i64_return:\n",
+                    "    add x1, sp, #16\n",
+                    "    strb wzr, [x1]\n",
+                    "    ldp x29, x30, [sp], #16\n"
+                ),
+                at: At::Line("    strb wzr, [x1]"),
+                rule: Rule::Lifetimes,
+                needle: "reaches past this function's frame of 16 bytes",
+            }),
+        },
+    ),
+    (
+        "the return address written, where the function started (M3)",
+        PerTarget {
+            // write_all's return address is at [rsp] when it starts.
+            linux_x86_64: Cell::Plant(Planted {
+                old: "write_all:\n",
+                new: "write_all:\n    mov qword ptr [rsp], 0\n",
+                at: At::Line("    mov qword ptr [rsp], 0"),
+                rule: Rule::Lifetimes,
+                needle: "into its return address",
+            }),
+            // The return address a function saved in its frame record, written through memory.
+            linux_aarch64: Cell::Plant(Planted {
+                old: "write_i64:\n    stp x29, x30, [sp, #-16]!\n",
+                new: concat!(
+                    "write_i64:\n",
+                    "    stp x29, x30, [sp, #-16]!\n",
+                    "    str xzr, [sp, #8]\n"
+                ),
+                at: At::Line("    str xzr, [sp, #8]"),
+                rule: Rule::Lifetimes,
+                needle: "return address",
+            }),
+        },
+    ),
+    (
+        "the return address written through a pointer to it (M3)",
+        PerTarget {
+            linux_x86_64: Cell::Plant(Planted {
+                old: "write_all:\n",
+                new: "write_all:\n    lea rcx, [rsp]\n    mov qword ptr [rcx], 0\n",
+                at: At::Line("    mov qword ptr [rcx], 0"),
+                rule: Rule::Lifetimes,
+                needle: "into its return address",
+            }),
+            linux_aarch64: Cell::Plant(Planted {
+                old: "write_i64:\n    stp x29, x30, [sp, #-16]!\n",
+                new: concat!(
+                    "write_i64:\n",
+                    "    stp x29, x30, [sp, #-16]!\n",
+                    "    add x1, sp, #8\n",
+                    "    str xzr, [x1]\n"
+                ),
+                at: At::Line("    str xzr, [x1]"),
+                rule: Rule::Lifetimes,
+                needle: "return address",
+            }),
+        },
+    ),
+    (
+        "a frame slot read before anything writes it (M5)",
+        PerTarget {
+            linux_x86_64: Cell::Plant(Planted {
+                old: "parse_i64:\n",
+                new: concat!(
+                    "parse_i64:\n",
+                    "    sub rsp, 8\n",
+                    "    mov r10, qword ptr [rsp]\n",
+                    "    add rsp, 8\n"
+                ),
+                at: At::Line("    mov r10, qword ptr [rsp]"),
+                rule: Rule::Initialization,
+                needle: "reads the frame at rsp + 0, which some path reaches without writing",
+            }),
+            linux_aarch64: Cell::Plant(Planted {
+                old: "parse_i64:\n",
+                new: concat!(
+                    "parse_i64:\n",
+                    "    sub sp, sp, #16\n",
+                    "    ldr x10, [sp]\n",
+                    "    add sp, sp, #16\n"
+                ),
+                at: At::Line("    ldr x10, [sp]"),
+                rule: Rule::Initialization,
+                needle: "which some path reaches without writing",
+            }),
+        },
+    ),
+    (
+        "what a function returns, followed through the call (M1): parse_i64 returns a number",
+        PerTarget {
+            linux_x86_64: Cell::Plant(Planted {
+                old: "    call parse_i64\n    test rax, rax\n",
+                new: concat!(
+                    "    call parse_i64\n",
+                    "    mov byte ptr [rax], 0\n",
+                    "    test rax, rax\n"
+                ),
+                at: At::Line("    mov byte ptr [rax], 0"),
+                rule: Rule::Owners,
+                needle: "uses rax as an address, but it holds a plain number here",
+            }),
+            linux_aarch64: Cell::Plant(Planted {
+                old: "    bl parse_i64\n    tbnz x0, #63, .Lstart_not_a_number\n",
+                new: concat!(
+                    "    bl parse_i64\n",
+                    "    strb wzr, [x0]\n",
+                    "    tbnz x0, #63, .Lstart_not_a_number\n"
+                ),
+                at: At::Line("    strb wzr, [x0]"),
+                rule: Rule::Owners,
+                needle: "as an address, but it holds a plain number here",
+            }),
+        },
+    ),
+    (
+        "the program's arguments written (M4): they are only read",
+        PerTarget {
+            linux_x86_64: Cell::Plant(Planted {
+                old: "    mov rdi, qword ptr [rsp + 16]\n",
+                new: "    mov rdi, qword ptr [rsp + 16]\n    mov byte ptr [rdi], 0\n",
+                at: At::Line("    mov byte ptr [rdi], 0"),
+                rule: Rule::ExclusiveWrites,
+                needle: "writes into the program's arguments, which it only reads",
+            }),
+            linux_aarch64: Cell::Plant(Planted {
+                old: "    cbz x0, .Lstart_assert_argv\n",
+                new: "    cbz x0, .Lstart_assert_argv\n    strb wzr, [x0]\n",
+                at: At::Line("    strb wzr, [x0]"),
+                rule: Rule::ExclusiveWrites,
+                needle: "writes into the program's arguments, which it only reads",
+            }),
+        },
+    ),
+    (
+        "a frame lent to a function that only reads it is still unwritten (M5)",
+        PerTarget {
+            linux_x86_64: Cell::Plant(Planted {
+                old: ".Lwrite_i64_return:\n    add rsp, 8\n",
+                new: concat!(
+                    ".Lwrite_i64_return:\n",
+                    "    mov rdi, rsp\n",
+                    "    call parse_i64\n",
+                    "    mov r10, qword ptr [rsp]\n",
+                    "    add rsp, 8\n"
+                ),
+                at: At::Line("    mov r10, qword ptr [rsp]"),
+                rule: Rule::Initialization,
+                needle: "reads the frame at rsp + 0, which some path reaches without writing",
+            }),
+            linux_aarch64: Cell::Plant(Planted {
+                old: ".Lwrite_i64_return:\n    ldp x29, x30, [sp], #16\n",
+                new: concat!(
+                    ".Lwrite_i64_return:\n",
+                    "    sub sp, sp, #16\n",
+                    "    mov x0, sp\n",
+                    "    bl parse_i64\n",
+                    "    ldr x10, [sp]\n",
+                    "    add sp, sp, #16\n",
+                    "    ldp x29, x30, [sp], #16\n"
+                ),
+                at: At::Line("    ldr x10, [sp]"),
+                rule: Rule::Initialization,
+                needle: "which some path reaches without writing",
+            }),
+        },
+    ),
+    (
+        "read-only data written through a register (M6)",
+        PerTarget {
+            linux_x86_64: Cell::Plant(Planted {
+                old: ".Lstart_usage:\n",
+                new: concat!(
+                    ".Lstart_usage:\n",
+                    "    lea rsi, [rip + usage_msg]\n",
+                    "    mov byte ptr [rsi], 0\n"
+                ),
+                at: At::Line("    mov byte ptr [rsi], 0"),
+                rule: Rule::Immutability,
+                needle: "writes to read-only usage_msg",
+            }),
+            linux_aarch64: Cell::Plant(Planted {
+                old: ".Lstart_usage:\n",
+                new: concat!(
+                    ".Lstart_usage:\n",
+                    "    adrp x1, usage_msg\n",
+                    "    add x1, x1, :lo12:usage_msg\n",
+                    "    strb wzr, [x1]\n"
+                ),
+                at: At::Line("    strb wzr, [x1]"),
+                rule: Rule::Immutability,
+                needle: "writes to read-only usage_msg",
+            }),
+        },
+    ),
+    (
+        "a frame bigger than the stack's limit (M8)",
+        PerTarget {
+            linux_x86_64: Cell::Plant(Planted {
+                old: "_start:\n",
+                new: "_start:\n    sub rsp, 2097152\n",
+                at: At::Nowhere,
+                rule: Rule::StackSize,
+                needle: "bytes of stack, more than 1048576",
+            }),
+            linux_aarch64: Cell::Plant(Planted {
+                old: "_start:\n",
+                new: "_start:\n    sub sp, sp, #1024, lsl #12\n",
+                at: At::Nowhere,
+                rule: Rule::StackSize,
+                needle: "more than 1048576",
+            }),
+        },
+    ),
+];
+
+/// Memory safety on every target: a bug planted for each memory rule is found, on its line. Each
+/// row of [`PLANTED`] replaces text of a target's template, where its CPU can have the bug, and
+/// wants the violation the row names.
 #[tokio::test]
 async fn memory_rules_find_each_planted_bug() {
-    let cases: [(&str, &str, &str, Rule, &str); 17] = [
-        // M2: a bounds check of part of the index, and one with a negative limit.
-        (
-            ".Lparse_loop:  # bound: 20\n    cmp rcx, MAX_CHARS\n",
-            ".Lparse_loop:  # bound: 20\n    cmp ecx, MAX_CHARS\n",
-            "    cmp ecx, MAX_CHARS",
-            Rule::Bounds,
-            "compares only the low 32 bits of rcx",
-        ),
-        (
-            ".Lparse_loop:  # bound: 20\n    cmp rcx, MAX_CHARS\n",
-            ".Lparse_loop:  # bound: 20\n    cmp rcx, -1\n",
-            "    cmp rcx, -1",
-            Rule::Bounds,
-            "compares with -1, which an unsigned jump reads as a huge number",
-        ),
-        // M2: a bit test whose offset is a register.
-        (
-            "    movzx edx, byte ptr [rdi + rcx]\n",
-            "    movzx edx, byte ptr [rdi + rcx]\n    bt qword ptr [rdi], rcx\n",
-            "    bt qword ptr [rdi], rcx",
-            Rule::Bounds,
-            "tests a bit in memory at an offset in a register",
-        ),
-        // M1: an address made from a plain number.
-        (
-            ".Lstart_usage:\n",
-            ".Lstart_usage:\n    mov esi, MAX_WRITES\n    mov byte ptr [rsi], 0\n",
-            "    mov byte ptr [rsi], 0",
-            Rule::Owners,
-            "holds a plain number here, not a pointer",
-        ),
-        // M2: a constant offset one byte past a symbol.
-        (
-            ".Lstart_write_failed:\n",
-            ".Lstart_write_failed:\n    lea rsi, [rip + out_buf]\n    mov byte ptr [rsi + \
-             OUT_BUF_LEN], 0\n",
-            "    mov byte ptr [rsi + OUT_BUF_LEN], 0",
-            Rule::Bounds,
-            "reaches byte 21 of out_buf, which has 21 bytes",
-        ),
-        // M2: one byte past usage_msg is nan_msg's first, but main.s names usage_msg.
-        (
-            ".Lstart_write_failed:\n",
-            ".Lstart_write_failed:\n    movzx eax, byte ptr [rip + usage_msg + USAGE_MSG_LEN]\n",
-            "    movzx eax, byte ptr [rip + usage_msg + USAGE_MSG_LEN]",
-            Rule::Scope,
-            "reaches 1 byte past the end of usage_msg, which has 18 bytes",
-        ),
-        // M2: so is a pointer just past usage_msg's end, as main.s makes it.
-        (
-            ".Lstart_write_failed:\n",
-            ".Lstart_write_failed:\n    lea rsi, [rip + usage_msg + USAGE_MSG_LEN]\n    movzx \
-             eax, byte ptr [rsi]\n",
-            "    movzx eax, byte ptr [rsi]",
-            Rule::Bounds,
-            "reaches byte 18 of usage_msg, which has 18 bytes",
-        ),
-        // M3: an address in the frame, returned.
-        (
-            ".Lparse_return:\n    ret\n",
-            ".Lparse_return:\n    lea rdx, [rsp]\n    ret\n",
-            "    lea rdx, [rsp]\n    ret",
-            Rule::Lifetimes,
-            "returns an address in its own frame in rdx",
-        ),
-        // M3: an address in the frame, stored where it outlives the function.
-        (
-            ".Lparse_return:\n    ret\n",
-            ".Lparse_return:\n    lea rcx, [rsp]\n    mov qword ptr [rip + out_buf], rcx\n    \
-             ret\n",
-            "    mov qword ptr [rip + out_buf], rcx",
-            Rule::Lifetimes,
-            "an address in this function's frame, outside the frame",
-        ),
-        // M3: a read past the frame, into the caller's.
-        (
-            "parse_i64:\n",
-            "parse_i64:\n    mov r10, qword ptr [rsp + 8]\n",
-            "    mov r10, qword ptr [rsp + 8]",
-            Rule::Lifetimes,
-            "into its return address or its caller's frame",
-        ),
-        // M3: a pointer to a known place in the frame, written past the frame.
-        (
-            ".Lwrite_i64_return:\n    add rsp, 8\n",
-            ".Lwrite_i64_return:\n    lea rcx, [rsp + 8]\n    mov byte ptr [rcx], 0\n    add \
-             rsp, 8\n",
-            "    mov byte ptr [rcx], 0",
-            Rule::Lifetimes,
-            "reaches past this function's frame of 8 bytes, into its return address",
-        ),
-        // M5: a frame slot read before anything writes it.
-        (
-            "parse_i64:\n",
-            "parse_i64:\n    sub rsp, 8\n    mov r10, qword ptr [rsp]\n    add rsp, 8\n",
-            "    mov r10, qword ptr [rsp]",
-            Rule::Initialization,
-            "reads the frame at rsp + 0, which some path reaches without writing",
-        ),
-        // M1: what a function returns is followed through the call: parse_i64 returns a number.
-        (
-            "    call parse_i64\n    test rax, rax\n",
-            "    call parse_i64\n    mov byte ptr [rax], 0\n    test rax, rax\n",
-            "    mov byte ptr [rax], 0",
-            Rule::Owners,
-            "uses rax as an address, but it holds a plain number here",
-        ),
-        // M4: the program's arguments are only read.
-        (
-            "    mov rdi, qword ptr [rsp + 16]\n",
-            "    mov rdi, qword ptr [rsp + 16]\n    mov byte ptr [rdi], 0\n",
-            "    mov byte ptr [rdi], 0",
-            Rule::ExclusiveWrites,
-            "writes into the program's arguments, which it only reads",
-        ),
-        // M5: a frame lent to a function that only reads it is still unwritten.
-        (
-            ".Lwrite_i64_return:\n    add rsp, 8\n",
-            ".Lwrite_i64_return:\n    mov rdi, rsp\n    call parse_i64\n    mov r10, qword ptr \
-             [rsp]\n    add rsp, 8\n",
-            "    mov r10, qword ptr [rsp]",
-            Rule::Initialization,
-            "reads the frame at rsp + 0, which some path reaches without writing",
-        ),
-        // M6: read-only data written through a register.
-        (
-            ".Lstart_usage:\n",
-            ".Lstart_usage:\n    lea rsi, [rip + usage_msg]\n    mov byte ptr [rsi], 0\n",
-            "    mov byte ptr [rsi], 0",
-            Rule::Immutability,
-            "writes to read-only usage_msg",
-        ),
-        // M8: a frame bigger than the stack's limit.
-        (
-            "_start:\n",
-            "_start:\n    sub rsp, 2097152\n",
-            "_start:",
-            Rule::StackSize,
-            "bytes of stack, more than 1048576",
-        ),
-    ];
-    for (from, to, at, rule, needle) in cases {
-        let text = with(from, to);
-        let report = check(&text).await;
-        // A returned address is reported where it's returned, on the `ret`.
-        let line = match rule {
-            Rule::StackSize => None,
-            _ if at.ends_with("\n    ret") => Some(line_of(&text, at) + 1),
-            _ => Some(line_of(&text, at)),
-        };
-        let found = report.violations.iter().any(|violation| {
-            violation.rule == rule
-                && (line.is_none() || violation.line == line)
-                && violation.to_string().contains(needle)
-        });
-        let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
-        assert!(
-            found,
-            "no {rule:?} violation containing {needle:?} in {all:#?}"
-        );
+    for (name, cells) in PLANTED {
+        for (target, cell) in cells.cells() {
+            let Cell::Plant(planted) = cell else {
+                continue;
+            };
+            let template = match target {
+                Profile::LinuxX86_64 => TEMPLATE,
+                Profile::LinuxAarch64 => AARCH64_TEMPLATE,
+            };
+            assert!(
+                template.contains(planted.old),
+                "{name} on {}: {:?} isn't in the template",
+                target.name(),
+                planted.old
+            );
+            let text = template.replacen(planted.old, planted.new, 1);
+            let report = check(&text).await;
+            let line = match planted.at {
+                At::Nowhere => None,
+                At::Line(at) => Some(line_of(&text, at)),
+                At::Ret(at) => Some(line_of(&text, at) + 1),
+            };
+            let found = report.violations.iter().any(|violation| {
+                violation.rule == planted.rule
+                    && (line.is_none() || violation.line == line)
+                    && violation.to_string().contains(planted.needle)
+            });
+            let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+            assert!(
+                found,
+                "{name} on {}: no {:?} violation containing {:?} in {all:#?}",
+                target.name(),
+                planted.rule,
+                planted.needle
+            );
+        }
     }
+}
+
+/// Every planted bug is planted on a target or says why that CPU can't have it, and no target
+/// plants fewer than the tests this table replaced did.
+#[test]
+fn every_planted_bug_is_planted_or_excused_on_every_target() {
+    for (name, cells) in PLANTED {
+        let mut planted = 0;
+        for (target, cell) in cells.cells() {
+            match cell {
+                Cell::Plant(_) => planted += 1,
+                Cell::NotApplicable(why) => {
+                    assert!(why.len() > 40, "{name}: say why {} can't", target.name());
+                }
+            }
+        }
+        assert!(planted > 0, "{name}: no target plants it");
+    }
+    let planted = |target: Profile| {
+        PLANTED
+            .iter()
+            .filter(|(_, cells)| matches!(cells.get(target), Cell::Plant(_)))
+            .count()
+    };
+    // The 17 bugs x86-64's test planted, and the 14 AArch64's did with its stack-limit test.
+    assert!(planted(Profile::LinuxX86_64) >= 17);
+    assert!(planted(Profile::LinuxAarch64) >= 15);
 }
 
 /// A pointer just past a symbol's end belongs to the symbol main.s names, whatever starts there:
@@ -2075,145 +2471,6 @@ async fn code_after_an_always_taken_aarch64_branch_can_never_run() {
             "can never run",
         );
     }
-}
-
-/// Memory safety on AArch64: a bug planted for each memory rule is found, as x86-64's
-/// `memory_rules_find_each_planted_bug` finds them in its dialect. Each case replaces `old` with
-/// `new` in the AArch64 template and wants a violation of `rule` whose text contains `needle`.
-#[tokio::test]
-async fn aarch64_memory_rules_find_each_planted_bug() {
-    let cases: [(&str, &str, Rule, &str); 14] = [
-        // M2: a bounds check of part of the index.
-        (
-            ".Lparse_loop:  // bound: 20\n    cmp x2, #MAX_CHARS\n",
-            ".Lparse_loop:  // bound: 20\n    cmp w2, #MAX_CHARS\n",
-            Rule::Bounds,
-            "",
-        ),
-        // M1: an address made from a plain number.
-        (
-            ".Lstart_usage:\n",
-            ".Lstart_usage:\n    mov x1, #MAX_WRITES\n    strb wzr, [x1]\n",
-            Rule::Owners,
-            "plain number",
-        ),
-        // M2: a constant offset one byte past a symbol.
-        (
-            ".Lstart_write_failed:\n",
-            ".Lstart_write_failed:\n    adrp x1, out_buf\n    add x1, x1, :lo12:out_buf\n    strb \
-             wzr, [x1, #OUT_BUF_LEN]\n",
-            Rule::Bounds,
-            "out_buf",
-        ),
-        // M2: and one past a read-only symbol, which the next symbol starts after.
-        (
-            ".Lstart_write_failed:\n",
-            ".Lstart_write_failed:\n    adrp x1, usage_msg\n    add x1, x1, :lo12:usage_msg\n    \
-             ldrb w2, [x1, #USAGE_MSG_LEN]\n",
-            Rule::Bounds,
-            "usage_msg",
-        ),
-        // M3: an address in the frame, returned.
-        (
-            ".Lwrite_i64_return:\n    ldp x29, x30, [sp], #16\n",
-            ".Lwrite_i64_return:\n    mov x1, sp\n    ldp x29, x30, [sp], #16\n",
-            Rule::Lifetimes,
-            "returns an address in its own frame",
-        ),
-        // M3: an address in the frame, stored where it outlives the function.
-        (
-            ".Lwrite_i64_return:\n    ldp x29, x30, [sp], #16\n",
-            ".Lwrite_i64_return:\n    mov x1, sp\n    adrp x2, out_buf\n    add x2, x2, \
-             :lo12:out_buf\n    str x1, [x2]\n    ldp x29, x30, [sp], #16\n",
-            Rule::Lifetimes,
-            "outside the frame",
-        ),
-        // M3: a read past the frame, into the caller's.
-        (
-            "parse_i64:\n",
-            "parse_i64:\n    ldr x10, [sp, #8]\n",
-            Rule::Lifetimes,
-            "into its return address or its caller's frame",
-        ),
-        // M3: a pointer to a known place in the frame, written past the frame.
-        (
-            ".Lwrite_i64_return:\n    ldp x29, x30, [sp], #16\n",
-            ".Lwrite_i64_return:\n    add x1, sp, #16\n    strb wzr, [x1]\n    ldp x29, x30, [sp], \
-             #16\n",
-            Rule::Lifetimes,
-            "reaches past this function's frame of 16 bytes",
-        ),
-        // M3: the return address a function saved in its frame record, written, and written
-        // through a pointer to it.
-        (
-            "write_i64:\n    stp x29, x30, [sp, #-16]!\n",
-            "write_i64:\n    stp x29, x30, [sp, #-16]!\n    str xzr, [sp, #8]\n",
-            Rule::Lifetimes,
-            "return address",
-        ),
-        (
-            "write_i64:\n    stp x29, x30, [sp, #-16]!\n",
-            "write_i64:\n    stp x29, x30, [sp, #-16]!\n    add x1, sp, #8\n    str xzr, [x1]\n",
-            Rule::Lifetimes,
-            "return address",
-        ),
-        // M5: a frame slot read before anything writes it.
-        (
-            "parse_i64:\n",
-            "parse_i64:\n    sub sp, sp, #16\n    ldr x10, [sp]\n    add sp, sp, #16\n",
-            Rule::Initialization,
-            "without writing",
-        ),
-        // M1: what a function returns is followed through the call: parse_i64 returns a number.
-        (
-            "    bl parse_i64\n    tbnz x0, #63, .Lstart_not_a_number\n",
-            "    bl parse_i64\n    strb wzr, [x0]\n    tbnz x0, #63, .Lstart_not_a_number\n",
-            Rule::Owners,
-            "plain number",
-        ),
-        // M4: the program's arguments are only read.
-        (
-            "    cbz x0, .Lstart_assert_argv\n",
-            "    cbz x0, .Lstart_assert_argv\n    strb wzr, [x0]\n",
-            Rule::ExclusiveWrites,
-            "arguments",
-        ),
-        // M6: read-only data written through a register.
-        (
-            ".Lstart_usage:\n",
-            ".Lstart_usage:\n    adrp x1, usage_msg\n    add x1, x1, :lo12:usage_msg\n    strb wzr, \
-             [x1]\n",
-            Rule::Immutability,
-            "usage_msg",
-        ),
-    ];
-    for (old, new, rule, needle) in cases {
-        let text = with_aarch64(old, new);
-        let report = check(&text).await;
-        let found = report
-            .violations
-            .iter()
-            .any(|violation| violation.rule == rule && violation.to_string().contains(needle));
-        let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
-        assert!(
-            found,
-            "no {rule:?} violation containing {needle:?} in {all:#?}\nfor {new:?}"
-        );
-    }
-}
-
-/// M8 on AArch64: a frame bigger than the stack's limit.
-#[tokio::test]
-async fn an_aarch64_frame_past_the_stack_limit_is_refused() {
-    let text = with_aarch64("_start:\n", "_start:\n    sub sp, sp, #1024, lsl #12\n");
-    let report = check(&text).await;
-    let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
-    assert!(
-        report.violations.iter().any(|violation| {
-            violation.rule == Rule::StackSize && violation.to_string().contains("more than 1048576")
-        }),
-        "{all:#?}"
-    );
 }
 
 /// Without its frame record, a function that calls can't return.

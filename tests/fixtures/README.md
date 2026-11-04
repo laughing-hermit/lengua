@@ -39,6 +39,6 @@ And written for the tests themselves:
 **Every one has its twin on the other CPU.** `linux-aarch64/` holds the AArch64 twin of each
 fixture here and of each program in `examples/`, 29 in all, each compiled from the very same
 `spec.md` (the twin test, `every_program_has_its_twin_on_the_other_cpu`, asks for the same bytes),
-and a program added on either CPU comes with its twin. `every_x86_64_program_passes_its_checks`
-(tests/every_program.rs) and `every_aarch64_twin_passes_its_checks` (tests/aarch64_session.rs)
-check them all through the server.
+and a program added on either CPU comes with its twin. One test,
+`every_program_passes_its_checks_on_every_target` (tests/every_program.rs), takes them all
+through the server on each target a computer runs.

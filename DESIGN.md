@@ -1183,6 +1183,32 @@ question, its loop leaving where its index reaches the bytes read as the NEON on
    that supplies tests' random bytes and clock (`supervise.rs`, which reads the CPU's registers:
    x86-64's and AArch64's, each in its own small `cpu` module). macOS and Windows have neither;
    each needs its own confinement.
+7. **The tests' column, and a runner to run it.** Every table of cases is a `PerTarget`
+   (`src/targets.rs`), a struct with a field for each target, so a new `Profile` stops every one
+   of them compiling until the new target has its cell, and a case can't be left out of one
+   target unnoticed. The cell is the target's own hardware's version of the case, or the reason,
+   and only a reason of the hardware, that the case can't be written there:
+   - `tests/red_team.rs`: for each attempt to get past the checks, the edit of the target's
+     template and what a refusal must name; and `PLANTED` in `src/checker/tests.rs`: the same
+     for the bugs planted against the memory rules (check-only, so every runner checks every
+     target's cells);
+   - `tests/every_program.rs`: where the target's twins of the examples and fixtures are, and
+     which optional extensions of its CPU a program may need (a program for one that a computer
+     lacks is skipped, with a note in the run's summary);
+   - `tests/limits.rs`: an assembly source of the target's CPU for each program that pins a
+     limit: time, output, the environment, names, open files, listing order, the clock and the
+     random bytes, the supervisor, threads, the network, and the rest of "Running programs".
+     Every runner builds every target's source (LLVM builds for all of them), so a typo fails
+     everywhere, and runs its own.
+
+   A target must pass them natively, on a runner of its own CPU: `tests/parity_inventory.rs`
+   fails unless `.github/workflows` has a job that runs `cargo test` on each target's runner
+   (`ubuntu-24.04` for x86-64, `ubuntu-24.04-arm` for ARM64), and unless every test file made
+   for one target (`#![cfg(target_arch = ...)]`, or a target in its name) is on its `DEBT` list
+   with what the other targets lack, so a new such file fails and the list only shrinks. QEMU's
+   user mode is for a developer's computer: it checks and runs, but the kernel sees QEMU's
+   system calls, so it can't hold a program to its spec's, and the supervisor can't follow it.
+   What the suite still tests on one target only is that `DEBT` list.
 
 **One product on every target.** A port adds a CPU's or an OS's means, never a different lengua.
 The same spec means the same on each: the same skills, tools, reports, lock and messages (only
@@ -1205,10 +1231,9 @@ x86-64 covers, each item with its own hardware's means (NEON where x86-64 has AV
 Linux targets hold each other to it program by program: every x86-64 example and fixture has an
 AArch64 twin compiled from the very same spec, under `tests/fixtures/linux-aarch64`, and every
 AArch64 one its x86-64 twin; a test checks the pairs and their specs, and another puts every
-AArch64 twin through the server, where each follows every rule and passes its tests (`second`
-fails its tests on both CPUs, by design). The two without one, `total` and `amounts`, are on
-todo.md's list of what Opus 5.5 didn't allow. The mutation test covers the same programs on both
-CPUs, x86-64's under its own decoder and ARM64's under QEMU or on ARM64.
+program of each target through the server, where each follows every rule and passes its tests
+(`second` fails its tests on both CPUs, by design). The mutation test covers the same programs on
+both CPUs, x86-64's under its own decoder and ARM64's under QEMU or on ARM64.
 
 The network shows the rule at work. A program's own `connect` could be held to its spec's ports
 on Linux (Landlock) and to this computer (lengua's tracer), but Windows's sandbox for apps can't
