@@ -147,13 +147,25 @@ async fn accesses_outside_their_owner_are_refused() {
         "    mov rdi, qword ptr [rsp + 16]\n",
         "    movzx ecx, byte ptr [rip + usage_msg + 18]\n    mov rdi, qword ptr [rsp + 16]\n",
     );
-    refused(&session, "a read past a buffer", &code, &["rule M2"]).await;
+    refused(
+        &session,
+        "a read past a buffer",
+        &code,
+        &["rule M2", "past the end of"],
+    )
+    .await;
     // Far past it, where another symbol or nothing lies.
     let code = changed(
         "    mov rdi, qword ptr [rsp + 16]\n",
         "    movzx ecx, byte ptr [rip + usage_msg + 4096]\n    mov rdi, qword ptr [rsp + 16]\n",
     );
-    refused(&session, "a read far past a buffer", &code, &["rule M2"]).await;
+    refused(
+        &session,
+        "a read far past a buffer",
+        &code,
+        &["rule M2", "past the end of"],
+    )
+    .await;
     // An index nothing has checked.
     let code = changed(
         "    mov rdi, qword ptr [rsp + 16]\n    test rdi, rdi\n",
@@ -193,14 +205,20 @@ async fn an_address_made_from_a_plain_number_is_refused() {
     refused(&session, "a fixed address", &code, &["rule M1"]).await;
     let code = changed(
         "    mov rdi, qword ptr [rsp + 16]\n",
-        "    mov rsi, qword ptr [rsp + 8]\n    movzx ecx, byte ptr [rsi]\n    mov rdi, qword \
-         ptr [rsp + 16]\n",
+        "    lea rax, [rip + usage_msg]\n    mov rsi, qword ptr [rax]\n    movzx ecx, byte ptr \
+         [rsi]\n    mov rdi, qword ptr [rsp + 16]\n",
     );
     refused(
         &session,
         "a pointer loaded from memory",
         &code,
-        &["rule M1", "rule M2", "rule 9"],
+        &[
+            "rule M1",
+            "rule M2",
+            "rule 9",
+            "no known owner",
+            "can't follow",
+        ],
     )
     .await;
     session.service.cancel().await.expect("close the session");
@@ -213,7 +231,13 @@ async fn writing_read_only_data_or_a_return_address_is_refused() {
         "    mov rdi, qword ptr [rsp + 16]\n",
         "    mov byte ptr [rip + usage_msg], 0\n    mov rdi, qword ptr [rsp + 16]\n",
     );
-    refused(&session, "a write to .rodata", &code, &["rule M6"]).await;
+    refused(
+        &session,
+        "a write to .rodata",
+        &code,
+        &["rule M6", "read-only"],
+    )
+    .await;
     // write_all's return address is at [rsp] when it starts.
     let code = changed("write_all:\n", "write_all:\n    mov qword ptr [rsp], 0\n");
     refused(
