@@ -52,7 +52,10 @@ mod tests {
             .cells()
             .map(|(target, cell)| (target.name(), *cell))
             .collect();
-        assert_eq!(names, [("linux-x86_64", "x86-64"), ("linux-aarch64", "arm64")]);
+        assert_eq!(
+            names,
+            [("linux-x86_64", "x86-64"), ("linux-aarch64", "arm64")]
+        );
         assert_eq!(Profile::ALL.len(), 2);
     }
 }
