@@ -84,11 +84,7 @@ const PLACES: PerTarget<Places> = PerTarget {
 /// the sibling each is to get. A debt is paid by writing the sibling, from the very same spec, and
 /// removing the entry (or moving it to `TIERS`, when the extension's form stays as a fast tier).
 const DEBT: PerTarget<&[Debt]> = PerTarget {
-    linux_x86_64: &[Debt {
-        program: "tests/fixtures/lines/main.s",
-        needs: &["BMI2"],
-        sibling: "lines with base shifts and masks in place of bzhi",
-    }],
+    linux_x86_64: &[],
     linux_aarch64: &[],
 };
 

@@ -845,8 +845,9 @@ What it covers:
   bytes left in chunk `j`, as `bzhi` clears the bits from its index (the low byte of
   `min(length - 16j, 16)`), with the loop still running there, is `16j + b < length`. `pairs`
   with a 4 KiB buffer is proven for every length so in under four seconds, against nine minutes
-  one final length at a time; the line counter, which masks its last chunk with `bzhi`, with a 64
-  KiB buffer, C's size, in under 30 seconds with no solver question. Counts that look back, as
+  one final length at a time; the line counter, with its last chunk masked by `bzhi` (the form the
+  prover's test keeps; the fixture itself masks with SSE2, on the baseline), with a 64 KiB buffer,
+  C's size, in under 30 seconds with no solver question. Counts that look back, as
   `words` does, take every final piece at once too: every text up to a buffer-full from the
   program's start, and every final piece after a whole buffer-full read from any state at the
   head, the formula reading that buffer-full's last bytes as a window before the piece. For the
