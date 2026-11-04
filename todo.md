@@ -192,10 +192,17 @@ in this run are listed above), heaviest first:
    - *An unexplained difference.* In the same 60 seconds, ARM64 proved far fewer combinations of
      the `amounts` valid-input block than x86-64 (36 against about 10,000 on the runners). Not
      investigated: the runner's CPU, the model's speed, or the twice-as-many paths.
-3. **CI coverage.** GitHub's x86-64 runners have no AVX-512, so the x86-64 programs that use it
-   (`count`, `words`, `padded`, the fast `wc`) have their rules checked there but are not taken
-   through the server, where their NEON twins run everywhere. The x86-64 job also has no QEMU, so
-   the ARM64-under-QEMU tests skip there without saying so.
+3. **CI coverage.** GitHub's x86-64 runners are a mixed pool: of 21 runs on 2026-11-04, 10 drew
+   a CPU with AVX-512 (Xeon Platinum 8573C and 6975P-C, EPYC 9V45, some EPYC 9V74) and 11 did not
+   (EPYC 7763, other EPYC 9V74), so x86-64 coverage is a coin flip per run. On a draw without it,
+   the eight x86-64 programs that use AVX-512 (`count`, `words`, `padded`, the fast `wc`,
+   `crc32c`, three benchmark ones) are neither taken through the server nor rule-checked
+   (`every_program_in_the_repository_follows_every_rule` skips them; the ARM64 job, which assumes
+   every extension, and an AVX-512 draw do check them), and about ten tests that need AVX-512
+   return early without a word, the model-against-CPU vector harness among them (so its SSE2,
+   AVX2, AES, SHA and PCLMUL probes never meet real silicon on those draws). The x86-64 job also
+   has no QEMU, so about 34 ARM64-under-QEMU tests are silent no-ops there. Skips print nothing
+   in a green log. The plan is in "Fitting GitHub's free runners" below.
 4. **Programs.**
    - Buffer sizes differ between twins: `count` 256 KiB against 64 KiB, `padded` and the fast
      `crc32c` 1 MiB against 64 KiB, `upcase` retries writes 4096 against 64 times.
@@ -208,9 +215,9 @@ in this run are listed above), heaviest first:
      (x86-64's SSE2, ARM64's NEON); an optional extension (AVX-512, SVE) is a speedup an agent
      picks from the machine line's features, never the only way to get the behavior. By it, the
      four x86-64 programs above lack their baseline form: an x86-64 computer without AVX-512 (most
-     are: AMD before Zen 4, Intel client chips since 2022, GitHub's runners) has no fast `wc` to
-     learn from or copy, and a macOS or Windows x86-64 port inherits the gap. Replacing AVX-512 by
-     SSE2 (and AVX2 for the fast form) is the work to do; see the research below.
+     are: AMD before Zen 4, Intel client chips since 2022, about half of GitHub's runners) has no
+     fast `wc` to learn from or copy, and a macOS or Windows x86-64 port inherits the gap. The
+     plan is in "Baseline forms for the AVX-512 programs" below.
    - The AArch64 dialect has no add-with-carry (`adc`, `sbc`).
 5. **Small items.** `cbz`/`tbz` on `xzr` or `wzr` count as conditional branches, so the dead-code
    and "assertion always fails" checks can be bypassed on ARM64; `ppoll`'s timeout and signal-mask
@@ -226,6 +233,85 @@ in this run are listed above), heaviest first:
    prove less than x86-64's.
 
 Beyond these two CPUs, the macOS and Windows ports remain skipped (below).
+
+### Baseline forms for the AVX-512 programs
+
+Why (the owner, 2026-11-04): each target's code is tailored to its CPU and OS to be fast, yet it is
+one product, so every program has a baseline form that runs on every machine of its target and an
+optional faster form picked from the machine line's features, both meeting the same spec, tests
+and proofs. ARM64 already has that (NEON, and SVE as an extra); x86-64 doesn't. Researched
+2026-11-04 by reading only; nothing below was assembled, run or measured.
+- **What uses AVX-512BW on x86-64:** the fast `wc` (`assets/fast/wc`, one function, `count_piece`,
+  64 bytes a step with `k` masks, its last partial step masked in the same loop, 64 KiB through
+  `fill`), `examples/count` (128 bytes a step, a full-step and a masked-tail routine, 256 KiB raw
+  reads), `tests/fixtures/padded` and `words`, and `fast/crc32c` in one function only (`move_front`,
+  a masked 64-byte copy its proof never reaches). `fast/histogram` has none but is gated with them.
+  The three benchmark-only AVX-512 programs (`upcase`, `shout`, `shout` on one thread) already
+  have SSE2 siblings (`examples/upcase`, the parallel template). No x86-64 program uses `ymm`,
+  though the compile skill tells the agent to use AVX2 when the machine line lists it.
+- **An SSE2 form is possible with what exists.** 16 bytes a step in the shape of ARM64's NEON
+  `wc`: `pcmpeqb` for newlines and spaces, `psubb`/`pminub`/`pcmpeqb` for the 9 to 13 range,
+  `por`, `pmovmskb`, then `bzhi` to cut the last step to the bytes left, `popcnt`, and the
+  previous-byte carry as a mask bit (`shrx`). The dialect allows all of it, and the prover models
+  every one of those instructions; `tests/fixtures/lines` (SSE2, `pcmpeqb`, `pmovmskb`, `bzhi`,
+  `popcnt`) is already proven for every length by induction at 64 KiB. The sketch is about 57 of
+  rule 4's 60 instructions (a helper for the constants if it runs over). Avoid the instructions
+  the prover doesn't model: `psadbw`, `palignr`, `punpck*`, `pack*`, `pmaddubsw`, `pextr*`,
+  `pinsr*`, `pblendw`, `pmovzx*`.
+- **Speed is the cost.** About 36 instructions per 16 bytes against the AVX-512 loop's 37 per
+  64: roughly 3.9 times the instructions, level with C and Rust in cycles where the AVX-512 `wc`
+  is 13.8 times ahead (`BENCHMARKS.md`; derived, not measured). So: keep AVX-512 as the optional
+  fast form, add the SSE2 form as the default, and add an AVX2 tier (32 bytes a step) if the
+  measured SSE2 `wc` doesn't beat C and Rust on a CPU without AVX-512.
+- **Order, by risk:** (0) CI gates first (below); (1) `crc32c`'s `move_front` scalar (8-byte
+  copies and a byte tail; no unmasked 16-byte load, which would read past the data); (2) fast
+  `wc` as SSE2 in `assets/fast/wc`, the old file moved to `assets/fast/wc-avx512` as ARM64's
+  `wc` and `wc-sve` are, proven first with the one-folder check, then a
+  `proves_the_sse2_fast_word_count_for_every_length` test with four planted bugs, ungated by CPU;
+  (3) measure with the x86-64 `benchmarks` dispatch, recording the CPU each time, since the pool
+  is mixed; (4) `words`, `padded`, `count`, reusing the new `count_piece` and changing only the
+  start (count's buffer aligned to its twin's 64 KiB, which closes that gap too); (5) the compile
+  skill and the references say which asset to start from by the machine line, and the README,
+  DESIGN and white paper stop saying "the AVX-512 `wc`" as if it were the only one.
+  Effort: `wc` medium, `crc32c`, `words` small, `padded`, `count` small to medium, the AVX2 tier
+  small to medium and optional.
+
+### Fitting GitHub's free runners
+
+What the runners are (read from the logs of the runs of 2026-11-04): 4 vCPUs, kernel 7.0 (azure),
+Landlock and yama in the LSM list, `ptrace_scope` 1, which is all the sandbox needs; the x86-64
+CPU varies per run (about half have AVX-512), the ARM64 one has SVE (its SVE proof runs). The
+sandbox is not an obstacle, and no step of setup has failed in about 160 jobs. What hurts:
+- The full suites take 32 to 35 minutes, about 18 to 19 of them the 141 prover tests, and a push cancels
+  the last one (15 of 33 x86-64 push runs, 13 of 33 ARM64 ones).
+- The macOS and Windows builds always fail (the Linux-only sandbox crates), cost 1.5 to 6.7
+  minutes each from a cold cache, add four red jobs to every push, and twice never got a runner:
+  the platform cancelled them at 15 minutes and the run sat "queued" while its tests had finished.
+- Skips are silent: a green log doesn't say that AVX-512 tests, the QEMU tests or a counter test
+  were skipped. There is no branch protection, so nothing enforces a gate.
+- Plan, in order (code = Rust or assembly, workflow = YAML only): (1) *code, tiny*: the
+  all-programs test skips by feature, before calling the server, and the rules test checks the
+  AVX-512 programs with every extension on any host, as the ARM64 job does; (2) *workflow*: print
+  the machine's facts and a summary of what was skipped into `$GITHUB_STEP_SUMMARY`, and a hygiene
+  bundle (Node 24 majors of the actions, `cancel-in-progress` off main, the dispatch group key
+  including `filter`, the cache saved even when a job fails, no duplicate `build` jobs on a
+  dispatch); (3) *workflow, the owner's call*: macOS and Windows out of the push path, to a weekly
+  and manual workflow, losing the per-push red marks; (4) *workflow, one dry run first*: a QEMU job
+  on x86-64, which un-skips about 34 tests and the ARM half of the mutation test; (5) *workflow and
+  script*: shard each suite (3 or 4 shards of prover tests, split by hash; estimated 34 to 39
+  minutes down to 12 to 15), not with `cargo-nextest`, whose one process per test breaks the
+  process-wide proving lock; (6) *code*: a baseline variant of the model-against-CPU vector test
+  that saves `xmm`/`ymm` only, so its SSE2, AVX2, AES, SHA and PCLMUL probes meet real silicon on
+  every draw; (7) *code*: the baseline forms above, the only change that ends the dependence on
+  which CPU the pool hands out.
+- Not recommended: lowering the proof budgets (calibrated on 16 cores; tests assert verdicts),
+  larger or self-hosted runners (outside the $0 rule), dropping the duplicate prover tests (both
+  solver builds get exercised), and emulating AVX-512: QEMU's TCG has none (checked in its source),
+  and Intel's SDE could only wrap the unsandboxed harness, its licence unread.
+- For the owner to decide: whether AVX-512 silicon coverage must stay a hard gate until the
+  baseline forms land (an "attempts" job that retries until a draw has the flag would do, about 94%
+  likely to hit); whether to read SDE's licence; a single `gate` job as a required check; and how
+  many shards fit the Free plan's 20 concurrent jobs.
 
 ## Skipped, and why
 
