@@ -375,6 +375,8 @@ pub struct Pool {
     /// that joining them again wouldn't give the term back: the low byte of a sum is the sum of
     /// its parts' low bytes.
     split_from: HashMap<Vec<Term>, Term>,
+    /// Each extraction made, by the term, its high bit and its low bit ([`Pool::extract`]).
+    extracted: HashMap<(Term, u32, u32), Term>,
 }
 
 /// The smallest all-ones number at least `value`: the range an or or xor stays in.
@@ -3317,7 +3319,20 @@ impl Pool {
     }
 
     /// Bits `low` to `high` of `a`, inclusive.
+    ///
+    /// Each answer is kept: terms are shared, and pushing an extraction down through a deep shared
+    /// term, such as a hash's rounds make, takes a time exponential in its depth when each way
+    /// down to a term is walked again.
     pub fn extract(&mut self, a: Term, high: u32, low: u32) -> Term {
+        if let Some(term) = self.extracted.get(&(a, high, low)) {
+            return *term;
+        }
+        let term = self.extract_uncached(a, high, low);
+        self.extracted.insert((a, high, low), term);
+        term
+    }
+
+    fn extract_uncached(&mut self, a: Term, high: u32, low: u32) -> Term {
         let width = self.width(a);
         let out = high - low + 1;
         if low == 0 && high + 1 == width {
@@ -5190,6 +5205,31 @@ mod tests {
             panic!("not a count: {both:?}");
         };
         assert_eq!(pool.count_parts(number), every);
+    }
+
+    #[test]
+    fn a_bit_of_a_deep_shared_term_takes_time_in_its_size_not_its_depth() {
+        // Each round's two words are made of the last round's two, so every term is shared along
+        // many paths, as a hash's rounds make it. Walked path by path, a bit of round 40 is over
+        // 10^8 steps; walked once for each term it reaches, 40 rounds is a few hundred.
+        let mut pool = Pool::default();
+        let mut a = pool.var(32, "a");
+        let mut b = pool.var(32, "b");
+        for _ in 0..40 {
+            let mixed = pool.xor(a, b);
+            let sum = pool.add(mixed, a);
+            (a, b) = (mixed, sum);
+        }
+        let began = std::time::Instant::now();
+        let bit = pool.extract(b, 0, 0);
+        assert_eq!(pool.width(bit), 1);
+        let again = pool.extract(b, 0, 0);
+        assert_eq!(bit, again, "the same question has the same answer");
+        assert!(
+            began.elapsed() < std::time::Duration::from_secs(5),
+            "took {:?}",
+            began.elapsed()
+        );
     }
 
     #[test]
