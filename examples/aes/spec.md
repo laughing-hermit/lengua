@@ -21,11 +21,31 @@ writing the output fails, the program exits with code 2.
 - Then it prints `69c4e0d86a7b0430d8cdb78070b4c55a` followed by a newline
 - And it exits with code `0`
 
+### For any `key`, `data`
+- Given standard input holding `{key}\n{data}\n`
+- When the program runs
+- Then it prints `69c4e0d86a7b0430d8cdb78070b4c55a` followed by a newline
+- And it exits with code `0`
+
+| key | data | runs |
+|---|---|---|
+| `choice("000102030405060708090a0b0c0d0e0f")` | `choice("00112233445566778899aabbccddeeff")` | 1 |
+
 ## B2: Encrypts the example of FIPS 197's appendix B
 - Given standard input holding `2b7e151628aed2a6abf7158809cf4f3c\n3243f6a8885a308d313198a2e0370734\n`
 - When the program runs
 - Then it prints `3925841d02dc09fbdc118597196a0b32` followed by a newline
 - And it exits with code `0`
+
+### For any `key`, `data`
+- Given standard input holding `{key}\n{data}\n`
+- When the program runs
+- Then it prints `3925841d02dc09fbdc118597196a0b32` followed by a newline
+- And it exits with code `0`
+
+| key | data | runs |
+|---|---|---|
+| `choice("2b7e151628aed2a6abf7158809cf4f3c")` | `choice("3243f6a8885a308d313198a2e0370734")` | 1 |
 
 ## B3: Encrypts four blocks, as NIST SP 800-38A's ECB-AES128 example does
 - Given standard input holding `2b7e151628aed2a6abf7158809cf4f3c\n6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411e5fbc1191a0a52eff69f2445df4f9b17ad2b417be66c3710\n`
@@ -33,17 +53,47 @@ writing the output fails, the program exits with code 2.
 - Then it prints `3ad77bb40d7a3660a89ecaf32466ef97f5d3d58503b9699de785895a96fdbaaf43b1cd7f598ece23881b00e3ed0306887b0c785e27e8ad3f8223207104725dd4` followed by a newline
 - And it exits with code `0`
 
+### For any `key`, `data`
+- Given standard input holding `{key}\n{data}\n`
+- When the program runs
+- Then it prints `3ad77bb40d7a3660a89ecaf32466ef97f5d3d58503b9699de785895a96fdbaaf43b1cd7f598ece23881b00e3ed0306887b0c785e27e8ad3f8223207104725dd4` followed by a newline
+- And it exits with code `0`
+
+| key | data | runs |
+|---|---|---|
+| `choice("2b7e151628aed2a6abf7158809cf4f3c")` | `choice("6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411e5fbc1191a0a52eff69f2445df4f9b17ad2b417be66c3710")` | 1 |
+
 ## B4: Encrypts a block of zeros with a key of zeros
 - Given standard input holding `00000000000000000000000000000000\n00000000000000000000000000000000\n`
 - When the program runs
 - Then it prints `66e94bd4ef8a2c3b884cfa59ca342b2e` followed by a newline
 - And it exits with code `0`
 
+### For any `key`, `data`
+- Given standard input holding `{key}\n{data}\n`
+- When the program runs
+- Then it prints `66e94bd4ef8a2c3b884cfa59ca342b2e` followed by a newline
+- And it exits with code `0`
+
+| key | data | runs |
+|---|---|---|
+| `choice("00000000000000000000000000000000")` | `choice("00000000000000000000000000000000")` | 1 |
+
 ## B5: Takes uppercase digits and a missing last newline
 - Given standard input holding `000102030405060708090A0B0C0D0E0F\n00112233445566778899AABBCCDDEEFF`
 - When the program runs
 - Then it prints `69c4e0d86a7b0430d8cdb78070b4c55a` followed by a newline
 - And it exits with code `0`
+
+### For any `key`, `data`
+- Given standard input holding `{key}\n{data}`
+- When the program runs
+- Then it prints `69c4e0d86a7b0430d8cdb78070b4c55a` followed by a newline
+- And it exits with code `0`
+
+| key | data | runs |
+|---|---|---|
+| `choice("000102030405060708090A0B0C0D0E0F")` | `choice("00112233445566778899AABBCCDDEEFF")` | 1 |
 
 ## B6: Rejects input that isn't a key and blocks of hexadecimal digits
 - Given standard input holding `000102030405060708090a0b0c0d0e0f\n00112233445566778899aabbccddee\n`
