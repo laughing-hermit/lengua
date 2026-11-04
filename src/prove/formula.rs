@@ -1113,7 +1113,10 @@ fn call(
             let bytes = text(next()?)?;
             Ok(Formula::Texts(tallied(pool, &bytes)?))
         }
-        other => Err(format!("the function {other:?}")),
+        other => Err(format!(
+            "the test function {}, which the proof doesn't model yet",
+            other.name()
+        )),
     }
 }
 

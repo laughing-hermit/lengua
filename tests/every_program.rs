@@ -3,6 +3,10 @@
 //! (tests/aarch64_session.rs), so neither CPU has a program the other CPU's suite doesn't check:
 //! one product on both Linux targets.
 
+// Its programs are x86-64 code, which runs only on an x86-64 computer; the AArch64 mirror runs
+// on an ARM64 one (or under QEMU).
+#![cfg(target_arch = "x86_64")]
+
 mod common;
 
 use common::{Program, Protocol, Session};

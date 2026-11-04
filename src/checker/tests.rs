@@ -2052,6 +2052,146 @@ async fn the_aarch64_dialect_refuses_what_it_should() {
     }
 }
 
+/// Memory safety on AArch64: a bug planted for each memory rule is found, as x86-64's
+/// `memory_rules_find_each_planted_bug` finds them in its dialect. Each case replaces `old` with
+/// `new` in the AArch64 template and wants a violation of `rule` whose text contains `needle`.
+#[tokio::test]
+async fn aarch64_memory_rules_find_each_planted_bug() {
+    let cases: [(&str, &str, Rule, &str); 14] = [
+        // M2: a bounds check of part of the index.
+        (
+            ".Lparse_loop:  // bound: 20\n    cmp x2, #MAX_CHARS\n",
+            ".Lparse_loop:  // bound: 20\n    cmp w2, #MAX_CHARS\n",
+            Rule::Bounds,
+            "",
+        ),
+        // M1: an address made from a plain number.
+        (
+            ".Lstart_usage:\n",
+            ".Lstart_usage:\n    mov x1, #MAX_WRITES\n    strb wzr, [x1]\n",
+            Rule::Owners,
+            "plain number",
+        ),
+        // M2: a constant offset one byte past a symbol.
+        (
+            ".Lstart_write_failed:\n",
+            ".Lstart_write_failed:\n    adrp x1, out_buf\n    add x1, x1, :lo12:out_buf\n    strb \
+             wzr, [x1, #OUT_BUF_LEN]\n",
+            Rule::Bounds,
+            "out_buf",
+        ),
+        // M2: and one past a read-only symbol, which the next symbol starts after.
+        (
+            ".Lstart_write_failed:\n",
+            ".Lstart_write_failed:\n    adrp x1, usage_msg\n    add x1, x1, :lo12:usage_msg\n    \
+             ldrb w2, [x1, #USAGE_MSG_LEN]\n",
+            Rule::Bounds,
+            "usage_msg",
+        ),
+        // M3: an address in the frame, returned.
+        (
+            ".Lwrite_i64_return:\n    ldp x29, x30, [sp], #16\n",
+            ".Lwrite_i64_return:\n    mov x1, sp\n    ldp x29, x30, [sp], #16\n",
+            Rule::Lifetimes,
+            "returns an address in its own frame",
+        ),
+        // M3: an address in the frame, stored where it outlives the function.
+        (
+            ".Lwrite_i64_return:\n    ldp x29, x30, [sp], #16\n",
+            ".Lwrite_i64_return:\n    mov x1, sp\n    adrp x2, out_buf\n    add x2, x2, \
+             :lo12:out_buf\n    str x1, [x2]\n    ldp x29, x30, [sp], #16\n",
+            Rule::Lifetimes,
+            "outside the frame",
+        ),
+        // M3: a read past the frame, into the caller's.
+        (
+            "parse_i64:\n",
+            "parse_i64:\n    ldr x10, [sp, #8]\n",
+            Rule::Lifetimes,
+            "into its return address or its caller's frame",
+        ),
+        // M3: a pointer to a known place in the frame, written past the frame.
+        (
+            ".Lwrite_i64_return:\n    ldp x29, x30, [sp], #16\n",
+            ".Lwrite_i64_return:\n    add x1, sp, #16\n    strb wzr, [x1]\n    ldp x29, x30, [sp], \
+             #16\n",
+            Rule::Lifetimes,
+            "reaches past this function's frame of 16 bytes",
+        ),
+        // M3: the return address a function saved in its frame record, written, and written
+        // through a pointer to it.
+        (
+            "write_i64:\n    stp x29, x30, [sp, #-16]!\n",
+            "write_i64:\n    stp x29, x30, [sp, #-16]!\n    str xzr, [sp, #8]\n",
+            Rule::Lifetimes,
+            "return address",
+        ),
+        (
+            "write_i64:\n    stp x29, x30, [sp, #-16]!\n",
+            "write_i64:\n    stp x29, x30, [sp, #-16]!\n    add x1, sp, #8\n    str xzr, [x1]\n",
+            Rule::Lifetimes,
+            "return address",
+        ),
+        // M5: a frame slot read before anything writes it.
+        (
+            "parse_i64:\n",
+            "parse_i64:\n    sub sp, sp, #16\n    ldr x10, [sp]\n    add sp, sp, #16\n",
+            Rule::Initialization,
+            "without writing",
+        ),
+        // M1: what a function returns is followed through the call: parse_i64 returns a number.
+        (
+            "    bl parse_i64\n    tbnz x0, #63, .Lstart_not_a_number\n",
+            "    bl parse_i64\n    strb wzr, [x0]\n    tbnz x0, #63, .Lstart_not_a_number\n",
+            Rule::Owners,
+            "plain number",
+        ),
+        // M4: the program's arguments are only read.
+        (
+            "    cbz x0, .Lstart_assert_argv\n",
+            "    cbz x0, .Lstart_assert_argv\n    strb wzr, [x0]\n",
+            Rule::ExclusiveWrites,
+            "arguments",
+        ),
+        // M6: read-only data written through a register.
+        (
+            ".Lstart_usage:\n",
+            ".Lstart_usage:\n    adrp x1, usage_msg\n    add x1, x1, :lo12:usage_msg\n    strb wzr, \
+             [x1]\n",
+            Rule::Immutability,
+            "usage_msg",
+        ),
+    ];
+    for (old, new, rule, needle) in cases {
+        let text = with_aarch64(old, new);
+        let report = check(&text).await;
+        let found = report
+            .violations
+            .iter()
+            .any(|violation| violation.rule == rule && violation.to_string().contains(needle));
+        let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+        assert!(
+            found,
+            "no {rule:?} violation containing {needle:?} in {all:#?}\nfor {new:?}"
+        );
+    }
+}
+
+/// M8 on AArch64: a frame bigger than the stack's limit.
+#[tokio::test]
+async fn an_aarch64_frame_past_the_stack_limit_is_refused() {
+    let text = with_aarch64("_start:\n", "_start:\n    sub sp, sp, #1024, lsl #12\n");
+    let report = check(&text).await;
+    let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+    assert!(
+        report.violations.iter().any(|violation| {
+            violation.rule == Rule::StackSize
+                && violation.to_string().contains("more than 1048576")
+        }),
+        "{all:#?}"
+    );
+}
+
 /// Without its frame record, a function that calls can't return.
 #[tokio::test]
 async fn an_aarch64_function_that_calls_saves_x30() {

@@ -53,10 +53,14 @@ never routed around through other models or subagents. It stopped none.
    memory, writes to read-only data, a changed return address, loops the rules miscount, recursion,
    calls through a register, a missing `ret`, a tampered `assert_fail`, an ignored result, and a
    wrong program that must never be stamped `done`. What it found:
-   - **A real gap on ARM64, fixed**: a function could overwrite `x30`, its return address, and
-     `check` caught that only when the tests crashed, where x86-64 refuses `mov [rsp], 0` before
-     running (rule M3). Now a rule refuses any instruction that writes the link register between
-     the frame record's save and restore (`src/checker/rules.rs`).
+   - **Two real gaps on ARM64, fixed**: a function could overwrite `x30`, its return address,
+     with an instruction (`mov x30, xzr`), or overwrite the copy its frame record keeps through
+     memory (`str xzr, [sp, #8]` after `stp x29, x30, [sp, #-16]!`), and `check` caught either only
+     when the tests crashed, where x86-64 refuses `mov qword ptr [rsp], 0` before running (rule
+     M3). Now a rule refuses any instruction that writes the link register between the frame
+     record's save and restore (`src/checker/rules.rs`), and M3 holds the saved return address in
+     the frame record's top eight bytes as it holds x86-64's return-address slot
+     (`src/checker/memory.rs`); both are red-team attempts on ARM64 now.
    - **A known limit, tested on both CPUs: a pointer read from memory.** The rules follow an
      address to its owner where they can; one loaded from memory has none they can follow, and
      refusing every such load would refuse valid programs (a table of pointers, `argv`). So it
@@ -73,12 +77,104 @@ never routed around through other models or subagents. It stopped none.
    `every_program_has_its_twin_on_the_other_cpu` and `every_aarch64_twin_passes_its_checks` now
    cover every fixture. Both reach `done` on ARM64 hardware.
 
-**Still open from this run.** On ARM64 the one-folder check of the SHA-256 twin
-(`check_one_aarch64_folder`) ran past the job's 90 minutes twice, while the same twin passes inside
-the full suite's `every_aarch64_twin_passes_its_checks`; why the single-folder run stalls isn't
-found (the proof time, 10 s per block, should end it). Worth an engineer's look.
+**The ARM64 SHA-256 stall, found and fixed.** The one-folder check of the ARM64 SHA-256 twin ran
+past the job's 90 minutes twice, while the same twin passed the full suite (which gives proofs no
+time). A stack taken on the runner by `scripts/stall-report.sh` (the workflows' `stall_seconds`
+input) showed the proof at 100% CPU inside `Pool::extract`, which pushed each bit extraction down
+through shared terms once per path to a term, exponential in a hash's rounds; x86-64's twin was
+shielded only because its prover stops at `palignr`. Fixed on both CPUs: extractions are
+remembered (`src/prove/term.rs`), a run asks whether the proof's time is up every 4096 steps, though
+a hash has no branch on its input to ask at (`Oracle::in_time`, `src/prove/exec.rs`), and the
+model's concrete runs of the tests' samples stop at the block's deadline (`agrees_until`,
+`src/prove/mod.rs`). Each has a unit test; the check no longer hangs.
 
-**Not blocked, and safer alternatives.** The crypto support is built: a user can
+**Found by the parity audit (2026-11-04), fixed in this run.** The user asked that the two Linux
+targets be the same product, so after the five items four read-only agents compared them for
+everything the hardware doesn't force: programs, rules and sandbox, tests, prover and documents.
+They returned 56 findings (about 40 once the overlaps are merged), each with file and line on
+both sides, which were checked against the code before anything was changed. Fixed:
+- **ARM64's saved return address** and **failed assertions' lines** (above and below): a failed
+  assertion named its `main.s` line only on x86-64, because the matcher looked for `call` and
+  AArch64 calls with `bl` (`src/testrun.rs`, with a test on the ARM64 template and one through the
+  server).
+- **ARM64 mutation testing** cut each line at the first `#`, which AArch64 uses for numbers, so
+  its programs got condition flips and almost nothing else; it now splits on the CPU's own comment
+  marker (`tests/mutation.rs`). Its next run on the ARM64 runner (`--ignored
+  every_proven_programs_mutants_are_caught`) may find proofs that miss a moved number: those are
+  findings to look into, not yet run.
+- **ARM64's red team** now has what x86-64's has (a write over the saved return address, a read
+  below `sp`, a stray backward jump, a tampered assertion message, a system call's result never
+  tested), asserts the pointer-from-memory case as x86-64's does, and its wrong-program test runs
+  with time for proofs, where it ran with none and so tested the tests alone.
+- **`check_one_aarch64_folder`** never failed; it now fails unless the job ends `done`, as x86-64's
+  `check_one_folder` does.
+- **x86-64's `total` fixture** broke three rules (a character as a constant, a `_start` of 77
+  instructions, an assertion reached from two places) and was exempted from the repository-wide
+  rules test, while its ARM64 twin passed them all. It is rewritten (`load_file`, `report`,
+  `report_bad_line`), the exemption is gone, and `tests/every_program.rs` checks every x86-64
+  example and fixture through the server, as `every_aarch64_twin_passes_its_checks` does for
+  ARM64. Both CPUs now give `total` the same 426 test runs and the same proof lines.
+- **The fill model** (the soundness check behind "cut any way" proofs) was compared with the real
+  `fill` for every way its input can be cut, with four planted bugs, only on x86-64; the same test
+  now runs on AArch64's `fill` (`src/prove/exec.rs`).
+- **Documents**: the plugin README, both manifests, the compile skill, `porting.md`, the root
+  README and DESIGN no longer speak for x86-64 alone or call ARM64 "under way"; the AArch64
+  reference gained what the x86-64 one had (files, the clock and random bytes, the terminal, the
+  environment layout, `exit_group`, `shutdown`, the window size, `getrandom`'s 256 bytes, the
+  checked jump table, the fast histogram and SVE `wc`, one assertion-number rule); the fixtures
+  README lists every fixture and the 29 twins.
+- **CI**: formatting is its own job (`targets.yml`), the same for both CPUs, and keeps the patch
+  that formats a difference, where it used to stand in front of the ARM64 tests; the x86-64 job
+  has the benchmark and release switches the ARM64 job had; both have `stall_seconds`.
+
+**Found by the parity audit, still open.** Nothing below is a known wrong answer; each is a place
+where one CPU has less than the other. By the audit's severity, then checked:
+- *High.* ARM64 has few checker tests for the memory rules M3, M4, M5 and M8, and few for M1, M2
+  and M7, where x86-64 has planted-bug fixtures for each (`memory_rules_find_each_planted_bug`,
+  `one_address_is_never_lent_twice_for_writing`, `the_stack_is_tracked_exactly`, the thread rules
+  and more in `src/checker/tests.rs`); each is a one-line edit of the ARM64 template
+  (`with_aarch64`), and the saved-return-address gap above is what their absence cost. The
+  prover is tested on 7 of the 29 ARM64 twins against about 20 x86-64 programs, and its
+  memory-bug tests are x86-only.
+- *Medium.* ARM64's sandbox has about 8 native tests against x86-64's 25: nothing that a program
+  holds no network, that connections hand over by their rules, or that a refused one is reported;
+  the limits the owner made identical on every system (time, output, environment, signals, files,
+  open files, names, rename, listing), the clone-flag pin, spec approval of the clock and random
+  bytes, and the supervisor's failure paths and threads are pinned on x86-64 only. Session
+  behaviors beyond check-to-done run only with x86-64 programs, and the unmodified AArch64
+  template has its rules checked but goes through `check` to `done` in no test but the ignored
+  mutation test. About half as many per-rule fixtures exist
+  for AArch64. The checker's and the prover's golden guards record x86-64 programs only. Executor
+  tests of loop detection, connections and sleep are x86-only. The x86-64 job installs no QEMU, so
+  the ARM64-under-QEMU tests skip there without saying so. The ARM64 benchmark workloads omit
+  programs x86-64 measures, and say AArch64 has no threads.
+- *Medium, the prover.* x86-64's dialect admits vector instructions its prover can't follow
+  (`palignr`, `pblendw`, `punpck*`, `pack*`, saturating and widening arithmetic, string
+  compares, `pextr*`/`pinsr*`, `pmovzx*`, `gf2p8*` and more: `src/checker/x86_64.rs` against
+  `src/prove/exec/vector.rs`), where AArch64's prover models its whole dialect. The same spec
+  therefore ends differently: x86-64's SHA-256 proof stops at `palignr` ("doesn't model yet") and
+  ARM64's runs until its time is up ("ran out of time"). Both say "tested, not proven", the only
+  result either can have, but for different reasons. It also follows pointer owners through more
+  instructions on x86-64 (`cmov`, `and` to a boundary, scaled `lea`) than ARM64 does through
+  `csel`, `and`-immediate and shifted `add` (`plan` against `plan_a64` in the executor); ARM64
+  then holds those accesses to the weaker "object the value points into" rule.
+- *Low.* `b.al`/`b.nv` and `cbz` on `xzr` count as conditional branches, so the dead-code and
+  "assertion always fails" checks can be bypassed on ARM64; `ppoll`'s timeout and signal-mask
+  pointers are missing from the static system call summary; the AArch64 vector model ends some
+  matches with a wildcard that would run an unmodelled op as zeros, where x86-64's says
+  "doesn't model yet"; the AArch64 dialect has no add-with-carry; AArch64 refusal texts say "no
+  floating point on vectors" and keep x86-64 wording in a few layout messages; an emulated session
+  always gets AArch64's CPU features; the model-against-CPU harnesses differ in feature gating and
+  host (x86-64's runs only on x86-64, ARM64's needs the crypto extensions to be there).
+  Programs: twin programs differ in buffer sizes (`count` 256 KiB against 64 KiB, `padded` and the
+  fast `crc32c` 1 MiB against 64 KiB, `upcase` retries writes 4096 against 64 times), the ARM64
+  main template's assertions skip number 3, and x86-64 ships its fast `wc` for AVX-512 only where
+  ARM64 has the baseline NEON form. Documents: DESIGN lists the x86-64 instructions the prover
+  models and the probe counts of its CPU harness but has no AArch64 list or counts;
+  `test-format.md` explains the float functions by x86-64 instructions alone; `SESSIONS.md` ran
+  the ARM64 suite under QEMU, without the kernel's filter, and its thread and terminal rows prove
+  less than x86-64's.
+
 write or drop in a standard SHA-256 or AES program and lengua checks and tests it. For a value
 computed from the input, checked, tested and proven, lengua's own program can be a plain checksum:
 - CRC-32C, done: `plugin/skills/compile/assets/fast/crc32c`, the checksum iSCSI and ext4 use, is

@@ -295,6 +295,48 @@ async fn the_aarch64_vector_template_is_proven() {
     session.service.cancel().await.expect("close the session");
 }
 
+/// A failed assertion names its line in main.s, on AArch64 as on x86-64
+/// (`failed_assertions_name_their_line` in tests/check_code.rs).
+#[tokio::test]
+async fn failed_assertions_name_their_line_on_aarch64() {
+    let Some((session, _)) = aarch64_session().await else {
+        return;
+    };
+    let asset = |path: &str| {
+        std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("plugin/skills/compile/assets")
+                .join(path),
+        )
+        .expect("the asset")
+    };
+    // The bounds check now trips on the second character.
+    let code = asset("linux-aarch64/main-template.s").replacen(
+        "    cmp x2, #MAX_CHARS\n",
+        "    cmp x2, #1\n",
+        1,
+    );
+    let program = written(
+        &session,
+        [
+            ("spec.md", asset("template-spec.md")),
+            ("main.s", code.clone()),
+        ],
+    )
+    .await;
+    let problems = failed(&session, &program).await;
+    let line = code
+        .lines()
+        .position(|line| line == "    mov w0, #5")
+        .expect("assertion 5")
+        + 1;
+    assert!(
+        problems.contains(&format!("assertion 5 failed at main.s:{line}")),
+        "{problems}"
+    );
+    session.service.cancel().await.expect("close the session");
+}
+
 /// The AArch64 streaming template, x86-64's `shout-stream` spec compiled with NEON, passes its
 /// tests and is proven for every length through the server, as x86-64's is.
 #[tokio::test]

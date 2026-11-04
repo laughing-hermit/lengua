@@ -529,7 +529,9 @@ impl Function {
         Self::Tally,
     ];
 
-    fn name(self) -> &'static str {
+    /// The function's name in the test language, as a spec writes it.
+    #[must_use]
+    pub fn name(self) -> &'static str {
         match self {
             Self::Len => "len",
             Self::Abs => "abs",
