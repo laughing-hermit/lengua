@@ -41,7 +41,7 @@ fn round_keys(key: &[u8; 16]) -> [[u8; 16]; 11] {
     let mut rcon: u8 = 1;
     for index in 4..44 {
         let mut word = words[index - 1];
-        if index % 4 == 0 {
+        if index.is_multiple_of(4) {
             word.rotate_left(1);
             for byte in &mut word {
                 *byte = SBOX[usize::from(*byte)];
@@ -86,8 +86,9 @@ fn shift_rows(state: &mut [u8; 16]) {
 }
 
 fn mix_columns(state: &mut [u8; 16]) {
-    for column in state.chunks_exact_mut(4) {
-        let [a0, a1, a2, a3] = [column[0], column[1], column[2], column[3]];
+    let (columns, _) = state.as_chunks_mut::<4>();
+    for column in columns {
+        let [a0, a1, a2, a3] = *column;
         let all = a0 ^ a1 ^ a2 ^ a3;
         column[0] = a0 ^ all ^ xtime(a0 ^ a1);
         column[1] = a1 ^ all ^ xtime(a1 ^ a2);
@@ -119,12 +120,14 @@ fn nibble(digit: u8) -> Option<u8> {
 }
 
 fn bytes_of(hex_digits: &str) -> Option<Vec<u8>> {
-    if hex_digits.len() % 2 != 0 {
+    if !hex_digits.len().is_multiple_of(2) {
         return None;
     }
     hex_digits
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| Some(nibble(pair[0])? << 4 | nibble(pair[1])?))
         .collect()
 }
@@ -140,14 +143,12 @@ pub fn encrypt_ecb_hex(key_hex: &str, data_hex: &str) -> Result<String, String> 
         .and_then(|bytes| bytes.try_into().ok())
         .ok_or("aes128's key is 32 hexadecimal digits")?;
     let mut data = bytes_of(data_hex)
-        .filter(|bytes| !bytes.is_empty() && bytes.len() % 16 == 0)
+        .filter(|bytes| !bytes.is_empty() && bytes.len().is_multiple_of(16))
         .ok_or("aes128's data is hexadecimal digits in a positive multiple of 32")?;
     let keys = round_keys(&key);
-    for block in data.chunks_exact_mut(16) {
-        let mut state = [0_u8; 16];
-        state.copy_from_slice(block);
-        encrypt_block(&keys, &mut state);
-        block.copy_from_slice(&state);
+    let (blocks, _) = data.as_chunks_mut::<16>();
+    for block in blocks {
+        encrypt_block(&keys, block);
     }
     Ok(crate::hash::hex(&data))
 }
