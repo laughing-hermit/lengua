@@ -7,7 +7,7 @@ description: Encrypts blocks of hexadecimal data with AES-128 in ECB mode, using
 Encrypts data with AES-128 (FIPS 197) and shows how lengua checks a program built on the CPU's
 AES instructions. Standard input holds two lines: the first is the 128-bit key, `32` hexadecimal
 digits; the second is the data, from `32` to `131072` hexadecimal digits in a multiple of 32, that
-is 1 to 4096 blocks of 16 bytes. Tests try data of `32` and of `128` digits, a block and four.
+is 1 to 4096 blocks of 16 bytes. Tests try data of `32` and of `128` digits, a block and four, and, for input that isn't of this form, keys of `30` digits and data of `0` to `30` or of `33` digits.
 The last newline may be missing, and hexadecimal digits may be lowercase or uppercase. The
 program encrypts each block separately with the key (ECB mode, as the standard's known-answer
 examples do, which is not a mode for protecting real data) and prints the ciphertext as

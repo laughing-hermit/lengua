@@ -607,8 +607,8 @@ pub const CROWDED: &str = "an any(…) is followed directly by a digit or anothe
 /// Names that can't be used as variables.
 const RESERVED: &[&str] = &[
     "true", "false", "len", "abs", "min", "max", "if", "upper", "lower", "reverse", "tr", "count",
-    "sha256", "aes128", "crc32", "crc32c", "double", "single", "fma", "round", "trunc", "floor", "ceil",
-    "sqrt", "fixed", "scaled", "places", "int", "choice", "string", "decimal",
+    "sha256", "aes128", "crc32", "crc32c", "double", "single", "fma", "round", "trunc", "floor",
+    "ceil", "sqrt", "fixed", "scaled", "places", "int", "choice", "string", "decimal",
 ];
 
 /// Whether `name` can name a variable: lowercase letters, digits and `_`, not starting with a

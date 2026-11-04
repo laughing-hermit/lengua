@@ -181,9 +181,11 @@ mod tests {
                 "6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e51\
                  30c81c46a35ce411e5fbc1191a0a52eff69f2445df4f9b17ad2b417be66c3710"
             ),
-            Ok("3ad77bb40d7a3660a89ecaf32466ef97f5d3d58503b9699de785895a96fdbaaf\
+            Ok(
+                "3ad77bb40d7a3660a89ecaf32466ef97f5d3d58503b9699de785895a96fdbaaf\
                 43b1cd7f598ece23881b00e3ed0306887b0c785e27e8ad3f8223207104725dd4"
-                .to_owned())
+                    .to_owned()
+            )
         );
         assert_eq!(
             encrypt_ecb_hex(&"0".repeat(32), &"0".repeat(32)),

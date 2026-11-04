@@ -167,7 +167,13 @@ async fn accesses_outside_their_owner_are_refused() {
         "    cbz x0, .Lstart_assert_argv\n",
         "    cbz x0, .Lstart_assert_argv\n    ldr x11, [sp, #8]\n    ldrb w10, [x0, x11]\n",
     );
-    refused(&session, "an unchecked index", &code, &["rule 9", "rule M2"]).await;
+    refused(
+        &session,
+        "an unchecked index",
+        &code,
+        &["rule 9", "rule M2"],
+    )
+    .await;
     // An index checked after the access, not before it.
     let code = changed(
         "    cbz x0, .Lstart_assert_argv\n",
@@ -241,10 +247,7 @@ async fn loops_the_rules_cant_count_are_refused() {
          x10, #1\n",
     );
     refused(&session, "a counter reset in the body", &code, &["rule 2"]).await;
-    let code = changed(
-        ".Lwrite_all_loop:  // bound: 64\n",
-        ".Lwrite_all_loop:\n",
-    );
+    let code = changed(".Lwrite_all_loop:  // bound: 64\n", ".Lwrite_all_loop:\n");
     refused(&session, "a loop with no bound", &code, &["rule 2"]).await;
     session.service.cancel().await.expect("close the session");
 }
@@ -255,7 +258,13 @@ async fn recursion_calls_through_registers_and_a_missing_return_are_refused() {
         return;
     };
     let code = changed("write_all:\n", "write_all:\n    bl write_all\n");
-    refused(&session, "recursion", &code, &["rule 1", "rule 4", "rule 3"]).await;
+    refused(
+        &session,
+        "recursion",
+        &code,
+        &["rule 1", "rule 4", "rule 3"],
+    )
+    .await;
     let code = changed(
         "    cbz x0, .Lstart_assert_argv\n",
         "    cbz x0, .Lstart_assert_argv\n    adrp x9, parse_i64\n    add x9, x9, \
@@ -311,7 +320,13 @@ async fn code_that_ignores_a_failed_result_is_refused() {
         "    bl parse_i64\n    tbnz x0, #63, .Lstart_not_a_number\n",
         "    bl parse_i64\n    mov x9, x0\n    tbnz x0, #63, .Lstart_not_a_number\n",
     );
-    refused(&session, "a result used before it's tested", &code, &["rule 7"]).await;
+    refused(
+        &session,
+        "a result used before it's tested",
+        &code,
+        &["rule 7"],
+    )
+    .await;
     session.service.cancel().await.expect("close the session");
 }
 

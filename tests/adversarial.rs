@@ -215,10 +215,7 @@ async fn writing_read_only_data_or_a_return_address_is_refused() {
     );
     refused(&session, "a write to .rodata", &code, &["rule M6"]).await;
     // write_all's return address is at [rsp] when it starts.
-    let code = changed(
-        "write_all:\n",
-        "write_all:\n    mov qword ptr [rsp], 0\n",
-    );
+    let code = changed("write_all:\n", "write_all:\n    mov qword ptr [rsp], 0\n");
     refused(
         &session,
         "a write over a return address",
@@ -270,10 +267,7 @@ async fn loops_the_rules_cant_count_are_refused() {
     );
     refused(&session, "a backward jump", &code, &["rule 2", "rule 1"]).await;
     // A loop with no bound written at all.
-    let code = changed(
-        ".Lwrite_all_loop:  # bound: 64\n",
-        ".Lwrite_all_loop:\n",
-    );
+    let code = changed(".Lwrite_all_loop:  # bound: 64\n", ".Lwrite_all_loop:\n");
     refused(&session, "a loop with no bound", &code, &["rule 2"]).await;
     session.service.cancel().await.expect("close the session");
 }
@@ -281,10 +275,7 @@ async fn loops_the_rules_cant_count_are_refused() {
 #[tokio::test]
 async fn recursion_calls_through_registers_and_a_missing_return_are_refused() {
     let session = Session::start(Protocol::Discover).await;
-    let code = changed(
-        "write_all:\n",
-        "write_all:\n    call write_all\n",
-    );
+    let code = changed("write_all:\n", "write_all:\n    call write_all\n");
     refused(&session, "recursion", &code, &["rule 1", "rule 4"]).await;
     let code = changed(
         "    mov rdi, qword ptr [rsp + 16]\n",
@@ -349,7 +340,13 @@ async fn code_that_ignores_a_failed_result_is_refused() {
         "    call parse_i64\n    test rax, rax\n    js .Lstart_not_a_number\n",
         "    call parse_i64\n    mov rbx, rax\n    test rax, rax\n    js .Lstart_not_a_number\n",
     );
-    refused(&session, "a result used before it's tested", &code, &["rule 7"]).await;
+    refused(
+        &session,
+        "a result used before it's tested",
+        &code,
+        &["rule 7"],
+    )
+    .await;
     // A system call's result that is never tested.
     let code = changed(
         "    mov eax, SYS_WRITE\n    syscall\n    test rax, rax\n    js .Lwrite_all_return\n",
