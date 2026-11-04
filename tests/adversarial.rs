@@ -221,6 +221,24 @@ async fn an_address_made_from_a_plain_number_is_refused() {
         any_line(&report["problems"], "SIGSEGV") || report["state"] == "code_problems",
         "a pointer loaded from memory wasn't stopped: {report}"
     );
+
+    // A pointer read from memory that happens to be good (argv[0], put there by the kernel) isn't
+    // wrong, but the rules can't follow it to an owner: the program may be `done`, and then the
+    // report must say that memory is tested, not proven.
+    let code = changed(
+        "    mov rdi, qword ptr [rsp + 16]\n",
+        "    mov rsi, qword ptr [rsp + 8]\n    movzx ecx, byte ptr [rsi]\n    mov rdi, qword \
+         ptr [rsp + 16]\n",
+    );
+    let program = checked_template(&session).await;
+    program.write("main.s", &code);
+    let report = session.check(&program).await;
+    assert!(
+        report["memory"]
+            .as_str()
+            .is_some_and(|memory| memory.contains("tested, not proven")),
+        "a pointer the rules can't follow was reported as proven: {report}"
+    );
     session.service.cancel().await.expect("close the session");
 }
 

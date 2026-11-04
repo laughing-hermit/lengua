@@ -200,6 +200,34 @@ async fn an_address_made_from_a_plain_number_is_refused() {
         "    cbz x0, .Lstart_assert_argv\n    mov x9, #4096\n    ldrb w10, [x9]\n",
     );
     refused(&session, "a fixed address", &code, &["rule M1"]).await;
+    // A pointer read from memory the rules can't follow to an owner is never stamped done when
+    // it's wrong: the sandbox kills the stray read.
+    let code = changed(
+        "    cbz x0, .Lstart_assert_argv\n",
+        "    cbz x0, .Lstart_assert_argv\n    adrp x9, usage_msg\n    add x9, x9, \
+         :lo12:usage_msg\n    ldr x10, [x9]\n    ldrb w11, [x10]\n",
+    );
+    let program = checked_template(&session).await;
+    program.write("main.s", &code);
+    let report = session.check(&program).await;
+    assert_ne!(
+        report["state"], "done",
+        "a pointer loaded from memory was stamped done: {report}"
+    );
+    // One that happens to be good (argv[0]) may be done, and then memory is tested, not proven.
+    let code = changed(
+        "    cbz x0, .Lstart_assert_argv\n",
+        "    cbz x0, .Lstart_assert_argv\n    ldr x9, [sp, #8]\n    ldrb w10, [x9]\n",
+    );
+    let program = checked_template(&session).await;
+    program.write("main.s", &code);
+    let report = session.check(&program).await;
+    assert!(
+        report["memory"]
+            .as_str()
+            .is_some_and(|memory| memory.contains("tested, not proven")),
+        "a pointer the rules can't follow was reported as proven: {report}"
+    );
     session.service.cancel().await.expect("close the session");
 }
 
