@@ -6,6 +6,7 @@
 //! computer's signed record of what it checked. This crate is the MCP server that checks, stamps
 //! and runs them. See `DESIGN.md` at the repository root for every design decision.
 
+pub mod aes;
 pub mod checker;
 pub mod connect;
 pub mod data_dir;

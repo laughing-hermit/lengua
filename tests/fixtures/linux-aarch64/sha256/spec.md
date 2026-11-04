@@ -6,9 +6,9 @@ description: Prints the SHA-256 digest of standard input.
 # Purpose
 Prints the SHA-256 digest of standard input, as FIPS 180-4 defines it: 64 lowercase hexadecimal
 digits followed by a newline. It reads standard input of any length a piece at a time. Tests give
-it up to `1048576` bytes, and try the edges of its padding and of its pieces with messages
-of `50` to `70`, `118` to `134` and `4090` to `4102` bytes. If reading the input or writing the output fails, the program exits with
-code 2.
+it up to `1048576` bytes, messages of `0` to `64` bytes, and, to try the edges of its padding and
+of its pieces, messages of exactly `56` bytes and of `50` to `70`, `118` to `134` and `4090` to
+`4102` bytes. If reading the input or writing the output fails, the program exits with code 2.
 
 # Behaviors
 ## B1: Prints the digest of the standard examples
@@ -25,7 +25,7 @@ code 2.
 
 | text | runs |
 |---|---|
-| `choice("abc")` | 1 |
+| `string(0, 64, "abc")` | 100 |
 
 ## B2: Prints the digest of empty input
 - Given empty standard input
@@ -47,7 +47,7 @@ code 2.
 
 | text | runs |
 |---|---|
-| `choice("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")` | 1 |
+| `string(56, 56, "abcdefghijklmnopq")` | 100 |
 
 ## B4: Prints the digest of any input
 - Given standard input holding `hello\n`
@@ -63,7 +63,6 @@ code 2.
 
 | text | runs |
 |---|---|
-| `choice("hello\n")` | 1 |
 | `string(0, 1048576, "0123456789abcdefghijklmnopqrstuvwxyz \n")` | 100 |
 | `string(50, 70, "abcdefghijklmnopqrstuvwxyz")` | 300 |
 | `string(118, 134, "abcdefghijklmnopqrstuvwxyz")` | 300 |

@@ -280,6 +280,7 @@ to choose text.
 | `scaled(x, places)` | An exact decimal as a whole number of its smallest units: `scaled(12.5, 2)` is 1250 (cents) |
 | `places(n, places)` | A whole number of units printed as a decimal: `places(1250, 2)` is "12.50", `places(-5, 2)` is "-0.05" |
 | `sha256(s)` | The SHA-256 of `s`'s bytes, in lowercase hex |
+| `aes128(key, data)` | The blocks `data` holds, as hex digits in a positive multiple of 32, encrypted with AES-128 under `key`'s 32 hex digits, each block on its own (ECB), in lowercase hex |
 | `crc32(s)` | The CRC-32 of `s`'s bytes, as zlib, gzip and PNG compute it |
 | `crc32c(s)` | The CRC-32C (Castagnoli) of `s`'s bytes, as iSCSI and ext4 compute it |
 | `any(lo, hi)` | In expected output only: any whole number from `lo` to `hi`, written plainly. See [Rules](#rules-output-the-program-chooses) |

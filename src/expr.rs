@@ -440,6 +440,9 @@ pub enum Function {
     Count,
     /// `sha256(s)`: the SHA-256 of `s`'s bytes, in lowercase hex.
     Sha256,
+    /// `aes128(key, data)`: the blocks `data` holds, in hex, encrypted with AES-128 under the 32
+    /// hex digits of `key`, each block on its own (ECB mode), in lowercase hex.
+    Aes128,
     /// `crc32(s)`: the CRC-32 of `s`'s bytes, as zlib, gzip and PNG compute it.
     Crc32,
     /// `crc32c(s)`: the CRC-32C (Castagnoli) of `s`'s bytes, as the `crc32` instruction computes it.
@@ -504,6 +507,7 @@ impl Function {
         Self::Tr,
         Self::Count,
         Self::Sha256,
+        Self::Aes128,
         Self::Crc32,
         Self::Crc32c,
         Self::Double,
@@ -538,6 +542,7 @@ impl Function {
             Self::Tr => "tr",
             Self::Count => "count",
             Self::Sha256 => "sha256",
+            Self::Aes128 => "aes128",
             Self::Crc32 => "crc32",
             Self::Crc32c => "crc32c",
             Self::Double => "double",
@@ -565,9 +570,13 @@ impl Function {
         match self {
             Self::Min | Self::Max => (2, usize::MAX),
             Self::If | Self::Fma | Self::Tr => (3, 3),
-            Self::Count | Self::Fixed | Self::Scaled | Self::Places | Self::Any | Self::Hex => {
-                (2, 2)
-            }
+            Self::Count
+            | Self::Fixed
+            | Self::Scaled
+            | Self::Places
+            | Self::Any
+            | Self::Hex
+            | Self::Aes128 => (2, 2),
             Self::Len
             | Self::Words
             | Self::Sort
@@ -598,7 +607,7 @@ pub const CROWDED: &str = "an any(…) is followed directly by a digit or anothe
 /// Names that can't be used as variables.
 const RESERVED: &[&str] = &[
     "true", "false", "len", "abs", "min", "max", "if", "upper", "lower", "reverse", "tr", "count",
-    "sha256", "crc32", "crc32c", "double", "single", "fma", "round", "trunc", "floor", "ceil",
+    "sha256", "aes128", "crc32", "crc32c", "double", "single", "fma", "round", "trunc", "floor", "ceil",
     "sqrt", "fixed", "scaled", "places", "int", "choice", "string", "decimal",
 ];
 
@@ -1500,6 +1509,13 @@ fn call(function: Function, arguments: &[Expr], env: &Env) -> Result<Value, Eval
                     .as_str()
                     .to_owned(),
             ))
+        }
+        Function::Aes128 => {
+            let key = string(argument(0)?, name)?;
+            let data = string(argument(1)?, name)?;
+            crate::aes::encrypt_ecb_hex(&key, &data)
+                .map(Value::Str)
+                .map_err(EvalError::Type)
         }
         Function::Crc32 => Ok(Value::Int(i128::from(crc(
             string(argument(0)?, name)?.as_bytes(),
@@ -2911,6 +2927,15 @@ mod tests {
         let check = env(&[("t", Value::Str("123456789".into()))]);
         assert_eq!(value("crc32(t)", &check), Ok(Value::Int(0xcbf4_3926)));
         assert_eq!(value("crc32c(t)", &check), Ok(Value::Int(0xe306_9283)));
+        let aes = env(&[
+            ("k", Value::Str("000102030405060708090a0b0c0d0e0f".into())),
+            ("d", Value::Str("00112233445566778899aabbccddeeff".into())),
+        ]);
+        assert_eq!(
+            value("aes128(k, d)", &aes),
+            Ok(Value::Str("69c4e0d86a7b0430d8cdb78070b4c55a".into()))
+        );
+        assert!(value("aes128(k, \"00\")", &aes).is_err());
         let abc = env(&[("t", Value::Str("abc".into()))]);
         assert_eq!(
             value("sha256(t)", &abc),
