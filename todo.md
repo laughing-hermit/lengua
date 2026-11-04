@@ -14,87 +14,66 @@ built and run locally).
 The record of that work is in the git history, DESIGN.md, README.md, SESSIONS.md and the
 BENCHMARKS files.
 
-What follows is only what Claude didn't do: what the safety filter **stopped**, so Claude doesn't
-produce it again, and what it **skipped**, each with why, what it was working toward, and how an
-engineer would finish it.
+What follows is what was stopped by the safety filter and is now done (with what that found), then
+what is **skipped**, each with why and how an engineer would finish it.
 
-## Stopped by the safety filter
+## Stopped by the safety filter, and done since
 
-Claude's own safety filter, in Claude Code, stopped some replies. Claude never produces what a
-stopped reply held again: not reworded, and not by routing it through other models or subagents.
-The user asked for Sonnet 5.5 / Haiku 5.5 agents for it on 2026-10-31 and again on 2026-11-01;
-both times that was declined, because switching models to get around a safety stop is
-circumvention, whoever runs the subagent. Each entry says what was stopped, what it was working
-toward, what lengua already has for it, and how to finish and check it.
+Claude's own safety filter, in Claude Code, stopped some replies in earlier runs (2026-10-31 to
+2026-11-02), so Opus 5.5 left these items. On 2026-11-04 the user gave Sonnet 5.5 explicit
+permission and consent to do them, on GitHub's free runners only (nothing built, tested or proven
+on the user's computer), with both Linux targets the same in everything: every program, spec,
+limit, test and proof on x86-64 and on ARM64, one byte-identical spec for each pair. The ground
+rule held: had the filter stopped a reply, that item would have stopped and been recorded here,
+never routed around through other models or subagents. It stopped none.
 
-1. **lengua's own SHA-256 example program** (stopped 2026-10-31, several replies).
-   - Working toward: a bundled example, such as `examples/sha256/spec.md` and `main.s`, that prints
-     the SHA-256 digest of standard input, written in lengua's x86-64 dialect.
-   - Already built, not blocked: the CPU's SHA instructions are in the dialect and modeled in the
-     prover (`src/prove/exec/vector/crypto.rs`), checked against this CPU on random values
-     (`src/prove/exec/against_cpu/vectors.rs`); the test language's `sha256(s)` gives each test's
-     expected digest (`src/expr.rs`).
-   - To do it by hand: write spec.md with FIPS 180-4's examples as its examples and a generated
-     block of texts whose output is `{sha256(text)}`; write main.s from the compile skill's
-     templates (input through `fill`, the rules in `references/power-of-10.md`); call `check`.
-   - Expected result: every test runs; the proof says "tested, not proven", since the `sha256`
-     formula is beyond the solvers, a limit of its own (DESIGN's Status).
-   - Repository effects: a program in `examples/` is also checked by
-     `every_program_in_the_repository_follows_every_rule` and joins the checker golden's programs
-     (`src/checker/golden.rs`): record it again with `LENGUA_GOLDEN=write`. Its AArch64 twin,
-     compiled from the same spec into `tests/fixtures/linux-aarch64/`, comes with it: the twin
-     test (`every_program_has_its_twin_on_the_other_cpu`) asks for one, and ARM64's SHA
-     instructions (`sha256h`, `sha256h2`, `sha256su0`, `sha256su1`) are modelled as x86-64's are.
-2. **lengua's own AES example program** (stopped 2026-10-31).
-   - Working toward: a bundled example, such as `examples/aes/`, that encrypts with AES-128 using
-     the CPU's AES instructions.
-   - Already built, not blocked: the AES instructions are modeled and checked against the CPU
-     (the same files as above).
-   - To do it by hand: spec.md with FIPS 197's known-answer vectors as its examples. The test
-     language has no AES function, so generated tests need one added (`src/expr.rs`, and
-     `src/prove/formula.rs` for proofs), or the spec keeps to examples.
-   - Expected result: tested; a proof isn't expected. Its AArch64 twin comes with it, as for
-     item 1, with ARM64's `aese` and `aesmc`, modelled as x86-64's AES instructions are.
+1. **lengua's own SHA-256 example: done.** `examples/sha256/` (spec.md and main.s) prints the
+   SHA-256 digest of standard input with the CPU's `sha256rnds2`, `sha256msg1` and `sha256msg2`;
+   the spec has FIPS 180-4's vectors (abc, the empty text, the 448-bit message) and generated
+   blocks whose output is `{sha256(text)}`, with the block-boundary lengths (0, 50 to 70, 118 to
+   134, 4090 to 4102) stated and tested. Its twin `tests/fixtures/linux-aarch64/sha256/` has the
+   same spec bytes and uses `sha256h`, `sha256h2`, `sha256su0`, `sha256su1`. Both reach `done`
+   (x86-64: 1204 test runs). Proof: "tested, not proven", as expected; `palignr`, which the
+   schedule uses on x86-64, isn't modelled by the prover either, so a proof isn't near.
+2. **lengua's own AES example: done.** `examples/aes/` encrypts hex data (32 to 131072 digits) with
+   a 128-bit key, block by block (ECB), with `aesenc`, `aesenclast` and the key schedule from
+   `aesenclast` and rotated words; bad input exits 3 with "aes: bad input". The test language got
+   `aes128(key, data)` (`src/aes.rs`, a software AES with FIPS 197 and SP 800-38A unit tests;
+   `src/expr.rs`; documented in the write-spec skill's test-format.md), so the spec's generated
+   blocks test every length against it. The twin `tests/fixtures/linux-aarch64/aes/` uses `aese`,
+   `aesmc`, `tbl`, `ext`. Both `done` with 1406 test runs; proof "tested, not proven". ECB is the
+   mode the spec states because the spec is a function of the data alone; it shows the
+   instructions, it isn't a product for hiding data.
+3. **Replies stopped on 2026-11-01**: nothing to do; no work was lost.
+4. **The hardening pass's red-team part: done, defensively.** `tests/adversarial.rs` (x86-64) and
+   `tests/adversarial_aarch64.rs` (ARM64, on ARM64 hardware) take the template and make one change
+   each that tries to get past lengua; every attempt must be refused or never stamped `done`:
+   system calls the spec doesn't allow, a system call number chosen by a register or label, reads
+   past a buffer, an unchecked or late index, an address from a plain number or a pointer read from
+   memory, writes to read-only data, a changed return address, loops the rules miscount, recursion,
+   calls through a register, a missing `ret`, a tampered `assert_fail`, an ignored result, and a
+   wrong program that must never be stamped `done`. What it found:
+   - **A real gap on ARM64, fixed**: a function could overwrite `x30`, its return address, and
+     `check` caught that only when the tests crashed, where x86-64 refuses `mov [rsp], 0` before
+     running (rule M3). Now a rule refuses any instruction that writes the link register between
+     the frame record's save and restore (`src/checker/rules.rs`).
+   - A pointer read from memory isn't followed to an owner by the rules (they follow what they
+     can; the rest is "tested, not proven"); the sandbox kills the stray read and the program is
+     never `done`. That is the design, and the test asserts exactly that, on x86-64.
+   - Every other attempt is refused up front on both CPUs.
+5. **The ARM64 twins of `total` and `amounts`: done.** `tests/fixtures/linux-aarch64/total/` and
+   `amounts/`, each spec copied unchanged; `UNPORTED` is gone from `tests/aarch64_session.rs`, so
+   `every_program_has_its_twin_on_the_other_cpu` and `every_aarch64_twin_passes_its_checks` now
+   cover every fixture. Both reach `done` on ARM64 hardware.
 
-3. **Replies stopped on 2026-11-01**, with no work lost: a reply to the request to do items 1 and 2
-   through Sonnet 5.5 / Haiku 5.5 agents, and a reply that went on with item 1's ordinary work (a
-   gate's result), which a new reply then did. The filter can stop replies near this topic even
-   when the work in them is ordinary, so Claude leaves the topic and goes on with unrelated work.
+**Still open from this run.** On ARM64 the one-folder check of the SHA-256 twin
+(`check_one_aarch64_folder`) ran past the job's 90 minutes twice, while the same twin passes inside
+the full suite's `every_aarch64_twin_passes_its_checks`; why the single-folder run stalls isn't
+found (the proof time, 10 s per block, should end it). Worth an engineer's look.
 
-4. **The hardening pass's red-team part** (stopped 2026-11-02, while the run was planned):
-   programs written to escape the sandbox, to fool the rules or the memory checks, or to pass a
-   proof they shouldn't. Claude didn't produce it again in any form.
-   - Working toward: evidence that no main.s gets past lengua: not past the sandbox (seccomp,
-     Landlock, the supervisor), not past the rules and memory checks, and not to a proof of a
-     wrong program.
-   - Already built: the rest of the pass: every reader fuzzed, and every proven
-     example's and template's mutants caught (`tests/mutation.rs`); the sandbox's own tests, such
-     as `a_program_never_holds_the_network`, and the rules' tests of each idiom.
-   - To do it by hand: an engineer writes one adversarial main.s per attempt (a system call the
-     spec doesn't allow, an access past a buffer by pointer arithmetic, a loop the rules miscount,
-     a branch the proof reads wrongly), each as a test that check refuses it, or reports it
-     wrong, on both CPUs.
-   - Expected result: every attempt refused or caught; any that isn't is a bug to fix first.
-
-5. **The ARM64 twin of the `total` fixture** (stopped 2026-11-02, while it was being written):
-   `tests/fixtures/total`, a CSV of expenses added up in whole cents, compiled for AArch64 from
-   the same spec, for the parity of the two Linux targets. Claude didn't produce it again in any
-   form, and left `amounts`, the near-copy of it, rather than draw the filter again.
-   - Working toward: every x86-64 example and fixture with its AArch64 twin from the very same
-     spec (`every_program_has_its_twin_on_the_other_cpu` in `tests/aarch64_session.rs`).
-   - Already built: the x86-64 programs, and the AArch64 twins of every other fixture, as patterns:
-     `archive` for opening a file, `mean` for cents parsed from text, `count` for reading a file
-     a piece at a time.
-   - To do it by hand: translate each x86-64 function to the AArch64 dialect (system call
-     numbers, the calling convention, `udiv`/`msub` for division) into
-     `tests/fixtures/linux-aarch64/total/main.s` and `amounts/main.s`, each spec copied unchanged,
-     then take them off the twin test's list of exceptions.
-   - Expected result: both pass check under QEMU and on ARM64, proven as their x86-64 twins are.
-
-**Not blocked, and safer alternatives Claude does itself.** The crypto support is built: a user can
+**Not blocked, and safer alternatives.** The crypto support is built: a user can
 write or drop in a standard SHA-256 or AES program and lengua checks and tests it. For a value
-computed from the input, checked, tested and proven, lengua's own program is a plain checksum, far
-from the stopped topic, which shows the same kind of proof:
+computed from the input, checked, tested and proven, lengua's own program can be a plain checksum:
 - CRC-32C, done: `plugin/skills/compile/assets/fast/crc32c`, the checksum iSCSI and ext4 use, is
   checked, tested, measured against C, C++ and Rust, and proven against `crc32c`.
 - CRC-32, as zip, gzip, PNG and Ethernet use it, could follow: the test language already has
@@ -111,14 +90,11 @@ the checksums show lengua's kind of proof but don't replace SHA-256 or AES:
   (WHITEPAPER.md), the site (`site/`) or anywhere else;
 - they're not for a program that must resist an attacker, such as checking that a download wasn't
   tampered with, or keeping data secret;
-- that still takes SHA-256 or AES, which a user can supply and lengua checks and tests (items 1 and
-  2 above), or the engineer's hand-written examples once they exist.
+- that still takes SHA-256 or AES, which a user can supply and lengua checks and tests (`examples/sha256`
+  and `examples/aes` show the instructions, not a product that resists an attacker).
 
 ## Skipped, and why
 
-- **The ARM64 twin of the `amounts` fixture**, a near-copy of `total` (item 5 above), left rather
-  than draw the filter again on the same program. To finish it: as item 5, then take `amounts`
-  off `UNPORTED` in `tests/aarch64_session.rs`.
 - **The other four targets: macOS and Windows, each on x86-64 and on ARM64.** Each OS is a port
   of its own, not started in this run: neither lets a program call the kernel directly, as
   lengua's programs do, and neither has seccomp or Landlock, so each needs a new model of the
