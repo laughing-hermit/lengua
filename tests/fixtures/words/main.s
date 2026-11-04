@@ -22,11 +22,10 @@
 .equ TAB, 9
 # Tab through carriage return are the 5 bytes from 9 to 13.
 .equ TAB_TO_CR, 4
-# A buffer-full of input, the most the main loop takes at a time, and its 64-byte vectors
+# A buffer-full of input, the most the main loop takes at a time, and its 16-byte steps
 .equ BUF_LEN, 4096
-.equ VECTOR, 64
-.equ VECTOR_MASK, 63
-.equ CHUNKS, BUF_LEN / VECTOR
+.equ VECTOR, 16
+.equ STEPS, BUF_LEN / VECTOR
 # The buffer-fulls the main loop takes at most
 .equ MAX_FULLS, 1099511627776
 .equ MAX_DIGITS, 20
@@ -34,6 +33,22 @@
 .equ OUT_LEN, 42
 
 .section .rodata
+
+# What each step compares its 16 bytes with, one vector of 16 lanes each: newlines, spaces,
+# tabs, the distance from tab to carriage return, and each lane's place plus one, 1 to 16. A
+# lane is a byte of the input where its place plus one is at most the bytes left.
+.type classes, @object
+classes:
+    .byte NEWLINE, NEWLINE, NEWLINE, NEWLINE, NEWLINE, NEWLINE, NEWLINE, NEWLINE
+    .byte NEWLINE, NEWLINE, NEWLINE, NEWLINE, NEWLINE, NEWLINE, NEWLINE, NEWLINE
+    .byte SPACE, SPACE, SPACE, SPACE, SPACE, SPACE, SPACE, SPACE
+    .byte SPACE, SPACE, SPACE, SPACE, SPACE, SPACE, SPACE, SPACE
+    .byte TAB, TAB, TAB, TAB, TAB, TAB, TAB, TAB
+    .byte TAB, TAB, TAB, TAB, TAB, TAB, TAB, TAB
+    .byte TAB_TO_CR, TAB_TO_CR, TAB_TO_CR, TAB_TO_CR, TAB_TO_CR, TAB_TO_CR, TAB_TO_CR, TAB_TO_CR
+    .byte TAB_TO_CR, TAB_TO_CR, TAB_TO_CR, TAB_TO_CR, TAB_TO_CR, TAB_TO_CR, TAB_TO_CR, TAB_TO_CR
+    .byte 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16
+.size classes, . - classes
 
 .type assert_message, @object
 assert_message:
@@ -79,29 +94,17 @@ _start:
     ja .Lstart_assert_count
     mov r15, rax
     lea rdi, [rip + buffer]
-    mov rsi, r15
-    and rsi, -VECTOR
-    mov edx, r14d
-    call count_full
+    mov rsi, rax
+    mov r10d, r14d
+    call count_piece
     add r12, rax
     add r13, rdx
     mov r14, rcx
-    mov rsi, r15
-    and rsi, VECTOR_MASK
-    jz .Lstart_next
-    lea rdi, [rip + buffer]
-    add rdi, r15
-    sub rdi, rsi
-    mov edx, r14d
-    call count_tail
-    add r12, rax
-    add r13, rdx
-    mov r14, rcx
-.Lstart_next:
     cmp r15, BUF_LEN
     jb .Lstart_print
     dec rbx
     jnz .Lstart_full
+    jmp .Lstart_assert_fulls
 .Lstart_print:
     mov rdi, r12
     mov rsi, r13
@@ -121,125 +124,97 @@ _start:
 .Lstart_assert_count:
     mov edi, 1
     call assert_fail
+.Lstart_assert_fulls:
+    mov edi, 2
+    call assert_fail
 .size _start, . - _start
 
-# Counts the newlines and word starts in whole 64-byte vectors.
-# In: rdi = the bytes; rsi = how many, a multiple of 64 up to BUF_LEN; edx = 1 when the byte
-# before them is whitespace (or there is none), else 0.
-# Out: rax = newlines; rdx = word starts; rcx = 1 when the last byte is whitespace, else as given.
-.type count_full, @function
-count_full:
+# Counts the newlines and word starts in a piece of the buffer, 16 bytes a step with SSE2, plus
+# pshufb and popcnt, so it runs on every x86-64 computer. Each step's bytes past the end are
+# masked off, lanes whose place isn't below the bytes left, so the last partial step needs no
+# code of its own, and no step's work depends on where the piece ends but what it counts. A
+# comparison's lanes, all ones or zero, become one bit each with pmovmskb, and popcnt adds them.
+# In: rdi = the bytes; rsi = how many, 1 to BUF_LEN; r10d = 1 when the byte before them is
+# whitespace (or there is none), else 0.
+# Out: rax = newlines; rdx = word starts; rcx = 1 when the last byte is whitespace, else 0.
+.type count_piece, @function
+count_piece:
     test rdi, rdi
-    jz .Lcount_full_assert_bytes
-    cmp rsi, BUF_LEN
-    ja .Lcount_full_assert_length
-    mov eax, NEWLINE
-    vpbroadcastb zmm1, eax
-    mov eax, SPACE
-    vpbroadcastb zmm2, eax
-    mov eax, TAB
-    vpbroadcastb zmm3, eax
-    mov eax, TAB_TO_CR
-    vpbroadcastb zmm4, eax
-    mov r10d, edx
-    xor r8d, r8d
-    xor r9d, r9d
+    jz .Lcount_piece_assert_bytes
+    movdqu xmm1, xmmword ptr [rip + classes]
+    movdqu xmm5, xmmword ptr [rip + classes + 16]
+    movdqu xmm7, xmmword ptr [rip + classes + 32]
+    movdqu xmm8, xmmword ptr [rip + classes + 48]
+    movdqu xmm9, xmmword ptr [rip + classes + 64]
+    pxor xmm10, xmm10
+    xor eax, eax
+    xor edx, edx
     xor ecx, ecx
-    mov r11, CHUNKS
-.Lcount_full_loop:  # bound: 64
+    mov r11, STEPS
+.Lcount_piece_loop:  # bound: 256
     cmp rcx, rsi
-    jae .Lcount_full_done
+    jae .Lcount_piece_done
     cmp rcx, BUF_LEN - VECTOR + 1
-    jae .Lcount_full_assert_index
-    vmovdqu8 zmm0, zmmword ptr [rdi + rcx]
-    vpcmpeqb k2, zmm0, zmm1
-    kmovq rax, k2
-    popcnt rax, rax
-    add r8, rax
-    vpcmpeqb k3, zmm0, zmm2
-    vpsubb zmm5, zmm0, zmm3
-    vpcmpub k4, zmm5, zmm4, 2
-    korq k3, k3, k4
-    kmovq rax, k3
-    lea rdx, [rax + rax]
-    or rdx, r10
-    andn rdx, rax, rdx
-    popcnt rdx, rdx
-    add r9, rdx
-    shr rax, 63
-    mov r10, rax
+    jae .Lcount_piece_assert_index
+    # xmm6: the lanes of this step that hold bytes before the end, those whose place plus one
+    # is at most min(rsi - rcx, 16): that number in every lane, its smaller with the lane's place
+    # plus one, and the lanes where that is the place plus one.
+    mov r8, rsi
+    sub r8, rcx
+    mov r9d, VECTOR
+    cmp r8, r9
+    cmova r8, r9
+    movd xmm6, r8d
+    pshufb xmm6, xmm10
+    pminub xmm6, xmm9
+    pcmpeqb xmm6, xmm9
+    movdqu xmm0, xmmword ptr [rdi + rcx]
+    # Newlines before the end.
+    movdqu xmm2, xmm0
+    pcmpeqb xmm2, xmm1
+    pand xmm2, xmm6
+    pmovmskb r8d, xmm2
+    popcnt r8d, r8d
+    add rax, r8
+    # Whitespace: a space, or a byte from tab to carriage return.
+    movdqu xmm3, xmm0
+    pcmpeqb xmm3, xmm5
+    psubb xmm0, xmm7
+    psubusb xmm0, xmm8
+    pcmpeqb xmm0, xmm10
+    por xmm3, xmm0
+    pmovmskb r8d, xmm3
+    # A word starts at a byte that isn't whitespace where the one before is: the whitespace
+    # mask moved up a place, with the byte before the step as its first bit.
+    lea r9d, [r8 + r8]
+    or r9d, r10d
+    # Whether this step's last byte is whitespace, for the next step: the mask's top bit.
+    mov r10d, r8d
+    shr r10d, 15
+    # The bytes before the end that aren't whitespace.
+    pandn xmm3, xmm6
+    pmovmskb r8d, xmm3
+    and r9d, r8d
+    popcnt r9d, r9d
+    add rdx, r9
     add rcx, VECTOR
     dec r11
-    jnz .Lcount_full_loop
-.Lcount_full_done:
-    mov rax, r8
-    mov rdx, r9
-    mov rcx, r10
+    jnz .Lcount_piece_loop
+.Lcount_piece_done:
+    # Whether the piece's last byte is whitespace, for the next piece: it is where the last
+    # step's lane for it, place (rsi - 1) mod 16, isn't one of the bytes that aren't.
+    lea r9d, [rsi - 1]
+    bt r8w, r9w
+    setae cl
+    movzx ecx, cl
     ret
-.Lcount_full_assert_bytes:
+.Lcount_piece_assert_bytes:
     mov edi, 3
     call assert_fail
-.Lcount_full_assert_length:
+.Lcount_piece_assert_index:
     mov edi, 4
     call assert_fail
-.Lcount_full_assert_index:
-    mov edi, 5
-    call assert_fail
-.size count_full, . - count_full
-
-# Counts the newlines and word starts in the last 1 to 63 bytes of the input, with a masked load.
-# In: rdi = the bytes; rsi = how many, 1 to 63; edx = 1 when the byte before them is whitespace
-# (or there is none), else 0.
-# Out: rax = newlines; rdx = word starts; rcx = 1 when the last byte is whitespace, else 0.
-.type count_tail, @function
-count_tail:
-    test rdi, rdi
-    jz .Lcount_tail_assert_bytes
-    test rsi, rsi
-    jz .Lcount_tail_assert_empty
-    cmp rsi, VECTOR
-    jae .Lcount_tail_assert_length
-    mov r10d, edx
-    mov r8, -1
-    bzhi r8, r8, rsi
-    kmovq k1, r8
-    vmovdqu8 zmm0 {k1}{z}, zmmword ptr [rdi]
-    mov eax, NEWLINE
-    vpbroadcastb zmm1, eax
-    mov eax, SPACE
-    vpbroadcastb zmm2, eax
-    mov eax, TAB
-    vpbroadcastb zmm3, eax
-    mov eax, TAB_TO_CR
-    vpbroadcastb zmm4, eax
-    vpcmpeqb k2 {k1}, zmm0, zmm1
-    kmovq r9, k2
-    popcnt r9, r9
-    vpcmpeqb k3 {k1}, zmm0, zmm2
-    vpsubb zmm5, zmm0, zmm3
-    vpcmpub k4 {k1}, zmm5, zmm4, 2
-    korq k3, k3, k4
-    kmovq rax, k3
-    lea rdx, [rax + rax]
-    or rdx, r10
-    andn rcx, rax, r8
-    and rdx, rcx
-    popcnt rdx, rdx
-    lea rcx, [rsi - 1]
-    shrx rcx, rax, rcx
-    and ecx, 1
-    mov rax, r9
-    ret
-.Lcount_tail_assert_bytes:
-    mov edi, 6
-    call assert_fail
-.Lcount_tail_assert_empty:
-    mov edi, 10
-    call assert_fail
-.Lcount_tail_assert_length:
-    mov edi, 7
-    call assert_fail
-.size count_tail, . - count_tail
+.size count_piece, . - count_piece
 
 # Prints two whole numbers, a space between them and a newline after, to standard output.
 # In: rdi = the first; rsi = the second.

@@ -95,6 +95,14 @@ async fn machine(source: &str) -> Machine {
         host.features
     };
     machine.sve_bytes = features.sve;
+    // An x86-64 program is mapped for every extension, as the prover golden maps it: a proof is
+    // math, and doesn't depend on which CPU the computer has (GitHub's x86-64 runners are a
+    // mixed pool, about half without AVX-512).
+    let features = if profile == Profile::LinuxX86_64 {
+        crate::platform::CpuFeatures::all()
+    } else {
+        features
+    };
     if let Some(program) = crate::checker::decode::map(&parsed, &machine, features, &mut Vec::new())
     {
         machine.named = program.named_symbols();
@@ -2266,7 +2274,7 @@ async fn proves_words_for_every_length_by_induction() {
     // the two buffer-fulls that do.
     for (wrong, why) in [
         ("    call fill\n", "    mov r14d, 1\n    call fill\n"),
-        (".Lstart_next:\n", ".Lstart_next:\n    xor r14d, r14d\n"),
+        ("    mov r14, rcx\n", "    xor r14d, r14d\n"),
     ]
     .map(|(from, to)| (source.replacen(from, to, 1), from))
     {
@@ -2282,8 +2290,8 @@ async fn proves_words_for_every_length_by_induction() {
     }
     // A count of the last buffer-full's words alone: no register keeps the words as they go.
     let last_only = machine(&source.replace(
-        "    add r13, rdx\n    mov r14, rcx\n    mov rsi, r15\n",
-        "    mov r13, rdx\n    mov r14, rcx\n    mov rsi, r15\n",
+        "    add r13, rdx\n    mov r14, rcx\n",
+        "    mov r13, rdx\n    mov r14, rcx\n",
     ))
     .await;
     let image = Image::new(&last_only).expect("an entry");
@@ -2630,13 +2638,12 @@ async fn proves_the_crc32c_checksum() {
     assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
 }
 
+/// The AVX-512 word count, the fast tier beside the baseline form: texts up to 200 bytes, and a
+/// carriage return that's one byte too short is found. The proof doesn't need AVX-512 hardware:
+/// it runs the model, which maps every extension.
 #[tokio::test]
 async fn proves_the_avx512_word_count() {
-    if !crate::platform::Machine::detect().features.avx512bw {
-        crate::skiplog::note("this CPU has no AVX-512BW");
-        return;
-    }
-    let folder = "plugin/skills/compile/assets/fast/wc/";
+    let folder = "plugin/skills/compile/assets/fast/wc-avx512/";
     let spec = repository_file(&format!("{folder}spec.md"))
         .replace(
             "Tests give it up to `1048576` bytes.",
@@ -3108,13 +3115,9 @@ async fn proves_the_aarch64_fetch_client() {
 }
 
 /// Output padded to a column by a chain of if(…)s choosing among texts of different lengths, as
-/// the AVX-512 word count Claude Code wrote in interactive round 2 prints its counts.
+/// the word count Claude Code wrote in interactive round 2 prints its counts.
 #[tokio::test]
 async fn proves_counts_padded_to_a_column() {
-    if !crate::platform::Machine::detect().features.avx512bw {
-        crate::skiplog::note("this CPU has no AVX-512BW");
-        return;
-    }
     // Texts up to 120 bytes, so counts of one, two and three digits each get their padding.
     let spec = fixture("padded", "spec.md")
         .replacen(
@@ -3525,13 +3528,14 @@ async fn proves_every_final_piece_at_once_where_a_loop_leaves_on_the_length() {
 /// choice, as it does every text up to a buffer-full from the program's start. With its own
 /// 64 KiB buffer it's proven for every length with no solver question. A word count that
 /// forgets the byte before each buffer-full, or the byte before each step, reads the carry from
-/// the wrong byte, or counts the bytes past the end, is caught.
+/// the wrong byte, or counts the bytes past the end, is caught. This is the fast tier beside
+/// the baseline form, which `proves_the_sse2_fast_word_count_for_every_length` proves.
 #[tokio::test]
-async fn proves_the_fast_word_count_for_every_length() {
+async fn proves_the_avx512_fast_word_count_for_every_length() {
     if !solvers_installed() {
         return;
     }
-    let folder = "plugin/skills/compile/assets/fast/wc/";
+    let folder = "plugin/skills/compile/assets/fast/wc-avx512/";
     let spec = repository_file(&format!("{folder}spec.md"));
     let asset = repository_file(&format!("{folder}main.s"));
     let block = block(&spec, 0);
@@ -3539,7 +3543,7 @@ async fn proves_the_fast_word_count_for_every_length() {
     let started = Instant::now();
     let verdict = prove(&right, &block, &long_budget());
     eprintln!(
-        "the fast wc at 64 KiB: {verdict:?} in {:?}",
+        "the AVX-512 fast wc at 64 KiB: {verdict:?} in {:?}",
         started.elapsed()
     );
     assert!(
@@ -3578,6 +3582,98 @@ async fn proves_the_fast_word_count_for_every_length() {
             "{to:?}: {verdict:?}"
         );
     }
+}
+
+/// The skill's fast word count, the baseline form every x86-64 computer runs: 16 bytes a step
+/// with SSE2 and popcnt, each step's bytes past the end masked off with lanes compared against
+/// their places, as NEON's does. It reads standard input through fill into 64 KiB and is proven
+/// for every length, as the AVX-512 tier beside it is, with no solver question, whatever CPU
+/// runs the proof. Its mutants, with a 256-byte buffer whose counterexamples come sooner (with
+/// 4 KiB the prover took over a minute on a word start past the end, a bug a 3-byte text shows),
+/// are caught: a piece that forgets the whitespace before it, a step that forgets the one
+/// before it, a word start past the end counted, and the larger of the bytes left and a step
+/// taken for the smaller.
+#[tokio::test]
+async fn proves_the_sse2_fast_word_count_for_every_length() {
+    if !solvers_installed() {
+        return;
+    }
+    let folder = "plugin/skills/compile/assets/fast/wc/";
+    let spec = repository_file(&format!("{folder}spec.md"));
+    let asset = repository_file(&format!("{folder}main.s"));
+    let block = block(&spec, 0);
+    let right = machine(&asset).await;
+    let started = Instant::now();
+    let verdict = prove(&right, &block, &long_budget());
+    eprintln!(
+        "the SSE2 fast wc at 64 KiB: {verdict:?} in {:?}",
+        started.elapsed()
+    );
+    assert!(
+        matches!(
+            verdict,
+            Verdict::Proven {
+                bound: None,
+                induction: Some(65536),
+                questions: 0,
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
+    let small = asset
+        .replace(".equ BUF_LEN, 65536\n", ".equ BUF_LEN, 256\n")
+        .replace("  # bound: 4096\n", "  # bound: 16\n");
+    for (from, to) in [
+        (
+            "    mov r10d, r14d\n    call count_piece\n",
+            "    mov r10d, 1\n    call count_piece\n",
+        ),
+        ("    mov r10d, r8d\n    shr r10d, 15\n", ""),
+        ("    pandn xmm3, xmm6\n", "    pcmpeqb xmm3, xmm10\n"),
+        ("    cmova r8, r9\n", "    cmovb r8, r9\n"),
+    ] {
+        assert!(small.contains(from), "{from:?}");
+        let wrong = machine(&small.replacen(from, to, 1)).await;
+        let verdict = prove(&wrong, &block, &text_budget());
+        assert!(
+            matches!(verdict, Verdict::Counterexample(_)),
+            "{to:?}: {verdict:?}"
+        );
+    }
+}
+
+/// The baseline word count over texts up to 200 bytes: every shape of them is proven with no
+/// solver question, and a carriage return that's one byte too short is found. A quick check
+/// beside the proof for every length.
+#[tokio::test]
+async fn proves_the_sse2_word_count_of_short_texts() {
+    let folder = "plugin/skills/compile/assets/fast/wc/";
+    let spec = repository_file(&format!("{folder}spec.md"))
+        .replace(
+            "Tests give it up to `1048576` bytes.",
+            "Tests give it up to `200` bytes.",
+        )
+        .replace("string(0, 1048576,", "string(0, 200,");
+    assert!(spec.contains("string(0, 200,"), "{spec}");
+    let source = repository_file(&format!("{folder}main.s"));
+    let block = block(&spec, 0);
+    let right = machine(&source).await;
+    let verdict = prove(&right, &block, &text_budget());
+    assert!(
+        matches!(
+            verdict,
+            Verdict::Proven {
+                bound: None,
+                questions: 0,
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
+    let wrong = machine(&source.replace(".equ TAB_TO_CR, 4", ".equ TAB_TO_CR, 3")).await;
+    let verdict = prove(&wrong, &block, &text_budget());
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
 }
 
 /// The fast word count on AArch64, the same spec compiled with NEON: fill into 64 KiB, and one loop

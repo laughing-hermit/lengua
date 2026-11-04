@@ -84,34 +84,11 @@ const PLACES: PerTarget<Places> = PerTarget {
 /// the sibling each is to get. A debt is paid by writing the sibling, from the very same spec, and
 /// removing the entry (or moving it to `TIERS`, when the extension's form stays as a fast tier).
 const DEBT: PerTarget<&[Debt]> = PerTarget {
-    linux_x86_64: &[
-        Debt {
-            program: "examples/count/main.s",
-            needs: &["AVX-512BW", "BMI1", "BMI2"],
-            sibling: "the same count in SSE2, 16 bytes a step, on the new fast wc's count_piece \
-                      with a 64 KiB buffer as its twin has",
-        },
-        Debt {
-            program: "plugin/skills/compile/assets/fast/wc/main.s",
-            needs: &["AVX-512BW", "BMI2"],
-            sibling: "fast/wc in SSE2, 16 bytes a step; the AVX-512 form moves to fast/wc-avx512",
-        },
-        Debt {
-            program: "tests/fixtures/lines/main.s",
-            needs: &["BMI2"],
-            sibling: "lines with base shifts and masks in place of bzhi",
-        },
-        Debt {
-            program: "tests/fixtures/padded/main.s",
-            needs: &["AVX-512BW", "BMI1", "BMI2"],
-            sibling: "padded in SSE2, on the new fast wc's count_piece",
-        },
-        Debt {
-            program: "tests/fixtures/words/main.s",
-            needs: &["AVX-512BW", "BMI1", "BMI2"],
-            sibling: "words in SSE2, on the new fast wc's count_piece",
-        },
-    ],
+    linux_x86_64: &[Debt {
+        program: "tests/fixtures/lines/main.s",
+        needs: &["BMI2"],
+        sibling: "lines with base shifts and masks in place of bzhi",
+    }],
     linux_aarch64: &[],
 };
 
@@ -120,6 +97,11 @@ const DEBT: PerTarget<&[Debt]> = PerTarget {
 /// tiers of the program they are measured against.
 const TIERS: PerTarget<&[Tier]> = PerTarget {
     linux_x86_64: &[
+        Tier {
+            program: "benches/programs/count/avx512.s",
+            needs: &["AVX-512BW", "BMI1", "BMI2"],
+            sibling: "examples/count/main.s",
+        },
         Tier {
             program: "benches/programs/shout/avx512-one.s",
             needs: &["AVX-512BW"],
@@ -149,6 +131,11 @@ const TIERS: PerTarget<&[Tier]> = PerTarget {
             program: "plugin/skills/compile/assets/fast/sha256-ni/main.s",
             needs: &["SHA"],
             sibling: "examples/sha256/main.s",
+        },
+        Tier {
+            program: "plugin/skills/compile/assets/fast/wc-avx512/main.s",
+            needs: &["AVX-512BW", "BMI2"],
+            sibling: "plugin/skills/compile/assets/fast/wc/main.s",
         },
     ],
     linux_aarch64: &[
@@ -180,6 +167,10 @@ const TIERS: PerTarget<&[Tier]> = PerTarget {
 /// and held to the baseline like the rest: one that needs more is in `TIERS`.
 const BENCH_ONLY: PerTarget<&[Bench]> = PerTarget {
     linux_x86_64: &[
+        Bench {
+            program: "benches/programs/count/avx512.s",
+            spec: "examples/count/spec.md",
+        },
         Bench {
             program: "benches/programs/shout/avx512-one.s",
             spec: "plugin/skills/compile/assets/parallel-template-spec.md",

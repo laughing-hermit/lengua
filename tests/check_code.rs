@@ -468,8 +468,7 @@ async fn the_tally_block_passes_its_checks() {
 /// proof's base finishes in the test's time.
 #[tokio::test]
 async fn a_word_count_is_proven_for_every_length() {
-    // The fast word count is AVX-512 code.
-    if !solvers_installed() || !has_avx512() {
+    if !solvers_installed() {
         return;
     }
     let session = Session::proving_alone_for(Protocol::Discover, 120).await;
@@ -1033,6 +1032,28 @@ async fn the_avx512_upcase_in_the_benchmark_passes_its_checks() {
 }
 
 #[tokio::test]
+async fn the_avx512_word_count_in_the_benchmark_passes_its_checks() {
+    // The word count Claude Code wrote through lengua from a plain request, as it was before
+    // the baseline form: the example's spec and tests, 128 bytes at a time with AVX-512, a fast
+    // tier the benchmark still measures. Only where the CPU has AVX-512BW.
+    if !has_avx512() {
+        return;
+    }
+    let session = session().await;
+    let code = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("benches/programs/count/avx512.s"),
+    )
+    .expect("the AVX-512 word count");
+    let program = written(
+        &session,
+        [("spec.md", example("count", "spec.md")), ("main.s", code)],
+    )
+    .await;
+    done(&session, &program).await;
+    session.service.cancel().await.expect("close the session");
+}
+
+#[tokio::test]
 async fn the_file_example_proves_its_file_handling() {
     // upcase's usage and missing-file behaviors draw their names with choice(…); the proof opens,
     // reads and writes files as the test gives them.
@@ -1285,11 +1306,13 @@ async fn a_client_over_tls_is_tested_in_plain_bytes() {
 #[tokio::test]
 async fn the_benchmarks_own_programs_pass_their_checks() {
     // The skill's fast programs, which the benchmark measures on 64 MiB, each with its own spec
-    // and tests.
-    if !has_avx512() {
-        return;
+    // and tests. Each runs on any x86-64 computer, but the AVX-512 tier of the word count,
+    // which sits beside its baseline form, runs where the CPU has AVX-512BW.
+    let mut workloads = vec!["wc", "crc32c", "histogram"];
+    if has_avx512() {
+        workloads.push("wc-avx512");
     }
-    for workload in ["wc", "crc32c", "histogram"] {
+    for workload in workloads {
         let session = session().await;
         let source = |name: &str| {
             std::fs::read_to_string(
@@ -1383,10 +1406,8 @@ async fn the_sort_claude_code_wrote_passes_its_checks() {
 
 #[tokio::test]
 async fn the_word_count_claude_code_wrote_passes_its_checks() {
-    // Written through lengua from a plain request in an interactive Claude Code session.
-    if !has_avx512() {
-        return;
-    }
+    // Written through lengua from a plain request in an interactive Claude Code session, and
+    // now in the baseline form that runs on every x86-64 computer.
     let session = session().await;
     let program = written(&session, example_files("count")).await;
     done(&session, &program).await;

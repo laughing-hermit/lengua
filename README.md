@@ -161,11 +161,14 @@ Complete programs, each with its spec, tests included, and its assembly:
   8080 over HTTP/1.0, through the connection lengua makes for it, and
   [`examples/echo`](examples/echo) is a line-echo server. Their tests bring their own server and
   client; both read with `fill`, so each is proven however the network cuts what it reads;
-- [`examples/count`](examples/count) counts lines and words like `wc -lw`. Claude Code wrote it
-  through lengua from one plain request in an interactive session; on a 4 GiB file it ran at
-  15.8 GB/s, ahead of hand-written AVX-512 C, 12 times faster than plain C and 25 times faster
-  than GNU `wc`. Its AVX-512 counting is proven right for every input up to 4096 bytes, what one
-  pipe write holds.
+- [`examples/count`](examples/count) counts lines and words like `wc -lw`, 16 bytes at a time with
+  SSE2, so it runs on every x86-64 computer. Claude Code wrote it through lengua from one plain
+  request in an interactive session; that version took 128 bytes a step with AVX-512 and, on a
+  4 GiB file, ran at 15.8 GB/s, ahead of hand-written AVX-512 C, 12 times faster than plain C and
+  25 times faster than GNU `wc` (it is kept as
+  [a benchmark program](benches/programs/count/avx512.s)). The SSE2 counting is proven right,
+  with no solver question, for every input up to 3,190 bytes in four minutes of a GitHub runner,
+  and further each time a `check` asks to prove on; one pipe write holds 4096.
 
 Their `lengua.lock` files aren't committed, because a lock is signed with each machine's own key.
 Ask the agent to check one with lengua: one `check` records the spec, checks its tests and the
@@ -185,18 +188,22 @@ the memory:
 | `hypotenuse`, a square root in doubles | 98× fewer | 1.9× less | 1.4× less | 2.9× less |
 | Capitalize a 1 MiB file | 5.1× fewer | 1.3× less | 1.3× less | 2.8× less |
 | Capitalize 1 MiB of standard input | 5.1× fewer | 1.7× less | 1.3× less | 2.8× less |
-| Count lines and words of 64 MiB (Claude Code's version) | 13.8× fewer | 1.6× less | 1.3× less | 3.3× less |
+| Count lines and words of 64 MiB (Claude Code's version, AVX-512 tier) | 13.8× fewer | 1.6× less | 1.3× less | 3.3× less |
 | CRC-32C of 64 MiB | 2.9× fewer | level | level | 3.1× less |
 | Byte histogram of 64 MiB | level | level | level | 2.5× less |
 
 The baselines are written the way a performance-minded programmer would: the CRC uses the
 `crc32` instruction, the histogram four tables, and the word count a loop compilers vectorize.
-lengua wins by using the CPU fully: 64 bytes a step with AVX-512, three `crc32` chains side by
-side, no C library and no runtime. The histogram is limited by one memory update per byte in
+lengua wins by using the CPU fully: 64 bytes a step with AVX-512 where the CPU has it (16 with
+SSE2 on any x86-64 computer, the baseline form), three `crc32` chains side by side, no C library
+and no runtime. The histogram is limited by one memory update per byte in
 every language. On 64 MiB through a pipe, the kernel's copying is most of the wall time, so a 3×
 lead in the program's own cycles shows as level on the clock. Measured 2026-11-02, with where the
 cycles go (stalls, L1 misses, mispredicted branches) for each large workload; BENCHMARKS-aarch64.md
-measures the same programs on GitHub's ARM64 runner.
+measures the same programs on GitHub's ARM64 runner. GitHub's x86-64 runners are a mixed pool, about
+half without AVX-512: on six draws of them (2026-11-04, [todo.md](todo.md) has each), including
+two CPUs without AVX-512, the baseline SSE2 word count took from level to 1.6 times less CPU time
+and wall time than the best of C, C++ and Rust.
 
 ## Develop
 

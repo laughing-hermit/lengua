@@ -138,11 +138,13 @@ no runtime, no garbage collector and no C library: a lengua program is a few kil
 and starts in microseconds. The checks above work on the machine code itself, so nothing between
 them and the CPU has to be trusted either.
 
-The agent writes for the person's own CPU and uses what it has: AVX-512 on an x86-64 computer
-that has it, NEON or SVE on ARM64. On lengua's benchmarks against C, C++ and Rust compiled for
-speed on the same computer (BENCHMARKS.md for x86-64, BENCHMARKS-aarch64.md for ARM64), lengua's
-best is ahead of or level with them on every x86-64 workload in cycles, CPU time and wall time,
-with 2.5 to 3.3 times less memory.
+The agent writes for the person's own CPU and uses what it has: SSE2 on every x86-64 computer
+and AVX-512 where the CPU has it, NEON on every ARM64 one and SVE where the CPU has it. Every
+program has a form that runs on all of its target's computers, and an extension is only a faster
+form beside it that meets the same spec, tests and proofs. On lengua's benchmarks against C, C++
+and Rust compiled for speed on the same computer (BENCHMARKS.md for x86-64,
+BENCHMARKS-aarch64.md for ARM64), lengua's best is ahead of or level with them on every x86-64
+workload in cycles, CPU time and wall time, with 2.5 to 3.3 times less memory.
 
 ## Why the spec is the mother
 

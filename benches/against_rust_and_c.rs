@@ -243,12 +243,19 @@ fn workloads() -> Vec<Workload> {
             name: "wc",
             about: "Counts the lines and words of 64 MiB on standard input, as `wc -lw` does. \
                     C, C++ and Rust compare each byte with the one before it, which compilers \
-                    can vectorize. lengua's versions take 64 bytes a step with AVX-512 masks: \
-                    the skill's example, and the program Claude Code wrote through lengua from \
-                    a plain request in an interactive session.",
+                    can vectorize. lengua's versions take 16 bytes a step with SSE2, which \
+                    every x86-64 computer has: the skill's example, and the count example, \
+                    which Claude Code wrote through lengua from a plain request in an \
+                    interactive session; and, where the CPU has AVX-512, 64 bytes a step with \
+                    masks, the skill's AVX-512 tier and count as Claude Code first wrote it.",
             lengua: &[
                 ("lengua", "plugin/skills/compile/assets/fast/wc/main.s"),
-                ("lengua, by Claude Code", "examples/count/main.s"),
+                (
+                    "lengua, AVX-512",
+                    "plugin/skills/compile/assets/fast/wc-avx512/main.s",
+                ),
+                ("lengua, count", "examples/count/main.s"),
+                ("lengua, count, AVX-512", "benches/programs/count/avx512.s"),
             ],
             lengua_aarch64: &[
                 (
@@ -376,10 +383,13 @@ fn lengua_versions(workload: &Workload) -> &'static [(&'static str, &'static str
 
 async fn build(workload: &Workload, toolchain: &Toolchain, folder: &Path) -> Vec<Version> {
     let mut versions = Vec::new();
-    // An SVE version runs only on a CPU with SVE.
-    let sve = Machine::detect().features.sve > 0;
+    // An SVE version runs only on a CPU with SVE, and an AVX-512 one only on a CPU with
+    // AVX-512BW (GitHub's x86-64 runners are a mixed pool, about half without).
+    let features = Machine::detect().features;
     for (number, (label, source)) in lengua_versions(workload).iter().enumerate() {
-        if source.contains("-sve/") && !sve {
+        if (source.contains("-sve/") && features.sve == 0)
+            || (source.contains("avx512") && !features.avx512bw)
+        {
             continue;
         }
         let (object, executable) = (

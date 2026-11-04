@@ -260,30 +260,29 @@ in this run are listed above), heaviest first:
      investigated: the runner's CPU, the model's speed, or the twice-as-many paths.
 3. **CI coverage.** GitHub's x86-64 runners are a mixed pool: of 21 runs on 2026-11-04, 10 drew
    a CPU with AVX-512 (Xeon Platinum 8573C and 6975P-C, EPYC 9V45, some EPYC 9V74) and 11 did not
-   (EPYC 7763, other EPYC 9V74), so x86-64 coverage is a coin flip per run. On a draw without it,
-   the eight x86-64 programs that use AVX-512 (`count`, `words`, `padded`, the fast `wc`,
-   `crc32c`, three benchmark ones) are neither taken through the server nor rule-checked
-   (`every_program_in_the_repository_follows_every_rule` skips them; the ARM64 job, which assumes
-   every extension, and an AVX-512 draw do check them), and about ten tests that need AVX-512
-   return early without a word, the model-against-CPU vector harness among them (so its SSE2,
-   AVX2, AES, SHA and PCLMUL probes never meet real silicon on those draws). The x86-64 job also
-   has no QEMU, so about 34 ARM64-under-QEMU tests are silent no-ops there. Skips print nothing
-   in a green log. The plan is in "Fitting GitHub's free runners" below.
+   (EPYC 7763, other EPYC 9V74), so x86-64 coverage was a coin flip per run. On a draw without
+   it, eight x86-64 programs that used AVX-512 (`count`, `words`, `padded`, the fast `wc`,
+   `crc32c`, three benchmark ones) were neither taken through the server nor rule-checked. Since
+   the baseline forms (below) no example or fixture needs AVX-512: every one goes through the
+   server and the rules on any draw (`every_x86_64_program_passes_its_checks` on an EPYC 7763
+   without AVX-512, nothing skipped: run 41894634835). What still needs the CPU is the AVX-512
+   tiers' own tests (`wc-avx512`, `count`'s benchmark variant, the benchmark-only programs), which
+   note their skip in the run summary, and the model-against-CPU vector harness's probes, so its
+   SSE2, AVX2, AES, SHA and PCLMUL probes meet real silicon only on the draws that run it. The
+   x86-64 job also has no QEMU, so about 34 ARM64-under-QEMU tests are silent no-ops there. The
+   plan is in "Fitting GitHub's free runners" below.
 4. **Programs.**
-   - Buffer sizes differ between twins: `count` 256 KiB against 64 KiB, `padded` and the fast
-     `crc32c` 1 MiB against 64 KiB, `upcase` retries writes 4096 against 64 times.
+   - Buffer sizes differ between twins: the fast `crc32c` 1 MiB against 64 KiB, `upcase` retries
+     writes 4096 against 64 times (`count` and `padded` are 64 KiB on both since 2026-11-04).
    - The ARM64 main template's assertions skip number 3.
-   - **x86-64's fast `wc` exists only in an AVX-512 form** (and so do `count`, `words` and
-     `padded`), where ARM64 has the baseline NEON form of each, and an SVE one as an extra. The
-     owner's reason for asking (2026-11-04): other targets, whatever their CPU and OS, must behave
-     the same, so a spec's behavior can't depend on an optional CPU extension. The rule this
-     implies: every program lengua ships has a form that runs on every machine of its target
-     (x86-64's SSE2, ARM64's NEON); an optional extension (AVX-512, SVE) is a speedup an agent
-     picks from the machine line's features, never the only way to get the behavior. By it, the
-     four x86-64 programs above lack their baseline form: an x86-64 computer without AVX-512 (most
-     are: AMD before Zen 4, Intel client chips since 2022, about half of GitHub's runners) has no
-     fast `wc` to learn from or copy, and a macOS or Windows x86-64 port inherits the gap. The
-     plan is in "Baseline forms for the AVX-512 programs" below.
+   - **x86-64's fast `wc`, `count`, `words` and `padded` had only an AVX-512 form**, where ARM64
+     has the baseline NEON form of each, and an SVE one as an extra. The owner's reason for
+     asking (2026-11-04): other targets, whatever their CPU and OS, must behave the same, so a
+     spec's behavior can't depend on an optional CPU extension. The rule this implies: every
+     program lengua ships has a form that runs on every machine of its target (x86-64's SSE2,
+     ARM64's NEON); an optional extension (AVX-512, SVE) is a speedup an agent picks from the
+     machine line's features, never the only way to get the behavior. Done for these programs on
+     2026-11-04, and what remains is in "Baseline forms for the AVX-512 programs" below.
    - The AArch64 dialect has no add-with-carry (`adc`, `sbc`).
 5. **Small items.** `cbz`/`tbz` on `xzr` or `wzr` count as conditional branches, so the dead-code
    and "assertion always fails" checks can be bypassed on ARM64; `ppoll`'s timeout and signal-mask
@@ -300,49 +299,88 @@ in this run are listed above), heaviest first:
 
 Beyond these two CPUs, the macOS and Windows ports remain skipped (below).
 
-### Baseline forms for the AVX-512 programs
+### Baseline forms for the AVX-512 programs: done on x86-64 (2026-11-04), and what is left
 
 Why (the owner, 2026-11-04): each target's code is tailored to its CPU and OS to be fast, yet it is
 one product, so every program has a baseline form that runs on every machine of its target and an
 optional faster form picked from the machine line's features, both meeting the same spec, tests
-and proofs. ARM64 already has that (NEON, and SVE as an extra); x86-64 doesn't. Researched
-2026-11-04 by reading only; nothing below was assembled, run or measured.
-- **What uses AVX-512BW on x86-64:** the fast `wc` (`assets/fast/wc`, one function, `count_piece`,
-  64 bytes a step with `k` masks, its last partial step masked in the same loop, 64 KiB through
-  `fill`), `examples/count` (128 bytes a step, a full-step and a masked-tail routine, 256 KiB raw
-  reads), `tests/fixtures/padded` and `words`, and the PCLMULQDQ form of the CRC-32C in one
-  function only (`move_front`, a masked 64-byte copy its proof never reaches; that form is the
-  tier `fast/crc32c-pclmul` now, with `move_front` scalar, and the shipped `fast/crc32c` is
-  SSE4.2's `crc32` and needs no AVX-512). `fast/histogram` has none but is gated with them.
-  The three benchmark-only AVX-512 programs (`upcase`, `shout`, `shout` on one thread) already
-  have SSE2 siblings (`examples/upcase`, the parallel template). No x86-64 program uses `ymm`,
-  though the compile skill tells the agent to use AVX2 when the machine line lists it.
-- **An SSE2 form is possible with what exists.** 16 bytes a step in the shape of ARM64's NEON
-  `wc`: `pcmpeqb` for newlines and spaces, `psubb`/`pminub`/`pcmpeqb` for the 9 to 13 range,
-  `por`, `pmovmskb`, then `bzhi` to cut the last step to the bytes left, `popcnt`, and the
-  previous-byte carry as a mask bit (`shrx`). The dialect allows all of it, and the prover models
-  every one of those instructions; `tests/fixtures/lines` (SSE2, `pcmpeqb`, `pmovmskb`, `bzhi`,
-  `popcnt`) is already proven for every length by induction at 64 KiB. The sketch is about 57 of
-  rule 4's 60 instructions (a helper for the constants if it runs over). Avoid the instructions
-  the prover doesn't model: `psadbw`, `palignr`, `punpck*`, `pack*`, `pmaddubsw`, `pextr*`,
-  `pinsr*`, `pblendw`, `pmovzx*`.
-- **Speed is the cost.** About 36 instructions per 16 bytes against the AVX-512 loop's 37 per
-  64: roughly 3.9 times the instructions, level with C and Rust in cycles where the AVX-512 `wc`
-  is 13.8 times ahead (`BENCHMARKS.md`; derived, not measured). So: keep AVX-512 as the optional
-  fast form, add the SSE2 form as the default, and add an AVX2 tier (32 bytes a step) if the
-  measured SSE2 `wc` doesn't beat C and Rust on a CPU without AVX-512.
-- **Order, by risk:** (0) CI gates first (below); (1) `crc32c`'s `move_front` scalar (8-byte
-  copies and a byte tail; no unmasked 16-byte load, which would read past the data); (2) fast
-  `wc` as SSE2 in `assets/fast/wc`, the old file moved to `assets/fast/wc-avx512` as ARM64's
-  `wc` and `wc-sve` are, proven first with the one-folder check, then a
-  `proves_the_sse2_fast_word_count_for_every_length` test with four planted bugs, ungated by CPU;
-  (3) measure with the x86-64 `benchmarks` dispatch, recording the CPU each time, since the pool
-  is mixed; (4) `words`, `padded`, `count`, reusing the new `count_piece` and changing only the
-  start (count's buffer aligned to its twin's 64 KiB, which closes that gap too); (5) the compile
-  skill and the references say which asset to start from by the machine line, and the README,
-  DESIGN and white paper stop saying "the AVX-512 `wc`" as if it were the only one.
-  Effort: `wc` medium, `crc32c`, `words` small, `padded`, `count` small to medium, the AVX2 tier
-  small to medium and optional.
+and proofs. ARM64 had that (NEON, and SVE as an extra); x86-64 now has it too. Done on GitHub's
+runners only (nothing built or run on the user's computer); the run ids are the evidence.
+- **The tests no longer depend on which CPU the pool hands out.** The prover tests map x86-64
+  programs with every extension, as the ARM64 job does (a proof is math); the all-programs test
+  leaves out only a program that needs AVX-512 and notes it (`lengua::skiplog`); the AVX-512
+  tier's own tests (`wc-avx512`, the word count's benchmark variant) run where the CPU has it and
+  note the skip where it hasn't. `every_x86_64_program_passes_its_checks` passed on an EPYC 7763
+  with **no AVX-512**, nothing skipped (run 41894634835, 85 s), and on three draws that have it
+  (41893011594, 41894624314, 41894629698).
+- **`assets/fast/wc` is the SSE2 form,** 16 bytes a step in the shape of ARM64's NEON `wc`:
+  `pcmpeqb`, `psubb`/`psubusb` for the 9 to 13 range, `pmovmskb`, `popcnt`, and a mask for the
+  last partial step built with `movd`, `pshufb`, `pminub` and `pcmpeqb`; `pshufb` and `popcnt` are
+  its only instructions past SSE2, and it uses no BMI and no `ymm`. `count_piece` is exactly rule
+  4's 60 instructions. The AVX-512 form moved to `assets/fast/wc-avx512` with the same spec bytes.
+  `proves_the_sse2_fast_word_count_for_every_length` proves it for every length by induction at 64
+  KiB with no solver question, and catches four planted bugs (the carry across pieces, the carry
+  across steps, a word start past the end, the larger of the bytes left and a step taken for the
+  smaller): the main verdict took 231 s on an EPYC 9V74 **without** AVX-512 (run 41889485548) and
+  the whole test 152 s on an EPYC 9V45 (run 41895524569).
+- **What the prover reads.** The first mask, `pcmpgtb` of the bytes left against the lanes'
+  places, a signed compare, was never proven: the length's conditions come out as a signed
+  comparison, `Pool::holds_where`/`reading` follow only unsigned ones, so the base of the
+  induction went one length at a time with counts, a part for each byte of the buffer, for the
+  solver (run 41874848019, gave up at 5829 bytes). The unsigned form is proven at once (a
+  256-byte buffer: one shape, 19 paths, 276 ms; run 41889461023). A prover that also read signed
+  compares of byte lanes would let more programs mask the natural way. Bugs that show only past a
+  buffer-full (a newline counted from the stale bytes beyond the last piece) were not found in a
+  minute at 256 bytes or more, and a word start past the end, which a 3-byte text shows, took 4.5
+  s at 256, 53 s at 1 KiB and was not found at 4 KiB (run 41892999427): the induction's questions
+  of hundreds of parts time out and leave no time for the search by length. So the planted-bug
+  test uses a 256-byte buffer and a word start for its past-the-end bug.
+- **`words`, `padded`, `count` and `crc32c`.** `tests/fixtures/words`, `tests/fixtures/padded` and
+  `examples/count` use the same `count_piece` (count's buffer is now 64 KiB like its ARM64 twin);
+  `words` is proven for every length by induction (4096-byte buffer, no solver question), `count`
+  for every input up to 3,190 bytes in four minutes on a 4-vCPU runner (run 41895528826), and the
+  60 seconds of a `check` on a runner prove none of the ASCII-text blocks of `count` or `padded`
+  (run 41893005309), which go on each time the agent asks to prove on. The AVX-512 originals are
+  `benches/programs/count/avx512.s` (cited in the README) and `wc-avx512`. `crc32c`'s only
+  AVX-512 use, `move_front`, copies 8 bytes at a time and then bytes; its proof and checks pass
+  (proven up to 2221 bytes). That three-chain `pclmulqdq` form is now the fast tier
+  `fast/crc32c-pclmul` (byte for byte the file this paragraph measured); the shipped `fast/crc32c`
+  is one SSE4.2 `crc32` chain, from the crypto work below.
+- **Measured on the runners** (`cargo bench --bench against_rust_and_c`, 64 MiB through a pipe,
+  the median of 41 runs, CPU time and wall time in ms; the runners expose no cycle counters, so
+  user cycles can't be told from the kernel's copy). Baseline SSE2 `wc` against the best of C,
+  C++ and Rust; the draw is the CPU the pool handed out, six dispatches:
+
+  | Run | CPU | AVX-512 | lengua `wc` | best other | AVX-512 `wc` |
+  |---|---|---|---|---|---|
+  | 41893737162 | EPYC 9V74 | yes | 29.9 / 31.2 | 29.9 (Rust) / 31.9 (C): 1.00× / 1.02× | 25.3 / 32.6 |
+  | 41893742012 | EPYC 9V74 | yes | 26.6 / 26.9 | 27.9 (C) / 28.3: 1.05× / 1.05× | 23.4 / 28.7 |
+  | 41893747152 | EPYC 9V74 | no | 33.3 / 33.8 | 35.8 (C) / 36.3: 1.08× / 1.07× | – |
+  | 41895807100 | Xeon 6975P-C | yes | 27.0 / 27.8 | 37.0 (C) / 37.4: 1.37× / 1.35× | 35.7 / 53.6 |
+  | 41895812441 | EPYC 7763 | no | 31.3 / 31.8 | 48.6 (C) / 49.0: 1.56× / 1.54× | – |
+  | 41895817808 | Xeon 8573C | yes | 35.3 / 37.2 | 47.9 (C) / 48.5: 1.36× / 1.30× | 23.1 / 43.5 |
+
+  The baseline form is level with or ahead of C and Rust on every draw, on both CPUs without
+  AVX-512 (1.08× and 1.56× less CPU time), so **the AVX2 tier was not built**: the condition for
+  it, an SSE2 `wc` that does not beat C and Rust on a CPU without AVX-512, did not occur. The
+  AVX-512 tier saves CPU time on three of the four AVX-512 draws (12 to 35 percent), never wall
+  time, and on the Xeon 6975P-C it is slower than SSE2 on both: this workload is a pipe's, and
+  the kernel's copy sets the pace. `examples/count`'s SSE2 form took 25.2 to 36.3 ms of CPU time,
+  1.04× to 1.47× less than the best other on the same six draws. `crc32c` (the three-chain form,
+  now `crc32c-pclmul`, with the scalar `move_front`) took 16.3 to 28.3 ms, 0.96× to 2.09× less CPU time than the best other (one draw,
+  the Xeon 6975P-C, level to slightly behind C++), but its wall time was 8 to 29 percent above the
+  best other's on all six; an A/B of the old AVX-512 copy (run column `lengua, AVX-512 copy`) has
+  the same wall-time gap, so the scalar copy is not the cause and **the cause is not known**
+  (the AVX-512 copy saves 2.7 and 4.0 ms of CPU time on the two EPYC 9V74 draws, 0.5 ms on the
+  Xeon 8573C and costs 1.9 ms on the Xeon 6975P-C, and its wall time is worse on all four, by
+  0.4 to 2.3 ms).
+- **Left, for another engineer.** (a) `tests/fixtures/lines` uses `bzhi` (BMI2) and has no
+  baseline form yet (the baseline feature set per target below); `aes`, `sha256` and `crc32c` have
+  theirs from the crypto work. (b) `crc32c`'s wall-time gap above. (c)
+  `move_front` could copy 16 bytes a step with `movdqu` (half the iterations; the scalar copy is a
+  few percent of the CPU time). (d) A signed-compare reading in the prover, above. (e) The
+  one-folder check's 60 s proof budget cannot finish the 64 KiB proof of `fast/wc` (231 s on a
+  runner), so its `check` says "tested, not proven" until asked to prove on.
 
 ### Fitting GitHub's free runners
 
@@ -371,7 +409,7 @@ sandbox is not an obstacle, and no step of setup has failed in about 160 jobs. W
   process-wide proving lock; (6) *code*: a baseline variant of the model-against-CPU vector test
   that saves `xmm`/`ymm` only, so its SSE2, AVX2, AES, SHA and PCLMUL probes meet real silicon on
   every draw; (7) *code*: the baseline forms above, the only change that ends the dependence on
-  which CPU the pool hands out.
+  which CPU the pool hands out (done for the examples and fixtures on 2026-11-04).
 - Not recommended: lowering the proof budgets (calibrated on 16 cores; tests assert verdicts),
   larger or self-hosted runners (outside the $0 rule), dropping the duplicate prover tests (both
   solver builds get exercised), and emulating AVX-512: QEMU's TCG has none (checked in its source),
@@ -468,43 +506,41 @@ natively on both runners:
 
 What `tests/baseline.rs` found on 2026-11-04, when it first held every shipped `main.s` to its
 target's baseline (x86-64: SSE2 with SSE3, SSSE3, SSE4.1, SSE4.2 and POPCNT; ARM64: ARMv8.0-A with
-NEON and floating point, nothing optional). The `DEBT` list in the test is this list, with the
-extensions each program needs exactly as the checker names them: the test fails for a program that
-needs more and isn't listed, for an entry that names other extensions, and for a listed program
-that now runs on the baseline, so the list only shrinks. Whoever writes a baseline sibling, from
-the very same `spec.md`, removes the entry; where the extension's form stays as a fast tier beside
-it, the entry moves to `TIERS`, which the test holds to a sibling that exists, needs nothing beyond
-the baseline and shares the spec's bytes.
+NEON and floating point, nothing optional): 8 of x86-64's 39 shipped programs and 3 of ARM64's 40
+needed more. The `DEBT` list in the test is what is still owed, with the extensions each program
+needs exactly as the checker names them: the test fails for a program that needs more and isn't
+listed, for an entry that names other extensions, and for a listed program that now runs on the
+baseline, so the list only shrinks. Whoever writes a baseline sibling, from the very same
+`spec.md`, removes the entry; where the extension's form stays as a fast tier beside it, the entry
+moves to `TIERS`, which the test holds to a sibling that exists, needs nothing beyond the baseline
+and shares the spec's bytes.
 
-x86-64, 8 of its 39 shipped programs:
-- `examples/aes`: AES-NI. Sibling: a software AES over SSE2 and SSSE3 (`pshufb` is baseline), the
-  AES-NI form kept as a tier beside it.
-- `examples/sha256`: SHA. Sibling: a software SHA-256 over the base instructions, the SHA-NI form
-  kept as a tier.
-- `examples/count`: AVX-512BW, BMI1, BMI2. Sibling: the same count in SSE2, 16 bytes a step, on
-  the new fast `wc`'s `count_piece`, with a 64 KiB buffer as its ARM64 twin has.
-- `tests/fixtures/words` and `tests/fixtures/padded`: AVX-512BW, BMI1, BMI2. Siblings: SSE2 forms
-  on `count_piece`, changing only the start.
-- `tests/fixtures/lines`: BMI2 (`bzhi`). Sibling: the same loop with base shifts and masks in
-  place of `bzhi`.
-- `plugin/skills/compile/assets/fast/wc`: AVX-512BW, BMI2. Sibling: `fast/wc` in SSE2, 16 bytes a
-  step, the AVX-512 file moving to `fast/wc-avx512` as ARM64's `wc-sve` sits beside its `wc`.
-- `plugin/skills/compile/assets/fast/crc32c`: AVX-512BW, BMI2, PCLMULQDQ (`crc32` itself is SSE4.2,
-  now baseline). Sibling: `crc32c` on `crc32` alone, its chains joined another way and
-  `move_front` as scalar copies, the PCLMULQDQ form kept as a tier.
+**Paid off (2026-11-04), on both CPUs:**
+- `examples/aes`, `examples/sha256` and the fast `crc32c` on x86-64, and the ARM64 `aes`, `sha256`
+  and fast `crc32c` twins: each now runs on its target's baseline (plain integer code; a table of
+  256 words for AES and for ARM64's CRC-32C; SSE4.2's `crc32` on x86-64), and the forms that use
+  the extensions are the tiers `fast/aes-ni`, `fast/sha256-ni`, `fast/crc32c-pclmul` and, on
+  ARM64, `fast/aes-aes`, `fast/sha256-sha2` and `fast/crc32c-crc`, each with the baseline's
+  `spec.md` bytes.
+- The AVX-512 programs on x86-64: the fast `wc` (SSE2, with the AVX-512 form as the tier
+  `fast/wc-avx512`), `examples/count` (its AVX-512 original is the benchmark-only
+  `benches/programs/count/avx512.s`) and the fixtures `words` and `padded`.
 
-ARM64, 3 of its 40 shipped programs:
-- `tests/fixtures/linux-aarch64/aes`: `aes`. Sibling: a software AES over NEON's base
-  instructions, the AES-extension form kept as a tier.
-- `tests/fixtures/linux-aarch64/sha256`: `sha`. Sibling: a software SHA-256 over the base
-  instructions, the SHA2-extension form kept as a tier.
-- `plugin/skills/compile/assets/linux-aarch64/fast/crc32c`: `crc`, `pmull`. Sibling: a software
-  CRC-32C by table or by bits, the CRC and PMULL form kept as a tier.
+**Still owed, x86-64, 1 of its shipped programs:**
+- `tests/fixtures/lines`: BMI2 (`bzhi`). Sibling: the same loop with its last chunk masked as the
+  fast `wc` masks it (`movd`, `pshufb`, `pminub`, `pcmpeqb`), in place of `bzhi`. Several prover
+  tests are written against this fixture's `bzhi` (the line counter at 64 KiB proven "with no
+  solver question" because the prover reads `bzhi`'s mask as `position < length`), so the change
+  comes with their expectations.
 
-Already tiers beside a written baseline sibling (`TIERS`): ARM64's `fast/wc-sve` (`sve`) beside
-`fast/wc`, and, benchmark-only and listed apart (`BENCH_ONLY`), x86-64's `benches/programs`
-`shout/avx512.s`, `shout/avx512-one.s` and `upcase/avx512.s` (AVX-512BW) beside the parallel
-template and `examples/upcase`. ARM64's two benchmark variants are NEON, on the baseline.
+ARM64 owes nothing.
+
+Tiers beside a written baseline sibling (`TIERS`): the six above, x86-64's `fast/wc-avx512`
+(AVX-512BW, BMI2) and ARM64's `fast/wc-sve` (`sve`) beside their `fast/wc`, and, benchmark-only
+and listed apart (`BENCH_ONLY`), x86-64's `benches/programs`
+`count/avx512.s`, `shout/avx512.s`, `shout/avx512-one.s` and `upcase/avx512.s` (AVX-512BW) beside
+`examples/count`, the parallel template and `examples/upcase`. ARM64's two benchmark variants are
+NEON, on the baseline.
 
 Not done by the test: the stamp lengua writes into `main.s` and `lengua.lock` (`needs SSE4.2, …`)
 still lists SSE3 to SSE4.2 and POPCNT as extensions, since the checker's own floor is SSE2

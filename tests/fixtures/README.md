@@ -15,15 +15,17 @@ And written for the tests themselves:
 
 - `cat`: standard input of up to 5,000 bytes printed back, whose proof covers texts up to the
   4,096 bytes a proof reaches.
-- `padded`: an AVX-512 `wc -lw` from interactive round 2, which pads its counts to seven
-  columns with a chain of `if(…)`s choosing among texts of different lengths.
+- `padded`: a `wc -lw` from interactive round 2, which pads its counts to seven columns with a
+  chain of `if(…)`s choosing among texts of different lengths. It counts 16 bytes a step with
+  SSE2, the baseline form that runs on every x86-64 computer, as the fast `wc` does.
 - `lines`: `wc -l` over standard input of any length, a buffer-full at a time through `fill`,
   its count kept in a register: proven for every length by induction, the count growing by each
   buffer-full's newlines.
 - `words`: `wc -lw` over standard input of any length, a buffer-full at a time through `fill`,
-  64 bytes a step with AVX-512 masks, whether the last byte read was whitespace kept in r14:
-  proven for every length by induction, each buffer-full's words counted after the last byte of
-  the one before.
+  16 bytes a step with SSE2 masks (the baseline form every x86-64 computer runs; the AVX-512
+  tier is `plugin/skills/compile/assets/fast/wc-avx512`), whether the last byte read was
+  whitespace kept in r14: proven for every length by induction, each buffer-full's words counted
+  after the last byte of the one before.
 - `calc`: a whole number, an operator and another, its `switch` on the operator's character a
   checked jump table (dialect 4) over `*`, `+`, `,` and `-`, the comma its unknown case.
 - `cat-stream`: standard input of any length copied back a piece at a time, so input larger than

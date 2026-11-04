@@ -163,6 +163,33 @@ programs are held to the baseline by `tests/baseline.rs`.
 - After using 256-bit or 512-bit registers, `vzeroupper` before SSE code avoids a slowdown on
   some CPUs.
 
+### A baseline form, and faster tiers beside it
+
+Every program has a baseline form that runs on every x86-64 computer: SSE2, `popcnt` and the
+instructions that came with SSE3 to SSE4.2, and nothing else, so no `ymm` or `zmm`, no BMI
+(`andn`, `bzhi`, `shrx`), no `k` masks. A faster form is a named tier beside it, picked from
+the `machine` line of a `check` reply, and meets the very same spec.md, so the program's
+behavior never depends on an optional extension:
+
+| `machine` lists | Start the word count from |
+|---|---|
+| `avx512bw` | [`wc-avx512`](../assets/fast/wc-avx512/main.s), 64 bytes a step with `k` masks |
+| otherwise | [`wc`](../assets/fast/wc/main.s), 16 bytes a step with SSE2 |
+
+[The fast `wc`](../assets/fast/wc/main.s) is the baseline pattern for a loop over bytes. Without
+`bzhi`, a masked last step is a vector of lanes: `movd xmm6, r8d` takes `min(left, 16)` (`cmova`
+of the bytes left and a step), `pshufb xmm6, xmm10` (an all-zero vector) spreads it over the 16
+lanes, `pminub xmm6, xmm9` takes the smaller of that and a vector of the lanes' places plus one,
+1 to 16, and `pcmpeqb xmm6, xmm9` leaves all ones in the lanes where the place plus one was the
+smaller, those that hold bytes before the end. Compare unsigned (`pminub`, `pcmpeqb`), not with
+`pcmpgtb`: the proofs follow an unsigned compare of a byte to the length, and don't a signed
+one. A compare's lanes are one bit each with `pmovmskb`, and `popcnt` adds them. Byte tests
+without `vpcmpub`: `psubb` of the first byte, `psubusb` of
+the range's width and `pcmpeqb` with zero find a byte in a range (tab to carriage return), and
+`pcmpeqb` finds a single byte. A shift by an amount that depends on the input has no baseline
+form the proofs follow, so find a bit of a mask with `bt reg, reg` instead (`bt r8w, r9w` takes
+its bit number modulo 16).
+
 ## Floating-point facts
 
 - Doubles travel in `xmm` registers: arguments in `xmm0` to `xmm7`, the result in `xmm0`. No

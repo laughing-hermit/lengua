@@ -61,7 +61,7 @@ const NARROW: [(&str, usize, usize); 2] = [
 /// tests prove them: the step over a buffer-full of 4096 symbolic bytes takes the solvers
 /// minutes. Each change is a line of main.s and what it becomes, a loop's bound with its
 /// buffer's where it counts the buffer's steps.
-const SMALLER: [(&str, &[(&str, &str)]); 3] = [
+const SMALLER: [(&str, &[(&str, &str)]); 4] = [
     (
         "tests/fixtures/lines/main.s",
         &[(".equ BUF_LEN, 4096\n", ".equ BUF_LEN, 256\n")],
@@ -72,6 +72,13 @@ const SMALLER: [(&str, &[(&str, &str)]); 3] = [
     ),
     (
         "plugin/skills/compile/assets/fast/wc/main.s",
+        &[
+            (".equ BUF_LEN, 65536\n", ".equ BUF_LEN, 256\n"),
+            ("  # bound: 4096\n", "  # bound: 16\n"),
+        ],
+    ),
+    (
+        "plugin/skills/compile/assets/fast/wc-avx512/main.s",
         &[
             (".equ BUF_LEN, 65536\n", ".equ BUF_LEN, 256\n"),
             ("  # bound: 1024\n", "  # bound: 4\n"),

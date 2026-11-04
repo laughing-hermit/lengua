@@ -63,9 +63,9 @@ Capitalizes 1 MiB of standard input to standard output. lengua's versions are th
 
 ## wc
 
-Counts the lines and words of 64 MiB on standard input, as `wc -lw` does. C, C++ and Rust compare each byte with the one before it, which compilers can vectorize. lengua's versions take 64 bytes a step with AVX-512 masks: the skill's example, and the program Claude Code wrote through lengua from a plain request in an interactive session.
+Counts the lines and words of 64 MiB on standard input, as `wc -lw` does. C, C++ and Rust compare each byte with the one before it, which compilers can vectorize. lengua's versions here take 64 bytes a step with AVX-512 masks: the skill's example (`wc-avx512`), and the program Claude Code wrote through lengua from a plain request in an interactive session (`benches/programs/count/avx512.s`). Both are the fast tier beside a baseline form that takes 16 bytes a step with SSE2 and runs on every x86-64 computer; these numbers were measured before that form existed, and a new run of the benchmark measures all four versions where the CPU has AVX-512, and the baseline forms alone where it has not.
 
-| | lengua | lengua, by Claude Code | Rust | C | C++ | best other ÷ best lengua |
+| | lengua, AVX-512 | lengua, by Claude Code, AVX-512 | Rust | C | C++ | best other ÷ best lengua |
 |---|---|---|---|---|---|---|
 | instructions | 38,859,999 | 21,055,698 | 153,689,439 | 78,918,856 | 82,423,989 | 3.7× |
 | cycles | 7,759,075 | 4,007,320 | 55,444,943 | 55,107,710 | 59,557,425 | 13.8× |

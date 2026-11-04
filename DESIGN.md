@@ -304,13 +304,18 @@ Speed comes from the agent, guided by the compile skill, which makes it a step o
 normal flow: once the tests are green, one pass for the widest vectors the CPU has (with masked
 loads for tails), independent chains where each step would wait on the last, large reads and
 writes, and streaming for input of any length. `assets/fast` holds checked programs for each
-pattern, which the benchmark measures: a word count 64 bytes a step with AVX-512 masks, a CRC-32C
-that runs three `crc32` chains and joins them with `pclmulqdq` (its fast tier `crc32c-pclmul`; on
-ARM64, whose CRC unit one chain already keeps busy, one `crc32cx` chain beside `pmull` folds on
-the vector units, the tier `crc32c-crc`), and a four-table histogram. SHA-256, AES-128 and
-CRC-32C each also have a baseline form that runs on every computer of its target and is the
-shipped one, the instructions' forms being named fast tiers beside it from the very same spec:
-`sha256-ni` and `aes-ni` on x86-64, `sha256-sha2` and `aes-aes` on ARM64. The
+pattern, which the benchmark measures: a word count 16 bytes a step with SSE2, the baseline form
+every x86-64 computer runs (and NEON on ARM64), with a faster tier beside it where the CPU has
+one, 64 bytes a step with AVX-512 masks (SVE on ARM64); a CRC-32C that runs three `crc32` chains
+and joins them with `pclmulqdq` (its fast tier `crc32c-pclmul`; on ARM64, whose CRC unit one chain
+already keeps busy, one `crc32cx` chain beside `pmull` folds on the vector units, the tier
+`crc32c-crc`), and a four-table histogram. SHA-256, AES-128 and CRC-32C each also have a baseline
+form that runs on every computer of its target and is the shipped one, the instructions' forms
+being named fast tiers beside it from the very same spec: `sha256-ni` and `aes-ni` on x86-64,
+`sha256-sha2` and `aes-aes` on ARM64. Through a pipe the wider tier does not always pay: on
+GitHub's runners the AVX-512 word count saved CPU time on three of four draws and wall time on
+none, and on one it was slower than the SSE2 form on both (todo.md has each draw); the pipe sets
+the pace. The
 fork-join template works in place: input lands straight in the workers' slots, which halves the
 memory a threaded program touches. Each program processes what each `read` returns as it comes,
 so its work overlaps the writer filling the pipe.
@@ -804,7 +809,7 @@ What it covers:
   buffer-fulls, which run from the program's start show the counterexample where the program is
   wrong: a wc that forgets at each read that the last one ended inside a word gets a text just
   over a buffer-full whose word straddles the two. tests/fixtures/words, a `wc -lw` through
-  `fill` 64 bytes a step with AVX-512 masks, is proven so with no solver question. A count of a
+  `fill` 16 bytes a step with SSE2, is proven so with no solver question. A count of a
   part that can overlap itself, as `count` of `"aa"`, depends on more than the last bytes: on
   `aaa…a` whether the next `a` ends a pair is the parity of everything read. The formula counts
   such a part as a matcher reads the text, one byte at a time, keeping how much of the part the
@@ -854,12 +859,24 @@ What it covers:
   `min(left, 64) - 1` of the step before's whitespace, is bit 63 where the step runs; and the
   output check is first settled by the run's own conditions, which a printed number's digit count
   is, then the run's conditions are rewritten by what settles them, each from its parts. The
-  skill's fast `wc`, 64 bytes a step with AVX-512 masks, each step masked to the bytes left so
-  the last partial step is the same code, is proven so for every length with its 64 KiB buffer in
-  about two minutes with no solver question; one that forgets the byte before each buffer-full or
-  each step, reads the carry from the wrong byte, or counts the bytes past the end is caught.
-  Masking every step costs it about half again the instructions and a third more CPU time than
-  the old shape's separate tail, at the same wall time, since a pipe sets the pace
+  skill's fast `wc`, 16 bytes a step with SSE2, the baseline form every x86-64 computer runs,
+  each step masked to the bytes left so the last partial step is the same code, is proven so for
+  every length with its 64 KiB buffer, with no solver question, in about four minutes on a
+  GitHub runner (4 vCPUs), on a CPU without AVX-512 as on one with it. Its mask is built so the
+  proof can read it: the bytes left, at most 16, spread over the lanes by `pshufb`, `pminub` with
+  each lane's place plus one, and `pcmpeqb` with the same, so a lane is a byte of the input where
+  its place plus one is at most the bytes left, an unsigned comparison of the length. The same
+  mask with `pcmpgtb` against the places is a signed comparison, which the reading of the
+  length's conditions doesn't follow: the base then went one length at a time, its counts, a
+  part for each byte of the buffer, handed to the solver, and the 64 KiB proof didn't finish.
+  The AVX-512 tier beside it
+  (`wc-avx512`, 64 bytes a step with `k` masks) is proven the same way, in about two minutes on
+  the 16-core computer the tests were tuned on. A word count that forgets the byte before each
+  buffer-full or each step, reads the carry from the wrong byte, or takes the larger of the bytes
+  left and a step for the smaller is caught in either form; the baseline form's planted bugs
+  also include a word start counted past the end.
+  Masking every step costs the AVX-512 tier about half again the instructions and a third more
+  CPU time than the old shape's separate tail, at the same wall time, since a pipe sets the pace
   (BENCHMARKS.md, 64 MiB): still ahead of C, C++ and Rust. Where every final piece at once isn't
   proven, the base goes one length at a time as before. A loop the induction doesn't fit, or
   whose step doesn't hold, is proven by length as above.
@@ -1173,7 +1190,7 @@ question, its loop leaving where its index reaches the bytes read as the NEON on
    [the fast wc's NEON form](plugin/skills/compile/assets/linux-aarch64/fast/wc/main.s), each
    16-byte step masked with `cmhi` of the bytes left against each lane's place, is proven for
    every length with a 64 KiB buffer, with no solver question, in about 105 seconds and 1.8 GB,
-   as x86-64's AVX-512 one is; and the vector template from its spec unchanged, every line with
+   as x86-64's SSE2 one is; and the vector template from its spec unchanged, every line with
    no solver question. CPU feature detection is per CPU too (x86's `is_x86_feature_detected!`).
 4. **Dialect:** the Power of 10 in that CPU's mnemonics and registers, with its reference (today
    `references/linux-x86_64.md` and the x86 parts of `references/power-of-10.md`). The rules
@@ -1241,9 +1258,12 @@ the way another does (its sandbox can't police something, say), every target tak
 limit, and either the capability is reshaped so every OS keeps it the same way, or that part is
 cut on every target, Linux too. So one OS's extra power, or its sandbox's, never makes a spec
 behave differently. What may differ is the hardware:
-the instructions a CPU has, its vectors' width, its speed. A target is done when it covers what
-x86-64 covers, each item with its own hardware's means (NEON where x86-64 has SSE, SVE where it
-has AVX-512). The two
+the instructions a CPU has, its vectors' width, its speed. Every program has a baseline form that
+runs on every machine of its target, x86-64's SSE2 and ARM64's NEON, and an optional extension
+(AVX-512, SVE) is only ever a named tier beside it (`wc-avx512`, `wc-sve`), picked from the
+machine line and meeting the very same spec, tests and proofs, so what a spec means never
+depends on an optional extension. A target is done when it covers what x86-64 covers, each item
+with its own hardware's means (NEON where x86-64 has SSE2, SVE where it has AVX-512). The two
 Linux targets hold each other to it program by program: every x86-64 example and fixture has an
 AArch64 twin compiled from the very same spec, under `tests/fixtures/linux-aarch64`, and every
 AArch64 one its x86-64 twin; a test checks the pairs and their specs, and another puts every

@@ -791,6 +791,7 @@ async fn every_program_in_the_repository_follows_every_rule() {
     let benches = root.join("benches/programs");
     for (spec, code) in [
         ("examples/upcase/spec.md", "upcase/avx512.s"),
+        ("examples/count/spec.md", "count/avx512.s"),
         (
             "plugin/skills/compile/assets/parallel-template-spec.md",
             "shout/avx512.s",

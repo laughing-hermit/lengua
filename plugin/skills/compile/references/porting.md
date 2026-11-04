@@ -105,8 +105,11 @@ own, lengua's checks included, could keep the same promise there: where one OS c
 promise the way another does, every target takes on its limit, and the capability is reshaped so
 every OS keeps it the same way, or that part is cut on every target, Linux too. Only the hardware
 may differ: its instructions, its vectors' width, its speed, and never so that a spec's behavior
-depends on an optional extension (the baseline, above). A target is done when it covers what
-x86-64 covers, each item with its own hardware's means.
+depends on an optional extension (the baseline, above). Every program has a baseline form that
+runs on every machine of its target (x86-64's SSE2 with SSE4.2 and POPCNT, ARM64's NEON), and an
+optional extension (AVX-512, SVE) is only a named tier beside it, picked from the machine line
+and meeting the same spec, tests and proofs. A target is done when it covers what x86-64 covers,
+each item with its own hardware's means.
 
 ## Order of targets
 
