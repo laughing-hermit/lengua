@@ -550,7 +550,7 @@ write_decimal:
     jnz .Lwrite_decimal_more
     dec ecx
     cmp ecx, NUM_BUF_LEN
-    jae .Lwrite_decimal_assert_index
+    jae .Lwrite_decimal_assert_point
     mov byte ptr [rsi + rcx], POINT
 .Lwrite_decimal_more:
     test rax, rax
@@ -578,6 +578,9 @@ write_decimal:
     call assert_fail
 .Lwrite_decimal_assert_index:
     mov edi, 20
+    call assert_fail
+.Lwrite_decimal_assert_point:
+    mov edi, 27
     call assert_fail
 .Lwrite_decimal_assert_chars:
     mov edi, 21
