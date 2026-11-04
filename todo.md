@@ -374,9 +374,9 @@ runners only (nothing built or run on the user's computer); the run ids are the 
   (the AVX-512 copy saves 2.7 and 4.0 ms of CPU time on the two EPYC 9V74 draws, 0.5 ms on the
   Xeon 8573C and costs 1.9 ms on the Xeon 6975P-C, and its wall time is worse on all four, by
   0.4 to 2.3 ms).
-- **Left, for another engineer.** (a) `tests/fixtures/lines` uses `bzhi` (BMI2) and has no
-  baseline form yet (the baseline feature set per target below); `aes`, `sha256` and `crc32c` have
-  theirs from the crypto work. (b) `crc32c`'s wall-time gap above. (c)
+- **Left, for another engineer.** (a) Nothing in the baseline feature set per target below: every
+  program has its baseline form (`lines`, `aes`, `sha256` and `crc32c` too). (b) `crc32c`'s
+  wall-time gap above. (c)
   `move_front` could copy 16 bytes a step with `movdqu` (half the iterations; the scalar copy is a
   few percent of the CPU time). (d) A signed-compare reading in the prover, above. (e) The
   one-folder check's 60 s proof budget cannot finish the 64 KiB proof of `fast/wc` (231 s on a
@@ -526,14 +526,13 @@ and shares the spec's bytes.
   `fast/wc-avx512`), `examples/count` (its AVX-512 original is the benchmark-only
   `benches/programs/count/avx512.s`) and the fixtures `words` and `padded`.
 
-**Still owed, x86-64, 1 of its shipped programs:**
-- `tests/fixtures/lines`: BMI2 (`bzhi`). Sibling: the same loop with its last chunk masked as the
-  fast `wc` masks it (`movd`, `pshufb`, `pminub`, `pcmpeqb`), in place of `bzhi`. Several prover
-  tests are written against this fixture's `bzhi` (the line counter at 64 KiB proven "with no
-  solver question" because the prover reads `bzhi`'s mask as `position < length`), so the change
-  comes with their expectations.
+- `tests/fixtures/lines` (BMI2's `bzhi`): its last chunk is now masked as the fast `wc` masks it
+  (`movd`, `pshufb`, `pminub`, `pcmpeqb`, `pand`). The prover's tests keep the `bzhi` form (the
+  fixture with the mask swapped back, `lines_with_bzhi` in `src/prove/tests.rs`), since the line
+  counter at 64 KiB proven "with no solver question" is where the prover's reading of `bzhi` as
+  `position < length` is tested.
 
-ARM64 owes nothing.
+**Nothing is owed on either CPU:** `DEBT` in `tests/baseline.rs` is empty.
 
 Tiers beside a written baseline sibling (`TIERS`): the six above, x86-64's `fast/wc-avx512`
 (AVX-512BW, BMI2) and ARM64's `fast/wc-sve` (`sve`) beside their `fast/wc`, and, benchmark-only

@@ -3830,24 +3830,102 @@ async fn a_proof_keeps_its_time_within_one_long_shape() {
     );
 }
 
-/// The line counter with a 64 KiB buffer, C's size: its count loop masks its last chunk by the
-/// bytes left (`bzhi`), and what each byte's mask says of the length comes out as the formula's
-/// `position < length`, so the base takes every final piece at once and the counter is proven
-/// for every length with no solver question. A counter that skips its last chunk, or keeps only
-/// the last buffer-full's count, is still caught.
+/// Lines of assembly, each indented and ended as the programs write them.
+fn assembly(lines: &[&str]) -> String {
+    lines.iter().map(|line| format!("    {line}\n")).collect()
+}
+
+/// The line counter as it was before it ran on the baseline: its last chunk masked by the bytes
+/// left with `bzhi` (BMI2), in place of the SSE2 mask the fixture has now. The prover reads `bzhi`
+/// too, so the tests keep proving that form.
+fn lines_with_bzhi(source: &str) -> String {
+    let steps = [
+        (
+            assembly(&["movdqu xmm3, xmmword ptr [rip + places]", "pxor xmm4, xmm4"]),
+            String::new(),
+        ),
+        (
+            assembly(&[
+                "movd xmm2, r9d",
+                "pshufb xmm2, xmm4",
+                "pminub xmm2, xmm3",
+                "pcmpeqb xmm2, xmm3",
+                "pand xmm0, xmm2",
+            ]),
+            String::new(),
+        ),
+        (
+            assembly(&["pmovmskb edx, xmm0", "popcnt edx, edx"]),
+            assembly(&["pmovmskb edx, xmm0", "bzhi edx, edx, r9d", "popcnt edx, edx"]),
+        ),
+    ];
+    let mut text = source.to_owned();
+    for (from, to) in steps {
+        assert!(text.contains(&from), "the fixture changed: {from:?}");
+        text = text.replace(&from, &to);
+    }
+    text
+}
+
+/// The line counter's source with a 64 KiB buffer, C's size, and its spec's block for it.
+fn lines_at_64_kib() -> (String, Generated) {
+    let spec = fixture("lines", "spec.md").replace("65536", "1048576");
+    let source =
+        fixture("lines", "main.s").replace(".equ BUF_LEN, 4096\n", ".equ BUF_LEN, 65536\n");
+    (source, block(&spec, 0))
+}
+
+/// The line counter with a 64 KiB buffer, C's size, as the fixture is written, on the baseline:
+/// its count loop masks its last chunk by the bytes left with SSE2 (`pminub` and `pcmpeqb` against
+/// the lanes' places plus one, unsigned compares the prover reads), and what each byte's mask says
+/// of the length comes out as the formula's `position < length`, so the base takes every final
+/// piece at once and the counter is proven for every length with no solver question. A counter
+/// that skips its last chunk is still caught.
 #[tokio::test]
 async fn proves_a_count_with_a_64_kib_buffer_for_every_length() {
     if !solvers_installed() {
         return;
     }
-    let spec = fixture("lines", "spec.md").replace("65536", "1048576");
-    let block = block(&spec, 0);
-    let source =
-        fixture("lines", "main.s").replace(".equ BUF_LEN, 4096\n", ".equ BUF_LEN, 65536\n");
+    let (source, block) = lines_at_64_kib();
     let right = machine(&source).await;
     let started = Instant::now();
     let verdict = prove(&right, &block, &long_budget());
     eprintln!("lines at 64 KiB: {verdict:?} in {:?}", started.elapsed());
+    assert!(
+        matches!(
+            verdict,
+            Verdict::Proven {
+                bound: None,
+                induction: Some(65536),
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
+    let short = machine(&source.replace(
+        "    cmp rcx, rdi\n    jae .Lcount_lines_return\n",
+        "    lea rdx, [rcx + 16]\n    cmp rdx, rdi\n    jae .Lcount_lines_return\n",
+    ))
+    .await;
+    let verdict = prove(&short, &block, &text_budget());
+    assert!(matches!(verdict, Verdict::Counterexample(_)), "{verdict:?}");
+}
+
+/// The same counter with its last chunk masked by `bzhi` (BMI2), which the prover reads as the
+/// formula's `position < length` too: proven for every length with no solver question, two
+/// shapes, as before the fixture moved to the baseline. A counter that skips its last chunk, or
+/// keeps only the last buffer-full's count, is still caught.
+#[tokio::test]
+async fn proves_a_count_masked_with_bzhi_for_every_length() {
+    if !solvers_installed() {
+        return;
+    }
+    let (source, block) = lines_at_64_kib();
+    let source = lines_with_bzhi(&source);
+    let right = machine(&source).await;
+    let started = Instant::now();
+    let verdict = prove(&right, &block, &long_budget());
+    eprintln!("lines with bzhi at 64 KiB: {verdict:?} in {:?}", started.elapsed());
     assert!(
         matches!(
             verdict,

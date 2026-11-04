@@ -32,6 +32,13 @@
 
 .section .rodata
 
+# Each lane's place plus one, 1 to 16. A lane is a byte of the input where its place plus one is at
+# most the bytes left.
+.type places, @object
+places:
+    .byte 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16
+.size places, . - places
+
 .type assert_message, @object
 assert_message:
     .ascii "lengua: assertion 000 failed\n"
@@ -101,7 +108,7 @@ _start:
 .size _start, . - _start
 
 # Counts the newlines among the first rdi bytes of buffer, 16 at a time: the bytes of the last
-# chunk past them are masked off.
+# chunk past them are masked off, with SSE2 alone (no BMI2), so it runs on every x86-64 computer.
 # In: rdi = how many, 1 to BUF_LEN.
 # Out: rax = how many of them are newlines.
 .type count_lines, @function
@@ -112,6 +119,8 @@ count_lines:
     mov eax, NEWLINE_X4
     movd xmm1, eax
     pshufd xmm1, xmm1, 0
+    movdqu xmm3, xmmword ptr [rip + places]
+    pxor xmm4, xmm4
     xor eax, eax
     xor ecx, ecx
     mov r8, BUF_CHUNKS
@@ -122,13 +131,20 @@ count_lines:
     jae .Lcount_lines_assert_index
     movdqu xmm0, xmmword ptr [rsi + rcx]
     pcmpeqb xmm0, xmm1
-    pmovmskb edx, xmm0
     mov r9, rdi
     sub r9, rcx
     mov r10d, CHUNK
     cmp r9, r10
     cmova r9, r10
-    bzhi edx, edx, r9d
+    # xmm2: the lanes of this chunk that hold bytes before the end, those whose place plus one is
+    # at most min(rdi - rcx, 16): that number in every lane, its smaller with the lane's place plus
+    # one, and the lanes where that is the place plus one.
+    movd xmm2, r9d
+    pshufb xmm2, xmm4
+    pminub xmm2, xmm3
+    pcmpeqb xmm2, xmm3
+    pand xmm0, xmm2
+    pmovmskb edx, xmm0
     popcnt edx, edx
     add rax, rdx
     add rcx, CHUNK
