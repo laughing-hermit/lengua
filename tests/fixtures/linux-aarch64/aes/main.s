@@ -515,7 +515,6 @@ print_hex:
 .Lprint_hex_loop:  // bound: 65537
     cmp x2, x1
     b.hs .Lprint_hex_done
-    mov x4, #DATA_BYTES
     cmp x2, x4
     b.hs .Lprint_hex_assert_index
     ldrb w3, [x0, x2]
@@ -599,7 +598,7 @@ write_line:
     ldp x29, x30, [sp], #16
     ret
 .Lwrite_line_assert_empty:
-    mov w0, #33
+    mov w0, #34
     bl assert_fail
 .Lwrite_line_assert_end:
     mov w0, #27

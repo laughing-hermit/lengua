@@ -572,7 +572,7 @@ write_line:
     add rsp, 8
     ret
 .Lwrite_line_assert_empty:
-    mov edi, 33
+    mov edi, 34
     call assert_fail
 .Lwrite_line_assert_end:
     mov edi, 27

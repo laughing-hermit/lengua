@@ -276,7 +276,8 @@ impl Checker<'_, '_> {
         // in between that writes the link register itself would send ret somewhere else.
         if let Some(link) = abi.link {
             for step in &steps[saved_region.clone()] {
-                if step.insn.writes.contains(link) {
+                if !matches!(step.insn.control, Control::Call(_)) && step.insn.writes.contains(link)
+                {
                     self.violation(
                         Rule::Functions,
                         step.source.line,
