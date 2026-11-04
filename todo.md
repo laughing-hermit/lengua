@@ -313,6 +313,38 @@ sandbox is not an obstacle, and no step of setup has failed in about 160 jobs. W
   likely to hit); whether to read SDE's licence; a single `gate` job as a required check; and how
   many shards fit the Free plan's 20 concurrent jobs.
 
+### Keeping five or six targets the same product
+
+The owner's worry (2026-11-04): with five or six targets whose hardware and OS differ, how is it
+known that a gap like the AVX-512 one doesn't happen again on another target? Today it is known
+only by audit. The guards cover that a twin exists and that its spec is the same bytes (29 twins),
+not that its tests, red team, limits and programs exist and hold on every machine of the target.
+Before the next port, make each guarantee a failing test:
+1. **One suite for all targets.** Express each test case once, with a column of snippets per
+   target (its instructions), and run it for every target; a missing cell fails the build. Most of
+   the audit's findings were two copies drifting apart (`adversarial.rs` against
+   `adversarial_aarch64.rs`; 97 integration tests exist for x86-64 only). Adding a target then
+   means adding a column, not copying files.
+2. **A baseline feature set per target, enforced.** Define each target's baseline (x86-64: SSE2 and
+   what the owner decides to add; ARM64: ARMv8.0 with NEON; Apple's and Qualcomm's ARM64 chips: what
+   they all have) and rule-check every shipped example, fixture and asset against it; a program
+   that needs more must be a named fast tier beside a baseline sibling with the same spec. The
+   AVX-512 case would have failed the day it was added. It also flags programs that break it
+   today: `examples/sha256` and `examples/aes` need SHA-NI and AES-NI on x86-64 and the ARMv8
+   crypto extensions on ARM64, which older Intel chips and some ARM64 boards lack, and `crc32c`
+   needs SSE4.2 and PCLMUL (and the CRC extension on ARM64). Each needs a software baseline form,
+   or to be classed as a fast tier with one.
+3. **The porting list as an executable conformance suite.** DESIGN's "Porting a target" becomes
+   the set of tests every target must pass natively: the rules, the red team, the mutation test,
+   the sandbox limits, the session behaviors, every example and fixture through the server.
+   GitHub has a free native runner for each of the six targets, so each is checked on its own
+   hardware, and a target isn't done until its suite is green there.
+4. **Limits tested on each OS.** "One target's limit is every target's" holds only if tests of the
+   limits (names, lengths, open files, listing order, ports) run on each OS; today they are pinned
+   on x86-64 only.
+5. **Visible coverage.** Every skip (a missing CPU feature, no QEMU, no counters) is printed in the
+   run's summary, so a green run says what it didn't cover.
+
 ## Skipped, and why
 
 - **The other four targets: macOS and Windows, each on x86-64 and on ARM64.** Each OS is a port
