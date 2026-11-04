@@ -36,7 +36,7 @@
 .equ MAX_NUM_CHARS, 24
 .equ NEWLINE, 10
 .equ COMMA, ','
-.equ POINT, '.'
+.equ POINT, 46
 .equ USAGE_MSG_LEN, 24
 .equ OPEN_MSG_LEN, 24
 .equ BAD_MSG_LEN, 16

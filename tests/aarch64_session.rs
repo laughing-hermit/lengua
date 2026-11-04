@@ -819,18 +819,22 @@ async fn check_one_aarch64_folder() {
     } else {
         return;
     };
-    let folder = std::path::PathBuf::from(folder);
-    let read = |file: &str| std::fs::read_to_string(folder.join(file)).expect("the file");
-    let program = written(
-        &session,
-        [("spec.md", read("spec.md")), ("main.s", read("main.s"))],
-    )
-    .await;
-    let report = session.settle(&program).await;
-    println!("PORT state: {}", report["state"]);
-    for field in ["problems", "tests", "proofs"] {
-        for line in report[field].as_array().into_iter().flatten() {
-            println!("PORT {field}: {}", text(line));
+    // Several folders, separated by commas, share one session.
+    for folder in folder.split(',') {
+        let folder = std::path::PathBuf::from(folder);
+        let read = |file: &str| std::fs::read_to_string(folder.join(file)).expect("the file");
+        let program = written(
+            &session,
+            [("spec.md", read("spec.md")), ("main.s", read("main.s"))],
+        )
+        .await;
+        let report = session.settle(&program).await;
+        println!("PORT folder: {}", folder.display());
+        println!("PORT state: {}", report["state"]);
+        for field in ["problems", "tests", "proofs"] {
+            for line in report[field].as_array().into_iter().flatten() {
+                println!("PORT {field}: {}", text(line));
+            }
         }
     }
     session.service.cancel().await.expect("close the session");
