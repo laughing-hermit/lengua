@@ -249,6 +249,27 @@ fn names(folder: &str) -> Vec<String> {
     found
 }
 
+/// The spec of the fast program `name`, a folder of `own`, the target's `fast` folder: its own
+/// spec.md or, when it is named for the extension it uses after the program it speeds up
+/// (`wc-sve`), that program's. Each is looked for in the target's folder first, then in the
+/// shared one (x86-64's), where the programs of both targets that meet one spec keep it.
+fn fast_spec(own: &str, name: &str) -> String {
+    let shared = format!("{SKILL_ASSETS}/fast");
+    let mut program = name;
+    loop {
+        for folder in [own, shared.as_str()] {
+            let spec = format!("{folder}/{program}/spec.md");
+            if exists(&spec) {
+                return spec;
+            }
+        }
+        match program.rsplit_once('-') {
+            Some((speeds_up, _)) => program = speeds_up,
+            None => return format!("{shared}/{program}/spec.md"),
+        }
+    }
+}
+
 /// Every program of `target` lengua ships, and the benchmark's variants for it, as the files
 /// say: nothing is listed by hand but the benchmark's.
 fn programs_of(target: Profile) -> Vec<Program> {
@@ -294,16 +315,9 @@ fn programs_of(target: Profile) -> Vec<Program> {
         if !exists(&code) {
             continue;
         }
-        let mut program = name.as_str();
-        while !exists(&format!("{SKILL_ASSETS}/fast/{program}/spec.md")) {
-            match program.rsplit_once('-') {
-                Some((speeds_up, _)) => program = speeds_up,
-                None => break,
-            }
-        }
         found.push(Program {
             code,
-            spec: format!("{SKILL_ASSETS}/fast/{program}/spec.md"),
+            spec: fast_spec(&fast, &name),
             bench: false,
         });
     }
