@@ -495,7 +495,7 @@ pub enum Function {
 }
 
 impl Function {
-    const ALL: [Self; 30] = [
+    const ALL: [Self; 31] = [
         Self::Len,
         Self::Abs,
         Self::Min,
