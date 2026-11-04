@@ -38,7 +38,7 @@ on:
         default: false
 
 concurrency:
-  group: arm64-${{ github.ref }}-${{ github.event_name }}
+  group: arm64-${{ github.ref }}-${{ github.event_name }}-${{ inputs.check_folder }}
   cancel-in-progress: true
 
 permissions:
