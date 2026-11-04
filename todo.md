@@ -99,15 +99,20 @@ both sides, which were checked against the code before anything was changed. Fix
   server).
 - **ARM64 mutation testing** cut each line at the first `#`, which AArch64 uses for numbers, so
   its programs got condition flips and almost nothing else; it now splits on the CPU's own comment
-  marker (`tests/mutation.rs`). Its next run on the ARM64 runner (`--ignored
-  every_proven_programs_mutants_are_caught`) may find proofs that miss a moved number: those are
-  findings to look into, not yet run.
+  marker (`tests/mutation.rs`). Its first run on the ARM64 runner (`--ignored
+  every_proven_programs_mutants_are_caught`, 8 mutants of each of 7 programs) caught every mutant
+  but one, which changes nothing a spec can see: the template's `cmp x0, #0` in `write_i64` moved
+  to `#1` sends zero down the negating path, and zero negated is zero. It is in the test's
+  `EQUIVALENT` list with that reason; the programs' proofs missed no moved number.
 - **ARM64's red team** now has what x86-64's has (a write over the saved return address, a read
   below `sp`, a stray backward jump, a tampered assertion message, a system call's result never
   tested), asserts the pointer-from-memory case as x86-64's does, and its wrong-program test runs
   with time for proofs, where it ran with none and so tested the tests alone.
 - **`check_one_aarch64_folder`** never failed; it now fails unless the job ends `done`, as x86-64's
   `check_one_folder` does.
+- **ARM64's checker tests** gained planted-bug fixtures for the memory rules M1 to M6 and M8, and
+  `b.al`/`b.nv` are now jumps, so the code after one can't run and an assertion it reaches always
+  fails (they were read as conditional branches, which bypassed both checks).
 - **x86-64's `total` fixture** broke three rules (a character as a constant, a `_start` of 77
   instructions, an assertion reached from two places) and was exempted from the repository-wide
   rules test, while its ARM64 twin passed them all. It is rewritten (`load_file`, `report`,
@@ -129,13 +134,14 @@ both sides, which were checked against the code before anything was changed. Fix
 
 **Found by the parity audit, still open.** Nothing below is a known wrong answer; each is a place
 where one CPU has less than the other. By the audit's severity, then checked:
-- *High.* ARM64 has few checker tests for the memory rules M3, M4, M5 and M8, and few for M1, M2
-  and M7, where x86-64 has planted-bug fixtures for each (`memory_rules_find_each_planted_bug`,
-  `one_address_is_never_lent_twice_for_writing`, `the_stack_is_tracked_exactly`, the thread rules
-  and more in `src/checker/tests.rs`); each is a one-line edit of the ARM64 template
-  (`with_aarch64`), and the saved-return-address gap above is what their absence cost. The
-  prover is tested on 7 of the 29 ARM64 twins against about 20 x86-64 programs, and its
-  memory-bug tests are x86-only.
+- *High.* ARM64 now has planted-bug fixtures for the memory rules M1 to M6 and M8
+  (`aarch64_memory_rules_find_each_planted_bug`, 14 cases, and a stack-size case), but not the rest
+  of what x86-64 has in `src/checker/tests.rs`: one address lent twice for writing
+  (`one_address_is_never_lent_twice_for_writing`, M4), `the_stack_is_tracked_exactly`, the thread
+  rules (M7), and the Power of 10 rules one by one (about half as many fixtures); each is a
+  one-line edit of the ARM64 template (`with_aarch64`), and the saved-return-address gap above is
+  what their absence cost. The prover is tested on 7 of the 29 ARM64 twins against about 20
+  x86-64 programs, and its memory-bug tests are x86-only.
 - *Medium.* ARM64's sandbox has about 8 native tests against x86-64's 25: nothing that a program
   holds no network, that connections hand over by their rules, or that a refused one is reported;
   the limits the owner made identical on every system (time, output, environment, signals, files,
@@ -146,7 +152,10 @@ where one CPU has less than the other. By the audit's severity, then checked:
   mutation test. About half as many per-rule fixtures exist
   for AArch64. The checker's and the prover's golden guards record x86-64 programs only. Executor
   tests of loop detection, connections and sleep are x86-only. The x86-64 job installs no QEMU, so
-  the ARM64-under-QEMU tests skip there without saying so. The ARM64 benchmark workloads omit
+  the ARM64-under-QEMU tests skip there without saying so. GitHub's x86-64 runners have no
+  AVX-512, so the x86-64 programs that use it (`count`, `words`, `padded`, the fast `wc`) have
+  their rules checked there but are not taken through the server, where their NEON twins run
+  everywhere; a runner with AVX-512 (or a self-hosted one) would close that. The ARM64 benchmark workloads omit
   programs x86-64 measures, and say AArch64 has no threads.
 - *Medium, the prover.* x86-64's dialect admits vector instructions its prover can't follow
   (`palignr`, `pblendw`, `punpck*`, `pack*`, saturating and widening arithmetic, string
@@ -158,7 +167,7 @@ where one CPU has less than the other. By the audit's severity, then checked:
   instructions on x86-64 (`cmov`, `and` to a boundary, scaled `lea`) than ARM64 does through
   `csel`, `and`-immediate and shifted `add` (`plan` against `plan_a64` in the executor); ARM64
   then holds those accesses to the weaker "object the value points into" rule.
-- *Low.* `b.al`/`b.nv` and `cbz` on `xzr` count as conditional branches, so the dead-code and
+- *Low.* `cbz`/`tbz` on `xzr` or `wzr` count as conditional branches, so the dead-code and
   "assertion always fails" checks can be bypassed on ARM64; `ppoll`'s timeout and signal-mask
   pointers are missing from the static system call summary; the AArch64 vector model ends some
   matches with a wildcard that would run an unmodelled op as zeros, where x86-64's says
