@@ -350,8 +350,16 @@ each later port adds one column. Make each guarantee a failing test:
 4. **Limits tested on each OS.** "One target's limit is every target's" holds only if tests of the
    limits (names, lengths, open files, listing order, ports) run on each OS; today they are pinned
    on x86-64 only.
-5. **Visible coverage.** Every skip (a missing CPU feature, no QEMU, no counters) is printed in the
-   run's summary, so a green run says what it didn't cover.
+5. **Visible coverage: done (2026-11-04).** Every skip (a missing CPU feature, no QEMU, no
+   counters, no solvers) is a `lengua::skiplog::note` (`src/skiplog.rs`), and both workflows print
+   the counts in the run's summary (`scripts/skip-summary.sh`) with the machine's CPU features, so
+   a green run says what it didn't cover. The first real run showed it: on the x86-64 runner, 29
+   ARM64-under-QEMU tests and 9 AVX-512 tests had been silent no-ops. Also done with it: the
+   rules test checks an AVX-512 program for every extension on any CPU, the all-programs test
+   skips by CPU feature (noted), `PerTarget<T>` and `Profile::ALL` (`src/targets.rs`) exist so a
+   new target breaks every table until its cell is filled, a `wip/**` branch gets no push run, a
+   dispatch doesn't build the matrix, and macOS and Windows build in `unported.yml` (weekly and on
+   request).
 
 ## Skipped, and why
 
