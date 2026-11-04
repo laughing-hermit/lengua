@@ -54,7 +54,7 @@ fn solvers_installed() -> bool {
         .output()
         .is_ok();
     if !installed {
-        eprintln!("z3 isn't installed");
+        lengua::skiplog::note("z3 isn't installed");
     }
     installed
 }
@@ -62,7 +62,7 @@ fn solvers_installed() -> bool {
 fn has_avx512() -> bool {
     let has = lengua::platform::Machine::detect().features.avx512bw;
     if !has {
-        eprintln!("this CPU has no AVX-512BW");
+        lengua::skiplog::note("this CPU has no AVX-512BW");
     }
     has
 }
@@ -1220,7 +1220,7 @@ async fn the_fetch_client_talks_to_the_tests_server() {
     done(&session, &program).await;
     // Only where nothing else holds port 8080 here.
     if std::net::TcpListener::bind("127.0.0.1:8080").is_err() {
-        eprintln!("skipped the runs: something on this computer holds port 8080");
+        lengua::skiplog::note("something on this computer holds port 8080");
         session.service.cancel().await.expect("close the session");
         return;
     }

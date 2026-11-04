@@ -803,7 +803,9 @@ async fn every_program_in_the_repository_follows_every_rule() {
     }
     // On x86-64 each program is held to this CPU's features, as check holds it; on another CPU
     // the programs can't run, and the checker, which doesn't depend on the computer it runs on,
-    // checks them for every feature.
+    // checks them for every feature. So is a program for AVX-512 on an x86-64 CPU without it
+    // (GitHub's runners are a mixed pool): it can't run here, but its rules don't depend on the
+    // computer.
     let features = if cfg!(target_arch = "x86_64") {
         crate::platform::Machine::detect().features
     } else {
@@ -815,9 +817,11 @@ async fn every_program_in_the_repository_follows_every_rule() {
             .unwrap_or_else(|problems| panic!("{}: {problems:?}", spec.display()));
         let text = std::fs::read_to_string(code).expect("a program");
         let needs_more = text.contains("vpcmpub") || text.contains("zmm");
-        if needs_more && !features.avx512bw {
-            continue;
-        }
+        let features = if needs_more && !features.avx512bw {
+            CpuFeatures::all()
+        } else {
+            features
+        };
         let report = check_full(&text, features, &spec.syscalls, spec.threads).await;
         if !report.passed() {
             let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();

@@ -55,28 +55,17 @@ async fn every_x86_64_program_passes_its_checks() {
                 .unwrap_or_else(|error| panic!("{name}/{file}: {error}"));
             program.write(file, &contents);
         }
-        session.record(&program).await;
-        let report = session.settle(&program).await;
-        // A program for a vector extension this computer's CPU lacks (GitHub's x86-64 runners
-        // have no AVX-512) is refused for that alone; the repository-wide rules test, which
-        // assumes every extension, checks its rules. Nothing else is excused.
-        let lacks_the_cpu = report["state"] == "code_problems"
-            && report["problems"].as_array().is_some_and(|problems| {
-                // The reply lists the first few problems and ends "…and N more".
-                let listed: Vec<&str> = problems
-                    .iter()
-                    .map(text)
-                    .filter(|problem| !problem.starts_with("…and "))
-                    .collect();
-                !listed.is_empty()
-                    && listed
-                        .iter()
-                        .all(|problem| problem.contains("which this CPU doesn't have"))
-            });
-        if lacks_the_cpu {
-            eprintln!("{name}: not checked here, it needs a CPU extension this computer lacks");
+        // A program for AVX-512 can't run on a CPU without it (GitHub's x86-64 runners are a
+        // mixed pool, about half without): it is left out here, and noted. The repository-wide
+        // rules test checks its rules for every extension on any computer.
+        let code = std::fs::read_to_string(folder.join("main.s")).expect("main.s");
+        let needs_avx512 = code.contains("vpcmpub") || code.contains("zmm");
+        if needs_avx512 && !lengua::platform::Machine::detect().features.avx512bw {
+            lengua::skiplog::note("this CPU has no AVX-512BW");
             continue;
         }
+        session.record(&program).await;
+        let report = session.settle(&program).await;
         if name == "second" {
             // Wrong by design, as its AArch64 twin is: one fill reads both lines only when no
             // read ends right after the first, and the tests' own pieces of standard input find

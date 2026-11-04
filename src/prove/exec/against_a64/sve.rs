@@ -473,7 +473,7 @@ fn vector_length() -> Option<usize> {
 #[allow(clippy::too_many_lines)]
 async fn every_sve_instruction_matches_the_cpu() {
     if !super::runs_aarch64() {
-        eprintln!("skipped: AArch64 programs don't run here (install qemu-user-static)");
+        crate::skiplog::note("QEMU doesn't run AArch64 programs here (install qemu-user-static)");
         return;
     }
     let Some(vl) = vector_length() else {

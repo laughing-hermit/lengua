@@ -1,12 +1,17 @@
 name: targets
 
-# lengua built natively on each of GitHub's six runners: Linux, macOS and Windows, each on x86-64
-# and ARM64, free on a public repository. Linux x86-64's job also runs every test, as the local
-# gate does; ARM64 Linux's tests are arm64.yml's. macOS and Windows aren't ported yet: their builds
-# stop at lengua's Linux-only sandbox (seccomp, Landlock and the supervisor), which is where each
-# OS's port starts, so they show where each stands without failing the run.
+# lengua built and tested natively on the two Linux targets, x86-64 and ARM64, free on a public
+# repository: this workflow builds both and runs every test on x86-64, and checks the formatting
+# both share; ARM64 Linux's tests are arm64.yml's. The four targets that don't exist yet, macOS and
+# Windows each on x86-64 and ARM64, are built by unported.yml, weekly and on request, so their
+# queues and their always-red builds don't hold up a push.
+#
+# A branch named wip/... gets no push run (its author dispatches the run it wants), so a branch
+# being worked on doesn't cost a 35-minute suite for every push.
 on:
   push:
+    branches-ignore:
+      - "wip/**"
     paths:
       - "src/**"
       - "tests/**"
@@ -44,7 +49,7 @@ on:
         default: false
 
 concurrency:
-  group: targets-${{ github.ref }}-${{ github.event_name }}-${{ inputs.check_folder }}
+  group: targets-${{ github.ref }}-${{ github.event_name }}-${{ inputs.check_folder }}-${{ inputs.filter }}
   cancel-in-progress: true
 
 permissions:
@@ -62,16 +67,14 @@ env:
 jobs:
   build:
     name: build (${{ matrix.target }})
+    # A dispatched run is for one thing (a filter, a folder, a benchmark): its test job builds it.
+    if: github.event_name != 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
         include:
           - { runner: ubuntu-24.04, target: linux-x86_64, ported: true }
           - { runner: ubuntu-24.04-arm, target: linux-aarch64, ported: true }
-          - { runner: macos-15-intel, target: macos-x86_64, ported: false }
-          - { runner: macos-15, target: macos-aarch64, ported: false }
-          - { runner: windows-2025, target: windows-x86_64, ported: false }
-          - { runner: windows-11-arm, target: windows-aarch64, ported: false }
     runs-on: ${{ matrix.runner }}
     continue-on-error: ${{ !matrix.ported }}
     timeout-minutes: 60
@@ -185,6 +188,16 @@ jobs:
           echo "LSMs: $(cat /sys/kernel/security/lsm 2>/dev/null || echo unknown)"
           echo "ptrace_scope: $(cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null || echo none)"
           sudo sysctl kernel.perf_event_paranoid=1 || true
+          {
+            echo "### The machine"
+            echo
+            echo "$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | sed 's/^ //'), $(nproc) vCPUs, kernel $(uname -r)"
+            echo
+            flags=$(grep -m1 '^flags' /proc/cpuinfo || true)
+            for flag in sse4_2 popcnt pclmulqdq aes sha_ni avx2 bmi1 bmi2 avx512bw; do
+              if grep -qw "$flag" <<< "$flags"; then echo "- $flag: yes"; else echo "- $flag: no"; fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Rust ${{ env.RUST_VERSION }}
         run: |
@@ -258,6 +271,7 @@ jobs:
           LENGUA_PROOF_SECONDS: "60"
           RUST_TEST_THREADS: "2"
           FILTER: ${{ github.event_name == 'workflow_dispatch' && inputs.filter || '' }}
+          LENGUA_SKIP_LOG: ${{ github.workspace }}/skips.log
         run: cargo test --release --locked --no-fail-fast $FILTER 2>&1 | tee test.log
 
       - name: Benchmarks against C, C++ and Rust
@@ -278,6 +292,7 @@ jobs:
           FILTER: ${{ inputs.filter }}
           LENGUA_CHECK_FOLDER: ${{ inputs.check_folder }}
           STALL_SECONDS: ${{ inputs.stall_seconds }}
+          LENGUA_SKIP_LOG: ${{ github.workspace }}/skips.log
         run: |
           tests='set -o pipefail; cargo test --release --locked --no-fail-fast $FILTER -- --ignored --nocapture 2>&1 | tee ignored.log'
           if [ -n "$STALL_SECONDS" ]; then
@@ -285,6 +300,12 @@ jobs:
           else
             bash -c "$tests"
           fi
+
+      # A green run says what it did not cover: libtest hides what a passing test prints, so a
+      # test that skips itself notes why (lengua::skiplog) and the notes are counted here.
+      - name: What the tests skipped
+        if: always()
+        run: bash scripts/skip-summary.sh skips.log | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Keep the logs and the server
         if: always()
@@ -294,6 +315,7 @@ jobs:
           path: |
             test.log
             ignored.log
+            skips.log
             stall.txt
             bench.log
             BENCHMARKS.md

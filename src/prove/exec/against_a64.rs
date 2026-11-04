@@ -1244,7 +1244,7 @@ fn runs_aarch64() -> bool {
 #[tokio::test]
 async fn every_aarch64_instruction_matches_the_cpu() {
     if !runs_aarch64() {
-        eprintln!("skipped: AArch64 programs don't run here (install qemu-user-static)");
+        crate::skiplog::note("QEMU doesn't run AArch64 programs here (install qemu-user-static)");
         return;
     }
     let seed = std::env::var("LENGUA_RANDOM_SEED")

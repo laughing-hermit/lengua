@@ -1281,7 +1281,7 @@ mod tests {
             return;
         };
         if solver.second.is_none() {
-            eprintln!("z3 isn't installed");
+            crate::skiplog::note("z3 isn't installed");
             return;
         }
         let mut pool = Pool::default();

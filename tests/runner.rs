@@ -661,9 +661,13 @@ fn network_syscalls(calls: &[Syscall]) -> Vec<Allowed> {
 /// Whether this computer lets a process count its CPU's instructions: a virtual machine may not
 /// give it the counters at all.
 fn counters_here() -> bool {
-    perf_event::Builder::new(perf_event::events::Hardware::INSTRUCTIONS)
+    let counts = perf_event::Builder::new(perf_event::events::Hardware::INSTRUCTIONS)
         .build()
-        .is_ok()
+        .is_ok();
+    if !counts {
+        lengua::skiplog::note("this computer gives a process no hardware instruction counters");
+    }
+    counts
 }
 
 async fn run_on(executable: &Path, syscalls: &[Allowed], net: &Net) -> Run {
@@ -1388,7 +1392,7 @@ fn qemu_runs_aarch64() -> bool {
                 .is_some_and(|flags| flags.contains('F'))
         });
     if !ready {
-        eprintln!("skipped: QEMU doesn't run AArch64 programs here (install qemu-user-static)");
+        lengua::skiplog::note("QEMU doesn't run AArch64 programs here (install qemu-user-static)");
     }
     ready
 }

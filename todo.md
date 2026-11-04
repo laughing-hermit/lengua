@@ -1,5 +1,12 @@
 # lengua's agenda: what's left for people
 
+**Targets: two of six exist.** lengua is meant to be one product on six targets: Linux, macOS and
+Windows, each on x86-64 and on ARM64. Only the two Linux targets exist. **The other four are
+missing:** macOS on x86-64, macOS on ARM64, Windows on x86-64 and Windows on ARM64 (see "Skipped,
+and why" below); each is a port of its own and none is started. The owner set this run's finish
+line on 2026-11-04: the two Linux targets only, done and the same product, and every item stopped
+by the safety filter finished. Nothing in this file about macOS or Windows is part of that line.
+
 As of 2026-11-02, both Linux targets, x86-64 and ARM64, are done, and they're one product: every
 capability, rule, limit, example, test, proof and measurement on both, only the hardware differing
 (DESIGN's "One product on every target"). Claude (Opus 5.5) did everything else this agenda held:
@@ -319,7 +326,8 @@ The owner's worry (2026-11-04): with five or six targets whose hardware and OS d
 known that a gap like the AVX-512 one doesn't happen again on another target? Today it is known
 only by audit. The guards cover that a twin exists and that its spec is the same bytes (29 twins),
 not that its tests, red team, limits and programs exist and hold on every machine of the target.
-Before the next port, make each guarantee a failing test:
+Four of the six targets are missing, so these are built and run for the two Linux targets now, and
+each later port adds one column. Make each guarantee a failing test:
 1. **One suite for all targets.** Express each test case once, with a column of snippets per
    target (its instructions), and run it for every target; a missing cell fails the build. Most of
    the audit's findings were two copies drifting apart (`adversarial.rs` against
@@ -347,7 +355,7 @@ Before the next port, make each guarantee a failing test:
 
 ## Skipped, and why
 
-- **The other four targets: macOS and Windows, each on x86-64 and on ARM64.** Each OS is a port
+- **The other four targets are missing: macOS and Windows, each on x86-64 and on ARM64.** Each OS is a port
   of its own, not started in this run: neither lets a program call the kernel directly, as
   lengua's programs do, and neither has seccomp or Landlock, so each needs a new model of the
   program's edge with the OS (libSystem, ntdll) and a new sandbox. Their CPUs are done: x86-64's

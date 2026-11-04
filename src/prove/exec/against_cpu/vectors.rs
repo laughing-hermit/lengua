@@ -704,7 +704,7 @@ fn compare(
 #[tokio::test]
 async fn every_vector_instruction_matches_this_cpu() {
     if !crate::platform::Machine::detect().features.avx512bw {
-        eprintln!("this CPU has no AVX-512BW");
+        crate::skiplog::note("this CPU has no AVX-512BW");
         return;
     }
     let seed = std::env::var("LENGUA_RANDOM_SEED")

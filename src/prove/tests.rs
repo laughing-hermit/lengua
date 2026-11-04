@@ -1252,10 +1252,14 @@ fn fixture_budget(seconds: u64) -> Budget {
 }
 
 fn solvers_installed() -> bool {
-    std::process::Command::new("z3")
+    let installed = std::process::Command::new("z3")
         .arg("--version")
         .output()
-        .is_ok()
+        .is_ok();
+    if !installed {
+        crate::skiplog::note("z3 isn't installed");
+    }
+    installed
 }
 
 /// The clock Claude Code wrote in interactive round 2, with the days from today to a date: the
@@ -2629,7 +2633,7 @@ async fn proves_the_crc32c_checksum() {
 #[tokio::test]
 async fn proves_the_avx512_word_count() {
     if !crate::platform::Machine::detect().features.avx512bw {
-        eprintln!("this CPU has no AVX-512BW");
+        crate::skiplog::note("this CPU has no AVX-512BW");
         return;
     }
     let folder = "plugin/skills/compile/assets/fast/wc/";
@@ -3108,7 +3112,7 @@ async fn proves_the_aarch64_fetch_client() {
 #[tokio::test]
 async fn proves_counts_padded_to_a_column() {
     if !crate::platform::Machine::detect().features.avx512bw {
-        eprintln!("this CPU has no AVX-512BW");
+        crate::skiplog::note("this CPU has no AVX-512BW");
         return;
     }
     // Texts up to 120 bytes, so counts of one, two and three digits each get their padding.

@@ -58,7 +58,7 @@ fn runs_aarch64() -> bool {
                 .is_some_and(|flags| flags.contains('F'))
         });
     if !ready {
-        eprintln!("skipped: AArch64 programs don't run here (install qemu-user-static)");
+        lengua::skiplog::note("QEMU doesn't run AArch64 programs here (install qemu-user-static)");
     }
     ready
 }

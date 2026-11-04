@@ -409,7 +409,7 @@ async fn a_wrong_program_is_never_stamped_done() {
         .output()
         .is_ok();
     if !installed {
-        eprintln!("z3 isn't installed");
+        lengua::skiplog::note("z3 isn't installed");
         return;
     }
     let session = Session::proving_alone(Protocol::Discover).await;

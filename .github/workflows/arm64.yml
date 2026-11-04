@@ -3,8 +3,13 @@ name: arm64
 # Linux ARM64 on ARM64 hardware: the native sandbox (the spec's own system call filter, Landlock,
 # the supervisor), the CPU's counters, and every test that runs there. x86-64 is tested the same
 # way by targets.yml, which also checks the formatting both CPUs share.
+#
+# A branch named wip/... gets no push run (its author dispatches the run it wants), so a branch
+# being worked on doesn't cost a 35-minute suite for every push.
 on:
   push:
+    branches-ignore:
+      - "wip/**"
     paths:
       - "src/**"
       - "tests/**"
@@ -42,7 +47,7 @@ on:
         default: false
 
 concurrency:
-  group: arm64-${{ github.ref }}-${{ github.event_name }}-${{ inputs.check_folder }}
+  group: arm64-${{ github.ref }}-${{ github.event_name }}-${{ inputs.check_folder }}-${{ inputs.filter }}
   cancel-in-progress: true
 
 permissions:
@@ -75,6 +80,16 @@ jobs:
           echo "perf_event_paranoid: $(cat /proc/sys/kernel/perf_event_paranoid)"
           echo "ptrace_scope: $(cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null || echo none)"
           sudo sysctl kernel.perf_event_paranoid=1 || true
+          {
+            echo "### The machine"
+            echo
+            echo "ARM64, $(nproc) vCPUs, kernel $(uname -r)"
+            echo
+            features=$(grep -m1 '^Features' /proc/cpuinfo || true)
+            for feature in asimd crc32 pmull aes sha1 sha2 atomics sve sve2; do
+              if grep -qw "$feature" <<< "$features"; then echo "- $feature: yes"; else echo "- $feature: no"; fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Rust ${{ env.RUST_VERSION }}
         run: |
@@ -148,6 +163,7 @@ jobs:
           LENGUA_PROOF_SECONDS: "60"
           RUST_TEST_THREADS: "2"
           FILTER: ${{ github.event_name == 'workflow_dispatch' && inputs.filter || '' }}
+          LENGUA_SKIP_LOG: ${{ github.workspace }}/skips.log
         run: cargo test --release --locked --no-fail-fast $FILTER 2>&1 | tee test.log
 
       - name: Benchmarks against C, C++ and Rust
@@ -168,6 +184,7 @@ jobs:
           FILTER: ${{ inputs.filter }}
           LENGUA_CHECK_FOLDER: ${{ inputs.check_folder }}
           STALL_SECONDS: ${{ inputs.stall_seconds }}
+          LENGUA_SKIP_LOG: ${{ github.workspace }}/skips.log
         run: |
           tests='set -o pipefail; cargo test --release --locked --no-fail-fast $FILTER -- --ignored --nocapture 2>&1 | tee ignored.log'
           if [ -n "$STALL_SECONDS" ]; then
@@ -175,6 +192,12 @@ jobs:
           else
             bash -c "$tests"
           fi
+
+      # A green run says what it did not cover: libtest hides what a passing test prints, so a
+      # test that skips itself notes why (lengua::skiplog) and the notes are counted here.
+      - name: What the tests skipped
+        if: always()
+        run: bash scripts/skip-summary.sh skips.log | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Keep the logs and the server
         if: always()
@@ -184,6 +207,7 @@ jobs:
           path: |
             test.log
             ignored.log
+            skips.log
             stall.txt
             bench.log
             BENCHMARKS-aarch64.md

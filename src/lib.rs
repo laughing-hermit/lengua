@@ -23,6 +23,7 @@ pub mod platform;
 pub mod prove;
 pub mod runner;
 pub mod server;
+pub mod skiplog;
 pub mod spec;
 pub mod state;
 pub mod supervise;
