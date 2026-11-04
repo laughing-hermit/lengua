@@ -17,6 +17,15 @@ on:
       - "Cargo.lock"
       - ".github/**"
   workflow_dispatch:
+    inputs:
+      filter:
+        description: "Only the tests whose names contain this (cargo test's filter), on Linux x86-64"
+        type: string
+        default: ""
+      ignored:
+        description: "Also run the slow ignored tests (the checker golden, the mutation test) on Linux x86-64"
+        type: boolean
+        default: false
 
 concurrency:
   group: targets-${{ github.ref }}
@@ -190,13 +199,24 @@ jobs:
         env:
           LENGUA_PROOF_SECONDS: "60"
           RUST_TEST_THREADS: "2"
-        run: cargo test --release --locked --no-fail-fast 2>&1 | tee test.log
+          FILTER: ${{ github.event_name == 'workflow_dispatch' && inputs.filter || '' }}
+        run: cargo test --release --locked --no-fail-fast $FILTER 2>&1 | tee test.log
+
+      - name: The slow ignored tests
+        if: github.event_name == 'workflow_dispatch' && inputs.ignored
+        env:
+          LENGUA_PROOF_SECONDS: "60"
+          RUST_TEST_THREADS: "2"
+          FILTER: ${{ inputs.filter }}
+        run: cargo test --release --locked --no-fail-fast $FILTER -- --ignored 2>&1 | tee ignored.log
 
       - name: Keep the log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-linux-x86_64-${{ github.run_number }}
-          path: test.log
+          path: |
+            test.log
+            ignored.log
           retention-days: 7
           if-no-files-found: ignore

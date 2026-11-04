@@ -20,6 +20,14 @@ on:
         description: "Also run the slow ignored tests"
         type: boolean
         default: false
+      filter:
+        description: "Only the tests whose names contain this (cargo test's filter), for both test steps"
+        type: string
+        default: ""
+      check_folder:
+        description: "A program folder for the ignored check_one_aarch64_folder test (LENGUA_CHECK_FOLDER)"
+        type: string
+        default: ""
       benchmarks:
         description: "Measure lengua against C, C++ and Rust here instead of testing"
         type: boolean
@@ -138,7 +146,8 @@ jobs:
         env:
           LENGUA_PROOF_SECONDS: "60"
           RUST_TEST_THREADS: "2"
-        run: cargo test --release --locked --no-fail-fast 2>&1 | tee test.log
+          FILTER: ${{ github.event_name == 'workflow_dispatch' && inputs.filter || '' }}
+        run: cargo test --release --locked --no-fail-fast $FILTER 2>&1 | tee test.log
 
       - name: Benchmarks against C, C++ and Rust
         if: github.event_name == 'workflow_dispatch' && inputs.benchmarks
@@ -155,7 +164,9 @@ jobs:
         env:
           LENGUA_PROOF_SECONDS: "60"
           RUST_TEST_THREADS: "2"
-        run: cargo test --release --locked --no-fail-fast -- --ignored 2>&1 | tee ignored.log
+          FILTER: ${{ inputs.filter }}
+          LENGUA_CHECK_FOLDER: ${{ inputs.check_folder }}
+        run: cargo test --release --locked --no-fail-fast $FILTER -- --ignored --nocapture 2>&1 | tee ignored.log
 
       - name: Keep the logs and the server
         if: always()

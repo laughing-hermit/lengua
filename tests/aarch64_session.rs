@@ -581,11 +581,6 @@ fn programs(root: &std::path::Path, folders: &[&str]) -> Vec<(String, std::path:
     found
 }
 
-/// The x86-64 fixtures with no AArch64 twin, and why: the safety filter stopped the reply that
-/// was writing `total`'s on 2026-11-02, and `amounts`, its near-copy, was left for the engineer
-/// who ports it, so as not to draw the filter again (todo.md's list of what Opus 5.5 didn't allow).
-const UNPORTED: [&str; 2] = ["total", "amounts"];
-
 /// Every x86-64 example and fixture has its AArch64 twin, compiled from the very same spec, and
 /// every AArch64 fixture its x86-64 one: one product on both Linux targets, only the hardware
 /// differing.
@@ -596,9 +591,6 @@ fn every_program_has_its_twin_on_the_other_cpu() {
     let arm = programs(root, &["tests/fixtures/linux-aarch64"]);
     let mut problems = Vec::new();
     for (name, folder) in &x86 {
-        if UNPORTED.contains(&name.as_str()) {
-            continue;
-        }
         match arm.iter().find(|(other, _)| other == name) {
             None => problems.push(format!("{name}: no AArch64 twin")),
             Some((_, twin)) => {
@@ -812,7 +804,10 @@ async fn a_raw_read_fails_when_standard_input_arrives_in_pieces_on_aarch64() {
 #[tokio::test]
 #[ignore = "checks the folder LENGUA_CHECK_FOLDER names: by hand"]
 async fn check_one_aarch64_folder() {
-    let Ok(folder) = std::env::var("LENGUA_CHECK_FOLDER") else {
+    let Some(folder) = std::env::var("LENGUA_CHECK_FOLDER")
+        .ok()
+        .filter(|folder| !folder.is_empty())
+    else {
         return;
     };
     // LENGUA_CHECK_NATIVE checks it as this computer's own program: an x86-64 twin on x86-64.
