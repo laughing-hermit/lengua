@@ -33,6 +33,9 @@ const ARGUMENT_ROOM: u64 = 1024 * 1024;
 /// The most instructions one run may take before the prover gives up on it.
 pub const MAX_STEPS: u64 = 5_000_000;
 
+/// How many steps a run takes between asking whether the proof still has its time.
+const STEPS_BETWEEN_TIME_CHECKS: u64 = 4096;
+
 /// Why a run past [`MAX_STEPS`] proves nothing.
 pub const TOO_LONG: &str = "a run took too many instructions to follow";
 
@@ -4007,6 +4010,17 @@ pub trait Oracle {
     ///
     /// Fails when the solver stops responding.
     fn possible(&mut self, pool: &Pool, path: &[Term], condition: Term) -> Result<bool, String>;
+
+    /// Whether the proof still has its time. [`explore`] asks every few thousand steps, so a run
+    /// through code with no branch on the inputs, such as a hash of them, which never asks
+    /// [`Self::possible`] anything, still ends with the proof's time.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the time is up.
+    fn in_time(&self) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// A run that left a loop whose exits are merged: the condition it left on, whether the run was
@@ -4443,6 +4457,9 @@ pub fn explore(
                 finished.push(state);
                 break;
             }
+            if state.steps.is_multiple_of(STEPS_BETWEEN_TIME_CHECKS) {
+                oracle.in_time()?;
+            }
             let obligations = state.obligations.len();
             let stepped = step(image, &mut state, pool);
             // While a loop's exits are merged, the run that stays must meet what it meets only
@@ -4656,6 +4673,11 @@ mod tests {
 
     /// Builds `source` and loads it.
     async fn image(source: &str) -> Image {
+        image_for(Profile::LinuxX86_64, source).await
+    }
+
+    /// Builds `source` for `profile`'s CPU and loads it.
+    async fn image_for(profile: Profile, source: &str) -> Image {
         let toolchain = Toolchain::discover().await.expect("llvm-mc and ld.lld");
         let folder = tempfile::tempdir().expect("temporary folder");
         let (assembly, object, executable) = (
@@ -4665,11 +4687,11 @@ mod tests {
         );
         std::fs::write(&assembly, source).expect("write");
         toolchain
-            .assemble(Profile::LinuxX86_64, &assembly, &object)
+            .assemble(profile, &assembly, &object)
             .await
             .expect("assemble");
         toolchain
-            .link(Profile::LinuxX86_64, &object, &executable)
+            .link(profile, &object, &executable)
             .await
             .expect("link");
         let bytes = std::fs::read(&executable).expect("read");
@@ -4810,6 +4832,55 @@ mod tests {
             other => panic!("ended with {other:?}"),
         };
         assert_eq!(status, Some(1));
+    }
+
+    /// An oracle with no branch to decide, which says the proof's time is up the fourth time it's
+    /// asked.
+    struct TimeUpAtTheFourthLook(std::cell::Cell<u32>);
+
+    impl Oracle for TimeUpAtTheFourthLook {
+        fn possible(&mut self, _: &Pool, _: &[Term], _: Term) -> Result<bool, String> {
+            Err("a concrete run reached a branch that depends on something unknown".into())
+        }
+
+        fn in_time(&self) -> Result<(), String> {
+            self.0.set(self.0.get() + 1);
+            if self.0.get() > 3 {
+                Err("time is up".into())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    /// A run of 100,000 times round a loop ends with the proof's time, though it never asks the
+    /// oracle about a branch: this is how a hash of the input, all straight-line code over
+    /// unknown values, stays within the proof's time.
+    async fn keeps_the_proofs_time_without_a_branch(profile: Profile, source: &str) {
+        let image = image_for(profile, source).await;
+        let mut pool = Pool::default();
+        let start = State::start(&image, &mut pool, &[], &[], Vec::new());
+        let mut oracle = TimeUpAtTheFourthLook(std::cell::Cell::new(0));
+        let result = explore(&image, start, &mut pool, &mut oracle, 2);
+        assert_eq!(result.err().as_deref(), Some("time is up"));
+        assert_eq!(oracle.0.get(), 4);
+    }
+
+    #[tokio::test]
+    async fn a_run_with_no_branch_on_its_inputs_keeps_the_proofs_time_on_x86_64() {
+        let source = ".intel_syntax noprefix\n.globl _start\n.text\n.type _start, @function\n\
+                      _start:\n    mov rcx, 100000\n.Lround:\n    dec rcx\n    jnz .Lround\n    \
+                      mov eax, 60\n    xor edi, edi\n    syscall\n.size _start, . - _start\n";
+        keeps_the_proofs_time_without_a_branch(Profile::LinuxX86_64, source).await;
+    }
+
+    #[tokio::test]
+    async fn a_run_with_no_branch_on_its_inputs_keeps_the_proofs_time_on_aarch64() {
+        let source = ".arch armv8-a\n.globl _start\n.text\n.type _start, @function\n\
+                      _start:\n    mov x1, #0x86a0\n    movk x1, #1, lsl #16\n.Lround:\n    \
+                      subs x1, x1, #1\n    b.ne .Lround\n    mov x8, #93\n    mov x0, #0\n    \
+                      svc #0\n.size _start, . - _start\n";
+        keeps_the_proofs_time_without_a_branch(Profile::LinuxAarch64, source).await;
     }
 
     /// fill's function from assets/fill.s, as main.s copies it.

@@ -28,6 +28,10 @@ on:
         description: "A program folder for the ignored check_one_aarch64_folder test (LENGUA_CHECK_FOLDER)"
         type: string
         default: ""
+      stall_seconds:
+        description: "Stop the slow ignored tests after this many seconds, keeping where they stood (stall.txt)"
+        type: string
+        default: ""
       benchmarks:
         description: "Measure lengua against C, C++ and Rust here instead of testing"
         type: boolean
@@ -162,11 +166,18 @@ jobs:
       - name: The slow ignored tests
         if: github.event_name == 'workflow_dispatch' && inputs.ignored
         env:
-          LENGUA_PROOF_SECONDS: ${{ inputs.check_folder != '' && '10' || '60' }}
+          LENGUA_PROOF_SECONDS: "60"
           RUST_TEST_THREADS: "2"
           FILTER: ${{ inputs.filter }}
           LENGUA_CHECK_FOLDER: ${{ inputs.check_folder }}
-        run: cargo test --release --locked --no-fail-fast $FILTER -- --ignored --nocapture 2>&1 | tee ignored.log
+          STALL_SECONDS: ${{ inputs.stall_seconds }}
+        run: |
+          tests='set -o pipefail; cargo test --release --locked --no-fail-fast $FILTER -- --ignored --nocapture 2>&1 | tee ignored.log'
+          if [ -n "$STALL_SECONDS" ]; then
+            bash scripts/stall-report.sh "$STALL_SECONDS" bash -c "$tests"
+          else
+            bash -c "$tests"
+          fi
 
       - name: Keep the logs and the server
         if: always()
@@ -176,6 +187,7 @@ jobs:
           path: |
             test.log
             ignored.log
+            stall.txt
             bench.log
             BENCHMARKS-aarch64.md
             target/release/lengua-mcp

@@ -985,6 +985,13 @@ fn search(
 }
 
 impl Oracle for Witnessed<'_> {
+    fn in_time(&self) -> Result<(), String> {
+        if Instant::now() > self.hard {
+            return Err(OUT_OF_TIME.into());
+        }
+        Ok(())
+    }
+
     fn possible(&mut self, pool: &Pool, path: &[Term], condition: Term) -> Result<bool, String> {
         // A shape that takes every final piece at once can be long without a question: its
         // time is kept at each branch too.
