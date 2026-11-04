@@ -26,8 +26,11 @@ fn append(path: &Path, reason: &str, test: &str) {
         .append(true)
         .open(path)
     {
-        // A failed write loses a note, not a result.
-        let _ = writeln!(file, "{reason}\t{test}");
+        // One write for the whole line: tests run on several threads, and a file in append mode
+        // keeps a single write whole where several (as `writeln!` makes) interleave. A failed
+        // write loses a note, not a result.
+        let line = format!("{reason}\t{test}\n");
+        let _ = file.write_all(line.as_bytes());
     }
 }
 
