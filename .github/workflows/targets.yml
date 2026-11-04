@@ -209,7 +209,7 @@ jobs:
       - name: The slow ignored tests
         if: github.event_name == 'workflow_dispatch' && inputs.ignored
         env:
-          LENGUA_PROOF_SECONDS: "60"
+          LENGUA_PROOF_SECONDS: ${{ inputs.check_folder != '' && '10' || '60' }}
           RUST_TEST_THREADS: "2"
           FILTER: ${{ inputs.filter }}
           LENGUA_CHECK_FOLDER: ${{ inputs.check_folder }}
