@@ -32,7 +32,7 @@ on:
         default: ""
 
 concurrency:
-  group: targets-${{ github.ref }}
+  group: targets-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 permissions:
