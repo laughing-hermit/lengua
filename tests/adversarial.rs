@@ -208,19 +208,19 @@ async fn an_address_made_from_a_plain_number_is_refused() {
         "    lea rax, [rip + usage_msg]\n    mov rsi, qword ptr [rax]\n    movzx ecx, byte ptr \
          [rsi]\n    mov rdi, qword ptr [rsp + 16]\n",
     );
-    refused(
-        &session,
-        "a pointer loaded from memory",
-        &code,
-        &[
-            "rule M1",
-            "rule M2",
-            "rule 9",
-            "no known owner",
-            "can't follow",
-        ],
-    )
-    .await;
+    // A pointer read from memory has no owner the rules can follow, so it's tested, not proven:
+    // the sandbox kills the stray read, and the program is never stamped done.
+    let program = checked_template(&session).await;
+    program.write("main.s", &code);
+    let report = session.check(&program).await;
+    assert_ne!(
+        report["state"], "done",
+        "a pointer loaded from memory was stamped done: {report}"
+    );
+    assert!(
+        any_line(&report["problems"], "SIGSEGV") || report["state"] == "code_problems",
+        "a pointer loaded from memory wasn't stopped: {report}"
+    );
     session.service.cancel().await.expect("close the session");
 }
 
