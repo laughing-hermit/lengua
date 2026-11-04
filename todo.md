@@ -132,58 +132,7 @@ both sides, which were checked against the code before anything was changed. Fix
   that formats a difference, where it used to stand in front of the ARM64 tests; the x86-64 job
   has the benchmark and release switches the ARM64 job had; both have `stall_seconds`.
 
-**Found by the parity audit, still open.** Nothing below is a known wrong answer; each is a place
-where one CPU has less than the other. By the audit's severity, then checked:
-- *High.* ARM64 now has planted-bug fixtures for the memory rules M1 to M6 and M8
-  (`aarch64_memory_rules_find_each_planted_bug`, 14 cases, and a stack-size case), but not the rest
-  of what x86-64 has in `src/checker/tests.rs`: one address lent twice for writing
-  (`one_address_is_never_lent_twice_for_writing`, M4), `the_stack_is_tracked_exactly`, the thread
-  rules (M7), and the Power of 10 rules one by one (about half as many fixtures); each is a
-  one-line edit of the ARM64 template (`with_aarch64`), and the saved-return-address gap above is
-  what their absence cost. The prover is tested on 7 of the 29 ARM64 twins against about 20
-  x86-64 programs, and its memory-bug tests are x86-only.
-- *Medium.* ARM64's sandbox has about 8 native tests against x86-64's 25: nothing that a program
-  holds no network, that connections hand over by their rules, or that a refused one is reported;
-  the limits the owner made identical on every system (time, output, environment, signals, files,
-  open files, names, rename, listing), the clone-flag pin, spec approval of the clock and random
-  bytes, and the supervisor's failure paths and threads are pinned on x86-64 only. Session
-  behaviors beyond check-to-done run only with x86-64 programs, and the unmodified AArch64
-  template has its rules checked but goes through `check` to `done` in no test but the ignored
-  mutation test. About half as many per-rule fixtures exist
-  for AArch64. The checker's and the prover's golden guards record x86-64 programs only. Executor
-  tests of loop detection, connections and sleep are x86-only. The x86-64 job installs no QEMU, so
-  the ARM64-under-QEMU tests skip there without saying so. GitHub's x86-64 runners have no
-  AVX-512, so the x86-64 programs that use it (`count`, `words`, `padded`, the fast `wc`) have
-  their rules checked there but are not taken through the server, where their NEON twins run
-  everywhere; a runner with AVX-512 (or a self-hosted one) would close that. The ARM64 benchmark workloads omit
-  programs x86-64 measures, and say AArch64 has no threads.
-- *Medium, the prover.* x86-64's dialect admits vector instructions its prover can't follow
-  (`palignr`, `pblendw`, `punpck*`, `pack*`, saturating and widening arithmetic, string
-  compares, `pextr*`/`pinsr*`, `pmovzx*`, `gf2p8*` and more: `src/checker/x86_64.rs` against
-  `src/prove/exec/vector.rs`), where AArch64's prover models its whole dialect. The same spec
-  therefore ends differently: x86-64's SHA-256 proof stops at `palignr` ("doesn't model yet") and
-  ARM64's runs until its time is up ("ran out of time"). Both say "tested, not proven", the only
-  result either can have, but for different reasons. It also follows pointer owners through more
-  instructions on x86-64 (`cmov`, `and` to a boundary, scaled `lea`) than ARM64 does through
-  `csel`, `and`-immediate and shifted `add` (`plan` against `plan_a64` in the executor); ARM64
-  then holds those accesses to the weaker "object the value points into" rule.
-- *Low.* `cbz`/`tbz` on `xzr` or `wzr` count as conditional branches, so the dead-code and
-  "assertion always fails" checks can be bypassed on ARM64; `ppoll`'s timeout and signal-mask
-  pointers are missing from the static system call summary; the AArch64 vector model ends some
-  matches with a wildcard that would run an unmodelled op as zeros, where x86-64's says
-  "doesn't model yet"; the AArch64 dialect has no add-with-carry; AArch64 refusal texts say "no
-  floating point on vectors" and keep x86-64 wording in a few layout messages; an emulated session
-  always gets AArch64's CPU features; the model-against-CPU harnesses differ in feature gating and
-  host (x86-64's runs only on x86-64, ARM64's needs the crypto extensions to be there).
-  Programs: twin programs differ in buffer sizes (`count` 256 KiB against 64 KiB, `padded` and the
-  fast `crc32c` 1 MiB against 64 KiB, `upcase` retries writes 4096 against 64 times), the ARM64
-  main template's assertions skip number 3, and x86-64 ships its fast `wc` for AVX-512 only where
-  ARM64 has the baseline NEON form. Documents: DESIGN lists the x86-64 instructions the prover
-  models and the probe counts of its CPU harness but has no AArch64 list or counts;
-  `test-format.md` explains the float functions by x86-64 instructions alone; `SESSIONS.md` ran
-  the ARM64 suite under QEMU, without the kernel's filter, and its thread and terminal rows prove
-  less than x86-64's.
-
+**Not blocked, and safer alternatives.** The crypto support is built: a user can
 write or drop in a standard SHA-256 or AES program and lengua checks and tests it. For a value
 computed from the input, checked, tested and proven, lengua's own program can be a plain checksum:
 - CRC-32C, done: `plugin/skills/compile/assets/fast/crc32c`, the checksum iSCSI and ext4 use, is
@@ -204,6 +153,79 @@ the checksums show lengua's kind of proof but don't replace SHA-256 or AES:
   tampered with, or keeping data secret;
 - that still takes SHA-256 or AES, which a user can supply and lengua checks and tests (`examples/sha256`
   and `examples/aes` show the instructions, not a product that resists an attacker).
+
+## What's left for parity and coherence between the two Linux targets
+
+I know of no case where the two CPUs give different answers. What's left is places where one CPU
+is checked or modelled less than the other, found by the 2026-11-04 parity audit (the ones fixed
+in this run are listed above), heaviest first:
+
+1. **Tests.** The biggest gap.
+   - *Sandbox.* ARM64 has about 8 native tests against x86-64's 25. It lacks a test that a program
+     holds no network, that connections hand over by their rules, or that a refused one is
+     reported; the limits made identical on every system (time, output, environment, signals,
+     files, open files, names, rename, listing), the clone-flag pin, spec approval of the clock
+     and random bytes, and the supervisor's failure paths and threads: all pinned on x86-64 only.
+   - *Checker fixtures.* ARM64 now has planted-bug fixtures for the memory rules M1 to M6 and M8
+     (`aarch64_memory_rules_find_each_planted_bug`), but still lacks the rest of what x86-64 has
+     in `src/checker/tests.rs`: one address lent twice for writing (M4,
+     `one_address_is_never_lent_twice_for_writing`), `the_stack_is_tracked_exactly`, the thread
+     rules (M7), and about half of the Power of 10 rules' fixtures. Each is a one-line edit of the
+     ARM64 template (`with_aarch64`); the saved-return-address gap is what their absence cost.
+   - *Prover tests.* ARM64's prover is tested on 7 of the 29 twins, x86-64's on about 20 programs,
+     and its memory-bug tests are x86-only.
+   - *Other x86-only coverage.* The checker's and the prover's golden recordings; executor tests
+     of loop detection, connections and sleep; session behaviors beyond check-to-done; and the
+     unmodified AArch64 template has its rules checked but goes through `check` to `done` in no
+     test but the ignored mutation test.
+2. **Prover reach.**
+   - *x86-64's prover* can't follow dozens of vector instructions the ARM64 prover models
+     (`palignr`, `pblendw`, `punpck*`, `pack*`, saturating and widening arithmetic, string
+     compares, `pextr*`/`pinsr*`, `pmovzx*`, `gf2p8*` and more: `src/checker/x86_64.rs` against
+     `src/prove/exec/vector.rs`). The same spec therefore ends "tested, not proven" for different
+     reasons: x86-64's SHA-256 stops at `palignr` ("doesn't model yet"), ARM64's runs until its
+     time is up ("ran out of time").
+   - *Pointer tracking.* ARM64 follows pointers through fewer instructions: x86-64's `plan`
+     follows `cmov`, `and` to a boundary and scaled `lea`; ARM64's `plan_a64` doesn't follow
+     `csel`, `and`-immediate or shifted `add`, so those accesses are held to the weaker "object the
+     value points into" rule.
+   - *An unexplained difference.* In the same 60 seconds, ARM64 proved far fewer combinations of
+     the `amounts` valid-input block than x86-64 (36 against about 10,000 on the runners). Not
+     investigated: the runner's CPU, the model's speed, or the twice-as-many paths.
+3. **CI coverage.** GitHub's x86-64 runners have no AVX-512, so the x86-64 programs that use it
+   (`count`, `words`, `padded`, the fast `wc`) have their rules checked there but are not taken
+   through the server, where their NEON twins run everywhere. The x86-64 job also has no QEMU, so
+   the ARM64-under-QEMU tests skip there without saying so.
+4. **Programs.**
+   - Buffer sizes differ between twins: `count` 256 KiB against 64 KiB, `padded` and the fast
+     `crc32c` 1 MiB against 64 KiB, `upcase` retries writes 4096 against 64 times.
+   - The ARM64 main template's assertions skip number 3.
+   - **x86-64's fast `wc` exists only in an AVX-512 form** (and so do `count`, `words` and
+     `padded`), where ARM64 has the baseline NEON form of each, and an SVE one as an extra. The
+     owner's reason for asking (2026-11-04): other targets, whatever their CPU and OS, must behave
+     the same, so a spec's behavior can't depend on an optional CPU extension. The rule this
+     implies: every program lengua ships has a form that runs on every machine of its target
+     (x86-64's SSE2, ARM64's NEON); an optional extension (AVX-512, SVE) is a speedup an agent
+     picks from the machine line's features, never the only way to get the behavior. By it, the
+     four x86-64 programs above lack their baseline form: an x86-64 computer without AVX-512 (most
+     are: AMD before Zen 4, Intel client chips since 2022, GitHub's runners) has no fast `wc` to
+     learn from or copy, and a macOS or Windows x86-64 port inherits the gap. Replacing AVX-512 by
+     SSE2 (and AVX2 for the fast form) is the work to do; see the research below.
+   - The AArch64 dialect has no add-with-carry (`adc`, `sbc`).
+5. **Small items.** `cbz`/`tbz` on `xzr` or `wzr` count as conditional branches, so the dead-code
+   and "assertion always fails" checks can be bypassed on ARM64; `ppoll`'s timeout and signal-mask
+   pointers are missing from the static system call summary; the AArch64 vector model ends some
+   matches with a wildcard that would run an unmodelled op as zeros, where x86-64's says "doesn't
+   model yet"; AArch64 refusal texts say "no floating point on vectors" and keep x86-64 wording in
+   a few layout messages; an emulated session always gets AArch64's CPU features; the
+   model-against-CPU harnesses differ in feature gating and host; the ARM64 benchmark workloads
+   omit programs x86-64 measures and say AArch64 has no threads. Documents: DESIGN lists the
+   x86-64 instructions the prover models and its CPU harness's probe counts but has no AArch64
+   list; `test-format.md` explains the float functions by x86-64 instructions alone; `SESSIONS.md`
+   ran the ARM64 suite under QEMU, without the kernel's filter, and its thread and terminal rows
+   prove less than x86-64's.
+
+Beyond these two CPUs, the macOS and Windows ports remain skipped (below).
 
 ## Skipped, and why
 

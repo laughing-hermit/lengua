@@ -62,10 +62,16 @@ async fn every_x86_64_program_passes_its_checks() {
         // assumes every extension, checks its rules. Nothing else is excused.
         let lacks_the_cpu = report["state"] == "code_problems"
             && report["problems"].as_array().is_some_and(|problems| {
-                !problems.is_empty()
-                    && problems
+                // The reply lists the first few problems and ends "…and N more".
+                let listed: Vec<&str> = problems
+                    .iter()
+                    .map(text)
+                    .filter(|problem| !problem.starts_with("…and "))
+                    .collect();
+                !listed.is_empty()
+                    && listed
                         .iter()
-                        .all(|problem| text(problem).contains("which this CPU doesn't have"))
+                        .all(|problem| problem.contains("which this CPU doesn't have"))
             });
         if lacks_the_cpu {
             eprintln!("{name}: not checked here, it needs a CPU extension this computer lacks");
