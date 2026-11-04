@@ -272,6 +272,24 @@ impl Checker<'_, '_> {
             }
         }
         let saved_region = pushing.len()..ret - popping.len();
+        // The return address is only ever saved and restored by the frame record; an instruction
+        // in between that writes the link register itself would send ret somewhere else.
+        if let Some(link) = abi.link {
+            for step in &steps[saved_region.clone()] {
+                if step.insn.writes.contains(link) {
+                    self.violation(
+                        Rule::Functions,
+                        step.source.line,
+                        format!(
+                            "`{}` overwrites {link}, the return address, so ret couldn't return",
+                            step.source.text
+                        ),
+                        "leave the link register to the frame record (`stp x29, x30, [sp, \
+                         #-16]!` first, `ldp x29, x30, [sp], #16` before ret) and to `bl`",
+                    );
+                }
+            }
+        }
         let mut changed = BTreeSet::new();
         for index in saved_region {
             for register in abi.callee_saved {

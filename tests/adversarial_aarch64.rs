@@ -220,7 +220,7 @@ async fn writing_read_only_data_or_a_return_address_is_refused() {
         &session,
         "a changed return address",
         &code,
-        &["rule M3", "rule 1", "rule 3", "dialect"],
+        &["return address", "rule M3", "rule 1", "rule 3", "dialect"],
     )
     .await;
     session.service.cancel().await.expect("close the session");

@@ -90,12 +90,14 @@ input:
 .size input, . - input
 
 // The key's 16 bytes.
+// shared: _start passes it to expand_key; parse_input decodes the key line into it
 .type key, @object
 key:
     .zero KEY_LEN
 .size key, . - key
 
 // The data's bytes, up to 4096 blocks.
+// shared: parse_input decodes the data into it; _start passes it to encrypt_blocks
 .type plain, @object
 plain:
     .zero PLAIN_LEN
@@ -114,6 +116,7 @@ round_keys:
 .size round_keys, . - round_keys
 
 // The ciphertext in hexadecimal and a newline.
+// shared: print_hex fills it with digits and write_line adds the newline and writes it
 .type out, @object
 out:
     .zero OUT_LEN
@@ -539,18 +542,9 @@ print_hex:
     b.ne .Lprint_hex_loop
     b .Lprint_hex_assert_steps
 .Lprint_hex_done:
-    lsl x10, x1, #1
-    mov x9, #HEX_MAX
-    cmp x10, x9
-    b.hi .Lprint_hex_assert_end
-    mov w7, #NEWLINE
-    strb w7, [x6, x10]
-    add x2, x10, #1
-    mov x1, x6
-    mov x0, #STDOUT
-    bl write_all
+    lsl x0, x1, #1
+    bl write_line
     tbnz x0, #63, .Lprint_hex_return
-    mov x0, #0
 .Lprint_hex_return:
     ldp x29, x30, [sp], #16
     ret
@@ -578,10 +572,39 @@ print_hex:
 .Lprint_hex_assert_steps:
     mov w0, #26
     bl assert_fail
-.Lprint_hex_assert_end:
+.size print_hex, . - print_hex
+
+// Writes the hex digits in out, a newline after them, to standard output.
+// In: x0 = how many digits, 1 to HEX_MAX.
+// Out: x0 = 0, or a negative error code.
+// returns: result
+.type write_line, @function
+write_line:
+    stp x29, x30, [sp, #-16]!
+    cbz x0, .Lwrite_line_assert_empty
+    mov x9, #HEX_MAX
+    cmp x0, x9
+    b.hi .Lwrite_line_assert_end
+    adrp x6, out
+    add x6, x6, :lo12:out
+    mov w7, #NEWLINE
+    strb w7, [x6, x0]
+    add x2, x0, #1
+    mov x1, x6
+    mov x0, #STDOUT
+    bl write_all
+    tbnz x0, #63, .Lwrite_line_return
+    mov x0, #0
+.Lwrite_line_return:
+    ldp x29, x30, [sp], #16
+    ret
+.Lwrite_line_assert_empty:
+    mov w0, #33
+    bl assert_fail
+.Lwrite_line_assert_end:
     mov w0, #27
     bl assert_fail
-.size print_hex, . - print_hex
+.size write_line, . - write_line
 
 // Reads from file descriptor x0 into the x2 bytes at x1 until they're full, the input ends,
 // or, when w3 is a byte (0 to 255), the last byte read is w3; with w3 = -1 it reads to the
