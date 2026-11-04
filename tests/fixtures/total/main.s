@@ -20,6 +20,7 @@
 .equ EXIT_WRITE_FAILED, 5
 # Error codes returned by functions marked "returns: result"
 .equ ERROR_IO, -5
+.equ ERROR_OPEN, -2
 .equ ERROR_INVALID, -22
 # Sizes and limits
 .equ ARGC_EXPECTED, 2
@@ -35,8 +36,8 @@
 .equ NUM_BUF_LEN, 24
 .equ MAX_NUM_CHARS, 24
 .equ NEWLINE, 10
-.equ COMMA, ','
-.equ POINT, '.'
+.equ COMMA, 44
+.equ POINT, 46
 .equ USAGE_MSG_LEN, 24
 .equ OPEN_MSG_LEN, 24
 .equ BAD_MSG_LEN, 16
@@ -66,6 +67,7 @@ assert_message:
 .section .bss
 
 # The whole expenses file.
+# shared: load_file reads the file into it and _start lends it to sum_lines
 .type file_buf, @object
 file_buf:
     .zero FILE_MAX
@@ -86,31 +88,14 @@ _start:
     mov rax, qword ptr [rsp]
     cmp rax, ARGC_EXPECTED
     jne .Lstart_usage
-    mov rsi, qword ptr [rsp + 16]
-    test rsi, rsi
+    mov rdi, qword ptr [rsp + 16]
+    test rdi, rdi
     jz .Lstart_assert_argv
-    mov edi, AT_FDCWD
-    mov edx, O_RDONLY
-    xor r10d, r10d
-    mov eax, SYS_OPENAT
-    syscall
+    call load_file
     test rax, rax
-    js .Lstart_open_failed
-    mov rbx, rax
-    mov edi, ebx
-    lea rsi, [rip + file_buf]
-    mov edx, FILE_MAX
-    call read_all
-    test rax, rax
-    js .Lstart_read_failed
-    mov r12, rax
-    mov edi, ebx
-    mov eax, SYS_CLOSE
-    syscall
-    test rax, rax
-    js .Lstart_read_failed
+    js .Lstart_load_failed
+    mov rsi, rax
     lea rdi, [rip + file_buf]
-    mov rsi, r12
     call sum_lines
     test rax, rax
     js .Lstart_bad_line
@@ -123,35 +108,26 @@ _start:
     mov edi, EXIT_OK
     jmp .Lstart_exit
 .Lstart_usage:
-    mov edi, STDERR
-    lea rsi, [rip + usage_msg]
-    mov edx, USAGE_MSG_LEN
-    call write_all
+    lea rdi, [rip + usage_msg]
+    mov esi, USAGE_MSG_LEN
+    call report
     test rax, rax
     js .Lstart_write_failed
     mov edi, EXIT_USAGE
     jmp .Lstart_exit
-.Lstart_open_failed:
-    mov edi, STDERR
-    lea rsi, [rip + open_msg]
-    mov edx, OPEN_MSG_LEN
-    call write_all
+.Lstart_load_failed:
+    cmp rax, ERROR_OPEN
+    jne .Lstart_read_failed
+    lea rdi, [rip + open_msg]
+    mov esi, OPEN_MSG_LEN
+    call report
     test rax, rax
     js .Lstart_write_failed
     mov edi, EXIT_OPEN_FAILED
     jmp .Lstart_exit
 .Lstart_bad_line:
-    mov rbx, rdx
-    mov edi, STDERR
-    lea rsi, [rip + bad_msg]
-    mov edx, BAD_MSG_LEN
-    call write_all
-    test rax, rax
-    js .Lstart_write_failed
-    mov rdi, rbx
-    mov esi, NO_PLACES
-    mov edx, STDERR
-    call write_decimal
+    mov rdi, rdx
+    call report_bad_line
     test rax, rax
     js .Lstart_write_failed
     mov edi, EXIT_BAD_LINE
@@ -168,6 +144,100 @@ _start:
     mov edi, 1
     call assert_fail
 .size _start, . - _start
+
+# Opens the file a path names, reads all of it into file_buf and closes it.
+# In: rdi = the path, a NUL-terminated string.
+# Out: rax = the bytes read, or ERROR_OPEN when the file can't be opened, or ERROR_IO.
+# returns: result
+.type load_file, @function
+load_file:
+    push rbx
+    test rdi, rdi
+    jz .Lload_file_assert_null
+    mov rsi, rdi
+    mov edi, AT_FDCWD
+    mov edx, O_RDONLY
+    xor r10d, r10d
+    mov eax, SYS_OPENAT
+    syscall
+    test rax, rax
+    js .Lload_file_open_failed
+    mov rbx, rax
+    mov edi, ebx
+    lea rsi, [rip + file_buf]
+    mov edx, FILE_MAX
+    call read_all
+    test rax, rax
+    js .Lload_file_failed
+    mov r8, rax
+    mov edi, ebx
+    mov eax, SYS_CLOSE
+    syscall
+    test rax, rax
+    js .Lload_file_failed
+    mov rax, r8
+    jmp .Lload_file_return
+.Lload_file_open_failed:
+    mov rax, ERROR_OPEN
+    jmp .Lload_file_return
+.Lload_file_failed:
+    mov rax, ERROR_IO
+.Lload_file_return:
+    pop rbx
+    ret
+.Lload_file_assert_null:
+    mov edi, 26
+    call assert_fail
+.size load_file, . - load_file
+
+# Prints a message to standard error.
+# In: rdi = the message, rsi = its length, at least 1.
+# Out: rax = 0, or a negative error code.
+# returns: result
+.type report, @function
+report:
+    sub rsp, 8
+    test rdi, rdi
+    jz .Lreport_assert_null
+    mov rdx, rsi
+    mov rsi, rdi
+    mov edi, STDERR
+    call write_all
+    test rax, rax
+    js .Lreport_return
+    xor eax, eax
+.Lreport_return:
+    add rsp, 8
+    ret
+.Lreport_assert_null:
+    mov edi, 25
+    call assert_fail
+.size report, . - report
+
+# Prints "total: bad line " and a line number, then a newline, to standard error.
+# In: rdi = the line number.
+# Out: rax = 0, or a negative error code.
+# returns: result
+.type report_bad_line, @function
+report_bad_line:
+    push rbx
+    mov rbx, rdi
+    lea rdi, [rip + bad_msg]
+    mov esi, BAD_MSG_LEN
+    call report
+    test rax, rax
+    js .Lreport_bad_line_return
+    mov rdi, rbx
+    mov esi, NO_PLACES
+    mov edx, STDERR
+    call write_decimal
+    test rax, rax
+    js .Lreport_bad_line_return
+    xor eax, eax
+.Lreport_bad_line_return:
+    pop rbx
+    ret
+.size report_bad_line, . - report_bad_line
 
 # Reads from a file descriptor until the input ends or the buffer is full.
 # In: edi = the file descriptor, rsi = the buffer, rdx = its size, at least 1.

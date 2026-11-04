@@ -195,7 +195,8 @@ pub fn assertion_lines(source: &Source) -> BTreeMap<i64, usize> {
             })
             .collect();
         for pair in instructions.windows(2) {
-            let calls_assert = pair[1].mnemonic == "call"
+            // x86-64 calls with `call`, AArch64 with `bl`.
+            let calls_assert = matches!(pair[1].mnemonic.as_str(), "call" | "bl")
                 && pair[1].operands == [Operand::Target("assert_fail".into())];
             if let (
                 true,
@@ -1758,6 +1759,19 @@ mod tests {
             .nth(line - 1)
             .expect("the line");
         assert_eq!(text.trim(), "mov edi, 4");
+    }
+
+    #[test]
+    fn finds_assertion_lines_in_the_aarch64_source_as_in_the_x86_64_one() {
+        let (source, _) = crate::checker::source::parse(crate::checker::AARCH64_TEMPLATE);
+        let lines = assertion_lines(&source);
+        // As many as the x86-64 template's, one at each place its code calls assert_fail.
+        assert_eq!(lines.len(), 11);
+        let text = crate::checker::AARCH64_TEMPLATE
+            .lines()
+            .nth(lines[&4] - 1)
+            .expect("the line");
+        assert_eq!(text.trim(), "mov w0, #4");
     }
 
     #[test]

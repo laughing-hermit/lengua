@@ -800,7 +800,8 @@ async fn a_raw_read_fails_when_standard_input_arrives_in_pieces_on_aarch64() {
     session.service.cancel().await.expect("close the session");
 }
 
-/// One folder's check, for porting a program: `LENGUA_CHECK_FOLDER` names it.
+/// One folder's check, for porting a program: `LENGUA_CHECK_FOLDER` names it, and the test fails
+/// unless the job ends done, as `check_one_folder` does for x86-64.
 #[tokio::test]
 #[ignore = "checks the folder LENGUA_CHECK_FOLDER names: by hand"]
 async fn check_one_aarch64_folder() {
@@ -819,6 +820,7 @@ async fn check_one_aarch64_folder() {
     } else {
         return;
     };
+    let mut failed = Vec::new();
     // Several folders, separated by commas, share one session.
     for folder in folder.split(',') {
         let folder = std::path::PathBuf::from(folder);
@@ -836,6 +838,11 @@ async fn check_one_aarch64_folder() {
                 println!("PORT {field}: {}", text(line));
             }
         }
+        if report["state"] != "done" {
+            failed.push(folder.display().to_string());
+        }
     }
     session.service.cancel().await.expect("close the session");
+    // As its x86-64 twin does: the job must end done.
+    assert!(failed.is_empty(), "not done: {failed:?}");
 }

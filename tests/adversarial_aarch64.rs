@@ -49,6 +49,18 @@ async fn aarch64_session() -> Option<Session> {
     }
 }
 
+/// [`aarch64_session`] with its time for proofs, as x86-64's wrong-program test has: the proof is
+/// what finds that bug, so a session with none would test the tests alone.
+async fn proving_aarch64_session() -> Option<Session> {
+    if cfg!(target_arch = "aarch64") {
+        Some(Session::proving_alone(Protocol::Discover).await)
+    } else if common::qemu_runs_aarch64() {
+        Some(Session::emulating_for(Protocol::Discover, "linux-aarch64", 300).await)
+    } else {
+        None
+    }
+}
+
 /// A program folder holding the template's spec, recorded.
 async fn checked_template(session: &Session) -> Program {
     let program = Program::new();
@@ -214,6 +226,10 @@ async fn an_address_made_from_a_plain_number_is_refused() {
         report["state"], "done",
         "a pointer loaded from memory was stamped done: {report}"
     );
+    assert!(
+        any_line(&report["problems"], "SIGSEGV") || report["state"] == "code_problems",
+        "a pointer loaded from memory wasn't stopped: {report}"
+    );
     // One that happens to be good (argv[0]) may be done, and then memory is tested, not proven.
     let code = changed(
         "    cbz x0, .Lstart_assert_argv\n",
@@ -251,6 +267,28 @@ async fn writing_read_only_data_or_a_return_address_is_refused() {
         &["return address", "rule M3", "rule 1", "rule 3", "dialect"],
     )
     .await;
+    // The return address a function saved in its frame record, written through memory: x86-64's
+    // `mov qword ptr [rsp], 0` at the start of a function.
+    let code = changed(
+        "write_i64:\n    stp x29, x30, [sp, #-16]!\n",
+        "write_i64:\n    stp x29, x30, [sp, #-16]!\n    str xzr, [sp, #8]\n",
+    );
+    refused(
+        &session,
+        "a write over the saved return address",
+        &code,
+        &["return address", "rule M3"],
+    )
+    .await;
+    // Reading below the stack pointer, where a signal handler or a callee could have left data.
+    let code = changed("write_all:\n", "write_all:\n    ldr x9, [sp, #-8]\n");
+    refused(
+        &session,
+        "a read below the stack pointer",
+        &code,
+        &["rule M3", "rule 3"],
+    )
+    .await;
     session.service.cancel().await.expect("close the session");
 }
 
@@ -275,6 +313,12 @@ async fn loops_the_rules_cant_count_are_refused() {
          x10, #1\n",
     );
     refused(&session, "a counter reset in the body", &code, &["rule 2"]).await;
+    // A backward jump that isn't a loop's end.
+    let code = changed(
+        "    mov w0, #EXIT_WRITE_FAILED\n.Lstart_exit:\n",
+        "    mov w0, #EXIT_WRITE_FAILED\n    b .Lstart_usage\n.Lstart_exit:\n",
+    );
+    refused(&session, "a backward jump", &code, &["rule 2", "rule 1"]).await;
     let code = changed(".Lwrite_all_loop:  // bound: 64\n", ".Lwrite_all_loop:\n");
     refused(&session, "a loop with no bound", &code, &["rule 2"]).await;
     session.service.cancel().await.expect("close the session");
@@ -336,6 +380,18 @@ async fn a_tampered_assertion_handler_is_refused() {
         &["assert_fail", "rule 5"],
     )
     .await;
+    // And one with its message changed.
+    let code = changed(
+        "    .ascii \"lengua: assertion 000 failed\\n\"\n",
+        "    .ascii \"lengua: assertion 000 passed\\n\"\n",
+    );
+    refused(
+        &session,
+        "an assertion message that says passed",
+        &code,
+        &["assert_message", "assert_fail", "rule 5"],
+    )
+    .await;
     session.service.cancel().await.expect("close the session");
 }
 
@@ -355,6 +411,13 @@ async fn code_that_ignores_a_failed_result_is_refused() {
         &["rule 7"],
     )
     .await;
+    // A system call's result that is never tested.
+    let code = changed(
+        "    mov x8, #SYS_WRITE\n    svc #0\n    tbnz x0, #63, .Lwrite_all_return\n",
+        "    mov x8, #SYS_WRITE\n    svc #0\n    mov x11, x0\n    tbnz x0, #63, \
+         .Lwrite_all_return\n",
+    );
+    refused(&session, "a write result used first", &code, &["rule 7"]).await;
     session.service.cancel().await.expect("close the session");
 }
 
@@ -362,7 +425,7 @@ async fn code_that_ignores_a_failed_result_is_refused() {
 async fn a_wrong_program_is_never_stamped_done() {
     // The negative of a number comes out one too big when it is above 2^62: a part of the range
     // the tests' samples may miss and the proof covers. Whichever finds it, the program must not
-    // be done.
+    // be done. Finding it takes the solvers most of their time, so no other proof runs beside it.
     let installed = std::process::Command::new("z3")
         .arg("--version")
         .output()
@@ -371,7 +434,7 @@ async fn a_wrong_program_is_never_stamped_done() {
         eprintln!("z3 isn't installed");
         return;
     }
-    let Some(session) = aarch64_session().await else {
+    let Some(session) = proving_aarch64_session().await else {
         return;
     };
     let program = checked_template(&session).await;

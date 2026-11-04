@@ -773,12 +773,6 @@ async fn every_program_in_the_repository_follows_every_rule() {
     ] {
         for entry in std::fs::read_dir(root.join(folder)).expect("a folder of programs") {
             let path = entry.expect("an entry").path();
-            // The CSV total Claude Code wrote in interactive round 2 names a character as a
-            // constant, from before constants were held to numbers; its proof tests need only its
-            // machine code.
-            if path.ends_with("total") {
-                continue;
-            }
             if path.join("main.s").is_file() {
                 programs.push((path.join("spec.md"), path.join("main.s")));
             }

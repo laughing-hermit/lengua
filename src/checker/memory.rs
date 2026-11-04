@@ -37,6 +37,9 @@ use crate::spec::Syscall;
 /// The most stack a program may use on any path.
 pub const MAX_STACK_BYTES: u64 = 1 << 20;
 
+/// The bytes of a saved return address: the top of a frame whose function saved the link register.
+const LINK_BYTES: i64 = 8;
+
 /// What a register's value is, as far as addresses go.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Owner {
@@ -971,7 +974,27 @@ fn access(
             let inside = first <= own && first - width + 1 >= 1;
             // _start reads the argument count and strings above its frame.
             let reads_arguments = start && !writes && first <= own;
-            if !inside && !reads_arguments {
+            // Where the CPU keeps the return address in a register, the function saves it with
+            // its first instruction, as the top of its frame: ret returns through those bytes,
+            // as x86-64's does through the slot above the frame.
+            let saves_link = abi.link.is_some_and(|link| {
+                matches!(
+                    function.steps.first().map(|opening| opening.insn.op),
+                    Some(Op::Push(registers)) if registers.contains(&Some(link))
+                )
+            });
+            if inside && saves_link && first - width + 1 <= LINK_BYTES {
+                found.push((
+                    Rule::Lifetimes,
+                    format!(
+                        "`{text}` reaches the return address this function saved in its frame, \
+                         which ret returns through"
+                    ),
+                    "keep every access at [sp + d] to the frame's own data, past the frame \
+                     record's saved return address"
+                        .into(),
+                ));
+            } else if !inside && !reads_arguments {
                 found.push((
                     Rule::Lifetimes,
                     format!(

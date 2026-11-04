@@ -75,15 +75,16 @@ fn mutants(code: &str) -> Vec<(String, String)> {
         out[index] = new;
         out.join("\n") + "\n"
     };
+    // A comment starts with `#` in x86-64's dialect and with `//` in AArch64's, where `#` writes
+    // a number: `mov x0, #1`, `[sp, #16]`.
+    let comment = if lines.iter().any(|line| line.starts_with(".arch ")) {
+        "//"
+    } else {
+        "#"
+    };
     let mut found = Vec::new();
     for (index, line) in lines.iter().enumerate() {
-        let code_part = line
-            .split("//")
-            .next()
-            .unwrap_or(line)
-            .split('#')
-            .next()
-            .unwrap_or(line);
+        let code_part = line.split(comment).next().unwrap_or(line);
         let trimmed = code_part.trim();
         if trimmed.is_empty() || trimmed.ends_with(':') {
             continue;
@@ -302,4 +303,17 @@ fn mutants_change_one_line_each_and_leave_assertions_alone() {
     for (_, mutant) in &found {
         assert_eq!(mutant.lines().count(), code.lines().count());
     }
+}
+
+#[test]
+fn aarch64_mutants_move_its_immediates_as_x86_64_ones_move_theirs() {
+    let code = ".arch armv8-a\n_start:\n    cmp x0, #5  // five\n    b.lo .Lok\n    mov w0, #3\n    \
+                bl assert_fail\n.equ LIMIT, 64\n.Lok:\n    ldr x1, [sp, #16]\n    ret\n";
+    let found = mutants(code);
+    let names: Vec<&str> = found.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["L3:imm+1", "L4:cond", "L7:const+1", "L9:imm+1"]);
+    assert!(found[0].1.contains("cmp x0, #6  // five"));
+    assert!(found[1].1.contains("b.hs .Lok"));
+    assert!(found[2].1.contains(".equ LIMIT, 65"));
+    assert!(found[3].1.contains("[sp, #17]"));
 }
