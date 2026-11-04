@@ -57,9 +57,16 @@ never routed around through other models or subagents. It stopped none.
      `check` caught that only when the tests crashed, where x86-64 refuses `mov [rsp], 0` before
      running (rule M3). Now a rule refuses any instruction that writes the link register between
      the frame record's save and restore (`src/checker/rules.rs`).
-   - A pointer read from memory isn't followed to an owner by the rules (they follow what they
-     can; the rest is "tested, not proven"); the sandbox kills the stray read and the program is
-     never `done`. That is the design, and the test asserts exactly that, on x86-64.
+   - **A known limit, tested on both CPUs: a pointer read from memory.** The rules follow an
+     address to its owner where they can; one loaded from memory has none they can follow, and
+     refusing every such load would refuse valid programs (a table of pointers, `argv`). So it
+     isn't refused up front, and "any attempt not refused is a bug" holds for the rest, not for
+     this. What holds instead, asserted by `an_address_made_from_a_plain_number_is_refused` on x86-64 and
+     ARM64: a wrong one is killed by the sandbox and the program is never `done`; a good one may
+     be `done`, and the report then says memory is "tested, not proven", never proven. Narrowing
+     this (following a loaded pointer back to a table whose entries are all owned addresses) would
+     change how M1 and M2 follow owners: a design change for an engineer, with the checker golden
+     re-recorded.
    - Every other attempt is refused up front on both CPUs.
 5. **The ARM64 twins of `total` and `amounts`: done.** `tests/fixtures/linux-aarch64/total/` and
    `amounts/`, each spec copied unchanged; `UNPORTED` is gone from `tests/aarch64_session.rs`, so
