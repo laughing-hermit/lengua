@@ -585,9 +585,15 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
             Stack::Same,
         ),
         Inst::BranchCond { cond: when, target } => (
-            Control::Branch {
-                target,
-                cond: cond(when),
+            // `b.al` and `b.nv` always jump, so they are a jump, as `b` is: the code after one
+            // can't run, and an assertion it leads to always fails.
+            if matches!(when, A64Cond::Al | A64Cond::Nv) {
+                Control::Jump(target)
+            } else {
+                Control::Branch {
+                    target,
+                    cond: cond(when),
+                }
             },
             None,
             vec![Operand::Target(target)],

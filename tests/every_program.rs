@@ -57,6 +57,20 @@ async fn every_x86_64_program_passes_its_checks() {
         }
         session.record(&program).await;
         let report = session.settle(&program).await;
+        // A program for a vector extension this computer's CPU lacks (GitHub's x86-64 runners
+        // have no AVX-512) is refused for that alone; the repository-wide rules test, which
+        // assumes every extension, checks its rules. Nothing else is excused.
+        let lacks_the_cpu = report["state"] == "code_problems"
+            && report["problems"].as_array().is_some_and(|problems| {
+                !problems.is_empty()
+                    && problems
+                        .iter()
+                        .all(|problem| text(problem).contains("which this CPU doesn't have"))
+            });
+        if lacks_the_cpu {
+            eprintln!("{name}: not checked here, it needs a CPU extension this computer lacks");
+            continue;
+        }
         if name == "second" {
             // Wrong by design, as its AArch64 twin is: one fill reads both lines only when no
             // read ends right after the first, and the tests' own pieces of standard input find

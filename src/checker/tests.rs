@@ -2052,6 +2052,27 @@ async fn the_aarch64_dialect_refuses_what_it_should() {
     }
 }
 
+/// `b.al` and `b.nv` always jump, as `b` does: the code after one can never run.
+#[tokio::test]
+async fn code_after_an_always_taken_aarch64_branch_can_never_run() {
+    for branch in ["b.al", "b.nv"] {
+        let text = with_aarch64(
+            "    mov w0, #EXIT_OK\n    b .Lstart_exit\n",
+            &format!(
+                "    mov w0, #EXIT_OK\n    {branch} .Lstart_exit\n    mov w0, #99\n    b \
+                 .Lstart_exit\n"
+            ),
+        );
+        let report = check(&text).await;
+        assert_violation(
+            &report,
+            Rule::ControlFlow,
+            line_of(&text, "    mov w0, #99"),
+            "can never run",
+        );
+    }
+}
+
 /// Memory safety on AArch64: a bug planted for each memory rule is found, as x86-64's
 /// `memory_rules_find_each_planted_bug` finds them in its dialect. Each case replaces `old` with
 /// `new` in the AArch64 template and wants a violation of `rule` whose text contains `needle`.
@@ -2185,8 +2206,7 @@ async fn an_aarch64_frame_past_the_stack_limit_is_refused() {
     let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
     assert!(
         report.violations.iter().any(|violation| {
-            violation.rule == Rule::StackSize
-                && violation.to_string().contains("more than 1048576")
+            violation.rule == Rule::StackSize && violation.to_string().contains("more than 1048576")
         }),
         "{all:#?}"
     );
