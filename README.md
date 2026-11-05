@@ -178,9 +178,9 @@ code, and creates the lock.
 
 [BENCHMARKS.md](BENCHMARKS.md) measures lengua programs against the same programs in C, C++ and
 Rust, built with every optimization for this CPU (`cargo bench --bench against_rust_and_c`
-measures again). On this machine, lengua's best version is ahead or level on every workload and
-every measure, with memory safety proven rather than checked at run time, and uses less than half
-the memory:
+measures again). On this machine, lengua's best version is ahead or level on every workload in
+CPU time, wall time, peak memory and file size. It has memory safety proven rather than checked at
+run time, and uses less than half the memory. Where it isn't ahead is described below the table.
 
 | Workload | Cycles | CPU time | Wall time | Peak memory |
 |---|---|---|---|---|
@@ -204,6 +204,17 @@ measures the same programs on GitHub's ARM64 runner. GitHub's x86-64 runners are
 half without AVX-512: on six draws of them (2026-11-04, [todo.md](todo.md) has each), including
 two CPUs without AVX-512, the baseline SSE2 word count took from level to 1.6 times less CPU time
 and wall time than the best of C, C++ and Rust.
+
+Where lengua isn't ahead:
+- **Instructions.** It runs more instructions than the best other on the histogram (0.7×) and the
+  CRC-32C (0.5×), and the CRC-32C also has more L1 misses and mispredicted branches. Vector and
+  multi-chain code does more per instruction.
+- **The histogram.** Its "level" is about 2% more CPU time and wall time than Rust's.
+- **The shout without AVX-512.** On a CPU without AVX-512, the best shout is the SSE2 form on 16
+  threads, which takes 814 µs of CPU time against plain Rust's 603 µs.
+- **The CRC-32C on ARM64.** On GitHub's ARM64 runner, it takes more wall time than C++ (0.7×).
+
+The roadmap in [todo.md](todo.md) closes these gaps and gates speed on all six targets.
 
 ## Develop
 
