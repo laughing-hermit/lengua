@@ -299,6 +299,7 @@ fn copies_its_input() -> Programs {
 }
 
 /// A program that writes a byte to `descriptor` and exits with the error that got, negated.
+#[cfg(unix)]
 fn writes_to(descriptor: i32) -> Programs {
     PerTarget {
         linux_x86_64: x86(

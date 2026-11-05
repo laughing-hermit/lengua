@@ -40,7 +40,7 @@ use tokio::sync::mpsc;
 
 use crate::connect::{self, Made, Reach, Relay};
 use crate::platform::{Allowed, Pin};
-use crate::runner::{End, Job, LAUNCH_FLAG, Limits, Net, OPEN_FILES, Run, portable_run};
+use crate::runner::{End, Job, LAUNCH_FLAG, Limits, OPEN_FILES, Run, portable_run};
 use crate::supervise::SUPERVISE_FLAG;
 use crate::supply::Supply;
 use crate::syscalls::host::{
