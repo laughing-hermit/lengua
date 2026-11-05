@@ -24,12 +24,28 @@ static TURNS: std::sync::RwLock<()> = std::sync::RwLock::new(());
 /// a proof runs alone.
 const ALONE_PAST: u64 = 150;
 
-/// How many times longer than on the 16-core computer the tests were tuned on a proof's budget is
-/// here, so a proof that finishes there finishes here too: a computer with fewer cores gets
-/// proportionally longer, a 4-core CI runner four times.
+/// What [`speed_probe`] reads on the computer the budgets are set by: a GitHub runner of Linux on
+/// x86-64 with 4 vCPUs (an AMD EPYC 9V45 read 67 ms on 2026-11-05, and ARM64 Linux's runner 66),
+/// where a scale of [`REFERENCE_SCALE`] has been enough for every proof.
+const REFERENCE_PROBE_MS: f64 = 67.0;
+
+/// The scale that has been enough on the reference computer.
+const REFERENCE_SCALE: f64 = 4.0;
+
+/// How many times longer than the budgets are written for a proof's time is here, so a proof that
+/// finishes on the reference computer finishes on this one too: in proportion to how long the
+/// speed probe takes here against there. It is measured once, not worked out from the number of
+/// cores, because a runner with as many cores can be much slower or faster than another, and a
+/// slow one reached other verdicts than a fast one in the same time.
 fn scale() -> u64 {
-    let cores = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
-    (16 / cores.max(1)).max(1) as u64
+    static SCALE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *SCALE.get_or_init(|| {
+        let here = speed_probe().as_secs_f64() * 1000.0;
+        let ratio = REFERENCE_SCALE * here / REFERENCE_PROBE_MS;
+        // A tenth of slack under, so a reading a little under the reference doesn't cost a whole
+        // step of the budget.
+        (ratio - 0.1).ceil().max(1.0) as u64
+    })
 }
 
 /// How long this computer takes to do a fixed amount of integer work spread over every core, the
@@ -59,8 +75,8 @@ fn speed_probe() -> Duration {
         .unwrap_or_default()
 }
 
-/// Prints what [`speed_probe`] reads here, to set the reference [`scale`] is measured against
-/// from the runners' own numbers (dispatch the ignored tests with this filter and read the log).
+/// Prints what [`speed_probe`] reads here and the scale it makes, to check [`REFERENCE_PROBE_MS`]
+/// against the runners' own numbers (dispatch the ignored tests with this filter).
 #[test]
 #[ignore = "prints this computer's speed probe, to calibrate the budgets' scale by"]
 fn the_speed_probe_reads() {
@@ -174,8 +190,8 @@ fn block(spec: &str, index: usize) -> Generated {
     suite.generated[index].clone()
 }
 
-/// A proof's budget of `seconds` on the 16-core computer these tests were tuned on, stretched by
-/// [`scale`] on a computer with fewer cores, so a proof that finishes there finishes here too.
+/// A proof's budget of `seconds` on the computer these tests are set for, stretched by [`scale`]
+/// on a slower one, so a proof that finishes there finishes here too.
 fn budget(seconds: u64) -> Budget {
     Budget {
         max_paths: 64,
