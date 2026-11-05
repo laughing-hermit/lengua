@@ -297,12 +297,13 @@ them, and any other build is proven again by itself.
 
 The bar is that a program the agent writes through lengua takes less CPU time, less wall time,
 less peak memory and a smaller file than the best of C, C++ and Rust built with every optimization
-for the CPU, on every workload and every target:
+for the CPU, on every workload and every target. It is one program, because a person runs one: the
+fastest tier the CPU supports must win all four measures at once.
 - A lead in time counts when the runs show it: they alternate between the languages, and lengua's
   median must be lower with 99% confidence. A difference within the noise doesn't count.
 - Memory and file size are compared as measured, and lengua's must be smaller.
-- Each language is shown at its best, with vector code and, where any language's best is
-  threaded, a threaded version.
+- The others are shown at their best on each measure, which can be a different program for each
+  (threaded for time, not for memory), and lengua's one program must be ahead of both.
 - Instructions and cycles are reported rather than compared, since vector code does more per
   instruction.
 
