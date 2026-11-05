@@ -296,9 +296,13 @@ this run are listed above), heaviest first:
    without AVX-512, nothing skipped: run 41894634835). What still needs the CPU is the AVX-512
    tiers' own tests (`wc-avx512`, `count`'s benchmark variant, the benchmark-only programs), which
    note their skip in the run summary, and the model-against-CPU vector harness's probes, so its
-   SSE2, AVX2, AES, SHA and PCLMUL probes meet real silicon only on the draws that run it. The
-   x86-64 job also has no QEMU, so about 34 ARM64-under-QEMU tests are silent no-ops there. The
-   plan is in "Fitting GitHub's free runners" below.
+   SSE2, AVX2, AES, SHA and PCLMUL probes meet real silicon only on the draws that run it.
+   Neither job has QEMU, so each table's cells for the other CPU are skipped with a note: 77 notes
+   on the x86-64 runner and 74 on the ARM64 one in the full runs of 2026-11-05 (41942378048 and
+   41942389027), besides 2 for counters and 2 for SVE on x86-64. They are not gaps: a cell runs
+   natively on the runner of its own CPU, and the notes say that the other CPU's cells ran
+   elsewhere. A QEMU job on x86-64 (plan below) would run the ARM64 cells there too. The plan is
+   in "Fitting GitHub's free runners" below.
 4. **Programs.**
    - Buffer sizes differ between twins: the fast `crc32c` 1 MiB against 64 KiB, `upcase` retries
      writes 4096 against 64 times (`count` and `padded` are 64 KiB on both since 2026-11-04).
@@ -436,7 +440,8 @@ sandbox is not an obstacle, and no step of setup has failed in about 160 jobs. W
   including `filter`, the cache saved even when a job fails, no duplicate `build` jobs on a
   dispatch); (3) *workflow, the owner's call*: macOS and Windows out of the push path, to a weekly
   and manual workflow, losing the per-push red marks; (4) *workflow, one dry run first*: a QEMU job
-  on x86-64, which un-skips about 34 tests and the ARM half of the mutation test; (5) *workflow and
+  on x86-64, which un-skips the ARM64 cells of the tables (77 skip notes in the full run of
+  2026-11-05) and the ARM half of the mutation test; (5) *workflow and
   script*: shard each suite (3 or 4 shards of prover tests, split by hash; estimated 34 to 39
   minutes down to 12 to 15), not with `cargo-nextest`, whose one process per test breaks the
   process-wide proving lock; (6) *code*: a baseline variant of the model-against-CPU vector test
