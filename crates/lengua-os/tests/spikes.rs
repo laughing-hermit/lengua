@@ -196,7 +196,11 @@ mod macos {
             "SPIKE macOS: unsigned, it ended {:?}; signing it ad hoc",
             first.status
         );
-        must(dir, "codesign", &["--force", "-s", "-", &program.to_string_lossy()]);
+        must(
+            dir,
+            "codesign",
+            &["--force", "-s", "-", &program.to_string_lossy()],
+        );
         Command::new(program).output().expect("a start")
     }
 
@@ -236,7 +240,11 @@ mod macos {
         // crashing one is its fault and not the missing signature.
         if cfg!(target_arch = "aarch64") {
             for program in [&crash, &hello] {
-                must(&dir, "codesign", &["--force", "-s", "-", &program.to_string_lossy()]);
+                must(
+                    &dir,
+                    "codesign",
+                    &["--force", "-s", "-", &program.to_string_lossy()],
+                );
             }
         }
         for _ in 0..3 {
@@ -319,7 +327,9 @@ mod windows {
                 "kernel32.lib",
             ],
         );
-        let output = Command::new(dir.join("hello.exe")).output().expect("a start");
+        let output = Command::new(dir.join("hello.exe"))
+            .output()
+            .expect("a start");
         println!(
             "SPIKE Windows hello: {:?}, stdout {:?}, stderr {:?}",
             output.status,
