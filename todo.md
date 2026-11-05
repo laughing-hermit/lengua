@@ -237,7 +237,6 @@ lengua is perfected when each of these is shown by a green run on GitHub's runne
   - Today a program gets the connections its spec names, made before it starts.
 - **SVE on Windows ARM64:** it needs a vector-length probe through the edge, and Windows's SVE
   support is unverified.
-- **A native cvc5 on Windows ARM64:** there's no release build, so the x64 one runs emulated.
 - **macOS's sandbox without Seatbelt:** the App Sandbox, with entitlements on the ad-hoc-signed
   program. Needed only if Apple removes Seatbelt or changes it past what the profile can keep;
   the gate on the newest macOS image would show that.
@@ -273,3 +272,8 @@ routed around through other models or subagents.
 - **2026-11-04.** A planning reply (Opus 5.5) was stopped while this file's sections were being
   read for the six-target plan. Nothing was lost. Its content isn't produced again, and the topic
   near it is left alone.
+- **2026-11-05.** A reply (Opus 5.5) was stopped while round 1's workflow and the macOS and Windows
+  spikes were being planned. Nothing was lost, and its content isn't produced again. With three
+  stops near the same ground, the tests that try to get past the sandbox on macOS and Windows are
+  left for the owner or another engineer: ROADMAP.md's bypass cells, and the spikes' checks of
+  what the sandbox refuses. The rest of round 1 goes on.

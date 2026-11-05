@@ -387,7 +387,7 @@ layouts, and `PIPE_WRITE`. Each of these facts is then written once. The module 
 | | link | libraries | a user needs |
 |---|---|---|---|
 | Linux | `ld.lld --fatal-warnings [--no-relax] -e _start`, static ELF | none | llvm and lld |
-| macOS | `ld64.lld -arch x86_64\|arm64 -platform_version macos 11.0 11.0 -e __start -fatal_warnings`; dynamic, LC_MAIN, ad-hoc signed on ARM64 | a minimal libSystem.tbd lengua writes from the edge's imports | LLVM only (Homebrew or the release archive); no Xcode, no SDK |
+| macOS | `ld64.lld -arch x86_64\|arm64 -platform_version macos 11.0 11.0 -e __start -fatal_warnings`; dynamic, LC_MAIN, ad-hoc signed on ARM64 | a minimal libSystem.tbd lengua writes from the edge's imports | LLVM only (llvm-mc and lld, from conda-forge, Homebrew on ARM64, or the release archive); no Xcode, no SDK |
 | Windows | `lld-link /entry:_start /subsystem:console /nodefaultlib /dynamicbase /nxcompat /highentropyva /stack:0x800000 /Brepro /WX /debug:symtab` | kernel32 (+ ws2_32, bcryptprimitives when used), import libraries built by llvm-dlltool from `.def` files lengua writes, cached in the data folder | LLVM's Windows release archive (llvm-mc, lld-link, llvm-dlltool); no Windows SDK |
 
 Triples: `{x86_64,aarch64}-unknown-linux-gnu`, `{x86_64,arm64}-apple-macos11.0`,
@@ -412,11 +412,15 @@ Triples: `{x86_64,aarch64}-unknown-linux-gnu`, `{x86_64,arm64}-apple-macos11.0`,
     maxprot or SG_READ_ONLY, and PE's section flags.
   - Every byte of the text section belongs to a function.
   - Imports are checked as described in §1.
-- **Solvers.**
-  - z3 4.16.0 runs natively on all six runners.
-  - cvc5 1.3.4 runs natively on five. On windows-11-arm it runs under x64 emulation, and gets a
-    native build if emulation ever changes a verdict.
-  - Both are pinned by SHA-256 in `scripts/ci/tools.tsv`.
+- **Solvers.** z3 4.16.0 and cvc5 1.3.4 both publish native builds for all six targets
+  (checked 2026-11-05; cvc5's include `cvc5-Win64-arm64-static.zip`). Both are pinned by SHA-256
+  in `scripts/ci/tools.tsv`.
+- **LLVM on macOS and Windows in CI.** LLVM publishes no Intel macOS archive for 22.1.8, and
+  Homebrew no longer builds Intel bottles for llvm or lld. conda-forge does publish `lld` and
+  `llvm-tools` 22.1.8 for osx-64, osx-arm64, win-64 and win-arm64. So setup installs them there
+  with micromamba (pinned by SHA-256), the same LLVM version the Linux jobs take from
+  apt.llvm.org. Users' installs follow in R6, where shipping llvm-mc and lld in the release
+  archive is weighed.
 
 ### 5. The sandbox on each OS
 
@@ -452,14 +456,15 @@ Two OS differences remain:
 **Fail closed.** On every OS, the launcher confirms the confinement is in force before it starts
 a program. If it isn't, `run` and the tests refuse, and say why.
 - Linux: Landlock's ruleset status and seccomp's filter, as today.
-- macOS: `sandbox_init`'s result, then a probe that must be refused: opening a path outside the
-  folder, and connecting out.
+- macOS: `sandbox_init`'s result.
 - Windows: the token's AppContainer and LPAC flags, and the process's assignment to the job.
 
-Seatbelt is deprecated and its rules undocumented, so macOS's sandbox tests (the bypass cells, the
-probe, the spike's cases) gate on the newest macOS image GitHub offers (§6). If Apple ever removes
-Seatbelt, the fallback to weigh is the App Sandbox: entitlements on the ad-hoc-signed program. That
-fallback is in todo.md.
+Seatbelt is deprecated and its rules undocumented, so macOS's sandbox tests gate on the newest
+macOS image GitHub offers (§6). If Apple ever removes Seatbelt, the fallback to weigh is the App
+Sandbox: entitlements on the ad-hoc-signed program. That fallback is in todo.md.
+
+The tests that try to get past the sandbox on macOS and Windows are left for the owner (todo.md's
+stopped list, 2026-11-05).
 
 ### 6. CI on the free runners
 
@@ -581,27 +586,25 @@ Nothing ran, since R0 changed documents only; the commit is the record.
      - built with llvm-mc, ld64.lld and a generated tbd;
      - calling through the GOT;
      - with a lowered `.rodata`, a `.bss`, a relative table, and symbols that start with `l` and
-       `L`;
-     - run plain, and under sandbox_init with deny-default.
+       `L`.
 
      It checks:
      - a socketpair end at fd 4, and a descriptor received by SCM_RIGHTS;
-     - accepting and polling an inherited TCP listener under `deny network*`;
      - a crashing child: ReportCrash's delay, and SIGBUS;
      - a pseudo-terminal;
      - whether a stored name's bytes can be read back.
    - **Windows.** The same program, through lld-link with `/debug:symtab` and a dlltool-built
-     kernel32.lib, run in an LPAC AppContainer, a job and a handle list. It checks:
+     kernel32.lib. It checks:
      - a handed-over pipe, connected loopback socket, listener and DuplicateHandle'd file, and
        which of ReadFile, WriteFile, recv, send, accept, WSAPoll and shutdown work on each;
-     - that CreateFileW and an outbound connect are refused;
      - that GetCommandLineW and the lpReserved2 table arrive;
      - a chain of frames under 4 KiB on a guard-paged stack;
      - an empty environment with WSAStartup;
-     - a working folder with no ACL for the container;
      - tick-based CPU time against cycle time;
      - commit and working set for a large `.bss`;
      - whether a 4,096-byte write is read whole from a byte-mode pipe.
+   - The spikes' checks of what the sandbox refuses are left for the owner (todo.md's stopped
+     list, 2026-11-05).
 2. **The build.**
    - Add `.gitattributes`.
    - In Cargo.toml: the Linux-only crates go under `cfg(target_os = "linux")`, rustix and nix
@@ -777,12 +780,12 @@ macos-26, and also every week on macos-15-intel and macos-15.
    - Places descriptors 3, 4 and up, and 4,352, and sweeps /dev/fd for anything else.
    - Sets rlimits and ignores SIGPIPE.
    - Applies the Seatbelt profile, written once in os/macos/sandbox.rs, with the inherited
-     listener's allowance. Runs the fail-closed probe (§5), then execve.
+     listener's allowance. Confirms the confinement is in force (§5), then execve.
    - Measures with wait4.
    - Maps SIGBUS to 11.
    - Supplies the machine facts and the data folder.
-6. **Bypass cells.** An unchecked program that calls libSystem's open and connect through the
-   GOT, which Seatbelt must stop.
+6. **Left for the owner:** the tests that try to get past the sandbox (todo.md's stopped list,
+   2026-11-05).
 7. **Coverage.** The model-against-CPU harnesses on Apple's M1 and on the Intel Mac;
    tests/edge.rs's pseudo-terminal rows.
 8. **Docs.** DESIGN's "Porting", README, plugin.json's description, and the skills' machine line.
@@ -798,8 +801,7 @@ macos-26, and also every week on macos-15-intel and macos-15.
 - Mach-O corners: `__bss` zero fill, and tables across sections.
 - The ARM64 macOS runner's 7 GB against memory-heavy proofs.
 - Only 5 macOS jobs at once, and the queue for the Intel runner.
-- Seatbelt is deprecated: the fail-closed probe and the gate on the newest image are the
-  mitigation.
+- Seatbelt is deprecated: failing closed and the gate on the newest image are the mitigation.
 
 ### R4 — Windows, x86-64 and ARM64
 
@@ -834,8 +836,9 @@ windows-11-arm.
    - Exceptions mapped to signals, and timeouts by TerminateJobObject.
    - Cycle time and working set.
    - The broker over an inherited duplex named pipe, with DuplicateHandle.
-5. **Coverage.** The Windows bypass cells, ConPTY rows in tests/edge.rs, and the harnesses on both
-   Windows runners.
+5. **Coverage.** ConPTY rows in tests/edge.rs, and the harnesses on both Windows runners. The
+   tests that try to get past the sandbox are left for the owner (todo.md's stopped list,
+   2026-11-05).
 
 **Verified by.**
 - A full `test` on six runners.
@@ -846,7 +849,7 @@ windows-11-arm.
 - AppContainer quirks.
 - The console.
 - Process creation and Defender adding latency to every test run.
-- cvc5 under emulation.
+- cvc5's and z3's Windows ARM64 builds, new to lengua.
 
 ### R5 — the performance finish line
 
