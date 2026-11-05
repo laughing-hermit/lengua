@@ -90,7 +90,10 @@ mod tests {
     #[test]
     fn prefers_xdg_data_home() {
         let dir = DataDir::from_vars(Some(absolute("xdg")), Some(absolute("home/u")), None);
-        assert_eq!(dir, Some(DataDir::new(PathBuf::from(absolute("xdg")).join("lengua"))));
+        assert_eq!(
+            dir,
+            Some(DataDir::new(PathBuf::from(absolute("xdg")).join("lengua")))
+        );
     }
 
     #[cfg(not(any(windows, target_os = "macos")))]
@@ -123,7 +126,9 @@ mod tests {
         let dir = DataDir::from_vars(None, Some(absolute("Users\\u")), Some(absolute("Local")));
         assert_eq!(
             dir,
-            Some(DataDir::new(PathBuf::from(absolute("Local")).join("lengua")))
+            Some(DataDir::new(
+                PathBuf::from(absolute("Local")).join("lengua")
+            ))
         );
     }
 

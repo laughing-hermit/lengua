@@ -1450,7 +1450,6 @@ fn confine(
     seccompiler::apply_filter(&filter).map_err(|error| format!("seccomp: {error}"))
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

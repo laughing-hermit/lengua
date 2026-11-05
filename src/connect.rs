@@ -25,9 +25,9 @@ use std::os::fd::AsFd;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use tokio::io::{AsyncRead, AsyncWrite};
 #[cfg(unix)]
 use tokio::io::AsyncWriteExt as _;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 #[cfg(unix)]
 use tokio::net::UnixStream;

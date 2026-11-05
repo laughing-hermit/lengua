@@ -635,7 +635,10 @@ fn sve_bytes() -> u16 {
 
 /// No other CPU has SVE, and no other system tells its length yet: Apple's CPUs have none, and
 /// Windows's length is a todo item for round 6.
-#[cfg(not(any(target_arch = "x86_64", all(target_os = "linux", target_arch = "aarch64"))))]
+#[cfg(not(any(
+    target_arch = "x86_64",
+    all(target_os = "linux", target_arch = "aarch64")
+)))]
 const fn sve_bytes() -> u16 {
     0
 }
