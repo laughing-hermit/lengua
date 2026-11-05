@@ -204,6 +204,9 @@ pub struct UnsafeBlock {
 pub struct Source {
     /// The CPU it's written for, as its first line says.
     pub isa: Isa,
+    /// Whether it defines `_start` and makes its own system calls, or defines `main` and calls the
+    /// edge's operations.
+    pub form: crate::edge::Form,
     /// The constants, by name.
     pub constants: BTreeMap<String, Constant>,
     /// The data symbols, in order.
@@ -1177,7 +1180,14 @@ impl Parser {
                 ),
             },
             ".globl" | ".global" => {
-                if arguments != "_start" {
+                if self.source.form == crate::edge::Form::Edge {
+                    self.violation(
+                        Rule::Scope,
+                        number,
+                        format!("{arguments} is exported"),
+                        "lengua exports `_start`; every symbol of main.s stays local",
+                    );
+                } else if arguments != "_start" {
                     self.violation(
                         Rule::Scope,
                         number,
@@ -1761,20 +1771,44 @@ impl Parser {
                 "give each symbol its own name",
             );
         }
-        if self.source.function("_start").is_none() {
-            self.dialect(
-                last_line,
-                "there's no _start function",
-                "start from the template, which has one",
-            );
-        }
-        if !self.globals.iter().any(|(name, _)| name == "_start") {
-            self.violation(
-                Rule::Scope,
-                last_line,
-                "_start isn't exported",
-                "add `.globl _start` in .text",
-            );
+        match self.source.form {
+            crate::edge::Form::Inline => {
+                // A program is in one form or the other: lengua's `_start` and a `_start` of its
+                // own can't both begin it.
+                if let Some(main) = self.source.function("main") {
+                    let line = main.line;
+                    self.dialect(
+                        line,
+                        "main.s defines main as well as _start",
+                        "a program defines `_start` and makes its own system calls, or defines \
+                         `main` and calls the edge's operations: not both",
+                    );
+                }
+                if self.source.function("_start").is_none() {
+                    self.dialect(
+                        last_line,
+                        "there's no _start function",
+                        "start from the template, which has one",
+                    );
+                }
+                if !self.globals.iter().any(|(name, _)| name == "_start") {
+                    self.violation(
+                        Rule::Scope,
+                        last_line,
+                        "_start isn't exported",
+                        "add `.globl _start` in .text",
+                    );
+                }
+            }
+            crate::edge::Form::Edge => {
+                if self.source.function("main").is_none() {
+                    self.dialect(
+                        last_line,
+                        "there's no main function",
+                        "define `main` with `.type main, @function` and `.size main, . - main`",
+                    );
+                }
+            }
         }
         (self.source, self.violations)
     }
@@ -1961,6 +1995,7 @@ pub fn parse(text: &str) -> (Source, Vec<Violation>) {
     let mut parser = Parser {
         source: Source {
             isa: isa_of(text),
+            form: crate::edge::form(text),
             ..Source::default()
         },
         violations: Vec::new(),

@@ -539,9 +539,10 @@ pub struct Lend {
 }
 
 /// How a program is written: with its own system calls, or against the edge.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Form {
     /// It defines `_start`, makes its own system calls and carries its own library.
+    #[default]
     Inline,
     /// It defines `main` and calls the edge.
     Edge,

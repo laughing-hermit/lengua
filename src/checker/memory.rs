@@ -442,7 +442,13 @@ fn states(
     let abi = program.abi();
     let start = function.name() == "_start";
     let mut entry = State::unknown(abi);
-    if !start {
+    // In the edge form lengua's `_start` calls `main` with the argument count and the two arrays
+    // of strings in its first three argument registers.
+    if program.source.form == crate::edge::Form::Edge && function.name() == "main" {
+        entry.set(abi.edge_arguments[0], Owner::Number);
+        entry.set(abi.edge_arguments[1], Owner::Arguments);
+        entry.set(abi.edge_arguments[2], Owner::Arguments);
+    } else if !start {
         for &register in abi.arguments {
             entry.set(
                 register,

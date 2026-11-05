@@ -59,6 +59,15 @@ impl Checker<'_, '_> {
             fix: fix.into(),
         });
     }
+
+    /// Whether `name` is where the program starts and never returns from: `_start` in the inline
+    /// form, `main` in the edge form.
+    fn is_entry(&self, name: &str) -> bool {
+        match self.program.source.form {
+            crate::edge::Form::Inline => name == "_start",
+            crate::edge::Form::Edge => name == "main",
+        }
+    }
 }
 
 /// The canonical reading function, and the constants its body names.
@@ -108,8 +117,12 @@ pub fn check(
     checker.recursion();
     checker.shared_data(&users);
     checker.lengths();
-    checker.canonical(template);
-    checker.canonical_fill(fill_template);
+    // The inline form carries copies of assert_fail and fill, held to the template's; in the edge
+    // form they are lengua's and main.s has none.
+    if program.source.form == crate::edge::Form::Inline {
+        checker.canonical(template);
+        checker.canonical_fill(fill_template);
+    }
     let functions = program
         .functions
         .iter()
@@ -205,13 +218,24 @@ impl Checker<'_, '_> {
             .filter(|(_, exit)| **exit == Exit::Return)
             .map(|(index, _)| index)
             .collect();
-        if name == "_start" {
+        if self.is_entry(name) {
             if let Some(first) = returns.first() {
+                let (problem, fix) = if name == "_start" {
+                    (
+                        "_start returns, but it has nothing to return to",
+                        "end _start with the exit system call",
+                    )
+                } else {
+                    (
+                        "main returns, but it has nothing to return to",
+                        "end main with a call to os_exit",
+                    )
+                };
                 self.violation(
                     Rule::Functions,
                     function.steps[*first].source.line,
-                    "_start returns, but it has nothing to return to",
-                    "end _start with the exit system call",
+                    problem,
+                    fix,
                 );
             }
         } else if returns.len() != 1 {
@@ -227,7 +251,7 @@ impl Checker<'_, '_> {
     /// Rule 4: callee-saved registers the function changes are pushed first and popped, in
     /// mirror order, right before its ret.
     fn callee_saved(&mut self, function: &MappedFunction<'_>, flow: &Flow) {
-        if function.name() == "_start" {
+        if self.is_entry(function.name()) {
             return;
         }
         let steps = &function.steps;
