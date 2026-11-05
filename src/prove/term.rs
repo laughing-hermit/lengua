@@ -5239,7 +5239,9 @@ mod tests {
         let all_again = pool.bool_and(other_way, below_five);
         for value in 0..128_u128 {
             let at = |term: Term| {
-                pool.evaluate_with(term, &mut |_, variable| (variable == small).then_some(value))
+                pool.evaluate_with(term, &mut |_, variable| {
+                    (variable == small).then_some(value)
+                })
             };
             // Below 10 follows from below 5 here, which the intervals don't know.
             let wanted = u128::from(value < 5 && value > 2);
