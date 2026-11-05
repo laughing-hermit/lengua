@@ -2001,7 +2001,7 @@ mod tests {
         }
     }
 
-    const TEMPLATE: &str = include_str!("../../plugin/skills/compile/assets/main-template.s");
+    const TEMPLATE: &str = include_str!("inline_form/main-template.s");
 
     fn violations(text: &str) -> Vec<String> {
         parse(text).1.iter().map(ToString::to_string).collect()

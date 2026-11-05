@@ -4595,3 +4595,22 @@ async fn a_bounds_check_against_a_constant_in_a_register_is_held_to_the_buffer()
         assert_violation(&report, Rule::Indirection, line_of(&text, compare), access);
     }
 }
+
+/// The frozen texts are the inline form's: each is the constant it is looked up by, none defines
+/// `main`, and a name that isn't one of them has none.
+#[test]
+fn the_frozen_texts_are_the_inline_forms() {
+    let frozen = [
+        ("main-template.s", TEMPLATE),
+        ("parallel-template.s", PARALLEL_TEMPLATE),
+        ("fill.s", FILL_TEMPLATE),
+        ("linux-aarch64/main-template.s", AARCH64_TEMPLATE),
+        ("linux-aarch64/parallel-template.s", PARALLEL_TEMPLATE_AARCH64),
+        ("linux-aarch64/fill.s", AARCH64_FILL_TEMPLATE),
+    ];
+    for (name, text) in frozen {
+        assert_eq!(super::frozen(name), Some(text), "{name}");
+        assert_eq!(crate::edge::form(text), crate::edge::Form::Inline, "{name}");
+    }
+    assert_eq!(super::frozen("server-template.s"), None);
+}

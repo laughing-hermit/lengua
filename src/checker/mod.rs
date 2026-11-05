@@ -30,29 +30,45 @@ use crate::spec::Syscall;
 pub use rules::Facts;
 pub use source::{Source, UnsafeBlock};
 
-/// The template program; its assert_fail and assert_message are the canonical ones.
-pub const TEMPLATE: &str = include_str!("../../plugin/skills/compile/assets/main-template.s");
+/// The template program; its assert_fail and assert_message are the canonical ones. This and the
+/// five below are the inline form's texts, frozen in `inline_form/` as the shipped templates were
+/// when programs began to move to the edge form: the shipped ones change as programs do, and the
+/// rules hold the inline form to these until the form is gone.
+pub const TEMPLATE: &str = include_str!("inline_form/main-template.s");
 
 /// The parallel template; its parallel_for, start_worker and join_worker, their data and their
 /// constants are the canonical thread code.
-pub const PARALLEL_TEMPLATE: &str =
-    include_str!("../../plugin/skills/compile/assets/parallel-template.s");
+pub const PARALLEL_TEMPLATE: &str = include_str!("inline_form/parallel-template.s");
 
 /// AArch64's parallel template: the same threads in AArch64's instructions.
 pub const PARALLEL_TEMPLATE_AARCH64: &str =
-    include_str!("../../plugin/skills/compile/assets/linux-aarch64/parallel-template.s");
+    include_str!("inline_form/linux-aarch64/parallel-template.s");
 
 /// fill, which reads until a buffer is full, the input ends or an end byte arrives; its body
 /// and constants are canonical, so the proof can cover every way the input arrives.
-pub const FILL_TEMPLATE: &str = include_str!("../../plugin/skills/compile/assets/fill.s");
+pub const FILL_TEMPLATE: &str = include_str!("inline_form/fill.s");
 
 /// The AArch64 template; its assert_fail and assert_message are the canonical ones there.
-pub const AARCH64_TEMPLATE: &str =
-    include_str!("../../plugin/skills/compile/assets/linux-aarch64/main-template.s");
+pub const AARCH64_TEMPLATE: &str = include_str!("inline_form/linux-aarch64/main-template.s");
 
 /// AArch64's fill, canonical as x86-64's is.
-pub const AARCH64_FILL_TEMPLATE: &str =
-    include_str!("../../plugin/skills/compile/assets/linux-aarch64/fill.s");
+pub const AARCH64_FILL_TEMPLATE: &str = include_str!("inline_form/linux-aarch64/fill.s");
+
+/// The frozen text of the shipped asset called `name`, as the compile skill's assets folder names
+/// it (`main-template.s`, `parallel-template.s` and `fill.s`, and AArch64's under
+/// `linux-aarch64/`), for a test that holds the inline form to what its rules were written against.
+#[must_use]
+pub fn frozen(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "main-template.s" => TEMPLATE,
+        "parallel-template.s" => PARALLEL_TEMPLATE,
+        "fill.s" => FILL_TEMPLATE,
+        "linux-aarch64/main-template.s" => AARCH64_TEMPLATE,
+        "linux-aarch64/parallel-template.s" => PARALLEL_TEMPLATE_AARCH64,
+        "linux-aarch64/fill.s" => AARCH64_FILL_TEMPLATE,
+        _ => return None,
+    })
+}
 
 /// At most this many violations are reported at once.
 pub const MAX_VIOLATIONS: usize = 20;

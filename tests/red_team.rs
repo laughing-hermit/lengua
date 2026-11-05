@@ -872,7 +872,13 @@ fn attempts() -> Vec<Attempt> {
         .collect()
 }
 
+/// The text of a file in the compile skill's assets; the inline form's templates are the frozen
+/// copies its rules were written against (src/checker/inline_form/), which the shipped ones leave
+/// as programs move to the edge form.
 fn asset(name: &str) -> String {
+    if let Some(text) = lengua::checker::frozen(name) {
+        return text.to_owned();
+    }
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("plugin/skills/compile/assets")
         .join(name);

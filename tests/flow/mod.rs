@@ -121,9 +121,14 @@ fn read(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
 }
 
-/// The text of a file in the compile skill's assets.
+/// The text of a file in the compile skill's assets. The inline form's templates are the frozen
+/// copies its rules were written against (src/checker/inline_form/), which the shipped ones leave
+/// as programs move to the edge form.
 pub fn asset(name: &str) -> String {
-    read(&root().join("plugin/skills/compile/assets").join(name))
+    match lengua::checker::frozen(name) {
+        Some(text) => text.to_owned(),
+        None => read(&root().join("plugin/skills/compile/assets").join(name)),
+    }
 }
 
 /// The text of `target`'s template program.

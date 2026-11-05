@@ -21,7 +21,7 @@ mod per_target;
 
 use std::collections::BTreeSet;
 use std::io::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use lengua::isa::Isa;
@@ -31,24 +31,18 @@ use lengua::targets::PerCpu;
 /// Functions by name, each with the mnemonics of its instructions in order.
 type Functions = Vec<(String, Vec<String>)>;
 
-/// A file of the compile skill's assets.
-fn asset(name: &str) -> String {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("plugin/skills/compile/assets")
-        .join(name);
-    std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
-}
-
-/// Each target's main template.
+/// Each target's main template, as the inline form's rules hold it: the frozen copy in
+/// src/checker/inline_form/, which the shipped template leaves behind as programs move to the edge
+/// form.
 const TEMPLATES: PerCpu<&str> = PerCpu {
-    x86_64: "main-template.s",
-    aarch64: "linux-aarch64/main-template.s",
+    x86_64: lengua::checker::TEMPLATE,
+    aarch64: lengua::checker::AARCH64_TEMPLATE,
 };
 
-/// Each target's fill.
+/// Each target's fill, frozen the same way.
 const FILLS: PerCpu<&str> = PerCpu {
-    x86_64: "fill.s",
-    aarch64: "linux-aarch64/fill.s",
+    x86_64: lengua::checker::FILL_TEMPLATE,
+    aarch64: lengua::checker::AARCH64_FILL_TEMPLATE,
 };
 
 /// The first line of each target's programs, which names the CPU's syntax.
@@ -133,22 +127,22 @@ fn between(text: &str, start: &str, end: &str) -> String {
 /// `target`'s program of fill and assert_fail: fill's constants and function, the template's
 /// assertion handler and its message, a buffer, and the driver.
 fn fill_program(target: Profile) -> String {
-    let template = asset(TEMPLATES.get(target));
-    let fill = asset(FILLS.get(target));
+    let template = *TEMPLATES.get(target);
+    let fill = *FILLS.get(target);
     format!(
         "{first}{constants}\n.section .rodata\n{message}\n.section .bss\n\
          .type buf, @object\nbuf:\n    .zero 64\n.size buf, . - buf\n\n{driver}\n{fill}\n{assert}",
         first = FIRST_LINES.get(target),
-        constants = between(&fill, ".equ SYS_READ", "MAX_FILL_READS, 1099511627776"),
+        constants = between(fill, ".equ SYS_READ", "MAX_FILL_READS, 1099511627776"),
         message = between(
-            &template,
+            template,
             ".type assert_message",
             ".size assert_message, . - assert_message"
         ),
         driver = DRIVERS.get(target),
-        fill = between(&fill, ".type fill, @function", ".size fill, . - fill"),
+        fill = between(fill, ".type fill, @function", ".size fill, . - fill"),
         assert = between(
-            &template,
+            template,
             ".type assert_fail, @function",
             ".size assert_fail, . - assert_fail"
         ),
@@ -325,15 +319,15 @@ fn run(executable: &Path, arguments: &[&str], stdin: &[&[u8]]) -> (String, Strin
 async fn the_template_links_one_instruction_per_line() {
     let folder = tempfile::tempdir().expect("temporary folder");
     for target in Profile::ALL {
-        let source = asset(TEMPLATES.get(target));
+        let source = *TEMPLATES.get(target);
         assert!(
             source.starts_with(*FIRST_LINES.get(target)),
             "line 1 of the {} template names the CPU",
             target.name()
         );
         let place = folder.path().join(target.name());
-        let executable = per_target::build(target, &place, "main", &source).await;
-        one_instruction_per_line(target, "the template", &source, &executable);
+        let executable = per_target::build(target, &place, "main", source).await;
+        one_instruction_per_line(target, "the template", source, &executable);
     }
 }
 
@@ -369,7 +363,7 @@ async fn the_template_does_what_its_spec_says() {
     for target in Profile::ALL {
         let place = folder.path().join(target.name());
         let executable =
-            per_target::build(target, &place, "main", &asset(TEMPLATES.get(target))).await;
+            per_target::build(target, &place, "main", TEMPLATES.get(target)).await;
         if per_target::way(target).is_none() {
             continue;
         }
@@ -575,7 +569,7 @@ async fn every_template_word_is_in_the_dialect() {
     let mut problems = Vec::new();
     for target in Profile::ALL {
         for (what, source) in [
-            ("the template", asset(TEMPLATES.get(target))),
+            ("the template", (*TEMPLATES.get(target)).to_owned()),
             ("the fill program", fill_program(target)),
         ] {
             let place = folder
