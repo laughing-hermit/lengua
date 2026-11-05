@@ -119,23 +119,52 @@ impl Toolchain {
         Ok(Self { assembler, linker })
     }
 
-    /// Assembles `source` into the object file `object`, treating warnings as errors.
+    /// Assembles `source` into the object file `object`, treating warnings as errors. A program
+    /// in the edge form ([`crate::edge::form`]) is assembled with lengua.s after it
+    /// ([`crate::edge::lengua_text`]), as one input written beside the object, so main.s's line
+    /// numbers are the same.
     pub async fn assemble(
         &self,
         profile: Profile,
         source: &Path,
         object: &Path,
     ) -> Result<(), BuildError> {
+        let assembly = self.with_lengua(profile, source, object).await?;
         let triple = format!("--triple={}", profile.llvm_triple());
         let args: [&OsStr; 6] = [
             triple.as_ref(),
             "--filetype=obj".as_ref(),
             "--fatal-warnings".as_ref(),
-            source.as_os_str(),
+            assembly.as_os_str(),
             "-o".as_ref(),
             object.as_os_str(),
         ];
         run_build_tool(BuildStep::Assemble, &self.assembler.path, &args).await
+    }
+
+    /// What `assemble` reads: `source` itself, or, for a program in the edge form, a file beside
+    /// `object` holding main.s and lengua.s.
+    async fn with_lengua(
+        &self,
+        profile: Profile,
+        source: &Path,
+        object: &Path,
+    ) -> Result<PathBuf, BuildError> {
+        let failed = |message: String| BuildError {
+            step: BuildStep::Assemble,
+            message,
+        };
+        let text = tokio::fs::read_to_string(source)
+            .await
+            .map_err(|error| failed(format!("could not read {}: {error}", source.display())))?;
+        let Some(lengua) = crate::edge::lengua_text(profile, &text) else {
+            return Ok(source.to_path_buf());
+        };
+        let both = object.with_extension("edge.s");
+        tokio::fs::write(&both, format!("{text}\n{lengua}"))
+            .await
+            .map_err(|error| failed(format!("could not write {}: {error}", both.display())))?;
+        Ok(both)
     }
 
     /// Links `object` into the static executable `executable`, treating warnings as errors. For

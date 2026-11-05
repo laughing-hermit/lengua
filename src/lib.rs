@@ -14,6 +14,7 @@ pub mod aes;
 pub mod checker;
 pub mod connect;
 pub mod data_dir;
+pub mod edge;
 pub mod expect;
 pub mod expr;
 #[cfg(test)]

@@ -620,7 +620,10 @@ pub(crate) async fn built(
     toolchain: &Toolchain,
     text: &str,
 ) -> Result<Vec<u8>, String> {
-    let key = Sha256Hex::of(text.as_bytes());
+    // A program in the edge form is built with lengua.s after it, which changes when lengua does:
+    // the cache keys on both, since target/ is kept between runs.
+    let lengua = crate::edge::lengua_text(profile, text).unwrap_or_default();
+    let key = Sha256Hex::of(format!("{text}\0{lengua}").as_bytes());
     let folder = root().join("target/golden-cache").join(key.as_str());
     let (assembly, object, executable, failure) = (
         folder.join("main.s"),
