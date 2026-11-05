@@ -38,11 +38,11 @@ impl Cpu<'_> {
     pub(super) fn execute_vector(&mut self, inst: Inst) -> Result<Step, Stop> {
         match inst {
             Inst::VectorThree { op, rd, rn, rm } => {
-                let lanes = self.v_three(op, rd, rn, rm);
+                let lanes = self.v_three(op, rd, rn, rm)?;
                 self.v_set_lanes(rd, &lanes);
             }
             Inst::VectorTwo { op, rd, rn } => {
-                let lanes = self.v_two(op, rd, rn);
+                let lanes = self.v_two(op, rd, rn)?;
                 self.v_set_lanes(rd, &lanes);
             }
             Inst::Pmull { rd, rn, rm } => {
@@ -50,11 +50,11 @@ impl Cpu<'_> {
                 self.set_v_bytes(rd, &bytes);
             }
             Inst::VectorAcross { op, rd, rn } => {
-                let value = self.v_across(op, rd, rn);
+                let value = self.v_across(op, rd, rn)?;
                 self.v_set_scalar(rd, value);
             }
             Inst::VectorShift { op, rd, rn, amount } => {
-                let lanes = self.v_shift(op, rd, rn, u32::from(amount));
+                let lanes = self.v_shift(op, rd, rn, u32::from(amount))?;
                 self.v_set_lanes(rd, &lanes);
             }
             Inst::VectorPermute { op, rd, rn, rm } => {
@@ -252,8 +252,8 @@ impl Cpu<'_> {
         self.pool.ite(condition, all, none)
     }
 
-    /// The operations of two vectors' lanes.
-    fn v_three(&mut self, op: VThree, rd: VReg, rn: VReg, rm: VReg) -> Vec<Term> {
+    /// The operations of two vectors' lanes, or the stop for one this model has no meaning for.
+    fn v_three(&mut self, op: VThree, rd: VReg, rn: VReg, rm: VReg) -> Result<Vec<Term>, Stop> {
         let (a, b) = (self.v_lanes(rn), self.v_lanes(rm));
         if op.float() {
             return self.v_float_three(op, rd, &a, &b);
@@ -290,15 +290,15 @@ impl Cpu<'_> {
             .collect()
     }
 
-    /// One lane of `op` of `x` and `y`.
-    fn v_lane_op(&mut self, op: VThree, x: Term, y: Term) -> Term {
+    /// One lane of `op` of `x` and `y`, or the stop for an op this model has no meaning for.
+    fn v_lane_op(&mut self, op: VThree, x: Term, y: Term) -> Result<Term, Stop> {
         let width = self.pool.width(x);
         let zero = self.pool.bv(width, 0);
         let all = self.pool.bv(width, ones(width));
         let lowest = self.pool.bv(width, 1 << (width - 1));
         let highest = self.pool.bv(width, ones(width) >> 1);
         let pool = &mut *self.pool;
-        match op {
+        Ok(match op {
             VThree::Add => pool.add(x, y),
             VThree::Sub => pool.sub(x, y),
             VThree::Mul => pool.mul(x, y),
@@ -376,15 +376,18 @@ impl Cpu<'_> {
                 let above = pool.slt(y, x);
                 pool.ite(above, y, x)
             }
-            _ => zero,
-        }
+            // The pairwise, bitwise and floating-point ops are other functions', and never get
+            // here; anything else is an op nobody has written a meaning for. It stops the proof
+            // rather than run as something it isn't.
+            _ => return Err(self.unmodelled(op)),
+        })
     }
 
     /// One byte of a bitwise operation: `d` the destination's, `x` the first source's and `y`
     /// the second's.
-    fn v_bitwise(&mut self, op: VThree, d: Term, x: Term, y: Term) -> Term {
+    fn v_bitwise(&mut self, op: VThree, d: Term, x: Term, y: Term) -> Result<Term, Stop> {
         let pool = &mut *self.pool;
-        match op {
+        Ok(match op {
             VThree::And => pool.and(x, y),
             VThree::Bic => {
                 let not_y = pool.not(y);
@@ -412,21 +415,22 @@ impl Cpu<'_> {
                 pool.or(kept, taken)
             }
             // The first source's bits where the second's are clear.
-            _ => {
+            VThree::Bif => {
                 let not_y = pool.not(y);
                 let kept = pool.and(d, y);
                 let taken = pool.and(x, not_y);
                 pool.or(kept, taken)
             }
-        }
+            _ => return Err(self.unmodelled(op)),
+        })
     }
 
-    /// The operations on one vector's lanes.
-    fn v_two(&mut self, op: VTwo, rd: VReg, rn: VReg) -> Vec<Term> {
+    /// The operations on one vector's lanes, or the stop for one this model has no meaning for.
+    fn v_two(&mut self, op: VTwo, rd: VReg, rn: VReg) -> Result<Vec<Term>, Stop> {
         let a = self.v_lanes(rn);
         let width = rn.arrangement.lane_bits();
         let zero = self.pool.bv(width, 0);
-        match op {
+        Ok(match op {
             VTwo::Cnt => a
                 .iter()
                 .map(|byte| {
@@ -517,7 +521,7 @@ impl Cpu<'_> {
             | VTwo::Fcmle0
             | VTwo::Fcmlt0
             | VTwo::Fcvtl
-            | VTwo::Fcvtn => self.v_float_two(op, rd, &a),
+            | VTwo::Fcvtn => return self.v_float_two(op, rd, &a),
             VTwo::Xtn => {
                 let narrow = width / 2;
                 let narrowed: Vec<Term> = a
@@ -534,12 +538,13 @@ impl Cpu<'_> {
                     narrowed
                 }
             }
-        }
+        })
     }
 
-    /// One float operation of `x` and `y`, a lane of each, as its scalar form computes it.
-    fn v_float_lane(&mut self, op: VThree, x: Term, y: Term) -> Term {
-        match op {
+    /// One float operation of `x` and `y`, a lane of each, as its scalar form computes it, or
+    /// the stop for an op this model has no meaning for.
+    fn v_float_lane(&mut self, op: VThree, x: Term, y: Term) -> Result<Term, Stop> {
+        Ok(match op {
             VThree::Fadd | VThree::Faddp => self.fp_two(FpTwo::Add, x, y),
             VThree::Fsub => self.fp_two(FpTwo::Sub, x, y),
             VThree::Fmul => self.fp_two(FpTwo::Mul, x, y),
@@ -553,7 +558,7 @@ impl Cpu<'_> {
                 let difference = self.fp_two(FpTwo::Sub, x, y);
                 self.fp_one(FpOne::Abs, difference, 0)
             }
-            _ => {
+            VThree::Fcmeq | VThree::Fcmge | VThree::Fcmgt | VThree::Facge | VThree::Facgt => {
                 let width = self.pool.width(x);
                 let (x, y) = if matches!(op, VThree::Facge | VThree::Facgt) {
                     (self.fp_one(FpOne::Abs, x, 0), self.fp_one(FpOne::Abs, y, 0))
@@ -564,6 +569,7 @@ impl Cpu<'_> {
                 let holds = match op {
                     VThree::Fcmeq => self.fp_test(FloatTest::Equal, x, y),
                     VThree::Fcmgt | VThree::Facgt => self.fp_test(FloatTest::Less, y, x),
+                    // Greater or equal: `fcmge`, and `facge` of the magnitudes.
                     _ => {
                         let above = self.fp_test(FloatTest::Less, y, x);
                         let equal = self.fp_test(FloatTest::Equal, x, y);
@@ -572,13 +578,20 @@ impl Cpu<'_> {
                 };
                 self.v_mask_where(holds, width)
             }
-        }
+            _ => return Err(self.unmodelled(op)),
+        })
     }
 
     /// The operations of two vectors of floats, `a` and `b` their lanes: each lane with its
     /// own, or neighbouring lanes paired as `addp` pairs them, or each product added to or
     /// subtracted from the destination's lane, rounded once.
-    fn v_float_three(&mut self, op: VThree, rd: VReg, a: &[Term], b: &[Term]) -> Vec<Term> {
+    fn v_float_three(
+        &mut self,
+        op: VThree,
+        rd: VReg,
+        a: &[Term],
+        b: &[Term],
+    ) -> Result<Vec<Term>, Stop> {
         match op {
             VThree::Faddp | VThree::Fmaxp | VThree::Fminp | VThree::Fmaxnmp | VThree::Fminnmp => {
                 let pairs: Vec<(Term, Term)> = a
@@ -598,9 +611,9 @@ impl Cpu<'_> {
                 } else {
                     FpThree::Msub
                 };
-                (0..a.len())
+                Ok((0..a.len())
                     .map(|at| self.fp_fused(fused, a[at], b[at], d[at]))
-                    .collect()
+                    .collect())
             }
             _ => a
                 .iter()
@@ -612,11 +625,11 @@ impl Cpu<'_> {
 
     /// The operations on one vector of floats, `a` its lanes, and the conversions between
     /// floats and whole numbers as wide, and between singles and doubles.
-    fn v_float_two(&mut self, op: VTwo, rd: VReg, a: &[Term]) -> Vec<Term> {
+    fn v_float_two(&mut self, op: VTwo, rd: VReg, a: &[Term]) -> Result<Vec<Term>, Stop> {
         let one = |cpu: &mut Self, op: FpOne| -> Vec<Term> {
             a.iter().map(|lane| cpu.fp_one(op, *lane, 0)).collect()
         };
-        match op {
+        Ok(match op {
             VTwo::Fabs => one(self, FpOne::Abs),
             VTwo::Fneg => one(self, FpOne::Neg),
             VTwo::Fsqrt => one(self, FpOne::Sqrt),
@@ -674,7 +687,7 @@ impl Cpu<'_> {
                 }
             }
             // The comparisons with zero, either sign of it, false for a NaN.
-            _ => a
+            VTwo::Fcmeq0 | VTwo::Fcmgt0 | VTwo::Fcmge0 | VTwo::Fcmle0 | VTwo::Fcmlt0 => a
                 .iter()
                 .map(|lane| {
                     let width = self.pool.width(*lane);
@@ -688,6 +701,7 @@ impl Cpu<'_> {
                             let equal = self.fp_test(FloatTest::Equal, *lane, zero);
                             self.pool.bool_or(above, equal)
                         }
+                        // `fcmle`: less or equal.
                         _ => {
                             let below = self.fp_test(FloatTest::Less, *lane, zero);
                             let equal = self.fp_test(FloatTest::Equal, *lane, zero);
@@ -697,27 +711,29 @@ impl Cpu<'_> {
                     self.v_mask_where(holds, width)
                 })
                 .collect(),
-        }
+            _ => return Err(self.unmodelled(op)),
+        })
     }
 
     /// A vector's floats into one: four singles reduced in pairs, the low two's and the high
     /// two's results then together, as the architecture's `Reduce` does, or two floats.
-    fn v_float_across(&mut self, op: VAcross, a: &[Term]) -> Term {
+    fn v_float_across(&mut self, op: VAcross, a: &[Term]) -> Result<Term, Stop> {
         let each = match op {
             VAcross::Fmaxv | VAcross::Fmaxp => VThree::Fmax,
             VAcross::Fminv | VAcross::Fminp => VThree::Fmin,
             VAcross::Fmaxnmv | VAcross::Fmaxnmp => VThree::Fmaxnm,
             VAcross::Fminnmv | VAcross::Fminnmp => VThree::Fminnm,
-            _ => VThree::Fadd,
+            VAcross::Faddp => VThree::Fadd,
+            _ => return Err(self.unmodelled(op)),
         };
         let mut level = a.to_vec();
         while level.len() > 1 {
             level = level
                 .chunks(2)
                 .map(|pair| self.v_float_lane(each, pair[0], pair[1]))
-                .collect();
+                .collect::<Result<Vec<Term>, Stop>>()?;
         }
-        level[0]
+        Ok(level[0])
     }
 
     /// `value`, `by` bits wider, with copies of its sign or with zeros.
@@ -743,14 +759,14 @@ impl Cpu<'_> {
         self.pool.count(width, &parts)
     }
 
-    /// A vector's lanes into one scalar.
-    fn v_across(&mut self, op: VAcross, rd: Scalar, rn: VReg) -> Term {
+    /// A vector's lanes into one scalar, or the stop for an op this model has no meaning for.
+    fn v_across(&mut self, op: VAcross, rd: Scalar, rn: VReg) -> Result<Term, Stop> {
         let a = self.v_lanes(rn);
         let width = rn.arrangement.lane_bits();
         if op.float() {
             return self.v_float_across(op, &a);
         }
-        match op {
+        Ok(match op {
             VAcross::Addv => self.v_sum(width, &a),
             VAcross::Uaddlv => {
                 let by = (8 << rd.size) - width;
@@ -769,27 +785,30 @@ impl Cpu<'_> {
                     .collect();
                 self.pool.sum(width + by, &widened)
             }
-            _ => {
+            VAcross::Umaxv | VAcross::Uminv | VAcross::Smaxv | VAcross::Sminv => {
                 let mut best = a[0];
                 for lane in &a[1..] {
                     let replaces = match op {
                         VAcross::Umaxv => self.pool.ult(best, *lane),
                         VAcross::Uminv => self.pool.ult(*lane, best),
                         VAcross::Smaxv => self.pool.slt(best, *lane),
+                        // `sminv`.
                         _ => self.pool.slt(*lane, best),
                     };
                     best = self.pool.ite(replaces, *lane, best);
                 }
                 best
             }
-        }
+            _ => return Err(self.unmodelled(op)),
+        })
     }
 
-    /// Each lane shifted by `amount`, with the widening and narrowing forms.
-    fn v_shift(&mut self, op: VShift, rd: VReg, rn: VReg, amount: u32) -> Vec<Term> {
+    /// Each lane shifted by `amount`, with the widening and narrowing forms, or the stop for a
+    /// shift this model has no meaning for.
+    fn v_shift(&mut self, op: VShift, rd: VReg, rn: VReg, amount: u32) -> Result<Vec<Term>, Stop> {
         let a = self.v_lanes(rn);
         let width = rn.arrangement.lane_bits();
-        match op {
+        Ok(match op {
             VShift::Shrn => {
                 let narrow = width / 2;
                 let by = self.pool.bv(width, u128::from(amount));
@@ -829,13 +848,21 @@ impl Cpu<'_> {
                 let d = self.v_lanes(rd);
                 (0..a.len())
                     .map(|at| self.v_lane_shift(op, d[at], a[at], width, amount))
-                    .collect()
+                    .collect::<Result<Vec<Term>, Stop>>()?
             }
-        }
+        })
     }
 
     /// One lane of a shift that keeps its width: `d` the destination's lane, `x` the source's.
-    fn v_lane_shift(&mut self, op: VShift, d: Term, x: Term, width: u32, amount: u32) -> Term {
+    /// The stop for a shift this model has no meaning for.
+    fn v_lane_shift(
+        &mut self,
+        op: VShift,
+        d: Term,
+        x: Term,
+        width: u32,
+        amount: u32,
+    ) -> Result<Term, Stop> {
         let zero = self.pool.bv(width, 0);
         // A shift right by the whole width leaves nothing, or nothing but copies of the sign.
         let right = |cpu: &mut Self, signed: bool| {
@@ -849,7 +876,7 @@ impl Cpu<'_> {
                 cpu.pool.lshr(x, by)
             }
         };
-        match op {
+        Ok(match op {
             VShift::Ushr => right(self, false),
             VShift::Sshr => right(self, true),
             VShift::Usra => {
@@ -863,7 +890,7 @@ impl Cpu<'_> {
             // The destination keeps its top `amount` bits.
             VShift::Sri => {
                 if amount >= width {
-                    return d;
+                    return Ok(d);
                 }
                 let shifted = right(self, false);
                 let keep = self.pool.bv(width, ones(width) & !(ones(width) >> amount));
@@ -875,14 +902,15 @@ impl Cpu<'_> {
                 self.pool.shl(x, by)
             }
             // The destination keeps its low `amount` bits.
-            _ => {
+            VShift::Sli => {
                 let by = self.pool.bv(width, u128::from(amount));
                 let shifted = self.pool.shl(x, by);
                 let keep = self.pool.bv(width, ones(amount));
                 let kept = self.pool.and(d, keep);
                 self.pool.or(kept, shifted)
             }
-        }
+            _ => return Err(self.unmodelled(op)),
+        })
     }
 
     /// The interleavings of two vectors' lanes.
