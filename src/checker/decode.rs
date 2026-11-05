@@ -458,7 +458,9 @@ pub fn map<'a>(
             violations.push(Violation {
                 rule: Rule::Dialect,
                 line: None,
-                problem: format!("the executable has a function, {name}, that main.s doesn't define"),
+                problem: format!(
+                    "the executable has a function, {name}, that main.s doesn't define"
+                ),
                 fix: "keep every function in main.s, with its `.type` and `.size` lines".into(),
             });
         }

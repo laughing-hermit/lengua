@@ -4758,13 +4758,20 @@ async fn lengua_s_is_matched_and_an_operation_keeps_what_the_edge_keeps() {
         assert_eq!(program.lengua.len(), 26, "{profile:?}");
         assert_eq!(program.functions.len(), 2, "{profile:?}");
         // lengua's data is not main.s's.
-        assert!(program.data.is_empty(), "{profile:?}: {:?}", program.data.keys());
+        assert!(
+            program.data.is_empty(),
+            "{profile:?}: {:?}",
+            program.data.keys()
+        );
         assert!(!program.lengua_data.is_empty(), "{profile:?}");
 
         let abi = program.abi();
         let main = program.function("main").expect("main");
         let call_to = |name: &str| {
-            let address = program.lengua_at_name(name).expect("lengua's function").address;
+            let address = program
+                .lengua_at_name(name)
+                .expect("lengua's function")
+                .address;
             main.steps
                 .iter()
                 .find(|step| step.insn.control == crate::isa::Control::Call(address))
@@ -4773,15 +4780,24 @@ async fn lengua_s_is_matched_and_an_operation_keeps_what_the_edge_keeps() {
         };
         let operation = call_to("os_exit");
         for register in abi.edge_clobbers {
-            assert!(operation.changes(*register, abi), "{profile:?} {register:?}");
+            assert!(
+                operation.changes(*register, abi),
+                "{profile:?} {register:?}"
+            );
         }
         for register in abi.edge_arguments {
             if !abi.edge_clobbers.contains(register) {
-                assert!(!operation.changes(*register, abi), "{profile:?} {register:?}");
+                assert!(
+                    !operation.changes(*register, abi),
+                    "{profile:?} {register:?}"
+                );
             }
         }
         for register in abi.callee_saved {
-            assert!(!operation.changes(*register, abi), "{profile:?} {register:?}");
+            assert!(
+                !operation.changes(*register, abi),
+                "{profile:?} {register:?}"
+            );
         }
         let ordinary = call_to("assert_fail");
         for register in abi.caller_saved {
