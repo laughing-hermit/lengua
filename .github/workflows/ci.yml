@@ -25,7 +25,7 @@ on:
           - ignored
         default: compile
       filter:
-        description: "Only the tests whose names contain this (cargo test's filter)"
+        description: "Only the tests whose names contain this (libtest's filters: several, separated by spaces)"
         type: string
         default: ""
       check_folder:
@@ -165,7 +165,7 @@ jobs:
           RUST_TEST_THREADS: "2"
           FILTER: ${{ inputs.filter }}
           LENGUA_SKIP_LOG: ${{ github.workspace }}/skips.log
-        run: cargo test --release --locked --workspace --no-fail-fast $FILTER 2>&1 | tee test.log
+        run: cargo test --release --locked --workspace --no-fail-fast -- $FILTER 2>&1 | tee test.log
 
       - name: The slow ignored tests
         if: ${{ inputs.mode == 'ignored' }}
@@ -177,7 +177,7 @@ jobs:
           STALL_SECONDS: ${{ inputs.stall_seconds }}
           LENGUA_SKIP_LOG: ${{ github.workspace }}/skips.log
         run: |
-          tests='set -o pipefail; cargo test --release --locked --workspace --no-fail-fast $FILTER -- --ignored --nocapture 2>&1 | tee ignored.log'
+          tests='set -o pipefail; cargo test --release --locked --workspace --no-fail-fast -- --ignored --nocapture $FILTER 2>&1 | tee ignored.log'
           if [ -n "$STALL_SECONDS" ]; then
             bash scripts/stall-report.sh "$STALL_SECONDS" bash -c "$tests"
           else
