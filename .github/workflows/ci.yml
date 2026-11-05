@@ -2,27 +2,47 @@ name: ci
 
 # lengua built and tested natively on all six targets, on GitHub's free runners (the repository is
 # public): Linux, macOS and Windows, each on x86-64 and ARM64. scripts/ci/targets.json names the six
-# runners; scripts/ci/tools.tsv pins the solvers; scripts/ci/setup.sh installs everything.
+# runners; scripts/ci/tools.tsv pins what they install; scripts/ci/setup.sh installs it.
 #
-# This is the first version of the one workflow that is to replace targets.yml, arm64.yml and
-# unported.yml (round 1 of ROADMAP.md), so for now it only runs when asked: dispatch it against a
-# branch, with the targets and the mode wanted. It takes over their push runs, and they go, when all
-# six targets are green. Benchmarks and release archives stay in targets.yml and arm64.yml until
-# rounds 5 and 6.
+# - A push to a branch runs the suite on all six (a branch named wip/... gets no push run: its
+#   author dispatches the run it wants, so work in progress doesn't cost a long suite per push).
+# - Every week it runs the suite and the slow ignored tests on all six.
+# - A dispatch picks the targets and the mode: compile (clippy and the tests built), test (the
+#   suite), ignored (the slow ignored tests, optionally one folder's check), bench (lengua against
+#   C, C++ and Rust) or release (the archive). A test run also has a job on x86-64 Linux with
+#   QEMU's user mode, so the ARM64 cells run there too, as on a developer's x86-64 computer.
 on:
+  push:
+    branches-ignore:
+      - "wip/**"
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "crates/**"
+      - "plugin/**"
+      - "benches/**"
+      - "examples/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/**"
+      - ".github/**"
+  schedule:
+    - cron: "17 5 * * 1"
   workflow_dispatch:
     inputs:
       targets:
-        description: "Which targets: all, or a comma-separated list from scripts/ci/targets.json"
+        description: "Which targets: all, or a comma-separated list from scripts/ci/targets.json (and qemu)"
         type: string
         default: "all"
       mode:
-        description: "compile: clippy and cargo test --no-run. test: the suite. ignored: the slow ignored tests."
+        description: "compile, test, ignored, bench (Linux) or release (Linux)"
         type: choice
         options:
           - compile
           - test
           - ignored
+          - bench
+          - release
         default: compile
       filter:
         description: "Only the tests whose names contain this (libtest's filters: several, separated by spaces)"
@@ -32,14 +52,18 @@ on:
         description: "Program folders, comma-separated, for the ignored check_one_folder test (LENGUA_CHECK_FOLDER)"
         type: string
         default: ""
+      check_target:
+        description: "The target to check them as (LENGUA_CHECK_TARGET), when not the runner's own: through QEMU"
+        type: string
+        default: ""
       stall_seconds:
         description: "Stop the slow ignored tests after this many seconds, keeping where they stood (stall.txt; Linux)"
         type: string
         default: ""
 
 concurrency:
-  group: ci-${{ github.ref }}-${{ inputs.mode }}-${{ inputs.targets }}-${{ inputs.filter }}-${{ inputs.check_folder }}
-  cancel-in-progress: true
+  group: ci-${{ github.ref }}-${{ github.event_name }}-${{ inputs.mode }}-${{ inputs.targets }}-${{ inputs.filter }}-${{ inputs.check_folder }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
@@ -48,7 +72,7 @@ env:
   CARGO_TERM_COLOR: never
 
 jobs:
-  # The targets to run, as a matrix, from the one list of runners.
+  # The jobs to run, as a matrix, from the one list of runners: each target in each mode.
   plan:
     name: plan
     runs-on: ubuntu-24.04
@@ -60,20 +84,39 @@ jobs:
 
       - id: matrix
         env:
+          EVENT: ${{ github.event_name }}
+          MODE: ${{ inputs.mode }}
           TARGETS: ${{ inputs.targets }}
         run: |
+          # A push runs the suite, the weekly run the suite and the ignored tests, a dispatch what it asks.
+          case "$EVENT" in
+            push) modes='["test"]'; TARGETS=all; MODE=test ;;
+            schedule) modes='["test","ignored"]'; TARGETS=all; MODE=test ;;
+            *) modes="[\"$MODE\"]" ;;
+          esac
           TARGETS="${TARGETS// /}"
+          listed=$(jq -c '.' scripts/ci/targets.json)
           if [ -z "$TARGETS" ] || [ "$TARGETS" = all ]; then
-            include=$(jq -c '.' scripts/ci/targets.json)
+            include="$listed"
           else
             include=$(jq -c --arg t ",$TARGETS," \
-              '[.[] | . as $e | select($t | contains("," + $e.target + ","))]' scripts/ci/targets.json)
+              '[.[] | . as $e | select($t | contains("," + $e.target + ","))]' <<< "$listed")
           fi
-          if [ "$include" = "[]" ]; then
-            echo "No such target in scripts/ci/targets.json: $TARGETS" >&2
+          # The benchmarks and the release archive are Linux's so far.
+          case "$MODE" in
+            bench|release) include=$(jq -c '[.[] | select(.target | startswith("linux-"))]' <<< "$include") ;;
+          esac
+          matrix=$(jq -c --argjson modes "$modes" \
+            '[.[] as $t | $modes[] as $m | $t + {mode: $m, base: $t.target, qemu: false}]' <<< "$include")
+          # The suite on x86-64 Linux with QEMU's user mode, beside the six.
+          if [ "$MODE" = test ] && { [ -z "$TARGETS" ] || [ "$TARGETS" = all ] || [[ ",$TARGETS," == *,qemu,* ]]; }; then
+            matrix=$(jq -c '. + [{target: "linux-x86_64-qemu", runner: "ubuntu-24.04", mode: "test", base: "linux-x86_64", qemu: true}]' <<< "$matrix")
+          fi
+          if [ "$matrix" = "[]" ]; then
+            echo "Nothing to run for: $TARGETS in $MODE" >&2
             exit 1
           fi
-          echo "matrix={\"include\":$include}" >> "$GITHUB_OUTPUT"
+          echo "matrix={\"include\":$matrix}" >> "$GITHUB_OUTPUT"
 
   # Formatting is the same on every target, so it is checked once, beside the tests rather than in
   # front of them: a difference never hides a test result. When there is one, the patch that
@@ -109,7 +152,7 @@ jobs:
           if-no-files-found: ignore
 
   test:
-    name: ${{ inputs.mode }} (${{ matrix.target }})
+    name: ${{ matrix.mode }} (${{ matrix.target }})
     needs: plan
     strategy:
       fail-fast: false
@@ -123,28 +166,36 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: The machine
-        run: bash scripts/ci/machine.sh ${{ matrix.target }}
+        run: bash scripts/ci/machine.sh ${{ matrix.base }}
 
       - name: Rust
-        run: bash scripts/ci/setup.sh ${{ matrix.target }} rust
+        run: bash scripts/ci/setup.sh ${{ matrix.base }} rust
 
       # The tools are kept between runs: the solvers, and LLVM where it is installed by hand.
       - uses: actions/cache@v4
-        if: ${{ inputs.mode != 'compile' }}
+        if: ${{ matrix.mode != 'compile' }}
         with:
           path: |
             ~/solvers
             ~/llvm
             ~/micromamba
-          key: tools-${{ matrix.target }}-${{ hashFiles('scripts/ci/tools.tsv', 'scripts/ci/setup.sh') }}
+          key: tools-${{ matrix.base }}-${{ hashFiles('scripts/ci/tools.tsv', 'scripts/ci/setup.sh') }}
 
       - name: LLVM
-        if: ${{ inputs.mode != 'compile' }}
-        run: bash scripts/ci/setup.sh ${{ matrix.target }} llvm
+        if: ${{ matrix.mode != 'compile' }}
+        run: bash scripts/ci/setup.sh ${{ matrix.base }} llvm
 
       - name: z3 and cvc5, pinned by checksum
-        if: ${{ inputs.mode != 'compile' }}
-        run: bash scripts/ci/setup.sh ${{ matrix.target }} solvers
+        if: ${{ matrix.mode != 'compile' }}
+        run: bash scripts/ci/setup.sh ${{ matrix.base }} solvers
+
+      - name: QEMU's user mode, for the other CPU's programs
+        if: ${{ matrix.qemu }}
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q qemu-user-static binfmt-support
+          echo "binfmt_misc/qemu-aarch64:"
+          cat /proc/sys/fs/binfmt_misc/qemu-aarch64
 
       - uses: actions/cache@v4
         with:
@@ -152,18 +203,18 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ci-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'scripts/ci/setup.sh') }}
-          restore-keys: ci-${{ matrix.target }}-
+          key: ci-${{ matrix.base }}-${{ hashFiles('Cargo.lock', 'scripts/ci/setup.sh') }}
+          restore-keys: ci-${{ matrix.base }}-
 
       - name: Clippy
         run: cargo clippy --release --all-targets --locked --workspace -- -D warnings
 
       - name: Build the tests
-        if: ${{ inputs.mode == 'compile' }}
+        if: ${{ matrix.mode == 'compile' }}
         run: cargo test --release --locked --workspace --no-run
 
       - name: Tests
-        if: ${{ inputs.mode == 'test' }}
+        if: ${{ matrix.mode == 'test' }}
         env:
           LENGUA_PROOF_SECONDS: "60"
           RUST_TEST_THREADS: "2"
@@ -172,12 +223,13 @@ jobs:
         run: cargo test --release --locked --workspace --no-fail-fast -- $FILTER 2>&1 | tee test.log
 
       - name: The slow ignored tests
-        if: ${{ inputs.mode == 'ignored' }}
+        if: ${{ matrix.mode == 'ignored' }}
         env:
           LENGUA_PROOF_SECONDS: "60"
           RUST_TEST_THREADS: "2"
           FILTER: ${{ inputs.filter }}
           LENGUA_CHECK_FOLDER: ${{ inputs.check_folder }}
+          LENGUA_CHECK_TARGET: ${{ inputs.check_target }}
           STALL_SECONDS: ${{ inputs.stall_seconds }}
           LENGUA_SKIP_LOG: ${{ github.workspace }}/skips.log
         run: |
@@ -187,6 +239,16 @@ jobs:
           else
             bash -c "$tests"
           fi
+
+      - name: Benchmarks against C, C++ and Rust
+        if: ${{ matrix.mode == 'bench' }}
+        run: |
+          sudo apt-get install -y -q time
+          cargo bench --locked --bench against_rust_and_c 2>&1 | tee bench.log
+
+      - name: The release archive
+        if: ${{ matrix.mode == 'release' }}
+        run: scripts/release.sh
 
       # A green run says what it did not cover: libtest hides what a passing test prints, so a
       # test that skips itself notes why (lengua::skiplog) and the notes are counted here.
@@ -198,14 +260,19 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ci-${{ matrix.target }}-${{ github.run_number }}
+          name: ci-${{ matrix.target }}-${{ matrix.mode }}-${{ github.run_number }}
           path: |
             test.log
             ignored.log
             skips.log
             stall.txt
+            bench.log
+            BENCHMARKS.md
+            BENCHMARKS-aarch64.md
             target/release/lengua-mcp
             target/release/lengua-mcp.exe
+            dist/*.tar.gz
+            dist/*.sha256
           retention-days: 7
           if-no-files-found: ignore
 

@@ -10,15 +10,16 @@
 //!   the others, so it must be listed in [`DEBT`] with its reason and what the other targets lack.
 //!   A new such file fails; a listed file that stops being for one target must leave the list,
 //!   so the debt only shrinks.
-//! - A native test runner for every target: each target has a job in `.github/workflows` that
-//!   runs `cargo test` on a runner of its own CPU, since a table's cells for a target run
-//!   natively on that target's runner. A target added to lengua without a runner row fails.
+//! - A native test runner for every target: `scripts/ci/targets.json` lists the GitHub runner of
+//!   each target's own CPU and system, and `ci.yml`'s one test job runs `cargo test` on every
+//!   runner the list names, since a table's cells for a target run natively on that target's
+//!   runner. A target added to lengua without a runner in the list fails, and so does a second
+//!   workflow that runs the suite.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use lengua::platform::Profile;
-use lengua::targets::PerTarget;
 use serde_json::Value;
 
 /// A test file for one target: why it is, and what the other targets lack because of it.
@@ -40,12 +41,6 @@ const DEBT: &[Debt] = &[];
 const ALIASES: &[&str] = &[
     "x86", "x64", "amd64", "arm64", "arm", "macos", "darwin", "windows", "win",
 ];
-
-/// Each target's native test runner: the label of the GitHub runner on its own CPU.
-const RUNNERS: PerTarget<&str> = PerTarget {
-    linux_x86_64: "ubuntu-24.04",
-    linux_aarch64: "ubuntu-24.04-arm",
-};
 
 /// The words of a file's name, split at every character that isn't a letter or a digit, that
 /// name a target.
@@ -186,108 +181,97 @@ fn the_ratchet_sees_a_file_for_one_target() {
     assert!(why_for_one_target("parity_inventory.rs", "").is_none());
 }
 
-/// The runners a job's `runs-on` names: the label itself, or, for `${{ matrix.key }}`, every
-/// value `key` takes in the job's matrix, listed or included.
-fn runners_of(job: &Value, runs_on: &str) -> Vec<String> {
-    let Some(key) = runs_on
-        .strip_prefix("${{ matrix.")
-        .and_then(|rest| rest.strip_suffix(" }}"))
-    else {
-        return vec![runs_on.to_owned()];
-    };
-    let matrix = &job["strategy"]["matrix"];
-    let listed = matrix[key].as_array().into_iter().flatten();
-    let included = matrix["include"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|entry| &entry[key]);
-    listed
-        .chain(included)
-        .filter_map(|value| value.as_str().map(str::to_owned))
+/// The runners `scripts/ci/targets.json` lists: the label of the GitHub runner of each target,
+/// by the target's name.
+fn hosts() -> BTreeMap<String, String> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/ci/targets.json");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    let list: Value = serde_json::from_str(&text).expect("targets.json is JSON");
+    list.as_array()
+        .expect("targets.json is a list")
+        .iter()
+        .map(|entry| {
+            let field = |name: &str| {
+                entry[name]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("an entry of targets.json has no {name}: {entry}"))
+                    .to_owned()
+            };
+            (field("target"), field("runner"))
+        })
         .collect()
 }
 
-/// Every job of the workflow `text` that runs `cargo test`: its name, as `file: job`, and the
-/// runner it runs on, once for each runner a matrix names.
-fn test_jobs_of(file: &str, text: &str) -> Vec<(String, String)> {
-    let workflow: Value =
-        serde_saphyr::from_str(text).unwrap_or_else(|error| panic!("{file}: not YAML: {error}"));
-    let mut found = Vec::new();
-    for (name, job) in workflow["jobs"].as_object().expect("the workflow's jobs") {
-        let runs_tests = job["steps"].as_array().is_some_and(|steps| {
-            steps.iter().any(|step| {
-                step["run"]
-                    .as_str()
-                    .is_some_and(|script| script.contains("cargo test"))
-            })
-        });
-        if runs_tests && let Some(runs_on) = job["runs-on"].as_str() {
-            for runner in runners_of(job, runs_on) {
-                found.push((format!("{file}: {name}"), runner));
-            }
-        }
-    }
-    found
-}
-
-/// Every job of every workflow in the repository that runs `cargo test`.
-fn test_jobs() -> Vec<(String, String)> {
+/// The workflows of the repository, by file name, as text.
+fn workflows() -> BTreeMap<String, String> {
     let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows");
-    let mut found = Vec::new();
-    for entry in std::fs::read_dir(&folder).expect("the workflows") {
-        let path = entry.expect("an entry").path();
-        if !path.extension().is_some_and(|extension| extension == "yml") {
-            continue;
-        }
-        let text = std::fs::read_to_string(&path)
-            .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-        let file = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .expect("a UTF-8 name");
-        found.extend(test_jobs_of(file, &text));
-    }
-    found
+    std::fs::read_dir(&folder)
+        .expect("the workflows")
+        .map(|entry| entry.expect("an entry").path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "yml"))
+        .map(|path| {
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("a UTF-8 name")
+                .to_owned();
+            (name, text)
+        })
+        .collect()
 }
 
-/// A runner a matrix names counts, listed or included, and a job that doesn't run the tests
-/// doesn't.
-#[test]
-fn a_runner_a_matrix_names_is_read() {
-    let workflow = "\
-jobs:
-  tests:
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm]
-        include:
-          - { runner: macos-15, flavor: x }
-    steps:
-      - run: cargo test --release
-  build:
-    runs-on: windows-2025
-    steps:
-      - run: cargo build
-";
-    let found = test_jobs_of("w.yml", workflow);
-    let runners: Vec<&str> = found.iter().map(|(_, runner)| runner.as_str()).collect();
-    assert_eq!(runners, ["ubuntu-24.04", "ubuntu-24.04-arm", "macos-15"]);
+/// Whether `job` has a step whose script contains `needle`.
+fn runs(job: &Value, needle: &str) -> bool {
+    job["steps"].as_array().is_some_and(|steps| {
+        steps
+            .iter()
+            .any(|step| step["run"].as_str().is_some_and(|run| run.contains(needle)))
+    })
 }
 
-/// Every target has a job that runs `cargo test` on a runner of its own CPU, so the cells of
-/// every table run natively on every target: a target added without a runner row fails.
+/// Every target has a runner in the list, and `ci.yml`'s test job runs `cargo test` on every
+/// runner the list names, so the cells of every table run natively on every target: a target
+/// added without a runner fails.
 #[test]
 fn every_target_has_a_native_test_runner() {
-    let jobs = test_jobs();
-    assert!(jobs.len() >= 2, "{jobs:#?}");
-    for (target, label) in RUNNERS.cells() {
-        assert!(
-            jobs.iter().any(|(_, runs_on)| runs_on == label),
-            "{} has no job that runs `cargo test` on {label} in .github/workflows: add its \
-             runner (the jobs found: {jobs:#?})",
-            target.name()
-        );
+    let hosts = hosts();
+    for target in Profile::ALL {
+        let label = hosts.get(target.name()).unwrap_or_else(|| {
+            panic!(
+                "{} has no runner in scripts/ci/targets.json: add its GitHub runner",
+                target.name()
+            )
+        });
+        assert!(!label.is_empty(), "{}: an empty runner", target.name());
     }
+    let workflows = workflows();
+    let ci: Value = serde_saphyr::from_str(workflows.get("ci.yml").expect("ci.yml"))
+        .unwrap_or_else(|error| panic!("ci.yml: not YAML: {error}"));
+    // The plan reads the list, and the test job runs on what the plan made of it.
+    assert!(
+        runs(&ci["jobs"]["plan"], "scripts/ci/targets.json"),
+        "ci.yml's plan job doesn't read scripts/ci/targets.json"
+    );
+    let test = &ci["jobs"]["test"];
+    assert_eq!(test["runs-on"], "${{ matrix.runner }}");
+    assert_eq!(
+        test["strategy"]["matrix"],
+        "${{ fromJSON(needs.plan.outputs.matrix) }}"
+    );
+    assert!(runs(test, "cargo test"), "ci.yml's test job runs no tests");
+}
+
+/// One workflow runs the suite: a second would be a second definition of how the targets are
+/// tested, and the two would drift.
+#[test]
+fn one_workflow_runs_the_suite() {
+    let running: Vec<String> = workflows()
+        .into_iter()
+        .filter(|(_, text)| text.contains("cargo test"))
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(running, ["ci.yml"], "the workflows that run `cargo test`");
 }

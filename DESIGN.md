@@ -1262,8 +1262,9 @@ question, its loop leaving where its index reaches the bytes read as the NEON on
      record of it.
 
    A target must pass them natively, on a runner of its own CPU: `tests/parity_inventory.rs`
-   fails unless `.github/workflows` has a job that runs `cargo test` on each target's runner
-   (`ubuntu-24.04` for x86-64, `ubuntu-24.04-arm` for ARM64), and unless every test file made
+   fails unless `scripts/ci/targets.json` lists a runner for each target (`ubuntu-24.04` for
+   x86-64 Linux, `ubuntu-24.04-arm` for ARM64 Linux) and `ci.yml`, the one workflow that runs the
+   suite, runs `cargo test` on every runner the list names, and unless every test file made
    for one target (`#![cfg(target_arch = ...)]`, or a target in its name) is on its `DEBT` list
    with what the other targets lack, so a new such file fails and the list only shrinks. QEMU's
    user mode is for a developer's computer: it checks and runs, but the kernel sees QEMU's
@@ -1489,8 +1490,9 @@ allocation while running, recursion, function pointers, and running other progra
 Two targets are done, as one product: Linux on x86-64, checked on this machine, and Linux on
 ARM64, checked here under QEMU and natively on GitHub's ARM64 runners, every x86-64 program with
 its AArch64 twin. CI builds lengua natively on all six of GitHub's runners, Linux, macOS and
-Windows on both CPUs (`.github/workflows/targets.yml`), and tests both Linux targets there; the
-macOS and Windows builds stop at the Linux-only sandbox until their ports. The other four of the top six, macOS and Windows on x86-64 and ARM64, need
+Windows on both CPUs (`.github/workflows/ci.yml`), and tests both Linux targets there; macOS and
+Windows build and run the tests that run no program, and say they can't run one until their ports.
+The other four of the top six, macOS and Windows on x86-64 and ARM64, need
 those computers and more than a new CPU, since they forbid the direct system calls lengua's
 programs make and have neither seccomp nor Landlock: each is a profile with its own decoder,
 prover model, dialect reference, runner and sandbox, as "Porting a target" sets out, and each
