@@ -174,7 +174,12 @@ fn x86_program(case: &Case) -> String {
     let _ = writeln!(text, "    mov qword ptr [rsp + {ENVP_AT}], r10");
     for step in case.steps {
         match step {
-            Call { op, args, keep } | Function { name: op, args, keep } => {
+            Call { op, args, keep }
+            | Function {
+                name: op,
+                args,
+                keep,
+            } => {
                 let registers = if matches!(step, Function { .. }) {
                     X86_FUNCTION_ARGUMENTS
                 } else {
@@ -192,14 +197,24 @@ fn x86_program(case: &Case) -> String {
                             let _ = writeln!(text, "    lea {register}, [rsp + {offset}]");
                         }
                         Kept(word) => {
-                            let _ =
-                                writeln!(text, "    mov {register}, qword ptr [rsp + {}]", 8 * word);
+                            let _ = writeln!(
+                                text,
+                                "    mov {register}, qword ptr [rsp + {}]",
+                                8 * word
+                            );
                         }
                         Argv(k) | Envp(k) => {
-                            let at = if matches!(arg, Argv(_)) { ARGV_AT } else { ENVP_AT };
+                            let at = if matches!(arg, Argv(_)) {
+                                ARGV_AT
+                            } else {
+                                ENVP_AT
+                            };
                             let _ = writeln!(text, "    mov {register}, qword ptr [rsp + {at}]");
-                            let _ =
-                                writeln!(text, "    mov {register}, qword ptr [{register} + {}]", 8 * k);
+                            let _ = writeln!(
+                                text,
+                                "    mov {register}, qword ptr [{register} + {}]",
+                                8 * k
+                            );
                         }
                     }
                 }
@@ -245,7 +260,12 @@ fn a64_program(case: &Case) -> String {
     let _ = writeln!(text, "    str xzr, [sp, #480]");
     for step in case.steps {
         match step {
-            Call { op, args, keep } | Function { name: op, args, keep } => {
+            Call { op, args, keep }
+            | Function {
+                name: op,
+                args,
+                keep,
+            } => {
                 for (number, arg) in args.iter().enumerate() {
                     match arg {
                         N(value) => {
@@ -264,7 +284,11 @@ fn a64_program(case: &Case) -> String {
                             let _ = writeln!(text, "    ldr x{number}, [sp, #{}]", 8 * word);
                         }
                         Argv(k) | Envp(k) => {
-                            let at = if matches!(arg, Argv(_)) { ARGV_AT } else { ENVP_AT };
+                            let at = if matches!(arg, Argv(_)) {
+                                ARGV_AT
+                            } else {
+                                ENVP_AT
+                            };
                             let _ = writeln!(text, "    ldr x{number}, [sp, #{at}]");
                             let _ = writeln!(text, "    ldr x{number}, [x{number}, #{}]", 8 * k);
                         }
@@ -613,7 +637,10 @@ fn cases() -> Vec<Case> {
                 image(
                     80,
                     &[1, -9],
-                    &[(64, &[0, 0, 0, 0, 1, 0, 17, 0]), (72, &[0, 0x11, 0, 0, 1, 0, 0, 0])],
+                    &[
+                        (64, &[0, 0, 0, 0, 1, 0, 17, 0]),
+                        (72, &[0, 0x11, 0, 0, 1, 0, 0, 0]),
+                    ],
                 ),
             )
         },
@@ -721,7 +748,12 @@ fn cases() -> Vec<Case> {
                 image(
                     320,
                     &[0, 0, 0, 0, 0, 0, 0, 0, 1, 10, 19, 28],
-                    &[(256, &[0x40]), (272, &[0x41]), (288, &[0x42]), (304, &[0x43])],
+                    &[
+                        (256, &[0x40]),
+                        (272, &[0x41]),
+                        (288, &[0x42]),
+                        (304, &[0x43]),
+                    ],
                 ),
             )
         },
@@ -821,7 +853,11 @@ fn cases() -> Vec<Case> {
         // The ways to write a file: made and emptied, appended to, and made only if it is not
         // there (EEXIST when it is). The folder holds what they wrote afterwards.
         Case {
-            data: &[("out", b"out.txt\0"), ("new", b"new.txt\0"), ("greeting", b"hello\n")],
+            data: &[
+                ("out", b"out.txt\0"),
+                ("new", b"new.txt\0"),
+                ("greeting", b"hello\n"),
+            ],
             after: &[("out.txt", "hello\nhello\n"), ("new.txt", "hel")],
             calls: &[Syscall::Openat, Syscall::Close],
             ..Case::new(
@@ -1003,7 +1039,13 @@ fn cases() -> Vec<Case> {
                     &[
                         // The descriptor the last open gave, which the report takes in.
                         (240, &[3]),
-                        (256, &[16, 0, 0, 8, b'o', b'n', b'l', b'y', b'.', b't', b'x', b't', 0, 0, 0, 0]),
+                        (
+                            256,
+                            &[
+                                16, 0, 0, 8, b'o', b'n', b'l', b'y', b'.', b't', b'x', b't', 0, 0,
+                                0, 0,
+                            ],
+                        ),
                         (416, &[8, 0, 1, 1, b's', 0, 0, 0]),
                     ],
                 ),
@@ -1032,7 +1074,11 @@ async fn every_operation_does_what_it_promises() {
             let mut spec = vec![Syscall::Write, Syscall::Exit];
             spec.extend_from_slice(case.calls);
             let allowed = target.allowed_syscalls(&spec, case.threads);
-            let arguments: Vec<String> = case.arguments.iter().map(|text| (*text).to_owned()).collect();
+            let arguments: Vec<String> = case
+                .arguments
+                .iter()
+                .map(|text| (*text).to_owned())
+                .collect();
             let environment: BTreeMap<String, String> = case
                 .environment
                 .iter()
@@ -1056,7 +1102,11 @@ async fn every_operation_does_what_it_promises() {
                 .await
                 .expect("the program runs");
             let what = format!("{} on {}", case.name, target.name());
-            assert_eq!(ran.end, End::Exited(i32::try_from(case.exit).unwrap_or(-1)), "{what}");
+            assert_eq!(
+                ran.end,
+                End::Exited(i32::try_from(case.exit).unwrap_or(-1)),
+                "{what}"
+            );
             assert_eq!(ran.stdout, case.stdout, "{what}");
             if !case.stderr.is_empty() {
                 assert_eq!(ran.stderr, case.stderr, "{what}");
@@ -1071,5 +1121,165 @@ async fn every_operation_does_what_it_promises() {
                 assert_eq!(*found, wanted, "{what}");
             }
         }
+    }
+}
+
+/// The terminal's operations on a terminal: a pseudo-terminal is the program's standard input and
+/// the test holds its other end. The program takes keys and waits, the test sees the mode as the
+/// program set it, the program puts it back and waits again, and the test sees it as it was.
+#[cfg(target_os = "linux")]
+fn on_a_terminal(executable: &Path) -> Vec<u8> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+
+    use rustix::fs::{Mode, OFlags};
+    use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
+    use rustix::termios::{
+        LocalModes, OptionalActions, SpecialCodeIndex, Winsize, tcgetattr, tcsetattr, tcsetwinsize,
+    };
+
+    let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY).expect("a pseudo-terminal");
+    grantpt(&master).expect("its slave's owner");
+    unlockpt(&master).expect("its slave unlocked");
+    let name = ptsname(&master, Vec::new()).expect("its slave's name");
+    let slave = rustix::fs::open(
+        name.as_c_str(),
+        OFlags::RDWR | OFlags::NOCTTY,
+        Mode::empty(),
+    )
+    .expect("its slave");
+    tcsetwinsize(
+        &master,
+        Winsize {
+            ws_row: 24,
+            ws_col: 80,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        },
+    )
+    .expect("a window size");
+    // Codes the raw mode changes and the restoring must bring back.
+    let mut start = tcgetattr(&master).expect("the mode");
+    start.special_codes[SpecialCodeIndex::VMIN] = 3;
+    start.special_codes[SpecialCodeIndex::VTIME] = 5;
+    tcsetattr(&master, OptionalActions::Now, &start).expect("a mode to start from");
+    let before = tcgetattr(&master).expect("the mode it starts from");
+    let mut child = {
+        let mut command = Command::new(executable);
+        command
+            .stdin(Stdio::from(slave))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit());
+        command.spawn().expect("the program starts")
+    };
+    let mut output = child.stdout.take().expect("its output");
+    let mut mark = [0_u8; 1];
+
+    output.read_exact(&mut mark).expect("the first mark");
+    assert_eq!(&mark, b"r");
+    let raw = tcgetattr(&master).expect("the mode the program set");
+    assert!(!raw.local_modes.intersects(LocalModes::ICANON | LocalModes::ECHO));
+    assert_eq!(raw.special_codes[SpecialCodeIndex::VMIN], 1);
+    assert_eq!(raw.special_codes[SpecialCodeIndex::VTIME], 0);
+    // Signals and the rest of the modes stay as they were.
+    assert_eq!(
+        raw.local_modes.contains(LocalModes::ISIG),
+        before.local_modes.contains(LocalModes::ISIG)
+    );
+    assert_eq!(raw.input_modes, before.input_modes);
+    assert_eq!(raw.output_modes, before.output_modes);
+    assert_eq!(raw.control_modes, before.control_modes);
+    // One key, which the raw mode hands over without a line end.
+    rustix::io::write(&master, b"k").expect("a key");
+
+    output.read_exact(&mut mark).expect("the second mark");
+    assert_eq!(&mark, b"d");
+    let after = tcgetattr(&master).expect("the mode the program put back");
+    assert_eq!(after.local_modes, before.local_modes);
+    assert_eq!(after.input_modes, before.input_modes);
+    assert_eq!(after.output_modes, before.output_modes);
+    assert_eq!(after.control_modes, before.control_modes);
+    assert_eq!(after.special_codes[SpecialCodeIndex::VMIN], 3);
+    assert_eq!(after.special_codes[SpecialCodeIndex::VTIME], 5);
+    // The program waits for a line, as the mode it has again says.
+    rustix::io::write(&master, b"k\n").expect("a line");
+
+    let mut rest = Vec::new();
+    output.read_to_end(&mut rest).expect("the rest of its output");
+    assert!(child.wait().expect("the program ends").success());
+    [b"rd".to_vec(), rest].concat()
+}
+
+/// Every cell on a terminal: keys as they are pressed and the mode put back, and the window's size
+/// as the terminal says it, asked of output and error first, which are not terminals here.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn the_terminal_operations_change_the_mode_and_put_it_back() {
+    let case = Case {
+        data: &[("mark", b"r"), ("done", b"d")],
+        ..Case::new(
+            "on_a_terminal",
+            &[
+                Call {
+                    op: "os_terminal",
+                    args: &[N(1)],
+                    keep: Some(0),
+                },
+                Call {
+                    op: "os_window",
+                    args: &[Scratch(64)],
+                    keep: Some(1),
+                },
+                Call {
+                    op: "os_write",
+                    args: &[N(1), Data("mark"), N(1)],
+                    keep: Some(2),
+                },
+                Call {
+                    op: "os_read",
+                    args: &[N(0), Scratch(80), N(1)],
+                    keep: Some(3),
+                },
+                Call {
+                    op: "os_terminal",
+                    args: &[N(0)],
+                    keep: Some(4),
+                },
+                Call {
+                    op: "os_terminal",
+                    args: &[N(0)],
+                    keep: Some(5),
+                },
+                Call {
+                    op: "os_write",
+                    args: &[N(1), Data("done"), N(1)],
+                    keep: Some(6),
+                },
+                Call {
+                    op: "os_read",
+                    args: &[N(0), Scratch(80), N(1)],
+                    keep: Some(7),
+                },
+            ],
+            72,
+            [
+                b"rd".to_vec(),
+                image(72, &[0, 0, 1, 1, 0, 0, 1, 1], &[(64, &[24, 0, 0, 0, 80, 0, 0, 0])]),
+            ]
+            .concat(),
+        )
+    };
+    let folder = tempfile::tempdir().expect("a folder");
+    for target in Profile::ALL {
+        let place = folder.path().join(target.name());
+        let executable =
+            per_target::build(target, &place, case.name, &program(target, &case)).await;
+        if per_target::way(target).is_none() {
+            continue;
+        }
+        let printed = tokio::task::spawn_blocking(move || on_a_terminal(&executable))
+            .await
+            .expect("the terminal test ends");
+        assert_eq!(printed, case.stdout, "{} on {}", case.name, target.name());
     }
 }

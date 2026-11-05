@@ -605,7 +605,10 @@ mod tests {
                     .strip_prefix("0x")
                     .map_or_else(|| digits.parse::<i64>(), |hex| i64::from_str_radix(hex, 16))
                     .unwrap_or_else(|_| panic!("{name} is {value}"));
-                (name.to_owned(), if negative { -magnitude } else { magnitude })
+                (
+                    name.to_owned(),
+                    if negative { -magnitude } else { magnitude },
+                )
             })
             .collect()
     }
@@ -674,20 +677,39 @@ mod tests {
                     assert_eq!(*value, -i64::from(*errno), "{what}");
                 }
             }
-            let used = found.keys().filter(|name| name.starts_with("LENGUA_SYS_")).count();
-            assert_eq!(used, calls.len(), "{profile:?}: a system call in one place only");
+            let used = found
+                .keys()
+                .filter(|name| name.starts_with("LENGUA_SYS_"))
+                .count();
+            assert_eq!(
+                used,
+                calls.len(),
+                "{profile:?}: a system call in one place only"
+            );
             assert_eq!(found["LENGUA_CHANNEL"], i64::from(CHANNEL), "{profile:?}");
             assert_eq!(found["LENGUA_RANDOM_MOST"], big(RANDOM_MOST), "{profile:?}");
-            assert_eq!(found["LENGUA_CLONE_FLAGS"], big(Profile::CLONE_FLAGS), "{profile:?}");
+            assert_eq!(
+                found["LENGUA_CLONE_FLAGS"],
+                big(Profile::CLONE_FLAGS),
+                "{profile:?}"
+            );
             // AArch64 builds the flags in two halves, as one instruction can't hold them.
             if let (Some(low), Some(high)) = (
                 found.get("LENGUA_CLONE_FLAGS_LOW"),
                 found.get("LENGUA_CLONE_FLAGS_HIGH"),
             ) {
-                assert_eq!(low | (high << 16), found["LENGUA_CLONE_FLAGS"], "{profile:?}");
+                assert_eq!(
+                    low | (high << 16),
+                    found["LENGUA_CLONE_FLAGS"],
+                    "{profile:?}"
+                );
             }
             assert_eq!(found["LENGUA_KIND_FILE"], big(kind::FILE), "{profile:?}");
-            assert_eq!(found["LENGUA_KIND_FOLDER"], big(kind::FOLDER), "{profile:?}");
+            assert_eq!(
+                found["LENGUA_KIND_FOLDER"],
+                big(kind::FOLDER),
+                "{profile:?}"
+            );
             assert_eq!(found["LENGUA_KIND_OTHER"], big(kind::OTHER), "{profile:?}");
         }
     }
@@ -699,13 +721,22 @@ mod tests {
         for profile in Profile::ALL {
             let [library, edge] = files(profile).map(|file| parse(file, comment(profile.isa())));
             for op in Op::ALL {
-                assert!(edge.snippets.contains_key(op.symbol()), "{profile:?} {}", op.symbol());
+                assert!(
+                    edge.snippets.contains_key(op.symbol()),
+                    "{profile:?} {}",
+                    op.symbol()
+                );
             }
             assert!(edge.snippets.contains_key("_start"), "{profile:?}");
             for name in edge.snippets.keys() {
-                assert!(!library.snippets.contains_key(name), "{profile:?} {name} is in both");
                 assert!(
-                    name == "_start" || name.starts_with("lengua_") || Op::from_symbol(name).is_some(),
+                    !library.snippets.contains_key(name),
+                    "{profile:?} {name} is in both"
+                );
+                assert!(
+                    name == "_start"
+                        || name.starts_with("lengua_")
+                        || Op::from_symbol(name).is_some(),
                     "{profile:?} {name} is not an operation"
                 );
             }
@@ -749,7 +780,10 @@ mod tests {
                 .map(|(label, _)| label)
                 .filter(|label| !label.is_empty() && !label.contains(char::is_whitespace));
             for label in defined {
-                assert!(labels.insert(label), "{profile:?}: {label} is defined twice");
+                assert!(
+                    labels.insert(label),
+                    "{profile:?}: {label} is defined twice"
+                );
             }
             for name in &names {
                 assert!(labels.contains(name), "{profile:?} lacks {name}");

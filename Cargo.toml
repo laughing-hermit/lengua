@@ -53,6 +53,10 @@ nix = { version = "0.31", default-features = false, features = ["process", "ptra
 perf-event2 = "0.7.4"
 seccompiler = "0.5"
 
+# Linux only: the terminal tests give a program a pseudo-terminal for standard input.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+rustix = { version = "1", features = ["fs", "pty", "termios"] }
+
 [dev-dependencies]
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
 jsonschema = { version = "0.60", default-features = false }
