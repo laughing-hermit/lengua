@@ -284,6 +284,11 @@ free runners, whose id is written in the table below, and by nothing else.
 
 ## Deferred, and why
 
+- **A knowledge graph over more than program folders.** The owner's idea: lengua indexes files
+  and anything else in a knowledge graph, each program folder a node. Program folders and their
+  `Builds on` links already are one, and `check` holds it to the code. Indexing other files, or
+  answering questions over the graph, needs a design first (new tools or MCP resources, which the
+  plugin's two tools don't offer), and the owner decides what it should do. Not designed.
 - **A direct path for existing names under `run`:** openat2 under Landlock, and on macOS too if
   its spike can read a name's stored bytes. Worth it only if round 5's many-files line under
   `run` shows the broker's round trip matters.
