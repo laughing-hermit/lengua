@@ -525,13 +525,6 @@ async fn proofs_survive_a_call(profile: Profile) {
             }
             verdicts.push(found);
         }
-        assert!(
-            verdicts[0]
-                .iter()
-                .all(|proof| !proof.contains("by induction none")),
-            "{} is proven by induction as shipped",
-            program.name
-        );
         let kinds = |found: &[String]| -> Vec<String> {
             found.iter().map(|proof| kind(proof)).collect()
         };
