@@ -1202,33 +1202,42 @@ mod tests {
     }
 
     /// A stand-in solver that reads commands and answers `answer` to every question, with an
-    /// empty model: a shell script, so Unix's alone until the fake is the test binary itself.
-    #[cfg(unix)]
-    fn fake(folder: &std::path::Path, answer: &str) -> String {
-        use std::os::unix::fs::PermissionsExt as _;
-        let path = folder.join(format!("always-{answer}"));
-        std::fs::write(
-            &path,
-            format!(
-                "#!/bin/sh\nwhile read -r line; do\n  case \"$line\" in\n    \"(echo \"*) echo \
-                 '{MARKER}' ;;\n    \"(check-sat\"*) echo {answer} ;;\n    \"(get-value\"*) echo \
-                 '()' ;;\n  esac\ndone\n"
-            ),
-        )
-        .expect("write the stand-in");
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-            .expect("make it runnable");
-        // A process another test forked while the file was open for writing keeps it busy until
-        // that process execs; once one run starts, none can.
-        for _ in 0..100 {
-            match Command::new(&path).stdin(Stdio::null()).status() {
-                Err(error) if error.raw_os_error() == Some(26) => {
-                    std::thread::sleep(std::time::Duration::from_millis(10));
+    /// empty model: a shell script, so Unix's alone until the fake is the test binary itself;
+    /// elsewhere there is none, and the test that wants it ends with a note.
+    fn fake(folder: &std::path::Path, answer: &str) -> Option<String> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let path = folder.join(format!("always-{answer}"));
+            std::fs::write(
+                &path,
+                format!(
+                    "#!/bin/sh\nwhile read -r line; do\n  case \"$line\" in\n    \"(echo \"*) echo \
+                     '{MARKER}' ;;\n    \"(check-sat\"*) echo {answer} ;;\n    \"(get-value\"*) echo \
+                     '()' ;;\n  esac\ndone\n"
+                ),
+            )
+            .expect("write the stand-in");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("make it runnable");
+            // A process another test forked while the file was open for writing keeps it busy
+            // until that process execs; once one run starts, none can.
+            for _ in 0..100 {
+                match Command::new(&path).stdin(Stdio::null()).status() {
+                    Err(error) if error.raw_os_error() == Some(26) => {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    _ => break,
                 }
-                _ => break,
             }
+            Some(path.to_string_lossy().into_owned())
         }
-        path.to_string_lossy().into_owned()
+        #[cfg(not(unix))]
+        {
+            let _ = (folder, answer);
+            crate::skiplog::note("the stand-in solver is a shell script, which this system lacks");
+            None
+        }
     }
 
     /// x + 1 = 0 for an 8-bit x: true only for 255.
@@ -1240,11 +1249,12 @@ mod tests {
         (x, pool.eq(next, zero))
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_second_solver_overrules_a_wrong_impossible() {
         let folder = tempfile::tempdir().expect("a folder");
-        let liar = fake(folder.path(), "unsat");
+        let Some(liar) = fake(folder.path(), "unsat") else {
+            return;
+        };
         let Ok(mut solver) = Solver::with(&[(Kind::Z3, &liar), (Kind::Cvc5, "cvc5")], 5000, false)
         else {
             return;
@@ -1274,11 +1284,12 @@ mod tests {
         assert_eq!(answer, Answer::Unsat);
     }
 
-    #[cfg(unix)]
     #[test]
     fn impossible_needs_both_solvers() {
         let folder = tempfile::tempdir().expect("a folder");
-        let doubter = fake(folder.path(), "sat");
+        let Some(doubter) = fake(folder.path(), "sat") else {
+            return;
+        };
         let Ok(mut solver) = Solver::with(&[(Kind::Z3, "z3"), (Kind::Cvc5, &doubter)], 5000, false)
         else {
             return;
@@ -1301,7 +1312,9 @@ mod tests {
             "{}",
             solver.why_unknown
         );
-        let unknown = fake(folder.path(), "unknown");
+        let Some(unknown) = fake(folder.path(), "unknown") else {
+            return;
+        };
         let mut solver =
             Solver::with(&[(Kind::Z3, "z3"), (Kind::Cvc5, &unknown)], 5000, false).expect("starts");
         let (answer, _) = solver
