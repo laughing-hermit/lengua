@@ -5046,6 +5046,27 @@ const EDGE_FIXTURES: &[EdgeFixture] = &[
         says: "enters lengua's own code",
     },
     EdgeFixture {
+        what: "a register the edge changes, read after the call",
+        edits: PerCpu {
+            x86_64: &[("    call os_write\n", "    call os_write\n    mov r8, rcx\n")],
+            aarch64: &[("    bl os_write\n", "    bl os_write\n    mov x9, x16\n")],
+        },
+        ops: &BASE_OPS,
+        says: "is read after a call that reaches the OS",
+    },
+    EdgeFixture {
+        what: "a vector register held across a call",
+        edits: PerCpu {
+            x86_64: &[(
+                "    call os_write\n    test rax, rax\n",
+                "    vpxor ymm0, ymm0, ymm0\n    call os_write\n    vmovdqa ymm1, ymm0\n    test rax, rax\n",
+            )],
+            aarch64: &[("    bl os_write\n", "    bl os_write\n    mov x9, x17\n")],
+        },
+        ops: &BASE_OPS,
+        says: "is read after a call that reaches the OS",
+    },
+    EdgeFixture {
         what: "a jump into an operation",
         edits: PerCpu {
             x86_64: &[("    js .Lmain_write_failed\n", "    js os_exit\n")],
@@ -5075,5 +5096,27 @@ async fn the_edge_form_rules_refuse_what_they_name() {
                 fixture.says
             );
         }
+    }
+}
+
+/// What the edge keeps is still there after a call: an argument register, which the program gave
+/// the operation, is read again with no word from the checker.
+#[tokio::test]
+async fn a_register_the_edge_keeps_is_readable_after_a_call() {
+    for (profile, from, to) in [
+        (
+            Profile::LinuxX86_64,
+            "    call os_write\n",
+            "    call os_write\n    mov r8, rsi\n",
+        ),
+        (
+            Profile::LinuxAarch64,
+            "    bl os_write\n",
+            "    bl os_write\n    mov x9, x1\n",
+        ),
+    ] {
+        let text = EDGE_BASE.get(profile).replacen(from, to, 1);
+        let report = check_edge(&text, &BASE_OPS).await;
+        assert!(report.passed(), "{profile:?}: {:#?}", report.violations);
     }
 }

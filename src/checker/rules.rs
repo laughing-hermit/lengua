@@ -96,6 +96,7 @@ pub fn check(
     let mut ids: BTreeMap<i64, usize> = BTreeMap::new();
     let mut assertions = 0;
     let mut users: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let reaching = checker.reaching_the_os();
     for function in &program.functions {
         let Some(flow) = flows.get(function.name()) else {
             continue;
@@ -114,6 +115,7 @@ pub fn check(
         }
         checker.operations(function, flow, ops);
         checker.frame(function, flow);
+        checker.changed_by_calls(function, flow, &reaching);
         checker.exit_statuses(function, flow);
         checker.results(function, flow);
         checker.indexes(function, flow);
@@ -538,6 +540,114 @@ impl Checker<'_, '_> {
                          it, add {needs} to spec.md and tell the user"
                     ),
                 );
+            }
+        }
+    }
+
+    /// The functions of main.s that reach the OS: those that call an operation, or one of the
+    /// library's functions that calls one, or a function that does.
+    fn reaching_the_os(&self) -> BTreeSet<String> {
+        let mut reaching: BTreeSet<String> = BTreeSet::new();
+        loop {
+            let before = reaching.len();
+            for function in &self.program.functions {
+                let Some(flow) = self.flows.get(function.name()) else {
+                    continue;
+                };
+                let reaches = flow.exits.iter().any(|exit| match exit {
+                    Exit::Edge { .. } => true,
+                    Exit::Call { callee } => {
+                        !crate::edge::library_calls(callee).is_empty() || reaching.contains(callee)
+                    }
+                    _ => false,
+                });
+                if reaches {
+                    reaching.insert(function.name().to_owned());
+                }
+            }
+            if reaching.len() == before {
+                return reaching;
+            }
+        }
+    }
+
+    /// Rule 6, for the edge form: after a call that reaches the OS, a register the edge's
+    /// convention changes isn't read until something sets it. An operation changes only those;
+    /// a function that reaches the OS gives back what a function does, and changes them too.
+    fn changed_by_calls(
+        &mut self,
+        function: &MappedFunction<'_>,
+        flow: &Flow,
+        reaching: &BTreeSet<String>,
+    ) {
+        if self.program.source.form != crate::edge::Form::Edge {
+            return;
+        }
+        let abi = self.program.abi();
+        let clobbers = abi.edge_clobbers;
+        let all: u64 = (0..clobbers.len()).fold(0, |mask, index| mask | (1_u64 << index));
+        let clearing = |registers: &[Reg]| -> u64 {
+            registers
+                .iter()
+                .filter_map(|register| clobbers.iter().position(|known| known == register))
+                .fold(0, |mask, index| mask | (1_u64 << index))
+        };
+        let count = function.steps.len();
+        if count == 0 {
+            return;
+        }
+        let mut states: Vec<Option<u64>> = vec![None; count];
+        states[0] = Some(0);
+        let mut pending = vec![0];
+        let mut reported = BTreeSet::new();
+        while let Some(at) = pending.pop() {
+            let Some(before) = states[at] else {
+                continue;
+            };
+            let step = &function.steps[at];
+            let insn = &step.insn;
+            for (index, register) in clobbers.iter().enumerate() {
+                if before & (1_u64 << index) != 0
+                    && insn.reads.contains(*register)
+                    && reported.insert((at, index))
+                {
+                    self.violation(
+                        Rule::Scope,
+                        step.source.line,
+                        format!(
+                            "`{register}` is read after a call that reaches the OS, which changes \
+                             it, and nothing has set it since"
+                        ),
+                        "set it again before this line reads it; the edge's convention keeps \
+                         the argument registers and the callee-saved ones, and changes the rest",
+                    );
+                }
+            }
+            let mut after = before;
+            for (index, register) in clobbers.iter().enumerate() {
+                if insn.writes.contains(*register) {
+                    after &= !(1_u64 << index);
+                }
+            }
+            let defined = match &flow.exits[at] {
+                Exit::Edge { .. } => Some(clearing(&[abi.result])),
+                Exit::Call { callee }
+                    if reaching.contains(callee)
+                        || !crate::edge::library_calls(callee).is_empty() =>
+                {
+                    Some(clearing(&abi.returns))
+                }
+                _ => None,
+            };
+            if let Some(defined) = defined {
+                after = all & !defined;
+            }
+            for &next in &flow.successors[at] {
+                let joined = states[next].map_or(after, |known| known | after);
+                if states[next] != Some(joined) {
+                    states[next] = Some(joined);
+                    pending.push(next);
+                }
             }
         }
     }
