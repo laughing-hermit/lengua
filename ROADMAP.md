@@ -663,19 +663,28 @@ Nothing ran, since R0 changed documents only; the commit is the record.
    - In Cargo.toml: the Linux-only crates go under `cfg(target_os = "linux")`, rustix and nix
      under `cfg(unix)`; add object's macho and pe features, and sysinfo.
    - Make a workspace with `crates/lengua-os`.
-3. **`src/os/`** (§3).
-   - runner.rs's Linux parts move into it.
-   - supervise.rs and the /proc probe are gated to Linux until R2 removes them.
-   - connect.rs gets a Windows stub.
-   - prove/watch.rs moves onto sysinfo.
-   - The toolchain's PATH search honours `.exe` and PATHEXT, with an install hint per OS.
-   - smt.rs's `#!/bin/sh` fake solver becomes the test binary in a fake-solver mode.
-   - `/tmp` (server.rs:2717) and tests/workflow.rs:89's `sh` become per-OS cells.
+3. **`src/os/`** (§3). Done, with these differences from the plan (2026-11-05):
+   - runner.rs's launch half moved whole into `src/os/linux.rs`, and `src/os/unsupported.rs`
+     gives every other system the same four things, saying programs don't run there yet. The
+     `unix/` half macOS shares is split out in round 3, when macOS shows what it needs.
+   - supervise.rs is Linux's. The /proc probe in testrun.rs stays until R2 removes it.
+   - connect.rs: the Unix socketpairs and the relay are Unix's; `Peer` is a type with no values
+     on Windows.
+   - prove/watch.rs did **not** move onto sysinfo: its memory guard still reads Linux's /proc,
+     and its tests say so where it reads nothing. Round 3 reads macOS's (`vm_stat`, `sysctl`) and
+     round 4 Windows's (`GlobalMemoryStatusEx`), without a new dependency; a solver is stopped on
+     Windows by `taskkill`.
+   - The toolchain's PATH search honours `.exe`, with an install hint per OS; the data folder is
+     each system's own.
+   - smt.rs's `#!/bin/sh` fake solver is still a script: its two tests skip with a note where
+     there is no shell (making it the test binary is left over).
 4. **Keying by target.** `Profile::os()`/`isa()` and the rest of §3's keying;
    `CpuFeatures::baseline` taking an `Isa`; the `-aarch64` names.
 5. **Tables.**
-   - `PerCpu` and `PerOs` go in src/targets.rs.
-   - The 289 cells are converted mechanically.
+   - `PerCpu` goes in src/targets.rs, with `PerTarget` kept for what differs by system too.
+     `PerOs` and `Profile::os()` wait for round 3, when a second system's profile makes them
+     needed.
+   - The 288 cells are converted mechanically.
    - `every_prover_test_runs_on_every_target` (src/prove/tests.rs:5068-5093) takes `PerCpu`.
    - Host-bound tests use `targets::host()` and `skiplog::note`.
 6. **One folder check.** `check_one_aarch64_folder` folds into `check_one_folder(target)`, which
