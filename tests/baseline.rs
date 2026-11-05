@@ -136,6 +136,11 @@ const TIERS: PerTarget<&[Tier]> = PerTarget {
     ],
     linux_aarch64: &[
         Tier {
+            program: "benches/programs/count/sve.s",
+            needs: &["sve"],
+            sibling: "tests/fixtures/linux-aarch64/count/main.s",
+        },
+        Tier {
             program: "plugin/skills/compile/assets/linux-aarch64/fast/aes-aes/main.s",
             needs: &["aes"],
             sibling: "tests/fixtures/linux-aarch64/aes/main.s",
@@ -181,6 +186,10 @@ const BENCH_ONLY: PerTarget<&[Bench]> = PerTarget {
         },
     ],
     linux_aarch64: &[
+        Bench {
+            program: "benches/programs/count/sve.s",
+            spec: "examples/count/spec.md",
+        },
         Bench {
             program: "benches/programs/shout/neon-one.s",
             spec: "plugin/skills/compile/assets/parallel-template-spec.md",

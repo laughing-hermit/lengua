@@ -48,23 +48,13 @@ const DEBT: &[Debt] = &[
     },
     Debt {
         file: "tests/aarch64_session.rs",
-        reason: "AArch64 programs through the server: the calc, hypotenuse, vector, stream, \
-                 tally, server, terminal, echo, fetch and parallel programs, the benchmark's \
-                 own programs, proofs, the cut only the proof tries, a closed standard output, \
-                 a computer an argument names, a raw read",
-        missing: "tests/check_code.rs has the x86-64 side of most of these and about 25 more \
-                  (see its own entry), which ARM64 lacks",
-    },
-    Debt {
-        file: "tests/check_code.rs",
-        reason: "x86-64 programs through the server: the vector, stream, tally, parallel and \
-                 jump-table programs, small ranges, decimals, files, folders, the environment, \
-                 sleep, the network, programs built on programs, the proofs of the examples and \
-                 what they find in a cut or a closed output, the AVX-512 programs of the \
-                 benchmarks",
-        missing: "ARM64 has no session test for: small ranges that run every value, decimals, \
-                  files, folders, listing, sleep, the environment, dice, TLS, programs built on \
-                  programs, and a server that waits for its client",
+        reason: "ARM64's by-hand port tool: `check_one_aarch64_folder` checks the folders \
+                 LENGUA_CHECK_FOLDER names, natively on an ARM64 computer and through QEMU's \
+                 user mode on an x86-64 one; every case of the server on AArch64 code is written \
+                 once, with a cell for each target, in the other files",
+        missing: "x86-64's tool, `check_one_folder` in tests/check_folder.rs, checks a folder as \
+                  this computer's own target and has no emulator path to check another \
+                  target's folder from here",
     },
 ];
 

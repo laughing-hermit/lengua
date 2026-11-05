@@ -239,13 +239,14 @@ in this run are listed above), heaviest first:
    - *Prover tests.* ARM64's prover is tested on 7 of the 29 twins, x86-64's on about 20 programs,
      and its memory-bug tests are x86-only.
    - *Other x86-only coverage.* The checker's and the prover's golden recordings; executor tests
-     of loop detection, connections and sleep; the 34 session tests still in `tests/check_code.rs`
-     against ARM64's 14 in `tests/aarch64_session.rs` (the missing ones are named in `DEBT`,
-     `tests/parity_inventory.rs`, which lists every test file still made for one CPU). The
-     server's own flow, the add workflow and the proofs of the template are no longer in this
-     list: they are one table for both CPUs (`tests/sessions.rs` and `tests/workflow.rs`, below),
-     and the unmodified AArch64 template now goes through `check` to `done`, is proven for every
-     input and is run in them.
+     of loop detection, connections and sleep. The session tests that were made for one CPU
+     (`tests/check_code.rs`, `tests/e2e.rs` and `tests/aarch64_session.rs`) are no longer in this
+     list: they are tables for both CPUs, the server's own flow, the add workflow and the proofs
+     of the template in `tests/sessions.rs` and `tests/workflow.rs` and the examples, fixtures,
+     templates and the benchmark's programs in `tests/programs.rs` (both below), and the
+     unmodified AArch64 template now goes through `check` to `done`, is proven for every input
+     and is run in them. `DEBT` in `tests/parity_inventory.rs` lists every test file still made
+     for one CPU.
 2. **Prover reach.**
    - *x86-64's prover* can't follow dozens of vector instructions the ARM64 prover models
      (`palignr`, `pblendw`, `punpck*`, `pack*`, saturating and widening arithmetic, string
@@ -482,12 +483,14 @@ natively on both runners:
   only reads it); every program of each target through the server (`tests/every_program.rs`,
   where a program for an extension the CPU lacks is skipped with a note); and the sandbox's
   limits (`tests/limits.rs`, 31 tests, each program an assembly source per CPU, built for both
-  CPUs on every runner and run on its own); and the server's flow (`tests/sessions.rs`, 18 cases,
-  and `tests/workflow.rs`, 7, below). Left: the three test files still made for one CPU, which
-  `tests/parity_inventory.rs` lists in `DEBT` with what each lacks on the other CPU:
-  `check_code.rs` (34 x86-64 session tests), `aarch64_session.rs` (14 ARM64 ones) and
-  `aarch64.rs`. Making them tables means writing ARM64 session cases for about 25 x86-64 ones
-  (and x86-64 ones for `aarch64.rs`'s three standalone tests), program by program.
+  CPUs on every runner and run on its own); the server's flow (`tests/sessions.rs`, 18 cases,
+  and `tests/workflow.rs`, 7, below); and the examples, fixtures, templates and the benchmark's
+  programs through the server (`tests/programs.rs`, 26 tests: 52 cases on the two CPUs where 32
+  were on one each, and what the second CPU showed is in "What the programs table found" below).
+  Left: the test files still made for one CPU, which `tests/parity_inventory.rs` lists in `DEBT`
+  with what each lacks on the other CPU: `aarch64_session.rs`, which is only ARM64's by-hand
+  port tool now (`check_one_aarch64_folder`, with the QEMU path that x86-64's `check_one_folder`
+  in `check_folder.rs` has no counterpart of).
 - *3, the porting list as an executable conformance suite: begun.* The rules, the red team, every
   program through the server, the sandbox's limits and the server's session flow are tables both
   runners run natively. `parity_inventory.rs` fails when a target has no job that runs
@@ -549,14 +552,15 @@ What the second CPU showed (the first ARM64 run, 41912454057, failed 3 of the 27
   (`flow::done` checks again while the reply says the proofs are "still running"). The window is
   for an engineer to close in `prove_all` (stamp before the last line is set, or end the stage
   first); other tests that read the lock after `settle`, such as
-  `the_file_example_proves_its_file_handling` in `tests/check_code.rs`, have it too, and that
-  file's `done` now waits for the job to end as well.
+  `the_file_example_proves_its_file_handling` (now in `tests/programs.rs`), have it too, and
+  that file's `done` waits for the job to end as well.
 - *An old test's schedule changed under it.* With the 16 flow tests gone from
   `tests/check_code.rs`, the streaming filter's two minutes of induction proof overlapped
   `the_file_example_proves_its_file_handling`'s for their whole length, and ran out of time on a
   slower x86-64 draw (a Xeon 8370C, run 41921857314: that one test failed, where the same set
   passed on a Xeon 8573C, run 41915069831). It runs alone now, as its siblings that need the
-  cores do.
+  cores do (`Proving::AloneFor` in `tests/programs.rs`, where both tests live since the programs
+  table).
 - Nothing else differed. The template, the streaming filter, `add`, `cat` and `echo` give the
   same answers word for word on both CPUs: the template's three proofs "for every input in
   range" with no solver question, `cat`'s bound of 4,096 of 5,000 bytes, the bug found by the
@@ -567,6 +571,50 @@ What the second CPU showed (the first ARM64 run, 41912454057, failed 3 of the 27
   did under QEMU: a session for this computer itself refuses the program QEMU tested) is kept,
   with the target as a parameter, but neither runner has QEMU. The cases with a session of their
   own timings (a changed wait, a grace) run natively only and note it when they don't.
+
+### What the programs table found (2026-11-04)
+
+`tests/programs.rs` takes the examples, fixtures, templates and the benchmark's programs through
+the server, each case written once with a cell for both CPUs. It replaced 25 functions of
+`tests/check_code.rs` (x86-64) and 7 of `tests/aarch64_session.rs` (ARM64) with 26 tests, which
+are 52 cases on the two runners where the 32 were each on one: ARM64 gained 19 (the examples' and
+fixtures' that only x86-64 had, and the benchmark's NEON and SVE analogues of the three AVX-512
+programs) and x86-64 one (the hypotenuse proven in doubles, which only ARM64 asked). The
+benchmark's word count had no ARM64 counterpart, so ARM64 got a program of its own for it
+(`benches/programs/count/sve.s`, below). Run natively on each runner (x86-64: 41914647554 on a
+CPU with AVX-512 and 41916653039 on one without, the five AVX-512 variants skipped with a note;
+ARM64: 41916659300), the two CPUs behave alike in 24 of the 26 tests: the same counts of test
+runs, the same runs and outputs, and the same verdict on every proof line the cells check
+(proven for every input in range, bounded at a length with the proof to go on, or tested, not
+proven): the hypotenuse's five blocks, upcase's files, archive, sweep, greet, dice, words and
+pairs by induction, the vector, streaming and tally templates, the parallel template and the
+benchmark's programs. They differ in two proofs, both ARM64's prover settling less than
+x86-64's, each pinned in its cell (`ABSDIFF` and `MEAN`, `tests/programs.rs`) the way `DEBT` is,
+so the test fails when ARM64 proves more until its cell says so:
+- *absdiff's first block* (196 input combinations through a conditional-move choice of a - b).
+  x86-64 proves all four blocks, memory with them, in the 60 seconds a runner gives; ARM64
+  proves B2 to B4 and not B1: not in 60 seconds ("ran out of time after 153 of 196 input
+  combinations", run 41912245262) and not in 240 ("a path couldn't be settled: cvc5 couldn't
+  confirm z3's answer: it ran out of time", run 41914652006), so the rest of its memory is
+  tested, not proven.
+- *mean's decimal blocks* (B1, B2 and B3, exact cents). x86-64 proves all six blocks in 414
+  seconds on a 4-vCPU runner (run 41914657858; in 60 seconds B1 and B3 say they "would take
+  about 60 seconds", run 41913028891). ARM64 proves B4 to B6 and not B1 to B3 in 600 seconds,
+  "a path couldn't be settled: z3 ran out of time" (run 41914663693); in 60 seconds B1 and B3
+  reached 73 of their 324 input combinations, and B2, which x86-64 settles by its terms alone
+  (448 paths, no solver question), needed a solver question that cvc5 could not confirm (run
+  41913035211).
+
+Not investigated, as the `amounts` difference in "Prover reach" above was not: why ARM64's terms
+settle fewer paths of these two programs (the model of an instruction, or how a signed compare or
+the conversion's `csel` is read), or why the solver questions it then asks are hard. The two
+may be one gap, and the `amounts` one with them.
+
+Two things the table needs are the dialects', not differences of the product: the comment sign of
+the `from:` line a program built on another carries (`//` on AArch64, `#` on x86-64), and, under
+QEMU's user mode on a developer's computer, which has no supervisor, a die's off-by-one test
+(it needs the tests' random bytes) is skipped with a note and a sleep's test passes at once,
+because the tests that need the supervisor are not run there.
 
 ### Baseline debt
 
@@ -604,8 +652,13 @@ Tiers beside a written baseline sibling (`TIERS`): the six above, x86-64's `fast
 (AVX-512BW, BMI2) and ARM64's `fast/wc-sve` (`sve`) beside their `fast/wc`, and, benchmark-only
 and listed apart (`BENCH_ONLY`), x86-64's `benches/programs`
 `count/avx512.s`, `shout/avx512.s`, `shout/avx512-one.s` and `upcase/avx512.s` (AVX-512BW) beside
-`examples/count`, the parallel template and `examples/upcase`. ARM64's two benchmark variants are
-NEON, on the baseline.
+`examples/count`, the parallel template and `examples/upcase`. ARM64's benchmark variants are two
+NEON ones, on the baseline (`shout/neon-one.s`, `upcase/neon.s`), and the SVE tier of the word
+count that meets count's spec, `count/sve.s` (`sve`, 2026-11-04: the count twin with `wc-sve`'s
+`count_piece`, the ARM64 cell of the case x86-64's `count/avx512.s` is), beside the count twin.
+Neither `benches/against_rust_and_c.rs` nor `BENCHMARKS-aarch64.md` measures `count/sve.s` yet,
+and ARM64 has no 16-thread variant of the shout with wider vectors where x86-64 has
+`shout/avx512.s`: both are for another engineer.
 
 Not done by the test: the stamp lengua writes into `main.s` and `lengua.lock` (`needs SSE4.2, …`)
 still lists SSE3 to SSE4.2 and POPCNT as extensions, since the checker's own floor is SSE2

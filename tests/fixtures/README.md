@@ -43,7 +43,11 @@ fixture here and of each program in `examples/`, 29 in all, each compiled from t
 `spec.md` (the twin test, `every_program_has_its_twin_on_the_other_cpu`, asks for the same bytes),
 and a program added on either CPU comes with its twin. One test,
 `every_program_passes_its_checks_on_every_target` (tests/every_program.rs), takes them all
-through the server on each target a computer runs.
+through the server on each target a computer runs, and `tests/programs.rs` takes the ones a case
+asks about further, each case written once with a cell for each CPU (the twin's folder, an edit
+of its text, the extension a variant needs): decimals, files, folders, sleep, the environment,
+dice, programs built on programs, words and pairs proven for every length, the vector, streaming,
+tally and parallel templates, and the benchmark's programs.
 
 **The session tests start from them.** `tests/sessions.rs` and `tests/workflow.rs` (each case once,
 a cell for each target, run natively on each CPU's runner) start from the template and from the

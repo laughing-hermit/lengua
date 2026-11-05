@@ -1232,7 +1232,16 @@ question, its loop leaving where its index reaches the bytes read as the NEON on
      limit: time, output, the environment, names, open files, listing order, the clock and the
      random bytes, the supervisor, threads, the network, and the rest of "Running programs".
      Every runner builds every target's source (LLVM builds for all of them), so a typo fails
-     everywhere, and runs its own.
+     everywhere, and runs its own;
+   - `tests/programs.rs`: for each case that takes the examples, fixtures, templates and fast
+     programs through the server (files, folders, sleep, the environment, dice, programs built
+     on programs, decimals, words and pairs counted for every length, the vector, streaming,
+     tally and parallel templates, the benchmark's programs), the target's twin of the program
+     (a folder, a template, a fast program), what the case changes in it (an edit of its text),
+     and the optional extension of its CPU a variant needs (a variant for one that a computer
+     lacks is skipped, with a note). The proofs, runs and counts are the case's; a cell pins
+     what its CPU proves or does differently, where one does, with the reason and todo.md's
+     record of it.
 
    A target must pass them natively, on a runner of its own CPU: `tests/parity_inventory.rs`
    fails unless `.github/workflows` has a job that runs `cargo test` on each target's runner
