@@ -1,175 +1,613 @@
-//! The edge's operations, one table of cases for both CPUs. Each case is a small program in the
-//! edge form (it defines `main` and calls `os_*`), built with lengua.s after it, run through the
-//! launcher under the system calls its operations need, and held to what it prints and how it
-//! ends. A table cell for the CPU this computer is runs natively, on that CPU's own runner in CI;
-//! the other CPU's cell runs through QEMU's user mode where that is set up, and every cell is at
-//! least built, since LLVM builds for both CPUs anywhere.
+//! The edge's operations, one table of cases for both CPUs. Each case is a list of steps, calls of
+//! the operations with the arguments they take, from which this file writes a small program for
+//! each CPU in the edge form (it defines `main` and calls `os_*`), so that both CPUs are held to
+//! the very same case. The program is built with lengua.s after it, run through the launcher under
+//! the system calls its operations make, and held to what it prints and how it ends. A case runs
+//! natively for the CPU this computer is, on that CPU's own runner in CI; for the other CPU it
+//! runs through QEMU's user mode where that is set up, and in any case it is built, since LLVM
+//! builds for both CPUs anywhere.
 //!
-//! What an operation does is the same on every CPU and every operating system, so a case's
-//! output and exit are written once; only its program differs, by CPU.
+//! A program keeps what each call returns in a scratch area it zeroes first, and prints the
+//! first `report` bytes of it before it exits, so a case says what it expects as bytes.
 
 mod common;
 mod per_target;
 
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::path::Path;
 
 use lengua::platform::Profile;
 use lengua::runner::{End, Job, Limits, run};
 use lengua::spec::Syscall;
-use lengua::targets::PerCpu;
 use per_target::Way;
 
 fn launcher() -> &'static Path {
     Path::new(env!("CARGO_BIN_EXE_lengua-mcp"))
 }
 
-/// Assembly lines, indented as instructions are unless they are labels or section names.
-fn lines(list: &[&str]) -> String {
-    let mut text = String::new();
-    for line in list {
-        let unindented = line.ends_with(':') || (line.starts_with('.') && !line.contains(' '));
-        if !unindented {
-            text.push_str("    ");
-        }
-        text.push_str(line);
-        text.push('\n');
-    }
-    text
+/// The scratch area's size: 64 words.
+const SCRATCH: u32 = 512;
+
+/// Where `main`'s arguments are kept in the scratch area, its last three words.
+const ARGC_AT: u32 = 488;
+const ARGV_AT: u32 = 496;
+const ENVP_AT: u32 = 504;
+
+/// The registers a call's arguments go in, on x86-64.
+const X86_ARGUMENTS: [&str; 6] = ["rdi", "rsi", "rdx", "r10", "r8", "r9"];
+
+/// What an argument of a call is.
+#[derive(Clone, Copy)]
+enum Arg {
+    /// A number.
+    N(i64),
+    /// The address of a data item.
+    Data(&'static str),
+    /// The address that many bytes into the scratch area.
+    Scratch(u32),
+    /// `argv[k]`.
+    Argv(u32),
+    /// `envp[k]`.
+    Envp(u32),
 }
 
-/// An x86-64 program in the edge form: `main` with `frame` bytes of stack to itself, which is
-/// 8 more than a multiple of 16 so that its calls are made with `rsp` aligned, then `data`.
-fn x86(frame: u32, body: &[&str], data: &[&str]) -> String {
-    format!(
-        ".intel_syntax noprefix\n.text\n.type main, @function\nmain:\n    sub rsp, {frame}\n{}\
-         .size main, . - main\n.section .rodata\n{}",
-        lines(body),
-        lines(data)
-    )
+/// One step of a program.
+#[derive(Clone, Copy)]
+enum Step {
+    /// Calls an operation, and keeps what it returns in a word of the scratch area.
+    Call {
+        op: &'static str,
+        args: &'static [Arg],
+        keep: Option<u32>,
+    },
+    /// Stores a number, in 1, 2, 4 or 8 bytes, that many bytes into the scratch area.
+    Set { offset: u32, bytes: u8, value: i64 },
 }
 
-/// An AArch64 program in the edge form: `main` with `frame` bytes of stack to itself, a multiple
-/// of 16, then `data`.
-fn a64(frame: u32, body: &[&str], data: &[&str]) -> String {
-    format!(
-        ".arch armv8-a\n.text\n.type main, @function\nmain:\n    sub sp, sp, #{frame}\n{}\
-         .size main, . - main\n.section .rodata\n{}",
-        lines(body),
-        lines(data)
-    )
-}
+use Arg::{Argv, Data, Envp, N, Scratch};
+use Step::{Call, Set};
 
-/// One case: a program for each CPU, what it prints and the code it exits with, and the system
-/// calls its operations make.
+/// One case.
 struct Case {
     name: &'static str,
-    program: PerCpu<String>,
-    /// The system calls the program's operations make, besides `write` and `exit_group`, which
-    /// every program may.
-    calls: &'static [Syscall],
+    /// Byte strings in read-only data, by name.
+    data: &'static [(&'static str, &'static [u8])],
+    steps: &'static [Step],
+    /// How many bytes of the scratch area the program prints, from its start, when its steps are
+    /// done, before it exits with `exit`.
+    report: u32,
+    exit: i64,
+    /// What the run gives it.
     stdin: &'static [u8],
+    arguments: &'static [&'static str],
+    environment: &'static [(&'static str, &'static str)],
+    files: &'static [(&'static str, &'static str)],
+    /// The system calls its operations make, besides `write` and `exit_group`.
+    calls: &'static [Syscall],
+    /// What it prints, all of it, the report included.
     stdout: Vec<u8>,
-    exit: i32,
 }
 
-/// The eight bytes of a result, little-endian, as a program stores one to print it.
+impl Case {
+    /// A case with nothing given to the program, that exits with 0.
+    fn new(name: &'static str, steps: &'static [Step], report: u32, stdout: Vec<u8>) -> Self {
+        Self {
+            name,
+            data: &[],
+            steps,
+            report,
+            exit: 0,
+            stdin: b"",
+            arguments: &[],
+            environment: &[],
+            files: &[],
+            calls: &[],
+            stdout,
+        }
+    }
+}
+
+/// The eight bytes of a result, little-endian, as a program stores it.
 fn word(value: i64) -> Vec<u8> {
     value.to_le_bytes().to_vec()
 }
 
+/// The first `length` bytes of a scratch area that holds `words` from its start and the bytes
+/// `at` the offsets, and zeros elsewhere.
+fn image(length: usize, words: &[i64], at: &[(usize, &[u8])]) -> Vec<u8> {
+    let mut bytes = vec![0_u8; length];
+    for (index, value) in words.iter().enumerate() {
+        bytes[8 * index..8 * index + 8].copy_from_slice(&value.to_le_bytes());
+    }
+    for (offset, found) in at {
+        bytes[*offset..*offset + found.len()].copy_from_slice(found);
+    }
+    bytes
+}
+
+/// The data items as assembly.
+fn data(case: &Case) -> String {
+    let mut text = String::from(".section .rodata\n");
+    for (name, bytes) in case.data {
+        let list: Vec<String> = bytes.iter().map(u8::to_string).collect();
+        let _ = writeln!(text, "{name}:\n    .byte {}", list.join(", "));
+    }
+    text
+}
+
+/// The case as an x86-64 program.
+fn x86_program(case: &Case) -> String {
+    let mut text = String::from(".intel_syntax noprefix\n.text\n.type main, @function\nmain:\n");
+    let _ = writeln!(text, "    sub rsp, {}", SCRATCH + 8);
+    // main's arguments to the scratch area's last words, and the rest zeroed.
+    text.push_str("    mov r8, rdi\n    mov r9, rsi\n    mov r10, rdx\n");
+    text.push_str("    xor eax, eax\n    mov rdi, rsp\n    mov ecx, 64\n    rep stosq\n");
+    let _ = writeln!(text, "    mov qword ptr [rsp + {ARGC_AT}], r8");
+    let _ = writeln!(text, "    mov qword ptr [rsp + {ARGV_AT}], r9");
+    let _ = writeln!(text, "    mov qword ptr [rsp + {ENVP_AT}], r10");
+    for step in case.steps {
+        match step {
+            Call { op, args, keep } => {
+                for (arg, register) in args.iter().zip(X86_ARGUMENTS) {
+                    match arg {
+                        N(value) => {
+                            let _ = writeln!(text, "    mov {register}, {value}");
+                        }
+                        Data(name) => {
+                            let _ = writeln!(text, "    lea {register}, [rip + {name}]");
+                        }
+                        Scratch(offset) => {
+                            let _ = writeln!(text, "    lea {register}, [rsp + {offset}]");
+                        }
+                        Argv(k) | Envp(k) => {
+                            let at = if matches!(arg, Argv(_)) { ARGV_AT } else { ENVP_AT };
+                            let _ = writeln!(text, "    mov {register}, qword ptr [rsp + {at}]");
+                            let _ =
+                                writeln!(text, "    mov {register}, qword ptr [{register} + {}]", 8 * k);
+                        }
+                    }
+                }
+                let _ = writeln!(text, "    call {op}");
+                if let Some(word) = keep {
+                    let _ = writeln!(text, "    mov qword ptr [rsp + {}], rax", 8 * word);
+                }
+            }
+            Set {
+                offset,
+                bytes,
+                value,
+            } => {
+                let size = match bytes {
+                    1 => "byte",
+                    2 => "word",
+                    4 => "dword",
+                    _ => "qword",
+                };
+                let _ = writeln!(text, "    mov {size} ptr [rsp + {offset}], {value}");
+            }
+        }
+    }
+    let _ = writeln!(
+        text,
+        "    mov edi, 1\n    mov rsi, rsp\n    mov edx, {}\n    call os_write\n    mov edi, {}\n    call os_exit\n.size main, . - main",
+        case.report, case.exit
+    );
+    text.push_str(&data(case));
+    text
+}
+
+/// The case as an AArch64 program.
+fn a64_program(case: &Case) -> String {
+    let mut text = String::from(".arch armv8-a\n.text\n.type main, @function\nmain:\n");
+    let _ = writeln!(text, "    sub sp, sp, #{}", SCRATCH + 16);
+    let _ = writeln!(text, "    stp x0, x1, [sp, #{ARGC_AT}]");
+    let _ = writeln!(text, "    str x2, [sp, #{ENVP_AT}]");
+    for pair in 0..30 {
+        let _ = writeln!(text, "    stp xzr, xzr, [sp, #{}]", 16 * pair);
+    }
+    let _ = writeln!(text, "    str xzr, [sp, #480]");
+    for step in case.steps {
+        match step {
+            Call { op, args, keep } => {
+                for (number, arg) in args.iter().enumerate() {
+                    match arg {
+                        N(value) => {
+                            let _ = writeln!(text, "    mov x{number}, #{value}");
+                        }
+                        Data(name) => {
+                            let _ = writeln!(
+                                text,
+                                "    adrp x{number}, {name}\n    add x{number}, x{number}, :lo12:{name}"
+                            );
+                        }
+                        Scratch(offset) => {
+                            let _ = writeln!(text, "    add x{number}, sp, #{offset}");
+                        }
+                        Argv(k) | Envp(k) => {
+                            let at = if matches!(arg, Argv(_)) { ARGV_AT } else { ENVP_AT };
+                            let _ = writeln!(text, "    ldr x{number}, [sp, #{at}]");
+                            let _ = writeln!(text, "    ldr x{number}, [x{number}, #{}]", 8 * k);
+                        }
+                    }
+                }
+                let _ = writeln!(text, "    bl {op}");
+                if let Some(word) = keep {
+                    let _ = writeln!(text, "    str x0, [sp, #{}]", 8 * word);
+                }
+            }
+            Set {
+                offset,
+                bytes,
+                value,
+            } => {
+                let (store, register) = match bytes {
+                    1 => ("strb", "w16"),
+                    2 => ("strh", "w16"),
+                    4 => ("str", "w16"),
+                    _ => ("str", "x16"),
+                };
+                let _ = writeln!(
+                    text,
+                    "    mov {register}, #{value}\n    {store} {register}, [sp, #{offset}]"
+                );
+            }
+        }
+    }
+    let _ = writeln!(
+        text,
+        "    mov x0, #1\n    mov x1, sp\n    mov x2, #{}\n    bl os_write\n    mov x0, #{}\n    bl os_exit\n.size main, . - main",
+        case.report, case.exit
+    );
+    text.push_str(&data(case));
+    text
+}
+
+fn program(target: Profile, case: &Case) -> String {
+    match target {
+        Profile::LinuxX86_64 => x86_program(case),
+        Profile::LinuxAarch64 => a64_program(case),
+    }
+}
+
 fn cases() -> Vec<Case> {
+    const GREETING: &[(&str, &[u8])] = &[("greeting", b"hello\n")];
     vec![
         // The first operations: write, and exit with the status given.
         Case {
-            name: "write_and_exit",
-            program: PerCpu {
-                x86_64: x86(
-                    8,
-                    &[
-                        "mov edi, 1",
-                        "lea rsi, [rip + greeting]",
-                        "mov edx, 6",
-                        "call os_write",
-                        "mov edi, 7",
-                        "call os_exit",
-                    ],
-                    &["greeting:", ".ascii \"hello\\n\""],
-                ),
-                aarch64: a64(
-                    16,
-                    &[
-                        "mov x0, #1",
-                        "adrp x1, greeting",
-                        "add x1, x1, :lo12:greeting",
-                        "mov x2, #6",
-                        "bl os_write",
-                        "mov x0, #7",
-                        "bl os_exit",
-                    ],
-                    &["greeting:", ".ascii \"hello\\n\""],
-                ),
-            },
-            calls: &[],
-            stdin: b"",
-            stdout: b"hello\n".to_vec(),
+            data: GREETING,
             exit: 7,
+            ..Case::new(
+                "write_and_exit",
+                &[Call {
+                    op: "os_write",
+                    args: &[N(1), Data("greeting"), N(6)],
+                    keep: Some(0),
+                }],
+                8,
+                [b"hello\n".to_vec(), image(8, &[6], &[])].concat(),
+            )
         },
         // An error is the negative of its number, and descriptor 4,352 is lengua's own, which
         // every operation refuses as a descriptor that is not open.
         Case {
-            name: "write_errors",
-            program: PerCpu {
-                x86_64: x86(
-                    24,
-                    &[
-                        "mov edi, 99",
-                        "lea rsi, [rip + greeting]",
-                        "mov edx, 6",
-                        "call os_write",
-                        "mov qword ptr [rsp], rax",
-                        "mov edi, 4352",
-                        "lea rsi, [rip + greeting]",
-                        "mov edx, 6",
-                        "call os_write",
-                        "mov qword ptr [rsp + 8], rax",
-                        "mov edi, 1",
-                        "mov rsi, rsp",
-                        "mov edx, 16",
-                        "call os_write",
-                        "xor edi, edi",
-                        "call os_exit",
-                    ],
-                    &["greeting:", ".ascii \"hello\\n\""],
+            data: GREETING,
+            ..Case::new(
+                "write_errors",
+                &[
+                    Call {
+                        op: "os_write",
+                        args: &[N(99), Data("greeting"), N(6)],
+                        keep: Some(0),
+                    },
+                    Call {
+                        op: "os_write",
+                        args: &[N(4352), Data("greeting"), N(6)],
+                        keep: Some(1),
+                    },
+                ],
+                16,
+                image(16, &[-9, -9], &[]),
+            )
+        },
+        // A read returns the bytes there are and then 0 at the end of the input.
+        Case {
+            stdin: b"abc",
+            calls: &[Syscall::Read],
+            ..Case::new(
+                "read",
+                &[
+                    Call {
+                        op: "os_read",
+                        args: &[N(0), Scratch(64), N(16)],
+                        keep: Some(0),
+                    },
+                    Call {
+                        op: "os_read",
+                        args: &[N(0), Scratch(64), N(16)],
+                        keep: Some(1),
+                    },
+                    Call {
+                        op: "os_read",
+                        args: &[N(99), Scratch(64), N(16)],
+                        keep: Some(2),
+                    },
+                    Call {
+                        op: "os_read",
+                        args: &[N(4352), Scratch(64), N(16)],
+                        keep: Some(3),
+                    },
+                ],
+                72,
+                image(72, &[3, 0, -9, -9], &[(64, b"abc")]),
+            )
+        },
+        // Closing and seeking a descriptor that isn't open or is lengua's own, and seeking
+        // where nothing has places: a pipe is ESPIPE.
+        Case {
+            calls: &[Syscall::Close, Syscall::Lseek],
+            ..Case::new(
+                "close_and_seek",
+                &[
+                    Call {
+                        op: "os_close",
+                        args: &[N(99)],
+                        keep: Some(0),
+                    },
+                    Call {
+                        op: "os_close",
+                        args: &[N(4352)],
+                        keep: Some(1),
+                    },
+                    Call {
+                        op: "os_seek",
+                        args: &[N(0), N(0), N(0)],
+                        keep: Some(2),
+                    },
+                    Call {
+                        op: "os_seek",
+                        args: &[N(4352), N(0), N(0)],
+                        keep: Some(3),
+                    },
+                ],
+                32,
+                image(32, &[-9, -9, -29, -9], &[]),
+            )
+        },
+        // Making and removing a folder, and what goes wrong: a name that is taken (EEXIST), one
+        // that isn't there (ENOENT), a kind that is none (EINVAL).
+        Case {
+            data: &[("d", b"d\0"), ("x", b"x\0"), ("y", b"y\0")],
+            calls: &[Syscall::Mkdirat, Syscall::Unlinkat, Syscall::Renameat],
+            ..Case::new(
+                "folders_and_names",
+                &[
+                    Call {
+                        op: "os_mkdir",
+                        args: &[Data("d")],
+                        keep: Some(0),
+                    },
+                    Call {
+                        op: "os_mkdir",
+                        args: &[Data("d")],
+                        keep: Some(1),
+                    },
+                    Call {
+                        op: "os_remove",
+                        args: &[Data("d"), N(1)],
+                        keep: Some(2),
+                    },
+                    Call {
+                        op: "os_remove",
+                        args: &[Data("d"), N(1)],
+                        keep: Some(3),
+                    },
+                    Call {
+                        op: "os_remove",
+                        args: &[Data("d"), N(7)],
+                        keep: Some(4),
+                    },
+                    Call {
+                        op: "os_rename",
+                        args: &[Data("x"), Data("y")],
+                        keep: Some(5),
+                    },
+                ],
+                48,
+                image(48, &[0, -17, 0, -2, -22, -2], &[]),
+            )
+        },
+        // A file renamed is where it was named, and the other name is free.
+        Case {
+            data: &[("x", b"x\0"), ("y", b"y\0")],
+            files: &[("x", "kept")],
+            calls: &[Syscall::Renameat],
+            ..Case::new(
+                "a_file_renamed",
+                &[Call {
+                    op: "os_rename",
+                    args: &[Data("x"), Data("y")],
+                    keep: Some(0),
+                }],
+                8,
+                image(8, &[0], &[]),
+            )
+        },
+        // The clocks, a clock that doesn't exist (EINVAL), and a wait of a microsecond.
+        Case {
+            calls: &[Syscall::ClockGettime, Syscall::ClockNanosleep],
+            ..Case::new(
+                "clocks_and_sleep",
+                &[
+                    Call {
+                        op: "os_clock",
+                        args: &[N(1), Scratch(64)],
+                        keep: Some(0),
+                    },
+                    Call {
+                        op: "os_clock",
+                        args: &[N(0), Scratch(80)],
+                        keep: Some(1),
+                    },
+                    Call {
+                        op: "os_clock",
+                        args: &[N(2), Scratch(96)],
+                        keep: Some(2),
+                    },
+                    Set {
+                        offset: 120,
+                        bytes: 8,
+                        value: 1000,
+                    },
+                    Call {
+                        op: "os_sleep",
+                        args: &[N(1), N(0), Scratch(112)],
+                        keep: Some(3),
+                    },
+                ],
+                32,
+                image(32, &[0, 0, -22, 0], &[]),
+            )
+        },
+        // Random bytes: all that were asked for, up to 256, and no more.
+        Case {
+            calls: &[Syscall::Getrandom],
+            ..Case::new(
+                "random",
+                &[
+                    Call {
+                        op: "os_random",
+                        args: &[Scratch(64), N(8)],
+                        keep: Some(0),
+                    },
+                    Call {
+                        op: "os_random",
+                        args: &[Scratch(64), N(300)],
+                        keep: Some(1),
+                    },
+                ],
+                16,
+                image(16, &[8, -22], &[]),
+            )
+        },
+        // The network's operations with no network: nothing is listening on 3, the first
+        // connection is 4 and not a listener, and shutdown on a pipe is none of the errors it
+        // gives, so it is EIO.
+        Case {
+            calls: &[Syscall::Accept4, Syscall::Shutdown],
+            ..Case::new(
+                "network_without_a_network",
+                &[
+                    Call {
+                        op: "os_accept",
+                        args: &[N(3)],
+                        keep: Some(0),
+                    },
+                    Call {
+                        op: "os_accept",
+                        args: &[N(4)],
+                        keep: Some(1),
+                    },
+                    Call {
+                        op: "os_shutdown",
+                        args: &[N(1), N(1)],
+                        keep: Some(2),
+                    },
+                    Call {
+                        op: "os_shutdown",
+                        args: &[N(4352), N(1)],
+                        keep: Some(3),
+                    },
+                ],
+                32,
+                image(32, &[-9, -9, -5, -9], &[]),
+            )
+        },
+        // A wait on standard input that has a byte, and one on descriptor 4,352, which is refused.
+        Case {
+            stdin: b"x",
+            calls: &[Syscall::Poll],
+            ..Case::new(
+                "poll",
+                &[
+                    Set {
+                        offset: 64,
+                        bytes: 4,
+                        value: 0,
+                    },
+                    Set {
+                        offset: 68,
+                        bytes: 2,
+                        value: 1,
+                    },
+                    Call {
+                        op: "os_poll",
+                        args: &[Scratch(64), N(1), N(0)],
+                        keep: Some(0),
+                    },
+                    Set {
+                        offset: 72,
+                        bytes: 4,
+                        value: 4352,
+                    },
+                    Set {
+                        offset: 76,
+                        bytes: 2,
+                        value: 1,
+                    },
+                    Call {
+                        op: "os_poll",
+                        args: &[Scratch(72), N(1), N(0)],
+                        keep: Some(1),
+                    },
+                ],
+                80,
+                image(
+                    80,
+                    &[1, -9],
+                    &[(64, &[0, 0, 0, 0, 1, 0, 1, 0]), (72, &[0, 0x11, 0, 0, 1, 0, 0, 0])],
                 ),
-                aarch64: a64(
-                    32,
-                    &[
-                        "mov w0, #99",
-                        "adrp x1, greeting",
-                        "add x1, x1, :lo12:greeting",
-                        "mov x2, #6",
-                        "bl os_write",
-                        "str x0, [sp]",
-                        "mov w0, #4352",
-                        "adrp x1, greeting",
-                        "add x1, x1, :lo12:greeting",
-                        "mov x2, #6",
-                        "bl os_write",
-                        "str x0, [sp, #8]",
-                        "mov x0, #1",
-                        "mov x1, sp",
-                        "mov x2, #16",
-                        "bl os_write",
-                        "mov w0, #0",
-                        "bl os_exit",
-                    ],
-                    &["greeting:", ".ascii \"hello\\n\""],
-                ),
-            },
-            calls: &[],
-            stdin: b"",
-            stdout: [word(-9), word(-9)].concat(),
-            exit: 0,
+            )
+        },
+        // What `main` is given: the number of arguments, the arguments and the environment,
+        // each as the operating system lays them out.
+        Case {
+            arguments: &["alpha", "be"],
+            environment: &[("NAME", "value")],
+            ..Case::new(
+                "main_arguments",
+                &[
+                    Call {
+                        op: "os_write",
+                        args: &[N(1), Scratch(ARGC_AT), N(8)],
+                        keep: Some(0),
+                    },
+                    Call {
+                        op: "os_write",
+                        args: &[N(1), Argv(1), N(5)],
+                        keep: Some(1),
+                    },
+                    Call {
+                        op: "os_write",
+                        args: &[N(1), Argv(2), N(2)],
+                        keep: Some(2),
+                    },
+                    Call {
+                        op: "os_write",
+                        args: &[N(1), Envp(0), N(10)],
+                        keep: Some(3),
+                    },
+                ],
+                32,
+                [
+                    word(3),
+                    b"alpha".to_vec(),
+                    b"be".to_vec(),
+                    b"NAME=value".to_vec(),
+                    image(32, &[8, 5, 2, 10], &[]),
+                ]
+                .concat(),
+            )
         },
     ]
 }
@@ -184,7 +622,7 @@ async fn every_operation_does_what_it_promises() {
         for target in Profile::ALL {
             let place = folder.path().join(target.name());
             let executable =
-                per_target::build(target, &place, case.name, case.program.get(target)).await;
+                per_target::build(target, &place, case.name, &program(target, &case)).await;
             built.push((target, executable));
         }
         for (target, executable) in built {
@@ -194,15 +632,28 @@ async fn every_operation_does_what_it_promises() {
             let mut spec = vec![Syscall::Write, Syscall::Exit];
             spec.extend_from_slice(case.calls);
             let allowed = target.allowed_syscalls(&spec, false);
+            let arguments: Vec<String> = case.arguments.iter().map(|text| (*text).to_owned()).collect();
+            let environment: BTreeMap<String, String> = case
+                .environment
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                .collect();
+            let files: BTreeMap<String, String> = case
+                .files
+                .iter()
+                .map(|(name, contents)| ((*name).to_owned(), (*contents).to_owned()))
+                .collect();
             let job = Job {
                 emulated: how == Way::Emulated,
-                ..Job::new(&executable, &[], case.stdin, &allowed)
+                env: &environment,
+                files: &files,
+                ..Job::new(&executable, &arguments, case.stdin, &allowed)
             };
             let ran = run(launcher(), job, Limits::default())
                 .await
                 .expect("the program runs");
             let what = format!("{} on {}", case.name, target.name());
-            assert_eq!(ran.end, End::Exited(case.exit), "{what}");
+            assert_eq!(ran.end, End::Exited(i32::try_from(case.exit).unwrap_or(-1)), "{what}");
             assert_eq!(ran.stdout, case.stdout, "{what}");
         }
     }

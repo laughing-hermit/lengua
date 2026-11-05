@@ -404,14 +404,8 @@ fn parse(file: &str, comment: &str) -> Parts {
 /// The files for a target: the CPU's library, then the operating system's edge on it.
 const fn files(profile: Profile) -> [&'static str; 2] {
     match profile {
-        Profile::LinuxX86_64 => [
-            include_str!("x86_64.s"),
-            include_str!("linux-x86_64.s"),
-        ],
-        Profile::LinuxAarch64 => [
-            include_str!("aarch64.s"),
-            include_str!("linux-aarch64.s"),
-        ],
+        Profile::LinuxX86_64 => [include_str!("x86_64.s"), include_str!("linux-x86_64.s")],
+        Profile::LinuxAarch64 => [include_str!("aarch64.s"), include_str!("linux-aarch64.s")],
     }
 }
 
@@ -468,7 +462,10 @@ pub fn lengua_text(profile: Profile, main: &str) -> Option<String> {
     let comment = comment(isa);
     let [library, edge] = files(profile).map(|file| parse(file, comment));
     let mut available: BTreeMap<&str, &Snippet> = BTreeMap::new();
-    for snippet in [&library, &edge].into_iter().flat_map(|parts| &parts.snippets) {
+    for snippet in [&library, &edge]
+        .into_iter()
+        .flat_map(|parts| &parts.snippets)
+    {
         available.insert(snippet.0.as_str(), snippet.1);
     }
     let mut wanted: BTreeSet<String> = BTreeSet::from(["_start".to_owned()]);
@@ -522,7 +519,11 @@ mod tests {
         let mut used: BTreeSet<u32> = BTreeSet::new();
         for op in Op::ALL {
             for errno in op.errors() {
-                assert!(ERRORS.contains(errno), "{} gives error {errno}", op.symbol());
+                assert!(
+                    ERRORS.contains(errno),
+                    "{} gives error {errno}",
+                    op.symbol()
+                );
                 used.insert(*errno);
             }
         }
@@ -563,7 +564,10 @@ mod tests {
         assert_eq!(form(".text\n_start:\n    ret\n"), Form::Inline);
         // A mix is the inline form's: the checker refuses it.
         assert_eq!(form("_start:\n    ret\nmain:\n    ret\n"), Form::Inline);
-        assert_eq!(form("# main: a comment\n    call main_loop\n"), Form::Inline);
+        assert_eq!(
+            form("# main: a comment\n    call main_loop\n"),
+            Form::Inline
+        );
         assert_eq!(form("    main: nop\n"), Form::Edge);
     }
 
