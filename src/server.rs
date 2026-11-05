@@ -91,6 +91,16 @@ fn proof_time() -> Duration {
         .map_or(PROOF_TIME, Duration::from_secs)
 }
 
+/// How long each write of the proofs to lengua.lock waits first: nothing, or
+/// `LENGUA_STAMP_DELAY_MS` for tests, which make the write slow to look at what a caller sees
+/// until it is done.
+fn stamp_delay() -> Duration {
+    std::env::var("LENGUA_STAMP_DELAY_MS")
+        .ok()
+        .and_then(|milliseconds| milliseconds.parse().ok())
+        .map_or(Duration::ZERO, Duration::from_millis)
+}
+
 /// The lengua MCP server.
 #[derive(Debug, Clone)]
 pub struct LenguaServer {
@@ -1443,8 +1453,17 @@ impl LenguaServer {
         };
         let blocks = order.len();
         order.sort_by_key(|index| prove::size(&code.suite.generated[*index]));
+        // The last block's line goes final only once the lock records the proofs, so a caller that
+        // sees every proof settled, or a server restarted at that moment, finds them there.
+        let mut last_line: Option<(usize, String, bool)> = None;
+        let release = |line: Option<(usize, String, bool)>| {
+            if let Some((index, detail, wrong)) = line {
+                set(index, detail, wrong);
+            }
+        };
         for (turn, &index) in order.iter().enumerate() {
             let block = &code.suite.generated[index];
+            let last = turn + 1 == blocks;
             if checking.cancel.load(Ordering::Relaxed) {
                 return;
             }
@@ -1463,7 +1482,12 @@ impl LenguaServer {
                 .filter(|_| !kernel_values && !block.uses_now())
             {
                 proven_ids.push((index, block.id.to_string()));
-                set(index, format!("proven: the tests tried {every}"), false);
+                let detail = format!("proven: the tests tried {every}");
+                if last {
+                    last_line = Some((index, detail, false));
+                } else {
+                    set(index, detail, false);
+                }
                 continue;
             }
             let budget = prove::Budget {
@@ -1562,9 +1586,14 @@ impl LenguaServer {
                 )
                 .await;
             }
-            set(index, detail, wrong);
+            if last {
+                last_line = Some((index, detail, wrong));
+            } else {
+                set(index, detail, wrong);
+            }
         }
         if proven_ids.is_empty() && bounded_ids.is_empty() && wrong_ids.is_empty() {
+            release(last_line);
             return;
         }
         let solvers = match (solved, alone_reason, recorded_solvers) {
@@ -1590,6 +1619,7 @@ impl LenguaServer {
             solvers,
         )
         .await;
+        release(last_line);
     }
 
     /// Runs inputs the proof found for real, so a counterexample is reported only when the
@@ -1937,6 +1967,10 @@ impl LenguaServer {
         wrong: Vec<(String, String)>,
         solvers: String,
     ) -> bool {
+        let delay = stamp_delay();
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
         let _writing = self.lock_writes.lock().await;
         let Ok(Some(key)) = Key::load(&self.data_dir) else {
             return false;

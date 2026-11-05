@@ -118,6 +118,19 @@ pub fn qemu_runs_aarch64() -> bool {
     ready
 }
 
+/// The timings a session sets on its server, for tests: each `None` leaves the server's own.
+#[derive(Debug, Clone, Copy, Default)]
+struct Knobs {
+    /// `LENGUA_PROOF_SECONDS`: the time each version's proofs get in all.
+    proof_seconds: Option<u64>,
+    /// `LENGUA_CHECK_WAIT_MS`: how long `check` waits.
+    wait_ms: Option<u64>,
+    /// `LENGUA_GREEN_GRACE_MS`: how long `check` waits for the proofs once the tests pass.
+    grace_ms: Option<u64>,
+    /// `LENGUA_STAMP_DELAY_MS`: how long each write of the proofs to lengua.lock waits first.
+    stamp_ms: Option<u64>,
+}
+
 /// A running `lengua-mcp` with a private, temporary data folder.
 pub struct Session {
     /// The connected client.
@@ -125,9 +138,8 @@ pub struct Session {
     /// The server's data folder; deleted when the session is dropped.
     pub data_dir: TempDir,
     protocol: Protocol,
-    proof_seconds: Option<u64>,
-    wait_ms: Option<u64>,
-    grace_ms: Option<u64>,
+    /// The timings it set on the server.
+    knobs: Knobs,
     /// The target a developer's `LENGUA_TARGET` names, when the session has one.
     target: Option<&'static str>,
     /// While the session may prove, its hold on the proving lock.
@@ -179,23 +191,38 @@ impl Session {
             Some(0) => None,
             _ => Some(Proving::Shared(proving().read_owned().await)),
         };
-        Self::connect(
-            protocol,
-            data_dir,
+        let knobs = Knobs {
             proof_seconds,
             wait_ms,
             grace_ms,
-            None,
-            hold,
-        )
-        .await
+            stamp_ms: None,
+        };
+        Self::connect(protocol, data_dir, knobs, None, hold).await
+    }
+
+    /// Starts `lengua-mcp` with its full time for proofs, `check` waiting at most `wait_ms` for
+    /// them, and each write of the proofs to lengua.lock waiting `stamp_ms` first: the moment
+    /// after the last proof is long enough to look at.
+    pub async fn proving_slow_to_record(protocol: Protocol, wait_ms: u64, stamp_ms: u64) -> Self {
+        let data_dir = tempfile::tempdir().expect("create a temporary data folder");
+        let hold = Some(Proving::Shared(proving().read_owned().await));
+        let knobs = Knobs {
+            wait_ms: Some(wait_ms),
+            stamp_ms: Some(stamp_ms),
+            ..Knobs::default()
+        };
+        Self::connect(protocol, data_dir, knobs, None, hold).await
     }
 
     /// Starts `lengua-mcp` for `target`, as a developer's `LENGUA_TARGET` asks: a target this
     /// computer runs only through QEMU's user mode. Its proofs get no time.
     pub async fn emulating(protocol: Protocol, target: &'static str) -> Self {
         let data_dir = tempfile::tempdir().expect("create a temporary data folder");
-        Self::connect(protocol, data_dir, Some(0), None, None, Some(target), None).await
+        let knobs = Knobs {
+            proof_seconds: Some(0),
+            ..Knobs::default()
+        };
+        Self::connect(protocol, data_dir, knobs, Some(target), None).await
     }
 
     /// Starts `lengua-mcp` for `target` through QEMU's user mode, as [`Self::emulating`] does,
@@ -203,16 +230,11 @@ impl Session {
     pub async fn emulating_for(protocol: Protocol, target: &'static str, seconds: u64) -> Self {
         let hold = Some(Proving::Shared(proving().read_owned().await));
         let data_dir = tempfile::tempdir().expect("create a temporary data folder");
-        Self::connect(
-            protocol,
-            data_dir,
-            Some(seconds),
-            None,
-            None,
-            Some(target),
-            hold,
-        )
-        .await
+        let knobs = Knobs {
+            proof_seconds: Some(seconds),
+            ..Knobs::default()
+        };
+        Self::connect(protocol, data_dir, knobs, Some(target), hold).await
     }
 
     /// Starts `lengua-mcp` giving each version's proofs `seconds` in all, once no other session
@@ -221,7 +243,11 @@ impl Session {
     pub async fn proving_alone_for(protocol: Protocol, seconds: u64) -> Self {
         let hold = Some(Proving::Alone(proving().write_owned().await));
         let data_dir = tempfile::tempdir().expect("create a temporary data folder");
-        Self::connect(protocol, data_dir, Some(seconds), None, None, None, hold).await
+        let knobs = Knobs {
+            proof_seconds: Some(seconds),
+            ..Knobs::default()
+        };
+        Self::connect(protocol, data_dir, knobs, None, hold).await
     }
 
     /// Starts `lengua-mcp` with its full time for proofs, once no other session in the test
@@ -229,7 +255,7 @@ impl Session {
     pub async fn proving_alone(protocol: Protocol) -> Self {
         let hold = Some(Proving::Alone(proving().write_owned().await));
         let data_dir = tempfile::tempdir().expect("create a temporary data folder");
-        Self::connect(protocol, data_dir, None, None, None, None, hold).await
+        Self::connect(protocol, data_dir, Knobs::default(), None, hold).await
     }
 
     /// Ends this server and starts a new one on the same data folder, as when a harness restarts
@@ -245,31 +271,18 @@ impl Session {
             service,
             data_dir,
             protocol,
-            proof_seconds,
-            wait_ms,
-            grace_ms,
+            knobs,
             _proving: hold,
             ..
         } = self;
         service.cancel().await.expect("close the session");
-        Self::connect(
-            protocol,
-            data_dir,
-            proof_seconds,
-            wait_ms,
-            grace_ms,
-            target,
-            hold,
-        )
-        .await
+        Self::connect(protocol, data_dir, knobs, target, hold).await
     }
 
     async fn connect(
         protocol: Protocol,
         data_dir: TempDir,
-        proof_seconds: Option<u64>,
-        wait_ms: Option<u64>,
-        grace_ms: Option<u64>,
+        knobs: Knobs,
         target: Option<&'static str>,
         hold: Option<Proving>,
     ) -> Self {
@@ -281,14 +294,17 @@ impl Session {
                 if let Some(target) = target {
                     command.env("LENGUA_TARGET", target);
                 }
-                if let Some(seconds) = proof_seconds {
+                if let Some(seconds) = knobs.proof_seconds {
                     command.env("LENGUA_PROOF_SECONDS", seconds.to_string());
                 }
-                if let Some(milliseconds) = wait_ms {
+                if let Some(milliseconds) = knobs.wait_ms {
                     command.env("LENGUA_CHECK_WAIT_MS", milliseconds.to_string());
                 }
-                if let Some(milliseconds) = grace_ms {
+                if let Some(milliseconds) = knobs.grace_ms {
                     command.env("LENGUA_GREEN_GRACE_MS", milliseconds.to_string());
+                }
+                if let Some(milliseconds) = knobs.stamp_ms {
+                    command.env("LENGUA_STAMP_DELAY_MS", milliseconds.to_string());
                 }
             });
         let transport = TokioChildProcess::new(command).expect("spawn lengua-mcp");
@@ -310,9 +326,7 @@ impl Session {
             service,
             data_dir,
             protocol,
-            proof_seconds,
-            wait_ms,
-            grace_ms,
+            knobs,
             target,
             _proving: hold,
         }

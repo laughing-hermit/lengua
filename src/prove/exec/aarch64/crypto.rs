@@ -20,13 +20,20 @@ impl Cpu<'_> {
 
     /// Four SHA-1 rounds, as `sha1c`, `sha1p` and `sha1m` take them: the state's words a to d
     /// in `x`, e in `y`, and the message words with their constants added in `w`.
-    fn sha1_rounds(&mut self, op: Crypto, x: [Term; 4], y: Term, w: [Term; 4]) -> [Term; 4] {
+    fn sha1_rounds(
+        &mut self,
+        op: Crypto,
+        x: [Term; 4],
+        y: Term,
+        w: [Term; 4],
+    ) -> Result<[Term; 4], Stop> {
         let (mut x, mut y) = (x, y);
         for word in w {
             let t = match op {
                 Crypto::Sha1c => self.choose(x[1], x[2], x[3]),
                 Crypto::Sha1p => self.parity(x[1], x[2], x[3]),
-                _ => self.majority(x[1], x[2], x[3]),
+                Crypto::Sha1m => self.majority(x[1], x[2], x[3]),
+                _ => return Err(self.unmodelled(op)),
             };
             let rotated = self.rotate_left(x[0], 5);
             y = self.sum(&[y, rotated, t, word]);
@@ -36,7 +43,7 @@ impl Cpu<'_> {
             x = [y, x[0], x[1], x[2]];
             y = top;
         }
-        x
+        Ok(x)
     }
 
     /// SHA-256's four rounds as `sha256h` (the first half, `x`) and `sha256h2` (the second, `y`)
@@ -114,7 +121,7 @@ impl Cpu<'_> {
             Crypto::Sha1c | Crypto::Sha1p | Crypto::Sha1m => {
                 let (x, w) = (self.words(&d), self.words(&m));
                 let y = self.word(&n[..4]);
-                let words = self.sha1_rounds(op, x, y, w);
+                let words = self.sha1_rounds(op, x, y, w)?;
                 self.unwords(words)
             }
             Crypto::Sha1h => {

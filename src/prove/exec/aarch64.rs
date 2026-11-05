@@ -57,6 +57,16 @@ const fn slot(register: A64Reg) -> Option<usize> {
 }
 
 impl Cpu<'_> {
+    /// The stop for an operation this model has no meaning for: a run that went on would prove
+    /// the program on a guess. It says what x86-64's model says of an instruction it lacks.
+    fn unmodelled(&self, op: impl std::fmt::Debug) -> Stop {
+        let function = self.image.function_at(self.at);
+        let name = format!("{op:?}").to_lowercase();
+        unsupported(format!(
+            "main.s's {function} uses {name}, which the proof doesn't model yet"
+        ))
+    }
+
     /// Runs the AArch64 instruction `inst`.
     pub(super) fn execute_a64(&mut self, inst: Inst) -> Result<Step, Stop> {
         match inst {

@@ -1466,6 +1466,34 @@ const ASSERTIONS: Fixtures = &[
         },
     ),
     (
+        "an assertion reached only through a branch on the zero register",
+        PerTarget {
+            linux_x86_64: Plan::NotApplicable(
+                "x86-64 has no zero register: every conditional jump there tests the flags",
+            ),
+            // `cbz xzr` always jumps, as `b` does, so the check never decides anything: assertion
+            // 10 always fails, and the lines after the jump can never run.
+            linux_aarch64: Plan::Breaks {
+                edits: &[(
+                    "    cbz x1, .Lwrite_all_assert_null\n",
+                    "    cbz xzr, .Lwrite_all_assert_null\n",
+                )],
+                finds: &[
+                    (
+                        Rule::Assertions,
+                        At::Line("    mov w0, #10"),
+                        "always fails",
+                    ),
+                    (
+                        Rule::ControlFlow,
+                        At::Line("    cbz x2, .Lwrite_all_assert_empty"),
+                        "can never run",
+                    ),
+                ],
+            },
+        },
+    ),
+    (
         "an assertion number used twice",
         PerCpu {
             x86_64: Plan::Breaks {
@@ -3745,15 +3773,45 @@ async fn the_aarch64_dialect_refuses_what_it_should() {
     }
 }
 
-/// `b.al` and `b.nv` always jump, as `b` does: the code after one can never run.
+/// `b.al`, `b.nv` and a branch on the zero register that must jump (`cbz`, `tbz`) always jump, as
+/// `b` does: the code after one can never run.
 #[tokio::test]
 async fn code_after_an_always_taken_aarch64_branch_can_never_run() {
-    for branch in ["b.al", "b.nv"] {
+    for branch in [
+        "b.al .Lstart_exit",
+        "b.nv .Lstart_exit",
+        "cbz xzr, .Lstart_exit",
+        "cbz wzr, .Lstart_exit",
+        "tbz xzr, #5, .Lstart_exit",
+        "tbz wzr, #31, .Lstart_exit",
+    ] {
         let text = with_aarch64(
             "    mov w0, #EXIT_OK\n    b .Lstart_exit\n",
             &format!(
-                "    mov w0, #EXIT_OK\n    {branch} .Lstart_exit\n    mov w0, #99\n    b \
+                "    mov w0, #EXIT_OK\n    {branch}\n    mov w0, #99\n    b \
                  .Lstart_exit\n"
+            ),
+        );
+        let report = check(&text).await;
+        assert_violation(
+            &report,
+            Rule::ControlFlow,
+            line_of(&text, "    mov w0, #99"),
+            "can never run",
+        );
+    }
+}
+
+/// A branch on the zero register that is never taken (`cbnz`, `tbnz`) goes nowhere: the code at
+/// its target can never run unless something else jumps there.
+#[tokio::test]
+async fn code_only_a_never_taken_aarch64_branch_reaches_can_never_run() {
+    for branch in ["cbnz xzr", "cbnz wzr", "tbnz xzr, #5", "tbnz wzr, #31"] {
+        let text = with_aarch64(
+            "    mov w0, #EXIT_OK\n    b .Lstart_exit\n",
+            &format!(
+                "    mov w0, #EXIT_OK\n    {branch}, .Lstart_never\n    b .Lstart_exit\n\
+                 .Lstart_never:\n    mov w0, #99\n    b .Lstart_exit\n"
             ),
         );
         let report = check(&text).await;

@@ -339,12 +339,13 @@ impl Cpu<'_> {
         let roles = FillAbi::of(self.image.isa);
         self.state.registers[roles.cursor] = self.pool.bv(64, u128::from(cursor + taken));
         self.state.registers[roles.space] = self.pool.bv(64, u128::from(space - taken));
-        // What the reads leave: on x86-64 the kernel's rcx and r11, and a loop count that depends
-        // on how the input was cut.
+        // What the reads leave: on x86-64 the kernel's rcx and r11, on AArch64 the SVE state the
+        // kernel clears, and a loop count that depends on how the input was cut.
         if self.image.isa == Isa::X86_64 {
             self.state.registers[1] = self.pool.bv(64, u128::from(fill.after_call));
             self.state.registers[11] = self.pool.bv(64, 0x202);
         }
+        self.state.clear_sve(self.pool);
         let count = self.pool.len();
         self.state.registers[roles.counter] = self.pool.var(64, &format!("fill{count}.reads"));
         self.state.rip = fill.done;
@@ -377,6 +378,7 @@ impl Cpu<'_> {
             self.state.registers[1] = self.pool.bv(64, u128::from(fill.after_call));
             self.state.registers[11] = self.pool.bv(64, 0x202);
         }
+        self.state.clear_sve(self.pool);
         let count = self.pool.len();
         self.state.registers[roles.counter] = self.pool.var(64, &format!("fill{count}.reads"));
         self.state.rip = fill.done;

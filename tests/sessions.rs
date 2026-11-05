@@ -838,6 +838,49 @@ async fn proofs_survive_a_server_restart() {
     }
 }
 
+/// The last line of a proof goes final only once lengua.lock records the proofs: a caller that
+/// sees every proof settled, or a server restarted at that moment, finds them there. The write is
+/// made slow (600 ms) and each check waits 50 ms at most, so a gap between the last line and the
+/// lock would be seen.
+#[tokio::test]
+async fn the_proofs_are_in_the_lock_before_the_last_line_goes_final() {
+    if !flow::solvers_installed() {
+        return;
+    }
+    for target in Profile::ALL {
+        if !flow::natively(target) {
+            continue;
+        }
+        let name = target.name();
+        let session = Session::proving_slow_to_record(Protocol::Discover, 50, 600).await;
+        let program = flow::shipped(&session, target, "cat").await;
+        let started = std::time::Instant::now();
+        loop {
+            let report = session.check(&program).await;
+            assert_ne!(report["state"], "tests_failed", "{name}: {report}");
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(600),
+                "{name}: the proofs never settled: {report}"
+            );
+            let settled = report["proofs"]
+                .as_array()
+                .is_some_and(|lines| !lines.is_empty())
+                && !any_line(&report["proofs"], ": proving")
+                && !any_line(&report["proofs"], "waiting for its turn");
+            if settled {
+                let lock = program.read("lengua.lock").unwrap_or_default();
+                assert!(
+                    lock.contains("[proofs]"),
+                    "{name}: all proof lines final, but the lock had no proofs: {report}\n{lock}"
+                );
+                break;
+            }
+        }
+        done(&session, &program).await;
+        session.service.cancel().await.expect("close the session");
+    }
+}
+
 /// An edit in the middle of a proof starts it over, and the old proof never lands on the new
 /// build.
 #[tokio::test]

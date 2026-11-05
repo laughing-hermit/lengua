@@ -401,6 +401,28 @@ fn the_facts_say_what_each_idiom_does() {
             cond: Cond::AboveEqual
         }
     );
+    // On the zero register a branch is decided in advance, as `b.al` and `b.nv` are: on zero it
+    // always jumps, on nonzero it never does.
+    for always in [
+        "cbz xzr, label",
+        "cbz wzr, label",
+        "tbz xzr, #5, label",
+        "tbz wzr, #31, label",
+    ] {
+        assert_eq!(
+            facts_of(always).control,
+            Control::Jump(0x40_2000),
+            "{always}"
+        );
+    }
+    for never in [
+        "cbnz xzr, label",
+        "cbnz wzr, label",
+        "tbnz xzr, #5, label",
+        "tbnz wzr, #31, label",
+    ] {
+        assert_eq!(facts_of(never).control, Control::Next, "{never}");
+    }
     let ret = facts_of("ret");
     assert!(ret.control == Control::Return && ret.uses(x(30)));
 

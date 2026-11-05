@@ -24,11 +24,76 @@ static TURNS: std::sync::RwLock<()> = std::sync::RwLock::new(());
 /// a proof runs alone.
 const ALONE_PAST: u64 = 150;
 
+/// What [`speed_probe`] reads on the computer the budgets are set by: a GitHub runner of Linux on
+/// x86-64 with 4 vCPUs (an AMD EPYC 9V45 read 67 ms on 2026-11-05, and ARM64 Linux's runner 66),
+/// where a scale of [`REFERENCE_SCALE`] has been enough for every proof.
+const REFERENCE_PROBE_MS: f64 = 67.0;
+
+/// The scale that has been enough on the reference computer.
+const REFERENCE_SCALE: f64 = 4.0;
+
+/// How many times longer than the budgets are written for a proof's time is here, so a proof that
+/// finishes on the reference computer finishes on this one too: in proportion to how long the
+/// speed probe takes here against there. It is measured once, not worked out from the number of
+/// cores, because a runner with as many cores can be much slower or faster than another, and a
+/// slow one reached other verdicts than a fast one in the same time.
+fn scale() -> u64 {
+    static SCALE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *SCALE.get_or_init(|| {
+        let here = speed_probe().as_secs_f64() * 1000.0;
+        let ratio = REFERENCE_SCALE * here / REFERENCE_PROBE_MS;
+        // A tenth of slack under, so a reading a little under the reference doesn't cost a whole
+        // step of the budget.
+        (ratio - 0.1).ceil().max(1.0) as u64
+    })
+}
+
+/// How long this computer takes to do a fixed amount of integer work spread over every core, the
+/// best of three runs: a measure of its speed that cores alone don't give, since a runner with as
+/// many cores can be slower or faster than another.
+fn speed_probe() -> Duration {
+    const ROUNDS: u64 = 300_000_000;
+    let cores = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    (0..3)
+        .map(|_| {
+            let started = Instant::now();
+            std::thread::scope(|scope| {
+                for _ in 0..cores {
+                    scope.spawn(|| {
+                        let mut mixed = 0x9e37_79b9_7f4a_7c15_u64;
+                        for _ in 0..ROUNDS / cores as u64 {
+                            mixed =
+                                mixed.rotate_left(13) ^ mixed.wrapping_mul(0xff51_afd7_ed55_8ccd);
+                        }
+                        std::hint::black_box(mixed);
+                    });
+                }
+            });
+            started.elapsed()
+        })
+        .min()
+        .unwrap_or_default()
+}
+
+/// Prints what [`speed_probe`] reads here and the scale it makes, to check [`REFERENCE_PROBE_MS`]
+/// against the runners' own numbers (dispatch the ignored tests with this filter).
+#[test]
+#[ignore = "prints this computer's speed probe, to calibrate the budgets' scale by"]
+fn the_speed_probe_reads() {
+    let cores = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    let probe = speed_probe();
+    eprintln!(
+        "speed probe: {} ms on {cores} cores (the scale is {})",
+        probe.as_millis(),
+        scale()
+    );
+    assert!(probe > Duration::ZERO);
+}
+
 /// [`super::prove`], in turn with the other proofs, its budget's time counted from its turn.
 fn prove(machine: &Machine, block: &Generated, budget: &Budget) -> Verdict {
     let asked = Instant::now();
-    let cores = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
-    let scale = (16 / cores.max(1)).max(1) as u64;
+    let scale = scale();
     let long =
         budget.deadline.saturating_duration_since(asked) > Duration::from_secs(ALONE_PAST * scale);
     // The whole computer, or a share of it, held until the proof ends.
@@ -125,17 +190,17 @@ fn block(spec: &str, index: usize) -> Generated {
     suite.generated[index].clone()
 }
 
-/// A proof's budget of `seconds` on the 16-core computer these tests were tuned on; a computer
-/// with fewer cores, such as a 2-core CI runner, gets proportionally longer, so a proof that
-/// finishes here finishes there too.
+/// A proof's budget of `seconds` on the computer these tests are set for, stretched by [`scale`]
+/// on a slower one, so a proof that finishes there finishes here too.
 fn budget(seconds: u64) -> Budget {
-    let cores = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
-    let scale = (16 / cores.max(1)).max(1) as u64;
     Budget {
         max_paths: 64,
         max_shapes: 2000,
         question_ms: 10_000,
-        ..Budget::until(Instant::now() + Duration::from_secs(seconds * scale), false)
+        ..Budget::until(
+            Instant::now() + Duration::from_secs(seconds * scale()),
+            false,
+        )
     }
 }
 
@@ -5063,6 +5128,7 @@ const NOT_ABOUT_A_CPU: &[&str] = &[
     "every_prover_test_runs_on_every_target",
     "the_scan_of_the_tests_finds_each_test",
     "the_short_name_shape_the_proof_tests_is_the_runs",
+    "the_speed_probe_reads",
 ];
 
 /// The suite stays one suite for every target: each test of the prover and of its executor runs
