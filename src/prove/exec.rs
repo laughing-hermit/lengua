@@ -1400,12 +1400,36 @@ impl State {
 impl State {
     /// A system call's return: `result` where the program reads it, and the registers the kernel
     /// changes, for the run to go on at `next`. On x86-64 that's rax, and rcx and r11, which
-    /// hold where it goes on and the flags; on AArch64, only x0.
+    /// hold where it goes on and the flags; on AArch64, only x0 and the SVE state
+    /// ([`State::clear_sve`]).
     pub(super) fn returns(&mut self, pool: &mut Pool, result: u64, next: u64) {
         self.registers[0] = pool.bv(64, u128::from(result));
         if self.isa == Isa::X86_64 {
             self.registers[1] = pool.bv(64, u128::from(next));
             self.registers[11] = pool.bv(64, 0x202);
+        }
+        self.clear_sve(pool);
+    }
+
+    /// What a return from a system call leaves of AArch64's SVE state, as Linux has it: Z0 to Z31
+    /// keep only their low 128 bits, which are the V registers, and P0 to P15 are all clear. (The
+    /// first-fault register isn't modelled.) x86-64's vector and mask registers pass through a
+    /// system call as they are.
+    pub(super) fn clear_sve(&mut self, pool: &mut Pool) {
+        if self.isa != Isa::Aarch64 {
+            return;
+        }
+        let zero = pool.bv(8, 0);
+        for vector in &mut self.vectors {
+            if vector[16..].iter().any(|byte| *byte != zero) {
+                Rc::make_mut(vector)[16..].fill(zero);
+            }
+        }
+        let no = pool.boolean(false);
+        for predicate in &mut self.predicates {
+            if predicate.iter().any(|lane| *lane != no) {
+                Rc::make_mut(predicate).fill(no);
+            }
         }
     }
 }
@@ -3517,6 +3541,8 @@ impl<'a> Cpu<'a> {
         let tid = FIRST_TID + self.state.threads;
         let id = self.pool.bv(32, u128::from(tid));
         self.save(parent_tid, id)?;
+        // Both threads come back from the system call, which clears AArch64's SVE state.
+        self.state.clear_sve(self.pool);
         let next = self.next;
         let (next_term, flags_word) = (self.pool.bv(64, u128::from(next)), self.pool.bv(64, 0x202));
         let mut waiting = registers;
@@ -3580,6 +3606,9 @@ impl<'a> Cpu<'a> {
         ] = waiting.flags;
         state.vectors = waiting.vectors;
         state.masks = waiting.masks;
+        // The thread that waited goes on from its system call's return, which cleared the SVE
+        // state: the predicates the ended thread left must not reach it.
+        state.clear_sve(self.pool);
         state.rip = waiting.rip;
         state.returns = waiting.returns;
         state.owners = waiting.owners;
@@ -4702,6 +4731,12 @@ mod tests {
 
     /// Builds `source` for `profile`'s CPU and loads it.
     async fn image_for(profile: Profile, source: &str) -> Image {
+        image_with_sve(profile, source, 0).await
+    }
+
+    /// Builds `source` for `profile`'s CPU and loads it, on a CPU whose vectors are `sve_bytes`
+    /// long (0 for one without SVE).
+    async fn image_with_sve(profile: Profile, source: &str, sve_bytes: u16) -> Image {
         let toolchain = Toolchain::discover().await.expect("llvm-mc and ld.lld");
         let folder = tempfile::tempdir().expect("temporary folder");
         let (assembly, object, executable) = (
@@ -4719,7 +4754,8 @@ mod tests {
             .await
             .expect("link");
         let bytes = std::fs::read(&executable).expect("read");
-        let machine = crate::checker::decode::read(&bytes).expect("decode");
+        let mut machine = crate::checker::decode::read(&bytes).expect("decode");
+        machine.sve_bytes = sve_bytes;
         Image::new(&machine).expect("an entry point")
     }
 
@@ -4943,6 +4979,48 @@ mod tests {
         for target in Profile::ALL {
             let (source, expected) = *CARRIES.get(target);
             let image = image_for(target, source).await;
+            let mut pool = Pool::default();
+            let start = State::start(&image, &mut pool, &[], &[], Vec::new());
+            let runs = explore(&image, start, &mut pool, &mut Concrete, 2).expect("runs");
+            let status = match &runs[0].end {
+                Some(End::Exit(status)) => pool.constant(*status),
+                other => panic!("{} ended with {other:?}", target.name()),
+            };
+            assert_eq!(status, Some(expected), "{}", target.name());
+        }
+    }
+
+    /// A program for each target that puts 7 in a vector register, makes a system call that fails
+    /// (`close` of descriptor -1), and exits with what the vector state still says; the vector
+    /// length it runs on, in bytes (0 without SVE); and the status it exits with. x86-64: the call
+    /// keeps xmm0, so the 7 comes back. AArch64: Linux keeps the V registers (the low 128 bits of
+    /// each Z) and clears the rest of the SVE state, so with 32-byte vectors the predicate set
+    /// before the call has no lane active (0), and z1 still holds 7 in 16 lanes only (16).
+    const VECTORS_ACROSS_A_CALL: PerTarget<(&str, u16, u128)> = PerTarget {
+        linux_x86_64: (
+            ".intel_syntax noprefix\n.globl _start\n.text\n.type _start, @function\n\
+             _start:\n    mov eax, 7\n    movd xmm0, eax\n    mov rdi, -1\n    mov eax, 3\n    \
+             syscall\n    movd edi, xmm0\n    mov eax, 60\n    syscall\n\
+             .size _start, . - _start\n",
+            0,
+            7,
+        ),
+        linux_aarch64: (
+            ".arch armv8-a\n.arch_extension sve\n.globl _start\n.text\n\
+             .type _start, @function\n_start:\n    ptrue p0.b\n    mov z1.b, #7\n    \
+             mov x0, #-1\n    mov x8, #57\n    svc #0\n    cntp x2, p0, p0.b\n    ptrue p1.b\n    \
+             cmpeq p2.b, p1/z, z1.b, #7\n    cntp x3, p1, p2.b\n    add x0, x3, x2\n    \
+             mov x8, #93\n    svc #0\n.size _start, . - _start\n",
+            32,
+            16,
+        ),
+    };
+
+    #[tokio::test]
+    async fn vector_state_across_a_system_call() {
+        for target in Profile::ALL {
+            let (source, sve_bytes, expected) = *VECTORS_ACROSS_A_CALL.get(target);
+            let image = image_with_sve(target, source, sve_bytes).await;
             let mut pool = Pool::default();
             let start = State::start(&image, &mut pool, &[], &[], Vec::new());
             let runs = explore(&image, start, &mut pool, &mut Concrete, 2).expect("runs");
