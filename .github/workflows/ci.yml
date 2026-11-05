@@ -57,7 +57,11 @@ on:
         type: string
         default: ""
       stall_seconds:
-        description: "Stop the slow ignored tests after this many seconds, keeping where they stood (stall.txt; Linux)"
+        description: "Stop a test or ignored run after this many seconds, keeping where it stood (stall.txt; Linux)"
+        type: string
+        default: ""
+      seed:
+        description: "The seed the randomized tests draw from (LENGUA_RANDOM_SEED), to run one again"
         type: string
         default: ""
 
@@ -219,8 +223,16 @@ jobs:
           LENGUA_PROOF_SECONDS: "60"
           RUST_TEST_THREADS: "2"
           FILTER: ${{ inputs.filter }}
+          LENGUA_RANDOM_SEED: ${{ inputs.seed }}
+          STALL_SECONDS: ${{ inputs.stall_seconds }}
           LENGUA_SKIP_LOG: ${{ github.workspace }}/skips.log
-        run: cargo test --release --locked --workspace --no-fail-fast -- $FILTER 2>&1 | tee test.log
+        run: |
+          tests='set -o pipefail; cargo test --release --locked --workspace --no-fail-fast -- $FILTER 2>&1 | tee test.log'
+          if [ -n "$STALL_SECONDS" ]; then
+            bash scripts/stall-report.sh "$STALL_SECONDS" bash -c "$tests"
+          else
+            bash -c "$tests"
+          fi
 
       - name: The slow ignored tests
         if: ${{ matrix.mode == 'ignored' }}
@@ -228,6 +240,7 @@ jobs:
           LENGUA_PROOF_SECONDS: "60"
           RUST_TEST_THREADS: "2"
           FILTER: ${{ inputs.filter }}
+          LENGUA_RANDOM_SEED: ${{ inputs.seed }}
           LENGUA_CHECK_FOLDER: ${{ inputs.check_folder }}
           LENGUA_CHECK_TARGET: ${{ inputs.check_target }}
           STALL_SECONDS: ${{ inputs.stall_seconds }}
