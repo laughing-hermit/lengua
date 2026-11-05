@@ -239,11 +239,13 @@ in this run are listed above), heaviest first:
    - *Prover tests.* ARM64's prover is tested on 7 of the 29 twins, x86-64's on about 20 programs,
      and its memory-bug tests are x86-only.
    - *Other x86-only coverage.* The checker's and the prover's golden recordings; executor tests
-     of loop detection, connections and sleep; the 56 session tests of `tests/check_code.rs` and
-     `tests/e2e.rs` against ARM64's 17 in `tests/aarch64_session.rs` (the missing ones are named
-     in `DEBT`, `tests/parity_inventory.rs`, which lists every test file still made for one CPU);
-     and the unmodified AArch64 template has its rules checked but goes through `check` to `done`
-     in no test but the ignored mutation test.
+     of loop detection, connections and sleep; the 34 session tests still in `tests/check_code.rs`
+     against ARM64's 14 in `tests/aarch64_session.rs` (the missing ones are named in `DEBT`,
+     `tests/parity_inventory.rs`, which lists every test file still made for one CPU). The
+     server's own flow, the add workflow and the proofs of the template are no longer in this
+     list: they are one table for both CPUs (`tests/sessions.rs` and `tests/workflow.rs`, below),
+     and the unmodified AArch64 template now goes through `check` to `done`, is proven for every
+     input and is run in them.
 2. **Prover reach.**
    - *x86-64's prover* can't follow dozens of vector instructions the ARM64 prover models
      (`palignr`, `pblendw`, `punpck*`, `pack*`, saturating and widening arithmetic, string
@@ -480,17 +482,19 @@ natively on both runners:
   only reads it); every program of each target through the server (`tests/every_program.rs`,
   where a program for an extension the CPU lacks is skipped with a note); and the sandbox's
   limits (`tests/limits.rs`, 31 tests, each program an assembly source per CPU, built for both
-  CPUs on every runner and run on its own). Left: the four test files still made for one CPU,
-  which `tests/parity_inventory.rs` lists in `DEBT` with what each lacks on the other CPU:
-  `check_code.rs` and `e2e.rs` (56 x86-64 session tests) and `aarch64_session.rs` and
-  `aarch64.rs` (21 ARM64 ones). Making them tables means writing ARM64 session cases for about 40
-  x86-64 ones (and x86-64 ones for `aarch64.rs`'s three standalone tests), program by program.
+  CPUs on every runner and run on its own); and the server's flow (`tests/sessions.rs`, 18 cases,
+  and `tests/workflow.rs`, 7, below). Left: the three test files still made for one CPU, which
+  `tests/parity_inventory.rs` lists in `DEBT` with what each lacks on the other CPU:
+  `check_code.rs` (34 x86-64 session tests), `aarch64_session.rs` (14 ARM64 ones) and
+  `aarch64.rs`. Making them tables means writing ARM64 session cases for about 25 x86-64 ones
+  (and x86-64 ones for `aarch64.rs`'s three standalone tests), program by program.
 - *3, the porting list as an executable conformance suite: begun.* The rules, the red team, every
-  program through the server and the sandbox's limits are tables both runners run natively.
-  `parity_inventory.rs` fails when a target has no job that runs `cargo test` on a runner of its
-  own CPU, and when a new test file is made for one target; DESIGN's "Porting a target" item 7
-  says which suites a new target must pass. Left: the mutation test (ignored, by dispatch) and
-  the session behaviors, which are the `DEBT` files above.
+  program through the server, the sandbox's limits and the server's session flow are tables both
+  runners run natively. `parity_inventory.rs` fails when a target has no job that runs
+  `cargo test` on a runner of its own CPU, and when a new test file is made for one target;
+  DESIGN's "Porting a target" item 7 says which suites a new target must pass. Left: the
+  mutation test (ignored, by dispatch) and the session behaviors of the programs in the `DEBT`
+  files above.
 - *4, limits tested on each OS: done for the two Linux targets.* `tests/limits.rs` pins names
   Windows refuses (`EINVAL`), names that aren't UTF-8 (`EILSEQ`), a name or a path too long
   (`ENAMETOOLONG`), a name that differs only in case (`EEXIST`), a file held open (`EBUSY`), the
@@ -501,6 +505,68 @@ natively on both runners:
 - *5, visible coverage: done* (`lengua::skiplog` and the run's summary). Every skip of the new
   tests notes its reason, and the log no longer mixes the notes of tests that skip at once (a
   note is one write).
+
+**The server's session flow, written once for both CPUs (2026-11-04).** `tests/sessions.rs` (18
+cases) and `tests/workflow.rs` (7) hold what the server does around a build, from the request to
+done, with a cell for each target (`PerTarget`; what they share is in `tests/flow/mod.rs`). A case
+starts from the target's template or its twin of `add`, `cat`, `cat-stream` or `echo`, makes the
+edit of that program's own text that breaks or fixes something (the `from` and `to` strings
+differ, since the sources do), and makes the same assertions on the server's answers; a test
+beside each table checks, on any computer, that every cell's edit applies to its program. They
+replaced `tests/e2e.rs` (7 tests), 16 tests of `tests/check_code.rs` and the 3 tests of
+`tests/aarch64_session.rs` that were the template's ARM64 side (stamped, proven, the line of a
+failed assertion): 26 test functions, which ran 23 times on x86-64 and 3 on ARM64, are 25 cases
+that run on both runners, 50 case runs, and two cell checks. Both runners ran the final files
+green (19 and 8 tests each), and the full suites after them: x86-64 in run 41928584953 and
+ARM64 in run 41928588718.
+What the second CPU showed (the first ARM64 run, 41912454057, failed 3 of the 27):
+- *A build refused for a register of the wrong width is refused at another stage.* On x86-64
+  `mov r9d, rbx` goes to the assembler, and the report carries its message ("doesn't build:
+  assembling failed", the line). On ARM64 `mov w9, x1` is refused before the assembler is asked,
+  by lengua's own AArch64 reader (`src/isa/aarch64/text.rs`), as a problem of the dialect:
+  "dialect main.s:110: `mov w9, x1`: its registers aren't all one width". Both are
+  `code_problems` that name the line, so the user meets the same kind of refusal, but not the
+  same words: ARM64's cell pins the dialect message, and adds what does reach the assembler
+  there, an instruction of an extension the program has not asked for (`crc32cx` without
+  `.arch_extension crc`: "doesn't build: assembling failed", run 41913581264). That follows from
+  DESIGN's rule that lengua decodes a new CPU's dialect itself, so it is recorded, not a bug.
+- *A hexadecimal number past `i64::MAX` is "not a number" to the source reader* (`primary` in
+  `src/checker/source.rs` takes hex through `i64::from_str_radix`): `and sp, x9,
+  #0xfffffffffffffff0` was refused as "`0xfffffffffffffff0` isn't a number" (run 41912454057),
+  though LLVM and the AArch64 text reader (`literal`, which takes `u64`) read it. The source
+  reader is the same for both CPUs (read from the code, not run on x86-64), and `#-16` for the
+  same mask is read and assembled, so this is a papercut with a way round.
+- *A done reply can come before the lock records the last proof* (not a CPU difference, found on
+  ARM64). Once the grace for the proofs (20 seconds) is over, `check` says done as soon as every
+  proof line is final, a moment before the job writes `[proofs]` to `lengua.lock` and ends:
+  `prove_all` in `src/server.rs` sets each block's line as it finishes and stamps the lock after
+  the last one. A case that read the lock right after `settle` then found no `[proofs]` table
+  (and a restart in that window would find none recorded and prove again). The full ARM64
+  suite hit it once, in
+  `an_edit_mid_proof_starts_over_and_the_old_proof_never_lands`, whose `cat` proof ran past the
+  grace beside another test's proof (run 41915075297; alone, the whole case takes 11 seconds on
+  both CPUs, runs 41921042365 and 41921046657). The cases now wait for the job to end
+  (`flow::done` checks again while the reply says the proofs are "still running"). The window is
+  for an engineer to close in `prove_all` (stamp before the last line is set, or end the stage
+  first); other tests that read the lock after `settle`, such as
+  `the_file_example_proves_its_file_handling` in `tests/check_code.rs`, have it too, and that
+  file's `done` now waits for the job to end as well.
+- *An old test's schedule changed under it.* With the 16 flow tests gone from
+  `tests/check_code.rs`, the streaming filter's two minutes of induction proof overlapped
+  `the_file_example_proves_its_file_handling`'s for their whole length, and ran out of time on a
+  slower x86-64 draw (a Xeon 8370C, run 41921857314: that one test failed, where the same set
+  passed on a Xeon 8573C, run 41915069831). It runs alone now, as its siblings that need the
+  cores do.
+- Nothing else differed. The template, the streaming filter, `add`, `cat` and `echo` give the
+  same answers word for word on both CPUs: the template's three proofs "for every input in
+  range" with no solver question, `cat`'s bound of 4,096 of 5,000 bytes, the bug found by the
+  proof (n = 1234567) and refused after a restart, an edit in the middle of a proof, done while
+  the proofs go on, the add workflow in both protocol generations, a program run from a shell
+  and a server from a shell until it is stopped.
+- *Not verified:* the QEMU tail of the streaming-filter case (what `aarch64_code_is_checked_and_tested`
+  did under QEMU: a session for this computer itself refuses the program QEMU tested) is kept,
+  with the target as a parameter, but neither runner has QEMU. The cases with a session of their
+  own timings (a changed wait, a grace) run natively only and note it when they don't.
 
 ### Baseline debt
 

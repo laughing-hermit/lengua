@@ -70,95 +70,6 @@ async fn aarch64_session() -> Option<(Session, bool)> {
     }
 }
 
-/// The AArch64 cat passes every rule and its tests, with no time for proofs; lengua's line is a
-/// `//` comment and the lock says what ran the tests. Under QEMU the reply and run say what held the
-/// runs, and a session for this computer itself runs none of it.
-#[tokio::test]
-async fn aarch64_code_is_checked_and_tested() {
-    let Some((session, emulated)) = aarch64_session().await else {
-        return;
-    };
-    let program = written(&session, aarch64_files("cat-stream")).await;
-    let report = done(&session, &program).await;
-    assert!(
-        any_line(&report["tests"], "follows every rule and passed all"),
-        "{report}"
-    );
-    assert_eq!(
-        any_line(&report["tests"], "test runs under qemu-aarch64"),
-        emulated,
-        "{report}"
-    );
-    assert_eq!(
-        any_line(
-            &report["tests"],
-            "the kernel couldn't hold its system calls to the spec, which only lengua's rules did"
-        ),
-        emulated,
-        "{report}"
-    );
-    // With no time for proofs, as x86-64's say with none: the prover models AArch64 code.
-    assert!(
-        report["proofs"]
-            .as_array()
-            .is_some_and(|proofs| !proofs.is_empty()
-                && proofs.iter().all(|proof| !text(proof).contains("no model"))),
-        "{report}"
-    );
-    assert!(
-        text(&report["memory"]).contains("the rest is tested, not proven"),
-        "{report}"
-    );
-    let code = program.read("main.s").expect("main.s");
-    let line = code.lines().nth(1).unwrap_or_default();
-    assert!(
-        line.starts_with("// lengua: compiled from spec.md sha256:")
-            && line.ends_with(" for linux-aarch64"),
-        "{code}"
-    );
-    let lock = program.read("lengua.lock").expect("the lock");
-    assert!(lock.contains("target = \"linux-aarch64\""), "{lock}");
-    assert_eq!(
-        lock.contains("emulator = \"qemu-aarch64"),
-        emulated,
-        "{lock}"
-    );
-    let mut arguments = program.arguments();
-    arguments["stdin"] = Value::from("hello, from far away\n".repeat(400));
-    let run = session.call_ok("run", arguments).await;
-    assert_eq!(run["stdout"], "hello, from far away\n".repeat(400), "{run}");
-    assert_eq!(run["exit_code"], 0, "{run}");
-    assert_eq!(
-        text(&run["emulated"]).starts_with("ran under qemu-aarch64"),
-        emulated,
-        "{run}"
-    );
-    if !emulated {
-        session.service.cancel().await.expect("close the session");
-        return;
-    }
-    assert!(run["instructions"].is_null(), "{run}");
-
-    // This computer's own session runs nothing tested under QEMU, and AArch64 code isn't its.
-    let session = session.restart_for(None).await;
-    let error = session.call_error("run", program.arguments()).await;
-    assert!(
-        error.contains("was tested as linux-aarch64 code under qemu-aarch64")
-            && error.contains("code natively"),
-        "{error}"
-    );
-    let report = session.check(&program).await;
-    assert_eq!(report["state"], "code_problems", "{report}");
-    assert!(
-        any_line(
-            &report["problems"],
-            "main.s is AArch64 code, and this computer is"
-        ),
-        "{report}"
-    );
-    session.service.cancel().await.expect("close the session");
-}
-
 /// The AArch64 calc runs each case of its jump table, and x86-64 code isn't what a session for
 /// linux-aarch64 checks.
 #[tokio::test]
@@ -292,48 +203,6 @@ async fn the_aarch64_vector_template_is_proven() {
     arguments["stdin"] = Value::from("neon shouts too\n");
     let run = session.call_ok("run", arguments).await;
     assert_eq!(run["stdout"], "NEON SHOUTS TOO\n", "{run}");
-    session.service.cancel().await.expect("close the session");
-}
-
-/// A failed assertion names its line in main.s, on AArch64 as on x86-64
-/// (`failed_assertions_name_their_line` in tests/check_code.rs).
-#[tokio::test]
-async fn failed_assertions_name_their_line_on_aarch64() {
-    let Some((session, _)) = aarch64_session().await else {
-        return;
-    };
-    let asset = |path: &str| {
-        std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("plugin/skills/compile/assets")
-                .join(path),
-        )
-        .expect("the asset")
-    };
-    // The bounds check now trips on the second character.
-    let code = asset("linux-aarch64/main-template.s").replacen(
-        "    cmp x2, #MAX_CHARS\n",
-        "    cmp x2, #1\n",
-        1,
-    );
-    let program = written(
-        &session,
-        [
-            ("spec.md", asset("template-spec.md")),
-            ("main.s", code.clone()),
-        ],
-    )
-    .await;
-    let problems = failed(&session, &program).await;
-    let line = code
-        .lines()
-        .position(|line| line == "    mov w0, #5")
-        .expect("assertion 5")
-        + 1;
-    assert!(
-        problems.contains(&format!("assertion 5 failed at main.s:{line}")),
-        "{problems}"
-    );
     session.service.cancel().await.expect("close the session");
 }
 
@@ -581,28 +450,6 @@ async fn the_aarch64_benchmarks_own_programs_pass_their_checks() {
             "{workload}: {report}"
         );
     }
-    session.service.cancel().await.expect("close the session");
-}
-
-/// The AArch64 cat, a streaming filter through `fill`, is proven for every length through the
-/// server, as x86-64's is: natively on an ARM64 computer, and through QEMU here.
-#[tokio::test]
-async fn aarch64_code_is_proven() {
-    let session = if cfg!(target_arch = "aarch64") {
-        Session::proving_for(Protocol::Discover, 120).await
-    } else if common::qemu_runs_aarch64() {
-        Session::emulating_for(Protocol::Discover, "linux-aarch64", 120).await
-    } else {
-        return;
-    };
-    let program = written(&session, aarch64_files("cat-stream")).await;
-    let report = session.settle(&program).await;
-    assert_eq!(report["state"], "done", "{report}");
-    let proof = text(&report["proofs"][0]);
-    assert!(
-        proof.starts_with("generated B1: proven for every input in range"),
-        "{report}"
-    );
     session.service.cancel().await.expect("close the session");
 }
 

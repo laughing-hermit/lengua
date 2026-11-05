@@ -1407,8 +1407,10 @@ to: each computer compiles every one of them for itself.
 
 The MVP is built: milestones 1 foundation, 2 spec and lock, 3 tests, 4 rule checker, 5 code and
 run, and 6 end to end, each committed after the project owner approved it. A program is two
-files: the tests are in the spec, whose steps are its examples. `tests/e2e.rs` runs the whole
-workflow on `examples/add` in both MCP protocol generations.
+files: the tests are in the spec, whose steps are its examples. `tests/workflow.rs` runs the whole
+workflow on `examples/add` and its ARM64 twin in both MCP protocol generations, and
+`tests/sessions.rs` the server's flow around a build, each case once with a cell for every
+target, on each target's own runner.
 
 Dialect 4 is the current one:
 - checked jump tables: a `switch` over dense cases in one bounds check and one jump, each case

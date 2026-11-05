@@ -1,4 +1,7 @@
-//! Checking main.s through the server: the rules, building, the tests, the proof, and run.
+//! Checking main.s through the server: the rules, building, the tests, the proof, and run. The
+//! server's own flow around them (the template stamped, each way of going wrong, `run` and the
+//! lock, the proofs and what they find, a restart) is `tests/sessions.rs`, one table for both
+//! CPUs; what is left here are x86-64 programs through the server that have no case there yet.
 
 // Its programs are x86-64 code, which runs only on an x86-64 computer; an ARM64 one runs the
 // AArch64 suites (tests/aarch64.rs, tests/aarch64_session.rs) and the ones for any CPU.
@@ -41,13 +44,6 @@ fn text(value: &Value) -> &str {
     value.as_str().unwrap_or_default()
 }
 
-/// Whether any of `lines` contains `needle`.
-fn any_line(lines: &Value, needle: &str) -> bool {
-    lines
-        .as_array()
-        .is_some_and(|lines| lines.iter().any(|line| text(line).contains(needle)))
-}
-
 fn solvers_installed() -> bool {
     let installed = std::process::Command::new("z3")
         .arg("--version")
@@ -67,15 +63,6 @@ fn has_avx512() -> bool {
     has
 }
 
-/// A program folder holding the template's spec, its tests included, recorded.
-async fn checked_template(session: &Session) -> Program {
-    let program = Program::new();
-    program.write("spec.md", &asset("template-spec.md"));
-    let report = session.record(&program).await;
-    assert_eq!(report["state"], "write_code", "{report}");
-    program
-}
-
 /// A program folder holding both files of `files`.
 async fn written(session: &Session, files: [(&str, String); 2]) -> Program {
     let program = Program::new();
@@ -91,9 +78,18 @@ fn example_files(name: &str) -> [(&'static str, String); 2] {
     ["spec.md", "main.s"].map(|file| (file, example(name, file)))
 }
 
-/// Checks until the job ends, which must be done.
+/// Checks until the job ends, which must be done. Once the grace for the proofs is over, a reply
+/// can say done while the job is still writing the last proof to the lock, and says so ("still
+/// running"): a test that reads the lock afterwards waits for the job to end (as
+/// `flow::done` does, in tests/flow/mod.rs).
 async fn done(session: &Session, program: &Program) -> Value {
-    let report = session.settle(program).await;
+    let mut report = session.settle(program).await;
+    for _ in 0..600 {
+        if !text(&report["next_step"]).contains("still running") {
+            break;
+        }
+        report = session.settle(program).await;
+    }
     assert_eq!(report["state"], "done", "{report}");
     report
 }
@@ -122,256 +118,6 @@ fn with_args(program: &Program, args: &[&str]) -> Value {
     let mut arguments = program.arguments();
     arguments["args"] = json!(args);
     arguments
-}
-
-#[tokio::test]
-async fn the_template_passes_its_tests_and_is_stamped() {
-    let session = session().await;
-    let program = checked_template(&session).await;
-    program.write("main.s", &asset("main-template.s"));
-    let report = done(&session, &program).await;
-    assert_eq!(
-        report["tests"][0], "main.s follows every rule and passed all 274 test runs",
-        "{report}"
-    );
-    let costs = report["performance"]
-        .as_array()
-        .expect("what each test cost");
-    assert_eq!(
-        costs.len(),
-        7,
-        "4 examples and 3 generated blocks: {report}"
-    );
-    assert!(
-        text(&costs[0]).starts_with("example B1: 1 run")
-            && text(&costs[0]).contains("its input, run alone 5 times: median "),
-        "{report}"
-    );
-    // The times come from the block's largest input, run alone: the minus sign and 19 digits.
-    assert!(
-        text(&costs[4]).starts_with("generated B1: 200 runs")
-            && text(&costs[4]).contains("its largest input, 20 bytes, run alone 5 times"),
-        "{report}"
-    );
-    assert_eq!(
-        report["example"],
-        "example B1: given arguments [\"7\"], the program printed \"-7\\n\", exited with code 0",
-        "{report}"
-    );
-    let lock = program.read("lengua.lock").expect("the lock");
-    assert!(
-        lock.contains("[code]") && lock.contains("executable_sha256 = "),
-        "{lock}"
-    );
-    assert!(lock.contains("toolchain = \"llvm-mc "), "{lock}");
-    session.service.cancel().await.expect("close the session");
-}
-
-#[tokio::test]
-async fn hardcoded_answers_fail_generated_tests() {
-    let session = session().await;
-    let program = checked_template(&session).await;
-    // Always prints -7 for any number: right for the example, wrong for the rest.
-    let code = asset("main-template.s").replacen(
-        "    js .Lstart_not_a_number\n    neg rdx\n",
-        "    js .Lstart_not_a_number\n    mov rdx, 7\n    neg rdx\n",
-        1,
-    );
-    program.write("main.s", &code);
-    let problems = failed(&session, &program).await;
-    assert!(problems.contains("generated B1"), "{problems}");
-    assert!(problems.contains("(seed "), "{problems}");
-    assert!(problems.contains("but was \"-7\\n\""), "{problems}");
-    assert!(
-        !program
-            .read("lengua.lock")
-            .expect("the lock")
-            .contains("[code]")
-    );
-    // Calling again with nothing changed runs the tests again, with new inputs.
-    assert!(failed(&session, &program).await.contains("(seed "));
-    session.service.cancel().await.expect("close the session");
-}
-
-#[tokio::test]
-async fn failed_assertions_name_their_line() {
-    let session = session().await;
-    let program = checked_template(&session).await;
-    // The bounds check now trips on the second character.
-    let code = asset("main-template.s").replacen("    cmp rcx, MAX_CHARS\n", "    cmp rcx, 1\n", 1);
-    program.write("main.s", &code);
-    let problems = failed(&session, &program).await;
-    let line = code
-        .lines()
-        .position(|line| line == "    mov edi, 4")
-        .expect("assertion 4")
-        + 1;
-    assert!(
-        problems.contains(&format!("assertion 4 failed at main.s:{line}")),
-        "{problems}"
-    );
-    session.service.cancel().await.expect("close the session");
-}
-
-#[tokio::test]
-async fn run_needs_matching_files_and_the_tested_build() {
-    let session = session().await;
-    let program = checked_template(&session).await;
-    let code = asset("main-template.s");
-    program.write("main.s", &code);
-    let error = session.call_error("run", program.arguments()).await;
-    assert!(
-        error.contains("doesn't"),
-        "run refuses unchecked code: {error}"
-    );
-    done(&session, &program).await;
-
-    let report = session.call_ok("run", with_args(&program, &["7"])).await;
-    assert_eq!(report["stdout"], "-7\n", "{report}");
-    assert_eq!(report["exit_code"], 0, "{report}");
-    assert_eq!(report["ended"], "exit code 0", "{report}");
-    let report = session.call_ok("run", with_args(&program, &[])).await;
-    assert_eq!(report["stderr"], "usage: negate <n>\n", "{report}");
-    assert_eq!(report["exit_code"], 1, "{report}");
-
-    // A build that differs from the tested one (as after an LLVM upgrade) doesn't run.
-    let key_bytes: [u8; 32] = std::fs::read(session.data_dir.path().join("key"))
-        .expect("the signing key")
-        .try_into()
-        .expect("32 bytes");
-    let key = lengua::lock::Key::from_bytes(key_bytes);
-    let mut lock = lengua::lock::read(program.path(), Some(&key))
-        .expect("a valid lock")
-        .expect("a lock");
-    let stamp = lock.code.as_mut().expect("code stamp");
-    stamp.executable_sha256 = lengua::hash::Sha256Hex::of(b"another build");
-    stamp.toolchain = "llvm-mc 21.0.0, ld.lld 21.0.0".into();
-    lock.proofs = None;
-    lengua::lock::write(program.path(), &lock, &key).expect("write the lock");
-    let error = session.call_error("run", with_args(&program, &["7"])).await;
-    assert!(
-        error.contains("differs from the one check tested"),
-        "{error}"
-    );
-    assert!(error.contains("built with llvm-mc 21.0.0"), "{error}");
-    done(&session, &program).await;
-    session.call_ok("run", with_args(&program, &["7"])).await;
-
-    // Any edit stops run until it's checked again.
-    program.write("main.s", &format!("{code}\n"));
-    let error = session.call_error("run", with_args(&program, &["7"])).await;
-    assert!(error.contains("call check"), "{error}");
-    program.write("main.s", &code);
-    let lock_text = program.read("lengua.lock").expect("the lock");
-    program.write(
-        "lengua.lock",
-        &lock_text.replace("max_stack_bytes = ", "max_stack_bytes = 1"),
-    );
-    let error = session.call_error("run", with_args(&program, &["7"])).await;
-    assert!(error.contains("can't be used"), "{error}");
-    session.service.cancel().await.expect("close the session");
-}
-
-#[tokio::test]
-async fn violations_come_with_rule_line_and_fix() {
-    let session = session().await;
-    let program = checked_template(&session).await;
-    let code = asset("main-template.s").replacen(
-        "    mov rax, qword ptr [rsp]\n",
-        "    and rsp, -16\n    mov rax, qword ptr [rsp]\n",
-        1,
-    );
-    program.write("main.s", &code);
-    let report = session.check(&program).await;
-    assert_eq!(report["state"], "code_problems", "{report}");
-    let line = code
-        .lines()
-        .position(|line| line == "    and rsp, -16")
-        .expect("the inserted line")
-        + 1;
-    assert!(
-        any_line(
-            &report["problems"],
-            &format!("rule 3 (fixed resources) main.s:{line}: `and` changes rsp")
-        ),
-        "{report}"
-    );
-    assert!(
-        text(&report["next_step"]).contains("compile skill"),
-        "{report}"
-    );
-    session.service.cancel().await.expect("close the session");
-}
-
-#[tokio::test]
-async fn main_s_needs_no_label_and_must_build() {
-    let session = session().await;
-    let program = checked_template(&session).await;
-    let code = asset("main-template.s");
-    // A label left from older versions of lengua is only a comment.
-    program.write(
-        "main.s",
-        &format!("# lengua: spec sha256:{}\n{code}", "0".repeat(64)),
-    );
-    done(&session, &program).await;
-
-    program.write(
-        "main.s",
-        &code.replacen("    xor r9d, r9d\n", "    mov r9d, rbx\n", 1),
-    );
-    let report = session.check(&program).await;
-    assert_eq!(report["state"], "code_problems", "{report}");
-    assert!(
-        any_line(&report["problems"], "doesn't build: assembling failed"),
-        "{report}"
-    );
-    assert!(
-        any_line(&report["problems"], "main.s:"),
-        "the assembler's message names the line: {report}"
-    );
-    session.service.cancel().await.expect("close the session");
-}
-
-#[tokio::test]
-async fn code_waits_for_a_spec_whose_tests_check() {
-    let session = session().await;
-    let program = Program::new();
-    program.write(
-        "spec.md",
-        &asset("template-spec.md").replace("| 50 |", "| 0 |"),
-    );
-    program.write("main.s", &asset("main-template.s"));
-    let report = session.record(&program).await;
-    assert_eq!(report["state"], "spec_problems", "{report}");
-    assert!(
-        any_line(&report["problems"], "runs must be from 1"),
-        "{report}"
-    );
-    assert!(program.read("lengua.lock").is_none());
-    session.service.cancel().await.expect("close the session");
-}
-
-#[tokio::test]
-async fn code_compiled_for_another_computer_is_compiled_again() {
-    let session = session().await;
-    let program = checked_template(&session).await;
-    let elsewhere = asset("main-template.s").replacen(
-        ".intel_syntax noprefix\n",
-        ".intel_syntax noprefix\n# lengua: compiled from spec.md sha256:00 for macos-arm64\n",
-        1,
-    );
-    program.write("main.s", &elsewhere);
-    let report = session.check(&program).await;
-    assert_eq!(report["state"], "code_problems", "{report}");
-    assert!(
-        any_line(&report["problems"], "compiled for macos-arm64"),
-        "{report}"
-    );
-    assert!(
-        text(&report["next_step"]).contains("for this computer with the compile skill"),
-        "{report}"
-    );
-    session.service.cancel().await.expect("close the session");
 }
 
 #[tokio::test]
@@ -405,7 +151,9 @@ async fn the_streaming_filter_is_proven_for_every_length() {
     if !solvers_installed() {
         return;
     }
-    let session = Session::proving_for(Protocol::Discover, 120).await;
+    // Alone: the induction needs the cores, and beside the file example's two minutes of proofs
+    // it ran out of its own on a slower computer (run 41921857314).
+    let session = Session::proving_alone_for(Protocol::Discover, 120).await;
     let program = written(
         &session,
         [
@@ -414,8 +162,7 @@ async fn the_streaming_filter_is_proven_for_every_length() {
         ],
     )
     .await;
-    let report = session.settle(&program).await;
-    assert_eq!(report["state"], "done", "{report}");
+    let report = done(&session, &program).await;
     let proof = text(&report["proofs"][0]);
     assert!(
         proof.starts_with("generated B1: proven for every input in range")
@@ -661,217 +408,6 @@ async fn the_parallel_template_runs_on_several_cores() {
     assert_eq!(run["exit_code"], 0, "{run}");
     assert_eq!(run["stdout"], text.to_ascii_uppercase());
     session.service.cancel().await.expect("close the session");
-}
-
-#[tokio::test]
-async fn tests_can_be_fixed_after_code_ran() {
-    let session = session().await;
-    let program = checked_template(&session).await;
-    program.write("main.s", &asset("main-template.s"));
-    let report = done(&session, &program).await;
-    assert!(report.get("changes").is_none(), "{report}");
-    let spec = asset("template-spec.md");
-
-    // A fix after code ran is checked like any version of the spec, and shown with lengua's
-    // own marks on what tests less; nobody has to approve anything.
-    program.write("spec.md", &spec.replace("| 200 |", "| 10 |"));
-    let report = done(&session, &program).await;
-    let changed = text(&report["changes"]["spec_changed"]);
-    assert!(changed.contains("- ") && changed.contains("+ "), "{report}");
-    assert!(changed.contains("| 10 |"), "{report}");
-    assert_eq!(
-        report["changes"]["tests_less"],
-        json!(["generated B1: fewer runs, 10 instead of 200"]),
-        "{report}"
-    );
-
-    // A change that tests more gets no mark, and going back to the first version shows nothing.
-    program.write("spec.md", &spec.replace("| 200 |", "| 300 |"));
-    let report = done(&session, &program).await;
-    assert!(report["changes"].get("tests_less").is_none(), "{report}");
-    assert!(report["changes"]["spec_changed"].is_string(), "{report}");
-    program.write("spec.md", &spec);
-    let report = done(&session, &program).await;
-    assert!(report.get("changes").is_none(), "{report}");
-    session.service.cancel().await.expect("close the session");
-}
-
-#[tokio::test]
-async fn new_words_in_the_middle_of_a_build_never_hide_a_change() {
-    let session = session().await;
-    let program = checked_template(&session).await;
-    // The build isn't finished: no code has passed yet. Changing the spec and recording it with
-    // other words keeps the first spec as what changes are shown against.
-    let spec = asset("template-spec.md");
-    let edited = spec.replacen("# Purpose\n", "# Purpose\nIt is quick. ", 1);
-    assert_ne!(spec, edited, "the edit applies");
-    program.write("spec.md", &edited);
-    session
-        .call_ok("check", program.request("Also make it quick"))
-        .await;
-    program.write("main.s", &asset("main-template.s"));
-    let report = done(&session, &program).await;
-    assert_eq!(
-        report["changes"]["requests"],
-        json!([common::REQUEST, "Also make it quick"]),
-        "{report}"
-    );
-    assert!(
-        text(&report["changes"]["spec_changed"]).contains("It is quick."),
-        "{report}"
-    );
-    session.service.cancel().await.expect("close the session");
-}
-
-#[tokio::test]
-async fn the_template_is_proven_for_every_input() {
-    if !solvers_installed() {
-        return;
-    }
-    let session = Session::proving(Protocol::Discover).await;
-    let program = checked_template(&session).await;
-    program.write("main.s", &asset("main-template.s"));
-    let report = done(&session, &program).await;
-    // B3's bad inputs come from choice(…), each proven in turn.
-    let proofs = report["proofs"].as_array().expect("proofs");
-    assert_eq!(proofs.len(), 3, "{report}");
-    assert!(
-        proofs
-            .iter()
-            .all(|proof| text(proof).contains(": proven for every input in range")),
-        "{report}"
-    );
-    let lock = program.read("lengua.lock").expect("the lock");
-    assert!(lock.contains("proven = [\"B1\", \"B3\", \"B4\"]"), "{lock}");
-    // Every step settles by the terms alone: the program's parse and the formula's number are
-    // one sum.
-    assert!(
-        lock.contains(
-            "solvers = \"none: the tests tried every value, or the terms settled every step\""
-        ),
-        "{lock}"
-    );
-    // Checking the same files again answers at once from what was found.
-    let again = session.check(&program).await;
-    assert_eq!(again["state"], "done", "{again}");
-    assert_eq!(again["proofs"], report["proofs"], "{again}");
-    // A new build is tested and proven again by itself.
-    program.write(
-        "main.s",
-        &asset("main-template.s").replacen("_start:\n", "_start:\n    nop\n", 1),
-    );
-    let report = done(&session, &program).await;
-    assert!(
-        any_line(&report["proofs"], "proven for every input in range"),
-        "{report}"
-    );
-    let relocked = program.read("lengua.lock").expect("the lock");
-    assert_ne!(lock, relocked);
-    assert!(
-        relocked.contains("proven = [\"B1\", \"B3\", \"B4\"]"),
-        "{relocked}"
-    );
-    session.service.cancel().await.expect("close the session");
-}
-
-#[tokio::test]
-async fn a_bug_the_samples_miss_is_found_by_the_proof_and_run_for_real() {
-    // The negative of 1234567 comes out one too big: one input in 18 quintillion, which the
-    // tests' samples miss and the proof finds; a real run with that input confirms it. Finding
-    // it takes the solvers most of their time for a question, so no other proof runs beside it.
-    if !solvers_installed() {
-        return;
-    }
-    let session = Session::proving_alone(Protocol::Discover).await;
-    let program = checked_template(&session).await;
-    let buggy = asset("main-template.s")
-        .replacen(
-            ".equ OUT_BUF_LEN, 21\n",
-            ".equ OUT_BUF_LEN, 21\n.equ UNLUCKY, -1234567\n",
-            1,
-        )
-        .replacen(
-            "    neg rdx\n    jo .Lstart_assert_negate\n",
-            "    neg rdx\n    jo .Lstart_assert_negate\n    cmp rdx, UNLUCKY\n    jne \
-             .Lstart_lucky\n    inc rdx\n.Lstart_lucky:\n",
-            1,
-        );
-    assert_ne!(buggy, asset("main-template.s"));
-    program.write("main.s", &buggy);
-    let problems = failed(&session, &program).await;
-    assert!(
-        problems.contains(
-            "the proof found inputs the tests didn't try where main.s is wrong: with n = 1234567"
-        ),
-        "{problems}"
-    );
-    // The tests passed, but a build the proof found wrong doesn't run.
-    let refused = session
-        .call_error("run", with_args(&program, &["1234567"]))
-        .await;
-    assert!(
-        refused.contains("The proof found inputs where main.s is wrong"),
-        "{refused}"
-    );
-    // Nor after lengua restarts: lengua.lock records what the proof found, and check shows it.
-    let restarted = session.restart().await;
-    let refused = restarted
-        .call_error("run", with_args(&program, &["1234567"]))
-        .await;
-    assert!(
-        refused.contains("The proof found inputs where main.s is wrong")
-            && refused.contains("n = 1234567"),
-        "{refused}"
-    );
-    let problems = failed(&restarted, &program).await;
-    assert!(problems.contains("with n = 1234567"), "{problems}");
-    restarted.service.cancel().await.expect("close the session");
-}
-
-#[tokio::test]
-async fn done_comes_once_the_tests_pass_while_the_proofs_go_on() {
-    if !solvers_installed() {
-        return;
-    }
-    // add's proof takes most of a minute, so done comes first, with the proofs still running.
-    let session = Session::proving_with_grace(Protocol::Discover, 0).await;
-    let program = Program::new();
-    for (name, text) in example_files("add") {
-        program.write(name, &text);
-    }
-    let report = session.record(&program).await;
-    assert_eq!(report["state"], "done", "{report}");
-    assert!(any_line(&report["proofs"], ": proving"), "{report}");
-    assert!(
-        text(&report["next_step"]).contains("still running"),
-        "{report}"
-    );
-    // The program runs while its proofs go on.
-    let run = session
-        .call_ok("run", with_args(&program, &["2", "3"]))
-        .await;
-    assert_eq!(run["stdout"], "5\n", "{run}");
-    session.service.cancel().await.expect("close the session");
-}
-
-#[tokio::test]
-async fn proofs_survive_a_server_restart() {
-    if !solvers_installed() {
-        return;
-    }
-    let session = Session::proving(Protocol::Discover).await;
-    let program = checked_template(&session).await;
-    program.write("main.s", &asset("main-template.s"));
-    done(&session, &program).await;
-    // A new server has no job in memory: it runs the tests again and takes the proofs the lock
-    // records about this very build.
-    let restarted = session.restart().await;
-    let report = done(&restarted, &program).await;
-    assert!(
-        any_line(&report["proofs"], "as lengua.lock records"),
-        "{report}"
-    );
-    restarted.service.cancel().await.expect("close the session");
 }
 
 #[tokio::test]
@@ -1414,45 +950,6 @@ async fn the_word_count_claude_code_wrote_passes_its_checks() {
     session.service.cancel().await.expect("close the session");
 }
 
-#[tokio::test]
-async fn long_text_is_proven_up_to_the_bound() {
-    if !solvers_installed() {
-        return;
-    }
-    let session = Session::proving(Protocol::Discover).await;
-    let program = written(
-        &session,
-        ["spec.md", "main.s"].map(|name| (name, fixture("cat", name))),
-    )
-    .await;
-    let report = done(&session, &program).await;
-    // Texts run to 5000 bytes, read with read, and a pipe write holds 4096: proving further
-    // can't help, so the line doesn't offer it.
-    let only = text(&report["proofs"][0]);
-    assert!(
-        only.starts_with(
-            "generated B1: proven for every input with text up to 4096 of 5000 bytes ("
-        ) && only.ends_with(
-            "; longer texts are tested, not proven: standard input past 4096 bytes is more \
-             than one pipe write, which the proof reads whole; read it with fill to be proven \
-             for any length"
-        ),
-        "{only}"
-    );
-    // The lock records it apart from full proofs.
-    let lock = program.read("lengua.lock").expect("the lock");
-    assert!(lock.contains("proven = []"), "{lock}");
-    for id in ["B1", "B2"] {
-        assert!(
-            lock.contains(&format!(
-                "{{ id = \"{id}\", bytes = 4096, of = 5000, more = false }}"
-            )),
-            "{lock}"
-        );
-    }
-    session.service.cancel().await.expect("close the session");
-}
-
 /// second's spec with a short first line and a long second one, so the tests' own pieces of
 /// standard input, cut after its first byte and at its middle, never end a read right after the
 /// first line: only the proof's cuts do.
@@ -1677,49 +1174,5 @@ async fn programs_on_the_network_are_proven() {
             .all(|proof| text(proof).contains("proven for every input in range"))),
         "{report}"
     );
-    session.service.cancel().await.expect("close the session");
-}
-
-#[tokio::test]
-async fn an_edit_mid_proof_starts_over_and_the_old_proof_never_lands() {
-    if !solvers_installed() {
-        return;
-    }
-    // Each check waits 50 ms at most, so it sees the proof running: cat's, of every text up to
-    // 4096 bytes, takes over a second even on an idle computer, where add's now takes less
-    // than one check's wait.
-    let session = Session::proving_waiting(Protocol::Discover, 50).await;
-    let program = written(
-        &session,
-        ["spec.md", "main.s"].map(|name| (name, fixture("cat", name))),
-    )
-    .await;
-    loop {
-        let report = session.check(&program).await;
-        match report["state"].as_str() {
-            Some("proving") => break,
-            Some("testing") => {}
-            _ => panic!("{report}"),
-        }
-    }
-    program.write(
-        "main.s",
-        &fixture("cat", "main.s").replacen("_start:\n", "_start:\n    nop\n", 1),
-    );
-    let report = done(&session, &program).await;
-    assert!(
-        any_line(&report["proofs"], "proven for every input"),
-        "{report}"
-    );
-    let lock = program.read("lengua.lock").expect("the lock");
-    let executable = |table: &str| {
-        lock.split(&format!("[{table}]"))
-            .nth(1)
-            .and_then(|rest| rest.split("executable_sha256 = \"").nth(1))
-            .and_then(|rest| rest.split('"').next())
-            .map(str::to_owned)
-    };
-    assert!(executable("code").is_some(), "{lock}");
-    assert_eq!(executable("code"), executable("proofs"), "{lock}");
     session.service.cancel().await.expect("close the session");
 }

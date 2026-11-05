@@ -48,39 +48,23 @@ const DEBT: &[Debt] = &[
     },
     Debt {
         file: "tests/aarch64_session.rs",
-        reason: "AArch64 programs through the server: the cat, calc, hypotenuse, vector, stream, \
-                 tally, server, terminal, echo, fetch and parallel programs, proofs, the cut \
-                 only the proof tries, a closed standard output, a computer an argument names, \
-                 a raw read, failed assertions' lines",
-        missing: "tests/check_code.rs has the x86-64 side of most of these and about 40 more \
+        reason: "AArch64 programs through the server: the calc, hypotenuse, vector, stream, \
+                 tally, server, terminal, echo, fetch and parallel programs, the benchmark's \
+                 own programs, proofs, the cut only the proof tries, a closed standard output, \
+                 a computer an argument names, a raw read",
+        missing: "tests/check_code.rs has the x86-64 side of most of these and about 25 more \
                   (see its own entry), which ARM64 lacks",
     },
     Debt {
         file: "tests/check_code.rs",
-        reason: "x86-64 programs through the server: the template stamped, hardcoded answers, \
-                 run's checks, violations with rule, line and fix, the proofs and what they find, \
-                 files, folders, the environment, sleep, the network, programs built on programs, \
-                 the AVX-512 programs of the benchmarks",
-        missing: "ARM64 has no session test for: hardcoded answers failing generated tests, run \
-                  needing the tested build, a violation's rule, line and fix, main.s needing no \
-                  label, code waiting for a spec, code compiled for another computer, small \
-                  ranges that run every value, decimals, files, tests fixed after code ran, the \
-                  whole template proven for every input, a bug the samples miss found by the \
-                  proof, done coming while the proofs go on, proofs surviving a restart, folders, \
-                  listing, sleep, the environment, dice, TLS, programs built on programs, long \
-                  text proven to its bound, a server that waits for its client, and an edit \
-                  during a proof",
-    },
-    Debt {
-        file: "tests/e2e.rs",
-        reason: "the whole workflow on the add example in both protocol generations, run from a \
-                 shell, a server from a shell, and the refusals and recoveries around them, \
-                 written for x86-64 code",
-        missing: "ARM64 has none of it: the add workflow in both protocol generations, \
-                  `lengua-mcp run` from a shell (a checked program, and a server until it is \
-                  stopped), code that breaks a rule running no tests, every call returning \
-                  within the window while the job goes on, and a shared program checked again \
-                  where it lands",
+        reason: "x86-64 programs through the server: the vector, stream, tally, parallel and \
+                 jump-table programs, small ranges, decimals, files, folders, the environment, \
+                 sleep, the network, programs built on programs, the proofs of the examples and \
+                 what they find in a cut or a closed output, the AVX-512 programs of the \
+                 benchmarks",
+        missing: "ARM64 has no session test for: small ranges that run every value, decimals, \
+                  files, folders, listing, sleep, the environment, dice, TLS, programs built on \
+                  programs, and a server that waits for its client",
     },
 ];
 

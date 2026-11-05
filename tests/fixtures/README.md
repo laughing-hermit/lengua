@@ -45,6 +45,13 @@ and a program added on either CPU comes with its twin. One test,
 `every_program_passes_its_checks_on_every_target` (tests/every_program.rs), takes them all
 through the server on each target a computer runs.
 
+**The session tests start from them.** `tests/sessions.rs` and `tests/workflow.rs` (each case once,
+a cell for each target, run natively on each CPU's runner) start from the template and from the
+twins of `add`, `cat`, `cat-stream` and `echo`: `cat` is proven up to its 4,096-byte bound and has
+its proof interrupted by an edit, `cat-stream` is stamped, run on a long input and proven for every
+length, and `echo` is served from a shell until it is stopped. A fixture they use is needed on
+both CPUs, with the very same `spec.md`.
+
 **`sha256` and `aes` are baseline forms.** The twins `linux-aarch64/sha256` and `linux-aarch64/aes`,
 like `examples/sha256` and `examples/aes`, are plain integer code (rotates, adds and xors, a table
 of 256 words for AES) that runs on every computer of its CPU; the forms that use the CPU's SHA and
