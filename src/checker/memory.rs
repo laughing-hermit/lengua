@@ -537,7 +537,9 @@ fn transfer(
                 after.set(*register, Owner::Number);
             }
         } else {
-            for register in abi.caller_saved {
+            // A call to an operation of the edge keeps what its convention keeps, the registers
+            // it was given its arguments in included.
+            for register in insn.call_clobbers.unwrap_or(abi.caller_saved) {
                 after.set(*register, Owner::Unknown);
             }
             after.set(abi.result, returned(&summary.returns, before));

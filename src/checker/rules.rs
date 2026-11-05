@@ -15,6 +15,10 @@ use crate::spec::{ASSERTION_EXIT_CODE, Syscall};
 /// The most instructions a function may have (assert_fail excluded).
 pub const MAX_INSTRUCTIONS: usize = 60;
 
+/// A function in the edge form keeps its frame under this many bytes: a stack of lengua's own,
+/// the threads', has no guard page below it, so what a frame may reach is what a page covers.
+const MAX_FRAME_BYTES: i64 = 4096;
+
 /// The fewest assertions per function, on average.
 pub const MIN_ASSERTIONS_PER_FUNCTION: usize = 2;
 
@@ -79,6 +83,7 @@ pub fn check(
     program: &Program<'_>,
     flows: &BTreeMap<String, Flow>,
     syscalls: &[Syscall],
+    ops: &[crate::edge::Op],
     profile: Profile,
     [template, fill_template]: [&Source; 2],
     violations: &mut Vec<Violation>,
@@ -107,11 +112,17 @@ pub fn check(
         if !super::threads::FUNCTIONS.contains(&function.name()) {
             checker.syscalls(function, flow, syscalls, profile);
         }
+        checker.operations(function, flow, ops);
+        checker.frame(function, flow);
         checker.exit_statuses(function, flow);
         checker.results(function, flow);
         checker.indexes(function, flow);
         checker.chains(function, flow);
-        checker.loops(function, flow, syscalls.contains(&Syscall::Accept4));
+        checker.loops(
+            function,
+            flow,
+            syscalls.contains(&Syscall::Accept4) || ops.contains(&crate::edge::Op::Accept),
+        );
         assertions += checker.assertions(function, flow, &mut ids);
     }
     checker.recursion();
@@ -469,10 +480,98 @@ impl Checker<'_, '_> {
         }
     }
 
+    /// Rule 3, for the edge form: each operation a program calls is one the spec allows, and a
+    /// call to one of lengua's library functions counts as the operations it calls.
+    fn operations(
+        &mut self,
+        function: &MappedFunction<'_>,
+        flow: &Flow,
+        allowed: &[crate::edge::Op],
+    ) {
+        use crate::edge::{Allowance, Op as Operation, library_calls};
+        for (index, exit) in flow.exits.iter().enumerate() {
+            let (name, reached): (&str, &[Operation]) = match exit {
+                Exit::Edge { op } => (op.symbol(), std::slice::from_ref(op)),
+                Exit::Call { callee } if self.program.lengua_at_name(callee).is_some() => {
+                    (callee.as_str(), library_calls(callee))
+                }
+                _ => continue,
+            };
+            let line = function.steps[index].source.line;
+            for op in reached {
+                if allowed.contains(op) {
+                    continue;
+                }
+                let needs = op
+                    .allowances()
+                    .iter()
+                    .filter_map(|allowance| match allowance {
+                        Allowance::Always => None,
+                        Allowance::Use(found) => {
+                            Some(format!("`{}` in its `- Uses:` line", found.name()))
+                        }
+                        Allowance::Network => Some("a `- Network:` line".to_owned()),
+                        Allowance::Listens => {
+                            Some("`- Network: listens on TCP port N`".to_owned())
+                        }
+                        Allowance::AtOnce => Some(
+                            "`up to N clients at once` in its `- Network:` line".to_owned(),
+                        ),
+                        Allowance::Threads => Some("a `- Threads:` line".to_owned()),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" or ");
+                let reaches = if name == op.symbol() {
+                    String::new()
+                } else {
+                    format!(" (it calls {})", op.symbol())
+                };
+                self.violation(
+                    Rule::Resources,
+                    line,
+                    format!(
+                        "{name} isn't one the spec allows{reaches}: it needs {needs}, which \
+                         spec.md doesn't name"
+                    ),
+                    format!(
+                        "use only what spec.md's Constraints name, or, when the program needs \
+                         it, add {needs} to spec.md and tell the user"
+                    ),
+                );
+            }
+        }
+    }
+
+    /// Rule 3, for the edge form: no function's frame reaches a page, the least a stack that has
+    /// no guard page below it can take.
+    fn frame(&mut self, function: &MappedFunction<'_>, flow: &Flow) {
+        if self.program.source.form != crate::edge::Form::Edge {
+            return;
+        }
+        let frame = flow.max_depth - self.program.abi().return_address;
+        if frame >= MAX_FRAME_BYTES {
+            self.violation(
+                Rule::Resources,
+                function.source.line,
+                format!("{}'s frame is {frame} bytes", function.name()),
+                format!(
+                    "keep every function's frame under {MAX_FRAME_BYTES} bytes; a bigger buffer \
+                     goes in .bss"
+                ),
+            );
+        }
+    }
+
     /// Rule 8: every exit status comes from `mov edi, NAME` on every path to the exit.
     fn exit_statuses(&mut self, function: &MappedFunction<'_>, flow: &Flow) {
         for (index, exit) in flow.exits.iter().enumerate() {
-            if *exit != (Exit::Syscall { exit: true }) {
+            if !matches!(
+                exit,
+                Exit::Syscall { exit: true }
+                    | Exit::Edge {
+                        op: crate::edge::Op::Exit
+                    }
+            ) {
                 continue;
             }
             let mut seen = BTreeSet::new();
@@ -528,6 +627,9 @@ impl Checker<'_, '_> {
         for (index, exit) in flow.exits.iter().enumerate() {
             let what = match exit {
                 Exit::Syscall { exit: false } => "this system call's result".to_owned(),
+                Exit::Edge { op } if *op != crate::edge::Op::Exit => {
+                    format!("{}'s result", op.symbol())
+                }
                 Exit::Call { callee } => match self.program.source.function(callee) {
                     Some(target) if target.returns_result => format!("{callee}'s result"),
                     _ => continue,

@@ -1717,6 +1717,62 @@ impl Parser {
         })
     }
 
+    /// What only the edge form refuses: a system call a program makes by itself, and the names
+    /// lengua keeps for its own text, which is assembled with main.s as one.
+    fn edge_form_names(&mut self) {
+        let mut found: Vec<(usize, String, &'static str)> = Vec::new();
+        for function in &self.source.functions {
+            for instruction in function.instructions() {
+                if instruction.mnemonic == "syscall" || instruction.mnemonic == "svc" {
+                    found.push((
+                        instruction.line,
+                        format!("`{}` makes a system call by itself", instruction.text),
+                        "call an operation of lengua's edge instead: os_write, os_read, os_exit \
+                         and the rest",
+                    ));
+                }
+            }
+            let labels = function.items.iter().filter_map(|item| match item {
+                Item::Label(label) => Some((label.line, label.name.as_str())),
+                Item::Instruction(_) => None,
+            });
+            let named = std::iter::once((function.line, function.name.as_str())).chain(labels);
+            for (line, name) in named {
+                if crate::edge::reserved(name) {
+                    found.push((
+                        line,
+                        format!("{name} is a name lengua keeps for its own text"),
+                        "choose another name: `_start`, `os_`, `lengua_`, assert_fail, fill and \
+                         parallel_for are lengua's",
+                    ));
+                }
+            }
+        }
+        let data = self
+            .source
+            .data
+            .iter()
+            .map(|data| (data.line, data.name.as_str()));
+        let constants = self
+            .source
+            .constants
+            .iter()
+            .map(|(name, constant)| (constant.line, name.as_str()));
+        for (line, name) in data.chain(constants) {
+            if crate::edge::reserved(name) {
+                found.push((
+                    line,
+                    format!("{name} is a name lengua keeps for its own text"),
+                    "choose another name: `os_`, `lengua_`, `LENGUA_`, assert_message and the \
+                     library's names are lengua's",
+                ));
+            }
+        }
+        for (line, problem, fix) in found {
+            self.dialect(line, problem, fix);
+        }
+    }
+
     fn finish(mut self, last_line: usize) -> (Source, Vec<Violation>) {
         if !self.seen_header {
             self.dialect(
@@ -1808,6 +1864,7 @@ impl Parser {
                         "define `main` with `.type main, @function` and `.size main, . - main`",
                     );
                 }
+                self.edge_form_names();
             }
         }
         (self.source, self.violations)

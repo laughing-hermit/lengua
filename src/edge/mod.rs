@@ -538,6 +538,32 @@ pub struct Lend {
     pub written: bool,
 }
 
+/// The library functions a program in the edge form may call, besides the operations: lengua's
+/// own, so main.s defines none of them.
+pub const LIBRARY: [&str; 3] = ["assert_fail", "fill", "parallel_for"];
+
+/// The operations one of the library's functions calls, which a program that calls it needs
+/// allowed.
+#[must_use]
+pub fn library_calls(name: &str) -> &'static [Op] {
+    match name {
+        "fill" => &[Op::Read],
+        "parallel_for" => &[Op::ThreadStart, Op::ThreadJoin],
+        _ => &[],
+    }
+}
+
+/// Whether lengua keeps `name` for itself in a program's text: `_start`, the operations and
+/// their tables, the library's functions and data, and what carries lengua's prefix.
+#[must_use]
+pub fn reserved(name: &str) -> bool {
+    ["_start", "assert_message"].contains(&name)
+        || LIBRARY.contains(&name)
+        || ["os_", "lengua_", "LENGUA_", ".Llengua_"]
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+}
+
 /// How a program is written: with its own system calls, or against the edge.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Form {

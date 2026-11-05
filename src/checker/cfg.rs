@@ -160,12 +160,24 @@ pub fn analyze(
                 // lengua's: an operation, or one of the library's functions.
                 None if program.lengua_at(target).is_some() => {
                     let name = program.lengua_at(target).map_or("", MappedFunction::name);
-                    crate::edge::Op::from_symbol(name).map_or_else(
-                        || Exit::Call {
+                    if let Some(op) = crate::edge::Op::from_symbol(name) {
+                        Exit::Edge { op }
+                    } else if crate::edge::LIBRARY.contains(&name) {
+                        Exit::Call {
                             callee: name.to_owned(),
-                        },
-                        |op| Exit::Edge { op },
-                    )
+                        }
+                    } else {
+                        report(
+                            Rule::ControlFlow,
+                            line,
+                            format!(
+                                "`{}` enters lengua's own code, {name}, which only lengua calls",
+                                step.source.text
+                            ),
+                            "call only the operations (os_*) and assert_fail, fill and parallel_for",
+                        );
+                        Exit::Stop
+                    }
                 }
                 None => {
                     report(

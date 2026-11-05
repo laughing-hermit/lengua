@@ -18,6 +18,21 @@ async fn check_full(
     syscalls: &[Syscall],
     threads: Option<u32>,
 ) -> Report {
+    check_allowing(text, features, syscalls, &[], threads).await
+}
+
+/// A program in the edge form, checked with the operations its spec allows.
+async fn check_edge(text: &str, ops: &[crate::edge::Op]) -> Report {
+    check_allowing(text, CpuFeatures::all(), &SYSCALLS, ops, None).await
+}
+
+async fn check_allowing(
+    text: &str,
+    features: CpuFeatures,
+    syscalls: &[Syscall],
+    ops: &[crate::edge::Op],
+    threads: Option<u32>,
+) -> Report {
     let (source, layout) = check_layout(text);
     if !layout.passed() {
         return layout;
@@ -49,7 +64,7 @@ async fn check_full(
         &bytes,
         Context {
             syscalls,
-            ops: &[],
+            ops,
             threads,
             lengua: lengua.as_ref(),
             features,
@@ -4802,6 +4817,263 @@ async fn lengua_s_is_matched_and_an_operation_keeps_what_the_edge_keeps() {
         let ordinary = call_to("assert_fail");
         for register in abi.caller_saved {
             assert!(ordinary.changes(*register, abi), "{profile:?} {register:?}");
+        }
+    }
+}
+
+/// A program in the edge form that passes every rule: it checks its arguments, writes a greeting
+/// and exits.
+const EDGE_BASE: PerCpu<&str> = PerCpu {
+    x86_64: ".intel_syntax noprefix\n\n\
+            .equ STDOUT, 1\n\
+            .equ EXIT_OK, 0\n\
+            .equ EXIT_WRITE_FAILED, 1\n\
+            .equ ARGC_MIN, 1\n\
+            .equ GREETING_LEN, 6\n\n\
+            .section .rodata\n\n\
+            .type greeting, @object\n\
+            greeting:\n    .ascii \"hello\\n\"\n\
+            .size greeting, . - greeting\n\n\
+            .text\n\n\
+            # Writes a greeting and exits: main gets the argument count, argv and envp.\n\
+            .type main, @function\n\
+            main:\n\
+            \x20   sub rsp, 8\n\
+            \x20   test rsi, rsi\n\
+            \x20   jz .Lmain_assert_argv\n\
+            \x20   cmp rdi, ARGC_MIN\n\
+            \x20   jb .Lmain_assert_argc\n\
+            \x20   mov edi, STDOUT\n\
+            \x20   lea rsi, [rip + greeting]\n\
+            \x20   mov edx, GREETING_LEN\n\
+            \x20   call os_write\n\
+            \x20   test rax, rax\n\
+            \x20   js .Lmain_write_failed\n\
+            \x20   mov edi, EXIT_OK\n\
+            \x20   call os_exit\n\
+            .Lmain_write_failed:\n\
+            \x20   mov edi, EXIT_WRITE_FAILED\n\
+            \x20   call os_exit\n\
+            .Lmain_assert_argv:\n\
+            \x20   mov edi, 1\n\
+            \x20   call assert_fail\n\
+            .Lmain_assert_argc:\n\
+            \x20   mov edi, 2\n\
+            \x20   call assert_fail\n\
+            .size main, . - main\n",
+    aarch64: ".arch armv8-a\n\n\
+            .equ STDOUT, 1\n\
+            .equ EXIT_OK, 0\n\
+            .equ EXIT_WRITE_FAILED, 1\n\
+            .equ ARGC_MIN, 1\n\
+            .equ GREETING_LEN, 6\n\n\
+            .section .rodata\n\n\
+            .type greeting, @object\n\
+            greeting:\n    .ascii \"hello\\n\"\n\
+            .size greeting, . - greeting\n\n\
+            .text\n\n\
+            // Writes a greeting and exits: main gets the argument count, argv and envp.\n\
+            .type main, @function\n\
+            main:\n\
+            \x20   cbz x1, .Lmain_assert_argv\n\
+            \x20   cmp x0, #ARGC_MIN\n\
+            \x20   b.lo .Lmain_assert_argc\n\
+            \x20   mov x0, #STDOUT\n\
+            \x20   adrp x1, greeting\n\
+            \x20   add x1, x1, :lo12:greeting\n\
+            \x20   mov x2, #GREETING_LEN\n\
+            \x20   bl os_write\n\
+            \x20   tbnz x0, #63, .Lmain_write_failed\n\
+            \x20   mov x0, #EXIT_OK\n\
+            \x20   bl os_exit\n\
+            .Lmain_write_failed:\n\
+            \x20   mov x0, #EXIT_WRITE_FAILED\n\
+            \x20   bl os_exit\n\
+            .Lmain_assert_argv:\n\
+            \x20   mov w0, #1\n\
+            \x20   bl assert_fail\n\
+            .Lmain_assert_argc:\n\
+            \x20   mov w0, #2\n\
+            \x20   bl assert_fail\n\
+            .size main, . - main\n",
+};
+
+/// What the base's spec allows: output and exit, which every program has.
+const BASE_OPS: [crate::edge::Op; 2] = [crate::edge::Op::Write, crate::edge::Op::Exit];
+
+/// The base passes every rule, on both CPUs.
+#[tokio::test]
+async fn an_edge_form_program_can_pass_every_rule() {
+    for profile in Profile::ALL {
+        let report = check_edge(EDGE_BASE.get(profile), &BASE_OPS).await;
+        assert!(report.passed(), "{profile:?}: {:#?}", report.violations);
+    }
+}
+
+/// One change to the base that a rule of the edge form refuses, for each CPU, and what the checker
+/// says of it.
+struct EdgeFixture {
+    what: &'static str,
+    edits: PerCpu<&'static [(&'static str, &'static str)]>,
+    /// The operations the spec allows.
+    ops: &'static [crate::edge::Op],
+    says: &'static str,
+}
+
+/// Both CPUs' edit of the same text, where the instructions don't differ.
+const fn both(
+    edits: &'static [(&'static str, &'static str)],
+) -> PerCpu<&'static [(&'static str, &'static str)]> {
+    PerCpu {
+        x86_64: edits,
+        aarch64: edits,
+    }
+}
+
+const EDGE_FIXTURES: &[EdgeFixture] = &[
+    EdgeFixture {
+        what: "a system call of its own",
+        edits: PerCpu {
+            x86_64: &[(
+                "    mov edi, EXIT_OK\n    call os_exit\n",
+                "    mov edi, EXIT_OK\n    mov eax, 231\n    syscall\n",
+            )],
+            aarch64: &[(
+                "    mov x0, #EXIT_OK\n    bl os_exit\n",
+                "    mov x0, #EXIT_OK\n    mov x8, #94\n    svc #0\n",
+            )],
+        },
+        ops: &BASE_OPS,
+        says: "makes a system call by itself",
+    },
+    EdgeFixture {
+        what: "a _start beside main",
+        edits: both(&[(
+            ".text\n",
+            ".text\n.globl _start\n.type _start, @function\n_start:\n    nop\n.size _start, . - _start\n",
+        )]),
+        ops: &BASE_OPS,
+        says: "main.s defines main as well as _start",
+    },
+    EdgeFixture {
+        what: "main exported",
+        edits: both(&[(".text\n", ".text\n.globl main\n")]),
+        ops: &BASE_OPS,
+        says: "main is exported",
+    },
+    EdgeFixture {
+        what: "a function named for a library function",
+        edits: both(&[(
+            ".size main, . - main\n",
+            ".size main, . - main\n\n.type fill, @function\nfill:\n    ret\n.size fill, . - fill\n",
+        )]),
+        ops: &BASE_OPS,
+        says: "fill is a name lengua keeps",
+    },
+    EdgeFixture {
+        what: "a constant with lengua's prefix",
+        edits: both(&[(".equ STDOUT, 1\n", ".equ STDOUT, 1\n.equ LENGUA_EXTRA, 7\n")]),
+        ops: &BASE_OPS,
+        says: "LENGUA_EXTRA is a name lengua keeps",
+    },
+    EdgeFixture {
+        what: "an operation the spec doesn't allow",
+        edits: PerCpu {
+            x86_64: &[("    call os_write\n", "    call os_clock\n")],
+            aarch64: &[("    bl os_write\n", "    bl os_clock\n")],
+        },
+        ops: &BASE_OPS,
+        says: "os_clock isn't one the spec allows",
+    },
+    EdgeFixture {
+        what: "a library function whose operations the spec doesn't allow",
+        edits: PerCpu {
+            x86_64: &[("    call os_write\n", "    call fill\n")],
+            aarch64: &[("    bl os_write\n", "    bl fill\n")],
+        },
+        ops: &BASE_OPS,
+        says: "fill isn't one the spec allows (it calls os_read)",
+    },
+    EdgeFixture {
+        what: "a result nobody tests",
+        edits: PerCpu {
+            x86_64: &[("    test rax, rax\n    js .Lmain_write_failed\n", "")],
+            aarch64: &[("    tbnz x0, #63, .Lmain_write_failed\n", "")],
+        },
+        ops: &BASE_OPS,
+        says: "os_write's result",
+    },
+    EdgeFixture {
+        what: "an exit status that isn't a named constant",
+        edits: PerCpu {
+            x86_64: &[("    mov edi, EXIT_OK\n", "    mov edi, 0\n")],
+            aarch64: &[("    mov x0, #EXIT_OK\n", "    mov x0, #0\n")],
+        },
+        ops: &BASE_OPS,
+        says: "without a named constant",
+    },
+    EdgeFixture {
+        what: "a main that returns",
+        edits: both(&[(".size main, . - main\n", "    ret\n.size main, . - main\n")]),
+        ops: &BASE_OPS,
+        says: "main returns, but it has nothing to return to",
+    },
+    EdgeFixture {
+        what: "a call on a stack that isn't aligned",
+        edits: PerCpu {
+            x86_64: &[("    sub rsp, 8\n", "")],
+            aarch64: &[("main:\n", "main:\n    sub sp, sp, #8\n")],
+        },
+        ops: &BASE_OPS,
+        says: "aligned",
+    },
+    EdgeFixture {
+        what: "a frame as big as a page",
+        edits: PerCpu {
+            x86_64: &[("    sub rsp, 8\n", "    sub rsp, 4104\n")],
+            aarch64: &[("main:\n", "main:\n    sub sp, sp, #4080\n    sub sp, sp, #16\n")],
+        },
+        ops: &BASE_OPS,
+        says: "frame is",
+    },
+    EdgeFixture {
+        what: "a call into lengua's own code",
+        edits: PerCpu {
+            x86_64: &[("    call os_write\n", "    call lengua_error\n")],
+            aarch64: &[("    bl os_write\n", "    bl lengua_error\n")],
+        },
+        ops: &BASE_OPS,
+        says: "enters lengua's own code",
+    },
+    EdgeFixture {
+        what: "a jump into an operation",
+        edits: PerCpu {
+            x86_64: &[("    js .Lmain_write_failed\n", "    js os_exit\n")],
+            aarch64: &[("    tbnz x0, #63, .Lmain_write_failed\n", "    tbnz x0, #63, os_exit\n")],
+        },
+        ops: &BASE_OPS,
+        says: "jumps outside main",
+    },
+];
+
+/// Each change is refused, on both CPUs, for the reason its rule gives.
+#[tokio::test]
+async fn the_edge_form_rules_refuse_what_they_name() {
+    for fixture in EDGE_FIXTURES {
+        for profile in Profile::ALL {
+            let mut text = EDGE_BASE.get(profile).to_string();
+            for (from, to) in *fixture.edits.get(profile) {
+                assert!(text.contains(from), "{} on {profile:?}: no {from:?}", fixture.what);
+                text = text.replacen(from, to, 1);
+            }
+            let report = check_edge(&text, fixture.ops).await;
+            let found: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+            assert!(
+                found.iter().any(|violation| violation.contains(fixture.says)),
+                "{} on {profile:?}: wanted {:?} in {found:#?}",
+                fixture.what,
+                fixture.says
+            );
         }
     }
 }
