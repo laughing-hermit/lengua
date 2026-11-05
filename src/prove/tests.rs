@@ -75,6 +75,14 @@ fn speed_probe() -> Duration {
         .unwrap_or_default()
 }
 
+/// How many times slower this computer is than the reference one: 1 there. A solver's time for
+/// one question is stretched by it, as a proof's whole time is by [`scale`]: a question that
+/// takes 6 s on the reference computer took longer than a fixed 10 s on a slow one, and z3 gave
+/// up ("a path couldn't be settled: z3 ran out of time") in a proof the budget had time for.
+fn slowness() -> f64 {
+    scale() as f64 / REFERENCE_SCALE
+}
+
 /// Prints what [`speed_probe`] reads here and the scale it makes, to check [`REFERENCE_PROBE_MS`]
 /// against the runners' own numbers (dispatch the ignored tests with this filter).
 #[test]
@@ -196,7 +204,7 @@ fn budget(seconds: u64) -> Budget {
     Budget {
         max_paths: 64,
         max_shapes: 2000,
-        question_ms: 10_000,
+        question_ms: (10_000.0 * slowness()).round() as u64,
         ..Budget::until(
             Instant::now() + Duration::from_secs(seconds * scale()),
             false,
@@ -584,7 +592,7 @@ async fn finds_a_bug_the_samples_miss() {
             &machine,
             &block,
             &Budget {
-                question_ms: 60_000,
+                question_ms: (60_000.0 * slowness()).round() as u64,
                 ..budget(600)
             },
         );
