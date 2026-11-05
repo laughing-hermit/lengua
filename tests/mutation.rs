@@ -45,6 +45,14 @@ const EQUIVALENT: &[(&str, &str)] = &[
         "write_i64's sign test against 1 sends zero down the negating path, and zero negated is \
          zero: the output is the same for every number",
     ),
+    // Found by the first run after the prover's model of AArch64 read the overflow flag, `tbnz`
+    // on the top bit and `msub` as x86-64's reads them (2026-11-05): add's proof is complete on
+    // ARM64 now, where the mutant used to come out unproven.
+    (
+        "tests/fixtures/linux-aarch64/add/main.s L273:imm+1",
+        "write_all's success value, 1 for 0: every caller tests only its sign (`tbnz x0, #63`) \
+         and then sets the result itself, so the output and the exit code are the same",
+    ),
 ];
 
 fn read(path: &str) -> String {

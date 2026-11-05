@@ -920,25 +920,20 @@ async fn the_dice_example_rolls_with_the_tests_random_bytes() {
     }
 }
 
-/// What each target's proofs of absdiff say. On x86-64 all four blocks are proven for every input
-/// in range, and memory with them. On ARM64 the first block is not: a path of it needs the
-/// solvers, and z3's answer is not confirmed by cvc5 in the time ("a path couldn't be settled:
-/// cvc5 couldn't confirm z3's answer: it ran out of time" after 240 seconds, run 41914652006;
-/// after 60 seconds the proof ran out of time earlier, "after 153 of 196 input combinations", run
-/// 41912245262), so the rest of memory is tested, not proven. todo.md records the difference.
+/// What each target's proofs of absdiff say: all four blocks are proven for every input in range,
+/// and memory with them. ARM64's first block was not until the prover's model of AArch64 read the
+/// overflow flag, `tbnz` on the top bit and `msub` as x86-64's reads them (it ran out of time
+/// after 153 of 196 input combinations in 60 seconds, run 41912245262, and "a path couldn't be
+/// settled" in 240, run 41914652006); now it settles by its terms alone, with no solver question
+/// (196 input combinations, 420 paths, run 41942392800).
 const ABSDIFF: PerTarget<Proofs> = PerTarget {
     linux_x86_64: Proofs {
         blocks: &[Verdict::Proven; 4],
         memory: "on every run the proofs of B1, B2, B3 and B4 cover",
     },
     linux_aarch64: Proofs {
-        blocks: &[
-            Verdict::NotProven,
-            Verdict::Proven,
-            Verdict::Proven,
-            Verdict::Proven,
-        ],
-        memory: "the rest is tested, not proven",
+        blocks: &[Verdict::Proven; 4],
+        memory: "on every run the proofs of B1, B2, B3 and B4 cover",
     },
 };
 

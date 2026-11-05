@@ -547,15 +547,17 @@ async fn a_raw_read_fails_when_standard_input_arrives_in_pieces() {
     }
 }
 
-/// What each target's proof says of add's block B4, where standard output is closed. x86-64's
-/// prover proves it for every input in range within a minute. AArch64's reaches only part of the
-/// block's 400 input combinations in that minute and says "tested, not proven" (it needed "about
-/// 8 minutes", run 41912035484 on the ARM64 runner), the same difference of speed that
-/// todo.md's `amounts` showed: a finding, pinned here as it is, not a case left out. Both still
-/// catch an exit code that is not the spec's, by the test that closes standard output.
+/// What each target's proof says of add's block B4, where standard output is closed: proven for
+/// every input in range within a minute. AArch64's reached only part of the block's 400 input
+/// combinations in that minute and said "tested, not proven" (it needed "about 8 minutes", run
+/// 41912035484 on the ARM64 runner) until the prover's model of AArch64 read the overflow flag,
+/// `tbnz` on the top bit and `msub` as x86-64's reads them (the same gaps that `amounts` showed
+/// in todo.md); now it settles the block by its terms alone (400 input combinations, 1014 paths,
+/// run 41942392800). Both catch an exit code that is not the spec's, by the test that closes
+/// standard output.
 const B4_PROOF: PerTarget<&str> = PerTarget {
     linux_x86_64: "generated B4: proven for every input in range",
-    linux_aarch64: "generated B4: tested, not proven",
+    linux_aarch64: "generated B4: proven for every input in range",
 };
 
 /// add's spec promises code 3 when writing its output fails, and its B4 shows it with

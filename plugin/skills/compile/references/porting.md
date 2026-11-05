@@ -124,6 +124,6 @@ each item with its own hardware's means.
   and the CPU's CRC, carry-less multiply, AES and SHA instructions ([its
   reference](linux-aarch64.md)); its fast `wc` is proven for every length with a 64 KiB buffer,
   as x86-64's is. Each example and fixture has its twin on the other CPU, compiled from the very
-  same spec (`tests/aarch64_session.rs`'s twin test).
+  same spec (`every_program_has_its_twin_on_the_other_cpu`, `tests/every_program.rs`).
 - **macOS (ARM64, x86-64)** and **Windows (x86-64, ARM64)** need all six, the OS edge and the
   sandbox most of all, because they forbid the direct syscalls lengua's Linux programs use.
