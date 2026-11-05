@@ -127,6 +127,7 @@ jobs:
           GOLDEN_BASE: ${{ inputs.golden_base }}
           GOLDEN_BASE_RUN: ${{ inputs.golden_base_run }}
           BENCH_AGAINST: ${{ inputs.bench_against }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           # A push runs the suite, the weekly run the suite and the ignored tests, a dispatch what it asks.
           case "$EVENT" in
@@ -162,7 +163,9 @@ jobs:
             fi
             legs='[{"label":"head","ref":""}]'
             if [ -z "$GOLDEN_BASE_RUN" ]; then
-              legs=$(jq -c --arg r "$GOLDEN_BASE" '. + [{label: "base", ref: $r}]' <<< "$legs")
+              # actions/checkout takes a branch, a tag or a full commit hash, never a short one.
+              full=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GOLDEN_BASE" --jq .sha)
+              legs=$(jq -c --arg r "$full" '. + [{label: "base", ref: $r}]' <<< "$legs")
             fi
             matrix=$(jq -c --argjson legs "$legs" \
               '[.[] | select(.target == "linux-x86_64") as $t | $legs[] | $t + . + {mode: "golden", base: $t.target, qemu: false, depth: 0}]' <<< "$listed")
