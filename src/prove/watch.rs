@@ -223,8 +223,7 @@ fn stop(solvers: &mut Solvers, pid: u32) -> bool {
     killed
 }
 
-/// Kills the process with this number; whether it did. Windows has no way to from a number alone
-/// yet (round 4 of the roadmap), and there nothing reads the memory the watchdog watches either.
+/// Kills the process with this number; whether it did.
 #[cfg(unix)]
 fn kill(pid: u32) -> bool {
     let Ok(raw) = i32::try_from(pid) else {
@@ -233,10 +232,16 @@ fn kill(pid: u32) -> bool {
     nix::sys::signal::kill(nix::unistd::Pid::from_raw(raw), nix::sys::signal::SIGKILL).is_ok()
 }
 
-/// Kills the process with this number: not yet here.
+/// Kills the process with this number; whether it did. Windows has no signal to send by number, so
+/// `taskkill` ends it at once.
 #[cfg(not(unix))]
-fn kill(_pid: u32) -> bool {
-    false
+fn kill(pid: u32) -> bool {
+    std::process::Command::new("taskkill")
+        .args(["/F", "/PID", &pid.to_string()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 /// Stops the solver with this process id as the watchdog would, for tests.
@@ -289,6 +294,11 @@ mod tests {
     /// the address space, and a test can make a thread see a computer with no memory at all.
     #[test]
     fn a_pool_that_may_double_needs_room_for_it() {
+        // Only Linux's free memory is read so far (round 3 and 4 of the roadmap read the others').
+        if memory().is_none() {
+            crate::skiplog::note("this system's free memory isn't read yet (only Linux's is)");
+            return;
+        }
         assert!(is_short_for(u64::MAX));
         let pretence = NoMemoryForTest::pretend();
         assert!(is_low() && is_short_for(0));
