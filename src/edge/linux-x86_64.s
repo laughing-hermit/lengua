@@ -12,6 +12,7 @@
 .equ LENGUA_SYS_READ, 0
 .equ LENGUA_SYS_WRITE, 1
 .equ LENGUA_SYS_CLOSE, 3
+.equ LENGUA_SYS_FSTAT, 5
 .equ LENGUA_SYS_POLL, 7
 .equ LENGUA_SYS_LSEEK, 8
 .equ LENGUA_SYS_SHUTDOWN, 48
@@ -21,11 +22,17 @@
 .equ LENGUA_SYS_MKDIRAT, 258
 .equ LENGUA_SYS_UNLINKAT, 263
 .equ LENGUA_SYS_RENAMEAT, 264
+.equ LENGUA_SYS_GETDENTS64, 217
+.equ LENGUA_SYS_OPENAT, 257
 .equ LENGUA_SYS_ACCEPT4, 288
 .equ LENGUA_SYS_GETRANDOM, 318
 .equ LENGUA_AT_FDCWD, -100
 .equ LENGUA_AT_REMOVEDIR, 512
 .equ LENGUA_FOLDER_MODE, 493
+.equ LENGUA_FILE_MODE, 420
+.equ LENGUA_KIND_FILE, 0
+.equ LENGUA_KIND_FOLDER, 1
+.equ LENGUA_KIND_OTHER, 2
 .equ LENGUA_CHANNEL, 4352
 .equ LENGUA_LISTENER, 3
 .equ LENGUA_RANDOM_MOST, 256
@@ -415,3 +422,222 @@ os_poll:
     call lengua_error
     ret
 .size os_poll, . - os_poll
+
+# == os_open: lengua_error
+.section .rodata
+.balign 4
+.type lengua_open_flags, @object
+# open's flags for each mode: READ, WRITE, APPEND, NEW and FOLDER.
+lengua_open_flags:
+    .long 0, 0x241, 0x441, 0xc1, 0x10000
+.size lengua_open_flags, . - lengua_open_flags
+
+.text
+.type os_open, @function
+# In: rdi = the name, NUL-terminated, relative to the working folder; esi = the mode: 0 to read, 1
+# to write, which makes the file and empties it, 2 to write at its end, 3 to write a file that
+# is not there yet, 4 to list a folder.
+# Out: rax = a descriptor, or an error.
+os_open:
+    cmp esi, 4
+    ja .Llengua_open_invalid
+    push rdi
+    push rsi
+    push rdx
+    push r10
+    mov eax, esi
+    lea r11, [rip + lengua_open_flags]
+    mov edx, dword ptr [r11 + 4*rax]
+    mov rsi, rdi
+    mov edi, LENGUA_AT_FDCWD
+    mov r10d, LENGUA_FILE_MODE
+    mov eax, LENGUA_SYS_OPENAT
+    syscall
+    pop r10
+    pop rdx
+    pop rsi
+    pop rdi
+    test rax, rax
+    js .Llengua_open_failed
+    ret
+.Llengua_open_invalid:
+    mov rax, LENGUA_EINVAL
+    ret
+.Llengua_open_failed:
+    lea r11, [rip + os_open_errors]
+    call lengua_error
+    ret
+.size os_open, . - os_open
+
+# == os_info: lengua_error
+.text
+.type os_info, @function
+# In: edi = the descriptor, rsi = 16 bytes for the size and then the kind.
+# Out: rax = 0, or an error. The kind is 0 for a file, 1 for a folder and 2 for anything else,
+# and the size is 0 unless it is a file.
+os_info:
+    cmp edi, LENGUA_CHANNEL
+    je .Llengua_info_refused
+    push rsi
+    sub rsp, 144
+    mov rsi, rsp
+    mov eax, LENGUA_SYS_FSTAT
+    syscall
+    test rax, rax
+    js .Llengua_info_failed
+    mov eax, dword ptr [rsp + 24]
+    and eax, 0xf000
+    cmp eax, 0x8000
+    je .Llengua_info_file
+    mov ecx, LENGUA_KIND_OTHER
+    cmp eax, 0x4000
+    jne .Llengua_info_sizeless
+    mov ecx, LENGUA_KIND_FOLDER
+.Llengua_info_sizeless:
+    xor eax, eax
+    jmp .Llengua_info_store
+.Llengua_info_file:
+    xor ecx, ecx
+    mov rax, qword ptr [rsp + 48]
+.Llengua_info_store:
+    mov r11, qword ptr [rsp + 144]
+    mov qword ptr [r11], rax
+    mov qword ptr [r11 + 8], rcx
+    xor eax, eax
+    add rsp, 144
+    pop rsi
+    ret
+.Llengua_info_refused:
+    mov rax, LENGUA_EBADF
+    ret
+.Llengua_info_failed:
+    add rsp, 144
+    pop rsi
+    lea r11, [rip + os_info_errors]
+    call lengua_error
+    ret
+.size os_info, . - os_info
+
+# == os_list: lengua_error
+.section .bss
+.balign 8
+.type lengua_dirents, @object
+# What the kernel lists, before it is put in the program's buffer in the form every system gives.
+lengua_dirents:
+    .zero 4096
+.size lengua_dirents, . - lengua_dirents
+
+.text
+.type os_list, @function
+# In: edi = a folder opened by os_open with mode 4, rsi = the buffer, rdx = its size.
+# Out: rax = how many bytes of entries it put in the buffer, 0 at the end, or an error. An entry
+# is a 2-byte length, a multiple of 8 that starts the next, a byte for the kind (0 a file, 1 a
+# folder, 2 other) and a byte for the name's length, then the name and a NUL, padded with zeros;
+# `.` and `..` are left out, and the order is the system's.
+os_list:
+    cmp edi, LENGUA_CHANNEL
+    je .Llengua_list_refused
+    push rbx
+    push rsi
+    push rdx
+    push r8
+    push r9
+    push r10
+    mov r10, rsi
+    mov r9, rsi
+    lea rsi, [rip + lengua_dirents]
+    cmp rdx, 4096
+    jbe .Llengua_list_read
+    mov edx, 4096
+.Llengua_list_read:
+    mov eax, LENGUA_SYS_GETDENTS64
+    syscall
+    test rax, rax
+    js .Llengua_list_failed
+    jz .Llengua_list_done
+    lea r8, [rsi + rax]
+    mov rbx, rsi
+.Llengua_list_entry:  # bound: 171
+    cmp rbx, r8
+    jae .Llengua_list_batch
+    cmp byte ptr [rbx + 19], 46
+    jne .Llengua_list_keep
+    cmp byte ptr [rbx + 20], 0
+    je .Llengua_list_next
+    cmp byte ptr [rbx + 20], 46
+    jne .Llengua_list_keep
+    cmp byte ptr [rbx + 21], 0
+    je .Llengua_list_next
+.Llengua_list_keep:
+    xor ecx, ecx
+.Llengua_list_measure:  # bound: 255
+    cmp byte ptr [rbx + rcx + 19], 0
+    je .Llengua_list_measured
+    inc ecx
+    jmp .Llengua_list_measure
+.Llengua_list_measured:
+    movzx eax, byte ptr [rbx + 18]
+    cmp eax, 8
+    je .Llengua_list_file
+    cmp eax, 4
+    je .Llengua_list_folder
+    mov eax, LENGUA_KIND_OTHER
+    jmp .Llengua_list_kind
+.Llengua_list_file:
+    mov eax, LENGUA_KIND_FILE
+    jmp .Llengua_list_kind
+.Llengua_list_folder:
+    mov eax, LENGUA_KIND_FOLDER
+.Llengua_list_kind:
+    mov byte ptr [r9 + 2], al
+    mov byte ptr [r9 + 3], cl
+    xor r11d, r11d
+.Llengua_list_copy:  # bound: 256
+    movzx eax, byte ptr [rbx + r11 + 19]
+    mov byte ptr [r9 + r11 + 4], al
+    inc r11d
+    cmp r11d, ecx
+    jbe .Llengua_list_copy
+    lea eax, [rcx + 12]
+    and eax, -8
+    mov word ptr [r9], ax
+    add r11d, 4
+.Llengua_list_pad:  # bound: 8
+    cmp r11d, eax
+    jae .Llengua_list_padded
+    mov byte ptr [r9 + r11], 0
+    inc r11d
+    jmp .Llengua_list_pad
+.Llengua_list_padded:
+    add r9, rax
+.Llengua_list_next:
+    movzx eax, word ptr [rbx + 16]
+    add rbx, rax
+    jmp .Llengua_list_entry
+.Llengua_list_batch:
+    cmp r9, r10
+    je .Llengua_list_read
+.Llengua_list_done:
+    mov rax, r9
+    sub rax, r10
+    pop r10
+    pop r9
+    pop r8
+    pop rdx
+    pop rsi
+    pop rbx
+    ret
+.Llengua_list_refused:
+    mov rax, LENGUA_EBADF
+    ret
+.Llengua_list_failed:
+    pop r10
+    pop r9
+    pop r8
+    pop rdx
+    pop rsi
+    pop rbx
+    lea r11, [rip + os_list_errors]
+    call lengua_error
+    ret
+.size os_list, . - os_list

@@ -12,11 +12,14 @@
 .equ LENGUA_SYS_MKDIRAT, 34
 .equ LENGUA_SYS_UNLINKAT, 35
 .equ LENGUA_SYS_RENAMEAT, 38
+.equ LENGUA_SYS_OPENAT, 56
 .equ LENGUA_SYS_CLOSE, 57
+.equ LENGUA_SYS_GETDENTS64, 61
 .equ LENGUA_SYS_LSEEK, 62
 .equ LENGUA_SYS_READ, 63
 .equ LENGUA_SYS_WRITE, 64
 .equ LENGUA_SYS_PPOLL, 73
+.equ LENGUA_SYS_FSTAT, 80
 .equ LENGUA_SYS_EXIT_GROUP, 94
 .equ LENGUA_SYS_CLOCK_GETTIME, 113
 .equ LENGUA_SYS_CLOCK_NANOSLEEP, 115
@@ -26,6 +29,10 @@
 .equ LENGUA_AT_FDCWD, -100
 .equ LENGUA_AT_REMOVEDIR, 512
 .equ LENGUA_FOLDER_MODE, 493
+.equ LENGUA_FILE_MODE, 420
+.equ LENGUA_KIND_FILE, 0
+.equ LENGUA_KIND_FOLDER, 1
+.equ LENGUA_KIND_OTHER, 2
 .equ LENGUA_CHANNEL, 4352
 .equ LENGUA_LISTENER, 3
 .equ LENGUA_RANDOM_MOST, 256
@@ -430,7 +437,8 @@ os_poll:
     mov x17, #1000
     udiv x4, x16, x17
     msub x16, x4, x17, x16
-    mov x17, #1000000
+    mov x17, #0x4240
+    movk x17, #0xf, lsl #16
     mul x16, x16, x17
     stp x4, x16, [sp]
     mov x2, sp
@@ -458,3 +466,222 @@ os_poll:
     ldr x30, [sp], #16
     ret
 .size os_poll, . - os_poll
+
+// == os_open: lengua_error
+.section .rodata
+.balign 4
+.type lengua_open_flags, @object
+// open's flags for each mode: READ, WRITE, APPEND, NEW and FOLDER (O_DIRECTORY is 0x4000 here).
+lengua_open_flags:
+    .long 0, 0x241, 0x441, 0xc1, 0x4000
+.size lengua_open_flags, . - lengua_open_flags
+
+.text
+.type os_open, @function
+// In: x0 = the name, NUL-terminated, relative to the working folder; w1 = the mode: 0 to read, 1
+// to write, which makes the file and empties it, 2 to write at its end, 3 to write a file that
+// is not there yet, 4 to list a folder.
+// Out: x0 = a descriptor, or an error.
+os_open:
+    cmp w1, #4
+    b.hi .Llengua_open_invalid
+    mov w16, w1
+    adrp x17, lengua_open_flags
+    add x17, x17, :lo12:lengua_open_flags
+    ldr w16, [x17, x16, lsl #2]
+    mov x17, x0
+    stp x1, x2, [sp, #-16]!
+    str x3, [sp, #-16]!
+    mov x2, x16
+    mov x1, x17
+    mov x0, #LENGUA_AT_FDCWD
+    mov x3, #LENGUA_FILE_MODE
+    mov x8, #LENGUA_SYS_OPENAT
+    svc #0
+    ldr x3, [sp], #16
+    ldp x1, x2, [sp], #16
+    tbnz x0, #63, .Llengua_open_failed
+    ret
+.Llengua_open_invalid:
+    mov x0, #LENGUA_EINVAL
+    ret
+.Llengua_open_failed:
+    adrp x17, os_open_errors
+    add x17, x17, :lo12:os_open_errors
+    str x30, [sp, #-16]!
+    bl lengua_error
+    ldr x30, [sp], #16
+    ret
+.size os_open, . - os_open
+
+// == os_info: lengua_error
+.text
+.type os_info, @function
+// In: w0 = the descriptor, x1 = 16 bytes for the size and then the kind.
+// Out: x0 = 0, or an error. The kind is 0 for a file, 1 for a folder and 2 for anything else,
+// and the size is 0 unless it is a file.
+os_info:
+    mov w16, #LENGUA_CHANNEL
+    cmp w0, w16
+    b.eq .Llengua_info_refused
+    sub sp, sp, #144
+    str x1, [sp, #128]
+    mov x1, sp
+    mov x8, #LENGUA_SYS_FSTAT
+    svc #0
+    tbnz x0, #63, .Llengua_info_failed
+    ldr w16, [sp, #16]
+    and w16, w16, #0xf000
+    mov x17, #0
+    cmp w16, #0x8000
+    b.ne .Llengua_info_sizeless
+    ldr x17, [sp, #48]
+    mov x16, #LENGUA_KIND_FILE
+    b .Llengua_info_store
+.Llengua_info_sizeless:
+    cmp w16, #0x4000
+    mov x16, #LENGUA_KIND_FOLDER
+    mov x8, #LENGUA_KIND_OTHER
+    csel x16, x16, x8, eq
+.Llengua_info_store:
+    ldr x1, [sp, #128]
+    stp x17, x16, [x1]
+    mov x0, #0
+    add sp, sp, #144
+    ret
+.Llengua_info_refused:
+    mov x0, #LENGUA_EBADF
+    ret
+.Llengua_info_failed:
+    ldr x1, [sp, #128]
+    add sp, sp, #144
+    adrp x17, os_info_errors
+    add x17, x17, :lo12:os_info_errors
+    str x30, [sp, #-16]!
+    bl lengua_error
+    ldr x30, [sp], #16
+    ret
+.size os_info, . - os_info
+
+// == os_list: lengua_error
+.section .bss
+.balign 8
+.type lengua_dirents, @object
+// What the kernel lists, before it is put in the program's buffer in the form every system gives.
+lengua_dirents:
+    .zero 4096
+.size lengua_dirents, . - lengua_dirents
+
+.text
+.type os_list, @function
+// In: w0 = a folder opened by os_open with mode 4, x1 = the buffer, x2 = its size.
+// Out: x0 = how many bytes of entries it put in the buffer, 0 at the end, or an error. An entry
+// is a 2-byte length, a multiple of 8 that starts the next, a byte for the kind (0 a file, 1 a
+// folder, 2 other) and a byte for the name's length, then the name and a NUL, padded with zeros;
+// `.` and `..` are left out, and the order is the system's.
+os_list:
+    mov w16, #LENGUA_CHANNEL
+    cmp w0, w16
+    b.eq .Llengua_list_refused
+    stp x1, x2, [sp, #-16]!
+    stp x9, x10, [sp, #-16]!
+    stp x11, x12, [sp, #-16]!
+    stp x13, x14, [sp, #-16]!
+    mov x14, x0
+    mov x9, x1
+    mov x10, x1
+    mov x16, #4096
+    cmp x2, x16
+    csel x2, x2, x16, ls
+.Llengua_list_read:
+    mov x0, x14
+    adrp x1, lengua_dirents
+    add x1, x1, :lo12:lengua_dirents
+    mov x8, #LENGUA_SYS_GETDENTS64
+    svc #0
+    tbnz x0, #63, .Llengua_list_failed
+    cbz x0, .Llengua_list_done
+    add x12, x1, x0
+    mov x11, x1
+.Llengua_list_entry:  // bound: 171
+    cmp x11, x12
+    b.hs .Llengua_list_batch
+    ldrb w16, [x11, #19]
+    cmp w16, #46
+    b.ne .Llengua_list_keep
+    ldrb w16, [x11, #20]
+    cbz w16, .Llengua_list_next
+    cmp w16, #46
+    b.ne .Llengua_list_keep
+    ldrb w16, [x11, #21]
+    cbz w16, .Llengua_list_next
+.Llengua_list_keep:
+    mov x13, #0
+.Llengua_list_measure:  // bound: 255
+    add x16, x11, x13
+    ldrb w16, [x16, #19]
+    cbz w16, .Llengua_list_measured
+    add x13, x13, #1
+    b .Llengua_list_measure
+.Llengua_list_measured:
+    ldrb w16, [x11, #18]
+    mov w17, #LENGUA_KIND_OTHER
+    cmp w16, #8
+    mov w8, #LENGUA_KIND_FILE
+    csel w17, w8, w17, eq
+    cmp w16, #4
+    mov w8, #LENGUA_KIND_FOLDER
+    csel w17, w8, w17, eq
+    strb w17, [x10, #2]
+    strb w13, [x10, #3]
+    mov x16, #0
+.Llengua_list_copy:  // bound: 256
+    add x17, x11, x16
+    ldrb w17, [x17, #19]
+    add x8, x10, x16
+    strb w17, [x8, #4]
+    add x16, x16, #1
+    cmp x16, x13
+    b.ls .Llengua_list_copy
+    add x17, x13, #12
+    and x17, x17, #-8
+    strh w17, [x10]
+    add x16, x16, #4
+.Llengua_list_pad:  // bound: 8
+    cmp x16, x17
+    b.hs .Llengua_list_padded
+    add x8, x10, x16
+    strb wzr, [x8]
+    add x16, x16, #1
+    b .Llengua_list_pad
+.Llengua_list_padded:
+    add x10, x10, x17
+.Llengua_list_next:
+    ldrh w16, [x11, #16]
+    add x11, x11, x16
+    b .Llengua_list_entry
+.Llengua_list_batch:
+    cmp x10, x9
+    b.eq .Llengua_list_read
+.Llengua_list_done:
+    sub x0, x10, x9
+    ldp x13, x14, [sp], #16
+    ldp x11, x12, [sp], #16
+    ldp x9, x10, [sp], #16
+    ldp x1, x2, [sp], #16
+    ret
+.Llengua_list_refused:
+    mov x0, #LENGUA_EBADF
+    ret
+.Llengua_list_failed:
+    ldp x13, x14, [sp], #16
+    ldp x11, x12, [sp], #16
+    ldp x9, x10, [sp], #16
+    ldp x1, x2, [sp], #16
+    adrp x17, os_list_errors
+    add x17, x17, :lo12:os_list_errors
+    str x30, [sp, #-16]!
+    bl lengua_error
+    ldr x30, [sp], #16
+    ret
+.size os_list, . - os_list

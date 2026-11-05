@@ -13,7 +13,7 @@
 mod common;
 mod per_target;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -46,6 +46,8 @@ enum Arg {
     Data(&'static str),
     /// The address that many bytes into the scratch area.
     Scratch(u32),
+    /// What an earlier call kept in that word of the scratch area.
+    Kept(u32),
     /// `argv[k]`.
     Argv(u32),
     /// `envp[k]`.
@@ -65,7 +67,7 @@ enum Step {
     Set { offset: u32, bytes: u8, value: i64 },
 }
 
-use Arg::{Argv, Data, Envp, N, Scratch};
+use Arg::{Argv, Data, Envp, Kept, N, Scratch};
 use Step::{Call, Set};
 
 /// One case.
@@ -83,6 +85,9 @@ struct Case {
     arguments: &'static [&'static str],
     environment: &'static [(&'static str, &'static str)],
     files: &'static [(&'static str, &'static str)],
+    folders: &'static [&'static str],
+    /// The files the working folder holds afterwards, when the case says; none, when it doesn't.
+    after: &'static [(&'static str, &'static str)],
     /// The system calls its operations make, besides `write` and `exit_group`.
     calls: &'static [Syscall],
     /// What it prints, all of it, the report included.
@@ -102,6 +107,8 @@ impl Case {
             arguments: &[],
             environment: &[],
             files: &[],
+            folders: &[],
+            after: &[],
             calls: &[],
             stdout,
         }
@@ -159,6 +166,10 @@ fn x86_program(case: &Case) -> String {
                         }
                         Scratch(offset) => {
                             let _ = writeln!(text, "    lea {register}, [rsp + {offset}]");
+                        }
+                        Kept(word) => {
+                            let _ =
+                                writeln!(text, "    mov {register}, qword ptr [rsp + {}]", 8 * word);
                         }
                         Argv(k) | Envp(k) => {
                             let at = if matches!(arg, Argv(_)) { ARGV_AT } else { ENVP_AT };
@@ -223,6 +234,9 @@ fn a64_program(case: &Case) -> String {
                         }
                         Scratch(offset) => {
                             let _ = writeln!(text, "    add x{number}, sp, #{offset}");
+                        }
+                        Kept(word) => {
+                            let _ = writeln!(text, "    ldr x{number}, [sp, #{}]", 8 * word);
                         }
                         Argv(k) | Envp(k) => {
                             let at = if matches!(arg, Argv(_)) { ARGV_AT } else { ENVP_AT };
@@ -609,6 +623,261 @@ fn cases() -> Vec<Case> {
                 .concat(),
             )
         },
+        // A file read, its size and kind, a seek, a descriptor closed and used again, a name
+        // that isn't there (ENOENT) and a mode that is none (EINVAL). The descriptor itself
+        // is kept in a word the report leaves out.
+        Case {
+            data: &[("in", b"in.txt\0"), ("none", b"none\0")],
+            files: &[("in.txt", "hello")],
+            calls: &[
+                Syscall::Openat,
+                Syscall::Read,
+                Syscall::Close,
+                Syscall::Lseek,
+                Syscall::Fstat,
+            ],
+            ..Case::new(
+                "a_file_read",
+                &[
+                    Call {
+                        op: "os_open",
+                        args: &[Data("in"), N(0)],
+                        keep: Some(30),
+                    },
+                    Call {
+                        op: "os_read",
+                        args: &[Kept(30), Scratch(128), N(16)],
+                        keep: Some(0),
+                    },
+                    Call {
+                        op: "os_info",
+                        args: &[Kept(30), Scratch(72)],
+                        keep: Some(1),
+                    },
+                    Call {
+                        op: "os_seek",
+                        args: &[Kept(30), N(1), N(0)],
+                        keep: Some(2),
+                    },
+                    Call {
+                        op: "os_read",
+                        args: &[Kept(30), Scratch(144), N(16)],
+                        keep: Some(3),
+                    },
+                    Call {
+                        op: "os_close",
+                        args: &[Kept(30)],
+                        keep: Some(4),
+                    },
+                    Call {
+                        op: "os_read",
+                        args: &[Kept(30), Scratch(144), N(16)],
+                        keep: Some(5),
+                    },
+                    Call {
+                        op: "os_open",
+                        args: &[Data("none"), N(0)],
+                        keep: Some(6),
+                    },
+                    Call {
+                        op: "os_open",
+                        args: &[Data("in"), N(9)],
+                        keep: Some(7),
+                    },
+                ],
+                88,
+                image(88, &[5, 0, 1, 4, 0, -9, -2, -22, 0, 5, 0], &[]),
+            )
+        },
+        // The ways to write a file: made and emptied, appended to, and made only if it is not
+        // there (EEXIST when it is). The folder holds what they wrote afterwards.
+        Case {
+            data: &[("out", b"out.txt\0"), ("new", b"new.txt\0"), ("greeting", b"hello\n")],
+            after: &[("out.txt", "hello\nhello\n"), ("new.txt", "hel")],
+            calls: &[Syscall::Openat, Syscall::Close],
+            ..Case::new(
+                "files_written",
+                &[
+                    Call {
+                        op: "os_open",
+                        args: &[Data("out"), N(1)],
+                        keep: Some(30),
+                    },
+                    Call {
+                        op: "os_write",
+                        args: &[Kept(30), Data("greeting"), N(6)],
+                        keep: Some(0),
+                    },
+                    Call {
+                        op: "os_close",
+                        args: &[Kept(30)],
+                        keep: Some(1),
+                    },
+                    Call {
+                        op: "os_open",
+                        args: &[Data("out"), N(2)],
+                        keep: Some(30),
+                    },
+                    Call {
+                        op: "os_write",
+                        args: &[Kept(30), Data("greeting"), N(6)],
+                        keep: Some(2),
+                    },
+                    Call {
+                        op: "os_close",
+                        args: &[Kept(30)],
+                        keep: Some(3),
+                    },
+                    Call {
+                        op: "os_open",
+                        args: &[Data("out"), N(3)],
+                        keep: Some(4),
+                    },
+                    Call {
+                        op: "os_open",
+                        args: &[Data("new"), N(3)],
+                        keep: Some(30),
+                    },
+                    Call {
+                        op: "os_write",
+                        args: &[Kept(30), Data("greeting"), N(3)],
+                        keep: Some(5),
+                    },
+                    Call {
+                        op: "os_close",
+                        args: &[Kept(30)],
+                        keep: Some(6),
+                    },
+                ],
+                56,
+                image(56, &[6, 0, 6, 0, -17, 3, 0], &[]),
+            )
+        },
+        // Listing folders: one entry of a file, one of a folder, a folder with nothing in it
+        // (`.` and `..` are left out, so the first read has nothing and the next is the end), a
+        // file that is no folder (ENOTDIR), a descriptor that isn't open, and the kind and size of
+        // a folder, a file and a pipe.
+        Case {
+            data: &[
+                ("one", b"one\0"),
+                ("two", b"two\0"),
+                ("empty", b"empty\0"),
+                ("file", b"one/only.txt\0"),
+            ],
+            files: &[("one/only.txt", "abcd")],
+            folders: &["two/s", "empty"],
+            calls: &[
+                Syscall::Openat,
+                Syscall::Close,
+                Syscall::Getdents64,
+                Syscall::Fstat,
+            ],
+            ..Case::new(
+                "folders_listed",
+                &[
+                    Call {
+                        op: "os_open",
+                        args: &[Data("one"), N(4)],
+                        keep: Some(30),
+                    },
+                    Call {
+                        op: "os_list",
+                        args: &[Kept(30), Scratch(256), N(128)],
+                        keep: Some(0),
+                    },
+                    Call {
+                        op: "os_list",
+                        args: &[Kept(30), Scratch(384), N(128)],
+                        keep: Some(1),
+                    },
+                    Call {
+                        op: "os_info",
+                        args: &[Kept(30), Scratch(64)],
+                        keep: None,
+                    },
+                    Call {
+                        op: "os_close",
+                        args: &[Kept(30)],
+                        keep: None,
+                    },
+                    Call {
+                        op: "os_open",
+                        args: &[Data("two"), N(4)],
+                        keep: Some(30),
+                    },
+                    Call {
+                        op: "os_list",
+                        args: &[Kept(30), Scratch(416), N(64)],
+                        keep: Some(2),
+                    },
+                    Call {
+                        op: "os_list",
+                        args: &[Kept(30), Scratch(440), N(32)],
+                        keep: Some(3),
+                    },
+                    Call {
+                        op: "os_close",
+                        args: &[Kept(30)],
+                        keep: None,
+                    },
+                    Call {
+                        op: "os_open",
+                        args: &[Data("empty"), N(4)],
+                        keep: Some(30),
+                    },
+                    Call {
+                        op: "os_list",
+                        args: &[Kept(30), Scratch(256), N(128)],
+                        keep: Some(4),
+                    },
+                    Call {
+                        op: "os_close",
+                        args: &[Kept(30)],
+                        keep: None,
+                    },
+                    Call {
+                        op: "os_open",
+                        args: &[Data("file"), N(0)],
+                        keep: Some(30),
+                    },
+                    Call {
+                        op: "os_list",
+                        args: &[Kept(30), Scratch(256), N(128)],
+                        keep: Some(5),
+                    },
+                    Call {
+                        op: "os_info",
+                        args: &[Kept(30), Scratch(80)],
+                        keep: None,
+                    },
+                    Call {
+                        op: "os_close",
+                        args: &[Kept(30)],
+                        keep: None,
+                    },
+                    Call {
+                        op: "os_list",
+                        args: &[N(99), Scratch(256), N(128)],
+                        keep: Some(6),
+                    },
+                    Call {
+                        op: "os_info",
+                        args: &[N(0), Scratch(96)],
+                        keep: None,
+                    },
+                ],
+                488,
+                image(
+                    488,
+                    // The results, then the kind and size of the folder, the file and the pipe.
+                    &[16, 0, 8, 0, 0, -20, -9, 0, 0, 1, 4, 0, 0, 2],
+                    &[
+                        (256, &[16, 0, 0, 8, b'o', b'n', b'l', b'y', b'.', b't', b'x', b't', 0, 0, 0, 0]),
+                        (416, &[8, 0, 1, 1, b's', 0, 0, 0]),
+                    ],
+                ),
+            )
+        },
     ]
 }
 
@@ -643,10 +912,13 @@ async fn every_operation_does_what_it_promises() {
                 .iter()
                 .map(|(name, contents)| ((*name).to_owned(), (*contents).to_owned()))
                 .collect();
+            let folders: BTreeSet<String> =
+                case.folders.iter().map(|name| (*name).to_owned()).collect();
             let job = Job {
                 emulated: how == Way::Emulated,
                 env: &environment,
                 files: &files,
+                folders: &folders,
                 ..Job::new(&executable, &arguments, case.stdin, &allowed)
             };
             let ran = run(launcher(), job, Limits::default())
@@ -655,6 +927,15 @@ async fn every_operation_does_what_it_promises() {
             let what = format!("{} on {}", case.name, target.name());
             assert_eq!(ran.end, End::Exited(i32::try_from(case.exit).unwrap_or(-1)), "{what}");
             assert_eq!(ran.stdout, case.stdout, "{what}");
+            if !case.after.is_empty() {
+                let found = ran.files.as_ref().expect("the files it left");
+                let wanted: BTreeMap<String, Vec<u8>> = case
+                    .after
+                    .iter()
+                    .map(|(name, contents)| ((*name).to_owned(), contents.as_bytes().to_vec()))
+                    .collect();
+                assert_eq!(*found, wanted, "{what}");
+            }
         }
     }
 }
