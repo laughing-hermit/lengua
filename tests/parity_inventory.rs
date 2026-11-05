@@ -34,16 +34,7 @@ struct Debt {
 /// Every test file that is for one target today, which is the debt: what the suite still tests
 /// on one target only. Paying one (a `PerTarget` table that both runners run) means deleting its
 /// entry, and the ratchet fails until it is gone.
-const DEBT: &[Debt] = &[Debt {
-    file: "tests/aarch64_session.rs",
-    reason: "ARM64's by-hand port tool: `check_one_aarch64_folder` checks the folders \
-                 LENGUA_CHECK_FOLDER names, natively on an ARM64 computer and through QEMU's \
-                 user mode on an x86-64 one; every case of the server on AArch64 code is written \
-                 once, with a cell for each target, in the other files",
-    missing: "x86-64's tool, `check_one_folder` in tests/check_folder.rs, checks a folder as \
-                  this computer's own target and has no emulator path to check another \
-                  target's folder from here",
-}];
+const DEBT: &[Debt] = &[];
 
 /// The names of a target in a file's name, besides the CPUs and OSes of the targets lengua has.
 const ALIASES: &[&str] = &[

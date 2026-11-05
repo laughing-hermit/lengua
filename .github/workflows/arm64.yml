@@ -30,7 +30,7 @@ on:
         type: string
         default: ""
       check_folder:
-        description: "A program folder for the ignored check_one_aarch64_folder test (LENGUA_CHECK_FOLDER)"
+        description: "A program folder for the ignored check_one_folder test (LENGUA_CHECK_FOLDER)"
         type: string
         default: ""
       stall_seconds:
