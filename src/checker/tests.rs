@@ -88,101 +88,6 @@ fn assert_violation(report: &Report, rule: Rule, line: usize, needle: &str) {
 }
 
 #[tokio::test]
-async fn the_template_passes_every_rule() {
-    let report = check(TEMPLATE).await;
-    let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
-    assert!(report.passed(), "{all:#?}");
-    let facts = report.facts.expect("the rules ran");
-    assert_eq!(facts.functions, 4);
-    assert_eq!(facts.assertions, 11);
-    assert!(facts.max_stack_bytes >= 48, "{facts:?}");
-    assert!(report.unsafe_blocks.is_empty());
-}
-
-#[tokio::test]
-async fn layout_hazards_are_dialect_violations() {
-    let line = line_of(TEMPLATE, "    xor r9d, r9d");
-    for (new, needle) in [
-        (
-            "    xor r9d, r9d; xor eax, eax\n",
-            "`;` puts several statements",
-        ),
-        ("    xor r9d, r9d /* clear */\n", "`/* */` comments"),
-        ("    rep\n", "is a prefix"),
-        ("    fld1\n", "`fld1` isn't in dialect 4"),
-        ("    mov rax, offset usage_msg\n", "offset"),
-        ("    mov rax, [usage_msg]\n", "address data relative to rip"),
-    ] {
-        let report = check(&with("    xor r9d, r9d\n", new)).await;
-        assert_violation(&report, Rule::Dialect, line, needle);
-    }
-    let label = line_of(TEMPLATE, ".Lparse_digits:");
-    let report = check(&with(
-        ".Lparse_digits:\n",
-        ".Lparse_digits: cmp byte ptr [rdi], 0\n",
-    ))
-    .await;
-    assert_violation(
-        &report,
-        Rule::Dialect,
-        label,
-        "a label and an instruction share a line",
-    );
-}
-
-#[tokio::test]
-async fn constants_must_come_first_and_stay_numbers() {
-    let late = TEMPLATE.replacen(".equ MAX_WRITES, 64\n", "", 1).replacen(
-        ".section .bss\n",
-        ".section .bss\n.equ MAX_WRITES, 64\n",
-        1,
-    );
-    let report = check(&late).await;
-    assert_violation(
-        &report,
-        Rule::Dialect,
-        line_of(&late, ".equ MAX_WRITES, 64"),
-        "below the header block",
-    );
-    let report = check(&with(
-        ".equ USAGE_MSG_LEN, 18",
-        ".equ USAGE_MSG_LEN, . - usage_msg",
-    ))
-    .await;
-    assert_violation(
-        &report,
-        Rule::Constants,
-        line_of(TEMPLATE, ".equ USAGE_MSG_LEN"),
-        "uses an address",
-    );
-    let report = check(&with(
-        ".equ NEWLINE, 10\n",
-        ".equ NEWLINE, 10\n.equ NEWLINE, 13\n",
-    ))
-    .await;
-    assert_violation(
-        &report,
-        Rule::Constants,
-        line_of(TEMPLATE, ".equ NEWLINE, 10") + 1,
-        "defined twice",
-    );
-}
-
-#[tokio::test]
-async fn x87_breaks_the_line_to_instruction_match() {
-    let line = line_of(TEMPLATE, "    xor r9d, r9d");
-    let report = check(&with("    xor r9d, r9d\n", "    fstsw ax\n")).await;
-    assert_violation(&report, Rule::Dialect, line, "don't match line for line");
-}
-
-#[tokio::test]
-async fn instructions_outside_dialect_1_are_rejected() {
-    let line = line_of(TEMPLATE, "    xor r9d, r9d");
-    let report = check(&with("    xor r9d, r9d\n", "    leave\n")).await;
-    assert_violation(&report, Rule::Dialect, line, "`leave` isn't in dialect 4");
-}
-
-#[tokio::test]
 async fn bmi2_follows_the_cpu() {
     let line = line_of(TEMPLATE, "    xor r9d, r9d");
     let text = with("    xor r9d, r9d\n", "    shlx r9, r9, rcx\n");
@@ -197,396 +102,154 @@ async fn bmi2_follows_the_cpu() {
     assert_violation(&report, Rule::Dialect, line, "needs BMI2");
 }
 
+/// A tampering with the parsed main.s of a target, after the machine code was built from the real
+/// one: the first line that starts with `line`, what is changed in its parsed form, and what the
+/// check then says of the line.
+struct Tamper {
+    line: &'static str,
+    change: fn(&mut source::Instruction),
+    needle: &'static str,
+}
+
+/// Each target's tampering with `MAX_WRITES`, the number a loop counter starts from: main.s is
+/// made to say 63 where the machine code says 64. x86-64 compares the operands of the parsed line,
+/// AArch64 the instruction its text reads as.
+const TAMPERS: PerTarget<Tamper> = PerTarget {
+    linux_x86_64: Tamper {
+        line: "    mov r8, MAX_WRITES",
+        change: |instruction| {
+            instruction.operands[1] = source::Operand::Immediate {
+                value: 63,
+                name: None,
+            };
+        },
+        needle: "is 63 as written but 64 in the machine code",
+    },
+    linux_aarch64: Tamper {
+        line: "    mov x10, #MAX_WRITES",
+        change: |instruction| instruction.text = String::from("mov x10, #63"),
+        needle: "in the machine code: as written it's",
+    },
+};
+
 #[tokio::test]
 async fn operands_must_mean_what_the_machine_does() {
-    let (mut source, _) = check_layout(TEMPLATE);
-    let line = line_of(TEMPLATE, "    mov r8, MAX_WRITES");
-    for function in &mut source.functions {
-        for item in &mut function.items {
-            if let source::Item::Instruction(instruction) = item
-                && instruction.line == line
-            {
-                instruction.operands[1] = source::Operand::Immediate {
-                    value: 63,
-                    name: None,
-                };
+    for (target, tamper) in TAMPERS.cells() {
+        let program = *TEMPLATES.get(target);
+        let (mut source, _) = check_layout(program);
+        let line = line_of(program, tamper.line);
+        for function in &mut source.functions {
+            for item in &mut function.items {
+                if let source::Item::Instruction(instruction) = item
+                    && instruction.line == line
+                {
+                    (tamper.change)(instruction);
+                }
             }
         }
+        let folder = tempfile::tempdir().expect("temporary folder");
+        let main = folder.path().join("main.s");
+        std::fs::write(&main, program).expect("write main.s");
+        let toolchain = Toolchain::discover().await.expect("toolchain");
+        toolchain
+            .assemble(target, &main, &folder.path().join("main.o"))
+            .await
+            .expect("assemble");
+        toolchain
+            .link(
+                target,
+                &folder.path().join("main.o"),
+                &folder.path().join("main"),
+            )
+            .await
+            .expect("link");
+        let bytes = std::fs::read(folder.path().join("main")).expect("read");
+        let report = check_program(
+            &source,
+            &bytes,
+            Context {
+                syscalls: &SYSCALLS,
+                threads: None,
+                features: CpuFeatures::all(),
+                profile: target,
+            },
+        );
+        assert_violation(&report, Rule::Dialect, line, tamper.needle);
     }
-    let folder = tempfile::tempdir().expect("temporary folder");
-    let main = folder.path().join("main.s");
-    std::fs::write(&main, TEMPLATE).expect("write main.s");
-    let toolchain = Toolchain::discover().await.expect("toolchain");
-    toolchain
-        .assemble(Profile::LinuxX86_64, &main, &folder.path().join("main.o"))
-        .await
-        .expect("assemble");
-    toolchain
-        .link(
-            Profile::LinuxX86_64,
-            &folder.path().join("main.o"),
-            &folder.path().join("main"),
-        )
-        .await
-        .expect("link");
-    let bytes = std::fs::read(folder.path().join("main")).expect("read");
-    let report = check_program(
-        &source,
-        &bytes,
-        Context {
-            syscalls: &SYSCALLS,
-            threads: None,
-            features: CpuFeatures::all(),
-            profile: Profile::LinuxX86_64,
-        },
-    );
-    assert_violation(
-        &report,
-        Rule::Dialect,
-        line,
-        "is 63 as written but 64 in the machine code",
-    );
 }
 
 /// A number that doesn't fit its instruction's field is refused: the assembler would keep only
 /// its low bits, so main.s wouldn't say what runs.
+const NUMBERS: Fixtures = &[
+    (
+        "a number wider than a 32-bit field",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[("    mov edx, USAGE_MSG_LEN\n", "    mov edx, 4294967314\n")],
+                finds: &[(
+                    Rule::Dialect,
+                    At::Line("    mov edx, 4294967314"),
+                    "which doesn't fit in its 32 bits",
+                )],
+            },
+            linux_aarch64: Plan::NotApplicable(
+                "an AArch64 instruction word has fixed fields (12-bit add numbers, 16-bit \
+                 pieces of a move, bitmask numbers) and LLVM refuses a number that none holds \
+                 instead of keeping its low bits, so no program assembles with a number cut short",
+            ),
+        },
+    ),
+    (
+        "a number wider than an 8-bit field",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[(
+                    "    cmp byte ptr [rdi], '-'\n",
+                    "    cmp byte ptr [rdi], 301\n",
+                )],
+                finds: &[(
+                    Rule::Dialect,
+                    At::Line("    cmp byte ptr [rdi], 301"),
+                    "which doesn't fit in its 8 bits",
+                )],
+            },
+            linux_aarch64: Plan::NotApplicable(
+                "an AArch64 compare takes a 12-bit number or a register, never a byte-sized \
+                 field that the assembler could cut a wider number to: LLVM refuses the number",
+            ),
+        },
+    ),
+    (
+        "the largest number a field holds, read as unsigned",
+        PerTarget {
+            linux_x86_64: Plan::Quiet {
+                edits: &[("    mov edx, USAGE_MSG_LEN\n", "    mov edx, 4294967295\n")],
+                word: "doesn't fit",
+            },
+            linux_aarch64: Plan::Quiet {
+                edits: &[("    mov x2, #USAGE_MSG_LEN\n", "    mov x2, #65535\n")],
+                word: "doesn't fit",
+            },
+        },
+    ),
+    (
+        "minus one, read as signed",
+        PerTarget {
+            linux_x86_64: Plan::Quiet {
+                edits: &[("    mov edx, USAGE_MSG_LEN\n", "    mov edx, -1\n")],
+                word: "doesn't fit",
+            },
+            linux_aarch64: Plan::Quiet {
+                edits: &[("    mov x2, #USAGE_MSG_LEN\n", "    mov x2, #-1\n")],
+                word: "doesn't fit",
+            },
+        },
+    ),
+];
+
 #[tokio::test]
 async fn numbers_must_fit_their_field() {
-    for (old, new, bits) in [
-        (
-            "    mov edx, USAGE_MSG_LEN\n",
-            "    mov edx, 4294967314\n",
-            32,
-        ),
-        (
-            "    cmp byte ptr [rdi], '-'\n",
-            "    cmp byte ptr [rdi], 301\n",
-            8,
-        ),
-    ] {
-        let text = with(old, new);
-        let report = check(&text).await;
-        assert_violation(
-            &report,
-            Rule::Dialect,
-            line_of(&text, new),
-            &format!("which doesn't fit in its {bits} bits"),
-        );
-    }
-    // A number that fits, read signed or unsigned, is as written.
-    for (old, new) in [
-        ("    mov edx, USAGE_MSG_LEN\n", "    mov edx, 4294967295\n"),
-        ("    mov edx, USAGE_MSG_LEN\n", "    mov edx, -1\n"),
-    ] {
-        let text = with(old, new);
-        let report = check(&text).await;
-        assert!(
-            !report
-                .violations
-                .iter()
-                .any(|violation| violation.to_string().contains("doesn't fit")),
-            "{new:?}: {:#?}",
-            report.violations
-        );
-    }
-}
-
-#[tokio::test]
-async fn the_stack_is_tracked_exactly() {
-    let line = line_of(TEMPLATE, "    test rsi, rsi");
-    let report = check(&with(
-        "    test rsi, rsi\n",
-        "    mov qword ptr [rsp - 8], rax\n    test rsi, rsi\n",
-    ))
-    .await;
-    assert_violation(&report, Rule::Resources, line, "uses memory below rsp");
-
-    let start = line_of(TEMPLATE, "    mov rax, qword ptr [rsp]");
-    let report = check(&with(
-        "    mov rax, qword ptr [rsp]\n",
-        "    and rsp, -16\n    mov rax, qword ptr [rsp]\n",
-    ))
-    .await;
-    assert_violation(&report, Rule::Resources, start, "changes rsp");
-
-    // A call in _start is aligned with nothing pushed; one push misaligns it.
-    let call = line_of(TEMPLATE, "    call parse_i64");
-    let report = check(&with(
-        "    call parse_i64\n",
-        "    push rax\n    call parse_i64\n    pop rcx\n",
-    ))
-    .await;
-    assert_violation(&report, Rule::Functions, call + 1, "isn't 16-byte aligned");
-
-    // A normal function enters 8 bytes deep, so write_i64 needs its sub rsp, 8.
-    let text = with("    sub rsp, 8\n", "").replacen("    add rsp, 8\n", "", 1);
-    let report = check(&text).await;
-    let call = line_of(&text, "    mov edi, STDOUT\n    call write_all") + 1;
-    assert_violation(&report, Rule::Functions, call, "isn't 16-byte aligned");
-}
-
-#[tokio::test]
-async fn loops_must_be_counted() {
-    // A counter in rcx doesn't survive the syscall in the loop.
-    let text = with("    mov r8, MAX_WRITES\n", "    mov rcx, MAX_WRITES\n").replacen(
-        "    dec r8\n    jnz .Lwrite_all_loop\n",
-        "    dec rcx\n    jnz .Lwrite_all_loop\n",
-        1,
-    );
-    let report = check(&text).await;
-    assert_violation(
-        &report,
-        Rule::Loops,
-        line_of(
-            &text,
-            "    syscall\n    test rax, rax\n    js .Lwrite_all_return",
-        ),
-        "changes the loop counter rcx",
-    );
-
-    // Jumping into the middle of a loop.
-    let text = with(
-        "    mov r8, MAX_WRITES\n",
-        "    jz .Lwrite_all_retry\n    mov r8, MAX_WRITES\n",
-    )
-    .replacen(
-        "    cmp rax, rdx\n",
-        ".Lwrite_all_retry:\n    cmp rax, rdx\n",
-        1,
-    );
-    let report = check(&text).await;
-    assert_violation(
-        &report,
-        Rule::Loops,
-        line_of(&text, "    jz .Lwrite_all_retry"),
-        "jumps into the middle of a loop",
-    );
-
-    // A bound smaller than the counter.
-    let text = with(
-        ".Lwrite_all_loop:  # bound: 64",
-        ".Lwrite_all_loop:  # bound: 8",
-    );
-    let report = check(&text).await;
-    assert_violation(
-        &report,
-        Rule::Loops,
-        line_of(&text, "    mov eax, SYS_WRITE"),
-        "outside 1 to the bound 8",
-    );
-}
-
-#[tokio::test]
-async fn assertions_have_one_place_each() {
-    // Two jumps share assertion 9.
-    let text = with(
-        "    jz .Lwrite_all_assert_empty\n",
-        "    jz .Lwrite_all_assert_null\n",
-    );
-    let report = check(&text).await;
-    assert_violation(
-        &report,
-        Rule::Assertions,
-        line_of(&text, "    mov edi, 9"),
-        "reached from 2 places",
-    );
-    // Assertion 10 now has no way in, so it can never run.
-    assert_violation(
-        &report,
-        Rule::ControlFlow,
-        line_of(&text, "    mov edi, 10"),
-        "can never run",
-    );
-
-    let text = with("    mov edi, 11\n", "    mov edi, 9\n");
-    let report = check(&text).await;
-    assert_violation(
-        &report,
-        Rule::Assertions,
-        line_of(
-            &text,
-            "    mov edi, 9\n    call assert_fail\n.size write_all",
-        ),
-        "used twice",
-    );
-
-    let text = with("    add dl, 48\n", "    add dl, 49\n");
-    let report = check(&text).await;
-    assert_violation(
-        &report,
-        Rule::Assertions,
-        line_of(&text, "assert_fail:"),
-        "assert_fail differs from the template",
-    );
-}
-
-#[tokio::test]
-async fn comparison_chains_need_a_default() {
-    let text = with(
-        "    mov rdi, rdx\n",
-        "    cmp rdx, 1\n    je .Lstart_one\n    cmp rdx, 2\n    je .Lstart_one\n.Lstart_one:\n    mov rdi, rdx\n",
-    );
-    let report = check(&text).await;
-    assert_violation(
-        &report,
-        Rule::ControlFlow,
-        line_of(&text, "    cmp rdx, 1"),
-        "has no default",
-    );
-}
-
-#[tokio::test]
-async fn results_are_checked_right_away() {
-    let text = with(
-        "    call parse_i64\n    test rax, rax\n",
-        "    call parse_i64\n.Lstart_parsed:\n    test rax, rax\n",
-    );
-    let report = check(&text).await;
-    assert_violation(
-        &report,
-        Rule::Results,
-        line_of(&text, "    call parse_i64"),
-        "a label comes before the check",
-    );
-
-    let text = with(
-        "    syscall\n    test rax, rax\n    js .Lwrite_all_return\n",
-        "    syscall\n    mov r9, rax\n    test rax, rax\n    js .Lwrite_all_return\n",
-    );
-    let report = check(&text).await;
-    assert_violation(
-        &report,
-        Rule::Results,
-        line_of(&text, "    syscall\n    mov r9, rax"),
-        "rax is used before it's checked",
-    );
-}
-
-#[tokio::test]
-async fn system_calls_and_exit_codes_are_named_and_allowed() {
-    let text = with("    mov edi, EXIT_OK\n", "    mov edi, 0\n");
-    let report = check(&text).await;
-    assert_violation(
-        &report,
-        Rule::Constants,
-        line_of(&text, "    mov edi, 0\n"),
-        "without a named constant",
-    );
-
-    let text = with("    mov eax, SYS_EXIT\n", "    mov eax, 60\n");
-    let report = check(&text).await;
-    assert_violation(
-        &report,
-        Rule::Constants,
-        line_of(&text, "    mov eax, 60\n"),
-        "isn't named",
-    );
-
-    let text = with(
-        ".equ SYS_EXIT, 60\n",
-        ".equ SYS_EXIT, 60\n.equ SYS_READ, 0\n",
-    )
-    .replacen("    mov eax, SYS_WRITE\n", "    mov eax, SYS_READ\n", 1);
-    let report = check(&text).await;
-    assert_violation(
-        &report,
-        Rule::Resources,
-        line_of(&text, "    mov eax, SYS_READ") + 1,
-        "isn't one the spec allows",
-    );
-}
-
-#[tokio::test]
-async fn data_stays_in_scope() {
-    let text = with(".equ USAGE_MSG_LEN, 18", ".equ USAGE_MSG_LEN, 17");
-    let report = check(&text).await;
-    assert_violation(
-        &report,
-        Rule::Constants,
-        line_of(&text, ".equ USAGE_MSG_LEN"),
-        "usage_msg is 18 bytes",
-    );
-
-    let text = with(
-        "    test rsi, rsi\n",
-        "    mov byte ptr [rip + usage_msg], 0\n    test rsi, rsi\n",
-    );
-    let report = check(&text).await;
-    assert_violation(
-        &report,
-        Rule::Scope,
-        line_of(&text, "    mov byte ptr [rip + usage_msg], 0"),
-        "writes to read-only usage_msg",
-    );
-
-    let text = with(
-        "    test rsi, rsi\n",
-        "    lea r9, [rip + out_buf]\n    test rsi, rsi\n",
-    );
-    let report = check(&text).await;
-    assert_violation(
-        &report,
-        Rule::Scope,
-        line_of(&text, "out_buf:"),
-        "out_buf is used by write_all, write_i64",
-    );
-}
-
-#[tokio::test]
-async fn indexed_accesses_are_bounds_checked() {
-    let text = with("    cmp rcx, MAX_CHARS\n", "    cmp rdx, MAX_CHARS\n");
-    let report = check(&text).await;
-    assert_violation(
-        &report,
-        Rule::Indirection,
-        line_of(&text, "    movzx edx, byte ptr [rdi + rcx]"),
-        "isn't bounds-checked",
-    );
-
-    let marked = with(
-        "    movzx edx, byte ptr [rdi + rcx]\n",
-        "    # unsafe: the loop counter keeps rcx below MAX_CHARS\n    movzx edx, byte ptr [rdi + rcx]\n    # end unsafe\n",
-    )
-    .replacen("    cmp rcx, MAX_CHARS\n", "    cmp rdx, MAX_CHARS\n", 1);
-    let report = check(&marked).await;
-    let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
-    assert!(report.passed(), "{all:#?}");
-    assert_eq!(report.unsafe_blocks.len(), 1);
-}
-
-#[tokio::test]
-async fn bounds_checks_compare_without_sign_and_fit_the_buffer() {
-    let text = with(
-        "    jae .Lparse_assert_index\n",
-        "    jge .Lparse_assert_index\n",
-    );
-    let report = check(&text).await;
-    assert_violation(
-        &report,
-        Rule::Indirection,
-        line_of(&text, "    jge .Lparse_assert_index"),
-        "jumps with jge",
-    );
-
-    let text = with(
-        "    cmp ecx, OUT_BUF_LEN\n    jae .Lwrite_i64_assert_digit_index\n",
-        "    cmp ecx, OUT_BUF_LEN + 1\n    jae .Lwrite_i64_assert_digit_index\n",
-    );
-    let report = check(&text).await;
-    assert_violation(
-        &report,
-        Rule::Indirection,
-        line_of(&text, "    cmp ecx, OUT_BUF_LEN + 1"),
-        "reach byte 21 of out_buf, which has 21 bytes",
-    );
-
-    // `lea` computes an address without touching memory, so its index needs no check.
-    let text = with(
-        "    cmp rcx, MAX_CHARS\n",
-        "    lea r11, [rdi + rcx]\n    cmp rcx, MAX_CHARS\n",
-    );
-    let report = check(&text).await;
-    assert!(report.violations.is_empty(), "{:#?}", report.violations);
+    hold(&ON_THE_TEMPLATE, NUMBERS).await;
 }
 
 /// The calc fixture, whose `apply` picks its operator's case through a checked jump table.
@@ -717,48 +380,6 @@ async fn jumps_go_through_registers_only_as_checked_tables() {
     }
 }
 
-#[tokio::test]
-async fn functions_stay_small_and_save_what_they_change() {
-    let text = with(
-        "    test rsi, rsi\n",
-        "    xor ebx, ebx\n    test rsi, rsi\n",
-    );
-    let report = check(&text).await;
-    assert_violation(
-        &report,
-        Rule::Functions,
-        line_of(&text, "write_all:"),
-        "changes rbx without saving it",
-    );
-
-    let text = with("    call parse_i64\n", "    call _start\n");
-    let report = check(&text).await;
-    assert_violation(
-        &report,
-        Rule::ControlFlow,
-        line_of(&text, "    call _start"),
-        "recursion",
-    );
-}
-
-#[tokio::test]
-async fn a_long_function_gets_a_place_to_split() {
-    let text = with(
-        "    jo .Lparse_invalid\n    inc rcx\n    dec r8\n",
-        &format!(
-            "    jo .Lparse_invalid\n    inc rcx\n{}    dec r8\n",
-            "    nop\n".repeat(25)
-        ),
-    );
-    let report = check(&text).await;
-    assert_violation(
-        &report,
-        Rule::Functions,
-        line_of(&text, "parse_i64:"),
-        "the loop `.Lparse_loop` (40 instructions), can be a function of its own",
-    );
-}
-
 /// Every program in the repository follows every rule, memory rules included, with what its own
 /// spec allows: the examples, the fixtures Claude Code wrote, the skill's assets and the
 /// benchmark's own programs.
@@ -839,33 +460,6 @@ async fn every_program_in_the_repository_follows_every_rule() {
     assert!(failed.is_empty(), "{failed:#?}");
 }
 
-/// M7: a worker's index bounded only by a register, and a worker reading another thread's part,
-/// are found.
-#[tokio::test]
-async fn workers_never_race() {
-    let cases = [
-        (
-            "    cmp r9, SLOT_SIZE - VECTOR + 1\n    jae .Lworker_assert_slot\n    movdqu xmm0, \
-             xmmword ptr [rbx + r9]\n",
-            "    movdqu xmm0, xmmword ptr [rbx + r9]\n",
-            "    movdqu xmm0, xmmword ptr [rbx + r9]",
-            "indexes the worker's slot with no constant limit",
-        ),
-        (
-            "    mov rbx, rsi\n    cmp rdi, THREADS\n",
-            "    mov rbx, rsi\n    mov rax, qword ptr [rip + slots]\n    cmp rdi, THREADS\n",
-            "    mov rax, qword ptr [rip + slots]",
-            "reaches slots on a worker thread, where other threads write their parts of it",
-        ),
-    ];
-    for (from, to, at, needle) in cases {
-        assert!(PARALLEL_TEMPLATE.contains(from), "{from:?}");
-        let text = PARALLEL_TEMPLATE.replacen(from, to, 1);
-        let report = check_parallel(&text).await;
-        assert_violation(&report, Rule::Races, line_of(&text, at), needle);
-    }
-}
-
 /// Where a planted bug's violation is reported.
 #[derive(Debug, Clone, Copy)]
 enum At {
@@ -874,6 +468,9 @@ enum At {
     /// On the `ret` right after the first line that starts with this text: an address that is
     /// returned is reported where it is returned.
     Ret(&'static str),
+    /// On the line right after the first that starts with this text: a system call is reported
+    /// on the instruction that makes it, after the one that names it.
+    After(&'static str),
     /// On no line of its own: the stack's size is the program's.
     Nowhere,
 }
@@ -1382,7 +979,7 @@ async fn memory_rules_find_each_planted_bug() {
             let line = match planted.at {
                 At::Nowhere => None,
                 At::Line(at) => Some(line_of(&text, at)),
-                At::Ret(at) => Some(line_of(&text, at) + 1),
+                At::Ret(at) | At::After(at) => Some(line_of(&text, at) + 1),
             };
             let found = report.violations.iter().any(|violation| {
                 violation.rule == planted.rule
@@ -1426,6 +1023,2018 @@ fn every_planted_bug_is_planted_or_excused_on_every_target() {
     // The 17 bugs x86-64's test planted, and the 14 AArch64's did with its stack-limit test.
     assert!(planted(Profile::LinuxX86_64) >= 17);
     assert!(planted(Profile::LinuxAarch64) >= 15);
+}
+
+/// A change to a program: the first `old` in it becomes `new`.
+type Edit = (&'static str, &'static str);
+
+/// A violation a fixture must cause: its rule, where it is reported, and a word of its text.
+type Finding = (Rule, At, &'static str);
+
+/// What one target does with a fixture of a rule.
+#[derive(Debug, Clone, Copy)]
+enum Plan {
+    /// The target's program with `edits` made, in order, breaks the rules in each of `finds`.
+    Breaks {
+        edits: &'static [Edit],
+        finds: &'static [Finding],
+    },
+    /// The target's program with `edits` made still follows every rule, and holds this many
+    /// blocks marked unsafe.
+    Follows {
+        edits: &'static [Edit],
+        unsafe_blocks: usize,
+    },
+    /// The target's program with `edits` made has no violation whose text has this word.
+    Quiet {
+        edits: &'static [Edit],
+        word: &'static str,
+    },
+    /// The fixture can't be written on this CPU, for this reason of its hardware.
+    NotApplicable(&'static str),
+}
+
+/// A table of fixtures, each row a way of breaking a rule with a cell for every target: a target
+/// added to lengua breaks every table until its cells are written.
+type Fixtures = &'static [(&'static str, PerTarget<Plan>)];
+
+/// The programs a table's fixtures are made of: one for each target, the system calls its spec
+/// allows, and the threads.
+struct Programs {
+    texts: PerTarget<&'static str>,
+    syscalls: &'static [Syscall],
+    threads: Option<u32>,
+}
+
+/// Each target's main template.
+const TEMPLATES: PerTarget<&str> = PerTarget {
+    linux_x86_64: TEMPLATE,
+    linux_aarch64: AARCH64_TEMPLATE,
+};
+
+/// Each target's parallel template.
+const PARALLEL_TEMPLATES: PerTarget<&str> = PerTarget {
+    linux_x86_64: PARALLEL_TEMPLATE,
+    linux_aarch64: PARALLEL_TEMPLATE_AARCH64,
+};
+
+/// The main templates, with what their spec allows.
+const ON_THE_TEMPLATE: Programs = Programs {
+    texts: TEMPLATES,
+    syscalls: &SYSCALLS,
+    threads: None,
+};
+
+/// The parallel templates, with what their spec allows.
+const ON_THE_PARALLEL_TEMPLATE: Programs = Programs {
+    texts: PARALLEL_TEMPLATES,
+    syscalls: &PARALLEL_SYSCALLS,
+    threads: Some(16),
+};
+
+/// `base` with each edit made in turn, or the first `old` it doesn't have.
+fn edited(base: &str, edits: &[Edit]) -> Result<String, String> {
+    let mut text = base.to_owned();
+    for &(old, new) in edits {
+        if !text.contains(old) {
+            return Err(format!("{old:?} isn't in the program"));
+        }
+        text = text.replacen(old, new, 1);
+    }
+    Ok(text)
+}
+
+/// The line a finding is reported on in `text`: none for a finding that is the program's.
+fn expected_line(text: &str, at: At) -> Result<Option<usize>, String> {
+    let find = |needle: &str| {
+        text.find(needle)
+            .map(|position| text[..position].matches('\n').count() + 1)
+            .ok_or_else(|| format!("{needle:?} isn't in the edited program"))
+    };
+    match at {
+        At::Nowhere => Ok(None),
+        At::Line(needle) => find(needle).map(Some),
+        At::Ret(needle) | At::After(needle) => find(needle).map(|line| Some(line + 1)),
+    }
+}
+
+/// Why `report` lacks the violation `finding` asks for in `text`, if it does.
+fn unmet(text: &str, report: &Report, finding: &Finding) -> Option<String> {
+    let (rule, at, needle) = *finding;
+    let line = match expected_line(text, at) {
+        Ok(line) => line,
+        Err(why) => return Some(why),
+    };
+    let found = report.violations.iter().any(|violation| {
+        violation.rule == rule
+            && (line.is_none() || violation.line == line)
+            && violation.to_string().contains(needle)
+    });
+    (!found).then(|| {
+        let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+        format!("no {rule:?} violation containing {needle:?} on {line:?} in {all:#?}")
+    })
+}
+
+/// `target`'s program with `edits` made, and what the rules say of it, or why the edits can't be
+/// made.
+async fn checked(
+    programs: &Programs,
+    target: Profile,
+    edits: &[Edit],
+) -> Result<(String, Report), String> {
+    let text = edited(programs.texts.get(target), edits)?;
+    let features = CpuFeatures::all();
+    let report = check_full(&text, features, programs.syscalls, programs.threads).await;
+    Ok((text, report))
+}
+
+/// Holds every fixture of `table` to its cell on every target: the program with the cell's edits
+/// made is checked, and each violation the cell names must be in the report. Every miss of every
+/// row is reported at once.
+async fn hold(programs: &Programs, table: Fixtures) {
+    let mut missed = Vec::new();
+    for (name, cells) in table {
+        for (target, plan) in cells.cells() {
+            let on = format!("{name} on {}", target.name());
+            match plan {
+                Plan::NotApplicable(_) => {}
+                Plan::Follows {
+                    edits,
+                    unsafe_blocks,
+                } => match checked(programs, target, edits).await {
+                    Err(why) => missed.push(format!("{on}: {why}")),
+                    Ok((_, report)) => {
+                        if !report.passed() || report.unsafe_blocks.len() != *unsafe_blocks {
+                            let all: Vec<String> =
+                                report.violations.iter().map(ToString::to_string).collect();
+                            missed.push(format!(
+                                "{on}: broke a rule, or holds {} unsafe blocks, not \
+                                 {unsafe_blocks}: {all:#?}",
+                                report.unsafe_blocks.len()
+                            ));
+                        }
+                    }
+                },
+                Plan::Breaks { edits, finds } => match checked(programs, target, edits).await {
+                    Err(why) => missed.push(format!("{on}: {why}")),
+                    Ok((text, report)) => {
+                        for finding in *finds {
+                            if let Some(problem) = unmet(&text, &report, finding) {
+                                missed.push(format!("{on}: {problem}"));
+                            }
+                        }
+                    }
+                },
+                Plan::Quiet { edits, word } => match checked(programs, target, edits).await {
+                    Err(why) => missed.push(format!("{on}: {why}")),
+                    Ok((_, report)) => {
+                        let said: Vec<String> = report
+                            .violations
+                            .iter()
+                            .map(ToString::to_string)
+                            .filter(|violation| violation.contains(*word))
+                            .collect();
+                        if !said.is_empty() {
+                            missed.push(format!("{on}: a violation says {word:?}: {said:#?}"));
+                        }
+                    }
+                },
+            }
+        }
+    }
+    assert!(missed.is_empty(), "{missed:#?}");
+}
+
+/// The stack pointer: nothing below it, moved only by the frame's own instructions, and a call
+/// made with the stack where the calling convention keeps it.
+const STACK: Fixtures = &[
+    (
+        "memory below the stack pointer",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[(
+                    "    test rsi, rsi\n",
+                    "    mov qword ptr [rsp - 8], rax\n    test rsi, rsi\n",
+                )],
+                finds: &[(
+                    Rule::Resources,
+                    At::Line("    mov qword ptr [rsp - 8], rax"),
+                    "uses memory below rsp",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[(
+                    "    cbz x1, .Lwrite_all_assert_null\n",
+                    "    str x0, [sp, #-16]\n    cbz x1, .Lwrite_all_assert_null\n",
+                )],
+                finds: &[(
+                    Rule::Resources,
+                    At::Line("    str x0, [sp, #-16]"),
+                    "uses memory below sp",
+                )],
+            },
+        },
+    ),
+    (
+        "the stack pointer set by something the frame doesn't do",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[(
+                    "    mov rax, qword ptr [rsp]\n",
+                    "    and rsp, -16\n    mov rax, qword ptr [rsp]\n",
+                )],
+                finds: &[(Rule::Resources, At::Line("    and rsp, -16"), "changes rsp")],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[(
+                    "    ldr x0, [sp]\n    cmp x0, #ARGC_EXPECTED\n",
+                    "    mov sp, x9\n    ldr x0, [sp]\n    cmp x0, #ARGC_EXPECTED\n",
+                )],
+                finds: &[(Rule::Resources, At::Line("    mov sp, x9"), "sets sp")],
+            },
+        },
+    ),
+    (
+        "a call made with the stack off its multiple of 16",
+        PerTarget {
+            // A call in _start is aligned with nothing pushed; one push misaligns it.
+            linux_x86_64: Plan::Breaks {
+                edits: &[(
+                    "    call parse_i64\n",
+                    "    push rax\n    call parse_i64\n    pop rcx\n",
+                )],
+                finds: &[(
+                    Rule::Functions,
+                    At::Line("    call parse_i64"),
+                    "isn't 16-byte aligned",
+                )],
+            },
+            // AArch64 faults on an sp that isn't a multiple of 16, so the dialect refuses the
+            // move itself.
+            linux_aarch64: Plan::Breaks {
+                edits: &[(
+                    "    bl parse_i64\n",
+                    "    sub sp, sp, #8\n    bl parse_i64\n    add sp, sp, #8\n",
+                )],
+                finds: &[(
+                    Rule::Resources,
+                    At::Line("    sub sp, sp, #8"),
+                    "but sp stays a multiple of 16",
+                )],
+            },
+        },
+    ),
+    (
+        "a function entered 8 bytes deep that makes a call without adjusting the stack",
+        PerTarget {
+            // A normal function enters 8 bytes deep, so write_i64 needs its sub rsp, 8.
+            linux_x86_64: Plan::Breaks {
+                edits: &[("    sub rsp, 8\n", ""), ("    add rsp, 8\n", "")],
+                finds: &[(
+                    Rule::Functions,
+                    At::After("    mov edi, STDOUT"),
+                    "isn't 16-byte aligned",
+                )],
+            },
+            linux_aarch64: Plan::NotApplicable(
+                "an AArch64 call leaves its return address in x30, not on the stack, and a \
+                 function keeps sp a multiple of 16 for its whole life (the row above refuses \
+                 any other move), so no function is entered 8 bytes deep",
+            ),
+        },
+    ),
+];
+
+#[tokio::test]
+async fn the_stack_is_tracked_exactly() {
+    hold(&ON_THE_TEMPLATE, STACK).await;
+}
+
+/// Rule 2: every loop is counted, from a counter nothing in it changes, entered at its head,
+/// with a bound the counter starts within.
+const LOOPS: Fixtures = &[
+    (
+        "a counter that the loop's system call changes",
+        PerTarget {
+            // A counter in rcx doesn't survive the syscall in the loop.
+            linux_x86_64: Plan::Breaks {
+                edits: &[
+                    ("    mov r8, MAX_WRITES\n", "    mov rcx, MAX_WRITES\n"),
+                    (
+                        "    dec r8\n    jnz .Lwrite_all_loop\n",
+                        "    dec rcx\n    jnz .Lwrite_all_loop\n",
+                    ),
+                ],
+                finds: &[(
+                    Rule::Loops,
+                    At::Line("    syscall\n    test rax, rax\n    js .Lwrite_all_return"),
+                    "changes the loop counter rcx",
+                )],
+            },
+            // A counter in x0 is the system call's result, and the loop's first instruction sets
+            // it too.
+            linux_aarch64: Plan::Breaks {
+                edits: &[
+                    ("    mov x10, #MAX_WRITES\n", "    mov x0, #MAX_WRITES\n"),
+                    (
+                        "    subs x10, x10, #1\n    b.ne .Lwrite_all_loop\n",
+                        "    subs x0, x0, #1\n    b.ne .Lwrite_all_loop\n",
+                    ),
+                ],
+                finds: &[(
+                    Rule::Loops,
+                    At::Line("    mov x0, x9\n    mov x8, #SYS_WRITE"),
+                    "changes the loop counter x0",
+                )],
+            },
+        },
+    ),
+    (
+        "a jump into the middle of a loop",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[
+                    (
+                        "    mov r8, MAX_WRITES\n",
+                        "    jz .Lwrite_all_retry\n    mov r8, MAX_WRITES\n",
+                    ),
+                    (
+                        "    cmp rax, rdx\n",
+                        ".Lwrite_all_retry:\n    cmp rax, rdx\n",
+                    ),
+                ],
+                finds: &[(
+                    Rule::Loops,
+                    At::Line("    jz .Lwrite_all_retry"),
+                    "jumps into the middle of a loop",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[
+                    (
+                        "    mov x10, #MAX_WRITES\n",
+                        "    cbz x9, .Lwrite_all_retry\n    mov x10, #MAX_WRITES\n",
+                    ),
+                    ("    cmp x0, x2\n", ".Lwrite_all_retry:\n    cmp x0, x2\n"),
+                ],
+                finds: &[(
+                    Rule::Loops,
+                    At::Line("    cbz x9, .Lwrite_all_retry"),
+                    "jumps into the middle of a loop",
+                )],
+            },
+        },
+    ),
+    (
+        "a bound smaller than the counter",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[(
+                    ".Lwrite_all_loop:  # bound: 64",
+                    ".Lwrite_all_loop:  # bound: 8",
+                )],
+                finds: &[(
+                    Rule::Loops,
+                    At::Line("    mov eax, SYS_WRITE"),
+                    "outside 1 to the bound 8",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[(
+                    ".Lwrite_all_loop:  // bound: 64",
+                    ".Lwrite_all_loop:  // bound: 8",
+                )],
+                finds: &[(
+                    Rule::Loops,
+                    At::Line("    mov x0, x9\n    mov x8, #SYS_WRITE"),
+                    "outside 1 to the bound 8",
+                )],
+            },
+        },
+    ),
+];
+
+#[tokio::test]
+async fn loops_must_be_counted() {
+    hold(&ON_THE_TEMPLATE, LOOPS).await;
+}
+
+/// Rule 5: an assertion has one place to be reached from, a number of its own, and the template's
+/// handler.
+const ASSERTIONS: Fixtures = &[
+    (
+        "two checks that share one assertion",
+        PerTarget {
+            // Two jumps share assertion 9, and assertion 10 now has no way in, so it can never run.
+            linux_x86_64: Plan::Breaks {
+                edits: &[(
+                    "    jz .Lwrite_all_assert_empty\n",
+                    "    jz .Lwrite_all_assert_null\n",
+                )],
+                finds: &[
+                    (
+                        Rule::Assertions,
+                        At::Line("    mov edi, 9"),
+                        "reached from 2 places",
+                    ),
+                    (
+                        Rule::ControlFlow,
+                        At::Line("    mov edi, 10"),
+                        "can never run",
+                    ),
+                ],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[(
+                    "    cbz x2, .Lwrite_all_assert_empty\n",
+                    "    cbz x2, .Lwrite_all_assert_null\n",
+                )],
+                finds: &[
+                    (
+                        Rule::Assertions,
+                        At::Line("    mov w0, #10"),
+                        "reached from 2 places",
+                    ),
+                    (
+                        Rule::ControlFlow,
+                        At::Line("    mov w0, #11"),
+                        "can never run",
+                    ),
+                ],
+            },
+        },
+    ),
+    (
+        "an assertion number used twice",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[("    mov edi, 11\n", "    mov edi, 9\n")],
+                finds: &[(
+                    Rule::Assertions,
+                    At::Line("    mov edi, 9\n    call assert_fail\n.size write_all"),
+                    "used twice",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[("    mov w0, #12\n", "    mov w0, #10\n")],
+                finds: &[(
+                    Rule::Assertions,
+                    At::Line("    mov w0, #10\n    bl assert_fail\n.size write_all"),
+                    "used twice",
+                )],
+            },
+        },
+    ),
+    (
+        "an assertion handler that isn't the template's",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[("    add dl, 48\n", "    add dl, 49\n")],
+                finds: &[(
+                    Rule::Assertions,
+                    At::Line("assert_fail:"),
+                    "assert_fail differs from the template",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[("    add w0, w0, #48\n", "    add w0, w0, #49\n")],
+                finds: &[(
+                    Rule::Assertions,
+                    At::Line("assert_fail:"),
+                    "assert_fail differs from the template",
+                )],
+            },
+        },
+    ),
+];
+
+#[tokio::test]
+async fn assertions_have_one_place_each() {
+    hold(&ON_THE_TEMPLATE, ASSERTIONS).await;
+}
+
+/// Rule 1: a chain of comparisons on one register ends in a default.
+const CHAINS: Fixtures = &[(
+    "a chain of comparisons with no default",
+    PerTarget {
+        linux_x86_64: Plan::Breaks {
+            edits: &[(
+                "    mov rdi, rdx\n",
+                "    cmp rdx, 1\n    je .Lstart_one\n    cmp rdx, 2\n    je .Lstart_one\n\
+                 .Lstart_one:\n    mov rdi, rdx\n",
+            )],
+            finds: &[(
+                Rule::ControlFlow,
+                At::Line("    cmp rdx, 1"),
+                "has no default",
+            )],
+        },
+        linux_aarch64: Plan::Breaks {
+            edits: &[(
+                "    bl write_i64\n",
+                "    cmp x1, #1\n    b.eq .Lstart_one\n    cmp x1, #2\n    b.eq .Lstart_one\n\
+                 .Lstart_one:\n    bl write_i64\n",
+            )],
+            finds: &[(
+                Rule::ControlFlow,
+                At::Line("    cmp x1, #1"),
+                "has no default",
+            )],
+        },
+    },
+)];
+
+#[tokio::test]
+async fn comparison_chains_need_a_default() {
+    hold(&ON_THE_TEMPLATE, CHAINS).await;
+}
+
+/// Rule 7: a result is checked right away, before anything else touches the register it's in.
+const RESULTS: Fixtures = &[
+    (
+        "a label between a call and the check of its result",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[(
+                    "    call parse_i64\n    test rax, rax\n",
+                    "    call parse_i64\n.Lstart_parsed:\n    test rax, rax\n",
+                )],
+                finds: &[(
+                    Rule::Results,
+                    At::Line("    call parse_i64"),
+                    "a label comes before the check",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[(
+                    "    bl parse_i64\n    tbnz x0, #63, .Lstart_not_a_number\n",
+                    "    bl parse_i64\n.Lstart_parsed:\n    tbnz x0, #63, .Lstart_not_a_number\n",
+                )],
+                finds: &[(
+                    Rule::Results,
+                    At::Line("    bl parse_i64"),
+                    "a label comes before the check",
+                )],
+            },
+        },
+    ),
+    (
+        "a system call's result used before it's checked",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[(
+                    "    syscall\n    test rax, rax\n    js .Lwrite_all_return\n",
+                    "    syscall\n    mov r9, rax\n    test rax, rax\n    js .Lwrite_all_return\n",
+                )],
+                finds: &[(
+                    Rule::Results,
+                    At::Line("    syscall\n    mov r9, rax"),
+                    "rax is used before it's checked",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[(
+                    "    svc #0\n    tbnz x0, #63, .Lwrite_all_return\n",
+                    "    svc #0\n    mov x11, x0\n    tbnz x0, #63, .Lwrite_all_return\n",
+                )],
+                finds: &[(
+                    Rule::Results,
+                    At::Line("    svc #0\n    mov x11, x0"),
+                    "x0 is used before it's checked",
+                )],
+            },
+        },
+    ),
+];
+
+#[tokio::test]
+async fn results_are_checked_right_away() {
+    hold(&ON_THE_TEMPLATE, RESULTS).await;
+}
+
+/// Rules 3 and 8: an exit status and a system call are named constants, and a system call is one
+/// the spec allows.
+const CALLS: Fixtures = &[
+    (
+        "an exit status that isn't a named constant",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[("    mov edi, EXIT_OK\n", "    mov edi, 0\n")],
+                finds: &[(
+                    Rule::Constants,
+                    At::Line("    mov edi, 0\n"),
+                    "without a named constant",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[("    mov w0, #EXIT_OK\n", "    mov w0, #0\n")],
+                finds: &[(
+                    Rule::Constants,
+                    At::Line("    mov w0, #0\n"),
+                    "without a named constant",
+                )],
+            },
+        },
+    ),
+    (
+        "a system call that isn't named",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[("    mov eax, SYS_EXIT\n", "    mov eax, 60\n")],
+                finds: &[(
+                    Rule::Constants,
+                    At::Line("    mov eax, 60\n"),
+                    "isn't named",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[("    mov x8, #SYS_EXIT\n", "    mov x8, #93\n")],
+                finds: &[(
+                    Rule::Constants,
+                    At::Line("    mov x8, #93\n"),
+                    "isn't named",
+                )],
+            },
+        },
+    ),
+    (
+        "a system call the spec doesn't allow",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[
+                    (
+                        ".equ SYS_EXIT, 60\n",
+                        ".equ SYS_EXIT, 60\n.equ SYS_READ, 0\n",
+                    ),
+                    ("    mov eax, SYS_WRITE\n", "    mov eax, SYS_READ\n"),
+                ],
+                finds: &[(
+                    Rule::Resources,
+                    At::After("    mov eax, SYS_READ"),
+                    "isn't one the spec allows",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[
+                    (
+                        ".equ SYS_EXIT, 93\n",
+                        ".equ SYS_EXIT, 93\n.equ SYS_READ, 63\n",
+                    ),
+                    ("    mov x8, #SYS_WRITE\n", "    mov x8, #SYS_READ\n"),
+                ],
+                finds: &[(
+                    Rule::Resources,
+                    At::After("    mov x8, #SYS_READ"),
+                    "isn't one the spec allows",
+                )],
+            },
+        },
+    ),
+];
+
+#[tokio::test]
+async fn system_calls_and_exit_codes_are_named_and_allowed() {
+    hold(&ON_THE_TEMPLATE, CALLS).await;
+}
+
+/// Rule 6: data is named by its size, written only where it's writable, and used by one function.
+const SCOPES: Fixtures = &[
+    (
+        "a length that isn't the size of the data it names",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[(".equ USAGE_MSG_LEN, 18", ".equ USAGE_MSG_LEN, 17")],
+                finds: &[(
+                    Rule::Constants,
+                    At::Line(".equ USAGE_MSG_LEN"),
+                    "usage_msg is 18 bytes",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[(".equ USAGE_MSG_LEN, 18", ".equ USAGE_MSG_LEN, 17")],
+                finds: &[(
+                    Rule::Constants,
+                    At::Line(".equ USAGE_MSG_LEN"),
+                    "usage_msg is 18 bytes",
+                )],
+            },
+        },
+    ),
+    (
+        "read-only data written by naming it",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[(
+                    "    test rsi, rsi\n",
+                    "    mov byte ptr [rip + usage_msg], 0\n    test rsi, rsi\n",
+                )],
+                finds: &[(
+                    Rule::Scope,
+                    At::Line("    mov byte ptr [rip + usage_msg], 0"),
+                    "writes to read-only usage_msg",
+                )],
+            },
+            linux_aarch64: Plan::NotApplicable(
+                "AArch64 has no memory operand that names a symbol: an address is adrp and \
+                 add :lo12:, and a store goes through the register that holds it, which the \
+                 planted row of M6 (read-only data written through a register) refuses",
+            ),
+        },
+    ),
+    (
+        "data used by two functions",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[(
+                    "    test rsi, rsi\n",
+                    "    lea r9, [rip + out_buf]\n    test rsi, rsi\n",
+                )],
+                finds: &[(
+                    Rule::Scope,
+                    At::Line("out_buf:"),
+                    "out_buf is used by write_all, write_i64",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[(
+                    "    cbz x1, .Lwrite_all_assert_null\n",
+                    "    adrp x9, out_buf\n    add x9, x9, :lo12:out_buf\n    cbz x1, \
+                     .Lwrite_all_assert_null\n",
+                )],
+                finds: &[(
+                    Rule::Scope,
+                    At::Line("out_buf:"),
+                    "out_buf is used by write_all, write_i64",
+                )],
+            },
+        },
+    ),
+];
+
+#[tokio::test]
+async fn data_stays_in_scope() {
+    hold(&ON_THE_TEMPLATE, SCOPES).await;
+}
+
+/// Rule 9: an indexed access is bounds-checked first, unless a person marks it unsafe.
+const INDEXES: Fixtures = &[
+    (
+        "an index that was compared under another name",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[("    cmp rcx, MAX_CHARS\n", "    cmp rdx, MAX_CHARS\n")],
+                finds: &[(
+                    Rule::Indirection,
+                    At::Line("    movzx edx, byte ptr [rdi + rcx]"),
+                    "isn't bounds-checked",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[("    cmp x2, #MAX_CHARS\n", "    cmp x1, #MAX_CHARS\n")],
+                finds: &[(
+                    Rule::Indirection,
+                    At::Line("    ldrb w10, [x0, x2]"),
+                    "isn't bounds-checked",
+                )],
+            },
+        },
+    ),
+    (
+        "an access marked unsafe",
+        PerTarget {
+            linux_x86_64: Plan::Follows {
+                edits: &[
+                    (
+                        "    movzx edx, byte ptr [rdi + rcx]\n",
+                        "    # unsafe: the loop counter keeps rcx below MAX_CHARS\n    movzx edx, \
+                         byte ptr [rdi + rcx]\n    # end unsafe\n",
+                    ),
+                    ("    cmp rcx, MAX_CHARS\n", "    cmp rdx, MAX_CHARS\n"),
+                ],
+                unsafe_blocks: 1,
+            },
+            linux_aarch64: Plan::Follows {
+                edits: &[
+                    (
+                        "    ldrb w10, [x0, x2]\n",
+                        "    // unsafe: the loop counter keeps x2 below MAX_CHARS\n    ldrb w10, \
+                         [x0, x2]\n    // end unsafe\n",
+                    ),
+                    ("    cmp x2, #MAX_CHARS\n", "    cmp x1, #MAX_CHARS\n"),
+                ],
+                unsafe_blocks: 1,
+            },
+        },
+    ),
+];
+
+#[tokio::test]
+async fn indexed_accesses_are_bounds_checked() {
+    hold(&ON_THE_TEMPLATE, INDEXES).await;
+}
+
+/// M2 and rule 9: a bounds check compares without sign, whole, and keeps every access inside its
+/// buffer.
+const BOUNDS: Fixtures = &[
+    (
+        "a bounds check that jumps with a signed condition",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[(
+                    "    jae .Lparse_assert_index\n",
+                    "    jge .Lparse_assert_index\n",
+                )],
+                finds: &[(
+                    Rule::Indirection,
+                    At::Line("    jge .Lparse_assert_index"),
+                    "jumps with jge",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[(
+                    "    b.hs .Lparse_assert_index\n",
+                    "    b.ge .Lparse_assert_index\n",
+                )],
+                finds: &[(
+                    Rule::Indirection,
+                    At::Line("    b.ge .Lparse_assert_index"),
+                    "jumps with b.ge",
+                )],
+            },
+        },
+    ),
+    (
+        "a bounds check that lets one byte too many through",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[(
+                    "    cmp ecx, OUT_BUF_LEN\n    jae .Lwrite_i64_assert_digit_index\n",
+                    "    cmp ecx, OUT_BUF_LEN + 1\n    jae .Lwrite_i64_assert_digit_index\n",
+                )],
+                finds: &[(
+                    Rule::Indirection,
+                    At::Line("    cmp ecx, OUT_BUF_LEN + 1"),
+                    "reach byte 21 of out_buf, which has 21 bytes",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[(
+                    "    cmp x2, #OUT_BUF_LEN\n    b.hs .Lwrite_i64_assert_digit_index\n",
+                    "    cmp x2, #OUT_BUF_LEN + 1\n    b.hs .Lwrite_i64_assert_digit_index\n",
+                )],
+                finds: &[(
+                    Rule::Indirection,
+                    At::Line("    cmp x2, #OUT_BUF_LEN + 1"),
+                    "reach byte 21 of out_buf, which has 21 bytes",
+                )],
+            },
+        },
+    ),
+    (
+        "an address computed with an index, which needs no check",
+        PerTarget {
+            // `lea` computes an address without touching memory, so its index needs no check.
+            linux_x86_64: Plan::Follows {
+                edits: &[(
+                    "    cmp rcx, MAX_CHARS\n",
+                    "    lea r11, [rdi + rcx]\n    cmp rcx, MAX_CHARS\n",
+                )],
+                unsafe_blocks: 0,
+            },
+            linux_aarch64: Plan::NotApplicable(
+                "AArch64 computes an address with add, which has no memory operand and so no \
+                 index to check: an index appears only in a load or a store, which the first \
+                 rows hold to its check",
+            ),
+        },
+    ),
+];
+
+#[tokio::test]
+async fn bounds_checks_compare_without_sign_and_fit_the_buffer() {
+    hold(&ON_THE_TEMPLATE, BOUNDS).await;
+}
+
+/// Twenty-five `nop` lines, to make a function too long.
+macro_rules! nops {
+    () => {
+        concat!(
+            "    nop\n    nop\n    nop\n    nop\n    nop\n",
+            "    nop\n    nop\n    nop\n    nop\n    nop\n",
+            "    nop\n    nop\n    nop\n    nop\n    nop\n",
+            "    nop\n    nop\n    nop\n    nop\n    nop\n",
+            "    nop\n    nop\n    nop\n    nop\n    nop\n"
+        )
+    };
+}
+
+/// Rule 4: a function saves the registers it changes, stays small, doesn't call itself.
+const FUNCTIONS: Fixtures = &[
+    (
+        "a function that changes a register it must give back",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[(
+                    "    test rsi, rsi\n",
+                    "    xor ebx, ebx\n    test rsi, rsi\n",
+                )],
+                finds: &[(
+                    Rule::Functions,
+                    At::Line("write_all:"),
+                    "changes rbx without saving it",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[(
+                    "    cbz x1, .Lwrite_all_assert_null\n",
+                    "    mov x19, #0\n    cbz x1, .Lwrite_all_assert_null\n",
+                )],
+                finds: &[(
+                    Rule::Functions,
+                    At::Line("write_all:"),
+                    "changes x19 without saving it",
+                )],
+            },
+        },
+    ),
+    (
+        "recursion",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[("    call parse_i64\n", "    call _start\n")],
+                finds: &[(Rule::ControlFlow, At::Line("    call _start"), "recursion")],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[("    bl parse_i64\n", "    bl _start\n")],
+                finds: &[(Rule::ControlFlow, At::Line("    bl _start"), "recursion")],
+            },
+        },
+    ),
+    (
+        "a function too long, with a place to split it",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[(
+                    "    jo .Lparse_invalid\n    inc rcx\n    dec r8\n",
+                    concat!(
+                        "    jo .Lparse_invalid\n    inc rcx\n",
+                        nops!(),
+                        "    dec r8\n"
+                    ),
+                )],
+                finds: &[(
+                    Rule::Functions,
+                    At::Line("parse_i64:"),
+                    "the loop `.Lparse_loop` (40 instructions), can be a function of its own",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[(
+                    "    add x2, x2, #1\n    subs x3, x3, #1\n",
+                    concat!("    add x2, x2, #1\n", nops!(), "    subs x3, x3, #1\n"),
+                )],
+                finds: &[(
+                    Rule::Functions,
+                    At::Line("parse_i64:"),
+                    "the loop `.Lparse_loop` (41 instructions), can be a function of its own",
+                )],
+            },
+        },
+    ),
+];
+
+#[tokio::test]
+async fn functions_stay_small_and_save_what_they_change() {
+    hold(&ON_THE_TEMPLATE, FUNCTIONS).await;
+}
+
+/// The dialect's layout: one instruction a line, comments the CPU's own, nothing the dialect
+/// leaves out, and every line one machine instruction.
+const LAYOUT: Fixtures = &[
+    (
+        "several statements on one line",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[("    xor r9d, r9d\n", "    xor r9d, r9d; xor eax, eax\n")],
+                finds: &[(
+                    Rule::Dialect,
+                    At::Line("    xor r9d, r9d; xor eax, eax"),
+                    "`;` puts several statements",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[("    mov x9, #0\n", "    mov x9, #0; mov x9, #0\n")],
+                finds: &[(
+                    Rule::Dialect,
+                    At::Line("    mov x9, #0; mov x9, #0"),
+                    "`;` puts several statements",
+                )],
+            },
+        },
+    ),
+    (
+        "a /* */ comment",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[("    xor r9d, r9d\n", "    xor r9d, r9d /* clear */\n")],
+                finds: &[(
+                    Rule::Dialect,
+                    At::Line("    xor r9d, r9d /* clear */"),
+                    "`/* */` comments",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[("    mov x9, #0\n", "    mov x9, #0 /* clear */\n")],
+                finds: &[(
+                    Rule::Dialect,
+                    At::Line("    mov x9, #0 /* clear */"),
+                    "`/* */` comments",
+                )],
+            },
+        },
+    ),
+    (
+        "an instruction prefix",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[("    xor r9d, r9d\n", "    rep\n")],
+                finds: &[(Rule::Dialect, At::Line("    rep"), "is a prefix")],
+            },
+            linux_aarch64: Plan::NotApplicable(
+                "AArch64 has no instruction prefixes: rep, lock and the segment overrides are \
+                 x86 ways to change what the next instruction does, and every AArch64 \
+                 instruction is one word that says all of it",
+            ),
+        },
+    ),
+    (
+        "an x87 instruction",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[("    xor r9d, r9d\n", "    fld1\n")],
+                finds: &[(
+                    Rule::Dialect,
+                    At::Line("    fld1"),
+                    "`fld1` isn't in dialect 4",
+                )],
+            },
+            linux_aarch64: Plan::NotApplicable(
+                "AArch64 has no x87 stack: its floating point is in the s and d registers it \
+                 shares with the vectors, and what the dialect leaves out of it is the next \
+                 row but one",
+            ),
+        },
+    ),
+    (
+        "a symbol's address taken as a number",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[("    xor r9d, r9d\n", "    mov rax, offset usage_msg\n")],
+                finds: &[(
+                    Rule::Dialect,
+                    At::Line("    mov rax, offset usage_msg"),
+                    "offset",
+                )],
+            },
+            linux_aarch64: Plan::NotApplicable(
+                "an AArch64 instruction word is 32 bits, so no immediate can hold an address: \
+                 an address is adrp and add :lo12:, and the literal pool that would hold one \
+                 is refused by the dialect's own table",
+            ),
+        },
+    ),
+    (
+        "data addressed without the CPU's own way to name an address",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[("    xor r9d, r9d\n", "    mov rax, [usage_msg]\n")],
+                finds: &[(
+                    Rule::Dialect,
+                    At::Line("    mov rax, [usage_msg]"),
+                    "address data relative to rip",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[("    mov x9, #0\n", "    ldr x9, usage_msg\n")],
+                finds: &[(
+                    Rule::Dialect,
+                    At::Line("    ldr x9, usage_msg"),
+                    "its address isn't in brackets",
+                )],
+            },
+        },
+    ),
+    (
+        "a label and an instruction on one line",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[(
+                    ".Lparse_digits:\n",
+                    ".Lparse_digits: cmp byte ptr [rdi], 0\n",
+                )],
+                finds: &[(
+                    Rule::Dialect,
+                    At::Line(".Lparse_digits:"),
+                    "a label and an instruction share a line",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[(".Lparse_digits:\n", ".Lparse_digits: nop\n")],
+                finds: &[(
+                    Rule::Dialect,
+                    At::Line(".Lparse_digits:"),
+                    "a label and an instruction share a line",
+                )],
+            },
+        },
+    ),
+    (
+        "an instruction the dialect leaves out",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[("    xor r9d, r9d\n", "    leave\n")],
+                finds: &[(
+                    Rule::Dialect,
+                    At::Line("    leave"),
+                    "`leave` isn't in dialect 4",
+                )],
+            },
+            // An exclusive load: AArch64's atomics are not in the dialect.
+            linux_aarch64: Plan::Breaks {
+                edits: &[("    mov x9, #0\n", "    ldxr x10, [x0]\n    mov x9, #0\n")],
+                finds: &[(
+                    Rule::Dialect,
+                    At::Line("    ldxr x10, [x0]"),
+                    "isn't an instruction lengua's AArch64 dialect has",
+                )],
+            },
+        },
+    ),
+    (
+        "an instruction that assembles to two",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[("    xor r9d, r9d\n", "    fstsw ax\n")],
+                finds: &[(
+                    Rule::Dialect,
+                    At::Line("    fstsw ax"),
+                    "don't match line for line",
+                )],
+            },
+            linux_aarch64: Plan::NotApplicable(
+                "an AArch64 instruction is one 32-bit word, so a line can't become two \
+                 machine instructions as x87's fstsw does (an fwait and an fnstsw)",
+            ),
+        },
+    ),
+];
+
+#[tokio::test]
+async fn layout_hazards_are_dialect_violations() {
+    hold(&ON_THE_TEMPLATE, LAYOUT).await;
+}
+
+/// Rule 8: the constants come first, are numbers, and are named once.
+const CONSTANTS: Fixtures = &[
+    (
+        "a constant below the header block",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[
+                    (".equ MAX_WRITES, 64\n", ""),
+                    (".section .bss\n", ".section .bss\n.equ MAX_WRITES, 64\n"),
+                ],
+                finds: &[(
+                    Rule::Dialect,
+                    At::Line(".equ MAX_WRITES, 64"),
+                    "below the header block",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[
+                    (".equ MAX_WRITES, 64\n", ""),
+                    (".section .bss\n", ".section .bss\n.equ MAX_WRITES, 64\n"),
+                ],
+                finds: &[(
+                    Rule::Dialect,
+                    At::Line(".equ MAX_WRITES, 64"),
+                    "below the header block",
+                )],
+            },
+        },
+    ),
+    (
+        "a constant that uses an address",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[(
+                    ".equ USAGE_MSG_LEN, 18",
+                    ".equ USAGE_MSG_LEN, . - usage_msg",
+                )],
+                finds: &[(
+                    Rule::Constants,
+                    At::Line(".equ USAGE_MSG_LEN"),
+                    "uses an address",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[(
+                    ".equ USAGE_MSG_LEN, 18",
+                    ".equ USAGE_MSG_LEN, . - usage_msg",
+                )],
+                finds: &[(
+                    Rule::Constants,
+                    At::Line(".equ USAGE_MSG_LEN"),
+                    "uses an address",
+                )],
+            },
+        },
+    ),
+    (
+        "a constant defined twice",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[(".equ NEWLINE, 10\n", ".equ NEWLINE, 10\n.equ NEWLINE, 13\n")],
+                finds: &[(
+                    Rule::Constants,
+                    At::Line(".equ NEWLINE, 13"),
+                    "defined twice",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[(".equ NEWLINE, 10\n", ".equ NEWLINE, 10\n.equ NEWLINE, 13\n")],
+                finds: &[(
+                    Rule::Constants,
+                    At::Line(".equ NEWLINE, 13"),
+                    "defined twice",
+                )],
+            },
+        },
+    ),
+];
+
+#[tokio::test]
+async fn constants_must_come_first_and_stay_numbers() {
+    hold(&ON_THE_TEMPLATE, CONSTANTS).await;
+}
+
+/// M7 and the thread rules: threads need the spec's approval and the template's own code, a
+/// worker writes only its stack and its slot, reads only inside the slot, makes no system call and
+/// leaves the register that holds the slot alone, and only the thread code starts threads.
+const THREADS: Fixtures = &[
+    (
+        "a worker's index bounded only by a register",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[(
+                    "    cmp r9, SLOT_SIZE - VECTOR + 1\n    jae .Lworker_assert_slot\n    movdqu xmm0, \
+                     xmmword ptr [rbx + r9]\n",
+                    "    movdqu xmm0, xmmword ptr [rbx + r9]\n",
+                )],
+                finds: &[(
+                    Rule::Races,
+                    At::Line("    movdqu xmm0, xmmword ptr [rbx + r9]"),
+                    "indexes the worker's slot with no constant limit",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[(
+                    "    mov x15, #SLOT_SCAN\n    cmp x14, x15\n    b.hs .Lworker_assert_slot\n    ldr q0, \
+                     [x19, x14]\n",
+                    "    ldr q0, [x19, x14]\n",
+                )],
+                finds: &[(
+                    Rule::Races,
+                    At::Line("    ldr q0, [x19, x14]"),
+                    "indexes the worker's slot with no constant limit",
+                )],
+            },
+        },
+    ),
+    (
+        "a worker reading what other threads write",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[(
+                    "    mov rbx, rsi\n    cmp rdi, THREADS\n",
+                    "    mov rbx, rsi\n    mov rax, qword ptr [rip + slots]\n    cmp rdi, THREADS\n",
+                )],
+                finds: &[(
+                    Rule::Races,
+                    At::Line("    mov rax, qword ptr [rip + slots]"),
+                    "reaches slots on a worker thread, where other threads write their parts of it",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[(
+                    "    mov x19, x1\n    cmp x0, #THREADS\n",
+                    "    mov x19, x1\n    adrp x13, slots\n    add x13, x13, :lo12:slots\n    cmp x0, \
+                     #THREADS\n",
+                )],
+                finds: &[(
+                    Rule::Races,
+                    At::Line("    add x13, x13, :lo12:slots"),
+                    "on a worker thread, where other threads write their parts of it",
+                )],
+            },
+        },
+    ),
+    (
+        "a worker writing the shared slots through the symbol's address",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[(
+                    "    movdqu xmmword ptr [rbx + r9], xmm0\n",
+                    "    lea rax, [rip + slots]\n    movdqu xmmword ptr [rax + r9], xmm0\n",
+                )],
+                finds: &[(
+                    Rule::Races,
+                    At::Line("    lea rax, [rip + slots]"),
+                    "on a worker thread, where other threads write their parts of it",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[(
+                    "    str q0, [x19, x14]\n",
+                    "    adrp x13, slots\n    add x13, x13, :lo12:slots\n    str q0, [x13, x14]\n",
+                )],
+                finds: &[(
+                    Rule::Races,
+                    At::Line("    add x13, x13, :lo12:slots"),
+                    "on a worker thread, where other threads write their parts of it",
+                )],
+            },
+        },
+    ),
+    (
+        "parallel_for changed",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[(
+                    "    mov ebx, 1\n    mov r13, THREADS\n.Lparallel_for_start:",
+                    "    mov ebx, 2\n    mov r13, THREADS\n.Lparallel_for_start:",
+                )],
+                finds: &[(
+                    Rule::Resources,
+                    At::Line("parallel_for:"),
+                    "parallel_for differs from the template",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[(
+                    "    mov x21, #THREADS\n.Lparallel_for_start:",
+                    "    mov x21, #THREADS - 1\n.Lparallel_for_start:",
+                )],
+                finds: &[(
+                    Rule::Resources,
+                    At::Line("parallel_for:"),
+                    "parallel_for differs from the template",
+                )],
+            },
+        },
+    ),
+    (
+        "clone's flags changed",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[(".equ CLONE_FLAGS, 0x350F00", ".equ CLONE_FLAGS, 0x50F00")],
+                finds: &[(
+                    Rule::Resources,
+                    At::Line(".equ CLONE_FLAGS"),
+                    "CLONE_FLAGS must be 3477248",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[(".equ CLONE_FLAGS, 0x350F00", ".equ CLONE_FLAGS, 0x50F00")],
+                finds: &[(
+                    Rule::Resources,
+                    At::Line(".equ CLONE_FLAGS"),
+                    "CLONE_FLAGS must be 3477248",
+                )],
+            },
+        },
+    ),
+    (
+        "a slot that isn't a multiple of 64 bytes",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[(".equ SLOT_SIZE, CHUNK", ".equ SLOT_SIZE, CHUNK + 8")],
+                finds: &[(
+                    Rule::Resources,
+                    At::Line(".equ SLOT_SIZE"),
+                    "isn't a positive multiple of 64",
+                )],
+            },
+            // 65528 is 16 bits, which one `mov` holds; CHUNK + 8 is not, and the dialect refuses
+            // the `mov` before the rules for threads are asked.
+            linux_aarch64: Plan::Breaks {
+                edits: &[(".equ SLOT_SIZE, CHUNK", ".equ SLOT_SIZE, CHUNK - 8")],
+                finds: &[(
+                    Rule::Resources,
+                    At::Line(".equ SLOT_SIZE"),
+                    "isn't a positive multiple of 64",
+                )],
+            },
+        },
+    ),
+    (
+        "a thread's stack too small for the worker's deepest path",
+        PerTarget {
+            // Each thread's stack must hold the worker's deepest path: here 128 bytes, in 64.
+            linux_x86_64: Plan::Breaks {
+                edits: &[
+                    (".equ STACK_SIZE, 4096", ".equ STACK_SIZE, 64"),
+                    (
+                        "worker:\n    push rbx\n",
+                        "worker:\n    push rbx\n    sub rsp, 64\n",
+                    ),
+                    (
+                        ".Lworker_done:\n    mov rax, rdx\n    pop rbx\n",
+                        ".Lworker_done:\n    mov rax, rdx\n    add rsp, 64\n    pop rbx\n",
+                    ),
+                ],
+                finds: &[(
+                    Rule::Resources,
+                    At::Line(".equ STACK_SIZE"),
+                    "a worker's stack can reach 128 bytes, but STACK_SIZE is 64",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[
+                    (".equ STACK_SIZE, 4096", ".equ STACK_SIZE, 64"),
+                    (
+                        "worker:\n    stp x19, x20, [sp, #-16]!\n",
+                        "worker:\n    stp x19, x20, [sp, #-16]!\n    sub sp, sp, #64\n",
+                    ),
+                    (
+                        ".Lworker_done:\n    mov x0, x12\n    ldp x19, x20, [sp], #16\n",
+                        ".Lworker_done:\n    mov x0, x12\n    add sp, sp, #64\n    ldp x19, x20, \
+                         [sp], #16\n",
+                    ),
+                ],
+                finds: &[(
+                    Rule::Resources,
+                    At::Line(".equ STACK_SIZE"),
+                    "but STACK_SIZE is 64",
+                )],
+            },
+        },
+    ),
+    (
+        "a worker writing a variable every thread shares",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[(
+                    "    add r9, VECTOR\n    dec r8\n    jnz .Lworker_loop\n",
+                    "    mov qword ptr [rip + input_size], rcx\n    add r9, VECTOR\n    dec r8\n    \
+                     jnz .Lworker_loop\n",
+                )],
+                finds: &[(
+                    Rule::Scope,
+                    At::Line("    mov qword ptr [rip + input_size], rcx"),
+                    "writes input_size on a worker thread",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[(
+                    "    add x14, x14, #VECTOR\n    subs x16, x16, #1\n    b.ne .Lworker_loop\n",
+                    "    adrp x13, input_size\n    add x13, x13, :lo12:input_size\n    str x12, \
+                     [x13]\n    add x14, x14, #VECTOR\n    subs x16, x16, #1\n    b.ne \
+                     .Lworker_loop\n",
+                )],
+                finds: &[(
+                    Rule::Scope,
+                    At::Line("    str x12, [x13]"),
+                    "writes through x13 on a worker thread",
+                )],
+            },
+        },
+    ),
+    (
+        "a worker writing through a register that isn't its slot",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[(
+                    "    add r9, VECTOR\n    dec r8\n    jnz .Lworker_loop\n",
+                    "    mov byte ptr [rsi], al\n    add r9, VECTOR\n    dec r8\n    jnz \
+                     .Lworker_loop\n",
+                )],
+                finds: &[(
+                    Rule::Scope,
+                    At::Line("    mov byte ptr [rsi], al"),
+                    "writes through rsi on a worker thread",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[(
+                    "    add x14, x14, #VECTOR\n    subs x16, x16, #1\n    b.ne .Lworker_loop\n",
+                    "    strb w10, [x1]\n    add x14, x14, #VECTOR\n    subs x16, x16, #1\n    b.ne \
+                     .Lworker_loop\n",
+                )],
+                finds: &[(
+                    Rule::Scope,
+                    At::Line("    strb w10, [x1]"),
+                    "writes through x1 on a worker thread",
+                )],
+            },
+        },
+    ),
+    (
+        "a worker's slot scanned past its end",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[(
+                    "    cmp r9, SLOT_SIZE - VECTOR + 1\n",
+                    "    cmp r9, SLOT_SIZE\n",
+                )],
+                finds: &[(
+                    Rule::Scope,
+                    At::Line("    movdqu xmmword ptr [rbx + r9], xmm0"),
+                    "outside the worker's slot",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[(
+                    ".equ SLOT_SCAN, SLOT_SIZE - VECTOR + 1\n",
+                    ".equ SLOT_SCAN, SLOT_SIZE\n",
+                )],
+                finds: &[(
+                    Rule::Scope,
+                    At::Line("    str q0, [x19, x14]"),
+                    "outside the worker's slot",
+                )],
+            },
+        },
+    ),
+    (
+        "a worker changing the register that holds its slot",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[(
+                    "    add r9, VECTOR\n    dec r8\n    jnz .Lworker_loop\n",
+                    "    add rbx, VECTOR\n    add r9, VECTOR\n    dec r8\n    jnz .Lworker_loop\n",
+                )],
+                finds: &[(
+                    Rule::Scope,
+                    At::Line("    add rbx, VECTOR"),
+                    "changes rbx, which holds the worker's slot",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[(
+                    "    add x14, x14, #VECTOR\n    subs x16, x16, #1\n    b.ne .Lworker_loop\n",
+                    "    add x19, x19, #VECTOR\n    add x14, x14, #VECTOR\n    subs x16, x16, #1\n    \
+                     b.ne .Lworker_loop\n",
+                )],
+                finds: &[(
+                    Rule::Scope,
+                    At::Line("    add x19, x19, #VECTOR"),
+                    "changes x19, which holds the worker's slot",
+                )],
+            },
+        },
+    ),
+    (
+        "a system call on a worker thread",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[
+                    (
+                        ".Lworker_done:\n    mov rax, rdx\n",
+                        ".Lworker_done:\n    mov eax, SYS_WRITE\n    syscall\n    test rax, rax\n    \
+                         js .Lworker_done_assert\n    mov rax, rdx\n",
+                    ),
+                    (
+                        ".Lworker_assert_index:\n",
+                        ".Lworker_done_assert:\n    mov edi, 16\n    call \
+                         assert_fail\n.Lworker_assert_index:\n",
+                    ),
+                ],
+                finds: &[(
+                    Rule::Resources,
+                    At::After("    mov eax, SYS_WRITE"),
+                    "makes a system call on a worker thread",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[
+                    (
+                        ".Lworker_done:\n    mov x0, x12\n",
+                        ".Lworker_done:\n    mov x8, #SYS_WRITE\n    svc #0\n    tbnz x0, #63, \
+                         .Lworker_done_assert\n    mov x0, x12\n",
+                    ),
+                    (
+                        ".Lworker_assert_index:\n",
+                        ".Lworker_done_assert:\n    mov w0, #16\n    bl \
+                         assert_fail\n.Lworker_assert_index:\n",
+                    ),
+                ],
+                finds: &[(
+                    Rule::Resources,
+                    At::After("    mov x8, #SYS_WRITE"),
+                    "makes a system call on a worker thread",
+                )],
+            },
+        },
+    ),
+    (
+        "a thread started outside the thread code",
+        PerTarget {
+            // clone anywhere else is a system call the spec doesn't list.
+            linux_x86_64: Plan::Breaks {
+                edits: &[(
+                    "_start:\n    call read_input\n",
+                    "_start:\n    mov edi, CLONE_FLAGS\n    mov eax, SYS_CLONE\n    syscall\n    test \
+                     rax, rax\n    js .Lstart_assert_length\n    call read_input\n",
+                )],
+                finds: &[(
+                    Rule::Resources,
+                    At::After("    mov eax, SYS_CLONE"),
+                    "system call 56 isn't one the spec allows",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[(
+                    "_start:\n    bl read_input\n",
+                    "_start:\n    mov x0, #CLONE_FLAGS & 0xffff\n    movk x0, #CLONE_FLAGS >> 16, \
+                     lsl #16\n    mov x8, #SYS_CLONE\n    svc #0\n    tbnz x0, #63, \
+                     .Lstart_read_failed\n    bl read_input\n",
+                )],
+                finds: &[(
+                    Rule::Resources,
+                    At::After("    mov x8, #SYS_CLONE"),
+                    "system call 220 isn't one the spec allows",
+                )],
+            },
+        },
+    ),
+    (
+        "the main thread calling a function of the workers",
+        PerTarget {
+            linux_x86_64: Plan::Breaks {
+                edits: &[(
+                    "    mov rdi, r12\n    call total_results\n",
+                    "    mov rdi, r12\n    call total_results\n    xor edi, edi\n    lea rsi, [rip + \
+                     slots]\n    call worker\n",
+                )],
+                finds: &[(
+                    Rule::Resources,
+                    At::Line("    call worker\n    cmp rax, rbx"),
+                    "_start calls worker, which only the thread code may call",
+                )],
+            },
+            linux_aarch64: Plan::Breaks {
+                edits: &[(
+                    "    mov x0, x20\n    bl total_results\n",
+                    "    mov x0, x20\n    bl total_results\n    mov x0, #0\n    adrp x1, slots\n    \
+                     add x1, x1, :lo12:slots\n    bl worker\n",
+                )],
+                finds: &[(
+                    Rule::Resources,
+                    At::Line("    bl worker\n    cmp x0, x19"),
+                    "_start calls worker, which only the thread code may call",
+                )],
+            },
+        },
+    ),
+];
+
+#[tokio::test]
+async fn threads_follow_the_rules_of_the_thread_code() {
+    hold(&ON_THE_PARALLEL_TEMPLATE, THREADS).await;
+}
+
+/// Threads need the spec's approval: a program that starts them under a spec that allows none is
+/// refused, and so is one whose THREADS is more than the spec allows.
+#[tokio::test]
+async fn threads_need_the_specs_approval() {
+    for (_, template) in PARALLEL_TEMPLATES.cells() {
+        let report = check_full(template, CpuFeatures::all(), &PARALLEL_SYSCALLS, None).await;
+        assert_violation(
+            &report,
+            Rule::Resources,
+            line_of(template, "parallel_for:"),
+            "spec.md doesn't allow threads",
+        );
+        let report = check_full(template, CpuFeatures::all(), &PARALLEL_SYSCALLS, Some(8)).await;
+        assert_violation(
+            &report,
+            Rule::Resources,
+            line_of(template, ".equ THREADS, 16"),
+            "THREADS is 16, but the spec allows from 1 to 8 threads",
+        );
+    }
+}
+
+/// Every target's parallel template passes every rule.
+#[tokio::test]
+async fn the_parallel_templates_pass_every_rule() {
+    for (target, template) in PARALLEL_TEMPLATES.cells() {
+        let report = check_parallel(template).await;
+        let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+        assert!(report.passed(), "{}: {all:#?}", target.name());
+    }
+}
+
+/// Every target's main template passes every rule, and the rules read all of it.
+#[tokio::test]
+async fn the_template_passes_every_rule() {
+    for (target, template) in TEMPLATES.cells() {
+        let report = check(template).await;
+        let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+        assert!(report.passed(), "{}: {all:#?}", target.name());
+        let facts = report.facts.expect("the rules ran");
+        assert_eq!(facts.functions, 4, "{}", target.name());
+        assert_eq!(facts.assertions, 11, "{}", target.name());
+        assert!(facts.max_stack_bytes >= 48, "{}: {facts:?}", target.name());
+        assert!(report.unsafe_blocks.is_empty(), "{}", target.name());
+    }
+}
+
+/// What a target's fillers are made of and where they go: the function that writes through its
+/// first argument and reads through its second (`fill`) and the one that calls it (`refill`), put
+/// before the template's `write_all`, and the call that lends 8 bytes to either.
+struct Kit {
+    /// A constant the fillers name, added: this line of the template becomes the other.
+    constant: Option<Edit>,
+    /// The fillers.
+    fillers: &'static str,
+    /// The comment of the function the fillers go before.
+    before: &'static str,
+    /// The label the call goes after.
+    label: &'static str,
+    /// The line that sets the call's size.
+    size: &'static str,
+    /// The call's instruction, up to the function it calls.
+    call: &'static str,
+}
+
+/// AArch64's `fill` and `refill`: `fill` stores a byte through x0 and returns the byte at x1.
+const AARCH64_FILLERS: &str = "// Stores a byte through x0, and returns the byte at x1.
+// In: x0 = the buffer, x1 = a byte to look at, x2 = how many, at least 1.
+// Out: x0 = the byte.
+// returns: result
+.type fill, @function
+fill:
+    strb w2, [x0]
+    ldrb w0, [x1]
+    ret
+.size fill, . - fill
+
+// Stores a byte through x0, by fill, and returns the byte at x1.
+// In: x0 = the buffer, x1 = a byte to look at.
+// Out: x0 = the byte.
+// returns: result
+.type refill, @function
+refill:
+    stp x29, x30, [sp, #-16]!
+    mov x2, #8
+    bl fill
+    ldp x29, x30, [sp], #16
+    ret
+.size refill, . - refill
+
+";
+
+/// Each target's fillers.
+const KITS: PerTarget<Kit> = PerTarget {
+    linux_x86_64: Kit {
+        constant: Some((
+            ".equ SYS_WRITE, 1\n",
+            ".equ SYS_READ, 0\n.equ SYS_WRITE, 1\n",
+        )),
+        fillers: FILLERS,
+        before: "# Writes rdx bytes from rsi to file descriptor edi",
+        label: ".Lstart_usage:\n",
+        size: "    mov edx, 8\n",
+        call: "    call ",
+    },
+    linux_aarch64: Kit {
+        constant: None,
+        fillers: AARCH64_FILLERS,
+        before: "// Writes x2 bytes from x1 to file descriptor x0, retrying partial writes.",
+        label: ".Lstart_usage:\n",
+        size: "    mov x2, #8\n",
+        call: "    bl ",
+    },
+};
+
+/// A way of lending an address to a function that writes through one argument and reads through
+/// another: the lines that put it in the two registers, the function called, and what the refusal
+/// says, none where the lending is allowed.
+struct Lending {
+    setup: &'static str,
+    callee: &'static str,
+    refused: Option<&'static str>,
+}
+
+/// M4: an address a function writes through is lent to it once.
+const LENDINGS: &[(&str, PerTarget<Lending>)] = &[
+    (
+        "the same address in both registers",
+        PerTarget {
+            linux_x86_64: Lending {
+                setup: "    lea rdi, [rip + out_buf]\n    lea rsi, [rip + out_buf]\n",
+                callee: "fill",
+                refused: Some(
+                    "lends one address, out_buf, in both rdi and rsi, and fill writes through rdi",
+                ),
+            },
+            linux_aarch64: Lending {
+                setup: "    adrp x0, out_buf\n    add x0, x0, :lo12:out_buf\n    adrp x1, out_buf\n    \
+                        add x1, x1, :lo12:out_buf\n",
+                callee: "fill",
+                refused: Some(
+                    "lends one address, out_buf, in both x0 and x1, and fill writes through x0",
+                ),
+            },
+        },
+    ),
+    (
+        "a copy of the pointer, which is the same address",
+        PerTarget {
+            linux_x86_64: Lending {
+                setup: "    lea rdi, [rip + out_buf + 4]\n    mov rsi, rdi\n",
+                callee: "fill",
+                refused: Some("lends one address, out_buf + 4, in both rdi and rsi"),
+            },
+            linux_aarch64: Lending {
+                setup: "    adrp x0, out_buf\n    add x0, x0, :lo12:out_buf\n    add x0, x0, #4\n    \
+                        mov x1, x0\n",
+                callee: "fill",
+                refused: Some("lends one address, out_buf + 4, in both x0 and x1"),
+            },
+        },
+    ),
+    (
+        "a function that writes through the address because what it calls does",
+        PerTarget {
+            linux_x86_64: Lending {
+                setup: "    lea rdi, [rip + out_buf]\n    lea rsi, [rip + out_buf]\n",
+                callee: "refill",
+                refused: Some("and refill writes through rdi"),
+            },
+            linux_aarch64: Lending {
+                setup: "    adrp x0, out_buf\n    add x0, x0, :lo12:out_buf\n    adrp x1, out_buf\n    \
+                        add x1, x1, :lo12:out_buf\n",
+                callee: "refill",
+                refused: Some("and refill writes through x0"),
+            },
+        },
+    ),
+    (
+        "separate parts of one buffer, as objects in an arena are",
+        PerTarget {
+            linux_x86_64: Lending {
+                setup: "    lea rdi, [rip + out_buf]\n    lea rsi, [rip + out_buf + 8]\n",
+                callee: "fill",
+                refused: None,
+            },
+            linux_aarch64: Lending {
+                setup: "    adrp x0, out_buf\n    add x0, x0, :lo12:out_buf\n    adrp x1, out_buf\n    \
+                        add x1, x1, :lo12:out_buf\n    add x1, x1, #8\n",
+                callee: "fill",
+                refused: None,
+            },
+        },
+    ),
+    (
+        "a buffer that is only read, lent twice",
+        PerTarget {
+            linux_x86_64: Lending {
+                setup: "    lea rdi, [rip + out_buf]\n    lea rsi, [rip + usage_msg]\n",
+                callee: "fill",
+                refused: None,
+            },
+            linux_aarch64: Lending {
+                setup: "    adrp x0, out_buf\n    add x0, x0, :lo12:out_buf\n    adrp x1, usage_msg\n    \
+                        add x1, x1, :lo12:usage_msg\n",
+                callee: "fill",
+                refused: None,
+            },
+        },
+    ),
+];
+
+/// The template of `target` with its fillers added, and a call of `callee` right after the label
+/// of its usage path, with `setup` before it.
+fn lending(target: Profile, setup: &str, callee: &str) -> String {
+    let kit = KITS.get(target);
+    let mut text = (*TEMPLATES.get(target)).to_owned();
+    if let Some((old, new)) = kit.constant {
+        assert!(text.contains(old), "{old:?} isn't in the template");
+        text = text.replacen(old, new, 1);
+    }
+    assert!(
+        text.contains(kit.before),
+        "{:?} isn't in the template",
+        kit.before
+    );
+    text = text.replacen(kit.before, &format!("{}{}", kit.fillers, kit.before), 1);
+    assert!(
+        text.contains(kit.label),
+        "{:?} isn't in the template",
+        kit.label
+    );
+    let call = format!("{}{setup}{}{}{callee}\n", kit.label, kit.size, kit.call);
+    text.replacen(kit.label, &call, 1)
+}
+
+#[tokio::test]
+async fn one_address_is_never_lent_twice_for_writing() {
+    let mut missed = Vec::new();
+    for (name, cells) in LENDINGS {
+        for (target, cell) in cells.cells() {
+            let text = lending(target, cell.setup, cell.callee);
+            let report = check_full(&text, CpuFeatures::all(), &PARALLEL_SYSCALLS, None).await;
+            let refusals: Vec<String> = report
+                .violations
+                .iter()
+                .filter(|violation| violation.rule == Rule::ExclusiveWrites)
+                .map(ToString::to_string)
+                .collect();
+            let on = format!("{name} on {}", target.name());
+            match cell.refused {
+                // Refused on the line of the call, which the usage path starts with.
+                Some(needle) => {
+                    let call = format!("{}{}\n", KITS.get(target).call, cell.callee);
+                    let line = line_of(&text, &call);
+                    let found = report.violations.iter().any(|violation| {
+                        violation.rule == Rule::ExclusiveWrites
+                            && violation.line == Some(line)
+                            && violation.to_string().contains(needle)
+                    });
+                    if !found {
+                        missed.push(format!("{on}: not refused for {needle:?}: {refusals:#?}"));
+                    }
+                }
+                None => {
+                    if !refusals.is_empty() {
+                        missed.push(format!("{on}: was refused: {refusals:#?}"));
+                    }
+                }
+            }
+        }
+    }
+    assert!(missed.is_empty(), "{missed:#?}");
+}
+
+/// Every table of fixtures, with its name.
+const TABLES: &[(&str, Fixtures)] = &[
+    ("the stack", STACK),
+    ("loops", LOOPS),
+    ("assertions", ASSERTIONS),
+    ("chains", CHAINS),
+    ("results", RESULTS),
+    ("calls", CALLS),
+    ("scope", SCOPES),
+    ("indexes", INDEXES),
+    ("bounds", BOUNDS),
+    ("functions", FUNCTIONS),
+    ("layout", LAYOUT),
+    ("constants", CONSTANTS),
+    ("numbers", NUMBERS),
+    ("threads", THREADS),
+];
+
+/// Every fixture is written on a target or says why that CPU can't have it, and no target writes
+/// fewer than the tests these tables replaced did.
+#[test]
+fn every_fixture_is_written_or_excused_on_every_target() {
+    let mut written = PerTarget {
+        linux_x86_64: 0,
+        linux_aarch64: 0,
+    };
+    for (table, rows) in TABLES {
+        for (name, cells) in *rows {
+            let mut any = false;
+            for (target, plan) in cells.cells() {
+                if let Plan::NotApplicable(why) = plan {
+                    assert!(
+                        why.len() > 40,
+                        "{table}: {name}: say why {} can't",
+                        target.name()
+                    );
+                    continue;
+                }
+                any = true;
+                match target {
+                    Profile::LinuxX86_64 => written.linux_x86_64 += 1,
+                    Profile::LinuxAarch64 => written.linux_aarch64 += 1,
+                }
+            }
+            assert!(any, "{table}: {name}: no target writes it");
+        }
+    }
+    for (_, cells) in LENDINGS {
+        match (cells.linux_x86_64.refused, cells.linux_aarch64.refused) {
+            (Some(_), Some(_)) | (None, None) => {}
+            _ => panic!("a lending is refused on one target and allowed on the other"),
+        }
+    }
+    assert!(written.linux_x86_64 >= 57, "{}", written.linux_x86_64);
+    assert!(written.linux_aarch64 >= 48, "{}", written.linux_aarch64);
 }
 
 /// A pointer just past a symbol's end belongs to the symbol main.s names, whatever starts there:
@@ -1496,79 +3105,6 @@ refill:
 .size refill, . - refill
 
 ";
-
-#[tokio::test]
-async fn one_address_is_never_lent_twice_for_writing() {
-    let lend = |setup: &str, callee: &str| {
-        let text = with(
-            ".equ SYS_WRITE, 1\n",
-            ".equ SYS_READ, 0\n.equ SYS_WRITE, 1\n",
-        )
-        .replacen(
-            "# Writes rdx bytes from rsi to file descriptor edi",
-            &format!("{FILLERS}# Writes rdx bytes from rsi to file descriptor edi"),
-            1,
-        )
-        .replacen(
-            ".Lstart_usage:\n",
-            &format!(".Lstart_usage:\n{setup}    mov edx, 8\n    call {callee}\n"),
-            1,
-        );
-        assert!(text.contains(&format!("    call {callee}\n")));
-        text
-    };
-    let refused = [
-        (
-            "    lea rdi, [rip + out_buf]\n    lea rsi, [rip + out_buf]\n",
-            "fill",
-            "lends one address, out_buf, in both rdi and rsi, and fill writes through rdi",
-        ),
-        // A copy of the pointer is the same address.
-        (
-            "    lea rdi, [rip + out_buf + 4]\n    mov rsi, rdi\n",
-            "fill",
-            "lends one address, out_buf + 4, in both rdi and rsi",
-        ),
-        // refill writes through rdi because what it calls does.
-        (
-            "    lea rdi, [rip + out_buf]\n    lea rsi, [rip + out_buf]\n",
-            "refill",
-            "and refill writes through rdi",
-        ),
-    ];
-    for (setup, callee, needle) in refused {
-        let text = lend(setup, callee);
-        let report = check_full(&text, CpuFeatures::all(), &PARALLEL_SYSCALLS, None).await;
-        assert_violation(
-            &report,
-            Rule::ExclusiveWrites,
-            line_of(&text, &format!("    call {callee}\n")),
-            needle,
-        );
-    }
-    // Separate parts of one buffer may be lent together, as objects in an arena are, and a
-    // buffer only read may be lent twice.
-    let allowed = [
-        "    lea rdi, [rip + out_buf]\n    lea rsi, [rip + out_buf + 8]\n",
-        "    lea rdi, [rip + out_buf]\n    lea rsi, [rip + usage_msg]\n",
-    ];
-    for setup in allowed {
-        let report = check_full(
-            &lend(setup, "fill"),
-            CpuFeatures::all(),
-            &PARALLEL_SYSCALLS,
-            None,
-        )
-        .await;
-        let refused: Vec<String> = report
-            .violations
-            .iter()
-            .filter(|violation| violation.rule == Rule::ExclusiveWrites)
-            .map(ToString::to_string)
-            .collect();
-        assert!(refused.is_empty(), "{setup:?} was refused: {refused:#?}");
-    }
-}
 
 #[test]
 fn reports_have_a_fixed_format() {
@@ -1817,186 +3353,6 @@ const PARALLEL_SYSCALLS: [Syscall; 3] = [Syscall::Read, Syscall::Write, Syscall:
 
 async fn check_parallel(text: &str) -> Report {
     check_full(text, CpuFeatures::all(), &PARALLEL_SYSCALLS, Some(16)).await
-}
-
-#[tokio::test]
-async fn the_parallel_template_passes_every_rule() {
-    let report = check_parallel(PARALLEL_TEMPLATE).await;
-    let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
-    assert!(report.passed(), "{all:#?}");
-}
-
-#[tokio::test]
-async fn threads_need_the_spec_and_the_canonical_code() {
-    // Threads the spec doesn't allow.
-    let report = check_full(
-        PARALLEL_TEMPLATE,
-        CpuFeatures::all(),
-        &PARALLEL_SYSCALLS,
-        None,
-    )
-    .await;
-    assert_violation(
-        &report,
-        Rule::Resources,
-        line_of(PARALLEL_TEMPLATE, "parallel_for:"),
-        "spec.md doesn't allow threads",
-    );
-    // More threads than it allows.
-    let report = check_full(
-        PARALLEL_TEMPLATE,
-        CpuFeatures::all(),
-        &PARALLEL_SYSCALLS,
-        Some(8),
-    )
-    .await;
-    assert_violation(
-        &report,
-        Rule::Resources,
-        line_of(PARALLEL_TEMPLATE, ".equ THREADS, 16"),
-        "THREADS is 16, but the spec allows from 1 to 8 threads",
-    );
-    for (old, new, rule, needle, message) in [
-        (
-            "    mov ebx, 1\n    mov r13, THREADS\n.Lparallel_for_start:",
-            "    mov ebx, 2\n    mov r13, THREADS\n.Lparallel_for_start:",
-            Rule::Resources,
-            "parallel_for:",
-            "parallel_for differs from the template",
-        ),
-        (
-            ".equ CLONE_FLAGS, 0x350F00",
-            ".equ CLONE_FLAGS, 0x50F00",
-            Rule::Resources,
-            ".equ CLONE_FLAGS",
-            "CLONE_FLAGS must be 3477248",
-        ),
-        (
-            ".equ SLOT_SIZE, CHUNK",
-            ".equ SLOT_SIZE, CHUNK + 8",
-            Rule::Resources,
-            ".equ SLOT_SIZE",
-            "isn't a positive multiple of 64",
-        ),
-    ] {
-        let text = PARALLEL_TEMPLATE.replacen(old, new, 1);
-        assert_ne!(text, PARALLEL_TEMPLATE, "{old}");
-        let report = check_parallel(&text).await;
-        assert_violation(&report, rule, line_of(&text, needle), message);
-    }
-    // Each thread's stack must hold the worker's deepest path: here 128 bytes, in 64.
-    let text = PARALLEL_TEMPLATE
-        .replacen(".equ STACK_SIZE, 4096", ".equ STACK_SIZE, 64", 1)
-        .replacen(
-            "worker:\n    push rbx\n",
-            "worker:\n    push rbx\n    sub rsp, 64\n",
-            1,
-        )
-        .replacen(
-            ".Lworker_done:\n    mov rax, rdx\n    pop rbx\n",
-            ".Lworker_done:\n    mov rax, rdx\n    add rsp, 64\n    pop rbx\n",
-            1,
-        );
-    let report = check_parallel(&text).await;
-    assert_violation(
-        &report,
-        Rule::Resources,
-        line_of(&text, ".equ STACK_SIZE"),
-        "a worker's stack can reach 128 bytes, but STACK_SIZE is 64",
-    );
-}
-
-#[tokio::test]
-async fn workers_write_only_their_stack_and_their_slot() {
-    let loop_end = "    add r9, VECTOR\n    dec r8\n    jnz .Lworker_loop\n";
-    for (old, new, rule, needle, message) in [
-        (
-            loop_end,
-            "    mov qword ptr [rip + input_size], rcx\n    add r9, VECTOR\n    dec r8\n    \
-             jnz .Lworker_loop\n",
-            Rule::Scope,
-            "    mov qword ptr [rip + input_size], rcx",
-            "writes input_size on a worker thread",
-        ),
-        (
-            loop_end,
-            "    mov byte ptr [rsi], al\n    add r9, VECTOR\n    dec r8\n    jnz .Lworker_loop\n",
-            Rule::Scope,
-            "    mov byte ptr [rsi], al",
-            "writes through rsi on a worker thread",
-        ),
-        (
-            "    cmp r9, SLOT_SIZE - VECTOR + 1\n",
-            "    cmp r9, SLOT_SIZE\n",
-            Rule::Scope,
-            "    movdqu xmmword ptr [rbx + r9], xmm0",
-            "outside the worker's slot",
-        ),
-        (
-            loop_end,
-            "    add rbx, VECTOR\n    add r9, VECTOR\n    dec r8\n    jnz .Lworker_loop\n",
-            Rule::Scope,
-            "    add rbx, VECTOR",
-            "changes rbx, which holds the worker's slot",
-        ),
-        (
-            ".Lworker_done:\n    mov rax, rdx\n",
-            ".Lworker_done:\n    mov eax, SYS_WRITE\n    syscall\n    test rax, rax\n    \
-             js .Lworker_done_assert\n    mov rax, rdx\n",
-            Rule::Resources,
-            "    mov eax, SYS_WRITE\n    syscall\n    test rax, rax\n    js .Lworker_done_assert",
-            "makes a system call on a worker thread",
-        ),
-    ] {
-        let mut text = PARALLEL_TEMPLATE.replacen(old, new, 1);
-        assert_ne!(text, PARALLEL_TEMPLATE, "{old}");
-        if new.contains(".Lworker_done_assert") {
-            text = text.replacen(
-                ".Lworker_assert_index:\n",
-                ".Lworker_done_assert:\n    mov edi, 16\n    call assert_fail\n.Lworker_assert_index:\n",
-                1,
-            );
-        }
-        let report = check_parallel(&text).await;
-        let line = line_of(&text, needle.lines().next().unwrap_or(needle))
-            + usize::from(needle.contains("syscall"));
-        assert_violation(&report, rule, line, message);
-    }
-}
-
-#[tokio::test]
-async fn only_the_thread_code_starts_threads() {
-    // clone anywhere else is a system call the spec doesn't list.
-    let text = PARALLEL_TEMPLATE.replacen(
-        "_start:\n    call read_input\n",
-        "_start:\n    mov edi, CLONE_FLAGS\n    mov eax, SYS_CLONE\n    syscall\n    test rax, rax\n    \
-         js .Lstart_assert_length\n    call read_input\n",
-        1,
-    );
-    let report = check_parallel(&text).await;
-    assert_violation(
-        &report,
-        Rule::Resources,
-        line_of(
-            &text,
-            "    mov eax, SYS_CLONE\n    syscall\n    test rax, rax\n    js .Lstart",
-        ) + 1,
-        "system call 56 isn't one the spec allows",
-    );
-    // The main thread can't call a function that runs on worker threads.
-    let text = PARALLEL_TEMPLATE.replacen(
-        "    mov rdi, r12\n    call total_results\n",
-        "    mov rdi, r12\n    call total_results\n    xor edi, edi\n    lea rsi, [rip + slots]\n    \
-         call worker\n",
-        1,
-    );
-    let report = check_parallel(&text).await;
-    assert_violation(
-        &report,
-        Rule::Resources,
-        line_of(&text, "    call worker\n    cmp rax, rbx"),
-        "_start calls worker, which only the thread code may call",
-    );
 }
 
 #[tokio::test]
@@ -2249,87 +3605,6 @@ async fn aarch64_aes_and_sha_need_a_cpu_with_them() {
         "{:?}",
         with.violations
     );
-}
-
-/// Threads on AArch64 are held to the same rules as x86-64's: the canonical functions copied
-/// word for word from AArch64's template, a worker reaching only its own slot through x19, and
-/// threads only where the spec allows them.
-#[tokio::test]
-async fn aarch64_threads_follow_the_rules() {
-    let spec = |text: &str| crate::spec::parse(text).expect("the spec");
-    let root =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("plugin/skills/compile/assets");
-    let allowed =
-        spec(&std::fs::read_to_string(root.join("parallel-template-spec.md")).expect("a spec"));
-    let text =
-        std::fs::read_to_string(root.join("linux-aarch64/parallel-template.s")).expect("a program");
-    let report = check_full(
-        &text,
-        CpuFeatures::all(),
-        &allowed.syscalls,
-        allowed.threads,
-    )
-    .await;
-    assert!(report.passed(), "{:#?}", report.violations);
-    let cases = [
-        (
-            "    mov x21, #THREADS\n.Lparallel_for_start:",
-            "    mov x21, #THREADS - 1\n.Lparallel_for_start:",
-            Rule::Resources,
-            "parallel_for:",
-            "parallel_for differs from the template",
-        ),
-        (
-            "    str q0, [x19, x14]\n",
-            "    adrp x13, slots\n    add x13, x13, :lo12:slots\n    str q0, [x13, x14]\n",
-            Rule::Races,
-            "    add x13, x13, :lo12:slots",
-            "on a worker thread, where other threads write their parts of it",
-        ),
-    ];
-    for (from, to, rule, at, needle) in cases {
-        let changed = text.replacen(from, to, 1);
-        assert_ne!(changed, text, "{to}");
-        let report = check_full(
-            &changed,
-            CpuFeatures::all(),
-            &allowed.syscalls,
-            allowed.threads,
-        )
-        .await;
-        assert_violation(&report, rule, line_of(&changed, at), needle);
-    }
-    let report = check_full(&text, CpuFeatures::all(), &allowed.syscalls, None).await;
-    assert!(
-        report
-            .violations
-            .iter()
-            .any(|violation| violation.problem.contains("spec.md doesn't allow threads")),
-        "{:#?}",
-        report.violations
-    );
-}
-
-/// The AArch64 template passes every rule.
-#[tokio::test]
-async fn the_aarch64_template_passes() {
-    let report = check(AARCH64_TEMPLATE).await;
-    assert!(
-        report.violations.is_empty(),
-        "{}",
-        report
-            .violations
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n")
-    );
-    // The rules read all of it, as they do x86-64's template.
-    let facts = report.facts.expect("the rules ran");
-    assert_eq!(facts.functions, 4);
-    assert_eq!(facts.assertions, 11);
-    assert!(facts.max_stack_bytes >= 48, "{facts:?}");
-    assert!(report.unsafe_blocks.is_empty());
 }
 
 /// The AArch64 template with `old` replaced by `new`, once.

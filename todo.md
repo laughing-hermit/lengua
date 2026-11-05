@@ -230,23 +230,42 @@ in this run are listed above), heaviest first:
    limits (ARM64 had 8 native tests against x86-64's 25, and now both run the same 31), the red
    team, the memory rules' planted bugs and the all-programs test run natively on both runners.
    What is left:
-   - *Checker fixtures.* The planted memory bugs are one table (`PLANTED`, `src/checker/tests.rs`,
-     a cell for each CPU), but ARM64 still lacks the rest of what x86-64 has there: one address
-     lent twice for writing (M4, `one_address_is_never_lent_twice_for_writing`),
-     `the_stack_is_tracked_exactly`, the thread rules (M7), and about half of the Power of 10
-     rules' fixtures. Each is a one-line edit of the ARM64 template (`with_aarch64`); the
-     saved-return-address gap is what their absence cost.
+   - *Checker fixtures: done (2026-11-04).* Beside the planted memory bugs (`PLANTED`), the Power
+     of 10 rules' fixtures are tables with a cell for each CPU in `src/checker/tests.rs`: the
+     stack, loops, assertions, comparison chains, results, calls and exit codes, scope, indexes,
+     bounds, functions, layout, constants, numbers, the thread rules (M7), the one address lent
+     twice for writing (M4) and the operands tampered with. 57 x86-64 and 48 ARM64 fixture cells
+     (plus 5 lendings and 1 tampering for each), check only, so every runner checks both CPUs'
+     cells: the 53 tests of `checker::tests` pass on x86-64 (run 41916413852) and on ARM64 (run
+     41916418962). The 9 cells a CPU cannot write say why in its hardware: AArch64 has no x87,
+     prefix, `offset` operand, memory operand that names a symbol or `lea` with an index, never
+     enters a function 8 bytes deep, and its assembler refuses a number that fits no field where
+     x86-64's cuts it short. The x86-64 originals are deleted, and ARM64's separate
+     `aarch64_threads_follow_the_rules` and `the_aarch64_template_passes` with them (their cases
+     are rows now). The unmodified AArch64 template goes through `check` to `done` in
+     `tests/template.rs`, a case for both CPUs (runs 41916423824 on x86-64, 41916430087 on
+     ARM64). The ARM64 cell of one row had to differ from its x86-64 twin in its text: a
+     `SLOT_SIZE` of `CHUNK + 8` is refused by the dialect (no single `mov` holds 65544) before
+     the thread rules look, so it is `CHUNK - 8` there.
    - *Prover tests.* ARM64's prover is tested on 7 of the 29 twins, x86-64's on about 20 programs,
      and its memory-bug tests are x86-only.
    - *Other x86-only coverage.* The checker's and the prover's golden recordings; executor tests
      of loop detection, connections and sleep. The session tests that were made for one CPU
-     (`tests/check_code.rs`, `tests/e2e.rs` and `tests/aarch64_session.rs`) are no longer in this
-     list: they are tables for both CPUs, the server's own flow, the add workflow and the proofs
-     of the template in `tests/sessions.rs` and `tests/workflow.rs` and the examples, fixtures,
-     templates and the benchmark's programs in `tests/programs.rs` (both below), and the
-     unmodified AArch64 template now goes through `check` to `done`, is proven for every input
-     and is run in them. `DEBT` in `tests/parity_inventory.rs` lists every test file still made
-     for one CPU.
+     (`tests/check_code.rs`, `tests/e2e.rs`, `tests/aarch64.rs` and `tests/aarch64_session.rs`)
+     are no longer in this list: they are tables for both CPUs, all done on 2026-11-04. The
+     server's own flow, the add workflow and the proofs of the template are `tests/sessions.rs`
+     and `tests/workflow.rs`; the examples, fixtures, templates and the benchmark's programs are
+     `tests/programs.rs` (both below); the rest is `tests/network.rs` (the echo server and the
+     fetch client against the tests' own peers and through `run`, a client over TLS, a computer
+     an argument names, a server that waits for its client to close, programs on the network
+     proven, the event-loop server and the key reader through the server, a raw read, a cut only
+     the proof tries, a closed standard output: 10 cases, 11 tests with the one that holds
+     every edit to its program), `tests/standalone.rs` (the templates built and run alone, one
+     instruction per line, fill and assert_fail as a program of their own, every word held to
+     LLVM's disassembler: the 4 tests of the deleted `tests/aarch64.rs`, now for x86-64 too) and
+     `tests/template.rs`. The unmodified AArch64 template now goes through `check` to `done`, is
+     proven for every input and is run in them. `DEBT` in `tests/parity_inventory.rs` lists every
+     test file still made for one CPU.
 2. **Prover reach.**
    - *x86-64's prover* can't follow dozens of vector instructions the ARM64 prover models
      (`palignr`, `pblendw`, `punpck*`, `pack*`, saturating and widening arithmetic, string
@@ -260,7 +279,17 @@ in this run are listed above), heaviest first:
      value points into" rule.
    - *An unexplained difference.* In the same 60 seconds, ARM64 proved far fewer combinations of
      the `amounts` valid-input block than x86-64 (36 against about 10,000 on the runners). Not
-     investigated: the runner's CPU, the model's speed, or the twice-as-many paths.
+     investigated: the runner's CPU, the model's speed, or the twice-as-many paths. The network
+     tables found it again on 2026-11-04, on the simplest program: `add`'s `B4`, where standard
+     output is closed (400 input combinations). x86-64 proves it for every input in range in the
+     minute (run 41913318774); on the ARM64 runner it comes out "tested, not proven: its 400 input
+     combinations would take about 8 minutes; the proof has 59 seconds", and `B1` about 9 (run
+     41912035484, again at 60 seconds in 41913324166). `a_closed_standard_output_fails_every_write`
+     (`tests/network.rs`) pins each CPU's line in a cell (`B4_PROOF`), as the case it is for
+     both: either way the test that closes standard output catches an exit code that is not the
+     spec's. Everything else the network tables prove reads the same on both CPUs: the echo
+     server's blocks and the fetch client's, "proven for every input in range" with the line
+     cut any way (runs 41912030313 and 41912035484).
 3. **CI coverage.** GitHub's x86-64 runners are a mixed pool: of 21 runs on 2026-11-04, 10 drew
    a CPU with AVX-512 (Xeon Platinum 8573C and 6975P-C, EPYC 9V45, some EPYC 9V74) and 11 did not
    (EPYC 7763, other EPYC 9V74), so x86-64 coverage was a coin flip per run. On a draw without
@@ -484,13 +513,17 @@ natively on both runners:
   where a program for an extension the CPU lacks is skipped with a note); and the sandbox's
   limits (`tests/limits.rs`, 31 tests, each program an assembly source per CPU, built for both
   CPUs on every runner and run on its own); the server's flow (`tests/sessions.rs`, 18 cases,
-  and `tests/workflow.rs`, 7, below); and the examples, fixtures, templates and the benchmark's
+  and `tests/workflow.rs`, 7, below); the examples, fixtures, templates and the benchmark's
   programs through the server (`tests/programs.rs`, 26 tests: 52 cases on the two CPUs where 32
-  were on one each, and what the second CPU showed is in "What the programs table found" below).
-  Left: the test files still made for one CPU, which `tests/parity_inventory.rs` lists in `DEBT`
-  with what each lacks on the other CPU: `aarch64_session.rs`, which is only ARM64's by-hand
-  port tool now (`check_one_aarch64_folder`, with the QEMU path that x86-64's `check_one_folder`
-  in `check_folder.rs` has no counterpart of).
+  were on one each, and what the second CPU showed is in "What the programs table found" below);
+  the network, terminal and standard-input cases (`tests/network.rs`), the templates built and
+  run alone (`tests/standalone.rs`, which replaced `tests/aarch64.rs`), the template through
+  `check` to `done` (`tests/template.rs`) and the Power of 10 rules' fixtures
+  (`src/checker/tests.rs`). Left: the test files still made for one CPU, which
+  `tests/parity_inventory.rs` lists in `DEBT` with what each lacks on the other CPU:
+  `aarch64_session.rs`, which is only ARM64's by-hand port tool now
+  (`check_one_aarch64_folder`, with the QEMU path that x86-64's `check_one_folder` in
+  `check_folder.rs` has no counterpart of).
 - *3, the porting list as an executable conformance suite: begun.* The rules, the red team, every
   program through the server, the sandbox's limits and the server's session flow are tables both
   runners run natively. `parity_inventory.rs` fails when a target has no job that runs

@@ -36,17 +36,6 @@ struct Debt {
 /// entry, and the ratchet fails until it is gone.
 const DEBT: &[Debt] = &[
     Debt {
-        file: "tests/aarch64.rs",
-        reason: "the AArch64 templates built and run alone, with no server: one machine \
-                 instruction per source line, the template against its spec's examples, fill \
-                 and assert_fail as a program of their own, and every word of the templates \
-                 read by lengua's decoder as LLVM's disassembler reads it",
-        missing: "x86-64 has none of the three standalone tests: its template runs through the \
-                  server rather than alone against its spec's examples, fill and assert_fail \
-                  are not a program of their own there, and its decoder (iced-x86) is not held \
-                  to LLVM's disassembler on every template word",
-    },
-    Debt {
         file: "tests/aarch64_session.rs",
         reason: "ARM64's by-hand port tool: `check_one_aarch64_folder` checks the folders \
                  LENGUA_CHECK_FOLDER names, natively on an ARM64 computer and through QEMU's \

@@ -56,6 +56,14 @@ its proof interrupted by an edit, `cat-stream` is stamped, run on a long input a
 length, and `echo` is served from a shell until it is stopped. A fixture they use is needed on
 both CPUs, with the very same `spec.md`.
 
+**Some are also the subject of a case written once for both CPUs.** `tests/network.rs` makes one
+change to a program of each CPU and holds the report to it: `second` read with a read of its own
+instead of `fill`, or with a spec whose first line the tests' cuts never end a read after (the
+proof's cut finds it); the `echo` and `fetch` examples served, fetched from, proven, and edited to
+wait for the client to close or to stop after one connection; and `add` with the exit code of a
+failed write changed. Each case's edit is a cell for each CPU in the test, checked against that
+CPU's program on every runner, so a twin that drifts from its sibling's text fails the build.
+
 **`sha256` and `aes` are baseline forms.** The twins `linux-aarch64/sha256` and `linux-aarch64/aes`,
 like `examples/sha256` and `examples/aes`, are plain integer code (rotates, adds and xors, a table
 of 256 words for AES) that runs on every computer of its CPU; the forms that use the CPU's SHA and
