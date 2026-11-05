@@ -90,7 +90,9 @@ lengua is perfected when each of these is shown by a green run on GitHub's runne
      sharded `ci.yml`.
    - The OS seams become backends keyed by target (`src/os/`), and tables are keyed by what a
      cell depends on (`PerCpu`, `PerOs`, `PerTarget`).
-   - The macOS and Windows spikes have answered: linking, the sandbox, handed-over descriptors.
+   - The macOS and Windows spikes have answered: what the toolchains make, names, pipes (first
+     answers 2026-11-05, in ROADMAP.md's round 1), then handed-over descriptors and handles,
+     which rounds 3 and 4 ask again. What a sandbox refuses is the owner's to try.
    - The Linux soundness items below are fixed.
 2. **The edge and the broker, on Linux, for both CPUs.**
    - Programs reach the OS only through lengua's linked edge: 21 operations defined once
