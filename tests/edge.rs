@@ -1001,6 +1001,8 @@ fn cases() -> Vec<Case> {
                     // The results, then the kind and size of the folder, the file and the pipe.
                     &[16, 0, 8, 0, 0, -20, -9, 0, 0, 1, 4, 0, 0, 2],
                     &[
+                        // The descriptor the last open gave, which the report takes in.
+                        (240, &[3]),
                         (256, &[16, 0, 0, 8, b'o', b'n', b'l', b'y', b'.', b't', b'x', b't', 0, 0, 0, 0]),
                         (416, &[8, 0, 1, 1, b's', 0, 0, 0]),
                     ],
