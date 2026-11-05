@@ -252,9 +252,10 @@ in this run are listed above), heaviest first:
      for both CPUs, and a guard fails a new test that runs on one CPU only.
    - *Session tests: done (2026-11-04).* The session tests that were made for one CPU
      (`tests/check_code.rs`, `tests/e2e.rs`, `tests/aarch64.rs` and `tests/aarch64_session.rs`)
-     are tables for both CPUs now. The server's own flow, the add workflow and the proofs of the template are `tests/sessions.rs`
-     and `tests/workflow.rs`; the examples, fixtures, templates and the benchmark's programs are
-     `tests/programs.rs` (both below); the rest is `tests/network.rs` (the echo server and the
+     are tables for both CPUs now. The server's own flow, the add workflow and the proofs of the
+     template are `tests/sessions.rs` and `tests/workflow.rs`; the examples, fixtures, templates
+     and the benchmark's programs are `tests/programs.rs` (both below); the rest is
+     `tests/network.rs` (the echo server and the
      fetch client against the tests' own peers and through `run`, a client over TLS, a computer
      an argument names, a server that waits for its client to close, programs on the network
      proven, the event-loop server and the key reader through the server, a raw read, a cut only
