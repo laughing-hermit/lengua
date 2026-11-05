@@ -145,8 +145,10 @@ const PROOF_NICENESS: i32 = 10;
 
 /// Lowers the calling thread's priority below the user's own work, and with it the solvers it
 /// starts, which inherit it. Linux keeps a priority for each thread, so the server's other
-/// threads, which answer the agent, keep theirs.
+/// threads, which answer the agent, keep theirs. Elsewhere a priority is the whole process's,
+/// which would slow the threads that answer the agent too, so nothing is lowered there yet.
 pub fn yield_to_others() {
+    #[cfg(target_os = "linux")]
     let _ = rustix::process::setpriority_process(None, PROOF_NICENESS);
 }
 
@@ -214,15 +216,27 @@ fn stop_largest() -> bool {
 
 /// Stops a running solver, marking it stopped; whether it was.
 fn stop(solvers: &mut Solvers, pid: u32) -> bool {
-    let Ok(raw) = i32::try_from(pid) else {
-        return false;
-    };
-    let killed =
-        nix::sys::signal::kill(nix::unistd::Pid::from_raw(raw), nix::sys::signal::SIGKILL).is_ok();
+    let killed = kill(pid);
     if killed {
         solvers.stopped.insert(pid);
     }
     killed
+}
+
+/// Kills the process with this number; whether it did. Windows has no way to from a number alone
+/// yet (round 4 of the roadmap), and there nothing reads the memory the watchdog watches either.
+#[cfg(unix)]
+fn kill(pid: u32) -> bool {
+    let Ok(raw) = i32::try_from(pid) else {
+        return false;
+    };
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(raw), nix::sys::signal::SIGKILL).is_ok()
+}
+
+/// Kills the process with this number: not yet here.
+#[cfg(not(unix))]
+fn kill(_pid: u32) -> bool {
+    false
 }
 
 /// Stops the solver with this process id as the watchdog would, for tests.
@@ -256,6 +270,7 @@ fn watch() {
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn reads_memory_from_proc() {
         let text = "MemTotal:       28350444 kB\nMemFree:  1 kB\nMemAvailable:   24855000 kB\n";
@@ -281,6 +296,7 @@ mod tests {
     }
 
     /// A proof worker yields: its priority drops below normal, and a solver it starts inherits it.
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_proof_worker_yields_to_other_work() {
         std::thread::spawn(|| {
@@ -307,6 +323,7 @@ mod tests {
     /// A solver the watchdog stops ends by SIGKILL, and is known to have been stopped. This
     /// stops its own process by number, never "the largest", which another test's solver
     /// could be.
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_stopped_solver_is_known_to_be() {
         let mut child = std::process::Command::new("sleep")

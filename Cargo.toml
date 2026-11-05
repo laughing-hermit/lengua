@@ -19,16 +19,12 @@ path = "src/main.rs"
 getrandom = "0.4"
 hmac = "0.13"
 iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder", "instr_info", "intel"] }
-landlock = "0.4.7"
-nix = { version = "0.31", default-features = false, features = ["process", "ptrace", "signal", "uio"] }
 object = { version = "0.40", default-features = false, features = ["std", "read_core", "elf"] }
-perf-event2 = "0.7.4"
 rand = { version = "0.10", default-features = false, features = ["chacha"] }
 rmcp = { version = "3.8.0", features = ["transport-io"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustix = { version = "1", features = ["net", "process", "termios", "thread"] }
 schemars = "1"
-seccompiler = "0.5"
 serde = { version = "1", features = ["derive"] }
 serde-saphyr = "2.0"
 serde_json = "1"
@@ -41,6 +37,18 @@ unicode-normalization = "0.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 webpki-roots = "1"
+
+# What only some systems have: the kernel's confinement and counters are Linux's, and the Unix
+# calls are Unix's (the nix crate is empty elsewhere). macOS and Windows get their own in rounds 3
+# and 4 of the roadmap.
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", default-features = false, features = ["process", "signal"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4.7"
+nix = { version = "0.31", default-features = false, features = ["process", "ptrace", "signal", "uio"] }
+perf-event2 = "0.7.4"
+seccompiler = "0.5"
 
 [dev-dependencies]
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }

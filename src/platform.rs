@@ -621,7 +621,7 @@ fn cpu_features() -> CpuFeatures {
 
 /// This ARM64 CPU's SVE vector length in bytes, as the kernel gives this process and its
 /// children, or 0 where it has none or a length past the model's.
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 fn sve_bytes() -> u16 {
     if !std::arch::is_aarch64_feature_detected!("sve") {
         return 0;
@@ -633,8 +633,9 @@ fn sve_bytes() -> u16 {
         .unwrap_or(0)
 }
 
-/// No other CPU has SVE.
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+/// No other CPU has SVE, and no other system tells its length yet: Apple's CPUs have none, and
+/// Windows's length is a todo item for round 6.
+#[cfg(not(any(target_arch = "x86_64", all(target_os = "linux", target_arch = "aarch64"))))]
 const fn sve_bytes() -> u16 {
     0
 }
@@ -642,6 +643,7 @@ const fn sve_bytes() -> u16 {
 /// The SVE vector length QEMU gives the AArch64 programs it runs here, in bytes, or 0 where it
 /// can't be told or is past the model's: measured once by running a program of four
 /// instructions, `cntb x0`, `lsr x0, x0, #4`, and an exit with x0, which says it in 16 bytes.
+#[cfg(target_os = "linux")]
 fn emulated_sve_bytes() -> u16 {
     static FOUND: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
     *FOUND.get_or_init(|| {
@@ -669,6 +671,12 @@ fn emulated_sve_bytes() -> u16 {
             .filter(|bytes| (16..=SVE_MAX_BYTES).contains(bytes))
             .unwrap_or(0)
     })
+}
+
+/// QEMU's user mode, which runs another CPU's programs, is Linux's alone.
+#[cfg(not(target_os = "linux"))]
+const fn emulated_sve_bytes() -> u16 {
+    0
 }
 
 /// A static AArch64 Linux executable that exits with its SVE vector length over 16: an ELF

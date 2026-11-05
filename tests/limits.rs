@@ -1715,6 +1715,7 @@ async fn gives_an_empty_environment_and_closed_stdin() {
 /// can, never reaches the program: the launcher closes every descriptor it doesn't hand over, so
 /// the program's write to that number fails with EBADF, and the file outside its folder is left
 /// as it was. (Landlock holds paths, not descriptors already open.)
+#[cfg(unix)]
 #[tokio::test]
 async fn a_descriptor_lengua_s_parent_left_open_never_reaches_the_program() {
     use std::os::fd::AsRawFd as _;
@@ -1897,7 +1898,16 @@ fn time(seconds: i64, nanoseconds: i64) -> Vec<u8> {
 }
 
 /// Whether this computer lets a process count its CPU's instructions: a virtual machine may not
+/// give it the counters at all, and only Linux's perf events are read so far.
+#[cfg(not(target_os = "linux"))]
+fn counters_here() -> bool {
+    lengua::skiplog::note("this system's instruction counters aren't read yet (only Linux's are)");
+    false
+}
+
+/// Whether this computer lets a process count its CPU's instructions: a virtual machine may not
 /// give it the counters at all.
+#[cfg(target_os = "linux")]
 fn counters_here() -> bool {
     let counts = perf_event::Builder::new(perf_event::events::Hardware::INSTRUCTIONS)
         .build()

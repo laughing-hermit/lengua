@@ -131,6 +131,7 @@ async fn a_checked_program_runs_from_a_shell() {
 
 /// A server runs from a shell until something stops it: on its spec's port, and a stop that
 /// reaches lengua-mcp, as a service manager sends one, stops the program too.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_server_from_a_shell_serves_until_it_is_stopped() {
     use std::io::{BufRead as _, Read as _};

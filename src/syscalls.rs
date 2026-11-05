@@ -396,6 +396,7 @@ mod tests {
     }
 
     /// This computer's table and ABI are the C library's view of this kernel.
+    #[cfg(target_os = "linux")]
     #[test]
     fn the_host_table_is_the_c_librarys() {
         use nix::libc;

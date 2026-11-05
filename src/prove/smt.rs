@@ -1202,7 +1202,8 @@ mod tests {
     }
 
     /// A stand-in solver that reads commands and answers `answer` to every question, with an
-    /// empty model.
+    /// empty model: a shell script, so Unix's alone until the fake is the test binary itself.
+    #[cfg(unix)]
     fn fake(folder: &std::path::Path, answer: &str) -> String {
         use std::os::unix::fs::PermissionsExt as _;
         let path = folder.join(format!("always-{answer}"));
@@ -1239,6 +1240,7 @@ mod tests {
         (x, pool.eq(next, zero))
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_second_solver_overrules_a_wrong_impossible() {
         let folder = tempfile::tempdir().expect("a folder");
@@ -1272,6 +1274,7 @@ mod tests {
         assert_eq!(answer, Answer::Unsat);
     }
 
+    #[cfg(unix)]
     #[test]
     fn impossible_needs_both_solvers() {
         let folder = tempfile::tempdir().expect("a folder");

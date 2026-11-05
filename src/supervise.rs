@@ -25,9 +25,10 @@ use std::process::ExitCode;
 /// The command-line flag that starts the binary as a supervisor.
 pub const SUPERVISE_FLAG: &str = "--supervise";
 
-/// Whether the supervisor runs on this computer's CPU: it reads and rewrites a stopped call's
-/// registers, x86-64's and AArch64's. Where it doesn't, tests that need it aren't run.
-pub const AVAILABLE: bool = cfg!(any(target_arch = "x86_64", target_arch = "aarch64"));
+/// Whether the supervisor runs on this computer: it traces with Linux's ptrace, and reads and
+/// rewrites a stopped call's registers, x86-64's and AArch64's. Where it doesn't, tests that need
+/// it aren't run.
+pub const AVAILABLE: bool = cfg!(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")));
 
 fn say(line: &str) {
     let mut stdout = std::io::stdout().lock();
@@ -38,22 +39,23 @@ fn say(line: &str) {
 /// Supervisor mode: traces the launcher named on standard input until its program ends.
 #[must_use]
 pub fn supervise() -> ExitCode {
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    #[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
     {
         traced::supervise()
     }
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    #[cfg(not(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
     {
         say(&format!(
-            "error: lengua's supervisor doesn't run on {} yet",
+            "error: lengua's supervisor doesn't run on {} {} yet",
+            std::env::consts::OS,
             std::env::consts::ARCH
         ));
         ExitCode::FAILURE
     }
 }
 
-/// The supervisor itself, for a CPU whose registers it reads.
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+/// The supervisor itself, for Linux on a CPU whose registers it reads.
+#[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
 mod traced {
     use std::collections::HashMap;
     use std::io::{IoSlice, Read as _};

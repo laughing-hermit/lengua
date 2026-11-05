@@ -6,6 +6,10 @@
 //! counters, started at the program's own exec, plus wall-clock time, peak memory and file size.
 //! C, C++ and Rust are built with every optimization for this CPU, and linked the way they ship.
 
+// Linux's alone so far: the counters, the shell and the timing it uses are Linux's, and round 5 of
+// the roadmap in todo.md makes it run on every system.
+#[cfg(target_os = "linux")]
+mod linux {
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -728,7 +732,7 @@ fn ratio(lengua: &[Option<f64>], others: &[Option<f64>]) -> String {
 }
 
 #[tokio::main]
-async fn main() {
+pub async fn main() {
     let toolchain = Toolchain::discover().await.expect("llvm-mc and ld.lld");
     let machine = Machine::detect();
     let folder = tempfile::tempdir().expect("a folder");
@@ -892,4 +896,18 @@ async fn main() {
     std::fs::write(&path, &report).expect("write the benchmarks");
     println!("{report}");
     eprintln!("wrote {}", path.display());
+}
+}
+
+#[cfg(target_os = "linux")]
+fn main() {
+    linux::main();
+}
+
+#[cfg(not(target_os = "linux"))]
+fn main() {
+    eprintln!(
+        "the benchmark runs on Linux only so far: round 5 of the roadmap in todo.md makes it \
+         portable"
+    );
 }

@@ -895,7 +895,7 @@ async fn send(
 /// program started: reads exactly what the program must send, replies, closes its side, and
 /// expects nothing more. `on` names the connection when the program has more than one.
 async fn serve(
-    stream: tokio::net::UnixStream,
+    stream: crate::connect::Peer,
     reply: Option<Reply>,
     delivery: Delivery,
     on: String,
@@ -904,7 +904,7 @@ async fn serve(
     let Some(reply) = reply else {
         return Ok(());
     };
-    let (mut reader, mut writer) = stream.into_split();
+    let (mut reader, mut writer) = tokio::io::split(stream);
     let expected = reply.receives.as_bytes();
     let mut got = Vec::new();
     let mut chunk = vec![0_u8; 64 * 1024];

@@ -6,6 +6,10 @@
 //! computer's signed record of what it checked. This crate is the MCP server that checks, stamps
 //! and runs them. See `DESIGN.md` at the repository root for every design decision.
 
+// A program's launch, confinement and counters exist only on Linux so far: elsewhere, what only
+// they use is dead until macOS and Windows get theirs (rounds 3 and 4 of the roadmap in todo.md).
+#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
+
 pub mod aes;
 pub mod checker;
 pub mod connect;
@@ -19,6 +23,7 @@ pub mod header;
 pub mod isa;
 pub mod lock;
 pub mod names;
+mod os;
 pub mod platform;
 pub mod prove;
 pub mod runner;

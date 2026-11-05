@@ -21,6 +21,17 @@ const TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_MESSAGE_BYTES: usize = 8 * 1024;
 
 /// What to tell the user when LLVM isn't installed.
+#[cfg(target_os = "macos")]
+pub const INSTALL_HINT: &str =
+    "Install LLVM's assembler and linker (Homebrew: brew install llvm lld).";
+
+/// What to tell the user when LLVM isn't installed.
+#[cfg(windows)]
+pub const INSTALL_HINT: &str =
+    "Install LLVM's assembler and linker (winget install LLVM.LLVM, or LLVM's release archive).";
+
+/// What to tell the user when LLVM isn't installed.
+#[cfg(not(any(target_os = "macos", windows)))]
 pub const INSTALL_HINT: &str = "Install LLVM's assembler and linker \
     (Fedora: sudo dnf install llvm lld; Debian/Ubuntu: sudo apt install llvm lld).";
 
@@ -210,8 +221,13 @@ async fn run_captured(tool: &Path, args: &[&OsStr]) -> Result<std::process::Outp
 
 fn find_in_path(name: &str) -> Option<PathBuf> {
     let path_var = std::env::var_os("PATH")?;
+    // A tool is run by its name, but on Windows its file ends in `.exe`.
+    let files = [
+        name.to_owned(),
+        format!("{name}{}", std::env::consts::EXE_SUFFIX),
+    ];
     std::env::split_paths(&path_var)
-        .map(|dir| dir.join(name))
+        .flat_map(|dir| files.iter().map(|file| dir.join(file)).collect::<Vec<_>>())
         .find(|candidate| is_executable(candidate))
 }
 

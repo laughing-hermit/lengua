@@ -20,12 +20,18 @@
 //! certificates; one it can't check is a connection lengua couldn't make.
 
 use std::io;
+#[cfg(unix)]
 use std::os::fd::AsFd;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt as _};
-use tokio::net::{TcpStream, UnixStream};
+use tokio::io::{AsyncRead, AsyncWrite};
+#[cfg(unix)]
+use tokio::io::AsyncWriteExt as _;
+use tokio::net::TcpStream;
+#[cfg(unix)]
+use tokio::net::UnixStream;
+#[cfg(unix)]
 use tokio::sync::oneshot;
 
 /// The descriptor a program's first connection has: 3 is a server's listener, so each
@@ -39,6 +45,7 @@ pub const MAX_CONNECTIONS: usize = 16;
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How long lengua waits, once the program has ended, for what it sent last to reach the place.
+#[cfg(unix)]
 const FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Where one connection goes.
@@ -94,7 +101,53 @@ pub struct Made {
     pub problem: Option<String>,
 }
 
+/// lengua's end of a connection that goes to the test's own server, which speaks on it itself.
+#[cfg(unix)]
+pub type Peer = UnixStream;
+
+/// Windows has no such stream yet (round 4 of the roadmap): this has no values, so the code that
+/// serves a peer compiles there and never runs.
+#[cfg(not(unix))]
+pub enum Peer {}
+
+#[cfg(not(unix))]
+impl AsyncRead for Peer {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+        _: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        match *self {}
+    }
+}
+
+#[cfg(not(unix))]
+impl AsyncWrite for Peer {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+        _: &[u8],
+    ) -> std::task::Poll<io::Result<usize>> {
+        match *self {}
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        match *self {}
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        match *self {}
+    }
+}
+
 /// One connection's two ends: the program's, which goes to the launcher, and lengua's.
+#[cfg(unix)]
 pub(crate) struct Pair {
     /// The program's end, blocking, as a program's descriptors are.
     pub program: std::os::unix::net::UnixStream,
@@ -103,6 +156,7 @@ pub(crate) struct Pair {
 }
 
 /// A new connection's two ends.
+#[cfg(unix)]
 pub(crate) fn pair() -> io::Result<Pair> {
     let (program, lengua) = std::os::unix::net::UnixStream::pair()?;
     lengua.set_nonblocking(true)?;
@@ -257,17 +311,20 @@ async fn connect_tcp(host: Option<&str>, port: u16) -> Result<TcpStream, String>
 
 /// Shuts `stream` both ways: the program's reads give 0 once what had arrived is read, and its
 /// writes fail with `EPIPE`.
+#[cfg(unix)]
 pub(crate) fn shut(stream: &impl AsFd) {
     let _ = rustix::net::shutdown(stream, rustix::net::Shutdown::Both);
 }
 
 /// A connection lengua relays between the program's stream and its place.
+#[cfg(unix)]
 pub(crate) struct Relay {
     task: tokio::task::JoinHandle<()>,
     /// Says when everything the program sent has gone to the place, with its end of sending.
     sent: Option<oneshot::Receiver<()>>,
 }
 
+#[cfg(unix)]
 impl Relay {
     /// Relays `program`, lengua's end of the program's stream, and `place` both ways until both
     /// have ended. Where either breaks off, the program's stream is shut both ways and held
@@ -320,6 +377,7 @@ impl Relay {
     }
 }
 
+#[cfg(unix)]
 impl Drop for Relay {
     fn drop(&mut self) {
         self.task.abort();
@@ -328,14 +386,8 @@ impl Drop for Relay {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Read as _, Write as _};
-
-    use tokio::io::AsyncReadExt as _;
-
     use super::*;
 
-    /// A TLS server for `localhost` on a free port of this computer, with a certificate of its
-    /// own, and a client that trusts that certificate alone.
     /// A computer an argument names is read when the program starts: a name or another
     /// computer's address goes there, over TLS when the spec says so; an argument that's missing,
     /// names this computer, or names nothing is a connection lengua can't make.
@@ -382,7 +434,18 @@ mod tests {
             );
         }
     }
+}
 
+#[cfg(all(test, unix))]
+mod relay {
+    use std::io::{Read as _, Write as _};
+
+    use tokio::io::AsyncReadExt as _;
+
+    use super::*;
+
+    /// A TLS server for `localhost` on a free port of this computer, with a certificate of its
+    /// own, and a client that trusts that certificate alone.
     fn server_and_trust() -> (tokio_rustls::TlsAcceptor, Arc<rustls::ClientConfig>) {
         let made = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()])
             .expect("a certificate");
@@ -513,7 +576,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod internet {
     use std::io::{Read as _, Write as _};
 

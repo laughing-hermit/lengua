@@ -161,9 +161,9 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Command, String>
         match arg.as_str() {
             "run" => {
                 let request = parse_run(args)?;
-                let data_dir = data_dir.or_else(DataDir::from_env).ok_or(
-                    "can't find a data folder: set HOME or XDG_DATA_HOME, or pass --data-dir",
-                )?;
+                let data_dir = data_dir
+                    .or_else(DataDir::from_env)
+                    .ok_or(lengua::data_dir::NOT_FOUND)?;
                 return Ok(Command::Run(data_dir, request));
             }
             "--data-dir" => {
@@ -180,8 +180,6 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Command, String>
     }
     match data_dir.or_else(DataDir::from_env) {
         Some(data_dir) => Ok(Command::Serve(data_dir)),
-        None => {
-            Err("can't find a data folder: set HOME or XDG_DATA_HOME, or pass --data-dir".into())
-        }
+        None => Err(lengua::data_dir::NOT_FOUND.into()),
     }
 }
