@@ -295,16 +295,21 @@ them, and any other build is proven again by itself.
 
 ## Performance
 
-The bar is that a program the agent writes through lengua takes no more CPU time, wall time, peak
-memory or file size than the best of C, C++ and Rust built with every optimization for the CPU,
-judged by kind of workload:
-- A program that is mostly starting up is compared above the OS's floor, an empty program's start.
+The bar is that a program the agent writes through lengua takes less CPU time, less wall time,
+less peak memory and a smaller file than the best of C, C++ and Rust built with every optimization
+for the CPU, on every workload and every target:
+- A lead in time counts when the runs show it: they alternate between the languages, and lengua's
+  median must be lower with 99% confidence. A difference within the noise doesn't count.
+- Memory and file size are compared as measured, and lengua's must be smaller.
+- Each language is shown at its best, with vector code and, where any language's best is
+  threaded, a threaded version.
 - Instructions and cycles are reported rather than compared, since vector code does more per
   instruction.
 
 `cargo bench --bench against_rust_and_c` measures it on seven workloads, from a program that is
 mostly starting up to 64 MiB streams, and writes BENCHMARKS.md. README says where lengua isn't
-ahead yet. A gate on every target's runner is round 5 of the roadmap in todo.md.
+ahead yet. A gate on every target's runner, with nothing excused, is round 5 of the roadmap in
+todo.md.
 
 Speed comes from the agent, guided by the compile skill, which makes it a step of the
 normal flow: once the tests are green, one pass for the widest vectors the CPU has (with masked

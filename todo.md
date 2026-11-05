@@ -44,18 +44,27 @@ lengua is perfected when each of these is shown by a green run on GitHub's runne
    - no target finds a counterexample another doesn't;
    - each proof line has the same verdict on the three targets of its CPU. Where a line's time
      budget cuts it short, the verdict is the same kind: proven, or bounded to a length.
-3. **Faster and leaner than C, C++ and Rust, by kind of workload.** Each target's runner measures
-   it, and a gate fails when lengua isn't ahead or level.
-   - What is compared:
-     - *Throughput* (64 MiB streams, files, sort, a word tally): CPU time and wall time.
-     - *Startup-bound programs* (add, hypotenuse): compared above each OS's floor, which is an
-       empty program's start; lengua must start no slower than C.
+3. **Faster and leaner than C, C++ and Rust, everywhere.** On every workload and every target,
+   lengua's best version takes less CPU time and less wall time, and uses less peak memory and a
+   smaller executable, than the best version in C, C++ or Rust. A gate on each target's runner
+   fails on any measure where that lead isn't shown. (The owner, 2026-11-05: "I want faster and
+   more memory efficient evrywhere".)
+   - Workloads:
+     - *Throughput* (64 MiB streams, files, sort, a word tally).
+     - *Startup-bound programs* (an empty program, add, hypotenuse).
      - *Servers* (64 clients, and 4,096): wall time and the server's CPU time.
-     - *Peak memory and executable size*, on every workload.
-   - "Level" means within the measured run-to-run spread, at least 2%. For memory and size it
-     also allows one page.
-   - Instructions and cycles are reported, not gated.
-   - Programs are measured as people run them, on their own.
+     - Many files, and the clock.
+     - Peak memory and size count on every one.
+   - A lead in time counts only when the runs show it: they alternate between the languages, and
+     lengua's median must be lower with 99% confidence ([ROADMAP.md](ROADMAP.md) §7 says how). A
+     difference within the noise fails.
+   - Memory and size are compared as measured, and lengua's must be smaller.
+   - Each language is shown at its best: vector code, and a threaded version wherever any
+     language's best is threaded.
+   - Nothing is excused at the finish line. Round 5's list of what's still behind may only shrink,
+     and it must end empty.
+   - Instructions and cycles are reported, not gated. Programs are measured as people run them,
+     on their own.
    - `run`'s own cost (the sandbox's start, the broker's round trips) is reported per OS. On
      Linux it is no worse than the cost of the supervisor it replaced.
 4. **A replacement for systems, command-line and server programs**, with lengua's safety rules
@@ -91,7 +100,8 @@ lengua is perfected when each of these is shown by a green run on GitHub's runne
 4. **Windows, on x86-64 and ARM64:** kernel32 through the IAT, PE, an LPAC AppContainer and a
    job.
 5. **Performance:**
-   - the bench on six runners, with an OS floor and a gate;
+   - the bench on six runners, with a gate that passes only where lengua is ahead on every
+     workload and measure;
    - sort, a word tally, servers, many files and the clock as workloads;
    - the known gaps below.
 6. **The rest:** prover parity across CPUs, the small items, the documents, and release
@@ -224,6 +234,13 @@ lengua is perfected when each of these is shown by a green run on GitHub's runne
   - In February 2026 it added `macos-26-intel`.
   - macOS 26 is Apple's last release for Intel Macs.
   - Rosetta 2 on the ARM64 runner is the option to weigh.
+- **A row the gate can't decide.** The finish line is "ahead everywhere", with nothing excused.
+  Some costs every language pays alike: macOS's dyld and libSystem start, the copy through a
+  pipe, an open, libSystem's clock, and executable sizes that round to a page. Where one of those
+  dominates a row, lengua's lead is only its own few instructions, and the row may stay undecided
+  or tied after every fix. Round 5 will name those rows, with the runs. For each, the owner then
+  picks: keep the finish line open, or accept that row as a stated exception. Until they pick, it
+  stays open.
 
 ## Deferred, and why
 

@@ -531,15 +531,27 @@ stopped list, 2026-11-05).
   - A hidden `lengua-mcp --measure` does the measuring, replacing GNU time and the /bin/sh FIFO
     (:483-577).
   - Each runner writes its own `BENCHMARKS-<target>.md`.
-- **The floor.** An `empty` workload: lengua's main calls `os_exit(0)` and C's main returns 0. The
-  floor on each runner is the smaller of the two.
-- **The gate** fails when lengua's best version is behind the best other version:
-  - on CPU or wall time, by more than the spread (the larger interquartile range over the median
-    of the two, at least 2%);
-  - on peak memory or size, by more than the spread plus one page.
+- **The empty program** is a workload like the others: lengua's main calls `os_exit(0)` and C's
+  main returns 0, and lengua must start faster than C. Each runner also reports it as that OS's
+  floor, the part of a startup-bound workload that no program avoids.
+- **The gate** fails on any workload and measure where lengua's best version isn't ahead of the
+  best version in C, C++ and Rust:
+  - *CPU and wall time.* The runs alternate between the languages, so drift hits all alike.
+    lengua is ahead when its median is lower and a one-sided Mann–Whitney U test gives p < 0.01.
+    Until the test decides, the bench adds runs, up to 2,000 per language or ten minutes a row.
+    Still undecided at the cap counts as behind.
+  - *Peak memory and executable size.* lengua's median must be smaller, as measured.
+  - *Each language at its best.* Vector code, and a threaded version wherever any language's best
+    is threaded (C with pthreads or Windows threads, C++ with `std::thread`, Rust with scoped
+    threads).
 
-  `KNOWN_BEHIND` (target, workload, measure, why) may only shrink, like tests/baseline.rs's
-  ratchet.
+  `KNOWN_BEHIND` (target, workload, measure, why) is round 5's work list. It may only shrink, like
+  tests/baseline.rs's ratchet, and it is empty at the finish line.
+- **A risk, stated plainly.** Some costs every language pays alike: macOS's dyld and libSystem
+  start, a pipe's copy, an open, libSystem's clock, and executable sizes that round to a page.
+  Where one dominates a row, lengua's lead is only its own few instructions, and the row needs
+  the most runs or may tie. A row that stays undecided keeps the finish line open and goes to
+  todo.md for the owner; it is never relabelled as level.
 - **New workloads.**
   - empty;
   - sort: 64 MiB of lines, in byte order;
@@ -555,7 +567,9 @@ stopped list, 2026-11-05).
   - `move_front` copying 16 bytes a step.
   - Measure count/sve.s, and a threaded ARM64 shout.
   - Read the Linux clock through the vDSO, as C's `clock_gettime` does.
-  - An event-queue op (epoll, kqueue, IOCP), if the 4,096-client server is behind.
+  - An event-queue op (epoll, kqueue, IOCP) for the 4,096-client server: C servers use them, so
+    the gate needs lengua to have them too.
+  - Every row the first six-runner gate run shows level or behind joins this list.
 
 ## Rounds
 
@@ -854,15 +868,14 @@ windows-11-arm.
 ### R5 — the performance finish line
 
 **Steps.**
-- §7's bench, floor, gate and workloads on six runners. The gate is enforced in `bench` mode and
-  in the weekly run.
+- §7's bench, gate and workloads on six runners (the empty program is a workload and also each
+  OS's floor). The gate is enforced in `bench` mode and in the weekly run.
 - The known gaps, closed by A/B runs.
 - BENCHMARKS-<target>.md, generated from the artifacts.
 - README, DESIGN and the bench's own text made true to the runs; "threads on AArch64 come later"
   goes.
 
-**Verified by.** The gate is green on six runners, with KNOWN_BEHIND empty, or with each remaining
-entry justified in todo.md.
+**Verified by.** The gate is green on six runners and KNOWN_BEHIND is empty.
 
 ### R6 — prover parity, the leftovers, documents, release
 
@@ -903,7 +916,7 @@ runners.
   bench and release, with everything green:
   - the suites, including the edge's conformance table and the mutation test;
   - the gate job's verdict comparison across the three OSes of each CPU;
-  - the bench gate, with KNOWN_BEHIND empty or each entry justified;
+  - the bench gate, with KNOWN_BEHIND empty;
   - the release archives, installed and checked.
 
   todo.md then says "perfected", with that run's id.

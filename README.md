@@ -181,6 +181,8 @@ Rust, built with every optimization for this CPU (`cargo bench --bench against_r
 measures again). On this machine, lengua's best version is ahead or level on every workload in
 CPU time, wall time, peak memory and file size. It has memory safety proven rather than checked at
 run time, and uses less than half the memory. Where it isn't ahead is described below the table.
+The goal is ahead on every measure, on every target: the rows that read level, and the items
+below, are the work left to reach it (round 5 of [todo.md](todo.md)).
 
 | Workload | Cycles | CPU time | Wall time | Peak memory |
 |---|---|---|---|---|
@@ -212,6 +214,9 @@ Where lengua isn't ahead:
 - **The histogram.** Its "level" is about 2% more CPU time and wall time than Rust's.
 - **The shout without AVX-512.** On a CPU without AVX-512, the best shout is the SSE2 form on 16
   threads, which takes 814 µs of CPU time against plain Rust's 603 µs.
+- **The CRC-32C on x86-64.** The table's "level" is this machine. On six draws of GitHub's x86-64
+  runners (2026-11-04) the three-chain form took 8 to 29 percent more wall time than the best
+  other, with CPU time from 0.96× to 2.09× less.
 - **The CRC-32C on ARM64.** On GitHub's ARM64 runner, it takes more wall time than C++ (0.7×).
 
 The roadmap in [todo.md](todo.md) closes these gaps and gates speed on all six targets.
