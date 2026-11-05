@@ -27,10 +27,28 @@ pub enum Way {
     Emulated,
 }
 
-/// The target this computer is.
-pub fn host() -> Profile {
+/// The target this computer is, when lengua has one for it: macOS and Windows have none until
+/// rounds 3 and 4 of the roadmap in todo.md.
+pub fn this_target() -> Option<Profile> {
     Profile::for_target(std::env::consts::OS, std::env::consts::ARCH)
-        .expect("the tests run on a target lengua exists on")
+}
+
+/// The target this computer is, for a test that runs programs and so has checked
+/// [`runs_programs`] first.
+pub fn host() -> Profile {
+    this_target().expect("a test that runs programs checks runs_programs first")
+}
+
+/// Whether lengua runs programs on this computer. Where it doesn't, a test that runs one says why
+/// in the run's summary and ends.
+pub fn runs_programs() -> bool {
+    let runs = this_target().is_some();
+    if !runs {
+        lengua::skiplog::note(
+            "lengua can't run programs on this system yet (rounds 3 and 4 of the roadmap)",
+        );
+    }
+    runs
 }
 
 /// The CPU's name as the run's summary says it.
@@ -56,7 +74,9 @@ pub fn qemu_runs(target: Profile) -> bool {
 /// How this computer runs `target`'s programs, or `None`, with a note in the run's summary, where
 /// it cannot.
 pub fn way(target: Profile) -> Option<Way> {
-    if target == host() {
+    if !runs_programs() {
+        None
+    } else if target == host() {
         Some(Way::Native)
     } else if qemu_runs(target) {
         Some(Way::Emulated)

@@ -37,10 +37,14 @@ async fn builds_a_program_that_exits_with_42() {
         .await
         .expect("link");
 
-    let status = std::process::Command::new(&executable)
-        .status()
-        .expect("run the program");
-    assert_eq!(status.code(), Some(42));
+    // The executable is Linux's, so it runs on Linux alone; elsewhere it is built, which is what
+    // the toolchain does.
+    if cfg!(target_os = "linux") {
+        let status = std::process::Command::new(&executable)
+            .status()
+            .expect("run the program");
+        assert_eq!(status.code(), Some(42));
+    }
 }
 
 #[tokio::test]

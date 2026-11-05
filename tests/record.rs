@@ -3,6 +3,7 @@
 //! recorded under them, and every change after them is shown.
 
 mod common;
+mod per_target;
 
 use common::{ADD_SPEC, Program, Protocol, REQUEST, Session};
 use lengua::hash::Sha256Hex;
@@ -18,6 +19,9 @@ fn hash(text: &str) -> String {
 
 #[tokio::test]
 async fn lists_check_with_its_hints() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let session = Session::start(Protocol::Discover).await;
     let tools = session.service.list_all_tools().await.expect("list tools");
     let tool = tools
@@ -38,6 +42,9 @@ async fn lists_check_with_its_hints() {
 
 #[tokio::test]
 async fn records_the_users_words_in_both_protocols() {
+    if !per_target::runs_programs() {
+        return;
+    }
     for protocol in Protocol::ALL {
         let session = Session::start(protocol).await;
         let program = Program::with_add_spec();
@@ -67,6 +74,9 @@ async fn records_the_users_words_in_both_protocols() {
 
 #[tokio::test]
 async fn the_path_may_name_the_spec_itself() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let session = Session::start(Protocol::Discover).await;
     let program = Program::with_add_spec();
     let spec_path = program.file("spec.md");
@@ -86,6 +96,9 @@ async fn the_path_may_name_the_spec_itself() {
 
 #[tokio::test]
 async fn the_users_words_are_needed_the_first_time() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let session = Session::start(Protocol::Discover).await;
     let program = Program::with_add_spec();
     for arguments in [program.arguments(), program.request(" \n ")] {
@@ -106,6 +119,9 @@ async fn the_users_words_are_needed_the_first_time() {
 
 #[tokio::test]
 async fn checking_the_same_spec_again_changes_nothing() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let session = Session::start(Protocol::Discover).await;
     let program = Program::with_add_spec();
     session.record(&program).await;
@@ -120,6 +136,9 @@ async fn checking_the_same_spec_again_changes_nothing() {
 
 #[tokio::test]
 async fn an_invalid_spec_is_reported_before_it_is_recorded() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let session = Session::start(Protocol::Discover).await;
     let program = Program::new();
     let invalid = ADD_SPEC.replace("exits with code `1`", "exits with code `134`");
@@ -142,6 +161,9 @@ async fn an_invalid_spec_is_reported_before_it_is_recorded() {
 
 #[tokio::test]
 async fn paths_must_be_absolute_and_a_new_folder_asks_for_a_spec() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let session = Session::start(Protocol::Discover).await;
     let relative = session
         .call_error("check", json!({ "path": "add", "request": REQUEST }))
@@ -160,6 +182,9 @@ async fn paths_must_be_absolute_and_a_new_folder_asks_for_a_spec() {
 
 #[tokio::test]
 async fn an_edited_spec_is_recorded_under_the_same_words() {
+    if !per_target::runs_programs() {
+        return;
+    }
     for protocol in Protocol::ALL {
         let session = Session::start(protocol).await;
         let program = Program::with_add_spec();
@@ -198,6 +223,9 @@ async fn an_edited_spec_is_recorded_under_the_same_words() {
 
 #[tokio::test]
 async fn a_build_keeps_its_requests_and_its_first_spec() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let session = Session::start(Protocol::Discover).await;
     let program = Program::with_add_spec();
     session.record(&program).await;

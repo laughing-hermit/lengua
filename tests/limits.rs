@@ -1609,6 +1609,9 @@ fn unshares() -> Programs {
 
 #[tokio::test]
 async fn runs_a_program_and_counts_its_instructions() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let folder = tempfile::tempdir().expect("temporary folder");
     let program = built_asset(folder.path(), "main", &TEMPLATES).await;
     let first = run_simply(&program, &args(&["7"]), b"").await;
@@ -1642,6 +1645,9 @@ async fn runs_a_program_and_counts_its_instructions() {
 
 #[tokio::test]
 async fn reports_exit_codes_and_failed_assertions() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let folder = tempfile::tempdir().expect("temporary folder");
     let program = built_asset(folder.path(), "main", &TEMPLATES).await;
     let usage = run_simply(&program, &[], b"").await;
@@ -1651,6 +1657,9 @@ async fn reports_exit_codes_and_failed_assertions() {
 
 #[tokio::test]
 async fn kills_programs_that_run_too_long() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let folder = tempfile::tempdir().expect("temporary folder");
     let forever = built(folder.path(), "forever", &forever()).await;
     let limits = Limits {
@@ -1677,6 +1686,9 @@ async fn kills_programs_that_run_too_long() {
 
 #[tokio::test]
 async fn kills_programs_that_print_too_much() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let folder = tempfile::tempdir().expect("temporary folder");
     let chatter = built(folder.path(), "chatter", &chatter()).await;
     let limits = Limits {
@@ -1698,6 +1710,9 @@ async fn kills_programs_that_print_too_much() {
 
 #[tokio::test]
 async fn gives_an_empty_environment_and_closed_stdin() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let folder = tempfile::tempdir().expect("temporary folder");
     let environment = built(folder.path(), "environment", &checks_its_environment()).await;
     let result = run_simply(&environment, &args(&["a", "b"]), b"").await;
@@ -1719,6 +1734,9 @@ async fn gives_an_empty_environment_and_closed_stdin() {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_descriptor_lengua_s_parent_left_open_never_reaches_the_program() {
+    if !per_target::runs_programs() {
+        return;
+    }
     use std::os::fd::AsRawFd as _;
     let folder = tempfile::tempdir().expect("temporary folder");
     let outside = folder.path().join("outside");
@@ -1736,6 +1754,9 @@ async fn a_descriptor_lengua_s_parent_left_open_never_reaches_the_program() {
 
 #[tokio::test]
 async fn reports_signals() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let folder = tempfile::tempdir().expect("temporary folder");
     let crash = built(folder.path(), "crash", &crashes()).await;
     let result = run_simply(&crash, &[], b"").await;
@@ -1745,6 +1766,9 @@ async fn reports_signals() {
 
 #[tokio::test]
 async fn gives_files_and_reads_back_what_the_program_left() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let folder = tempfile::tempdir().expect("temporary folder");
     let copy = built(folder.path(), "copy-file", &copies_a_file()).await;
     let files = BTreeMap::from([("in.txt".to_owned(), "hello\n".to_owned())]);
@@ -1780,6 +1804,9 @@ async fn gives_files_and_reads_back_what_the_program_left() {
 
 #[tokio::test]
 async fn the_kernel_keeps_programs_inside_what_their_spec_allows() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let folder = tempfile::tempdir().expect("temporary folder");
     // A system call the spec doesn't allow (getpid) stops the program.
     let getpid = built(
@@ -1832,6 +1859,9 @@ async fn the_kernel_keeps_programs_inside_what_their_spec_allows() {
 
 #[tokio::test]
 async fn threads_start_only_with_the_canonical_flags() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let folder = tempfile::tempdir().expect("temporary folder");
     // A fork, clone with SIGCHLD alone: a new process rather than a thread of this one.
     let fork = built(folder.path(), "fork", &forks()).await;
@@ -1854,6 +1884,9 @@ async fn threads_start_only_with_the_canonical_flags() {
 
 #[tokio::test]
 async fn the_clock_and_random_bytes_need_the_specs_approval() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let folder = tempfile::tempdir().expect("temporary folder");
     let reader = built(
         folder.path(),
@@ -1921,6 +1954,9 @@ fn counters_here() -> bool {
 
 #[tokio::test]
 async fn tests_supply_the_random_bytes_and_the_clock() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let folder = tempfile::tempdir().expect("temporary folder");
     let program = built(folder.path(), "draw", &draws_and_reads_the_clock("buffer")).await;
     let supply =
@@ -1961,6 +1997,9 @@ async fn tests_supply_the_random_bytes_and_the_clock() {
 
 #[tokio::test]
 async fn supplied_calls_behave_like_the_kernels() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let folder = tempfile::tempdir().expect("temporary folder");
     // A buffer the program can't write: getrandom fails with EFAULT, as the kernel's would.
     let unwritable = built(
@@ -1995,6 +2034,9 @@ async fn supplied_calls_behave_like_the_kernels() {
 /// A test's sleep ends at once, and says it slept.
 #[tokio::test]
 async fn a_tests_sleep_ends_at_once() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let folder = tempfile::tempdir().expect("temporary folder");
     let program = built(folder.path(), "sleeps", &sleeps()).await;
     let syscalls = calls(&[Syscall::ClockNanosleep, Syscall::Exit]);
@@ -2015,6 +2057,9 @@ async fn a_tests_sleep_ends_at_once() {
 
 #[tokio::test]
 async fn the_supervisor_follows_threaded_programs() {
+    if !per_target::runs_programs() {
+        return;
+    }
     // The parallel template starts workers with clone; the supervisor follows each one and the
     // program prints just what it prints alone.
     let folder = tempfile::tempdir().expect("temporary folder");
@@ -2088,6 +2133,9 @@ fn connected(connections: Vec<Reach>, listen: bool) -> Net {
 
 #[tokio::test]
 async fn a_program_never_holds_the_network() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let folder = tempfile::tempdir().expect("temporary folder");
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a free port");
     let port = listener.local_addr().expect("an address").port();
@@ -2117,6 +2165,9 @@ async fn a_program_never_holds_the_network() {
 
 #[tokio::test]
 async fn servers_take_connections_on_descriptor_3() {
+    if !per_target::runs_programs() {
+        return;
+    }
     use tokio::io::AsyncReadExt as _;
     let folder = tempfile::tempdir().expect("temporary folder");
     // Takes one connection, says hi on it and exits.
@@ -2185,6 +2236,9 @@ async fn servers_take_connections_on_descriptor_3() {
 
 #[tokio::test]
 async fn connections_are_handed_over_from_descriptor_4() {
+    if !per_target::runs_programs() {
+        return;
+    }
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     let folder = tempfile::tempdir().expect("temporary folder");
     let client = built(folder.path(), "client", &answers_ok()).await;
@@ -2233,6 +2287,9 @@ async fn connections_are_handed_over_from_descriptor_4() {
 
 #[tokio::test]
 async fn a_connection_lengua_couldnt_make_is_ended_both_ways() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let folder = tempfile::tempdir().expect("temporary folder");
     let ended = built(folder.path(), "ended", &finds_its_connection_ended()).await;
     let calls = network_syscalls(&[Syscall::Read, Syscall::Write, Syscall::Exit]);
@@ -2286,6 +2343,9 @@ async fn a_connection_lengua_couldnt_make_is_ended_both_ways() {
 
 #[tokio::test]
 async fn each_connection_has_its_own_number() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let folder = tempfile::tempdir().expect("temporary folder");
     // Closes descriptors 3, 4 and 5, and exits with a bit for each that was open.
     let numbers = built(folder.path(), "numbers", &counts_its_descriptors()).await;
@@ -2300,6 +2360,9 @@ async fn each_connection_has_its_own_number() {
 
 #[tokio::test]
 async fn what_a_program_sends_last_reaches_its_place() {
+    if !per_target::runs_programs() {
+        return;
+    }
     use tokio::io::AsyncReadExt as _;
     let folder = tempfile::tempdir().expect("temporary folder");
     // Sends 256 KiB and exits at once.
@@ -2325,6 +2388,9 @@ async fn what_a_program_sends_last_reaches_its_place() {
 
 #[tokio::test]
 async fn a_program_holds_as_many_open_files_on_every_system() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let folder = tempfile::tempdir().expect("temporary folder");
     let opener = built(folder.path(), "opener", &opens_until_it_cant()).await;
     let files = BTreeMap::from([("f".to_owned(), "x".to_owned())]);
@@ -2348,6 +2414,9 @@ async fn a_program_holds_as_many_open_files_on_every_system() {
 
 #[tokio::test]
 async fn a_program_gets_only_names_every_system_takes() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let folder = tempfile::tempdir().expect("temporary folder");
     let calls = all_file_syscalls();
     let none = BTreeMap::new();
@@ -2392,6 +2461,9 @@ async fn a_program_gets_only_names_every_system_takes() {
 
 #[tokio::test]
 async fn an_open_file_is_neither_renamed_nor_removed() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let folder = tempfile::tempdir().expect("temporary folder");
     let files = BTreeMap::from([("f".to_owned(), "x".to_owned())]);
     let calls = all_file_syscalls();
@@ -2408,6 +2480,9 @@ async fn an_open_file_is_neither_renamed_nor_removed() {
 
 #[tokio::test]
 async fn a_tests_second_run_lists_folders_the_other_way_round() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let folder = tempfile::tempdir().expect("temporary folder");
     let lister = built(
         folder.path(),
@@ -2506,6 +2581,9 @@ const SERVERS: PerTarget<(&str, &str)> = PerTarget {
 /// still sending; one that serves a client at a time is caught waiting on the first.
 #[tokio::test]
 async fn a_server_for_clients_at_once_answers_each_while_others_send() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let (template, one_at_a_time) = *SERVERS.get(per_target::host());
     let template = asset(template);
@@ -2528,6 +2606,9 @@ async fn a_server_for_clients_at_once_answers_each_while_others_send() {
 /// lets it read and set the terminal's mode and nothing else.
 #[tokio::test]
 async fn a_terminal_program_takes_keys_from_a_pipe_too() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let terminals = PerTarget {
         linux_x86_64: "terminal-template.s",
         linux_aarch64: "linux-aarch64/terminal-template.s",
@@ -2552,6 +2633,9 @@ async fn a_terminal_program_takes_keys_from_a_pipe_too() {
 
 #[tokio::test]
 async fn runs_at_once_report_what_runs_one_at_a_time_do() {
+    if !per_target::runs_programs() {
+        return;
+    }
     // Passing tests: the same runs, and each test timed alone on its largest input.
     let alone = template_tests(str::to_owned, 1).await;
     let together = template_tests(str::to_owned, 8).await;
@@ -2612,6 +2696,9 @@ async fn runs_at_once_report_what_runs_one_at_a_time_do() {
 /// call is skipped or made harmless, and the answer lands with nothing else changed.
 #[tokio::test]
 async fn a_supplied_call_leaves_the_other_registers_alone() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let folder = tempfile::tempdir().expect("temporary folder");
     let program = built(
         folder.path(),
@@ -2641,6 +2728,9 @@ fn emulated_targets() -> Vec<lengua::platform::Profile> {
 /// SIGPIPE ignored.
 #[tokio::test]
 async fn an_emulated_program_gets_its_connections_too() {
+    if !per_target::runs_programs() {
+        return;
+    }
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     let scratch = tempfile::tempdir().expect("a folder");
     for target in emulated_targets() {
@@ -2687,6 +2777,9 @@ async fn an_emulated_program_gets_its_connections_too() {
 /// is counted, since the instructions would be QEMU's.
 #[tokio::test]
 async fn an_emulated_program_is_confined_by_landlock_and_the_kernel() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let scratch = tempfile::tempdir().expect("a folder");
     for target in emulated_targets() {
         let place = scratch.path().join(target.name());
@@ -2730,6 +2823,9 @@ async fn an_emulated_program_is_confined_by_landlock_and_the_kernel() {
 #[tokio::test]
 #[ignore = "a measurement, not a check"]
 async fn speedup_of_runs_at_once_on_the_word_count() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let counts = PerTarget {
         linux_x86_64: "examples/count",
         linux_aarch64: "tests/fixtures/linux-aarch64/count",

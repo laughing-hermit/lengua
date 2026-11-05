@@ -128,15 +128,19 @@ jobs:
       - name: Rust
         run: bash scripts/ci/setup.sh ${{ matrix.target }} rust
 
-      - name: LLVM
-        if: ${{ inputs.mode != 'compile' && startsWith(matrix.target, 'linux-') }}
-        run: bash scripts/ci/setup.sh ${{ matrix.target }} llvm
-
+      # The tools are kept between runs: the solvers, and LLVM where it is installed by hand.
       - uses: actions/cache@v4
         if: ${{ inputs.mode != 'compile' }}
         with:
-          path: ~/solvers
-          key: solvers-${{ matrix.target }}-${{ hashFiles('scripts/ci/tools.tsv') }}
+          path: |
+            ~/solvers
+            ~/llvm
+            ~/micromamba
+          key: tools-${{ matrix.target }}-${{ hashFiles('scripts/ci/tools.tsv', 'scripts/ci/setup.sh') }}
+
+      - name: LLVM
+        if: ${{ inputs.mode != 'compile' }}
+        run: bash scripts/ci/setup.sh ${{ matrix.target }} llvm
 
       - name: z3 and cvc5, pinned by checksum
         if: ${{ inputs.mode != 'compile' }}

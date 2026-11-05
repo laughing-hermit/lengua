@@ -2723,17 +2723,25 @@ mod tests {
 
     #[test]
     fn a_check_may_name_the_folder_or_its_spec() {
-        let folder = folder_of("/home/you/add/spec.md").expect("a spec path");
-        assert_eq!(folder.to_string(), "/home/you/add");
-        let folder = folder_of(" /home/you/add ").expect("a folder path");
-        assert_eq!(folder.to_string(), "/home/you/add");
+        // An absolute path on this system.
+        let root = if cfg!(windows) { "C:\\" } else { "/" };
+        let add = Path::new(root).join("home").join("you").join("add");
+        let named = add.to_string_lossy().into_owned();
+        let spec = add.join("spec.md");
+        let folder = folder_of(&spec.to_string_lossy()).expect("a spec path");
+        assert_eq!(folder.to_string(), named);
+        let folder = folder_of(&format!(" {named} ")).expect("a folder path");
+        assert_eq!(folder.to_string(), named);
         assert!(folder_of("add/spec.md").is_err());
     }
 
     #[test]
     fn the_machine_fits_in_a_line() {
         let machine = Machine::detect();
-        let native = Target::session(&machine, None).expect("a host lengua builds on");
+        let Ok(native) = Target::session(&machine, None) else {
+            crate::skiplog::note("lengua has no target for this system yet");
+            return;
+        };
         let line = machine_line(&machine, &native);
         assert!(line.contains("core"), "{line}");
         assert!(!line.contains('\n'), "{line}");

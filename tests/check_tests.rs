@@ -2,6 +2,7 @@
 //! user's words kept until they're fixed, and an old tests.toml moved into the spec.
 
 mod common;
+mod per_target;
 
 use common::{ADD_SPEC, Program, Protocol, REQUEST, Session};
 use lengua::hash::Sha256Hex;
@@ -13,6 +14,9 @@ fn text(value: &Value) -> &str {
 
 #[tokio::test]
 async fn records_a_spec_with_its_tests() {
+    if !per_target::runs_programs() {
+        return;
+    }
     for protocol in Protocol::ALL {
         let session = Session::start(protocol).await;
         let program = Program::with_add_spec();
@@ -52,6 +56,9 @@ async fn records_a_spec_with_its_tests() {
 
 #[tokio::test]
 async fn tests_can_be_fixed_under_the_same_request() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let session = Session::start(Protocol::Discover).await;
     let program = Program::with_add_spec();
     session.record(&program).await;
@@ -74,6 +81,9 @@ async fn tests_can_be_fixed_under_the_same_request() {
 
 #[tokio::test]
 async fn problems_are_reported_and_the_words_wait_for_the_fix() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let session = Session::start(Protocol::Discover).await;
     let program = Program::new();
     program.write("spec.md", &ADD_SPEC.replace("{a + b}", "{a - b}"));
@@ -104,6 +114,9 @@ async fn problems_are_reported_and_the_words_wait_for_the_fix() {
 
 #[tokio::test]
 async fn an_old_tests_file_goes_into_the_spec() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let session = Session::start(Protocol::Discover).await;
     let program = Program::with_add_spec();
     program.write(
@@ -124,6 +137,9 @@ async fn an_old_tests_file_goes_into_the_spec() {
 
 #[tokio::test]
 async fn a_changed_spec_checks_its_tests_again() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let session = Session::start(Protocol::Discover).await;
     let program = Program::with_add_spec();
     session.record(&program).await;

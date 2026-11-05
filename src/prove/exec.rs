@@ -4583,8 +4583,8 @@ mod logs;
 pub mod net;
 mod vector;
 
-// It runs a harness of x86-64 instructions on this computer's CPU.
-#[cfg(all(test, target_arch = "x86_64"))]
+// It runs a harness of x86-64 instructions on this computer's CPU: a Linux program, so on Linux.
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 mod against_cpu;
 
 /// Whether a name of these ASCII bytes has the shape of a Windows short name

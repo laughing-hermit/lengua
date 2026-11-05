@@ -1,6 +1,7 @@
 //! The server speaks MCP correctly in both protocol generations.
 
 mod common;
+mod per_target;
 
 use common::{Program, Protocol, Session};
 
@@ -46,6 +47,9 @@ async fn handshake_reports_server_name_version_and_instructions() {
 
 #[tokio::test]
 async fn a_new_folder_shows_the_machine_and_the_first_step() {
+    if !per_target::runs_programs() {
+        return;
+    }
     for protocol in Protocol::ALL {
         let session = Session::start(protocol).await;
         let program = Program::new();

@@ -1236,9 +1236,9 @@ fn word(bytes: &[u8], index: usize) -> u64 {
     u64::from_le_bytes(word)
 }
 
-/// Whether AArch64 programs run here: natively, or through QEMU registered with flag F.
+/// Whether AArch64 programs run here: natively on Linux, or through QEMU registered with flag F.
 fn runs_aarch64() -> bool {
-    if cfg!(target_arch = "aarch64") {
+    if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
         return true;
     }
     let entry =

@@ -16,6 +16,7 @@
 //! tier's absence of its feature is noted, never silent.
 
 mod common;
+mod per_target;
 
 use std::path::Path;
 
@@ -207,6 +208,9 @@ async fn passes_its_checks(session: &Session, folder: &str) {
 #[cfg(target_arch = "x86_64")]
 #[tokio::test]
 async fn the_x86_64_crc32c_baseline_passes_its_checks() {
+    if !per_target::runs_programs() {
+        return;
+    }
     if !Machine::detect().features.sse4_2 {
         lengua::skiplog::note("this CPU has no SSE4.2");
         return;
@@ -221,6 +225,9 @@ async fn the_x86_64_crc32c_baseline_passes_its_checks() {
 #[cfg(target_arch = "x86_64")]
 #[tokio::test]
 async fn the_x86_64_fast_tiers_pass_their_checks() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let tiers: [Tier; 3] = [
         (
             FORMS[0].x86_64[1],
@@ -254,6 +261,9 @@ async fn the_x86_64_fast_tiers_pass_their_checks() {
 /// QEMU, whose CPU has them all, on an x86-64 computer.
 #[tokio::test]
 async fn the_aarch64_fast_tiers_pass_their_checks() {
+    if !per_target::runs_programs() {
+        return;
+    }
     let native = cfg!(target_arch = "aarch64");
     let session = if native {
         Session::start(Protocol::Discover).await
