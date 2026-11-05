@@ -7,6 +7,18 @@ and why" below); each is a port of its own and none is started. The owner set th
 line on 2026-11-04: the two Linux targets only, done and the same product, and every item stopped
 by the safety filter finished. Nothing in this file about macOS or Windows is part of that line.
 
+**Where that line stands (2026-11-05).** The two Linux targets are one product held by one suite.
+Every test of the server, the programs, the network, the checker and the prover is a table with a
+cell for each target, run natively on the runner of each CPU (`tests/parity_inventory.rs` fails a
+new test file made for one CPU); every shipped program has a form that runs on every machine of
+its target (`tests/baseline.rs`, nothing owed), with the extension forms as named fast tiers; and
+ARM64's prover settles what x86-64's does on every program the tables ask. The full suites on the
+merged tree passed 530 tests on x86-64 and 526 on ARM64, none failed, and the mutation test
+passed on both (runs 41948019569, 41948026904, 41948022915 and 41948030519; ARM64's slow `mean`
+proof, 41948034208). What is left below is a list of places where one CPU is checked or modelled
+less than the other, none of it a case where the two answer a spec differently (beyond the words of
+a few refusals), and the four missing targets.
+
 As of 2026-11-02, both Linux targets, x86-64 and ARM64, are done, and they're one product: every
 capability, rule, limit, example, test, proof and measurement on both, only the hardware differing
 (DESIGN's "One product on every target"). Claude (Opus 5.5) did everything else this agenda held:
