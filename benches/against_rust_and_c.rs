@@ -16,7 +16,7 @@ mod linux {
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
 
-    use lengua::platform::{Machine, Profile};
+    use lengua::platform::{CpuFeatures, Machine, Profile};
     use lengua::toolchain::Toolchain;
     use perf_event::events::{
         Cache, CacheId, CacheOp, CacheResult, Event, Hardware, Raw, Software,
@@ -387,34 +387,63 @@ mod linux {
         }
     }
 
+    /// Whether this CPU can run a lengua version built from `source`: an SVE version runs only on
+    /// a CPU with SVE, and an AVX-512 one only on a CPU with AVX-512BW (GitHub's x86-64 runners
+    /// are a mixed pool, about half without).
+    fn runs_here(source: &str, features: &CpuFeatures) -> bool {
+        !((source.contains("-sve/") && features.sve == 0)
+            || (source.contains("avx512") && !features.avx512bw))
+    }
+
+    /// Assembles and links lengua's version `number` of `workload` from the file `source`, into
+    /// `folder` under names that begin with `stem`.
+    async fn build_lengua(
+        workload: &Workload,
+        number: usize,
+        label: &str,
+        source: &Path,
+        stem: &str,
+        toolchain: &Toolchain,
+        folder: &Path,
+    ) -> Version {
+        let (object, executable) = (
+            folder.join(format!("{}-{stem}-{number}.o", workload.name)),
+            folder.join(format!("{}-{stem}-{number}", workload.name)),
+        );
+        toolchain
+            .assemble(PROFILE, source, &object)
+            .await
+            .expect("assemble a lengua version");
+        toolchain
+            .link(PROFILE, &object, &executable)
+            .await
+            .expect("link a lengua version");
+        Version {
+            label: label.to_owned(),
+            executable,
+            lengua: true,
+        }
+    }
+
     async fn build(workload: &Workload, toolchain: &Toolchain, folder: &Path) -> Vec<Version> {
         let mut versions = Vec::new();
-        // An SVE version runs only on a CPU with SVE, and an AVX-512 one only on a CPU with
-        // AVX-512BW (GitHub's x86-64 runners are a mixed pool, about half without).
         let features = Machine::detect().features;
         for (number, (label, source)) in lengua_versions(workload).iter().enumerate() {
-            if (source.contains("-sve/") && features.sve == 0)
-                || (source.contains("avx512") && !features.avx512bw)
-            {
+            if !runs_here(source, &features) {
                 continue;
             }
-            let (object, executable) = (
-                folder.join(format!("{}-{number}.o", workload.name)),
-                folder.join(format!("{}-lengua-{number}", workload.name)),
+            versions.push(
+                build_lengua(
+                    workload,
+                    number,
+                    label,
+                    &root().join(source),
+                    "lengua",
+                    toolchain,
+                    folder,
+                )
+                .await,
             );
-            toolchain
-                .assemble(PROFILE, &root().join(source), &object)
-                .await
-                .expect("assemble a lengua version");
-            toolchain
-                .link(PROFILE, &object, &executable)
-                .await
-                .expect("link a lengua version");
-            versions.push(Version {
-                label: (*label).to_owned(),
-                executable,
-                lengua: true,
-            });
         }
         for (label, file) in workload.others {
             let source = root()
@@ -587,30 +616,60 @@ mod linux {
         values.get(values.len() / 2).copied()
     }
 
+    /// Runs `version` once, and fails if it didn't exit with 0 or printed something other than
+    /// `expected`.
+    fn checked_run(
+        version: &Version,
+        workload: &Workload,
+        folder: &Path,
+        expected: &[u8],
+    ) -> Sample {
+        let sample = run(version, workload, folder, &[]);
+        assert_eq!(
+            sample.status,
+            Some(0),
+            "{} {} failed",
+            workload.name,
+            version.label
+        );
+        let output = match workload.output_file {
+            Some(name) => std::fs::read(folder.join(name)).expect("the output file"),
+            None => sample.stdout.clone(),
+        };
+        assert!(
+            output == expected,
+            "{} {} printed something else",
+            workload.name,
+            version.label
+        );
+        sample
+    }
+
+    /// The medians of `samples`, with `peaks` and `stalls` as measured apart from them.
+    fn summarize(
+        version: &Version,
+        samples: &[Sample],
+        peaks: Vec<u64>,
+        stalls: Vec<Option<u64>>,
+    ) -> Measures {
+        Measures {
+            stalls,
+            instructions: median(samples.iter().filter_map(|s| s.instructions).collect()),
+            cycles: median(samples.iter().filter_map(|s| s.cycles).collect()),
+            cpu_time: median(samples.iter().filter_map(|s| s.cpu_time).collect()),
+            wall_time: median(samples.iter().map(|s| s.wall_time).collect()).unwrap_or_default(),
+            peak_kib: median(peaks),
+            size: std::fs::metadata(&version.executable).map_or(0, |metadata| metadata.len()),
+        }
+    }
+
     fn measure(version: &Version, workload: &Workload, folder: &Path, expected: &[u8]) -> Measures {
         for (name, contents) in &workload.files {
             std::fs::write(folder.join(name), contents).expect("write an input file");
         }
         let mut samples = Vec::new();
         for round in 0..WARM_UP + RUNS {
-            let sample = run(version, workload, folder, &[]);
-            assert_eq!(
-                sample.status,
-                Some(0),
-                "{} {} failed",
-                workload.name,
-                version.label
-            );
-            let output = match workload.output_file {
-                Some(name) => std::fs::read(folder.join(name)).expect("the output file"),
-                None => sample.stdout.clone(),
-            };
-            assert!(
-                output == expected,
-                "{} {} printed something else",
-                workload.name,
-                version.label
-            );
+            let sample = checked_run(version, workload, folder, expected);
             if round >= WARM_UP {
                 samples.push(sample);
             }
@@ -629,15 +688,203 @@ mod linux {
         } else {
             Vec::new()
         };
-        Measures {
-            stalls,
-            instructions: median(samples.iter().filter_map(|s| s.instructions).collect()),
-            cycles: median(samples.iter().filter_map(|s| s.cycles).collect()),
-            cpu_time: median(samples.iter().filter_map(|s| s.cpu_time).collect()),
-            wall_time: median(samples.iter().map(|s| s.wall_time).collect()).unwrap_or_default(),
-            peak_kib: median(peaks),
-            size: std::fs::metadata(&version.executable).map_or(0, |metadata| metadata.len()),
+        summarize(version, &samples, peaks, stalls)
+    }
+
+    /// Two versions of a workload measured alternately in one run, and each round's ratios.
+    struct Pair {
+        first: Measures,
+        second: Measures,
+        /// Each round's wall time of the second ÷ the first, in order of size.
+        wall: Vec<f64>,
+        /// The same for CPU time, where both runs counted it.
+        cpu: Vec<f64>,
+    }
+
+    /// Measures `first` and `second` one after the other in every round, which of the two goes
+    /// first alternating from round to round, so that neither always finds the cache the other
+    /// warmed. What the report gives of a measure is the ratio of each round's pair, which the
+    /// machine's drift over the run doesn't move.
+    fn measure_pair(
+        first: &Version,
+        second: &Version,
+        workload: &Workload,
+        folder: &Path,
+        expected: &[u8],
+    ) -> Pair {
+        for (name, contents) in &workload.files {
+            std::fs::write(folder.join(name), contents).expect("write an input file");
         }
+        let (mut firsts, mut seconds) = (Vec::new(), Vec::new());
+        let (mut wall, mut cpu) = (Vec::new(), Vec::new());
+        for round in 0..WARM_UP + RUNS {
+            let (a, b) = if round % 2 == 0 {
+                let a = checked_run(first, workload, folder, expected);
+                let b = checked_run(second, workload, folder, expected);
+                (a, b)
+            } else {
+                let b = checked_run(second, workload, folder, expected);
+                let a = checked_run(first, workload, folder, expected);
+                (a, b)
+            };
+            if round >= WARM_UP {
+                wall.push(b.wall_time.as_secs_f64() / a.wall_time.as_secs_f64());
+                if let (Some(then), Some(now)) = (a.cpu_time, b.cpu_time)
+                    && then > Duration::ZERO
+                {
+                    cpu.push(now.as_secs_f64() / then.as_secs_f64());
+                }
+                firsts.push(a);
+                seconds.push(b);
+            }
+        }
+        let peaks = |version: &Version| -> Vec<u64> {
+            (0..5)
+                .filter_map(|_| peak_kib(version, workload, folder))
+                .collect()
+        };
+        wall.sort_by(f64::total_cmp);
+        cpu.sort_by(f64::total_cmp);
+        Pair {
+            first: summarize(first, &firsts, peaks(first), Vec::new()),
+            second: summarize(second, &seconds, peaks(second), Vec::new()),
+            wall,
+            cpu,
+        }
+    }
+
+    /// The `part` quantile (0 to 1) of values in order of size.
+    fn quantile(sorted: &[f64], part: f64) -> Option<f64> {
+        let last = sorted.len().checked_sub(1)?;
+        sorted.get(((last as f64) * part).round() as usize).copied()
+    }
+
+    /// A ratio's median and, in brackets, its quartiles: whether it differs from 1 by more than
+    /// the runs' own spread shows in whether the brackets hold 1.
+    fn spread(sorted: &[f64]) -> String {
+        match (
+            quantile(sorted, 0.25),
+            quantile(sorted, 0.5),
+            quantile(sorted, 0.75),
+        ) {
+            (Some(low), Some(middle), Some(high)) => {
+                format!("{middle:.3}× ({low:.3}–{high:.3})")
+            }
+            _ => "–".to_owned(),
+        }
+    }
+
+    /// The commit whose lengua programs the report sets lengua's programs now against, when the
+    /// environment names one (`LENGUA_BENCH_AGAINST`).
+    fn against() -> Option<String> {
+        std::env::var("LENGUA_BENCH_AGAINST")
+            .ok()
+            .map(|sha| sha.trim().to_owned())
+            .filter(|sha| !sha.is_empty())
+    }
+
+    /// The file `source` as commit `sha` had it, written into `folder`; `None` if it had no such
+    /// file.
+    fn source_at(
+        sha: &str,
+        source: &str,
+        workload: &Workload,
+        number: usize,
+        folder: &Path,
+    ) -> Option<PathBuf> {
+        let shown = Command::new("git")
+            .arg("show")
+            .arg(format!("{sha}:{source}"))
+            .current_dir(root())
+            .output()
+            .ok()?;
+        if !shown.status.success() {
+            return None;
+        }
+        let path = folder.join(format!("{}-then-{number}.s", workload.name));
+        std::fs::write(&path, &shown.stdout).ok()?;
+        Some(path)
+    }
+
+    /// The report's section that sets each lengua version of each workload now against the same
+    /// version as commit `sha` had it, both built here with this toolchain and run alternately.
+    async fn compare(sha: &str, toolchain: &Toolchain, folder: &Path) -> String {
+        let short = &sha[..sha.len().min(7)];
+        let mut section = format!(
+            "\n# lengua now against lengua at {short}\n\nEach lengua version of each workload \
+             above, as commit {short} had it and as it is now, both built with this toolchain \
+             and run one after the other in every round of {RUNS}, which goes first alternating. \
+             \"now ÷ then\" is the median of each round's ratio, with the quartiles of those \
+             ratios in brackets: a figure whose brackets hold 1 is level within the runs' own \
+             spread. Peak memory and file size are the medians' ratio.\n"
+        );
+        let features = Machine::detect().features;
+        for workload in workloads() {
+            let expected = expected_output(&workload);
+            for (number, (label, source)) in lengua_versions(&workload).iter().enumerate() {
+                if !runs_here(source, &features) {
+                    continue;
+                }
+                let Some(old) = source_at(sha, source, &workload, number, folder) else {
+                    let _ = writeln!(section, "\n- {} {label}: not in {short}", workload.name);
+                    continue;
+                };
+                eprintln!("{} {label} against {short}…", workload.name);
+                let then = build_lengua(
+                    &workload,
+                    number,
+                    &format!("{label} then"),
+                    &old,
+                    "then",
+                    toolchain,
+                    folder,
+                )
+                .await;
+                let now = build_lengua(
+                    &workload,
+                    number,
+                    label,
+                    &root().join(source),
+                    "now",
+                    toolchain,
+                    folder,
+                )
+                .await;
+                let work = folder.join(format!("{}-pair-{number}", workload.name));
+                std::fs::create_dir(&work).expect("a working folder");
+                let pair = measure_pair(&then, &now, &workload, &work, &expected);
+                let ratio_of = |then: Option<u64>, now: Option<u64>| match (then, now) {
+                    (Some(then), Some(now)) if then > 0 => {
+                        format!("{:.3}×", now as f64 / then as f64)
+                    }
+                    _ => "–".to_owned(),
+                };
+                let _ = write!(
+                    section,
+                    "\n## {} ({label})\n\n| | then | now | now ÷ then |\n|---|---|---|---|\n\
+                     | CPU time | {} | {} | {} |\n| wall time | {} | {} | {} |\n\
+                     | peak memory | {} | {} | {} |\n| file size | {} | {} | {} |\n",
+                    workload.name,
+                    pair.first.cpu_time.map_or_else(|| "–".to_owned(), micros),
+                    pair.second.cpu_time.map_or_else(|| "–".to_owned(), micros),
+                    spread(&pair.cpu),
+                    micros(pair.first.wall_time),
+                    micros(pair.second.wall_time),
+                    spread(&pair.wall),
+                    pair.first
+                        .peak_kib
+                        .map_or_else(|| "–".to_owned(), |kib| format!("{} KiB", thousands(kib))),
+                    pair.second
+                        .peak_kib
+                        .map_or_else(|| "–".to_owned(), |kib| format!("{} KiB", thousands(kib))),
+                    ratio_of(pair.first.peak_kib, pair.second.peak_kib),
+                    size(pair.first.size),
+                    size(pair.second.size),
+                    ratio_of(Some(pair.first.size), Some(pair.second.size)),
+                );
+            }
+        }
+        section
     }
 
     /// The output every version must give, computed here.
@@ -889,6 +1136,11 @@ mod linux {
             report.push_str(&row("file size", &|m| size(m.size), &|m| {
                 Some(m.size as f64)
             }));
+        }
+        // Where an earlier commit's lengua programs are named (LENGUA_BENCH_AGAINST), each is also
+        // measured against its version there, run alternately in this run.
+        if let Some(sha) = against() {
+            report.push_str(&compare(&sha, &toolchain, folder.path()).await);
         }
         let path = root().join(if ARM64 {
             "BENCHMARKS-aarch64.md"
