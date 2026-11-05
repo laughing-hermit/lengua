@@ -18,6 +18,17 @@ fn operand(register: A64Reg) -> Operand {
     }
 }
 
+/// How a branch that tests `rt` goes when `rt` is the zero register, which always holds 0: the
+/// branch on zero (`cbz`, `tbz`) always jumps and the branch on nonzero (`cbnz`, `tbnz`) never
+/// does, so they are decided in advance as `b.al` and `b.nv` are. `None` for any other register.
+fn decided(rt: A64Reg, nonzero: bool, target: u64) -> Option<Control> {
+    (rt.gpr == Gpr::Zr).then_some(if nonzero {
+        Control::Next
+    } else {
+        Control::Jump(target)
+    })
+}
+
 /// Whether `register` is the stack pointer.
 /// A floating-point register, as the shared facts name it.
 const fn fp(register: FpReg) -> Reg {
@@ -607,10 +618,13 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
             rt,
             target,
         } => (
-            Control::Branch {
+            // On the zero register it is decided in advance, so the code after an always-taken
+            // one can't run, and the target of a never-taken one is reached some other way or not
+            // at all.
+            decided(rt, nonzero, target).unwrap_or(Control::Branch {
                 target,
                 cond: if nonzero { Cond::NotZero } else { Cond::Zero },
-            },
+            }),
             None,
             vec![operand(rt), Operand::Target(target)],
             None,
@@ -624,14 +638,14 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
             bit,
             target,
         } => (
-            Control::Branch {
+            decided(rt, nonzero, target).unwrap_or(Control::Branch {
                 target,
                 cond: if nonzero {
                     Cond::BitSet(bit)
                 } else {
                     Cond::BitClear(bit)
                 },
-            },
+            }),
             None,
             vec![
                 operand(rt),
