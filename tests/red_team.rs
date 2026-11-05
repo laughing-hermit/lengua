@@ -1119,9 +1119,5 @@ fn every_cell_edits_text_its_template_has() {
     }
     // The 41 attempts each file held, and the x86-64 `openat` this table adds.
     assert!(tried.x86_64 >= 42, "{} on x86-64", tried.x86_64);
-    assert!(
-        tried.aarch64 >= 41,
-        "{} on ARM64",
-        tried.aarch64
-    );
+    assert!(tried.aarch64 >= 41, "{} on ARM64", tried.aarch64);
 }
