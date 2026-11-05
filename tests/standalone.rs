@@ -362,8 +362,7 @@ async fn the_template_does_what_its_spec_says() {
     let folder = tempfile::tempdir().expect("temporary folder");
     for target in Profile::ALL {
         let place = folder.path().join(target.name());
-        let executable =
-            per_target::build(target, &place, "main", TEMPLATES.get(target)).await;
+        let executable = per_target::build(target, &place, "main", TEMPLATES.get(target)).await;
         if per_target::way(target).is_none() {
             continue;
         }

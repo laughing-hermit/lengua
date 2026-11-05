@@ -4605,7 +4605,10 @@ fn the_frozen_texts_are_the_inline_forms() {
         ("parallel-template.s", PARALLEL_TEMPLATE),
         ("fill.s", FILL_TEMPLATE),
         ("linux-aarch64/main-template.s", AARCH64_TEMPLATE),
-        ("linux-aarch64/parallel-template.s", PARALLEL_TEMPLATE_AARCH64),
+        (
+            "linux-aarch64/parallel-template.s",
+            PARALLEL_TEMPLATE_AARCH64,
+        ),
         ("linux-aarch64/fill.s", AARCH64_FILL_TEMPLATE),
     ];
     for (name, text) in frozen {
