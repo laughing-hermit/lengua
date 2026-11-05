@@ -1479,7 +1479,11 @@ const ASSERTIONS: Fixtures = &[
                     "    cbz xzr, .Lwrite_all_assert_null\n",
                 )],
                 finds: &[
-                    (Rule::Assertions, At::Line("    mov w0, #10"), "always fails"),
+                    (
+                        Rule::Assertions,
+                        At::Line("    mov w0, #10"),
+                        "always fails",
+                    ),
                     (
                         Rule::ControlFlow,
                         At::Line("    cbz x2, .Lwrite_all_assert_empty"),
@@ -3802,12 +3806,7 @@ async fn code_after_an_always_taken_aarch64_branch_can_never_run() {
 /// its target can never run unless something else jumps there.
 #[tokio::test]
 async fn code_only_a_never_taken_aarch64_branch_reaches_can_never_run() {
-    for branch in [
-        "cbnz xzr",
-        "cbnz wzr",
-        "tbnz xzr, #5",
-        "tbnz wzr, #31",
-    ] {
+    for branch in ["cbnz xzr", "cbnz wzr", "tbnz xzr, #5", "tbnz wzr, #31"] {
         let text = with_aarch64(
             "    mov w0, #EXIT_OK\n    b .Lstart_exit\n",
             &format!(
