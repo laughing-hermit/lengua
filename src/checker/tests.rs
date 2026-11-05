@@ -4685,8 +4685,8 @@ async fn the_two_forms_have_the_same_facts() {
                 .facts
                 .expect("the rules got far enough to learn the facts")
         };
-        let inline = facts(*EXITS_INLINE.get(profile)).await;
-        let edge = facts(*EXITS_EDGE.get(profile)).await;
+        let inline = facts(EXITS_INLINE.get(profile)).await;
+        let edge = facts(EXITS_EDGE.get(profile)).await;
         assert_eq!(edge.features, inline.features, "{profile:?}");
         assert_eq!(edge.named, inline.named, "{profile:?}");
         assert_eq!(edge.tables, inline.tables, "{profile:?}");
