@@ -405,6 +405,7 @@ async fn needs_beyond_baseline(
         .await
         .map_err(|error| error.to_string())?;
     let bytes = std::fs::read(&executable).map_err(|error| format!("the executable: {error}"))?;
+    let lengua = checker::lengua_source(target, text);
     let check = |features: CpuFeatures| {
         checker::check_program(
             &source,
@@ -413,6 +414,7 @@ async fn needs_beyond_baseline(
                 syscalls: &spec.syscalls,
                 ops: &spec.ops,
                 threads: spec.threads,
+                lengua: lengua.as_ref(),
                 features,
                 profile: target,
             },

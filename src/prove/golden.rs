@@ -142,6 +142,7 @@ fn machine_of(profile: Profile, text: &str, bytes: &[u8]) -> Machine {
     let (parsed, _) = crate::checker::check_layout(text);
     if let Some(program) = crate::checker::decode::map(
         &parsed,
+        None,
         &machine,
         crate::platform::CpuFeatures::all(),
         &mut Vec::new(),

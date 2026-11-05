@@ -414,5 +414,6 @@ pub fn facts(instruction: &Instruction, factory: &mut InstructionInfoFactory) ->
         op,
         value,
         stack,
+        call_clobbers: None,
     }
 }

@@ -200,6 +200,23 @@ impl Summary {
             returns: Owner::Number,
         }
     }
+
+    /// The buffers a call to an operation of the edge lends: its `lends`, in the registers the
+    /// edge's convention passes its arguments in.
+    fn operation(op: crate::edge::Op, abi: &Abi) -> Self {
+        let registers = |written: bool| -> BTreeSet<Reg> {
+            op.lends()
+                .iter()
+                .filter(|lend| lend.written || !written)
+                .map(|lend| abi.edge_arguments[lend.argument])
+                .collect()
+        };
+        Self {
+            uses: registers(false),
+            writes: registers(true),
+            returns: Owner::Number,
+        }
+    }
 }
 
 /// Each general-purpose register's owner before an instruction, by its slot, and which frame
@@ -397,6 +414,7 @@ fn lent(
                     .get(callee)
                     .cloned()
                     .unwrap_or_else(|| Summary::every(abi.arguments)),
+                Exit::Edge { op } => Summary::operation(*op, abi),
                 _ => Summary::every(abi.arguments),
             }),
             Control::Syscall => Some(Summary::syscall(

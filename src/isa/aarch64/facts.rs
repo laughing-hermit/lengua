@@ -1021,6 +1021,7 @@ pub fn facts(inst: &Inst, address: u64) -> Insn {
         op,
         value,
         stack,
+        call_clobbers: None,
     }
 }
 

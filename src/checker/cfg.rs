@@ -31,6 +31,12 @@ pub enum Exit {
         /// Whether it's `exit` or `exit_group`.
         exit: bool,
     },
+    /// A call into lengua's edge: one of its operations, which keeps what the edge's convention
+    /// keeps. `os_exit` ends the program.
+    Edge {
+        /// The operation.
+        op: crate::edge::Op,
+    },
     /// Jumps through a checked table to the instruction at one of these indexes.
     Table(Vec<usize>),
     /// Something the dialect doesn't allow; already reported.
@@ -151,6 +157,16 @@ pub fn analyze(
                 Some(callee) => Exit::Call {
                     callee: callee.name().to_owned(),
                 },
+                // lengua's: an operation, or one of the library's functions.
+                None if program.lengua_at(target).is_some() => {
+                    let name = program.lengua_at(target).map_or("", MappedFunction::name);
+                    crate::edge::Op::from_symbol(name).map_or_else(
+                        || Exit::Call {
+                            callee: name.to_owned(),
+                        },
+                        |op| Exit::Edge { op },
+                    )
+                }
                 None => {
                     report(
                         Rule::ControlFlow,
@@ -181,6 +197,7 @@ pub fn analyze(
             Exit::Next | Exit::Branch(_) => true,
             Exit::Call { callee } => callee != ASSERT_FAIL,
             Exit::Syscall { exit } => !exit,
+            Exit::Edge { op } => *op != crate::edge::Op::Exit,
             Exit::Jump(_) | Exit::Table(_) | Exit::Return | Exit::Stop => false,
         };
         if let Exit::Jump(target) | Exit::Branch(target) = exit {
@@ -259,10 +276,12 @@ pub fn analyze(
                 "undo every push and sub rsp before ret",
             );
         }
-        if let Exit::Call { callee } = &exits[index]
-            && callee != ASSERT_FAIL
-            && before % 16 != 0
-        {
+        let aligned_call = match &exits[index] {
+            Exit::Call { callee } => callee != ASSERT_FAIL,
+            Exit::Edge { op } => *op != crate::edge::Op::Exit,
+            _ => false,
+        };
+        if aligned_call && before % 16 != 0 {
             report(
                 Rule::Functions,
                 line,
@@ -334,7 +353,7 @@ pub fn deepest(name: &str, program: &Program<'_>, flows: &BTreeMap<String, Flow>
         if let Some(known) = memo.get(name) {
             return *known;
         }
-        let (Some(_), Some(flow)) = (program.function(name), flows.get(name)) else {
+        let (Some(_), Some(flow)) = (program.any_function(name), flows.get(name)) else {
             return 0;
         };
         if !visiting.insert(name.to_owned()) {
@@ -342,10 +361,13 @@ pub fn deepest(name: &str, program: &Program<'_>, flows: &BTreeMap<String, Flow>
         }
         let mut most = flow.max_depth;
         for (index, exit) in flow.exits.iter().enumerate() {
-            if let Exit::Call { callee } = exit {
-                let at_call = flow.depth[index].unwrap_or(0);
-                most = most.max(at_call + walk(callee, program, flows, memo, visiting));
-            }
+            let callee = match exit {
+                Exit::Call { callee } => callee.as_str(),
+                Exit::Edge { op } => op.symbol(),
+                _ => continue,
+            };
+            let at_call = flow.depth[index].unwrap_or(0);
+            most = most.max(at_call + walk(callee, program, flows, memo, visiting));
         }
         visiting.remove(name);
         memo.insert(name.to_owned(), most);

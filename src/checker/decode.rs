@@ -1,7 +1,7 @@
 //! Reads the linked executable back and matches it to main.s instruction by instruction,
 //! operands included, so the step from main.s to machine code is a checked translation.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use iced_x86::{Decoder, DecoderOptions, Instruction, InstructionInfoFactory};
 use object::{
@@ -13,7 +13,7 @@ use super::source::{
     Source,
 };
 use super::{Rule, Violation, aarch64 as aarch64_checks, x86_64};
-use crate::isa::{Abi, Insn, Isa, aarch64};
+use crate::isa::{Abi, Control, Insn, Isa, aarch64};
 use crate::platform::CpuFeatures;
 
 /// A function in the executable.
@@ -318,8 +318,13 @@ pub struct Program<'a> {
     pub source: &'a Source,
     /// The functions, in source order.
     pub functions: Vec<MappedFunction<'a>>,
-    /// Data symbols by name.
+    /// Data symbols by name: main.s's own.
     pub data: BTreeMap<String, MachineData>,
+    /// lengua's functions, matched to lengua.s as main.s's are to main.s, when the program is in
+    /// the edge form; empty otherwise. They are exempt from the program's rules.
+    pub lengua: Vec<MappedFunction<'a>>,
+    /// lengua's data symbols by name, when the program is in the edge form.
+    pub lengua_data: BTreeMap<String, MachineData>,
 }
 
 impl Program<'_> {
@@ -343,6 +348,27 @@ impl Program<'_> {
         self.functions
             .iter()
             .find(|function| function.address == address)
+    }
+
+    /// The function of lengua's starting at `address`.
+    #[must_use]
+    pub fn lengua_at(&self, address: u64) -> Option<&MappedFunction<'_>> {
+        self.lengua
+            .iter()
+            .find(|function| function.address == address)
+    }
+
+    /// The function of lengua's called `name`.
+    #[must_use]
+    pub fn lengua_at_name(&self, name: &str) -> Option<&MappedFunction<'_>> {
+        self.lengua.iter().find(|function| function.name() == name)
+    }
+
+    /// A function of either unit by name, for the stack.
+    #[must_use]
+    pub fn any_function(&self, name: &str) -> Option<&MappedFunction<'_>> {
+        self.function(name)
+            .or_else(|| self.lengua.iter().find(|function| function.name() == name))
     }
 
     /// The data symbol a step's `[rip + name]` operand names in main.s, with the offset main.s
@@ -383,6 +409,7 @@ impl Program<'_> {
 /// after recording why: then nothing else can be trusted.
 pub fn map<'a>(
     source: &'a Source,
+    lengua: Option<&'a Source>,
     machine: &Machine,
     features: CpuFeatures,
     violations: &mut Vec<Violation>,
@@ -403,14 +430,73 @@ pub fn map<'a>(
             functions.push(mapped);
         }
     }
+    // lengua's own unit, matched to lengua.s as main.s's is to main.s.
+    let mut lengua_functions = Vec::new();
+    for function in lengua.iter().flat_map(|lengua| &lengua.functions) {
+        let Some(code) = machine.functions.get(&function.name) else {
+            violations.push(Violation {
+                rule: Rule::Dialect,
+                line: Some(function.line),
+                problem: format!("lengua's {} isn't in the executable", function.name),
+                fix: "lengua.s is lengua's to write: this is a bug in it".into(),
+            });
+            continue;
+        };
+        if let Some(mapped) = map_function(function, code, violations) {
+            lengua_functions.push(mapped);
+        }
+    }
+    // Every function of the executable belongs to one of the two.
+    let known: BTreeSet<&str> = source
+        .functions
+        .iter()
+        .chain(lengua.iter().flat_map(|lengua| &lengua.functions))
+        .map(|function| function.name.as_str())
+        .collect();
+    for name in machine.functions.keys() {
+        if !known.contains(name.as_str()) {
+            violations.push(Violation {
+                rule: Rule::Dialect,
+                line: None,
+                problem: format!("the executable has a function, {name}, that main.s doesn't define"),
+                fix: "keep every function in main.s, with its `.type` and `.size` lines".into(),
+            });
+        }
+    }
     if violations.len() > before {
         return None;
     }
+    // A call that enters an operation changes what the edge's convention says, not what an
+    // ordinary call does.
+    let abi = machine.isa.abi();
+    for function in &mut functions {
+        for step in &mut function.steps {
+            if let Control::Call(target) = step.insn.control
+                && lengua_functions.iter().any(|callee| {
+                    callee.address == target
+                        && crate::edge::Op::from_symbol(callee.name()).is_some()
+                })
+            {
+                step.insn.call_clobbers = Some(abi.edge_clobbers);
+            }
+        }
+    }
+    let (lengua_data, data): (BTreeMap<String, MachineData>, BTreeMap<String, MachineData>) =
+        match lengua {
+            None => (BTreeMap::new(), machine.data.clone()),
+            Some(lengua) => machine
+                .data
+                .iter()
+                .map(|(name, data)| (name.clone(), data.clone()))
+                .partition(|(name, _)| lengua.data.iter().any(|symbol| symbol.name == *name)),
+        };
     let program = Program {
         isa: machine.isa,
         source,
         functions,
-        data: machine.data.clone(),
+        data,
+        lengua: lengua_functions,
+        lengua_data,
     };
     for function in &program.functions {
         let code = match &machine.functions[function.name()].code {

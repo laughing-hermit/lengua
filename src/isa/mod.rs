@@ -377,6 +377,10 @@ pub struct Insn {
     pub value: Value,
     /// What it does to the stack pointer.
     pub stack: Stack,
+    /// The registers this call changes when it enters lengua's edge, which keeps most: `None` for
+    /// an ordinary call, which changes the convention's `caller_saved`. Set by the checker once it
+    /// has matched the call to an operation (`Abi::edge_clobbers`).
+    pub call_clobbers: Option<&'static [Reg]>,
 }
 
 /// A CPU's calling convention, as lengua's programs follow it.
@@ -426,7 +430,9 @@ impl Insn {
     pub fn changes(&self, register: Reg, abi: &Abi) -> bool {
         let full = register.full();
         let clobbered = match self.control {
-            Control::Call(_) | Control::IndirectCall => abi.caller_saved,
+            Control::Call(_) | Control::IndirectCall => {
+                self.call_clobbers.unwrap_or(abi.caller_saved)
+            }
             Control::Syscall => abi.syscall_clobbers,
             _ => &[],
         };

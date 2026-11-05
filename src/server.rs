@@ -766,6 +766,7 @@ impl LenguaServer {
                         )));
                     }
                 };
+                let lengua = checker::lengua_source(profile, &code);
                 let report = checker::check_program(
                     &source,
                     &built.bytes,
@@ -773,6 +774,7 @@ impl LenguaServer {
                         syscalls: &spec.syscalls,
                         ops: &spec.ops,
                         threads: spec.threads,
+                        lengua: lengua.as_ref(),
                         features: target.features(&machine),
                         profile,
                     },

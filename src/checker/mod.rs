@@ -226,6 +226,9 @@ pub struct Context<'a> {
     pub ops: &'a [crate::edge::Op],
     /// How many threads the spec allows at once, when it allows more than one.
     pub threads: Option<u32>,
+    /// lengua.s as lengua assembled it after main.s, for a program in the edge form (see
+    /// [`lengua_source`]).
+    pub lengua: Option<&'a Source>,
     /// This CPU's extensions.
     pub features: CpuFeatures,
     /// The platform.
@@ -278,6 +281,19 @@ pub fn check_layout(text: &str) -> (Source, Report) {
     (source, report)
 }
 
+/// lengua.s as lengua assembles it after `main`, read the way main.s is: for a program in the edge
+/// form, else `None`. Its functions are matched to the executable like main.s's; what the dialect
+/// says of its layout is not a program's to answer for.
+#[must_use]
+pub fn lengua_source(profile: Profile, main: &str) -> Option<Source> {
+    let text = crate::edge::lengua_text(profile, main)?;
+    let first = match profile.isa() {
+        Isa::X86_64 => ".intel_syntax noprefix\n",
+        Isa::Aarch64 => ".arch armv8-a\n",
+    };
+    Some(source::parse(&format!("{first}{text}")).0)
+}
+
 /// Checks the executable built from main.s: that it matches main.s instruction by instruction,
 /// then every rule.
 #[must_use]
@@ -297,7 +313,13 @@ pub fn check_program(source: &Source, executable: &[u8], context: Context<'_>) -
             return Report::new(violations, None, source);
         }
     };
-    let Some(program) = decode::map(source, &machine, context.features, &mut violations) else {
+    let Some(program) = decode::map(
+        source,
+        context.lengua,
+        &machine,
+        context.features,
+        &mut violations,
+    ) else {
         return Report::new(violations, None, source);
     };
     let exit_numbers = [
@@ -306,7 +328,7 @@ pub fn check_program(source: &Source, executable: &[u8], context: Context<'_>) -
     ];
     // Jumps through checked tables, found first, since the control flow follows their cases.
     let jumps = tables::every(&program, &mut violations);
-    let flows: BTreeMap<String, cfg::Flow> = program
+    let mut flows: BTreeMap<String, cfg::Flow> = program
         .functions
         .iter()
         .map(|function| {
@@ -317,6 +339,11 @@ pub fn check_program(source: &Source, executable: &[u8], context: Context<'_>) -
             )
         })
         .collect();
+    // lengua's own functions are read for their stack, and answer to no rule of the program's.
+    for function in &program.lengua {
+        let flow = cfg::analyze(function, &program, &exit_numbers, &[], &mut Vec::new());
+        flows.insert(function.name().to_owned(), flow);
+    }
     let (template, fill_template) = match program.isa {
         Isa::X86_64 => (TEMPLATE, FILL_TEMPLATE),
         Isa::Aarch64 => (AARCH64_TEMPLATE, AARCH64_FILL_TEMPLATE),

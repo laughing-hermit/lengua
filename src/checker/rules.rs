@@ -1418,8 +1418,15 @@ impl Checker<'_, '_> {
         }
     }
 
-    /// The deepest stack over every call path from `_start`.
+    /// The deepest stack over every call path from the program's start: `_start` in the inline
+    /// form, and `main` in the edge form, which lengua's `_start` calls and whose own frames count
+    /// where an operation is called.
     fn max_stack(&self) -> u64 {
-        u64::try_from(deepest("_start", self.program, self.flows)).unwrap_or(0)
+        let start = if self.program.function("_start").is_some() {
+            "_start"
+        } else {
+            "main"
+        };
+        u64::try_from(deepest(start, self.program, self.flows)).unwrap_or(0)
     }
 }

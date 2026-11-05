@@ -65,7 +65,6 @@ _start:
     add x2, x1, x0, lsl #3
     add x2, x2, #8
     bl main
-    brk #0
 .size _start, . - _start
 
 // == lengua_error
@@ -95,7 +94,6 @@ lengua_error:
 os_exit:
     mov x8, #LENGUA_SYS_EXIT_GROUP
     svc #0
-    brk #0
 .size os_exit, . - os_exit
 
 // == os_write: lengua_error
@@ -893,7 +891,6 @@ os_thread_start:
     mov x0, #0
     mov x8, #LENGUA_SYS_EXIT
     svc #0
-    brk #0
 .Llengua_thread_start_invalid:
     mov x0, #LENGUA_EINVAL
     ret

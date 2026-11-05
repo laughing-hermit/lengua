@@ -21,7 +21,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use super::{Context, Report, check_layout, check_program};
+use super::{Context, Report, check_layout, check_program, lengua_source};
 use crate::hash::Sha256Hex;
 use crate::platform::{CpuFeatures, Profile};
 use crate::spec::Syscall;
@@ -678,6 +678,7 @@ async fn report(
     if !layout.passed() {
         return format!("layout\n{}", describe(&layout));
     }
+    let lengua = lengua_source(profile, text);
     match built(profile, toolchain, text).await {
         Ok(bytes) => describe(&check_program(
             &source,
@@ -686,6 +687,7 @@ async fn report(
                 syscalls,
                 ops,
                 threads,
+                lengua: lengua.as_ref(),
                 features: CpuFeatures::all(),
                 profile,
             },

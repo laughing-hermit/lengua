@@ -43,6 +43,7 @@ async fn check_full(
         .await
         .unwrap_or_else(|error| panic!("linking failed: {error:?}"));
     let bytes = std::fs::read(&executable).expect("read the executable");
+    let lengua = lengua_source(profile, text);
     check_program(
         &source,
         &bytes,
@@ -50,6 +51,7 @@ async fn check_full(
             syscalls,
             ops: &[],
             threads,
+            lengua: lengua.as_ref(),
             features,
             profile,
         },
@@ -172,6 +174,7 @@ async fn operands_must_mean_what_the_machine_does() {
                 syscalls: &SYSCALLS,
                 ops: &[],
                 threads: None,
+                lengua: None,
                 features: CpuFeatures::all(),
                 profile: target,
             },
@@ -4620,11 +4623,11 @@ fn the_frozen_texts_are_the_inline_forms() {
     assert_eq!(super::frozen("server-template.s"), None);
 }
 
-/// lengua.s read as a program, with the first line main.s gives it: what the dialect's parser
-/// says of the edge's own text, for the program that calls all of it.
+/// lengua.s read as a program, with the first line main.s gives it: its 26 functions are all
+/// there, and the dialect's parser finds fault only with how its data is laid out (alignment
+/// directives and sizes that are bare numbers), which is not a program's rule to hold lengua to.
 #[test]
-fn what_the_dialect_says_of_lengua_s() {
-    let mut all: Vec<String> = Vec::new();
+fn the_dialect_finds_only_the_data_layout_of_lengua_s_at_fault() {
     for profile in Profile::ALL {
         let (first, call) = match profile.isa() {
             Isa::X86_64 => (".intel_syntax noprefix\n", "call"),
@@ -4639,8 +4642,150 @@ fn what_the_dialect_says_of_lengua_s() {
         }
         let text = crate::edge::lengua_text(profile, &main).expect("the edge form");
         let (source, violations) = source::parse(&format!("{first}{text}"));
-        all.push(format!("{profile:?}: {} functions", source.functions.len()));
-        all.extend(violations.iter().map(|violation| format!("{profile:?}: {violation}")));
+        assert_eq!(source.functions.len(), 26, "{profile:?}");
+        let others: Vec<String> = violations
+            .iter()
+            .map(ToString::to_string)
+            .filter(|violation| {
+                !violation.contains(".balign emits bytes outside a data symbol")
+                    && !violation.contains("uses a bare number")
+            })
+            .collect();
+        assert!(others.is_empty(), "{profile:?}: {others:#?}");
     }
-    assert_eq!(all.len(), 2, "{all:#?}");
+}
+
+/// The smallest program that ends with 0, in the inline form and in the edge form, for each CPU.
+const EXITS_INLINE: PerCpu<&str> = PerCpu {
+    x86_64: ".intel_syntax noprefix\n.equ SYS_EXIT, 231\n.equ EXIT_OK, 0\n\n.text\n.globl _start\n\
+             .type _start, @function\n_start:\n    mov edi, EXIT_OK\n    mov eax, SYS_EXIT\n    syscall\n\
+             .size _start, . - _start\n",
+    aarch64: ".arch armv8-a\n.equ SYS_EXIT, 94\n.equ EXIT_OK, 0\n\n.text\n.globl _start\n\
+              .type _start, @function\n_start:\n    mov w0, #EXIT_OK\n    mov x8, #SYS_EXIT\n    svc #0\n\
+              .size _start, . - _start\n",
+};
+
+/// The same program against the edge: `main` is entered by a call, and ends with `os_exit`.
+const EXITS_EDGE: PerCpu<&str> = PerCpu {
+    x86_64: ".intel_syntax noprefix\n.equ EXIT_OK, 0\n\n.text\n.type main, @function\nmain:\n\
+             \x20   sub rsp, 8\n    mov edi, EXIT_OK\n    call os_exit\n.size main, . - main\n",
+    aarch64: ".arch armv8-a\n.equ EXIT_OK, 0\n\n.text\n.type main, @function\nmain:\n\
+              \x20   stp x29, x30, [sp, #-16]!\n    mov w0, #EXIT_OK\n    bl os_exit\n.size main, . - main\n",
+};
+
+/// The same program in the two forms has the same facts, apart from the deepest the stack gets,
+/// which counts the edge's own frames in the edge form: lengua's code doesn't leak into what the
+/// rules learn of the program.
+#[tokio::test]
+async fn the_two_forms_have_the_same_facts() {
+    for profile in Profile::ALL {
+        let facts = |text: &'static str| async move {
+            check_full(text, CpuFeatures::all(), &SYSCALLS, None)
+                .await
+                .facts
+                .expect("the rules got far enough to learn the facts")
+        };
+        let inline = facts(*EXITS_INLINE.get(profile)).await;
+        let edge = facts(*EXITS_EDGE.get(profile)).await;
+        assert_eq!(edge.features, inline.features, "{profile:?}");
+        assert_eq!(edge.named, inline.named, "{profile:?}");
+        assert_eq!(edge.tables, inline.tables, "{profile:?}");
+        assert_eq!(edge.functions, inline.functions, "{profile:?}");
+        assert_eq!(edge.assertions, inline.assertions, "{profile:?}");
+        assert_eq!(edge.sve_bytes, inline.sve_bytes, "{profile:?}");
+        assert!(
+            edge.max_stack_bytes > inline.max_stack_bytes,
+            "{profile:?}: {} and {}",
+            edge.max_stack_bytes,
+            inline.max_stack_bytes
+        );
+    }
+}
+
+/// lengua.s is matched to the executable line for line, and every function of the executable is
+/// main.s's or lengua's; a call to an operation changes what the edge's convention changes and
+/// no more, where an ordinary call changes everything a function may.
+#[tokio::test]
+async fn lengua_s_is_matched_and_an_operation_keeps_what_the_edge_keeps() {
+    let toolchain = Toolchain::discover()
+        .await
+        .expect("llvm-mc and ld.lld are installed");
+    for profile in Profile::ALL {
+        let (first, call, ret) = match profile.isa() {
+            Isa::X86_64 => (".intel_syntax noprefix", "call", "ret"),
+            Isa::Aarch64 => (".arch armv8-a", "bl", "ret"),
+        };
+        // A main that calls all of it, and the worker the thread library runs.
+        let mut text = format!("{first}\n\n.text\n.type main, @function\nmain:\n");
+        for op in crate::edge::Op::ALL {
+            text.push_str(&format!("    {call} {}\n", op.symbol()));
+        }
+        for name in ["assert_fail", "fill", "parallel_for"] {
+            text.push_str(&format!("    {call} {name}\n"));
+        }
+        text.push_str(&format!(
+            ".size main, . - main\n.type worker, @function\nworker:\n    {ret}\n.size worker, . - worker\n"
+        ));
+        let folder = tempfile::tempdir().expect("temporary folder");
+        let (main, object, executable) = (
+            folder.path().join("main.s"),
+            folder.path().join("main.o"),
+            folder.path().join("main"),
+        );
+        std::fs::write(&main, &text).expect("write main.s");
+        toolchain
+            .assemble(profile, &main, &object)
+            .await
+            .unwrap_or_else(|error| panic!("{profile:?} assembling: {error:?}"));
+        toolchain
+            .link(profile, &object, &executable)
+            .await
+            .unwrap_or_else(|error| panic!("{profile:?} linking: {error:?}"));
+        let machine = decode::read(&std::fs::read(&executable).expect("the executable"))
+            .expect("the executable is readable");
+        let (source, layout) = check_layout(&text);
+        assert!(layout.passed(), "{profile:?}: {:?}", layout.violations);
+        let lengua = lengua_source(profile, &text).expect("the edge form");
+        let mut violations = Vec::new();
+        let program = decode::map(
+            &source,
+            Some(&lengua),
+            &machine,
+            CpuFeatures::all(),
+            &mut violations,
+        )
+        .unwrap_or_else(|| panic!("{profile:?}: {violations:#?}"));
+        assert_eq!(program.lengua.len(), 26, "{profile:?}");
+        assert_eq!(program.functions.len(), 2, "{profile:?}");
+        // lengua's data is not main.s's.
+        assert!(program.data.is_empty(), "{profile:?}: {:?}", program.data.keys());
+        assert!(!program.lengua_data.is_empty(), "{profile:?}");
+
+        let abi = program.abi();
+        let main = program.function("main").expect("main");
+        let call_to = |name: &str| {
+            let address = program.lengua_at_name(name).expect("lengua's function").address;
+            main.steps
+                .iter()
+                .find(|step| step.insn.control == crate::isa::Control::Call(address))
+                .map(|step| &step.insn)
+                .unwrap_or_else(|| panic!("{profile:?}: main doesn't call {name}"))
+        };
+        let operation = call_to("os_exit");
+        for register in abi.edge_clobbers {
+            assert!(operation.changes(*register, abi), "{profile:?} {register:?}");
+        }
+        for register in abi.edge_arguments {
+            if !abi.edge_clobbers.contains(register) {
+                assert!(!operation.changes(*register, abi), "{profile:?} {register:?}");
+            }
+        }
+        for register in abi.callee_saved {
+            assert!(!operation.changes(*register, abi), "{profile:?} {register:?}");
+        }
+        let ordinary = call_to("assert_fail");
+        for register in abi.caller_saved {
+            assert!(ordinary.changes(*register, abi), "{profile:?} {register:?}");
+        }
+    }
 }
