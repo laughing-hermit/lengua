@@ -396,10 +396,7 @@ impl Op {
             }],
             Self::Poll => &[Lend {
                 argument: 0,
-                bytes: Bytes::Table {
-                    count: 1,
-                    entry: 8,
-                },
+                bytes: Bytes::Table { count: 1, entry: 8 },
                 written: true,
             }],
             Self::Window => &[Lend {
@@ -1064,7 +1061,10 @@ mod tests {
         assert_eq!(calls(&server), serving);
         serving.insert("poll");
         assert_eq!(calls(&busy), serving);
-        assert_eq!(calls(&Network::default()), BTreeSet::from(["write", "exit_group"]));
+        assert_eq!(
+            calls(&Network::default()),
+            BTreeSet::from(["write", "exit_group"])
+        );
     }
 
     /// The thread operations are allowed by threads and by nothing else.
@@ -1085,10 +1085,18 @@ mod tests {
                 assert!(lend.argument < op.arguments(), "{}", op.symbol());
                 match lend.bytes {
                     Bytes::Argument(other) => {
-                        assert!(other < op.arguments() && other != lend.argument, "{}", op.symbol());
+                        assert!(
+                            other < op.arguments() && other != lend.argument,
+                            "{}",
+                            op.symbol()
+                        );
                     }
                     Bytes::Table { count, .. } => {
-                        assert!(count < op.arguments() && count != lend.argument, "{}", op.symbol());
+                        assert!(
+                            count < op.arguments() && count != lend.argument,
+                            "{}",
+                            op.symbol()
+                        );
                     }
                     Bytes::Fixed(_) | Bytes::Name => {}
                 }
@@ -1108,10 +1116,17 @@ mod tests {
                 assert!(abi.edge_clobbers.contains(register), "{isa:?} {register:?}");
             }
             for register in abi.callee_saved {
-                assert!(!abi.edge_clobbers.contains(register), "{isa:?} {register:?}");
+                assert!(
+                    !abi.edge_clobbers.contains(register),
+                    "{isa:?} {register:?}"
+                );
             }
             for op in Op::ALL {
-                assert!(op.arguments() <= abi.edge_arguments.len(), "{isa:?} {}", op.symbol());
+                assert!(
+                    op.arguments() <= abi.edge_arguments.len(),
+                    "{isa:?} {}",
+                    op.symbol()
+                );
             }
         }
     }
