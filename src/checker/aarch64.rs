@@ -126,6 +126,13 @@ fn named(function: &MappedFunction<'_>, program: &Program<'_>, name: &str) -> Op
                 .function(name)
                 .map(|found| found.address.cast_signed())
         })
+        // A call into lengua's unit lands on its function: where the rules then say what's
+        // allowed to enter it.
+        .or_else(|| {
+            program
+                .lengua_at_name(name)
+                .map(|found| found.address.cast_signed())
+        })
         .or_else(|| {
             program
                 .data
