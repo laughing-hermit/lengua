@@ -537,7 +537,8 @@ fn cases() -> Vec<Case> {
                 image(32, &[-9, -9, -5, -9], &[]),
             )
         },
-        // A wait on standard input that has a byte, and one on descriptor 4,352, which is refused.
+        // A wait on standard input that has a byte and has ended (data and hang-up, 1 and 16),
+        // and one on descriptor 4,352, which is refused.
         Case {
             stdin: b"x",
             calls: &[Syscall::Poll],
@@ -579,7 +580,7 @@ fn cases() -> Vec<Case> {
                 image(
                     80,
                     &[1, -9],
-                    &[(64, &[0, 0, 0, 0, 1, 0, 1, 0]), (72, &[0, 0x11, 0, 0, 1, 0, 0, 0])],
+                    &[(64, &[0, 0, 0, 0, 1, 0, 17, 0]), (72, &[0, 0x11, 0, 0, 1, 0, 0, 0])],
                 ),
             )
         },
