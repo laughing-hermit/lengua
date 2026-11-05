@@ -167,6 +167,27 @@ Then by finish-line point:
 
 ### Round 2
 
+Under way, on stacked `wip/r2-*` branches that each merge to main when its runs are green (the
+plan is ROADMAP.md's R2). Done, with the runs that show it:
+- **0a, the evidence tools.** `ci.yml` takes `test_files` (a gate that runs no test fails),
+  `mutate_only`, a `golden` mode (the head and a base recorded in one dispatch, then compared by
+  `scripts/ci/golden-diff.sh`, raw or as a proof ledger) and `bench_against` (the bench's
+  workloads built from a base commit and from the head, run alternately). The bench's noise
+  floor is run 42110275838. A golden base leg runs the dispatched ref's scripts: the first
+  golden run (42110130166) spent 71 minutes on its base and kept nothing, because the base
+  commit predates `ran-some-tests.sh`.
+- **0b.1, a spike: proofs through a call.** `fill` calling an operation keeps its proofs'
+  verdicts (run 42111907655).
+- **1, the Linux edge on both CPUs.** The 21 operations in `src/edge/linux-x86_64.s` and
+  `linux-aarch64.s`, `assert_fail`, `fill` and `parallel_for` in the CPU libraries,
+  `edge::lengua_text` and `Toolchain::assemble` writing lengua.s after a program in the edge
+  form, and `tests/edge.rs`: every operation on each CPU, natively and through QEMU and on a
+  pseudo-terminal, with every call held to the registers it keeps. Runs: the edge tests on both
+  Linux runners 42121334134, through QEMU 42121369789, the full suite on six runners
+  42122543252.
+
+Still to do, from round 1 and the plan's later steps:
+
 - **The QEMU job's seven failing cases** (run 42085247387: 528 passed, 7 failed). In
   `tests/programs.rs`: `a_program_gets_only_the_environment_its_test_or_run_gives`,
   `a_program_lists_its_folder_and_deletes_inside_it`,
