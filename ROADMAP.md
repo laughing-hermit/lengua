@@ -117,9 +117,10 @@ layouts, and `PIPE_WRITE`. Each of these facts is then written once. The module 
 - `Profile::allowed_syscalls`, `syscall_name`, `syscall_number` and their pins
   (platform.rs:89-219);
 - memory.rs's per-call buffers (156-200), and the prover's `lent` calls that repeat them;
-- calls.rs's `Call` and its two tables, and `syscalls::connects`;
+- `Call` and its two tables (src/prove/exec/calls.rs:7-122; there is no `checker/calls.rs`), and
+  `syscalls::connects`;
 - the constants written twice (EBADF/EPIPE, EINVAL/EEXIST, O_CREAT, MSG_NOSIGNAL, getrandom's
-  flags), and the file-call list (runner.rs:1133, supervise.rs:257-270).
+  flags), and the file-call list (os/linux.rs:810, supervise.rs:279-285).
 
 | op | arguments → result | allowed by |
 |---|---|---|
@@ -188,7 +189,9 @@ layouts, and `PIPE_WRITE`. Each of these facts is then written once. The module 
   Windows, with no stubs or thunks.
 - It refuses:
   - `syscall`/`svc` in main.s;
-  - main.s defining a reserved name (`_start`, `os_*`, assert_fail, fill, parallel_for);
+  - main.s defining a reserved name (`_start`, `os_*`, assert_fail, fill, parallel_for), beside
+    the duplicate-symbol check at source.rs:1739-1762 (`names::broken`/`clashes` check file names,
+    not symbols);
   - main.s touching lengua's data, or entering lengua anywhere but an op's or the library's entry;
   - a call to an op the spec doesn't allow;
   - any import beyond the linked ops'. On Mach-O that means only libSystem, every GOT slot an
@@ -197,7 +200,8 @@ layouts, and `PIPE_WRITE`. Each of these facts is then written once. The module 
   calls.
 
 **One calling convention per CPU, shared by its three OSes.** `Abi.edge_arguments` and
-`edge_clobbers` replace the system-call pair.
+`edge_clobbers` are added beside the system-call fields; `Abi.syscall_number` stays, because
+reading seccomp's list from the linked code needs it.
 - Arguments go in rdi, rsi, rdx, r10, r8, r9, or x0–x5. The result comes back in rax or x0.
 - What a call changes:
   - x86-64: rax, rcx, r11, the flags, every xmm/ymm/zmm register, and k0–k7;
@@ -222,14 +226,16 @@ layouts, and `PIPE_WRITE`. Each of these facts is then written once. The module 
   - On macOS, dyld calls LC_MAIN's `_start` with them already in place.
   - On Windows:
     - the edge splits `GetCommandLineW` by the MSVC rules, which `runner::arguments_length`
-      (runner.rs:72-95) already models;
+      (runner.rs:41-67) already models;
     - it converts each argument with `WideCharToMultiByte(CP_UTF8)`;
     - it takes the environment from `GetEnvironmentStringsW`, leaving out the `=X:` entries and
       SystemRoot (which the launcher adds for Winsock);
     - it holds them in static buffers, at most 98,301 bytes;
     - it calls `WSAStartup` when a network op is linked.
-  - This replaces the start-stack rules (cfg.rs's entry depth, memory.rs:262-268 and 839-856,
-    rules.rs:208-214) and the prover's start stack (exec.rs:940-965).
+  - This replaces the start-stack rules (cfg.rs's entry depth, memory.rs:262-268, 425-437,
+    839-856 and 973-976, rules.rs:208-214, 229-232 and 1421-1424, source.rs:1179-1189 and
+    1764-1777) and the prover's start stack (exec.rs:940-965), for the edge form; the inline form
+    keeps them until it is deleted.
 - *Exit.* exit_group on Linux, `_exit` on macOS, and `TerminateProcess(GetCurrentProcess(),
   status)` on Windows, because `ExitProcess` would run DLL detach code while the workers die.
 - *Threads.*
@@ -238,8 +244,8 @@ layouts, and `PIPE_WRITE`. Each of these facts is then written once. The module 
   - macOS uses `pthread_create`/`pthread_join` with 1 MiB stacks.
   - Windows uses `CreateThread` with 1 MiB and joins with `WaitForSingleObject`.
   - This replaces three things: the parallel template's trio, threads.rs's word-for-word check
-    and constants (threads.rs:36-44), and the prover's clone/futex model (exec.rs:3503-3589,
-    3913-3928).
+    and constants (threads.rs:36-44), and the prover's clone/futex model (exec.rs:3522-3618,
+    3932-3957).
   - The new model runs the worker at start and returns its result at join.
 - *Terminal.*
   - Linux: ioctl TCGETS/TCSETS/TIOCGWINSZ on descriptors 0–2.
@@ -266,17 +272,21 @@ layouts, and `PIPE_WRITE`. Each of these facts is then written once. The module 
 
 **The prover.**
 - A call to an `os_*` function runs `Cpu::edge_call(op)`, in the new prove/exec/edge.rs.
-  - There is one model per op, moved from `Cpu::syscall` (exec.rs:3591-4003) and net.rs.
+  - There is one model per op, moved from `Cpu::syscall` (exec.rs:3620-4032) and net.rs.
   - It reads the arguments through `edge_arguments`, writes the result, and applies
     `edge_clobbers`.
-  - The clobbers include SVE state. Linux clears it, but today's model keeps it
-    (exec/aarch64.rs:219).
+  - The clobbers include SVE state, which Linux clears and `State::clear_sve` already clears
+    (round 1).
   - It never steps into edge code.
-- fill, assert_fail and parallel_for are stepped as CPU code.
+- fill, assert_fail and parallel_for are stepped as CPU code. `fill`'s `Fill::find`
+  (exec/fill.rs:51-133) matches a fixed shape containing `syscall`/`svc` today, and is rewritten
+  to find the library's text, which has `call os_read` in that place.
 - Removed:
-  - `Call`, `Call::of` and `Convention` (calls.rs:124-167);
+  - `Call`, `Call::of` and `Convention`'s system-call use (src/prove/exec/calls.rs:7-167;
+    `Convention.stack` is also used outside system calls, exec.rs:965, 1315, 1599 and
+    induction.rs:302, 392, so it stays);
   - `Image::linux` and `LinuxAbi`;
-  - the rcx/r11 lines in State::returns (exec.rs:1404-1410);
+  - the rcx/r11 lines in State::returns (exec.rs:1405-1412);
   - poll and ppoll as two separate cases;
   - "a system call chosen by the input";
   - the models of calls no spec allows;
@@ -325,7 +335,8 @@ layouts, and `PIPE_WRITE`. Each of these facts is then written once. The module 
 - **`src/os/`** has four parts:
   - `unix/`, shared by Linux and macOS: descriptor placement, rlimits, execve, wait4, restoring
     the terminal, forwarding signals, socketpairs and SCM_RIGHTS;
-  - `linux/`: Landlock, seccomp and perf counters, moved from runner.rs:1254-1700;
+  - `linux/`: Landlock, seccomp and perf counters, in `src/os/linux.rs` since round 1
+    (`launch_job` 491-715, `confine` 1342-1451, the pins 1289-1334);
   - `macos/`: Seatbelt and sysctl;
   - `windows/`, built on `crates/lengua-os`.
 - **Host facts.**
@@ -708,7 +719,7 @@ Nothing ran, since R0 changed documents only; the commit is the record.
 
 **Reuse.** `PerTarget::cells` (src/targets.rs:34), `skiplog::note`, scripts/skip-summary.sh and
 stall-report.sh, parity_inventory's `test_jobs_of`/`runners_of`, and `Toolchain::assemble/link`
-(src/toolchain.rs:111-149).
+(src/toolchain.rs:122-160).
 
 **Verified by.**
 - `compile` is green on six runners.
