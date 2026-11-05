@@ -178,8 +178,10 @@ code, and creates the lock.
 
 [BENCHMARKS.md](BENCHMARKS.md) measures lengua programs against the same programs in C, C++ and
 Rust, built with every optimization for this CPU (`cargo bench --bench against_rust_and_c`
-measures again). On this machine, lengua's best version is ahead or level on every workload in
-CPU time, wall time, peak memory and file size. It has memory safety proven rather than checked at
+measures again). On the owner's computer, an AMD Ryzen measured on 2026-11-02 before everything moved
+to GitHub's runners, lengua's best version is ahead or level on every workload in CPU time, wall
+time, peak memory and file size; that is Linux on x86-64 only, and
+[BENCHMARKS-aarch64.md](BENCHMARKS-aarch64.md) is GitHub's ARM64 Linux runner. It has memory safety proven rather than checked at
 run time, and uses less than half the memory. Where it isn't ahead is described below the table.
 The goal is one program that is ahead on every measure at once, on every target. The table below
 takes lengua's best version for each measure, which can be a different program for each; that, the
@@ -216,7 +218,7 @@ Where lengua isn't ahead:
 - **The histogram.** Its "level" is about 2% more CPU time and wall time than Rust's.
 - **The shout without AVX-512.** On a CPU without AVX-512, the best shout is the SSE2 form on 16
   threads, which takes 814 µs of CPU time against plain Rust's 603 µs.
-- **The CRC-32C on x86-64.** The table's "level" is this machine. On six draws of GitHub's x86-64
+- **The CRC-32C on x86-64.** The table's "level" is the owner's computer. On six draws of GitHub's x86-64
   runners (2026-11-04) the three-chain form took 8 to 29 percent more wall time than the best
   other, with CPU time from 0.96× to 2.09× less.
 - **The CRC-32C on ARM64.** On GitHub's ARM64 runner, it takes more wall time than C++ (0.7×).

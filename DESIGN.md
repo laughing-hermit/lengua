@@ -1487,9 +1487,9 @@ listing, and SHA-256 and AES, in plain integer code and with the instructions. E
 Left out of the dialect on purpose: gathers and scatters, whose addresses can't be bounds-checked,
 allocation while running, recursion, function pointers, and running other programs.
 
-Two targets are done, as one product: Linux on x86-64, checked on this machine, and Linux on
-ARM64, checked here under QEMU and natively on GitHub's ARM64 runners, every x86-64 program with
-its AArch64 twin. CI builds lengua natively on all six of GitHub's runners, Linux, macOS and
+Two targets are done, as one product, Linux only: Linux on x86-64 and Linux on ARM64, each tested
+natively on its own GitHub runner (nothing runs on the owner's computer), every x86-64 program
+with its AArch64 twin. CI builds lengua natively on all six of GitHub's runners, Linux, macOS and
 Windows on both CPUs (`.github/workflows/ci.yml`), and tests both Linux targets there; macOS and
 Windows build and run the tests that run no program, and say they can't run one until their ports.
 The other four of the top six, macOS and Windows on x86-64 and ARM64, need

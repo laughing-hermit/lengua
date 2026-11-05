@@ -6,8 +6,8 @@ Knowledge Format, naming no CPU or OS; the agent compiles it to `main.s` for the
 checks the code against the rules, tests it, proves it, and runs it confined. The product is an
 Agent Plugin, skills and one Rust MCP server only, so it runs in any agent harness.
 
-**Where lengua stands (2026-11-05).** Two of six targets are done: Linux on x86-64 and on ARM64,
-one product held by one suite (530 tests on x86-64 and 526 on ARM64 passed on the merged tree, and
+**Where lengua stands (2026-11-05).** Two of six targets are done, **Linux only**: Linux on x86-64
+and on ARM64, one product held by one suite (530 tests on x86-64 and 526 on ARM64 passed on the merged tree, and
 the mutation test on both: runs 41948019569, 41948026904, 41948022915 and 41948030519; ARM64's slow
 `mean` proof, 41948034208). macOS and Windows are round 1 of the roadmap below, in progress.
 The record of the finished work is in the git history, DESIGN.md, README.md, SESSIONS.md and the
@@ -15,7 +15,8 @@ BENCHMARKS files.
 
 **How the work is done.**
 - Everything is built, tested, proven and measured on GitHub's free runners, which cost nothing
-  since the repository is public. The owner's computer only edits files and pushes.
+  since the repository is public. Nothing runs on the owner's computer, which only holds the
+  files.
 - Each round works on a `wip/<round>` branch, merges to main when its runs are green, and records
   their ids here.
 - An item leaves this file when it's done, so what's here is what's left.
@@ -101,13 +102,13 @@ free runners, whose id is written in the table below, and by nothing else.
 
 | | now | what's left |
 |---|---|---|
-| 1. AI language, Agent Plugin | Built on Linux: both skills, `check` and `run`, the spec format, the `Builds on` graph. | The release check through a plain MCP client on every OS (round 6). Knowledge-graph indexing past program folders: not designed. |
-| 2. Six targets | Linux on both CPUs: done. macOS and Windows compile with clippy clean on the round 1 branch (run 42068545472, all six green); their tests that run no program are being fixed there. | The edge and broker (round 2); programs running on macOS (round 3) and Windows (round 4). |
-| 3. Tailored | CPU tiers and baselines: done on Linux. OS: Linux programs call the kernel directly. | One edge per OS (round 2, 3, 4). |
-| 4. Faster, leaner | Measured on Linux (BENCHMARKS): most rows ahead, some level, none gated. | The gate on six runners (round 5). |
+| 1. AI language, Agent Plugin | **Linux only** (x86-64 and ARM64): both skills, `check` and `run`, the spec format, the `Builds on` graph. | The release check through a plain MCP client on every OS (round 6). Knowledge-graph indexing past program folders: not designed. |
+| 2. Six targets | **Linux only** is done, on both CPUs. macOS and Windows compile with clippy clean, and pass every test that runs no program, on all four runners (run 42085247387); programs don't run there yet. | The edge and broker (round 2); programs running on macOS (round 3) and Windows (round 4). |
+| 3. Tailored | **Linux only**: CPU tiers with a baseline form beside each. Linux programs call the kernel directly; no OS edge exists yet. | One edge per OS (rounds 2, 3 and 4). |
+| 4. Faster, leaner | **Linux only**, measured on the owner's computer (x86-64, 2026-11-02) and GitHub's ARM64 runner: most rows ahead, some level, none gated. | The gate on six runners (round 5). |
 | 5. A replacement | Scope written in DESIGN. | Prover reach (round 6). |
-| 6. Truthful documents | README and DESIGN state the stricter bar. | A last pass (round 6). |
-| 7. Shippable | Archives for Linux, both CPUs. | Six hosts (round 6). |
+| 6. Truthful documents | README and DESIGN state the stricter bar and say what is Linux only. | A last pass (round 6). |
+| 7. Shippable | **Linux only**: archives for x86-64 and ARM64. | Six hosts (round 6). |
 
 ## Roadmap (2026-11-05)
 
