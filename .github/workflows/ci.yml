@@ -234,6 +234,13 @@ jobs:
           ref: ${{ matrix.ref }}
           fetch-depth: ${{ matrix.depth }}
 
+      # The base predates some of the scripts the steps below run (a base leg needs the full
+      # history, which brings the dispatched commit with it), so the leg runs the base's code with
+      # the dispatched ref's scripts.
+      - name: The dispatched ref's scripts
+        if: ${{ matrix.ref != '' }}
+        run: git checkout ${{ github.sha }} -- scripts
+
       - name: The machine
         run: bash scripts/ci/machine.sh ${{ matrix.base }}
 
