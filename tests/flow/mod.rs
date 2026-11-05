@@ -2,8 +2,8 @@
 //! program, and what it says to each way of going wrong) and `tests/workflow.rs` (the whole
 //! workflow around it, from the request to done, from a shell and between two users).
 //!
-//! Each case is written once. What differs between the targets is a cell of a `PerTarget` table
-//! (`lengua::targets::PerTarget`): a target added to lengua breaks every table until its cell
+//! Each case is written once. What differs between the targets is a cell of a `PerCpu` table
+//! (`lengua::targets::PerCpu`): a target added to lengua breaks every table until its cell
 //! is filled. A cell is an edit of the target's own text (its `from` and `to` differ, since the
 //! x86-64 and AArch64 sources do), a word of its CPU, or a folder of its programs. The
 //! assertions on the server's answers are the same for every target, so a case that one CPU
@@ -17,7 +17,7 @@ use std::process::Command;
 
 use lengua::hash::Sha256Hex;
 use lengua::platform::Profile;
-use lengua::targets::PerTarget;
+use lengua::targets::PerCpu;
 use serde_json::{Value, json};
 
 use crate::common::{Program, Protocol, Session};
@@ -43,14 +43,14 @@ pub struct Kit {
 }
 
 /// Each target's kit.
-pub static KITS: PerTarget<Kit> = PerTarget {
-    linux_x86_64: Kit {
+pub static KITS: PerCpu<Kit> = PerCpu {
+    x86_64: Kit {
         template: "main-template.s",
         programs: &["examples", "tests/fixtures"],
         comment: "#",
         first_line: ".intel_syntax noprefix",
     },
-    linux_aarch64: Kit {
+    aarch64: Kit {
         template: "linux-aarch64/main-template.s",
         programs: &["tests/fixtures/linux-aarch64"],
         comment: "//",
@@ -85,13 +85,13 @@ pub struct Offence {
 
 /// Each target's instruction that moves its stack pointer where only a push, a pop or an add or
 /// a subtract of a constant may.
-pub static MOVES_THE_STACK_POINTER: PerTarget<Offence> = PerTarget {
-    linux_x86_64: Offence {
+pub static MOVES_THE_STACK_POINTER: PerCpu<Offence> = PerCpu {
+    x86_64: Offence {
         before: "    mov rax, qword ptr [rsp]\n",
         line: "    and rsp, -16",
         says: "`and` changes rsp",
     },
-    linux_aarch64: Offence {
+    aarch64: Offence {
         before: "    ldr x0, [sp]\n",
         line: "    and sp, x9, #-16",
         says: "`and` sets sp",

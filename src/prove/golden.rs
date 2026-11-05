@@ -28,7 +28,7 @@ use crate::checker::decode::Machine;
 use crate::checker::golden::{PLACES, built, compare_or_record, programs};
 use crate::expr::Generator;
 use crate::platform::Profile;
-use crate::targets::PerTarget;
+use crate::targets::PerCpu;
 use crate::testfile::Generated;
 use crate::toolchain::Toolchain;
 
@@ -61,12 +61,12 @@ const SVE_BYTES: u16 = 16;
 /// of their ranges, with where in [`CUTS`] each starts: calc's 64-bit products, and histogram's
 /// table of counts, which the solvers take a minute and a half over at texts of 3 bytes. Each
 /// target's own programs.
-const NARROW: PerTarget<&[(&str, usize, usize)]> = PerTarget {
-    linux_x86_64: &[
+const NARROW: PerCpu<&[(&str, usize, usize)]> = PerCpu {
+    x86_64: &[
         ("tests/fixtures/calc/main.s", 3, 2),
         ("plugin/skills/compile/assets/fast/histogram/main.s", 1, 1),
     ],
-    linux_aarch64: &[
+    aarch64: &[
         ("tests/fixtures/linux-aarch64/calc/main.s", 3, 2),
         (
             "plugin/skills/compile/assets/linux-aarch64/fast/histogram/main.s",
@@ -84,8 +84,8 @@ type Smaller = (&'static str, &'static [(&'static str, &'static str)]);
 /// tests prove them: the step over a buffer-full of 4096 symbolic bytes takes the solvers
 /// minutes. Each change is a line of main.s and what it becomes, a loop's bound with its
 /// buffer's where it counts the buffer's steps. Each target's own programs.
-const SMALLER: PerTarget<&[Smaller]> = PerTarget {
-    linux_x86_64: &[
+const SMALLER: PerCpu<&[Smaller]> = PerCpu {
+    x86_64: &[
         (
             "tests/fixtures/lines/main.s",
             &[(".equ BUF_LEN, 4096\n", ".equ BUF_LEN, 256\n")],
@@ -109,7 +109,7 @@ const SMALLER: PerTarget<&[Smaller]> = PerTarget {
             ],
         ),
     ],
-    linux_aarch64: &[
+    aarch64: &[
         (
             "tests/fixtures/linux-aarch64/lines/main.s",
             &[(".equ BUF_LEN, 4096\n", ".equ BUF_LEN, 256\n")],

@@ -1,7 +1,7 @@
 //! The templates built and run alone, with no server, on every target: LLVM assembles and links
 //! each target's main template and a program made of its fill and assert_fail, and these tests
 //! read the machine code and run the programs themselves. What they hold is written once, with a
-//! cell for each target (`PerTarget`):
+//! cell for each target (`PerCpu`):
 //!
 //! - one machine instruction per source line, function by function, as `llvm-objdump` prints
 //!   them: the step from main.s to machine code that `check` relies on;
@@ -26,7 +26,7 @@ use std::process::{Command, Stdio};
 
 use lengua::isa::Isa;
 use lengua::platform::Profile;
-use lengua::targets::PerTarget;
+use lengua::targets::PerCpu;
 
 /// Functions by name, each with the mnemonics of its instructions in order.
 type Functions = Vec<(String, Vec<String>)>;
@@ -40,28 +40,28 @@ fn asset(name: &str) -> String {
 }
 
 /// Each target's main template.
-const TEMPLATES: PerTarget<&str> = PerTarget {
-    linux_x86_64: "main-template.s",
-    linux_aarch64: "linux-aarch64/main-template.s",
+const TEMPLATES: PerCpu<&str> = PerCpu {
+    x86_64: "main-template.s",
+    aarch64: "linux-aarch64/main-template.s",
 };
 
 /// Each target's fill.
-const FILLS: PerTarget<&str> = PerTarget {
-    linux_x86_64: "fill.s",
-    linux_aarch64: "linux-aarch64/fill.s",
+const FILLS: PerCpu<&str> = PerCpu {
+    x86_64: "fill.s",
+    aarch64: "linux-aarch64/fill.s",
 };
 
 /// The first line of each target's programs, which names the CPU's syntax.
-const FIRST_LINES: PerTarget<&str> = PerTarget {
-    linux_x86_64: ".intel_syntax noprefix\n",
-    linux_aarch64: ".arch armv8-a\n",
+const FIRST_LINES: PerCpu<&str> = PerCpu {
+    x86_64: ".intel_syntax noprefix\n",
+    aarch64: ".arch armv8-a\n",
 };
 
 /// What a target's program of fill and assert_fail is made of besides their own text: the `_start`
 /// that drives them. With no arguments it copies standard input up to a newline that a read ends
 /// with into a buffer of 64 bytes and writes what it read; with one it fails assertion 123.
-const DRIVERS: PerTarget<&str> = PerTarget {
-    linux_x86_64: concat!(
+const DRIVERS: PerCpu<&str> = PerCpu {
+    x86_64: concat!(
         ".text\n",
         ".globl _start\n",
         ".type _start, @function\n",
@@ -90,7 +90,7 @@ const DRIVERS: PerTarget<&str> = PerTarget {
         "    call assert_fail\n",
         ".size _start, . - _start\n"
     ),
-    linux_aarch64: concat!(
+    aarch64: concat!(
         ".text\n",
         ".globl _start\n",
         ".type _start, @function\n",

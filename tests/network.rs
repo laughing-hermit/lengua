@@ -4,7 +4,7 @@
 //! for its client to close, the event-loop server and the key reader, standard input that
 //! arrives in pieces, a cut only the proof tries, and standard output that is closed.
 //!
-//! Each case is written once, with a cell for each target (`PerTarget`): the program's folder, or
+//! Each case is written once, with a cell for each target (`PerCpu`): the program's folder, or
 //! the edit of that target's code that the case makes. The specs of the two targets' programs are
 //! the same bytes, so an edit of a spec is one for both. A target added to lengua breaks this
 //! file until its cells are written; every target's edits are checked against its programs on
@@ -18,7 +18,7 @@ use std::path::PathBuf;
 
 use common::{Program, Protocol, Session};
 use lengua::platform::Profile;
-use lengua::targets::PerTarget;
+use lengua::targets::PerCpu;
 use serde_json::{Value, json};
 
 /// How long each program's proofs may take, in seconds, in the cases that wait for them.
@@ -30,26 +30,26 @@ const SHORT_PROOF_SECONDS: u64 = 60;
 
 /// A program's folder on each target, relative to the repository: its spec.md, the same bytes on
 /// every target, and its main.s.
-type Folders = PerTarget<&'static str>;
+type Folders = PerCpu<&'static str>;
 
-const ECHO: Folders = PerTarget {
-    linux_x86_64: "examples/echo",
-    linux_aarch64: "tests/fixtures/linux-aarch64/echo",
+const ECHO: Folders = PerCpu {
+    x86_64: "examples/echo",
+    aarch64: "tests/fixtures/linux-aarch64/echo",
 };
 
-const FETCH: Folders = PerTarget {
-    linux_x86_64: "examples/fetch",
-    linux_aarch64: "tests/fixtures/linux-aarch64/fetch",
+const FETCH: Folders = PerCpu {
+    x86_64: "examples/fetch",
+    aarch64: "tests/fixtures/linux-aarch64/fetch",
 };
 
-const SECOND: Folders = PerTarget {
-    linux_x86_64: "tests/fixtures/second",
-    linux_aarch64: "tests/fixtures/linux-aarch64/second",
+const SECOND: Folders = PerCpu {
+    x86_64: "tests/fixtures/second",
+    aarch64: "tests/fixtures/linux-aarch64/second",
 };
 
-const ADD: Folders = PerTarget {
-    linux_x86_64: "examples/add",
-    linux_aarch64: "tests/fixtures/linux-aarch64/add",
+const ADD: Folders = PerCpu {
+    x86_64: "examples/add",
+    aarch64: "tests/fixtures/linux-aarch64/add",
 };
 
 /// A change to a program's code: the first `from` becomes `to`.
@@ -57,24 +57,24 @@ type Edit = (&'static str, &'static str);
 
 /// Where the programs call fill with a newline as its end byte, the call that reads to the end of
 /// what arrives instead: the end byte is -1.
-const READS_TO_THE_END: PerTarget<Edit> = PerTarget {
-    linux_x86_64: (
+const READS_TO_THE_END: PerCpu<Edit> = PerCpu {
+    x86_64: (
         "    mov ecx, NEWLINE\n    call fill\n",
         "    mov ecx, -1\n    call fill\n",
     ),
-    linux_aarch64: (
+    aarch64: (
         "    mov w3, #NEWLINE\n    bl fill\n",
         "    mov w3, #-1\n    bl fill\n",
     ),
 };
 
 /// Where the programs call fill, one read of their own instead.
-const READS_ONCE: PerTarget<Edit> = PerTarget {
-    linux_x86_64: (
+const READS_ONCE: PerCpu<Edit> = PerCpu {
+    x86_64: (
         "    mov ecx, NEWLINE\n    call fill\n",
         "    mov eax, SYS_READ\n    syscall\n",
     ),
-    linux_aarch64: (
+    aarch64: (
         "    mov w3, #NEWLINE\n    bl fill\n",
         "    mov x8, #SYS_READ\n    svc #0\n",
     ),
@@ -82,8 +82,8 @@ const READS_ONCE: PerTarget<Edit> = PerTarget {
 
 /// The echo server made to exit after its first connection, where its spec says it keeps
 /// serving: an exit and the constants it names.
-const STOPS_AFTER_ONE: PerTarget<[Edit; 2]> = PerTarget {
-    linux_x86_64: [
+const STOPS_AFTER_ONE: PerCpu<[Edit; 2]> = PerCpu {
+    x86_64: [
         (
             ".equ SYS_ACCEPT4, 288\n",
             ".equ SYS_ACCEPT4, 288\n.equ SYS_EXIT, 60\n.equ EXIT_DONE, 0\n",
@@ -93,7 +93,7 @@ const STOPS_AFTER_ONE: PerTarget<[Edit; 2]> = PerTarget {
             ".Lstart_next:\n    mov eax, SYS_EXIT\n    mov edi, EXIT_DONE\n    syscall",
         ),
     ],
-    linux_aarch64: [
+    aarch64: [
         (
             ".equ SYS_ACCEPT4, 242\n",
             ".equ SYS_ACCEPT4, 242\n.equ SYS_EXIT, 93\n.equ EXIT_DONE, 0\n",
@@ -110,12 +110,12 @@ const WRONG_EXIT: Edit = (".equ EXIT_WRITE_FAILED, 3", ".equ EXIT_WRITE_FAILED, 
 
 /// The event-loop server and the key reader of each target: the spec of each in the compile
 /// skill's assets, and its template.
-const EVENT_LOOPS: PerTarget<[(&str, &str); 2]> = PerTarget {
-    linux_x86_64: [
+const EVENT_LOOPS: PerCpu<[(&str, &str); 2]> = PerCpu {
+    x86_64: [
         ("server-template-spec.md", "server-template.s"),
         ("terminal-template-spec.md", "terminal-template.s"),
     ],
-    linux_aarch64: [
+    aarch64: [
         ("server-template-spec.md", "linux-aarch64/server-template.s"),
         (
             "terminal-template-spec.md",
@@ -555,9 +555,9 @@ async fn a_raw_read_fails_when_standard_input_arrives_in_pieces() {
 /// in todo.md); now it settles the block by its terms alone (400 input combinations, 1014 paths,
 /// run 41942392800). Both catch an exit code that is not the spec's, by the test that closes
 /// standard output.
-const B4_PROOF: PerTarget<&str> = PerTarget {
-    linux_x86_64: "generated B4: proven for every input in range",
-    linux_aarch64: "generated B4: proven for every input in range",
+const B4_PROOF: PerCpu<&str> = PerCpu {
+    x86_64: "generated B4: proven for every input in range",
+    aarch64: "generated B4: proven for every input in range",
 };
 
 /// add's spec promises code 3 when writing its output fails, and its B4 shows it with

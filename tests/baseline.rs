@@ -22,7 +22,7 @@ use lengua::checker::{self, Context};
 use lengua::isa::Isa;
 use lengua::platform::{CpuFeatures, Profile};
 use lengua::spec::Spec;
-use lengua::targets::PerTarget;
+use lengua::targets::PerCpu;
 use lengua::toolchain::Toolchain;
 
 /// The skill's assets, from the repository's root.
@@ -69,12 +69,12 @@ struct Places {
     assets: &'static str,
 }
 
-const PLACES: PerTarget<Places> = PerTarget {
-    linux_x86_64: Places {
+const PLACES: PerCpu<Places> = PerCpu {
+    x86_64: Places {
         folders: &["examples", "tests/fixtures"],
         assets: SKILL_ASSETS,
     },
-    linux_aarch64: Places {
+    aarch64: Places {
         folders: &["tests/fixtures/linux-aarch64"],
         assets: "plugin/skills/compile/assets/linux-aarch64",
     },
@@ -83,16 +83,16 @@ const PLACES: PerTarget<Places> = PerTarget {
 /// The shipped programs that need more than the baseline and have no baseline sibling yet, with
 /// the sibling each is to get. A debt is paid by writing the sibling, from the very same spec, and
 /// removing the entry (or moving it to `TIERS`, when the extension's form stays as a fast tier).
-const DEBT: PerTarget<&[Debt]> = PerTarget {
-    linux_x86_64: &[],
-    linux_aarch64: &[],
+const DEBT: PerCpu<&[Debt]> = PerCpu {
+    x86_64: &[],
+    aarch64: &[],
 };
 
 /// The programs that need more than the baseline and have their baseline sibling: fast tiers,
 /// named for their extension beside the program they speed up. The benchmark's variants are fast
 /// tiers of the program they are measured against.
-const TIERS: PerTarget<&[Tier]> = PerTarget {
-    linux_x86_64: &[
+const TIERS: PerCpu<&[Tier]> = PerCpu {
+    x86_64: &[
         Tier {
             program: "benches/programs/count/avx512.s",
             needs: &["AVX-512BW", "BMI1", "BMI2"],
@@ -134,7 +134,7 @@ const TIERS: PerTarget<&[Tier]> = PerTarget {
             sibling: "plugin/skills/compile/assets/fast/wc/main.s",
         },
     ],
-    linux_aarch64: &[
+    aarch64: &[
         Tier {
             program: "benches/programs/count/sve.s",
             needs: &["sve"],
@@ -166,8 +166,8 @@ const TIERS: PerTarget<&[Tier]> = PerTarget {
 /// The benchmark's own variants, which are not shipped: they are what lengua's speed is measured
 /// with, against C, C++ and Rust, so an AVX-512 one is a fast tier by its nature. Listed apart,
 /// and held to the baseline like the rest: one that needs more is in `TIERS`.
-const BENCH_ONLY: PerTarget<&[Bench]> = PerTarget {
-    linux_x86_64: &[
+const BENCH_ONLY: PerCpu<&[Bench]> = PerCpu {
+    x86_64: &[
         Bench {
             program: "benches/programs/count/avx512.s",
             spec: "examples/count/spec.md",
@@ -185,7 +185,7 @@ const BENCH_ONLY: PerTarget<&[Bench]> = PerTarget {
             spec: "examples/upcase/spec.md",
         },
     ],
-    linux_aarch64: &[
+    aarch64: &[
         Bench {
             program: "benches/programs/count/sve.s",
             spec: "examples/count/spec.md",
@@ -429,7 +429,7 @@ async fn needs_beyond_baseline(
     let facts = everything
         .facts
         .ok_or_else(|| "the rules didn't run on it".to_owned())?;
-    let baseline = CpuFeatures::baseline(target);
+    let baseline = CpuFeatures::baseline(target.isa());
     let has = |name: &str| match target.isa() {
         Isa::X86_64 => checker::x86_64::cpu_has(name, &baseline),
         Isa::Aarch64 => checker::aarch64::cpu_has(name, &baseline),

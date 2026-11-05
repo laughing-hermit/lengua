@@ -21,7 +21,7 @@ pub enum Profile {
 
 impl Profile {
     /// Every target lengua exists on. Four more are planned (macOS and Windows, each on x86-64
-    /// and ARM64); a new profile is added here, to [`crate::targets::PerTarget`] and to every
+    /// and ARM64); a new profile is added here, to [`crate::targets::PerCpu`] and to every
     /// `match` on a profile, none of which compiles until it is.
     pub const ALL: [Self; 2] = [Self::LinuxX86_64, Self::LinuxAarch64];
 
@@ -340,11 +340,12 @@ impl CpuFeatures {
         }
     }
 
-    /// The target's baseline: the extensions every machine of `profile` has, and so all that a
-    /// program lengua ships for the target may rely on. An instruction beyond it belongs to a fast
-    /// tier, a program of its own beside a baseline sibling that meets the very same spec, which
-    /// an agent picks only where the machine line lists the extension (DESIGN.md, "One product on
-    /// every target"). `tests/baseline.rs` holds every shipped program to it.
+    /// The baseline of a CPU, the same on every system it runs on: the extensions every machine of
+    /// `isa` has, and so all that a program lengua ships for it may rely on. An instruction
+    /// beyond it belongs to a fast tier, a program of its own beside a baseline sibling that meets
+    /// the very same spec, which an agent picks only where the machine line lists the extension
+    /// (DESIGN.md, "One product on every target"). `tests/baseline.rs` holds every shipped
+    /// program to it.
     ///
     /// - Linux on x86-64: SSE2, which every x86-64 CPU has, with SSE3, SSSE3, SSE4.1, SSE4.2 and
     ///   POPCNT. Windows 11 24H2 requires a CPU with SSE4.2 and POPCNT, and every Intel Mac and
@@ -355,9 +356,9 @@ impl CpuFeatures {
     /// The owner decided both sets and may change them here. A machine that lacks its target's
     /// baseline is outside what lengua is written for.
     #[must_use]
-    pub fn baseline(profile: Profile) -> Self {
-        match profile {
-            Profile::LinuxX86_64 => Self {
+    pub fn baseline(isa: Isa) -> Self {
+        match isa {
+            Isa::X86_64 => Self {
                 popcnt: true,
                 sse3: true,
                 ssse3: true,
@@ -365,7 +366,7 @@ impl CpuFeatures {
                 sse4_2: true,
                 ..Self::default()
             },
-            Profile::LinuxAarch64 => Self::default(),
+            Isa::Aarch64 => Self::default(),
         }
     }
 }
@@ -914,7 +915,7 @@ mod tests {
     #[test]
     fn the_baseline_is_named_in_the_checkers_extensions() {
         use crate::checker::{aarch64, x86_64};
-        let x86 = CpuFeatures::baseline(Profile::LinuxX86_64);
+        let x86 = CpuFeatures::baseline(Isa::X86_64);
         for name in ["SSE3", "SSSE3", "SSE4.1", "SSE4.2", "POPCNT"] {
             assert_eq!(x86_64::cpu_has(name, &x86), Some(true), "{name}");
         }
@@ -936,7 +937,7 @@ mod tests {
         ] {
             assert_eq!(x86_64::cpu_has(name, &x86), Some(false), "{name}");
         }
-        let arm = CpuFeatures::baseline(Profile::LinuxAarch64);
+        let arm = CpuFeatures::baseline(Isa::Aarch64);
         for name in [
             "crc", "pmull", "aes", "sha", "sve16", "sve32", "sve48", "sve64",
         ] {
@@ -958,7 +959,7 @@ mod tests {
             serde_json::to_value(features).expect("features are plain data")
         };
         let have = json(machine.features);
-        let floor = json(CpuFeatures::baseline(profile));
+        let floor = json(CpuFeatures::baseline(profile.isa()));
         for (name, needed) in floor.as_object().expect("features are an object") {
             if *needed == serde_json::Value::Bool(true) {
                 assert_eq!(have[name], serde_json::Value::Bool(true), "{name}");

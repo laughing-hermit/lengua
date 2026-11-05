@@ -3,7 +3,7 @@
 //! the very same spec, so neither CPU has a program the other CPU's suite doesn't check: one
 //! product on every target, only the hardware differing.
 //!
-//! The test is written once, with a cell for each target (`PerTarget`) saying where its programs
+//! The test is written once, with a cell for each target (`PerCpu`) saying where its programs
 //! are and what its CPU can lack; a target added to lengua breaks it until its cells are filled.
 //! It takes the programs of every target this computer runs, natively or through QEMU's user
 //! mode; the others' are taken on their own runners.
@@ -15,15 +15,15 @@ use std::path::{Path, PathBuf};
 
 use common::{Program, Protocol};
 use lengua::platform::{CpuFeatures, Emulator, Machine, Profile, Target};
-use lengua::targets::PerTarget;
+use lengua::targets::PerCpu;
 use per_target::Way;
 use serde_json::Value;
 
 /// The folders of each target's programs, relative to the repository: a program is a folder with
 /// a spec.md and a main.s.
-const FOLDERS: PerTarget<&[&str]> = PerTarget {
-    linux_x86_64: &["examples", "tests/fixtures"],
-    linux_aarch64: &["tests/fixtures/linux-aarch64"],
+const FOLDERS: PerCpu<&[&str]> = PerCpu {
+    x86_64: &["examples", "tests/fixtures"],
+    aarch64: &["tests/fixtures/linux-aarch64"],
 };
 
 /// An optional extension of a CPU: a program that uses it can't run on a CPU without it.
@@ -63,14 +63,14 @@ impl Extension {
 /// The optional extensions of each target's CPU, each with words of a program that show it uses
 /// the extension. The baseline (x86-64's SSE2 to SSE4.2 and POPCNT, ARM64's NEON) isn't here:
 /// every machine of the target has it.
-const EXTENSIONS: PerTarget<&[(Extension, &[&str])]> = PerTarget {
-    linux_x86_64: &[
+const EXTENSIONS: PerCpu<&[(Extension, &[&str])]> = PerCpu {
+    x86_64: &[
         (Extension::Avx512bw, &["vpcmpub", "zmm"]),
         (Extension::Aes, &["aesenc"]),
         (Extension::Sha, &["sha256rnds2"]),
         (Extension::Pclmulqdq, &["pclmulqdq"]),
     ],
-    linux_aarch64: &[
+    aarch64: &[
         (Extension::Crc, &["crc32"]),
         (Extension::Aes, &["aese", "aesd"]),
         (Extension::Sha, &["sha256h", "sha1c"]),

@@ -2,7 +2,7 @@
 //! CPU, through QEMU's user mode where that is set up for the other CPU, or not at all. A test
 //! asks here, runs what it can, and notes (lengua::skiplog) what it could not cover.
 //!
-//! Every test that holds a table of cells, one per target (`lengua::targets::PerTarget`), runs
+//! Every test that holds a table of cells, one per target (`lengua::targets::PerCpu`), runs
 //! the cells of the target this computer is natively, on that target's runner in CI; a cell for
 //! the other target runs only where QEMU does that CPU's programs, and every cell is at least
 //! built (LLVM assembles and links for every target on any computer).

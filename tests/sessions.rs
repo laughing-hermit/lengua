@@ -1,6 +1,6 @@
 //! The server's flow on every target: how `check` builds, tests and proves a program, what it
 //! says to each way of going wrong, and what `run` allows after it. Each case is written once,
-//! with a cell for every target (`PerTarget`): the program it starts from, or the edit of its
+//! with a cell for every target (`PerCpu`): the program it starts from, or the edit of its
 //! text that breaks or fixes something (the `from` and `to` strings differ, since the x86-64 and
 //! AArch64 sources do). The assertions on the server's answers are the same on every target, so
 //! a case that one CPU passes and the other fails is a finding about lengua, never a different
@@ -17,17 +17,17 @@ mod per_target;
 use common::{Program, Protocol, Session};
 use flow::{Edits, any_line, done, failed, text, with_args};
 use lengua::platform::Profile;
-use lengua::targets::PerTarget;
+use lengua::targets::{PerCpu, PerTarget};
 use per_target::Way;
 use serde_json::{Value, json};
 
 /// A program that always prints -7: right for the example, wrong for the rest.
-static HARDCODED: PerTarget<Edits> = PerTarget {
-    linux_x86_64: &[(
+static HARDCODED: PerCpu<Edits> = PerCpu {
+    x86_64: &[(
         "    js .Lstart_not_a_number\n    neg rdx\n",
         "    js .Lstart_not_a_number\n    mov rdx, 7\n    neg rdx\n",
     )],
-    linux_aarch64: &[(
+    aarch64: &[(
         "    tbnz x0, #63, .Lstart_not_a_number\n    negs x0, x1\n",
         "    tbnz x0, #63, .Lstart_not_a_number\n    mov x1, #7\n    negs x0, x1\n",
     )],
@@ -45,13 +45,13 @@ struct Trip {
 }
 
 /// Each target's tripped assertion.
-static TRIPS: PerTarget<Trip> = PerTarget {
-    linux_x86_64: Trip {
+static TRIPS: PerCpu<Trip> = PerCpu {
+    x86_64: Trip {
         edits: &[("    cmp rcx, MAX_CHARS\n", "    cmp rcx, 1\n")],
         sets_the_number: "    mov edi, 4",
         number: 4,
     },
-    linux_aarch64: Trip {
+    aarch64: Trip {
         edits: &[("    cmp x2, #MAX_CHARS\n", "    cmp x2, #1\n")],
         sets_the_number: "    mov w0, #5",
         number: 5,
@@ -74,12 +74,12 @@ struct Refusal {
 /// the assembler is asked, so the same mistake is a problem of the dialect, naming the line.
 /// What reaches the assembler there is an instruction of an extension the program has not
 /// asked for with `.arch_extension`, which lengua's reader accepts and the assembler does not.
-static BUILD_REFUSALS: PerTarget<&[Refusal]> = PerTarget {
-    linux_x86_64: &[Refusal {
+static BUILD_REFUSALS: PerCpu<&[Refusal]> = PerCpu {
+    x86_64: &[Refusal {
         edits: &[("    xor r9d, r9d\n", "    mov r9d, rbx\n")],
         says: &["doesn't build: assembling failed"],
     }],
-    linux_aarch64: &[
+    aarch64: &[
         Refusal {
             edits: &[("    mov x9, #0\n", "    mov w9, x1\n")],
             says: &[
@@ -99,14 +99,14 @@ static BUILD_REFUSALS: PerTarget<&[Refusal]> = PerTarget {
 
 /// The target another computer compiled main.s for: another OS on the other CPU.
 static ELSEWHERE: PerTarget<&str> = PerTarget {
-    linux_x86_64: "macos-arm64",
+    linux_x86_64: "macos-aarch64",
     linux_aarch64: "macos-x86_64",
 };
 
 /// The negative of 1234567 comes out one too big: one input in 18 quintillion, which the tests'
 /// samples miss and the proof finds.
-static UNLUCKY: PerTarget<Edits> = PerTarget {
-    linux_x86_64: &[
+static UNLUCKY: PerCpu<Edits> = PerCpu {
+    x86_64: &[
         (
             ".equ OUT_BUF_LEN, 21\n",
             ".equ OUT_BUF_LEN, 21\n.equ UNLUCKY, -1234567\n",
@@ -123,7 +123,7 @@ static UNLUCKY: PerTarget<Edits> = PerTarget {
             ),
         ),
     ],
-    linux_aarch64: &[(
+    aarch64: &[(
         "    negs x0, x1\n    b.vs .Lstart_assert_negate\n",
         concat!(
             "    negs x0, x1\n",

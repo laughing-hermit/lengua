@@ -1,7 +1,7 @@
 //! The inventory that keeps the test suite one suite for every target, so that a gap between two
 //! targets is a failing test rather than something an audit finds.
 //!
-//! lengua is one product on every target, tested by the same cases (`PerTarget` tables in
+//! lengua is one product on every target, tested by the same cases (`PerCpu` tables in
 //! `tests/red_team.rs`, `tests/every_program.rs`, `tests/limits.rs` and `src/checker/tests.rs`).
 //! Two things keep it so:
 //!
@@ -32,7 +32,7 @@ struct Debt {
 }
 
 /// Every test file that is for one target today, which is the debt: what the suite still tests
-/// on one target only. Paying one (a `PerTarget` table that both runners run) means deleting its
+/// on one target only. Paying one (a `PerCpu` table that both runners run) means deleting its
 /// entry, and the ratchet fails until it is gone.
 const DEBT: &[Debt] = &[];
 
@@ -141,7 +141,7 @@ fn no_new_test_file_is_for_one_target() {
         if !DEBT.iter().any(|debt| debt.file == file) {
             problems.push(format!(
                 "{file} is for one target ({why}) and is not in DEBT: write the cases once, as a \
-                 table with a cell for each target (lengua::targets::PerTarget), or list the \
+                 table with a cell for each target (lengua::targets::PerCpu), or list the \
                  file with its reason and the counterpart the other targets lack"
             ));
         }

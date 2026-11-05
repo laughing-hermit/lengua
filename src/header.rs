@@ -229,11 +229,11 @@ mod tests {
         assert!(lacking.contains("AVX-512BW"), "{lacking}");
         assert!(!lacking.contains("AVX2,"), "{lacking}");
         let other = Header {
-            target: "macos-arm64".into(),
+            target: "macos-aarch64".into(),
             ..header(&[])
         };
         let elsewhere = other.elsewhere(here, &cpu).expect("another target");
-        assert!(elsewhere.contains("macos-arm64"), "{elsewhere}");
+        assert!(elsewhere.contains("macos-aarch64"), "{elsewhere}");
         // Names lengua doesn't know don't stop it.
         assert_eq!(header(&["QUANTUM"]).elsewhere(here, &cpu), None);
     }

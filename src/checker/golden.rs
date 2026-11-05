@@ -25,7 +25,7 @@ use super::{Context, Report, check_layout, check_program};
 use crate::hash::Sha256Hex;
 use crate::platform::{CpuFeatures, Profile};
 use crate::spec::Syscall;
-use crate::targets::PerTarget;
+use crate::targets::PerCpu;
 use crate::toolchain::Toolchain;
 
 /// The most mutants made of one program, taken evenly from all of its candidates.
@@ -180,8 +180,8 @@ pub(crate) struct Places {
 const SHARED_ASSETS: &str = "plugin/skills/compile/assets";
 
 /// Each target's places.
-pub(crate) static PLACES: PerTarget<Places> = PerTarget {
-    linux_x86_64: Places {
+pub(crate) static PLACES: PerCpu<Places> = PerCpu {
+    x86_64: Places {
         label: "x86",
         folders: &["examples", "tests/fixtures"],
         assets: SHARED_ASSETS,
@@ -202,7 +202,7 @@ pub(crate) static PLACES: PerTarget<Places> = PerTarget {
         ],
         comment: "#",
     },
-    linux_aarch64: Places {
+    aarch64: Places {
         label: "aarch64",
         folders: &["tests/fixtures/linux-aarch64"],
         assets: "plugin/skills/compile/assets/linux-aarch64",
@@ -829,9 +829,9 @@ async fn every_report_is_as_recorded_on_aarch64() {
 }
 
 /// The template of each target, whose mutants the next test looks at.
-const TEMPLATES: PerTarget<&str> = PerTarget {
-    linux_x86_64: super::TEMPLATE,
-    linux_aarch64: super::AARCH64_TEMPLATE,
+const TEMPLATES: PerCpu<&str> = PerCpu {
+    x86_64: super::TEMPLATE,
+    aarch64: super::AARCH64_TEMPLATE,
 };
 
 #[test]

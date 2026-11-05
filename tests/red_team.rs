@@ -11,7 +11,7 @@
 //! refuses it first. Any attempt that isn't refused is a bug in lengua to fix before anything
 //! else.
 //!
-//! There is one table of attempts, and each has a cell for every target (`PerTarget`): the change
+//! There is one table of attempts, and each has a cell for every target (`PerCpu`): the change
 //! to that target's template and what a refusal must name, or why the attempt can't be written
 //! on that CPU. A target added to lengua breaks this table until its cells are filled. A target
 //! is tried where this computer runs its programs, natively or through QEMU's user mode; the
@@ -25,7 +25,7 @@ use std::path::PathBuf;
 
 use common::{Program, Protocol, Session};
 use lengua::platform::Profile;
-use lengua::targets::PerTarget;
+use lengua::targets::PerCpu;
 use serde_json::Value;
 
 /// A change to a template: the first `from` in it becomes `to`.
@@ -93,19 +93,19 @@ struct Attempt {
     /// What it tries, in words.
     what: &'static str,
     expect: Expect,
-    cells: PerTarget<Cell>,
+    cells: PerCpu<Cell>,
 }
 
 /// Each target's template, in the compile skill's assets.
-const TEMPLATES: PerTarget<&str> = PerTarget {
-    linux_x86_64: "main-template.s",
-    linux_aarch64: "linux-aarch64/main-template.s",
+const TEMPLATES: PerCpu<&str> = PerCpu {
+    x86_64: "main-template.s",
+    aarch64: "linux-aarch64/main-template.s",
 };
 
 /// The template's exit, in each target's instructions.
-const EXITS: PerTarget<&str> = PerTarget {
-    linux_x86_64: "    mov eax, SYS_EXIT\n    syscall\n",
-    linux_aarch64: "    mov x8, #SYS_EXIT\n    svc #0\n",
+const EXITS: PerCpu<&str> = PerCpu {
+    x86_64: "    mov eax, SYS_EXIT\n    syscall\n",
+    aarch64: "    mov x8, #SYS_EXIT\n    svc #0\n",
 };
 
 /// What a refusal of a system call names: not one the spec allows, or a connection a program
@@ -140,15 +140,15 @@ const ATTEMPTS: &[Attempt] = &[
         family: Family::CallChoice,
         what: "a number from a register",
         expect: Expect::Refused,
-        cells: PerTarget {
-            linux_x86_64: Cell::Try {
+        cells: PerCpu {
+            x86_64: Cell::Try {
                 edits: &[(
                     "    mov eax, SYS_EXIT\n    syscall\n",
                     "    mov eax, edi\n    syscall\n    mov eax, SYS_EXIT\n    syscall\n",
                 )],
                 needles: &["isn't chosen by a `mov eax, SYS_NAME`"],
             },
-            linux_aarch64: Cell::Try {
+            aarch64: Cell::Try {
                 edits: &[(
                     "    mov x8, #SYS_EXIT\n    svc #0\n",
                     "    mov x8, x9\n    svc #0\n    mov x8, #SYS_EXIT\n    svc #0\n",
@@ -161,15 +161,15 @@ const ATTEMPTS: &[Attempt] = &[
         family: Family::CallChoice,
         what: "a label between the number and the call",
         expect: Expect::Refused,
-        cells: PerTarget {
-            linux_x86_64: Cell::Try {
+        cells: PerCpu {
+            x86_64: Cell::Try {
                 edits: &[(
                     "    mov eax, SYS_EXIT\n    syscall\n",
                     "    mov eax, SYS_EXIT\n.Lstart_sneak:\n    syscall\n",
                 )],
                 needles: &["isn't chosen by a `mov eax, SYS_NAME`", "rule 1"],
             },
-            linux_aarch64: Cell::Try {
+            aarch64: Cell::Try {
                 edits: &[(
                     "    mov x8, #SYS_EXIT\n    svc #0\n",
                     "    mov x8, #SYS_EXIT\n.Lstart_sneak:\n    svc #0\n",
@@ -184,8 +184,8 @@ const ATTEMPTS: &[Attempt] = &[
         family: Family::Accesses,
         what: "a read past a buffer",
         expect: Expect::Refused,
-        cells: PerTarget {
-            linux_x86_64: Cell::Try {
+        cells: PerCpu {
+            x86_64: Cell::Try {
                 edits: &[(
                     "    mov rdi, qword ptr [rsp + 16]\n",
                     concat!(
@@ -195,7 +195,7 @@ const ATTEMPTS: &[Attempt] = &[
                 )],
                 needles: &["rule M2", "past the end of"],
             },
-            linux_aarch64: Cell::Try {
+            aarch64: Cell::Try {
                 edits: &[(
                     "    cbz x0, .Lstart_assert_argv\n",
                     concat!(
@@ -213,8 +213,8 @@ const ATTEMPTS: &[Attempt] = &[
         family: Family::Accesses,
         what: "a read far past a buffer",
         expect: Expect::Refused,
-        cells: PerTarget {
-            linux_x86_64: Cell::Try {
+        cells: PerCpu {
+            x86_64: Cell::Try {
                 edits: &[(
                     "    mov rdi, qword ptr [rsp + 16]\n",
                     concat!(
@@ -224,7 +224,7 @@ const ATTEMPTS: &[Attempt] = &[
                 )],
                 needles: &["rule M2", "past the end of"],
             },
-            linux_aarch64: Cell::Try {
+            aarch64: Cell::Try {
                 edits: &[(
                     "    cbz x0, .Lstart_assert_argv\n",
                     concat!(
@@ -242,8 +242,8 @@ const ATTEMPTS: &[Attempt] = &[
         family: Family::Accesses,
         what: "an unchecked index",
         expect: Expect::Refused,
-        cells: PerTarget {
-            linux_x86_64: Cell::Try {
+        cells: PerCpu {
+            x86_64: Cell::Try {
                 edits: &[(
                     "    mov rdi, qword ptr [rsp + 16]\n    test rdi, rdi\n",
                     concat!(
@@ -255,7 +255,7 @@ const ATTEMPTS: &[Attempt] = &[
                 )],
                 needles: &["rule 9", "rule M2"],
             },
-            linux_aarch64: Cell::Try {
+            aarch64: Cell::Try {
                 edits: &[(
                     "    cbz x0, .Lstart_assert_argv\n",
                     concat!(
@@ -272,8 +272,8 @@ const ATTEMPTS: &[Attempt] = &[
         family: Family::Accesses,
         what: "an index checked too late",
         expect: Expect::Refused,
-        cells: PerTarget {
-            linux_x86_64: Cell::Try {
+        cells: PerCpu {
+            x86_64: Cell::Try {
                 edits: &[(
                     "    mov rdi, qword ptr [rsp + 16]\n    test rdi, rdi\n",
                     concat!(
@@ -287,7 +287,7 @@ const ATTEMPTS: &[Attempt] = &[
                 )],
                 needles: &["rule 9", "rule M2"],
             },
-            linux_aarch64: Cell::Try {
+            aarch64: Cell::Try {
                 edits: &[(
                     "    cbz x0, .Lstart_assert_argv\n",
                     concat!(
@@ -308,8 +308,8 @@ const ATTEMPTS: &[Attempt] = &[
         family: Family::Addresses,
         what: "a fixed address",
         expect: Expect::Refused,
-        cells: PerTarget {
-            linux_x86_64: Cell::Try {
+        cells: PerCpu {
+            x86_64: Cell::Try {
                 edits: &[(
                     "    mov rdi, qword ptr [rsp + 16]\n",
                     concat!(
@@ -320,7 +320,7 @@ const ATTEMPTS: &[Attempt] = &[
                 )],
                 needles: &["rule M1"],
             },
-            linux_aarch64: Cell::Try {
+            aarch64: Cell::Try {
                 edits: &[(
                     "    cbz x0, .Lstart_assert_argv\n",
                     concat!(
@@ -337,8 +337,8 @@ const ATTEMPTS: &[Attempt] = &[
         family: Family::Addresses,
         what: "a wrong pointer loaded from memory",
         expect: Expect::NeverDone,
-        cells: PerTarget {
-            linux_x86_64: Cell::Try {
+        cells: PerCpu {
+            x86_64: Cell::Try {
                 edits: &[(
                     "    mov rdi, qword ptr [rsp + 16]\n",
                     concat!(
@@ -350,7 +350,7 @@ const ATTEMPTS: &[Attempt] = &[
                 )],
                 needles: &[],
             },
-            linux_aarch64: Cell::Try {
+            aarch64: Cell::Try {
                 edits: &[(
                     "    cbz x0, .Lstart_assert_argv\n",
                     concat!(
@@ -369,8 +369,8 @@ const ATTEMPTS: &[Attempt] = &[
         family: Family::Addresses,
         what: "a good pointer loaded from memory (argv[0])",
         expect: Expect::TestedNotProven,
-        cells: PerTarget {
-            linux_x86_64: Cell::Try {
+        cells: PerCpu {
+            x86_64: Cell::Try {
                 edits: &[(
                     "    mov rdi, qword ptr [rsp + 16]\n",
                     concat!(
@@ -381,7 +381,7 @@ const ATTEMPTS: &[Attempt] = &[
                 )],
                 needles: &[],
             },
-            linux_aarch64: Cell::Try {
+            aarch64: Cell::Try {
                 edits: &[(
                     "    cbz x0, .Lstart_assert_argv\n",
                     concat!(
@@ -400,8 +400,8 @@ const ATTEMPTS: &[Attempt] = &[
         family: Family::Writes,
         what: "a write to read-only data",
         expect: Expect::Refused,
-        cells: PerTarget {
-            linux_x86_64: Cell::Try {
+        cells: PerCpu {
+            x86_64: Cell::Try {
                 edits: &[(
                     "    mov rdi, qword ptr [rsp + 16]\n",
                     concat!(
@@ -411,7 +411,7 @@ const ATTEMPTS: &[Attempt] = &[
                 )],
                 needles: &["rule M6", "read-only"],
             },
-            linux_aarch64: Cell::Try {
+            aarch64: Cell::Try {
                 edits: &[(
                     "    cbz x0, .Lstart_assert_argv\n",
                     concat!(
@@ -429,12 +429,12 @@ const ATTEMPTS: &[Attempt] = &[
         family: Family::Writes,
         what: "a changed return address",
         expect: Expect::Refused,
-        cells: PerTarget {
-            linux_x86_64: Cell::NotApplicable(
+        cells: PerCpu {
+            x86_64: Cell::NotApplicable(
                 "x86-64 keeps a return address in memory, where `call` pushes it, and not in a \
                  register a function could change: the next attempt writes it there",
             ),
-            linux_aarch64: Cell::Try {
+            aarch64: Cell::Try {
                 edits: &[("write_all:\n", "write_all:\n    mov x30, xzr\n")],
                 needles: &["return address", "rule M3", "rule 1", "rule 3", "dialect"],
             },
@@ -444,14 +444,14 @@ const ATTEMPTS: &[Attempt] = &[
         family: Family::Writes,
         what: "a write over the saved return address",
         expect: Expect::Refused,
-        cells: PerTarget {
+        cells: PerCpu {
             // write_all's return address is at [rsp] when it starts.
-            linux_x86_64: Cell::Try {
+            x86_64: Cell::Try {
                 edits: &[("write_all:\n", "write_all:\n    mov qword ptr [rsp], 0\n")],
                 needles: &["rule M3", "rule 3"],
             },
             // The return address a function saved in its frame record, written through memory.
-            linux_aarch64: Cell::Try {
+            aarch64: Cell::Try {
                 edits: &[(
                     "write_i64:\n    stp x29, x30, [sp, #-16]!\n",
                     "write_i64:\n    stp x29, x30, [sp, #-16]!\n    str xzr, [sp, #8]\n",
@@ -464,15 +464,15 @@ const ATTEMPTS: &[Attempt] = &[
         family: Family::Writes,
         what: "a read below the stack pointer",
         expect: Expect::Refused,
-        cells: PerTarget {
-            linux_x86_64: Cell::Try {
+        cells: PerCpu {
+            x86_64: Cell::Try {
                 edits: &[(
                     "write_all:\n",
                     "write_all:\n    mov rax, qword ptr [rsp - 8]\n",
                 )],
                 needles: &["rule M3", "rule 3"],
             },
-            linux_aarch64: Cell::Try {
+            aarch64: Cell::Try {
                 edits: &[("write_all:\n", "write_all:\n    ldr x9, [sp, #-8]\n")],
                 needles: &["rule M3", "rule 3"],
             },
@@ -483,15 +483,15 @@ const ATTEMPTS: &[Attempt] = &[
         family: Family::Loops,
         what: "a bound below the counter",
         expect: Expect::Refused,
-        cells: PerTarget {
-            linux_x86_64: Cell::Try {
+        cells: PerCpu {
+            x86_64: Cell::Try {
                 edits: &[(
                     ".Lwrite_all_loop:  # bound: 64\n",
                     ".Lwrite_all_loop:  # bound: 63\n",
                 )],
                 needles: &["rule 2"],
             },
-            linux_aarch64: Cell::Try {
+            aarch64: Cell::Try {
                 edits: &[(
                     ".Lwrite_all_loop:  // bound: 64\n",
                     ".Lwrite_all_loop:  // bound: 63\n",
@@ -504,15 +504,15 @@ const ATTEMPTS: &[Attempt] = &[
         family: Family::Loops,
         what: "a loop with no counter",
         expect: Expect::Refused,
-        cells: PerTarget {
-            linux_x86_64: Cell::Try {
+        cells: PerCpu {
+            x86_64: Cell::Try {
                 edits: &[(
                     "    dec r8\n    jnz .Lwrite_all_loop\n",
                     "    jmp .Lwrite_all_loop\n",
                 )],
                 needles: &["rule 2"],
             },
-            linux_aarch64: Cell::Try {
+            aarch64: Cell::Try {
                 edits: &[(
                     "    subs x10, x10, #1\n    b.ne .Lwrite_all_loop\n",
                     "    b .Lwrite_all_loop\n",
@@ -525,8 +525,8 @@ const ATTEMPTS: &[Attempt] = &[
         family: Family::Loops,
         what: "a counter reset in the body",
         expect: Expect::Refused,
-        cells: PerTarget {
-            linux_x86_64: Cell::Try {
+        cells: PerCpu {
+            x86_64: Cell::Try {
                 edits: &[(
                     "    add rsi, rax\n    sub rdx, rax\n    jz .Lwrite_all_done\n    dec r8\n",
                     concat!(
@@ -539,7 +539,7 @@ const ATTEMPTS: &[Attempt] = &[
                 )],
                 needles: &["rule 2"],
             },
-            linux_aarch64: Cell::Try {
+            aarch64: Cell::Try {
                 edits: &[(
                     "    subs x2, x2, x0\n    b.eq .Lwrite_all_done\n    subs x10, x10, #1\n",
                     concat!(
@@ -557,8 +557,8 @@ const ATTEMPTS: &[Attempt] = &[
         family: Family::Loops,
         what: "a backward jump that isn't a loop's end",
         expect: Expect::Refused,
-        cells: PerTarget {
-            linux_x86_64: Cell::Try {
+        cells: PerCpu {
+            x86_64: Cell::Try {
                 edits: &[(
                     "    mov edi, EXIT_WRITE_FAILED\n.Lstart_exit:\n",
                     concat!(
@@ -569,7 +569,7 @@ const ATTEMPTS: &[Attempt] = &[
                 )],
                 needles: &["rule 2", "rule 1"],
             },
-            linux_aarch64: Cell::Try {
+            aarch64: Cell::Try {
                 edits: &[(
                     "    mov w0, #EXIT_WRITE_FAILED\n.Lstart_exit:\n",
                     concat!(
@@ -586,12 +586,12 @@ const ATTEMPTS: &[Attempt] = &[
         family: Family::Loops,
         what: "a loop with no bound",
         expect: Expect::Refused,
-        cells: PerTarget {
-            linux_x86_64: Cell::Try {
+        cells: PerCpu {
+            x86_64: Cell::Try {
                 edits: &[(".Lwrite_all_loop:  # bound: 64\n", ".Lwrite_all_loop:\n")],
                 needles: &["rule 2"],
             },
-            linux_aarch64: Cell::Try {
+            aarch64: Cell::Try {
                 edits: &[(".Lwrite_all_loop:  // bound: 64\n", ".Lwrite_all_loop:\n")],
                 needles: &["rule 2"],
             },
@@ -602,12 +602,12 @@ const ATTEMPTS: &[Attempt] = &[
         family: Family::Calls,
         what: "recursion",
         expect: Expect::Refused,
-        cells: PerTarget {
-            linux_x86_64: Cell::Try {
+        cells: PerCpu {
+            x86_64: Cell::Try {
                 edits: &[("write_all:\n", "write_all:\n    call write_all\n")],
                 needles: &["rule 1", "rule 4"],
             },
-            linux_aarch64: Cell::Try {
+            aarch64: Cell::Try {
                 edits: &[("write_all:\n", "write_all:\n    bl write_all\n")],
                 needles: &["rule 1", "rule 4", "rule 3"],
             },
@@ -617,8 +617,8 @@ const ATTEMPTS: &[Attempt] = &[
         family: Family::Calls,
         what: "a call through a register",
         expect: Expect::Refused,
-        cells: PerTarget {
-            linux_x86_64: Cell::Try {
+        cells: PerCpu {
+            x86_64: Cell::Try {
                 edits: &[(
                     "    mov rdi, qword ptr [rsp + 16]\n",
                     concat!(
@@ -629,7 +629,7 @@ const ATTEMPTS: &[Attempt] = &[
                 )],
                 needles: &["rule 9", "dialect", "rule M1", "rule 1"],
             },
-            linux_aarch64: Cell::Try {
+            aarch64: Cell::Try {
                 edits: &[(
                     "    cbz x0, .Lstart_assert_argv\n",
                     concat!(
@@ -647,15 +647,15 @@ const ATTEMPTS: &[Attempt] = &[
         family: Family::Calls,
         what: "a function with no return",
         expect: Expect::Refused,
-        cells: PerTarget {
-            linux_x86_64: Cell::Try {
+        cells: PerCpu {
+            x86_64: Cell::Try {
                 edits: &[(
                     ".Lwrite_all_return:\n    ret\n",
                     ".Lwrite_all_return:\n    nop\n",
                 )],
                 needles: &["rule 1", "rule 4"],
             },
-            linux_aarch64: Cell::Try {
+            aarch64: Cell::Try {
                 edits: &[(
                     ".Lwrite_all_return:\n    ret\n",
                     ".Lwrite_all_return:\n    nop\n",
@@ -669,15 +669,15 @@ const ATTEMPTS: &[Attempt] = &[
         family: Family::Handler,
         what: "an assertion handler that exits with 0",
         expect: Expect::Refused,
-        cells: PerTarget {
-            linux_x86_64: Cell::Try {
+        cells: PerCpu {
+            x86_64: Cell::Try {
                 edits: &[(
                     "    mov eax, 231\n    mov edi, 134\n    syscall\n",
                     "    mov eax, 231\n    mov edi, 0\n    syscall\n",
                 )],
                 needles: &["assert_fail", "rule 5"],
             },
-            linux_aarch64: Cell::Try {
+            aarch64: Cell::Try {
                 edits: &[(
                     "    mov x0, #134\n    mov x8, #94\n    svc #0\n",
                     "    mov x0, #0\n    mov x8, #94\n    svc #0\n",
@@ -690,15 +690,15 @@ const ATTEMPTS: &[Attempt] = &[
         family: Family::Handler,
         what: "an assertion message that says passed",
         expect: Expect::Refused,
-        cells: PerTarget {
-            linux_x86_64: Cell::Try {
+        cells: PerCpu {
+            x86_64: Cell::Try {
                 edits: &[(
                     "    .ascii \"lengua: assertion 000 failed\\n\"\n",
                     "    .ascii \"lengua: assertion 000 passed\\n\"\n",
                 )],
                 needles: &["assert_message", "assert_fail", "rule 5"],
             },
-            linux_aarch64: Cell::Try {
+            aarch64: Cell::Try {
                 edits: &[(
                     "    .ascii \"lengua: assertion 000 failed\\n\"\n",
                     "    .ascii \"lengua: assertion 000 passed\\n\"\n",
@@ -712,8 +712,8 @@ const ATTEMPTS: &[Attempt] = &[
         family: Family::Results,
         what: "a result used before it's tested",
         expect: Expect::Refused,
-        cells: PerTarget {
-            linux_x86_64: Cell::Try {
+        cells: PerCpu {
+            x86_64: Cell::Try {
                 edits: &[(
                     "    call parse_i64\n    test rax, rax\n    js .Lstart_not_a_number\n",
                     concat!(
@@ -725,7 +725,7 @@ const ATTEMPTS: &[Attempt] = &[
                 )],
                 needles: &["rule 7"],
             },
-            linux_aarch64: Cell::Try {
+            aarch64: Cell::Try {
                 edits: &[(
                     "    bl parse_i64\n    tbnz x0, #63, .Lstart_not_a_number\n",
                     concat!(
@@ -742,8 +742,8 @@ const ATTEMPTS: &[Attempt] = &[
         family: Family::Results,
         what: "a write result used first",
         expect: Expect::Refused,
-        cells: PerTarget {
-            linux_x86_64: Cell::Try {
+        cells: PerCpu {
+            x86_64: Cell::Try {
                 edits: &[(
                     "    mov eax, SYS_WRITE\n    syscall\n    test rax, rax\n    js .Lwrite_all_return\n",
                     concat!(
@@ -756,7 +756,7 @@ const ATTEMPTS: &[Attempt] = &[
                 )],
                 needles: &["rule 7"],
             },
-            linux_aarch64: Cell::Try {
+            aarch64: Cell::Try {
                 edits: &[(
                     "    mov x8, #SYS_WRITE\n    svc #0\n    tbnz x0, #63, .Lwrite_all_return\n",
                     concat!(
@@ -776,8 +776,8 @@ const ATTEMPTS: &[Attempt] = &[
         family: Family::Proof,
         what: "a wrong program the samples may miss",
         expect: Expect::ProofFindsIt,
-        cells: PerTarget {
-            linux_x86_64: Cell::Try {
+        cells: PerCpu {
+            x86_64: Cell::Try {
                 edits: &[
                     (
                         ".equ OUT_BUF_LEN, 21\n",
@@ -798,7 +798,7 @@ const ATTEMPTS: &[Attempt] = &[
                 ],
                 needles: &[],
             },
-            linux_aarch64: Cell::Try {
+            aarch64: Cell::Try {
                 edits: &[
                     (
                         ".equ OUT_BUF_LEN, 21\n",
@@ -831,9 +831,9 @@ fn call_attempts() -> Vec<Attempt> {
             family: Family::SystemCalls,
             what,
             expect: Expect::Refused,
-            cells: PerTarget {
-                linux_x86_64: Cell::Call(x86_64),
-                linux_aarch64: Cell::Call(aarch64),
+            cells: PerCpu {
+                x86_64: Cell::Call(x86_64),
+                aarch64: Cell::Call(aarch64),
             },
         })
         .collect();
@@ -841,9 +841,9 @@ fn call_attempts() -> Vec<Attempt> {
         family: Family::SystemCalls,
         what: "open",
         expect: Expect::Refused,
-        cells: PerTarget {
-            linux_x86_64: Cell::Call(2),
-            linux_aarch64: Cell::NotApplicable(
+        cells: PerCpu {
+            x86_64: Cell::Call(2),
+            aarch64: Cell::NotApplicable(
                 "AArch64 Linux has no `open`: its table keeps only `openat`, which is its own \
                  attempt",
             ),
@@ -853,9 +853,9 @@ fn call_attempts() -> Vec<Attempt> {
         family: Family::SystemCalls,
         what: "fork",
         expect: Expect::Refused,
-        cells: PerTarget {
-            linux_x86_64: Cell::Call(57),
-            linux_aarch64: Cell::NotApplicable(
+        cells: PerCpu {
+            x86_64: Cell::Call(57),
+            aarch64: Cell::NotApplicable(
                 "AArch64 Linux has no `fork`: its table keeps only `clone`, which is its own \
                  attempt",
             ),
@@ -1086,9 +1086,9 @@ async fn a_wrong_program_is_never_stamped_done() {
 /// no target tries fewer attempts than the two files this table replaced did.
 #[test]
 fn every_cell_edits_text_its_template_has() {
-    let mut tried = PerTarget {
-        linux_x86_64: 0,
-        linux_aarch64: 0,
+    let mut tried = PerCpu {
+        x86_64: 0,
+        aarch64: 0,
     };
     for attempt in attempts() {
         let mut applies = false;
@@ -1098,8 +1098,8 @@ fn every_cell_edits_text_its_template_has() {
                     assert_ne!(code, asset(TEMPLATES.get(target)), "{}", attempt.what);
                     applies = true;
                     match target {
-                        Profile::LinuxX86_64 => tried.linux_x86_64 += 1,
-                        Profile::LinuxAarch64 => tried.linux_aarch64 += 1,
+                        Profile::LinuxX86_64 => tried.x86_64 += 1,
+                        Profile::LinuxAarch64 => tried.aarch64 += 1,
                     }
                 }
                 None => {
@@ -1118,10 +1118,10 @@ fn every_cell_edits_text_its_template_has() {
         assert!(applies, "{}: no target tries it", attempt.what);
     }
     // The 41 attempts each file held, and the x86-64 `openat` this table adds.
-    assert!(tried.linux_x86_64 >= 42, "{} on x86-64", tried.linux_x86_64);
+    assert!(tried.x86_64 >= 42, "{} on x86-64", tried.x86_64);
     assert!(
-        tried.linux_aarch64 >= 41,
+        tried.aarch64 >= 41,
         "{} on ARM64",
-        tried.linux_aarch64
+        tried.aarch64
     );
 }

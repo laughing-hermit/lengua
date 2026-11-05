@@ -1,6 +1,6 @@
 //! Proofs about real programs: the template, examples/add, and planted bugs the samples miss.
 //!
-//! Each case is written once for both Linux CPUs: a table with a [`PerTarget`] cell where the two
+//! Each case is written once for both Linux CPUs: a table with a [`PerCpu`] cell where the two
 //! differ (the folder of a program's twin, an assembly source, the edit that plants a bug), run
 //! for every target of [`Profile::ALL`] on either runner, since a proof is mathematics. A cell
 //! that cannot be written says why. [`every_prover_test_runs_on_every_target`] fails a test that
@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use super::*;
 use crate::platform::Profile;
-use crate::targets::PerTarget;
+use crate::targets::PerCpu;
 use crate::toolchain::Toolchain;
 
 /// The share of the computer a proof's budget assumes. A proof spreads its work over every core,
@@ -151,7 +151,7 @@ fn asset(name: &str) -> String {
 /// A program the repository has for both targets, compiled from the very same spec: the folder
 /// that holds its `spec.md` and `main.s` on each. A case that proves it is written once, with a
 /// cell for each target where the two differ (an edit that plants a bug, an assembly source).
-type Folders = PerTarget<&'static str>;
+type Folders = PerCpu<&'static str>;
 
 /// A change that plants a bug in a program: the first `from` in its main.s becomes `to`.
 type Edit = (&'static str, &'static str);
@@ -173,9 +173,9 @@ fn edited(source: &str, edits: &[(&str, &str)]) -> String {
 }
 
 /// The template of each target, in the compile skill's assets.
-const TEMPLATES: PerTarget<&str> = PerTarget {
-    linux_x86_64: crate::checker::TEMPLATE,
-    linux_aarch64: crate::checker::AARCH64_TEMPLATE,
+const TEMPLATES: PerCpu<&str> = PerCpu {
+    x86_64: crate::checker::TEMPLATE,
+    aarch64: crate::checker::AARCH64_TEMPLATE,
 };
 
 /// The template is proven for every input from its spec, every generated block of it, on each
@@ -213,9 +213,9 @@ async fn proves_the_template_for_every_input() {
 }
 
 /// The folders of the streaming `cat`.
-const CAT_STREAM: Folders = PerTarget {
-    linux_x86_64: "tests/fixtures/cat-stream",
-    linux_aarch64: "tests/fixtures/linux-aarch64/cat-stream",
+const CAT_STREAM: Folders = PerCpu {
+    x86_64: "tests/fixtures/cat-stream",
+    aarch64: "tests/fixtures/linux-aarch64/cat-stream",
 };
 
 /// A streaming filter through `fill`, `cat`, is proven for every length by induction over its
@@ -253,15 +253,15 @@ async fn proves_a_streaming_filter_for_every_length() {
 }
 
 /// The folders of the hypotenuse.
-const HYPOTENUSE: Folders = PerTarget {
-    linux_x86_64: "examples/hypotenuse",
-    linux_aarch64: "tests/fixtures/linux-aarch64/hypotenuse",
+const HYPOTENUSE: Folders = PerCpu {
+    x86_64: "examples/hypotenuse",
+    aarch64: "tests/fixtures/linux-aarch64/hypotenuse",
 };
 
 /// The hypotenuse's scale, 1000.0, read from a `.double` in .rodata in place of made from a
 /// whole number, on each target.
-const SCALE_FROM_RODATA: PerTarget<&[Edit]> = PerTarget {
-    linux_x86_64: &[
+const SCALE_FROM_RODATA: PerCpu<&[Edit]> = PerCpu {
+    x86_64: &[
         (
             ".type assert_message, @object\n",
             ".type thousand, @object\nthousand:\n    .double 1000.0\n.size thousand, . - thousand\n\n\
@@ -272,7 +272,7 @@ const SCALE_FROM_RODATA: PerTarget<&[Edit]> = PerTarget {
             "    movsd xmm2, qword ptr [rip + thousand]\n",
         ),
     ],
-    linux_aarch64: &[
+    aarch64: &[
         (
             ".type assert_message, @object\n",
             ".type thousand, @object\nthousand:\n    .double 1000.0\n.size thousand, . - thousand\n\n\
@@ -287,22 +287,22 @@ const SCALE_FROM_RODATA: PerTarget<&[Edit]> = PerTarget {
 
 /// A pointer moved one double past the scale, which is read after it: on AArch64 the load moves
 /// it as it goes (`ldr d2, [x2], #8`), on x86-64 an `add`.
-const ONE_DOUBLE_PAST_THE_SCALE: PerTarget<Edit> = PerTarget {
-    linux_x86_64: (
+const ONE_DOUBLE_PAST_THE_SCALE: PerCpu<Edit> = PerCpu {
+    x86_64: (
         "    movsd xmm2, qword ptr [rip + thousand]\n",
         "    lea rcx, [rip + thousand]\n    movsd xmm2, qword ptr [rcx]\n    add rcx, 8\n    \
          movsd xmm3, qword ptr [rcx]\n",
     ),
-    linux_aarch64: (
+    aarch64: (
         "    ldr d2, [x2]\n",
         "    ldr d2, [x2], #8\n    ldr d3, [x2]\n",
     ),
 };
 
 /// The result rounded toward zero rather than to the nearest, on each target.
-const ROUNDED_TOWARD_ZERO: PerTarget<Edit> = PerTarget {
-    linux_x86_64: ("    cvtsd2si rdi, xmm0\n", "    cvttsd2si rdi, xmm0\n"),
-    linux_aarch64: ("    frintn d0, d0\n", "    frintz d0, d0\n"),
+const ROUNDED_TOWARD_ZERO: PerCpu<Edit> = PerCpu {
+    x86_64: ("    cvtsd2si rdi, xmm0\n", "    cvttsd2si rdi, xmm0\n"),
+    aarch64: ("    frintn d0, d0\n", "    frintz d0, d0\n"),
 };
 
 /// The hypotenuse, from the example's spec: its doubles are the formula's step by step, for
@@ -362,9 +362,9 @@ async fn proves_the_hypotenuse() {
 /// The hypotenuse with both sides in one vector of two doubles, on each target: the sides
 /// converted and divided by the scale, in both lanes, and squared in one step, then the two
 /// squares added.
-const HYPOTENUSE_ON_VECTORS: PerTarget<fn(&str) -> String> = PerTarget {
-    linux_x86_64: hypotenuse_on_vectors_x86_64,
-    linux_aarch64: crate::checker::tests::on_vectors,
+const HYPOTENUSE_ON_VECTORS: PerCpu<fn(&str) -> String> = PerCpu {
+    x86_64: hypotenuse_on_vectors_x86_64,
+    aarch64: crate::checker::tests::on_vectors,
 };
 
 /// x86-64's hypotenuse on packed doubles: `unpcklpd` puts the sides in one register and the
@@ -386,9 +386,9 @@ fn hypotenuse_on_vectors_x86_64(text: &str) -> String {
 }
 
 /// The scale taken from the lane above it, which holds 0, on each target.
-const SCALE_FROM_THE_OTHER_LANE: PerTarget<Edit> = PerTarget {
-    linux_x86_64: ("    unpcklpd xmm2, xmm2\n", "    unpckhpd xmm2, xmm2\n"),
-    linux_aarch64: ("    dup v1.2d, v2.d[0]\n", "    dup v1.2d, v2.d[1]\n"),
+const SCALE_FROM_THE_OTHER_LANE: PerCpu<Edit> = PerCpu {
+    x86_64: ("    unpcklpd xmm2, xmm2\n", "    unpckhpd xmm2, xmm2\n"),
+    aarch64: ("    dup v1.2d, v2.d[0]\n", "    dup v1.2d, v2.d[1]\n"),
 };
 
 /// On vectors, both sides in one of two doubles, each step rounds as the scalar one does: the
@@ -448,9 +448,9 @@ fn splits_ranges_into_digit_pieces() {
 }
 
 /// The folders of the sum of two whole numbers.
-const ADD: Folders = PerTarget {
-    linux_x86_64: "examples/add",
-    linux_aarch64: "tests/fixtures/linux-aarch64/add",
+const ADD: Folders = PerCpu {
+    x86_64: "examples/add",
+    aarch64: "tests/fixtures/linux-aarch64/add",
 };
 
 /// About a minute on 16 cores in release mode: `cargo test --release -- --ignored`.
@@ -480,8 +480,8 @@ async fn proves_add_for_every_pair_of_inputs() {
 
 /// The bug that comes out one input in 18 quintillion, planted on each target: the negative of
 /// 1234567 comes out one too big. AArch64 builds the number from a `mov` and a `movk`.
-const UNLUCKY_NUMBER: PerTarget<&[Edit]> = PerTarget {
-    linux_x86_64: &[
+const UNLUCKY_NUMBER: PerCpu<&[Edit]> = PerCpu {
+    x86_64: &[
         (
             ".equ OUT_BUF_LEN, 21\n",
             ".equ OUT_BUF_LEN, 21\n.equ UNLUCKY, -1234567\n",
@@ -492,7 +492,7 @@ const UNLUCKY_NUMBER: PerTarget<&[Edit]> = PerTarget {
              jne .Lstart_lucky\n    inc rdx\n.Lstart_lucky:\n",
         ),
     ],
-    linux_aarch64: &[(
+    aarch64: &[(
         "    negs x0, x1\n    b.vs .Lstart_assert_negate\n",
         "    negs x0, x1\n    b.vs .Lstart_assert_negate\n    mov x2, #0xd687\n    \
          movk x2, #0x12, lsl #16\n    neg x2, x2\n    cmp x0, x2\n    b.ne .Lstart_lucky\n    \
@@ -547,18 +547,18 @@ const SPARE: Edit = (
 /// the return address its `call` pushed, so a pointer just past it reaches that address;
 /// AArch64's frame record holds the return address inside the frame, so the same bug is a
 /// pointer into the record, and a pointer past the frame reaches the caller's.
-const MEMORY_BUGS: &[(&str, PerTarget<MemoryBug>)] = &[
+const MEMORY_BUGS: &[(&str, PerCpu<MemoryBug>)] = &[
     (
         "digits written from 8 bytes into out_buf run past its end",
-        PerTarget {
-            linux_x86_64: MemoryBug {
+        PerCpu {
+            x86_64: MemoryBug {
                 edits: &[(
                     "    lea rsi, [rip + out_buf]\n    mov ecx, OUT_BUF_LEN - 1\n",
                     "    lea rsi, [rip + out_buf + 8]\n    mov ecx, OUT_BUF_LEN - 1\n",
                 )],
                 needle: "writes 1 byte at byte 27 of out_buf, which has 21 bytes",
             },
-            linux_aarch64: MemoryBug {
+            aarch64: MemoryBug {
                 edits: &[(
                     "    strb w10, [x1, #OUT_BUF_LEN - 1]\n    mov x2, #OUT_BUF_LEN - 1\n",
                     "    strb w10, [x1, #OUT_BUF_LEN - 1]\n    add x1, x1, #8\n    \
@@ -570,8 +570,8 @@ const MEMORY_BUGS: &[(&str, PerTarget<MemoryBug>)] = &[
     ),
     (
         "write_all is lent write_i64's frame, which nothing wrote",
-        PerTarget {
-            linux_x86_64: MemoryBug {
+        PerCpu {
+            x86_64: MemoryBug {
                 edits: &[(
                     "    mov edi, STDOUT\n    call write_all\n",
                     "    mov edi, STDOUT\n    mov rsi, rsp\n    mov edx, 8\n    call write_all\n",
@@ -579,7 +579,7 @@ const MEMORY_BUGS: &[(&str, PerTarget<MemoryBug>)] = &[
                 needle: "reads byte 0 of write_i64's frame, which has 8 bytes, which nothing wrote",
             },
             // The frame record's 16 bytes are written, so the frame lent is 16 bytes below it.
-            linux_aarch64: MemoryBug {
+            aarch64: MemoryBug {
                 edits: &[(
                     "    mov x0, #STDOUT\n    bl write_all\n",
                     "    mov x0, #STDOUT\n    sub sp, sp, #16\n    mov x1, sp\n    mov x2, #8\n    \
@@ -591,9 +591,9 @@ const MEMORY_BUGS: &[(&str, PerTarget<MemoryBug>)] = &[
     ),
     (
         "a pointer writes the return address of write_i64",
-        PerTarget {
+        PerCpu {
             // Just past write_i64's frame of 8 bytes.
-            linux_x86_64: MemoryBug {
+            x86_64: MemoryBug {
                 edits: &[(
                     ".Lwrite_i64_return:\n    add rsp, 8\n",
                     ".Lwrite_i64_return:\n    lea rcx, [rsp + 8]\n    mov byte ptr [rcx], 0\n    \
@@ -602,7 +602,7 @@ const MEMORY_BUGS: &[(&str, PerTarget<MemoryBug>)] = &[
                 needle: "so it reaches the return address of write_i64",
             },
             // Into the frame record, where x30 was saved.
-            linux_aarch64: MemoryBug {
+            aarch64: MemoryBug {
                 edits: &[(
                     ".Lwrite_i64_return:\n    ldp x29, x30, [sp], #16\n",
                     ".Lwrite_i64_return:\n    add x1, sp, #8\n    strb wzr, [x1]\n    \
@@ -615,8 +615,8 @@ const MEMORY_BUGS: &[(&str, PerTarget<MemoryBug>)] = &[
     (
         "a loop that clears one byte too many: its pointer, one step past out_buf, writes \
          spare's first byte, which nothing prints",
-        PerTarget {
-            linux_x86_64: MemoryBug {
+        PerCpu {
+            x86_64: MemoryBug {
                 edits: &[
                     SPARE,
                     (
@@ -630,7 +630,7 @@ const MEMORY_BUGS: &[(&str, PerTarget<MemoryBug>)] = &[
                 needle: "writes 1 byte at byte 21 of out_buf, which has 21 bytes, so it reaches \
                          byte 0 of spare, which has 8 bytes",
             },
-            linux_aarch64: MemoryBug {
+            aarch64: MemoryBug {
                 edits: &[
                     SPARE,
                     (
@@ -648,8 +648,8 @@ const MEMORY_BUGS: &[(&str, PerTarget<MemoryBug>)] = &[
     ),
     (
         "a pointer to out_buf's end, as main.s names it, is out_buf's, not spare's",
-        PerTarget {
-            linux_x86_64: MemoryBug {
+        PerCpu {
+            x86_64: MemoryBug {
                 edits: &[
                     SPARE,
                     (
@@ -661,7 +661,7 @@ const MEMORY_BUGS: &[(&str, PerTarget<MemoryBug>)] = &[
                 needle: "writes 1 byte at byte 21 of out_buf, which has 21 bytes, so it reaches \
                          byte 0 of spare",
             },
-            linux_aarch64: MemoryBug {
+            aarch64: MemoryBug {
                 edits: &[
                     SPARE,
                     (
@@ -677,8 +677,8 @@ const MEMORY_BUGS: &[(&str, PerTarget<MemoryBug>)] = &[
     ),
     (
         "a pointer stepped past the program's path, the first argument string, reads the next",
-        PerTarget {
-            linux_x86_64: MemoryBug {
+        PerCpu {
+            x86_64: MemoryBug {
                 edits: &[(
                     "    mov rdi, qword ptr [rsp + 16]\n",
                     "    mov rdi, qword ptr [rsp + 8]\n    add rdi, 13\n    \
@@ -686,7 +686,7 @@ const MEMORY_BUGS: &[(&str, PerTarget<MemoryBug>)] = &[
                 )],
                 needle: "reads 1 byte at byte 13 of the program's argument 0, which has 13 bytes",
             },
-            linux_aarch64: MemoryBug {
+            aarch64: MemoryBug {
                 edits: &[(
                     "    ldr x0, [sp, #16]\n",
                     "    ldr x1, [sp, #8]\n    add x1, x1, #13\n    ldrb w2, [x1]\n    \
@@ -698,14 +698,14 @@ const MEMORY_BUGS: &[(&str, PerTarget<MemoryBug>)] = &[
     ),
     (
         "the return address written where the function started",
-        PerTarget {
+        PerCpu {
             // write_all's return address is at [rsp] when it starts.
-            linux_x86_64: MemoryBug {
+            x86_64: MemoryBug {
                 edits: &[("write_all:\n", "write_all:\n    mov qword ptr [rsp], 0\n")],
                 needle: "writes over the return address of write_all",
             },
             // The return address a function saved in its frame record, written through memory.
-            linux_aarch64: MemoryBug {
+            aarch64: MemoryBug {
                 edits: &[(
                     "write_i64:\n    stp x29, x30, [sp, #-16]!\n",
                     "write_i64:\n    stp x29, x30, [sp, #-16]!\n    str xzr, [sp, #8]\n",
@@ -749,9 +749,9 @@ async fn finds_memory_bugs_the_rules_cannot_see() {
 }
 
 /// The folders of the absolute difference.
-const ABSDIFF: Folders = PerTarget {
-    linux_x86_64: "examples/absdiff",
-    linux_aarch64: "tests/fixtures/linux-aarch64/absdiff",
+const ABSDIFF: Folders = PerCpu {
+    x86_64: "examples/absdiff",
+    aarch64: "tests/fixtures/linux-aarch64/absdiff",
 };
 
 /// The absolute difference, which branches on the sign of a - b where the formula has abs: the
@@ -785,9 +785,9 @@ async fn proves_absolute_difference() {
 }
 
 /// The folders of the mean of two numbers.
-const MEAN: Folders = PerTarget {
-    linux_x86_64: "examples/mean",
-    linux_aarch64: "tests/fixtures/linux-aarch64/mean",
+const MEAN: Folders = PerCpu {
+    x86_64: "examples/mean",
+    aarch64: "tests/fixtures/linux-aarch64/mean",
 };
 
 /// The mean of two prices in cents, rounded half away from zero: decimals in, decimals out. The
@@ -815,9 +815,9 @@ async fn proves_the_mean_of_two_prices() {
 }
 
 /// The folders of the program that opens a file its argument names.
-const ARCHIVE: Folders = PerTarget {
-    linux_x86_64: "examples/archive",
-    linux_aarch64: "tests/fixtures/linux-aarch64/archive",
+const ARCHIVE: Folders = PerCpu {
+    x86_64: "examples/archive",
+    aarch64: "tests/fixtures/linux-aarch64/archive",
 };
 
 /// A file name the input chooses: archive opens the file its argument names, which no test file
@@ -1012,9 +1012,9 @@ random:
 }
 
 /// The die on each target.
-const ROLL: PerTarget<fn(u8) -> String> = PerTarget {
-    linux_x86_64: roll_x86_64,
-    linux_aarch64: roll_aarch64,
+const ROLL: PerCpu<fn(u8) -> String> = PerCpu {
+    x86_64: roll_x86_64,
+    aarch64: roll_aarch64,
 };
 
 /// A die: one random byte from the kernel, printed as 1 to 6. The kernel's byte is any value, so
@@ -1138,9 +1138,9 @@ time:
 }
 
 /// The seconds modulo `days` on each target.
-const MODULO: PerTarget<fn(u32) -> String> = PerTarget {
-    linux_x86_64: modulo_x86_64,
-    linux_aarch64: modulo_aarch64,
+const MODULO: PerCpu<fn(u32) -> String> = PerCpu {
+    x86_64: modulo_x86_64,
+    aarch64: modulo_aarch64,
 };
 
 /// A clock reading the test supplies, taken modulo 7: proven for every second from 1970 to 2100,
@@ -1203,8 +1203,8 @@ Prints its argument, `1` to `3` letters.
 
 /// Writes its argument: every branch is settled by the bytes' ranges, and the output is the
 /// argument's own terms. One program for each target.
-const ECHO: PerTarget<&str> = PerTarget {
-    linux_x86_64: ".intel_syntax noprefix
+const ECHO: PerCpu<&str> = PerCpu {
+    x86_64: ".intel_syntax noprefix
 .globl _start
 .text
 .type _start, @function
@@ -1225,7 +1225,7 @@ _start:
     syscall
 .size _start, . - _start
 ",
-    linux_aarch64: ".arch armv8-a
+    aarch64: ".arch armv8-a
 .globl _start
 .text
 .type _start, @function
@@ -1311,9 +1311,9 @@ fn fixture(name: &str, file: &str) -> String {
 }
 
 /// The folders of the CSV total.
-const TOTAL: Folders = PerTarget {
-    linux_x86_64: "tests/fixtures/total",
-    linux_aarch64: "tests/fixtures/linux-aarch64/total",
+const TOTAL: Folders = PerCpu {
+    x86_64: "tests/fixtures/total",
+    aarch64: "tests/fixtures/linux-aarch64/total",
 };
 
 /// The CSV total Claude Code wrote: its first block has 24,696 input combinations, more than
@@ -1471,9 +1471,9 @@ product.
 "#;
 
 /// The folders of the calculator with a jump table.
-const CALC: Folders = PerTarget {
-    linux_x86_64: "tests/fixtures/calc",
-    linux_aarch64: "tests/fixtures/linux-aarch64/calc",
+const CALC: Folders = PerCpu {
+    x86_64: "tests/fixtures/calc",
+    aarch64: "tests/fixtures/linux-aarch64/calc",
 };
 
 /// A checked jump table (dialect 4): the proof follows every case the input can reach through
@@ -1693,9 +1693,9 @@ type LettersProgram = (fn(&str, u32) -> String, [&'static str; 2]);
 
 /// The letters through a jump table on each target: the program, and the two ways its index is
 /// made from the byte (`h` to `k` become 0 to 3, and `l` becomes 4, one past the table).
-const LETTERS: PerTarget<LettersProgram> = PerTarget {
-    linux_x86_64: (letters_x86_64, ["xor eax, 104", "and eax, 7"]),
-    linux_aarch64: (
+const LETTERS: PerCpu<LettersProgram> = PerCpu {
+    x86_64: (letters_x86_64, ["xor eax, 104", "and eax, 7"]),
+    aarch64: (
         letters_aarch64,
         ["mov w3, #104\n    eor w9, w9, w3", "and w9, w9, #7"],
     ),
@@ -1764,9 +1764,9 @@ fn solvers_installed() -> bool {
 }
 
 /// The folders of the day count.
-const DAYS: Folders = PerTarget {
-    linux_x86_64: "tests/fixtures/days",
-    linux_aarch64: "tests/fixtures/linux-aarch64/days",
+const DAYS: Folders = PerCpu {
+    x86_64: "tests/fixtures/days",
+    aarch64: "tests/fixtures/linux-aarch64/days",
 };
 
 /// The clock Claude Code wrote in interactive round 2, with the days from today to a date: the
@@ -1845,9 +1845,9 @@ fn with_row(spec: &str, index: usize, cells: &[(&str, &str)]) -> String {
 }
 
 /// The folders of the clock of interactive round 3.
-const DATES: Folders = PerTarget {
-    linux_x86_64: "tests/fixtures/dates",
-    linux_aarch64: "tests/fixtures/linux-aarch64/dates",
+const DATES: Folders = PerCpu {
+    x86_64: "tests/fixtures/dates",
+    aarch64: "tests/fixtures/linux-aarch64/dates",
 };
 
 /// The clock of interactive round 3, whose day count's block covers valid and invalid dates at
@@ -1890,13 +1890,13 @@ const CENTURY_LEAP_DAYS: &[(&str, &str)] = &[
 
 /// The bug that leaves the 400-year rule out of the day count, on each target: a year that is a
 /// multiple of 100 goes straight to the month's days, so it is never a leap year.
-const NO_400_YEAR_RULE: PerTarget<Edit> = PerTarget {
-    linux_x86_64: (
+const NO_400_YEAR_RULE: PerCpu<Edit> = PerCpu {
+    x86_64: (
         "    mov rax, rdi\n    xor edx, edx\n    mov ecx, YEARS_PER_ERA\n    div rcx\n    \
          test rdx, rdx\n    jnz .Ldays_from_date_check_day\n.Ldays_from_date_leap:\n",
         "    jmp .Ldays_from_date_check_day\n.Ldays_from_date_leap:\n",
     ),
-    linux_aarch64: (
+    aarch64: (
         "    mov x9, #YEARS_PER_ERA\n    udiv x14, x0, x9\n    msub x15, x14, x9, x0\n    \
          cbnz x15, .Ldays_from_date_check_day\n.Ldays_from_date_leap:\n",
         "    b .Ldays_from_date_check_day\n.Ldays_from_date_leap:\n",
@@ -1962,20 +1962,20 @@ const FIXED_FIELDS: &[(&str, &str)] = &[
 ];
 
 /// The folders of the CSV total with amounts.
-const AMOUNTS: Folders = PerTarget {
-    linux_x86_64: "tests/fixtures/amounts",
-    linux_aarch64: "tests/fixtures/linux-aarch64/amounts",
+const AMOUNTS: Folders = PerCpu {
+    x86_64: "tests/fixtures/amounts",
+    aarch64: "tests/fixtures/linux-aarch64/amounts",
 };
 
 /// The bug that drops a negative amount's cents, on each target: where the parse negates the
 /// amount in cents, it takes the cents off first, as whole hundreds.
-const DROPPED_CENTS: PerTarget<Edit> = PerTarget {
-    linux_x86_64: (
+const DROPPED_CENTS: PerCpu<Edit> = PerCpu {
+    x86_64: (
         "    neg rdx\n.Lparse_return:\n",
         "    mov rax, rdx\n    xor edx, edx\n    mov r8d, 100\n    div r8\n    \
          imul rdx, rax, -100\n    xor eax, eax\n.Lparse_return:\n",
     ),
-    linux_aarch64: (
+    aarch64: (
         "    neg x1, x1\n.Lparse_return:\n",
         "    mov x3, #100\n    udiv x4, x1, x3\n    mov x5, #-100\n    mul x1, x4, x5\n\
          .Lparse_return:\n",
@@ -2157,9 +2157,9 @@ time:
 }
 
 /// The day of the week on each target.
-const WEEKDAY: PerTarget<fn(u32) -> String> = PerTarget {
-    linux_x86_64: weekday_x86_64,
-    linux_aarch64: weekday_aarch64,
+const WEEKDAY: PerCpu<fn(u32) -> String> = PerCpu {
+    x86_64: weekday_x86_64,
+    aarch64: weekday_aarch64,
 };
 
 /// The day of the week from the clock: a second 64-bit division of the first's quotient, which
@@ -2191,9 +2191,9 @@ async fn proves_the_day_of_the_week_with_two_divisions() {
 }
 
 /// The folders of the hh:mm:ss clock.
-const CLOCK: Folders = PerTarget {
-    linux_x86_64: "tests/fixtures/clock",
-    linux_aarch64: "tests/fixtures/linux-aarch64/clock",
+const CLOCK: Folders = PerCpu {
+    x86_64: "tests/fixtures/clock",
+    aarch64: "tests/fixtures/linux-aarch64/clock",
 };
 
 /// The hh:mm:ss clock Claude Code wrote: six divisions by constants, and output padded by `if`.
@@ -2351,9 +2351,9 @@ buffer:
 }
 
 /// The capitals on each target.
-const SHOUT: PerTarget<fn(u32) -> String> = PerTarget {
-    linux_x86_64: shout_x86_64,
-    linux_aarch64: shout_aarch64,
+const SHOUT: PerCpu<fn(u32) -> String> = PerCpu {
+    x86_64: shout_x86_64,
+    aarch64: shout_aarch64,
 };
 
 /// A text formula proven against a program: standard input capitalized byte by byte without
@@ -2551,9 +2551,9 @@ out:
 }
 
 /// The count made of bit instructions on each target.
-const COUNT_WITH_BITS: PerTarget<fn(u32) -> String> = PerTarget {
-    linux_x86_64: count_with_bits_x86_64,
-    linux_aarch64: count_with_bits_aarch64,
+const COUNT_WITH_BITS: PerCpu<fn(u32) -> String> = PerCpu {
+    x86_64: count_with_bits_x86_64,
+    aarch64: count_with_bits_aarch64,
 };
 
 /// Bit instructions against a text formula: a mask of the bytes that are `a`, built without
@@ -2662,9 +2662,9 @@ buffer:
 type EchoProgram = (fn(&str) -> String, &'static str);
 
 /// The echo of each target, and the line of it that gives the read its size.
-const ECHO_OF_STDIN: PerTarget<EchoProgram> = PerTarget {
-    linux_x86_64: (echo_x86_64, "    mov edx, 8192\n"),
-    linux_aarch64: (echo_aarch64, "    mov x2, #8192\n"),
+const ECHO_OF_STDIN: PerCpu<EchoProgram> = PerCpu {
+    x86_64: (echo_x86_64, "    mov edx, 8192\n"),
+    aarch64: (echo_aarch64, "    mov x2, #8192\n"),
 };
 
 fn echo_block(stdout: &str, example: &str) -> Generated {
@@ -2757,9 +2757,9 @@ async fn proves_long_text_up_to_the_bound() {
 /// What each target's echo runs once its input is long enough, which its model doesn't follow,
 /// and what the proof says it stopped at: `cpuid` on x86-64, and on AArch64 a `svc` with a
 /// number other than 0, which a system call never has.
-const UNMODELLED: PerTarget<(&str, &str)> = PerTarget {
-    linux_x86_64: ("    xor eax, eax\n    cpuid", "cpuid"),
-    linux_aarch64: ("    svc #1", "svc other than"),
+const UNMODELLED: PerCpu<(&str, &str)> = PerCpu {
+    x86_64: ("    xor eax, eax\n    cpuid", "cpuid"),
+    aarch64: ("    svc #1", "svc other than"),
 };
 
 /// Where the model stops following the program at some length, the proof holds below it.
@@ -2824,12 +2824,12 @@ type VectorTemplate = (&'static str, Edit);
 
 /// The vector template of each target, and the edit that stops its capitals at `y`: the bound
 /// above `z`, four bytes of it at a time on x86-64's SSE2, a byte in AArch64's NEON.
-const VECTOR_TEMPLATES: PerTarget<VectorTemplate> = PerTarget {
-    linux_x86_64: (
+const VECTOR_TEMPLATES: PerCpu<VectorTemplate> = PerCpu {
+    x86_64: (
         "vector-template.s",
         (".equ ABOVE_Z_X4, 0x7b7b7b7b", ".equ ABOVE_Z_X4, 0x7a7a7a7a"),
     ),
-    linux_aarch64: (
+    aarch64: (
         "linux-aarch64/vector-template.s",
         (".equ ABOVE_Z, 0x7b", ".equ ABOVE_Z, 0x7a"),
     ),
@@ -2885,15 +2885,15 @@ async fn proves_the_vector_template() {
 }
 
 /// The streaming template of each target, in the skill's assets.
-const STREAM_TEMPLATES: PerTarget<&str> = PerTarget {
-    linux_x86_64: "stream-template.s",
-    linux_aarch64: "linux-aarch64/stream-template.s",
+const STREAM_TEMPLATES: PerCpu<&str> = PerCpu {
+    x86_64: "stream-template.s",
+    aarch64: "linux-aarch64/stream-template.s",
 };
 
 /// The streaming template that capitalizes only the first buffer-full, on each target: a register
 /// that says whether a buffer-full was capitalized before.
-const CAPITALIZES_THE_FIRST_FULL_ONLY: PerTarget<[Edit; 2]> = PerTarget {
-    linux_x86_64: [
+const CAPITALIZES_THE_FIRST_FULL_ONLY: PerCpu<[Edit; 2]> = PerCpu {
+    x86_64: [
         (
             "    mov rbx, MAX_FULLS\n",
             "    xor r13d, r13d\n    mov rbx, MAX_FULLS\n",
@@ -2904,7 +2904,7 @@ const CAPITALIZES_THE_FIRST_FULL_ONLY: PerTarget<[Edit; 2]> = PerTarget {
              mov r13d, 1\n",
         ),
     ],
-    linux_aarch64: [
+    aarch64: [
         (
             "    mov x19, #MAX_FULLS\n",
             "    mov x21, #0\n    mov x19, #MAX_FULLS\n",
@@ -2988,19 +2988,19 @@ async fn proves_a_stream_for_every_length_by_induction() {
 }
 
 /// The folders of the line counter.
-const LINES: Folders = PerTarget {
-    linux_x86_64: "tests/fixtures/lines",
-    linux_aarch64: "tests/fixtures/linux-aarch64/lines",
+const LINES: Folders = PerCpu {
+    x86_64: "tests/fixtures/lines",
+    aarch64: "tests/fixtures/linux-aarch64/lines",
 };
 
 /// The line counter that stops a chunk early, on each target: its loop leaves when the next
 /// chunk would pass the end, so the last partial chunk of each buffer-full is never counted.
-const MISSES_THE_LAST_CHUNK: PerTarget<Edit> = PerTarget {
-    linux_x86_64: (
+const MISSES_THE_LAST_CHUNK: PerCpu<Edit> = PerCpu {
+    x86_64: (
         "    cmp rcx, rdi\n    jae .Lcount_lines_return\n",
         "    lea rdx, [rcx + 16]\n    cmp rdx, rdi\n    jae .Lcount_lines_return\n",
     ),
-    linux_aarch64: (
+    aarch64: (
         "    cmp x10, x1\n    b.hs .Lcount_lines_return\n",
         "    add x4, x10, #CHUNK\n    cmp x4, x1\n    b.hs .Lcount_lines_return\n",
     ),
@@ -3008,9 +3008,9 @@ const MISSES_THE_LAST_CHUNK: PerTarget<Edit> = PerTarget {
 
 /// The line counter that keeps only the last buffer-full's count, on each target: the register
 /// that adds up the counts is set to each in turn.
-const COUNTS_THE_LAST_FULL_ALONE: PerTarget<Edit> = PerTarget {
-    linux_x86_64: ("    add r13, rax\n", "    mov r13, rax\n"),
-    linux_aarch64: ("    add x21, x21, x0\n", "    mov x21, x0\n"),
+const COUNTS_THE_LAST_FULL_ALONE: PerCpu<Edit> = PerCpu {
+    x86_64: ("    add r13, rax\n", "    mov r13, rax\n"),
+    aarch64: ("    add x21, x21, x0\n", "    mov x21, x0\n"),
 };
 
 /// Induction over counts: a line count kept in a register, grown by each buffer-full's
@@ -3058,20 +3058,20 @@ async fn proves_a_count_for_every_length_by_induction() {
 }
 
 /// The folders of the word counter.
-const WORDS: Folders = PerTarget {
-    linux_x86_64: "tests/fixtures/words",
-    linux_aarch64: "tests/fixtures/linux-aarch64/words",
+const WORDS: Folders = PerCpu {
+    x86_64: "tests/fixtures/words",
+    aarch64: "tests/fixtures/linux-aarch64/words",
 };
 
 /// The two bugs in what crosses from one buffer-full to the next, on each target: each
 /// buffer-full taken as if whitespace came before it, and the word-ending flag lost after each
 /// one. x86-64 keeps the flag in r14, AArch64 in x23 (0xff for whitespace).
-const FORGETS_THE_WORD_ACROSS_FULLS: PerTarget<[Edit; 2]> = PerTarget {
-    linux_x86_64: [
+const FORGETS_THE_WORD_ACROSS_FULLS: PerCpu<[Edit; 2]> = PerCpu {
+    x86_64: [
         ("    call fill\n", "    mov r14d, 1\n    call fill\n"),
         ("    mov r14, rcx\n", "    xor r14d, r14d\n"),
     ],
-    linux_aarch64: [
+    aarch64: [
         (
             "    mov w3, #READ_TO_END\n    bl fill\n",
             "    mov w3, #READ_TO_END\n    mov x23, #0xff\n    bl fill\n",
@@ -3082,12 +3082,12 @@ const FORGETS_THE_WORD_ACROSS_FULLS: PerTarget<[Edit; 2]> = PerTarget {
 
 /// The word counter that keeps only the last buffer-full's words, on each target: no register
 /// keeps the words as they go.
-const COUNTS_THE_LAST_FULLS_WORDS_ALONE: PerTarget<Edit> = PerTarget {
-    linux_x86_64: (
+const COUNTS_THE_LAST_FULLS_WORDS_ALONE: PerCpu<Edit> = PerCpu {
+    x86_64: (
         "    add r13, rdx\n    mov r14, rcx\n",
         "    mov r13, rdx\n    mov r14, rcx\n",
     ),
-    linux_aarch64: (
+    aarch64: (
         "    add x22, x22, x1\n    mov x23, x2\n",
         "    mov x22, x1\n    mov x23, x2\n",
     ),
@@ -3151,19 +3151,19 @@ async fn proves_words_for_every_length_by_induction() {
 }
 
 /// The folders of the sort example.
-const SORT: Folders = PerTarget {
-    linux_x86_64: "examples/sort",
-    linux_aarch64: "tests/fixtures/linux-aarch64/sort",
+const SORT: Folders = PerCpu {
+    x86_64: "examples/sort",
+    aarch64: "tests/fixtures/linux-aarch64/sort",
 };
 
 /// The comparison that puts the longer of two lines with the same start first, on each target:
 /// the difference of the two lengths is taken the other way round.
-const LONGER_LINE_FIRST: PerTarget<Edit> = PerTarget {
-    linux_x86_64: (
+const LONGER_LINE_FIRST: PerCpu<Edit> = PerCpu {
+    x86_64: (
         ".Lcompare_lengths:\n    mov rax, r8\n    sub rax, r9\n",
         ".Lcompare_lengths:\n    mov rax, r9\n    sub rax, r8\n",
     ),
-    linux_aarch64: (
+    aarch64: (
         ".Lcompare_lengths:\n    sub x0, x9, x10\n",
         ".Lcompare_lengths:\n    sub x0, x10, x9\n",
     ),
@@ -3223,8 +3223,8 @@ async fn proves_sorting_for_short_texts() {
 type TallyTemplate = (&'static str, [Edit; 3]);
 
 /// The tally template of each target, and its bugs.
-const TALLY_TEMPLATES: PerTarget<TallyTemplate> = PerTarget {
-    linux_x86_64: (
+const TALLY_TEMPLATES: PerCpu<TallyTemplate> = PerCpu {
+    x86_64: (
         "tally-template.s",
         [
             (
@@ -3241,7 +3241,7 @@ const TALLY_TEMPLATES: PerTarget<TallyTemplate> = PerTarget {
             ),
         ],
     ),
-    linux_aarch64: (
+    aarch64: (
         "linux-aarch64/tally-template.s",
         [
             (
@@ -3295,15 +3295,15 @@ async fn proves_a_tally_for_short_texts() {
 
 /// The parallel template of each target, in the skill's assets: x86-64's with `clone` and
 /// `futex`, AArch64's with `clone`, `futex` and `ldar`.
-const PARALLEL_TEMPLATES: PerTarget<&str> = PerTarget {
-    linux_x86_64: "parallel-template.s",
-    linux_aarch64: "linux-aarch64/parallel-template.s",
+const PARALLEL_TEMPLATES: PerCpu<&str> = PerCpu {
+    x86_64: "parallel-template.s",
+    aarch64: "linux-aarch64/parallel-template.s",
 };
 
 /// The terminal template of each target, in the skill's assets.
-const TERMINAL_TEMPLATES: PerTarget<&str> = PerTarget {
-    linux_x86_64: "terminal-template.s",
-    linux_aarch64: "linux-aarch64/terminal-template.s",
+const TERMINAL_TEMPLATES: PerCpu<&str> = PerCpu {
+    x86_64: "terminal-template.s",
+    aarch64: "linux-aarch64/terminal-template.s",
 };
 
 /// Threads: each of parallel_for's workers runs to its end as it starts, which M7 makes the same
@@ -3371,18 +3371,18 @@ async fn proves_a_program_for_the_terminal() {
 /// a time and three chains joined by `pclmulqdq`, AArch64's `crc32cx` chain beside carry-less
 /// multiplies that fold the other half of each 32 KiB block. Both meet the very same spec,
 /// `fast/crc32c/spec.md`.
-const CRC32C_TIERS: PerTarget<&str> = PerTarget {
-    linux_x86_64: "fast/crc32c-pclmul/main.s",
-    linux_aarch64: "linux-aarch64/fast/crc32c-crc/main.s",
+const CRC32C_TIERS: PerCpu<&str> = PerCpu {
+    x86_64: "fast/crc32c-pclmul/main.s",
+    aarch64: "linux-aarch64/fast/crc32c-crc/main.s",
 };
 
 /// The functions of the CRC-32C tier that a proof of short texts never runs, on each target, as
 /// the proof says (run 41919475930 for both): x86-64's three chains at once start at 12288 bytes,
 /// past every text proven, and its copy before them; AArch64's block, which folds 32768 bytes
 /// at a time, and the join of its two parts.
-const CRC32C_UNREACHED: PerTarget<&[&str]> = PerTarget {
-    linux_x86_64: &["move_front", "crc_block"],
-    linux_aarch64: &["crc_block", "crc_join"],
+const CRC32C_UNREACHED: PerCpu<&[&str]> = PerCpu {
+    x86_64: &["move_front", "crc_block"],
+    aarch64: &["crc_block", "crc_join"],
 };
 
 /// The CRC-32C fast tier meets the formula's chain of byte steps (`crc32` over 8 bytes at a
@@ -3459,15 +3459,15 @@ type WordCountForm = (&'static str, &'static str);
 /// The fast word count's forms on each target: the baseline form every machine of the target
 /// runs (SSE2 with `popcnt` on x86-64, NEON on AArch64), and the optional extension's tier beside
 /// it (AVX-512, SVE).
-const WORD_COUNT_FORMS: PerTarget<[WordCountForm; 2]> = PerTarget {
-    linux_x86_64: [
+const WORD_COUNT_FORMS: PerCpu<[WordCountForm; 2]> = PerCpu {
+    x86_64: [
         ("SSE2", "plugin/skills/compile/assets/fast/wc/main.s"),
         (
             "AVX-512",
             "plugin/skills/compile/assets/fast/wc-avx512/main.s",
         ),
     ],
-    linux_aarch64: [
+    aarch64: [
         (
             "NEON",
             "plugin/skills/compile/assets/linux-aarch64/fast/wc/main.s",
@@ -3533,16 +3533,16 @@ async fn proves_the_word_count_of_short_texts() {
 }
 
 /// The folders of the upcase example.
-const UPCASE: Folders = PerTarget {
-    linux_x86_64: "examples/upcase",
-    linux_aarch64: "tests/fixtures/linux-aarch64/upcase",
+const UPCASE: Folders = PerCpu {
+    x86_64: "examples/upcase",
+    aarch64: "tests/fixtures/linux-aarch64/upcase",
 };
 
 /// The bound that lets `z` stay small, on each target: x86-64 compares against a signed
 /// constant, AArch64 against the number of letters.
-const Z_STAYS_SMALL: PerTarget<Edit> = PerTarget {
-    linux_x86_64: ("mov eax, 0x9a9a9a9a", "mov eax, 0x99999999"),
-    linux_aarch64: ("    cmp w5, #LETTERS\n", "    cmp w5, #LETTERS - 1\n"),
+const Z_STAYS_SMALL: PerCpu<Edit> = PerCpu {
+    x86_64: ("mov eax, 0x9a9a9a9a", "mov eax, 0x99999999"),
+    aarch64: ("    cmp w5, #LETTERS\n", "    cmp w5, #LETTERS - 1\n"),
 };
 
 /// Vector code on files: upcase, which Claude Code wrote through lengua with SSE2's signed
@@ -3658,8 +3658,8 @@ fn network_budget(listens: bool) -> Budget {
 type ServerTemplate = (&'static str, [Edit; 2]);
 
 /// The server template of each target, and its bugs.
-const SERVER_TEMPLATES: PerTarget<ServerTemplate> = PerTarget {
-    linux_x86_64: (
+const SERVER_TEMPLATES: PerCpu<ServerTemplate> = PerCpu {
+    x86_64: (
         "server-template.s",
         [
             (
@@ -3672,7 +3672,7 @@ const SERVER_TEMPLATES: PerTarget<ServerTemplate> = PerTarget {
             ),
         ],
     ),
-    linux_aarch64: (
+    aarch64: (
         "linux-aarch64/server-template.s",
         [
             (
@@ -3746,18 +3746,18 @@ async fn proves_a_server_for_clients_at_once() {
 }
 
 /// The folders of the program that prints the second of two lines.
-const SECOND: Folders = PerTarget {
-    linux_x86_64: "tests/fixtures/second",
-    linux_aarch64: "tests/fixtures/linux-aarch64/second",
+const SECOND: Folders = PerCpu {
+    x86_64: "tests/fixtures/second",
+    aarch64: "tests/fixtures/linux-aarch64/second",
 };
 
 /// The edit that reads with one raw `read` in place of fill, on each target.
-const RAW_READ: PerTarget<Edit> = PerTarget {
-    linux_x86_64: (
+const RAW_READ: PerCpu<Edit> = PerCpu {
+    x86_64: (
         "    mov ecx, NEWLINE\n    call fill\n",
         "    mov eax, SYS_READ\n    syscall\n",
     ),
-    linux_aarch64: (
+    aarch64: (
         "    mov w3, #NEWLINE\n    bl fill\n",
         "    mov x8, #SYS_READ\n    svc #0\n",
     ),
@@ -3789,18 +3789,18 @@ async fn a_raw_read_of_short_input_is_proven_for_every_count() {
 }
 
 /// The folders of the line-echo server.
-const ECHO_SERVER: Folders = PerTarget {
-    linux_x86_64: "examples/echo",
-    linux_aarch64: "tests/fixtures/linux-aarch64/echo",
+const ECHO_SERVER: Folders = PerCpu {
+    x86_64: "examples/echo",
+    aarch64: "tests/fixtures/linux-aarch64/echo",
 };
 
 /// The edit that lends fill a buffer 8 bytes too small for its size, on each target.
-const FILL_LENT_TOO_LITTLE: PerTarget<Edit> = PerTarget {
-    linux_x86_64: (
+const FILL_LENT_TOO_LITTLE: PerCpu<Edit> = PerCpu {
+    x86_64: (
         "    mov edx, LINE_MAX\n    mov ecx, NEWLINE\n    call fill\n",
         "    mov edx, LINE_MAX + 8\n    mov ecx, NEWLINE\n    call fill\n",
     ),
-    linux_aarch64: (
+    aarch64: (
         "    mov x2, #LINE_MAX\n    mov w3, #NEWLINE\n    bl fill\n",
         "    mov x2, #LINE_MAX + 8\n    mov w3, #NEWLINE\n    bl fill\n",
     ),
@@ -3867,8 +3867,8 @@ type ServerBugs = [Edit; 3];
 
 /// The line-echo server's bugs, on each target. fill's call is `call fill` after `mov ecx,
 /// NEWLINE` on x86-64, and `bl fill` after `mov w3, #NEWLINE` on AArch64.
-const ECHO_SERVER_BUGS: PerTarget<ServerBugs> = PerTarget {
-    linux_x86_64: [
+const ECHO_SERVER_BUGS: PerCpu<ServerBugs> = PerCpu {
+    x86_64: [
         (
             "    mov ecx, NEWLINE\n    call fill\n",
             "    mov eax, SYS_READ\n    mov edi, ebx\n    syscall\n",
@@ -3882,7 +3882,7 @@ const ECHO_SERVER_BUGS: PerTarget<ServerBugs> = PerTarget {
             "    xor eax, eax\n",
         ),
     ],
-    linux_aarch64: [
+    aarch64: [
         (
             "    mov w3, #NEWLINE\n    bl fill\n",
             "    mov x8, #SYS_READ\n    svc #0\n",
@@ -3961,19 +3961,19 @@ async fn proves_the_echo_server() {
 }
 
 /// The folders of the fetch client.
-const FETCH: Folders = PerTarget {
-    linux_x86_64: "examples/fetch",
-    linux_aarch64: "tests/fixtures/linux-aarch64/fetch",
+const FETCH: Folders = PerCpu {
+    x86_64: "examples/fetch",
+    aarch64: "tests/fixtures/linux-aarch64/fetch",
 };
 
 /// The edit that reads the reply once in place of fill, on each target: a reply cut by the
 /// network comes up short.
-const FETCH_READS_ONCE: PerTarget<Edit> = PerTarget {
-    linux_x86_64: (
+const FETCH_READS_ONCE: PerCpu<Edit> = PerCpu {
+    x86_64: (
         "    mov ecx, -1\n    call fill\n",
         "    mov eax, SYS_READ\n    syscall\n",
     ),
-    linux_aarch64: (
+    aarch64: (
         "    mov w3, #-1\n    bl fill\n",
         "    mov x8, #SYS_READ\n    svc #0\n",
     ),
@@ -4037,9 +4037,9 @@ async fn proves_the_fetch_client() {
 }
 
 /// The folders of the word count that pads its counts to a column.
-const PADDED: Folders = PerTarget {
-    linux_x86_64: "tests/fixtures/padded",
-    linux_aarch64: "tests/fixtures/linux-aarch64/padded",
+const PADDED: Folders = PerCpu {
+    x86_64: "tests/fixtures/padded",
+    aarch64: "tests/fixtures/linux-aarch64/padded",
 };
 
 /// Output padded to a column by a chain of if(…)s choosing among texts of different lengths, as
@@ -4383,9 +4383,9 @@ buffer:
 }
 
 /// The capitals of each target.
-const CAPITALS: PerTarget<fn(u8) -> String> = PerTarget {
-    linux_x86_64: capitals_x86_64,
-    linux_aarch64: capitals_aarch64,
+const CAPITALS: PerCpu<fn(u8) -> String> = PerCpu {
+    x86_64: capitals_x86_64,
+    aarch64: capitals_aarch64,
 };
 
 /// The spec of the capitals over text beyond ASCII.
@@ -4458,9 +4458,9 @@ async fn proves_capitals_over_text_beyond_ascii() {
 }
 
 /// The folders of the program that counts lines and words.
-const COUNT: Folders = PerTarget {
-    linux_x86_64: "examples/count",
-    linux_aarch64: "tests/fixtures/linux-aarch64/count",
+const COUNT: Folders = PerCpu {
+    x86_64: "examples/count",
+    aarch64: "tests/fixtures/linux-aarch64/count",
 };
 
 /// examples/count's lines and words over text with accented letters and symbols: every byte of
@@ -4499,16 +4499,16 @@ async fn proves_a_word_count_over_text_beyond_ascii() {
 }
 
 /// The folders of the count of pairs of a letter.
-const PAIRS: Folders = PerTarget {
-    linux_x86_64: "tests/fixtures/pairs",
-    linux_aarch64: "tests/fixtures/linux-aarch64/pairs",
+const PAIRS: Folders = PerCpu {
+    x86_64: "tests/fixtures/pairs",
+    aarch64: "tests/fixtures/linux-aarch64/pairs",
 };
 
 /// The three bugs in the letter pending across buffer-fulls, on each target: dropped at a
 /// buffer-full's end, ignored coming into the count, and one pending from the start. x86-64
 /// keeps it in r14, AArch64 in x22.
-const FORGETS_THE_PENDING_LETTER: PerTarget<[Edit; 3]> = PerTarget {
-    linux_x86_64: [
+const FORGETS_THE_PENDING_LETTER: PerCpu<[Edit; 3]> = PerCpu {
+    x86_64: [
         ("    mov r14, rdx\n", "    xor r14d, r14d\n"),
         ("    mov rdx, rsi\n", "    xor edx, edx\n"),
         (
@@ -4516,7 +4516,7 @@ const FORGETS_THE_PENDING_LETTER: PerTarget<[Edit; 3]> = PerTarget {
             "    mov r14d, 1\n    mov rbx, MAX_FULLS\n",
         ),
     ],
-    linux_aarch64: [
+    aarch64: [
         ("    mov x22, x1\n", "    mov x22, #0\n"),
         ("    mov x1, x22\n", "    mov x1, #0\n"),
         (
@@ -4527,12 +4527,12 @@ const FORGETS_THE_PENDING_LETTER: PerTarget<[Edit; 3]> = PerTarget {
 };
 
 /// The bug that counts the whole buffer-full, past what fill read, on each target.
-const COUNTS_PAST_WHAT_FILL_READ: PerTarget<Edit> = PerTarget {
-    linux_x86_64: (
+const COUNTS_PAST_WHAT_FILL_READ: PerCpu<Edit> = PerCpu {
+    x86_64: (
         "    mov rdi, rax\n    mov rsi, r14\n",
         "    mov edi, BUF_LEN\n    mov rsi, r14\n",
     ),
-    linux_aarch64: (
+    aarch64: (
         "    mov x1, x22\n    bl count_pairs\n",
         "    mov x1, x22\n    mov x0, #BUF_LEN\n    bl count_pairs\n",
     ),
@@ -4648,8 +4648,8 @@ struct LongWordCount {
 /// tier beside it. x86-64's mutants run with a 256-byte buffer for the baseline (with 4 KiB the
 /// prover took over a minute on a word start past the end, a bug a 3-byte text shows) and 4 KiB
 /// for the tier.
-const LONG_WORD_COUNTS: PerTarget<[LongWordCount; 2]> = PerTarget {
-    linux_x86_64: [
+const LONG_WORD_COUNTS: PerCpu<[LongWordCount; 2]> = PerCpu {
+    x86_64: [
         LongWordCount {
             main: "plugin/skills/compile/assets/fast/wc/main.s",
             smaller: [
@@ -4690,7 +4690,7 @@ const LONG_WORD_COUNTS: PerTarget<[LongWordCount; 2]> = PerTarget {
             needs_sve: false,
         },
     ],
-    linux_aarch64: [
+    aarch64: [
         LongWordCount {
             main: "plugin/skills/compile/assets/linux-aarch64/fast/wc/main.s",
             smaller: [
@@ -4944,9 +4944,9 @@ type OneInstructionMask = Result<fn(&str) -> String, &'static str>;
 
 /// The line counter whose last chunk is masked by the bytes left with one instruction of the
 /// target's, in place of the fixture's mask of several, or why the target has no such form.
-const MASKED_WITH_ONE_INSTRUCTION: PerTarget<OneInstructionMask> = PerTarget {
-    linux_x86_64: Ok(lines_with_bzhi),
-    linux_aarch64: Err(
+const MASKED_WITH_ONE_INSTRUCTION: PerCpu<OneInstructionMask> = PerCpu {
+    x86_64: Ok(lines_with_bzhi),
+    aarch64: Err(
         "AArch64 has no instruction that clears a register's bits from a place in another \
          register up, as BMI2's `bzhi` does: the bitfield instructions (`ubfx`, `bfxil`) take a \
          constant place, so the fixture's own mask, `cmhi` of the bytes left against the lanes' \

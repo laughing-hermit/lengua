@@ -2,7 +2,7 @@
 //! the `add` program: from the request to done through check alone, then run, from a shell, and
 //! every way lengua refuses or recovers. Each target runs its own twin of `add` (one
 //! byte-identical spec.md, a main.s in its CPU's instructions) and the same assertions, on its
-//! own CPU's runner; what differs between the targets is a cell of a `PerTarget` table in
+//! own CPU's runner; what differs between the targets is a cell of a `PerCpu` table in
 //! `tests/flow/mod.rs`.
 
 mod common;

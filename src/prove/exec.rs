@@ -4641,7 +4641,7 @@ mod against_a64;
 mod tests {
     use super::*;
     use crate::platform::Profile;
-    use crate::targets::PerTarget;
+    use crate::targets::PerCpu;
     use crate::toolchain::Toolchain;
 
     /// The proof's short-name shape, on names whose bytes are known, gives the run's answer
@@ -4757,24 +4757,24 @@ mod tests {
     }
 
     /// The line counter on each target: twins from the very same spec.
-    const LINES: PerTarget<&str> = PerTarget {
-        linux_x86_64: "tests/fixtures/lines/main.s",
-        linux_aarch64: "tests/fixtures/linux-aarch64/lines/main.s",
+    const LINES: PerCpu<&str> = PerCpu {
+        x86_64: "tests/fixtures/lines/main.s",
+        aarch64: "tests/fixtures/linux-aarch64/lines/main.s",
     };
 
     /// The counters of the line counter's five loops, sorted, on each target: the main loop over
     /// buffer-fulls, the count over a buffer-full's chunks, fill's reads, and the digits and the
     /// writes. x86-64 keeps them in rbx, r8 and r9; AArch64 in x19, x11, x12, x3 and x10, and
     /// ends each loop with `subs` and `b.ne` where x86-64 has `dec` and `jnz`.
-    const LOOP_COUNTERS: PerTarget<[usize; 5]> = PerTarget {
-        linux_x86_64: [3, 8, 8, 8, 9],
-        linux_aarch64: [3, 10, 11, 12, 19],
+    const LOOP_COUNTERS: PerCpu<[usize; 5]> = PerCpu {
+        x86_64: [3, 8, 8, 8, 9],
+        aarch64: [3, 10, 11, 12, 19],
     };
 
     /// The counter of fill's read loop on each target.
-    const FILL_COUNTER: PerTarget<usize> = PerTarget {
-        linux_x86_64: 9,
-        linux_aarch64: 12,
+    const FILL_COUNTER: PerCpu<usize> = PerCpu {
+        x86_64: 9,
+        aarch64: 12,
     };
 
     #[tokio::test]
@@ -4829,8 +4829,8 @@ mod tests {
     /// with the number its write returned less 2: 0 when the write went through. One for each
     /// target, with that CPU's system calls: write 1 and read 0 and exit 60 on x86-64, write 64
     /// and read 63 and exit 93 on AArch64.
-    const SENDS_ON_ITS_CONNECTION: PerTarget<&str> = PerTarget {
-        linux_x86_64: ".intel_syntax noprefix\n.globl _start\n.text\n\
+    const SENDS_ON_ITS_CONNECTION: PerCpu<&str> = PerCpu {
+        x86_64: ".intel_syntax noprefix\n.globl _start\n.text\n\
             .type _start, @function\n_start:\n    mov eax, 1\n    mov edi, 4\n    \
             lea rsi, [rip + ok]\n    mov edx, 2\n    syscall\n    lea r12, [rax - 2]\n    \
             xor eax, eax\n    mov edi, 4\n    lea rsi, [rip + buffer]\n    mov edx, 64\n    \
@@ -4839,7 +4839,7 @@ mod tests {
             syscall\n.size _start, . - _start\n.data\n.type ok, @object\nok:\n    .ascii \"ok\"\n\
             .size ok, . - ok\n.bss\n.type buffer, @object\nbuffer:\n    .zero 64\n\
             .size buffer, . - buffer\n",
-        linux_aarch64: ".arch armv8-a\n.globl _start\n.text\n\
+        aarch64: ".arch armv8-a\n.globl _start\n.text\n\
             .type _start, @function\n_start:\n    mov x0, #4\n    adrp x1, ok\n    \
             add x1, x1, :lo12:ok\n    mov x2, #2\n    mov x8, #64\n    svc #0\n    \
             sub x19, x0, #2\n    mov x0, #4\n    adrp x1, buffer\n    add x1, x1, :lo12:buffer\n    \
@@ -4921,15 +4921,15 @@ mod tests {
     /// `adds` and `subs` make, read back with `cset hs`: the same all-ones number added to itself
     /// carries out (1), and taken from itself it doesn't borrow (1, shifted left by one to 2),
     /// so the exit status is 3.
-    const CARRIES: PerTarget<(&str, u128)> = PerTarget {
-        linux_x86_64: (
+    const CARRIES: PerCpu<(&str, u128)> = PerCpu {
+        x86_64: (
             ".intel_syntax noprefix\n.globl _start\n.text\n.type _start, @function\n\
              _start:\n    mov rax, -1\n    mov rbx, -1\n    stc\n    adc rax, rbx\n    \
              setb dil\n    movzx edi, dil\n    mov eax, 60\n    syscall\n\
              .size _start, . - _start\n",
             1,
         ),
-        linux_aarch64: (
+        aarch64: (
             ".arch armv8-a\n.globl _start\n.text\n.type _start, @function\n\
              _start:\n    mov x0, #-1\n    mov x1, #-1\n    adds x2, x0, x1\n    cset w3, hs\n    \
              subs x4, x0, x1\n    cset w5, hs\n    add w0, w3, w5, lsl #1\n    mov x8, #93\n    \
@@ -4975,11 +4975,11 @@ mod tests {
 
     /// A loop of 100,000 times round with nothing to decide, on each target: `dec` and `jnz` on
     /// x86-64, `subs` and `b.ne` on AArch64.
-    const HUNDRED_THOUSAND_ROUNDS: PerTarget<&str> = PerTarget {
-        linux_x86_64: ".intel_syntax noprefix\n.globl _start\n.text\n.type _start, @function\n\
+    const HUNDRED_THOUSAND_ROUNDS: PerCpu<&str> = PerCpu {
+        x86_64: ".intel_syntax noprefix\n.globl _start\n.text\n.type _start, @function\n\
                       _start:\n    mov rcx, 100000\n.Lround:\n    dec rcx\n    jnz .Lround\n    \
                       mov eax, 60\n    xor edi, edi\n    syscall\n.size _start, . - _start\n",
-        linux_aarch64: ".arch armv8-a\n.globl _start\n.text\n.type _start, @function\n\
+        aarch64: ".arch armv8-a\n.globl _start\n.text\n.type _start, @function\n\
                       _start:\n    mov x1, #0x86a0\n    movk x1, #1, lsl #16\n.Lround:\n    \
                       subs x1, x1, #1\n    b.ne .Lround\n    mov x8, #93\n    mov x0, #0\n    \
                       svc #0\n.size _start, . - _start\n",
@@ -5022,11 +5022,11 @@ mod tests {
     }
 
     /// A loop of a million times round with nothing to decide, on each target.
-    const A_MILLION_ROUNDS: PerTarget<&str> = PerTarget {
-        linux_x86_64: ".intel_syntax noprefix\n.globl _start\n.text\n.type _start, @function\n\
+    const A_MILLION_ROUNDS: PerCpu<&str> = PerCpu {
+        x86_64: ".intel_syntax noprefix\n.globl _start\n.text\n.type _start, @function\n\
                       _start:\n    mov rcx, 1000000\n.Lround:\n    dec rcx\n    jnz .Lround\n    \
                       mov eax, 60\n    xor edi, edi\n    syscall\n.size _start, . - _start\n",
-        linux_aarch64: ".arch armv8-a\n.globl _start\n.text\n.type _start, @function\n\
+        aarch64: ".arch armv8-a\n.globl _start\n.text\n.type _start, @function\n\
                       _start:\n    mov x1, #0x4240\n    movk x1, #0xf, lsl #16\n.Lround:\n    \
                       subs x1, x1, #1\n    b.ne .Lround\n    mov x8, #93\n    mov x0, #0\n    \
                       svc #0\n.size _start, . - _start\n",
@@ -5054,11 +5054,11 @@ mod tests {
     }
 
     /// A program that exits at once, on each target.
-    const EXITS_AT_ONCE: PerTarget<&str> = PerTarget {
-        linux_x86_64: ".intel_syntax noprefix\n.globl _start\n.text\n.type _start, @function\n\
+    const EXITS_AT_ONCE: PerCpu<&str> = PerCpu {
+        x86_64: ".intel_syntax noprefix\n.globl _start\n.text\n.type _start, @function\n\
                       _start:\n    mov eax, 60\n    xor edi, edi\n    syscall\n\
                       .size _start, . - _start\n",
-        linux_aarch64: ".arch armv8-a\n.globl _start\n.text\n.type _start, @function\n\
+        aarch64: ".arch armv8-a\n.globl _start\n.text\n.type _start, @function\n\
                       _start:\n    mov x8, #93\n    mov x0, #0\n    svc #0\n\
                       .size _start, . - _start\n",
     };
@@ -5200,8 +5200,8 @@ mod tests {
     }
 
     /// The fill test of each target, with the same four bugs planted in each CPU's `fill`.
-    const FILLS: PerTarget<FillCell> = PerTarget {
-        linux_x86_64: FillCell {
+    const FILLS: PerCpu<FillCell> = PerCpu {
+        x86_64: FillCell {
             asset: crate::checker::FILL_TEMPLATE,
             program: fill_program,
             mutants: [
@@ -5227,7 +5227,7 @@ mod tests {
                 ),
             ],
         },
-        linux_aarch64: FillCell {
+        aarch64: FillCell {
             asset: crate::checker::AARCH64_FILL_TEMPLATE,
             program: fill_program_aarch64,
             mutants: [
@@ -5330,9 +5330,9 @@ mod tests {
 
     /// The program that sleeps on each target, with `clock_nanosleep` (230 on x86-64, 115 on
     /// AArch64), which a run takes as over at once.
-    const NAP: PerTarget<&str> = PerTarget {
-        linux_x86_64: "tests/fixtures/nap/main.s",
-        linux_aarch64: "tests/fixtures/linux-aarch64/nap/main.s",
+    const NAP: PerCpu<&str> = PerCpu {
+        x86_64: "tests/fixtures/nap/main.s",
+        aarch64: "tests/fixtures/linux-aarch64/nap/main.s",
     };
 
     #[tokio::test]
@@ -5349,9 +5349,9 @@ mod tests {
     }
 
     /// The template of each target.
-    const TEMPLATES: PerTarget<&str> = PerTarget {
-        linux_x86_64: crate::checker::TEMPLATE,
-        linux_aarch64: crate::checker::AARCH64_TEMPLATE,
+    const TEMPLATES: PerCpu<&str> = PerCpu {
+        x86_64: crate::checker::TEMPLATE,
+        aarch64: crate::checker::AARCH64_TEMPLATE,
     };
 
     #[tokio::test]

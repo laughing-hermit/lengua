@@ -2,7 +2,7 @@
 //! for its rule and line.
 
 use super::*;
-use crate::targets::PerTarget;
+use crate::targets::PerCpu;
 use crate::toolchain::Toolchain;
 
 /// What the template's spec allows.
@@ -114,8 +114,8 @@ struct Tamper {
 /// Each target's tampering with `MAX_WRITES`, the number a loop counter starts from: main.s is
 /// made to say 63 where the machine code says 64. x86-64 compares the operands of the parsed line,
 /// AArch64 the instruction its text reads as.
-const TAMPERS: PerTarget<Tamper> = PerTarget {
-    linux_x86_64: Tamper {
+const TAMPERS: PerCpu<Tamper> = PerCpu {
+    x86_64: Tamper {
         line: "    mov r8, MAX_WRITES",
         change: |instruction| {
             instruction.operands[1] = source::Operand::Immediate {
@@ -125,7 +125,7 @@ const TAMPERS: PerTarget<Tamper> = PerTarget {
         },
         needle: "is 63 as written but 64 in the machine code",
     },
-    linux_aarch64: Tamper {
+    aarch64: Tamper {
         line: "    mov x10, #MAX_WRITES",
         change: |instruction| instruction.text = String::from("mov x10, #63"),
         needle: "in the machine code: as written it's",
@@ -183,8 +183,8 @@ async fn operands_must_mean_what_the_machine_does() {
 const NUMBERS: Fixtures = &[
     (
         "a number wider than a 32-bit field",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[("    mov edx, USAGE_MSG_LEN\n", "    mov edx, 4294967314\n")],
                 finds: &[(
                     Rule::Dialect,
@@ -192,7 +192,7 @@ const NUMBERS: Fixtures = &[
                     "which doesn't fit in its 32 bits",
                 )],
             },
-            linux_aarch64: Plan::NotApplicable(
+            aarch64: Plan::NotApplicable(
                 "an AArch64 instruction word has fixed fields (12-bit add numbers, 16-bit \
                  pieces of a move, bitmask numbers) and LLVM refuses a number that none holds \
                  instead of keeping its low bits, so no program assembles with a number cut short",
@@ -201,8 +201,8 @@ const NUMBERS: Fixtures = &[
     ),
     (
         "a number wider than an 8-bit field",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[(
                     "    cmp byte ptr [rdi], '-'\n",
                     "    cmp byte ptr [rdi], 301\n",
@@ -213,7 +213,7 @@ const NUMBERS: Fixtures = &[
                     "which doesn't fit in its 8 bits",
                 )],
             },
-            linux_aarch64: Plan::NotApplicable(
+            aarch64: Plan::NotApplicable(
                 "an AArch64 compare takes a 12-bit number or a register, never a byte-sized \
                  field that the assembler could cut a wider number to: LLVM refuses the number",
             ),
@@ -221,12 +221,12 @@ const NUMBERS: Fixtures = &[
     ),
     (
         "the largest number a field holds, read as unsigned",
-        PerTarget {
-            linux_x86_64: Plan::Quiet {
+        PerCpu {
+            x86_64: Plan::Quiet {
                 edits: &[("    mov edx, USAGE_MSG_LEN\n", "    mov edx, 4294967295\n")],
                 word: "doesn't fit",
             },
-            linux_aarch64: Plan::Quiet {
+            aarch64: Plan::Quiet {
                 edits: &[("    mov x2, #USAGE_MSG_LEN\n", "    mov x2, #65535\n")],
                 word: "doesn't fit",
             },
@@ -234,12 +234,12 @@ const NUMBERS: Fixtures = &[
     ),
     (
         "minus one, read as signed",
-        PerTarget {
-            linux_x86_64: Plan::Quiet {
+        PerCpu {
+            x86_64: Plan::Quiet {
                 edits: &[("    mov edx, USAGE_MSG_LEN\n", "    mov edx, -1\n")],
                 word: "doesn't fit",
             },
-            linux_aarch64: Plan::Quiet {
+            aarch64: Plan::Quiet {
                 edits: &[("    mov x2, #USAGE_MSG_LEN\n", "    mov x2, #-1\n")],
                 word: "doesn't fit",
             },
@@ -498,18 +498,18 @@ enum Cell {
 /// The bugs planted for the memory rules, each with a cell for every target: a target added to
 /// lengua breaks this table until its cells are filled, and a row can't be left out of one
 /// target without saying why that CPU can't have it.
-const PLANTED: &[(&str, PerTarget<Cell>)] = &[
+const PLANTED: &[(&str, PerCpu<Cell>)] = &[
     (
         "a bounds check of part of the index (M2)",
-        PerTarget {
-            linux_x86_64: Cell::Plant(Planted {
+        PerCpu {
+            x86_64: Cell::Plant(Planted {
                 old: ".Lparse_loop:  # bound: 20\n    cmp rcx, MAX_CHARS\n",
                 new: ".Lparse_loop:  # bound: 20\n    cmp ecx, MAX_CHARS\n",
                 at: At::Line("    cmp ecx, MAX_CHARS"),
                 rule: Rule::Bounds,
                 needle: "compares only the low 32 bits of rcx",
             }),
-            linux_aarch64: Cell::Plant(Planted {
+            aarch64: Cell::Plant(Planted {
                 old: ".Lparse_loop:  // bound: 20\n    cmp x2, #MAX_CHARS\n",
                 new: ".Lparse_loop:  // bound: 20\n    cmp w2, #MAX_CHARS\n",
                 at: At::Line("    cmp w2, #MAX_CHARS"),
@@ -520,15 +520,15 @@ const PLANTED: &[(&str, PerTarget<Cell>)] = &[
     ),
     (
         "a bounds check with a negative limit (M2)",
-        PerTarget {
-            linux_x86_64: Cell::Plant(Planted {
+        PerCpu {
+            x86_64: Cell::Plant(Planted {
                 old: ".Lparse_loop:  # bound: 20\n    cmp rcx, MAX_CHARS\n",
                 new: ".Lparse_loop:  # bound: 20\n    cmp rcx, -1\n",
                 at: At::Line("    cmp rcx, -1"),
                 rule: Rule::Bounds,
                 needle: "compares with -1, which an unsigned jump reads as a huge number",
             }),
-            linux_aarch64: Cell::NotApplicable(
+            aarch64: Cell::NotApplicable(
                 "AArch64's `cmp` takes an unsigned 12-bit number, so a limit of -1 can't be \
                  written as one: the assembler turns `cmp x2, #-1` into `cmn x2, #1`, an add",
             ),
@@ -536,15 +536,15 @@ const PLANTED: &[(&str, PerTarget<Cell>)] = &[
     ),
     (
         "a bit test whose offset is a register (M2)",
-        PerTarget {
-            linux_x86_64: Cell::Plant(Planted {
+        PerCpu {
+            x86_64: Cell::Plant(Planted {
                 old: "    movzx edx, byte ptr [rdi + rcx]\n",
                 new: "    movzx edx, byte ptr [rdi + rcx]\n    bt qword ptr [rdi], rcx\n",
                 at: At::Line("    bt qword ptr [rdi], rcx"),
                 rule: Rule::Bounds,
                 needle: "tests a bit in memory at an offset in a register",
             }),
-            linux_aarch64: Cell::NotApplicable(
+            aarch64: Cell::NotApplicable(
                 "AArch64 has no instruction that tests a bit in memory at a register's offset: its \
                  loads and stores take byte addresses, and `tbz` and `tbnz` test a bit of a \
                  register",
@@ -553,15 +553,15 @@ const PLANTED: &[(&str, PerTarget<Cell>)] = &[
     ),
     (
         "an address made from a plain number (M1)",
-        PerTarget {
-            linux_x86_64: Cell::Plant(Planted {
+        PerCpu {
+            x86_64: Cell::Plant(Planted {
                 old: ".Lstart_usage:\n",
                 new: ".Lstart_usage:\n    mov esi, MAX_WRITES\n    mov byte ptr [rsi], 0\n",
                 at: At::Line("    mov byte ptr [rsi], 0"),
                 rule: Rule::Owners,
                 needle: "holds a plain number here, not a pointer",
             }),
-            linux_aarch64: Cell::Plant(Planted {
+            aarch64: Cell::Plant(Planted {
                 old: ".Lstart_usage:\n",
                 new: ".Lstart_usage:\n    mov x1, #MAX_WRITES\n    strb wzr, [x1]\n",
                 at: At::Line("    strb wzr, [x1]"),
@@ -572,8 +572,8 @@ const PLANTED: &[(&str, PerTarget<Cell>)] = &[
     ),
     (
         "a constant offset one byte past a symbol (M2)",
-        PerTarget {
-            linux_x86_64: Cell::Plant(Planted {
+        PerCpu {
+            x86_64: Cell::Plant(Planted {
                 old: ".Lstart_write_failed:\n",
                 new: concat!(
                     ".Lstart_write_failed:\n",
@@ -584,7 +584,7 @@ const PLANTED: &[(&str, PerTarget<Cell>)] = &[
                 rule: Rule::Bounds,
                 needle: "reaches byte 21 of out_buf, which has 21 bytes",
             }),
-            linux_aarch64: Cell::Plant(Planted {
+            aarch64: Cell::Plant(Planted {
                 old: ".Lstart_write_failed:\n",
                 new: concat!(
                     ".Lstart_write_failed:\n",
@@ -600,8 +600,8 @@ const PLANTED: &[(&str, PerTarget<Cell>)] = &[
     ),
     (
         "a direct reference one byte past a symbol (M2): the next symbol starts there",
-        PerTarget {
-            linux_x86_64: Cell::Plant(Planted {
+        PerCpu {
+            x86_64: Cell::Plant(Planted {
                 old: ".Lstart_write_failed:\n",
                 new: concat!(
                     ".Lstart_write_failed:\n",
@@ -611,7 +611,7 @@ const PLANTED: &[(&str, PerTarget<Cell>)] = &[
                 rule: Rule::Scope,
                 needle: "reaches 1 byte past the end of usage_msg, which has 18 bytes",
             }),
-            linux_aarch64: Cell::NotApplicable(
+            aarch64: Cell::NotApplicable(
                 "AArch64 has no access relative to the program counter with a displacement: an \
                  address is `adrp` of the bare symbol and `add :lo12:`, and the offset is the \
                  load's, which the next row plants",
@@ -620,8 +620,8 @@ const PLANTED: &[(&str, PerTarget<Cell>)] = &[
     ),
     (
         "a pointer just past a symbol's end, as main.s makes it (M2)",
-        PerTarget {
-            linux_x86_64: Cell::Plant(Planted {
+        PerCpu {
+            x86_64: Cell::Plant(Planted {
                 old: ".Lstart_write_failed:\n",
                 new: concat!(
                     ".Lstart_write_failed:\n",
@@ -632,7 +632,7 @@ const PLANTED: &[(&str, PerTarget<Cell>)] = &[
                 rule: Rule::Bounds,
                 needle: "reaches byte 18 of usage_msg, which has 18 bytes",
             }),
-            linux_aarch64: Cell::Plant(Planted {
+            aarch64: Cell::Plant(Planted {
                 old: ".Lstart_write_failed:\n",
                 new: concat!(
                     ".Lstart_write_failed:\n",
@@ -648,15 +648,15 @@ const PLANTED: &[(&str, PerTarget<Cell>)] = &[
     ),
     (
         "an address in the frame, returned (M3)",
-        PerTarget {
-            linux_x86_64: Cell::Plant(Planted {
+        PerCpu {
+            x86_64: Cell::Plant(Planted {
                 old: ".Lparse_return:\n    ret\n",
                 new: ".Lparse_return:\n    lea rdx, [rsp]\n    ret\n",
                 at: At::Ret("    lea rdx, [rsp]"),
                 rule: Rule::Lifetimes,
                 needle: "returns an address in its own frame in rdx",
             }),
-            linux_aarch64: Cell::Plant(Planted {
+            aarch64: Cell::Plant(Planted {
                 old: ".Lwrite_i64_return:\n    ldp x29, x30, [sp], #16\n",
                 new: concat!(
                     ".Lwrite_i64_return:\n",
@@ -671,8 +671,8 @@ const PLANTED: &[(&str, PerTarget<Cell>)] = &[
     ),
     (
         "an address in the frame, stored where it outlives the function (M3)",
-        PerTarget {
-            linux_x86_64: Cell::Plant(Planted {
+        PerCpu {
+            x86_64: Cell::Plant(Planted {
                 old: ".Lparse_return:\n    ret\n",
                 new: concat!(
                     ".Lparse_return:\n",
@@ -684,7 +684,7 @@ const PLANTED: &[(&str, PerTarget<Cell>)] = &[
                 rule: Rule::Lifetimes,
                 needle: "an address in this function's frame, outside the frame",
             }),
-            linux_aarch64: Cell::Plant(Planted {
+            aarch64: Cell::Plant(Planted {
                 old: ".Lwrite_i64_return:\n    ldp x29, x30, [sp], #16\n",
                 new: concat!(
                     ".Lwrite_i64_return:\n",
@@ -702,15 +702,15 @@ const PLANTED: &[(&str, PerTarget<Cell>)] = &[
     ),
     (
         "a read past the frame, into the caller's (M3)",
-        PerTarget {
-            linux_x86_64: Cell::Plant(Planted {
+        PerCpu {
+            x86_64: Cell::Plant(Planted {
                 old: "parse_i64:\n",
                 new: "parse_i64:\n    mov r10, qword ptr [rsp + 8]\n",
                 at: At::Line("    mov r10, qword ptr [rsp + 8]"),
                 rule: Rule::Lifetimes,
                 needle: "into its return address or its caller's frame",
             }),
-            linux_aarch64: Cell::Plant(Planted {
+            aarch64: Cell::Plant(Planted {
                 old: "parse_i64:\n",
                 new: "parse_i64:\n    ldr x10, [sp, #8]\n",
                 at: At::Line("    ldr x10, [sp, #8]"),
@@ -721,8 +721,8 @@ const PLANTED: &[(&str, PerTarget<Cell>)] = &[
     ),
     (
         "a pointer to a known place in the frame, written past the frame (M3)",
-        PerTarget {
-            linux_x86_64: Cell::Plant(Planted {
+        PerCpu {
+            x86_64: Cell::Plant(Planted {
                 old: ".Lwrite_i64_return:\n    add rsp, 8\n",
                 new: concat!(
                     ".Lwrite_i64_return:\n",
@@ -734,7 +734,7 @@ const PLANTED: &[(&str, PerTarget<Cell>)] = &[
                 rule: Rule::Lifetimes,
                 needle: "reaches past this function's frame of 8 bytes, into its return address",
             }),
-            linux_aarch64: Cell::Plant(Planted {
+            aarch64: Cell::Plant(Planted {
                 old: ".Lwrite_i64_return:\n    ldp x29, x30, [sp], #16\n",
                 new: concat!(
                     ".Lwrite_i64_return:\n",
@@ -750,9 +750,9 @@ const PLANTED: &[(&str, PerTarget<Cell>)] = &[
     ),
     (
         "the return address written, where the function started (M3)",
-        PerTarget {
+        PerCpu {
             // write_all's return address is at [rsp] when it starts.
-            linux_x86_64: Cell::Plant(Planted {
+            x86_64: Cell::Plant(Planted {
                 old: "write_all:\n",
                 new: "write_all:\n    mov qword ptr [rsp], 0\n",
                 at: At::Line("    mov qword ptr [rsp], 0"),
@@ -760,7 +760,7 @@ const PLANTED: &[(&str, PerTarget<Cell>)] = &[
                 needle: "into its return address",
             }),
             // The return address a function saved in its frame record, written through memory.
-            linux_aarch64: Cell::Plant(Planted {
+            aarch64: Cell::Plant(Planted {
                 old: "write_i64:\n    stp x29, x30, [sp, #-16]!\n",
                 new: concat!(
                     "write_i64:\n",
@@ -775,15 +775,15 @@ const PLANTED: &[(&str, PerTarget<Cell>)] = &[
     ),
     (
         "the return address written through a pointer to it (M3)",
-        PerTarget {
-            linux_x86_64: Cell::Plant(Planted {
+        PerCpu {
+            x86_64: Cell::Plant(Planted {
                 old: "write_all:\n",
                 new: "write_all:\n    lea rcx, [rsp]\n    mov qword ptr [rcx], 0\n",
                 at: At::Line("    mov qword ptr [rcx], 0"),
                 rule: Rule::Lifetimes,
                 needle: "into its return address",
             }),
-            linux_aarch64: Cell::Plant(Planted {
+            aarch64: Cell::Plant(Planted {
                 old: "write_i64:\n    stp x29, x30, [sp, #-16]!\n",
                 new: concat!(
                     "write_i64:\n",
@@ -799,8 +799,8 @@ const PLANTED: &[(&str, PerTarget<Cell>)] = &[
     ),
     (
         "a frame slot read before anything writes it (M5)",
-        PerTarget {
-            linux_x86_64: Cell::Plant(Planted {
+        PerCpu {
+            x86_64: Cell::Plant(Planted {
                 old: "parse_i64:\n",
                 new: concat!(
                     "parse_i64:\n",
@@ -812,7 +812,7 @@ const PLANTED: &[(&str, PerTarget<Cell>)] = &[
                 rule: Rule::Initialization,
                 needle: "reads the frame at rsp + 0, which some path reaches without writing",
             }),
-            linux_aarch64: Cell::Plant(Planted {
+            aarch64: Cell::Plant(Planted {
                 old: "parse_i64:\n",
                 new: concat!(
                     "parse_i64:\n",
@@ -828,8 +828,8 @@ const PLANTED: &[(&str, PerTarget<Cell>)] = &[
     ),
     (
         "what a function returns, followed through the call (M1): parse_i64 returns a number",
-        PerTarget {
-            linux_x86_64: Cell::Plant(Planted {
+        PerCpu {
+            x86_64: Cell::Plant(Planted {
                 old: "    call parse_i64\n    test rax, rax\n",
                 new: concat!(
                     "    call parse_i64\n",
@@ -840,7 +840,7 @@ const PLANTED: &[(&str, PerTarget<Cell>)] = &[
                 rule: Rule::Owners,
                 needle: "uses rax as an address, but it holds a plain number here",
             }),
-            linux_aarch64: Cell::Plant(Planted {
+            aarch64: Cell::Plant(Planted {
                 old: "    bl parse_i64\n    tbnz x0, #63, .Lstart_not_a_number\n",
                 new: concat!(
                     "    bl parse_i64\n",
@@ -855,15 +855,15 @@ const PLANTED: &[(&str, PerTarget<Cell>)] = &[
     ),
     (
         "the program's arguments written (M4): they are only read",
-        PerTarget {
-            linux_x86_64: Cell::Plant(Planted {
+        PerCpu {
+            x86_64: Cell::Plant(Planted {
                 old: "    mov rdi, qword ptr [rsp + 16]\n",
                 new: "    mov rdi, qword ptr [rsp + 16]\n    mov byte ptr [rdi], 0\n",
                 at: At::Line("    mov byte ptr [rdi], 0"),
                 rule: Rule::ExclusiveWrites,
                 needle: "writes into the program's arguments, which it only reads",
             }),
-            linux_aarch64: Cell::Plant(Planted {
+            aarch64: Cell::Plant(Planted {
                 old: "    cbz x0, .Lstart_assert_argv\n",
                 new: "    cbz x0, .Lstart_assert_argv\n    strb wzr, [x0]\n",
                 at: At::Line("    strb wzr, [x0]"),
@@ -874,8 +874,8 @@ const PLANTED: &[(&str, PerTarget<Cell>)] = &[
     ),
     (
         "a frame lent to a function that only reads it is still unwritten (M5)",
-        PerTarget {
-            linux_x86_64: Cell::Plant(Planted {
+        PerCpu {
+            x86_64: Cell::Plant(Planted {
                 old: ".Lwrite_i64_return:\n    add rsp, 8\n",
                 new: concat!(
                     ".Lwrite_i64_return:\n",
@@ -888,7 +888,7 @@ const PLANTED: &[(&str, PerTarget<Cell>)] = &[
                 rule: Rule::Initialization,
                 needle: "reads the frame at rsp + 0, which some path reaches without writing",
             }),
-            linux_aarch64: Cell::Plant(Planted {
+            aarch64: Cell::Plant(Planted {
                 old: ".Lwrite_i64_return:\n    ldp x29, x30, [sp], #16\n",
                 new: concat!(
                     ".Lwrite_i64_return:\n",
@@ -907,8 +907,8 @@ const PLANTED: &[(&str, PerTarget<Cell>)] = &[
     ),
     (
         "read-only data written through a register (M6)",
-        PerTarget {
-            linux_x86_64: Cell::Plant(Planted {
+        PerCpu {
+            x86_64: Cell::Plant(Planted {
                 old: ".Lstart_usage:\n",
                 new: concat!(
                     ".Lstart_usage:\n",
@@ -919,7 +919,7 @@ const PLANTED: &[(&str, PerTarget<Cell>)] = &[
                 rule: Rule::Immutability,
                 needle: "writes to read-only usage_msg",
             }),
-            linux_aarch64: Cell::Plant(Planted {
+            aarch64: Cell::Plant(Planted {
                 old: ".Lstart_usage:\n",
                 new: concat!(
                     ".Lstart_usage:\n",
@@ -935,15 +935,15 @@ const PLANTED: &[(&str, PerTarget<Cell>)] = &[
     ),
     (
         "a frame bigger than the stack's limit (M8)",
-        PerTarget {
-            linux_x86_64: Cell::Plant(Planted {
+        PerCpu {
+            x86_64: Cell::Plant(Planted {
                 old: "_start:\n",
                 new: "_start:\n    sub rsp, 2097152\n",
                 at: At::Nowhere,
                 rule: Rule::StackSize,
                 needle: "bytes of stack, more than 1048576",
             }),
-            linux_aarch64: Cell::Plant(Planted {
+            aarch64: Cell::Plant(Planted {
                 old: "_start:\n",
                 new: "_start:\n    sub sp, sp, #1024, lsl #12\n",
                 at: At::Nowhere,
@@ -1056,26 +1056,26 @@ enum Plan {
 
 /// A table of fixtures, each row a way of breaking a rule with a cell for every target: a target
 /// added to lengua breaks every table until its cells are written.
-type Fixtures = &'static [(&'static str, PerTarget<Plan>)];
+type Fixtures = &'static [(&'static str, PerCpu<Plan>)];
 
 /// The programs a table's fixtures are made of: one for each target, the system calls its spec
 /// allows, and the threads.
 struct Programs {
-    texts: PerTarget<&'static str>,
+    texts: PerCpu<&'static str>,
     syscalls: &'static [Syscall],
     threads: Option<u32>,
 }
 
 /// Each target's main template.
-const TEMPLATES: PerTarget<&str> = PerTarget {
-    linux_x86_64: TEMPLATE,
-    linux_aarch64: AARCH64_TEMPLATE,
+const TEMPLATES: PerCpu<&str> = PerCpu {
+    x86_64: TEMPLATE,
+    aarch64: AARCH64_TEMPLATE,
 };
 
 /// Each target's parallel template.
-const PARALLEL_TEMPLATES: PerTarget<&str> = PerTarget {
-    linux_x86_64: PARALLEL_TEMPLATE,
-    linux_aarch64: PARALLEL_TEMPLATE_AARCH64,
+const PARALLEL_TEMPLATES: PerCpu<&str> = PerCpu {
+    x86_64: PARALLEL_TEMPLATE,
+    aarch64: PARALLEL_TEMPLATE_AARCH64,
 };
 
 /// The main templates, with what their spec allows.
@@ -1211,8 +1211,8 @@ async fn hold(programs: &Programs, table: Fixtures) {
 const STACK: Fixtures = &[
     (
         "memory below the stack pointer",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[(
                     "    test rsi, rsi\n",
                     "    mov qword ptr [rsp - 8], rax\n    test rsi, rsi\n",
@@ -1223,7 +1223,7 @@ const STACK: Fixtures = &[
                     "uses memory below rsp",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(
                     "    cbz x1, .Lwrite_all_assert_null\n",
                     "    str x0, [sp, #-16]\n    cbz x1, .Lwrite_all_assert_null\n",
@@ -1238,15 +1238,15 @@ const STACK: Fixtures = &[
     ),
     (
         "the stack pointer set by something the frame doesn't do",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[(
                     "    mov rax, qword ptr [rsp]\n",
                     "    and rsp, -16\n    mov rax, qword ptr [rsp]\n",
                 )],
                 finds: &[(Rule::Resources, At::Line("    and rsp, -16"), "changes rsp")],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(
                     "    ldr x0, [sp]\n    cmp x0, #ARGC_EXPECTED\n",
                     "    mov sp, x9\n    ldr x0, [sp]\n    cmp x0, #ARGC_EXPECTED\n",
@@ -1257,9 +1257,9 @@ const STACK: Fixtures = &[
     ),
     (
         "a call made with the stack off its multiple of 16",
-        PerTarget {
+        PerCpu {
             // A call in _start is aligned with nothing pushed; one push misaligns it.
-            linux_x86_64: Plan::Breaks {
+            x86_64: Plan::Breaks {
                 edits: &[(
                     "    call parse_i64\n",
                     "    push rax\n    call parse_i64\n    pop rcx\n",
@@ -1272,7 +1272,7 @@ const STACK: Fixtures = &[
             },
             // AArch64 faults on an sp that isn't a multiple of 16, so the dialect refuses the
             // move itself.
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(
                     "    bl parse_i64\n",
                     "    sub sp, sp, #8\n    bl parse_i64\n    add sp, sp, #8\n",
@@ -1287,9 +1287,9 @@ const STACK: Fixtures = &[
     ),
     (
         "a function entered 8 bytes deep that makes a call without adjusting the stack",
-        PerTarget {
+        PerCpu {
             // A normal function enters 8 bytes deep, so write_i64 needs its sub rsp, 8.
-            linux_x86_64: Plan::Breaks {
+            x86_64: Plan::Breaks {
                 edits: &[("    sub rsp, 8\n", ""), ("    add rsp, 8\n", "")],
                 finds: &[(
                     Rule::Functions,
@@ -1297,7 +1297,7 @@ const STACK: Fixtures = &[
                     "isn't 16-byte aligned",
                 )],
             },
-            linux_aarch64: Plan::NotApplicable(
+            aarch64: Plan::NotApplicable(
                 "an AArch64 call leaves its return address in x30, not on the stack, and a \
                  function keeps sp a multiple of 16 for its whole life (the row above refuses \
                  any other move), so no function is entered 8 bytes deep",
@@ -1316,9 +1316,9 @@ async fn the_stack_is_tracked_exactly() {
 const LOOPS: Fixtures = &[
     (
         "a counter that the loop's system call changes",
-        PerTarget {
+        PerCpu {
             // A counter in rcx doesn't survive the syscall in the loop.
-            linux_x86_64: Plan::Breaks {
+            x86_64: Plan::Breaks {
                 edits: &[
                     ("    mov r8, MAX_WRITES\n", "    mov rcx, MAX_WRITES\n"),
                     (
@@ -1334,7 +1334,7 @@ const LOOPS: Fixtures = &[
             },
             // A counter in x0 is the system call's result, and the loop's first instruction sets
             // it too.
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[
                     ("    mov x10, #MAX_WRITES\n", "    mov x0, #MAX_WRITES\n"),
                     (
@@ -1352,8 +1352,8 @@ const LOOPS: Fixtures = &[
     ),
     (
         "a jump into the middle of a loop",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[
                     (
                         "    mov r8, MAX_WRITES\n",
@@ -1370,7 +1370,7 @@ const LOOPS: Fixtures = &[
                     "jumps into the middle of a loop",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[
                     (
                         "    mov x10, #MAX_WRITES\n",
@@ -1388,8 +1388,8 @@ const LOOPS: Fixtures = &[
     ),
     (
         "a bound smaller than the counter",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[(
                     ".Lwrite_all_loop:  # bound: 64",
                     ".Lwrite_all_loop:  # bound: 8",
@@ -1400,7 +1400,7 @@ const LOOPS: Fixtures = &[
                     "outside 1 to the bound 8",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(
                     ".Lwrite_all_loop:  // bound: 64",
                     ".Lwrite_all_loop:  // bound: 8",
@@ -1425,9 +1425,9 @@ async fn loops_must_be_counted() {
 const ASSERTIONS: Fixtures = &[
     (
         "two checks that share one assertion",
-        PerTarget {
+        PerCpu {
             // Two jumps share assertion 9, and assertion 10 now has no way in, so it can never run.
-            linux_x86_64: Plan::Breaks {
+            x86_64: Plan::Breaks {
                 edits: &[(
                     "    jz .Lwrite_all_assert_empty\n",
                     "    jz .Lwrite_all_assert_null\n",
@@ -1445,7 +1445,7 @@ const ASSERTIONS: Fixtures = &[
                     ),
                 ],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(
                     "    cbz x2, .Lwrite_all_assert_empty\n",
                     "    cbz x2, .Lwrite_all_assert_null\n",
@@ -1467,8 +1467,8 @@ const ASSERTIONS: Fixtures = &[
     ),
     (
         "an assertion number used twice",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[("    mov edi, 11\n", "    mov edi, 9\n")],
                 finds: &[(
                     Rule::Assertions,
@@ -1476,7 +1476,7 @@ const ASSERTIONS: Fixtures = &[
                     "used twice",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[("    mov w0, #12\n", "    mov w0, #10\n")],
                 finds: &[(
                     Rule::Assertions,
@@ -1488,8 +1488,8 @@ const ASSERTIONS: Fixtures = &[
     ),
     (
         "an assertion handler that isn't the template's",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[("    add dl, 48\n", "    add dl, 49\n")],
                 finds: &[(
                     Rule::Assertions,
@@ -1497,7 +1497,7 @@ const ASSERTIONS: Fixtures = &[
                     "assert_fail differs from the template",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[("    add w0, w0, #48\n", "    add w0, w0, #49\n")],
                 finds: &[(
                     Rule::Assertions,
@@ -1517,8 +1517,8 @@ async fn assertions_have_one_place_each() {
 /// Rule 1: a chain of comparisons on one register ends in a default.
 const CHAINS: Fixtures = &[(
     "a chain of comparisons with no default",
-    PerTarget {
-        linux_x86_64: Plan::Breaks {
+    PerCpu {
+        x86_64: Plan::Breaks {
             edits: &[(
                 "    mov rdi, rdx\n",
                 "    cmp rdx, 1\n    je .Lstart_one\n    cmp rdx, 2\n    je .Lstart_one\n\
@@ -1530,7 +1530,7 @@ const CHAINS: Fixtures = &[(
                 "has no default",
             )],
         },
-        linux_aarch64: Plan::Breaks {
+        aarch64: Plan::Breaks {
             edits: &[(
                 "    bl write_i64\n",
                 "    cmp x1, #1\n    b.eq .Lstart_one\n    cmp x1, #2\n    b.eq .Lstart_one\n\
@@ -1554,8 +1554,8 @@ async fn comparison_chains_need_a_default() {
 const RESULTS: Fixtures = &[
     (
         "a label between a call and the check of its result",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[(
                     "    call parse_i64\n    test rax, rax\n",
                     "    call parse_i64\n.Lstart_parsed:\n    test rax, rax\n",
@@ -1566,7 +1566,7 @@ const RESULTS: Fixtures = &[
                     "a label comes before the check",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(
                     "    bl parse_i64\n    tbnz x0, #63, .Lstart_not_a_number\n",
                     "    bl parse_i64\n.Lstart_parsed:\n    tbnz x0, #63, .Lstart_not_a_number\n",
@@ -1581,8 +1581,8 @@ const RESULTS: Fixtures = &[
     ),
     (
         "a system call's result used before it's checked",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[(
                     "    syscall\n    test rax, rax\n    js .Lwrite_all_return\n",
                     "    syscall\n    mov r9, rax\n    test rax, rax\n    js .Lwrite_all_return\n",
@@ -1593,7 +1593,7 @@ const RESULTS: Fixtures = &[
                     "rax is used before it's checked",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(
                     "    svc #0\n    tbnz x0, #63, .Lwrite_all_return\n",
                     "    svc #0\n    mov x11, x0\n    tbnz x0, #63, .Lwrite_all_return\n",
@@ -1618,8 +1618,8 @@ async fn results_are_checked_right_away() {
 const CALLS: Fixtures = &[
     (
         "an exit status that isn't a named constant",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[("    mov edi, EXIT_OK\n", "    mov edi, 0\n")],
                 finds: &[(
                     Rule::Constants,
@@ -1627,7 +1627,7 @@ const CALLS: Fixtures = &[
                     "without a named constant",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[("    mov w0, #EXIT_OK\n", "    mov w0, #0\n")],
                 finds: &[(
                     Rule::Constants,
@@ -1639,8 +1639,8 @@ const CALLS: Fixtures = &[
     ),
     (
         "a system call that isn't named",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[("    mov eax, SYS_EXIT\n", "    mov eax, 60\n")],
                 finds: &[(
                     Rule::Constants,
@@ -1648,7 +1648,7 @@ const CALLS: Fixtures = &[
                     "isn't named",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[("    mov x8, #SYS_EXIT\n", "    mov x8, #93\n")],
                 finds: &[(
                     Rule::Constants,
@@ -1660,8 +1660,8 @@ const CALLS: Fixtures = &[
     ),
     (
         "a system call the spec doesn't allow",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[
                     (
                         ".equ SYS_EXIT, 60\n",
@@ -1675,7 +1675,7 @@ const CALLS: Fixtures = &[
                     "isn't one the spec allows",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[
                     (
                         ".equ SYS_EXIT, 93\n",
@@ -1702,8 +1702,8 @@ async fn system_calls_and_exit_codes_are_named_and_allowed() {
 const SCOPES: Fixtures = &[
     (
         "a length that isn't the size of the data it names",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[(".equ USAGE_MSG_LEN, 18", ".equ USAGE_MSG_LEN, 17")],
                 finds: &[(
                     Rule::Constants,
@@ -1711,7 +1711,7 @@ const SCOPES: Fixtures = &[
                     "usage_msg is 18 bytes",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(".equ USAGE_MSG_LEN, 18", ".equ USAGE_MSG_LEN, 17")],
                 finds: &[(
                     Rule::Constants,
@@ -1723,8 +1723,8 @@ const SCOPES: Fixtures = &[
     ),
     (
         "read-only data written by naming it",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[(
                     "    test rsi, rsi\n",
                     "    mov byte ptr [rip + usage_msg], 0\n    test rsi, rsi\n",
@@ -1735,7 +1735,7 @@ const SCOPES: Fixtures = &[
                     "writes to read-only usage_msg",
                 )],
             },
-            linux_aarch64: Plan::NotApplicable(
+            aarch64: Plan::NotApplicable(
                 "AArch64 has no memory operand that names a symbol: an address is adrp and \
                  add :lo12:, and a store goes through the register that holds it, which the \
                  planted row of M6 (read-only data written through a register) refuses",
@@ -1744,8 +1744,8 @@ const SCOPES: Fixtures = &[
     ),
     (
         "data used by two functions",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[(
                     "    test rsi, rsi\n",
                     "    lea r9, [rip + out_buf]\n    test rsi, rsi\n",
@@ -1756,7 +1756,7 @@ const SCOPES: Fixtures = &[
                     "out_buf is used by write_all, write_i64",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(
                     "    cbz x1, .Lwrite_all_assert_null\n",
                     "    adrp x9, out_buf\n    add x9, x9, :lo12:out_buf\n    cbz x1, \
@@ -1781,8 +1781,8 @@ async fn data_stays_in_scope() {
 const INDEXES: Fixtures = &[
     (
         "an index that was compared under another name",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[("    cmp rcx, MAX_CHARS\n", "    cmp rdx, MAX_CHARS\n")],
                 finds: &[(
                     Rule::Indirection,
@@ -1790,7 +1790,7 @@ const INDEXES: Fixtures = &[
                     "isn't bounds-checked",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[("    cmp x2, #MAX_CHARS\n", "    cmp x1, #MAX_CHARS\n")],
                 finds: &[(
                     Rule::Indirection,
@@ -1802,8 +1802,8 @@ const INDEXES: Fixtures = &[
     ),
     (
         "an access marked unsafe",
-        PerTarget {
-            linux_x86_64: Plan::Follows {
+        PerCpu {
+            x86_64: Plan::Follows {
                 edits: &[
                     (
                         "    movzx edx, byte ptr [rdi + rcx]\n",
@@ -1814,7 +1814,7 @@ const INDEXES: Fixtures = &[
                 ],
                 unsafe_blocks: 1,
             },
-            linux_aarch64: Plan::Follows {
+            aarch64: Plan::Follows {
                 edits: &[
                     (
                         "    ldrb w10, [x0, x2]\n",
@@ -1839,8 +1839,8 @@ async fn indexed_accesses_are_bounds_checked() {
 const BOUNDS: Fixtures = &[
     (
         "a bounds check that jumps with a signed condition",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[(
                     "    jae .Lparse_assert_index\n",
                     "    jge .Lparse_assert_index\n",
@@ -1851,7 +1851,7 @@ const BOUNDS: Fixtures = &[
                     "jumps with jge",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(
                     "    b.hs .Lparse_assert_index\n",
                     "    b.ge .Lparse_assert_index\n",
@@ -1866,8 +1866,8 @@ const BOUNDS: Fixtures = &[
     ),
     (
         "a bounds check that lets one byte too many through",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[(
                     "    cmp ecx, OUT_BUF_LEN\n    jae .Lwrite_i64_assert_digit_index\n",
                     "    cmp ecx, OUT_BUF_LEN + 1\n    jae .Lwrite_i64_assert_digit_index\n",
@@ -1878,7 +1878,7 @@ const BOUNDS: Fixtures = &[
                     "reach byte 21 of out_buf, which has 21 bytes",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(
                     "    cmp x2, #OUT_BUF_LEN\n    b.hs .Lwrite_i64_assert_digit_index\n",
                     "    cmp x2, #OUT_BUF_LEN + 1\n    b.hs .Lwrite_i64_assert_digit_index\n",
@@ -1893,16 +1893,16 @@ const BOUNDS: Fixtures = &[
     ),
     (
         "an address computed with an index, which needs no check",
-        PerTarget {
+        PerCpu {
             // `lea` computes an address without touching memory, so its index needs no check.
-            linux_x86_64: Plan::Follows {
+            x86_64: Plan::Follows {
                 edits: &[(
                     "    cmp rcx, MAX_CHARS\n",
                     "    lea r11, [rdi + rcx]\n    cmp rcx, MAX_CHARS\n",
                 )],
                 unsafe_blocks: 0,
             },
-            linux_aarch64: Plan::NotApplicable(
+            aarch64: Plan::NotApplicable(
                 "AArch64 computes an address with add, which has no memory operand and so no \
                  index to check: an index appears only in a load or a store, which the first \
                  rows hold to its check",
@@ -1933,8 +1933,8 @@ macro_rules! nops {
 const FUNCTIONS: Fixtures = &[
     (
         "a function that changes a register it must give back",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[(
                     "    test rsi, rsi\n",
                     "    xor ebx, ebx\n    test rsi, rsi\n",
@@ -1945,7 +1945,7 @@ const FUNCTIONS: Fixtures = &[
                     "changes rbx without saving it",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(
                     "    cbz x1, .Lwrite_all_assert_null\n",
                     "    mov x19, #0\n    cbz x1, .Lwrite_all_assert_null\n",
@@ -1960,12 +1960,12 @@ const FUNCTIONS: Fixtures = &[
     ),
     (
         "recursion",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[("    call parse_i64\n", "    call _start\n")],
                 finds: &[(Rule::ControlFlow, At::Line("    call _start"), "recursion")],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[("    bl parse_i64\n", "    bl _start\n")],
                 finds: &[(Rule::ControlFlow, At::Line("    bl _start"), "recursion")],
             },
@@ -1973,8 +1973,8 @@ const FUNCTIONS: Fixtures = &[
     ),
     (
         "a function too long, with a place to split it",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[(
                     "    jo .Lparse_invalid\n    inc rcx\n    dec r8\n",
                     concat!(
@@ -1989,7 +1989,7 @@ const FUNCTIONS: Fixtures = &[
                     "the loop `.Lparse_loop` (40 instructions), can be a function of its own",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(
                     "    add x2, x2, #1\n    subs x3, x3, #1\n",
                     concat!("    add x2, x2, #1\n", nops!(), "    subs x3, x3, #1\n"),
@@ -2014,8 +2014,8 @@ async fn functions_stay_small_and_save_what_they_change() {
 const LAYOUT: Fixtures = &[
     (
         "several statements on one line",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[("    xor r9d, r9d\n", "    xor r9d, r9d; xor eax, eax\n")],
                 finds: &[(
                     Rule::Dialect,
@@ -2023,7 +2023,7 @@ const LAYOUT: Fixtures = &[
                     "`;` puts several statements",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[("    mov x9, #0\n", "    mov x9, #0; mov x9, #0\n")],
                 finds: &[(
                     Rule::Dialect,
@@ -2035,8 +2035,8 @@ const LAYOUT: Fixtures = &[
     ),
     (
         "a /* */ comment",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[("    xor r9d, r9d\n", "    xor r9d, r9d /* clear */\n")],
                 finds: &[(
                     Rule::Dialect,
@@ -2044,7 +2044,7 @@ const LAYOUT: Fixtures = &[
                     "`/* */` comments",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[("    mov x9, #0\n", "    mov x9, #0 /* clear */\n")],
                 finds: &[(
                     Rule::Dialect,
@@ -2056,12 +2056,12 @@ const LAYOUT: Fixtures = &[
     ),
     (
         "an instruction prefix",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[("    xor r9d, r9d\n", "    rep\n")],
                 finds: &[(Rule::Dialect, At::Line("    rep"), "is a prefix")],
             },
-            linux_aarch64: Plan::NotApplicable(
+            aarch64: Plan::NotApplicable(
                 "AArch64 has no instruction prefixes: rep, lock and the segment overrides are \
                  x86 ways to change what the next instruction does, and every AArch64 \
                  instruction is one word that says all of it",
@@ -2070,8 +2070,8 @@ const LAYOUT: Fixtures = &[
     ),
     (
         "an x87 instruction",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[("    xor r9d, r9d\n", "    fld1\n")],
                 finds: &[(
                     Rule::Dialect,
@@ -2079,7 +2079,7 @@ const LAYOUT: Fixtures = &[
                     "`fld1` isn't in dialect 4",
                 )],
             },
-            linux_aarch64: Plan::NotApplicable(
+            aarch64: Plan::NotApplicable(
                 "AArch64 has no x87 stack: its floating point is in the s and d registers it \
                  shares with the vectors, and what the dialect leaves out of it is the next \
                  row but one",
@@ -2088,8 +2088,8 @@ const LAYOUT: Fixtures = &[
     ),
     (
         "a symbol's address taken as a number",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[("    xor r9d, r9d\n", "    mov rax, offset usage_msg\n")],
                 finds: &[(
                     Rule::Dialect,
@@ -2097,7 +2097,7 @@ const LAYOUT: Fixtures = &[
                     "offset",
                 )],
             },
-            linux_aarch64: Plan::NotApplicable(
+            aarch64: Plan::NotApplicable(
                 "an AArch64 instruction word is 32 bits, so no immediate can hold an address: \
                  an address is adrp and add :lo12:, and the literal pool that would hold one \
                  is refused by the dialect's own table",
@@ -2106,8 +2106,8 @@ const LAYOUT: Fixtures = &[
     ),
     (
         "data addressed without the CPU's own way to name an address",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[("    xor r9d, r9d\n", "    mov rax, [usage_msg]\n")],
                 finds: &[(
                     Rule::Dialect,
@@ -2115,7 +2115,7 @@ const LAYOUT: Fixtures = &[
                     "address data relative to rip",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[("    mov x9, #0\n", "    ldr x9, usage_msg\n")],
                 finds: &[(
                     Rule::Dialect,
@@ -2127,8 +2127,8 @@ const LAYOUT: Fixtures = &[
     ),
     (
         "a label and an instruction on one line",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[(
                     ".Lparse_digits:\n",
                     ".Lparse_digits: cmp byte ptr [rdi], 0\n",
@@ -2139,7 +2139,7 @@ const LAYOUT: Fixtures = &[
                     "a label and an instruction share a line",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(".Lparse_digits:\n", ".Lparse_digits: nop\n")],
                 finds: &[(
                     Rule::Dialect,
@@ -2151,8 +2151,8 @@ const LAYOUT: Fixtures = &[
     ),
     (
         "an instruction the dialect leaves out",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[("    xor r9d, r9d\n", "    leave\n")],
                 finds: &[(
                     Rule::Dialect,
@@ -2161,7 +2161,7 @@ const LAYOUT: Fixtures = &[
                 )],
             },
             // An exclusive load: AArch64's atomics are not in the dialect.
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[("    mov x9, #0\n", "    ldxr x10, [x0]\n    mov x9, #0\n")],
                 finds: &[(
                     Rule::Dialect,
@@ -2173,8 +2173,8 @@ const LAYOUT: Fixtures = &[
     ),
     (
         "an instruction that assembles to two",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[("    xor r9d, r9d\n", "    fstsw ax\n")],
                 finds: &[(
                     Rule::Dialect,
@@ -2182,7 +2182,7 @@ const LAYOUT: Fixtures = &[
                     "don't match line for line",
                 )],
             },
-            linux_aarch64: Plan::NotApplicable(
+            aarch64: Plan::NotApplicable(
                 "an AArch64 instruction is one 32-bit word, so a line can't become two \
                  machine instructions as x87's fstsw does (an fwait and an fnstsw)",
             ),
@@ -2199,8 +2199,8 @@ async fn layout_hazards_are_dialect_violations() {
 const CONSTANTS: Fixtures = &[
     (
         "a constant below the header block",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[
                     (".equ MAX_WRITES, 64\n", ""),
                     (".section .bss\n", ".section .bss\n.equ MAX_WRITES, 64\n"),
@@ -2211,7 +2211,7 @@ const CONSTANTS: Fixtures = &[
                     "below the header block",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[
                     (".equ MAX_WRITES, 64\n", ""),
                     (".section .bss\n", ".section .bss\n.equ MAX_WRITES, 64\n"),
@@ -2226,8 +2226,8 @@ const CONSTANTS: Fixtures = &[
     ),
     (
         "a constant that uses an address",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[(
                     ".equ USAGE_MSG_LEN, 18",
                     ".equ USAGE_MSG_LEN, . - usage_msg",
@@ -2238,7 +2238,7 @@ const CONSTANTS: Fixtures = &[
                     "uses an address",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(
                     ".equ USAGE_MSG_LEN, 18",
                     ".equ USAGE_MSG_LEN, . - usage_msg",
@@ -2253,8 +2253,8 @@ const CONSTANTS: Fixtures = &[
     ),
     (
         "a constant defined twice",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[(".equ NEWLINE, 10\n", ".equ NEWLINE, 10\n.equ NEWLINE, 13\n")],
                 finds: &[(
                     Rule::Constants,
@@ -2262,7 +2262,7 @@ const CONSTANTS: Fixtures = &[
                     "defined twice",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(".equ NEWLINE, 10\n", ".equ NEWLINE, 10\n.equ NEWLINE, 13\n")],
                 finds: &[(
                     Rule::Constants,
@@ -2285,8 +2285,8 @@ async fn constants_must_come_first_and_stay_numbers() {
 const THREADS: Fixtures = &[
     (
         "a worker's index bounded only by a register",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[(
                     "    cmp r9, SLOT_SIZE - VECTOR + 1\n    jae .Lworker_assert_slot\n    movdqu xmm0, \
                      xmmword ptr [rbx + r9]\n",
@@ -2298,7 +2298,7 @@ const THREADS: Fixtures = &[
                     "indexes the worker's slot with no constant limit",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(
                     "    mov x15, #SLOT_SCAN\n    cmp x14, x15\n    b.hs .Lworker_assert_slot\n    ldr q0, \
                      [x19, x14]\n",
@@ -2314,8 +2314,8 @@ const THREADS: Fixtures = &[
     ),
     (
         "a worker reading what other threads write",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[(
                     "    mov rbx, rsi\n    cmp rdi, THREADS\n",
                     "    mov rbx, rsi\n    mov rax, qword ptr [rip + slots]\n    cmp rdi, THREADS\n",
@@ -2326,7 +2326,7 @@ const THREADS: Fixtures = &[
                     "reaches slots on a worker thread, where other threads write their parts of it",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(
                     "    mov x19, x1\n    cmp x0, #THREADS\n",
                     "    mov x19, x1\n    adrp x13, slots\n    add x13, x13, :lo12:slots\n    cmp x0, \
@@ -2342,8 +2342,8 @@ const THREADS: Fixtures = &[
     ),
     (
         "a worker writing the shared slots through the symbol's address",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[(
                     "    movdqu xmmword ptr [rbx + r9], xmm0\n",
                     "    lea rax, [rip + slots]\n    movdqu xmmword ptr [rax + r9], xmm0\n",
@@ -2354,7 +2354,7 @@ const THREADS: Fixtures = &[
                     "on a worker thread, where other threads write their parts of it",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(
                     "    str q0, [x19, x14]\n",
                     "    adrp x13, slots\n    add x13, x13, :lo12:slots\n    str q0, [x13, x14]\n",
@@ -2369,8 +2369,8 @@ const THREADS: Fixtures = &[
     ),
     (
         "parallel_for changed",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[(
                     "    mov ebx, 1\n    mov r13, THREADS\n.Lparallel_for_start:",
                     "    mov ebx, 2\n    mov r13, THREADS\n.Lparallel_for_start:",
@@ -2381,7 +2381,7 @@ const THREADS: Fixtures = &[
                     "parallel_for differs from the template",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(
                     "    mov x21, #THREADS\n.Lparallel_for_start:",
                     "    mov x21, #THREADS - 1\n.Lparallel_for_start:",
@@ -2396,8 +2396,8 @@ const THREADS: Fixtures = &[
     ),
     (
         "clone's flags changed",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[(".equ CLONE_FLAGS, 0x350F00", ".equ CLONE_FLAGS, 0x50F00")],
                 finds: &[(
                     Rule::Resources,
@@ -2405,7 +2405,7 @@ const THREADS: Fixtures = &[
                     "CLONE_FLAGS must be 3477248",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(".equ CLONE_FLAGS, 0x350F00", ".equ CLONE_FLAGS, 0x50F00")],
                 finds: &[(
                     Rule::Resources,
@@ -2417,8 +2417,8 @@ const THREADS: Fixtures = &[
     ),
     (
         "a slot that isn't a multiple of 64 bytes",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[(".equ SLOT_SIZE, CHUNK", ".equ SLOT_SIZE, CHUNK + 8")],
                 finds: &[(
                     Rule::Resources,
@@ -2428,7 +2428,7 @@ const THREADS: Fixtures = &[
             },
             // 65528 is 16 bits, which one `mov` holds; CHUNK + 8 is not, and the dialect refuses
             // the `mov` before the rules for threads are asked.
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(".equ SLOT_SIZE, CHUNK", ".equ SLOT_SIZE, CHUNK - 8")],
                 finds: &[(
                     Rule::Resources,
@@ -2440,9 +2440,9 @@ const THREADS: Fixtures = &[
     ),
     (
         "a thread's stack too small for the worker's deepest path",
-        PerTarget {
+        PerCpu {
             // Each thread's stack must hold the worker's deepest path: here 128 bytes, in 64.
-            linux_x86_64: Plan::Breaks {
+            x86_64: Plan::Breaks {
                 edits: &[
                     (".equ STACK_SIZE, 4096", ".equ STACK_SIZE, 64"),
                     (
@@ -2460,7 +2460,7 @@ const THREADS: Fixtures = &[
                     "a worker's stack can reach 128 bytes, but STACK_SIZE is 64",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[
                     (".equ STACK_SIZE, 4096", ".equ STACK_SIZE, 64"),
                     (
@@ -2483,8 +2483,8 @@ const THREADS: Fixtures = &[
     ),
     (
         "a worker writing a variable every thread shares",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[(
                     "    add r9, VECTOR\n    dec r8\n    jnz .Lworker_loop\n",
                     "    mov qword ptr [rip + input_size], rcx\n    add r9, VECTOR\n    dec r8\n    \
@@ -2496,7 +2496,7 @@ const THREADS: Fixtures = &[
                     "writes input_size on a worker thread",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(
                     "    add x14, x14, #VECTOR\n    subs x16, x16, #1\n    b.ne .Lworker_loop\n",
                     "    adrp x13, input_size\n    add x13, x13, :lo12:input_size\n    str x12, \
@@ -2513,8 +2513,8 @@ const THREADS: Fixtures = &[
     ),
     (
         "a worker writing through a register that isn't its slot",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[(
                     "    add r9, VECTOR\n    dec r8\n    jnz .Lworker_loop\n",
                     "    mov byte ptr [rsi], al\n    add r9, VECTOR\n    dec r8\n    jnz \
@@ -2526,7 +2526,7 @@ const THREADS: Fixtures = &[
                     "writes through rsi on a worker thread",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(
                     "    add x14, x14, #VECTOR\n    subs x16, x16, #1\n    b.ne .Lworker_loop\n",
                     "    strb w10, [x1]\n    add x14, x14, #VECTOR\n    subs x16, x16, #1\n    b.ne \
@@ -2542,8 +2542,8 @@ const THREADS: Fixtures = &[
     ),
     (
         "a worker's slot scanned past its end",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[(
                     "    cmp r9, SLOT_SIZE - VECTOR + 1\n",
                     "    cmp r9, SLOT_SIZE\n",
@@ -2554,7 +2554,7 @@ const THREADS: Fixtures = &[
                     "outside the worker's slot",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(
                     ".equ SLOT_SCAN, SLOT_SIZE - VECTOR + 1\n",
                     ".equ SLOT_SCAN, SLOT_SIZE\n",
@@ -2569,8 +2569,8 @@ const THREADS: Fixtures = &[
     ),
     (
         "a worker changing the register that holds its slot",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[(
                     "    add r9, VECTOR\n    dec r8\n    jnz .Lworker_loop\n",
                     "    add rbx, VECTOR\n    add r9, VECTOR\n    dec r8\n    jnz .Lworker_loop\n",
@@ -2581,7 +2581,7 @@ const THREADS: Fixtures = &[
                     "changes rbx, which holds the worker's slot",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(
                     "    add x14, x14, #VECTOR\n    subs x16, x16, #1\n    b.ne .Lworker_loop\n",
                     "    add x19, x19, #VECTOR\n    add x14, x14, #VECTOR\n    subs x16, x16, #1\n    \
@@ -2597,8 +2597,8 @@ const THREADS: Fixtures = &[
     ),
     (
         "a system call on a worker thread",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[
                     (
                         ".Lworker_done:\n    mov rax, rdx\n",
@@ -2617,7 +2617,7 @@ const THREADS: Fixtures = &[
                     "makes a system call on a worker thread",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[
                     (
                         ".Lworker_done:\n    mov x0, x12\n",
@@ -2640,9 +2640,9 @@ const THREADS: Fixtures = &[
     ),
     (
         "a thread started outside the thread code",
-        PerTarget {
+        PerCpu {
             // clone anywhere else is a system call the spec doesn't list.
-            linux_x86_64: Plan::Breaks {
+            x86_64: Plan::Breaks {
                 edits: &[(
                     "_start:\n    call read_input\n",
                     "_start:\n    mov edi, CLONE_FLAGS\n    mov eax, SYS_CLONE\n    syscall\n    test \
@@ -2654,7 +2654,7 @@ const THREADS: Fixtures = &[
                     "system call 56 isn't one the spec allows",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(
                     "_start:\n    bl read_input\n",
                     "_start:\n    mov x0, #CLONE_FLAGS & 0xffff\n    movk x0, #CLONE_FLAGS >> 16, \
@@ -2671,8 +2671,8 @@ const THREADS: Fixtures = &[
     ),
     (
         "the main thread calling a function of the workers",
-        PerTarget {
-            linux_x86_64: Plan::Breaks {
+        PerCpu {
+            x86_64: Plan::Breaks {
                 edits: &[(
                     "    mov rdi, r12\n    call total_results\n",
                     "    mov rdi, r12\n    call total_results\n    xor edi, edi\n    lea rsi, [rip + \
@@ -2684,7 +2684,7 @@ const THREADS: Fixtures = &[
                     "_start calls worker, which only the thread code may call",
                 )],
             },
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(
                     "    mov x0, x20\n    bl total_results\n",
                     "    mov x0, x20\n    bl total_results\n    mov x0, #0\n    adrp x1, slots\n    \
@@ -2798,8 +2798,8 @@ refill:
 ";
 
 /// Each target's fillers.
-const KITS: PerTarget<Kit> = PerTarget {
-    linux_x86_64: Kit {
+const KITS: PerCpu<Kit> = PerCpu {
+    x86_64: Kit {
         constant: Some((
             ".equ SYS_WRITE, 1\n",
             ".equ SYS_READ, 0\n.equ SYS_WRITE, 1\n",
@@ -2810,7 +2810,7 @@ const KITS: PerTarget<Kit> = PerTarget {
         size: "    mov edx, 8\n",
         call: "    call ",
     },
-    linux_aarch64: Kit {
+    aarch64: Kit {
         constant: None,
         fillers: AARCH64_FILLERS,
         before: "// Writes x2 bytes from x1 to file descriptor x0, retrying partial writes.",
@@ -2830,18 +2830,18 @@ struct Lending {
 }
 
 /// M4: an address a function writes through is lent to it once.
-const LENDINGS: &[(&str, PerTarget<Lending>)] = &[
+const LENDINGS: &[(&str, PerCpu<Lending>)] = &[
     (
         "the same address in both registers",
-        PerTarget {
-            linux_x86_64: Lending {
+        PerCpu {
+            x86_64: Lending {
                 setup: "    lea rdi, [rip + out_buf]\n    lea rsi, [rip + out_buf]\n",
                 callee: "fill",
                 refused: Some(
                     "lends one address, out_buf, in both rdi and rsi, and fill writes through rdi",
                 ),
             },
-            linux_aarch64: Lending {
+            aarch64: Lending {
                 setup: "    adrp x0, out_buf\n    add x0, x0, :lo12:out_buf\n    adrp x1, out_buf\n    \
                         add x1, x1, :lo12:out_buf\n",
                 callee: "fill",
@@ -2853,13 +2853,13 @@ const LENDINGS: &[(&str, PerTarget<Lending>)] = &[
     ),
     (
         "a copy of the pointer, which is the same address",
-        PerTarget {
-            linux_x86_64: Lending {
+        PerCpu {
+            x86_64: Lending {
                 setup: "    lea rdi, [rip + out_buf + 4]\n    mov rsi, rdi\n",
                 callee: "fill",
                 refused: Some("lends one address, out_buf + 4, in both rdi and rsi"),
             },
-            linux_aarch64: Lending {
+            aarch64: Lending {
                 setup: "    adrp x0, out_buf\n    add x0, x0, :lo12:out_buf\n    add x0, x0, #4\n    \
                         mov x1, x0\n",
                 callee: "fill",
@@ -2869,13 +2869,13 @@ const LENDINGS: &[(&str, PerTarget<Lending>)] = &[
     ),
     (
         "a function that writes through the address because what it calls does",
-        PerTarget {
-            linux_x86_64: Lending {
+        PerCpu {
+            x86_64: Lending {
                 setup: "    lea rdi, [rip + out_buf]\n    lea rsi, [rip + out_buf]\n",
                 callee: "refill",
                 refused: Some("and refill writes through rdi"),
             },
-            linux_aarch64: Lending {
+            aarch64: Lending {
                 setup: "    adrp x0, out_buf\n    add x0, x0, :lo12:out_buf\n    adrp x1, out_buf\n    \
                         add x1, x1, :lo12:out_buf\n",
                 callee: "refill",
@@ -2885,13 +2885,13 @@ const LENDINGS: &[(&str, PerTarget<Lending>)] = &[
     ),
     (
         "separate parts of one buffer, as objects in an arena are",
-        PerTarget {
-            linux_x86_64: Lending {
+        PerCpu {
+            x86_64: Lending {
                 setup: "    lea rdi, [rip + out_buf]\n    lea rsi, [rip + out_buf + 8]\n",
                 callee: "fill",
                 refused: None,
             },
-            linux_aarch64: Lending {
+            aarch64: Lending {
                 setup: "    adrp x0, out_buf\n    add x0, x0, :lo12:out_buf\n    adrp x1, out_buf\n    \
                         add x1, x1, :lo12:out_buf\n    add x1, x1, #8\n",
                 callee: "fill",
@@ -2901,13 +2901,13 @@ const LENDINGS: &[(&str, PerTarget<Lending>)] = &[
     ),
     (
         "a buffer that is only read, lent twice",
-        PerTarget {
-            linux_x86_64: Lending {
+        PerCpu {
+            x86_64: Lending {
                 setup: "    lea rdi, [rip + out_buf]\n    lea rsi, [rip + usage_msg]\n",
                 callee: "fill",
                 refused: None,
             },
-            linux_aarch64: Lending {
+            aarch64: Lending {
                 setup: "    adrp x0, out_buf\n    add x0, x0, :lo12:out_buf\n    adrp x1, usage_msg\n    \
                         add x1, x1, :lo12:usage_msg\n",
                 callee: "fill",
@@ -3002,9 +3002,9 @@ const TABLES: &[(&str, Fixtures)] = &[
 /// fewer than the tests these tables replaced did.
 #[test]
 fn every_fixture_is_written_or_excused_on_every_target() {
-    let mut written = PerTarget {
-        linux_x86_64: 0,
-        linux_aarch64: 0,
+    let mut written = PerCpu {
+        x86_64: 0,
+        aarch64: 0,
     };
     for (table, rows) in TABLES {
         for (name, cells) in *rows {
@@ -3020,21 +3020,21 @@ fn every_fixture_is_written_or_excused_on_every_target() {
                 }
                 any = true;
                 match target {
-                    Profile::LinuxX86_64 => written.linux_x86_64 += 1,
-                    Profile::LinuxAarch64 => written.linux_aarch64 += 1,
+                    Profile::LinuxX86_64 => written.x86_64 += 1,
+                    Profile::LinuxAarch64 => written.aarch64 += 1,
                 }
             }
             assert!(any, "{table}: {name}: no target writes it");
         }
     }
     for (_, cells) in LENDINGS {
-        match (cells.linux_x86_64.refused, cells.linux_aarch64.refused) {
+        match (cells.x86_64.refused, cells.aarch64.refused) {
             (Some(_), Some(_)) | (None, None) => {}
             _ => panic!("a lending is refused on one target and allowed on the other"),
         }
     }
-    assert!(written.linux_x86_64 >= 57, "{}", written.linux_x86_64);
-    assert!(written.linux_aarch64 >= 48, "{}", written.linux_aarch64);
+    assert!(written.x86_64 >= 57, "{}", written.x86_64);
+    assert!(written.aarch64 >= 48, "{}", written.aarch64);
 }
 
 /// A pointer just past a symbol's end belongs to the symbol main.s names, whatever starts there:

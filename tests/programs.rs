@@ -1,5 +1,5 @@
 //! The programs lengua ships, and the compile skill's templates and fast programs, go through the
-//! server on every target. Each case is written once, with a cell for each target (`PerTarget`):
+//! server on every target. Each case is written once, with a cell for each target (`PerCpu`):
 //! that CPU's twin of the program (a folder of `examples`, of `tests/fixtures` or of
 //! `tests/fixtures/linux-aarch64`, a template, a fast program), what the case changes in it, and
 //! whatever the product does with it that depends on the hardware. A program follows every rule
@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use common::{Program, Protocol, Session};
 use lengua::platform::{CpuFeatures, Emulator, Machine, Profile, Target};
-use lengua::targets::PerTarget;
+use lengua::targets::PerCpu;
 use per_target::Way;
 use serde_json::{Value, json};
 
@@ -113,26 +113,26 @@ fn edited(file: &str, mut text: String, edits: &[Edit]) -> String {
 
 /// The twins of an example: x86-64's in `examples`, ARM64's among the fixtures. Both are compiled
 /// from the very same spec.
-fn example(name: &str) -> PerTarget<Files> {
-    PerTarget {
-        linux_x86_64: Files::folder(&format!("examples/{name}")),
-        linux_aarch64: Files::folder(&format!("tests/fixtures/linux-aarch64/{name}")),
+fn example(name: &str) -> PerCpu<Files> {
+    PerCpu {
+        x86_64: Files::folder(&format!("examples/{name}")),
+        aarch64: Files::folder(&format!("tests/fixtures/linux-aarch64/{name}")),
     }
 }
 
 /// The twins of a fixture.
-fn fixture(name: &str) -> PerTarget<Files> {
-    PerTarget {
-        linux_x86_64: Files::folder(&format!("tests/fixtures/{name}")),
-        linux_aarch64: Files::folder(&format!("tests/fixtures/linux-aarch64/{name}")),
+fn fixture(name: &str) -> PerCpu<Files> {
+    PerCpu {
+        x86_64: Files::folder(&format!("tests/fixtures/{name}")),
+        aarch64: Files::folder(&format!("tests/fixtures/linux-aarch64/{name}")),
     }
 }
 
 /// A template of the compile skill: one spec for both CPUs, and the code of each.
-fn template(spec: &str, x86_64: &str, aarch64: &str) -> PerTarget<Files> {
-    PerTarget {
-        linux_x86_64: Files::pair(&format!("{ASSETS}/{spec}"), &format!("{ASSETS}/{x86_64}")),
-        linux_aarch64: Files::pair(&format!("{ASSETS}/{spec}"), &format!("{ASSETS}/{aarch64}")),
+fn template(spec: &str, x86_64: &str, aarch64: &str) -> PerCpu<Files> {
+    PerCpu {
+        x86_64: Files::pair(&format!("{ASSETS}/{spec}"), &format!("{ASSETS}/{x86_64}")),
+        aarch64: Files::pair(&format!("{ASSETS}/{spec}"), &format!("{ASSETS}/{aarch64}")),
     }
 }
 
@@ -515,7 +515,7 @@ async fn variants_pass(target: Profile, rig: &Rig, variants: &[Variant]) {
 
 /// Each target's twin of a program follows every rule and passes its tests, with no time for
 /// proofs.
-async fn pass(name: &str, programs: PerTarget<Files>) {
+async fn pass(name: &str, programs: PerCpu<Files>) {
     for target in Profile::ALL {
         let Some(rig) = rig_for(target, Proving::No).await else {
             continue;
@@ -608,12 +608,12 @@ async fn the_hypotenuse_computes_in_doubles() {
 /// bit and `msub` as x86-64's reads them: a path of each needed a solver question that z3 could
 /// not answer in the time ("a path couldn't be settled: z3 ran out of time" after 600 seconds,
 /// run 41914663693).
-const MEAN: PerTarget<Proofs> = PerTarget {
-    linux_x86_64: Proofs {
+const MEAN: PerCpu<Proofs> = PerCpu {
+    x86_64: Proofs {
         blocks: &[Verdict::Proven; 6],
         memory: "",
     },
-    linux_aarch64: Proofs {
+    aarch64: Proofs {
         blocks: &[Verdict::Proven; 6],
         memory: "",
     },
@@ -621,9 +621,9 @@ const MEAN: PerTarget<Proofs> = PerTarget {
 
 /// How long each target's proofs of mean get: x86-64 needs seven minutes on a 4-vCPU runner, so
 /// it gets fifteen for the pool's slower draws; ARM64 is given ten and needs about five.
-const MEAN_PROVING: PerTarget<Proving> = PerTarget {
-    linux_x86_64: Proving::For(900),
-    linux_aarch64: Proving::For(600),
+const MEAN_PROVING: PerCpu<Proving> = PerCpu {
+    x86_64: Proving::For(900),
+    aarch64: Proving::For(600),
 };
 
 /// About three minutes with 16 cores, seven on a 4-vCPU runner: mean's two blocks of decimal
@@ -872,9 +872,9 @@ async fn a_program_gets_only_the_environment_its_test_or_run_gives() {
 }
 
 /// A die that's off by one, in each CPU's instructions: the digit is added from `0`, not `1`.
-const OFF_BY_ONE: PerTarget<&[Edit]> = PerTarget {
-    linux_x86_64: &[("add edx, '1'", "add edx, '0'")],
-    linux_aarch64: &[("add w4, w4, #'1'", "add w4, w4, #'0'")],
+const OFF_BY_ONE: PerCpu<&[Edit]> = PerCpu {
+    x86_64: &[("add edx, '1'", "add edx, '0'")],
+    aarch64: &[("add w4, w4, #'1'", "add w4, w4, #'0'")],
 };
 
 /// The tests supply the random bytes, so each roll is exact: 200 runs, plus the proof that every
@@ -923,12 +923,12 @@ async fn the_dice_example_rolls_with_the_tests_random_bytes() {
 /// after 153 of 196 input combinations in 60 seconds, run 41912245262, and "a path couldn't be
 /// settled" in 240, run 41914652006); now it settles by its terms alone, with no solver question
 /// (196 input combinations, 420 paths, run 41942392800).
-const ABSDIFF: PerTarget<Proofs> = PerTarget {
-    linux_x86_64: Proofs {
+const ABSDIFF: PerCpu<Proofs> = PerCpu {
+    x86_64: Proofs {
         blocks: &[Verdict::Proven; 4],
         memory: "on every run the proofs of B1, B2, B3 and B4 cover",
     },
-    linux_aarch64: Proofs {
+    aarch64: Proofs {
         blocks: &[Verdict::Proven; 4],
         memory: "on every run the proofs of B1, B2, B3 and B4 cover",
     },
@@ -976,9 +976,9 @@ async fn small_ranges_run_every_value() {
         "main-template.s",
         "linux-aarch64/main-template.s",
     );
-    let programs = PerTarget {
-        linux_x86_64: templates.linux_x86_64.spec_changed(NARROWED),
-        linux_aarch64: templates.linux_aarch64.spec_changed(NARROWED),
+    let programs = PerCpu {
+        x86_64: templates.x86_64.spec_changed(NARROWED),
+        aarch64: templates.aarch64.spec_changed(NARROWED),
     };
     for target in Profile::ALL {
         let Some(rig) = rig_for(target, Proving::No).await else {
@@ -1001,9 +1001,9 @@ async fn small_ranges_run_every_value() {
 }
 
 /// What a session refuses of code for another CPU, in each CPU's name.
-const CODE_IS: PerTarget<&str> = PerTarget {
-    linux_x86_64: "main.s is x86-64 code, and",
-    linux_aarch64: "main.s is AArch64 code, and",
+const CODE_IS: PerCpu<&str> = PerCpu {
+    x86_64: "main.s is x86-64 code, and",
+    aarch64: "main.s is AArch64 code, and",
 };
 
 /// A `switch` on an operator, as a checked jump table (dialect 4): it follows every rule, passes
@@ -1064,9 +1064,9 @@ const SMALL_BUFFER: &[Edit] = &[(".equ BUF_LEN, 4096\n", ".equ BUF_LEN, 128\n")]
 #[tokio::test]
 async fn a_word_count_is_proven_for_every_length() {
     let words = fixture("words");
-    let programs = PerTarget {
-        linux_x86_64: words.linux_x86_64.code_changed(SMALL_BUFFER),
-        linux_aarch64: words.linux_aarch64.code_changed(SMALL_BUFFER),
+    let programs = PerCpu {
+        x86_64: words.x86_64.code_changed(SMALL_BUFFER),
+        aarch64: words.aarch64.code_changed(SMALL_BUFFER),
     };
     for target in Profile::ALL {
         let Some(rig) = rig_for(target, Proving::AloneFor(120)).await else {
@@ -1118,9 +1118,9 @@ async fn a_count_of_a_part_that_overlaps_itself_is_proven_for_every_length() {
 // Programs built on programs, and the programs Claude Code wrote.
 
 /// What starts the comment that names the part a function comes from, in each CPU's dialect.
-const FROM: PerTarget<&str> = PerTarget {
-    linux_x86_64: "# from: ",
-    linux_aarch64: "// from: ",
+const FROM: PerCpu<&str> = PerCpu {
+    x86_64: "# from: ",
+    aarch64: "// from: ",
 };
 
 /// Programs stack like nodes of a graph: one spec links to another it builds on, and its main.s
@@ -1365,15 +1365,15 @@ async fn the_parallel_template_runs_on_several_cores() {
 /// The benchmark's own programs: the skill's fast programs, each with its own spec and tests.
 /// Each runs on any computer of its CPU, but the tier of the word count, which sits beside its
 /// baseline form, needs AVX-512BW on x86-64 and SVE on ARM64.
-fn benchmark_programs() -> PerTarget<Vec<Variant>> {
-    PerTarget {
-        linux_x86_64: vec![
+fn benchmark_programs() -> PerCpu<Vec<Variant>> {
+    PerCpu {
+        x86_64: vec![
             variant("wc", fast_x86_64("wc"), Needs::Nothing),
             variant("crc32c", fast_x86_64("crc32c"), Needs::Nothing),
             variant("histogram", fast_x86_64("histogram"), Needs::Nothing),
             variant("wc-avx512", fast_x86_64("wc-avx512"), Needs::Avx512bw),
         ],
-        linux_aarch64: vec![
+        aarch64: vec![
             variant("wc", fast_aarch64("wc", "wc"), Needs::Nothing),
             variant("crc32c", fast_aarch64("crc32c", "crc32c"), Needs::Nothing),
             variant(
@@ -1388,10 +1388,10 @@ fn benchmark_programs() -> PerTarget<Vec<Variant>> {
 
 /// The benchmark's shout programs: the parallel template's spec, with the vectors the CPU's
 /// extension gives (x86-64's AVX-512 on 16 threads and on one, ARM64's NEON on one).
-fn shout_tiers() -> PerTarget<Vec<Variant>> {
+fn shout_tiers() -> PerCpu<Vec<Variant>> {
     let spec = format!("{ASSETS}/parallel-template-spec.md");
-    PerTarget {
-        linux_x86_64: vec![
+    PerCpu {
+        x86_64: vec![
             variant(
                 "avx512 shout",
                 Files::pair(&spec, "benches/programs/shout/avx512.s"),
@@ -1403,7 +1403,7 @@ fn shout_tiers() -> PerTarget<Vec<Variant>> {
                 Needs::Avx512bw,
             ),
         ],
-        linux_aarch64: vec![variant(
+        aarch64: vec![variant(
             "neon shout, one thread",
             Files::pair(&spec, "benches/programs/shout/neon-one.s"),
             Needs::Nothing,
@@ -1413,15 +1413,15 @@ fn shout_tiers() -> PerTarget<Vec<Variant>> {
 
 /// The benchmark's upcase programs: the example's spec and tests, 64 bytes at a time with AVX-512
 /// on x86-64 and 16 at a time with NEON on ARM64.
-fn upcase_tiers() -> PerTarget<Vec<Variant>> {
+fn upcase_tiers() -> PerCpu<Vec<Variant>> {
     let spec = "examples/upcase/spec.md";
-    PerTarget {
-        linux_x86_64: vec![variant(
+    PerCpu {
+        x86_64: vec![variant(
             "avx512 upcase",
             Files::pair(spec, "benches/programs/upcase/avx512.s"),
             Needs::Avx512bw,
         )],
-        linux_aarch64: vec![variant(
+        aarch64: vec![variant(
             "neon upcase",
             Files::pair(spec, "benches/programs/upcase/neon.s"),
             Needs::Nothing,
@@ -1433,15 +1433,15 @@ fn upcase_tiers() -> PerTarget<Vec<Variant>> {
 /// request, as it was before the baseline form (the example's spec and tests), a fast tier the
 /// benchmark still measures: 128 bytes at a time with AVX-512 on x86-64, and on ARM64 the same
 /// program with a vector at a time, as many bytes as the CPU's SVE vectors hold.
-fn count_tiers() -> PerTarget<Vec<Variant>> {
+fn count_tiers() -> PerCpu<Vec<Variant>> {
     let spec = "examples/count/spec.md";
-    PerTarget {
-        linux_x86_64: vec![variant(
+    PerCpu {
+        x86_64: vec![variant(
             "avx512 count",
             Files::pair(spec, "benches/programs/count/avx512.s"),
             Needs::Avx512bw,
         )],
-        linux_aarch64: vec![variant(
+        aarch64: vec![variant(
             "sve count",
             Files::pair(spec, "benches/programs/count/sve.s"),
             Needs::Sve,
@@ -1450,7 +1450,7 @@ fn count_tiers() -> PerTarget<Vec<Variant>> {
 }
 
 /// Takes the programs of every target this computer runs through the server.
-async fn tiers_pass(tiers: PerTarget<Vec<Variant>>) {
+async fn tiers_pass(tiers: PerCpu<Vec<Variant>>) {
     for target in Profile::ALL {
         let Some(rig) = rig_for(target, Proving::No).await else {
             continue;
@@ -1497,7 +1497,7 @@ async fn the_word_count_in_the_benchmark_passes_its_checks() {
 // The tables, read on any computer.
 
 /// Every program table above, by case: the cells that are twins of one program.
-fn twin_tables() -> Vec<(&'static str, PerTarget<Files>)> {
+fn twin_tables() -> Vec<(&'static str, PerCpu<Files>)> {
     let templates = template(
         "template-spec.md",
         "main-template.s",
@@ -1516,17 +1516,17 @@ fn twin_tables() -> Vec<(&'static str, PerTarget<Files>)> {
         ("absdiff", example("absdiff")),
         (
             "small ranges",
-            PerTarget {
-                linux_x86_64: templates.linux_x86_64.spec_changed(NARROWED),
-                linux_aarch64: templates.linux_aarch64.spec_changed(NARROWED),
+            PerCpu {
+                x86_64: templates.x86_64.spec_changed(NARROWED),
+                aarch64: templates.aarch64.spec_changed(NARROWED),
             },
         ),
         ("calc", fixture("calc")),
         (
             "words",
-            PerTarget {
-                linux_x86_64: words.linux_x86_64.code_changed(SMALL_BUFFER),
-                linux_aarch64: words.linux_aarch64.code_changed(SMALL_BUFFER),
+            PerCpu {
+                x86_64: words.x86_64.code_changed(SMALL_BUFFER),
+                aarch64: words.aarch64.code_changed(SMALL_BUFFER),
             },
         ),
         ("pairs", fixture("pairs")),
@@ -1568,7 +1568,7 @@ fn twin_tables() -> Vec<(&'static str, PerTarget<Files>)> {
 }
 
 /// Every tier table above, by case.
-fn tier_tables() -> Vec<(&'static str, PerTarget<Vec<Variant>>)> {
+fn tier_tables() -> Vec<(&'static str, PerCpu<Vec<Variant>>)> {
     vec![
         ("benchmark programs", benchmark_programs()),
         ("shouts", shout_tiers()),

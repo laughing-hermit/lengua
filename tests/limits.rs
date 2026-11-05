@@ -9,7 +9,7 @@
 //! and the random bytes, the test's own bytes and readings, the supervisor's failure paths and
 //! threads, the pin on `clone`'s flags, and a network the program never holds.
 //!
-//! Each program is a table with a source for each target (`PerTarget`), in that CPU's assembly;
+//! Each program is a table with a source for each target (`PerCpu`), in that CPU's assembly;
 //! a target added to lengua breaks every table until its sources are written. Every target's
 //! source is built on every computer (LLVM builds for all of them), so a typo in a cell fails
 //! on every runner; the program for the target this computer is runs natively, on that target's
@@ -30,7 +30,7 @@ use lengua::runner::{End, Job, Limits, Net, Run, run, start};
 use lengua::spec::{Syscall, Use};
 use lengua::supply::Supply;
 use lengua::syscalls::{aarch64, x86_64};
-use lengua::targets::PerTarget;
+use lengua::targets::PerCpu;
 
 fn launcher() -> &'static Path {
     Path::new(env!("CARGO_BIN_EXE_lengua-mcp"))
@@ -82,7 +82,7 @@ fn a64(body: &[&str], data: &[&str]) -> String {
 }
 
 /// A program's source for each target.
-type Programs = PerTarget<String>;
+type Programs = PerCpu<String>;
 
 /// Builds a program for every target, so that a mistake in any cell fails on every runner, and
 /// returns the executable for the target this computer is.
@@ -100,21 +100,21 @@ async fn built(folder: &Path, name: &str, programs: &Programs) -> PathBuf {
 }
 
 /// The compile skill's assets that are a program for each target.
-type Assets = PerTarget<&'static str>;
+type Assets = PerCpu<&'static str>;
 
 /// Builds the asset of each target, as [`built`] does.
 async fn built_asset(folder: &Path, name: &str, assets: &Assets) -> PathBuf {
-    let programs = PerTarget {
-        linux_x86_64: asset(assets.linux_x86_64),
-        linux_aarch64: asset(assets.linux_aarch64),
+    let programs = PerCpu {
+        x86_64: asset(assets.x86_64),
+        aarch64: asset(assets.aarch64),
     };
     built(folder, name, &programs).await
 }
 
 /// The template program.
-const TEMPLATES: Assets = PerTarget {
-    linux_x86_64: "main-template.s",
-    linux_aarch64: "linux-aarch64/main-template.s",
+const TEMPLATES: Assets = PerCpu {
+    x86_64: "main-template.s",
+    aarch64: "linux-aarch64/main-template.s",
 };
 
 /// The system calls of a spec that allows `spec` and no thread.
@@ -180,16 +180,16 @@ async fn run_simply(executable: &Path, arguments: &[String], stdin: &[u8]) -> Ru
 
 /// A program that never ends.
 fn forever() -> Programs {
-    PerTarget {
-        linux_x86_64: x86(&["jmp _start"], &[]),
-        linux_aarch64: a64(&["b _start"], &[]),
+    PerCpu {
+        x86_64: x86(&["jmp _start"], &[]),
+        aarch64: a64(&["b _start"], &[]),
     }
 }
 
 /// A program that prints `y` and a newline for ever.
 fn chatter() -> Programs {
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "mov eax, 1",
                 "mov edi, 1",
@@ -200,7 +200,7 @@ fn chatter() -> Programs {
             ],
             &[".data", "line:", ".ascii \"y\\n\""],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 "mov x0, #1",
                 "adrp x1, line",
@@ -218,8 +218,8 @@ fn chatter() -> Programs {
 /// A program that exits with 0 when its environment is empty: the first variable is null right
 /// after the arguments' null.
 fn checks_its_environment() -> Programs {
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "mov rax, qword ptr [rsp]",
                 "lea rbx, [rsp + 8*rax + 16]",
@@ -231,7 +231,7 @@ fn checks_its_environment() -> Programs {
             ],
             &[],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 "ldr x0, [sp]",
                 "add x1, sp, x0, lsl #3",
@@ -248,8 +248,8 @@ fn checks_its_environment() -> Programs {
 
 /// A program that copies standard input to standard output until it ends.
 fn copies_its_input() -> Programs {
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "xor eax, eax",
                 "xor edi, edi",
@@ -271,7 +271,7 @@ fn copies_its_input() -> Programs {
             ],
             &[".bss", "buffer:", ".zero 4096"],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 "mov x0, #0",
                 "adrp x1, buffer",
@@ -301,8 +301,8 @@ fn copies_its_input() -> Programs {
 /// A program that writes a byte to `descriptor` and exits with the error that got, negated.
 #[cfg(unix)]
 fn writes_to(descriptor: i32) -> Programs {
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "mov eax, 1",
                 &format!("mov edi, {descriptor}"),
@@ -316,7 +316,7 @@ fn writes_to(descriptor: i32) -> Programs {
             ],
             &[".data", "byte:", ".ascii \"x\""],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 &format!("mov x0, #{descriptor}"),
                 "adrp x1, byte",
@@ -335,16 +335,16 @@ fn writes_to(descriptor: i32) -> Programs {
 
 /// A program that writes through a null pointer.
 fn crashes() -> Programs {
-    PerTarget {
-        linux_x86_64: x86(&["xor eax, eax", "mov byte ptr [rax], 1"], &[]),
-        linux_aarch64: a64(&["mov x0, #0", "mov w1, #1", "strb w1, [x0]"], &[]),
+    PerCpu {
+        x86_64: x86(&["xor eax, eax", "mov byte ptr [rax], 1"], &[]),
+        aarch64: a64(&["mov x0, #0", "mov w1, #1", "strb w1, [x0]"], &[]),
     }
 }
 
 /// A program that opens `in.txt`, reads it and writes what it read to `out.txt`.
 fn copies_a_file() -> Programs {
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "mov eax, 257",
                 "mov edi, -100",
@@ -383,7 +383,7 @@ fn copies_a_file() -> Programs {
                 ".zero 4096",
             ],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 "mov x0, #-100",
                 "adrp x1, input",
@@ -429,8 +429,8 @@ fn copies_a_file() -> Programs {
 
 /// A program that makes a system call no spec here allows (`getpid`) and exits with 0.
 fn makes_a_call_its_spec_doesnt_allow() -> Programs {
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "mov eax, 39",
                 "syscall",
@@ -440,7 +440,7 @@ fn makes_a_call_its_spec_doesnt_allow() -> Programs {
             ],
             &[],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 "mov x8, #172",
                 "svc #0",
@@ -455,8 +455,8 @@ fn makes_a_call_its_spec_doesnt_allow() -> Programs {
 
 /// A program that opens a file outside its folder and exits with the error it got, negated.
 fn opens_a_file_outside_its_folder() -> Programs {
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "mov eax, 257",
                 "mov edi, -100",
@@ -470,7 +470,7 @@ fn opens_a_file_outside_its_folder() -> Programs {
             ],
             &[".data", "path:", ".asciz \"/etc/hostname\""],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 "mov x0, #-100",
                 "adrp x1, path",
@@ -490,8 +490,8 @@ fn opens_a_file_outside_its_folder() -> Programs {
 
 /// A program that writes to `out.txt` for ever.
 fn grows_a_file() -> Programs {
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "mov eax, 257",
                 "mov edi, -100",
@@ -517,7 +517,7 @@ fn grows_a_file() -> Programs {
                 ".zero 4096",
             ],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 "mov x0, #-100",
                 "adrp x1, output",
@@ -550,8 +550,8 @@ fn grows_a_file() -> Programs {
 
 /// A program that starts a process with `clone` and `SIGCHLD` alone, not a thread of its own.
 fn forks() -> Programs {
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "mov edi, 17",
                 "xor esi, esi",
@@ -563,7 +563,7 @@ fn forks() -> Programs {
             ],
             &[],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 "mov x0, #17",
                 "mov x1, #0",
@@ -581,8 +581,8 @@ fn forks() -> Programs {
 /// A program that asks for 16 random bytes, then the time of day, and exits with how many bytes
 /// it got plus the clock's result (0).
 fn asks_for_random_bytes_and_the_clock() -> Programs {
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "mov eax, 318",
                 "lea rdi, [rip + buffer]",
@@ -601,7 +601,7 @@ fn asks_for_random_bytes_and_the_clock() -> Programs {
             ],
             &[".bss", "buffer:", ".zero 16", "time:", ".zero 16"],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 "adrp x19, buffer",
                 "add x19, x19, :lo12:buffer",
@@ -628,8 +628,8 @@ fn asks_for_random_bytes_and_the_clock() -> Programs {
 /// all of it to standard output (the 4 bytes, then 16 and 16 of the two readings), and exits
 /// with what `getrandom` returned.
 fn draws_and_reads_the_clock(symbol: &str) -> Programs {
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "mov eax, 318",
                 &format!("lea rdi, [rip + {symbol}]"),
@@ -658,7 +658,7 @@ fn draws_and_reads_the_clock(symbol: &str) -> Programs {
                 ".bss", "buffer:", ".zero 4", "first:", ".zero 16", "second:", ".zero 16",
             ],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 "adrp x19, buffer",
                 "add x19, x19, :lo12:buffer",
@@ -693,8 +693,8 @@ fn draws_and_reads_the_clock(symbol: &str) -> Programs {
 
 /// A program that draws one random byte and then writes through a null pointer.
 fn crashes_after_a_draw() -> Programs {
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "mov eax, 318",
                 "lea rdi, [rip + buffer]",
@@ -705,7 +705,7 @@ fn crashes_after_a_draw() -> Programs {
             ],
             &[".bss", "buffer:", ".zero 1"],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 "adrp x19, buffer",
                 "add x19, x19, :lo12:buffer",
@@ -724,8 +724,8 @@ fn crashes_after_a_draw() -> Programs {
 
 /// A program that draws one random byte and then spins.
 fn spins_after_a_draw() -> Programs {
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "mov eax, 318",
                 "lea rdi, [rip + buffer]",
@@ -737,7 +737,7 @@ fn spins_after_a_draw() -> Programs {
             ],
             &[".bss", "buffer:", ".zero 1"],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 "adrp x19, buffer",
                 "add x19, x19, :lo12:buffer",
@@ -756,8 +756,8 @@ fn spins_after_a_draw() -> Programs {
 
 /// A program that asks to sleep for ten seconds.
 fn sleeps() -> Programs {
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "mov eax, 230",
                 "mov edi, 1",
@@ -771,7 +771,7 @@ fn sleeps() -> Programs {
             ],
             &[".data", ".balign 8", "request:", ".quad 10", ".quad 0"],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 "adrp x2, request",
                 "add x2, x2, :lo12:request",
@@ -793,8 +793,8 @@ fn sleeps() -> Programs {
 /// `connect`: 0 when it got through, 13 (`EACCES`) when the kernel refused the port.
 fn connects_to(port: u16) -> Programs {
     let (high, low) = (port >> 8, port & 0xff);
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "mov eax, 41",
                 "mov edi, 2",
@@ -821,7 +821,7 @@ fn connects_to(port: u16) -> Programs {
                 ".zero 8",
             ],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 "mov x0, #2",
                 "mov x1, #1",
@@ -852,8 +852,8 @@ fn connects_to(port: u16) -> Programs {
 /// A server that takes one connection on the listening socket (descriptor 3), says `hi` on it
 /// and exits.
 fn serves_one_client() -> Programs {
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "mov eax, 288",
                 "mov edi, 3",
@@ -872,7 +872,7 @@ fn serves_one_client() -> Programs {
             ],
             &[".data", "hi:", ".ascii \"hi\""],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 "mov x0, #3",
                 "mov x1, #0",
@@ -896,8 +896,8 @@ fn serves_one_client() -> Programs {
 
 /// A server that takes connections for ever.
 fn serves_for_ever() -> Programs {
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "again:",
                 "mov eax, 288",
@@ -910,7 +910,7 @@ fn serves_for_ever() -> Programs {
             ],
             &[],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 "1:",
                 "mov x0, #3",
@@ -929,8 +929,8 @@ fn serves_for_ever() -> Programs {
 /// A client that reads up to 64 bytes from its connection (descriptor 4), prints them, answers
 /// `ok` on it and exits.
 fn answers_ok() -> Programs {
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "xor eax, eax",
                 "mov edi, 4",
@@ -960,7 +960,7 @@ fn answers_ok() -> Programs {
                 ".zero 64",
             ],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 "adrp x19, buffer",
                 "add x19, x19, :lo12:buffer",
@@ -999,8 +999,8 @@ fn answers_ok() -> Programs {
 /// A client that reads its connection, then writes on it, and exits with the read's result less
 /// the write's: 0 and -`EPIPE` give 32. A `SIGPIPE` would kill it instead.
 fn finds_its_connection_ended() -> Programs {
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "xor eax, eax",
                 "mov edi, 4",
@@ -1020,7 +1020,7 @@ fn finds_its_connection_ended() -> Programs {
             ],
             &[".bss", "buffer:", ".zero 64"],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 "adrp x19, buffer",
                 "add x19, x19, :lo12:buffer",
@@ -1046,8 +1046,8 @@ fn finds_its_connection_ended() -> Programs {
 
 /// A program that closes descriptors 3, 4 and 5 and exits with a bit for each that was open.
 fn counts_its_descriptors() -> Programs {
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "mov eax, 3",
                 "mov edi, 3",
@@ -1079,7 +1079,7 @@ fn counts_its_descriptors() -> Programs {
             ],
             &[],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 "mov x0, #3",
                 "mov x8, #57",
@@ -1113,8 +1113,8 @@ fn counts_its_descriptors() -> Programs {
 
 /// A program that sends 256 KiB on its connection (descriptor 4) and exits at once.
 fn sends_a_lot_and_exits() -> Programs {
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "mov eax, 1",
                 "mov edi, 4",
@@ -1127,7 +1127,7 @@ fn sends_a_lot_and_exits() -> Programs {
             ],
             &[".bss", "big:", ".zero 262144"],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 "mov x0, #4",
                 "adrp x1, big",
@@ -1147,8 +1147,8 @@ fn sends_a_lot_and_exits() -> Programs {
 /// A program that opens the file `f` until it can't, and exits with how many it opened, modulo
 /// 256.
 fn opens_until_it_cant() -> Programs {
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "xor r12d, r12d",
                 "1:",
@@ -1170,7 +1170,7 @@ fn opens_until_it_cant() -> Programs {
             ],
             &[".data", "name:", ".asciz \"f\""],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 "mov x12, #0",
                 "mov x13, #10000",
@@ -1200,8 +1200,8 @@ fn opens_until_it_cant() -> Programs {
 /// got, or 0.
 fn makes(name: &str) -> Programs {
     let name = format!(".asciz \"{name}\"");
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "mov eax, 257",
                 "mov edi, -100",
@@ -1222,7 +1222,7 @@ fn makes(name: &str) -> Programs {
             ],
             &[".data", "name:", &name],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 "mov x0, #-100",
                 "adrp x1, name",
@@ -1248,8 +1248,8 @@ fn makes(name: &str) -> Programs {
 /// A program that opens `f`, then removes it (or, with `rename`, renames it to `g`) while it's
 /// open, and exits with the error number that got, or 0.
 fn holds_a_file_then(rename: bool) -> Programs {
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "mov eax, 257",
                 "mov edi, -100",
@@ -1288,7 +1288,7 @@ fn holds_a_file_then(rename: bool) -> Programs {
             ],
             &[".data", "name:", ".asciz \"f\"", "other:", ".asciz \"g\""],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 "mov x0, #-100",
                 "adrp x1, name",
@@ -1325,8 +1325,8 @@ fn holds_a_file_then(rename: bool) -> Programs {
 
 /// A program that lists its folder and prints the first entry's name.
 fn lists_its_folder_and_prints_the_first() -> Programs {
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "mov eax, 257",
                 "mov edi, -100",
@@ -1363,7 +1363,7 @@ fn lists_its_folder_and_prints_the_first() -> Programs {
                 ".zero 4096",
             ],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 "mov x0, #-100",
                 "adrp x1, here",
@@ -1409,8 +1409,8 @@ fn lists_its_folder_and_prints_the_first() -> Programs {
 /// A program that asks the terminal's question, how many bytes wait to be read (`FIONREAD`),
 /// which a terminal program may not.
 fn asks_how_many_bytes_wait() -> Programs {
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "mov eax, 16",
                 "xor edi, edi",
@@ -1423,7 +1423,7 @@ fn asks_how_many_bytes_wait() -> Programs {
             ],
             &[".data", "waiting:", ".zero 8"],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 "mov x0, #0",
                 "mov x1, #0x541b",
@@ -1444,8 +1444,8 @@ fn asks_how_many_bytes_wait() -> Programs {
 /// exits with the number of the first register that isn't as it left it, or 0. `syscall` itself
 /// changes rcx and r11 on x86-64, so they aren't among them; the result register is checked too.
 fn keeps_its_registers_through_a_draw() -> Programs {
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "lea rdi, [rip + buffer]",
                 "mov esi, 4",
@@ -1493,7 +1493,7 @@ fn keeps_its_registers_through_a_draw() -> Programs {
             ],
             &[".bss", ".balign 16", "buffer:", ".zero 16"],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 "adrp x0, buffer",
                 "add x0, x0, :lo12:buffer",
@@ -1544,8 +1544,8 @@ fn keeps_its_registers_through_a_draw() -> Programs {
 /// A program that opens the file its first argument names and exits with 0 when it can, 1 when
 /// it can't.
 fn opens_its_first_argument() -> Programs {
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "mov rsi, qword ptr [rsp + 16]",
                 "mov edi, -100",
@@ -1560,7 +1560,7 @@ fn opens_its_first_argument() -> Programs {
             ],
             &[],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 "ldr x1, [sp, #16]",
                 "mov x0, #-100",
@@ -1579,8 +1579,8 @@ fn opens_its_first_argument() -> Programs {
 
 /// A program that asks for a new user namespace, which no program here may.
 fn unshares() -> Programs {
-    PerTarget {
-        linux_x86_64: x86(
+    PerCpu {
+        x86_64: x86(
             &[
                 "mov edi, 0x10000000",
                 "mov eax, 272",
@@ -1591,7 +1591,7 @@ fn unshares() -> Programs {
             ],
             &[],
         ),
-        linux_aarch64: a64(
+        aarch64: a64(
             &[
                 "mov x0, #0x10000000",
                 "mov x8, #97",
@@ -2063,9 +2063,9 @@ async fn the_supervisor_follows_threaded_programs() {
     // The parallel template starts workers with clone; the supervisor follows each one and the
     // program prints just what it prints alone.
     let folder = tempfile::tempdir().expect("temporary folder");
-    let assets = PerTarget {
-        linux_x86_64: "parallel-template.s",
-        linux_aarch64: "linux-aarch64/parallel-template.s",
+    let assets = PerCpu {
+        x86_64: "parallel-template.s",
+        aarch64: "linux-aarch64/parallel-template.s",
     };
     let program = built_asset(folder.path(), "shout", &assets).await;
     let syscalls = per_target::host().allowed_syscalls(
@@ -2108,9 +2108,9 @@ fn network_syscalls(spec: &[Syscall]) -> Vec<Allowed> {
 }
 
 /// The numbers of `socket` and `connect`, which no spec allows a program.
-const SOCKET_AND_CONNECT: PerTarget<[i64; 2]> = PerTarget {
-    linux_x86_64: [x86_64::SOCKET, x86_64::CONNECT],
-    linux_aarch64: [aarch64::SOCKET, aarch64::CONNECT],
+const SOCKET_AND_CONNECT: PerCpu<[i64; 2]> = PerCpu {
+    x86_64: [x86_64::SOCKET, x86_64::CONNECT],
+    aarch64: [aarch64::SOCKET, aarch64::CONNECT],
 };
 
 async fn run_on(executable: &Path, syscalls: &[Allowed], net: &Net) -> Run {
@@ -2569,9 +2569,9 @@ async fn asset_tests(spec: &str, code: &str) -> lengua::testrun::Outcome {
 
 /// The event-loop server template of each target, and a server that serves a client at a time,
 /// which the first test must tell from it: the echo example.
-const SERVERS: PerTarget<(&str, &str)> = PerTarget {
-    linux_x86_64: ("server-template.s", "examples/echo/main.s"),
-    linux_aarch64: (
+const SERVERS: PerCpu<(&str, &str)> = PerCpu {
+    x86_64: ("server-template.s", "examples/echo/main.s"),
+    aarch64: (
         "linux-aarch64/server-template.s",
         "tests/fixtures/linux-aarch64/echo/main.s",
     ),
@@ -2609,9 +2609,9 @@ async fn a_terminal_program_takes_keys_from_a_pipe_too() {
     if !per_target::runs_programs() {
         return;
     }
-    let terminals = PerTarget {
-        linux_x86_64: "terminal-template.s",
-        linux_aarch64: "linux-aarch64/terminal-template.s",
+    let terminals = PerCpu {
+        x86_64: "terminal-template.s",
+        aarch64: "linux-aarch64/terminal-template.s",
     };
     let host = per_target::host();
     let template = asset(terminals.get(host));
@@ -2826,9 +2826,9 @@ async fn speedup_of_runs_at_once_on_the_word_count() {
     if !per_target::runs_programs() {
         return;
     }
-    let counts = PerTarget {
-        linux_x86_64: "examples/count",
-        linux_aarch64: "tests/fixtures/linux-aarch64/count",
+    let counts = PerCpu {
+        x86_64: "examples/count",
+        aarch64: "tests/fixtures/linux-aarch64/count",
     };
     let host = per_target::host();
     let example = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(counts.get(host));

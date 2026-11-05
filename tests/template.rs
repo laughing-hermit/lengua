@@ -11,13 +11,13 @@ use std::path::PathBuf;
 use common::{Program, Protocol};
 use lengua::header::Header;
 use lengua::platform::Profile;
-use lengua::targets::PerTarget;
+use lengua::targets::PerCpu;
 use serde_json::Value;
 
 /// Each target's main template, in the compile skill's assets.
-const TEMPLATES: PerTarget<&str> = PerTarget {
-    linux_x86_64: "main-template.s",
-    linux_aarch64: "linux-aarch64/main-template.s",
+const TEMPLATES: PerCpu<&str> = PerCpu {
+    x86_64: "main-template.s",
+    aarch64: "linux-aarch64/main-template.s",
 };
 
 /// A file of the compile skill's assets.
