@@ -411,6 +411,11 @@ const MAX_CONJUNCTS: usize = 32;
 /// The most intervals a set of a variable's values [`Pool::holds_where`] works out may have.
 const MAX_INTERVALS: usize = 1 << 16;
 
+/// How many levels deep [`Pool::bool_and`] joins a comparison to a conjunction's comparison of the
+/// same value. The joins that end do so in a few levels, as each makes one comparison say what
+/// two did; the ones that never would go on for ever.
+const MAX_JOINS: u32 = 6;
+
 /// How many terms and kept extractions a pool grows by between looks at the computer's free
 /// memory. A term is a few hundred bytes, and code over unknown values with no branch to decide,
 /// such as a hash of the input, makes them by the million: in a single extraction, which walks
@@ -4294,6 +4299,14 @@ impl Pool {
 
     /// Both true.
     pub fn bool_and(&mut self, a: Term, b: Term) -> Term {
+        self.bool_and_joining(a, b, MAX_JOINS)
+    }
+
+    /// [`Self::bool_and`], a comparison joining the conjunction's one of its value at most `joins`
+    /// levels deep. Three comparisons of one value that overlap, none holding wherever another
+    /// does (`x < 10`, `x < 5` and `2 < x`, say), would otherwise join one another round and
+    /// round for ever.
+    fn bool_and_joining(&mut self, a: Term, b: Term, joins: u32) -> Term {
         match (self.truth(a), self.truth(b)) {
             (Some(false), _) | (_, Some(false)) => return self.boolean(false),
             (Some(true), _) => return b,
@@ -4327,7 +4340,8 @@ impl Pool {
         // A comparison joining a conjunction that holds one of the same value joins that one,
         // so the conditions a merged loop's exits put on each part come to one.
         for (whole, comparison) in [(a, b), (b, a)] {
-            if let Node::BoolAnd(x, y) = *self.node(whole)
+            if joins > 0
+                && let Node::BoolAnd(x, y) = *self.node(whole)
                 && let Some((subject, ..)) = self.interval(comparison, true)
             {
                 for (kept, joined) in [(x, y), (y, x)] {
@@ -4335,8 +4349,8 @@ impl Pool {
                         .interval(joined, true)
                         .is_some_and(|(other, ..)| other == subject)
                     {
-                        let combined = self.bool_and(joined, comparison);
-                        return self.bool_and(kept, combined);
+                        let combined = self.bool_and_joining(joined, comparison, joins - 1);
+                        return self.bool_and_joining(kept, combined, joins - 1);
                     }
                 }
             }
@@ -4350,7 +4364,7 @@ impl Pool {
             {
                 let other = if x == first { y } else { x };
                 let not_other = self.bool_not(other);
-                return self.bool_and(first, not_other);
+                return self.bool_and_joining(first, not_other, joins);
             }
         }
         let (a, b) = self.ordered(a, b);
@@ -5203,6 +5217,35 @@ mod random;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Three comparisons of one value that overlap, none holding wherever another does, joined
+    /// into a conjunction one at a time: the join of a comparison to its value's comparison in the
+    /// conjunction used to go round them for ever (found by a stalled randomized test), and it
+    /// ends with the same conjunction at every value.
+    #[test]
+    fn three_overlapping_comparisons_of_one_value_end_in_a_conjunction() {
+        let mut pool = Pool::default();
+        let small = pool.var(7, "x");
+        // 0 to 127 as 8 bits, so that unsigned comparisons of it read as intervals.
+        let x = pool.zero_extend(small, 1);
+        let (ten, five, two) = (pool.bv(8, 10), pool.bv(8, 5), pool.bv(8, 2));
+        // [0, 9], [-128, 4] and [3, 127].
+        let below_ten = pool.ult(x, ten);
+        let below_five = pool.slt(x, five);
+        let above_two = pool.slt(two, x);
+        let first = pool.bool_and(below_ten, below_five);
+        let all = pool.bool_and(first, above_two);
+        let other_way = pool.bool_and(above_two, below_ten);
+        let all_again = pool.bool_and(other_way, below_five);
+        for value in 0..128_u128 {
+            let at = |term: Term| {
+                pool.evaluate_with(term, &mut |_, variable| (variable == small).then_some(value))
+            };
+            let wanted = u128::from(value < 10 && value < 5 && value > 2);
+            assert_eq!(at(all), Some(wanted), "x = {value}");
+            assert_eq!(at(all_again), Some(wanted), "x = {value}");
+        }
+    }
 
     #[test]
     fn a_running_count_keeps_each_condition_once() {
