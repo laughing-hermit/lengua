@@ -4619,3 +4619,31 @@ fn the_frozen_texts_are_the_inline_forms() {
     }
     assert_eq!(super::frozen("server-template.s"), None);
 }
+
+/// lengua.s read as a program, with the first line main.s gives it: what the dialect's parser
+/// says of the edge's own text, for the program that calls all of it.
+#[test]
+fn what_the_dialect_says_of_lengua_s() {
+    for profile in Profile::ALL {
+        let (first, call) = match profile.isa() {
+            Isa::X86_64 => (".intel_syntax noprefix\n", "call"),
+            Isa::Aarch64 => (".arch armv8-a\n", "bl"),
+        };
+        let mut main = String::from("main:\n");
+        for op in crate::edge::Op::ALL {
+            main.push_str(&format!("    {call} {}\n", op.symbol()));
+        }
+        for name in ["assert_fail", "fill", "parallel_for"] {
+            main.push_str(&format!("    {call} {name}\n"));
+        }
+        let text = crate::edge::lengua_text(profile, &main).expect("the edge form");
+        let (source, violations) = source::parse(&format!("{first}{text}"));
+        let found: Vec<String> = violations.iter().map(ToString::to_string).collect();
+        assert!(
+            found.is_empty(),
+            "{profile:?}: {} functions, {} violations: {found:#?}",
+            source.functions.len(),
+            found.len()
+        );
+    }
+}
