@@ -624,6 +624,40 @@ Nothing ran, since R0 changed documents only; the commit is the record.
      - whether a 4,096-byte write is read whole from a byte-mode pipe.
    - The spikes' checks of what the sandbox refuses are left for the owner (todo.md's stopped
      list, 2026-11-05).
+
+   **First answers (2026-11-05, run 42068120455, all six runners).**
+   - *The toolchain makes a runnable executable on each system with LLVM's tools alone, no SDK.*
+     - macOS, both CPUs: llvm-mc 22.1.8, `ld64.lld -platform_version macos 11.0 11.0 -e _main`
+       and a hand-written `libSystem.tbd` (`_write`, `__exit`) link a Mach-O that dyld runs, which
+       writes "hello" through the GOT and exits 0. `ld64.lld` signs ARM64 output ad hoc itself:
+       no `codesign` step was needed.
+     - Windows, both CPUs: `llvm-dlltool -d kernel32.def` makes the import library, and `lld-link
+       /entry:_start /subsystem:console /nodefaultlib /debug:symtab` links a PE that runs and
+       calls GetStdHandle, WriteFile and ExitProcess through the IAT.
+   - *What the macOS linker lays down* (ARM64; x86-64 is the same with 4 KiB pages): `__PAGEZERO`,
+     `__TEXT` (`__text`, `__cstring`), `__DATA_CONST` holding `__got` with the read-only flag
+     `SG_READ_ONLY` set, `__LINKEDIT`; load commands `LC_MAIN`, `LC_LOAD_DYLIB
+     /usr/lib/libSystem.B.dylib`, `LC_FUNCTION_STARTS`, `LC_DATA_IN_CODE`, `LC_CODE_SIGNATURE`. So
+     the checker can hold the GOT read-only by its segment flag, as §4 plans. The executable is
+     33,408 bytes on ARM64 (two 16 KiB segments and 640 bytes of `__LINKEDIT`) and about 8.5 KiB
+     on x86-64: a floor a C program shares, so a size lead there comes from `__LINKEDIT` alone.
+   - *A fault ends the program by SIGSEGV (11), at once.* A write to address 0 ended by 11 on both
+     CPUs in 3 to 4.5 ms, shorter than a program that exits (6.8 ms, its first run): no crash
+     reporter delay shows. (The SIGBUS to 11 mapping stays in the table for the faults that raise it.)
+   - *Names.* A directory listing gives back the bytes a name was stored with, on macOS and
+     Windows (composed `é`, c3 a9, listed as c3 a9), so the broker can compare names byte for byte
+     (decision 2). What a lookup folds differs: both systems find `README` for a file made as
+     `Readme`, and creating `readme` over it leaves one entry; macOS finds the composed file by
+     its decomposed spelling, Windows doesn't. So a lookup alone can't say whether a name was
+     spelt exactly: the broker reads the stored name from the listing.
+   - *A pipe.* On macOS and Windows alike, one read of a 64 KiB buffer after one 4,096-byte write
+     gets all 4,096 bytes, and two 1,000-byte writes come back as 2,000 in one read: decision 12
+     holds without the fallback size.
+   - *Still to answer:* a socketpair end at fd 4 and a descriptor by SCM_RIGHTS, and a
+     pseudo-terminal, on macOS; on Windows the handed-over handles, `lpReserved2`, a deep frame
+     chain, an empty environment with WSAStartup, cycle time against ticks, and a large `.bss`'s
+     commit. They need the program to run with descriptors and handles placed for it, which
+     round 3 and round 4 do; the answers are asked for again there.
 2. **The build.**
    - Add `.gitattributes`.
    - In Cargo.toml: the Linux-only crates go under `cfg(target_os = "linux")`, rustix and nix

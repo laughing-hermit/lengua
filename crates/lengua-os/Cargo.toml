@@ -1,0 +1,20 @@
+[package]
+name = "lengua-os"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "Apache-2.0"
+description = "lengua's calls into the operating system: the only crate of the workspace that may hold unsafe code, each call in a safe function with a test on its system's runner."
+publish = false
+
+[lib]
+name = "lengua_os"
+path = "src/lib.rs"
+
+# The workspace's one crate allowed unsafe code, which the lengua crate forbids (todo.md, round 1).
+[lints.rust]
+unsafe_code = "allow"
+missing_docs = "warn"
+
+[lints.clippy]
+unwrap_used = "warn"

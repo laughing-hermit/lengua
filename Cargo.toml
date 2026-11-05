@@ -7,6 +7,9 @@ license = "Apache-2.0"
 description = "MCP server for lengua: spec-driven programming in checked x86-64 assembly"
 publish = false
 
+[workspace]
+members = ["crates/lengua-os"]
+
 [lib]
 name = "lengua"
 path = "src/lib.rs"
