@@ -4624,6 +4624,7 @@ fn the_frozen_texts_are_the_inline_forms() {
 /// says of the edge's own text, for the program that calls all of it.
 #[test]
 fn what_the_dialect_says_of_lengua_s() {
+    let mut all: Vec<String> = Vec::new();
     for profile in Profile::ALL {
         let (first, call) = match profile.isa() {
             Isa::X86_64 => (".intel_syntax noprefix\n", "call"),
@@ -4638,12 +4639,8 @@ fn what_the_dialect_says_of_lengua_s() {
         }
         let text = crate::edge::lengua_text(profile, &main).expect("the edge form");
         let (source, violations) = source::parse(&format!("{first}{text}"));
-        let found: Vec<String> = violations.iter().map(ToString::to_string).collect();
-        assert!(
-            found.is_empty(),
-            "{profile:?}: {} functions, {} violations: {found:#?}",
-            source.functions.len(),
-            found.len()
-        );
+        all.push(format!("{profile:?}: {} functions", source.functions.len()));
+        all.extend(violations.iter().map(|violation| format!("{profile:?}: {violation}")));
     }
+    assert_eq!(all.len(), 2, "{all:#?}");
 }

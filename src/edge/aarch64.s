@@ -3,6 +3,9 @@
 // ...). src/edge/mod.rs says how this file is read: a line `// == name: needs` starts a snippet,
 // which is written when main.s calls `name` or another snippet needs it.
 
+.equ LENGUA_FILL_READS, 1099511627776
+.equ LENGUA_FILL_IO, -5
+
 // == assert_fail: os_write os_exit
 .section .rodata
 .type assert_message, @object
@@ -48,9 +51,6 @@ assert_fail:
 .size assert_fail, . - assert_fail
 
 // == fill: assert_fail os_read
-.equ LENGUA_FILL_READS, 1099511627776
-.equ LENGUA_FILL_IO, -5
-
 .text
 .type fill, @function
 // Reads from file descriptor x0 into the x2 bytes at x1 until they're full, the input ends,
