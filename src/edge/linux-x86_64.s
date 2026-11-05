@@ -38,6 +38,7 @@
 .equ LENGUA_KIND_FOLDER, 1
 .equ LENGUA_KIND_OTHER, 2
 .equ LENGUA_CHANNEL, 4352
+.equ LENGUA_MAIN_RETURNED, 125
 .equ LENGUA_LISTENER, 3
 .equ LENGUA_RANDOM_MOST, 256
 .equ LENGUA_CLONE_FLAGS, 0x350f00
@@ -51,7 +52,7 @@
 .equ LENGUA_TIOCGWINSZ, 0x5413
 .equ LENGUA_NOT_LINE_MODE, -11
 
-# == _start
+# == _start: os_exit
 .text
 .globl _start
 .type _start, @function
@@ -61,7 +62,8 @@ _start:
     lea rsi, [rsp + 8]
     lea rdx, [rsi + 8*rdi + 8]
     call main
-    ud2
+    mov edi, LENGUA_MAIN_RETURNED
+    call os_exit
 .size _start, . - _start
 
 # == lengua_error

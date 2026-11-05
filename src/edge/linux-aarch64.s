@@ -38,6 +38,7 @@
 .equ LENGUA_KIND_FOLDER, 1
 .equ LENGUA_KIND_OTHER, 2
 .equ LENGUA_CHANNEL, 4352
+.equ LENGUA_MAIN_RETURNED, 125
 .equ LENGUA_LISTENER, 3
 .equ LENGUA_RANDOM_MOST, 256
 .equ LENGUA_CLONE_FLAGS, 0x350f00
@@ -54,7 +55,7 @@
 .equ LENGUA_TIOCGWINSZ, 0x5413
 .equ LENGUA_LINE_MODE, 10
 
-// == _start
+// == _start: os_exit
 .text
 .globl _start
 .type _start, @function
@@ -65,6 +66,8 @@ _start:
     add x2, x1, x0, lsl #3
     add x2, x2, #8
     bl main
+    mov x0, #LENGUA_MAIN_RETURNED
+    bl os_exit
 .size _start, . - _start
 
 // == lengua_error
