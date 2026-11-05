@@ -4996,8 +4996,8 @@ mod tests {
     /// keeps xmm0, so the 7 comes back. AArch64: Linux keeps the V registers (the low 128 bits of
     /// each Z) and clears the rest of the SVE state, so with 32-byte vectors the predicate set
     /// before the call has no lane active (0), and z1 still holds 7 in 16 lanes only (16).
-    const VECTORS_ACROSS_A_CALL: PerTarget<(&str, u16, u128)> = PerTarget {
-        linux_x86_64: (
+    const VECTORS_ACROSS_A_CALL: PerCpu<(&str, u16, u128)> = PerCpu {
+        x86_64: (
             ".intel_syntax noprefix\n.globl _start\n.text\n.type _start, @function\n\
              _start:\n    mov eax, 7\n    movd xmm0, eax\n    mov rdi, -1\n    mov eax, 3\n    \
              syscall\n    movd edi, xmm0\n    mov eax, 60\n    syscall\n\
@@ -5005,7 +5005,7 @@ mod tests {
             0,
             7,
         ),
-        linux_aarch64: (
+        aarch64: (
             ".arch armv8-a\n.arch_extension sve\n.globl _start\n.text\n\
              .type _start, @function\n_start:\n    ptrue p0.b\n    mov z1.b, #7\n    \
              mov x0, #-1\n    mov x8, #57\n    svc #0\n    cntp x2, p0, p0.b\n    ptrue p1.b\n    \

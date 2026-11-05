@@ -1467,13 +1467,13 @@ const ASSERTIONS: Fixtures = &[
     ),
     (
         "an assertion reached only through a branch on the zero register",
-        PerTarget {
-            linux_x86_64: Plan::NotApplicable(
+        PerCpu {
+            x86_64: Plan::NotApplicable(
                 "x86-64 has no zero register: every conditional jump there tests the flags",
             ),
             // `cbz xzr` always jumps, as `b` does, so the check never decides anything: assertion
             // 10 always fails, and the lines after the jump can never run.
-            linux_aarch64: Plan::Breaks {
+            aarch64: Plan::Breaks {
                 edits: &[(
                     "    cbz x1, .Lwrite_all_assert_null\n",
                     "    cbz xzr, .Lwrite_all_assert_null\n",
