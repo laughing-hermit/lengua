@@ -34,8 +34,11 @@ const ARGC_AT: u32 = 488;
 const ARGV_AT: u32 = 496;
 const ENVP_AT: u32 = 504;
 
-/// The registers a call's arguments go in, on x86-64.
+/// The registers an operation's arguments go in, on x86-64: the system call's, as r10 is the fourth.
 const X86_ARGUMENTS: [&str; 6] = ["rdi", "rsi", "rdx", "r10", "r8", "r9"];
+
+/// The registers a function's arguments go in, on x86-64: the fourth is rcx.
+const X86_FUNCTION_ARGUMENTS: [&str; 6] = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
 
 /// What an argument of a call is.
 #[derive(Clone, Copy)]
@@ -63,12 +66,19 @@ enum Step {
         args: &'static [Arg],
         keep: Option<u32>,
     },
+    /// Calls a library function (`fill`, `parallel_for`, `assert_fail`), whose arguments go in the
+    /// registers of the CPU's calling convention, and keeps what it returns.
+    Function {
+        name: &'static str,
+        args: &'static [Arg],
+        keep: Option<u32>,
+    },
     /// Stores a number, in 1, 2, 4 or 8 bytes, that many bytes into the scratch area.
     Set { offset: u32, bytes: u8, value: i64 },
 }
 
 use Arg::{Argv, Data, Envp, Kept, N, Scratch};
-use Step::{Call, Set};
+use Step::{Call, Function, Set};
 
 /// One case.
 struct Case {
@@ -82,6 +92,8 @@ struct Case {
     exit: i64,
     /// What the run gives it.
     stdin: &'static [u8],
+    /// What it prints to standard error, all of it, when the case says; anything when it doesn't.
+    stderr: &'static [u8],
     arguments: &'static [&'static str],
     environment: &'static [(&'static str, &'static str)],
     files: &'static [(&'static str, &'static str)],
@@ -90,6 +102,10 @@ struct Case {
     after: &'static [(&'static str, &'static str)],
     /// The system calls its operations make, besides `write` and `exit_group`.
     calls: &'static [Syscall],
+    /// Whether it starts threads.
+    threads: bool,
+    /// Assembly appended to the program for each CPU, such as a `worker`: x86-64's, then AArch64's.
+    extra: (&'static str, &'static str),
     /// What it prints, all of it, the report included.
     stdout: Vec<u8>,
 }
@@ -104,12 +120,15 @@ impl Case {
             report,
             exit: 0,
             stdin: b"",
+            stderr: b"",
             arguments: &[],
             environment: &[],
             files: &[],
             folders: &[],
             after: &[],
             calls: &[],
+            threads: false,
+            extra: ("", ""),
             stdout,
         }
     }
@@ -155,8 +174,13 @@ fn x86_program(case: &Case) -> String {
     let _ = writeln!(text, "    mov qword ptr [rsp + {ENVP_AT}], r10");
     for step in case.steps {
         match step {
-            Call { op, args, keep } => {
-                for (arg, register) in args.iter().zip(X86_ARGUMENTS) {
+            Call { op, args, keep } | Function { name: op, args, keep } => {
+                let registers = if matches!(step, Function { .. }) {
+                    X86_FUNCTION_ARGUMENTS
+                } else {
+                    X86_ARGUMENTS
+                };
+                for (arg, register) in args.iter().zip(registers) {
                     match arg {
                         N(value) => {
                             let _ = writeln!(text, "    mov {register}, {value}");
@@ -204,6 +228,7 @@ fn x86_program(case: &Case) -> String {
         "    mov edi, 1\n    mov rsi, rsp\n    mov edx, {}\n    call os_write\n    mov edi, {}\n    call os_exit\n.size main, . - main",
         case.report, case.exit
     );
+    text.push_str(case.extra.0);
     text.push_str(&data(case));
     text
 }
@@ -220,7 +245,7 @@ fn a64_program(case: &Case) -> String {
     let _ = writeln!(text, "    str xzr, [sp, #480]");
     for step in case.steps {
         match step {
-            Call { op, args, keep } => {
+            Call { op, args, keep } | Function { name: op, args, keep } => {
                 for (number, arg) in args.iter().enumerate() {
                     match arg {
                         N(value) => {
@@ -273,6 +298,7 @@ fn a64_program(case: &Case) -> String {
         "    mov x0, #1\n    mov x1, sp\n    mov x2, #{}\n    bl os_write\n    mov x0, #{}\n    bl os_exit\n.size main, . - main",
         case.report, case.exit
     );
+    text.push_str(case.extra.1);
     text.push_str(&data(case));
     text
 }
@@ -283,6 +309,13 @@ fn program(target: Profile, case: &Case) -> String {
         Profile::LinuxAarch64 => a64_program(case),
     }
 }
+
+/// A worker for `parallel_for`: it writes 0x40 and its index in its slot's first byte and returns
+/// nine times its index and one.
+const X86_WORKER: &str = ".type worker, @function\nworker:\n    lea eax, [rdi + 64]\n    mov byte ptr [rsi], al\n    lea rax, [rdi + 8*rdi + 1]\n    ret\n.size worker, . - worker\n";
+
+/// The same worker for AArch64.
+const A64_WORKER: &str = ".type worker, @function\nworker:\n    add w2, w0, #64\n    strb w2, [x1]\n    mov x2, #9\n    mul x0, x0, x2\n    add x0, x0, #1\n    ret\n.size worker, . - worker\n";
 
 fn cases() -> Vec<Case> {
     const GREETING: &[(&str, &[u8])] = &[("greeting", b"hello\n")];
@@ -624,6 +657,101 @@ fn cases() -> Vec<Case> {
                 .concat(),
             )
         },
+        // fill reads until its buffer is full or the input ends, however the input comes, and
+        // gives an operation's error as it is.
+        Case {
+            stdin: b"abcdefgh",
+            calls: &[Syscall::Read],
+            ..Case::new(
+                "fill",
+                &[
+                    Function {
+                        name: "fill",
+                        args: &[N(0), Scratch(64), N(4), N(-1)],
+                        keep: Some(0),
+                    },
+                    Function {
+                        name: "fill",
+                        args: &[N(0), Scratch(128), N(16), N(-1)],
+                        keep: Some(1),
+                    },
+                    Function {
+                        name: "fill",
+                        args: &[N(0), Scratch(192), N(4), N(-1)],
+                        keep: Some(2),
+                    },
+                    Function {
+                        name: "fill",
+                        args: &[N(99), Scratch(64), N(4), N(-1)],
+                        keep: Some(3),
+                    },
+                ],
+                200,
+                image(200, &[4, 4, 0, -9], &[(64, b"abcd"), (128, b"efgh")]),
+            )
+        },
+        // An assertion that fails ends the program with 134, printing nothing to standard output.
+        Case {
+            exit: 134,
+            stderr: b"lengua: assertion 005 failed\n",
+            ..Case::new(
+                "an_assertion_fails",
+                &[Function {
+                    name: "assert_fail",
+                    args: &[N(5)],
+                    keep: None,
+                }],
+                0,
+                vec![],
+            )
+        },
+        // Four threads, each running main.s's worker on a slot of its own: what each returns lands
+        // in the results, and what each wrote is in its slot.
+        Case {
+            threads: true,
+            extra: (X86_WORKER, A64_WORKER),
+            ..Case::new(
+                "parallel_for",
+                &[Function {
+                    name: "parallel_for",
+                    args: &[N(4), Scratch(256), N(16), Scratch(64)],
+                    keep: None,
+                }],
+                320,
+                image(
+                    320,
+                    &[0, 0, 0, 0, 0, 0, 0, 0, 1, 10, 19, 28],
+                    &[(256, &[0x40]), (272, &[0x41]), (288, &[0x42]), (304, &[0x43])],
+                ),
+            )
+        },
+        // The terminal's operations where there is no terminal, which is every test's case: taking
+        // keys, putting the mode back, and the window's size are all "not a terminal", ENOTTY.
+        Case {
+            calls: &[Syscall::Ioctl],
+            ..Case::new(
+                "terminal_without_a_terminal",
+                &[
+                    Call {
+                        op: "os_terminal",
+                        args: &[N(1)],
+                        keep: Some(0),
+                    },
+                    Call {
+                        op: "os_terminal",
+                        args: &[N(0)],
+                        keep: Some(1),
+                    },
+                    Call {
+                        op: "os_window",
+                        args: &[Scratch(64)],
+                        keep: Some(2),
+                    },
+                ],
+                24,
+                image(24, &[-25, -25, -25], &[]),
+            )
+        },
         // A file read, its size and kind, a seek, a descriptor closed and used again, a name
         // that isn't there (ENOENT) and a mode that is none (EINVAL). The descriptor itself
         // is kept in a word the report leaves out.
@@ -901,7 +1029,7 @@ async fn every_operation_does_what_it_promises() {
             };
             let mut spec = vec![Syscall::Write, Syscall::Exit];
             spec.extend_from_slice(case.calls);
-            let allowed = target.allowed_syscalls(&spec, false);
+            let allowed = target.allowed_syscalls(&spec, case.threads);
             let arguments: Vec<String> = case.arguments.iter().map(|text| (*text).to_owned()).collect();
             let environment: BTreeMap<String, String> = case
                 .environment
@@ -928,6 +1056,9 @@ async fn every_operation_does_what_it_promises() {
             let what = format!("{} on {}", case.name, target.name());
             assert_eq!(ran.end, End::Exited(i32::try_from(case.exit).unwrap_or(-1)), "{what}");
             assert_eq!(ran.stdout, case.stdout, "{what}");
+            if !case.stderr.is_empty() {
+                assert_eq!(ran.stderr, case.stderr, "{what}");
+            }
             if !case.after.is_empty() {
                 let found = ran.files.as_ref().expect("the files it left");
                 let wanted: BTreeMap<String, Vec<u8>> = case

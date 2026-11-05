@@ -9,6 +9,7 @@
 // operation refuses descriptor 4,352, which is lengua's own. What lengua writes here carries the
 // prefix `lengua_`, `LENGUA_` or `.Llengua_`, which a program's own names may not.
 
+.equ LENGUA_SYS_IOCTL, 29
 .equ LENGUA_SYS_MKDIRAT, 34
 .equ LENGUA_SYS_UNLINKAT, 35
 .equ LENGUA_SYS_RENAMEAT, 38
@@ -20,11 +21,14 @@
 .equ LENGUA_SYS_WRITE, 64
 .equ LENGUA_SYS_PPOLL, 73
 .equ LENGUA_SYS_FSTAT, 80
+.equ LENGUA_SYS_EXIT, 93
 .equ LENGUA_SYS_EXIT_GROUP, 94
+.equ LENGUA_SYS_FUTEX, 98
 .equ LENGUA_SYS_CLOCK_GETTIME, 113
 .equ LENGUA_SYS_CLOCK_NANOSLEEP, 115
 .equ LENGUA_SYS_SHUTDOWN, 210
 .equ LENGUA_SYS_ACCEPT4, 242
+.equ LENGUA_SYS_CLONE, 220
 .equ LENGUA_SYS_GETRANDOM, 278
 .equ LENGUA_AT_FDCWD, -100
 .equ LENGUA_AT_REMOVEDIR, 512
@@ -36,9 +40,19 @@
 .equ LENGUA_CHANNEL, 4352
 .equ LENGUA_LISTENER, 3
 .equ LENGUA_RANDOM_MOST, 256
+.equ LENGUA_CLONE_FLAGS, 0x350f00
+.equ LENGUA_CLONE_FLAGS_LOW, 0x0f00
+.equ LENGUA_CLONE_FLAGS_HIGH, 0x35
+.equ LENGUA_MAX_WAITS, 64
+.equ LENGUA_FUTEX_WAIT, 0
 .equ LENGUA_EBADF, -9
 .equ LENGUA_EIO, -5
 .equ LENGUA_EINVAL, -22
+.equ LENGUA_ENOTTY, -25
+.equ LENGUA_TCGETS, 0x5401
+.equ LENGUA_TCSETS, 0x5402
+.equ LENGUA_TIOCGWINSZ, 0x5413
+.equ LENGUA_LINE_MODE, 10
 
 // == _start
 .text
@@ -685,3 +699,258 @@ os_list:
     ldr x30, [sp], #16
     ret
 .size os_list, . - os_list
+
+// == os_terminal: lengua_error
+.section .bss
+.balign 8
+.type lengua_terminal, @object
+// The terminal's mode as the program found it, 36 bytes, then a byte that is 1 once it is kept.
+lengua_terminal:
+    .zero 40
+.size lengua_terminal, . - lengua_terminal
+
+.text
+.type os_terminal, @function
+// In: w0 = 1 to take keys as they are pressed, with no echo and no line editing (signals and
+// output processing stay as they are), or 0 to put the mode back as it was found.
+// Out: x0 = 0, or -ENOTTY where standard input is not a terminal or there is no mode to put back.
+os_terminal:
+    stp x1, x2, [sp, #-16]!
+    sub sp, sp, #48
+    cbz w0, .Llengua_terminal_restore
+    mov x0, #0
+    mov x1, #LENGUA_TCGETS
+    mov x2, sp
+    mov x8, #LENGUA_SYS_IOCTL
+    svc #0
+    tbnz x0, #63, .Llengua_terminal_done
+    adrp x16, lengua_terminal
+    add x16, x16, :lo12:lengua_terminal
+    ldrb w17, [x16, #36]
+    cbnz w17, .Llengua_terminal_set
+    ldp x8, x17, [sp]
+    stp x8, x17, [x16]
+    ldp x8, x17, [sp, #16]
+    stp x8, x17, [x16, #16]
+    ldr w8, [sp, #32]
+    str w8, [x16, #32]
+    mov w17, #1
+    strb w17, [x16, #36]
+.Llengua_terminal_set:
+    ldr w16, [sp, #12]
+    mov w17, #LENGUA_LINE_MODE
+    bic w16, w16, w17
+    str w16, [sp, #12]
+    strb wzr, [sp, #22]
+    mov w16, #1
+    strb w16, [sp, #23]
+    mov x0, #0
+    mov x1, #LENGUA_TCSETS
+    mov x2, sp
+    mov x8, #LENGUA_SYS_IOCTL
+    svc #0
+    b .Llengua_terminal_done
+.Llengua_terminal_restore:
+    adrp x16, lengua_terminal
+    add x16, x16, :lo12:lengua_terminal
+    mov x0, #LENGUA_ENOTTY
+    ldrb w17, [x16, #36]
+    cbz w17, .Llengua_terminal_done
+    mov x2, x16
+    mov x0, #0
+    mov x1, #LENGUA_TCSETS
+    mov x8, #LENGUA_SYS_IOCTL
+    svc #0
+.Llengua_terminal_done:
+    add sp, sp, #48
+    ldp x1, x2, [sp], #16
+    tbnz x0, #63, .Llengua_terminal_failed
+    ret
+.Llengua_terminal_failed:
+    adrp x17, os_terminal_errors
+    add x17, x17, :lo12:os_terminal_errors
+    str x30, [sp, #-16]!
+    bl lengua_error
+    ldr x30, [sp], #16
+    ret
+.size os_terminal, . - os_terminal
+
+// == os_window: lengua_error
+.text
+.type os_window, @function
+// In: x0 = 8 bytes for the rows and then the columns, 4 bytes each.
+// Out: x0 = 0, or -ENOTTY where none of standard output, error and input is a terminal.
+os_window:
+    stp x1, x2, [sp, #-16]!
+    sub sp, sp, #32
+    str x0, [sp, #16]
+    mov x0, #1
+    mov x1, #LENGUA_TIOCGWINSZ
+    mov x2, sp
+    mov x8, #LENGUA_SYS_IOCTL
+    svc #0
+    tbz x0, #63, .Llengua_window_found
+    mov x0, #2
+    mov x1, #LENGUA_TIOCGWINSZ
+    mov x2, sp
+    mov x8, #LENGUA_SYS_IOCTL
+    svc #0
+    tbz x0, #63, .Llengua_window_found
+    mov x0, #0
+    mov x1, #LENGUA_TIOCGWINSZ
+    mov x2, sp
+    mov x8, #LENGUA_SYS_IOCTL
+    svc #0
+    tbz x0, #63, .Llengua_window_found
+    b .Llengua_window_done
+.Llengua_window_found:
+    ldr x16, [sp, #16]
+    ldrh w17, [sp]
+    str w17, [x16]
+    ldrh w17, [sp, #2]
+    str w17, [x16, #4]
+    mov x0, #0
+.Llengua_window_done:
+    add sp, sp, #32
+    ldp x1, x2, [sp], #16
+    tbnz x0, #63, .Llengua_window_failed
+    ret
+.Llengua_window_failed:
+    adrp x17, os_window_errors
+    add x17, x17, :lo12:os_window_errors
+    str x30, [sp, #-16]!
+    bl lengua_error
+    ldr x30, [sp], #16
+    ret
+.size os_window, . - os_window
+
+// == lengua_threads
+.section .bss
+.balign 64
+.type lengua_stacks, @object
+// The stacks of the threads os_thread_start starts: 64 of 1 MiB, one for each number, the top of
+// each being where the next begins. Only the pages a thread touches are ever there.
+lengua_stacks:
+    .zero 67108864
+.size lengua_stacks, . - lengua_stacks
+
+.balign 4
+.type lengua_tids, @object
+// Each thread's id, which the kernel sets when it starts and clears, waking a waiter, when it ends.
+lengua_tids:
+    .zero 256
+.size lengua_tids, . - lengua_tids
+
+.balign 8
+.type lengua_results, @object
+// What each thread's worker returned.
+lengua_results:
+    .zero 512
+.size lengua_results, . - lengua_results
+
+// == os_thread_start: lengua_error lengua_threads
+.text
+.type os_thread_start, @function
+// In: w0 = the thread's number, from 1 to 63; x1 = its slot. The thread runs worker(number,
+// slot), which is main.s's, on a stack of its own, and keeps what it returns for os_thread_join.
+// Out: x0 = 0 once it is running, or an error.
+os_thread_start:
+    sub w16, w0, #1
+    cmp w16, #62
+    b.hi .Llengua_thread_start_invalid
+    stp x19, x20, [sp, #-16]!
+    stp x1, x2, [sp, #-16]!
+    stp x3, x4, [sp, #-16]!
+    mov x19, x0
+    mov x20, x1
+    adrp x1, lengua_stacks
+    add x1, x1, :lo12:lengua_stacks
+    add x16, x19, #1
+    add x1, x1, x16, lsl #20
+    adrp x2, lengua_tids
+    add x2, x2, :lo12:lengua_tids
+    add x2, x2, x19, lsl #2
+    mov x3, #0
+    mov x4, x2
+    mov x0, #LENGUA_CLONE_FLAGS_LOW
+    movk x0, #LENGUA_CLONE_FLAGS_HIGH, lsl #16
+    mov x8, #LENGUA_SYS_CLONE
+    svc #0
+    tbnz x0, #63, .Llengua_thread_start_failed
+    cbz x0, .Llengua_thread_child
+    ldp x3, x4, [sp], #16
+    ldp x1, x2, [sp], #16
+    ldp x19, x20, [sp], #16
+    mov x0, #0
+    ret
+.Llengua_thread_child:
+    mov x0, x19
+    mov x1, x20
+    bl worker
+    adrp x16, lengua_results
+    add x16, x16, :lo12:lengua_results
+    str x0, [x16, x19, lsl #3]
+    mov x0, #0
+    mov x8, #LENGUA_SYS_EXIT
+    svc #0
+    brk #0
+.Llengua_thread_start_invalid:
+    mov x0, #LENGUA_EINVAL
+    ret
+.Llengua_thread_start_failed:
+    ldp x3, x4, [sp], #16
+    ldp x1, x2, [sp], #16
+    ldp x19, x20, [sp], #16
+    adrp x17, os_thread_start_errors
+    add x17, x17, :lo12:os_thread_start_errors
+    str x30, [sp, #-16]!
+    bl lengua_error
+    ldr x30, [sp], #16
+    ret
+.size os_thread_start, . - os_thread_start
+
+// == os_thread_join: lengua_threads
+.text
+.type os_thread_join, @function
+// In: w0 = a thread's number, as os_thread_start was given it.
+// Out: x0 = what the thread's worker returned, once it has ended; -EINVAL for a number no thread
+// has, or one that does not end.
+os_thread_join:
+    sub w16, w0, #1
+    cmp w16, #62
+    b.hi .Llengua_thread_join_invalid
+    stp x1, x2, [sp, #-16]!
+    str x3, [sp, #-16]!
+    stp x9, x10, [sp, #-16]!
+    str x11, [sp, #-16]!
+    mov x11, x0
+    adrp x9, lengua_tids
+    add x9, x9, :lo12:lengua_tids
+    add x9, x9, x11, lsl #2
+    mov x10, #LENGUA_MAX_WAITS
+.Llengua_thread_join_wait:  // bound: 64
+    ldar w2, [x9]
+    cbz w2, .Llengua_thread_join_done
+    mov x0, x9
+    mov x1, #LENGUA_FUTEX_WAIT
+    mov x3, #0
+    mov x8, #LENGUA_SYS_FUTEX
+    svc #0
+    subs x10, x10, #1
+    b.ne .Llengua_thread_join_wait
+    mov x0, #LENGUA_EINVAL
+    b .Llengua_thread_join_leave
+.Llengua_thread_join_done:
+    adrp x16, lengua_results
+    add x16, x16, :lo12:lengua_results
+    ldr x0, [x16, x11, lsl #3]
+.Llengua_thread_join_leave:
+    ldr x11, [sp], #16
+    ldp x9, x10, [sp], #16
+    ldr x3, [sp], #16
+    ldp x1, x2, [sp], #16
+    ret
+.Llengua_thread_join_invalid:
+    mov x0, #LENGUA_EINVAL
+    ret
+.size os_thread_join, . - os_thread_join

@@ -589,4 +589,171 @@ mod tests {
             assert_eq!(lengua_text(profile, &main), Some(text));
         }
     }
+
+    /// The `.equ NAME, value` lines of an edge file's header, by name.
+    fn constants(header: &str) -> BTreeMap<String, i64> {
+        header
+            .lines()
+            .filter_map(|line| line.strip_prefix(".equ "))
+            .map(|rest| {
+                let (name, value) = rest.split_once(',').expect("a name and a value");
+                let (name, value) = (name.trim(), value.trim());
+                let (negative, digits) = value
+                    .strip_prefix('-')
+                    .map_or((false, value), |digits| (true, digits));
+                let magnitude = digits
+                    .strip_prefix("0x")
+                    .map_or_else(|| digits.parse::<i64>(), |hex| i64::from_str_radix(hex, 16))
+                    .unwrap_or_else(|_| panic!("{name} is {value}"));
+                (name.to_owned(), if negative { -magnitude } else { magnitude })
+            })
+            .collect()
+    }
+
+    /// A CPU's system calls by the names the edge files give them.
+    macro_rules! system_calls {
+        ($module:ident: $($name:ident),+) => {
+            &[$((stringify!($name), crate::syscalls::$module::$name)),+]
+        };
+    }
+
+    /// What an edge file holds in `.equ` lines is what the tables hold: the system calls' numbers
+    /// (which `syscalls`' own tests hold to the kernel's headers), the closed set of errors, the
+    /// descriptor that is lengua's own, the most random bytes, the thread flags and the kinds.
+    #[test]
+    fn the_edge_files_agree_with_the_tables() {
+        const NAMES: [(&str, u32); 21] = [
+            ("ENOENT", error::ENOENT),
+            ("EIO", error::EIO),
+            ("EBADF", error::EBADF),
+            ("EAGAIN", error::EAGAIN),
+            ("EACCES", error::EACCES),
+            ("EBUSY", error::EBUSY),
+            ("EEXIST", error::EEXIST),
+            ("ENOTDIR", error::ENOTDIR),
+            ("EISDIR", error::EISDIR),
+            ("EINVAL", error::EINVAL),
+            ("EMFILE", error::EMFILE),
+            ("ENOTTY", error::ENOTTY),
+            ("EFBIG", error::EFBIG),
+            ("ENOSPC", error::ENOSPC),
+            ("ESPIPE", error::ESPIPE),
+            ("EPIPE", error::EPIPE),
+            ("ENAMETOOLONG", error::ENAMETOOLONG),
+            ("ENOTEMPTY", error::ENOTEMPTY),
+            ("EILSEQ", error::EILSEQ),
+            ("ECONNRESET", error::ECONNRESET),
+            ("ENOTCONN", error::ENOTCONN),
+        ];
+        let big = |number: u64| i64::try_from(number).expect("a number that fits");
+        for profile in Profile::ALL {
+            let [_, edge] = files(profile);
+            let found = constants(&parse(edge, comment(profile.isa())).header);
+            let calls: &[(&str, i64)] = match profile {
+                Profile::LinuxX86_64 => system_calls!(
+                    x86_64: READ, WRITE, CLOSE, FSTAT, POLL, LSEEK, IOCTL, SHUTDOWN, CLONE, EXIT,
+                    FUTEX, CLOCK_GETTIME, CLOCK_NANOSLEEP, EXIT_GROUP, MKDIRAT, UNLINKAT, RENAMEAT,
+                    GETDENTS64, OPENAT, ACCEPT4, GETRANDOM
+                ),
+                Profile::LinuxAarch64 => system_calls!(
+                    aarch64: IOCTL, MKDIRAT, UNLINKAT, RENAMEAT, OPENAT, CLOSE, GETDENTS64, LSEEK,
+                    READ, WRITE, PPOLL, FSTAT, EXIT, EXIT_GROUP, FUTEX, CLOCK_GETTIME,
+                    CLOCK_NANOSLEEP, SHUTDOWN, ACCEPT4, CLONE, GETRANDOM
+                ),
+            };
+            for (name, value) in &found {
+                let what = format!("{profile:?} {name}");
+                let rest = name.strip_prefix("LENGUA_").expect("lengua's own prefix");
+                if let Some(call) = rest.strip_prefix("SYS_") {
+                    let number = calls
+                        .iter()
+                        .find(|(known, _)| *known == call)
+                        .map(|(_, number)| *number);
+                    assert_eq!(Some(*value), number, "{what}");
+                } else if let Some((_, errno)) = NAMES.iter().find(|(known, _)| *known == rest) {
+                    assert_eq!(*value, -i64::from(*errno), "{what}");
+                }
+            }
+            let used = found.keys().filter(|name| name.starts_with("LENGUA_SYS_")).count();
+            assert_eq!(used, calls.len(), "{profile:?}: a system call in one place only");
+            assert_eq!(found["LENGUA_CHANNEL"], i64::from(CHANNEL), "{profile:?}");
+            assert_eq!(found["LENGUA_RANDOM_MOST"], big(RANDOM_MOST), "{profile:?}");
+            assert_eq!(found["LENGUA_CLONE_FLAGS"], big(Profile::CLONE_FLAGS), "{profile:?}");
+            // AArch64 builds the flags in two halves, as one instruction can't hold them.
+            if let (Some(low), Some(high)) = (
+                found.get("LENGUA_CLONE_FLAGS_LOW"),
+                found.get("LENGUA_CLONE_FLAGS_HIGH"),
+            ) {
+                assert_eq!(low | (high << 16), found["LENGUA_CLONE_FLAGS"], "{profile:?}");
+            }
+            assert_eq!(found["LENGUA_KIND_FILE"], big(kind::FILE), "{profile:?}");
+            assert_eq!(found["LENGUA_KIND_FOLDER"], big(kind::FOLDER), "{profile:?}");
+            assert_eq!(found["LENGUA_KIND_OTHER"], big(kind::OTHER), "{profile:?}");
+        }
+    }
+
+    /// Each OS's edge file has `_start` and every operation, the CPU's library and the edge file
+    /// share no name, what a snippet needs is there, and the names are the reserved ones.
+    #[test]
+    fn the_files_hold_every_snippet_once() {
+        for profile in Profile::ALL {
+            let [library, edge] = files(profile).map(|file| parse(file, comment(profile.isa())));
+            for op in Op::ALL {
+                assert!(edge.snippets.contains_key(op.symbol()), "{profile:?} {}", op.symbol());
+            }
+            assert!(edge.snippets.contains_key("_start"), "{profile:?}");
+            for name in edge.snippets.keys() {
+                assert!(!library.snippets.contains_key(name), "{profile:?} {name} is in both");
+                assert!(
+                    name == "_start" || name.starts_with("lengua_") || Op::from_symbol(name).is_some(),
+                    "{profile:?} {name} is not an operation"
+                );
+            }
+            for name in library.snippets.keys() {
+                assert!(
+                    ["assert_fail", "fill", "parallel_for"].contains(&name.as_str()),
+                    "{profile:?} {name} is not a library function"
+                );
+            }
+            for snippet in library.snippets.values().chain(edge.snippets.values()) {
+                for need in &snippet.needs {
+                    assert!(
+                        library.snippets.contains_key(need) || edge.snippets.contains_key(need),
+                        "{profile:?} needs {need}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A main.s that calls everything the edge offers gets all of it, and no label is twice in it.
+    #[test]
+    fn everything_links_on_every_cpu() {
+        for profile in Profile::ALL {
+            let call = match profile.isa() {
+                Isa::X86_64 => "call",
+                Isa::Aarch64 => "bl",
+            };
+            let mut names: Vec<&str> = Op::ALL.iter().map(|op| op.symbol()).collect();
+            names.extend(["assert_fail", "fill", "parallel_for"]);
+            let mut main = String::from("main:\n");
+            for name in &names {
+                let _ = writeln!(main, "    {call} {name}");
+            }
+            let text = lengua_text(profile, &main).expect("the edge form");
+            let mut labels: BTreeSet<&str> = BTreeSet::new();
+            let defined = text
+                .lines()
+                .filter(|line| !line.starts_with(char::is_whitespace))
+                .filter_map(|line| line.split_once(':'))
+                .map(|(label, _)| label)
+                .filter(|label| !label.is_empty() && !label.contains(char::is_whitespace));
+            for label in defined {
+                assert!(labels.insert(label), "{profile:?}: {label} is defined twice");
+            }
+            for name in &names {
+                assert!(labels.contains(name), "{profile:?} lacks {name}");
+            }
+        }
+    }
 }

@@ -15,7 +15,11 @@
 .equ LENGUA_SYS_FSTAT, 5
 .equ LENGUA_SYS_POLL, 7
 .equ LENGUA_SYS_LSEEK, 8
+.equ LENGUA_SYS_IOCTL, 16
 .equ LENGUA_SYS_SHUTDOWN, 48
+.equ LENGUA_SYS_CLONE, 56
+.equ LENGUA_SYS_EXIT, 60
+.equ LENGUA_SYS_FUTEX, 202
 .equ LENGUA_SYS_CLOCK_GETTIME, 228
 .equ LENGUA_SYS_CLOCK_NANOSLEEP, 230
 .equ LENGUA_SYS_EXIT_GROUP, 231
@@ -36,9 +40,16 @@
 .equ LENGUA_CHANNEL, 4352
 .equ LENGUA_LISTENER, 3
 .equ LENGUA_RANDOM_MOST, 256
+.equ LENGUA_CLONE_FLAGS, 0x350f00
+.equ LENGUA_MAX_WAITS, 64
 .equ LENGUA_EBADF, -9
 .equ LENGUA_EIO, -5
 .equ LENGUA_EINVAL, -22
+.equ LENGUA_ENOTTY, -25
+.equ LENGUA_TCGETS, 0x5401
+.equ LENGUA_TCSETS, 0x5402
+.equ LENGUA_TIOCGWINSZ, 0x5413
+.equ LENGUA_NOT_LINE_MODE, -11
 
 # == _start
 .text
@@ -641,3 +652,273 @@ os_list:
     call lengua_error
     ret
 .size os_list, . - os_list
+
+# == os_terminal: lengua_error
+.section .bss
+.balign 8
+.type lengua_terminal, @object
+# The terminal's mode as the program found it, 36 bytes, then a byte that is 1 once it is kept.
+lengua_terminal:
+    .zero 40
+.size lengua_terminal, . - lengua_terminal
+
+.text
+.type os_terminal, @function
+# In: edi = 1 to take keys as they are pressed, with no echo and no line editing (signals and
+# output processing stay as they are), or 0 to put the mode back as it was found.
+# Out: rax = 0, or -ENOTTY where standard input is not a terminal or there is no mode to put back.
+os_terminal:
+    push rdi
+    push rsi
+    push rdx
+    sub rsp, 40
+    test edi, edi
+    jz .Llengua_terminal_restore
+    mov esi, LENGUA_TCGETS
+    xor edi, edi
+    mov rdx, rsp
+    mov eax, LENGUA_SYS_IOCTL
+    syscall
+    test rax, rax
+    js .Llengua_terminal_done
+    lea r11, [rip + lengua_terminal]
+    cmp byte ptr [r11 + 36], 0
+    jne .Llengua_terminal_set
+    mov rax, qword ptr [rsp]
+    mov qword ptr [r11], rax
+    mov rax, qword ptr [rsp + 8]
+    mov qword ptr [r11 + 8], rax
+    mov rax, qword ptr [rsp + 16]
+    mov qword ptr [r11 + 16], rax
+    mov rax, qword ptr [rsp + 24]
+    mov qword ptr [r11 + 24], rax
+    mov eax, dword ptr [rsp + 32]
+    mov dword ptr [r11 + 32], eax
+    mov byte ptr [r11 + 36], 1
+.Llengua_terminal_set:
+    and dword ptr [rsp + 12], LENGUA_NOT_LINE_MODE
+    mov byte ptr [rsp + 22], 0
+    mov byte ptr [rsp + 23], 1
+    mov esi, LENGUA_TCSETS
+    xor edi, edi
+    mov rdx, rsp
+    mov eax, LENGUA_SYS_IOCTL
+    syscall
+    jmp .Llengua_terminal_done
+.Llengua_terminal_restore:
+    lea r11, [rip + lengua_terminal]
+    mov rax, LENGUA_ENOTTY
+    cmp byte ptr [r11 + 36], 0
+    je .Llengua_terminal_done
+    mov esi, LENGUA_TCSETS
+    xor edi, edi
+    mov rdx, r11
+    mov eax, LENGUA_SYS_IOCTL
+    syscall
+.Llengua_terminal_done:
+    add rsp, 40
+    pop rdx
+    pop rsi
+    pop rdi
+    test rax, rax
+    js .Llengua_terminal_failed
+    ret
+.Llengua_terminal_failed:
+    lea r11, [rip + os_terminal_errors]
+    call lengua_error
+    ret
+.size os_terminal, . - os_terminal
+
+# == os_window: lengua_error
+.section .rodata
+.type lengua_window_order, @object
+# The descriptors a window's size is asked of, in turn: output, error, input.
+lengua_window_order:
+    .byte 1, 2, 0
+.size lengua_window_order, . - lengua_window_order
+
+.text
+.type os_window, @function
+# In: rdi = 8 bytes for the rows and then the columns, 4 bytes each.
+# Out: rax = 0, or -ENOTTY where none of standard output, error and input is a terminal.
+os_window:
+    push rbx
+    push rdi
+    push rsi
+    push rdx
+    sub rsp, 8
+    xor ebx, ebx
+.Llengua_window_try:  # bound: 3
+    lea r11, [rip + lengua_window_order]
+    movzx edi, byte ptr [r11 + rbx]
+    mov esi, LENGUA_TIOCGWINSZ
+    mov rdx, rsp
+    mov eax, LENGUA_SYS_IOCTL
+    syscall
+    test rax, rax
+    jns .Llengua_window_found
+    inc ebx
+    cmp ebx, 3
+    jb .Llengua_window_try
+    jmp .Llengua_window_done
+.Llengua_window_found:
+    movzx eax, word ptr [rsp]
+    movzx ecx, word ptr [rsp + 2]
+    mov r11, qword ptr [rsp + 24]
+    mov dword ptr [r11], eax
+    mov dword ptr [r11 + 4], ecx
+    xor eax, eax
+.Llengua_window_done:
+    add rsp, 8
+    pop rdx
+    pop rsi
+    pop rdi
+    pop rbx
+    test rax, rax
+    js .Llengua_window_failed
+    ret
+.Llengua_window_failed:
+    lea r11, [rip + os_window_errors]
+    call lengua_error
+    ret
+.size os_window, . - os_window
+
+# == lengua_threads
+.section .bss
+.balign 64
+.type lengua_stacks, @object
+# The stacks of the threads os_thread_start starts: 64 of 1 MiB, one for each number, the top of
+# each being where the next begins. Only the pages a thread touches are ever there.
+lengua_stacks:
+    .zero 67108864
+.size lengua_stacks, . - lengua_stacks
+
+.balign 4
+.type lengua_tids, @object
+# Each thread's id, which the kernel sets when it starts and clears, waking a waiter, when it ends.
+lengua_tids:
+    .zero 256
+.size lengua_tids, . - lengua_tids
+
+.balign 8
+.type lengua_results, @object
+# What each thread's worker returned.
+lengua_results:
+    .zero 512
+.size lengua_results, . - lengua_results
+
+# == os_thread_start: lengua_error lengua_threads
+.text
+.type os_thread_start, @function
+# In: edi = the thread's number, from 1 to 63; rsi = its slot. The thread runs worker(number,
+# slot), which is main.s's, on a stack of its own, and keeps what it returns for os_thread_join.
+# Out: rax = 0 once it is running, or an error.
+os_thread_start:
+    lea eax, [rdi - 1]
+    cmp eax, 62
+    ja .Llengua_thread_start_invalid
+    push rbx
+    push r12
+    push rdi
+    push rsi
+    push rdx
+    push r10
+    push r8
+    mov ebx, edi
+    mov r12, rsi
+    lea rsi, [rip + lengua_stacks]
+    lea rax, [rbx + 1]
+    shl rax, 20
+    add rsi, rax
+    lea rdx, [rip + lengua_tids]
+    lea rdx, [rdx + 4*rbx]
+    mov r10, rdx
+    xor r8d, r8d
+    mov edi, LENGUA_CLONE_FLAGS
+    mov eax, LENGUA_SYS_CLONE
+    syscall
+    test rax, rax
+    js .Llengua_thread_start_failed
+    jz .Llengua_thread_child
+    pop r8
+    pop r10
+    pop rdx
+    pop rsi
+    pop rdi
+    pop r12
+    pop rbx
+    xor eax, eax
+    ret
+.Llengua_thread_child:
+    mov edi, ebx
+    mov rsi, r12
+    call worker
+    lea rcx, [rip + lengua_results]
+    mov qword ptr [rcx + 8*rbx], rax
+    xor edi, edi
+    mov eax, LENGUA_SYS_EXIT
+    syscall
+    ud2
+.Llengua_thread_start_invalid:
+    mov rax, LENGUA_EINVAL
+    ret
+.Llengua_thread_start_failed:
+    pop r8
+    pop r10
+    pop rdx
+    pop rsi
+    pop rdi
+    pop r12
+    pop rbx
+    lea r11, [rip + os_thread_start_errors]
+    call lengua_error
+    ret
+.size os_thread_start, . - os_thread_start
+
+# == os_thread_join: lengua_threads
+.text
+.type os_thread_join, @function
+# In: edi = a thread's number, as os_thread_start was given it.
+# Out: rax = what the thread's worker returned, once it has ended; -EINVAL for a number no thread
+# has, or one that does not end.
+os_thread_join:
+    lea eax, [rdi - 1]
+    cmp eax, 62
+    ja .Llengua_thread_join_invalid
+    push rbx
+    push rdi
+    push rsi
+    push rdx
+    push r10
+    push r9
+    mov ebx, edi
+    lea rdi, [rip + lengua_tids]
+    lea rdi, [rdi + 4*rbx]
+    mov r9d, LENGUA_MAX_WAITS
+.Llengua_thread_join_wait:  # bound: 64
+    mov edx, dword ptr [rdi]
+    test edx, edx
+    jz .Llengua_thread_join_done
+    xor esi, esi
+    xor r10d, r10d
+    mov eax, LENGUA_SYS_FUTEX
+    syscall
+    dec r9d
+    jnz .Llengua_thread_join_wait
+    mov rax, LENGUA_EINVAL
+    jmp .Llengua_thread_join_leave
+.Llengua_thread_join_done:
+    lea rcx, [rip + lengua_results]
+    mov rax, qword ptr [rcx + 8*rbx]
+.Llengua_thread_join_leave:
+    pop r9
+    pop r10
+    pop rdx
+    pop rsi
+    pop rdi
+    pop rbx
+    ret
+.Llengua_thread_join_invalid:
+    mov rax, LENGUA_EINVAL
+    ret
+.size os_thread_join, . - os_thread_join
