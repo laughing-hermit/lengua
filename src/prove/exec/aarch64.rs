@@ -191,7 +191,16 @@ impl Cpu<'_> {
                 target,
             } => {
                 let value = self.x(rt);
-                let set = self.pool.bit_is_set(value, u32::from(bit));
+                let bit = u32::from(bit);
+                // The top bit is the sign, and x86-64's `js` reads it as `result < 0`, which the
+                // value's range settles where a bit's value would be a question for the solvers:
+                // the check of every call's result (`tbnz x0, #63`) is of this kind.
+                let set = if bit + 1 == bits(rt) {
+                    let zero = self.pool.bv(bits(rt), 0);
+                    self.pool.slt(value, zero)
+                } else {
+                    self.pool.bit_is_set(value, bit)
+                };
                 let condition = if nonzero {
                     set
                 } else {
@@ -391,22 +400,46 @@ impl Cpu<'_> {
         if flags {
             let width = self.pool.width(result);
             let zero = self.pool.bv(width, 0);
-            let (carry, overflow) = if sub {
-                // No borrow: a at least b, without sign; overflow: a and b of different signs,
-                // and the result's sign not a's.
+            // Signed operands whose ranges keep the exact result in range never overflow, however
+            // their signs fall: the sums and differences of parsed numbers, as x86-64's flags
+            // are set. Without it the check of an overflow (`b.vs`) is a question for the solvers
+            // on every path, and a number's print and a sum of amounts end with a path unsettled.
+            let ((a_low, a_high), (b_low, b_high)) =
+                (self.pool.signed_range(a), self.pool.signed_range(b));
+            let (minimum, maximum) = (-(1_i128 << (width - 1)), (1_i128 << (width - 1)) - 1);
+            let fits = if sub {
+                a_low.checked_sub(b_high).is_some_and(|low| low >= minimum)
+                    && a_high
+                        .checked_sub(b_low)
+                        .is_some_and(|high| high <= maximum)
+            } else {
+                a_low.checked_add(b_low).is_some_and(|low| low >= minimum)
+                    && a_high
+                        .checked_add(b_high)
+                        .is_some_and(|high| high <= maximum)
+            };
+            let carry = if sub {
+                // No borrow: a at least b, without sign.
                 let borrow = self.pool.ult(a, b);
+                self.pool.bool_not(borrow)
+            } else {
+                // A carry out of the top bit: the sum is below an addend.
+                self.pool.ult(result, a)
+            };
+            let overflow = if fits {
+                self.pool.boolean(false)
+            } else if sub {
+                // a and b of different signs, and the result's sign not a's.
                 let a_b = self.pool.xor(a, b);
                 let a_result = self.pool.xor(a, result);
                 let both = self.pool.and(a_b, a_result);
-                (self.pool.bool_not(borrow), self.pool.slt(both, zero))
+                self.pool.slt(both, zero)
             } else {
-                // A carry out of the top bit: the sum is below an addend; overflow: both addends'
-                // sign differs from the result's.
-                let carry = self.pool.ult(result, a);
+                // Both addends' sign differs from the result's.
                 let a_result = self.pool.xor(a, result);
                 let b_result = self.pool.xor(b, result);
                 let both = self.pool.and(a_result, b_result);
-                (carry, self.pool.slt(both, zero))
+                self.pool.slt(both, zero)
             };
             self.state.sign = self.pool.slt(result, zero);
             self.state.zero = self.pool.eq(result, zero);
@@ -551,6 +584,27 @@ impl Cpu<'_> {
         }
     }
 
+    /// `dividend - quotient × divisor`, where `quotient` is the dividend's own quotient by that
+    /// constant divisor (`udiv`, or `sdiv` by a positive one): the dividend's remainder, however
+    /// the pool wrote the quotient. A quotient by 10 of 5 times a sum is that sum halved, a form
+    /// no sum less ten times it folds back to a remainder from, and the digits a print takes off
+    /// with `udiv` and `msub` are then the remainders a formula states, as x86-64's `div` gives
+    /// them.
+    fn remainder_of(&mut self, dividend: Term, quotient: Term, divisor: Term) -> Option<Term> {
+        let width = self.pool.width(dividend);
+        let constant = self
+            .pool
+            .constant(divisor)
+            .filter(|constant| *constant >= 2)?;
+        if self.pool.udiv(dividend, divisor) == quotient {
+            return Some(self.pool.urem(dividend, divisor));
+        }
+        if constant <= mask(width - 1) && self.pool.sdiv(dividend, divisor) == quotient {
+            return Some(self.pool.srem(dividend, divisor));
+        }
+        None
+    }
+
     /// The multiplies: `madd` and `msub` (so `mul`), the long ones from `w` registers, and the
     /// high halves of 128-bit products.
     fn three_source(&mut self, op: Three, rn: A64Reg, rm: A64Reg, ra: A64Reg) -> Term {
@@ -559,6 +613,11 @@ impl Cpu<'_> {
                 let a = self.x(rn);
                 let b = self.x(rm);
                 let c = self.x(ra);
+                if op == Three::Msub
+                    && let Some(remainder) = self.remainder_of(c, a, b)
+                {
+                    return remainder;
+                }
                 let product = self.pool.mul(a, b);
                 if op == Three::Madd {
                     self.pool.add(c, product)

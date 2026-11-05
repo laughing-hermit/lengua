@@ -689,6 +689,15 @@ fn probes(rng: &mut ChaCha8Rng) -> Vec<Probe> {
         }
         let (d, n, m) = (r(rng), r(rng), r(rng));
         list.push(probe(&[format!("mul {d}, {n}, {m}")]));
+        // A remainder: a quotient and its divisor taken from the dividend with `msub`, which the
+        // model gives as the remainder itself where the divisor is a constant past 1.
+        for division in ["udiv", "sdiv"] {
+            let (q, n, m, d) = (r(rng), r(rng), r(rng), r(rng));
+            list.push(probe(&[
+                format!("{division} {q}, {n}, {m}"),
+                format!("msub {d}, {q}, {m}, {n}"),
+            ]));
+        }
         // Conditions, after a comparison, a logic test, an addition and a negative comparison.
         for condition in &CONDITIONS[..14] {
             let (n, m, d, a, b) = (r(rng), r(rng), r(rng), r(rng), r(rng));

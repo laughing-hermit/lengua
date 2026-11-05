@@ -1938,10 +1938,11 @@ impl<'a> Cpu<'a> {
         if count == 0 {
             return Ok(());
         }
+        // Where the call is is `at`, on either CPU: AArch64 has no x86 instruction to ask.
         let what = |cpu: &Self| {
             format!(
                 "in {}, the {call} system call",
-                cpu.image.function_at(cpu.instruction.ip())
+                cpu.image.function_at(cpu.at)
             )
         };
         let convention = Convention::of(self.image.isa);
@@ -4640,6 +4641,7 @@ mod against_a64;
 mod tests {
     use super::*;
     use crate::platform::Profile;
+    use crate::targets::PerTarget;
     use crate::toolchain::Toolchain;
 
     /// The proof's short-name shape, on names whose bytes are known, gives the run's answer
@@ -4698,11 +4700,6 @@ mod tests {
         }
     }
 
-    /// Builds `source` and loads it.
-    async fn image(source: &str) -> Image {
-        image_for(Profile::LinuxX86_64, source).await
-    }
-
     /// Builds `source` for `profile`'s CPU and loads it.
     async fn image_for(profile: Profile, source: &str) -> Image {
         let toolchain = Toolchain::discover().await.expect("llvm-mc and ld.lld");
@@ -4753,49 +4750,117 @@ mod tests {
         (text(&state.stdout), text(&state.stderr), status)
     }
 
+    /// A file of this repository, by its path from the top.
+    fn repository_text(path: &str) -> String {
+        std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path))
+            .unwrap_or_else(|error| panic!("{path}: {error}"))
+    }
+
+    /// The line counter on each target: twins from the very same spec.
+    const LINES: PerTarget<&str> = PerTarget {
+        linux_x86_64: "tests/fixtures/lines/main.s",
+        linux_aarch64: "tests/fixtures/linux-aarch64/lines/main.s",
+    };
+
+    /// The counters of the line counter's five loops, sorted, on each target: the main loop over
+    /// buffer-fulls, the count over a buffer-full's chunks, fill's reads, and the digits and the
+    /// writes. x86-64 keeps them in rbx, r8 and r9; AArch64 in x19, x11, x12, x3 and x10, and
+    /// ends each loop with `subs` and `b.ne` where x86-64 has `dec` and `jnz`.
+    const LOOP_COUNTERS: PerTarget<[usize; 5]> = PerTarget {
+        linux_x86_64: [3, 8, 8, 8, 9],
+        linux_aarch64: [3, 10, 11, 12, 19],
+    };
+
+    /// The counter of fill's read loop on each target.
+    const FILL_COUNTER: PerTarget<usize> = PerTarget {
+        linux_x86_64: 9,
+        linux_aarch64: 12,
+    };
+
     #[tokio::test]
     async fn every_bounded_loop_is_found_with_its_counter() {
-        // The line counter's five loops: the main loop over buffer-fulls (rbx), the count over a
-        // buffer-full's chunks (r8), fill's reads (r9), and the digits and writes (r8).
-        let source = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/lines/main.s"),
-        )
-        .expect("the fixture");
-        let image = image(&source).await;
-        let counters: Vec<usize> = image.loops().map(|found| found.counter).collect();
-        let mut sorted = counters.clone();
-        sorted.sort_unstable();
-        assert_eq!(sorted, vec![3, 8, 8, 8, 9], "{:?}", image.loops);
-        for found in image.loops() {
-            let latch = image.instructions[&found.latch];
-            assert_eq!(latch.mnemonic(), Mnemonic::Jne);
-            assert_eq!(latch.near_branch_target(), found.head);
-            assert_eq!(latch.next_ip(), found.exit);
-            assert!(found.head < found.latch);
+        for target in Profile::ALL {
+            let source = repository_text(LINES.get(target));
+            let image = image_for(target, &source).await;
+            let counters: Vec<usize> = image.loops().map(|found| found.counter).collect();
+            let mut sorted = counters.clone();
+            sorted.sort_unstable();
+            assert_eq!(
+                sorted,
+                LOOP_COUNTERS.get(target).to_vec(),
+                "{}: {:?}",
+                target.name(),
+                image.loops
+            );
+            for found in image.loops() {
+                match target {
+                    Profile::LinuxX86_64 => {
+                        let latch = image.instructions[&found.latch];
+                        assert_eq!(latch.mnemonic(), Mnemonic::Jne);
+                        assert_eq!(latch.near_branch_target(), found.head);
+                        assert_eq!(latch.next_ip(), found.exit);
+                    }
+                    Profile::LinuxAarch64 => {
+                        // `b.ne` or `cbnz`, four bytes long.
+                        let latch = image.words[&found.latch];
+                        let back = match latch {
+                            a64::Inst::BranchCond { target: back, .. }
+                            | a64::Inst::CompareBranch { target: back, .. } => back,
+                            other => panic!("a latch that is {other:?}"),
+                        };
+                        assert_eq!(back, found.head);
+                        assert_eq!(found.exit, found.latch + 4);
+                    }
+                }
+                assert!(found.head < found.latch);
+            }
+            assert_eq!(
+                image
+                    .loop_at(image.fill_head().expect("fill"))
+                    .map(|found| found.counter),
+                Some(*FILL_COUNTER.get(target)),
+                "{}",
+                target.name()
+            );
         }
-        assert_eq!(
-            image
-                .loop_at(image.fill_head().expect("fill"))
-                .map(|found| found.counter),
-            Some(9)
-        );
     }
 
     /// A program that sends `ok` on its first connection, prints what comes back, and exits
-    /// with the number its write returned less 2: 0 when the write went through.
-    const SENDS_ON_ITS_CONNECTION: &str = ".intel_syntax noprefix\n.globl _start\n.text\n\
-        .type _start, @function\n_start:\n    mov eax, 1\n    mov edi, 4\n    \
-        lea rsi, [rip + ok]\n    mov edx, 2\n    syscall\n    lea r12, [rax - 2]\n    \
-        xor eax, eax\n    mov edi, 4\n    lea rsi, [rip + buffer]\n    mov edx, 64\n    \
-        syscall\n    mov rdx, rax\n    mov eax, 1\n    mov edi, 1\n    \
-        lea rsi, [rip + buffer]\n    syscall\n    mov rdi, r12\n    mov eax, 60\n    \
-        syscall\n.size _start, . - _start\n.data\n.type ok, @object\nok:\n    .ascii \"ok\"\n\
-        .size ok, . - ok\n.bss\n.type buffer, @object\nbuffer:\n    .zero 64\n\
-        .size buffer, . - buffer\n";
+    /// with the number its write returned less 2: 0 when the write went through. One for each
+    /// target, with that CPU's system calls: write 1 and read 0 and exit 60 on x86-64, write 64
+    /// and read 63 and exit 93 on AArch64.
+    const SENDS_ON_ITS_CONNECTION: PerTarget<&str> = PerTarget {
+        linux_x86_64: ".intel_syntax noprefix\n.globl _start\n.text\n\
+            .type _start, @function\n_start:\n    mov eax, 1\n    mov edi, 4\n    \
+            lea rsi, [rip + ok]\n    mov edx, 2\n    syscall\n    lea r12, [rax - 2]\n    \
+            xor eax, eax\n    mov edi, 4\n    lea rsi, [rip + buffer]\n    mov edx, 64\n    \
+            syscall\n    mov rdx, rax\n    mov eax, 1\n    mov edi, 1\n    \
+            lea rsi, [rip + buffer]\n    syscall\n    mov rdi, r12\n    mov eax, 60\n    \
+            syscall\n.size _start, . - _start\n.data\n.type ok, @object\nok:\n    .ascii \"ok\"\n\
+            .size ok, . - ok\n.bss\n.type buffer, @object\nbuffer:\n    .zero 64\n\
+            .size buffer, . - buffer\n",
+        linux_aarch64: ".arch armv8-a\n.globl _start\n.text\n\
+            .type _start, @function\n_start:\n    mov x0, #4\n    adrp x1, ok\n    \
+            add x1, x1, :lo12:ok\n    mov x2, #2\n    mov x8, #64\n    svc #0\n    \
+            sub x19, x0, #2\n    mov x0, #4\n    adrp x1, buffer\n    add x1, x1, :lo12:buffer\n    \
+            mov x2, #64\n    mov x8, #63\n    svc #0\n    mov x2, x0\n    mov x0, #1\n    \
+            adrp x1, buffer\n    add x1, x1, :lo12:buffer\n    mov x8, #64\n    svc #0\n    \
+            mov x0, x19\n    mov x8, #93\n    svc #0\n.size _start, . - _start\n.data\n\
+            .type ok, @object\nok:\n    .ascii \"ok\"\n.size ok, . - ok\n.bss\n\
+            .type buffer, @object\nbuffer:\n    .zero 64\n.size buffer, . - buffer\n",
+    };
 
     #[tokio::test]
     async fn the_connections_lengua_makes_are_open_at_the_start() {
-        let image = image(SENDS_ON_ITS_CONNECTION).await;
+        for target in Profile::ALL {
+            connections_are_open_at_the_start(target, SENDS_ON_ITS_CONNECTION.get(target)).await;
+        }
+    }
+
+    /// The connections lengua makes are open at the start of `target`'s `source`: it writes
+    /// to the first and reads what the test's server answers; handed over ended, the write fails.
+    async fn connections_are_open_at_the_start(target: Profile, source: &str) {
+        let image = image_for(target, source).await;
         let mut pool = Pool::default();
         let text = |pool: &Pool, terms: &[Term]| {
             terms
@@ -4815,13 +4880,19 @@ mod tests {
         };
         let start = State::start(&image, &mut pool, &[], &[], Vec::new()).with_network(network);
         let mut runs = explore(&image, start, &mut pool, &mut Concrete, 4).expect("concrete");
-        assert_eq!(runs.len(), 1);
+        assert_eq!(runs.len(), 1, "{}", target.name());
         let answered = runs.remove(0);
-        assert_eq!(text(&pool, &answered.stdout), "hello");
-        assert_eq!(text(&pool, &answered.connections[0].sent), "ok");
+        assert_eq!(text(&pool, &answered.stdout), "hello", "{}", target.name());
+        assert_eq!(
+            text(&pool, &answered.connections[0].sent),
+            "ok",
+            "{}",
+            target.name()
+        );
         assert!(
             matches!(answered.end, Some(End::Exit(status)) if pool.constant(status) == Some(0)),
-            "{:?}",
+            "{}: {:?}",
+            target.name(),
             answered.end
         );
         // Handed over ended: the write fails with EPIPE, so it exits with -34 & 255, and the
@@ -4833,32 +4904,54 @@ mod tests {
         let start = State::start(&image, &mut pool, &[], &[], Vec::new()).with_network(network);
         let mut runs = explore(&image, start, &mut pool, &mut Concrete, 4).expect("concrete");
         let ended = runs.remove(0);
-        assert_eq!(text(&pool, &ended.stdout), "");
-        assert!(ended.connections[0].sent.is_empty());
+        assert_eq!(text(&pool, &ended.stdout), "", "{}", target.name());
+        assert!(ended.connections[0].sent.is_empty(), "{}", target.name());
         assert!(
             matches!(ended.end, Some(End::Exit(status)) if pool.constant(status) == Some(222)),
-            "{:?}",
+            "{}: {:?}",
+            target.name(),
             ended.end
         );
     }
 
+    /// A program for each target that exits with the carries the CPU makes, and the status it
+    /// exits with. x86-64: 0xff..ff + 0xff..ff with a carry in (`adc`): the result equals the
+    /// first operand, yet it carries out, so the exit status is 1. AArch64's dialect has no
+    /// `adc` or `sbc` (a gap todo.md lists, not one of the CPU), so its cell is the carries that
+    /// `adds` and `subs` make, read back with `cset hs`: the same all-ones number added to itself
+    /// carries out (1), and taken from itself it doesn't borrow (1, shifted left by one to 2),
+    /// so the exit status is 3.
+    const CARRIES: PerTarget<(&str, u128)> = PerTarget {
+        linux_x86_64: (
+            ".intel_syntax noprefix\n.globl _start\n.text\n.type _start, @function\n\
+             _start:\n    mov rax, -1\n    mov rbx, -1\n    stc\n    adc rax, rbx\n    \
+             setb dil\n    movzx edi, dil\n    mov eax, 60\n    syscall\n\
+             .size _start, . - _start\n",
+            1,
+        ),
+        linux_aarch64: (
+            ".arch armv8-a\n.globl _start\n.text\n.type _start, @function\n\
+             _start:\n    mov x0, #-1\n    mov x1, #-1\n    adds x2, x0, x1\n    cset w3, hs\n    \
+             subs x4, x0, x1\n    cset w5, hs\n    add w0, w3, w5, lsl #1\n    mov x8, #93\n    \
+             svc #0\n.size _start, . - _start\n",
+            3,
+        ),
+    };
+
     #[tokio::test]
-    async fn adds_with_carry_like_the_cpu() {
-        // 0xff..ff + 0xff..ff with a carry in: the result equals the first operand, yet it
-        // carries out, so the exit status is 1.
-        let source = ".intel_syntax noprefix\n.globl _start\n.text\n.type _start, @function\n\
-                      _start:\n    mov rax, -1\n    mov rbx, -1\n    stc\n    adc rax, rbx\n    \
-                      setb dil\n    movzx edi, dil\n    mov eax, 60\n    syscall\n\
-                      .size _start, . - _start\n";
-        let image = image(source).await;
-        let mut pool = Pool::default();
-        let start = State::start(&image, &mut pool, &[], &[], Vec::new());
-        let runs = explore(&image, start, &mut pool, &mut Concrete, 2).expect("runs");
-        let status = match &runs[0].end {
-            Some(End::Exit(status)) => pool.constant(*status),
-            other => panic!("ended with {other:?}"),
-        };
-        assert_eq!(status, Some(1));
+    async fn carries_like_the_cpu() {
+        for target in Profile::ALL {
+            let (source, expected) = *CARRIES.get(target);
+            let image = image_for(target, source).await;
+            let mut pool = Pool::default();
+            let start = State::start(&image, &mut pool, &[], &[], Vec::new());
+            let runs = explore(&image, start, &mut pool, &mut Concrete, 2).expect("runs");
+            let status = match &runs[0].end {
+                Some(End::Exit(status)) => pool.constant(*status),
+                other => panic!("{} ended with {other:?}", target.name()),
+            };
+            assert_eq!(status, Some(expected), "{}", target.name());
+        }
     }
 
     /// An oracle with no branch to decide, which says the proof's time is up the fourth time it's
@@ -4880,34 +4973,37 @@ mod tests {
         }
     }
 
+    /// A loop of 100,000 times round with nothing to decide, on each target: `dec` and `jnz` on
+    /// x86-64, `subs` and `b.ne` on AArch64.
+    const HUNDRED_THOUSAND_ROUNDS: PerTarget<&str> = PerTarget {
+        linux_x86_64: ".intel_syntax noprefix\n.globl _start\n.text\n.type _start, @function\n\
+                      _start:\n    mov rcx, 100000\n.Lround:\n    dec rcx\n    jnz .Lround\n    \
+                      mov eax, 60\n    xor edi, edi\n    syscall\n.size _start, . - _start\n",
+        linux_aarch64: ".arch armv8-a\n.globl _start\n.text\n.type _start, @function\n\
+                      _start:\n    mov x1, #0x86a0\n    movk x1, #1, lsl #16\n.Lround:\n    \
+                      subs x1, x1, #1\n    b.ne .Lround\n    mov x8, #93\n    mov x0, #0\n    \
+                      svc #0\n.size _start, . - _start\n",
+    };
+
     /// A run of 100,000 times round a loop ends with the proof's time, though it never asks the
     /// oracle about a branch: this is how a hash of the input, all straight-line code over
     /// unknown values, stays within the proof's time.
-    async fn keeps_the_proofs_time_without_a_branch(profile: Profile, source: &str) {
-        let image = image_for(profile, source).await;
-        let mut pool = Pool::default();
-        let start = State::start(&image, &mut pool, &[], &[], Vec::new());
-        let mut oracle = TimeUpAtTheFourthLook(std::cell::Cell::new(0));
-        let result = explore(&image, start, &mut pool, &mut oracle, 2);
-        assert_eq!(result.err().as_deref(), Some("time is up"));
-        assert_eq!(oracle.0.get(), 4);
-    }
-
     #[tokio::test]
-    async fn a_run_with_no_branch_on_its_inputs_keeps_the_proofs_time_on_x86_64() {
-        let source = ".intel_syntax noprefix\n.globl _start\n.text\n.type _start, @function\n\
-                      _start:\n    mov rcx, 100000\n.Lround:\n    dec rcx\n    jnz .Lround\n    \
-                      mov eax, 60\n    xor edi, edi\n    syscall\n.size _start, . - _start\n";
-        keeps_the_proofs_time_without_a_branch(Profile::LinuxX86_64, source).await;
-    }
-
-    #[tokio::test]
-    async fn a_run_with_no_branch_on_its_inputs_keeps_the_proofs_time_on_aarch64() {
-        let source = ".arch armv8-a\n.globl _start\n.text\n.type _start, @function\n\
-                      _start:\n    mov x1, #0x86a0\n    movk x1, #1, lsl #16\n.Lround:\n    \
-                      subs x1, x1, #1\n    b.ne .Lround\n    mov x8, #93\n    mov x0, #0\n    \
-                      svc #0\n.size _start, . - _start\n";
-        keeps_the_proofs_time_without_a_branch(Profile::LinuxAarch64, source).await;
+    async fn a_run_with_no_branch_on_its_inputs_keeps_the_proofs_time() {
+        for target in Profile::ALL {
+            let image = image_for(target, HUNDRED_THOUSAND_ROUNDS.get(target)).await;
+            let mut pool = Pool::default();
+            let start = State::start(&image, &mut pool, &[], &[], Vec::new());
+            let mut oracle = TimeUpAtTheFourthLook(std::cell::Cell::new(0));
+            let result = explore(&image, start, &mut pool, &mut oracle, 2);
+            assert_eq!(
+                result.err().as_deref(),
+                Some("time is up"),
+                "{}",
+                target.name()
+            );
+            assert_eq!(oracle.0.get(), 4, "{}", target.name());
+        }
     }
 
     /// An oracle with no branch to decide, which says the computer has no memory left the first
@@ -4925,56 +5021,72 @@ mod tests {
         }
     }
 
+    /// A loop of a million times round with nothing to decide, on each target.
+    const A_MILLION_ROUNDS: PerTarget<&str> = PerTarget {
+        linux_x86_64: ".intel_syntax noprefix\n.globl _start\n.text\n.type _start, @function\n\
+                      _start:\n    mov rcx, 1000000\n.Lround:\n    dec rcx\n    jnz .Lround\n    \
+                      mov eax, 60\n    xor edi, edi\n    syscall\n.size _start, . - _start\n",
+        linux_aarch64: ".arch armv8-a\n.globl _start\n.text\n.type _start, @function\n\
+                      _start:\n    mov x1, #0x4240\n    movk x1, #0xf, lsl #16\n.Lround:\n    \
+                      subs x1, x1, #1\n    b.ne .Lround\n    mov x8, #93\n    mov x0, #0\n    \
+                      svc #0\n.size _start, . - _start\n",
+    };
+
     /// A run that makes a new number every step ends with the computer's memory, though it never
     /// asks the oracle about a branch: a hash of the input, all straight-line code over unknown
     /// values, makes terms by the million, and the steps alone don't bound them.
-    async fn keeps_the_memory_without_a_branch(profile: Profile, source: &str) {
-        let image = image_for(profile, source).await;
-        let mut pool = Pool::default();
-        let start = State::start(&image, &mut pool, &[], &[], Vec::new());
-        let mut oracle = NoRoomAtTheFirstLook(std::cell::Cell::new(0));
-        let result = explore(&image, start, &mut pool, &mut oracle, 2);
-        assert_eq!(result.err().as_deref(), Some("no room"));
-        assert_eq!(oracle.0.get(), 1);
+    #[tokio::test]
+    async fn a_run_that_fills_the_pool_keeps_the_memory() {
+        for target in Profile::ALL {
+            let image = image_for(target, A_MILLION_ROUNDS.get(target)).await;
+            let mut pool = Pool::default();
+            let start = State::start(&image, &mut pool, &[], &[], Vec::new());
+            let mut oracle = NoRoomAtTheFirstLook(std::cell::Cell::new(0));
+            let result = explore(&image, start, &mut pool, &mut oracle, 2);
+            assert_eq!(
+                result.err().as_deref(),
+                Some("no room"),
+                "{}",
+                target.name()
+            );
+            assert_eq!(oracle.0.get(), 1, "{}", target.name());
+        }
     }
 
-    #[tokio::test]
-    async fn a_run_that_fills_the_pool_keeps_the_memory_on_x86_64() {
-        let source = ".intel_syntax noprefix\n.globl _start\n.text\n.type _start, @function\n\
-                      _start:\n    mov rcx, 1000000\n.Lround:\n    dec rcx\n    jnz .Lround\n    \
-                      mov eax, 60\n    xor edi, edi\n    syscall\n.size _start, . - _start\n";
-        keeps_the_memory_without_a_branch(Profile::LinuxX86_64, source).await;
-    }
-
-    #[tokio::test]
-    async fn a_run_that_fills_the_pool_keeps_the_memory_on_aarch64() {
-        let source = ".arch armv8-a\n.globl _start\n.text\n.type _start, @function\n\
-                      _start:\n    mov x1, #0x4240\n    movk x1, #0xf, lsl #16\n.Lround:\n    \
-                      subs x1, x1, #1\n    b.ne .Lround\n    mov x8, #93\n    mov x0, #0\n    \
-                      svc #0\n.size _start, . - _start\n";
-        keeps_the_memory_without_a_branch(Profile::LinuxAarch64, source).await;
-    }
+    /// A program that exits at once, on each target.
+    const EXITS_AT_ONCE: PerTarget<&str> = PerTarget {
+        linux_x86_64: ".intel_syntax noprefix\n.globl _start\n.text\n.type _start, @function\n\
+                      _start:\n    mov eax, 60\n    xor edi, edi\n    syscall\n\
+                      .size _start, . - _start\n",
+        linux_aarch64: ".arch armv8-a\n.globl _start\n.text\n.type _start, @function\n\
+                      _start:\n    mov x8, #93\n    mov x0, #0\n    svc #0\n\
+                      .size _start, . - _start\n",
+    };
 
     /// A run on a pool that found the memory short ends at its next step, though the oracle
     /// never has to ask: one step can make the terms by the million in a single extraction, far
     /// between two looks of the loop's, and what the pool made after that is nothing to go on.
     #[tokio::test]
     async fn a_run_on_a_pool_that_found_the_memory_short_ends_at_its_next_step() {
-        let source = ".intel_syntax noprefix\n.globl _start\n.text\n.type _start, @function\n\
-                      _start:\n    mov eax, 60\n    xor edi, edi\n    syscall\n\
-                      .size _start, . - _start\n";
-        let image = image_for(Profile::LinuxX86_64, source).await;
-        let _no_memory = crate::prove::watch::NoMemoryForTest::pretend();
-        let mut pool = Pool::default();
-        let start = State::start(&image, &mut pool, &[], &[], Vec::new());
-        let one = pool.bv(32, 1);
-        while !pool.out_of_room() {
-            let next = pool.var(32, &format!("b{}", pool.len()));
-            let _ = pool.add(next, one);
+        for target in Profile::ALL {
+            let image = image_for(target, EXITS_AT_ONCE.get(target)).await;
+            let _no_memory = crate::prove::watch::NoMemoryForTest::pretend();
+            let mut pool = Pool::default();
+            let start = State::start(&image, &mut pool, &[], &[], Vec::new());
+            let one = pool.bv(32, 1);
+            while !pool.out_of_room() {
+                let next = pool.var(32, &format!("b{}", pool.len()));
+                let _ = pool.add(next, one);
+            }
+            let result = explore(&image, start, &mut pool, &mut Concrete, 2);
+            let why = result.err();
+            assert_eq!(
+                why.as_deref(),
+                Some(crate::prove::watch::OUT_OF_MEMORY),
+                "{}",
+                target.name()
+            );
         }
-        let result = explore(&image, start, &mut pool, &mut Concrete, 2);
-        let why = result.err();
-        assert_eq!(why.as_deref(), Some(crate::prove::watch::OUT_OF_MEMORY));
     }
 
     /// fill's function from assets/fill.s, as main.s copies it.
@@ -5075,71 +5187,86 @@ mod tests {
             .collect()
     }
 
-    #[tokio::test]
-    async fn fill_read_whole_is_its_code_for_every_cut() {
-        let mutants = [
-            (
-                "reads every piece at the buffer's start",
-                "    add rsi, rax\n",
-                "",
-            ),
-            (
-                "stops a byte short of full",
-                "    sub rdx, rax\n    jz .Lfill_done\n",
-                "    sub rdx, rax\n    cmp rdx, 1\n    jbe .Lfill_done\n",
-            ),
-            (
-                "checks the byte after the last",
-                "byte ptr [rsi - 1]",
-                "byte ptr [rsi]",
-            ),
-            (
-                "counts one byte too many",
-                "    mov rax, r8\n    sub rax, rdx\n",
-                "    lea rax, [r8 + 1]\n    sub rax, rdx\n",
-            ),
-        ];
-        fill_read_whole_is_its_code(
-            Profile::LinuxX86_64,
-            fill_function(crate::checker::FILL_TEMPLATE),
-            fill_program,
-            mutants,
-        )
-        .await;
+    /// A bug planted in `fill`: what it does, and the edit that plants it.
+    type FillMutant = (&'static str, &'static str, &'static str);
+
+    /// One target's cell of the fill test: its own `fill`, as the compile skill ships it, the
+    /// program that calls it, and four bugs planted in it.
+    #[derive(Clone, Copy)]
+    struct FillCell {
+        asset: &'static str,
+        program: fn(&str, u32, i32) -> String,
+        mutants: [FillMutant; 4],
     }
 
-    /// The same test on AArch64, in its own `fill`, with the same four bugs planted in it.
+    /// The fill test of each target, with the same four bugs planted in each CPU's `fill`.
+    const FILLS: PerTarget<FillCell> = PerTarget {
+        linux_x86_64: FillCell {
+            asset: crate::checker::FILL_TEMPLATE,
+            program: fill_program,
+            mutants: [
+                (
+                    "reads every piece at the buffer's start",
+                    "    add rsi, rax\n",
+                    "",
+                ),
+                (
+                    "stops a byte short of full",
+                    "    sub rdx, rax\n    jz .Lfill_done\n",
+                    "    sub rdx, rax\n    cmp rdx, 1\n    jbe .Lfill_done\n",
+                ),
+                (
+                    "checks the byte after the last",
+                    "byte ptr [rsi - 1]",
+                    "byte ptr [rsi]",
+                ),
+                (
+                    "counts one byte too many",
+                    "    mov rax, r8\n    sub rax, rdx\n",
+                    "    lea rax, [r8 + 1]\n    sub rax, rdx\n",
+                ),
+            ],
+        },
+        linux_aarch64: FillCell {
+            asset: crate::checker::AARCH64_FILL_TEMPLATE,
+            program: fill_program_aarch64,
+            mutants: [
+                (
+                    "reads every piece at the buffer's start",
+                    "    add x1, x1, x0\n",
+                    "",
+                ),
+                (
+                    "stops a byte short of full",
+                    "    subs x2, x2, x0\n    b.eq .Lfill_done\n",
+                    "    subs x2, x2, x0\n    cmp x2, #1\n    b.ls .Lfill_done\n",
+                ),
+                (
+                    "checks the byte after the last",
+                    "ldurb w13, [x1, #-1]",
+                    "ldrb w13, [x1]",
+                ),
+                (
+                    "counts one byte too many",
+                    "    sub x0, x10, x2\n",
+                    "    sub x0, x10, x2\n    add x0, x0, #1\n",
+                ),
+            ],
+        },
+    };
+
     #[tokio::test]
-    async fn fill_read_whole_is_its_code_for_every_cut_on_aarch64() {
-        let mutants = [
-            (
-                "reads every piece at the buffer's start",
-                "    add x1, x1, x0\n",
-                "",
-            ),
-            (
-                "stops a byte short of full",
-                "    subs x2, x2, x0\n    b.eq .Lfill_done\n",
-                "    subs x2, x2, x0\n    cmp x2, #1\n    b.ls .Lfill_done\n",
-            ),
-            (
-                "checks the byte after the last",
-                "ldurb w13, [x1, #-1]",
-                "ldrb w13, [x1]",
-            ),
-            (
-                "counts one byte too many",
-                "    sub x0, x10, x2\n",
-                "    sub x0, x10, x2\n    add x0, x0, #1\n",
-            ),
-        ];
-        fill_read_whole_is_its_code(
-            Profile::LinuxAarch64,
-            fill_function(crate::checker::AARCH64_FILL_TEMPLATE),
-            fill_program_aarch64,
-            mutants,
-        )
-        .await;
+    async fn fill_read_whole_is_its_code_for_every_cut() {
+        for target in Profile::ALL {
+            let cell = *FILLS.get(target);
+            fill_read_whole_is_its_code(
+                target,
+                fill_function(cell.asset),
+                cell.program,
+                cell.mutants,
+            )
+            .await;
+        }
     }
 
     /// fill read as a whole gives exactly what its code gives, over every way its input can be
@@ -5201,37 +5328,57 @@ mod tests {
         }
     }
 
+    /// The program that sleeps on each target, with `clock_nanosleep` (230 on x86-64, 115 on
+    /// AArch64), which a run takes as over at once.
+    const NAP: PerTarget<&str> = PerTarget {
+        linux_x86_64: "tests/fixtures/nap/main.s",
+        linux_aarch64: "tests/fixtures/linux-aarch64/nap/main.s",
+    };
+
     #[tokio::test]
     async fn a_sleep_ends_at_once() {
-        let source = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/nap/main.s"),
-        )
-        .expect("the nap fixture");
-        let image = image(&source).await;
-        assert_eq!(
-            run(&image, &[], ""),
-            ("awake\n".into(), String::new(), Some(0))
-        );
+        for target in Profile::ALL {
+            let image = image_for(target, &repository_text(NAP.get(target))).await;
+            assert_eq!(
+                run(&image, &[], ""),
+                ("awake\n".into(), String::new(), Some(0)),
+                "{}",
+                target.name()
+            );
+        }
     }
+
+    /// The template of each target.
+    const TEMPLATES: PerTarget<&str> = PerTarget {
+        linux_x86_64: crate::checker::TEMPLATE,
+        linux_aarch64: crate::checker::AARCH64_TEMPLATE,
+    };
 
     #[tokio::test]
     async fn runs_the_template_like_the_cpu() {
-        let image = image(crate::checker::TEMPLATE).await;
-        assert_eq!(
-            run(&image, &["7"], ""),
-            ("-7\n".into(), String::new(), Some(0))
-        );
-        assert_eq!(
-            run(&image, &["-9223372036854775807"], ""),
-            ("9223372036854775807\n".into(), String::new(), Some(0))
-        );
-        assert_eq!(
-            run(&image, &[], ""),
-            (String::new(), "usage: negate <n>\n".into(), Some(1))
-        );
-        assert_eq!(
-            run(&image, &["12x"], ""),
-            (String::new(), "error: not a number\n".into(), Some(2))
-        );
+        for target in Profile::ALL {
+            let image = image_for(target, TEMPLATES.get(target)).await;
+            let name = target.name();
+            assert_eq!(
+                run(&image, &["7"], ""),
+                ("-7\n".into(), String::new(), Some(0)),
+                "{name}"
+            );
+            assert_eq!(
+                run(&image, &["-9223372036854775807"], ""),
+                ("9223372036854775807\n".into(), String::new(), Some(0)),
+                "{name}"
+            );
+            assert_eq!(
+                run(&image, &[], ""),
+                (String::new(), "usage: negate <n>\n".into(), Some(1)),
+                "{name}"
+            );
+            assert_eq!(
+                run(&image, &["12x"], ""),
+                (String::new(), "error: not a number\n".into(), Some(2)),
+                "{name}"
+            );
+        }
     }
 }

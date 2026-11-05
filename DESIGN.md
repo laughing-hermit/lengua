@@ -1139,10 +1139,16 @@ per target. A new profile must supply:
    (`exec/aarch64.rs`, held to QEMU and to ARM64 silicon by its `against_a64` harness), around one
    shared core: calls by the CPU's convention, `fill`, induction and the term pool. AArch64's
    proofs settle as x86-64's do, with no solver question: its template, a streaming filter
-   through `fill` for every length, and a file program. Its idioms needed two readings of the
-   pool's own: a digit taken off with `udiv` and `msub`, `n - (n / 10) × 10` one division at a
-   time, is the remainder, where x86-64's `div` gives it; and a product's overflow check, its
-   high half against its low half's sign, `asr #63`, is the value's sign, which its range settles.
+   through `fill` for every length, a file program, and the numeric examples' blocks that
+   x86-64's settle by terms alone (the absolute difference, the mean of whole numbers, the day
+   count, the CSV total's amounts). Its idioms needed four readings of the pool's own: a digit
+   taken off with `udiv` and `msub`, `n - (n / 10) × 10` one division at a time, is the
+   remainder, where x86-64's `div` gives it, however the pool wrote the quotient (one by 10 of 5
+   times a sum is that sum halved); a product's overflow check, its high half against its low
+   half's sign, `asr #63`, is the value's sign, which its range settles, as is a result's check,
+   `tbnz x0, #63`, which reads `x0 < 0` as x86-64's `js` does; and `adds`, `subs` and `negs`
+   overflow nowhere their operands' ranges keep the result in range, as x86-64's flags are set,
+   so the `b.vs` after them is settled by the terms.
    Its floating point (`exec/aarch64/float.rs`) is the pool's float terms, which compute as SSE
    does, with AArch64's own rules around them where the two CPUs differ: a signaling NaN operand
    before a quiet one and a positive default NaN, `fmax` and `fmin` passing NaNs on and putting -0

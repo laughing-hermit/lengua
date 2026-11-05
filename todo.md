@@ -247,13 +247,12 @@ in this run are listed above), heaviest first:
      ARM64). The ARM64 cell of one row had to differ from its x86-64 twin in its text: a
      `SLOT_SIZE` of `CHUNK + 8` is refused by the dialect (no single `mov` holds 65544) before
      the thread rules look, so it is `CHUNK - 8` there.
-   - *Prover tests.* ARM64's prover is tested on 7 of the 29 twins, x86-64's on about 20 programs,
-     and its memory-bug tests are x86-only.
-   - *Other x86-only coverage.* The checker's and the prover's golden recordings; executor tests
-     of loop detection, connections and sleep. The session tests that were made for one CPU
+   - *Prover tests: done (2026-11-04, "The prover's parity round" at the end).* Every prover test
+     and executor test is one test with a cell for each target, the golden recordings are made
+     for both CPUs, and a guard fails a new test that runs on one CPU only.
+   - *Session tests: done (2026-11-04).* The session tests that were made for one CPU
      (`tests/check_code.rs`, `tests/e2e.rs`, `tests/aarch64.rs` and `tests/aarch64_session.rs`)
-     are no longer in this list: they are tables for both CPUs, all done on 2026-11-04. The
-     server's own flow, the add workflow and the proofs of the template are `tests/sessions.rs`
+     are tables for both CPUs now. The server's own flow, the add workflow and the proofs of the template are `tests/sessions.rs`
      and `tests/workflow.rs`; the examples, fixtures, templates and the benchmark's programs are
      `tests/programs.rs` (both below); the rest is `tests/network.rs` (the echo server and the
      fetch client against the tests' own peers and through `run`, a client over TLS, a computer
@@ -277,19 +276,13 @@ in this run are listed above), heaviest first:
      follows `cmov`, `and` to a boundary and scaled `lea`; ARM64's `plan_a64` doesn't follow
      `csel`, `and`-immediate or shifted `add`, so those accesses are held to the weaker "object the
      value points into" rule.
-   - *An unexplained difference.* In the same 60 seconds, ARM64 proved far fewer combinations of
-     the `amounts` valid-input block than x86-64 (36 against about 10,000 on the runners). Not
-     investigated: the runner's CPU, the model's speed, or the twice-as-many paths. The network
-     tables found it again on 2026-11-04, on the simplest program: `add`'s `B4`, where standard
-     output is closed (400 input combinations). x86-64 proves it for every input in range in the
-     minute (run 41913318774); on the ARM64 runner it comes out "tested, not proven: its 400 input
-     combinations would take about 8 minutes; the proof has 59 seconds", and `B1` about 9 (run
-     41912035484, again at 60 seconds in 41913324166). `a_closed_standard_output_fails_every_write`
-     (`tests/network.rs`) pins each CPU's line in a cell (`B4_PROOF`), as the case it is for
-     both: either way the test that closes standard output catches an exit code that is not the
-     spec's. Everything else the network tables prove reads the same on both CPUs: the echo
-     server's blocks and the fetch client's, "proven for every input in range" with the line
-     cut any way (runs 41912030313 and 41912035484).
+   - *The difference that was unexplained is explained and gone (2026-11-04).* In the same 60
+     seconds, ARM64 proved far fewer combinations of the `amounts` valid-input block than x86-64
+     (36 against about 10,000 on the runners). It was the same gaps that stopped ARM64's numeric
+     proofs (the overflow flag, `tbnz #63` and `msub`, in "The prover's parity round" at the end),
+     each a path for the solvers to refute. With them fixed, in the same 240 seconds (60 scaled by
+     the 4-vCPU runner) the ARM64 twin settles 503,715 shapes and x86-64's 163,060, both with no
+     question, on one runner (run 41934621397).
 3. **CI coverage.** GitHub's x86-64 runners are a mixed pool: of 21 runs on 2026-11-04, 10 drew
    a CPU with AVX-512 (Xeon Platinum 8573C and 6975P-C, EPYC 9V45, some EPYC 9V74) and 11 did not
    (EPYC 7763, other EPYC 9V74), so x86-64 coverage was a coin flip per run. On a draw without
@@ -350,8 +343,9 @@ runners only (nothing built or run on the user's computer); the run ids are the 
   last partial step built with `movd`, `pshufb`, `pminub` and `pcmpeqb`; `pshufb` and `popcnt` are
   its only instructions past SSE2, and it uses no BMI and no `ymm`. `count_piece` is exactly rule
   4's 60 instructions. The AVX-512 form moved to `assets/fast/wc-avx512` with the same spec bytes.
-  `proves_the_sse2_fast_word_count_for_every_length` proves it for every length by induction at 64
-  KiB with no solver question, and catches four planted bugs (the carry across pieces, the carry
+  `proves_the_fast_word_count_for_every_length` (once x86-64's alone as
+  `proves_the_sse2_fast_word_count_for_every_length`, now one test with a cell for each CPU)
+  proves it for every length by induction at 64 KiB with no solver question, and catches four planted bugs (the carry across pieces, the carry
   across steps, a word start past the end, the larger of the bytes left and a step taken for the
   smaller): the main verdict took 231 s on an EPYC 9V74 **without** AVX-512 (run 41889485548) and
   the whole test 152 s on an EPYC 9V45 (run 41895524569).
@@ -730,3 +724,68 @@ their goldens.
   user's word. `scripts/release.sh` builds the archive for either Linux CPU, and it installs and
   runs locally, under the Apache License 2.0 (LICENSE); publishing it as a release, listing the
   plugin where agent plugins are found, and deploying the site wait for the owner.
+
+## The prover's parity round (2026-11-04)
+
+The prover's tests, its executor's tests and the checker's and prover's golden recordings were each
+written for one CPU, mostly x86-64. Each case is now written once, as a table with a `PerTarget`
+cell for every target (`src/prove/tests.rs`, `src/prove/exec.rs`, `src/checker/golden.rs`,
+`src/prove/golden.rs`), and runs for both Linux CPUs on either runner, since a proof is
+mathematics; only the SVE tier's proof needs a CPU or an emulator with SVE, and notes where it
+skips. Done on GitHub's runners only (nothing was built or run on the user's computer); the run
+ids are the evidence.
+
+- **Counts.** `src/prove/tests.rs` had 80 tests, 17 of them named for AArch64; it has 66: 58 with
+  a cell for each CPU and 8 about no CPU's code (range arithmetic, diagnostics, the two guards).
+  The 17 AArch64 tests and six x86-64 ones (the AVX-512 and the SSE2 word counts, the hypotenuse
+  of whole and of decimal sides) were merged into the table of their twin and the old functions
+  deleted; every assertion of the originals is kept, for every cell (two are stronger: the
+  absolute difference and the mean of whole numbers also say "no question"). The executor's tests
+  went from 13 to 10, each over both targets; the checker golden from 3 tests to 5, the prover
+  golden from 1 to 2.
+- **A guard.** `every_prover_test_runs_on_every_target` reads the sources of the prover's and the
+  executor's tests and fails one that goes through neither `Profile::ALL` nor a table's
+  `.cells()` (nor a helper that does), and one named for a CPU; a test about no CPU's code is
+  listed in `NOT_ABOUT_A_CPU`. A test written for one CPU fails until it has its cell, and a third
+  target's column breaks every table.
+- **What the ported cases found, all fixed in the models** (each change makes the model say what
+  the CPU's own semantics already say, so no proof accepts anything it did not):
+  1. An AArch64 report named "its code" for the function of a system call, because it asked an
+     x86 instruction for the place (`buffers_lent_to_the_kernel_hold_every_byte_it_may_touch`):
+     `cpu.at` is the place now (runs 41916180612 on ARM64, 41916175486 on x86-64).
+  2. Five AArch64 proofs that x86-64 settles by its terms alone stopped with "a path couldn't be
+     settled": the absolute difference, the mean of whole numbers, the day count's B2, the dates'
+     print block and the CSV total's first block (runs 41911025872, 41914526161; what the solvers
+     were asked, from 41916787131 and 41918825112). Three gaps in `src/prove/exec/aarch64.rs`
+     caused it, each AArch64's instructions read less exactly than x86-64's:
+     - `adds`, `subs` and `negs` set the overflow flag by the xor-and-sign formula always, where
+       x86-64's arithmetic sets it false when the operands' ranges keep the exact result in
+       range; every `b.vs` after one, a number's print or a sum of amounts, was a path for the
+       solvers to refute. Now the same rule.
+     - `tbz` and `tbnz` on the top bit asked for bit 63 as an extract compared with 1, which the
+       value ranges cannot settle; x86-64's `js` reads `result < 0`, which they do. The check of
+       every call's result is `tbnz x0, #63`. Now `x0 < 0`.
+     - `msub` of a quotient and its divisor from the dividend gave `n - 10 × (n / 10)` where the
+       pool had written the quotient as a halving (a quotient by 10 of 5 times a sum is that sum
+       halved), a form no sum folds back to a remainder from, so the program's digits did not
+       meet the formula's `bvurem`. Now the remainder, where the quotient is the dividend's own
+       by a constant; `against_a64` probes it against the CPU.
+     After them the verdicts are the same on both CPUs: the absolute difference 196 shapes, 420
+     paths, no question; the mean of whole numbers 196, 448, none; the day count's B2 none; the
+     CSV total's first block 4096 shapes, none; the dates' print block 1600 shapes and 12098
+     paths, with 173 questions for the solvers on ARM64 and 188 on x86-64 (runs 41921354636,
+     41923532882, 41922605599). Each was pinned first as a cell that stops, rather than the case
+     weakened for both CPUs; the pins failed the day the proofs went through, and are gone.
+- **Where the two CPUs still differ, with the same kind of verdict:** the CRC-32C tier's
+  unreached functions (x86-64's `move_front` and `crc_block`, AArch64's `crc_block` and
+  `crc_join`: different programs, both proven with 101 shapes, 994 paths and no question; run
+  41919475930); the line counter masked by one instruction, which only x86-64 has (`bzhi`; the
+  AArch64 cell says why, and the test insists on the reason); the SVE tier of the word count,
+  proven only where the CPU or emulator has SVE (the ARM64 runner proves it, the x86-64 one notes
+  the skip); the hypotenuse on vectors, packed doubles (`unpcklpd`, `divpd`, `mulpd`) for x86-64
+  and `fdiv`/`fmul` on `.2d` lanes for AArch64; and the words the proof reports in (a frame
+  record holds AArch64's return address inside the frame, so the memory-bug cells match each
+  CPU's own text).
+- **Left.** The prover's reach past the models' differences in the "Prover reach" list above
+  (x86-64's missing vector instructions, AArch64's pointer tracking through `csel`, `and`-immediate
+  and shifted `add`) is as it was; the ARM64 SHA-256 still runs out of time.

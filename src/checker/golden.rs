@@ -1,24 +1,31 @@
-//! Round 9's guard G1: the checker's report on every x86-64 program in the repository and on
-//! thousands of small mutants of them, recorded before the checker moves onto
-//! architecture-neutral instruction facts, so that each step of the move can be shown to change
-//! no report at all.
+//! Round 9's guard G1: the checker's report on every program in the repository, for each of the
+//! two CPUs, x86-64's and ARM64's, and on thousands of small mutants of them, recorded before the
+//! checker moves onto architecture-neutral instruction facts, so that each step of the move can
+//! be shown to change no report at all.
 //!
 //! `LENGUA_GOLDEN=write cargo test --release --lib checker::golden -- --ignored` records the
-//! reports under `target/golden/`; without the variable the test compares and, when anything
-//! differs, writes what it found beside the recording and names the first differences. The
-//! recording isn't committed: it's made again from the commit before the refactor if it's lost.
-//! Builds are cached by their source's hash under `target/golden-cache/`, so a comparison takes
-//! seconds.
+//! reports under `target/golden/`, a recording for each CPU; without the variable the test
+//! compares and, when anything differs, writes what it found beside the recording and names the
+//! first differences. The recording isn't committed: it's made again from the commit before the
+//! refactor if it's lost. A run that finds none, such as a fresh checkout's on a runner, makes
+//! it and says in its summary ([`crate::skiplog`]) that it compared nothing. Builds are cached by
+//! their source's hash under `target/golden-cache/`, so a comparison takes seconds.
+//!
+//! What differs between the CPUs is one table, [`PLACES`]: where the programs are, what a comment
+//! starts with, and the recording's name. The mutants of a CPU's program swap its own registers,
+//! flip its own conditions and move its own addressing; the program lists are what
+//! `tests/baseline.rs` holds to the baseline.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::{Context, Report, check_layout, check_program};
 use crate::hash::Sha256Hex;
 use crate::platform::{CpuFeatures, Profile};
 use crate::spec::Syscall;
+use crate::targets::PerTarget;
 use crate::toolchain::Toolchain;
 
 /// The most mutants made of one program, taken evenly from all of its candidates.
@@ -93,15 +100,122 @@ const FAMILIES: [(&str, &str); 18] = [
     ("ror", "rol"),
 ];
 
-/// The annotations a mutant drops.
+/// The annotations a mutant drops, each written after the dialect's comment marker.
 const ANNOTATIONS: [&str; 6] = [
-    "# bound:",
-    "# returns:",
-    "# unsafe:",
-    "# end unsafe",
-    "# from:",
-    "# shared:",
+    "bound:",
+    "returns:",
+    "unsafe:",
+    "end unsafe",
+    "from:",
+    "shared:",
 ];
+
+/// Condition codes and their opposites in AArch64's `b.cond` and the instructions that select by
+/// one.
+const A64_CONDITIONS: [(&str, &str); 16] = [
+    ("eq", "ne"),
+    ("ne", "eq"),
+    ("hs", "lo"),
+    ("lo", "hs"),
+    ("cs", "cc"),
+    ("cc", "cs"),
+    ("hi", "ls"),
+    ("ls", "hi"),
+    ("mi", "pl"),
+    ("pl", "mi"),
+    ("vs", "vc"),
+    ("vc", "vs"),
+    ("ge", "lt"),
+    ("lt", "ge"),
+    ("gt", "le"),
+    ("le", "gt"),
+];
+
+/// AArch64's instructions that take a condition as their last operand.
+const A64_SELECTS: [&str; 9] = [
+    "csel", "csinc", "csinv", "csneg", "cset", "csetm", "cinc", "cinv", "cneg",
+];
+
+/// AArch64's instructions a mutant swaps for a close relative.
+const A64_FAMILIES: [(&str, &str); 20] = [
+    ("add", "sub"),
+    ("sub", "add"),
+    ("adds", "subs"),
+    ("subs", "adds"),
+    ("cmp", "cmn"),
+    ("cmn", "cmp"),
+    ("and", "orr"),
+    ("orr", "and"),
+    ("eor", "orr"),
+    ("lsl", "lsr"),
+    ("lsr", "lsl"),
+    ("tbz", "tbnz"),
+    ("tbnz", "tbz"),
+    ("cbz", "cbnz"),
+    ("cbnz", "cbz"),
+    ("udiv", "sdiv"),
+    ("sdiv", "udiv"),
+    ("ldrb", "ldrsb"),
+    ("ldrsb", "ldrb"),
+    ("mul", "add"),
+];
+
+/// What differs between the targets: where the programs are, what a comment starts with, and the
+/// recording's name.
+pub(crate) struct Places {
+    /// What its recordings are called: `checker-<label>.txt` and `prover-<label>.txt`.
+    pub(crate) label: &'static str,
+    /// Folders of programs, each holding a spec.md and a main.s, from the repository's root.
+    folders: &'static [&'static str],
+    /// The skill's assets for the target, where its templates and its fast programs are.
+    assets: &'static str,
+    /// The benchmark's variants for the target: the spec each meets, and its main.s.
+    benches: &'static [(&'static str, &'static str)],
+    /// What starts a comment in its dialect.
+    comment: &'static str,
+}
+
+/// The skill's assets that the targets share: the specs of the templates and of the fast
+/// programs that have none of their own.
+const SHARED_ASSETS: &str = "plugin/skills/compile/assets";
+
+/// Each target's places.
+pub(crate) static PLACES: PerTarget<Places> = PerTarget {
+    linux_x86_64: Places {
+        label: "x86",
+        folders: &["examples", "tests/fixtures"],
+        assets: SHARED_ASSETS,
+        benches: &[
+            (
+                "examples/upcase/spec.md",
+                "benches/programs/upcase/avx512.s",
+            ),
+            ("examples/count/spec.md", "benches/programs/count/avx512.s"),
+            (
+                "plugin/skills/compile/assets/parallel-template-spec.md",
+                "benches/programs/shout/avx512.s",
+            ),
+            (
+                "plugin/skills/compile/assets/parallel-template-spec.md",
+                "benches/programs/shout/avx512-one.s",
+            ),
+        ],
+        comment: "#",
+    },
+    linux_aarch64: Places {
+        label: "aarch64",
+        folders: &["tests/fixtures/linux-aarch64"],
+        assets: "plugin/skills/compile/assets/linux-aarch64",
+        benches: &[
+            ("examples/upcase/spec.md", "benches/programs/upcase/neon.s"),
+            (
+                "plugin/skills/compile/assets/parallel-template-spec.md",
+                "benches/programs/shout/neon-one.s",
+            ),
+        ],
+        comment: "//",
+    },
+};
 
 /// A program and the spec that says which system calls and threads it may use.
 pub(crate) struct Program {
@@ -117,17 +231,67 @@ fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// Every x86-64 program in the repository, with its spec.
-pub(crate) fn programs() -> Vec<Program> {
+/// The names of what `folder` holds that end with `suffix`, sorted.
+fn names_ending(folder: &Path, suffix: &str) -> Vec<String> {
+    let mut found: Vec<String> = std::fs::read_dir(folder)
+        .unwrap_or_else(|error| panic!("{}: {error}", folder.display()))
+        .map(|entry| {
+            entry
+                .expect("an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .filter(|name| name.ends_with(suffix))
+        .collect();
+    found.sort();
+    found
+}
+
+/// The spec of the program in `folder`, a folder of a target's fast programs: its own spec.md or,
+/// for a program named for the extension it uses after the program it speeds up (`wc-sve`), that
+/// program's, looked for in the target's folder first and then in the shared one.
+fn spec_of(folder: &Path) -> PathBuf {
+    let own = folder.join("spec.md");
+    if own.is_file() {
+        return own;
+    }
+    let shared = root().join(SHARED_ASSETS).join("fast");
+    let beside = folder.parent().expect("a folder of programs").to_owned();
+    let mut name = folder
+        .file_name()
+        .expect("a name")
+        .to_string_lossy()
+        .into_owned();
+    loop {
+        for fast in [&beside, &shared] {
+            let spec = fast.join(&name).join("spec.md");
+            if spec.is_file() {
+                return spec;
+            }
+        }
+        match name.rsplit_once('-') {
+            Some((speeds_up, _)) => name = speeds_up.to_owned(),
+            None => panic!("{} has no spec", folder.display()),
+        }
+    }
+}
+
+/// Every program of `profile`'s in the repository, with its spec: the examples and fixtures, the
+/// fast programs, the skill's templates, and the benchmark's variants.
+pub(crate) fn programs(profile: Profile) -> Vec<Program> {
     let root = root();
+    let places = PLACES.get(profile);
     let mut pairs: Vec<(PathBuf, PathBuf)> = Vec::new();
-    for folder in [
-        "examples",
-        "tests/fixtures",
-        "plugin/skills/compile/assets/fast",
-    ] {
-        let mut entries: Vec<PathBuf> = std::fs::read_dir(root.join(folder))
-            .expect("a folder of programs")
+    let mut folders: Vec<PathBuf> = places
+        .folders
+        .iter()
+        .map(|folder| root.join(folder))
+        .collect();
+    folders.push(root.join(places.assets).join("fast"));
+    for folder in folders {
+        let mut entries: Vec<PathBuf> = std::fs::read_dir(&folder)
+            .unwrap_or_else(|error| panic!("{}: {error}", folder.display()))
             .map(|entry| entry.expect("an entry").path())
             .filter(|path| path.join("main.s").is_file())
             .collect();
@@ -135,35 +299,22 @@ pub(crate) fn programs() -> Vec<Program> {
         pairs.extend(
             entries
                 .into_iter()
-                .map(|path| (path.join("spec.md"), path.join("main.s"))),
+                .map(|path| (spec_of(&path), path.join("main.s"))),
         );
     }
-    let assets = root.join("plugin/skills/compile/assets");
-    for (spec, code) in [
-        ("template-spec.md", "main-template.s"),
-        ("vector-template-spec.md", "vector-template.s"),
-        ("parallel-template-spec.md", "parallel-template.s"),
-        ("server-template-spec.md", "server-template.s"),
-        ("terminal-template-spec.md", "terminal-template.s"),
-        ("stream-template-spec.md", "stream-template.s"),
-        ("tally-template-spec.md", "tally-template.s"),
-    ] {
-        pairs.push((assets.join(spec), assets.join(code)));
+    // A template is made from the spec of its name: main-template.s from template-spec.md.
+    let assets = root.join(places.assets);
+    for name in names_ending(&assets, "-template.s") {
+        let stem = name.strip_suffix("-template.s").unwrap_or_default();
+        let spec = if stem == "main" {
+            "template-spec.md".to_owned()
+        } else {
+            format!("{stem}-template-spec.md")
+        };
+        pairs.push((root.join(SHARED_ASSETS).join(spec), assets.join(name)));
     }
-    let benches = root.join("benches/programs");
-    for (spec, code) in [
-        ("examples/upcase/spec.md", "upcase/avx512.s"),
-        ("examples/count/spec.md", "count/avx512.s"),
-        (
-            "plugin/skills/compile/assets/parallel-template-spec.md",
-            "shout/avx512.s",
-        ),
-        (
-            "plugin/skills/compile/assets/parallel-template-spec.md",
-            "shout/avx512-one.s",
-        ),
-    ] {
-        pairs.push((root.join(spec), benches.join(code)));
+    for (spec, code) in places.benches {
+        pairs.push((root.join(spec), root.join(code)));
     }
     pairs
         .into_iter()
@@ -189,8 +340,10 @@ pub(crate) fn programs() -> Vec<Program> {
 /// The mutants of `text`, each with its name: for every instruction, the line deleted,
 /// doubled, swapped with the next, a register, a number, a condition or the instruction
 /// changed for a neighbour, or its memory operand moved; for every annotation, the annotation
-/// dropped. At most [`MAX_MUTANTS`], taken evenly.
-fn mutants(text: &str) -> Vec<(String, String)> {
+/// dropped. At most [`MAX_MUTANTS`], taken evenly. The registers, conditions, instructions and
+/// addressing a mutant changes, and the comment it keeps, are `profile`'s.
+fn mutants(profile: Profile, text: &str) -> Vec<(String, String)> {
+    let marker = PLACES.get(profile).comment;
     let lines: Vec<&str> = text.lines().collect();
     let (source, _) = check_layout(text);
     let instructions: BTreeSet<usize> = source
@@ -228,7 +381,7 @@ fn mutants(text: &str) -> Vec<(String, String)> {
             swapped.swap(index, index + 1);
             found.push((id("swap"), swapped.join("\n") + "\n"));
         }
-        let (code, comment) = match line.find('#') {
+        let (code, comment) = match line.find(marker) {
             Some(at) => line.split_at(at),
             None => (line, ""),
         };
@@ -241,7 +394,7 @@ fn mutants(text: &str) -> Vec<(String, String)> {
                 .trim_end()
                 .to_owned()
         };
-        if let Some(swapped) = swap_register(operands) {
+        if let Some(swapped) = swap_register(profile, operands) {
             found.push((id("reg"), with(index, Some(rebuild(mnemonic, &swapped)))));
         }
         if let Some((start, end, value)) = last_number(operands) {
@@ -256,20 +409,24 @@ fn mutants(text: &str) -> Vec<(String, String)> {
                 }
             }
         }
-        if let Some(flipped) = flip_condition(mnemonic) {
-            found.push((id("cond"), with(index, Some(rebuild(&flipped, operands)))));
+        if let Some((flipped, operands)) = flip_condition(profile, mnemonic, operands) {
+            found.push((id("cond"), with(index, Some(rebuild(&flipped, &operands)))));
         }
-        if let Some((_, other)) = FAMILIES.iter().find(|(name, _)| *name == mnemonic) {
+        let families: &[(&str, &str)] = match profile {
+            Profile::LinuxX86_64 => &FAMILIES,
+            Profile::LinuxAarch64 => &A64_FAMILIES,
+        };
+        if let Some((_, other)) = families.iter().find(|(name, _)| *name == mnemonic) {
             found.push((id("family"), with(index, Some(rebuild(other, operands)))));
         }
-        if let Some(moved) = move_memory(operands) {
+        if let Some(moved) = move_memory(profile, operands) {
             found.push((id("mem"), with(index, Some(rebuild(mnemonic, &moved)))));
         }
     }
     for (index, line) in lines.iter().enumerate() {
         if let Some(at) = ANNOTATIONS
             .iter()
-            .find_map(|annotation| line.find(annotation))
+            .find_map(|annotation| line.find(&format!("{marker} {annotation}")))
         {
             let dropped = line[..at].trim_end().to_owned();
             found.push((format!("L{}:annot", index + 1), with(index, Some(dropped))));
@@ -303,19 +460,44 @@ fn words(text: &str) -> Vec<(usize, usize)> {
     found
 }
 
+/// `register` as the next register of its width and kind, on `profile`'s CPU: x86-64's rax to
+/// rbx and on through its row, xmm0 to xmm1; AArch64's x0 to x1 (x0 to x28), w0 to w1, v0.16b to
+/// v1.16b.
+fn next_register(profile: Profile, register: &str) -> Option<String> {
+    match profile {
+        Profile::LinuxX86_64 => {
+            let next = REGISTERS.iter().find_map(|row| {
+                let at = row.iter().position(|name| *name == register)?;
+                Some(row[(at + 1) % row.len()].to_owned())
+            });
+            let vector = ["xmm", "ymm", "zmm"].iter().find_map(|prefix| {
+                let number: u32 = register.strip_prefix(prefix)?.parse().ok()?;
+                Some(format!("{prefix}{}", (number + 1) % 16))
+            });
+            next.or(vector)
+        }
+        Profile::LinuxAarch64 => {
+            let general = ['x', 'w'].iter().find_map(|prefix| {
+                let number: u32 = register.strip_prefix(*prefix)?.parse().ok()?;
+                (number <= 28).then(|| format!("{prefix}{}", (number + 1) % 29))
+            });
+            // `v1.16b`: the register's number, then its arrangement.
+            let vector = register.strip_prefix('v').and_then(|rest| {
+                let digits = rest
+                    .find(|character: char| !character.is_ascii_digit())
+                    .unwrap_or(rest.len());
+                let number: u32 = rest[..digits].parse().ok()?;
+                Some(format!("v{}{}", (number + 1) % 32, &rest[digits..]))
+            });
+            general.or(vector)
+        }
+    }
+}
+
 /// `operands` with its first register swapped for the next of its width.
-fn swap_register(operands: &str) -> Option<String> {
+fn swap_register(profile: Profile, operands: &str) -> Option<String> {
     for (start, end) in words(operands) {
-        let word = &operands[start..end];
-        let next = REGISTERS.iter().find_map(|row| {
-            let at = row.iter().position(|register| *register == word)?;
-            Some(row[(at + 1) % row.len()].to_owned())
-        });
-        let vector = ["xmm", "ymm", "zmm"].iter().find_map(|prefix| {
-            let number: u32 = word.strip_prefix(prefix)?.parse().ok()?;
-            Some(format!("{prefix}{}", (number + 1) % 16))
-        });
-        if let Some(new) = next.or(vector) {
+        if let Some(new) = next_register(profile, &operands[start..end]) {
             return Some(format!("{}{new}{}", &operands[..start], &operands[end..]));
         }
     }
@@ -336,7 +518,7 @@ fn last_number(operands: &str) -> Option<(usize, usize, i64)> {
 }
 
 /// `mnemonic` with its condition reversed, for a `jcc`, `setcc` or `cmovcc`.
-fn flip_condition(mnemonic: &str) -> Option<String> {
+fn flip_x86_condition(mnemonic: &str) -> Option<String> {
     ["cmov", "set", "j"].iter().find_map(|prefix| {
         let condition = mnemonic.strip_prefix(prefix)?;
         let (_, opposite) = CONDITIONS.iter().find(|(code, _)| *code == condition)?;
@@ -344,15 +526,79 @@ fn flip_condition(mnemonic: &str) -> Option<String> {
     })
 }
 
-/// `operands` with its memory operand's scale changed, or 8 bytes further on.
-fn move_memory(operands: &str) -> Option<String> {
-    for (from, to) in [("*8", "*4"), ("*4", "*8"), ("*2", "*4"), ("*1", "*2")] {
-        if operands.contains(from) {
-            return Some(operands.replacen(from, to, 1));
+/// The opposite of AArch64's condition `code`.
+fn opposite_a64_condition(code: &str) -> Option<&'static str> {
+    A64_CONDITIONS
+        .iter()
+        .find(|(name, _)| *name == code)
+        .map(|(_, opposite)| *opposite)
+}
+
+/// The instruction `mnemonic` with `operands` as `profile`'s CPU has it with the condition it
+/// tests reversed: x86-64's `jcc`, `setcc` and `cmovcc` by their names; AArch64's `b.cond` by its
+/// name, and `csel`, `cset` and their kin by their last operand.
+fn flip_condition(profile: Profile, mnemonic: &str, operands: &str) -> Option<(String, String)> {
+    match profile {
+        Profile::LinuxX86_64 => {
+            flip_x86_condition(mnemonic).map(|flipped| (flipped, operands.to_owned()))
+        }
+        Profile::LinuxAarch64 => {
+            if let Some(code) = mnemonic.strip_prefix("b.") {
+                let opposite = opposite_a64_condition(code)?;
+                return Some((format!("b.{opposite}"), operands.to_owned()));
+            }
+            if !A64_SELECTS.contains(&mnemonic) {
+                return None;
+            }
+            let (before, code) = operands.rsplit_once(", ")?;
+            let opposite = opposite_a64_condition(code)?;
+            Some((mnemonic.to_owned(), format!("{before}, {opposite}")))
         }
     }
-    let end = operands.find(']')?;
-    Some(format!("{} + 8{}", &operands[..end], &operands[end..]))
+}
+
+/// `operands` with its memory operand's scale changed, or 8 bytes further on: x86-64's `*8` to
+/// `*4`; AArch64's `lsl #3` to `lsl #2`, or its immediate offset 8 further on.
+fn move_memory(profile: Profile, operands: &str) -> Option<String> {
+    match profile {
+        Profile::LinuxX86_64 => {
+            for (from, to) in [("*8", "*4"), ("*4", "*8"), ("*2", "*4"), ("*1", "*2")] {
+                if operands.contains(from) {
+                    return Some(operands.replacen(from, to, 1));
+                }
+            }
+            let end = operands.find(']')?;
+            Some(format!("{} + 8{}", &operands[..end], &operands[end..]))
+        }
+        Profile::LinuxAarch64 => {
+            let end = operands.find(']')?;
+            let open = operands[..end].rfind('[')?;
+            // A post-indexed access, `[sp], #16`, has its offset after the bracket: left alone.
+            if operands[end + 1..].trim_start().starts_with(',') {
+                return None;
+            }
+            let bracket = &operands[open + 1..end];
+            for (from, to) in [
+                ("lsl #3", "lsl #2"),
+                ("lsl #2", "lsl #3"),
+                ("lsl #1", "lsl #2"),
+            ] {
+                if bracket.contains(from) {
+                    return Some(operands.replacen(from, to, 1));
+                }
+            }
+            // An offset `[x1, #4]` becomes `[x1, #12]`; a base alone `[x1]` gets `#8`.
+            let (head, tail) = (&operands[..=open], &operands[end..]);
+            match bracket.rsplit_once(", #") {
+                Some((base, offset)) => {
+                    let number: i64 = offset.parse().ok()?;
+                    Some(format!("{head}{base}, #{}{tail}", number + 8))
+                }
+                None if !bracket.contains(',') => Some(format!("{head}{bracket}, #8{tail}")),
+                None => None,
+            }
+        }
+    }
 }
 
 /// What the checker says, line by line.
@@ -367,9 +613,13 @@ fn describe(report: &Report) -> String {
     text
 }
 
-/// `text` built, from the cache when it was built before: the executable, or why it didn't
-/// build.
-pub(crate) async fn built(toolchain: &Toolchain, text: &str) -> Result<Vec<u8>, String> {
+/// `text` built for `profile`'s CPU, from the cache when it was built before: the executable, or
+/// why it didn't build.
+pub(crate) async fn built(
+    profile: Profile,
+    toolchain: &Toolchain,
+    text: &str,
+) -> Result<Vec<u8>, String> {
     let key = Sha256Hex::of(text.as_bytes());
     let folder = root().join("target/golden-cache").join(key.as_str());
     let (assembly, object, executable, failure) = (
@@ -390,15 +640,8 @@ pub(crate) async fn built(toolchain: &Toolchain, text: &str) -> Result<Vec<u8>, 
     tokio::fs::write(&assembly, text)
         .await
         .expect("write main.s");
-    let made = match toolchain
-        .assemble(Profile::LinuxX86_64, &assembly, &object)
-        .await
-    {
-        Ok(()) => {
-            toolchain
-                .link(Profile::LinuxX86_64, &object, &executable)
-                .await
-        }
+    let made = match toolchain.assemble(profile, &assembly, &object).await {
+        Ok(()) => toolchain.link(profile, &object, &executable).await,
         Err(error) => Err(error),
     };
     match made {
@@ -416,8 +659,10 @@ pub(crate) async fn built(toolchain: &Toolchain, text: &str) -> Result<Vec<u8>, 
     }
 }
 
-/// The checker's report on `text`, as [`describe`] writes it, or why it didn't build.
+/// The checker's report on `text` for `profile`'s CPU, as [`describe`] writes it, or why it
+/// didn't build.
 async fn report(
+    profile: Profile,
     toolchain: &Toolchain,
     text: &str,
     syscalls: &[Syscall],
@@ -427,7 +672,7 @@ async fn report(
     if !layout.passed() {
         return format!("layout\n{}", describe(&layout));
     }
-    match built(toolchain, text).await {
+    match built(profile, toolchain, text).await {
         Ok(bytes) => describe(&check_program(
             &source,
             &bytes,
@@ -435,15 +680,16 @@ async fn report(
                 syscalls,
                 threads,
                 features: CpuFeatures::all(),
-                profile: Profile::LinuxX86_64,
+                profile,
             },
         )),
         Err(message) => format!("build failed: {message}\n"),
     }
 }
 
-/// The recording: each program's report in full, then a hash of each mutant's.
-async fn record() -> String {
+/// The recording of `profile`'s programs: each program's report in full, then a hash of each
+/// mutant's.
+async fn record(profile: Profile) -> String {
     let toolchain = Arc::new(
         Toolchain::discover()
             .await
@@ -454,10 +700,10 @@ async fn record() -> String {
     // Every text is checked once, by its hash, whichever programs and mutants share it.
     let mut started: BTreeSet<String> = BTreeSet::new();
     let mut listed: Vec<(String, Vec<(String, String)>)> = Vec::new();
-    for program in programs() {
+    for program in programs(profile) {
         let mut ids = Vec::new();
         let all = std::iter::once(("base".to_owned(), program.text.clone()))
-            .chain(mutants(&program.text));
+            .chain(mutants(profile, &program.text));
         for (id, text) in all {
             let key = Sha256Hex::of(text.as_bytes()).as_str().to_owned();
             ids.push((id, key.clone()));
@@ -468,7 +714,8 @@ async fn record() -> String {
             let (syscalls, threads) = (Arc::clone(&program.syscalls), program.threads);
             tasks.spawn(async move {
                 let _permit = permits.acquire_owned().await.expect("never closed");
-                (key, report(&toolchain, &text, &syscalls, threads).await)
+                let found = report(profile, &toolchain, &text, &syscalls, threads).await;
+                (key, found)
             });
         }
         listed.push((program.name, ids));
@@ -501,27 +748,35 @@ fn recording_path(name: &str) -> PathBuf {
     root().join("target/golden").join(name)
 }
 
+/// Writes `found` as the recording at `path`.
+fn record_at(path: &Path, found: &str) {
+    std::fs::create_dir_all(path.parent().expect("a folder")).expect("make target/golden");
+    std::fs::write(path, found).expect("record");
+    eprintln!(
+        "recorded {} ({} lines)",
+        path.display(),
+        found.lines().count()
+    );
+}
+
 /// Compares `found` with the recording called `name`, or records it under
-/// `LENGUA_GOLDEN=write`.
+/// `LENGUA_GOLDEN=write`. Where there is no recording, as on a fresh checkout, it makes one and
+/// notes in the run's summary that it compared nothing: the run is a smoke test of the guard's
+/// machinery, and the guard around a refactor needs the recording of the commit before it.
 pub(crate) fn compare_or_record(name: &str, found: &str) {
     let path = recording_path(name);
     if std::env::var("LENGUA_GOLDEN").as_deref() == Ok("write") {
-        std::fs::create_dir_all(path.parent().expect("a folder")).expect("make target/golden");
-        std::fs::write(&path, found).expect("record");
-        eprintln!(
-            "recorded {} ({} lines)",
-            path.display(),
-            found.lines().count()
-        );
+        record_at(&path, found);
         return;
     }
-    let recorded = std::fs::read_to_string(&path).unwrap_or_else(|_| {
-        panic!(
-            "{} isn't recorded: record it with LENGUA_GOLDEN=write at the commit before the \
-             refactor",
-            path.display()
-        )
-    });
+    let Ok(recorded) = std::fs::read_to_string(&path) else {
+        record_at(&path, found);
+        crate::skiplog::note(&format!(
+            "{name} had no recording to compare with (LENGUA_GOLDEN=write makes one at the commit \
+             before a refactor): this run recorded it and compared nothing"
+        ));
+        return;
+    };
     if recorded == found {
         return;
     }
@@ -543,34 +798,123 @@ pub(crate) fn compare_or_record(name: &str, found: &str) {
     );
 }
 
+/// The guard on `profile`'s programs: their reports, and those of their mutants, are as recorded.
+/// Where there is no recording to compare with, the reports are made twice (the second time from
+/// the cached builds) and must be the same, which at least shows the guard is deterministic.
+async fn reports_are_as_recorded(profile: Profile) {
+    let name = format!("checker-{}.txt", PLACES.get(profile).label);
+    let writing = std::env::var("LENGUA_GOLDEN").as_deref() == Ok("write");
+    let fresh = !writing && !recording_path(&name).is_file();
+    let found = record(profile).await;
+    compare_or_record(&name, &found);
+    if fresh {
+        let again = record(profile).await;
+        assert!(
+            again == found,
+            "{name}: two runs of the checker on the same programs gave different reports"
+        );
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Round 9's guard: run with --ignored around the checker's refactor"]
 async fn every_report_is_as_recorded() {
-    let found = record().await;
-    compare_or_record("checker-x86.txt", &found);
+    reports_are_as_recorded(Profile::LinuxX86_64).await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Round 9's guard: run with --ignored around the checker's refactor"]
+async fn every_report_is_as_recorded_on_aarch64() {
+    reports_are_as_recorded(Profile::LinuxAarch64).await;
+}
+
+/// The template of each target, whose mutants the next test looks at.
+const TEMPLATES: PerTarget<&str> = PerTarget {
+    linux_x86_64: super::TEMPLATE,
+    linux_aarch64: super::AARCH64_TEMPLATE,
+};
 
 #[test]
 fn mutants_are_made_the_same_way_every_time() {
-    let text = super::TEMPLATE;
-    let (first, second) = (mutants(text), mutants(text));
-    assert_eq!(first, second);
-    assert!(
-        first.len() > 100 && first.len() <= MAX_MUTANTS,
-        "{}",
-        first.len()
-    );
-    let kinds: BTreeSet<&str> = first
-        .iter()
-        .filter_map(|(id, _)| id.split_once(':').map(|(_, kind)| kind))
-        .collect();
-    for kind in [
-        "del", "dup", "swap", "reg", "imm0", "cond", "family", "annot",
-    ] {
-        assert!(kinds.contains(kind), "{kind} in {kinds:?}");
+    for profile in Profile::ALL {
+        let text = *TEMPLATES.get(profile);
+        let name = profile.name();
+        let (first, second) = (mutants(profile, text), mutants(profile, text));
+        assert_eq!(first, second, "{name}");
+        assert!(
+            first.len() > 100 && first.len() <= MAX_MUTANTS,
+            "{name}: {}",
+            first.len()
+        );
+        let kinds: BTreeSet<&str> = first
+            .iter()
+            .filter_map(|(id, _)| id.split_once(':').map(|(_, kind)| kind))
+            .collect();
+        for kind in [
+            "del", "dup", "swap", "reg", "imm0", "cond", "family", "annot",
+        ] {
+            assert!(kinds.contains(kind), "{name}: {kind} in {kinds:?}");
+        }
+        // Each mutant changes the program.
+        assert!(first.iter().all(|(_, mutant)| mutant != text), "{name}");
     }
-    // Each mutant changes the program.
-    assert!(first.iter().all(|(_, mutant)| mutant != text));
+}
+
+/// A mutant of each target's program moves what that CPU's instructions have: registers by their
+/// names, the condition a jump or a select tests, and the addressing of a load.
+#[test]
+fn mutants_move_each_cpus_own_instructions() {
+    assert_eq!(
+        swap_register(Profile::LinuxX86_64, "rax, qword ptr [rsi + rcx*8]").as_deref(),
+        Some("rbx, qword ptr [rsi + rcx*8]")
+    );
+    assert_eq!(
+        swap_register(Profile::LinuxAarch64, "x0, [x1, x2, lsl #3]").as_deref(),
+        Some("x1, [x1, x2, lsl #3]")
+    );
+    assert_eq!(
+        swap_register(Profile::LinuxAarch64, "v3.16b, v4.16b").as_deref(),
+        Some("v4.16b, v4.16b")
+    );
+    // x30 and sp are not swapped.
+    assert_eq!(swap_register(Profile::LinuxAarch64, "x30, sp"), None);
+    assert_eq!(
+        flip_condition(Profile::LinuxX86_64, "jne", ".Lagain"),
+        Some(("je".to_owned(), ".Lagain".to_owned()))
+    );
+    assert_eq!(
+        flip_condition(Profile::LinuxAarch64, "b.ne", ".Lagain"),
+        Some(("b.eq".to_owned(), ".Lagain".to_owned()))
+    );
+    assert_eq!(
+        flip_condition(Profile::LinuxAarch64, "csel", "x0, x7, x0, lo"),
+        Some(("csel".to_owned(), "x0, x7, x0, hs".to_owned()))
+    );
+    assert_eq!(
+        flip_condition(Profile::LinuxAarch64, "cset", "w7, lo"),
+        Some(("cset".to_owned(), "w7, hs".to_owned()))
+    );
+    assert_eq!(
+        flip_condition(Profile::LinuxAarch64, "add", "x0, x1, x2"),
+        None
+    );
+    assert_eq!(
+        move_memory(Profile::LinuxAarch64, "w5, [x1, x4, lsl #2]").as_deref(),
+        Some("w5, [x1, x4, lsl #3]")
+    );
+    assert_eq!(
+        move_memory(Profile::LinuxAarch64, "x2, [sp, #16]").as_deref(),
+        Some("x2, [sp, #24]")
+    );
+    assert_eq!(
+        move_memory(Profile::LinuxAarch64, "w5, [x1]").as_deref(),
+        Some("w5, [x1, #8]")
+    );
+    // A post-indexed pair keeps its writeback.
+    assert_eq!(
+        move_memory(Profile::LinuxAarch64, "x29, x30, [sp], #16"),
+        None
+    );
 }
 
 /// Prints the report on one program or mutant, for a golden that differs:
@@ -580,14 +924,19 @@ fn mutants_are_made_the_same_way_every_time() {
 async fn explains_a_mutant() {
     let wanted = std::env::var("LENGUA_GOLDEN_MUTANT").expect("LENGUA_GOLDEN_MUTANT names one");
     let (name, id) = wanted.split_once(' ').expect("a program and a mutant");
-    let program = programs()
+    let (profile, program) = Profile::ALL
         .into_iter()
-        .find(|program| program.name == name)
+        .flat_map(|profile| {
+            programs(profile)
+                .into_iter()
+                .map(move |found| (profile, found))
+        })
+        .find(|(_, program)| program.name == name)
         .expect("a program in the golden");
     let text = if id == "base" {
         program.text.clone()
     } else {
-        mutants(&program.text)
+        mutants(profile, &program.text)
             .into_iter()
             .find(|(found, _)| found == id)
             .expect("a mutant of it")
@@ -596,6 +945,13 @@ async fn explains_a_mutant() {
     let toolchain = Toolchain::discover().await.expect("llvm-mc and ld.lld");
     eprintln!(
         "{}",
-        report(&toolchain, &text, &program.syscalls, program.threads).await
+        report(
+            profile,
+            &toolchain,
+            &text,
+            &program.syscalls,
+            program.threads
+        )
+        .await
     );
 }

@@ -1,7 +1,10 @@
-//! Round 9's guard G3: the prover on every x86-64 program in the repository, recorded before its
-//! machine model moves onto per-CPU tables, so each step of the move can be shown to change
-//! nothing: each generated block's samples run through the concrete model (how each ended, its
-//! steps, registers, flags and output), and each block's proofs.
+//! Round 9's guard G3: the prover on every program in the repository, x86-64's and ARM64's,
+//! recorded before its machine model moves onto per-CPU tables, so each step of the move can be
+//! shown to change nothing: each generated block's samples run through the concrete model (how
+//! each ended, its steps, registers, flags and output), and each block's proofs. A CPU's
+//! programs are the checker golden's list for it ([`crate::checker::golden::PLACES`]); the
+//! programs that use SVE are recorded at vectors of 16 bytes, so the recording does not depend
+//! on the computer that makes it.
 //!
 //! The server's proofs go as far as their time allows, which differs from one run to the next, so
 //! here each block is proven in ways that always end the same: by induction, its step over the
@@ -22,8 +25,10 @@ use super::exec::{self, Image};
 use super::term::Pool;
 use super::{Budget, Verdict, by_length, sample_start};
 use crate::checker::decode::Machine;
-use crate::checker::golden::{built, compare_or_record, programs};
+use crate::checker::golden::{PLACES, built, compare_or_record, programs};
 use crate::expr::Generator;
+use crate::platform::Profile;
+use crate::targets::PerTarget;
 use crate::testfile::Generated;
 use crate::toolchain::Toolchain;
 
@@ -49,46 +54,90 @@ const COMBINATIONS: usize = 1024;
 /// How many bytes past the shortest the base of a proof by induction goes here.
 const BASE_LENGTHS: usize = 3;
 
+/// The length of the SVE vectors the programs that use them are recorded at, in bytes.
+const SVE_BYTES: u16 = 16;
+
 /// The blocks, by program and number, whose proofs by length take minutes over the wider parts
 /// of their ranges, with where in [`CUTS`] each starts: calc's 64-bit products, and histogram's
-/// table of counts, which the solvers take a minute and a half over at texts of 3 bytes.
-const NARROW: [(&str, usize, usize); 2] = [
-    ("tests/fixtures/calc/main.s", 3, 2),
-    ("plugin/skills/compile/assets/fast/histogram/main.s", 1, 1),
-];
+/// table of counts, which the solvers take a minute and a half over at texts of 3 bytes. Each
+/// target's own programs.
+const NARROW: PerTarget<&[(&str, usize, usize)]> = PerTarget {
+    linux_x86_64: &[
+        ("tests/fixtures/calc/main.s", 3, 2),
+        ("plugin/skills/compile/assets/fast/histogram/main.s", 1, 1),
+    ],
+    linux_aarch64: &[
+        ("tests/fixtures/linux-aarch64/calc/main.s", 3, 2),
+        (
+            "plugin/skills/compile/assets/linux-aarch64/fast/histogram/main.s",
+            1,
+            1,
+        ),
+    ],
+};
+
+/// A program and the changes to its main.s that give the smaller buffer its proof by induction
+/// is proven with.
+type Smaller = (&'static str, &'static [(&'static str, &'static str)]);
 
 /// The programs proven by induction here with a smaller buffer than their own, as the prover's
 /// tests prove them: the step over a buffer-full of 4096 symbolic bytes takes the solvers
 /// minutes. Each change is a line of main.s and what it becomes, a loop's bound with its
-/// buffer's where it counts the buffer's steps.
-const SMALLER: [(&str, &[(&str, &str)]); 4] = [
-    (
-        "tests/fixtures/lines/main.s",
-        &[(".equ BUF_LEN, 4096\n", ".equ BUF_LEN, 256\n")],
-    ),
-    (
-        "tests/fixtures/words/main.s",
-        &[(".equ BUF_LEN, 4096\n", ".equ BUF_LEN, 256\n")],
-    ),
-    (
-        "plugin/skills/compile/assets/fast/wc/main.s",
-        &[
-            (".equ BUF_LEN, 65536\n", ".equ BUF_LEN, 256\n"),
-            ("  # bound: 4096\n", "  # bound: 16\n"),
-        ],
-    ),
-    (
-        "plugin/skills/compile/assets/fast/wc-avx512/main.s",
-        &[
-            (".equ BUF_LEN, 65536\n", ".equ BUF_LEN, 256\n"),
-            ("  # bound: 1024\n", "  # bound: 4\n"),
-        ],
-    ),
-];
+/// buffer's where it counts the buffer's steps. Each target's own programs.
+const SMALLER: PerTarget<&[Smaller]> = PerTarget {
+    linux_x86_64: &[
+        (
+            "tests/fixtures/lines/main.s",
+            &[(".equ BUF_LEN, 4096\n", ".equ BUF_LEN, 256\n")],
+        ),
+        (
+            "tests/fixtures/words/main.s",
+            &[(".equ BUF_LEN, 4096\n", ".equ BUF_LEN, 256\n")],
+        ),
+        (
+            "plugin/skills/compile/assets/fast/wc/main.s",
+            &[
+                (".equ BUF_LEN, 65536\n", ".equ BUF_LEN, 256\n"),
+                ("  # bound: 4096\n", "  # bound: 16\n"),
+            ],
+        ),
+        (
+            "plugin/skills/compile/assets/fast/wc-avx512/main.s",
+            &[
+                (".equ BUF_LEN, 65536\n", ".equ BUF_LEN, 256\n"),
+                ("  # bound: 1024\n", "  # bound: 4\n"),
+            ],
+        ),
+    ],
+    linux_aarch64: &[
+        (
+            "tests/fixtures/linux-aarch64/lines/main.s",
+            &[(".equ BUF_LEN, 4096\n", ".equ BUF_LEN, 256\n")],
+        ),
+        (
+            "tests/fixtures/linux-aarch64/words/main.s",
+            &[(".equ BUF_LEN, 4096\n", ".equ BUF_LEN, 256\n")],
+        ),
+        (
+            "plugin/skills/compile/assets/linux-aarch64/fast/wc/main.s",
+            &[
+                (".equ BUF_LEN, 65536\n", ".equ BUF_LEN, 256\n"),
+                ("  // bound: 4096\n", "  // bound: 16\n"),
+            ],
+        ),
+        (
+            "plugin/skills/compile/assets/linux-aarch64/fast/wc-sve/main.s",
+            &[
+                (".equ BUF_LEN, 65536\n", ".equ BUF_LEN, 256\n"),
+                ("  // bound: 4096\n", "  // bound: 16\n"),
+            ],
+        ),
+    ],
+};
 
-/// The machine code of `text`, with what main.s names and its jump tables, as the server
-/// passes them to the prover.
-fn machine_of(text: &str, bytes: &[u8]) -> Machine {
+/// The machine code of `text` for `profile`'s CPU, with what main.s names and its jump tables,
+/// as the server passes them to the prover.
+fn machine_of(profile: Profile, text: &str, bytes: &[u8]) -> Machine {
     let mut machine = crate::checker::decode::read(bytes).expect("decode");
     let (parsed, _) = crate::checker::check_layout(text);
     if let Some(program) = crate::checker::decode::map(
@@ -100,6 +149,9 @@ fn machine_of(text: &str, bytes: &[u8]) -> Machine {
         machine.named = program.named_symbols();
         let jumps = crate::checker::tables::every(&program, &mut Vec::new());
         machine.tables = crate::checker::tables::addresses(&program, &jumps);
+    }
+    if profile == Profile::LinuxAarch64 {
+        machine.sve_bytes = SVE_BYTES;
     }
     machine
 }
@@ -289,35 +341,39 @@ fn proofs(
 }
 
 /// The recording: per program and generated block, each sample's run and the proofs.
-async fn record() -> String {
+async fn record(profile: Profile) -> String {
     let toolchain = Toolchain::discover()
         .await
         .expect("llvm-mc and ld.lld are installed");
     let mut recording = String::new();
-    for program in programs() {
+    for program in programs(profile) {
         let _ = writeln!(recording, "== {}", program.name);
-        let Ok(bytes) = built(&toolchain, &program.text).await else {
+        let Ok(bytes) = built(profile, &toolchain, &program.text).await else {
             let _ = writeln!(recording, "  doesn't build");
             continue;
         };
-        let machine = machine_of(&program.text, &bytes);
+        let machine = machine_of(profile, &program.text, &bytes);
         let Some(image) = Image::new(&machine) else {
             let _ = writeln!(recording, "  no _start");
             continue;
         };
         // The build its proofs by induction take, with a smaller buffer where it has one.
-        let induced = match SMALLER.iter().find(|(name, _)| *name == program.name) {
+        let induced = match SMALLER
+            .get(profile)
+            .iter()
+            .find(|(name, _)| *name == program.name)
+        {
             Some((_, changes)) => {
                 let mut text = program.text.clone();
                 for (line, smaller) in *changes {
                     assert!(text.contains(line), "{} has {line:?}", program.name);
                     text = text.replace(line, smaller);
                 }
-                let bytes = built(&toolchain, &text)
+                let bytes = built(profile, &toolchain, &text)
                     .await
                     .expect("the smaller buffer builds");
                 let _ = writeln!(recording, "  by induction with {}", changes[0].1.trim_end());
-                machine_of(&text, &bytes)
+                machine_of(profile, &text, &bytes)
             }
             None => machine.clone(),
         };
@@ -353,6 +409,7 @@ async fn record() -> String {
             }
             let ran = began.elapsed();
             let from = NARROW
+                .get(profile)
                 .iter()
                 .find(|(name, number, _)| *name == program.name && *number == index + 1)
                 .map_or(0, |(.., from)| *from);
@@ -371,9 +428,21 @@ async fn record() -> String {
     recording
 }
 
+/// The guard on `profile`'s programs: their samples' runs and their proofs are as recorded (or
+/// recorded, where there is nothing to compare with: see [`compare_or_record`]).
+async fn runs_and_proofs_are_as_recorded(profile: Profile) {
+    let found = record(profile).await;
+    compare_or_record(&format!("prover-{}.txt", PLACES.get(profile).label), &found);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Round 9's guard: run with --ignored around the prover's refactor"]
 async fn every_run_and_proof_is_as_recorded() {
-    let found = record().await;
-    compare_or_record("prover-x86.txt", &found);
+    runs_and_proofs_are_as_recorded(Profile::LinuxX86_64).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Round 9's guard: run with --ignored around the prover's refactor"]
+async fn every_run_and_proof_is_as_recorded_on_aarch64() {
+    runs_and_proofs_are_as_recorded(Profile::LinuxAarch64).await;
 }

@@ -72,3 +72,15 @@ on ARM64 `linux-aarch64/fast/sha256-sha2` and `fast/aes-aes`), each beside the v
 `spec.md`. `tests/crypto_forms.rs` holds that to account: the same spec bytes in every form, a
 baseline that uses nothing beyond its CPU's baseline, and the tiers through the server where the
 CPU has what they use.
+
+**The prover proves both twins of a fixture from the same cases.** The prover's tests
+(`src/prove/tests.rs`) and the executor's (`src/prove/exec.rs`) are written once, as tables with a
+cell for each target (`PerTarget`): a fixture's two twins are proven from the very same `spec.md`
+blocks, each test reading its target's folder (`tests/fixtures/<name>` and
+`tests/fixtures/linux-aarch64/<name>`), and a planted bug is an edit of each target's own
+`main.s`, listed beside the other's. Both CPUs' cells run on either runner, since a proof is
+mathematics, except the SVE tier's, which needs a CPU or an emulator with SVE (noted in the run's
+summary where it is skipped). `every_prover_test_runs_on_every_target` fails a prover or executor
+test that goes through no table of targets, so a fixture proven for one CPU is proven for the
+other the day it is added. A cell that must differ from the other CPU's says why beside it; none
+pins a weaker result today.
