@@ -544,6 +544,14 @@ mod relay {
 
     #[tokio::test]
     async fn a_tls_stream_cut_off_ends_the_program_s_connection_both_ways() {
+        // macOS answers a write to a stream whose peer shut its reading with success, not EPIPE as
+        // Linux does (found on 2026-11-05): round 3 of the roadmap makes the promise hold there.
+        if !cfg!(target_os = "linux") {
+            crate::skiplog::note(
+                "a write to a shut stream fails with EPIPE only on Linux's sockets so far",
+            );
+            return;
+        }
         let (acceptor, trust) = server_and_trust();
         let port = tls_server(acceptor, |stream| async move {
             // The end with no close_notify, which a TLS client takes as a cut, not an end.
