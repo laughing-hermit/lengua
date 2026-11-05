@@ -513,12 +513,10 @@ impl Checker<'_, '_> {
                             Some(format!("`{}` in its `- Uses:` line", found.name()))
                         }
                         Allowance::Network => Some("a `- Network:` line".to_owned()),
-                        Allowance::Listens => {
-                            Some("`- Network: listens on TCP port N`".to_owned())
+                        Allowance::Listens => Some("`- Network: listens on TCP port N`".to_owned()),
+                        Allowance::AtOnce => {
+                            Some("`up to N clients at once` in its `- Network:` line".to_owned())
                         }
-                        Allowance::AtOnce => Some(
-                            "`up to N clients at once` in its `- Network:` line".to_owned(),
-                        ),
                         Allowance::Threads => Some("a `- Threads:` line".to_owned()),
                     })
                     .collect::<Vec<_>>()

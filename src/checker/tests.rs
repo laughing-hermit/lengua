@@ -5031,7 +5031,10 @@ const EDGE_FIXTURES: &[EdgeFixture] = &[
         what: "a frame as big as a page",
         edits: PerCpu {
             x86_64: &[("    sub rsp, 8\n", "    sub rsp, 4104\n")],
-            aarch64: &[("main:\n", "main:\n    sub sp, sp, #4080\n    sub sp, sp, #16\n")],
+            aarch64: &[(
+                "main:\n",
+                "main:\n    sub sp, sp, #4080\n    sub sp, sp, #16\n",
+            )],
         },
         ops: &BASE_OPS,
         says: "frame is",
@@ -5048,7 +5051,10 @@ const EDGE_FIXTURES: &[EdgeFixture] = &[
     EdgeFixture {
         what: "a register the edge changes, read after the call",
         edits: PerCpu {
-            x86_64: &[("    call os_write\n", "    call os_write\n    mov r8, rcx\n")],
+            x86_64: &[(
+                "    call os_write\n",
+                "    call os_write\n    mov r8, rcx\n",
+            )],
             aarch64: &[("    bl os_write\n", "    bl os_write\n    mov x9, x16\n")],
         },
         ops: &BASE_OPS,
@@ -5070,7 +5076,10 @@ const EDGE_FIXTURES: &[EdgeFixture] = &[
         what: "a jump into an operation",
         edits: PerCpu {
             x86_64: &[("    js .Lmain_write_failed\n", "    js os_exit\n")],
-            aarch64: &[("    tbnz x0, #63, .Lmain_write_failed\n", "    tbnz x0, #63, os_exit\n")],
+            aarch64: &[(
+                "    tbnz x0, #63, .Lmain_write_failed\n",
+                "    tbnz x0, #63, os_exit\n",
+            )],
         },
         ops: &BASE_OPS,
         says: "jumps outside main",
@@ -5084,13 +5093,19 @@ async fn the_edge_form_rules_refuse_what_they_name() {
         for profile in Profile::ALL {
             let mut text = EDGE_BASE.get(profile).to_string();
             for (from, to) in *fixture.edits.get(profile) {
-                assert!(text.contains(from), "{} on {profile:?}: no {from:?}", fixture.what);
+                assert!(
+                    text.contains(from),
+                    "{} on {profile:?}: no {from:?}",
+                    fixture.what
+                );
                 text = text.replacen(from, to, 1);
             }
             let report = check_edge(&text, fixture.ops).await;
             let found: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
             assert!(
-                found.iter().any(|violation| violation.contains(fixture.says)),
+                found
+                    .iter()
+                    .any(|violation| violation.contains(fixture.says)),
                 "{} on {profile:?}: wanted {:?} in {found:#?}",
                 fixture.what,
                 fixture.says
