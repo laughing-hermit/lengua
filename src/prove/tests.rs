@@ -4286,6 +4286,34 @@ fn signed_value(pool: &Pool, term: Term, x: Term, value: u128) -> i128 {
 #[test]
 fn reads_conditions_as_intervals_and_settles_only_what_holds() {
     let seed = seed();
+    // Said first, so that a run that stalls in it (as one did on ARM64 once, for over an hour)
+    // names the seed to run it again with: LENGUA_RANDOM_SEED.
+    eprintln!("reads_conditions_as_intervals_and_settles_only_what_holds: seed {seed}");
+    intervals_with(seed);
+}
+
+/// Looks for a seed the test above stalls on, as one did once: 400 seeds from a random one, each
+/// given a minute, the first to stall named in the failure.
+#[test]
+#[ignore = "hunts for a seed the interval test stalls on: ci.yml mode ignored, filter hunt"]
+fn hunt_for_a_seed_the_interval_test_stalls_on() {
+    let first = seed();
+    for seed in first..first.wrapping_add(400) {
+        let (done, wait) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            intervals_with(seed);
+            let _ = done.send(());
+        });
+        assert!(
+            wait.recv_timeout(Duration::from_secs(60)).is_ok(),
+            "seed {seed} stalls the interval test for over a minute: run it with \
+             LENGUA_RANDOM_SEED={seed}"
+        );
+    }
+}
+
+/// The interval test's rounds, from `seed`.
+fn intervals_with(seed: u64) {
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
     let (mut read, mut ruled_out, mut settled_some) = (0, 0, 0);
     for round in 0..1500 {
@@ -5122,6 +5150,7 @@ const NOT_ABOUT_A_CPU: &[&str] = &[
     "splits_ranges_into_digit_pieces",
     "goes_through_every_combination_once_by_its_longest_text",
     "reads_conditions_as_intervals_and_settles_only_what_holds",
+    "hunt_for_a_seed_the_interval_test_stalls_on",
     "explores_a_program",
     "explores_a_fixture_block",
     "explains_what_a_proof_asks",
