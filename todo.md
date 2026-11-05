@@ -221,15 +221,17 @@ the checksums show lengua's kind of proof but don't replace SHA-256 or AES:
 
 ## What's left for parity and coherence between the two Linux targets
 
-I know of no case where the two CPUs give different answers. What's left is places where one CPU
-is checked or modelled less than the other, found by the 2026-11-04 parity audit (the ones fixed
-in this run are listed above), heaviest first:
+I know of no case where the two CPUs give different answers to the same spec, beyond the words of
+a few refusals (the session flow's findings, below). What's left is places where one CPU is
+checked or modelled less than the other, found by the 2026-11-04 parity audit (the ones fixed in
+this run are listed above), heaviest first:
 
-1. **Tests.** The biggest gap, narrowed on 2026-11-04 by writing each case once, as a table with a
-   cell for each target (see "Keeping five or six targets the same product" below): the sandbox's
-   limits (ARM64 had 8 native tests against x86-64's 25, and now both run the same 31), the red
-   team, the memory rules' planted bugs and the all-programs test run natively on both runners.
-   What is left:
+1. **Tests: done (2026-11-04 and 05).** The biggest gap, closed by writing each case once, as a
+   table with a cell for each target (see "Keeping five or six targets the same product" below):
+   the sandbox's limits (ARM64 had 8 native tests against x86-64's 25, and now both run the same
+   31), the red team, the memory rules' planted bugs, the all-programs test, the checker's
+   fixtures, the prover's tests, and the server's session tests, run natively on both runners.
+   No test file made for one CPU is left but ARM64's by-hand port tool (`DEBT`). In detail:
    - *Checker fixtures: done (2026-11-04).* Beside the planted memory bugs (`PLANTED`), the Power
      of 10 rules' fixtures are tables with a cell for each CPU in `src/checker/tests.rs`: the
      stack, loops, assertions, comparison chains, results, calls and exit codes, scope, indexes,
@@ -315,7 +317,11 @@ in this run are listed above), heaviest first:
    pointers are missing from the static system call summary; the AArch64 vector model ends some
    matches with a wildcard that would run an unmodelled op as zeros, where x86-64's says "doesn't
    model yet"; AArch64 refusal texts say "no floating point on vectors" and keep x86-64 wording in
-   a few layout messages; an emulated session always gets AArch64's CPU features; the
+   a few layout messages; a register of the wrong width is refused by lengua's own AArch64
+   reader, before the assembler is asked, where x86-64's reaches the assembler (the same kind of
+   refusal in other words); a hexadecimal number past `i64::MAX` is "not a number" to the source
+   reader both CPUs share (`and sp, x9, #0xfffffffffffffff0` meets it on ARM64; `#-16` is read);
+   an emulated session always gets AArch64's CPU features; the
    model-against-CPU harnesses differ in feature gating and host; the ARM64 benchmark workloads
    omit programs x86-64 measures and say AArch64 has no threads. Documents: DESIGN lists the
    x86-64 instructions the prover models and its CPU harness's probe counts but has no AArch64
@@ -495,9 +501,10 @@ each later port adds one column. Make each guarantee a failing test:
    dispatch doesn't build the matrix, and macOS and Windows build in `unported.yml` (weekly and on
    request).
 
-**Where items 1, 3, 4 and 5 stand (2026-11-04).** Built for the two Linux targets, and run
+**Where items 1, 3, 4 and 5 stand (2026-11-05).** Built for the two Linux targets, and run
 natively on both runners:
-- *1, one suite for all targets: begun.* Each of these is a table with a `PerTarget` cell for every
+- *1, one suite for all targets: done for the two Linux targets.* Each of these is a table with a
+  `PerTarget` cell for every
   target (`src/targets.rs`), so a new target breaks the build until its cells exist, and an
   attempt that a CPU can't write says why: the red team (`tests/red_team.rs`, which replaced
   `adversarial.rs` and `adversarial_aarch64.rs`: their 41 attempts each, as 42 rows, with
@@ -514,18 +521,23 @@ natively on both runners:
   the network, terminal and standard-input cases (`tests/network.rs`), the templates built and
   run alone (`tests/standalone.rs`, which replaced `tests/aarch64.rs`), the template through
   `check` to `done` (`tests/template.rs`) and the Power of 10 rules' fixtures
-  (`src/checker/tests.rs`). Left: the test files still made for one CPU, which
-  `tests/parity_inventory.rs` lists in `DEBT` with what each lacks on the other CPU:
-  `aarch64_session.rs`, which is only ARM64's by-hand port tool now
+  (`src/checker/tests.rs`); and the prover's tests, its executor's tests and the golden
+  recordings (`src/prove/tests.rs`, `src/prove/exec.rs`, `src/checker/golden.rs`,
+  `src/prove/golden.rs`: 66 tests in the first, 58 with a cell for each CPU and 8 about no CPU's
+  code, and a guard, `every_prover_test_runs_on_every_target`, that fails a new one going through
+  one CPU only). Left: one test file made for one CPU, which `tests/parity_inventory.rs` lists in
+  `DEBT` with what the other lacks: `aarch64_session.rs`, ARM64's by-hand port tool
   (`check_one_aarch64_folder`, with the QEMU path that x86-64's `check_one_folder` in
-  `check_folder.rs` has no counterpart of).
-- *3, the porting list as an executable conformance suite: begun.* The rules, the red team, every
-  program through the server, the sandbox's limits and the server's session flow are tables both
-  runners run natively. `parity_inventory.rs` fails when a target has no job that runs
-  `cargo test` on a runner of its own CPU, and when a new test file is made for one target;
-  DESIGN's "Porting a target" item 7 says which suites a new target must pass. Left: the
-  mutation test (ignored, by dispatch) and the session behaviors of the programs in the `DEBT`
-  files above.
+  `check_folder.rs` has no counterpart of); and the checker's fixtures that name a CPU's own
+  instructions (the extension gates, the vector, double and single precision families), which
+  each CPU keeps for its own.
+- *3, the porting list as an executable conformance suite: done for the two Linux targets.* The
+  rules, the red team, every program through the server, the sandbox's limits, the server's
+  session flow, the network and terminal cases and the prover's tests are tables both runners run
+  natively. `parity_inventory.rs` fails when a target has no job that runs `cargo test` on a
+  runner of its own CPU, and when a new test file is made for one target; DESIGN's "Porting a
+  target" item 7 says which suites a new target must pass. The mutation test is ignored, so it
+  runs by dispatch, once on each runner.
 - *4, limits tested on each OS: done for the two Linux targets.* `tests/limits.rs` pins names
   Windows refuses (`EINVAL`), names that aren't UTF-8 (`EILSEQ`), a name or a path too long
   (`ENAMETOOLONG`), a name that differs only in case (`EEXIST`), a file held open (`EBUSY`), the
@@ -793,7 +805,10 @@ ids are the evidence.
   `an_edit_mid_proof_starts_over_and_the_old_proof_never_lands` of `tests/check_code.rs`, which
   times an edit against a running proof of the x86-64 cat: its lock had no `[proofs]` table
   when read. No x86-64 model changed in this round, and the test passed alone,
-  41941213692, and in the whole suite again, 41941210154: a flake to look at, not a result.)
+  41941213692, and in the whole suite again, 41941210154: a flake, not a result. It is the
+  done-before-lock window the session flow found, described under "The server's session flow"
+  above: `check` says done a moment before the job writes `[proofs]` to the lock. That test is
+  `tests/sessions.rs`'s case now, which waits for the job to end.)
   The slow ignored proofs, each green on both runners with both CPUs' cells (add, the mean of two
   prices, the CSV total's free-text blocks, the tally, the CRC-32C bound): ARM64 41934616906,
   41929471471, 41930631706, 41933009081, 41933883331; x86-64 41933695608, 41933956811,
