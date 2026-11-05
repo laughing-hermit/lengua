@@ -623,32 +623,41 @@ programs) and x86-64 one (the hypotenuse proven in doubles, which only ARM64 ask
 benchmark's word count had no ARM64 counterpart, so ARM64 got a program of its own for it
 (`benches/programs/count/sve.s`, below). Run natively on each runner (x86-64: 41914647554 on a
 CPU with AVX-512 and 41916653039 on one without, the five AVX-512 variants skipped with a note;
-ARM64: 41916659300), the two CPUs behave alike in 24 of the 26 tests: the same counts of test
+ARM64: 41916659300), the two CPUs behaved alike in 24 of the 26 tests: the same counts of test
 runs, the same runs and outputs, and the same verdict on every proof line the cells check
 (proven for every input in range, bounded at a length with the proof to go on, or tested, not
 proven): the hypotenuse's five blocks, upcase's files, archive, sweep, greet, dice, words and
 pairs by induction, the vector, streaming and tally templates, the parallel template and the
-benchmark's programs. They differ in two proofs, both ARM64's prover settling less than
+benchmark's programs. They differed in two proofs, both ARM64's prover settling less than
 x86-64's, each pinned in its cell (`ABSDIFF` and `MEAN`, `tests/programs.rs`) the way `DEBT` is,
-so the test fails when ARM64 proves more until its cell says so:
+so that the test fails when ARM64 proves more until its cell says so:
 - *absdiff's first block* (196 input combinations through a conditional-move choice of a - b).
-  x86-64 proves all four blocks, memory with them, in the 60 seconds a runner gives; ARM64
-  proves B2 to B4 and not B1: not in 60 seconds ("ran out of time after 153 of 196 input
+  x86-64 proved all four blocks, memory with them, in the 60 seconds a runner gives; ARM64
+  proved B2 to B4 and not B1: not in 60 seconds ("ran out of time after 153 of 196 input
   combinations", run 41912245262) and not in 240 ("a path couldn't be settled: cvc5 couldn't
-  confirm z3's answer: it ran out of time", run 41914652006), so the rest of its memory is
+  confirm z3's answer: it ran out of time", run 41914652006), so the rest of its memory was
   tested, not proven.
-- *mean's decimal blocks* (B1, B2 and B3, exact cents). x86-64 proves all six blocks in 414
+- *mean's decimal blocks* (B1, B2 and B3, exact cents). x86-64 proved all six blocks in 414
   seconds on a 4-vCPU runner (run 41914657858; in 60 seconds B1 and B3 say they "would take
-  about 60 seconds", run 41913028891). ARM64 proves B4 to B6 and not B1 to B3 in 600 seconds,
+  about 60 seconds", run 41913028891). ARM64 proved B4 to B6 and not B1 to B3 in 600 seconds,
   "a path couldn't be settled: z3 ran out of time" (run 41914663693); in 60 seconds B1 and B3
   reached 73 of their 324 input combinations, and B2, which x86-64 settles by its terms alone
   (448 paths, no solver question), needed a solver question that cvc5 could not confirm (run
   41913035211).
 
-Not investigated, as the `amounts` difference in "Prover reach" above was not: why ARM64's terms
-settle fewer paths of these two programs (the model of an instruction, or how a signed compare or
-the conversion's `csel` is read), or why the solver questions it then asks are hard. The two
-may be one gap, and the `amounts` one with them.
+They differ no more, and the pins did what they were for. The prover's parity round (the last
+section) found the cause in three gaps of the model of AArch64 and fixed them; when its branch
+was merged with this table, the first run on the merged tree failed exactly the pinned tests
+(`the_absolute_difference_example_is_proven`, run 41942392800, and the ignored
+`the_decimal_example_is_proven`, run 41947013349), and the cells were set to what those runs
+printed. ARM64 proves absdiff's four blocks with no solver question (196 input combinations, 420
+paths), and mean's six in about 290 seconds on a 4-vCPU runner: B1 and B3 (324 input
+combinations, 1148 paths each) ask the solvers, every question confirmed by z3 and cvc5, and B2
+(448 paths) and the errors settle by their terms alone. The same fixes closed `add`'s B4 (standard
+output closed, 400 input combinations, 1014 paths), which the network table had pinned as "tested,
+not proven" on ARM64 (`B4_PROOF`, `tests/network.rs`; the same run). Both cells of each table are
+equal now. A cell can still pin a stop (`Verdict::NotProven`), for a target whose prover settles
+less, with no cell using it today.
 
 Two things the table needs are the dialects', not differences of the product: the comment sign of
 the `from:` line a program built on another carries (`//` on AArch64, `#` on x86-64), and, under

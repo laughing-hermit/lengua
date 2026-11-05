@@ -423,7 +423,10 @@ impl<'a> Expect<'a> {
 enum Verdict {
     /// Proven for every input in range.
     Proven,
-    /// Tested, not proven: the proof ran out of time or could not settle a path.
+    /// Tested, not proven: the proof ran out of time or could not settle a path. No cell says
+    /// this today, since ARM64's prover settles what x86-64's does; a target whose prover
+    /// settles less pins its stop here, and a test then fails the day it settles more.
+    #[allow(dead_code)]
     NotProven,
 }
 
@@ -597,33 +600,27 @@ async fn the_hypotenuse_computes_in_doubles() {
 }
 
 /// What each target's proofs of mean say, block by block: the decimal means (B1), the whole ones
-/// (B2), the decimal means again with the other sign (B3), and the three errors. On x86-64 every
-/// block is proven for every input in range (414 seconds on a 4-vCPU runner, run 41914657858).
-/// On ARM64 the first three are not: a path of each needs a solver question that z3 cannot answer
-/// in the time ("a path couldn't be settled: z3 ran out of time" after 600 seconds, run
-/// 41914663693; after 60 seconds B1 and B3 ran out of time at 73 of their 324 input
-/// combinations and B2 was not confirmed by cvc5, run 41913035211), where x86-64 settles every
-/// path by its terms, so no solver is asked. todo.md records the difference.
+/// (B2), the decimal means again with the other sign (B3), and the three errors. Every block is
+/// proven for every input in range on both CPUs: x86-64 in 414 seconds on a 4-vCPU runner (run
+/// 41914657858), ARM64 in about 290 (run 41947013349; its B1 and B3 ask the solvers, every
+/// question confirmed by z3 and cvc5, and the rest settles by its terms). ARM64's first three
+/// were not proven until the prover's model of AArch64 read the overflow flag, `tbnz` on the top
+/// bit and `msub` as x86-64's reads them: a path of each needed a solver question that z3 could
+/// not answer in the time ("a path couldn't be settled: z3 ran out of time" after 600 seconds,
+/// run 41914663693).
 const MEAN: PerTarget<Proofs> = PerTarget {
     linux_x86_64: Proofs {
         blocks: &[Verdict::Proven; 6],
         memory: "",
     },
     linux_aarch64: Proofs {
-        blocks: &[
-            Verdict::NotProven,
-            Verdict::NotProven,
-            Verdict::NotProven,
-            Verdict::Proven,
-            Verdict::Proven,
-            Verdict::Proven,
-        ],
-        memory: "the rest is tested, not proven",
+        blocks: &[Verdict::Proven; 6],
+        memory: "",
     },
 };
 
 /// How long each target's proofs of mean get: x86-64 needs seven minutes on a 4-vCPU runner, so
-/// it gets fifteen for the pool's slower draws; ARM64 is given ten and gives up in about six.
+/// it gets fifteen for the pool's slower draws; ARM64 is given ten and needs about five.
 const MEAN_PROVING: PerTarget<Proving> = PerTarget {
     linux_x86_64: Proving::For(900),
     linux_aarch64: Proving::For(600),
