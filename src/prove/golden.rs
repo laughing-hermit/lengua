@@ -446,3 +446,107 @@ async fn every_run_and_proof_is_as_recorded() {
 async fn every_run_and_proof_is_as_recorded_on_aarch64() {
     runs_and_proofs_are_as_recorded(Profile::LinuxAarch64).await;
 }
+
+/// SPIKE (round 2, step 0b.1), thrown away: `text` with the read of its `fill` moved into a
+/// function `os_read` that `fill` calls, as the library's `fill` will call the edge's.
+fn through_a_call(profile: Profile, text: &str) -> String {
+    let (read, call, function) = match profile {
+        Profile::LinuxX86_64 => (
+            "    mov eax, SYS_READ\n    syscall\n",
+            "    call os_read\n",
+            "\n.text\n.type os_read, @function\nos_read:\n    mov eax, SYS_READ\n    syscall\n    ret\n.size os_read, . - os_read\n",
+        ),
+        Profile::LinuxAarch64 => (
+            "    mov x8, #SYS_READ\n    svc #0\n",
+            "    bl os_read\n",
+            "\n.text\n.type os_read, @function\nos_read:\n    mov x8, #SYS_READ\n    svc #0\n    ret\n.size os_read, . - os_read\n",
+        ),
+    };
+    assert_eq!(text.matches(read).count(), 1, "one read, in fill");
+    format!("{}{function}", text.replace(read, call))
+}
+
+/// SPIKE: a proof's verdict without its digits (counts, sizes), and without the function
+/// `os_read`, which no run calls where `fill` stands in for it.
+fn kind(proof: &str) -> String {
+    proof
+        .replace(", \"os_read\"", "")
+        .replace("\"os_read\", ", "")
+        .replace("\"os_read\"", "")
+        .chars()
+        .filter(|character| !character.is_ascii_digit())
+        .collect()
+}
+
+/// SPIKE: cat-stream and lines, proven as shipped and with `fill` calling `os_read`: the same
+/// verdicts, in particular the same proof by induction.
+async fn proofs_survive_a_call(profile: Profile) {
+    let toolchain = Toolchain::discover()
+        .await
+        .expect("llvm-mc and ld.lld are installed");
+    for program in programs(profile) {
+        if !(program.name.contains("/cat-stream/") || program.name.contains("/lines/")) {
+            continue;
+        }
+        let suite = crate::testfile::check(&program.spec).expect("the spec's tests check");
+        let listens = program.spec.network.listens.is_some();
+        let mut verdicts: Vec<Vec<String>> = Vec::new();
+        for (label, text) in [
+            ("shipped", program.text.clone()),
+            ("through a call", through_a_call(profile, &program.text)),
+        ] {
+            let bytes = built(profile, &toolchain, &text)
+                .await
+                .expect("it builds");
+            let machine = machine_of(profile, &text, &bytes);
+            let induced = match SMALLER
+                .get(profile)
+                .iter()
+                .find(|(name, _)| *name == program.name)
+            {
+                Some((_, changes)) => {
+                    let mut smaller = text.clone();
+                    for (line, replacement) in *changes {
+                        assert!(smaller.contains(line), "{} has {line:?}", program.name);
+                        smaller = smaller.replace(line, replacement);
+                    }
+                    let bytes = built(profile, &toolchain, &smaller)
+                        .await
+                        .expect("the smaller buffer builds");
+                    machine_of(profile, &smaller, &bytes)
+                }
+                None => machine.clone(),
+            };
+            let mut found = Vec::new();
+            for (index, block) in suite.generated.iter().enumerate() {
+                let (proof, _) = proofs(&machine, &induced, block, listens, 0);
+                eprintln!("SPIKE {} {label} B{}: {proof}", program.name, index + 1);
+                found.push(proof);
+            }
+            verdicts.push(found);
+        }
+        assert!(
+            verdicts[0]
+                .iter()
+                .all(|proof| !proof.contains("by induction none")),
+            "{} is proven by induction as shipped",
+            program.name
+        );
+        let kinds = |found: &[String]| -> Vec<String> {
+            found.iter().map(|proof| kind(proof)).collect()
+        };
+        assert_eq!(
+            kinds(&verdicts[0]),
+            kinds(&verdicts[1]),
+            "{}: the proof changed when fill called os_read",
+            program.name
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "round 2, step 0b.1: a spike"]
+async fn spike_fill_through_a_call() {
+    proofs_survive_a_call(Profile::LinuxX86_64).await;
+    proofs_survive_a_call(Profile::LinuxAarch64).await;
+}

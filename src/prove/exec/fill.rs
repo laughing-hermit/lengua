@@ -93,45 +93,93 @@ const SHAPE_AARCH64: [&str; 25] = [
     "BranchReg",
 ];
 
+/// SPIKE: fill as it is when its read is a call to `os_read`, which holds the `syscall`: the
+/// shape of [`SHAPE`] with the `mov` and the `syscall` of the read become one `call`.
+const SHAPE_CALL: [&str; 26] = [
+    "test", "je", "test", "je", "mov", "mov", "mov", "call", "test", "js", "je", "cmp", "ja",
+    "add", "sub", "je", "movzx", "cmp", "je", "dec", "jne", "mov", "jmp", "mov", "sub", "ret",
+];
+
+/// SPIKE: AArch64's, with the `mov x8` and the `svc` become one `bl`.
+const SHAPE_AARCH64_CALL: [&str; 24] = [
+    "CompareBranch",
+    "CompareBranch",
+    "LogicalShifted",
+    "LogicalShifted",
+    "LogicalShifted",
+    "MoveWide",
+    "LogicalShifted",
+    "Branch",
+    "TestBranch",
+    "CompareBranch",
+    "AddShifted",
+    "BranchCond",
+    "AddShifted",
+    "AddShifted",
+    "BranchCond",
+    "LoadStore",
+    "AddShifted",
+    "BranchCond",
+    "AddImm",
+    "BranchCond",
+    "MoveWide",
+    "Branch",
+    "AddShifted",
+    "BranchReg",
+];
+
 impl Fill {
     /// fill's places in `image`, when it has a function named fill of the canonical shape.
     pub fn find(image: &Image, machine: &crate::checker::decode::Machine) -> Option<Self> {
         let function = machine.functions.get("fill")?;
         let words = function.words();
         if !words.is_empty() {
-            if words.len() < SHAPE_AARCH64.len() {
-                return None;
-            }
-            let same = words.iter().zip(SHAPE_AARCH64).all(|(word, kind)| {
-                word.inst.as_ref().is_ok_and(|inst| {
-                    let name = format!("{inst:?}");
-                    name.split(|character: char| !character.is_alphanumeric())
-                        .next()
-                        == Some(kind)
-                })
-            });
+            let kinds_match = |shape: &[&str]| {
+                words.len() >= shape.len()
+                    && words.iter().zip(shape).all(|(word, kind)| {
+                        word.inst.as_ref().is_ok_and(|inst| {
+                            let name = format!("{inst:?}");
+                            name.split(|character: char| !character.is_alphanumeric())
+                                .next()
+                                == Some(*kind)
+                        })
+                    })
+            };
             // Its loop's head, `mov x0, x9`; after `svc`; and `.Lfill_done`.
-            return same.then(|| Self {
+            if kinds_match(&SHAPE_AARCH64) {
+                return Some(Self {
+                    head: words[6].address,
+                    after_call: words[9].address,
+                    done: words[23].address,
+                });
+            }
+            // SPIKE: the same with the read a `bl`.
+            return kinds_match(&SHAPE_AARCH64_CALL).then(|| Self {
                 head: words[6].address,
-                after_call: words[9].address,
-                done: words[23].address,
+                after_call: words[8].address,
+                done: words[22].address,
             });
         }
         let instructions = function.x86();
-        if instructions.len() < SHAPE.len() {
-            return None;
-        }
-        let same = instructions
-            .iter()
-            .zip(SHAPE)
-            .all(|(instruction, mnemonic)| {
-                format!("{:?}", instruction.mnemonic()).to_ascii_lowercase() == mnemonic
-            });
+        let mnemonics_match = |shape: &[&str]| {
+            instructions.len() >= shape.len()
+                && instructions.iter().zip(shape).all(|(instruction, mnemonic)| {
+                    format!("{:?}", instruction.mnemonic()).to_ascii_lowercase() == *mnemonic
+                })
+        };
         let _ = image;
-        same.then(|| Self {
+        if mnemonics_match(&SHAPE) {
+            return Some(Self {
+                head: instructions[7].ip(),
+                after_call: instructions[9].ip(),
+                done: instructions[24].ip(),
+            });
+        }
+        // SPIKE: the same with the read a `call`.
+        mnemonics_match(&SHAPE_CALL).then(|| Self {
             head: instructions[7].ip(),
-            after_call: instructions[9].ip(),
-            done: instructions[24].ip(),
+            after_call: instructions[8].ip(),
+            done: instructions[23].ip(),
         })
     }
 
