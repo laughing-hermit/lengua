@@ -787,6 +787,20 @@ ids are the evidence.
   and `fdiv`/`fmul` on `.2d` lanes for AArch64; and the words the proof reports in (a frame
   record holds AArch64's return address inside the frame, so the memory-bug cells match each
   CPU's own text).
+- **Evidence (run ids).** The full suites with no filter, green on both runners: 41924164203
+  (ARM64) and 41925325060 (x86-64), and again at the last code, 41936241205 and 41941210154. (The
+  first x86-64 run of the last code, 41936245652, failed once on
+  `an_edit_mid_proof_starts_over_and_the_old_proof_never_lands` of `tests/check_code.rs`, which
+  times an edit against a running proof of the x86-64 cat: its lock had no `[proofs]` table
+  when read. No x86-64 model changed in this round, and the test passed alone,
+  41941213692, and in the whole suite again, 41941210154: a flake to look at, not a result.)
+  The slow ignored proofs, each green on both runners with both CPUs' cells (add, the mean of two
+  prices, the CSV total's free-text blocks, the tally, the CRC-32C bound): ARM64 41934616906,
+  41929471471, 41930631706, 41933009081, 41933883331; x86-64 41933695608, 41933956811,
+  41934625556, 41931255715, 41932626736. The prover goldens, about an hour each: 41924811946
+  (x86-64's runner, both CPUs) and 41924806608 (ARM64's); with no committed recording they
+  record and compare nothing, where the checker goldens (41937056801, 41937061258) also record
+  twice and require the same report. The executor's tests: 41911016597 and 41911012154.
 - **Left.** The prover's reach past the models' differences in the "Prover reach" list above
   (x86-64's missing vector instructions, AArch64's pointer tracking through `csel`, `and`-immediate
   and shifted `add`) is as it was; the ARM64 SHA-256 still runs out of time.
