@@ -21,6 +21,7 @@ use std::fmt::Write as _;
 
 use crate::isa::Isa;
 use crate::platform::Profile;
+use crate::spec::{Network, Syscall, Use};
 
 /// The descriptor of the channel to lengua's broker, which every operation refuses when a
 /// program passes it: a program holds [`crate::runner::OPEN_FILES`] descriptors, 0 to 4,351.
@@ -323,6 +324,221 @@ impl Op {
         }
         mask
     }
+
+    /// How many arguments it takes, in the registers of the CPU's convention.
+    #[must_use]
+    pub const fn arguments(self) -> usize {
+        match self {
+            Self::Read | Self::Write | Self::Seek | Self::List | Self::Sleep | Self::Poll => 3,
+            Self::Open
+            | Self::Info
+            | Self::Remove
+            | Self::Rename
+            | Self::Clock
+            | Self::Random
+            | Self::Shutdown
+            | Self::ThreadStart => 2,
+            Self::Close
+            | Self::Mkdir
+            | Self::Accept
+            | Self::Terminal
+            | Self::Window
+            | Self::ThreadJoin
+            | Self::Exit => 1,
+        }
+    }
+
+    /// The buffers it takes by their address, which it reads or writes through.
+    #[must_use]
+    pub const fn lends(self) -> &'static [Lend] {
+        match self {
+            Self::Read | Self::List => &[Lend {
+                argument: 1,
+                bytes: Bytes::Argument(2),
+                written: true,
+            }],
+            Self::Write => &[Lend {
+                argument: 1,
+                bytes: Bytes::Argument(2),
+                written: false,
+            }],
+            Self::Open | Self::Mkdir | Self::Remove => &[Lend {
+                argument: 0,
+                bytes: Bytes::Name,
+                written: false,
+            }],
+            Self::Rename => &[
+                Lend {
+                    argument: 0,
+                    bytes: Bytes::Name,
+                    written: false,
+                },
+                Lend {
+                    argument: 1,
+                    bytes: Bytes::Name,
+                    written: false,
+                },
+            ],
+            Self::Info | Self::Clock => &[Lend {
+                argument: 1,
+                bytes: Bytes::Fixed(16),
+                written: true,
+            }],
+            Self::Sleep => &[Lend {
+                argument: 2,
+                bytes: Bytes::Fixed(16),
+                written: false,
+            }],
+            Self::Random => &[Lend {
+                argument: 0,
+                bytes: Bytes::Argument(1),
+                written: true,
+            }],
+            Self::Poll => &[Lend {
+                argument: 0,
+                bytes: Bytes::Table {
+                    count: 1,
+                    entry: 8,
+                },
+                written: true,
+            }],
+            Self::Window => &[Lend {
+                argument: 0,
+                bytes: Bytes::Fixed(8),
+                written: true,
+            }],
+            // The slot is the program's own and only its worker looks into it.
+            Self::Close
+            | Self::Seek
+            | Self::Accept
+            | Self::Shutdown
+            | Self::Terminal
+            | Self::ThreadStart
+            | Self::ThreadJoin
+            | Self::Exit => &[],
+        }
+    }
+
+    /// What a spec names to allow it: any one of these.
+    #[must_use]
+    pub const fn allowances(self) -> &'static [Allowance] {
+        use crate::spec::Use::{Clock, Files, RandomBytes, StandardInput, Terminal};
+        match self {
+            Self::Write | Self::Exit => &[Allowance::Always],
+            Self::Read => &[
+                Allowance::Use(StandardInput),
+                Allowance::Use(Files),
+                Allowance::Use(Terminal),
+                Allowance::Network,
+            ],
+            Self::Open
+            | Self::Seek
+            | Self::Info
+            | Self::List
+            | Self::Mkdir
+            | Self::Remove
+            | Self::Rename => &[Allowance::Use(Files)],
+            Self::Close => &[Allowance::Use(Files), Allowance::Network],
+            Self::Clock | Self::Sleep => &[Allowance::Use(Clock)],
+            Self::Random => &[Allowance::Use(RandomBytes)],
+            Self::Accept => &[Allowance::Listens],
+            Self::Shutdown => &[Allowance::Network],
+            Self::Poll => &[Allowance::Use(Terminal), Allowance::AtOnce],
+            Self::Terminal | Self::Window => &[Allowance::Use(Terminal)],
+            Self::ThreadStart | Self::ThreadJoin => &[Allowance::Threads],
+        }
+    }
+
+    /// The Linux system calls it makes, in the vocabulary of a spec's `Syscall`s: none for the
+    /// thread operations, whose `clone` and `futex` a spec never names.
+    #[must_use]
+    pub const fn syscalls(self) -> &'static [Syscall] {
+        match self {
+            Self::Read => &[Syscall::Read],
+            Self::Write => &[Syscall::Write],
+            Self::Open => &[Syscall::Openat],
+            Self::Close => &[Syscall::Close],
+            Self::Seek => &[Syscall::Lseek],
+            Self::Info => &[Syscall::Fstat],
+            Self::List => &[Syscall::Getdents64],
+            Self::Mkdir => &[Syscall::Mkdirat],
+            Self::Remove => &[Syscall::Unlinkat],
+            Self::Rename => &[Syscall::Renameat],
+            Self::Clock => &[Syscall::ClockGettime],
+            Self::Sleep => &[Syscall::ClockNanosleep],
+            Self::Random => &[Syscall::Getrandom],
+            Self::Accept => &[Syscall::Accept4],
+            Self::Shutdown => &[Syscall::Shutdown],
+            Self::Poll => &[Syscall::Poll],
+            Self::Terminal | Self::Window => &[Syscall::Ioctl],
+            Self::ThreadStart | Self::ThreadJoin => &[],
+            Self::Exit => &[Syscall::ExitGroup],
+        }
+    }
+}
+
+/// What a spec names to allow an operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Allowance {
+    /// Every program may call it.
+    Always,
+    /// A program that names this capability.
+    Use(Use),
+    /// A program on the network at all, with connections or serving.
+    Network,
+    /// A program that serves: lengua gives it a listening socket.
+    Listens,
+    /// A server of several clients at once.
+    AtOnce,
+    /// A program that may run threads: only lengua's library calls the operation.
+    Threads,
+}
+
+/// The operations a spec allows: those any of whose [`Allowance`]s it meets.
+#[must_use]
+pub fn ops_for(uses: &[Use], network: &Network, threads: Option<u32>) -> Vec<Op> {
+    Op::ALL
+        .into_iter()
+        .filter(|op| {
+            op.allowances().iter().any(|allowance| match allowance {
+                Allowance::Always => true,
+                Allowance::Use(found) => uses.contains(found),
+                Allowance::Network => network.is_used(),
+                Allowance::Listens => network.listens.is_some(),
+                Allowance::AtOnce => network.at_once.is_some(),
+                Allowance::Threads => threads.is_some(),
+            })
+        })
+        .collect()
+}
+
+/// How many bytes a buffer an operation is lent holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bytes {
+    /// The number in this other argument.
+    Argument(usize),
+    /// This many.
+    Fixed(u64),
+    /// A name: up to and including its NUL.
+    Name,
+    /// A table of entries: as many as the number in this argument, each this big.
+    Table {
+        /// The argument that holds how many.
+        count: usize,
+        /// The size of one.
+        entry: u64,
+    },
+}
+
+/// A buffer an operation takes by its address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Lend {
+    /// The argument that holds its address, counted from 0.
+    pub argument: usize,
+    /// How big it is.
+    pub bytes: Bytes,
+    /// Whether the operation writes through it, and may read it too; otherwise it only reads.
+    pub written: bool,
 }
 
 /// How a program is written: with its own system calls, or against the edge.
@@ -787,6 +1003,115 @@ mod tests {
             }
             for name in &names {
                 assert!(labels.contains(name), "{profile:?} lacks {name}");
+            }
+        }
+    }
+
+    /// What each capability allows, by operation, is what it allows by system call: the
+    /// operations make the capability's calls and the output and exit every program has.
+    #[test]
+    fn a_use_allows_the_operations_its_calls_need() {
+        let none = Network::default();
+        for found in Use::ALL {
+            let needed: BTreeSet<&str> = ops_for(&[found], &none, None)
+                .iter()
+                .flat_map(|op| op.syscalls())
+                .map(|call| call.name())
+                .collect();
+            let allowed: BTreeSet<&str> = found
+                .syscalls()
+                .iter()
+                .chain(&[Syscall::Write, Syscall::ExitGroup])
+                .map(|call| call.name())
+                .collect();
+            assert_eq!(needed, allowed, "{}", found.name());
+        }
+    }
+
+    /// A program on the network is allowed the operations its calls need, and a server of several
+    /// clients the wait; the calls the spec also lists, `sendto` for a write on a connection and the
+    /// thread's own `exit`, no operation makes.
+    #[test]
+    fn the_network_allows_the_operations_its_calls_need() {
+        let client = Network {
+            connections: vec![crate::spec::Endpoint {
+                host: None,
+                argument: None,
+                port: 80,
+                tls: false,
+            }],
+            ..Network::default()
+        };
+        let server = Network {
+            listens: Some(8080),
+            ..Network::default()
+        };
+        let busy = Network {
+            at_once: Some(64),
+            ..server.clone()
+        };
+        let calls = |network: &Network| -> BTreeSet<&'static str> {
+            ops_for(&[], network, None)
+                .iter()
+                .flat_map(|op| op.syscalls())
+                .map(|call| call.name())
+                .collect()
+        };
+        let base = ["write", "exit_group", "read", "close", "shutdown"];
+        assert_eq!(calls(&client), BTreeSet::from(base));
+        let mut serving = BTreeSet::from(base);
+        serving.insert("accept4");
+        assert_eq!(calls(&server), serving);
+        serving.insert("poll");
+        assert_eq!(calls(&busy), serving);
+        assert_eq!(calls(&Network::default()), BTreeSet::from(["write", "exit_group"]));
+    }
+
+    /// The thread operations are allowed by threads and by nothing else.
+    #[test]
+    fn threads_allow_the_thread_operations() {
+        let none = Network::default();
+        let on = ops_for(&[], &none, Some(4));
+        assert!(on.contains(&Op::ThreadStart) && on.contains(&Op::ThreadJoin));
+        let off = ops_for(&Use::ALL, &none, None);
+        assert!(!off.contains(&Op::ThreadStart) && !off.contains(&Op::ThreadJoin));
+    }
+
+    /// A buffer an operation takes is in one of its arguments, and its size is in another.
+    #[test]
+    fn an_operations_lends_are_inside_its_arguments() {
+        for op in Op::ALL {
+            for lend in op.lends() {
+                assert!(lend.argument < op.arguments(), "{}", op.symbol());
+                match lend.bytes {
+                    Bytes::Argument(other) => {
+                        assert!(other < op.arguments() && other != lend.argument, "{}", op.symbol());
+                    }
+                    Bytes::Table { count, .. } => {
+                        assert!(count < op.arguments() && count != lend.argument, "{}", op.symbol());
+                    }
+                    Bytes::Fixed(_) | Bytes::Name => {}
+                }
+            }
+        }
+    }
+
+    /// A CPU's edge convention takes its arguments where a system call does, changes what a system
+    /// call changes and its own scratch, and none of what a function gives back.
+    #[test]
+    fn the_edge_convention_keeps_what_a_function_gives_back() {
+        for isa in [Isa::X86_64, Isa::Aarch64] {
+            let abi = isa.abi();
+            assert_eq!(abi.edge_arguments, abi.syscall_arguments, "{isa:?}");
+            assert!(abi.edge_clobbers.contains(&abi.result), "{isa:?}");
+            for register in abi.syscall_clobbers {
+                assert!(abi.edge_clobbers.contains(register), "{isa:?} {register:?}");
+            }
+            for register in abi.callee_saved {
+                assert!(!abi.edge_clobbers.contains(register), "{isa:?} {register:?}");
+            }
+            for op in Op::ALL {
+                assert!(op.arguments() <= abi.edge_arguments.len(), "{isa:?} {}", op.symbol());
             }
         }
     }

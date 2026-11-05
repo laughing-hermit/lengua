@@ -411,6 +411,7 @@ async fn needs_beyond_baseline(
             &bytes,
             Context {
                 syscalls: &spec.syscalls,
+                ops: &spec.ops,
                 threads: spec.threads,
                 features,
                 profile: target,

@@ -224,6 +224,7 @@ pub(crate) struct Program {
     pub(crate) text: String,
     pub(crate) spec: Arc<crate::spec::Spec>,
     syscalls: Arc<Vec<Syscall>>,
+    ops: Arc<Vec<crate::edge::Op>>,
     threads: Option<u32>,
 }
 
@@ -330,6 +331,7 @@ pub(crate) fn programs(profile: Profile) -> Vec<Program> {
                     .to_string(),
                 text: std::fs::read_to_string(&code).expect("a program"),
                 syscalls: Arc::new(spec.syscalls.clone()),
+                ops: Arc::new(spec.ops.clone()),
                 threads: spec.threads,
                 spec: Arc::new(spec),
             }
@@ -669,6 +671,7 @@ async fn report(
     toolchain: &Toolchain,
     text: &str,
     syscalls: &[Syscall],
+    ops: &[crate::edge::Op],
     threads: Option<u32>,
 ) -> String {
     let (source, layout) = check_layout(text);
@@ -681,6 +684,7 @@ async fn report(
             &bytes,
             Context {
                 syscalls,
+                ops,
                 threads,
                 features: CpuFeatures::all(),
                 profile,
@@ -714,10 +718,14 @@ async fn record(profile: Profile) -> String {
                 continue;
             }
             let (toolchain, permits) = (Arc::clone(&toolchain), Arc::clone(&permits));
-            let (syscalls, threads) = (Arc::clone(&program.syscalls), program.threads);
+            let (syscalls, ops, threads) = (
+                Arc::clone(&program.syscalls),
+                Arc::clone(&program.ops),
+                program.threads,
+            );
             tasks.spawn(async move {
                 let _permit = permits.acquire_owned().await.expect("never closed");
-                let found = report(profile, &toolchain, &text, &syscalls, threads).await;
+                let found = report(profile, &toolchain, &text, &syscalls, &ops, threads).await;
                 (key, found)
             });
         }
@@ -953,6 +961,7 @@ async fn explains_a_mutant() {
             &toolchain,
             &text,
             &program.syscalls,
+            &program.ops,
             program.threads
         )
         .await

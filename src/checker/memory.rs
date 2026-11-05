@@ -1113,3 +1113,30 @@ fn width(insn: &Insn) -> i64 {
         .map_or(1, |memory| i64::try_from(memory.width).unwrap_or(1))
         .max(1)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::edge::Op as EdgeOp;
+
+    /// An operation lends what the system call it makes does, except where the edge is stricter by
+    /// design: it never has the kernel write what is left of a sleep or the address of a peer, and
+    /// its terminal operation keeps the mode it reads and writes in its own memory.
+    #[test]
+    fn an_operation_lends_what_its_system_call_does() {
+        for profile in Profile::ALL {
+            let abi = profile.isa().abi();
+            for op in EdgeOp::ALL {
+                let [call] = op.syscalls() else { continue };
+                if matches!(op, EdgeOp::Sleep | EdgeOp::Accept | EdgeOp::Terminal) {
+                    continue;
+                }
+                let summary = Summary::syscall(Some(profile.syscall_number(*call)), profile, abi);
+                let what = format!("{} on {profile:?}", op.symbol());
+                assert_eq!(summary.uses.len(), op.lends().len(), "{what}");
+                let written = op.lends().iter().filter(|lend| lend.written).count();
+                assert_eq!(summary.writes.len(), written, "{what}");
+            }
+        }
+    }
+}

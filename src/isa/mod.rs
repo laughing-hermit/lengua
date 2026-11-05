@@ -411,6 +411,11 @@ pub struct Abi {
     pub caller_saved: &'static [Reg],
     /// The registers a system call changes.
     pub syscall_clobbers: &'static [Reg],
+    /// The registers an operation of lengua's edge takes its arguments in, in order.
+    pub edge_arguments: &'static [Reg],
+    /// The registers a call to an operation of the edge changes, and no others: what a system call
+    /// changes and what the edge's own instructions around it use, the vector registers included.
+    pub edge_clobbers: &'static [Reg],
     /// The registers a function must give back unchanged.
     pub callee_saved: &'static [Reg],
 }

@@ -771,6 +771,7 @@ impl LenguaServer {
                     &built.bytes,
                     checker::Context {
                         syscalls: &spec.syscalls,
+                        ops: &spec.ops,
                         threads: spec.threads,
                         features: target.features(&machine),
                         profile,

@@ -33,6 +33,8 @@ pub struct Spec {
     /// The system calls that allows on this target, worked out from `uses`, the network and the
     /// output every program has.
     pub syscalls: Vec<Syscall>,
+    /// The edge's operations the same words allow: what a program in the edge form may call.
+    pub ops: Vec<crate::edge::Op>,
     /// How many threads the program may run at once, when the spec allows more than one.
     pub threads: Option<u32>,
     /// The backtick values in `# Purpose`, in order of first appearance: the ranges of the
@@ -1739,6 +1741,7 @@ impl Parser {
         }
         let uses = self.uses.take().unwrap_or_default();
         let syscalls = self.syscalls_for(&uses);
+        let ops = crate::edge::ops_for(&uses, &self.network, self.threads);
         self.check_network();
         match header {
             Some((title, description)) if self.problems.is_empty() => Ok(Spec {
@@ -1747,6 +1750,7 @@ impl Parser {
                 behaviors: self.behaviors,
                 uses,
                 syscalls,
+                ops,
                 threads: self.threads,
                 purpose_values: self.purpose_values,
                 network: self.network,

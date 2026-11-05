@@ -222,6 +222,8 @@ impl fmt::Display for Violation {
 pub struct Context<'a> {
     /// The system calls the spec allows.
     pub syscalls: &'a [Syscall],
+    /// The edge's operations the spec allows, which a program in the edge form may call.
+    pub ops: &'a [crate::edge::Op],
     /// How many threads the spec allows at once, when it allows more than one.
     pub threads: Option<u32>,
     /// This CPU's extensions.

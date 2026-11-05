@@ -48,6 +48,7 @@ async fn check_full(
         &bytes,
         Context {
             syscalls,
+            ops: &[],
             threads,
             features,
             profile,
@@ -169,6 +170,7 @@ async fn operands_must_mean_what_the_machine_does() {
             &bytes,
             Context {
                 syscalls: &SYSCALLS,
+                ops: &[],
                 threads: None,
                 features: CpuFeatures::all(),
                 profile: target,
