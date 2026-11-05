@@ -5241,7 +5241,8 @@ mod tests {
             let at = |term: Term| {
                 pool.evaluate_with(term, &mut |_, variable| (variable == small).then_some(value))
             };
-            let wanted = u128::from(value < 10 && value < 5 && value > 2);
+            // Below 10 follows from below 5 here, which the intervals don't know.
+            let wanted = u128::from(value < 5 && value > 2);
             assert_eq!(at(all), Some(wanted), "x = {value}");
             assert_eq!(at(all_again), Some(wanted), "x = {value}");
         }
