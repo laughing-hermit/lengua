@@ -160,9 +160,10 @@ pub fn analyze(
                 // lengua's: an operation, or one of the library's functions.
                 None if program.lengua_at(target).is_some() => {
                     let name = program.lengua_at(target).map_or("", MappedFunction::name);
+                    let in_lengua = program.lengua_at_name(function.name()).is_some();
                     if let Some(op) = crate::edge::Op::from_symbol(name) {
                         Exit::Edge { op }
-                    } else if crate::edge::LIBRARY.contains(&name) {
+                    } else if in_lengua || crate::edge::LIBRARY.contains(&name) {
                         Exit::Call {
                             callee: name.to_owned(),
                         }

@@ -4818,6 +4818,22 @@ async fn lengua_s_is_matched_and_an_operation_keeps_what_the_edge_keeps() {
         for register in abi.caller_saved {
             assert!(ordinary.changes(*register, abi), "{profile:?} {register:?}");
         }
+        // lengua's own functions have a flow and a stack without a fault of the kind the first
+        // rules find, apart from the guard after an exit that can never run.
+        let exits = [
+            profile.syscall_number(Syscall::Exit),
+            profile.syscall_number(Syscall::ExitGroup),
+        ];
+        let mut faults = Vec::new();
+        for function in &program.lengua {
+            cfg::analyze(function, &program, &exits, &[], &mut faults);
+        }
+        let faults: Vec<String> = faults
+            .iter()
+            .map(ToString::to_string)
+            .filter(|fault| !fault.contains("can never run"))
+            .collect();
+        assert!(faults.is_empty(), "{profile:?}: {faults:#?}");
     }
 }
 
@@ -5025,7 +5041,8 @@ const EDGE_FIXTURES: &[EdgeFixture] = &[
             aarch64: &[("main:\n", "main:\n    sub sp, sp, #8\n")],
         },
         ops: &BASE_OPS,
-        says: "aligned",
+        says: // x86-64 says the stack isn't 16-byte aligned; AArch64 never lets sp be anything else.
+        "16",
     },
     EdgeFixture {
         what: "a frame as big as a page",
