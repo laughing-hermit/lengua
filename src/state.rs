@@ -186,23 +186,25 @@ impl State {
     pub fn next_step(&self, folder: &ProgramFolder) -> String {
         match self {
             Self::NoSpec => format!(
-                "Next: write {folder}/{SPEC_FILE}, its tests included, with the write-spec skill, \
-                 then call check with path {folder} and, as request, the user's words that asked \
-                 for the program."
+                "Next: write {}, its tests included, with the write-spec skill, then call check \
+                 with path {folder} and, as request, the user's words that asked for the program.",
+                folder.file(SPEC_FILE).display()
             ),
             Self::LockInvalid(error) => format!(
-                "Next: {folder}/{} can't be used: {error}. Call check with path {folder} and, as \
-                 request, the user's words that asked for this program; the tests and code are \
-                 then checked again.",
-                lock::LOCK_FILE
+                "Next: {} can't be used: {error}. Call check with path {folder} and, as request, \
+                 the user's words that asked for this program; the tests and code are then \
+                 checked again.",
+                folder.file(lock::LOCK_FILE).display()
             ),
             Self::SpecUnrecorded => format!(
                 "Next: call check with path {folder} and, as request, the user's words that asked \
                  for this program or this change, quoted exactly."
             ),
             Self::CodeMissing => format!(
-                "Next: compile {folder}/{SPEC_FILE} into {folder}/{CODE_FILE} with the compile \
-                 skill, then call check with path {folder}."
+                "Next: compile {} into {} with the compile skill, then call check with path \
+                 {folder}.",
+                folder.file(SPEC_FILE).display(),
+                folder.file(CODE_FILE).display()
             ),
             Self::CodeUnchecked | Self::Ready => {
                 format!("Next: call check with path {folder}.")
@@ -245,9 +247,22 @@ mod tests {
         State::of(&Snapshot { spec, code, lock })
     }
 
+    /// An absolute path on this system: `rest` below its root.
+    fn absolute(rest: &str) -> String {
+        if cfg!(windows) {
+            format!("C:\\{rest}")
+        } else {
+            format!("/{rest}")
+        }
+    }
+
+    /// The program folder these tests ask about.
+    fn add() -> ProgramFolder {
+        ProgramFolder::new(&absolute("projects/add")).expect("absolute path")
+    }
+
     fn next_step(state: &State) -> String {
-        let folder = ProgramFolder::new("/projects/add").expect("absolute path");
-        state.next_step(&folder)
+        state.next_step(&add())
     }
 
     #[test]
@@ -258,9 +273,10 @@ mod tests {
         );
         assert_eq!(state, State::NoSpec);
         assert!(
-            next_step(&state).starts_with(
-                "Next: write /projects/add/spec.md, its tests included, with the write-spec skill"
-            ),
+            next_step(&state).starts_with(&format!(
+                "Next: write {}, its tests included, with the write-spec skill",
+                add().file(SPEC_FILE).display()
+            )),
             "{}",
             next_step(&state)
         );
@@ -275,13 +291,14 @@ mod tests {
         assert_eq!(state, State::LockInvalid(LockError::BadSignature));
         let step = next_step(&state);
         assert!(
-            step.starts_with(
-                "Next: /projects/add/lengua.lock can't be used: its signature doesn't match"
-            ),
+            step.starts_with(&format!(
+                "Next: {} can't be used: its signature doesn't match",
+                add().file(lock::LOCK_FILE).display()
+            )),
             "{step}"
         );
         assert!(
-            step.contains("Call check with path /projects/add and, as request"),
+            step.contains(&format!("Call check with path {} and, as request", add())),
             "{step}"
         );
     }
@@ -297,7 +314,10 @@ mod tests {
         assert_eq!(changed, State::SpecUnrecorded);
         let step = next_step(&missing);
         assert!(
-            step.contains("call check with path /projects/add and, as request, the user's words"),
+            step.contains(&format!(
+                "call check with path {} and, as request, the user's words",
+                add()
+            )),
             "{step}"
         );
     }
@@ -328,7 +348,7 @@ mod tests {
         assert_eq!(edited, State::CodeUnchecked);
         assert_eq!(
             next_step(&edited),
-            "Next: call check with path /projects/add."
+            format!("Next: call check with path {}.", add())
         );
     }
 
@@ -341,18 +361,18 @@ mod tests {
         assert_eq!(state, State::Ready);
         assert_eq!(
             next_step(&state),
-            "Next: call check with path /projects/add."
+            format!("Next: call check with path {}.", add())
         );
     }
 
     #[test]
     fn program_folders_must_be_absolute_and_plain() {
         assert_eq!(
-            ProgramFolder::new("/projects/./add/").map(|folder| folder.to_string()),
-            Ok("/projects/add".to_owned())
+            ProgramFolder::new(&absolute("projects/./add/")).map(|folder| folder.to_string()),
+            Ok(add().to_string())
         );
         assert!(ProgramFolder::new("add").is_err());
-        assert!(ProgramFolder::new("/projects/../etc").is_err());
+        assert!(ProgramFolder::new(&absolute("projects/../etc")).is_err());
     }
 
     #[test]
@@ -365,7 +385,8 @@ mod tests {
         assert_eq!(snapshot.spec, Some(digest("spec")));
         assert_eq!(snapshot.code, None);
         assert_eq!(snapshot.lock, LockStatus::Missing);
-        let missing = ProgramFolder::new("/nonexistent/lengua/program").expect("absolute path");
+        let missing =
+            ProgramFolder::new(&absolute("nonexistent/lengua/program")).expect("absolute path");
         assert_eq!(
             Snapshot::read(&missing, None)
                 .expect("a missing folder is empty")
