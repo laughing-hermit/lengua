@@ -181,8 +181,10 @@ Rust, built with every optimization for this CPU (`cargo bench --bench against_r
 measures again). On this machine, lengua's best version is ahead or level on every workload in
 CPU time, wall time, peak memory and file size. It has memory safety proven rather than checked at
 run time, and uses less than half the memory. Where it isn't ahead is described below the table.
-The goal is ahead on every measure, on every target: the rows that read level, and the items
-below, are the work left to reach it (round 5 of [todo.md](todo.md)).
+The goal is one program that is ahead on every measure at once, on every target. The table below
+takes lengua's best version for each measure, which can be a different program for each; that, the
+rows that read level, and the items below are the work left to reach it (round 5 of
+[todo.md](todo.md)).
 
 | Workload | Cycles | CPU time | Wall time | Peak memory |
 |---|---|---|---|---|

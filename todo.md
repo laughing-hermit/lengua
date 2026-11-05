@@ -1,19 +1,17 @@
 # lengua's agenda: what's left for people
 
-**Where lengua stands (2026-11-05).** Two of six targets exist: Linux on x86-64 and on ARM64.
-They are one product held by one suite:
-- Every test of the server, the programs, the network, the checker and the prover is a table with
-  a cell for each target, run natively on the runner of each CPU.
-  `tests/parity_inventory.rs` fails any new test file made for one CPU.
-- Every shipped program has a form that runs on every machine of its target (`tests/baseline.rs`,
-  nothing owed), with the extension forms as named fast tiers.
-- ARM64's prover settles what x86-64's does on every program the tables ask.
+**What lengua is.** An AI language: an LLM is the compiler, and lengua validates its translations
+instead of trusting them. A person's request becomes a `spec.md`, Behavior-Driven and in the Open
+Knowledge Format, naming no CPU or OS; the agent compiles it to `main.s` for the machine; lengua
+checks the code against the rules, tests it, proves it, and runs it confined. The product is an
+Agent Plugin, skills and one Rust MCP server only, so it runs in any agent harness.
 
-The full suites on the merged tree passed 530 tests on x86-64 and 526 on ARM64, with none failed,
-and the mutation test passed on both (runs 41948019569, 41948026904, 41948022915 and
-41948030519; ARM64's slow `mean` proof, 41948034208). The record of that work is in the git
-history, DESIGN.md, README.md, SESSIONS.md and the BENCHMARKS files. The four other targets,
-macOS and Windows on each CPU, are the roadmap below.
+**Where lengua stands (2026-11-05).** Two of six targets are done: Linux on x86-64 and on ARM64,
+one product held by one suite (530 tests on x86-64 and 526 on ARM64 passed on the merged tree, and
+the mutation test on both: runs 41948019569, 41948026904, 41948022915 and 41948030519; ARM64's slow
+`mean` proof, 41948034208). macOS and Windows are round 1 of the roadmap below, in progress.
+The record of the finished work is in the git history, DESIGN.md, README.md, SESSIONS.md and the
+BENCHMARKS files.
 
 **How the work is done.**
 - Everything is built, tested, proven and measured on GitHub's free runners, which cost nothing
@@ -26,9 +24,21 @@ macOS and Windows on each CPU, are the roadmap below.
 
 ## The finish line: "perfected" (set 2026-11-05)
 
-lengua is perfected when each of these is shown by a green run on GitHub's runners:
+lengua is finished when all seven of these are true. Each is shown by a green run on GitHub's
+free runners, whose id is written in the table below, and by nothing else.
 
-1. **Six targets, one product.** Linux, macOS and Windows on x86-64 and ARM64 each pass the one
+1. **It is an AI language, delivered as an Agent Plugin and nothing else.**
+   - The plugin is two skills (`write-spec`, `compile`) and one Rust MCP server (`check`, `run`).
+     No hooks, no subagents, nothing that needs one agent harness's features: any harness that
+     loads skills and MCP servers runs it.
+   - A program is a folder of two files. `spec.md` is the source of truth: Behavior-Driven
+     (Given/When/Then, its tests inside), an Open Knowledge Format page in the manner of an LLM
+     Wiki, naming no CPU or OS. `main.s` is the LLM's translation of it for one machine, which
+     lengua validates (rules, tests, proofs) instead of trusting.
+   - Program folders are the nodes of a knowledge graph and a spec's `Builds on` links are its
+     edges, with an `index.md` listing a folder of nodes; `check` holds the graph to the code.
+     Indexing other files in the graph is not designed yet ("Deferred" below).
+2. **Six targets, one product.** Linux, macOS and Windows on x86-64 and ARM64 each pass the one
    conformance suite natively, on their own runner. The suite covers:
    - the rules and memory rules, and the sandbox's limits;
    - the edge's conformance table;
@@ -37,18 +47,25 @@ lengua is perfected when each of these is shown by a green run on GitHub's runne
    - the prover's tests and the mutation test.
 
    `tests/parity_inventory.rs` requires a native `cargo test` job on all six runners, and refuses
-   any test file made for one target.
-2. **Every shipped program on every target.** Each program has one text per CPU, the same main.s
-   on Linux, macOS and Windows, from one byte-identical spec. It has a baseline form (no optional
-   CPU extension) and its named fast tiers. Across the targets:
+   any test file made for one target. Every shipped program has one text per CPU, the same
+   main.s on Linux, macOS and Windows, from one byte-identical spec, with a baseline form (no
+   optional CPU extension) and its named fast tiers. Across the targets:
    - no target finds a counterexample another doesn't;
    - each proof line has the same verdict on the three targets of its CPU. Where a line's time
      budget cuts it short, the verdict is the same kind: proven, or bounded to a length.
-3. **Faster and leaner than C, C++ and Rust, everywhere.** On every workload and every target,
-   lengua's best version takes less CPU time and less wall time, and uses less peak memory and a
-   smaller executable, than the best version in C, C++ or Rust. A gate on each target's runner
-   fails on any measure where that lead isn't shown. (The owner, 2026-11-05: "I want faster and
-   more memory efficient evrywhere".)
+3. **Tailored to each CPU and OS for speed.** main.s is written for the CPU: the widest vectors it
+   has (AVX-512, AVX2, NEON, SVE) as named fast tiers, each beside a baseline form that runs on
+   every machine of that CPU. The edge, which main.s calls for everything that reaches the OS, is
+   written for the OS: raw system calls on Linux, libSystem's thinnest wrappers on macOS,
+   kernel32's on Windows. The spec, the checks and the behavior are the same on every target; only
+   the instructions differ.
+4. **Faster and leaner than C, C++ and Rust, everywhere.** On every workload and every target, one
+   lengua program, the one lengua ships for that machine, takes less CPU time and less wall time,
+   and uses less peak memory and a smaller executable, than the best C, C++ or Rust does on each of
+   those measures. A gate on each target's runner fails on any measure where that lead isn't
+   shown. (The owner, 2026-11-05: "I want faster and more memory efficient evrywhere". A person
+   runs one program, so one program must win all four at once: never a threaded build for time and
+   a single-thread one for memory.)
    - Workloads:
      - *Throughput* (64 MiB streams, files, sort, a word tally).
      - *Startup-bound programs* (an empty program, add, hypotenuse).
@@ -59,22 +76,38 @@ lengua is perfected when each of these is shown by a green run on GitHub's runne
      lengua's median must be lower with 99% confidence ([ROADMAP.md](ROADMAP.md) §7 says how). A
      difference within the noise fails.
    - Memory and size are compared as measured, and lengua's must be smaller.
-   - Each language is shown at its best: vector code, and a threaded version wherever any
-     language's best is threaded.
+   - The others are shown at their best on each measure, which can be a different program for
+     each (Rust with threads for time, without for memory). lengua's side is one program: the
+     fastest tier the machine's CPU supports, which the compile skill picks. If that tier loses a
+     measure, the row is behind until it doesn't; choosing another tier for that measure doesn't
+     count.
    - Nothing is excused at the finish line. Round 5's list of what's still behind may only shrink,
      and it must end empty.
    - Instructions and cycles are reported, not gated. Programs are measured as people run them,
      on their own.
    - `run`'s own cost (the sandbox's start, the broker's round trips) is reported per OS. On
      Linux it is no worse than the cost of the supervisor it replaced.
-4. **A replacement for systems, command-line and server programs**, with lengua's safety rules
+5. **A replacement for systems, command-line and server programs**, with lengua's safety rules
    kept (memory sized from the spec, explicit stacks for recursion, checked tables for dispatch).
    DESIGN and the white paper say plainly what's out of that scope or excluded by design, and
    "Deferred" below says what would bring each in.
-5. **Truthful documents.** README, DESIGN, BENCHMARKS and the white paper say what the runs show,
+6. **Truthful documents.** README, DESIGN, BENCHMARKS and the white paper say what the runs show,
    per target, and nothing more.
-6. **Shippable.** A release archive for each of the six hosts builds, installs and passes its
-   check in CI. The archives are unsigned, and the owner publishes them.
+7. **Shippable.** A release archive for each of the six hosts builds, installs and passes its
+   check in CI, driven through a plain MCP client. The archives are unsigned, and the owner
+   publishes them.
+
+**Where each stands.** Updated as rounds merge, with the run that shows it.
+
+| | now | what's left |
+|---|---|---|
+| 1. AI language, Agent Plugin | Built on Linux: both skills, `check` and `run`, the spec format, the `Builds on` graph. | The release check through a plain MCP client on every OS (round 6). Knowledge-graph indexing past program folders: not designed. |
+| 2. Six targets | Linux on both CPUs: done. macOS and Windows compile with clippy clean on the round 1 branch (run 42068545472, all six green); their tests that run no program are being fixed there. | The edge and broker (round 2); programs running on macOS (round 3) and Windows (round 4). |
+| 3. Tailored | CPU tiers and baselines: done on Linux. OS: Linux programs call the kernel directly. | One edge per OS (round 2, 3, 4). |
+| 4. Faster, leaner | Measured on Linux (BENCHMARKS): most rows ahead, some level, none gated. | The gate on six runners (round 5). |
+| 5. A replacement | Scope written in DESIGN. | Prover reach (round 6). |
+| 6. Truthful documents | README and DESIGN state the stricter bar. | A last pass (round 6). |
+| 7. Shippable | Archives for Linux, both CPUs. | Six hosts (round 6). |
 
 ## Roadmap (2026-11-05)
 
@@ -161,6 +194,13 @@ lengua is perfected when each of these is shown by a green run on GitHub's runne
 
 ### Round 5
 
+- **The bench takes one program.** Its table (`ratio` in `benches/against_rust_and_c.rs`) now takes
+  lengua's best value for each measure, which can be a different version for each. It takes the
+  four measures of the one program the compile skill picks for the machine, and reports the other
+  tiers beside it, not instead of it.
+- **Where the fastest tier isn't the leanest.** A threaded or wide-vector tier that wins time but
+  costs memory (stacks, per-thread slots, tables) is a row to fix, not to excuse: the 16-thread
+  shout against Rust's single-thread memory is the first to measure.
 - **`crc32c`'s wall time.**
   - On x86-64, the three-chain form, now `fast/crc32c-pclmul`, took 0.96× to 2.09× less CPU time
     than the best other on six runner draws, but 8 to 29 percent more wall time on all six.
@@ -244,6 +284,11 @@ lengua is perfected when each of these is shown by a green run on GitHub's runne
 
 ## Deferred, and why
 
+- **A knowledge graph over more than program folders.** The owner's idea: lengua indexes files
+  and anything else in a knowledge graph, each program folder a node. Program folders and their
+  `Builds on` links already are one, and `check` holds it to the code. Indexing other files, or
+  answering questions over the graph, needs a design first (new tools or MCP resources, which the
+  plugin's two tools don't offer), and the owner decides what it should do. Not designed.
 - **A direct path for existing names under `run`:** openat2 under Landlock, and on macOS too if
   its spike can read a name's stored bytes. Worth it only if round 5's many-files line under
   `run` shows the broker's round trip matters.

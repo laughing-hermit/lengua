@@ -534,16 +534,21 @@ stopped list, 2026-11-05).
 - **The empty program** is a workload like the others: lengua's main calls `os_exit(0)` and C's
   main returns 0, and lengua must start faster than C. Each runner also reports it as that OS's
   floor, the part of a startup-bound workload that no program avoids.
-- **The gate** fails on any workload and measure where lengua's best version isn't ahead of the
-  best version in C, C++ and Rust:
+- **The gate** fails on any workload and measure where the one lengua program for the machine
+  isn't ahead of the best C, C++ and Rust on that measure:
   - *CPU and wall time.* The runs alternate between the languages, so drift hits all alike.
     lengua is ahead when its median is lower and a one-sided Mann–Whitney U test gives p < 0.01.
     Until the test decides, the bench adds runs, up to 2,000 per language or ten minutes a row.
     Still undecided at the cap counts as behind.
   - *Peak memory and executable size.* lengua's median must be smaller, as measured.
-  - *Each language at its best.* Vector code, and a threaded version wherever any language's best
-    is threaded (C with pthreads or Windows threads, C++ with `std::thread`, Rust with scoped
-    threads).
+  - *One program against the best of the others.* lengua's side is one program per workload and
+    machine: the fastest tier the CPU supports, as the compile skill picks it, named in the bench's
+    table. It must be ahead on all four measures at once. The others are taken at their best on
+    each measure, so a different program for each: vector code, and threads wherever any
+    language's best is threaded (C with pthreads or Windows threads, C++ with `std::thread`,
+    Rust with scoped threads) for time, the single-thread version for memory. A row where no tier
+    wins all four is behind, and `KNOWN_BEHIND` is the work of making one do it (threads with lean
+    stacks, tables that stay small).
 
   `KNOWN_BEHIND` (target, workload, measure, why) is round 5's work list. It may only shrink, like
   tests/baseline.rs's ratchet, and it is empty at the finish line.
