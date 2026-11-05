@@ -1,0 +1,223 @@
+name: ci
+
+# lengua built and tested natively on all six targets, on GitHub's free runners (the repository is
+# public): Linux, macOS and Windows, each on x86-64 and ARM64. scripts/ci/targets.json names the six
+# runners; scripts/ci/tools.tsv pins the solvers; scripts/ci/setup.sh installs everything.
+#
+# This is the first version of the one workflow that is to replace targets.yml, arm64.yml and
+# unported.yml (round 1 of ROADMAP.md), so for now it only runs when asked: dispatch it against a
+# branch, with the targets and the mode wanted. It takes over their push runs, and they go, when all
+# six targets are green. Benchmarks and release archives stay in targets.yml and arm64.yml until
+# rounds 5 and 6.
+on:
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: "Which targets: all, or a comma-separated list from scripts/ci/targets.json"
+        type: string
+        default: "all"
+      mode:
+        description: "compile: clippy and cargo test --no-run. test: the suite. ignored: the slow ignored tests."
+        type: choice
+        options:
+          - compile
+          - test
+          - ignored
+        default: compile
+      filter:
+        description: "Only the tests whose names contain this (cargo test's filter)"
+        type: string
+        default: ""
+      check_folder:
+        description: "Program folders, comma-separated, for the ignored check_one_folder test (LENGUA_CHECK_FOLDER)"
+        type: string
+        default: ""
+      stall_seconds:
+        description: "Stop the slow ignored tests after this many seconds, keeping where they stood (stall.txt; Linux)"
+        type: string
+        default: ""
+
+concurrency:
+  group: ci-${{ github.ref }}-${{ inputs.mode }}-${{ inputs.targets }}-${{ inputs.filter }}-${{ inputs.check_folder }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  # The targets to run, as a matrix, from the one list of runners.
+  plan:
+    name: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: matrix
+        env:
+          TARGETS: ${{ inputs.targets }}
+        run: |
+          TARGETS="${TARGETS// /}"
+          if [ -z "$TARGETS" ] || [ "$TARGETS" = all ]; then
+            include=$(jq -c '.' scripts/ci/targets.json)
+          else
+            include=$(jq -c --arg t ",$TARGETS," \
+              '[.[] | . as $e | select($t | contains("," + $e.target + ","))]' scripts/ci/targets.json)
+          fi
+          if [ "$include" = "[]" ]; then
+            echo "No such target in scripts/ci/targets.json: $TARGETS" >&2
+            exit 1
+          fi
+          echo "matrix={\"include\":$include}" >> "$GITHUB_OUTPUT"
+
+  # Formatting is the same on every target, so it is checked once, beside the tests rather than in
+  # front of them: a difference never hides a test result. When there is one, the patch that
+  # formats it is kept (fmt.patch), to apply with git.
+  format:
+    name: format
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust
+        run: bash scripts/ci/setup.sh linux-x86_64 rust
+
+      - name: Format
+        run: |
+          if ! cargo fmt --check; then
+            cargo fmt
+            git diff > fmt.patch
+            exit 1
+          fi
+
+      - name: Keep the patch
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fmt-patch-${{ github.run_number }}
+          path: fmt.patch
+          retention-days: 7
+          if-no-files-found: ignore
+
+  test:
+    name: ${{ inputs.mode }} (${{ matrix.target }})
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The machine
+        run: bash scripts/ci/machine.sh ${{ matrix.target }}
+
+      - name: Rust
+        run: bash scripts/ci/setup.sh ${{ matrix.target }} rust
+
+      - name: LLVM
+        if: ${{ inputs.mode != 'compile' && startsWith(matrix.target, 'linux-') }}
+        run: bash scripts/ci/setup.sh ${{ matrix.target }} llvm
+
+      - uses: actions/cache@v4
+        if: ${{ inputs.mode != 'compile' }}
+        with:
+          path: ~/solvers
+          key: solvers-${{ matrix.target }}-${{ hashFiles('scripts/ci/tools.tsv') }}
+
+      - name: z3 and cvc5, pinned by checksum
+        if: ${{ inputs.mode != 'compile' }}
+        run: bash scripts/ci/setup.sh ${{ matrix.target }} solvers
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ci-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'scripts/ci/setup.sh') }}
+          restore-keys: ci-${{ matrix.target }}-
+
+      - name: Clippy
+        run: cargo clippy --release --all-targets --locked --workspace -- -D warnings
+
+      - name: Build the tests
+        if: ${{ inputs.mode == 'compile' }}
+        run: cargo test --release --locked --workspace --no-run
+
+      - name: Tests
+        if: ${{ inputs.mode == 'test' }}
+        env:
+          LENGUA_PROOF_SECONDS: "60"
+          RUST_TEST_THREADS: "2"
+          FILTER: ${{ inputs.filter }}
+          LENGUA_SKIP_LOG: ${{ github.workspace }}/skips.log
+        run: cargo test --release --locked --workspace --no-fail-fast $FILTER 2>&1 | tee test.log
+
+      - name: The slow ignored tests
+        if: ${{ inputs.mode == 'ignored' }}
+        env:
+          LENGUA_PROOF_SECONDS: "60"
+          RUST_TEST_THREADS: "2"
+          FILTER: ${{ inputs.filter }}
+          LENGUA_CHECK_FOLDER: ${{ inputs.check_folder }}
+          STALL_SECONDS: ${{ inputs.stall_seconds }}
+          LENGUA_SKIP_LOG: ${{ github.workspace }}/skips.log
+        run: |
+          tests='set -o pipefail; cargo test --release --locked --workspace --no-fail-fast $FILTER -- --ignored --nocapture 2>&1 | tee ignored.log'
+          if [ -n "$STALL_SECONDS" ]; then
+            bash scripts/stall-report.sh "$STALL_SECONDS" bash -c "$tests"
+          else
+            bash -c "$tests"
+          fi
+
+      # A green run says what it did not cover: libtest hides what a passing test prints, so a
+      # test that skips itself notes why (lengua::skiplog) and the notes are counted here.
+      - name: What the tests skipped
+        if: always()
+        run: bash scripts/skip-summary.sh skips.log | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the logs and the server
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-${{ matrix.target }}-${{ github.run_number }}
+          path: |
+            test.log
+            ignored.log
+            skips.log
+            stall.txt
+            target/release/lengua-mcp
+            target/release/lengua-mcp.exe
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # One check that says whether the whole run passed.
+  gate:
+    name: gate
+    needs: [plan, format, test]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed
+        env:
+          RESULTS: ${{ needs.plan.result }} ${{ needs.format.result }} ${{ needs.test.result }}
+        run: |
+          echo "plan, format, test: $RESULTS"
+          for result in $RESULTS; do
+            [ "$result" = success ] || exit 1
+          done
