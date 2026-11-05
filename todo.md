@@ -6,12 +6,12 @@ Knowledge Format, naming no CPU or OS; the agent compiles it to `main.s` for the
 checks the code against the rules, tests it, proves it, and runs it confined. The product is an
 Agent Plugin, skills and one Rust MCP server only, so it runs in any agent harness.
 
-**Where lengua stands (2026-11-05).** Two of six targets are done, **Linux only**: Linux on x86-64
-and on ARM64, one product held by one suite (530 tests on x86-64 and 526 on ARM64 passed on the merged tree, and
-the mutation test on both: runs 41948019569, 41948026904, 41948022915 and 41948030519; ARM64's slow
-`mean` proof, 41948034208). macOS and Windows are round 1 of the roadmap below, in progress.
-The record of the finished work is in the git history, DESIGN.md, README.md, SESSIONS.md and the
-BENCHMARKS files.
+**Where lengua stands (2026-11-05).** Two of the six targets are done: Linux on x86-64 and Linux on
+ARM64, one product held by one suite, and the mutation test passes on both (run 42084426990).
+The other four, macOS and Windows each on x86-64 and on
+ARM64, build with clippy clean and pass every test that runs no program, on their own runners, and
+run no program yet (the table under "Where each stands"). The record of the finished work is in
+the git history, DESIGN.md, README.md, SESSIONS.md and the BENCHMARKS files.
 
 **How the work is done.**
 - Everything is built, tested, proven and measured on GitHub's free runners, which cost nothing
@@ -98,31 +98,45 @@ free runners, whose id is written in the table below, and by nothing else.
    check in CI, driven through a plain MCP client. The archives are unsigned, and the owner
    publishes them.
 
-**Where each stands.** Updated as rounds merge, with the run that shows it.
+**Where each stands.** Updated as rounds merge, with the run that shows it. First by target, from
+run 42085247387 (2026-11-05, commit 43c63ea; libtest counts a test that notes why it did nothing
+as passed):
+
+| target | runner | suite | programs run | against C, C++ and Rust | archive |
+|---|---|---|---|---|---|
+| Linux x86-64 | ubuntu-24.04 | 535 passed | yes | BENCHMARKS.md (the owner's computer, 2026-11-02) | built |
+| Linux ARM64 | ubuntu-24.04-arm | 531 passed | yes | BENCHMARKS-aarch64.md (the runner) | built |
+| macOS x86-64 | macos-26-intel | 527 passed, 122 of them did nothing: no program runs yet | round 3 | round 5 | round 6 |
+| macOS ARM64 | macos-26 | 525 passed, 120 of them did nothing | round 3 | round 5 | round 6 |
+| Windows x86-64 | windows-2025 | 522 passed, 120 of them did nothing | round 4 | round 5 | round 6 |
+| Windows ARM64 | windows-11-arm | 520 passed, 118 of them did nothing | round 4 | round 5 | round 6 |
+
+Then by finish-line point:
 
 | | now | what's left |
 |---|---|---|
-| 1. AI language, Agent Plugin | **Linux only** (x86-64 and ARM64): both skills, `check` and `run`, the spec format, the `Builds on` graph. | The release check through a plain MCP client on every OS (round 6). Knowledge-graph indexing past program folders: not designed. |
-| 2. Six targets | **Linux only** is done, on both CPUs. macOS and Windows compile with clippy clean, and pass every test that runs no program, on all four runners (run 42085247387); programs don't run there yet. | The edge and broker (round 2); programs running on macOS (round 3) and Windows (round 4). |
-| 3. Tailored | **Linux only**: CPU tiers with a baseline form beside each. Linux programs call the kernel directly; no OS edge exists yet. | One edge per OS (rounds 2, 3 and 4). |
-| 4. Faster, leaner | **Linux only**, measured on the owner's computer (x86-64, 2026-11-02) and GitHub's ARM64 runner: most rows ahead, some level, none gated. | The gate on six runners (round 5). |
+| 1. AI language, Agent Plugin | On Linux x86-64 and Linux ARM64: both skills, `check` and `run`, the spec format, the `Builds on` graph. On the other four the server builds and the tests that run no program pass, but no program runs. | The release check through a plain MCP client on every target (round 6). Knowledge-graph indexing past program folders: not designed. |
+| 2. Six targets | Linux x86-64 and Linux ARM64 pass the whole suite natively. The other four pass every test that runs no program (the table above). | The edge and broker (round 2); programs running on macOS (round 3) and Windows (round 4). |
+| 3. Tailored | CPU tiers for x86-64 and ARM64, each with a baseline form beside it. For the OS, Linux programs call the kernel directly; no edge exists yet for any OS. | One edge per OS (rounds 2, 3 and 4). |
+| 4. Faster, leaner | Measured on Linux x86-64 and Linux ARM64 (the table above): most rows ahead, some level, none gated. The other four are not measured. | The gate on all six runners (round 5). |
 | 5. A replacement | Scope written in DESIGN. | Prover reach (round 6). |
-| 6. Truthful documents | README and DESIGN state the stricter bar and say what is Linux only. | A last pass (round 6). |
-| 7. Shippable | **Linux only**: archives for x86-64 and ARM64. | Six hosts (round 6). |
+| 6. Truthful documents | README and DESIGN state the stricter bar and name the targets each claim covers. | A last pass (round 6). |
+| 7. Shippable | Archives for Linux x86-64 and Linux ARM64. | The other four hosts (round 6). |
 
 ## Roadmap (2026-11-05)
 
 0. **Documents: done 2026-11-05.** This file, README's benchmark claim, DESIGN's performance bar,
    and ROADMAP.md.
-1. **Six hosts, one workflow.**
+1. **Six hosts, one workflow: done 2026-11-05** (run 42085247387, commit 43c63ea).
    - lengua-mcp builds and runs `cargo test --workspace` natively on all six runners, from one
-     sharded `ci.yml`.
-   - The OS seams become backends keyed by target (`src/os/`), and tables are keyed by what a
-     cell depends on (`PerCpu`, `PerOs`, `PerTarget`).
-   - The macOS and Windows spikes have answered: what the toolchains make, names, pipes (first
-     answers 2026-11-05, in ROADMAP.md's round 1), then handed-over descriptors and handles,
-     which rounds 3 and 4 ask again. What a sandbox refuses is the owner's to try.
-   - The Linux soundness items below are fixed.
+     `ci.yml` (whose suites take 35 to 62 minutes, so it isn't sharded).
+   - The OS seams are backends keyed by target (`src/os/`: Linux's, and one for the systems that
+     can't run a program yet), and the tables are keyed by CPU (`PerCpu`, `PerTarget`; `PerOs`
+     comes with round 3).
+   - The spikes' first answers (what the toolchains make, names, pipes) are in ROADMAP.md's
+     round 1; handed-over descriptors and handles are asked again in rounds 3 and 4. What a
+     sandbox refuses is the owner's to try.
+   - The Linux soundness items are fixed, each with a test.
 2. **The edge and the broker, on Linux, for both CPUs.**
    - Programs reach the OS only through lengua's linked edge: 21 operations defined once
      (`src/edge/mod.rs`) and one calling convention per CPU.
@@ -151,40 +165,25 @@ free runners, whose id is written in the table below, and by nothing else.
 
 ## What's left, by round
 
-### Round 1
-
-- **CI.**
-  - One sharded workflow replaces `targets.yml`, `arm64.yml` and `unported.yml`.
-    - The full suites take 32 to 35 minutes, 18 to 19 of them the 141 prover tests.
-    - Shards are split by hash, not with `cargo-nextest`, because its one process per test
-      breaks the process-wide proving lock.
-  - A QEMU job on x86-64 runs the ARM64 cells that the x86-64 runner skips (77 notes in the full
-    run of 2026-11-05, 41942378048), and the ARM half of the mutation test.
-  - `tests/aarch64_session.rs`, ARM64's by-hand port tool and the last entry of `DEBT` in
-    `tests/parity_inventory.rs`, folds into `check_one_folder(target)`.
-  - Runner facts (2026-11-04): 4 vCPUs, kernel 7.0 (azure), Landlock and yama in the LSM list,
-    `ptrace_scope` 1. The x86-64 pool is mixed, about half of it with AVX-512; the ARM64 runner
-    has SVE.
-  - Not recommended: lowering the proof budgets (tests assert verdicts); larger or self-hosted
-    runners (outside the $0 rule); emulating AVX-512 (QEMU's TCG has none).
-- **Soundness, before round 2's verdict ledger.**
-  - **Wildcard ops.** The AArch64 vector model ends some matches with a wildcard that would run
-    an unmodelled op as zeros, where x86-64's model says "doesn't model yet".
-  - **`cbz`/`tbz` on `xzr` or `wzr`** count as conditional branches, so on ARM64 they can get past
-    the dead-code and "assertion always fails" checks.
-  - **SVE state.** The model keeps SVE state across `svc` (`src/prove/exec/aarch64.rs`), which
-    Linux clears.
-  - **The lock window.** `check` can say done a moment before the job writes `[proofs]` to
-    `lengua.lock`.
-    - `prove_all` in `src/server.rs` sets each block's line as it finishes, and stamps the lock
-      only after the last one.
-    - A restart in that window finds no proofs recorded. Until it's fixed, the tests wait for
-      the job to end.
-  - **Time budgets** scale by vCPU count (60 s × 4 on a runner). A measured speed probe would let
-    a slower runner, such as macOS ARM64's with 3 vCPUs, reach the same verdicts.
-
 ### Round 2
 
+- **The QEMU job's seven failing cases** (run 42085247387: 528 passed, 7 failed). In
+  `tests/programs.rs`: `a_program_gets_only_the_environment_its_test_or_run_gives`,
+  `a_program_lists_its_folder_and_deletes_inside_it`,
+  `a_program_makes_folders_and_moves_files_inside_its_own`, `small_ranges_run_every_value`,
+  `the_parallel_template_runs_on_several_cores` and
+  `the_vector_template_passes_its_tests_and_is_proven`; in `tests/template.rs`:
+  `the_template_passes_its_tests_and_is_stamped`. They expect what a native run reports, and an
+  emulated report differs (it says "under qemu-aarch64", and has no counters or timings). Make
+  each cell say what an emulated run says, then take `continue-on-error` off the job in `ci.yml`
+  so that the gate requires it.
+- **The goldens compare nothing on a runner.** `checker::golden` and `prove::golden` compare a
+  run with a recording made at an earlier commit, and a fresh runner has none, so they record
+  and note that they compared nothing: the four "passed" that way on both Linux targets (run
+  42084426990). Before the edge changes what the checker reads, a job records them at the
+  merge-base and at the head, both on the runner, and diffs the two. The prover's two take about
+  30 minutes each. Filter `explains_a_mutant` out: it is a helper that needs
+  `LENGUA_GOLDEN_MUTANT`.
 - `upcase` retries writes 4096 times on x86-64 and 64 times on ARM64. The ARM64 main template's
   assertions skip number 3.
 - The stamp lengua writes into `main.s` and `lengua.lock` (`needs SSE4.2, …`) lists SSE3 to
@@ -194,6 +193,26 @@ free runners, whose id is written in the table below, and by nothing else.
   goes away with the edge's `os_poll`.
 - The model-against-CPU harnesses differ between the CPUs in feature gating and host. They move
   onto the edge, so they run on every runner with one gating.
+
+### Round 3
+
+- **macOS's free memory.** The memory guard in `src/prove/watch.rs` reads Linux's `/proc`, so
+  one test skips on macOS; it needs `vm_stat` or `sysctl`.
+- **A write to a shut stream** fails with EPIPE on Linux's sockets, and the macOS test of a TLS
+  stream cut off skips until the connect path is ported.
+- **`PerOs` and `Profile::os()`**, and the shared Unix half of `src/os/` (descriptor placement,
+  rlimits, `execve`, `wait4`), come when macOS shows what it needs.
+- What the spikes left open on macOS: a socketpair end at descriptor 4, a descriptor passed by
+  SCM_RIGHTS, and a pseudo-terminal (ROADMAP.md, round 1). They need a program that runs.
+
+### Round 4
+
+- **Windows's free memory.** The same guard needs `GlobalMemoryStatusEx`; one test skips.
+- **The stand-in solver** (`src/prove/smt.rs`) is a shell script, which Windows lacks, so two
+  tests skip there. It becomes the test binary in a stand-in mode.
+- What the spikes left open on Windows: the handed-over handles, `lpReserved2`, a deep frame
+  chain, an empty environment with `WSAStartup`, cycle time against ticks, and a large `.bss`'s
+  commit (ROADMAP.md, round 1). They need a program that runs.
 
 ### Round 5
 
@@ -238,6 +257,10 @@ free runners, whose id is written in the table below, and by nothing else.
   read signed compares of byte lanes would let more programs mask the natural way.
 - **CI coverage.** A baseline variant of the model-against-CPU vector test that saves `xmm`/`ymm`
   only, so its SSE2, AVX2, AES, SHA and PCLMUL probes meet real silicon on every draw.
+- **A zero-register branch after another branch.** The "assertion always fails" check reads a
+  jump that follows any branch as conditional, because the loop-exhaustion and chain-default
+  idioms 167 shipped programs use rely on it. So a `cbz xzr` right after another branch passes
+  that check, though the dead-code check catches it. No shipped program has one.
 - **The AArch64 dialect** has no add-with-carry (`adc`, `sbc`).
 - **Small items.**
   - AArch64 refusal texts say "no floating point on vectors", and keep x86-64's wording in a few

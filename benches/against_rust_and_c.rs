@@ -909,7 +909,7 @@ fn main() {
 #[cfg(not(target_os = "linux"))]
 fn main() {
     eprintln!(
-        "the benchmark runs on Linux only so far: round 5 of the roadmap in todo.md makes it \
-         portable"
+        "the benchmark runs on Linux x86-64 and Linux ARM64 so far: round 5 of the roadmap in \
+         todo.md makes it run on all six"
     );
 }

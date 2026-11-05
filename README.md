@@ -15,8 +15,9 @@ match. See [DESIGN.md](DESIGN.md) for how and why.
 lengua is an [Agent Plugin](https://agent-plugins.org): two skills and an MCP server, using only
 open standards, so it works in Claude Code, Codex, Cursor and other agent harnesses.
 
-> Status: dialect 4 on Linux, x86-64 and ARM64, with memory rules that check every address has an owner and
-> stays inside it. It covers whole numbers, exact decimals, floating point in double and single
+> Status: dialect 4 on Linux x86-64 and Linux ARM64, with memory rules that check every address has an owner and
+> stays inside it. macOS and Windows, each on x86-64 and ARM64, build and pass every test that
+> runs no program, and run no program yet ([todo.md](todo.md)). It covers whole numbers, exact decimals, floating point in double and single
 > precision with fused multiply-add, vectors from SSE2 to AVX-512 and from NEON to SVE,
 > hashing and checksums, files
 > and folders, environment variables, fork-join threads, waiting, the clock and random bytes
@@ -46,7 +47,8 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 
 ## Requirements
 
-- Linux on x86-64 or ARM64 (AArch64)
+- Linux on x86-64 or ARM64 (AArch64); macOS and Windows are the roadmap's rounds 3 and 4
+  ([todo.md](todo.md))
 - Rust 1.89 or newer (to build the server)
 - LLVM's assembler and linker: `sudo dnf install llvm lld` (Fedora) or `sudo apt install llvm lld`
   (Debian/Ubuntu)

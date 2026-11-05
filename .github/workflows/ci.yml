@@ -35,7 +35,7 @@ on:
         type: string
         default: "all"
       mode:
-        description: "compile, test, ignored, bench (Linux) or release (Linux)"
+        description: "compile, test, ignored, bench or release (the last two for linux-x86_64 and linux-aarch64 so far)"
         type: choice
         options:
           - compile
@@ -57,7 +57,7 @@ on:
         type: string
         default: ""
       stall_seconds:
-        description: "Stop a test or ignored run after this many seconds, keeping where it stood (stall.txt; Linux)"
+        description: "Stop a test or ignored run after this many seconds, keeping where it stood (stall.txt; the two Linux targets)"
         type: string
         default: ""
       seed:
@@ -106,7 +106,7 @@ jobs:
             include=$(jq -c --arg t ",$TARGETS," \
               '[.[] | . as $e | select($t | contains("," + $e.target + ","))]' <<< "$listed")
           fi
-          # The benchmarks and the release archive are Linux's so far.
+          # The benchmarks and the release archive exist for linux-x86_64 and linux-aarch64 so far.
           case "$MODE" in
             bench|release) include=$(jq -c '[.[] | select(.target | startswith("linux-"))]' <<< "$include") ;;
           esac

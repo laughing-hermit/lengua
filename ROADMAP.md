@@ -472,23 +472,29 @@ stopped list, 2026-11-05).
   removed. Its jobs:
   - **format** (ubuntu-24.04): `cargo fmt --check`, with `fmt.patch` as an artifact.
   - **test**, on six runners: ubuntu-24.04, ubuntu-24.04-arm, macos-26-intel, macos-26,
-    windows-2025 and windows-11-arm. Linux and Windows run 3 shards each and macOS 2, so 16 jobs:
-    within the Free plan's 20 concurrent jobs, 5 of them macOS.
+    windows-2025 and windows-11-arm. Each runs the whole suite in one job, which took 35 to 62
+    minutes (run 42085247387). Shards were planned and left out: seven test jobs fit the Free
+    plan's concurrent jobs, and a shard split by test would break the proving lock, which is
+    per process.
     - The macOS jobs use the newest images GitHub has made generally available. They move up a
       version when a newer one does, so macOS's sandbox tests always gate on the newest macOS.
 
     Each job:
-    - runs `scripts/ci/setup.sh`: LLVM 22 first, put first on PATH (ring's build needs clang on
-      Windows ARM64), then Rust 1.99.1, then the solvers;
-    - writes the machine's facts into the run summary;
-    - runs clippy with `-D warnings` on shard 1;
-    - runs `cargo test --workspace` through `scripts/ci/shard.sh`, which lists each test
-      binary's tests and runs the ones that hash to its shard with `--exact`, in that binary's one
-      process, so the proving lock still holds;
-    - writes the skip summary, and keeps the verdict tables, skip logs and benchmark results as
-      artifacts.
-  - **qemu** (ubuntu-24.04): the emulated tests.
-  - **gate**: depends on every other job.
+    - runs `scripts/ci/setup.sh`: Rust 1.99.1, LLVM 22 (Windows ARM64's ring build needs clang,
+      which the image's LLVM has) and the solvers, each pinned in `scripts/ci/tools.tsv`;
+    - writes the machine's facts into the run summary (`scripts/ci/machine.sh`);
+    - runs clippy with `-D warnings`;
+    - runs `cargo test --workspace`;
+    - writes the skip summary, and keeps the logs, skip logs and benchmark results as artifacts.
+  - **qemu** (ubuntu-24.04): the suite again with QEMU's user mode, so the ARM64 cells run on
+    an x86-64 computer as they do on a developer's. It reports without failing the run until its
+    seven failing cases are fixed (todo.md, round 2).
+  - **gate**: depends on plan, format and test.
+- **Runner facts** (2026-11-04). 4 vCPUs on Linux, kernel 7.0 (azure), Landlock and yama in the
+  LSM list, `ptrace_scope` 1. The x86-64 pool is mixed, about half of it with AVX-512, and the
+  ARM64 runner has SVE. Not recommended: lowering the proof budgets (tests assert verdicts);
+  larger or self-hosted runners (outside the $0 rule); emulating AVX-512 (QEMU's TCG has
+  none).
 - **When it runs.**
   - Pushes to main run it, path-filtered; `wip/**` branches get no push runs.
   - Dispatch inputs: targets (all six by default); mode (`compile` is clippy plus `cargo test
@@ -793,7 +799,9 @@ round.
    - Then everything on both Linux runners:
      - the full suites;
      - the mutation test;
-     - both goldens;
+     - both goldens, compared with recordings made at the merge-base in the same run: a fresh
+       runner has no recording, so alone they record and compare nothing, as round 1's did (run
+       42084426990);
      - the bench A/B: `LENGUA_BENCH_AGAINST=<merge-base>` builds the pre-edge programs beside the
        new ones, in one run.
 
