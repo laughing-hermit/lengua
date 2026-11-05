@@ -162,6 +162,113 @@ fn data(case: &Case) -> String {
     text
 }
 
+/// The registers an operation keeps on x86-64 that none of its arguments is in: each is given a
+/// value before the call and must hold it after. A call changes rax, rcx, r11, the flags and the
+/// vector registers, and no other register.
+const X86_KEPT: [&str; 6] = ["rbx", "rbp", "r12", "r13", "r14", "r15"];
+
+/// The same on AArch64: a call changes x0, x8, x16, x17, x30, the flags and the vector registers,
+/// and no other register. x1 to x5 are checked as arguments.
+const A64_KEPT: [&str; 21] = [
+    "x6", "x7", "x9", "x10", "x11", "x12", "x13", "x14", "x15", "x18", "x19", "x20", "x21", "x22",
+    "x23", "x24", "x25", "x26", "x27", "x28", "x29",
+];
+
+/// The value a register that holds none of a call's arguments is given before it, and must still
+/// hold after: one for each, small enough for a `cmp` immediate on both CPUs.
+const fn sentinel(position: usize) -> usize {
+    0x500 + position
+}
+
+/// The instructions that put an argument in a register, on x86-64.
+fn x86_load(text: &mut String, arg: &Arg, register: &str) {
+    match arg {
+        N(value) => {
+            let _ = writeln!(text, "    mov {register}, {value}");
+        }
+        Data(name) => {
+            let _ = writeln!(text, "    lea {register}, [rip + {name}]");
+        }
+        Scratch(offset) => {
+            let _ = writeln!(text, "    lea {register}, [rsp + {offset}]");
+        }
+        Kept(word) => {
+            let _ = writeln!(text, "    mov {register}, qword ptr [rsp + {}]", 8 * word);
+        }
+        Argv(k) | Envp(k) => {
+            let at = if matches!(arg, Argv(_)) {
+                ARGV_AT
+            } else {
+                ENVP_AT
+            };
+            let _ = writeln!(text, "    mov {register}, qword ptr [rsp + {at}]");
+            let _ = writeln!(
+                text,
+                "    mov {register}, qword ptr [{register} + {}]",
+                8 * k
+            );
+        }
+    }
+}
+
+/// The call of a step on x86-64. Around an operation every register it keeps holds a value of its
+/// own, and after it each is checked, the arguments' registers too: a register that changed ends
+/// the program with 100 and the step's number. A library function is called as it is.
+fn x86_call(
+    text: &mut String,
+    index: usize,
+    op: &str,
+    args: &[Arg],
+    keep: Option<u32>,
+    function: bool,
+) {
+    let registers = if function {
+        X86_FUNCTION_ARGUMENTS
+    } else {
+        X86_ARGUMENTS
+    };
+    if !function {
+        for (position, register) in X86_KEPT.iter().enumerate() {
+            let _ = writeln!(text, "    mov {register}, {}", sentinel(position));
+        }
+    }
+    for (position, register) in registers.iter().enumerate() {
+        match args.get(position) {
+            Some(arg) => x86_load(text, arg, register),
+            None if !function => {
+                let value = sentinel(X86_KEPT.len() + position);
+                let _ = writeln!(text, "    mov {register}, {value}");
+            }
+            None => {}
+        }
+    }
+    let _ = writeln!(text, "    call {op}");
+    if !function {
+        let bad = format!(".Lbad{index}");
+        for (position, register) in X86_KEPT.iter().enumerate() {
+            let value = sentinel(position);
+            let _ = writeln!(text, "    cmp {register}, {value}\n    jne {bad}");
+        }
+        for (position, register) in X86_ARGUMENTS.iter().enumerate() {
+            if let Some(arg) = args.get(position) {
+                x86_load(text, arg, "r11");
+                let _ = writeln!(text, "    cmp {register}, r11\n    jne {bad}");
+            } else {
+                let value = sentinel(X86_KEPT.len() + position);
+                let _ = writeln!(text, "    cmp {register}, {value}\n    jne {bad}");
+            }
+        }
+        let _ = writeln!(
+            text,
+            "    jmp .Lok{index}\n{bad}:\n    mov edi, {}\n    call os_exit\n.Lok{index}:",
+            100 + index
+        );
+    }
+    if let Some(word) = keep {
+        let _ = writeln!(text, "    mov qword ptr [rsp + {}], rax", 8 * word);
+    }
+}
+
 /// The case as an x86-64 program.
 fn x86_program(case: &Case) -> String {
     let mut text = String::from(".intel_syntax noprefix\n.text\n.type main, @function\nmain:\n");
@@ -172,57 +279,21 @@ fn x86_program(case: &Case) -> String {
     let _ = writeln!(text, "    mov qword ptr [rsp + {ARGC_AT}], r8");
     let _ = writeln!(text, "    mov qword ptr [rsp + {ARGV_AT}], r9");
     let _ = writeln!(text, "    mov qword ptr [rsp + {ENVP_AT}], r10");
-    for step in case.steps {
+    for (index, step) in case.steps.iter().enumerate() {
         match step {
             Call { op, args, keep }
             | Function {
                 name: op,
                 args,
                 keep,
-            } => {
-                let registers = if matches!(step, Function { .. }) {
-                    X86_FUNCTION_ARGUMENTS
-                } else {
-                    X86_ARGUMENTS
-                };
-                for (arg, register) in args.iter().zip(registers) {
-                    match arg {
-                        N(value) => {
-                            let _ = writeln!(text, "    mov {register}, {value}");
-                        }
-                        Data(name) => {
-                            let _ = writeln!(text, "    lea {register}, [rip + {name}]");
-                        }
-                        Scratch(offset) => {
-                            let _ = writeln!(text, "    lea {register}, [rsp + {offset}]");
-                        }
-                        Kept(word) => {
-                            let _ = writeln!(
-                                text,
-                                "    mov {register}, qword ptr [rsp + {}]",
-                                8 * word
-                            );
-                        }
-                        Argv(k) | Envp(k) => {
-                            let at = if matches!(arg, Argv(_)) {
-                                ARGV_AT
-                            } else {
-                                ENVP_AT
-                            };
-                            let _ = writeln!(text, "    mov {register}, qword ptr [rsp + {at}]");
-                            let _ = writeln!(
-                                text,
-                                "    mov {register}, qword ptr [{register} + {}]",
-                                8 * k
-                            );
-                        }
-                    }
-                }
-                let _ = writeln!(text, "    call {op}");
-                if let Some(word) = keep {
-                    let _ = writeln!(text, "    mov qword ptr [rsp + {}], rax", 8 * word);
-                }
-            }
+            } => x86_call(
+                &mut text,
+                index,
+                op,
+                args,
+                *keep,
+                matches!(step, Function { .. }),
+            ),
             Set {
                 offset,
                 bytes,
@@ -248,6 +319,87 @@ fn x86_program(case: &Case) -> String {
     text
 }
 
+/// The instructions that put an argument in a register, on AArch64.
+fn a64_load(text: &mut String, arg: &Arg, register: &str) {
+    match arg {
+        N(value) => {
+            let _ = writeln!(text, "    mov {register}, #{value}");
+        }
+        Data(name) => {
+            let _ = writeln!(
+                text,
+                "    adrp {register}, {name}\n    add {register}, {register}, :lo12:{name}"
+            );
+        }
+        Scratch(offset) => {
+            let _ = writeln!(text, "    add {register}, sp, #{offset}");
+        }
+        Kept(word) => {
+            let _ = writeln!(text, "    ldr {register}, [sp, #{}]", 8 * word);
+        }
+        Argv(k) | Envp(k) => {
+            let at = if matches!(arg, Argv(_)) {
+                ARGV_AT
+            } else {
+                ENVP_AT
+            };
+            let _ = writeln!(text, "    ldr {register}, [sp, #{at}]");
+            let _ = writeln!(text, "    ldr {register}, [{register}, #{}]", 8 * k);
+        }
+    }
+}
+
+/// The call of a step on AArch64, checked as on x86-64 (x0 holds the result, so it isn't).
+fn a64_call(
+    text: &mut String,
+    index: usize,
+    op: &str,
+    args: &[Arg],
+    keep: Option<u32>,
+    function: bool,
+) {
+    if !function {
+        for (position, register) in A64_KEPT.iter().enumerate() {
+            let _ = writeln!(text, "    mov {register}, #{}", sentinel(position));
+        }
+    }
+    for number in 0..6 {
+        match args.get(number) {
+            Some(arg) => a64_load(text, arg, &format!("x{number}")),
+            None if !function && number > 0 => {
+                let value = sentinel(A64_KEPT.len() + number);
+                let _ = writeln!(text, "    mov x{number}, #{value}");
+            }
+            None => {}
+        }
+    }
+    let _ = writeln!(text, "    bl {op}");
+    if !function {
+        let bad = format!(".Lbad{index}");
+        for (position, register) in A64_KEPT.iter().enumerate() {
+            let value = sentinel(position);
+            let _ = writeln!(text, "    cmp {register}, #{value}\n    b.ne {bad}");
+        }
+        for number in 1..6 {
+            if let Some(arg) = args.get(number) {
+                a64_load(text, arg, "x16");
+                let _ = writeln!(text, "    cmp x{number}, x16\n    b.ne {bad}");
+            } else {
+                let value = sentinel(A64_KEPT.len() + number);
+                let _ = writeln!(text, "    cmp x{number}, #{value}\n    b.ne {bad}");
+            }
+        }
+        let _ = writeln!(
+            text,
+            "    b .Lok{index}\n{bad}:\n    mov x0, #{}\n    bl os_exit\n.Lok{index}:",
+            100 + index
+        );
+    }
+    if let Some(word) = keep {
+        let _ = writeln!(text, "    str x0, [sp, #{}]", 8 * word);
+    }
+}
+
 /// The case as an AArch64 program.
 fn a64_program(case: &Case) -> String {
     let mut text = String::from(".arch armv8-a\n.text\n.type main, @function\nmain:\n");
@@ -258,47 +410,21 @@ fn a64_program(case: &Case) -> String {
         let _ = writeln!(text, "    stp xzr, xzr, [sp, #{}]", 16 * pair);
     }
     let _ = writeln!(text, "    str xzr, [sp, #480]");
-    for step in case.steps {
+    for (index, step) in case.steps.iter().enumerate() {
         match step {
             Call { op, args, keep }
             | Function {
                 name: op,
                 args,
                 keep,
-            } => {
-                for (number, arg) in args.iter().enumerate() {
-                    match arg {
-                        N(value) => {
-                            let _ = writeln!(text, "    mov x{number}, #{value}");
-                        }
-                        Data(name) => {
-                            let _ = writeln!(
-                                text,
-                                "    adrp x{number}, {name}\n    add x{number}, x{number}, :lo12:{name}"
-                            );
-                        }
-                        Scratch(offset) => {
-                            let _ = writeln!(text, "    add x{number}, sp, #{offset}");
-                        }
-                        Kept(word) => {
-                            let _ = writeln!(text, "    ldr x{number}, [sp, #{}]", 8 * word);
-                        }
-                        Argv(k) | Envp(k) => {
-                            let at = if matches!(arg, Argv(_)) {
-                                ARGV_AT
-                            } else {
-                                ENVP_AT
-                            };
-                            let _ = writeln!(text, "    ldr x{number}, [sp, #{at}]");
-                            let _ = writeln!(text, "    ldr x{number}, [x{number}, #{}]", 8 * k);
-                        }
-                    }
-                }
-                let _ = writeln!(text, "    bl {op}");
-                if let Some(word) = keep {
-                    let _ = writeln!(text, "    str x0, [sp, #{}]", 8 * word);
-                }
-            }
+            } => a64_call(
+                &mut text,
+                index,
+                op,
+                args,
+                *keep,
+                matches!(step, Function { .. }),
+            ),
             Set {
                 offset,
                 bytes,
@@ -592,6 +718,33 @@ fn cases() -> Vec<Case> {
                 ],
                 32,
                 image(32, &[-9, -9, -5, -9], &[]),
+            )
+        },
+        // Descriptor 4,352 is lengua's own, and the operations that take a descriptor and have no
+        // case of their own for it refuse it too, as one that isn't open.
+        Case {
+            calls: &[Syscall::Fstat, Syscall::Getdents64, Syscall::Accept4],
+            ..Case::new(
+                "the_channel_is_not_a_file",
+                &[
+                    Call {
+                        op: "os_info",
+                        args: &[N(4352), Scratch(64)],
+                        keep: Some(0),
+                    },
+                    Call {
+                        op: "os_list",
+                        args: &[N(4352), Scratch(128), N(64)],
+                        keep: Some(1),
+                    },
+                    Call {
+                        op: "os_accept",
+                        args: &[N(4352)],
+                        keep: Some(2),
+                    },
+                ],
+                24,
+                image(24, &[-9, -9, -9], &[]),
             )
         },
         // A wait on standard input that has a byte and has ended (data and hang-up, 1 and 16),
@@ -1102,11 +1255,15 @@ async fn every_operation_does_what_it_promises() {
                 .await
                 .expect("the program runs");
             let what = format!("{} on {}", case.name, target.name());
-            assert_eq!(
-                ran.end,
-                End::Exited(i32::try_from(case.exit).unwrap_or(-1)),
-                "{what}"
-            );
+            let exit = i32::try_from(case.exit).unwrap_or(-1);
+            // 100 and a step's number: a register that call must keep has changed.
+            let hint = match ran.end {
+                End::Exited(code) if code != exit && (100..200).contains(&code) => {
+                    format!(" (step {} changed a register it must keep)", code - 100)
+                }
+                _ => String::new(),
+            };
+            assert_eq!(ran.end, End::Exited(exit), "{what}{hint}");
             assert_eq!(ran.stdout, case.stdout, "{what}");
             if !case.stderr.is_empty() {
                 assert_eq!(ran.stderr, case.stderr, "{what}");
@@ -1178,7 +1335,10 @@ fn on_a_terminal(executable: &Path) -> Vec<u8> {
     output.read_exact(&mut mark).expect("the first mark");
     assert_eq!(&mark, b"r");
     let raw = tcgetattr(&master).expect("the mode the program set");
-    assert!(!raw.local_modes.intersects(LocalModes::ICANON | LocalModes::ECHO));
+    assert!(
+        !raw.local_modes
+            .intersects(LocalModes::ICANON | LocalModes::ECHO)
+    );
     assert_eq!(raw.special_codes[SpecialCodeIndex::VMIN], 1);
     assert_eq!(raw.special_codes[SpecialCodeIndex::VTIME], 0);
     // Signals and the rest of the modes stay as they were.
@@ -1205,7 +1365,9 @@ fn on_a_terminal(executable: &Path) -> Vec<u8> {
     rustix::io::write(&master, b"k\n").expect("a line");
 
     let mut rest = Vec::new();
-    output.read_to_end(&mut rest).expect("the rest of its output");
+    output
+        .read_to_end(&mut rest)
+        .expect("the rest of its output");
     assert!(child.wait().expect("the program ends").success());
     [b"rd".to_vec(), rest].concat()
 }
@@ -1264,7 +1426,11 @@ async fn the_terminal_operations_change_the_mode_and_put_it_back() {
             72,
             [
                 b"rd".to_vec(),
-                image(72, &[0, 0, 1, 1, 0, 0, 1, 1], &[(64, &[24, 0, 0, 0, 80, 0, 0, 0])]),
+                image(
+                    72,
+                    &[0, 0, 1, 1, 0, 0, 1, 1],
+                    &[(64, &[24, 0, 0, 0, 80, 0, 0, 0])],
+                ),
             ]
             .concat(),
         )
