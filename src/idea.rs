@@ -128,6 +128,29 @@ impl Network {
     }
 }
 
+/// What a `- Uses:` line naming `uses` and a `- Network:` line saying `network` allow, read as an
+/// idea's `# Constraints` reads them, for a program with no idea of its own, such as a test of
+/// the WebAssembly host. An empty `network` names no network.
+///
+/// # Errors
+///
+/// The problems either line has, as an idea would report them.
+pub fn constraints(uses: &[&str], network: &str) -> Result<(Vec<Use>, Network), Vec<Problem>> {
+    let mut parser = Parser::default();
+    if !uses.is_empty() {
+        parser.constraint_line(1, &format!("- Uses: {}", uses.join(", ")));
+    }
+    if !network.trim().is_empty() {
+        parser.constraint_line(2, &format!("- Network: {network}"));
+    }
+    let uses = parser.uses.take().unwrap_or_default();
+    if parser.problems.is_empty() {
+        Ok((uses, parser.network))
+    } else {
+        Err(parser.into_problems())
+    }
+}
+
 /// The most connections an idea may name.
 pub const MAX_CONNECTIONS: usize = crate::connect::MAX_CONNECTIONS;
 
