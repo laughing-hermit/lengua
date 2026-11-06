@@ -991,19 +991,19 @@ type: lengua/program-idea
 title: roll
 ---
 # Purpose
-Rolls a die for a player numbered from `1` to `9`.
+The program rolls a die for a player numbered from `1` to `9`.
 
 # Behaviors
 ## B1: Rolls a die
 - Given the argument `1`
 - When the program runs
-- Then it prints text matching `rolled {any(1, 6)}` followed by a newline
+- Then it prints text that matches `rolled {any(1, 6)}` and a newline
 - And it exits with code `0`
 
 ### For any `player`
 - Given the argument `{player}`
 - When the program runs
-- Then it prints `rolled {any(1, 6)}` followed by a newline
+- Then it prints `rolled {any(1, 6)}` and a newline
 - And it exits with code `0`
 
 | player |
@@ -1145,7 +1145,7 @@ type: lengua/program-idea
 title: weekday
 ---
 # Purpose
-Exits with the clock's seconds since 1970 modulo 7, from `0` to `6`.
+The program exits with the clock's seconds since 1970 modulo 7, from `0` to `6`.
 
 # Behaviors
 ## B1: Exits with the seconds modulo 7
@@ -1272,7 +1272,7 @@ title: echo
 description: Prints its argument.
 ---
 # Purpose
-Prints its argument, `1` to `3` letters.
+The program prints its argument, `1` to `3` letters.
 
 # Behaviors
 ## B1: Prints the argument
@@ -1534,23 +1534,23 @@ async fn trace_a_few_csv_total_combinations(target: Profile) {
 const CHOSEN_OPERATOR: &str = r#"---
 type: lengua/program-idea
 title: calc
-description: Combines 6 and 3 with the operator it's given.
+description: Combines 6 and 3 with the operator that it gets.
 ---
 # Purpose
-Prints 6 and 3 combined by the operator it's given, `1` character: their sum, difference or
-product.
+The program combines 6 and 3 with the operator that it gets, `1` character. It prints their sum,
+difference or product.
 
 # Behaviors
 ## B1: Applies the operator
 - Given the arguments `6`, `+` and `3`
 - When the program runs
-- Then it prints `9` followed by a newline
+- Then it prints `9` and a newline
 - And it exits with code `0`
 
 ### For any `op`
 - Given the arguments `6`, `{op}` and `3`
 - When the program runs
-- Then it prints `{if(op == "+", 9, if(op == "-", 3, 18))}` followed by a newline
+- Then it prints `{if(op == "+", 9, if(op == "-", 3, 18))}` and a newline
 - And it exits with code `0`
 
 | op | runs |
@@ -1624,18 +1624,18 @@ type: lengua/program-idea
 title: letters
 ---
 # Purpose
-Turns `1` character of standard input into a capital: `h` to `k` become `W` to `Z`, and `l`
-prints nothing.
+The program turns `1` character of standard input into a capital: `h` to `k` become `W` to `Z`,
+and `l` prints nothing.
 
 # Behaviors
 ## B1: Turns a letter into a capital
-- Given standard input holding `i`
+- Given standard input that contains `i`
 - When the program runs
 - Then it prints `X`
 - And it exits with code `0`
 
 ### For any `text`
-- Given standard input holding `{text}`
+- Given standard input that contains `{text}`
 - When the program runs
 - Then it prints `{if(text == "l", "", tr(text, "hijk", "WXYZ"))}`
 - And it exits with code `0`
@@ -2156,7 +2156,8 @@ type: lengua/program-idea
 title: weekday
 ---
 # Purpose
-Exits with the day of the week of the clock's seconds since 1970, from `0` (Sunday) to `6`.
+The program exits with the day of the week of the clock's seconds since 1970, from `0` (Sunday)
+to `6`.
 
 # Behaviors
 ## B1: Exits with the day of the week
@@ -2322,17 +2323,17 @@ type: lengua/program-idea
 title: shout
 ---
 # Purpose
-Capitalizes standard input of `0` to `16` characters.
+The program capitalizes standard input of `0` to `16` characters.
 
 # Behaviors
 ## B1: Capitalizes its input
-- Given standard input holding `ab`
+- Given standard input that contains `ab`
 - When the program runs
 - Then it prints `AB`
 - And it exits with code `0`
 
 ### For any `text`
-- Given standard input holding `{text}`
+- Given standard input that contains `{text}`
 - When the program runs
 - Then it prints `{upper(text)}`
 - And it exits with code `0`
@@ -2478,19 +2479,19 @@ type: lengua/program-idea
 title: count a
 ---
 # Purpose
-Counts the `a` bytes in standard input of `0` to `16` characters.
+The program counts the `a` bytes in standard input of `0` to `16` characters.
 
 # Behaviors
 ## B1: Counts them
-- Given standard input holding `aba`
+- Given standard input that contains `aba`
 - When the program runs
-- Then it prints `2` followed by a newline
+- Then it prints `2` and a newline
 - And it exits with code `0`
 
 ### For any `text`
-- Given standard input holding `{text}`
+- Given standard input that contains `{text}`
 - When the program runs
-- Then it prints `{count(text, "a")}` followed by a newline
+- Then it prints `{count(text, "a")}` and a newline
 - And it exits with code `0`
 
 | text |
@@ -2765,17 +2766,17 @@ type: lengua/program-idea
 title: echo
 ---
 # Purpose
-Prints standard input of `0` to `5000` characters back.
+The program prints standard input of `0` to `5000` characters back.
 
 # Behaviors
 ## B1: Prints it back
-- Given standard input holding `{example}`
+- Given standard input that contains `{example}`
 - When the program runs
 - Then it prints `{example}`
 - And it exits with code `0`
 
 ### For any `text`
-- Given standard input holding `{stdout}`
+- Given standard input that contains `{stdout}`
 - When the program runs
 - Then it prints `{stdout}`
 - And it exits with code `0`
@@ -3481,7 +3482,7 @@ const CRC32C_UNREACHED: PerCpu<&[&str]> = PerCpu {
 #[tokio::test]
 async fn proves_the_crc32c_checksum() {
     let idea = asset("fast/crc32c/idea.md")
-        .replace("Tests give it up to `1048576`", "Tests give it up to `100`")
+        .replace("tests give it up to `1048576`", "tests give it up to `100`")
         .replace("string(0, 1048576,", "string(0, 100,");
     assert!(idea.contains("string(0, 100,"), "{idea}");
     let block = block(&idea, 0);
@@ -3584,8 +3585,8 @@ async fn proves_the_word_count_of_short_texts() {
     }
     let idea = repository_file(WORD_COUNT_IDEA)
         .replace(
-            "Tests give it up to `1048576` bytes.",
-            "Tests give it up to `200` bytes.",
+            "The tests give it up to `1048576` bytes.",
+            "The tests give it up to `200` bytes.",
         )
         .replace("string(0, 1048576,", "string(0, 200,");
     assert!(idea.contains("string(0, 200,"), "{idea}");
@@ -4066,8 +4067,8 @@ async fn proves_the_fetch_client() {
         let name = target.name();
         let idea = twin(&FETCH, target, "idea.md")
             .replacen(
-                "path holds `1` to `100` characters",
-                "path holds `1` to `100` characters (tests: `6` and `11`)",
+                "path has `1` to `100` characters",
+                "path has `1` to `100` characters (tests: `6` and `11`)",
                 1,
             )
             .replacen("`string(1, 100, ", "`string(1, 6, ", 1)
@@ -4500,17 +4501,17 @@ type: lengua/program-idea
 title: capitals
 ---
 # Purpose
-Prints standard input of `0` to `8` characters back with each ASCII letter in capitals.
+The program prints standard input of `0` to `8` characters back with each ASCII letter in capitals.
 
 # Behaviors
 ## B1: Prints it in capitals
-- Given standard input holding `ab`
+- Given standard input that contains `ab`
 - When the program runs
 - Then it prints `AB`
 - And it exits with code `0`
 
 ### For any `text`
-- Given standard input holding `{text}`
+- Given standard input that contains `{text}`
 - When the program runs
 - Then it prints `{upper(text)}`
 - And it exits with code `0`
@@ -4575,8 +4576,8 @@ const COUNT: Folders = PerCpu {
 async fn proves_a_word_count_over_text_beyond_ascii() {
     for target in Profile::ALL {
         let purpose = twin(&COUNT, target, "idea.md").replacen(
-            "The tests give it standard\ninput of up to `1048576` bytes",
-            "The tests give it standard\ninput of up to `1048576` bytes (tests: `16`)",
+            "The tests give it standard input of up to `1048576` bytes",
+            "The tests give it standard input of up to `1048576` bytes (tests: `16`)",
             1,
         );
         let idea = purpose.replacen(

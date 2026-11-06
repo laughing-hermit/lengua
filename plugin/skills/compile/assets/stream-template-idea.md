@@ -4,20 +4,22 @@ title: shout-stream
 description: Copies standard input of any length to standard output with every ASCII letter in capitals.
 ---
 # Purpose
-A filter for shell pipelines: it copies standard input of any length to standard output with each
-ASCII letter `a` to `z` in capitals, a piece at a time, so input larger than memory works. Other
-bytes pass through unchanged. Tests give it up to `65536` bytes. If reading the input fails, the
-program exits with code 3; if writing the output fails, with code 4.
+This program is a filter for shell pipelines. It copies standard input of any length to standard
+output, with each ASCII letter `a` to `z` in capitals. It copies one piece at a time, so it can
+copy input that is larger than its memory. It does not change the other bytes.
+
+The tests give it up to `65536` bytes. If the program cannot read its input, it exits with code 3.
+If the program cannot write its output, it exits with code 4.
 
 # Behaviors
 ## B1: Shouts its input
-- Given standard input holding `hello, world`
+- Given standard input that contains `hello, world`
 - When the program runs
 - Then it prints `HELLO, WORLD`
 - And it exits with code `0`
 
 ### For any `text`
-- Given standard input holding `{text}`
+- Given standard input that contains `{text}`
 - When the program runs
 - Then it prints `{upper(text)}`
 - And it exits with code `0`

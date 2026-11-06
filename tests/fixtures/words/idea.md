@@ -4,23 +4,25 @@ title: words-stream
 description: Counts the lines and words of standard input of any length.
 ---
 # Purpose
-Counts the lines and words of standard input of any length, as `wc -lw` does, a piece at a time,
-so input larger than memory works: it prints the number of newline bytes, a space, the number of
-words and a newline. A word is a run of bytes other than spaces, tabs, newlines, vertical tabs,
-form feeds and carriage returns. Tests give it up to `65536` bytes. If reading the input fails,
-the program exits with code 3; if writing the output fails, with code 4.
+The program counts the lines and words of standard input of any length, as `wc -lw` does. It reads
+one piece at a time, so it can read input that is larger than its memory. It prints the number of
+newline bytes, a space, the number of words and a newline.
+
+A word is a run of bytes other than spaces, tabs, newlines, vertical tabs, form feeds and carriage
+returns. The tests give it up to `65536` bytes. If the program cannot read its input, it exits with
+code 3. If the program cannot write its output, it exits with code 4.
 
 # Behaviors
 ## B1: Counts lines and words
-- Given standard input holding `ab ba\nb\n`
+- Given standard input that contains `ab ba\nb\n`
 - When the program runs
-- Then it prints `2 3` followed by a newline
+- Then it prints `2 3` and a newline
 - And it exits with code `0`
 
 ### For any `text`
-- Given standard input holding `{text}`
+- Given standard input that contains `{text}`
 - When the program runs
-- Then it prints `{count(text, "\n")} {words(text)}` followed by a newline
+- Then it prints `{count(text, "\n")} {words(text)}` and a newline
 - And it exits with code `0`
 
 | text | runs |

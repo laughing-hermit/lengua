@@ -1,26 +1,31 @@
 ---
 type: lengua/program-idea
 title: sort
-description: Sorts the lines of standard input in byte order, optionally dropping duplicate lines.
+description: Sorts the lines of standard input in byte order and can drop duplicate lines.
 ---
 # Purpose
-Sorts text the way `LC_ALL=C sort` does, for shell pipelines: it reads standard input of up to
-`1048576` bytes, splits it into lines, and prints them in byte order, each followed by a newline.
-A last line without a newline is still a line, and gets one when printed. Empty input prints
-nothing. Given the option `-u`, it prints each distinct line only once, as `sort -u` does. Any
-other argument, or more than one argument, is a usage error. Short inputs of up to `64` bytes are
-tried with a wider mix of characters. Input longer than the limit is rejected rather than partly sorted. If reading the input fails, the program exits with code 3;
-if writing the output fails, it exits with code 2.
+The program sorts text as `LC_ALL=C sort` does, for shell pipelines. It reads standard input of
+up to `1048576` bytes and splits it into lines. It prints the lines in byte order, each with a
+newline at its end. A last line without a newline is also a line, and the program adds a newline
+when it prints it. For empty input, the program prints nothing.
+
+With the option `-u`, it prints each different line only once, as `sort -u` does. Any other
+argument, or more than one argument, is a usage error.
+
+The tests also try short inputs of up to `64` bytes with a wider mix of characters. The program
+rejects input that is longer than the limit, and it does not sort a part of it. If the program
+cannot read its input, it exits with code 3. If the program cannot write its output, it exits
+with code 2.
 
 # Behaviors
 ## B1: Sorts lines
-- Given standard input holding `pear\napple\nfig\napple\n`
+- Given standard input that contains `pear\napple\nfig\napple\n`
 - When the program runs
 - Then it prints `apple\napple\nfig\npear\n`
 - And it exits with code `0`
 
 ### For any text
-- Given standard input holding `{text}`
+- Given standard input that contains `{text}`
 - When the program runs
 - Then it prints `{sort(text)}`
 - And it exits with code `0`
@@ -32,14 +37,14 @@ if writing the output fails, it exits with code 2.
 
 ## B2: Drops duplicate lines with -u
 - Given the argument `-u`
-- And standard input holding `pear\napple\nfig\napple\n`
+- And standard input that contains `pear\napple\nfig\napple\n`
 - When the program runs
 - Then it prints `apple\nfig\npear\n`
 - And it exits with code `0`
 
 ### For any text, uniquely
 - Given the argument `-u`
-- And standard input holding `{text}`
+- And standard input that contains `{text}`
 - When the program runs
 - Then it prints `{uniq(sort(text))}`
 - And it exits with code `0`
@@ -50,13 +55,13 @@ if writing the output fails, it exits with code 2.
 | `string(0, 64, "aefgilprBz \n\t")` | 300 |
 
 ## B3: Adds a newline to a last line without one
-- Given standard input holding `b\na`
+- Given standard input that contains `b\na`
 - When the program runs
 - Then it prints `a\nb\n`
 - And it exits with code `0`
 
 ### For any lines with an unfinished last line
-- Given standard input holding `{text}`
+- Given standard input that contains `{text}`
 - When the program runs
 - Then it prints `{sort(text)}`
 - And it exits with code `0`
@@ -67,16 +72,16 @@ if writing the output fails, it exits with code 2.
 
 ## B4: Rejects an unknown option
 - Given the argument `-r`
-- And standard input holding `b\na\n`
+- And standard input that contains `b\na\n`
 - When the program runs
-- Then it prints `usage: sort [-u]` followed by a newline to standard error
+- Then it prints `usage: sort [-u]` and a newline to standard error
 - And it exits with code `1`
 
 ### For any unknown argument
 - Given the argument `{arg}`
-- And standard input holding `b\na\n`
+- And standard input that contains `b\na\n`
 - When the program runs
-- Then it prints `usage: sort [-u]` followed by a newline to standard error
+- Then it prints `usage: sort [-u]` and a newline to standard error
 - And it exits with code `1`
 
 | arg |
@@ -85,16 +90,16 @@ if writing the output fails, it exits with code 2.
 
 ## B5: Rejects extra arguments
 - Given the arguments `-u` and `-u`
-- And standard input holding `b\na\n`
+- And standard input that contains `b\na\n`
 - When the program runs
-- Then it prints `usage: sort [-u]` followed by a newline to standard error
+- Then it prints `usage: sort [-u]` and a newline to standard error
 - And it exits with code `1`
 
 ### For any two or more arguments
 - Given the arguments `{a}` and `{b}`
-- And standard input holding `{text}`
+- And standard input that contains `{text}`
 - When the program runs
-- Then it prints `usage: sort [-u]` followed by a newline to standard error
+- Then it prints `usage: sort [-u]` and a newline to standard error
 - And it exits with code `1`
 
 | a | b | text |
@@ -102,15 +107,15 @@ if writing the output fails, it exits with code 2.
 | `choice("-u", "x", "")` | `choice("-u", "-r", "")` | `string(0, 64, "ab\n")` |
 
 ## B6: Rejects input that is too long
-- Given standard input holding `a` repeated `1048576` times followed by `\n`
+- Given standard input that contains `a` `1048576` times then `\n`
 - When the program runs
-- Then it prints `error: input longer than 1048576 bytes` followed by a newline to standard error
+- Then it prints `error: input longer than 1048576 bytes` and a newline to standard error
 - And it exits with code `4`
 
 ### For any input past the limit
-- Given standard input holding `{head}` followed by `\n`
+- Given standard input that contains `{head}` then `\n`
 - When the program runs
-- Then it prints `error: input longer than 1048576 bytes` followed by a newline to standard error
+- Then it prints `error: input longer than 1048576 bytes` and a newline to standard error
 - And it exits with code `4`
 
 | head | runs |

@@ -1,28 +1,28 @@
 ---
 type: lengua/program-idea
 title: sweep
-description: Deletes the empty files in the working folder, and says how many.
+description: Deletes the empty files in the current folder and says how many it deleted.
 ---
 # Purpose
-Deletes every empty file directly in the working folder, keeping each file that holds anything,
-from `1` byte to `100` and more, and every folder, then prints how many files it deleted, `0` to
-`16`, to tidy a folder after a script. If listing, checking or deleting fails, it exits with
-code 3.
+The program deletes each empty file that is directly in the current folder, to tidy a folder after
+a script. It keeps each file that has contents, from `1` byte to `100` and more. It also keeps each
+folder. Then it prints the number of files that it deleted, `0` to `16`. If it cannot list, examine
+or delete the files, it exits with code 3.
 
 # Behaviors
 ## B1: Deletes the empty files
 - Given an empty file `a.txt`
-- And a file `b.txt` holding `keep`
+- And a file `b.txt` that contains `keep`
 - When the program runs
-- Then it prints `deleted 1` followed by a newline
+- Then it prints `deleted 1` and a newline
 - And there is no file `a.txt`
 - And it exits with code `0`
 
 ### For any `text`
 - Given an empty file `a.txt`
-- And a file `b.txt` holding `{text}`
+- And a file `b.txt` that contains `{text}`
 - When the program runs
-- Then it prints `deleted 1` followed by a newline
+- Then it prints `deleted 1` and a newline
 - And there is no file `a.txt`
 - And it exits with code `0`
 
@@ -30,18 +30,18 @@ code 3.
 |---|
 | `string(1, 100, "ekp")` |
 
-## B2: Keeps a folder with nothing empty
-- Given a file `b.txt` holding `keep`
+## B2: Keeps a folder that has no empty files
+- Given a file `b.txt` that contains `keep`
 - And an empty folder `old`
 - When the program runs
-- Then it prints `deleted 0` followed by a newline
+- Then it prints `deleted 0` and a newline
 - And it exits with code `0`
 
 ### For any `text`
-- Given a file `b.txt` holding `{text}`
+- Given a file `b.txt` that contains `{text}`
 - And an empty folder `old`
 - When the program runs
-- Then it prints `deleted 0` followed by a newline
+- Then it prints `deleted 0` and a newline
 - And it exits with code `0`
 
 | text |

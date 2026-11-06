@@ -1,26 +1,28 @@
 ---
 type: lengua/program-idea
 title: hypotenuse
-description: Prints the length of a right triangle's hypotenuse from its two side lengths, with three decimals.
+description: Prints the length of the hypotenuse of a right triangle from the lengths of its two sides, with three decimals.
 ---
 # Purpose
-Lets someone at a shell find the long side of a right triangle: given the lengths of the two
-shorter sides as arguments, it prints the length of the hypotenuse, the square root of the sum of
-their squares, rounded to three decimals. Each side is a number from `0.001` to `1000000.000`,
-written as digits with an optional point followed by one to three more digits. If writing the
-output fails, the program exits with code 4.
+A person at a shell can use this program to find the long side of a right triangle. The arguments
+are the lengths of the two shorter sides. The length of the hypotenuse is the square root of the
+sum of the squares of the two sides. The program rounds this length to three decimals and prints
+it.
+
+Each side is a number from `0.001` to `1000000.000`. It has digits, then an optional point and one
+to three more digits. If the program cannot write its output, it exits with code 4.
 
 # Behaviors
 ## B1: Prints the hypotenuse of two whole sides
 - Given the arguments `3` and `4`
 - When the program runs
-- Then it prints `5.000` followed by a newline
+- Then it prints `5.000` and a newline
 - And it exits with code `0`
 
 ### For any `a` and `b`
 - Given the arguments `{a}` and `{b}`
 - When the program runs
-- Then it prints `{fixed(sqrt(double(a) * double(a) + double(b) * double(b)), 3)}` followed by a newline
+- Then it prints `{fixed(sqrt(double(a) * double(a) + double(b) * double(b)), 3)}` and a newline
 - And it exits with code `0`
 
 | a | b | runs |
@@ -30,29 +32,29 @@ output fails, the program exits with code 4.
 ## B2: Accepts sides with decimals
 - Given the arguments `1.5` and `2.25`
 - When the program runs
-- Then it prints `2.704` followed by a newline
+- Then it prints `2.704` and a newline
 - And it exits with code `0`
 
 ### For any `a` and `b`
 - Given the arguments `{a}` and `{b}`
 - When the program runs
-- Then it prints `{fixed(sqrt(a * a + b * b), 3)}` followed by a newline
+- Then it prints `{fixed(sqrt(a * a + b * b), 3)}` and a newline
 - And it exits with code `0`
 
 | a | b | runs |
 |---|---|---|
 | `decimal(0.001, 1000000.000)` | `decimal(0.001, 1000000.000)` | 300 |
 
-## B3: Shows usage when the number of arguments is wrong
+## B3: Shows the usage line for a wrong number of arguments
 - Given the argument `3`
 - When the program runs
-- Then it prints `usage: hypotenuse <a> <b>` followed by a newline to standard error
+- Then it prints `usage: hypotenuse <a> <b>` and a newline to standard error
 - And it exits with code `1`
 
 ### For any `a`
 - Given the argument `{a}`
 - When the program runs
-- Then it prints `usage: hypotenuse <a> <b>` followed by a newline to standard error
+- Then it prints `usage: hypotenuse <a> <b>` and a newline to standard error
 - And it exits with code `1`
 
 | a | runs |
@@ -62,13 +64,13 @@ output fails, the program exits with code 4.
 ## B4: Rejects a side that is not a number
 - Given the arguments `3` and `four`
 - When the program runs
-- Then it prints `error: side is not a number` followed by a newline to standard error
+- Then it prints `error: side is not a number` and a newline to standard error
 - And it exits with code `2`
 
 ### For any `a` and `b`
 - Given the arguments `{a}` and `{b}`
 - When the program runs
-- Then it prints `error: side is not a number` followed by a newline to standard error
+- Then it prints `error: side is not a number` and a newline to standard error
 - And it exits with code `2`
 
 | a | b | runs |
@@ -78,13 +80,13 @@ output fails, the program exits with code 4.
 ## B5: Rejects a side out of range
 - Given the arguments `0` and `4`
 - When the program runs
-- Then it prints `error: side out of range` followed by a newline to standard error
+- Then it prints `error: side out of range` and a newline to standard error
 - And it exits with code `3`
 
 ### For any `a` and `b`
 - Given the arguments `{a}` and `{b}`
 - When the program runs
-- Then it prints `error: side out of range` followed by a newline to standard error
+- Then it prints `error: side out of range` and a newline to standard error
 - And it exits with code `3`
 
 | a | b | runs |

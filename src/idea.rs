@@ -2188,32 +2188,32 @@ mod tests {
     const ADD: &str = r#"---
 type: lengua/program-idea
 title: add
-description: Adds two whole numbers given as arguments and prints the sum.
+description: Adds the two whole numbers in its arguments and prints the sum.
 ---
 # Purpose
-Adds two whole numbers between `-1000000000` and `1000000000`.
+The program adds two whole numbers between `-1000000000` and `1000000000`.
 
 # Behaviors
 ## B1: Adds two numbers
 - Given the arguments `2` and `3`
 - When the program runs
-- Then it prints `5` followed by a newline
+- Then it prints `5` and a newline
 - And it exits with code `0`
 
 ### For any `a` and `b`
 - Given the arguments `{a}` and `{b}`
 - When the program runs
-- Then it prints `{a + b}` followed by a newline
+- Then it prints `{a + b}` and a newline
 - And it exits with code `0`
 
 | a | b |
 |---|---|
 | `int(-1000000000, 1000000000)` | `int(-1000000000, 1000000000)` |
 
-## B2: Missing arguments
+## B2: Shows the usage line without arguments
 - Given no arguments
 - When the program runs
-- Then it prints `usage: add <a> <b>` followed by a newline to standard error
+- Then it prints `usage: add <a> <b>` and a newline to standard error
 - And it exits with code `1`
 
 # Constraints
@@ -2280,30 +2280,30 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
     #[test]
     fn an_idea_names_no_kind_of_computer() {
         let fast = ADD.replace(
-            "Adds two whole numbers between",
-            "Adds, with AVX-512 and one system call, two whole numbers between",
+            "adds two whole numbers between",
+            "adds, with AVX-512 and one system call, two whole numbers between",
         );
         assert_problem(&fast, "line 7: `AVX-512` names one kind of computer");
         assert_problem(&fast, "`system call` names one kind of computer");
         let described = ADD.replace("prints the sum.", "prints the sum on Linux.");
         assert_problem(&described, "line 4: `Linux` names one kind of computer");
         let registers = ADD.replace(
-            "Adds two whole numbers between",
-            "Adds rax and xmm0, between",
+            "adds two whole numbers between",
+            "adds rax and xmm0, between",
         );
         assert_problem(&registers, "`rax`");
         assert_problem(&registers, "`xmm0`");
         // Its subject, values, and everyday words pass.
         let subject = ADD.replace("title: add", "title: x86 add").replace(
-            "Adds two whole numbers between",
-            "Adds two x86 registers' whole numbers between",
+            "adds two whole numbers between",
+            "adds two x86 registers' whole numbers between",
         );
         assert!(parse(&subject).is_ok(), "{:?}", parse(&subject));
         let values = ADD.replace("prints `5`", "prints `rax`");
         assert!(parse(&values).is_ok(), "{:?}", parse(&values));
         let everyday = ADD.replace(
-            "Adds two whole numbers between",
-            "Adds, under a neon sign with a clang, two whole numbers between",
+            "adds two whole numbers between",
+            "adds, under a neon sign with a clang, two whole numbers between",
         );
         assert!(parse(&everyday).is_ok(), "{:?}", parse(&everyday));
     }
@@ -2314,7 +2314,7 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
         assert_eq!(idea.title, "add");
         assert_eq!(
             idea.description.as_deref(),
-            Some("Adds two whole numbers given as arguments and prints the sum.")
+            Some("Adds the two whole numbers in its arguments and prints the sum.")
         );
         assert_eq!(idea.behaviors.len(), 2);
         let first = &idea.behaviors[0];
@@ -2354,7 +2354,7 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
         let id = BehaviorId::parse("B2").expect("valid ID");
         assert_eq!(
             idea.behavior(id).map(|b| b.title.as_str()),
-            Some("Missing arguments")
+            Some("Shows the usage line without arguments")
         );
     }
 
@@ -2390,7 +2390,10 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
     #[test]
     fn each_behavior_names_its_own_rule_and_purpose_says_why() {
         assert_problem(
-            &ADD.replace("## B2: Missing arguments", "## B2: Adds two NUMBERS"),
+            &ADD.replace(
+                "## B2: Shows the usage line without arguments",
+                "## B2: Adds two NUMBERS",
+            ),
             "B2 has the same title as B1",
         );
         let start = ADD.find("# Purpose").expect("purpose");
@@ -2558,7 +2561,7 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
         );
         let server = ADD
             .replace("- Uses: nothing", "- Network: listens on TCP port 7007")
-            .replace("- And it exits with code `0`", "- And it keeps serving");
+            .replace("- And it exits with code `0`", "- And it does not stop");
         let idea = parse(&server).expect("valid idea");
         assert_eq!(idea.network.listens, Some(7007));
         assert!(
@@ -2597,7 +2600,7 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
             idea.syscalls.contains(&Syscall::Accept4) && idea.syscalls.contains(&Syscall::Sendto)
         );
         assert_problem(
-            &ADD.replace("- And it exits with code `0`", "- And it keeps serving"),
+            &ADD.replace("- And it exits with code `0`", "- And it does not stop"),
             "B1 keeps serving, which only a server does",
         );
         assert_problem(
@@ -2636,7 +2639,10 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
     #[test]
     fn rejects_malformed_headings() {
         assert_problem(
-            &ADD.replace("## B2: Missing arguments", "## Missing arguments"),
+            &ADD.replace(
+                "## B2: Shows the usage line without arguments",
+                "## Shows the usage line without arguments",
+            ),
             "behavior headings look like",
         );
         assert_problem(
@@ -2644,7 +2650,7 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
             "behavior headings look like",
         );
         assert_problem(
-            &ADD.replace("## B2: Missing arguments", "## B2:"),
+            &ADD.replace("## B2: Shows the usage line without arguments", "## B2:"),
             "short title",
         );
     }
@@ -2652,7 +2658,7 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
     #[test]
     fn requires_given_when_and_then() {
         let without_then = ADD.replace(
-            "- Then it prints `5` followed by a newline\n- And it exits with code `0`\n",
+            "- Then it prints `5` and a newline\n- And it exits with code `0`\n",
             "",
         );
         assert_problem(
@@ -2724,8 +2730,8 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
     #[test]
     fn exit_words_inside_backticks_dont_count() {
         let text = ADD.replace(
-            "- Then it prints `5` followed by a newline",
-            "- Then it prints `exit code` followed by a newline",
+            "- Then it prints `5` and a newline",
+            "- Then it prints `exit code` and a newline",
         );
         let idea = parse(&text).expect("valid idea");
         assert_eq!(idea.behaviors[0].exit_code, 0);
@@ -2897,7 +2903,7 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
     #[test]
     fn reads_double_backtick_values_and_continuations() {
         let text = ADD.replace(
-            "- Then it prints `5` followed by a newline",
+            "- Then it prints `5` and a newline",
             "- Then it prints ``a`b``\n  and then `5`",
         );
         let idea = parse(&text).expect("valid idea");

@@ -1,56 +1,57 @@
 ---
 type: lengua/program-idea
 title: greet
-description: Greets whoever the NAME environment variable names.
+description: Greets the person that the NAME environment variable names.
 ---
 # Purpose
-Greets the person the `NAME` environment variable names, for a shell's welcome line. A name holds
-`1` to `64` characters. Without one, or with a name of `65` to `100` characters or more, it prints
-how to use it to standard error and exits with code 1. If writing fails, it exits with code 3.
+The program greets the person that the `NAME` environment variable names, as the welcome line of a
+shell. A name has `1` to `64` characters. Without a name, or with a name of `65` to `100`
+characters or more, the program prints how to use it. It prints this to standard error and exits
+with code 1. If the program cannot write its output, it exits with code 3.
 
 # Behaviors
-## B1: Greets whoever NAME names
-- Given the environment variable `NAME` set to `Ada`
+## B1: Greets the person that NAME names
+- Given the environment variable `NAME` with the value `Ada`
 - When the program runs
-- Then it prints `Hello, Ada!` followed by a newline
+- Then it prints `Hello, Ada!` and a newline
 - And it exits with code `0`
 
 ### For any `name`
-- Given the environment variable `NAME` set to `{name}`
+- Given the environment variable `NAME` with the value `{name}`
 - When the program runs
-- Then it prints `Hello, {name}!` followed by a newline
+- Then it prints `Hello, {name}!` and a newline
 - And it exits with code `0`
 
 | name |
 |---|
 | `string(1, 64, "Adabcz -")` |
 
-## B2: Shows usage without a name
-- Given the environment variable `HOME` set to `/home/ada`
+## B2: Shows the usage line without a name
+- Given the environment variable `HOME` with the value `/home/ada`
 - When the program runs
-- Then it prints `usage: NAME=<who> greet` followed by a newline to standard error
+- Then it prints `usage: NAME=<who> greet` and a newline to standard error
 - And it exits with code `1`
 
 ### For any `home`
-- Given the environment variable `HOME` set to `{home}`
+- Given the environment variable `HOME` with the value `{home}`
 - When the program runs
-- Then it prints `usage: NAME=<who> greet` followed by a newline to standard error
+- Then it prints `usage: NAME=<who> greet` and a newline to standard error
 - And it exits with code `1`
 
 | home |
 |---|
 | `string(1, 64, "/adehmo")` |
 
-## B3: Shows usage for a name too long
-- Given the environment variable `NAME` set to `a` repeated `65` times
+## B3: Shows the usage line for a name that is too long
+- Given the environment variable `NAME` with the value `a` `65` times
 - When the program runs
-- Then it prints `usage: NAME=<who> greet` followed by a newline to standard error
+- Then it prints `usage: NAME=<who> greet` and a newline to standard error
 - And it exits with code `1`
 
 ### For any `name`
-- Given the environment variable `NAME` set to `{name}`
+- Given the environment variable `NAME` with the value `{name}`
 - When the program runs
-- Then it prints `usage: NAME=<who> greet` followed by a newline to standard error
+- Then it prints `usage: NAME=<who> greet` and a newline to standard error
 - And it exits with code `1`
 
 | name |

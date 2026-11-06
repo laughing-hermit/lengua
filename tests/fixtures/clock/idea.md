@@ -5,25 +5,28 @@ description: Prints the current UTC time of day as HH:MM:SS.
 ---
 # Purpose
 
-Lets someone at a shell see the current time of day in UTC at a glance. The program reads the
-system clock as whole seconds since 1970, from `0` to `4102444799`, keeps only the seconds past
-the most recent UTC midnight, and prints them as hours, minutes and seconds, each as two digits
-with a leading zero where needed, separated by colons. Fractions of a second are dropped. It takes
-no arguments and ignores any it is given. If reading the clock fails, the program exits with code
-3. If writing the output fails, the program exits with code 2.
+A person at a shell can use this program to see the current time of day in UTC. The program reads
+the system clock as whole seconds since 1970, from `0` to `4102444799`. It keeps only the seconds
+after the most recent UTC midnight. It prints them as hours, minutes and seconds, with a colon
+between each two parts.
+
+Each part has two digits, with a zero at the start where necessary. The program ignores fractions
+of a second. It takes no arguments, and it ignores the arguments that it gets. If the program
+cannot read the clock, it exits with code 3. If the program cannot write its output, it exits with
+code 2.
 
 # Behaviors
 
 ## B1: Prints the UTC time of day
 - Given the clock at `1735735845`
 - When the program runs
-- Then it prints `12:50:45` followed by a newline
+- Then it prints `12:50:45` and a newline
 - And it exits with code `0`
 
 ### For any `t`
 - Given the clock at `{t}`
 - When the program runs
-- Then it prints `{if(t % 86400 / 3600 < 10, "0", "")}{t % 86400 / 3600}:{if(t % 3600 / 60 < 10, "0", "")}{t % 3600 / 60}:{if(t % 60 < 10, "0", "")}{t % 60}` followed by a newline
+- Then it prints `{if(t % 86400 / 3600 < 10, "0", "")}{t % 86400 / 3600}:{if(t % 3600 / 60 < 10, "0", "")}{t % 3600 / 60}:{if(t % 60 < 10, "0", "")}{t % 60}` and a newline
 - And it exits with code `0`
 
 | t | runs |
@@ -33,13 +36,13 @@ no arguments and ignores any it is given. If reading the clock fails, the progra
 ## B2: Pads each part to two digits
 - Given the clock at `1735693509`
 - When the program runs
-- Then it prints `01:05:09` followed by a newline
+- Then it prints `01:05:09` and a newline
 - And it exits with code `0`
 
 ### For any `t`
 - Given the clock at `{t}`
 - When the program runs
-- Then it prints `{if(t % 86400 / 3600 < 10, "0", "")}{t % 86400 / 3600}:{if(t % 3600 / 60 < 10, "0", "")}{t % 3600 / 60}:{if(t % 60 < 10, "0", "")}{t % 60}` followed by a newline
+- Then it prints `{if(t % 86400 / 3600 < 10, "0", "")}{t % 86400 / 3600}:{if(t % 3600 / 60 < 10, "0", "")}{t % 3600 / 60}:{if(t % 60 < 10, "0", "")}{t % 60}` and a newline
 - And it exits with code `0`
 
 | t | runs |

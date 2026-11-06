@@ -4,23 +4,26 @@ title: pairs-stream
 description: Counts the pairs of a letter in standard input of any length.
 ---
 # Purpose
-Counts the times `aa` comes in standard input of any length, a piece at a time, so input larger
-than memory works: each `a` belongs to at most one pair, taken from the left as they come, so
-`aaa` holds one pair and `aaaa` two. It prints the count and a newline. Tests give it up to
-`65536` bytes. If reading the input fails, the program exits with code 3; if writing the output
-fails, with code 4.
+The program counts the times that `aa` occurs in standard input of any length. It reads one piece
+at a time, so it can read input that is larger than its memory. Each `a` is part of at most one
+pair. The program takes the pairs from the left, in the order that they come. Thus `aaa` has one
+pair and `aaaa` has two pairs.
+
+The program prints the count and a newline. The tests give it up to `65536` bytes. If the program
+cannot read its input, it exits with code 3. If the program cannot write its output, it exits with
+code 4.
 
 # Behaviors
 ## B1: Counts the pairs
-- Given standard input holding `aaa baaaa`
+- Given standard input that contains `aaa baaaa`
 - When the program runs
-- Then it prints `3` followed by a newline
+- Then it prints `3` and a newline
 - And it exits with code `0`
 
 ### For any `text`
-- Given standard input holding `{text}`
+- Given standard input that contains `{text}`
 - When the program runs
-- Then it prints `{count(text, "aa")}` followed by a newline
+- Then it prints `{count(text, "aa")}` and a newline
 - And it exits with code `0`
 
 | text | runs |
