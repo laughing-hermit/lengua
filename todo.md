@@ -6,8 +6,9 @@ Knowledge Format, naming no CPU or OS; the agent compiles it to `main.s` for the
 checks the code against the rules, tests it, proves it, and runs it confined. The product is an
 Agent Plugin, skills and one Rust MCP server only, so it runs in any agent harness.
 
-**Where lengua stands (2026-11-05).** Two of the six targets are done: Linux on x86-64 and Linux on
-ARM64, one product held by one suite, and the mutation test passes on both (run 42084426990).
+**Where lengua stands (2026-11-06).** Two of the six targets are done: Linux on x86-64 and Linux on
+ARM64, one product held by one suite, every program reaching the OS only through lengua's edge,
+and the mutation test passes on both (run 42178888801).
 The other four, macOS and Windows each on x86-64 and on
 ARM64, build with clippy clean and pass every test that runs no program, on their own runners, and
 run no program yet (the table under "Where each stands"). The record of the finished work is in
@@ -99,17 +100,17 @@ free runners, whose id is written in the table below, and by nothing else.
    publishes them.
 
 **Where each stands.** Updated as rounds merge, with the run that shows it. First by target, from
-run 42085247387 (2026-11-05, commit 43c63ea; libtest counts a test that notes why it did nothing
-as passed):
+run 42178871938 (2026-11-06, commit 26ef909, the code of round 2's end; libtest counts a test that
+notes why it did nothing as passed):
 
 | target | runner | suite | programs run | against C, C++ and Rust | archive |
 |---|---|---|---|---|---|
-| Linux x86-64 | ubuntu-24.04 | 535 passed | yes | BENCHMARKS.md (the owner's computer, 2026-11-02) | built |
-| Linux ARM64 | ubuntu-24.04-arm | 531 passed | yes | BENCHMARKS-aarch64.md (the runner) | built |
-| macOS x86-64 | macos-26-intel | 527 passed, 122 of them did nothing: no program runs yet | round 3 | round 5 | round 6 |
-| macOS ARM64 | macos-26 | 525 passed, 120 of them did nothing | round 3 | round 5 | round 6 |
-| Windows x86-64 | windows-2025 | 522 passed, 120 of them did nothing | round 4 | round 5 | round 6 |
-| Windows ARM64 | windows-11-arm | 520 passed, 118 of them did nothing | round 4 | round 5 | round 6 |
+| Linux x86-64 | ubuntu-24.04 | 569 passed | yes | BENCHMARKS.md (the owner's computer, 2026-11-02) | built |
+| Linux ARM64 | ubuntu-24.04-arm | 565 passed | yes | BENCHMARKS-aarch64.md (the runner) | built |
+| macOS x86-64 | macos-26-intel | 550 passed, 122 of them did nothing: no program runs yet | round 3 | round 5 | round 6 |
+| macOS ARM64 | macos-26 | 548 passed, 120 of them did nothing | round 3 | round 5 | round 6 |
+| Windows x86-64 | windows-2025 | 544 passed, 120 of them did nothing | round 4 | round 5 | round 6 |
+| Windows ARM64 | windows-11-arm | 542 passed, 118 of them did nothing | round 4 | round 5 | round 6 |
 
 Then by finish-line point:
 
@@ -137,14 +138,16 @@ Then by finish-line point:
      round 1; handed-over descriptors and handles are asked again in rounds 3 and 4. What a
      sandbox refuses is the owner's to try.
    - The Linux soundness items are fixed, each with a test.
-2. **The edge and the broker, on Linux, for both CPUs.**
+2. **The edge and the broker, on Linux, for both CPUs: done 2026-11-06** (run 42178871938,
+   commit 26ef909).
    - Programs reach the OS only through lengua's linked edge: 21 operations defined once
      (`src/edge/mod.rs`) and one calling convention per CPU.
    - assert_fail, fill and parallel_for move into lengua's library instead of being copied into
      every main.s.
    - A broker (`src/broker.rs`) replaces the ptrace supervisor for names, and for the tests'
-     clock, random bytes, sleeps and waits.
-   - The benchmarks are level with the pre-edge build.
+     clock, random bytes, sleeps and waits, and does only what the program's spec allows.
+   - The benchmarks are level with the pre-edge build but for two gaps, in round 5's list: the
+     ARM64 histogram, and the executables' size.
 3. **macOS, on x86-64 and ARM64:** libSystem through the GOT, Mach-O, Seatbelt, tested on the
    newest macOS images.
 4. **Windows, on x86-64 and ARM64:** kernel32 through the IAT, PE, an LPAC AppContainer and a
@@ -167,69 +170,24 @@ Then by finish-line point:
 
 ### Round 2
 
-Under way, on stacked `wip/r2-*` branches that each merge to main when its runs are green (the
-plan is ROADMAP.md's R2). Done, with the runs that show it:
-- **0a, the evidence tools.** `ci.yml` takes `test_files` (a gate that runs no test fails),
-  `mutate_only`, a `golden` mode (the head and a base recorded in one dispatch, then compared by
-  `scripts/ci/golden-diff.sh`, raw or as a proof ledger) and `bench_against` (the bench's
-  workloads built from a base commit and from the head, run alternately). The bench's noise
-  floor is run 42110275838. A golden base leg runs the dispatched ref's scripts: the first
-  golden run (42110130166) spent 71 minutes on its base and kept nothing, because the base
-  commit predates `ran-some-tests.sh`.
-- **0b.1, a spike: proofs through a call.** `fill` calling an operation keeps its proofs'
-  verdicts (run 42111907655).
-- **1, the Linux edge on both CPUs.** The 21 operations in `src/edge/linux-x86_64.s` and
-  `linux-aarch64.s`, `assert_fail`, `fill` and `parallel_for` in the CPU libraries,
-  `edge::lengua_text` and `Toolchain::assemble` writing lengua.s after a program in the edge
-  form, and `tests/edge.rs`: every operation on each CPU, natively and through QEMU and on a
-  pseudo-terminal, with every call held to the registers it keeps. Runs: the edge tests on both
-  Linux runners 42121334134, through QEMU 42121369789, the full suite on six runners
-  42122543252.
-- **2, the checker takes the edge form** (2a–2d): two units (main.s's and lengua's), the
-  operations as `Exit::Edge`, the edge rules, and the thread rules for an edge-form program.
-  The golden raw diff against `e4163d4` is empty (run 42132982376).
-- **3, the prover takes it** (3a–3c): `edge_call` models every operation whole, thread operations
-  run as the code they are, and the library `fill` is found by its shape. The model agrees with
-  the system on every case on both CPUs (run 42137756844).
-- **4, an edge-form program runs; the pilots**: the main template and `cat`/`cat-stream`, with
-  their proofs and inductions unchanged, on both CPUs (runs 42137847004, 42137850804,
-  42137855171, 42137859008).
-- **5, the programs**: every shipped program, template and benchmark is in the edge form on both
-  CPUs, on stacked branches `wip/r2-5a` to `5h`. The stack's gate (run 42144788634 on
-  `wip/r2-5h`) found what the families' own tests hadn't, all fixed on `wip/r2-6a`: a rule on
-  registers the edge changes that took a pure helper's third result for stale (rcx after
-  `count_piece`), echo's fourth assertion, two frames (dates, the server template), the raw-read
-  proof test (it needs `fill` linked), the thread test's op list and the sessions tests' nop.
-- **6a, the broker alone**: its messages, parser (with a fuzz target) and service on Linux
-  (run 42144883542).
-- **6b, 6c and 6d, the broker's channel and the sandbox switch**: the edge's channel code on both
-  CPUs (descriptor 4,352, the first message, requests for names, the clock and random bytes,
-  notes of closes, waits and listings, a listing turned round), the launcher's channel and the
-  broker's thread for a job, the harness's switch to the broker's notes, Landlock with no path
-  for a program that has a channel (fail closed where Landlock is not enforced; QEMU keeps the
-  folder), and seccomp pins that keep `sendmsg` and `recvmsg` on descriptor 4,352 and every
-  descriptor-first call off it. Runs: targeted, on both Linux runners, 42151476555 (6b, 6c) and
-  42154121624 (6d). The stack's first full gate (run 42152070867, `wip/r2-6a`) failed five lib
-  tests on both Linux CPUs and passed everything else: all five were stale expectations in the
-  tests (two pinned system-call lists without `sendmsg` and `recvmsg`, two checker tests that
-  counted 26 functions in lengua's text, one AArch64 thread fixture's immediate), fixed in
-  `wip/r2-6d`; its full run on six runners, 42158417211, passed on all six native jobs (the QEMU
-  job fails as listed below).
-- **8a, on `wip/r2-8a`**: the ptrace supervisor and the tests only it served are deleted; a write
-  past a test's file limit is a short write and then `EFBIG` (the launcher ignores SIGXFSZ,
-  through the `lengua-os` crate's first function); the checker no longer reads the inline form
-  (`Form` is gone, `edge::is_program` says whether text is a program; the system-call rule, the
-  canonical copies, the start-stack owners and the frozen templates are deleted), a program may
-  not call `os_thread_start` or `os_thread_join` itself, the shipped `fill.s` assets are gone,
-  and the checker's, the integration and the prover's tests stand on the shipped edge-form
-  templates. The compile run 42161170289 built every target under clippy `-D warnings`. The red
-  team gained 14 attempts for the edge form on each CPU, and a reading of the checker against
-  them found three holes that were older than the round, now closed with their rows: a push or a
-  pop of memory and `pop rsp` on x86-64, and a page address (`adrp`) with no `add` after it on
-  AArch64.
-- **8c, the documents**: DESIGN.md has the broker, the sandbox as built and a section on the
-  edge; the CPU references are `x86_64.md` and `aarch64.md`; the compile skill teaches the edge
-  form.
+Done and merged on 2026-11-06 (the code of `26ef909`; the roadmap list above has its run). The
+runs that show each part:
+
+| part | runs |
+|---|---|
+| the evidence tools: `test_files`, `mutate_only`, the `golden` mode, `bench_against` | the bench's noise floor 42110275838 |
+| a spike: proofs through a call (`fill` calling an operation keeps its verdicts) | 42111907655 |
+| the Linux edge on both CPUs, with `tests/edge.rs` | edge tests 42121334134, through QEMU 42121369789, the full suite 42122543252 |
+| the checker takes the edge form | the golden raw diff against `e4163d4` is empty: 42132982376 |
+| the prover takes it | its model agrees with the system on every case: 42137756844 |
+| the pilots: the main template, `cat`, `cat-stream`, proofs unchanged | 42137847004, 42137850804, 42137855171, 42137859008 |
+| every program in the edge form | the stack's gate, which found stale tests and two frames: 42144788634, 42152070867 |
+| the broker, its channel and the sandbox switch | 42144883542, 42151476555, 42154121624; the full run at the 6d tip 42158417211 |
+| the supervisor gone, `EFBIG`, the inline form gone | compile 42161170289; the full run at the 8a tip 42166195938 |
+| the hardening of the broker and the sandbox; three checker holes closed | compile on six 42175924178; the red team 42178828714; the checker's tests 42178837518; the full run on six 42178871938 |
+| the mutation test | 42164995419; at the end 42178888801 |
+| the bench against `e4163d4` | 42162207179 |
+| the golden ledger against `e4163d4` | the 6d tip 42164445967; at the end 42178880153 |
 
 Decided while building (the owner's to reverse):
 - The prover keeps its raw system-call model (`Cpu::syscall`, `Image::linux`, the raw `_start`
@@ -239,14 +197,16 @@ Decided while building (the owner's to reverse):
 - Step 7, the snippets: the raw programs that probe the sandbox (`tests/limits.rs`) stay raw by
   their purpose; the snippets that tested the inline form's rules went with the form.
 - Step 8b, the layout (one `spec.md` per program, assets split per CPU), goes to round 6.
+- Landlock is required of every program, not only of those whose broker opens their files: a
+  kernel without it (older than 5.13, or with it off) runs no program.
 
-Still to do in round 2: the full suites on six runners at the 8a tip, the mutation test, the
-golden ledger against `e4163d4`, the bench against it, and the merge to main.
+What round 2 left:
 
-- **The QEMU job's seven failing cases** (run 42085247387: 528 passed, 7 failed; in run
-  42158417211, with the broker serving names and supplies under QEMU, the same seven fail and one
-  more: `the_streaming_filter_is_proven_for_every_length`, whose proof ran out of time at 4,001
-  bytes on the loaded emulated job and so lacked "by induction"). In
+- **The QEMU job's seven failing cases** (run 42085247387: 528 passed, 7 failed; in the final run,
+  42178871938, with the broker serving names and supplies under QEMU, the same seven fail. In run
+  42158417211 an eighth did, `the_streaming_filter_is_proven_for_every_length`, whose proof ran
+  out of time at 4,001 bytes on the loaded emulated job and so lacked "by induction"; its
+  time is the emulated job's load). In
   `tests/programs.rs`: `a_program_gets_only_the_environment_its_test_or_run_gives`,
   `a_program_lists_its_folder_and_deletes_inside_it`,
   `a_program_makes_folders_and_moves_files_inside_its_own`, `small_ranges_run_every_value`,
@@ -256,13 +216,16 @@ golden ledger against `e4163d4`, the bench against it, and the merge to main.
   emulated report differs (it says "under qemu-aarch64", and has no counters or timings). Make
   each cell say what an emulated run says, then take `continue-on-error` off the job in `ci.yml`
   so that the gate requires it.
-- **The goldens compare nothing on a runner by themselves.** `checker::golden` and
-  `prove::golden` compare a run with a recording made at an earlier commit, and a fresh runner
-  has none, so they record and note that they compared nothing: the four "passed" that way on
-  both Linux targets (run 42084426990). The `golden` mode of `ci.yml` records the base and the
-  head in one dispatch, and `scripts/ci/golden-diff.sh` compares the two; a golden leg takes
-  about 100 minutes on the x86-64 runner (the head leg of the first run, 42152180357, was cut
-  off at the old limit of 120).
+- **The goldens compare nothing in a plain run.** `checker::golden` and `prove::golden` compare a
+  run with a recording made at an earlier commit, and a fresh runner has none, so they record and
+  note that they compared nothing: the four "passed" that way on both Linux targets. Only the
+  `golden` mode of `ci.yml` compares: it records the base and the head, and
+  `scripts/ci/golden-diff.sh` diffs them. A leg takes about 100 minutes on the x86-64 runner.
+- **A proof that ends for memory differs between runs.** `examples/sha256`'s proofs end in a
+  memory stop ("terms grew too large for the memory the computer has free", at 10 and 20 million
+  terms even on an idle runner), in "ran out of time", or in "doesn't model sha256 yet",
+  depending on the load. All are "tested, not proven", and the ledger counts a memory stop like
+  a time-out: run again, not a difference.
 - `upcase` retries writes 4096 times on x86-64 and 64 times on ARM64. The ARM64 main template's
   assertions skip number 3.
 - The stamp lengua writes into `main.s` and `lengua.lock` (`needs SSE4.2, …`) lists SSE3 to

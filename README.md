@@ -49,6 +49,8 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 
 - Linux on x86-64 or ARM64 (AArch64); macOS and Windows are the roadmap's rounds 3 and 4
   ([todo.md](todo.md))
+- A kernel with Landlock on, which every run needs: Linux 5.13 or newer, and 6.12 or newer for a
+  program that uses the network. lengua won't run a program without it.
 - Rust 1.89 or newer (to build the server)
 - LLVM's assembler and linker: `sudo dnf install llvm lld` (Fedora) or `sudo apt install llvm lld`
   (Debian/Ubuntu)
