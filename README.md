@@ -3,7 +3,7 @@
 > **Moving to WebAssembly (2026-11-06).** The owner decided to move lengua's code from assembly to
 > WebAssembly. A program becomes a folder of `idea.md`, the idea file, and `main.wat`, the agent's
 > WebAssembly, which `lengua-mcp` checks, proves and runs the same way on Linux, Windows and macOS,
-> on x86-64 and ARM64. The work lands in milestones W0 to W13 ([todo.md](todo.md),
+> on x86-64 and ARM64. The work lands in milestones W0 to W15 ([todo.md](todo.md),
 > [ROADMAP.md](ROADMAP.md)). Until it does, this page describes the native lengua below, which the
 > tag `native-final` keeps.
 

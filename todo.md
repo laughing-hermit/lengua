@@ -12,7 +12,7 @@ server only, so it runs in any agent harness.
 WebAssembly ("we are now pivoting into web assembly"). The native lengua, Linux on x86-64 and
 Linux on ARM64 with one suite and the mutation test passing on both (run 42178888801), is tagged
 `native-final` (commit 723879e), and stays in the repository beside the WebAssembly path until
-milestone W10. The WebAssembly lengua is built in milestones W0 to W13 below, each merged to main
+milestone W11. The WebAssembly lengua is built in milestones W0 to W15 below, each merged to main
 once it is green on every runner. With it, `lengua-mcp` runs natively on Linux, Windows and macOS,
 so the WSL 2 and Lima routes are superseded (branch `wip/routes-ci`, left unmerged).
 
@@ -84,13 +84,13 @@ x86-64 stays dropped (the owner: Apple makes no Intel Macs).
 
 | Point | Now | Left |
 |---|---|---|
-| 1. AI language, Agent Plugin | The native plugin: `write-idea`, `compile`, `check`, `run`, `idea.md` and `main.s`, the `Builds on` graph | W1 (idea files), W5 (the compile skill for WebAssembly), W6 (the graph) |
-| 2. One product everywhere | Two native Linux targets pass the one suite (run 42178888801) | W2 to W5 on all five runners |
-| 3. Tailored | CPU tiers for x86-64 and ARM64 | W2 (engine, caches), W8 |
-| 4. Competitive | Native programs measured, none gated | W8 (the gate) |
-| 5. Safe and proven | Native rules, proofs and Linux sandbox | W3, W4, W7 |
-| 6. Truthful documents | Describe the native lengua | W11 |
-| 7. Shippable | Native archives for two Linux targets | W9, W12 |
+| 1. AI language, Agent Plugin | The native plugin: `write-idea`, `compile`, `check`, `run`, `idea.md` and `main.s`, the `Builds on` graph | W1 (idea files), W3 (the graph), W6 (Attested Computation), W9 (the skills) |
+| 2. One product everywhere | Two native Linux targets pass the one suite (run 42178888801) | W2, then W4 to W9 on all five runners |
+| 3. Tailored | CPU tiers for x86-64 and ARM64 | W4 (the engine), W10 (caches), W12 |
+| 4. Competitive | Native programs measured, none gated | W12 (the gate) |
+| 5. Safe and proven | Native rules, proofs and Linux sandbox | W5, W8, W10, W13 |
+| 6. Truthful documents | Describe the native lengua | W15 |
+| 7. Shippable | Native archives for two Linux targets | W14 |
 
 ## Decisions made during the pivot, for the owner to review
 
@@ -102,47 +102,89 @@ Each can be reversed.
   operations and the broker's rules for names, so a program runs the same way on every system.
   A program that only reads and writes files and standard streams also runs under any WASI
   runtime.
-- **Wasmtime is the engine** (Cranelift), embedded in `lengua-mcp`, with SIMD, wide arithmetic and
-  bulk memory on, and threads, relaxed SIMD, 64-bit memory, GC and exceptions off.
-- **No threads** until WebAssembly's threads are standard; the parallel template is retired.
-- **Programs run inside the server**, one store per run, with memory, time, output and file
-  limits from the idea; a shell's `lengua-mcp run` gets its own process. An OS sandbox as a second
-  wall is deferred.
+- **lengua's own host, not Wasmtime's WASI**: lengua implements its part of WASI preview 1 itself,
+  on the engine's linker, so its semantics are its own (one closed set of errors, the rules for
+  names, test-supplied clocks and random bytes, connections made before the start) and the prover
+  models one implementation. Folders are reached through `cap-std`, which resolves every name
+  beneath the folder.
+- **Wasmtime is the engine** (Cranelift), pinned exactly, embedded in `lengua-mcp`: WebAssembly
+  2.0 with SIMD128, bulk memory, multi-value, sign extension and saturating conversions on;
+  threads, relaxed SIMD, wide arithmetic, 64-bit memory, multiple memories, tail calls, GC and
+  exceptions off (wide arithmetic and relaxed SIMD aren't finished standards). NaN results are
+  made canonical, so every machine computes the same bits. Where Cranelift fails on a runner
+  (Windows on ARM64 is the engine's third tier), its portable interpreter (Pulley) runs instead,
+  and the gap is published.
+- **The text is parsed with `wast`**, keeping each instruction's line, and validated by
+  `wasmparser` with the engine's own features. lengua's library (`$assert_fail`, `$fill`,
+  `$write_all`) is merged into the module, so a program is one standard module. `main.wat` has no
+  lengua header line; the lock and `verified` record what it was checked as.
+- **Programs run in child processes**: a pool of reused `lengua-mcp --wasm-worker` processes runs
+  the tests, each run in a fresh store; `run` and a background server each get a fresh child;
+  a worker ends when the server does. Limits: memory up to what the module declares, time by the
+  engine's epochs, 8 MiB of output, 64 MiB a file and a total for all files. Instruction counts
+  become the engine's fuel, WebAssembly operations executed, the same on every system. An OS
+  sandbox as a second wall is deferred.
+- **Descriptors by role**: 0 to 2 the standard streams, 3 the working folder (as `.`), 4 the
+  listener, 5 on the connections lengua made. Files live in the working folder, as before.
 - **The clock is rounded to a microsecond**, after OpenAI's 2026 report of agents signalling to
   each other through the CPU cache's timing.
+- **No threads** until WebAssembly's threads are standard, and no fused multiply-add (core
+  WebAssembly has none): an idea with `- Threads:` or `fma` is refused. The parallel template, and
+  the tiers that need CPU instructions (AES, SHA, CRC, AVX-512, SVE), are retired.
 - **`idea.md` is an Open Knowledge Format `Attested Computation`**: `runtime: webassembly`,
-  `computation: main.wat`, `run` its executor and `check` its attester. `check` writes
-  `verified: { by: lengua/<version>, at }` when everything passes, and the lock's hash leaves the
-  trust and lifecycle keys out.
-- **The skill `write-idea` is now `write-idea`.**
-- **The graph is also an MCP resource**, read-only, beside the two tools.
-- **The performance finish line** compares lengua with C, C++ and Rust compiled to WebAssembly and
-  run the same way, and publishes the gaps against their native builds (point 4).
-- **Secrets**: an idea line `- Secret:` names data that must not reach a branch, an address or a
-  variable-time instruction (point 5).
-- **Five runners**, as above; macOS on x86-64 stays dropped.
+  `computation: main.wat`, `parameters` with a lengua key `from` (an argument, standard input, an
+  environment variable or a file), `run` its executor and `check` its attester. The format says an
+  agent must not author a computation; lengua reads that as: the agent writes `main.wat` only while
+  the idea is unverified, and any edit starts a new, unverified definition. `check` writes
+  `verified: [{ by: lengua/<version>, at, idea: sha256:…, code: sha256:… }]` at `done` (a
+  line-level edit, never re-serializing the YAML), removes its own entry when a changed idea is
+  recorded, and keeps anyone else's. The lock's hash of the idea leaves out `verified` and
+  `generated`. The lock's format is 5 after the rename and 6 with the WebAssembly code stamp.
+- **The skill `write-spec` is now `write-idea`.**
+- **The knowledge graph's root** is the nearest folder above whose `index.md` has `okf_version`,
+  else the program folder's parent; lengua never writes `index.md` or `log.md` in a home folder,
+  a filesystem's root or the system's temporary folder; it changes only its own entries; `log.md`
+  never quotes a request's words. **No MCP resource**: the files are the graph.
+- **The signing key stays in the per-user data folder**, so a lock made in one agent harness
+  verifies in another; `PLUGIN_DATA` holds only caches.
+- **Memory regions** in `main.wat`: a region `$x` is an immutable global holding its address,
+  with `$x.size` (writable) or `$x.rosize` (read-only); addresses 0 to 1023 are lengua's. Rule 4,
+  a function's size, starts at 180 operators, to be calibrated on the templates.
+- **The performance finish line** compares lengua with C, C++ and Rust compiled to WebAssembly
+  (built once, on Linux, and shared) and run the same way, process against process, and publishes
+  the gaps against their native builds (point 4).
+- **Secrets**: an idea line `- Secret:` names data that must not reach a branch, a `select`, an
+  address, a length, a loop's count, division or floating point (point 5), checked first in the
+  WebAssembly and then in the machine code the engine makes, with the native lengua's decoders.
+- **Five runners**, as above; macOS on x86-64 stays dropped (the design pass would have kept it;
+  the owner's earlier word stands).
 
 ## Roadmap: the pivot's milestones (2026-11-06)
 
 Each merges to main when green on the runners it names; [ROADMAP.md](ROADMAP.md) has the detail.
 
 - **W0. Record the decision.** This file, ROADMAP.md, README's opening, the tag `native-final`.
-- **W1. Idea files.** `idea.md` becomes `idea.md` and `write-idea` becomes `write-idea`,
-  everywhere, with the lock's format bumped.
-- **W2. The WebAssembly foundation.** The engine, the build, lengua's WASI host, the runner, the
-  `machine` line with the CPU's caches, the first WebAssembly fixtures, and CI on all five
-  runners.
-- **W3. The WebAssembly dialect's rules.** Power of 10 and the memory rules, for WebAssembly.
-- **W4. The prover's WebAssembly front end.**
-- **W5. Every program in WebAssembly**, and the compile skill rewritten for it.
-- **W6. The knowledge graph**, in the Open Knowledge Format.
-- **W7. Constant time.**
-- **W8. Performance and the gate.**
-- **W9. Package, `doctor` and release** on all five runners.
-- **W10. The native product retired** (kept at the tag).
-- **W11. The documents and the finish line.**
-- **W12. The agent's test, in the interactive session.**
-- **W13. The finish-line run, and the report.**
+- **W1. Idea files.** `spec.md` becomes `idea.md` and `write-spec` becomes `write-idea`,
+  everywhere, with the lock's format bumped, and the manifests on Agent Plugins 1.1.0.
+- **W2. CI on all five runners** again: lengua builds and its tests pass natively on each (native
+  programs on Linux only).
+- **W3. The knowledge graph**, in the Open Knowledge Format, on today's program folders.
+- **W4. The WebAssembly runtime**: lengua's WASI host, the engine, the worker pool.
+- **W5. The WebAssembly dialect's rules.**
+- **W6. `check` and `run` for WebAssembly ideas**, end to end, with `idea.md` an Attested
+  Computation.
+- **W7. The prover's seam**: the world it models taken out of the CPU's state, with no verdict
+  changed.
+- **W8. The WebAssembly prover**, in four steps: the concrete model, symbolic proofs, every length,
+  SIMD and floats.
+- **W9. Every program in WebAssembly**, the skills rewritten, and the parity ledger.
+- **W10. Constant time and caches.**
+- **W11. The native product retired** (kept at the tag).
+- **W12. Performance and the gate.**
+- **W13. Constant time in the machine code.**
+- **W14. Package, `doctor` and release** on all five runners, and the agent's test in the
+  interactive session.
+- **W15. The documents, the finish-line run, and the report.**
 
 Runs, as they land:
 
@@ -158,25 +200,25 @@ this file at the tag `native-final`.
 - **Round 2's leftovers:** the QEMU job's seven failing cases, plain runs' goldens, sha256's
   load-dependent proof bound on x86-64, upcase's retries and the skipped assertion, the stamp's
   CPU names, moving the CPU harnesses onto the edge. The WebAssembly lengua has no QEMU, no
-  per-CPU code and no CPU stamp; its own goldens come with W3 and W4.
+  per-CPU code and no CPU stamp; its own goldens come with W5 and W8.
 - **Round 3:** the Ubuntu package with LLVM, the install test through `setup.sh`, the kernel
   floor and Landlock, `doctor` for Linux kernels, musl or an older glibc, LLVM's version, WSL 2 on
   `windows-11-arm`, and the routes in CI. `lengua-mcp` needs no LLVM, no kernel feature and no VM
-  now; W9 builds the package and `doctor` for every system.
+  now; W14 builds the package and `doctor` for every system.
 - **Later, the image:** a container image of a Linux package isn't needed for Windows or a Mac
   any more. It can still come later for servers, if wanted.
 - **The native macOS and Windows ports** (ROADMAP's deferred round 4): the WebAssembly lengua
   reaches both natively.
 - **Round 5's native gaps:** the GNU toolchain A/B, `crc32c`'s wall time and `move_front`, the
   histogram's loop placement and the dialect's code alignment, the executables' size, the SSE2
-  one-thread shout, and ARM64's missing bench programs. W8 measures the WebAssembly programs
+  one-thread shout, and ARM64's missing bench programs. W12 measures the WebAssembly programs
   afresh; the gate and its workloads carry over.
-- **Round 6's native items:** the Linux sandbox's twelve known limits (W2 and W9 set the
+- **Round 6's native items:** the Linux sandbox's twelve known limits (W4 and W14 set the
   WebAssembly host's limits instead), the `.equ` checks against the edge, a pointer moved by a
   register, the one-spec layout across CPU folders, the raw system-call model, the x86-64 and
   ARM64 prover's missing instructions, signed lane compares, the xmm-only harness, the
   zero-register branch, AArch64's `adc` and `sbc`, and the small items. The release check and the
-  last pass over the documents carry over (W9, W11).
+  last pass over the documents carry over (W14, W15).
 - **Fast paths on Linux** (the vDSO clock, `epoll`, `splice`): the host's own I/O replaces them.
 
 ## The owner's
@@ -191,15 +233,15 @@ this file at the tag `native-final`.
   designed yet.
 - **A row the gate can't decide.** Some costs every language pays alike: copying through a pipe,
   an open, the clock. Where one of those dominates a row, lengua's lead is only its own few
-  instructions, and the row may stay undecided or tied after every fix. W8 names those rows, with
+  instructions, and the row may stay undecided or tied after every fix. W12 names those rows, with
   the runs. For each, the owner then picks: keep the finish line open, or accept that row as a
   stated exception. Until they pick, it stays open.
 - **The decisions above**, each the owner's to keep or reverse.
 
 ## Deferred, and why
 
-- **A knowledge graph over more than program folders.** W6 makes the program folders a graph in
-  the Open Knowledge Format, with `index.md`, `log.md` and a read-only resource. Indexing other
+- **A knowledge graph over more than program folders.** W3 makes the program folders a graph in
+  the Open Knowledge Format, with `index.md` and `log.md`. Indexing other
   files, or answering questions over the graph, needs a design the owner hasn't asked for.
 - **Connections made on demand.** A program that opens a connection itself, as a proxy does,
   needs WASI's newer sockets (preview 2 or 3) and spec syntax. Today a program gets the
@@ -217,7 +259,7 @@ this file at the tag `native-final`.
 - **A pointer read from memory.** The memory rules can't follow it to an owner, so a program that
   uses one is "tested, not proven" for memory.
 - **UDP, any URL, processes, GUIs, libraries for other languages to call:** outside the finish
-  line's scope; W11 has DESIGN say what would bring each in.
+  line's scope; W15 has DESIGN say what would bring each in.
 
 ## Stopped by the safety filter
 
