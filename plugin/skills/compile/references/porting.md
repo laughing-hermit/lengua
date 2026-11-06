@@ -21,9 +21,10 @@ optimizer would rewrite the instructions the prover just checked.
   the program, so both need that CPU: natively, or under an emulator for development (QEMU's user
   mode runs Linux ARM64 programs on an x86-64 Linux host). Under emulation the kernel sees the
   emulator's own system calls, not the program's, so only Landlock and resource limits still
-  confine a run; the spec-exact system-call filter, the tests' supplied random bytes and clock,
-  and the cycle counts need the target natively. So the per-host part of the server is the
-  runner, and a target is fully tested only on its own CPU (a CI runner counts).
+  confine a run; the spec-exact system-call filter and the cycle counts need the target natively.
+  The tests' supplied random bytes and clock come from lengua's broker, so they work under
+  emulation too. So the per-host part of the server is the runner, and a target is fully tested
+  only on its own CPU (a CI runner counts).
 - **The plugin decides per target.** The server detects its host at startup
   (`Profile::for_target` over `std::env::consts`) and uses that target; the user installs one
   plugin and it picks what it needs. On an unsupported host it says so and points here. Ship one
@@ -51,21 +52,29 @@ Each new target needs:
 3. **Prover model** — the CPU's instructions in `src/prove/exec`, and CPU-feature detection.
 4. **Dialect** — the Power of 10 in that CPU's mnemonics and registers, with its own reference
    beside `linux-x86_64.md`.
-5. **The OS edge** — on Linux, the system calls' numbers, the instruction and registers that make
-   them, and the ABI's details, which differ between CPUs even on one OS (on AArch64: no `poll`,
-   only `ppoll`; `clone`'s child-tid argument in another place; a 128-byte `struct stat` with
-   `st_mode` at 16 rather than 144 and 24; `O_DIRECTORY` = `0o40000`, which is x86-64's value
-   for `O_DIRECT`). **macOS and Windows don't allow direct syscalls:** a program must call the
-   system library (libSystem, ntdll), so those model the system-library calling convention
-   instead.
-6. **The runner and sandbox** (the per-host part) — on Linux, seccomp and Landlock
-   (`runner.rs`) and the supervisor that supplies tests' random bytes and clock (`supervise.rs`,
-   which reads the CPU's registers); macOS and Windows each need their own confinement. The
-   network needs none of a sandbox's own policing: lengua's runner makes each connection a spec
-   names and hands the program its end of a local stream (a Unix socket pair on Linux, from
-   descriptor 4; a pipe or socket handle on Windows), as it binds a server's port, so a target's
-   sandbox only has to keep the program off the network altogether. macOS also needs the binary
-   code-signed (ad-hoc via `ld64.lld`) before it will run.
+5. **The OS edge** — a file for the OS and CPU, `src/edge/<os>-<cpu>.s`, holding `_start` and the
+   21 operations of [the edge](edge.md), `os_read` to `os_exit`, written for the OS. On Linux each
+   is a system call with a few instructions around it: the numbers, the instruction and registers
+   that make it, and the ABI's details, which differ between CPUs even on one OS (on AArch64:
+   no `poll`, only `ppoll`; `clone`'s child-tid argument in another place; a 128-byte
+   `struct stat` with `st_mode` at 16 rather than 144 and 24; `O_DIRECTORY` = `0o40000`, which is
+   x86-64's value for `O_DIRECT`). **macOS and Windows don't allow direct syscalls:** their edges
+   call the system library (libSystem; kernel32 and ntdll) instead. The operations' names,
+   arguments, errors and results are `src/edge/mod.rs`'s and the same everywhere, so no program
+   changes; `assert_fail`, `fill` and `parallel_for` are written once per CPU on top of them, and
+   `tests/edge.rs` holds every operation to one table of cases on every target.
+6. **The runner, the broker and the sandbox** (the per-host part) — the launcher that confines a
+   program and starts it (on Linux seccomp, Landlock and resource limits, `os/linux.rs`), and
+   the broker (`src/broker.rs`) that serves the program what a sandbox with no path leaves it:
+   every name opened beneath its folder without following a link, held to what every system takes;
+   the tests' clock and random bytes; and notes of its waits and listings. It talks to the
+   program's edge over a channel the program inherits at descriptor 4,352. macOS and Windows each
+   need their own confinement and their own channel. The network needs none of a sandbox's own
+   policing: lengua's runner makes each connection a spec names and hands the program its end of
+   a local stream (a Unix socket pair on Linux, from descriptor 4; a pipe or socket handle on
+   Windows), as it binds a server's port, so a target's sandbox only has to keep the program off
+   the network altogether. macOS also needs the binary code-signed (ad-hoc via `ld64.lld`) before
+   it will run.
 
 ## The baseline
 
@@ -115,9 +124,9 @@ each item with its own hardware's means.
 
 - **Linux ARM64 is done**, and is the pattern for the rest: the same OS, so the same kinds of
   system calls, the same sandbox (seccomp, Landlock) and ELF; its decoder, prover model, dialect
-  and triple (2, 3, 4) are its own, and the OS edge (5) and the supervisor's registers (6) change
-  in detail. Tested under QEMU on an x86-64 Linux computer for everything but the sandbox's exact
-  filter and supplies, and on an ARM64 computer or CI runner for those. It covers what x86-64
+  and triple (2, 3, 4) are its own, and the OS edge (5) changes in detail. Tested under QEMU on an
+  x86-64 Linux computer for everything but the sandbox's exact filter, and on an ARM64 computer or
+  CI runner for that. It covers what x86-64
   covers, checked, tested and proven as x86-64's code is: arguments, whole numbers, floating
   point, vectors (NEON, and SVE's scalable bytes), text, standard input of any length through
   `fill`, files and folders, hash tables, sorting, servers and clients, the terminal, threads,
@@ -126,4 +135,5 @@ each item with its own hardware's means.
   as x86-64's is. Each example and fixture has its twin on the other CPU, compiled from the very
   same spec (`every_program_has_its_twin_on_the_other_cpu`, `tests/every_program.rs`).
 - **macOS (ARM64, x86-64)** and **Windows (x86-64, ARM64)** need all six, the OS edge and the
-  sandbox most of all, because they forbid the direct syscalls lengua's Linux programs use.
+  sandbox most of all: their edges call the system library where those systems forbid direct
+  system calls, and each confines a program by its own means.

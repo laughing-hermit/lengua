@@ -2,9 +2,10 @@
 
 For a computer whose `machine` line starts `linux-aarch64`: an ARM64 computer running Linux, or
 an x86-64 one testing AArch64 code through QEMU. The rules are the same as x86-64's
-([the rules](power-of-10.md)), written in AArch64's instructions; start from
+([the rules](power-of-10.md)), written in AArch64's instructions, and a program calls the same
+operations and library functions ([the edge](edge.md)); this page is what is AArch64's. Start from
 [the AArch64 template](../assets/linux-aarch64/main-template.s), and read standard input with
-[AArch64's fill](../assets/linux-aarch64/fill.s), copied word for word with its constants.
+`fill`.
 
 What AArch64 code covers so far, checked, tested and proven as x86-64's is: arguments, whole
 numbers, floating point in singles and doubles, vectors of whole numbers and of floats (NEON),
@@ -30,19 +31,18 @@ x86-64's is.
   `x19` to `x28`, and constants too wide for `cmp`, such as `MAX_WORDS`, sit in a register built
   with `mov` and `movk`.
 - [The event-loop server](../assets/linux-aarch64/server-template.s) serves up to 8 clients at
-  once with `ppoll`, from [its spec](../assets/server-template-spec.md), proven in every order
+  once with `os_poll`, from [its spec](../assets/server-template-spec.md), proven in every order
   its clients' steps can come in.
 - [The key reader](../assets/linux-aarch64/terminal-template.s) reads keys one at a time with no
   echo, from [its spec](../assets/terminal-template-spec.md).
 - [The parallel template](../assets/linux-aarch64/parallel-template.s) capitalizes up to a
-  megabyte on up to 16 threads, from [its spec](../assets/parallel-template-spec.md). Copy its
-  `parallel_for`, `start_worker` and `join_worker`, their data and constants word for word, as on
-  x86-64; `worker` keeps its slot in `x19`, set by `mov x19, x1` after saving x19, and writes
-  only its stack and its slot. AArch64's `clone` takes where to clear the thread's id in `x4`, not
-  x86-64's fourth argument, and `join_worker` reads the id with `ldar`, a load-acquire, so the
-  worker's result can't be read before the id shows it ended: loads on ARM64 can pass each
-  other. `ldar` of a whole `w` or `x` register from a base with no offset is the dialect's only
-  ordered access.
+  megabyte on up to 16 threads, from [its spec](../assets/parallel-template-spec.md). It calls
+  `parallel_for`, which is lengua's, as on x86-64; `worker` keeps its slot in `x19`, set by
+  `mov x19, x1` after saving x19, and writes only its stack and its slot. lengua's code does the
+  threads' part that is AArch64's: `clone` takes where to clear the thread's id in `x4`, and the
+  join reads the id with `ldar`, a load-acquire, so a worker's result can't be read before the id
+  shows it ended: loads on ARM64 can pass each other. `ldar` of a whole `w` or `x` register from a
+  base with no offset is the dialect's only ordered access.
 - [The crc32c](../assets/linux-aarch64/fast/crc32c/main.s) prints standard input's CRC-32C from
   [its spec](../assets/fast/crc32c/spec.md) with no CRC32 instruction, which only ARMv8.1 and
   later have, so it runs on every ARM64 computer: a byte at a time through a table of 256 words,
@@ -79,112 +79,51 @@ x86-64's is.
   `mov x2, #BUF_LEN & 0xffff` then `movk x2, #BUF_LEN >> 16, lsl #16`.
 - Indexes are whole `x` registers: `ldrb w3, [x1, x2]`.
 
-## System calls
+## Calling an operation
 
-What the spec names under `# Constraints` decides the calls a program may make, as on x86-64:
-`write`, `exit` and `exit_group` always; `read` for `standard input`; `openat`, `read`, `write`,
-`lseek`, `close`, `fstat`, `getdents64`, `mkdirat`, `unlinkat` and `renameat` for `files`;
-`clock_gettime` and `clock_nanosleep` for `the clock`; `getrandom` for `random bytes`; `read`,
-`write`, `sendto`, `shutdown` and `close` on the connections lengua makes and hands over from
-descriptor 4, `accept4` on the listening socket lengua hands a server as descriptor 3, and
-`ppoll` for a server of several clients at once (never `socket` or `connect`); `ioctl` and
-`ppoll` for the terminal; `clone`, `futex` and `exit` for threads, only through the parallel
-template's `parallel_for`. The kernel refuses any other.
+An operation's arguments go in `x0` to `x5` (a 32-bit argument such as a descriptor in the low
+half, `w0`), and its result comes back in `x0`. It changes `x0`, `x8`, `x16`, `x17`, `x30`, the
+flags, the vector registers `v0` to `v7` and `v16` to `v31` (and the upper halves of `v8` to
+`v15`), and SVE's `z`, `p` and `ffr` registers, and no other register: a counter in `x19` or a
+pointer in `x1` is as it was after the call. A result below zero is an error, so test it right
+away with `tbnz x0, #63, error`:
 
-`mov x8, #SYS_NAME` picks the call, the arguments go in `x0` to `x5`, and `svc #0` runs it. It
-returns in `x0` and changes nothing else. A result from -4095 to -1 is an error (the negative
-errno), so test it right away with `tbnz x0, #63, error`.
+```
+    mov x0, #STDOUT
+    adrp x1, greeting
+    add x1, x1, :lo12:greeting
+    mov x2, #GREETING_LEN
+    bl os_write
+    tbnz x0, #63, .Lmain_write_failed
+```
 
-| Call | `SYS_` number | Arguments | Result |
-|---|---|---|---|
-| `read` | 63 | `x0` fd, `x1` buffer, `x2` count | bytes read, 0 at the end of input, or an error |
-| `write` | 64 | `x0` fd, `x1` bytes, `x2` count | bytes written, possibly fewer than asked, or an error |
-| `openat` | 56 | `x0` `AT_FDCWD` (-100), `x1` the name, `x2` flags (0 to read; 0x241 to write a new or emptied file), `x3` the new file's mode, such as 420 (`0644`) | the fd or an error |
-| `close` | 57 | `x0` fd | 0 or an error |
-| `lseek` | 62 | `x0` fd, `x1` offset, `x2` whence (0 start, 1 current, 2 end) | the new offset or an error |
-| `fstat` | 80 | `x0` an open file, `x1` 128 bytes for its details: its size is the 8 bytes at 48 | 0 or an error |
-| `getdents64` | 61 | `x0` a folder opened with `O_DIRECTORY` (0x4000, not x86-64's 0x10000), `x1` a buffer, `x2` its size | the bytes of entries it filled, as on x86-64 |
-| `mkdirat` | 34 | `x0` `AT_FDCWD`, `x1` the folder's name, `x2` its mode | 0, -17 (`EEXIST`) when it's there, or an error |
-| `unlinkat` | 35 | `x0` `AT_FDCWD`, `x1` the name, `x2` 0 for a file or 0x200 for an empty folder | 0 or an error |
-| `renameat` | 38 | `x0` `AT_FDCWD`, `x1` the old name, `x2` `AT_FDCWD`, `x3` the new name | 0 or an error |
-| `clock_gettime` | 113 | `x0` clock (0 the time of day, 1 a clock that only moves forward), `x1` 16 bytes for seconds then nanoseconds | 0 or an error |
-| `clock_nanosleep` | 115 | `x0` clock, `x1` 0, `x2` 16 bytes of how long | 0 or an error |
-| `getrandom` | 278 | `x0` buffer, `x1` count, `x2` 0 | bytes filled, all of them for up to 256, or an error |
-| `accept4` | 242 | `x0` 3, `x1` to `x3` 0 | the connection or an error |
-| `sendto` | 206 | `x0` the connection, `x1` bytes, `x2` count, `x3` 0x4000 (`MSG_NOSIGNAL`), `x4` and `x5` 0 | bytes sent or an error |
-| `ppoll` | 73 | `x0` a table of 8-byte entries (descriptor, events, events that came), `x1` how many, `x2` 0 to wait until one is ready, or 16 bytes of how long, `x3` 0 | how many are ready, 0 when the time ran out, or an error |
-| `shutdown` | 210 | `x0` the connection, `x1` 1 to stop sending | 0 or an error |
-| `ioctl` | 29 | `x0` 0, 1 or 2; `x1` 0x5401 (`TCGETS`) to read the terminal's mode or 0x5402 (`TCSETS`) to set it, with `x2` its 36 bytes, or 0x5413 (`TIOCGWINSZ`) for the window's rows and columns, 2 bytes each, in `x2`'s 8 bytes | 0, or -25 (`ENOTTY`) when it isn't a terminal, as in every test; the kernel refuses any other request |
-| `exit` | 93 | `w0` status | doesn't return |
-| `exit_group` | 94 | `w0` status | doesn't return |
+`bl` puts the return address in `x30`, which an operation changes: a function that calls one saves
+`x30` as any caller does (`stp x29, x30, [sp, #-16]!`, below). The registers a call changes can't be
+read after it until something sets them. A vector constant kept across a call is loaded again
+after it. The library's functions (`fill`, `assert_fail`, `parallel_for`) take their arguments by
+the calling convention below.
 
-Names: lengua holds every name a program gives `openat`, `mkdirat`, `unlinkat` and `renameat` to
-what every system takes, so a name Windows refuses (`< > : " \ | ? *`, a control character, a
-dot or space at the end, `CON`, `NUL.txt`, `com1` and the other device names, and a short
-name's shape such as `REPORT~1.TXT`, by which Windows can open another file) returns `EINVAL`
-(-22); one that isn't UTF-8 of characters Unicode 9.0 assigned, `EILSEQ` (-84); one past 255
-bytes or a path past 1,023, `ENAMETOOLONG` (-36); a new name that differs only in case from one
-in its folder, `EEXIST` (-17); and renaming or removing a file the program holds open, `EBUSY`
-(-16). A program holds at most 4,352 files open. A folder lists in no set order, and a test
-runs a program that lists one again with the order turned round, so sort entries before
-acting on their order.
-
-AArch64 has no `poll`: `ppoll` is the wait, with x86-64's `poll` table. Its time is a pointer, so
-"until one is ready" is `x2` 0, not -1, and the kernel writes the time left back into the 16
-bytes it read: keep them in `.bss` and set them again before each wait, as
-[the terminal template](../assets/linux-aarch64/terminal-template.s) does. A native kernel
-skips the write to `.rodata`, but QEMU refuses the wait. A client's connections are lengua's,
-made before it starts, from descriptor 4 in its spec's order, as on x86-64; one lengua couldn't
-make comes ended, so its first read gives 0 and its first write fails with `EPIPE` (-32). A
-connection `over TLS` is plain bytes to the program: lengua does the TLS. One to the computer an
-argument names is made the same way, before the program starts: the program only reads the
-argument, for its `Host:` line, never to connect.
-
-The terminal: keys one at a time with no echo take the terminal's mode with `TCGETS`, its local
-flags (the 4 bytes at 12) without `ICANON` (2) and `ECHO` (8), `VMIN` (the byte at 23) 1 and
-`VTIME` (at 22) 0, set with `TCSETS`; the mode as found goes back at the end, as
-[the terminal template](../assets/linux-aarch64/terminal-template.s) does. When `TCGETS` fails,
-as it does in every test, where standard input is a pipe, keys come as they are and nothing
-changes. `ppoll` on standard input with a time waits for the next key, a game's tick when none
-comes. Arrows and other special keys are escape sequences of several bytes, such as 27, 91, 65
-for up, and `\033[…` sequences move the cursor, clear the screen and color text.
-
-Random bytes and the clock: tests usually supply them in place of the kernel's, so output that
-depends on them can be checked exactly. Draw the random bytes the spec's Purpose says how to use,
-in any batch size: bytes asked for past what a test supplies are zeros, so only the bytes the
-program uses decide its output. Each `clock_gettime` call reads the test's next reading, and the
-last one repeats. Check both results like any call's.
-
-Files: open an input with `openat` (`AT_FDCWD`, name, `O_RDONLY`), and create or replace an output
-with `O_WRONLY | O_CREAT | O_TRUNC` (0x241) and mode 420; `close` each when done. Name files
-relative to the working folder. The kernel lets a program open files only inside that folder, so
-any other path fails with `EACCES` (-13); a missing file fails with `ENOENT` (-2). Each error is
-a behavior the spec names, with its own exit code.
+AArch64 has no `poll`, and the operation hides what that means: `os_poll` takes the same table
+as x86-64's and a time in milliseconds, -1 for no limit, whatever the kernel's `ppoll` wants.
 
 ## Program start
 
-At `_start` the stack holds the arguments, and `sp` is 16-byte aligned:
-
-| Address | Holds |
-|---|---|
-| `[sp]` | `argc`, the number of arguments including the program's path |
-| `[sp, #8]` | `argv[0]`, the program's path |
-| `[sp, #16]` | `argv[1]`, the first argument, and so on |
-| `[sp, #8 * (argc + 1)]` | 0, the end of the list |
-| `[sp, #8 * (argc + 2)]` | the environment: a pointer to each variable's `NAME=value`, then 0 |
-
-Each argument and variable is a NUL-terminated string, read-only. A program gets environment
-variables only when its spec uses `the environment`, and then only those its test or the user's
-run gives; otherwise the list is empty. lengua runs programs in a working folder of their own: an
-empty temporary folder, or the user's folder when they ask to run the program on their files.
-`_start` has no return address: it ends with `exit`, and keeps what it needs across calls in `x19`
-to `x28` without saving them.
+lengua's `_start` calls `main`, so `main` is entered as a function is: `x0` holds `argc`, the
+number of arguments including the program's path; `x1` the address of an array of pointers to
+them, `argv[0]` the program's path, ending in 0; and `x2` the address of an array of pointers to
+the environment, each variable's `NAME=value`, ending in 0. Each is a NUL-terminated string,
+read-only. `sp` is 16-byte aligned. A program gets environment variables only when its spec uses
+`the environment`, and then only those its test or the user's run gives; otherwise the list is
+empty. lengua runs programs in a working folder of their own: an empty temporary folder, or the
+user's folder when they ask to run the program on their files. `main` has nothing to return to:
+it ends with `bl os_exit`, and keeps what it needs across calls in `x19` to `x28` without saving
+them.
 
 ## Calling convention (AAPCS64)
 
 - Arguments go in `x0` to `x7`; results come back in `x0`, and in `x1` for a second value.
-- `bl` puts the return address in `x30`. A function that calls anything but `assert_fail`
-  opens with `stp x29, x30, [sp, #-16]!` and closes with `ldp x29, x30, [sp], #16` right before
+- `bl` puts the return address in `x30`. A function that calls anything but `assert_fail`, an
+  operation included, opens with `stp x29, x30, [sp, #-16]!` and closes with `ldp x29, x30, [sp], #16` right before
   its one `ret`.
 - A function must give back `x19` to `x28`, `d8` to `d15` (and `sp`) unchanged: save the ones it
   uses in pairs, `stp x19, x20, [sp, #-16]!` after the opening and `ldp x19, x20, [sp], #16`
@@ -201,10 +140,10 @@ to `x28` without saving them.
 - **Bounds:** `cmp xI, #LIMIT` and `b.hs` to an assertion before `[xB, xI]`, `LIMIT` an encodable
   number or a register holding a named constant.
 - **Results:** the first instruction to touch `x0` after a call to a `// returns: result`
-  function, or after `svc`, is `tbnz x0, #63, …`, `cmp x0, #0` with `b.lt`, or `cbz`/`cbnz x0`.
+  function or an operation (`bl os_…`), is `tbnz x0, #63, …`, `cmp x0, #0` with `b.lt`, or `cbz`/`cbnz x0`.
 - **Assertions:** `mov w0, #N` and `bl assert_fail`, each number reached from one place, at least
-  two a function on average, numbered 1 to 899 as on x86-64 (901 and up are the thread code's, and
-  fill's own are 990 to 992).
+  two a function on average, numbered 1 to 999 as on x86-64, each once; lengua's own, in `fill` and
+  `parallel_for`, are 990 and up, so keep a program's below them.
 - **Checked jump tables:** a `switch` over a dense range of small numbers jumps through a table
   of the function's own labels in `.rodata` (`.long .Lcase - table` entries), the index bounds-
   checked as any index is, as the calculator fixture does:

@@ -9,7 +9,11 @@ compatibility: Needs the lengua MCP server from the lengua plugin, on Linux x86-
 
 `main.s` is the program: assembly for this computer's target, Linux on x86-64 or on AArch64,
 that you compile from `spec.md`; the first word of `check`'s `machine` line names the target,
-`linux-x86_64` or `linux-aarch64`. You are the compiler. lengua checks your translation: it assembles `main.s`, reads the machine code back,
+`linux-x86_64` or `linux-aarch64`. You are the compiler. You write `main`, and reach the system
+only by calling lengua's operations (`os_read`, `os_write`, `os_open`, …) and its library
+(`assert_fail`, `fill`, `parallel_for`), which are the same on every computer:
+[the edge](references/edge.md) lists them. lengua checks your translation: it assembles `main.s`
+with its own file after it (`_start` and what `main` calls), reads the machine code back,
 matches it to `main.s` line by line, checks the lengua Power of 10, then runs every test in the
 spec and proves what it can. Nothing runs before every rule passes. Once a check passes, lengua
 writes main.s's second line itself, naming the spec it was compiled from, this computer's target
@@ -26,7 +30,7 @@ and the CPU features the code needs; never write that line yourself.
    to the same rule: a program that needs an extension is a fast tier, named for it (`wc-sve`),
    beside a baseline form from the very same spec, and the tier is the one to start from only
    where `machine` lists its extension.
-2. Plan the functions before writing them: at most 60 instructions each (rule 4), so `_start`
+2. Plan the functions before writing them: at most 60 instructions each (rule 4), so `main`
    checks the arguments and calls the functions that do the work. When the spec builds on parts
    (`- Builds on:`), each part must be done first: call `check` on its folder until it is. Then
    take the functions you use from the part's main.s word for word, each with a
@@ -34,18 +38,19 @@ and the CPU features the code needs; never write that line yourself.
    each to the part's current code, and says which to copy again when the part changes. Never
    rewrite what a part already does.
 3. Write `<path>/main.s` in the shape of [the template](assets/main-template.s): its first line
-   is `.intel_syntax noprefix`, and `assert_fail` and `assert_message` are copied word for word
-   (on `linux-aarch64`, [the AArch64 template](assets/linux-aarch64/main-template.s), whose first
-   line is `.arch armv8-a`, and [its fill](assets/linux-aarch64/fill.s));
-   the rest is the program. The template is a complete, checked program that prints the negative
+   is `.intel_syntax noprefix` (on `linux-aarch64`, [the AArch64 template](assets/linux-aarch64/main-template.s),
+   whose first line is `.arch armv8-a`), `main` takes the argument count, the arguments and the
+   environment in its first three argument registers and ends with `call os_exit`, and
+   `assert_fail` is lengua's: call it with the assertion's number, never define it; the rest is
+   the program. The template is a complete, checked program that prints the negative
    of a number ([its spec](assets/template-spec.md)); its `parse_i64`, `write_i64` and
    `write_all` can be reused as they are. To read a whole input, a reply, or a request up to the
-   byte that ends it (such as a newline), call `fill` from [fill.s](assets/fill.s), copied word for
-   word with its three constants: the proof then covers every way the input can arrive, cut into
-   any pieces. To stream input larger than a buffer, call `fill` again for each buffer-full, with
-   `ecx` -1, as [the streaming filter](assets/stream-template.s) does
+   byte that ends it (such as a newline), call `fill`, which is lengua's: the proof then covers
+   every way the input can arrive, cut into any pieces. To stream input larger than a buffer,
+   call `fill` again for each buffer-full, with its stop byte -1, as
+   [the streaming filter](assets/stream-template.s) does
    ([its spec](assets/stream-template-spec.md); on AArch64
-   [its NEON form](assets/linux-aarch64/stream-template.s), `w3` -1): where each buffer-full's
+   [its NEON form](assets/linux-aarch64/stream-template.s)): where each buffer-full's
    output is its bytes
    mapped one by one (`upper`, `lower`, `tr`), or counts kept in registers and printed at the
    end (`len`, `words`, `count` of a part such as `"\n"` or `"\r\n"`), the proof covers every
@@ -72,8 +77,8 @@ and the CPU features the code needs; never write that line yourself.
    [the event-loop server](assets/server-template.s) ([its spec](assets/server-template-spec.md)):
    `poll` over the listening socket and a fixed table of connections, a line buffer for each,
    and answering each client as its request completes; its proof follows the clients' steps in
-   every order between polls; on AArch64 [its form](assets/linux-aarch64/server-template.s)
-   waits with `ppoll`. A program for the terminal starts from
+   every order between polls; on AArch64 [its form](assets/linux-aarch64/server-template.s) is
+   the same program. A program for the terminal starts from
    [the key reader](assets/terminal-template.s) ([its spec](assets/terminal-template-spec.md); on
    AArch64 [its form](assets/linux-aarch64/terminal-template.s)):
    keys one at a time with no echo, a wait for the next key, and the terminal set back at the
@@ -85,9 +90,10 @@ and the CPU features the code needs; never write that line yourself.
    choice made for each input byte with `cmov` or `setcc`, not a branch, keeps the proof
    to one path; a branch per byte doubles the paths with each byte, and the proof stops early.
 4. Write the code by [the rules](references/power-of-10.md), with
+   [the edge](references/edge.md) for the operations, the errors and the library, and
    [the Linux x86-64 reference](references/linux-x86_64.md), or on `linux-aarch64`
-   [the Linux AArch64 reference](references/linux-aarch64.md), for system calls, the program's
-   start, the calling convention and the dialect's form there. Write it correct first; speed comes in step 6.
+   [the Linux AArch64 reference](references/linux-aarch64.md), for the calling convention and the
+   dialect's form on the CPU. Write it correct first; speed comes in step 6.
 5. Call `check` with `path`. It checks the rules first and lists each violation as
    `rule N (name) main.s:LINE: problem. Fix: …`. Then it runs every test: each behavior's example,
    and the generated tests with fresh random inputs (boundary values first). A failure shows the
@@ -114,7 +120,8 @@ and the CPU features the code needs; never write that line yourself.
    - **Break dependency chains:** when each step waits on the one before, as in a checksum or a
      running sum, run two to four independent chains side by side and join them at the end.
    - **Large pieces:** read through `fill` into a 64 KiB buffer, the most a pipe hands over at
-     a time, and write in large pieces, never a line or a byte per call.
+     a time, and write in large pieces, never a line or a byte per call: each operation is a call
+     and a system call.
    - **Input of any length streams:** fill a buffer, process it, keep only what crosses into the
      next buffer-full (such as whether the last byte ended a word), and repeat until `fill`
      returns less than the buffer.
@@ -204,7 +211,8 @@ and the CPU features the code needs; never write that line yourself.
 
 `run` runs the checked program with `path`, plus `args` and `stdin` when it reads them, within 40
 seconds. A program that works on files runs in a folder of the user's: pass it as `folder` and
-name the files in `args` relative to it; the program can't touch anything outside it. A server
+name the files in `args` relative to it; the program can't touch anything outside it, and lengua
+opens every name it asks for. A server
 starts in the background on its spec's port and `run` returns its address: try it with your own
 tools, such as `curl` or `nc`, then call `run` with `stop: true` to stop it and see what it
 printed. A program that connects gets its connections from lengua, made before it starts to the
@@ -220,8 +228,9 @@ a new program that passes the same checks, so whatever must be the same everywhe
 spec. A `main.s` that comes along in a copied folder is checked from scratch before `run` runs it;
 when its second line says it was compiled for another computer or a CPU feature this one lacks,
 `check` says so, and you compile the spec again for this one. lengua's line names the code, it
-doesn't protect it: anyone can build main.s outside lengua, so its guarantees hold only for
-programs that `run` runs after `check`. lengua supports two targets so far, Linux on x86-64 and on
+doesn't protect it: `lengua-mcp link main.s` prints main.s followed by lengua's file, so anyone
+can build it outside lengua, and its guarantees hold only for programs that `run` runs after
+`check`. lengua supports two targets so far, Linux on x86-64 and on
 AArch64, the same lengua on each: every rule, limit and capability of one is the other's, and each
 example and fixture has its twin on the other CPU, compiled from the very same spec. Every
 program has a baseline form that runs on every computer of its target, and an optional extension
@@ -265,7 +274,7 @@ When the spec allows threads (`- Threads: up to N`), split heavy work across cor
 `parallel_for`: [the parallel template](assets/parallel-template.s) (with
 [its spec](assets/parallel-template-spec.md); on AArch64
 [its form](assets/linux-aarch64/parallel-template.s)) capitalizes up to a megabyte on 16
-threads, each worker filling its own slot. Copy its thread code word for word, follow "Threads" in
+threads, each worker filling its own slot. Call `parallel_for` as it does, follow "Threads" in
 [the rules](references/power-of-10.md), and compare the time on the clock, which threads
 shorten. Starting a thread costs tens of microseconds, so give each one at least a few hundred
 kilobytes of vector work: on a megabyte, one 64-byte loop is as fast as sixteen threads.

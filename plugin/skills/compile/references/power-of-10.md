@@ -45,7 +45,9 @@ checker for assembly. Each violation's label says which: `rule 9` or `rule M3`.
 
   `# returns: result` (optional, right above `.type`) marks a function whose `rax` is negative on
   error.
-- **`.globl _start`** in `.text`; nothing else is exported.
+- **Nothing is exported:** no `.globl`. lengua's own file, assembled after `main.s`, has `_start`,
+  which calls `main`, and the operations and library functions `main.s` calls
+  ([the edge](edge.md)).
 - **One instruction per line.** Not allowed: `;`, `/* */`, a label and an instruction on one
   line, numbered labels (`1:`), prefixes (`rep`, `lock`), `offset`, segment registers, macros and
   their kin (`.macro`, `.rept`, `.irp`, `.if`, `.include`, `.set`), and anything but instructions
@@ -67,14 +69,15 @@ constant, and `lea reg, [rip + name]` loads an address. Write the size (`byte pt
 
 ## Instruction set
 
-The dialect's instructions are integer instructions, `syscall`, vector instructions and floating
-point in double and single precision:
+The dialect's instructions are integer instructions, vector instructions and floating point in
+double and single precision. There is no `syscall`: a program reaches the system by calling
+lengua's operations (`call os_write`; [the edge](edge.md)).
 
 - `mov movzx movsx movsxd lea push pop xchg bswap` and every `cmovCC`
 - `add adc sub sbb neg inc dec mul imul div idiv cbw cwde cdqe cwd cdq cqo`
 - `and or xor not test cmp shl sal shr sar rol ror shld shrd bt bts btr btc bsf bsr` and every
   `setCC`
-- `jmp`, every `jCC`, `call ret syscall nop`
+- `jmp`, every `jCC`, `call ret nop`
 
 POPCNT (`popcnt`) is in the x86-64 baseline, which every machine has. The rest only when the CPU
 has them (the `machine` line of a `check` reply lists its features): BMI1 (`andn bextr blsi blsmsk
@@ -127,7 +130,8 @@ Rules for vectors:
   `rcx + 15`, and rule 9's bounds check must keep all of them inside the buffer (see below).
   Size buffers in whole chunks so the last chunk stays inside.
 - **Calls clobber vectors.** No vector register is callee-saved, so a function never saves one,
-  and a value in a vector register is gone after a `call`. System calls keep them.
+  and a value in a vector register is gone after a `call`, an operation too: load a constant
+  again after one.
 
 [assets/vector-template.s](../assets/vector-template.s) is a complete, checked SSE2 program
 (capitalizing a line 16 bytes at a time) with its spec and tests.
@@ -188,32 +192,32 @@ Everything else is out: x87, string instructions (`movs`, `stos`, …), `loop`, 
 ### Threads
 
 When the spec allows threads (`- Threads: up to N` under Constraints), a program can split its
-work across cores with fork-join: `parallel_for` starts the threads and waits for all of them,
-like Rust's scoped threads. Copy `parallel_for`, `start_worker`, `join_worker`, the constants
-from `SYS_CLONE` to `MAX_WAITS`, and the data `stacks`, `tids`, `results` and `slots` word for
-word from [the parallel template](../assets/parallel-template.s); `check` compares them. Then
-choose three constants:
+work across cores with fork-join: lengua's `parallel_for` starts the threads and waits for all of
+them, like Rust's scoped threads. Nothing is copied: write `worker` and what is around it, as
+[the parallel template](../assets/parallel-template.s) does. Choose two constants:
 - `THREADS`, at most the spec's N;
-- `STACK_SIZE`, each thread's stack: a multiple of 64 that holds the worker's deepest call path,
-  which `check` computes;
 - `SLOT_SIZE`, each worker's output: a multiple of 64.
 
-Write a function named `worker`. `call parallel_for` with `rdi` = how many workers to run, from 1
-to `THREADS`, and it calls `worker` once for each index, worker 0 on the calling thread:
+Reserve the data `slots`, `THREADS * SLOT_SIZE` bytes with `.balign 64`, and `results`, `THREADS`
+words with `.balign 8`, both in `.bss`. `call parallel_for` with `rdi` = how many workers to run,
+from 1 to `THREADS` (a `cmp` and `ja` to an assertion against `THREADS` comes right before),
+`rsi` = `slots`, `rdx` = `SLOT_SIZE` and `rcx` = `results`, and it calls `worker` once for each
+index, worker 0 on the calling thread. Each other thread has a stack of 1 MiB, less 64 bytes, which
+holds the worker's deepest call path, which `check` computes.
 - `worker` gets its index in `rdi` and its slot, `slots + index * SLOT_SIZE`, in `rsi`. It starts
   with `push rbx` and `mov rbx, rsi` (before any call), and leaves `rbx` alone after that.
 - It returns a 64-bit result in `rax`, which lands in `results[index]`.
 - It and every function it calls write only their own stack frame (`[rsp + …]`, inside what they
   pushed or reserved) and the slot (`[rbx + …]`, inside `SLOT_SIZE`, with the usual bounds
   checks). They read anything, including data the main thread wrote before `parallel_for`.
-- They make no system calls, and only `worker` and its callees call them. Read and write on the
-  main thread, before and after.
+- They call no operation, and only `parallel_for` calls `worker`. Read and write on the main
+  thread, before and after.
 
 No two threads ever write the same byte, so results are the same on every run: combine `results`
 in index order for a reduction (a count, a sum), or lay the slots end to end for a map (each
-worker writes its part of the output, and one `write` prints them all). Assertions 901 to 999 are
-the thread code's; number yours from 1 to 899. The kernel lets a threaded program call `clone`
-only with `parallel_for`'s flags.
+worker writes its part of the output, and one `os_write` prints them all). lengua's own
+assertions are numbered 990 and up; number yours from 1 to 899. The kernel lets a threaded program
+call `clone` only with `parallel_for`'s flags.
 
 Threads pay off when each worker has real work: starting one costs about 10 to 20 microseconds,
 and splitting a fast vector loop over a megabyte saves little. Pick the worker count from the
@@ -254,21 +258,22 @@ jump table (rule 9) picks the case with one bounds check and one jump, whichever
 The counter is set by `mov R, NAME` right before the head label; `NAME`'s value is from 1 to the
 `# bound: N` written after the head label. The loop ends with `dec R` (or `sub R, 1`) right before
 `jnz` (or `jne`) to the head. Enter only through the head, and leave early with forward jumps.
-Nothing in the body changes `R`: `syscall` changes `rax`, `rcx` and `r11`, and `call` changes
+Nothing in the body changes `R`: an operation changes `rax`, `rcx` and `r11`, and `call` changes
 `rax`, `rcx`, `rdx`, `rsi`, `rdi` and `r8` to `r11`, so a loop that calls counts in `rbx` or `r12`
 to `r15`. Every backward jump must be such a loop's end.
 
 One loop may run without a bound, as NASA's rule allows for loops meant never to end: a server's
 loop that takes connections, in a program whose spec says `- Network: listens on TCP port N`, or,
-for a server of several clients at once, its loop around `poll`. Its
+for a server of several clients at once, its loop around `os_poll`. Its
 head label says `# bound: forever` and it closes with an unconditional `jmp` to the head, so it
 provably never ends by itself; leaving early (to exit) uses forward jumps as usual:
 
 ```
-.Lstart_serve:  # bound: forever
-    mov eax, SYS_ACCEPT4
+.Lmain_serve:  # bound: forever
+    mov edi, LISTENING
+    call os_accept
     ... take one connection, answer it, close it ...
-    jmp .Lstart_serve
+    jmp .Lmain_serve
 ```
 
 ### 3. Resources reserved up front
@@ -281,22 +286,23 @@ program touches them, so a 64 MiB buffer for a program that reads up to 64 MiB i
 is allocated or freed while the program runs, so there's no leak, double free or use after free.
 
 The program runs as one thread unless its spec allows threads (`- Threads: up to N`); then it
-starts them only through the canonical `parallel_for` (see "Threads" below). It uses only the
-system calls of what its spec names (`- Uses:` and `- Network:`), which are the capabilities the
-program is granted, and each `syscall`
-is chosen by `mov eax, SYS_NAME` in the same straight-line code (no label or call between). The stack changes only through 64-bit `push` and
+starts them only through lengua's `parallel_for` (see "Threads" below). It calls only the
+operations of what its spec names (`- Uses:` and `- Network:`), which are the capabilities the
+program is granted ([the edge](edge.md) says which each allows), and makes no system call of its
+own. The stack changes only through 64-bit `push` and
 `pop`, `call`, `ret`, and `sub rsp, N` / `add rsp, N`; every path into a line has the same depth,
 and nothing reads or writes below `rsp` (no red zone). `check` checks the deepest stack
-over all call paths.
+over all call paths, lengua's own frames included.
 
 ### 4. Small functions
 
-At most 60 instructions per function (`assert_fail` excluded). One `ret`, reached with the stack
-as it was on entry; `_start` has no `ret` and ends with an exit system call. Calls happen with the
-stack 16-byte aligned: `_start` starts aligned, and other functions start 8 bytes deep (the return
-address), so they move `rsp` by 8 more (`sub rsp, 8`, or one extra `push`) before calling. Calls
-to `assert_fail` don't need alignment. A function that changes `rbx`, `rbp` or `r12` to `r15`
-pushes them first and pops them in reverse order right before its `ret`.
+At most 60 instructions per function. One `ret`, reached with the stack as it was on entry;
+`main` has no `ret` and ends with `call os_exit`. Calls happen with the stack 16-byte aligned:
+every function, `main` too, starts 8 bytes deep (the return address), so it moves `rsp` by 8 more
+(`sub rsp, 8`, or one extra `push`: an odd number of pushes is already aligned) before calling.
+Calls to `assert_fail` don't need alignment. A function that changes `rbx`, `rbp` or `r12` to
+`r15` pushes them first, before anything else, and pops them in reverse order right before its
+`ret`; a `sub rsp, 8` goes after the pushes and its `add rsp, 8` before the pops.
 
 ### 5. Assertions
 
@@ -312,35 +318,39 @@ pushes them first and pops them in reverse order right before its `ret`.
 An assertion is exactly a label, `mov edi, <number from 1 to 999>` and `call assert_fail`. It's
 reached by one jump only: a conditional jump, or a `jmp` right after one (the end of a comparison
 chain, or a loop that ran out). Numbers are unique in the program, and functions average at least
-2 assertions. `assert_fail` prints `lengua: assertion NNN failed` to standard error and exits with
-code 134, which `check` reports as the assertion's line. Copy `assert_fail` and
-`assert_message` from `assets/main-template.s` word for word.
+2 assertions. `assert_fail` is lengua's: it prints `lengua: assertion NNN failed` to standard
+error and exits with code 134, which `check` reports as the assertion's line. Call it, never
+define it; lengua's own assertions are numbered 990 and up.
 
 ### 6. Smallest scope
 
-Only `_start` is exported. `[rip + name]` operands name data symbols, and read-only data is never
+Nothing is exported. `[rip + name]` operands name data symbols, and read-only data is never
 written. Writable data (`.data`, `.bss`) belongs to one function; others receive a pointer and a
 length, unless the data is marked `# shared: <reason>` right above its `.type` line.
 
 ### 7. Checked results
 
-After a system call that returns (not exit), or a call to a function marked `# returns: result`,
-the first instruction that touches `rax` is `test` or `cmp`, directly followed by a conditional
+After an operation (not `os_exit`), or a call to a function marked `# returns: result`, the
+first instruction that touches `rax` is `test` or `cmp`, directly followed by a conditional
 jump, with no label or jump before it:
 
 ```
     call parse_i64
     test rax, rax
-    js .Lstart_not_a_number
+    js .Lmain_not_a_number
 ```
 
-Results follow Linux: `rax` of 0 or more means success, a negative `rax` is an error code. A
-result function returns its value in another register, such as `rdx`.
+An operation's result is 0 or more on success and the negative of one of
+[the edge's errors](edge.md) otherwise, and a result function's `rax` is negative on error too. A
+result function returns its value in another register, such as `rdx`. After a call that reaches
+an operation, a register the operation changes (`rcx`, `r11`) can't be read until something sets
+it; a function that reaches no operation and sets one itself, a third result in `rcx`, gives it
+back.
 
 ### 8. No macros, named constants
 
-No macros, repeats, conditional assembly or includes. Named constants for system call numbers
-(`mov eax, SYS_WRITE` with `.equ SYS_WRITE, 1`), exit statuses (`mov edi, EXIT_USAGE` on every path
+No macros, repeats, conditional assembly or includes. Named constants for descriptors, modes and
+errors (`mov edi, STDOUT` with `.equ STDOUT, 1`), exit statuses (`mov edi, EXIT_USAGE` on every path
 to the exit; 0 to 255, never 134), `.zero` and `.skip` sizes, and loop counts. A constant named
 `NAME_LEN` must equal the size of the data symbol `name`: `USAGE_MSG_LEN` is `usage_msg`'s length.
 
@@ -424,13 +434,13 @@ proof follows every case the index can reach.
 Every address has an owner, and every access stays inside it. `check` follows each register
 through each function: what it holds may be a data symbol's address (from `lea reg, [rip +
 name]`), an address in the function's own frame (from rsp), a pointer the caller lent in a
-register, the program's arguments (which `_start` finds above its stack), a plain number, or a
+register, the program's arguments (which `main` is given: `argv` and `envp`), a plain number, or a
 value it doesn't follow, such as a pointer loaded from memory. Adding a number to an address
 keeps its owner, and so does a call that returns a pointer it was lent. What the rules can't
 settle, the proof checks on every run it covers. Each access must stay inside the buffer, frame
 or argument its pointer was made from, even where the CPU would let it into a neighbour: a
 pointer one step past a buffer's end still belongs to that buffer, even where the next buffer
-starts there. A buffer lent to a system call must hold every byte the call may touch. No return address may be
+starts there. A buffer lent to an operation must hold every byte it may touch. No return address may be
 written, and no stack may be read before something wrote it.
 
 - **M1, owners.** An address is never made from a plain number: no fixed addresses, and no
@@ -439,25 +449,24 @@ written, and no stack may be read before something wrote it.
   through any register, and rule 9's checks bound the whole index. A bit test in memory takes a
   constant offset (`bt qword ptr [rsi], 3`), never a register: with one, it reaches past its
   operand.
-- **M3, lifetimes.** An address in the function's own frame is lent to callees and system calls
+- **M3, lifetimes.** An address in the function's own frame is lent to callees and operations
   in registers only: it's never stored outside the frame or returned. Every access at a constant
   offset from rsp stays inside the frame the function made with `push` and `sub rsp`, never its
-  return address or its caller's frame; only `_start` reads above its frame, where its arguments
-  are.
+  return address or its caller's frame.
 - **M4, exclusive writes.** An address a function writes through is lent to it once: at a call,
   no other register the function uses holds the same address. `lea rdi, [rip + buf]`, then `mov
   rsi, rdi`, then a call to a function that reads rsi and writes rdi, is refused. Separate parts
   of one buffer, such as objects carved from an arena, may be lent together; keeping the parts
   apart is the program's job. `check` works out which registers each function reads and writes
-  through, from its code and what it calls, system calls included. The program's arguments are
+  through, from its code and what it calls, operations included. The program's arguments are
   only read: copy one into a buffer before changing it.
 - **M5, initialization.** No frame byte is read before every path to the read has written it, by
-  a store, a `push`, or a call or system call lent the frame in a register it writes through.
+  a store, a `push`, or a call or operation lent the frame in a register it writes through.
 - **M6, immutability.** Read-only data is never written, through any register, and no memory is
   both writable and executable.
-- **M7, threads.** A worker reaches the per-thread data (`stacks`, `tids`, `results`, `slots`) only
-  through `rbx`, its own slot, with every index bounded by a constant, so no thread writes a byte
-  another thread reads or writes.
+- **M7, threads.** A worker reaches the per-thread data (`results`, `slots`) only through `rbx`,
+  its own slot, with every index bounded by a constant, so no thread writes a byte another thread
+  reads or writes.
 - **M8, stack size.** The deepest path through the program uses at most 1 MiB of stack. Large
   buffers go in `.bss`, sized from the spec's limits.
 

@@ -1,111 +1,42 @@
 # Linux x86-64 reference
 
-## System calls
+What a program calls, the operations and the library functions, is in [the edge](edge.md). This
+page is what is x86-64's: the registers an operation takes, how `main` starts, the calling
+convention and the dialect's forms.
 
-What the spec names under `# Constraints` decides the calls a program may make on this computer:
-`write`, `exit` and `exit_group` always; `read` for `standard input`; `openat`, `read`, `write`,
-`lseek`, `close`, `fstat`, `getdents64`, `mkdirat`, `unlinkat` and `renameat` for `files`; `clock_gettime` and `clock_nanosleep` (to wait) for `the
-clock`; `getrandom` for `random bytes`; none for `the environment`, which is on the stack at the
-start; `read`, `ioctl` and `poll` for `the terminal`; `read`, `close`, `shutdown` and `sendto`
-on the connections lengua makes for `- Network: connects to …`, and on the ones a server takes
-with `accept4` for `- Network: listens on …`, with `poll` for `up to N clients at once`. No
-program opens a socket or connects: the kernel refuses `socket`, `connect` and any other call.
+## Calling an operation
 
-`mov eax, SYS_NAME` picks the call, the arguments go in `rdi`, `rsi`, `rdx`, `r10`, `r8` and `r9`
-(`r10`, not `rcx`), and `syscall` runs it. It returns in `rax` and changes `rcx` and `r11`; every
-other register keeps its value. A result from -4095 to -1 is an error (the negative errno), so
-test it right away with `test rax, rax` and `js`.
+An operation's arguments go in `rdi`, `rsi`, `rdx`, `r10`, `r8` and `r9` (`r10`, not `rcx`), a
+32-bit argument such as a descriptor in the low half (`edi`), and its result comes back in `rax`.
+It changes `rax`, `rcx`, `r11`, the flags and every vector register, and no other register: a
+counter in `rbx` or a pointer in `rsi` is as it was after the call. A result below zero is an
+error, so test it right away with `test rax, rax` and `js`:
 
-| Call | `SYS_` number | Arguments | Result |
-|---|---|---|---|
-| `read` | 0 | `edi` fd, `rsi` buffer, `rdx` count | bytes read, 0 at the end of input, or an error |
-| `write` | 1 | `edi` fd, `rsi` bytes, `rdx` count | bytes written, possibly fewer than asked, or an error |
-| `close` | 3 | `edi` fd | 0 or an error |
-| `lseek` | 8 | `edi` fd, `rsi` offset, `edx` whence (0 start, 1 current, 2 end) | the new offset or an error |
-| `exit` | 60 | `edi` status | doesn't return |
-| `clock_gettime` | 228 | `edi` clock (0 the time of day, 1 a clock that only moves forward), `rsi` 16 bytes for seconds then nanoseconds | 0 or an error |
-| `fstat` | 5 | `edi` an open file, `rsi` 144 bytes for its details: its size is the 8 bytes at 48 | 0 or an error |
-| `getdents64` | 217 | `edi` a folder opened with `O_RDONLY \| O_DIRECTORY` (0x10000), `rsi` a buffer, `rdx` its size | the bytes of entries it filled, 0 at the end, or an error. Each entry: its length in the 2 bytes at 16, its kind at 18 (8 a file, 4 a folder), its NUL-terminated name from 19; `.` and `..` come too, in no set order |
-| `mkdirat` | 258 | `edi` `AT_FDCWD` (-100), `rsi` the folder's name, `edx` its mode, such as 0x1ed (`0755`) | 0, -17 (`EEXIST`) when it's there, or an error |
-| `unlinkat` | 263 | `edi` `AT_FDCWD`, `rsi` the name, `edx` 0 for a file or 0x200 (`AT_REMOVEDIR`) for an empty folder | 0 or an error |
-| `renameat` | 264 | `edi` `AT_FDCWD`, `rsi` the old name, `edx` `AT_FDCWD`, `r10` the new name, which it replaces | 0 or an error |
-| `clock_nanosleep` | 230 | `edi` clock (1, the one that only moves forward), `esi` 0, `rdx` 16 bytes of seconds then nanoseconds to wait, `r10` 0 | 0 or an error |
-| `exit_group` | 231 | `edi` status | doesn't return |
-| `openat` | 257 | `edi` -100 (the current folder), `rsi` NUL-terminated path, `edx` flags, `r10d` mode | a file descriptor or an error |
-| `getrandom` | 318 | `rdi` buffer, `rsi` count, `edx` flags (0) | bytes filled, all of them for up to 256, or an error |
-| `sendto` | 44 | `edi` the connection, `rsi` bytes, `rdx` count, `r10d` 0x4000 (`MSG_NOSIGNAL`), `r8` 0, `r9` 0 | bytes sent or an error |
-| `shutdown` | 48 | `edi` the connection, `esi` 1 to stop sending | 0 or an error |
-| `accept4` | 288 | `edi` 3, `rsi` 0, `rdx` 0, `r10d` 0 | the next connection's file descriptor, or an error |
-| `poll` | 7 | `rdi` a table of 8-byte entries (the descriptor, 4 bytes; the events waited for, 2; the events that came, 2), `esi` how many, `edx` the most milliseconds to wait, -1 for no limit | how many entries have events, 0 when the time ran out, or an error; a negative descriptor is passed over |
-| `ioctl` | 16 | `edi` 0, 1 or 2; `esi` 0x5401 (`TCGETS`) to read the terminal's mode or 0x5402 (`TCSETS`) to set it, with `rdx` its 36 bytes, or 0x5413 (`TIOCGWINSZ`) for the window's rows and columns, 2 bytes each, in `rdx`'s 8 bytes | 0, or -25 (`ENOTTY`) when it isn't a terminal, as in every test; the kernel refuses any other request |
+```
+    mov edi, STDOUT
+    lea rsi, [rip + greeting]
+    mov edx, GREETING_LEN
+    call os_write
+    test rax, rax
+    js .Lmain_write_failed
+```
 
-File descriptors 0, 1 and 2 are standard input, output and error. `openat` flags: `O_RDONLY` 0,
-`O_WRONLY` 1, `O_RDWR` 2, `O_CREAT` 0x40, `O_TRUNC` 0x200, `O_APPEND` 0x400; a mode such as 0o644
-is 420 in decimal. `write` and `read` may move fewer bytes than asked, so loop until done, as the
-template's `write_all` does.
-
-Names: lengua holds every name a program gives `openat`, `mkdirat`, `unlinkat` and `renameat` to
-what every system takes, so a name Windows refuses (`< > : " \ | ? *`, a control character, a
-dot or space at the end, `CON`, `NUL.txt`, `com1` and the other device names, and a short
-name's shape such as `REPORT~1.TXT`, by which Windows can open another file) returns `EINVAL`
-(-22); one that isn't UTF-8 of characters Unicode 9.0 assigned, `EILSEQ` (-84); one past 255
-bytes or a path past 1,023, `ENAMETOOLONG` (-36); a new name that differs only in case from one
-in its folder, `EEXIST` (-17); and renaming or removing a file the program holds open, `EBUSY`
-(-16). A program holds at most 4,352 files open. A folder lists in no set order, and a test
-runs a program that lists one again with the order turned round, so sort entries before
-acting on their order.
-
-The network: a program never connects or binds. lengua makes each connection its spec names
-before the program starts and hands it over, the first `- Network: connects to …` place on file
-descriptor 4, the next on 5, and so on (`.equ CONNECTION, 4`); a server gets its listening socket
-as descriptor 3 and takes each connection with `accept4`. A client sends on its connection with
-`write` or `sendto`, reads until `read` returns 0, when the server has closed its side, and may
-`shutdown` its sending side when it's done. A connection lengua couldn't make comes ended: its
-first `read` gives 0 and its first write fails with `EPIPE` (-32), never a signal, so a client
-that sends first finds a server it can't reach on its first write. A connection `over TLS` is
-plain bytes to the program too: lengua does the TLS. A connection to the computer an argument
-names is made the same way, before the program starts, so the program only reads the argument,
-for its `Host:` line, never to connect. A server reads until it has
-the request, answers, and closes the connection. Data can arrive in pieces, so never assume one
-`read` gets it all.
-
-The terminal: keys one at a time with no echo take the terminal's mode with `TCGETS`, its local
-flags (the 4 bytes at 12) without `ICANON` (2) and `ECHO` (8), `VMIN` (the byte at 23) 1 and
-`VTIME` (at 22) 0, set with `TCSETS`; the mode as found goes back at the end, as
-`assets/terminal-template.s` does. When `TCGETS` fails, as it does in every test, where standard
-input is a pipe, keys come as they are and nothing changes. `poll` on standard input with a time
-waits for the next key, a game's tick when none comes. Arrows and other special keys are escape
-sequences of several bytes, such as 27, 91, 65 for up, and `\033[…` sequences move the cursor,
-clear the screen and color text.
-
-Random bytes and the clock: tests usually supply them in place of the kernel's, so output that
-depends on them can be checked exactly. Draw the random bytes the spec's Purpose says how to use,
-in any batch size: bytes asked for past what a test supplies are zeros, so only the bytes the
-program uses decide its output. Each `clock_gettime` call reads the test's next reading, and the
-last one repeats. Check both results like any call's.
-
-Files: open an input with `openat` (-100, name, `O_RDONLY`), and create or replace an output with
-`O_WRONLY | O_CREAT | O_TRUNC` (0x241) and mode 420; `close` each when done. Name files relative to
-the working folder. The kernel lets a program open files only inside that folder, so any other
-path fails with `EACCES` (-13); a missing file fails with `ENOENT` (-2). Each error is a behavior
-the spec names, with its own exit code.
+`rcx` and `r11` and the vector registers can't be read after the call until something sets them.
+The library's functions (`fill`, `assert_fail`, `parallel_for`) take their arguments by the
+calling convention below, `rcx` fourth.
 
 ## Program start
 
-At `_start` the stack holds the arguments, and `rsp` is 16-byte aligned:
-
-| Address | Holds |
-|---|---|
-| `[rsp]` | `argc`, the number of arguments including the program's path |
-| `[rsp + 8]` | `argv[0]`, the program's path |
-| `[rsp + 16]` | `argv[1]`, the first argument, and so on |
-| `[rsp + 8 * (argc + 1)]` | 0, the end of the list |
-| `[rsp + 8 * (argc + 2)]` | the environment: a pointer to each variable's `NAME=value`, then 0 |
-
-Each argument and variable is a NUL-terminated string, read-only. A program gets environment
-variables only when its spec uses `the environment`, and then only those its test or the user's
-run gives; otherwise the list is empty. lengua runs programs in a working folder of their own: an empty temporary folder, or the user's folder when they ask to run
-the program on their files. `_start` has no return address: it ends with `exit`.
+lengua's `_start` calls `main`, so `main` is entered as a function is: `rdi` holds `argc`, the
+number of arguments including the program's path; `rsi` the address of an array of pointers to
+them, `argv[0]` the program's path, ending in 0; and `rdx` the address of an array of pointers to
+the environment, each variable's `NAME=value`, ending in 0. Each is a NUL-terminated string,
+read-only. `rsp` is 8 bytes off a multiple of 16, the return address: `sub rsp, 8` (or a push)
+before the first call, as in any function. A program gets environment variables only when its spec
+uses `the environment`, and then only those its test or the user's run gives; otherwise the list
+is empty. lengua runs programs in a working folder of their own: an empty temporary folder, or the
+user's folder when they ask to run the program on their files. `main` has nothing to return to: it
+ends with `call os_exit`.
 
 ## Calling convention (System V)
 
@@ -149,8 +80,8 @@ programs are held to the baseline by `tests/baseline.rs`.
   SSE4.2. AVX2 adds 32-byte `ymm` forms (`vpaddb ymm0, ymm1, ymm2`) and AVX-512 64-byte `zmm`
   forms, 32 vector registers and the mask registers `k0` to `k7`; they are fast tiers, and a
   `check` reply's `machine` lists which this CPU has.
-- No vector or mask register is callee-saved: after a `call` they hold anything. System calls keep
-  them.
+- No vector or mask register is callee-saved: after a `call` they hold anything, and an operation
+  changes them all. A vector constant kept across a call is loaded again after it.
 - Spread a byte over a register without data: `mov eax, 0x0a0a0a0a`, `movd xmm1, eax`,
   `pshufd xmm1, xmm1, 0`. With AVX2: `vpbroadcastb ymm1, xmm1`.
 - Find bytes 16 at a time: `pcmpeqb xmm0, xmm1` sets each matching byte to `0xff`, `pmovmskb
