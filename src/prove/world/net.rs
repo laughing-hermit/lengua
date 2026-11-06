@@ -411,8 +411,8 @@ impl World {
     fn accept_polled(host: &mut impl Host, address: u64, length: u64) -> Result<u64, Stop> {
         let world = host.world();
         let peers = world.peers.clone().unwrap_or_default();
-        let waiting = (0..peers.len())
-            .find(|client| peers[*client].steps >= 1 && !world.taken(*client));
+        let waiting =
+            (0..peers.len()).find(|client| peers[*client].steps >= 1 && !world.taken(*client));
         match waiting {
             Some(client) => Self::take_client(host, client, address, length),
             None => Err(host.world().idle()),

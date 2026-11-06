@@ -381,7 +381,9 @@ fn sve_model(
     state.core.last = Last::Other;
     for (word, value) in values.cell.iter().enumerate() {
         let value = pool.bv(64, u128::from(*value));
-        state.core.store(&mut pool, cell_address + 8 * word as u64, value);
+        state
+            .core
+            .store(&mut pool, cell_address + 8 * word as u64, value);
     }
     state.core.rip = start;
     let mut steps = 0;

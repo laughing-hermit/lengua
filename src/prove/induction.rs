@@ -560,10 +560,7 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
                     .ok_or("a run's first buffer-full left no changes")?;
                 (changes, second.stdin_read - snapshot.stdin_read)
             } else {
-                (
-                    run.changes(),
-                    run.world.stdin_taken() - snapshot.stdin_read,
-                )
+                (run.changes(), run.world.stdin_taken() - snapshot.stdin_read)
             };
             if let Some(why) = changes.other.first() {
                 return Err(why.clone().into());

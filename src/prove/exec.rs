@@ -944,7 +944,10 @@ impl State {
             if index > 0
                 && let Some(string) = strings.iter().position(|start| start == word)
             {
-                state.core.pointers.insert(address, Owner::Argument(string + 1));
+                state
+                    .core
+                    .pointers
+                    .insert(address, Owner::Argument(string + 1));
             }
         }
         let convention = Convention::of(image.isa);

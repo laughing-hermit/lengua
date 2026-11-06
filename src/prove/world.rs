@@ -339,8 +339,7 @@ impl World {
     /// much and taken as many of the test's bytes and readings, cut their input the same way,
     /// and written and opened as many files.
     pub(super) fn did_the_same(&self, other: &Self) -> bool {
-        let same_stream =
-            |x: &Rc<Vec<Term>>, y: &Rc<Vec<Term>>| Rc::ptr_eq(x, y) || x[..] == y[..];
+        let same_stream = |x: &Rc<Vec<Term>>, y: &Rc<Vec<Term>>| Rc::ptr_eq(x, y) || x[..] == y[..];
         self.end.is_none()
             && other.end.is_none()
             && same_stream(&self.stdout, &other.stdout)
@@ -651,36 +650,35 @@ impl World {
     /// Flags the model doesn't follow.
     pub(super) fn remove(&mut self, name: String, flags: u64) -> Result<u64, Stop> {
         let inside = format!("{name}/");
-        let errno = match flags {
-            0 if self.file(&name).is_some() => {
-                self.written.remove(&name);
-                self.removed.insert(name);
-                return Ok(0);
-            }
-            0 if self.is_folder(&name) => EISDIR,
-            AT_REMOVEDIR if self.is_folder(&name) => {
-                let holds = self
-                    .files
-                    .keys()
-                    .chain(self.written.keys())
-                    .any(|file| file.starts_with(&inside) && self.file(file).is_some())
-                    || self
-                        .folders_before
-                        .iter()
-                        .chain(&self.made)
-                        .any(|folder| folder.starts_with(&inside) && self.is_folder(folder));
-                if holds {
-                    ENOTEMPTY
-                } else {
-                    self.made.remove(&name);
+        let errno =
+            match flags {
+                0 if self.file(&name).is_some() => {
+                    self.written.remove(&name);
                     self.removed.insert(name);
                     return Ok(0);
                 }
-            }
-            AT_REMOVEDIR if self.file(&name).is_some() => ENOTDIR,
-            0 | AT_REMOVEDIR => ENOENT,
-            other => return Err(unsupported(format!("unlinkat with flags {other:#x}"))),
-        };
+                0 if self.is_folder(&name) => EISDIR,
+                AT_REMOVEDIR if self.is_folder(&name) => {
+                    let holds =
+                        self.files
+                            .keys()
+                            .chain(self.written.keys())
+                            .any(|file| file.starts_with(&inside) && self.file(file).is_some())
+                            || self.folders_before.iter().chain(&self.made).any(|folder| {
+                                folder.starts_with(&inside) && self.is_folder(folder)
+                            });
+                    if holds {
+                        ENOTEMPTY
+                    } else {
+                        self.made.remove(&name);
+                        self.removed.insert(name);
+                        return Ok(0);
+                    }
+                }
+                AT_REMOVEDIR if self.file(&name).is_some() => ENOTDIR,
+                0 | AT_REMOVEDIR => ENOENT,
+                other => return Err(unsupported(format!("unlinkat with flags {other:#x}"))),
+            };
         Ok((-errno).cast_unsigned())
     }
 
