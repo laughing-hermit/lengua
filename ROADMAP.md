@@ -1,9 +1,11 @@
-# lengua's roadmap: six targets, one product
+# lengua's roadmap: five targets, one product
 
-This is how lengua gets from two targets (Linux on x86-64 and ARM64) to six (macOS and Windows on
-each CPU too), and to the finish line set on 2026-11-05: lengua *perfected*, a replacement for
-and an improvement on C, C++ and Rust, faster and leaner than them, the same product on every
-target. The finish line itself, and what is left, are in [todo.md](todo.md). This file holds:
+This is how lengua gets from two targets (Linux on x86-64 and ARM64) to five (macOS on ARM64, and
+Windows on each CPU), and to the finish line set on 2026-11-05: lengua *perfected*, a replacement
+for and an improvement on C, C++ and Rust, faster and leaner than them, the same product on every
+target. macOS on x86-64 was part of it until the owner dropped it on 2026-11-06, since Apple no
+longer makes Intel Macs (todo.md, "Deferred"). The finish line itself, and what is left, are in
+[todo.md](todo.md). This file holds:
 - the decisions the rounds rest on;
 - the design: the OS edge, the broker, the server's OS seams, the toolchains, the sandbox on
   each OS, CI and the performance gate;
@@ -17,7 +19,7 @@ Decided with the owner (2026-11-04):
   small canonical edge, one per target, which lengua supplies, assembles after main.s and checks
   in the executable line by line, as it does its own `assert_fail`, `fill` and `parallel_for`.
   Linux programs moved to it too (round 2).
-  - So six targets need two program texts per program, not six, and the OS layer is written once
+  - So five targets need two program texts per program, not five, and the OS layer is written once
     per target.
   - Each edge is tailored for speed: raw system calls on Linux, libSystem's thinnest wrappers on
     macOS, kernel32 on Windows. CPU code stays tailored per CPU (SSE2/AVX-512, NEON/SVE).
@@ -94,9 +96,8 @@ reverse.
     for command-line programs, is deprecated, and its rules aren't documented.
     - On every OS, the launcher confirms the confinement is in force before it starts a program,
       and otherwise refuses with a reason.
-    - The macOS test jobs run on the newest images GitHub has made generally available (macos-26
-      and macos-26-intel). A change Apple makes then stops runs at once, rather than quietly
-      weakening them.
+    - The macOS test job runs on the newest image GitHub has made generally available (macos-26).
+      A change Apple makes then stops runs at once, rather than quietly weakening them.
 
 ## Design
 
@@ -110,9 +111,9 @@ differently or add.
 
 **Sources.**
 - Two edge files exist, `src/edge/linux-x86_64.s` and `src/edge/linux-aarch64.s`, beside the two
-  OS-neutral CPU libraries, `src/edge/x86_64.s` and `src/edge/aarch64.s`. Four more come:
-  `src/edge/macos-{x86_64,aarch64}.s` in round 3 and `src/edge/windows-{x86_64,aarch64}.s` in
-  round 4. Each is embedded with `include_str!` and gets its arm in `edge::files`.
+  OS-neutral CPU libraries, `src/edge/x86_64.s` and `src/edge/aarch64.s`. Three more come:
+  `src/edge/macos-aarch64.s` in round 3 and `src/edge/windows-{x86_64,aarch64}.s` in round 4.
+  Each is embedded with `include_str!` and gets its arm in `edge::files`.
 - Each OS fact is written once, in its edge file: macOS's errno table, and Windows's offsets and
   each import's DLL. The `.tbd` and `.def` import lists are read from the edge's undefined
   symbols.
@@ -123,7 +124,7 @@ Windows, with no stubs or thunks, and turns what comes back into the closed erro
 - macOS's `errno` and Windows's `GetLastError`/`WSAGetLastError` map through tables in their edge
   files. A test requires each table to cover the whole set.
 - The edges save what their C ABI may change but the calling convention keeps:
-  - on x86-64, rdi, rsi, rdx and r8–r10 on macOS, and rdx and r8–r10 on Windows;
+  - on x86-64 (Windows alone), rdx and r8–r10;
   - on AArch64, x1–x7 and x9–x15 (d8–d15 need no saving: every OS's C ABI keeps them).
 - They realign the stack, add Windows's 32-byte shadow space, and run `vzeroupper` before calling
   the library, on x86-64 with AVX.
@@ -233,8 +234,8 @@ and Windows each add a service of their own beside it, on the same messages.
   - `supervise::AVAILABLE` went with supervise.rs. `Image::linux` and `syscalls::host` stay, as
     Linux's own.
   - `CpuFeatures::baseline` takes an `Isa`.
-- **Profiles.** LinuxX86_64, LinuxAarch64, MacosX86_64, MacosAarch64, WindowsX86_64 and
-  WindowsAarch64. The ARM64 ones are named `macos-aarch64` and `windows-aarch64`.
+- **Profiles.** LinuxX86_64, LinuxAarch64, MacosAarch64, WindowsX86_64 and WindowsAarch64. The
+  ARM64 ones are named `macos-aarch64` and `windows-aarch64`.
 - **Tables.**
   - `PerCpu<T>` and `PerOs<T>` join `PerTarget<T>`. `PerTarget` keeps only what differs per
     CPU-and-OS pair: today `ELSEWHERE` in tests/sessions.rs.
@@ -275,10 +276,10 @@ and Windows each add a service of their own beside it, on the same messages.
 | | link | libraries | a user needs |
 |---|---|---|---|
 | Linux | `ld.lld --fatal-warnings [--no-relax] -e _start`, static ELF | none | llvm and lld |
-| macOS | `ld64.lld -arch x86_64\|arm64 -platform_version macos 11.0 11.0 -e __start -fatal_warnings`; dynamic, LC_MAIN, ad-hoc signed on ARM64 | a minimal libSystem.tbd lengua writes from the edge's imports | LLVM only (llvm-mc and lld, from conda-forge, Homebrew on ARM64, or the release archive); no Xcode, no SDK |
+| macOS | `ld64.lld -arch arm64 -platform_version macos 11.0 11.0 -e __start -fatal_warnings`; dynamic, LC_MAIN, ad-hoc signed | a minimal libSystem.tbd lengua writes from the edge's imports | LLVM only (llvm-mc and lld, from conda-forge, Homebrew, or the release archive); no Xcode, no SDK |
 | Windows | `lld-link /entry:_start /subsystem:console /nodefaultlib /dynamicbase /nxcompat /highentropyva /stack:0x800000 /Brepro /WX /debug:symtab` | kernel32 (+ ws2_32, bcryptprimitives when used), import libraries built by llvm-dlltool from `.def` files lengua writes, cached in the data folder | LLVM's Windows release archive (llvm-mc, lld-link, llvm-dlltool); no Windows SDK |
 
-Triples: `{x86_64,aarch64}-unknown-linux-gnu`, `{x86_64,arm64}-apple-macos11.0`,
+Triples: `{x86_64,aarch64}-unknown-linux-gnu`, `arm64-apple-macos11.0`,
 `{x86_64,aarch64}-pc-windows-msvc`.
 
 - **Lowering** (`src/toolchain/lower.rs`) goes line for line, so reports still name main.s's
@@ -300,15 +301,13 @@ Triples: `{x86_64,aarch64}-unknown-linux-gnu`, `{x86_64,arm64}-apple-macos11.0`,
     maxprot or SG_READ_ONLY, and PE's section flags.
   - Every byte of the text section belongs to a function.
   - Imports are checked as described in §1.
-- **Solvers.** z3 4.16.0 and cvc5 1.3.4 both publish native builds for all six targets
+- **Solvers.** z3 4.16.0 and cvc5 1.3.4 both publish native builds for all five targets
   (checked 2026-11-05; cvc5's include `cvc5-Win64-arm64-static.zip`). Both are pinned by SHA-256
   in `scripts/ci/tools.tsv`.
-- **LLVM on macOS and Windows in CI.** LLVM publishes no Intel macOS archive for 22.1.8, and
-  Homebrew no longer builds Intel bottles for llvm or lld. conda-forge does publish `lld` and
-  `llvm-tools` 22.1.8 for osx-64, osx-arm64, win-64 and win-arm64. So setup installs them there
-  with micromamba (pinned by SHA-256), the same LLVM version the Linux jobs take from
-  apt.llvm.org. Users' installs follow in R6, where shipping llvm-mc and lld in the release
-  archive is weighed.
+- **LLVM on macOS and Windows in CI.** conda-forge publishes `lld` and `llvm-tools` 22.1.8 for
+  osx-arm64, win-64 and win-arm64. So setup installs them there with micromamba (pinned by
+  SHA-256), the same LLVM version the Linux jobs take from apt.llvm.org. Users' installs follow
+  in R6, where shipping llvm-mc and lld in the release archive is weighed.
 
 ### 5. The sandbox on each OS
 
@@ -323,7 +322,7 @@ Triples: `{x86_64,aarch64}-unknown-linux-gnu`, `{x86_64,arm64}-apple-macos11.0`,
 | no core files, no dialogs | RLIMIT_CORE 0 | same | SetErrorMode, no WER, die on an unhandled exception, CREATE_NO_WINDOW |
 | crashes as signal numbers | native | SIGBUS → 11 | access violation and stack overflow → 11, illegal instruction → 4, divide → 8, Ctrl+C → 2, ended by lengua → 9 |
 
-Some behavior is reshaped on every target, so all six keep one promise:
+Some behavior is reshaped on every target, so all five keep one promise:
 - EFBIG replaces SIGXFSZ.
 - The terminal is two operations. On Linux they make the ioctls that `Pin::Terminal` allows, and
   the pin stays.
@@ -361,12 +360,11 @@ stopped list, 2026-11-05).
 - **One workflow, `.github/workflows/ci.yml`.** targets.yml, arm64.yml and unported.yml are
   removed. Its jobs:
   - **format** (ubuntu-24.04): `cargo fmt --check`, with `fmt.patch` as an artifact.
-  - **test**, on six runners: ubuntu-24.04, ubuntu-24.04-arm, macos-26-intel, macos-26,
-    windows-2025 and windows-11-arm. Each runs the whole suite in one job, which took 35 to 62
-    minutes (run 42085247387). Shards were planned and left out: seven test jobs fit the Free
-    plan's concurrent jobs, and a shard split by test would break the proving lock, which is
-    per process.
-    - The macOS jobs use the newest images GitHub has made generally available. They move up a
+  - **test**, on five runners: ubuntu-24.04, ubuntu-24.04-arm, macos-26, windows-2025 and
+    windows-11-arm. Each runs the whole suite in one job, which took 35 to 62 minutes (run
+    42085247387). Shards were planned and left out: six test jobs fit the Free plan's concurrent
+    jobs, and a shard split by test would break the proving lock, which is per process.
+    - The macOS job uses the newest image GitHub has made generally available. It moves up a
       version when a newer one does, so macOS's sandbox tests always gate on the newest macOS.
 
     Each job:
@@ -389,15 +387,15 @@ stopped list, 2026-11-05).
   none).
 - **When it runs.**
   - Pushes to main run it, path-filtered; `wip/**` branches get no push runs.
-  - Dispatch inputs: targets (all six by default); mode (`compile` is clippy plus `cargo test
+  - Dispatch inputs: targets (all five by default); mode (`compile` is clippy plus `cargo test
     --no-run`, about 10 minutes; also `test`, `ignored`, `golden`, `bench` and `release`, the
     last three on Linux x86-64 and Linux ARM64 so far); filter; test_files; check_folder;
     check_target;
     mutate_only; stall_seconds; seed; and, for `golden` and `bench`, golden_base,
     golden_base_run, golden_view and bench_against.
-  - Every week: `test` and `ignored` on all six. From round 3 the same run also covers:
-    - the full suite on the previous macOS images (macos-15, macos-15-intel), because programs
-      are built for older macOS too;
+  - Every week: `test` and `ignored` on all five. From round 3 the same run also covers:
+    - the full suite on the previous macOS image (macos-15), because programs are built for
+      older macOS too;
     - the sandbox tests on any newer macOS image GitHub has in preview. That job only warns,
       and is not part of the gate.
 - **Caches and actions.**
@@ -408,8 +406,8 @@ stopped list, 2026-11-05).
 - **Line endings.** `.gitattributes` (`* text=auto eol=lf`) lands before the first Windows test,
   because GitHub's Windows images would otherwise check out CRLF. A spec's hash normalizes CRLF.
 - **parity_inventory.**
-  - R1 adds `scripts/ci/targets.json`: six runner labels, each needing a native `cargo test` job.
-    parity_inventory and ci.yml's plan job read it.
+  - R1 adds `scripts/ci/targets.json`: a runner label for each target, each needing a native
+    `cargo test` job. parity_inventory and ci.yml's plan job read it.
   - DEBT is empty after R1.
 - **How a round iterates.**
   1. Push `wip/<round>`.
@@ -473,7 +471,7 @@ stopped list, 2026-11-05).
   - Read the Linux clock through the vDSO, as C's `clock_gettime` does.
   - An event-queue op (epoll, kqueue, IOCP) for the 4,096-client server: C servers use them, so
     the gate needs lengua to have them too.
-  - Every row the first six-runner gate run shows level or behind joins this list.
+  - Every row the first five-runner gate run shows level or behind joins this list.
 
 ## Rounds
 
@@ -487,6 +485,9 @@ stopped list, 2026-11-05).
 Nothing ran, since R0 changed documents only; the commit is the record.
 
 ### R1 — six hosts, one workflow, the spikes, the soundness items
+
+Round 1 built and tested all six hosts. macOS on x86-64 was dropped on 2026-11-06, so its answers
+below are the record of what was found, and five hosts remain.
 
 **Goal.**
 - lengua-mcp builds, passes clippy and runs `cargo test --workspace` natively on all six
@@ -656,17 +657,17 @@ The build differs from the plan in these ways:
   `needs`; MACHINE_WORDS' Windows words and AArch64's registers; the model-against-CPU harnesses,
   which still build raw `_start` programs; and a broker for the bench's `run` lines.
 
-### R3 — macOS, x86-64 and ARM64
+### R3 — macOS, ARM64
 
-**Goal.** macos-x86_64 and macos-aarch64 pass the one suite natively, on macos-26-intel and
-macos-26, and also every week on macos-15-intel and macos-15.
+**Goal.** macos-aarch64 passes the one suite natively, on macos-26, and also every week on
+macos-15. (macOS on x86-64 was dropped on 2026-11-06: todo.md, "Deferred".)
 
 **Steps.**
-1. **Profiles.** The two profiles, and `for_target("macos", …)`.
+1. **Profile.** The profile, and `for_target("macos", …)`.
 2. **Toolchain.** `Os::Macos`'s triple, ld64.lld, the tbd writer, and the Mach-O lowering (§4).
    The executable is named `main`.
 3. **decode/macho.rs**, with the read-only checks.
-4. **The edge files, `src/edge/macos-{x86_64,aarch64}.s`.**
+4. **The edge file, `src/edge/macos-aarch64.s`.**
    - LC_MAIN's `_start`, imports through the GOT, register saving, and the errno table.
    - stat → Info. Its offsets are pinned by a test against the libc crate's stat on the runner,
      as `the_host_table_is_the_c_librarys` (syscalls.rs) does today.
@@ -683,22 +684,23 @@ macos-26, and also every week on macos-15-intel and macos-15.
    - Supplies the machine facts and the data folder.
 6. **Left for the owner:** the tests that try to get past the sandbox (todo.md's stopped list,
    2026-11-05).
-7. **Coverage.** The model-against-CPU harnesses on Apple's M1 and on the Intel Mac, once they
-   build through the edge (round 2 left them as raw `_start` programs, which only Linux runs;
-   todo.md, round 2); tests/edge.rs's pseudo-terminal rows.
+7. **Coverage.** The model-against-CPU harness on Apple's M1, once it builds through the edge
+   (round 2 left the harnesses as raw `_start` programs, which only Linux runs; todo.md,
+   round 2); tests/edge.rs's pseudo-terminal rows.
 8. **Docs.** DESIGN's "Porting", README, plugin.json's description, and the skills' machine line.
 
 **Verified by.**
-- `compile`, then a full `test`, on six runners.
-- The gate compares each CPU's verdict tables across Linux and macOS (finish line 2).
-- The mutation test on both macOS runners.
-- `bench` on both, for the record.
+- `compile`, then a full `test`, on five runners.
+- The gate compares ARM64's verdict tables across Linux and macOS (finish line 2).
+- The mutation test on the macOS runner.
+- `bench` on it, for the record.
 
-**Size and risks.** Size L, about 5k lines.
+**Size and risks.** Size L, about 3.5k lines, of which the one edge file is about 1.5k, as each
+of the Linux edge files is.
 - Seatbelt and dyld's shared cache, which has lived under Cryptexes since macOS 13.
 - Mach-O corners: `__bss` zero fill, and tables across sections.
 - The ARM64 macOS runner's 7 GB against memory-heavy proofs.
-- Only 5 macOS jobs at once, and the queue for the Intel runner.
+- Only 5 macOS jobs at once.
 - Seatbelt is deprecated: failing closed and the gate on the newest image are the mitigation.
 
 ### R4 — Windows, x86-64 and ARM64
@@ -739,8 +741,8 @@ windows-11-arm.
    2026-11-05).
 
 **Verified by.**
-- A full `test` on six runners.
-- Verdicts compared across the three OSes of each CPU.
+- A full `test` on five runners.
+- Verdicts compared across the OSes of each CPU (two on x86-64, three on ARM64).
 - The mutation test on both Windows runners.
 
 **Size and risks.** Size XL.
@@ -752,14 +754,14 @@ windows-11-arm.
 ### R5 — the performance finish line
 
 **Steps.**
-- §7's bench, gate and workloads on six runners (the empty program is a workload and also each
+- §7's bench, gate and workloads on five runners (the empty program is a workload and also each
   OS's floor). The gate is enforced in `bench` mode and in the weekly run.
 - The known gaps, closed by A/B runs.
 - BENCHMARKS-<target>.md, generated from the artifacts.
 - README, DESIGN and the bench's own text made true to the runs; "threads on AArch64 come later"
   goes.
 
-**Verified by.** The gate is green on six runners and KNOWN_BEHIND is empty.
+**Verified by.** The gate is green on five runners and KNOWN_BEHIND is empty.
 
 ### R6 — prover parity, the leftovers, documents, release
 
@@ -783,14 +785,14 @@ windows-11-arm.
   - The one-folder check's 60 s budget against fast/wc's 231 s proof.
   - DESIGN's AArch64 instruction list.
   - test-format's float wording.
-- **Release archives for six hosts.**
+- **Release archives for five hosts.**
   - scripts/release.sh and install.sh per OS, packed as tar.gz, or zip on Windows.
   - mcp.json names lengua-mcp.exe on Windows.
   - `release` mode builds, installs and checks each one on its own runner. They are unsigned.
 - **A last pass** over DESIGN, the white paper and the plugin README.
 
-**Verified by.** The full suites, the mutation tests, both goldens and `release` mode, green on six
-runners.
+**Verified by.** The full suites, the mutation tests, both goldens and `release` mode, green on
+five runners.
 
 ## Verification
 
@@ -801,7 +803,7 @@ runners.
   2. the filtered tests;
   3. the full suite on the round's runners;
   4. from R2 on, also the mutation test, the goldens and the bench, as each round names them.
-- **The finish line** is one dispatched `ci.yml` run on all six runners, in modes test, ignored,
+- **The finish line** is one dispatched `ci.yml` run on all five runners, in modes test, ignored,
   bench and release, with everything green:
   - the suites, including the edge's conformance table and the mutation test;
   - the gate job's verdict comparison across the three OSes of each CPU;

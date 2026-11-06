@@ -6,12 +6,13 @@ Knowledge Format, naming no CPU or OS; the agent compiles it to `main.s` for the
 checks the code against the rules, tests it, proves it, and runs it confined. The product is an
 Agent Plugin, skills and one Rust MCP server only, so it runs in any agent harness.
 
-**Where lengua stands (2026-11-06).** Two of the six targets are done: Linux on x86-64 and Linux on
+**Where lengua stands (2026-11-06).** Two of the five targets are done: Linux on x86-64 and Linux on
 ARM64, one product held by one suite, every program reaching the OS only through lengua's edge,
 and the mutation test passes on both (run 42178888801).
-The other four, macOS and Windows each on x86-64 and on
+The other three, macOS on ARM64 and Windows on x86-64 and on
 ARM64, build with clippy clean and pass every test that runs no program, on their own runners, and
-run no program yet (the table under "Where each stands"). The record of the finished work is in
+run no program yet (the table under "Where each stands"). The owner dropped macOS on x86-64 the
+same day: Apple stopped making Intel Macs, and the target's test machine is ending ("Deferred"). The record of the finished work is in
 the git history, DESIGN.md, README.md, SESSIONS.md and the BENCHMARKS files.
 
 **How the work is done.**
@@ -40,21 +41,22 @@ free runners, whose id is written in the table below, and by nothing else.
    - Program folders are the nodes of a knowledge graph and a spec's `Builds on` links are its
      edges, with an `index.md` listing a folder of nodes; `check` holds the graph to the code.
      Indexing other files in the graph is not designed yet ("Deferred" below).
-2. **Six targets, one product.** Linux, macOS and Windows on x86-64 and ARM64 each pass the one
-   conformance suite natively, on their own runner. The suite covers:
+2. **Five targets, one product.** Linux on x86-64 and ARM64, macOS on ARM64 and Windows on x86-64
+   and ARM64 each pass the one conformance suite natively, on their own runner. The suite covers:
    - the rules and memory rules, and the sandbox's limits;
    - the edge's conformance table;
    - every example, fixture and template, through the server;
    - the network and terminal flows, and the server's session flow;
    - the prover's tests and the mutation test.
 
-   `tests/parity_inventory.rs` requires a native `cargo test` job on all six runners, and refuses
+   `tests/parity_inventory.rs` requires a native `cargo test` job on all five runners, and refuses
    any test file made for one target. Every shipped program has one text per CPU, the same
    main.s on Linux, macOS and Windows, from one byte-identical spec, with a baseline form (no
    optional CPU extension) and its named fast tiers. Across the targets:
    - no target finds a counterexample another doesn't;
-   - each proof line has the same verdict on the three targets of its CPU. Where a line's time
-     budget cuts it short, the verdict is the same kind: proven, or bounded to a length.
+   - each proof line has the same verdict on the targets of its CPU (two on x86-64, three on
+     ARM64). Where a line's time budget cuts it short, the verdict is the same kind: proven, or
+     bounded to a length.
 3. **Tailored to each CPU and OS for speed.** main.s is written for the CPU: the widest vectors it
    has (AVX-512, AVX2, NEON, SVE) as named fast tiers, each beside a baseline form that runs on
    every machine of that CPU. The edge, which main.s calls for everything that reaches the OS, is
@@ -95,20 +97,20 @@ free runners, whose id is written in the table below, and by nothing else.
    "Deferred" below says what would bring each in.
 6. **Truthful documents.** README, DESIGN, BENCHMARKS and the white paper say what the runs show,
    per target, and nothing more.
-7. **Shippable.** A release archive for each of the six hosts builds, installs and passes its
+7. **Shippable.** A release archive for each of the five hosts builds, installs and passes its
    check in CI, driven through a plain MCP client. The archives are unsigned, and the owner
    publishes them.
 
 **Where each stands.** Updated as rounds merge, with the run that shows it. First by target, from
 run 42192900115 (2026-11-06, main at aa30020; run 42178871938 on the branch counted the same;
-libtest counts a test that notes why it did nothing as passed):
+libtest counts a test that notes why it did nothing as passed; the run also had macOS on x86-64,
+550 passed with 122 that did nothing, before that target was dropped):
 
 | target | runner | suite | programs run | against C, C++ and Rust | archive |
 |---|---|---|---|---|---|
 | Linux x86-64 | ubuntu-24.04 | 569 passed | yes | BENCHMARKS.md (the owner's computer, 2026-11-02) | built |
 | Linux ARM64 | ubuntu-24.04-arm | 565 passed | yes | BENCHMARKS-aarch64.md (the runner) | built |
-| macOS x86-64 | macos-26-intel | 550 passed, 122 of them did nothing: no program runs yet | round 3 | round 5 | round 6 |
-| macOS ARM64 | macos-26 | 548 passed, 120 of them did nothing | round 3 | round 5 | round 6 |
+| macOS ARM64 | macos-26 | 548 passed, 120 of them did nothing: no program runs yet | round 3 | round 5 | round 6 |
 | Windows x86-64 | windows-2025 | 544 passed, 120 of them did nothing | round 4 | round 5 | round 6 |
 | Windows ARM64 | windows-11-arm | 542 passed, 118 of them did nothing | round 4 | round 5 | round 6 |
 
@@ -116,20 +118,21 @@ Then by finish-line point:
 
 | | now | what's left |
 |---|---|---|
-| 1. AI language, Agent Plugin | On Linux x86-64 and Linux ARM64: both skills, `check` and `run`, the spec format, the `Builds on` graph. On the other four the server builds and the tests that run no program pass, but no program runs. | The release check through a plain MCP client on every target (round 6). Knowledge-graph indexing past program folders: not designed. |
-| 2. Six targets | Linux x86-64 and Linux ARM64 pass the whole suite natively. The other four pass every test that runs no program (the table above). | Programs running on macOS (round 3) and Windows (round 4). |
+| 1. AI language, Agent Plugin | On Linux x86-64 and Linux ARM64: both skills, `check` and `run`, the spec format, the `Builds on` graph. On the other three the server builds and the tests that run no program pass, but no program runs. | The release check through a plain MCP client on every target (round 6). Knowledge-graph indexing past program folders: not designed. |
+| 2. Five targets | Linux x86-64 and Linux ARM64 pass the whole suite natively. The other three pass every test that runs no program (the table above). | Programs running on macOS (round 3) and Windows (round 4). |
 | 3. Tailored | CPU tiers for x86-64 and ARM64, each with a baseline form beside it. For the OS, every Linux program reaches it only through lengua's edge: 21 operations in `src/edge/linux-x86_64.s` and `linux-aarch64.s`; no edge exists yet for macOS or Windows. | An edge for macOS (round 3) and for Windows (round 4). |
-| 4. Faster, leaner | Measured on Linux x86-64 and Linux ARM64 (the table above): most rows ahead, some level, none gated. The other four are not measured. | The gate on all six runners (round 5). |
+| 4. Faster, leaner | Measured on Linux x86-64 and Linux ARM64 (the table above): most rows ahead, some level, none gated. The other three are not measured. | The gate on all five runners (round 5). |
 | 5. A replacement | Scope written in DESIGN. | Prover reach (round 6). |
 | 6. Truthful documents | README and DESIGN state the stricter bar and name the targets each claim covers. | A last pass (round 6). |
-| 7. Shippable | Archives for Linux x86-64 and Linux ARM64. | The other four hosts (round 6). |
+| 7. Shippable | Archives for Linux x86-64 and Linux ARM64. | The other three hosts (round 6). |
 
 ## Roadmap (2026-11-05)
 
 0. **Documents: done 2026-11-05.** This file, README's benchmark claim, DESIGN's performance bar,
    and ROADMAP.md.
-1. **Six hosts, one workflow: done 2026-11-05** (run 42085247387, commit 43c63ea).
-   - lengua-mcp builds and runs `cargo test --workspace` natively on all six runners, from one
+1. **Six hosts, one workflow: done 2026-11-05** (run 42085247387, commit 43c63ea; the owner
+   dropped macOS on x86-64 on 2026-11-06, so five remain).
+   - lengua-mcp builds and runs `cargo test --workspace` natively on all five runners, from one
      `ci.yml` (whose suites take 35 to 62 minutes, so it isn't sharded).
    - The OS seams are backends keyed by target (`src/os/`: Linux's, and one for the systems that
      can't run a program yet), and the tables are keyed by CPU (`PerCpu`, `PerTarget`; `PerOs`
@@ -149,17 +152,17 @@ Then by finish-line point:
      clock, random bytes, sleeps and waits, and does only what the program's spec allows.
    - The benchmarks are level with the pre-edge build but for two gaps, in round 5's list: the
      ARM64 histogram, and the executables' size.
-3. **macOS, on x86-64 and ARM64:** libSystem through the GOT, Mach-O, Seatbelt, tested on the
-   newest macOS images.
+3. **macOS, on ARM64:** libSystem through the GOT, Mach-O, Seatbelt, tested on the newest macOS
+   image.
 4. **Windows, on x86-64 and ARM64:** kernel32 through the IAT, PE, an LPAC AppContainer and a
    job.
 5. **Performance:**
-   - the bench on six runners, with a gate that passes only where lengua is ahead on every
+   - the bench on five runners, with a gate that passes only where lengua is ahead on every
      workload and measure;
    - sort, a word tally, servers, many files and the clock as workloads;
    - the known gaps below.
 6. **The rest:** prover parity across CPUs, the small items, the documents, and release
-   archives for six hosts.
+   archives for five hosts.
 
 [ROADMAP.md](ROADMAP.md) lists the decisions the rounds rest on:
 - the owner's of 2026-11-04 (a shared edge per OS; unsafe code only in one small binding crate;
@@ -384,12 +387,14 @@ What round 2 left:
 - **Launcher services for compression and a GUI.** Each would be one definition that every OS
   must provide outside the program, as lengua does TLS; a GUI is a product of its own. Not
   designed yet.
-- **macOS on x86-64 once GitHub's Intel runners end.**
-  - In September 2025, GitHub said x86-64 macOS support ends after the macOS 15 image retires in
-    fall 2027.
-  - In February 2026 it added `macos-26-intel`.
-  - macOS 26 is Apple's last release for Intel Macs.
-  - Rosetta 2 on the ARM64 runner is the option to weigh.
+- **macOS on x86-64: dropped from the targets by the owner on 2026-11-06.**
+  - Apple sold its last Intel laptop in 2021 and its last Intel Mac in June 2023; macOS 26 is the
+    last release for Intel Macs, and macOS 27 needs Apple silicon.
+  - GitHub said in September 2025 that x86-64 macOS support ends after the macOS 15 image retires
+    in fall 2027. It added `macos-26-intel` in February 2026, the only Intel runner lengua used.
+  - What would bring it back is a reason to run lengua programs on an Intel Mac. Rosetta 2 runs
+    x86-64 programs on Apple silicon, in full through macOS 27 and for old games only after, so
+    the ARM64 runner could test one while it lasts.
 - **A row the gate can't decide.** The finish line is "ahead everywhere", with nothing excused.
   Some costs every language pays alike: macOS's dyld and libSystem start, the copy through a
   pipe, an open, libSystem's clock, and executable sizes that round to a page. Where one of those

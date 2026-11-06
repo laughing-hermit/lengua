@@ -31,8 +31,8 @@ optimizer would rewrite the instructions the prover just checked.
   server build per host OS (its runner + the shared backends); a selector picks the host's build;
   the skills (markdown) are the same everywhere.
 - **No hardware needed to build or test a target.** Rust cross-compiles the server (bar the
-  Linux-only confinement); CI runners are real Linux, macOS (Apple silicon included) and Windows
-  machines; QEMU runs Linux ARM64 locally.
+  Linux-only confinement); CI runners are real Linux and Windows machines and Apple-silicon Macs;
+  QEMU runs Linux ARM64 locally.
 
 ## What a new target profile must supply
 
@@ -83,8 +83,7 @@ same on every system it runs on. `CpuFeatures::baseline(isa)` names it, and the 
 stops compiling until a new CPU has one; a new system on a CPU lengua already has takes that CPU's
 set. Choose the lowest set that every machine the CPU's systems run on has, and write down why:
 - Linux on x86-64: SSE2, which every x86-64 CPU has, with SSE3, SSSE3, SSE4.1, SSE4.2 and POPCNT.
-  Windows 11 24H2 requires SSE4.2 and POPCNT, and every GitHub runner and every Intel Mac has
-  them. BMI1, BMI2, LZCNT, AVX, AVX2, AVX-512, AES-NI, SHA and PCLMULQDQ are not in it.
+  Windows 11 24H2 requires SSE4.2 and POPCNT, and every GitHub runner has them. BMI1, BMI2, LZCNT, AVX, AVX2, AVX-512, AES-NI, SHA and PCLMULQDQ are not in it.
 - Linux on AArch64: ARMv8.0-A with NEON and floating point, and nothing optional: no CRC-32, PMULL,
   AES, SHA-1 or SHA-2, LSE atomics or SVE. macOS and Windows on ARM64 take this same set; changing
   it, with the owner, changes it on every system.
@@ -134,6 +133,6 @@ each item with its own hardware's means.
   reference](aarch64.md)); its fast `wc` is proven for every length with a 64 KiB buffer,
   as x86-64's is. Each example and fixture has its twin on the other CPU, compiled from the very
   same spec (`every_program_has_its_twin_on_the_other_cpu`, `tests/every_program.rs`).
-- **macOS (ARM64, x86-64)** and **Windows (x86-64, ARM64)** need all six, the OS edge and the
+- **macOS (ARM64)** and **Windows (x86-64, ARM64)** need all six, the OS edge and the
   sandbox most of all: their edges call the system library where those systems forbid direct
   system calls, and each confines a program by its own means.

@@ -100,7 +100,7 @@ static BUILD_REFUSALS: PerCpu<&[Refusal]> = PerCpu {
 /// The target another computer compiled main.s for: another OS on the other CPU.
 static ELSEWHERE: PerTarget<&str> = PerTarget {
     linux_x86_64: "macos-aarch64",
-    linux_aarch64: "macos-x86_64",
+    linux_aarch64: "windows-x86_64",
 };
 
 /// The negative of 1234567 comes out one too big: one input in 18 quintillion, which the tests'

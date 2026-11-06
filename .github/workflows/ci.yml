@@ -1,12 +1,13 @@
 name: ci
 
-# lengua built and tested natively on all six targets, on GitHub's free runners (the repository is
-# public): Linux, macOS and Windows, each on x86-64 and ARM64. scripts/ci/targets.json names the six
-# runners; scripts/ci/tools.tsv pins what they install; scripts/ci/setup.sh installs it.
+# lengua built and tested natively on all five targets, on GitHub's free runners (the repository is
+# public): Linux on x86-64 and ARM64, macOS on ARM64 (Apple stopped making Intel Macs), and Windows
+# on x86-64 and ARM64. scripts/ci/targets.json names the five runners; scripts/ci/tools.tsv pins
+# what they install; scripts/ci/setup.sh installs it.
 #
-# - A push to a branch runs the suite on all six (a branch named wip/... gets no push run: its
+# - A push to a branch runs the suite on all five (a branch named wip/... gets no push run: its
 #   author dispatches the run it wants, so work in progress doesn't cost a long suite per push).
-# - Every week it runs the suite and the slow ignored tests on all six.
+# - Every week it runs the suite and the slow ignored tests on all five.
 # - A dispatch picks the targets and the mode: compile (clippy and the tests built), test (the
 #   suite), ignored (the slow ignored tests, optionally one folder's check), golden (the checker's
 #   and the prover's recordings of every program, made at two commits and compared), bench (lengua
@@ -170,7 +171,7 @@ jobs:
             matrix=$(jq -c --argjson legs "$legs" \
               '[.[] | select(.target == "linux-x86_64") as $t | $legs[] | $t + . + {mode: "golden", base: $t.target, qemu: false, depth: 0}]' <<< "$listed")
           fi
-          # The suite on x86-64 Linux with QEMU's user mode, beside the six.
+          # The suite on x86-64 Linux with QEMU's user mode, beside the five.
           if [ "$MODE" = test ] && { [ -z "$TARGETS" ] || [ "$TARGETS" = all ] || [[ ",$TARGETS," == *,qemu,* ]]; }; then
             matrix=$(jq -c '. + [{target: "linux-x86_64-qemu", runner: "ubuntu-24.04", mode: "test", base: "linux-x86_64", qemu: true, ref: "", label: "", depth: 1}]' <<< "$matrix")
           fi

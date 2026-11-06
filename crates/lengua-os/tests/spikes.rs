@@ -124,25 +124,14 @@ fn spike_a_4096_byte_write_is_read_whole() {
     println!("SPIKE pipe: two writes of 1,000 bytes, one read got {got} bytes");
 }
 
-#[cfg(target_os = "macos")]
+// lengua's one macOS target is Apple silicon: Apple stopped making Intel Macs in 2023.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod macos {
     use super::*;
 
-    const ARCH: &str = if cfg!(target_arch = "aarch64") {
-        "arm64"
-    } else {
-        "x86_64"
-    };
-    const HELLO: &str = if cfg!(target_arch = "aarch64") {
-        include_str!("../spikes/macos-aarch64-hello.s")
-    } else {
-        include_str!("../spikes/macos-x86_64-hello.s")
-    };
-    const CRASH: &str = if cfg!(target_arch = "aarch64") {
-        include_str!("../spikes/macos-aarch64-crash.s")
-    } else {
-        include_str!("../spikes/macos-x86_64-crash.s")
-    };
+    const ARCH: &str = "arm64";
+    const HELLO: &str = include_str!("../spikes/macos-aarch64-hello.s");
+    const CRASH: &str = include_str!("../spikes/macos-aarch64-crash.s");
     const LIBSYSTEM: &str = include_str!("../spikes/libSystem.tbd");
 
     /// Builds `source` into `dir/name` with LLVM's tools alone and a hand-written stub of libSystem:
@@ -189,7 +178,7 @@ mod macos {
     /// and says so.
     fn start(dir: &Path, program: &Path) -> Output {
         let first = Command::new(program).output().expect("a start");
-        if first.status.code().is_some() || cfg!(target_arch = "x86_64") {
+        if first.status.code().is_some() {
             return first;
         }
         println!(
@@ -238,14 +227,12 @@ mod macos {
         let hello = build(&dir, "hello", HELLO);
         // An ARM64 program must be signed to run at all: signed here, so that what ends the
         // crashing one is its fault and not the missing signature.
-        if cfg!(target_arch = "aarch64") {
-            for program in [&crash, &hello] {
-                must(
-                    &dir,
-                    "codesign",
-                    &["--force", "-s", "-", &program.to_string_lossy()],
-                );
-            }
+        for program in [&crash, &hello] {
+            must(
+                &dir,
+                "codesign",
+                &["--force", "-s", "-", &program.to_string_lossy()],
+            );
         }
         for _ in 0..3 {
             let began = std::time::Instant::now();

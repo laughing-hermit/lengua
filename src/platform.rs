@@ -366,8 +366,8 @@ impl CpuFeatures {
     /// program to it.
     ///
     /// - Linux on x86-64: SSE2, which every x86-64 CPU has, with SSE3, SSSE3, SSE4.1, SSE4.2 and
-    ///   POPCNT. Windows 11 24H2 requires a CPU with SSE4.2 and POPCNT, and every Intel Mac and
-    ///   every GitHub runner has them. BMI1, BMI2, LZCNT, AVX and what follows are not in it.
+    ///   POPCNT. Windows 11 24H2 requires a CPU with SSE4.2 and POPCNT, and every GitHub runner
+    ///   has them. BMI1, BMI2, LZCNT, AVX and what follows are not in it.
     /// - Linux on AArch64: ARMv8.0-A with NEON and floating point, and nothing optional: no
     ///   CRC-32, PMULL, AES, SHA-1 or SHA-2, atomics (LSE) or SVE.
     ///

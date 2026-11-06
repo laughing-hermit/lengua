@@ -211,8 +211,8 @@ rules, tests and proof engine on both, with each CPU's own instruction model. Ev
 has a twin on the other CPU, compiled from the very same spec, and both pass the same checks. In
 real interactive sessions of Claude Code with the plugin, programs come from one plain request:
 in the suites of 2026-11-02, all twelve requests on each Linux target, from a wc to an HTTPS
-fetch to a multi-client server, gave a program that passed every check (SESSIONS.md). The top four other
-targets, macOS and Windows on x86-64 and ARM64, are next, each held to every limit the others have.
+fetch to a multi-client server, gave a program that passed every check (SESSIONS.md). The other three
+targets, macOS on ARM64 and Windows on x86-64 and ARM64, are next, each held to every limit the others have.
 
 lengua is an Agent Plugin: two skills and one MCP server, using only open standards, so it works
 in Claude Code and other agent harnesses alike.

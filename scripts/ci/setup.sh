@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# For CI: installs what a job needs, the same way on all six runners (it runs under Git Bash on
+# For CI: installs what a job needs, the same way on all five runners (it runs under Git Bash on
 # Windows). Usage: bash scripts/ci/setup.sh <target> <step>...
 #
 # Steps:

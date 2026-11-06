@@ -16,7 +16,7 @@ lengua is an [Agent Plugin](https://agent-plugins.org): two skills and an MCP se
 open standards, so it works in Claude Code, Codex, Cursor and other agent harnesses.
 
 > Status: dialect 4 on Linux x86-64 and Linux ARM64, with memory rules that check every address has an owner and
-> stays inside it. macOS and Windows, each on x86-64 and ARM64, build and pass every test that
+> stays inside it. macOS on ARM64 and Windows on x86-64 and ARM64 build and pass every test that
 > runs no program, and run no program yet ([todo.md](todo.md)). It covers whole numbers, exact decimals, floating point in double and single
 > precision with fused multiply-add, vectors from SSE2 to AVX-512 and from NEON to SVE,
 > hashing and checksums, files
@@ -47,8 +47,8 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 
 ## Requirements
 
-- Linux on x86-64 or ARM64 (AArch64); macOS and Windows are the roadmap's rounds 3 and 4
-  ([todo.md](todo.md))
+- Linux on x86-64 or ARM64 (AArch64); macOS on Apple silicon and Windows are the roadmap's rounds
+  3 and 4 ([todo.md](todo.md)). Intel Macs are not a target: Apple no longer makes them.
 - A kernel with Landlock on, which every run needs: Linux 5.13 or newer, and 6.12 or newer for a
   program that uses the network. lengua won't run a program without it.
 - Rust 1.89 or newer (to build the server)
@@ -229,7 +229,7 @@ Where lengua isn't ahead:
   other, with CPU time from 0.96× to 2.09× less.
 - **The CRC-32C on ARM64.** On GitHub's ARM64 runner, it takes more wall time than C++ (0.7×).
 
-The roadmap in [todo.md](todo.md) closes these gaps and gates speed on all six targets.
+The roadmap in [todo.md](todo.md) closes these gaps and gates speed on all five targets.
 
 ## Develop
 
