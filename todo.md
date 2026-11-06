@@ -213,7 +213,8 @@ plan is ROADMAP.md's R2). Done, with the runs that show it:
   tests on both Linux CPUs and passed everything else: all five were stale expectations in the
   tests (two pinned system-call lists without `sendmsg` and `recvmsg`, two checker tests that
   counted 26 functions in lengua's text, one AArch64 thread fixture's immediate), fixed in
-  `wip/r2-6d`; its full run on six runners is 42158417211.
+  `wip/r2-6d`; its full run on six runners, 42158417211, passed on all six native jobs (the QEMU
+  job fails as listed below).
 - **8a, on `wip/r2-8a`**: the ptrace supervisor and the tests only it served are deleted; a write
   past a test's file limit is a short write and then `EFBIG` (the launcher ignores SIGXFSZ,
   through the `lengua-os` crate's first function); the checker no longer reads the inline form
@@ -238,7 +239,10 @@ Decided while building (the owner's to reverse):
 Still to do in round 2: the full suites on six runners at the 8a tip, the mutation test, the
 golden ledger against `e4163d4`, the bench against it, and the merge to main.
 
-- **The QEMU job's seven failing cases** (run 42085247387: 528 passed, 7 failed). In
+- **The QEMU job's seven failing cases** (run 42085247387: 528 passed, 7 failed; in run
+  42158417211, with the broker serving names and supplies under QEMU, the same seven fail and one
+  more: `the_streaming_filter_is_proven_for_every_length`, whose proof ran out of time at 4,001
+  bytes on the loaded emulated job and so lacked "by induction"). In
   `tests/programs.rs`: `a_program_gets_only_the_environment_its_test_or_run_gives`,
   `a_program_lists_its_folder_and_deletes_inside_it`,
   `a_program_makes_folders_and_moves_files_inside_its_own`, `small_ranges_run_every_value`,
