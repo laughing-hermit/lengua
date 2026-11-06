@@ -174,7 +174,7 @@ impl Cpu<'_> {
             self.state.registers[slot] = self.pool.bv(64, u128::from(*value));
             self.state.owners[slot] = None;
         }
-        let step = self.perform(Some(call), number);
+        let step = self.perform(Some(call), u128::from(number));
         for (slot, term, owner) in kept {
             self.state.registers[slot] = term;
             self.state.owners[slot] = owner;

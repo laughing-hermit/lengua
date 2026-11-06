@@ -3695,7 +3695,7 @@ impl<'a> Cpu<'a> {
     /// What the kernel does for `call`, which the program made with `raw` as its number, with
     /// its arguments in the registers: the same for a system call and for an operation of
     /// lengua's that is one.
-    fn perform(&mut self, call: Option<Call>, raw: u64) -> Result<Step, Stop> {
+    fn perform(&mut self, call: Option<Call>, raw: u128) -> Result<Step, Stop> {
         let convention = Convention::of(self.image.isa);
         let arguments = convention.arguments.map(|slot| self.state.registers[slot]);
         let (rdi, rsi, rdx) = (arguments[0], arguments[1], arguments[2]);
