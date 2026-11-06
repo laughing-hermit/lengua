@@ -470,7 +470,7 @@ async fn every_program_in_the_repository_follows_every_rule() {
         } else {
             features
         };
-        let report = check_full(&text, features, &spec.syscalls, spec.threads).await;
+        let report = check_allowing(&text, features, &spec.syscalls, &spec.ops, spec.threads).await;
         if !report.passed() {
             let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
             failed.push(format!("{}: {all:#?}", code.display()));
