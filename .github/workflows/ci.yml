@@ -428,7 +428,9 @@ jobs:
           # The base's: from this run, or from an earlier one whose recordings are reused.
           gh run download "${BASE_RUN:-$RUN}" --pattern 'golden-base-*' --dir golden/base
 
+      # `shell: bash` runs with pipefail, so that the script's exit decides the job and not tee's.
       - name: Compare
+        shell: bash
         env:
           VIEW: ${{ inputs.golden_view }}
         run: bash scripts/ci/golden-diff.sh "$VIEW" golden/base golden/head | tee -a "$GITHUB_STEP_SUMMARY"
