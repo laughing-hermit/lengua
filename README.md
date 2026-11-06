@@ -16,8 +16,8 @@ lengua is an [Agent Plugin](https://agent-plugins.org): two skills and an MCP se
 open standards, so it works in Claude Code, Codex, Cursor and other agent harnesses.
 
 > Status: dialect 4 on Linux x86-64 and Linux ARM64, with memory rules that check every address has an owner and
-> stays inside it. Windows and Mac reach it through WSL 2, Docker or a Linux VM (see "Windows and
-> Mac" below; [todo.md](todo.md)). It covers whole numbers, exact decimals, floating point in double and single
+> stays inside it. Windows and Mac will reach it through the lengua image, run by Docker or Podman
+> (planned; see "Windows and Mac" below and [todo.md](todo.md)). It covers whole numbers, exact decimals, floating point in double and single
 > precision with fused multiply-add, vectors from SSE2 to AVX-512 and from NEON to SVE,
 > hashing and checksums, files
 > and folders, environment variables, fork-join threads, waiting, the clock and random bytes
@@ -48,7 +48,8 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 ## Requirements
 
 - Linux on x86-64 or ARM64 (AArch64), with glibc 2.39 or newer: Ubuntu 24.04, Debian 13 or Fedora
-  40 and later. On Windows or a Mac, use WSL 2, Docker or a Linux VM ("Windows and Mac" below).
+  40 and later. On Windows or a Mac, use a Linux ("Windows and Mac" below): the lengua image under
+  Docker or Podman once it exists, WSL 2 or a Linux VM until then.
 - A kernel with Landlock on, which every run needs: Linux 5.13 or newer, and 6.12 or newer for a
   program that uses the network. lengua won't run a program without it. `cat
   /sys/kernel/security/lsm` should list `landlock`.
