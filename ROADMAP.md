@@ -1,28 +1,30 @@
-# lengua's roadmap: five targets, one product
+# lengua's roadmap: two targets, one product
 
-This is how lengua gets from two targets (Linux on x86-64 and ARM64) to five (macOS on ARM64, and
-Windows on each CPU), and to the finish line set on 2026-11-05: lengua *perfected*, a replacement
-for and an improvement on C, C++ and Rust, faster and leaner than them, the same product on every
-target. macOS on x86-64 was part of it until the owner dropped it on 2026-11-06, since Apple no
-longer makes Intel Macs (todo.md, "Deferred"). The finish line itself, and what is left, are in
+lengua has two targets, Linux on x86-64 and Linux on ARM64. This roadmap began as the plan for six
+(macOS and Windows on each CPU too). On 2026-11-06 the owner dropped macOS on x86-64, since Apple
+no longer makes Intel Macs, and then decided that the native macOS and Windows ports wait: Windows
+reaches lengua through WSL 2 or Docker, and a Mac through a Linux VM or Docker (todo.md,
+"Deferred"). What this file holds is the way to the finish line set on 2026-11-05: lengua
+*perfected*, a replacement for and an improvement on C, C++ and Rust, faster and leaner than them,
+the same product on both targets. The finish line itself, and what is left, are in
 [todo.md](todo.md). This file holds:
 - the decisions the rounds rest on;
-- the design: the OS edge, the broker, the server's OS seams, the toolchains, the sandbox on
-  each OS, CI and the performance gate;
+- the design: the OS edge, the broker, the server's OS seams, the toolchains, the sandbox, CI and
+  the performance gate, with the macOS and Windows parts kept as the design of the deferred ports;
 - each round's steps and the runs that verify it.
 
 As a round lands, its part moves into [DESIGN.md](DESIGN.md) and leaves this file.
 
 Decided with the owner (2026-11-04):
-- **A shared edge per OS.** A program's text is written once per CPU and runs on all three OSes.
+- **A shared edge per OS.** A program's text is written once per CPU, whatever the OS.
   Every operation that reaches the OS (read, write, open, the clock, threads...) is a call into a
   small canonical edge, one per target, which lengua supplies, assembles after main.s and checks
   in the executable line by line, as it does its own `assert_fail`, `fill` and `parallel_for`.
   Linux programs moved to it too (round 2).
-  - So five targets need two program texts per program, not five, and the OS layer is written once
-    per target.
-  - Each edge is tailored for speed: raw system calls on Linux, libSystem's thinnest wrappers on
-    macOS, kernel32 on Windows. CPU code stays tailored per CPU (SSE2/AVX-512, NEON/SVE).
+  - So a new OS costs one edge file per CPU, not a new text for each program.
+  - Each edge is tailored for speed: raw system calls on Linux, and, if the ports return,
+    libSystem's thinnest wrappers on macOS and kernel32 on Windows. CPU code stays tailored per
+    CPU (SSE2/AVX-512, NEON/SVE).
 - **Unsafe code.** lengua's crate keeps `unsafe_code = "forbid"`. OS facilities come from
   maintained crates with safe APIs; where none exists, one small separate binding crate in the
   workspace holds only those calls, reviewed and tested.
@@ -55,7 +57,8 @@ code.
 
 These were taken on 2026-11-05 under the owner's rule ("whichever is best for speed and
 efficiency per target"), and the owner approved them with the plan. Each is the owner's to
-reverse.
+reverse. Since 2026-11-06 only Linux is built, so the decisions about macOS and Windows wait with
+the ports.
 
 1. **A broker replaces the ptrace supervisor on every OS.** One Rust service holds the name
    rules, plus the clock, random bytes, sleeps and waits in tests. Under lengua (tests and `run`),
@@ -100,6 +103,10 @@ reverse.
       A change Apple makes then stops runs at once, rather than quietly weakening them.
 
 ## Design
+
+Only Linux is built. What follows about macOS and Windows is the design of the native ports the
+owner deferred on 2026-11-06, kept so that they can come back (todo.md, "Deferred"); what Linux
+has is in [DESIGN.md](DESIGN.md).
 
 ### 1. The edge
 
@@ -301,9 +308,10 @@ Triples: `{x86_64,aarch64}-unknown-linux-gnu`, `arm64-apple-macos11.0`,
     maxprot or SG_READ_ONLY, and PE's section flags.
   - Every byte of the text section belongs to a function.
   - Imports are checked as described in §1.
-- **Solvers.** z3 4.16.0 and cvc5 1.3.4 both publish native builds for all five targets
-  (checked 2026-11-05; cvc5's include `cvc5-Win64-arm64-static.zip`). Both are pinned by SHA-256
-  in `scripts/ci/tools.tsv`.
+- **Solvers.** z3 4.16.0 and cvc5 1.3.4 both publish native builds for Linux, macOS and Windows
+  on both CPUs (checked 2026-11-05; cvc5's include `cvc5-Win64-arm64-static.zip`). Both are
+  pinned by SHA-256 in `scripts/ci/tools.tsv`, which holds the Linux rows alone since
+  2026-11-06.
 - **LLVM on macOS and Windows in CI.** conda-forge publishes `lld` and `llvm-tools` 22.1.8 for
   osx-arm64, win-64 and win-arm64. So setup installs them there with micromamba (pinned by
   SHA-256), the same LLVM version the Linux jobs take from apt.llvm.org. Users' installs follow
@@ -322,7 +330,7 @@ Triples: `{x86_64,aarch64}-unknown-linux-gnu`, `arm64-apple-macos11.0`,
 | no core files, no dialogs | RLIMIT_CORE 0 | same | SetErrorMode, no WER, die on an unhandled exception, CREATE_NO_WINDOW |
 | crashes as signal numbers | native | SIGBUS → 11 | access violation and stack overflow → 11, illegal instruction → 4, divide → 8, Ctrl+C → 2, ended by lengua → 9 |
 
-Some behavior is reshaped on every target, so all five keep one promise:
+Some behavior is reshaped on every target, the deferred ones too, so all keep one promise:
 - EFBIG replaces SIGXFSZ.
 - The terminal is two operations. On Linux they make the ioctls that `Pin::Terminal` allows, and
   the pin stays.
@@ -360,16 +368,15 @@ stopped list, 2026-11-05).
 - **One workflow, `.github/workflows/ci.yml`.** targets.yml, arm64.yml and unported.yml are
   removed. Its jobs:
   - **format** (ubuntu-24.04): `cargo fmt --check`, with `fmt.patch` as an artifact.
-  - **test**, on five runners: ubuntu-24.04, ubuntu-24.04-arm, macos-26, windows-2025 and
-    windows-11-arm. Each runs the whole suite in one job, which took 35 to 62 minutes (run
-    42085247387). Shards were planned and left out: six test jobs fit the Free plan's concurrent
-    jobs, and a shard split by test would break the proving lock, which is per process.
-    - The macOS job uses the newest image GitHub has made generally available. It moves up a
-      version when a newer one does, so macOS's sandbox tests always gate on the newest macOS.
+  - **test**, on two runners: ubuntu-24.04 and ubuntu-24.04-arm. Each runs the whole suite in one
+    job, which took 35 to 62 minutes on the six runners of run 42085247387. Shards were planned
+    and left out: a shard split by test would break the proving lock, which is per process.
+    Until 2026-11-06 the test job also ran on macOS and Windows; the ports' CI design is in the
+    deferred round, R4.
 
     Each job:
-    - runs `scripts/ci/setup.sh`: Rust 1.99.1, LLVM 22 (Windows ARM64's ring build needs clang,
-      which the image's LLVM has) and the solvers, each pinned in `scripts/ci/tools.tsv`;
+    - runs `scripts/ci/setup.sh`: Rust 1.99.1, LLVM 22 and the solvers, each pinned in
+      `scripts/ci/tools.tsv`;
     - writes the machine's facts into the run summary (`scripts/ci/machine.sh`);
     - runs clippy with `-D warnings`;
     - runs `cargo test --workspace`;
@@ -387,17 +394,13 @@ stopped list, 2026-11-05).
   none).
 - **When it runs.**
   - Pushes to main run it, path-filtered; `wip/**` branches get no push runs.
-  - Dispatch inputs: targets (all five by default); mode (`compile` is clippy plus `cargo test
-    --no-run`, about 10 minutes; also `test`, `ignored`, `golden`, `bench` and `release`, the
-    last three on Linux x86-64 and Linux ARM64 so far); filter; test_files; check_folder;
-    check_target;
+  - Dispatch inputs: targets (both by default); mode (`compile` is clippy plus `cargo test
+    --no-run`, about 10 minutes; also `test`, `ignored`, `golden`, `bench` and `release`);
+    filter; test_files; check_folder; check_target;
     mutate_only; stall_seconds; seed; and, for `golden` and `bench`, golden_base,
     golden_base_run, golden_view and bench_against.
-  - Every week: `test` and `ignored` on all five. From round 3 the same run also covers:
-    - the full suite on the previous macOS image (macos-15), because programs are built for
-      older macOS too;
-    - the sandbox tests on any newer macOS image GitHub has in preview. That job only warns,
-      and is not part of the gate.
+  - Every week: `test` and `ignored` on both. From round 3 the same run also covers the suite
+    inside a default Docker container (the lengua image) on both runners.
 - **Caches and actions.**
   - Caches hold the registry and a pruned target/ per runner, with LLVM and the solvers cached
     separately, all within 10 GB.
@@ -471,7 +474,7 @@ stopped list, 2026-11-05).
   - Read the Linux clock through the vDSO, as C's `clock_gettime` does.
   - An event-queue op (epoll, kqueue, IOCP) for the 4,096-client server: C servers use them, so
     the gate needs lengua to have them too.
-  - Every row the first five-runner gate run shows level or behind joins this list.
+  - Every row the first gate run shows level or behind joins this list.
 
 ## Rounds
 
@@ -486,8 +489,9 @@ Nothing ran, since R0 changed documents only; the commit is the record.
 
 ### R1 — six hosts, one workflow, the spikes, the soundness items
 
-Round 1 built and tested all six hosts. macOS on x86-64 was dropped on 2026-11-06, so its answers
-below are the record of what was found, and five hosts remain.
+Round 1 built and tested all six hosts. On 2026-11-06 macOS on x86-64 was dropped and the native
+macOS and Windows ports were deferred, so its answers below are the record of what was found, and
+two hosts remain.
 
 **Goal.**
 - lengua-mcp builds, passes clippy and runs `cargo test --workspace` natively on all six
@@ -657,7 +661,44 @@ The build differs from the plan in these ways:
   `needs`; MACHINE_WORDS' Windows words and AArch64's registers; the model-against-CPU harnesses,
   which still build raw `_start` programs; and a broker for the bench's `run` lines.
 
-### R3 — macOS, ARM64
+### R3 — reach: other systems, and more Linux
+
+**Goal.** A person on Windows, on a Mac or on an older Linux can run lengua on one of its two
+targets, and the documents say exactly what each route needs and what has been tested. todo.md's
+"Round 3" holds the questions the plan must settle, and an Opus plan makes these candidate steps
+executable.
+
+**Steps.**
+1. **The kernel floor.** Decide what the launcher requires: Landlock for every program, and the
+   Landlock ABI the network needs (6 today, Linux 6.12; 4 would be Linux 6.7). A sandbox change
+   gets a review and its tests (`tests/limits.rs`, the red team).
+2. **`lengua-mcp doctor`.** It prints the kernel, the Landlock ABI, seccomp, glibc, the CPU's
+   features and the counters, and says in words a person can act on what a route lacks.
+3. **The server on more Linux.** Static musl builds or an older-glibc build for both CPUs, chosen
+   with the LLVM versions lengua needs; `scripts/install.sh` and `scripts/release.sh` follow.
+4. **The lengua image.** Ubuntu 24.04 with LLVM 22, z3, cvc5 and lengua-mcp, for linux/amd64 and
+   linux/arm64, built and published by a workflow.
+5. **A container job.** `ci.yml` runs the suite inside the image on both Linux runners, under
+   Docker's default seccomp profile.
+6. **The documents.** README and the plugin README say how to use lengua on Windows (WSL 2 first,
+   Docker second) and on a Mac (a Linux VM, or Docker through one), what each needs, and what the
+   project has not tested.
+
+**Verified by.**
+- `compile`, then a full `test`, on both runners.
+- The container job, green on both.
+- Hand tests of WSL 2 and of a Mac VM, noted in todo.md: no free runner can run them.
+
+**Size and risks.** Size M. The routes' kernels differ and some have no Landlock (todo.md, "Round
+3"); who tests the Mac and Windows routes by hand is open.
+
+### R4 — native macOS and Windows ports (deferred 2026-11-06)
+
+The owner deferred these ports when lengua became two targets: Windows is reached through WSL 2 or
+Docker, and a Mac through a Linux VM or Docker. What follows, the plans of the old rounds 3 and 4,
+is kept so that they can come back (todo.md, "Deferred").
+
+#### macOS, ARM64 (was R3)
 
 **Goal.** macos-aarch64 passes the one suite natively, on macos-26, and also every week on
 macos-15. (macOS on x86-64 was dropped on 2026-11-06: todo.md, "Deferred".)
@@ -690,7 +731,7 @@ macos-15. (macOS on x86-64 was dropped on 2026-11-06: todo.md, "Deferred".)
 8. **Docs.** DESIGN's "Porting", README, plugin.json's description, and the skills' machine line.
 
 **Verified by.**
-- `compile`, then a full `test`, on five runners.
+- `compile`, then a full `test`, on every runner.
 - The gate compares ARM64's verdict tables across Linux and macOS (finish line 2).
 - The mutation test on the macOS runner.
 - `bench` on it, for the record.
@@ -703,7 +744,7 @@ of the Linux edge files is.
 - Only 5 macOS jobs at once.
 - Seatbelt is deprecated: failing closed and the gate on the newest image are the mitigation.
 
-### R4 — Windows, x86-64 and ARM64
+#### Windows, x86-64 and ARM64 (was R4)
 
 **Goal.** windows-x86_64 and windows-aarch64 pass the one suite natively, on windows-2025 and
 windows-11-arm.
@@ -741,7 +782,7 @@ windows-11-arm.
    2026-11-05).
 
 **Verified by.**
-- A full `test` on five runners.
+- A full `test` on every runner.
 - Verdicts compared across the OSes of each CPU (two on x86-64, three on ARM64).
 - The mutation test on both Windows runners.
 
@@ -754,14 +795,16 @@ windows-11-arm.
 ### R5 — the performance finish line
 
 **Steps.**
-- §7's bench, gate and workloads on five runners (the empty program is a workload and also each
-  OS's floor). The gate is enforced in `bench` mode and in the weekly run.
+- §7's bench, gate and workloads on both runners (the empty program is a workload and also the
+  floor). The gate is enforced in `bench` mode and in the weekly run.
+- Linux's own fast paths, each measured before and after: the vDSO clock, one `epoll` operation
+  for the servers, `splice` for the pipe rows. Not io_uring, which Docker's default profile blocks.
 - The known gaps, closed by A/B runs.
 - BENCHMARKS-<target>.md, generated from the artifacts.
 - README, DESIGN and the bench's own text made true to the runs; "threads on AArch64 come later"
   goes.
 
-**Verified by.** The gate is green on five runners and KNOWN_BEHIND is empty.
+**Verified by.** The gate is green on both runners and KNOWN_BEHIND is empty.
 
 ### R6 — prover parity, the leftovers, documents, release
 
@@ -785,14 +828,14 @@ windows-11-arm.
   - The one-folder check's 60 s budget against fast/wc's 231 s proof.
   - DESIGN's AArch64 instruction list.
   - test-format's float wording.
-- **Release archives for five hosts.**
-  - scripts/release.sh and install.sh per OS, packed as tar.gz, or zip on Windows.
-  - mcp.json names lengua-mcp.exe on Windows.
+- **Release archives for both targets.**
+  - scripts/release.sh and install.sh, packed as tar.gz, built as round 3 decides (musl or an
+    older glibc) and published with the lengua image.
   - `release` mode builds, installs and checks each one on its own runner. They are unsigned.
 - **A last pass** over DESIGN, the white paper and the plugin README.
 
 **Verified by.** The full suites, the mutation tests, both goldens and `release` mode, green on
-five runners.
+both runners.
 
 ## Verification
 
@@ -803,10 +846,11 @@ five runners.
   2. the filtered tests;
   3. the full suite on the round's runners;
   4. from R2 on, also the mutation test, the goldens and the bench, as each round names them.
-- **The finish line** is one dispatched `ci.yml` run on all five runners, in modes test, ignored,
+- **The finish line** is one dispatched `ci.yml` run on both runners, in modes test, ignored,
   bench and release, with everything green:
   - the suites, including the edge's conformance table and the mutation test;
-  - the gate job's verdict comparison across the three OSes of each CPU;
+  - the verdict comparison of the two CPUs' proofs;
+  - the container job;
   - the bench gate, with KNOWN_BEHIND empty;
   - the release archives, installed and checked.
 

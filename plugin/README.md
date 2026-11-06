@@ -12,4 +12,5 @@ kernel to the system calls, files and network its spec names.
 
 It needs Linux on x86-64 or on ARM64 with glibc 2.39 or later and Landlock on (Linux 5.13 or
 newer; 6.12 for a program that uses the network), LLVM's `llvm-mc` and `ld.lld`, and, for proofs,
-the z3 and cvc5 solvers.
+the z3 and cvc5 solvers. On Windows use WSL 2 or Docker, and on a Mac a Linux VM or Docker, and run
+your agent and lengua inside it (the repository's README, "Windows and Mac").

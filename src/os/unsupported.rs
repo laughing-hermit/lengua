@@ -1,6 +1,6 @@
-//! A system lengua can't run programs on yet: macOS and Windows, until their rounds of the
-//! roadmap. Everything that needs a running program says so, and says it once, here; checking and
-//! proving a program don't run it and work as everywhere.
+//! A system lengua doesn't run programs on: anything but Linux. Windows reaches lengua through
+//! WSL 2 and a Mac through a Linux VM or container, which are Linux. Everything that needs a
+//! running program says so, and says it once, here.
 
 use std::ffi::OsString;
 use std::io;
@@ -14,8 +14,8 @@ use crate::runner::{End, Job, Limits, Run};
 fn cannot() -> io::Error {
     io::Error::new(
         io::ErrorKind::Unsupported,
-        "lengua can't run programs on this operating system yet (macOS and Windows come in \
-         rounds 3 and 4 of the roadmap in todo.md); it can check and prove them",
+        "lengua runs programs on Linux only: on Windows use WSL 2, and on a Mac a Linux VM or \
+         container, and run your agent and lengua there (README.md, \"Windows and Mac\")",
     )
 }
 

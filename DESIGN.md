@@ -235,7 +235,9 @@ spec allows:
   refuses, `EBUSY`. The edge also tells the broker whether the program listed a folder: a test
   whose program did runs again with each listing turned round, since no system promises an order,
   and fails if its result changes. The prover gives the same answers for names it knows, and
-  splits a name the input chooses on Windows's ASCII rules;
+  splits a name the input chooses on Windows's ASCII rules. The rules stay with only Linux
+  targets: a project folder reached from WSL 2 (`/mnt/c`) or shared into a Mac's Linux VM is a
+  Windows or macOS file system underneath, and a spec's tests must mean the same on it;
 - the program holds at most 4,352 files open (one number on every target, within macOS's
   `OPEN_MAX`); its arguments take at most 32,000 characters of Windows's command line and its
   environment's names are unique ignoring case, or it doesn't start; and a write to a closed
@@ -373,7 +375,7 @@ which come with their ports).
 - **Errors** are one closed set, Linux's numbers negated, on every OS: 2, 5, 9, 11, 13, 16, 17,
   20, 21, 22, 24, 25, 27, 28, 29, 32, 36, 39, 84, 104 and 107. Each operation lists its subset,
   the prover returns exactly that subset, and an error outside it is `EIO`, on the error path
-  only. On macOS and Windows, whose ports come in rounds 3 and 4 (the roadmap below), `errno` and
+  only. On macOS and Windows, if their native ports return (todo.md, "Deferred"), `errno` and
   `GetLastError` will map through tables in their edge files, and a test will require each table
   to cover the set.
 - **Data** is the same bytes on every OS. `os_info` gives {size, kind}: kind 0 a file, 1 a
@@ -1177,11 +1179,13 @@ allows `clone` only with the flags lengua's `parallel_for` gives it, and `assert
 thread with `exit_group`, so a failed check anywhere stops the whole program.
 
 Roadmap, in order (round by round in todo.md, the design in ROADMAP.md):
-1. macOS on ARM64 (round 3), then Windows on x86-64 and ARM64 (round 4), each with its own edge
-   file and confinement;
-2. the performance finish line, a gate on every target's runner (round 5);
-3. prover parity across the CPUs, the small items, the documents and release archives for five
-   hosts (round 6).
+1. reach (round 3): the routes for Windows and Mac (WSL 2, Docker, a Linux VM), a server that
+   installs on more Linux, the lengua image and the kernel floor;
+2. the performance finish line, a gate on both targets' runners (round 5);
+3. prover parity across the CPUs, the small items, the documents and the release archives
+   (round 6).
+
+Native macOS and Windows ports are deferred (todo.md, "Deferred").
 
 Proofs past the finish line are research (todo.md, "Deferred"); "Status" below lists what is
 tested, not proven, today.
@@ -1190,10 +1194,12 @@ tested, not proven, today.
 
 lengua builds, checks, proves and runs programs for Linux on x86-64 and on ARM64 (ELF, reaching
 the system through lengua's edge; tested natively on GitHub's runners of both, and the ARM64 ones
-also under QEMU on the x86-64 one), assembled by LLVM's `llvm-mc` and linked by `ld.lld`. macOS on
-ARM64 (on a Mac, through Apple's LLVM) and Windows on x86-64 and ARM64 (import libraries generated
-by `llvm-dlltool`, no Windows SDK) follow, each with its own edge file and confinement. macOS on
-x86-64 is not a target: Apple makes no Intel Macs any more (todo.md, "Deferred").
+also under QEMU on the x86-64 one), assembled by LLVM's `llvm-mc` and linked by `ld.lld`. Those
+are its two targets. Windows reaches lengua through WSL 2 or Docker and a Mac through a Linux VM
+or Docker, which run the same two targets (README.md, "Windows and Mac"). Native macOS and Windows
+ports are deferred: each would bring its own edge file and confinement (the plans are in
+ROADMAP.md), and macOS on x86-64 is not planned at all, since Apple makes no Intel Macs any more
+(todo.md, "Deferred").
 
 The spec is the portable part and already agnostic: it names no CPU or OS, and `check` rejects a
 CPU or OS term in a spec's prose, so the same spec means the same on every target. The per-target
@@ -1221,13 +1227,13 @@ What needs the host, and what doesn't:
   but the spec-exact system-call filter and the cycle counts need the target natively (GitHub's
   ARM64 runners). The broker serves such a program as any other. So the per-host part of the
   server is the runner (item 6 below). It's also why programs run only on Linux x86-64 and Linux
-  ARM64 today: seccomp and Landlock are Linux's, so macOS and Windows each need a confinement of
-  their own, and the server builds on all six targets meanwhile (todo.md).
+  ARM64: seccomp and Landlock are Linux's, so macOS and Windows would each need a confinement of
+  their own, and lengua reaches them through a Linux that has Landlock instead.
 
 **The plugin decides per target.** The server detects its host at startup (`Profile::for_target`
 over `std::env::consts`) and uses that target, so the user installs one plugin and it picks what it
-needs rather than choosing a build from a list. On a host lengua doesn't support yet it says so and
-names the targets it builds for, rather than failing deep inside.
+needs rather than choosing a build from a list. On a host that isn't one of the two Linux targets
+it says so and points to "Windows and Mac" in README.md, rather than failing deep inside.
 
 main.s's first line says which CPU's code it is (`.intel_syntax noprefix` or `.arch armv8-a`) but
 never chooses the target: code for another CPU stops `check` ("main.s is AArch64 code, and this
@@ -1244,15 +1250,16 @@ broker serves the emulated program as any other, so its tests' names, supplied r
 clock and instant sleeps work, and a client's too, since lengua makes its connections. Nothing is
 measured, and the reply says what held the runs. lengua.lock records what ran the tests
 (`emulator = "qemu-aarch64 10.2.2"`), and `run` won't run code tested one way in a session of
-the other. lengua's line in main.s is the target CPU's comment, `// lengua: …` on AArch64. Distribution is then: one server build per host OS,
-each with that host's runner and the shared backends; a thin selector picks the host's build; the
-skills are the same everywhere.
+the other. lengua's line in main.s is the target CPU's comment, `// lengua: …` on AArch64.
+Distribution is then: one server build for each Linux target (a build that installs on more
+distributions, and an image, are planned: todo.md, "Round 3"); the skills are the same everywhere.
 
 **Building and testing without owning the hardware.** A target doesn't need its machine bought,
-and nothing is built or run on the owner's computer. GitHub's free runners are real Linux and
-Windows machines on both CPUs and Apple-silicon Macs, and `ci.yml` builds and tests each target
-natively on its own; QEMU's user mode adds the other CPU's Linux programs on the x86-64
-Linux runner. What's written per target is the backend and that host's runner.
+and nothing is built or run on the owner's computer. GitHub's free runners are real Linux
+machines on both CPUs, and `ci.yml` builds and tests each target natively on its own; QEMU's user
+mode adds the other CPU's Linux programs on the x86-64 Linux runner. No free runner can run WSL 2
+or a Mac VM; Docker's route can be tested in a container on those runners (todo.md, "Round 3").
+What's written per target is the backend and that host's runner.
 
 ### Porting a target
 
@@ -1493,12 +1500,12 @@ all; the decoders, prover models and dialects of their CPUs (2 to 4) are written
 and x86-64's and ARM64's exist. QEMU's user mode, on the x86-64 Linux runner, tests Linux ARM64
 for all but the sandbox's exact filter, which GitHub's ARM64 runner tests natively.
 
-The plugin's own server binary will ship for x86_64/aarch64 Linux (musl), aarch64 macOS and
-x86_64/aarch64 Windows; that is the server running, separate from which targets it can compile and
-check programs for.
+The plugin's own server binary ships for x86_64 and aarch64 Linux, built on glibc 2.39 today; a
+static musl build, or one for older glibc, is planned (todo.md, "Round 3"). That is the server
+running, separate from which targets it can compile and check programs for.
 
-Next, in the order of todo.md and ROADMAP.md: macOS, Windows, the performance finish line, then
-prover parity, the documents and the release.
+Next, in the order of todo.md and ROADMAP.md: reach (WSL 2, Docker and Linux VM routes, more
+Linux), the performance finish line, then prover parity, the documents and the release.
 
 ## Code conventions
 
@@ -1669,16 +1676,15 @@ listing, and SHA-256 and AES, in plain integer code and with the instructions. E
 Left out of the dialect on purpose: gathers and scatters, whose addresses can't be bounds-checked,
 allocation while running, recursion, function pointers, and running other programs.
 
-Two of the five targets are done, as one product: Linux on x86-64 and Linux on ARM64, each tested
-natively on its own GitHub runner (nothing runs on the owner's computer), every x86-64 program
-with its AArch64 twin. CI builds lengua natively on all five of GitHub's runners, Linux and
-Windows on both CPUs and macOS on ARM64 (`.github/workflows/ci.yml`), and runs the suite on each;
-on macOS and Windows it passes every test that runs no program, and the tests that would run one
-say they can't until their ports. Those three need more than a new CPU, since they
+lengua has two targets, as one product: Linux on x86-64 and Linux on ARM64, each tested natively
+on its own GitHub runner (`.github/workflows/ci.yml`; nothing runs on the owner's computer),
+every x86-64 program with its AArch64 twin. Windows reaches it through WSL 2 or Docker and a Mac
+through a Linux VM or Docker (README.md, "Windows and Mac"), routes the project has not tested.
+A native macOS or Windows port, deferred, would need more than a new CPU, since those systems
 forbid the direct system calls lengua's edge makes on Linux and have neither seccomp nor
-Landlock: each is a profile with its own toolchain, executable reader, edge file, runner and
+Landlock: each would be a profile with its own toolchain, executable reader, edge file, runner and
 sandbox, on the decoder, prover model and dialect reference its CPU already has, as "Porting a
-target" sets out, and each must hold every limit the Linux targets do. The white paper
+target" sets out, and each would have to hold every limit the Linux targets do. The white paper
 (WHITEPAPER.md) says what lengua
 is and isn't, and a site where people share specs (`site/`) runs locally: the spec travels, each
 computer compiles it for itself, and code is checked again wherever it runs. todo.md holds only

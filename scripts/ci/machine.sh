@@ -33,16 +33,6 @@ yes_no() { # yes_no <word> <the line to look in>
       echo "- LSMs: $(cat /sys/kernel/security/lsm 2> /dev/null || echo unknown)"
       echo "- ptrace_scope: $(cat /proc/sys/kernel/yama/ptrace_scope 2> /dev/null || echo none)"
       ;;
-    macos-*)
-      echo "$(sysctl -n machdep.cpu.brand_string 2> /dev/null || uname -m), $(sysctl -n hw.ncpu) vCPUs, $(($(sysctl -n hw.memsize) / 1073741824)) GiB, macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
-      echo
-      echo '```'
-      sysctl -a 2> /dev/null | grep -E '^hw\.optional\.(arm\.FEAT_(CRC32|PMULL|AES|SHA256|SHA3|SVE|SME)|avx|sse4|aes|bmi|popcnt)' | sort || true
-      echo '```'
-      ;;
-    windows-*)
-      echo "${PROCESSOR_IDENTIFIER:-unknown}, ${NUMBER_OF_PROCESSORS:-?} vCPUs, $(cmd //c ver 2> /dev/null | tr -d '\r' | sed '/^$/d')"
-      ;;
     *)
       uname -a
       ;;

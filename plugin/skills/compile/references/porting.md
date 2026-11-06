@@ -4,7 +4,10 @@ lengua is hardware-agnostic where it matters: the **spec** names no CPU or OS (`
 CPU or OS term in a spec's prose), so the thing people share is the same on every target. What is
 per-target is the compiled `main.s` and lengua's checking of it — and that is per-target by nature:
 you can't check native code without modelling the native machine. This file is the contract for
-adding a target, so "add a target" is a bounded task, not a rewrite.
+adding a target, so "add a target" is a bounded task, not a rewrite. Today lengua has two targets,
+Linux on x86-64 and on ARM64; Windows and Mac users reach them through WSL 2, Docker or a Linux
+VM, and native macOS and Windows ports are deferred (todo.md, "Deferred"), so the macOS and
+Windows parts below are the checklist for a port that may come back.
 
 lengua's design is **native per target** (the AI writes the target's assembly; lengua checks and
 proves the actual machine code), chosen over compiling to a portable IR because it keeps the

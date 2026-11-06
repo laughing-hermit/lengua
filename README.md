@@ -16,8 +16,8 @@ lengua is an [Agent Plugin](https://agent-plugins.org): two skills and an MCP se
 open standards, so it works in Claude Code, Codex, Cursor and other agent harnesses.
 
 > Status: dialect 4 on Linux x86-64 and Linux ARM64, with memory rules that check every address has an owner and
-> stays inside it. macOS on ARM64 and Windows on x86-64 and ARM64 build and pass every test that
-> runs no program, and run no program yet ([todo.md](todo.md)). It covers whole numbers, exact decimals, floating point in double and single
+> stays inside it. Windows and Mac reach it through WSL 2, Docker or a Linux VM (see "Windows and
+> Mac" below; [todo.md](todo.md)). It covers whole numbers, exact decimals, floating point in double and single
 > precision with fused multiply-add, vectors from SSE2 to AVX-512 and from NEON to SVE,
 > hashing and checksums, files
 > and folders, environment variables, fork-join threads, waiting, the clock and random bytes
@@ -42,20 +42,46 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 > sessions, twelve requests on each Linux target from an add to an HTTPS fetch, every program came
 > from one request ([SESSIONS.md](SESSIONS.md)). Linux on ARM64 is the same product, every example
 > with its AArch64 twin; [WHITEPAPER.md](WHITEPAPER.md) says what lengua is, and `site/` is a local
-> site for sharing specs. What's left for people, the work the safety filter stopped or that was
-> skipped (macOS and Windows among it), is in [todo.md](todo.md).
+> site for sharing specs. What's left for people, and the work the safety filter stopped or that
+> was skipped, is in [todo.md](todo.md).
 
 ## Requirements
 
-- Linux on x86-64 or ARM64 (AArch64); macOS on Apple silicon and Windows are the roadmap's rounds
-  3 and 4 ([todo.md](todo.md)). Intel Macs are not a target: Apple no longer makes them.
+- Linux on x86-64 or ARM64 (AArch64), with glibc 2.39 or newer: Ubuntu 24.04, Debian 13 or Fedora
+  40 and later. On Windows or a Mac, use WSL 2, Docker or a Linux VM ("Windows and Mac" below).
 - A kernel with Landlock on, which every run needs: Linux 5.13 or newer, and 6.12 or newer for a
-  program that uses the network. lengua won't run a program without it.
+  program that uses the network. lengua won't run a program without it. `cat
+  /sys/kernel/security/lsm` should list `landlock`.
 - Rust 1.89 or newer (to build the server)
 - LLVM's assembler and linker: `sudo dnf install llvm lld` (Fedora) or `sudo apt install llvm lld`
   (Debian/Ubuntu)
 - For proofs, the z3 and cvc5 solvers: `sudo dnf install z3 cvc5` or `sudo apt install z3 cvc5`.
   With only one of them installed, proofs still run, and say that one solver answered alone.
+
+## Windows and Mac
+
+lengua runs on Linux. Windows and macOS don't run it natively (native ports are deferred:
+[todo.md](todo.md), "Deferred"), so run your agent and lengua together inside a Linux that has what
+the requirements above list. The project has not tested any of these routes, since no free CI
+runner can run them; todo.md's "Round 3" says what is planned.
+
+- **Windows: WSL 2** (recommended). Run `wsl --install -d Ubuntu-24.04`, then install your agent
+  and the lengua plugin inside Ubuntu (Claude Code runs there, so the plugin is an ordinary Linux
+  plugin), and keep your projects in its home folder, not under `/mnt/c`, which is slow and
+  ignores case. Microsoft's WSL 2 kernel has had Landlock since 2022.
+- **Docker, on Windows or a Mac.** Use a Linux image with glibc 2.39 or newer (`ubuntu:24.04`;
+  `ubuntu:22.04`, `debian:12` and Alpine are too old) and, on Apple silicon, a `linux/arm64`
+  image. The Linux kernel under Docker must have Landlock: Docker Desktop on Windows (its WSL 2
+  backend) should, and Docker Desktop on a Mac reportedly doesn't, so use Colima or another Linux
+  VM there. An image with lengua inside is planned, best as a dev container that holds your agent
+  and lengua together.
+- **Mac: a Linux VM.** Colima or Lima (an Ubuntu 24.04 arm64 VM), UTM or Parallels, with your
+  agent and lengua inside. Apple has no WSL. Its `container` tool (macOS 26, Apple silicon) runs
+  each container in a small Linux VM whose kernel may lack Landlock, so check `cat
+  /sys/kernel/security/lsm` before relying on it.
+
+The network floor, Linux 6.12, is above Ubuntu 24.04's stock kernel (6.8): a program that uses the
+network needs a newer kernel there, until round 3 decides whether the floor can be lower.
 
 ## Build
 
@@ -229,7 +255,7 @@ Where lengua isn't ahead:
   other, with CPU time from 0.96× to 2.09× less.
 - **The CRC-32C on ARM64.** On GitHub's ARM64 runner, it takes more wall time than C++ (0.7×).
 
-The roadmap in [todo.md](todo.md) closes these gaps and gates speed on all five targets.
+The roadmap in [todo.md](todo.md) closes these gaps and gates speed on both targets.
 
 ## Develop
 
