@@ -1,10 +1,5 @@
 .arch armv8-a
 
-// System calls (Linux AArch64)
-.equ SYS_READ, 63
-.equ SYS_WRITE, 64
-.equ SYS_CLOSE, 57
-.equ SYS_EXIT, 93
 // File descriptors
 .equ STDOUT, 1
 .equ STDERR, 2
@@ -27,8 +22,6 @@
 .equ VERSION_LEN, 13
 .equ REQUEST_LEN, 117
 .equ RESPONSE_LEN, 65536
-// fill's limit on reads, as fill.s has it
-.equ MAX_FILL_READS, 1099511627776
 // The blank line ending a response's headers, "\r\n\r\n", read as one 32-bit word, and the
 // places a word of it can start in the response.
 .equ HEADER_END, 0x0a0d0a0d
@@ -60,11 +53,6 @@ version:
     .ascii " HTTP/1.0\r\n\r\n"
 .size version, . - version
 
-.type assert_message, @object
-assert_message:
-    .ascii "lengua: assertion 000 failed\n"
-.size assert_message, . - assert_message
-
 .section .bss
 
 // The request: "GET ", the path and " HTTP/1.0" with a blank line.
@@ -80,56 +68,52 @@ response:
 .size response, . - response
 
 .text
-.globl _start
-
 // Checks the arguments, fetches the page and prints its body, then exits.
-.type _start, @function
-_start:
-    ldr x9, [sp]
-    cmp x9, #ARGC_EXPECTED
-    b.ne .Lstart_usage
-    ldr x0, [sp, #16]
-    cbz x0, .Lstart_assert_path
+.type main, @function
+main:
+    cmp x0, #ARGC_EXPECTED
+    b.ne .Lmain_usage
+    ldr x0, [x1, #8]
+    cbz x0, .Lmain_assert_path
     adrp x1, request
     add x1, x1, :lo12:request
     bl build_request
-    tbnz x0, #63, .Lstart_usage
+    tbnz x0, #63, .Lmain_usage
     mov x2, x1
     adrp x1, request
     add x1, x1, :lo12:request
     adrp x3, response
     add x3, x3, :lo12:response
     bl fetch_page
-    tbnz x0, #63, .Lstart_unreachable
+    tbnz x0, #63, .Lmain_unreachable
     adrp x0, response
     add x0, x0, :lo12:response
     bl print_body
-    tbnz x0, #63, .Lstart_write_failed
+    tbnz x0, #63, .Lmain_write_failed
     mov w0, #EXIT_OK
-    b .Lstart_exit
-.Lstart_usage:
+    b .Lmain_exit
+.Lmain_usage:
     adrp x1, usage_msg
     add x1, x1, :lo12:usage_msg
     mov x2, #USAGE_MSG_LEN
     bl complain
     mov w0, #EXIT_USAGE
-    b .Lstart_exit
-.Lstart_unreachable:
+    b .Lmain_exit
+.Lmain_unreachable:
     adrp x1, unreachable_msg
     add x1, x1, :lo12:unreachable_msg
     mov x2, #UNREACHABLE_MSG_LEN
     bl complain
     mov w0, #EXIT_UNREACHABLE
-    b .Lstart_exit
-.Lstart_write_failed:
+    b .Lmain_exit
+.Lmain_write_failed:
     mov w0, #EXIT_WRITE_FAILED
-.Lstart_exit:
-    mov x8, #SYS_EXIT
-    svc #0
-.Lstart_assert_path:
+.Lmain_exit:
+    bl os_exit
+.Lmain_assert_path:
     mov w0, #2
     bl assert_fail
-.size _start, . - _start
+.size main, . - main
 
 // Writes a message to standard error, or exits with EXIT_WRITE_FAILED when it can't.
 // In: x1 = the message; x2 = its length, at least 1.
@@ -145,8 +129,7 @@ complain:
     ret
 .Lcomplain_failed:
     mov w0, #EXIT_WRITE_FAILED
-    mov x8, #SYS_EXIT
-    svc #0
+    bl os_exit
 .Lcomplain_assert_message:
     mov w0, #22
     bl assert_fail
@@ -280,8 +263,7 @@ fetch_page:
 .Lfetch_page_close:
     mov x21, x0
     mov x0, #CONNECTION
-    mov x8, #SYS_CLOSE
-    svc #0
+    bl os_close
     tbnz x0, #63, .Lfetch_page_result
 .Lfetch_page_result:
     mov x0, x21
@@ -375,14 +357,14 @@ find_body:
 // returns: result
 .type write_all, @function
 write_all:
+    stp x29, x30, [sp, #-16]!
     cbz x1, .Lwrite_all_assert_null
     cbz x2, .Lwrite_all_assert_empty
     mov x9, x0
     mov x10, #MAX_WRITES
 .Lwrite_all_loop:  // bound: 64
     mov x0, x9
-    mov x8, #SYS_WRITE
-    svc #0
+    bl os_write
     tbnz x0, #63, .Lwrite_all_return
     cmp x0, x2
     b.hi .Lwrite_all_assert_count
@@ -396,6 +378,7 @@ write_all:
 .Lwrite_all_done:
     mov x0, #0
 .Lwrite_all_return:
+    ldp x29, x30, [sp], #16
     ret
 .Lwrite_all_assert_null:
     mov w0, #19
@@ -408,88 +391,3 @@ write_all:
     bl assert_fail
 .size write_all, . - write_all
 
-// Reads from file descriptor x0 into the x2 bytes at x1 until they're full, the input ends,
-// or, when w3 is a byte (0 to 255), the last byte read is w3; with w3 = -1 it reads to the
-// end. However the input arrives, it reads the same.
-// In: x0 = the file descriptor, x1 = the buffer, x2 = its size, at least 1, w3 = the end
-// byte or -1.
-// Out: x0 = how many bytes it read, or a negative error code.
-// returns: result
-.type fill, @function
-fill:
-    cbz x1, .Lfill_assert_null
-    cbz x2, .Lfill_assert_empty
-    mov x9, x0
-    mov x10, x2
-    mov w11, w3
-    mov x12, #MAX_FILL_READS
-.Lfill_loop:  // bound: 1099511627776
-    mov x0, x9
-    mov x8, #SYS_READ
-    svc #0
-    tbnz x0, #63, .Lfill_return
-    cbz x0, .Lfill_done
-    cmp x0, x2
-    b.hi .Lfill_assert_count
-    add x1, x1, x0
-    subs x2, x2, x0
-    b.eq .Lfill_done
-    ldurb w13, [x1, #-1]
-    cmp w13, w11
-    b.eq .Lfill_done
-    subs x12, x12, #1
-    b.ne .Lfill_loop
-    mov x0, #ERROR_IO
-    b .Lfill_return
-.Lfill_done:
-    sub x0, x10, x2
-.Lfill_return:
-    ret
-.Lfill_assert_null:
-    mov w0, #990
-    bl assert_fail
-.Lfill_assert_empty:
-    mov w0, #991
-    bl assert_fail
-.Lfill_assert_count:
-    mov w0, #992
-    bl assert_fail
-.size fill, . - fill
-
-// lengua's assertion handler. check compares it word for word: copy it exactly.
-// In: w0 = the assertion's number, 1 to 999. Prints "lengua: assertion NNN failed" to
-// standard error and ends the program, every thread of it, with code 134.
-.type assert_fail, @function
-assert_fail:
-    sub sp, sp, #32
-    adrp x1, assert_message
-    add x1, x1, :lo12:assert_message
-    ldp x2, x3, [x1]
-    stp x2, x3, [sp]
-    ldr x2, [x1, #16]
-    str x2, [sp, #16]
-    ldr w2, [x1, #24]
-    str w2, [sp, #24]
-    ldrb w2, [x1, #28]
-    strb w2, [sp, #28]
-    mov w2, #100
-    udiv w3, w0, w2
-    msub w0, w3, w2, w0
-    add w3, w3, #48
-    strb w3, [sp, #18]
-    mov w2, #10
-    udiv w3, w0, w2
-    msub w0, w3, w2, w0
-    add w3, w3, #48
-    strb w3, [sp, #19]
-    add w0, w0, #48
-    strb w0, [sp, #20]
-    mov x0, #2
-    mov x1, sp
-    mov x2, #29
-    mov x8, #64
-    svc #0
-    mov x0, #134
-    mov x8, #94
-    svc #0
-.size assert_fail, . - assert_fail

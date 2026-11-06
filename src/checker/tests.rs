@@ -498,8 +498,6 @@ const INLINE_FORM: &[&str] = &[
     "benches/programs/shout/neon-one.s",
     "benches/programs/upcase/avx512.s",
     "benches/programs/upcase/neon.s",
-    "examples/echo/main.s",
-    "examples/fetch/main.s",
     "plugin/skills/compile/assets/fast/aes-ni/main.s",
     "plugin/skills/compile/assets/fast/crc32c/main.s",
     "plugin/skills/compile/assets/fast/crc32c-pclmul/main.s",
@@ -515,13 +513,9 @@ const INLINE_FORM: &[&str] = &[
     "plugin/skills/compile/assets/linux-aarch64/fast/wc/main.s",
     "plugin/skills/compile/assets/linux-aarch64/fast/wc-sve/main.s",
     "plugin/skills/compile/assets/linux-aarch64/parallel-template.s",
-    "plugin/skills/compile/assets/linux-aarch64/server-template.s",
     "plugin/skills/compile/assets/linux-aarch64/terminal-template.s",
     "plugin/skills/compile/assets/parallel-template.s",
-    "plugin/skills/compile/assets/server-template.s",
     "plugin/skills/compile/assets/terminal-template.s",
-    "tests/fixtures/linux-aarch64/echo/main.s",
-    "tests/fixtures/linux-aarch64/fetch/main.s",
 ];
 
 /// Every `.s` file under `folder` that defines `_start`, by its path from the repository's root.
@@ -3490,39 +3484,34 @@ async fn check_parallel(text: &str) -> Report {
 
 #[tokio::test]
 async fn only_a_server_takes_connections_forever() {
+    use crate::edge::Op;
     let echo = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/echo/main.s"),
     )
     .expect("the echo example");
-    let server = [
-        Syscall::Read,
-        Syscall::Close,
-        Syscall::Accept4,
-        Syscall::Sendto,
-        Syscall::Exit,
-    ];
-    let report = check_full(&echo, CpuFeatures::all(), &server, None).await;
+    let server = [Op::Read, Op::Write, Op::Close, Op::Accept];
+    let report = check_edge(&echo, &server).await;
     assert!(report.passed(), "{report:#?}");
     // A program that doesn't serve has no loop without a bound.
-    let not_a_server = [Syscall::Read, Syscall::Close, Syscall::Exit];
-    let report = check_full(&echo, CpuFeatures::all(), &not_a_server, None).await;
+    let not_a_server = [Op::Read, Op::Write, Op::Close];
+    let report = check_edge(&echo, &not_a_server).await;
     assert_violation(
         &report,
         Rule::Loops,
-        line_of(&echo, ".Lstart_serve:  # bound: forever") + 1,
+        line_of(&echo, ".Lmain_serve:  # bound: forever") + 1,
         "only a server's loop that takes connections may run forever",
     );
     // A loop that could end by itself isn't one that runs forever.
     let ending = echo.replacen(
-        "    jmp .Lstart_serve\n",
-        "    test rbx, rbx\n    jnz .Lstart_serve\n    jmp .Lstart_serve\n",
+        "    jmp .Lmain_serve\n",
+        "    test rbx, rbx\n    jnz .Lmain_serve\n    jmp .Lmain_serve\n",
         1,
     );
-    let report = check_full(&ending, CpuFeatures::all(), &server, None).await;
+    let report = check_edge(&ending, &server).await;
     assert_violation(
         &report,
         Rule::Loops,
-        line_of(&ending, "    jnz .Lstart_serve"),
+        line_of(&ending, "    jnz .Lmain_serve"),
         "closes with an unconditional `jmp`",
     );
 }

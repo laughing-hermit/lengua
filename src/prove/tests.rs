@@ -3750,7 +3750,7 @@ fn network_budget(listens: bool) -> Budget {
 }
 
 /// The event-loop server template of each target, in the skill's assets, and its two bugs:
-/// serving the first slot alone, and a connection never closed. AArch64 waits with `ppoll`.
+/// serving the first slot alone, and a connection never closed.
 type ServerTemplate = (&'static str, [Edit; 2]);
 
 /// The server template of each target, and its bugs.
@@ -3763,7 +3763,7 @@ const SERVER_TEMPLATES: PerCpu<ServerTemplate> = PerCpu {
                 "    mov rbx, 1\n.Lserve_clients_slot:",
             ),
             (
-                "    mov eax, SYS_CLOSE\n    mov edi, ebx\n    syscall\n",
+                "    mov edi, ebx\n    call os_close\n",
                 "    xor eax, eax\n",
             ),
         ],
@@ -3776,7 +3776,7 @@ const SERVER_TEMPLATES: PerCpu<ServerTemplate> = PerCpu {
                 "    mov x20, #1\n.Lserve_clients_slot:",
             ),
             (
-                "    mov w0, w11\n    mov x8, #SYS_CLOSE\n    svc #0\n",
+                "    mov w0, w11\n    bl os_close\n",
                 "    mov x0, #0\n",
             ),
         ],
@@ -3784,7 +3784,7 @@ const SERVER_TEMPLATES: PerCpu<ServerTemplate> = PerCpu {
 };
 
 /// A server for clients at once: the event-loop template waits on its listener and every
-/// connection with poll (on AArch64, `ppoll`). One client is proven for every line in range, in
+/// connection with os_poll. One client is proven for every line in range, in
 /// every order its connecting and its pieces can come in between polls; two at once, in every
 /// such order, and with the first holding its last byte until the second has its answer, as the
 /// test's do, as far as the time goes. Serving the first slot alone, so the second client waits
@@ -3964,28 +3964,28 @@ const ECHO_SERVER_BUGS: PerCpu<ServerBugs> = PerCpu {
     x86_64: [
         (
             "    mov ecx, NEWLINE\n    call fill\n",
-            "    mov eax, SYS_READ\n    mov edi, ebx\n    syscall\n",
+            "    call os_read\n",
         ),
         (
             "    mov ecx, NEWLINE\n    call fill\n",
             "    mov ecx, -1\n    call fill\n",
         ),
         (
-            "    mov eax, SYS_CLOSE\n    mov edi, ebx\n    syscall\n",
+            "    mov edi, ebx\n    call os_close\n",
             "    xor eax, eax\n",
         ),
     ],
     aarch64: [
         (
             "    mov w3, #NEWLINE\n    bl fill\n",
-            "    mov x8, #SYS_READ\n    svc #0\n",
+            "    bl os_read\n",
         ),
         (
             "    mov w3, #NEWLINE\n    bl fill\n",
             "    mov w3, #-1\n    bl fill\n",
         ),
         (
-            "    mov x0, x19\n    mov x8, #SYS_CLOSE\n    svc #0\n",
+            "    mov x0, x19\n    bl os_close\n",
             "    mov x0, #0\n",
         ),
     ],
@@ -4064,11 +4064,11 @@ const FETCH: Folders = PerCpu {
 const FETCH_READS_ONCE: PerCpu<Edit> = PerCpu {
     x86_64: (
         "    mov ecx, -1\n    call fill\n",
-        "    mov eax, SYS_READ\n    syscall\n",
+        "    call os_read\n",
     ),
     aarch64: (
         "    mov w3, #-1\n    bl fill\n",
-        "    mov x8, #SYS_READ\n    svc #0\n",
+        "    bl os_read\n",
     ),
 };
 

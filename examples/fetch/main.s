@@ -1,10 +1,5 @@
 .intel_syntax noprefix
 
-# System calls (Linux x86-64)
-.equ SYS_READ, 0
-.equ SYS_WRITE, 1
-.equ SYS_CLOSE, 3
-.equ SYS_EXIT, 60
 # File descriptors
 .equ STDOUT, 1
 .equ STDERR, 2
@@ -27,8 +22,6 @@
 .equ VERSION_LEN, 13
 .equ REQUEST_LEN, 117
 .equ RESPONSE_LEN, 65536
-# fill's limit on reads, as assets/fill.s has it
-.equ MAX_FILL_READS, 1099511627776
 # The blank line ending a response's headers, "\r\n\r\n", read as one 32-bit word.
 .equ HEADER_END, 0x0a0d0a0d
 .equ HEADER_END_BYTES, 4
@@ -58,11 +51,6 @@ version:
     .ascii " HTTP/1.0\r\n\r\n"
 .size version, . - version
 
-.type assert_message, @object
-assert_message:
-    .ascii "lengua: assertion 000 failed\n"
-.size assert_message, . - assert_message
-
 .section .bss
 
 # The request: "GET ", the path and " HTTP/1.0" with a blank line.
@@ -78,54 +66,51 @@ response:
 .size response, . - response
 
 .text
-.globl _start
-
 # Checks the arguments, fetches the page and prints its body, then exits.
-.type _start, @function
-_start:
-    mov rax, qword ptr [rsp]
-    cmp rax, ARGC_EXPECTED
-    jne .Lstart_usage
-    mov rdi, qword ptr [rsp + 16]
+.type main, @function
+main:
+    sub rsp, 8
+    cmp rdi, ARGC_EXPECTED
+    jne .Lmain_usage
+    mov rdi, qword ptr [rsi + 8]
     test rdi, rdi
-    jz .Lstart_assert_path
+    jz .Lmain_assert_path
     lea rsi, [rip + request]
     call build_request
     test rax, rax
-    js .Lstart_usage
+    js .Lmain_usage
     lea rsi, [rip + request]
     lea rcx, [rip + response]
     call fetch_page
     test rax, rax
-    js .Lstart_unreachable
+    js .Lmain_unreachable
     lea rdi, [rip + response]
     mov rsi, rdx
     call print_body
     test rax, rax
-    js .Lstart_write_failed
+    js .Lmain_write_failed
     mov edi, EXIT_OK
-    jmp .Lstart_exit
-.Lstart_usage:
+    jmp .Lmain_exit
+.Lmain_usage:
     lea rsi, [rip + usage_msg]
     mov edx, USAGE_MSG_LEN
     call complain
     mov edi, EXIT_USAGE
-    jmp .Lstart_exit
-.Lstart_unreachable:
+    jmp .Lmain_exit
+.Lmain_unreachable:
     lea rsi, [rip + unreachable_msg]
     mov edx, UNREACHABLE_MSG_LEN
     call complain
     mov edi, EXIT_UNREACHABLE
-    jmp .Lstart_exit
-.Lstart_write_failed:
+    jmp .Lmain_exit
+.Lmain_write_failed:
     mov edi, EXIT_WRITE_FAILED
-.Lstart_exit:
-    mov eax, SYS_EXIT
-    syscall
-.Lstart_assert_path:
+.Lmain_exit:
+    call os_exit
+.Lmain_assert_path:
     mov edi, 2
     call assert_fail
-.size _start, . - _start
+.size main, . - main
 
 # Writes a message to standard error, or exits with EXIT_WRITE_FAILED when it can't.
 # In: rsi = the message; edx = its length, at least 1.
@@ -144,8 +129,7 @@ complain:
     ret
 .Lcomplain_failed:
     mov edi, EXIT_WRITE_FAILED
-    mov eax, SYS_EXIT
-    syscall
+    call os_exit
 .Lcomplain_assert_message:
     mov edi, 22
     call assert_fail
@@ -286,9 +270,8 @@ fetch_page:
     mov r12, rdx
 .Lfetch_page_close:
     mov r13, rax
-    mov eax, SYS_CLOSE
     mov edi, CONNECTION
-    syscall
+    call os_close
     test rax, rax
     js .Lfetch_page_result
 .Lfetch_page_result:
@@ -336,56 +319,6 @@ receive:
     call assert_fail
 .size receive, . - receive
 
-# Reads from file descriptor edi into the rdx bytes at rsi until they're full, the input ends,
-# or, when ecx is a byte (0 to 255), the last byte read is ecx; with ecx = -1 it reads to the
-# end. However the input arrives, it reads the same.
-# In: edi = the file descriptor, rsi = the buffer, rdx = its size, at least 1, ecx = the end
-# byte or -1.
-# Out: rax = how many bytes it read, or a negative error code.
-# returns: result
-.type fill, @function
-fill:
-    test rsi, rsi
-    jz .Lfill_assert_null
-    test rdx, rdx
-    jz .Lfill_assert_empty
-    mov r8, rdx
-    mov r10d, ecx
-    mov r9, MAX_FILL_READS
-.Lfill_loop:  # bound: 1099511627776
-    mov eax, SYS_READ
-    syscall
-    test rax, rax
-    js .Lfill_return
-    jz .Lfill_done
-    cmp rax, rdx
-    ja .Lfill_assert_count
-    add rsi, rax
-    sub rdx, rax
-    jz .Lfill_done
-    movzx eax, byte ptr [rsi - 1]
-    cmp eax, r10d
-    je .Lfill_done
-    dec r9
-    jnz .Lfill_loop
-    mov rax, ERROR_IO
-    jmp .Lfill_return
-.Lfill_done:
-    mov rax, r8
-    sub rax, rdx
-.Lfill_return:
-    ret
-.Lfill_assert_null:
-    mov edi, 990
-    call assert_fail
-.Lfill_assert_empty:
-    mov edi, 991
-    call assert_fail
-.Lfill_assert_count:
-    mov edi, 992
-    call assert_fail
-.size fill, . - fill
-
 # Finds where a response's body starts: just after the first blank line.
 # In: rdi = the response; rsi = its length, at most RESPONSE_LEN.
 # Out: rax = the body's offset, or the length when there's no blank line.
@@ -431,14 +364,14 @@ find_body:
 # returns: result
 .type write_all, @function
 write_all:
+    sub rsp, 8
     test rsi, rsi
     jz .Lwrite_all_assert_null
     test rdx, rdx
     jz .Lwrite_all_assert_empty
     mov r8, MAX_WRITES
 .Lwrite_all_loop:  # bound: 64
-    mov eax, SYS_WRITE
-    syscall
+    call os_write
     test rax, rax
     js .Lwrite_all_return
     cmp rax, rdx
@@ -453,6 +386,7 @@ write_all:
 .Lwrite_all_done:
     xor eax, eax
 .Lwrite_all_return:
+    add rsp, 8
     ret
 .Lwrite_all_assert_null:
     mov edi, 19
@@ -465,42 +399,3 @@ write_all:
     call assert_fail
 .size write_all, . - write_all
 
-# lengua's assertion handler. check_code compares it word for word: copy it exactly.
-# In: edi = the assertion's number, 1 to 999. Prints "lengua: assertion NNN failed" to
-# standard error and ends the program, every thread of it, with code 134.
-.type assert_fail, @function
-assert_fail:
-    sub rsp, 40
-    mov rax, qword ptr [rip + assert_message]
-    mov qword ptr [rsp], rax
-    mov rax, qword ptr [rip + assert_message + 8]
-    mov qword ptr [rsp + 8], rax
-    mov rax, qword ptr [rip + assert_message + 16]
-    mov qword ptr [rsp + 16], rax
-    mov eax, dword ptr [rip + assert_message + 24]
-    mov dword ptr [rsp + 24], eax
-    mov al, byte ptr [rip + assert_message + 28]
-    mov byte ptr [rsp + 28], al
-    mov eax, edi
-    xor edx, edx
-    mov ecx, 100
-    div ecx
-    add al, 48
-    mov byte ptr [rsp + 18], al
-    mov eax, edx
-    xor edx, edx
-    mov ecx, 10
-    div ecx
-    add al, 48
-    mov byte ptr [rsp + 19], al
-    add dl, 48
-    mov byte ptr [rsp + 20], dl
-    mov eax, 1
-    mov edi, 2
-    mov rsi, rsp
-    mov edx, 29
-    syscall
-    mov eax, 231
-    mov edi, 134
-    syscall
-.size assert_fail, . - assert_fail

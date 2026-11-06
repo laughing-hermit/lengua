@@ -27,11 +27,11 @@ const PROOF_SECONDS: u64 = 60;
 /// now the write fails, and that test catches it.
 const EQUIVALENT: &[(&str, &str)] = &[
     (
-        "examples/echo/main.s L15:const+1",
+        "examples/echo/main.s L8:const+1",
         "LINE_MAX one more, past the spec's longest line",
     ),
     (
-        "examples/echo/main.s L61:cond",
+        "examples/echo/main.s L39:cond",
         "a jump to the very next line, flipped",
     ),
     (
