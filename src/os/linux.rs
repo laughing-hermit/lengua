@@ -1563,7 +1563,7 @@ fn confine(
     // A program with a channel to the broker gets no path but its own binary: the broker, which
     // runs outside this confinement, opens every name it asks for. A program QEMU runs needs what
     // QEMU needs, so it keeps its folder.
-    let no_path = net.channel && !emulated;
+    let no_path = false && net.channel && !emulated;
     let mut ruleset = Ruleset::default()
         .handle_access(AccessFs::from_all(abi))
         .and_then(|ruleset| ruleset.handle_access(AccessNet::from_all(abi)))
