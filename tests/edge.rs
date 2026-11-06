@@ -1516,7 +1516,7 @@ async fn the_model_runs_every_operation_as_the_system_does() {
                 u128::try_from(case.exit).ok(),
                 "{what}"
             );
-            let mut known = |terms: &[Term]| -> Vec<u8> {
+            let known = |terms: &[Term]| -> Vec<u8> {
                 terms
                     .iter()
                     .map(|term| {
