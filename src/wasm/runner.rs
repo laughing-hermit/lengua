@@ -403,7 +403,6 @@ pub fn prepare(
 
 /// Every file under `folder`, and every folder, by name relative to it with `/` between names on
 /// every system, or why they can't all be read.
-#[must_use]
 pub fn left_in(folder: &Path) -> Left {
     match read_left(folder) {
         Ok((files, folders)) => (Ok(files), folders),
