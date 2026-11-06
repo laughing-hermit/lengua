@@ -59,11 +59,12 @@ free runners, whose id is written in the table below, and by nothing else.
      verdict is the same kind: proven, or bounded to a length.
 
    A Linux that meets the floor runs lengua directly, with no container. Other systems reach the
-   two targets through the lengua image (Ubuntu 24.04), run by Docker (the Docker Engine and its
-   `docker` command, not Docker Desktop), with Podman supported as the compatible alternative; on
-   a Mac this waits on Landlock (round 3). The image is the one route the project promises and
-   tests (round 3); WSL 2 and a Linux VM are the same Linux set up by hand. The floor of the
-   product is a default Docker or Podman container, on any host: what
+   two targets through the lengua image (Ubuntu 24.04), run by a working Docker (a `docker`
+   command talking to an engine, from whichever provider: Docker Desktop, Rancher Desktop, Colima
+   or the Docker Engine in WSL 2 or on Linux), with Podman supported as the compatible
+   alternative; on a Mac this waits on Landlock (round 3). The image is the one route the project
+   promises and tests (round 3); WSL 2 and a Linux VM are the same Linux set up by hand. The floor
+   of the product is a default Docker or Podman container, on any host: what
    such a container doesn't give everywhere, lengua doesn't need (it does not use io_uring, which
    both runtimes' default profiles block; hardware counters are optional; the proofs' memory guard
    reads the container's own limit), and a container job on both runners holds it there. A limit
@@ -136,7 +137,7 @@ reach those two targets. The project has tested none of these routes yet:
 
 | route | how | what it needs | tested by |
 |---|---|---|---|
-| The image: Windows, a Mac, an older Linux | the lengua image run by Docker (the Engine, not Docker Desktop), with Podman supported (round 3: Ubuntu 24.04 pinned by digest, LLVM, the solvers and lengua-mcp, for both CPUs). Windows: Docker Engine inside WSL 2. Mac: Docker Engine in a Linux VM such as Colima. Older Linux: Docker Engine | a kernel with Landlock under the container: Linux hosts; WSL 2's kernel; Colima's Ubuntu VM and Podman Desktop's Fedora CoreOS VM, both unverified on a Mac; Docker Desktop on a Mac reportedly has none (a report of 2026-10-02), so it works only after round 3's Landlock policy | a default container under Docker and under Podman on both Linux runners (round 3); the owner's Fedora under Podman, by hand; a Mac, by the one-line check in "Round 3" |
+| The image: Windows, a Mac, an older Linux | the lengua image run by a working Docker (any provider), with Podman supported (round 3: Ubuntu 24.04 pinned by digest, LLVM, the solvers and lengua-mcp, for both CPUs). Windows: Docker Desktop (the easiest installer), Rancher Desktop or Docker Engine inside WSL 2. Mac: Colima or Rancher Desktop, or Docker Desktop once its VM passes the check. Older Linux: Docker Engine | a kernel with Landlock under the container: Linux hosts; WSL 2's kernel; the VMs of Colima, Rancher Desktop and Podman Desktop, all unverified on a Mac; Docker Desktop on a Mac reportedly has none (a report of 2026-10-02), so it works only after round 3's Landlock policy | a default container under Docker and under Podman on both Linux runners (round 3); the owner's Fedora under Podman, by hand; a Mac, by the one-line check in "Round 3" |
 | Windows: WSL 2, by hand | `wsl --install -d Ubuntu-24.04`, then the agent and lengua inside it | Microsoft's kernel has Landlock (since 2022; the current one is 6.18); glibc 2.39 | nobody yet |
 | Mac: a Linux VM, by hand | Colima, Lima, UTM or Parallels (Ubuntu 24.04 arm64); Apple's `container` (macOS 26) is unverified | a kernel with Landlock, and glibc 2.39 | nobody yet |
 
@@ -301,7 +302,7 @@ An Opus plan comes first. What it must settle, from what the research found on 2
   - **A Mac is the test case,** since a Mac is a third of professional developers and many already
     run Docker Desktop. First the one-line check, on a real Mac (the owner's to arrange, since no
     free runner can run it): `docker run --rm ubuntu:24.04 cat /sys/kernel/security/lsm` must
-    list `landlock`, under Docker Desktop, under Colima and under Podman Desktop. Where it
+    list `landlock`, under Docker Desktop, Rancher Desktop, Colima and Podman Desktop. Where it
     doesn't, the options are the VM's maker enabling Landlock (out of our hands), lengua not
     requiring Landlock where seccomp and the broker already keep the promise (a sandbox change: a
     review, `tests/limits.rs` and the red team; it would also remove the Linux 6.12 floor), or
@@ -317,20 +318,27 @@ An Opus plan comes first. What it must settle, from what the research found on 2
   distributions also ship old LLVM: which versions does lengua need? DESIGN.md says musl builds
   are coming. Decide between static musl builds, an older-glibc build or both, and which
   distributions the documents promise.
-- **The container tool: Docker, not Docker Desktop** (the owner, 2026-11-06; Podman supported).
-  The standard is the Docker Engine and its `docker` command. Why Docker: in Stack Overflow's
-  2025 survey ([source](https://survey.stackoverflow.co/2025/technology)) Docker is at 71.1% of
-  respondents (73.8% of professionals) and Podman at 11.1% (10.9%); dev containers, CI and
-  MCP-server documents say `docker run`; and Podman speaks the same commands
-  (Fedora's `podman-docker` package adds a `docker` command), so Podman users stay supported and
-  the container job tests both (the runner has Docker 28.0.4 and Podman 4.9.3). Why not Docker
-  Desktop: it needs a paid plan in a company of more than 250 people or $10 million a year, the
-  Engine doesn't; its Mac VM reportedly has no Landlock; and no free runner can test its VM,
-  where they do test the Engine. Docker Desktop still works wherever its VM passes the check
-  below, but no document names it. Where the Engine comes from: native on Linux; inside WSL 2 on
-  Windows; in a Linux VM such as Colima on a Mac. This Fedora laptop needs no container at all
-  (glibc 2.43, Landlock, llvm-mc, ld.lld, z3 and cvc5 are installed): it runs lengua directly, and
-  its Podman is for trying the image by hand.
+- **The container tool: a working Docker** (the owner, 2026-11-06; Podman supported). The owner
+  chose Docker over Podman, then Docker over Docker Desktop; a side agent then pointed out that
+  the Docker Engine alone isn't one-click on Windows or a Mac, so the standard became the
+  interface: a `docker` command that talks to an engine, from any provider. Why Docker: in Stack
+  Overflow's 2025 survey ([source](https://survey.stackoverflow.co/2025/technology)) Docker is at
+  71.1% of respondents (73.8% of professionals) and Podman at 11.1% (10.9%); dev containers, CI
+  and MCP-server documents say `docker run`; and Podman speaks the same commands (Fedora's
+  `podman-docker` package adds a `docker` command), so Podman users stay supported and the
+  container job tests both (the runner has Docker 28.0.4 and Podman 4.9.3). The `docker` command
+  and the Docker Engine are open source (Apache 2.0), but the Engine runs only on Linux (Docker's
+  install page offers it on Windows and a Mac "through Docker Desktop"), so Windows and a Mac need
+  a Linux VM from a provider: Docker Desktop (one installer; free for personal use, education,
+  non-commercial open source and companies under 250 employees and $10 million revenue, paid
+  above that; its Mac VM reportedly has no Landlock), Rancher Desktop (SUSE, open source, Apache
+  2.0, no size limit, Windows, Mac and Linux), Colima (Mac, MIT, `brew install colima docker`) or
+  the Docker Engine inside WSL 2 (Windows). None of this is containers' fault: a container shares
+  the host's kernel and lengua's programs are Linux programs, so something must supply a Linux
+  kernel; only the deferred native ports would avoid it. No free runner can test a provider's VM,
+  but they test the Engine. This Fedora laptop needs no container at all (glibc 2.43, Landlock,
+  llvm-mc, ld.lld, z3 and cvc5 are installed): it runs lengua directly, and its Podman is for
+  trying the image by hand.
 - **The lengua image.** Ubuntu 24.04, pinned by digest, not a moving tag. The owner suggested
   Debian (stable), and Debian 13 would work (glibc 2.41, security support to 2028 and LTS to 2030,
   apt.llvm.org's `trixie` repositories with LLVM 22 and 23, the official image for both CPUs). It
@@ -349,16 +357,17 @@ An Opus plan comes first. What it must settle, from what the research found on 2
   bit-vector bugs the prover works around). Decide whether a native install takes the image's
   pinned versions too, so that a proof's verdict doesn't depend on the route, and have `doctor`
   print the versions it found.
-- **Windows and Mac.** The image comes first, under Docker: on Windows the Docker Engine inside
-  WSL 2, on a Mac the Docker Engine in a Linux VM such as Colima. When the launcher finds a Docker
-  whose kernel has no Landlock (Docker Desktop's Mac VM reportedly), it says so in a sentence
-  and names a VM that should have it. WSL 2 with the agent inside it (Claude Code runs there, so
-  the plugin is an ordinary Linux plugin: no bridge, no container needed, and the project lives
-  on ext4, not on `/mnt/c`, which is slow and case-insensitive) and a Linux VM (Colima, Lima, UTM,
-  Parallels) are the same Linux set up by hand: documented, not promised. An agent on the Windows
-  side calling `lengua-mcp` through `wsl.exe` in `.mcp.json` would meet path and environment
-  translation: not planned, not tested. The owner tests what CI can't, and the documents say so
-  until they have.
+- **Windows and Mac.** The image comes first, under a working Docker from any provider: on Windows
+  Docker Desktop (the easiest installer), Rancher Desktop or the Docker Engine inside WSL 2, on a
+  Mac Colima or Rancher Desktop, or Docker Desktop once its VM passes the check. When the
+  launcher finds a Docker whose kernel has no Landlock (Docker Desktop's Mac VM reportedly), it
+  says so in a sentence and names a VM that should have it. WSL 2 with the agent inside it
+  (Claude Code runs there, so the plugin is an ordinary Linux plugin: no bridge, no container
+  needed, and the project lives on ext4, not on `/mnt/c`, which is slow and case-insensitive) and
+  a Linux VM (Colima, Lima, UTM, Parallels) are the same Linux set up by hand: documented, not
+  promised. An agent on the Windows side calling `lengua-mcp` through `wsl.exe` in `.mcp.json`
+  would meet path and environment translation: not planned, not tested. The owner tests what CI
+  can't, and the documents say so until they have.
 - **Inside a container,** `/proc/meminfo` shows the host's memory, so the proofs' memory guard
   overestimates what is free, and hardware counters may be missing; runs still work.
 
