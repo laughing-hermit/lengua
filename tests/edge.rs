@@ -1537,7 +1537,10 @@ async fn the_model_runs_every_operation_as_the_system_does() {
             let known = |terms: &[Term]| -> Option<Vec<u8>> {
                 terms
                     .iter()
-                    .map(|term| pool.constant(*term).and_then(|value| u8::try_from(value).ok()))
+                    .map(|term| {
+                        pool.constant(*term)
+                            .and_then(|value| u8::try_from(value).ok())
+                    })
                     .collect()
             };
             if known(&run.stdout).as_ref() != Some(&case.stdout) {
