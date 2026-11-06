@@ -2965,7 +2965,10 @@ async fn an_edge_form_programs_threads_follow_the_rules() {
             "THREADS is 16, but the spec allows from 1 to 8 threads",
         );
         for (old, new, at, needle) in cases {
-            assert!(template.contains(old), "{name}: {old:?} isn't in the template");
+            assert!(
+                template.contains(old),
+                "{name}: {old:?} isn't in the template"
+            );
             let changed = template.replacen(old, new, 1);
             let report = check_edge_threads(&changed, Some(16)).await;
             assert_violation(&report, Rule::Resources, line_of(&changed, at), needle);

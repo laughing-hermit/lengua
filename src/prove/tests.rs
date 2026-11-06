@@ -3815,10 +3815,7 @@ const SERVER_TEMPLATES: PerCpu<ServerTemplate> = PerCpu {
                 "    mov x20, #CLIENTS\n.Lserve_clients_slot:",
                 "    mov x20, #1\n.Lserve_clients_slot:",
             ),
-            (
-                "    mov w0, w11\n    bl os_close\n",
-                "    mov x0, #0\n",
-            ),
+            ("    mov w0, w11\n    bl os_close\n", "    mov x0, #0\n"),
         ],
     ),
 };
@@ -4016,18 +4013,12 @@ const ECHO_SERVER_BUGS: PerCpu<ServerBugs> = PerCpu {
         ),
     ],
     aarch64: [
-        (
-            "    mov w3, #NEWLINE\n    bl fill\n",
-            "    bl os_read\n",
-        ),
+        ("    mov w3, #NEWLINE\n    bl fill\n", "    bl os_read\n"),
         (
             "    mov w3, #NEWLINE\n    bl fill\n",
             "    mov w3, #-1\n    bl fill\n",
         ),
-        (
-            "    mov x0, x19\n    bl os_close\n",
-            "    mov x0, #0\n",
-        ),
+        ("    mov x0, x19\n    bl os_close\n", "    mov x0, #0\n"),
     ],
 };
 
@@ -4102,14 +4093,8 @@ const FETCH: Folders = PerCpu {
 /// The edit that reads the reply once in place of fill, on each target: a reply cut by the
 /// network comes up short.
 const FETCH_READS_ONCE: PerCpu<Edit> = PerCpu {
-    x86_64: (
-        "    mov ecx, -1\n    call fill\n",
-        "    call os_read\n",
-    ),
-    aarch64: (
-        "    mov w3, #-1\n    bl fill\n",
-        "    bl os_read\n",
-    ),
+    x86_64: ("    mov ecx, -1\n    call fill\n", "    call os_read\n"),
+    aarch64: ("    mov w3, #-1\n    bl fill\n", "    bl os_read\n"),
 };
 
 /// A client on the network, through the connection lengua makes for it: fetch is proven for

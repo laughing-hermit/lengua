@@ -288,8 +288,7 @@ impl Checker<'_, '_> {
                             .to_owned(),
                     ));
                 }
-                if constant_before(function, index, abi.arguments[2], abi)
-                    .map(|(_, value)| value)
+                if constant_before(function, index, abi.arguments[2], abi).map(|(_, value)| value)
                     != Some(slot_size)
                 {
                     found.push((

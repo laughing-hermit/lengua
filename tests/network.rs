@@ -82,14 +82,20 @@ const READS_ONCE: PerCpu<Edit> = PerCpu {
 /// serving: an exit and the constants it names.
 const STOPS_AFTER_ONE: PerCpu<[Edit; 2]> = PerCpu {
     x86_64: [
-        (".equ LISTENING, 3\n", ".equ LISTENING, 3\n.equ EXIT_DONE, 0\n"),
+        (
+            ".equ LISTENING, 3\n",
+            ".equ LISTENING, 3\n.equ EXIT_DONE, 0\n",
+        ),
         (
             ".Lmain_next:\n    jmp .Lmain_serve",
             ".Lmain_next:\n    mov edi, EXIT_DONE\n    call os_exit",
         ),
     ],
     aarch64: [
-        (".equ LISTENING, 3\n", ".equ LISTENING, 3\n.equ EXIT_DONE, 0\n"),
+        (
+            ".equ LISTENING, 3\n",
+            ".equ LISTENING, 3\n.equ EXIT_DONE, 0\n",
+        ),
         (
             ".Lmain_next:\n    b .Lmain_serve",
             ".Lmain_next:\n    mov w0, #EXIT_DONE\n    bl os_exit",

@@ -8,10 +8,14 @@ use std::mem::MaybeUninit;
 use std::os::fd::{AsFd as _, OwnedFd};
 use std::os::unix::net::UnixStream;
 
-use rustix::fs::{AtFlags, Dir, Mode as FileMode, OFlags, ResolveFlags, mkdirat, openat2, renameat, unlinkat};
+use rustix::fs::{
+    AtFlags, Dir, Mode as FileMode, OFlags, ResolveFlags, mkdirat, openat2, renameat, unlinkat,
+};
 use rustix::net::{SendAncillaryBuffer, SendAncillaryMessage, SendFlags, sendmsg};
 
-use super::{Hello, Kind, Refusal, Request, encode_reply, parse_header, parse_request, REQUEST_LEN};
+use super::{
+    Hello, Kind, REQUEST_LEN, Refusal, Request, encode_reply, parse_header, parse_request,
+};
 use crate::edge::Op;
 use crate::edge::error::{EACCES, EBUSY, EEXIST, EINVAL, EIO};
 use crate::names;
@@ -240,9 +244,7 @@ impl Broker {
     fn busy(&self, path: &[u8]) -> bool {
         self.opens.values().any(|open| {
             open == path
-                || (open.len() > path.len()
-                    && open.starts_with(path)
-                    && open[path.len()] == b'/')
+                || (open.len() > path.len() && open.starts_with(path) && open[path.len()] == b'/')
         })
     }
 
@@ -529,8 +531,6 @@ pub fn serve(broker: &mut Broker, stream: &mut UnixStream) -> Outcome {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Read as _, Write as _};
-    use std::os::fd::AsFd as _;
     use std::path::Path;
 
     use rustix::net::{RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, recvmsg};
@@ -581,7 +581,10 @@ mod tests {
         // An existing file opens to read, and a missing one is not there.
         let read = broker.answer(&request(Kind::Open, 0, "notes.txt", ""));
         assert!(read.result >= 1 && read.handover.is_some(), "{read:?}");
-        assert_eq!(errno(&broker.answer(&request(Kind::Open, 0, "gone.txt", ""))), 2);
+        assert_eq!(
+            errno(&broker.answer(&request(Kind::Open, 0, "gone.txt", ""))),
+            2
+        );
         // A file is made, emptied again, appended to, and made only when new.
         for (mode, wanted) in [(1, 0), (1, 0), (2, 0), (3, 17)] {
             let answer = broker.answer(&request(Kind::Open, mode, "made.txt", ""));
@@ -592,12 +595,24 @@ mod tests {
             errno(&broker.answer(&request(Kind::Open, 1, "MADE.TXT", ""))),
             17
         );
-        assert_eq!(errno(&broker.answer(&request(Kind::Mkdir, 0, "Notes.TXT", ""))), 17);
+        assert_eq!(
+            errno(&broker.answer(&request(Kind::Mkdir, 0, "Notes.TXT", ""))),
+            17
+        );
         // Names every system refuses.
-        assert_eq!(errno(&broker.answer(&request(Kind::Open, 1, "a:b", ""))), 22);
-        assert_eq!(errno(&broker.answer(&request(Kind::Open, 1, "con", ""))), 22);
+        assert_eq!(
+            errno(&broker.answer(&request(Kind::Open, 1, "a:b", ""))),
+            22
+        );
+        assert_eq!(
+            errno(&broker.answer(&request(Kind::Open, 1, "con", ""))),
+            22
+        );
         let long = "x".repeat(300);
-        assert_eq!(errno(&broker.answer(&request(Kind::Open, 1, &long, ""))), 36);
+        assert_eq!(
+            errno(&broker.answer(&request(Kind::Open, 1, &long, ""))),
+            36
+        );
         // The folder itself opens as a folder, and not as a file to write.
         let here = broker.answer(&request(Kind::Open, 4, ".", ""));
         assert!(here.handover.is_some(), "{here:?}");
@@ -633,12 +648,24 @@ mod tests {
         let back = broker.answer(&request(Kind::Open, 4, "sub/../sub", ""));
         assert!(back.handover.is_some(), "{back:?}");
         // The calls that change names do not follow a link either.
-        assert_eq!(errno(&broker.answer(&request(Kind::Mkdir, 0, "link/new", ""))), 13);
-        assert_eq!(errno(&broker.answer(&request(Kind::Remove, 0, "link/secret", ""))), 13);
-        assert_eq!(errno(&broker.answer(&request(Kind::Rename, 0, "link/secret", "x"))), 13);
+        assert_eq!(
+            errno(&broker.answer(&request(Kind::Mkdir, 0, "link/new", ""))),
+            13
+        );
+        assert_eq!(
+            errno(&broker.answer(&request(Kind::Remove, 0, "link/secret", ""))),
+            13
+        );
+        assert_eq!(
+            errno(&broker.answer(&request(Kind::Rename, 0, "link/secret", "x"))),
+            13
+        );
         assert!(outside.path().join("secret").exists());
         // A link in the folder is itself removed, not what it points to.
-        assert_eq!(errno(&broker.answer(&request(Kind::Remove, 0, "file", ""))), 0);
+        assert_eq!(
+            errno(&broker.answer(&request(Kind::Remove, 0, "file", ""))),
+            0
+        );
         assert!(outside.path().join("secret").exists());
     }
 
@@ -651,12 +678,27 @@ mod tests {
         let mut broker = broker_in(folder.path());
         let held = broker.answer(&request(Kind::Open, 0, "sub/a.txt", ""));
         let token = u64::try_from(held.result).expect("a token");
-        assert_eq!(errno(&broker.answer(&request(Kind::Remove, 0, "sub/a.txt", ""))), 16);
-        assert_eq!(errno(&broker.answer(&request(Kind::Remove, 1, "sub", ""))), 16);
-        assert_eq!(errno(&broker.answer(&request(Kind::Rename, 0, "sub", "moved"))), 16);
-        assert_eq!(errno(&broker.answer(&request(Kind::Rename, 0, "sub/a.txt", "c"))), 16);
+        assert_eq!(
+            errno(&broker.answer(&request(Kind::Remove, 0, "sub/a.txt", ""))),
+            16
+        );
+        assert_eq!(
+            errno(&broker.answer(&request(Kind::Remove, 1, "sub", ""))),
+            16
+        );
+        assert_eq!(
+            errno(&broker.answer(&request(Kind::Rename, 0, "sub", "moved"))),
+            16
+        );
+        assert_eq!(
+            errno(&broker.answer(&request(Kind::Rename, 0, "sub/a.txt", "c"))),
+            16
+        );
         // What isn't held goes.
-        assert_eq!(errno(&broker.answer(&request(Kind::Rename, 0, "b.txt", "c.txt"))), 0);
+        assert_eq!(
+            errno(&broker.answer(&request(Kind::Rename, 0, "b.txt", "c.txt"))),
+            0
+        );
         // Once the program says it closed the file, it goes.
         let closed = Request {
             kind: Kind::Closed,
@@ -666,12 +708,24 @@ mod tests {
             second: Vec::new(),
         };
         broker.answer(&closed);
-        assert_eq!(errno(&broker.answer(&request(Kind::Remove, 0, "sub/a.txt", ""))), 0);
-        assert_eq!(errno(&broker.answer(&request(Kind::Remove, 1, "sub", ""))), 0);
+        assert_eq!(
+            errno(&broker.answer(&request(Kind::Remove, 0, "sub/a.txt", ""))),
+            0
+        );
+        assert_eq!(
+            errno(&broker.answer(&request(Kind::Remove, 1, "sub", ""))),
+            0
+        );
         // A folder with something in it stays, with the error the system gives.
-        assert_eq!(errno(&broker.answer(&request(Kind::Mkdir, 0, "full", ""))), 0);
+        assert_eq!(
+            errno(&broker.answer(&request(Kind::Mkdir, 0, "full", ""))),
+            0
+        );
         std::fs::write(folder.path().join("full/x"), "x").expect("a file");
-        assert_eq!(errno(&broker.answer(&request(Kind::Remove, 1, "full", ""))), 39);
+        assert_eq!(
+            errno(&broker.answer(&request(Kind::Remove, 1, "full", ""))),
+            39
+        );
     }
 
     #[test]
@@ -720,7 +774,14 @@ mod tests {
             seconds.copy_from_slice(&answer.payload[..8]);
             i64::from_le_bytes(seconds)
         };
-        assert_eq!([reading(&mut broker), reading(&mut broker), reading(&mut broker)], [100, 200, 200]);
+        assert_eq!(
+            [
+                reading(&mut broker),
+                reading(&mut broker),
+                reading(&mut broker)
+            ],
+            [100, 200, 200]
+        );
         // The notes.
         broker.answer(&request(Kind::Waiting, 0, "", ""));
         broker.answer(&request(Kind::Listed, 0, "", ""));
@@ -730,7 +791,9 @@ mod tests {
     /// A client's side of the channel: a request goes out, and the reply and its descriptor come
     /// back.
     fn ask(stream: &mut UnixStream, request: &Request) -> (i64, Vec<u8>, Option<OwnedFd>) {
-        stream.write_all(&request.encode()).expect("the request goes");
+        stream
+            .write_all(&request.encode())
+            .expect("the request goes");
         let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
         let mut control = RecvAncillaryBuffer::new(&mut space);
         let mut fixed = [0u8; super::super::REPLY_LEN];
@@ -792,14 +855,24 @@ mod tests {
         let fds = [spare.as_fd()];
         let _fits = control.push(SendAncillaryMessage::ScmRights(&fds));
         let ping = request(Kind::Waiting, 0, "", "").encode();
-        sendmsg(&client, &[IoSlice::new(&ping)], &mut control, SendFlags::empty())
-            .expect("the note goes");
+        sendmsg(
+            &client,
+            &[IoSlice::new(&ping)],
+            &mut control,
+            SendFlags::empty(),
+        )
+        .expect("the note goes");
         let (result, _, _) = ask(&mut client, &request(Kind::Open, 4, ".", ""));
         assert!(result >= 1);
         // Bytes that aren't a request end it.
-        client.write_all(&[0xff; REQUEST_LEN]).expect("the bytes go");
+        client
+            .write_all(&[0xff; REQUEST_LEN])
+            .expect("the bytes go");
         let (outcome, notes) = service.join().expect("the service ends");
-        assert!(matches!(outcome, Outcome::Refused(Refusal::Kind(255))), "{outcome:?}");
+        assert!(
+            matches!(outcome, Outcome::Refused(Refusal::Kind(255))),
+            "{outcome:?}"
+        );
         assert!(notes.waited);
     }
 
@@ -810,6 +883,9 @@ mod tests {
         let (client, mut server) = UnixStream::pair().expect("a channel");
         let service = std::thread::spawn(move || serve(&mut broker, &mut server));
         drop(client);
-        assert!(matches!(service.join().expect("the service ends"), Outcome::Closed));
+        assert!(matches!(
+            service.join().expect("the service ends"),
+            Outcome::Closed
+        ));
     }
 }

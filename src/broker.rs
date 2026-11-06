@@ -97,7 +97,9 @@ impl Hello {
         let Ok(bytes) = <[u8; HELLO_LEN]>::try_from(bytes) else {
             return Err(Refusal::Short);
         };
-        let word = |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+        let word = |at: usize| {
+            u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
+        };
         if word(0) != MAGIC || word(4) != VERSION {
             return Err(Refusal::Magic);
         }
@@ -213,8 +215,16 @@ impl Request {
         let mut bytes = Vec::with_capacity(REQUEST_LEN + self.first.len() + self.second.len());
         bytes.push(self.kind as u8);
         bytes.push(self.argument);
-        bytes.extend_from_slice(&u16::try_from(self.first.len()).unwrap_or(u16::MAX).to_le_bytes());
-        bytes.extend_from_slice(&u16::try_from(self.second.len()).unwrap_or(u16::MAX).to_le_bytes());
+        bytes.extend_from_slice(
+            &u16::try_from(self.first.len())
+                .unwrap_or(u16::MAX)
+                .to_le_bytes(),
+        );
+        bytes.extend_from_slice(
+            &u16::try_from(self.second.len())
+                .unwrap_or(u16::MAX)
+                .to_le_bytes(),
+        );
         bytes.extend_from_slice(&[0, 0]);
         bytes.extend_from_slice(&self.value.to_le_bytes());
         bytes.extend_from_slice(&self.first);
@@ -305,9 +315,7 @@ pub fn parse_header(bytes: &[u8]) -> Result<Header, Refusal> {
 ///
 /// When the bytes aren't exactly one request, or a name has a NUL in it.
 pub fn parse_request(bytes: &[u8]) -> Result<Request, Refusal> {
-    let (fixed, body) = bytes
-        .split_at_checked(REQUEST_LEN)
-        .ok_or(Refusal::Short)?;
+    let (fixed, body) = bytes.split_at_checked(REQUEST_LEN).ok_or(Refusal::Short)?;
     let header = parse_header(fixed)?;
     if body.len() != header.body() {
         return Err(Refusal::Length(body.len()));
@@ -330,7 +338,11 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, Refusal> {
 pub fn encode_reply(result: i64, payload: &[u8]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(REPLY_LEN + payload.len());
     bytes.extend_from_slice(&result.to_le_bytes());
-    bytes.extend_from_slice(&u32::try_from(payload.len()).unwrap_or(u32::MAX).to_le_bytes());
+    bytes.extend_from_slice(
+        &u32::try_from(payload.len())
+            .unwrap_or(u32::MAX)
+            .to_le_bytes(),
+    );
     bytes.extend_from_slice(&[0; 4]);
     bytes.extend_from_slice(payload);
     bytes
@@ -351,7 +363,10 @@ pub fn parse_reply(bytes: &[u8]) -> Result<(i64, usize), Refusal> {
     if bytes[12..] != [0; 4] {
         return Err(Refusal::Reserved);
     }
-    Ok((i64::from_le_bytes(result), usize::try_from(length).unwrap_or(usize::MAX)))
+    Ok((
+        i64::from_le_bytes(result),
+        usize::try_from(length).unwrap_or(usize::MAX),
+    ))
 }
 
 #[cfg(target_os = "linux")]
@@ -390,7 +405,11 @@ mod tests {
     #[test]
     fn every_request_is_read_back_as_it_was_written() {
         for request in requests() {
-            assert_eq!(parse_request(&request.encode()), Ok(request.clone()), "{request:?}");
+            assert_eq!(
+                parse_request(&request.encode()),
+                Ok(request.clone()),
+                "{request:?}"
+            );
         }
     }
 
