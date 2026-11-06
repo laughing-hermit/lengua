@@ -53,6 +53,8 @@ main:
 echo_line:
     stp x29, x30, [sp, #-16]!
     stp x19, x20, [sp, #-16]!
+    cmp x0, #LISTENING
+    b.ls .Lecho_line_assert_connection
     mov x19, x0
     adrp x1, line
     add x1, x1, :lo12:line
@@ -81,6 +83,9 @@ echo_line:
     ret
 .Lecho_line_assert_count:
     mov w0, #3
+    bl assert_fail
+.Lecho_line_assert_connection:
+    mov w0, #4
     bl assert_fail
 .size echo_line, . - echo_line
 

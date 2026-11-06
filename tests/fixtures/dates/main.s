@@ -189,7 +189,6 @@ read_day:
 # returns: result
 .type read_clock, @function
 read_clock:
-    sub rsp, 8
     sub rsp, CLOCK_FRAME
     mov edi, CLOCK_REALTIME
     mov rsi, rsp
@@ -207,7 +206,6 @@ read_clock:
     mov rax, ERROR_INVALID
 .Lread_clock_return:
     add rsp, CLOCK_FRAME
-    add rsp, 8
     ret
 .Lread_clock_assert_ns:
     mov edi, 3

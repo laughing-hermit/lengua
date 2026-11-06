@@ -140,9 +140,13 @@ static UNLUCKY: PerCpu<Edits> = PerCpu {
 
 /// A change that leaves what a program does as it was, and makes it a new build: a `nop` first.
 /// The tests and the proofs must be made again for it, and a proof of the old build must not
-/// land on it. Both CPUs have a `nop`, and `main` in every program of the edge form, which the
-/// template and `cat`, the programs it is made in, are in.
+/// land on it. Both CPUs have a `nop`; `main` starts every program of the edge form, which `cat`
+/// is, and `_start` the inline form, which the template is here (the copy its rules were written
+/// against).
 const NOP: flow::Edit = ("main:\n", "main:\n    nop\n");
+
+/// The same change to the template, which is in the inline form.
+const TEMPLATE_NOP: flow::Edit = ("_start:\n", "_start:\n    nop\n");
 
 /// The template, with its spec recorded, passes every rule and all 274 test runs, is stamped
 /// with lengua's line, and the lock says what built it.
@@ -691,7 +695,10 @@ async fn the_template_is_proven_for_every_input() {
         assert_eq!(again["state"], "done", "{name}: {again}");
         assert_eq!(again["proofs"], report["proofs"], "{name}: {again}");
         // A new build is tested and proven again by itself.
-        program.write("main.s", &flow::template(target).replacen(NOP.0, NOP.1, 1));
+        program.write(
+            "main.s",
+            &flow::template(target).replacen(TEMPLATE_NOP.0, TEMPLATE_NOP.1, 1),
+        );
         let report = done(&session, &program).await;
         assert!(
             any_line(&report["proofs"], "proven for every input in range"),
@@ -1007,7 +1014,7 @@ fn every_cell_edits_text_its_program_has() {
         assert_ne!(offence.applied_to(&template), template, "{name}");
         // A `nop` goes first in the template and in cat, and every program starts with the line
         // that says which CPU's code it is.
-        assert!(template.contains(NOP.0), "the template on {name}");
+        assert!(template.contains(TEMPLATE_NOP.0), "the template on {name}");
         assert!(
             flow::program_file(target, "cat", "main.s").contains(NOP.0),
             "cat on {name}"

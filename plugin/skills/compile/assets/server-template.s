@@ -247,9 +247,9 @@ serve_slot:
 # In: edi = the slot, 0 to CLIENTS - 1.
 .type finish_slot, @function
 finish_slot:
-    sub rsp, 8
     push rbx
     push r12
+    sub rsp, 8
     mov r12d, edi
     cmp r12, CLIENTS
     jae .Lfinish_slot_assert_slot
@@ -283,9 +283,9 @@ finish_slot:
     mov qword ptr [rax + r12*8], 0
     dec qword ptr [rip + taken]
     mov word ptr [rip + pollfds + EVENTS], POLLIN
+    add rsp, 8
     pop r12
     pop rbx
-    add rsp, 8
     ret
 .Lfinish_slot_assert_slot:
     mov edi, 11

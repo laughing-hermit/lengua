@@ -2858,7 +2858,13 @@ fn edge_parallel_template(target: Profile) -> String {
 /// allows and `threads` threads.
 async fn check_edge_threads(text: &str, threads: Option<u32>) -> Report {
     use crate::edge::Op;
-    let ops = [Op::Read, Op::Write, Op::ThreadStart, Op::ThreadJoin];
+    let ops = [
+        Op::Read,
+        Op::Write,
+        Op::Exit,
+        Op::ThreadStart,
+        Op::ThreadJoin,
+    ];
     check_allowing(text, CpuFeatures::all(), &SYSCALLS, &ops, threads).await
 }
 

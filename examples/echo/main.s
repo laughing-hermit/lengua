@@ -55,6 +55,8 @@ main:
 .type echo_line, @function
 echo_line:
     push rbx
+    cmp edi, LISTENING
+    jbe .Lecho_line_assert_connection
     mov ebx, edi
     lea rsi, [rip + line]
     mov edx, LINE_MAX
@@ -81,6 +83,9 @@ echo_line:
     ret
 .Lecho_line_assert_count:
     mov edi, 3
+    call assert_fail
+.Lecho_line_assert_connection:
+    mov edi, 4
     call assert_fail
 .size echo_line, . - echo_line
 

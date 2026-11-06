@@ -140,20 +140,24 @@ pub struct Outcome {
 /// Where the tests run. lengua's supervisor supplies a test's random bytes and clock, ends its
 /// sleeps at once and checks where it connects; it can't follow a program that QEMU's user mode
 /// runs, and runs only on the CPUs whose registers it reads, so where it can't, the tests that
-/// need it aren't run. Under QEMU the runs aren't timed either: their instructions are QEMU's.
+/// need it aren't run. A program with a channel to lengua's broker needs no supervisor, on any CPU
+/// and under QEMU too. Under QEMU the runs aren't timed either: their instructions are QEMU's.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Setting {
     /// Whether QEMU's user mode runs the program, for the target's CPU.
     pub emulated: bool,
     /// Whether the spec lets the program sleep, which a test ends at once.
     pub sleeps: bool,
+    /// Whether lengua's broker serves the program over a channel.
+    pub channel: bool,
 }
 
 impl Setting {
-    /// Whether the supervisor can follow the program here.
+    /// Whether what a test supplies and watches can be done for the program here: its broker
+    /// does it, or the supervisor can follow it.
     #[must_use]
     pub fn supervised(self) -> bool {
-        !self.emulated && crate::supervise::AVAILABLE
+        self.channel || (!self.emulated && crate::supervise::AVAILABLE)
     }
 }
 
