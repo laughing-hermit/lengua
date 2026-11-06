@@ -1000,9 +1000,8 @@ mod tests {
             let size = |bytes: usize| i64::try_from(bytes).expect("a size");
             let ask = |kind: crate::broker::Kind| kind as i64;
             let widen = i64::from;
-            let reply_at = size(
-                (crate::broker::REQUEST_LEN + crate::broker::MAX_BODY).next_multiple_of(8),
-            );
+            let reply_at =
+                size((crate::broker::REQUEST_LEN + crate::broker::MAX_BODY).next_multiple_of(8));
             let wire: [(&str, i64); 28] = [
                 ("LENGUA_MAGIC", i64::from(crate::broker::MAGIC)),
                 ("LENGUA_VERSION", i64::from(crate::broker::VERSION)),
@@ -1033,11 +1032,20 @@ mod tests {
                 // The edge's own: where the reply and its payload are in the wire's buffer, which
                 // holds a request of two paths first.
                 ("LENGUA_REPLY_AT", reply_at),
-                ("LENGUA_PAYLOAD_AT", reply_at + size(crate::broker::REPLY_LEN)),
+                (
+                    "LENGUA_PAYLOAD_AT",
+                    reply_at + size(crate::broker::REPLY_LEN),
+                ),
                 ("LENGUA_LOOKED", 1 << 31),
             ];
             for (name, wanted) in wire {
                 assert_eq!(found[name], wanted, "{profile:?} {name}");
+            }
+            // AArch64 builds the magic in two halves, as one instruction can't hold it.
+            if let (Some(low), Some(high)) =
+                (found.get("LENGUA_MAGIC_LOW"), found.get("LENGUA_MAGIC_HIGH"))
+            {
+                assert_eq!(low | (high << 16), found["LENGUA_MAGIC"], "{profile:?}");
             }
         }
     }

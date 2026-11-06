@@ -269,18 +269,19 @@ impl Started {
         let stderr = self.stderr.await.map_err(io::Error::other)??;
         let (supplied, random_asked, listed) = match (self.supervisor.as_mut(), self.broker.take())
         {
-            (Some((supervisor, lines)), _) => {
-                match supervisor_verdict(supervisor, lines).await {
-                    Ok((asked, listed)) => (None, Some(asked), listed),
-                    Err(problem) => (Some(problem), None, false),
-                }
-            }
+            (Some((supervisor, lines)), _) => match supervisor_verdict(supervisor, lines).await {
+                Ok((asked, listed)) => (None, Some(asked), listed),
+                Err(problem) => (Some(problem), None, false),
+            },
             // The program ended, so its end of the channel has closed and the service with it.
-            (None, Some(Brokered {
-                service,
-                notes,
-                random,
-            })) => {
+            (
+                None,
+                Some(Brokered {
+                    service,
+                    notes,
+                    random,
+                }),
+            ) => {
                 let outcome = tokio::task::spawn_blocking(move || service.join())
                     .await
                     .map_err(io::Error::other)?;
@@ -290,9 +291,9 @@ impl Started {
                         "lengua's broker stopped serving the program, which sent what isn't a \
                          message of the protocol ({refusal:?})"
                     )),
-                    Ok(Outcome::Failed(error)) => {
-                        Some(format!("lengua's broker stopped serving the program: {error}"))
-                    }
+                    Ok(Outcome::Failed(error)) => Some(format!(
+                        "lengua's broker stopped serving the program: {error}"
+                    )),
                     Err(_) => Some("lengua's broker stopped serving the program".to_owned()),
                 };
                 (

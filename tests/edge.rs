@@ -1234,7 +1234,11 @@ async fn every_operation_does_what_it_promises() {
             let place = folder.path().join(target.name());
             let text = program(target, &case);
             let executable = per_target::build(target, &place, case.name, &text).await;
-            built.push((target, executable, lengua::edge::uses_channel(target, &text)));
+            built.push((
+                target,
+                executable,
+                lengua::edge::uses_channel(target, &text),
+            ));
         }
         for (target, executable, channel) in built {
             let Some(how) = per_target::way(target) else {
@@ -1263,49 +1267,197 @@ async fn every_operation_does_what_it_promises() {
             // A program that links the channel runs twice: on its own, calling the system itself,
             // and with lengua's broker serving it. It does the same both ways.
             for brokered in [false, true] {
-            if brokered && !channel {
-                continue;
-            }
-            let job = Job {
-                emulated: how == Way::Emulated,
-                env: &environment,
-                files: &files,
-                folders: &folders,
-                channel: brokered,
-                ..Job::new(&executable, &arguments, case.stdin, &allowed)
-            };
-            let ran = run(launcher(), job, Limits::default())
-                .await
-                .expect("the program runs");
-            let what = format!(
-                "{} on {}{}",
-                case.name,
-                target.name(),
-                if brokered { ", through the broker" } else { "" }
-            );
-            let exit = i32::try_from(case.exit).unwrap_or(-1);
-            // 100 and a step's number: a register that call must keep has changed.
-            let hint = match ran.end {
-                End::Exited(code) if code != exit && (100..200).contains(&code) => {
-                    format!(" (step {} changed a register it must keep)", code - 100)
+                if brokered && !channel {
+                    continue;
                 }
-                _ => String::new(),
-            };
-            assert_eq!(ran.end, End::Exited(exit), "{what}{hint}");
-            assert_eq!(ran.stdout, case.stdout, "{what}");
-            if !case.stderr.is_empty() {
-                assert_eq!(ran.stderr, case.stderr, "{what}");
+                let job = Job {
+                    emulated: how == Way::Emulated,
+                    env: &environment,
+                    files: &files,
+                    folders: &folders,
+                    channel: brokered,
+                    ..Job::new(&executable, &arguments, case.stdin, &allowed)
+                };
+                let ran = run(launcher(), job, Limits::default())
+                    .await
+                    .expect("the program runs");
+                let what = format!(
+                    "{} on {}{}",
+                    case.name,
+                    target.name(),
+                    if brokered { ", through the broker" } else { "" }
+                );
+                let exit = i32::try_from(case.exit).unwrap_or(-1);
+                // 100 and a step's number: a register that call must keep has changed.
+                let hint = match ran.end {
+                    End::Exited(code) if code != exit && (100..200).contains(&code) => {
+                        format!(" (step {} changed a register it must keep)", code - 100)
+                    }
+                    _ => String::new(),
+                };
+                assert_eq!(ran.end, End::Exited(exit), "{what}{hint}");
+                assert_eq!(ran.stdout, case.stdout, "{what}");
+                if !case.stderr.is_empty() {
+                    assert_eq!(ran.stderr, case.stderr, "{what}");
+                }
+                if !case.after.is_empty() {
+                    let found = ran.files.as_ref().expect("the files it left");
+                    let wanted: BTreeMap<String, Vec<u8>> = case
+                        .after
+                        .iter()
+                        .map(|(name, contents)| ((*name).to_owned(), contents.as_bytes().to_vec()))
+                        .collect();
+                    assert_eq!(*found, wanted, "{what}");
+                }
             }
-            if !case.after.is_empty() {
-                let found = ran.files.as_ref().expect("the files it left");
-                let wanted: BTreeMap<String, Vec<u8>> = case
-                    .after
-                    .iter()
-                    .map(|(name, contents)| ((*name).to_owned(), contents.as_bytes().to_vec()))
-                    .collect();
-                assert_eq!(*found, wanted, "{what}");
-            }
-            }
+        }
+    }
+}
+
+/// A test gives the program its clock and its random bytes through the broker, in the order it
+/// asks, the last reading repeating, and a wait of an hour ends at once; and the broker knows how
+/// many random bytes the program asked for.
+#[tokio::test]
+async fn a_test_gives_the_program_its_clock_and_random_bytes_through_the_broker() {
+    use lengua::supply::{Supply, Time};
+
+    let case = Case {
+        calls: &[
+            Syscall::ClockGettime,
+            Syscall::ClockNanosleep,
+            Syscall::Getrandom,
+        ],
+        ..Case::new(
+            "supplied",
+            &[
+                Set {
+                    offset: 112,
+                    bytes: 8,
+                    value: 3600,
+                },
+                Call {
+                    op: "os_clock",
+                    args: &[N(0), Scratch(64)],
+                    keep: Some(0),
+                },
+                Call {
+                    op: "os_random",
+                    args: &[Scratch(80), N(4)],
+                    keep: Some(1),
+                },
+                Call {
+                    op: "os_clock",
+                    args: &[N(1), Scratch(96)],
+                    keep: Some(2),
+                },
+                Call {
+                    op: "os_sleep",
+                    args: &[N(1), N(0), Scratch(112)],
+                    keep: Some(3),
+                },
+            ],
+            128,
+            image(
+                128,
+                &[0, 4, 0, 0],
+                &[
+                    (64, &word(100)),
+                    (72, &word(5)),
+                    (80, &[1, 2, 3, 4]),
+                    (96, &word(200)),
+                    (104, &word(7)),
+                    (112, &word(3600)),
+                ],
+            ),
+        )
+    };
+    let supply = Supply {
+        random: Some(vec![1, 2, 3, 4]),
+        clock: vec![
+            Time {
+                seconds: 100,
+                nanoseconds: 5,
+            },
+            Time {
+                seconds: 200,
+                nanoseconds: 7,
+            },
+        ],
+    };
+    let folder = tempfile::tempdir().expect("a folder");
+    for target in Profile::ALL {
+        let place = folder.path().join(target.name());
+        let text = program(target, &case);
+        let executable = per_target::build(target, &place, case.name, &text).await;
+        assert!(lengua::edge::uses_channel(target, &text), "{}", target.name());
+        let Some(how) = per_target::way(target) else {
+            continue;
+        };
+        let mut spec = vec![Syscall::Write, Syscall::Exit];
+        spec.extend_from_slice(case.calls);
+        let allowed = target.allowed_syscalls(&spec, false);
+        let job = Job {
+            emulated: how == Way::Emulated,
+            supply: Some(&supply),
+            channel: true,
+            ..Job::new(&executable, &[], b"", &allowed)
+        };
+        let ran = run(launcher(), job, Limits::default())
+            .await
+            .expect("the program runs");
+        let what = target.name();
+        assert_eq!(ran.end, End::Exited(0), "{what}");
+        assert_eq!(ran.stdout, case.stdout, "{what}");
+        assert_eq!(ran.supplied, None, "{what}");
+        assert_eq!(ran.random_asked, Some(4), "{what}");
+        assert!(ran.wall_time_ns < 1_500_000_000, "{what}: {ran:?}");
+    }
+}
+
+/// Every operation and library function builds on its own, with what it needs, and all of them
+/// build together, on both CPUs, whatever the arguments: what the table of cases doesn't call is
+/// still assembled, and no name is twice.
+#[tokio::test]
+async fn every_operation_builds_alone_and_with_all_the_others() {
+    let folder = tempfile::tempdir().expect("a folder");
+    let mut names: Vec<&'static str> = lengua::edge::Op::ALL
+        .iter()
+        .map(|op| op.symbol())
+        .collect();
+    names.extend(["fill", "parallel_for", "assert_fail"]);
+    let mut groups: Vec<(String, Vec<&'static str>)> = names
+        .iter()
+        .map(|name| (format!("build_{name}"), vec![*name]))
+        .collect();
+    groups.push(("build_everything".to_owned(), names.clone()));
+    for (name, calls) in groups {
+        let steps: Vec<Step> = calls
+            .iter()
+            .map(|call| {
+                if call.starts_with("os_") {
+                    Call {
+                        op: call,
+                        args: &[],
+                        keep: None,
+                    }
+                } else {
+                    Function {
+                        name: call,
+                        args: &[],
+                        keep: None,
+                    }
+                }
+            })
+            .collect();
+        let steps: &'static [Step] = Box::leak(steps.into_boxed_slice());
+        let name: &'static str = Box::leak(name.into_boxed_str());
+        let case = Case {
+            extra: (X86_WORKER, A64_WORKER),
+            ..Case::new(name, steps, 0, Vec::new())
+        };
+        for target in Profile::ALL {
+            let place = folder.path().join(target.name());
+            per_target::build(target, &place, case.name, &program(target, &case)).await;
         }
     }
 }

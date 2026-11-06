@@ -65,6 +65,8 @@
 .equ LENGUA_SOL_SOCKET, 1
 .equ LENGUA_SCM_RIGHTS, 1
 .equ LENGUA_MAGIC, 0x42474e4c
+.equ LENGUA_MAGIC_LOW, 0x4e4c
+.equ LENGUA_MAGIC_HIGH, 0x4247
 .equ LENGUA_VERSION, 1
 .equ LENGUA_HELLO_LEN, 32
 .equ LENGUA_REQUEST_LEN, 16
@@ -188,18 +190,34 @@ os_read:
     ret
 .size os_read, . - os_read
 
-// == os_close: lengua_error
+// == os_close: lengua_error lengua_tokens lengua_note
 .text
 .type os_close, @function
 // In: w0 = the descriptor.
-// Out: x0 = 0, or an error.
+// Out: x0 = 0, or an error. A file the broker opened is told to it as closed.
 os_close:
     mov w16, #LENGUA_CHANNEL
     cmp w0, w16
     b.eq .Llengua_close_refused
+    mov w17, w0
     mov x8, #LENGUA_SYS_CLOSE
     svc #0
     tbnz x0, #63, .Llengua_close_failed
+    cmp w17, w16
+    b.hs .Llengua_close_done
+    adrp x16, lengua_tokens
+    add x16, x16, :lo12:lengua_tokens
+    add x16, x16, x17, lsl #2
+    ldr w0, [x16]
+    cbz w0, .Llengua_close_done
+    str wzr, [x16]
+    mov x16, x0
+    mov w17, #LENGUA_NOTE_CLOSED
+    str x30, [sp, #-16]!
+    bl lengua_note
+    ldr x30, [sp], #16
+.Llengua_close_done:
+    mov x0, #0
     ret
 .Llengua_close_refused:
     mov x0, #LENGUA_EBADF
@@ -239,12 +257,16 @@ os_seek:
     ret
 .size os_seek, . - os_seek
 
-// == os_mkdir: lengua_error
+// == os_mkdir: lengua_error lengua_ask lengua_channel_ready
 .text
 .type os_mkdir, @function
 // In: x0 = the name, NUL-terminated, relative to the working folder.
-// Out: x0 = 0, or an error.
+// Out: x0 = 0, or an error. Where lengua's broker serves the program, it makes the folder.
 os_mkdir:
+    str x30, [sp, #-16]!
+    bl lengua_channel_ready
+    cbnz w16, .Llengua_mkdir_asked
+    ldr x30, [sp], #16
     mov x16, x0
     stp x1, x2, [sp, #-16]!
     mov x1, x16
@@ -253,6 +275,13 @@ os_mkdir:
     mov x8, #LENGUA_SYS_MKDIRAT
     svc #0
     ldp x1, x2, [sp], #16
+    tbnz x0, #63, .Llengua_mkdir_failed
+    ret
+.Llengua_mkdir_asked:
+    mov w17, #LENGUA_ASK_MKDIR
+    mov w16, #0
+    bl lengua_ask
+    ldr x30, [sp], #16
     tbnz x0, #63, .Llengua_mkdir_failed
     ret
 .Llengua_mkdir_failed:
@@ -264,14 +293,18 @@ os_mkdir:
     ret
 .size os_mkdir, . - os_mkdir
 
-// == os_remove: lengua_error
+// == os_remove: lengua_error lengua_ask lengua_channel_ready
 .text
 .type os_remove, @function
 // In: x0 = the name, w1 = 0 for a file or 1 for an empty folder.
-// Out: x0 = 0, or an error.
+// Out: x0 = 0, or an error. Where lengua's broker serves the program, it removes the name.
 os_remove:
     cmp w1, #1
     b.hi .Llengua_remove_invalid
+    str x30, [sp, #-16]!
+    bl lengua_channel_ready
+    cbnz w16, .Llengua_remove_asked
+    ldr x30, [sp], #16
     mov x16, x0
     mov x17, #LENGUA_AT_REMOVEDIR
     stp x1, x2, [sp, #-16]!
@@ -282,6 +315,13 @@ os_remove:
     mov x8, #LENGUA_SYS_UNLINKAT
     svc #0
     ldp x1, x2, [sp], #16
+    tbnz x0, #63, .Llengua_remove_failed
+    ret
+.Llengua_remove_asked:
+    mov w17, #LENGUA_ASK_REMOVE
+    mov w16, w1
+    bl lengua_ask
+    ldr x30, [sp], #16
     tbnz x0, #63, .Llengua_remove_failed
     ret
 .Llengua_remove_invalid:
@@ -296,12 +336,16 @@ os_remove:
     ret
 .size os_remove, . - os_remove
 
-// == os_rename: lengua_error
+// == os_rename: lengua_error lengua_ask lengua_channel_ready
 .text
 .type os_rename, @function
 // In: x0 = the name it has, x1 = the name it is to have, which is replaced.
-// Out: x0 = 0, or an error.
+// Out: x0 = 0, or an error. Where lengua's broker serves the program, it renames the file.
 os_rename:
+    str x30, [sp, #-16]!
+    bl lengua_channel_ready
+    cbnz w16, .Llengua_rename_asked
+    ldr x30, [sp], #16
     mov x16, x0
     mov x17, x1
     stp x1, x2, [sp, #-16]!
@@ -316,6 +360,13 @@ os_rename:
     ldp x1, x2, [sp], #16
     tbnz x0, #63, .Llengua_rename_failed
     ret
+.Llengua_rename_asked:
+    mov w17, #LENGUA_ASK_RENAME
+    mov w16, #0
+    bl lengua_ask
+    ldr x30, [sp], #16
+    tbnz x0, #63, .Llengua_rename_failed
+    ret
 .Llengua_rename_failed:
     adrp x17, os_rename_errors
     add x17, x17, :lo12:os_rename_errors
@@ -325,18 +376,35 @@ os_rename:
     ret
 .size os_rename, . - os_rename
 
-// == os_clock: lengua_error
+// == os_clock: lengua_error lengua_ask lengua_channel_ready
 .text
 .type os_clock, @function
 // In: w0 = 0 for the time of day or 1 for a clock that only moves forward, x1 = 16 bytes for the
 // seconds and then the nanoseconds.
-// Out: x0 = 0, or an error.
+// Out: x0 = 0, or an error. A test that gives the program readings has the broker give them.
 os_clock:
     cmp w0, #1
     b.hi .Llengua_clock_invalid
+    str x30, [sp, #-16]!
+    bl lengua_channel_ready
+    tbnz w16, #4, .Llengua_clock_asked
+    ldr x30, [sp], #16
     mov x8, #LENGUA_SYS_CLOCK_GETTIME
     svc #0
     tbnz x0, #63, .Llengua_clock_failed
+    ret
+.Llengua_clock_asked:
+    mov w17, #LENGUA_ASK_CLOCK
+    mov w16, w0
+    bl lengua_ask
+    ldr x30, [sp], #16
+    tbnz x0, #63, .Llengua_clock_failed
+    adrp x17, lengua_wire
+    add x17, x17, :lo12:lengua_wire
+    add x17, x17, #LENGUA_PAYLOAD_AT
+    ldp x16, x0, [x17]
+    stp x16, x0, [x1]
+    mov x0, #0
     ret
 .Llengua_clock_invalid:
     mov x0, #LENGUA_EINVAL
@@ -350,23 +418,31 @@ os_clock:
     ret
 .size os_clock, . - os_clock
 
-// == os_sleep: lengua_error
+// == os_sleep: lengua_error lengua_channel_ready
 .text
 .type os_sleep, @function
 // In: w0 = the clock as for os_clock, w1 = 0 to wait that long or 1 to wait until that time,
 // x2 = 16 bytes for the seconds and then the nanoseconds.
-// Out: x0 = 0, or an error.
+// Out: x0 = 0, or an error. In a test the wait ends at once.
 os_sleep:
     cmp w0, #1
     b.hi .Llengua_sleep_invalid
     cmp w1, #1
     b.hi .Llengua_sleep_invalid
+    str x30, [sp, #-16]!
+    bl lengua_channel_ready
+    tbnz w16, #1, .Llengua_sleep_skipped
+    ldr x30, [sp], #16
     str x3, [sp, #-16]!
     mov x3, #0
     mov x8, #LENGUA_SYS_CLOCK_NANOSLEEP
     svc #0
     ldr x3, [sp], #16
     tbnz x0, #63, .Llengua_sleep_failed
+    ret
+.Llengua_sleep_skipped:
+    ldr x30, [sp], #16
+    mov x0, #0
     ret
 .Llengua_sleep_invalid:
     mov x0, #LENGUA_EINVAL
@@ -380,20 +456,52 @@ os_sleep:
     ret
 .size os_sleep, . - os_sleep
 
-// == os_random: lengua_error
+// == os_random: lengua_error lengua_ask lengua_channel_ready
 .text
 .type os_random, @function
 // In: x0 = the buffer, x1 = how many bytes, at most 256.
-// Out: x0 = how many it filled, all of them, or an error.
+// Out: x0 = how many it filled, all of them, or an error. A test that gives the program bytes has
+// the broker give them.
 os_random:
     cmp x1, #LENGUA_RANDOM_MOST
     b.hi .Llengua_random_invalid
+    stp x30, x0, [sp, #-16]!
+    bl lengua_channel_ready
+    tbnz w16, #3, .Llengua_random_asked
+    ldp x30, x0, [sp], #16
     str x2, [sp, #-16]!
     mov x2, #0
     mov x8, #LENGUA_SYS_GETRANDOM
     svc #0
     ldr x2, [sp], #16
     tbnz x0, #63, .Llengua_random_failed
+    ret
+.Llengua_random_asked:
+    cbz x1, .Llengua_random_none
+    mov w17, #LENGUA_ASK_RANDOM
+    mov w16, #0
+    bl lengua_ask
+    tbnz x0, #63, .Llengua_random_refused
+    ldp x30, x0, [sp], #16
+    adrp x17, lengua_wire
+    add x17, x17, :lo12:lengua_wire
+    add x17, x17, #LENGUA_PAYLOAD_AT
+    mov x16, x1
+.Llengua_random_copy:  // bound: 256
+    ldrb w8, [x17]
+    strb w8, [x0]
+    add x17, x17, #1
+    add x0, x0, #1
+    sub x16, x16, #1
+    cbnz x16, .Llengua_random_copy
+    mov x0, x1
+    ret
+.Llengua_random_refused:
+    ldp x30, x16, [sp], #16
+    b .Llengua_random_failed
+.Llengua_random_none:
+    ldp x30, x0, [sp], #16
+    mov x0, #0
     ret
 .Llengua_random_invalid:
     mov x0, #LENGUA_EINVAL
@@ -407,22 +515,29 @@ os_random:
     ret
 .size os_random, . - os_random
 
-// == os_accept: lengua_error
+// == os_accept: lengua_error lengua_wait_note
 .text
 .type os_accept, @function
 // In: w0 = 3, the listening socket lengua bound for the program.
-// Out: x0 = the next connection's descriptor, or an error.
+// Out: x0 = the next connection's descriptor, or an error. A test is told when the program waits.
 os_accept:
     cmp w0, #LENGUA_LISTENER
     b.ne .Llengua_accept_refused
     stp x1, x2, [sp, #-16]!
-    str x3, [sp, #-16]!
+    stp x3, x30, [sp, #-16]!
     mov x1, #0
     mov x2, #0
     mov x3, #0
+    mov w17, #LENGUA_NOTE_WAITING
+    bl lengua_wait_note
+    mov x0, #LENGUA_LISTENER
     mov x8, #LENGUA_SYS_ACCEPT4
     svc #0
-    ldr x3, [sp], #16
+    str x0, [sp, #-16]!
+    mov w17, #LENGUA_NOTE_RESUMED
+    bl lengua_wait_note
+    ldr x0, [sp], #16
+    ldp x3, x30, [sp], #16
     ldp x1, x2, [sp], #16
     tbnz x0, #63, .Llengua_accept_failed
     ret
@@ -463,7 +578,7 @@ os_shutdown:
     ret
 .size os_shutdown, . - os_shutdown
 
-// == os_poll: lengua_error
+// == os_poll: lengua_error lengua_wait_note
 .text
 .type os_poll, @function
 // In: x0 = a table of 8-byte entries (the descriptor, 4 bytes; the events waited for, 2; the
@@ -483,9 +598,10 @@ os_poll:
     add w16, w16, #1
     b .Llengua_poll_scan
 .Llengua_poll_scanned:
-    sub sp, sp, #48
+    sub sp, sp, #64
     stp x2, x3, [sp, #16]
-    str x4, [sp, #32]
+    stp x4, x30, [sp, #32]
+    str x0, [sp, #48]
     sxtw x16, w2
     tbnz x16, #63, .Llengua_poll_forever
     mov x17, #1000
@@ -502,11 +618,18 @@ os_poll:
 .Llengua_poll_wait:
     mov x3, #0
     mov x4, #0
+    mov w17, #LENGUA_NOTE_WAITING
+    bl lengua_wait_note
+    ldr x0, [sp, #48]
     mov x8, #LENGUA_SYS_PPOLL
     svc #0
+    str x0, [sp, #48]
+    mov w17, #LENGUA_NOTE_RESUMED
+    bl lengua_wait_note
+    ldr x0, [sp, #48]
     ldp x2, x3, [sp, #16]
-    ldr x4, [sp, #32]
-    add sp, sp, #48
+    ldp x4, x30, [sp, #32]
+    add sp, sp, #64
     tbnz x0, #63, .Llengua_poll_failed
     ret
 .Llengua_poll_refused:
@@ -521,7 +644,7 @@ os_poll:
     ret
 .size os_poll, . - os_poll
 
-// == os_open: lengua_error
+// == os_open: lengua_error lengua_tokens lengua_ask lengua_channel_ready lengua_note
 .section .rodata
 .balign 4
 .type lengua_open_flags, @object
@@ -535,10 +658,15 @@ lengua_open_flags:
 // In: x0 = the name, NUL-terminated, relative to the working folder; w1 = the mode: 0 to read, 1
 // to write, which makes the file and empties it, 2 to write at its end, 3 to write a file that
 // is not there yet, 4 to list a folder.
-// Out: x0 = a descriptor, or an error.
+// Out: x0 = a descriptor, or an error. Where lengua's broker serves the program, it opens the file
+// and the descriptor comes from it, with a token the edge keeps to tell it when the file is closed.
 os_open:
     cmp w1, #4
     b.hi .Llengua_open_invalid
+    str x30, [sp, #-16]!
+    bl lengua_channel_ready
+    cbnz w16, .Llengua_open_asked
+    ldr x30, [sp], #16
     mov w16, w1
     adrp x17, lengua_open_flags
     add x17, x17, :lo12:lengua_open_flags
@@ -555,6 +683,29 @@ os_open:
     ldr x3, [sp], #16
     ldp x1, x2, [sp], #16
     tbnz x0, #63, .Llengua_open_failed
+    ret
+.Llengua_open_asked:
+    mov w17, #LENGUA_ASK_OPEN
+    mov w16, w1
+    bl lengua_ask
+    ldr x30, [sp], #16
+    tbnz x0, #63, .Llengua_open_failed
+    mov w17, #LENGUA_CHANNEL
+    cmp w16, w17
+    b.hs .Llengua_open_nothing
+    adrp x17, lengua_tokens
+    add x17, x17, :lo12:lengua_tokens
+    add x17, x17, x16, lsl #2
+    str w0, [x17]
+    mov w0, w16
+    ret
+.Llengua_open_nothing:
+    mov x16, x0
+    mov w17, #LENGUA_NOTE_CLOSED
+    str x30, [sp, #-16]!
+    bl lengua_note
+    ldr x30, [sp], #16
+    mov x0, #LENGUA_EMFILE
     ret
 .Llengua_open_invalid:
     mov x0, #LENGUA_EINVAL
@@ -617,7 +768,7 @@ os_info:
     ret
 .size os_info, . - os_info
 
-// == os_list: lengua_error
+// == os_list: lengua_error lengua_list_note
 .section .bss
 .balign 8
 .type lengua_dirents, @object
@@ -637,6 +788,9 @@ os_list:
     mov w16, #LENGUA_CHANNEL
     cmp w0, w16
     b.eq .Llengua_list_refused
+    str x30, [sp, #-16]!
+    bl lengua_list_note
+    ldr x30, [sp], #16
     stp x1, x2, [sp, #-16]!
     stp x9, x10, [sp, #-16]!
     stp x11, x12, [sp, #-16]!
@@ -993,3 +1147,350 @@ os_thread_join:
     mov x0, #LENGUA_EINVAL
     ret
 .size os_thread_join, . - os_thread_join
+
+// == lengua_wire
+.section .bss
+.balign 8
+.type lengua_channel_state, @object
+// What the first look at descriptor 4,352 found: a word that is 0 until it was looked at, then
+// LENGUA_LOOKED with LENGUA_ON and the first message's mode and flags where it is a channel to
+// lengua's broker, and the file limit the message names, 8 bytes, at 8.
+lengua_channel_state:
+    .zero 16
+.size lengua_channel_state, . - lengua_channel_state
+
+.balign 8
+.type lengua_wire, @object
+// What goes over the channel: a request, 16 bytes and the names after them, up to two paths; the
+// reply's 16 bytes at LENGUA_REPLY_AT and its payload, up to 256 bytes, at LENGUA_PAYLOAD_AT. The
+// first message, 32 bytes, is read into the start of it.
+lengua_wire:
+    .zero 2336
+.size lengua_wire, . - lengua_wire
+
+// == lengua_tokens
+.section .bss
+.balign 4
+.type lengua_tokens, @object
+// For each descriptor the broker gave os_open, the token it knows the file by, until it is closed.
+lengua_tokens:
+    .zero 17408
+.size lengua_tokens, . - lengua_tokens
+
+// == lengua_channel_ready: lengua_wire
+.text
+.type lengua_channel_ready, @function
+// Out: w16 = 0 where descriptor 4,352 is not a channel to lengua's broker, else LENGUA_ON with the
+// bits LENGUA_TESTING, LENGUA_REVERSED, LENGUA_RANDOM and LENGUA_CLOCK the first message says. The
+// first call looks, the first message waiting already; every later one remembers. Changes x8, x16,
+// x17 and the flags only.
+lengua_channel_ready:
+    adrp x17, lengua_channel_state
+    add x17, x17, :lo12:lengua_channel_state
+    ldr w16, [x17]
+    cbz w16, .Llengua_ready_look
+    and w16, w16, #0x7fffffff
+    ret
+.Llengua_ready_look:
+    stp x0, x1, [sp, #-16]!
+    str x2, [sp, #-16]!
+    sub sp, sp, #80
+    stp xzr, xzr, [sp]
+    add x17, sp, #56
+    mov x16, #1
+    stp x17, x16, [sp, #16]
+    stp xzr, xzr, [sp, #32]
+    str xzr, [sp, #48]
+    adrp x17, lengua_wire
+    add x17, x17, :lo12:lengua_wire
+    mov x16, #LENGUA_HELLO_LEN
+    stp x17, x16, [sp, #56]
+    mov x0, #LENGUA_CHANNEL
+    mov x1, sp
+    mov x2, #LENGUA_MSG_DONTWAIT
+    mov x8, #LENGUA_SYS_RECVMSG
+    svc #0
+    cmp x0, #LENGUA_HELLO_LEN
+    b.ne .Llengua_ready_none
+    adrp x17, lengua_wire
+    add x17, x17, :lo12:lengua_wire
+    ldr w16, [x17]
+    mov w0, #LENGUA_MAGIC_LOW
+    movk w0, #LENGUA_MAGIC_HIGH, lsl #16
+    cmp w16, w0
+    b.ne .Llengua_ready_none
+    ldr w16, [x17, #4]
+    cmp w16, #LENGUA_VERSION
+    b.ne .Llengua_ready_none
+    ldr w0, [x17, #8]
+    cmp w0, #1
+    b.hi .Llengua_ready_none
+    ldr w1, [x17, #12]
+    cmp w1, #7
+    b.hi .Llengua_ready_none
+    add w0, w0, w0
+    add w0, w0, #LENGUA_ON
+    add w0, w0, w1, lsl #2
+    ldr x2, [x17, #16]
+    adrp x17, lengua_channel_state
+    add x17, x17, :lo12:lengua_channel_state
+    mov w16, #LENGUA_LOOKED
+    add w16, w16, w0
+    str w16, [x17]
+    str x2, [x17, #8]
+    mov w16, w0
+    b .Llengua_ready_leave
+.Llengua_ready_none:
+    adrp x17, lengua_channel_state
+    add x17, x17, :lo12:lengua_channel_state
+    mov w16, #LENGUA_LOOKED
+    str w16, [x17]
+    mov w16, #0
+.Llengua_ready_leave:
+    add sp, sp, #80
+    ldr x2, [sp], #16
+    ldp x0, x1, [sp], #16
+    ret
+.size lengua_channel_ready, . - lengua_channel_ready
+
+// == lengua_name
+.text
+.type lengua_name, @function
+// In: x9 = a name, NUL-terminated; x10 = where its bytes go. Out: x0 = how long it is, 1 to
+// LENGUA_PATH_MAX, and x10 after it; for none or a longer one, -ENOENT or -ENAMETOOLONG, and x10 as
+// it was. Changes x0, x10, x11, x16 and the flags only.
+lengua_name:
+    mov x0, #0
+.Llengua_name_copy:  // bound: 1024
+    add x11, x9, x0
+    ldrb w11, [x11]
+    cbz w11, .Llengua_name_end
+    cmp w0, #LENGUA_PATH_MAX
+    b.hs .Llengua_name_long
+    add x16, x10, x0
+    strb w11, [x16]
+    add x0, x0, #1
+    b .Llengua_name_copy
+.Llengua_name_end:
+    cbz x0, .Llengua_name_empty
+    add x10, x10, x0
+    ret
+.Llengua_name_empty:
+    mov x0, #LENGUA_ENOENT
+    ret
+.Llengua_name_long:
+    mov x0, #LENGUA_ENAMETOOLONG
+    ret
+.size lengua_name, . - lengua_name
+
+// == lengua_exchange: lengua_wire
+.text
+.type lengua_exchange, @function
+// In: w0 = how long the request is, which is in lengua_wire. Out: x0 = the reply's result, or -EIO
+// where the channel fails; w16 = the descriptor that came with the reply, or -1; the reply's
+// payload is in lengua_wire at LENGUA_PAYLOAD_AT. Changes x0, x8, x16, x17 and the flags only.
+lengua_exchange:
+    stp x1, x2, [sp, #-16]!
+    stp x3, x4, [sp, #-16]!
+    sub sp, sp, #96
+    mov w3, w0
+    stp xzr, xzr, [sp]
+    add x17, sp, #56
+    mov x16, #1
+    stp x17, x16, [sp, #16]
+    stp xzr, xzr, [sp, #32]
+    str xzr, [sp, #48]
+    adrp x17, lengua_wire
+    add x17, x17, :lo12:lengua_wire
+    mov w16, w3
+    stp x17, x16, [sp, #56]
+    mov x0, #LENGUA_CHANNEL
+    mov x1, sp
+    mov x2, #LENGUA_MSG_NOSIGNAL
+    mov x8, #LENGUA_SYS_SENDMSG
+    svc #0
+    cmp x0, x3
+    b.ne .Llengua_exchange_failed
+    adrp x17, lengua_wire
+    add x17, x17, :lo12:lengua_wire
+    add x17, x17, #LENGUA_REPLY_AT
+    mov x16, #LENGUA_REPLY_LEN
+    stp x17, x16, [sp, #56]
+    add x17, sp, #72
+    mov x16, #24
+    stp x17, x16, [sp, #32]
+    str xzr, [sp, #72]
+    mov x0, #LENGUA_CHANNEL
+    mov x1, sp
+    mov x2, #LENGUA_MSG_WAITALL
+    mov x8, #LENGUA_SYS_RECVMSG
+    svc #0
+    cmp x0, #LENGUA_REPLY_LEN
+    b.ne .Llengua_exchange_failed
+    mov w4, #-1
+    ldr x16, [sp, #40]
+    cmp x16, #20
+    b.lo .Llengua_exchange_whole
+    ldr w16, [sp, #80]
+    cmp w16, #LENGUA_SOL_SOCKET
+    b.ne .Llengua_exchange_whole
+    ldr w16, [sp, #84]
+    cmp w16, #LENGUA_SCM_RIGHTS
+    b.ne .Llengua_exchange_whole
+    ldr w4, [sp, #88]
+.Llengua_exchange_whole:
+    adrp x17, lengua_wire
+    add x17, x17, :lo12:lengua_wire
+    add x17, x17, #LENGUA_REPLY_AT
+    ldr w16, [x17, #8]
+    cbz w16, .Llengua_exchange_done
+    cmp w16, #LENGUA_PAYLOAD_MAX
+    b.hi .Llengua_exchange_failed
+    mov w3, w16
+    stp xzr, xzr, [sp, #32]
+    add x17, x17, #16
+    mov w16, w3
+    stp x17, x16, [sp, #56]
+    mov x0, #LENGUA_CHANNEL
+    mov x1, sp
+    mov x2, #LENGUA_MSG_WAITALL
+    mov x8, #LENGUA_SYS_RECVMSG
+    svc #0
+    cmp x0, x3
+    b.ne .Llengua_exchange_failed
+.Llengua_exchange_done:
+    adrp x17, lengua_wire
+    add x17, x17, :lo12:lengua_wire
+    add x17, x17, #LENGUA_REPLY_AT
+    ldr x0, [x17]
+    mov w16, w4
+    b .Llengua_exchange_leave
+.Llengua_exchange_failed:
+    mov x0, #LENGUA_EIO
+    mov w16, #-1
+.Llengua_exchange_leave:
+    add sp, sp, #96
+    ldp x3, x4, [sp], #16
+    ldp x1, x2, [sp], #16
+    ret
+.size lengua_exchange, . - lengua_exchange
+
+// == lengua_ask: lengua_exchange lengua_name
+.text
+.type lengua_ask, @function
+// In: w17 = what is asked, LENGUA_ASK_OPEN to LENGUA_ASK_RANDOM; w16 = its argument, the mode, kind
+// or clock; x0 = the first name, for what asks about names; x1 = the second name of a rename, or how
+// many random bytes. Out: as lengua_exchange, or a name's error from lengua_name with w16 = -1.
+// Changes x0, x8, x16, x17 and the flags only.
+lengua_ask:
+    stp x30, x9, [sp, #-16]!
+    stp x10, x11, [sp, #-16]!
+    stp x12, x13, [sp, #-16]!
+    adrp x12, lengua_wire
+    add x12, x12, :lo12:lengua_wire
+    mov w13, w17
+    stp xzr, xzr, [x12]
+    strb w13, [x12]
+    strb w16, [x12, #1]
+    add x10, x12, #LENGUA_REQUEST_LEN
+    cmp w13, #LENGUA_ASK_RENAME
+    b.hi .Llengua_ask_unnamed
+    mov x9, x0
+    bl lengua_name
+    tbnz x0, #63, .Llengua_ask_refused
+    strh w0, [x12, #2]
+    cmp w13, #LENGUA_ASK_RENAME
+    b.ne .Llengua_ask_send
+    mov x9, x1
+    bl lengua_name
+    tbnz x0, #63, .Llengua_ask_refused
+    strh w0, [x12, #4]
+    b .Llengua_ask_send
+.Llengua_ask_unnamed:
+    cmp w13, #LENGUA_ASK_RANDOM
+    b.ne .Llengua_ask_send
+    str x1, [x12, #8]
+.Llengua_ask_send:
+    sub x0, x10, x12
+    bl lengua_exchange
+    b .Llengua_ask_leave
+.Llengua_ask_refused:
+    mov w16, #-1
+.Llengua_ask_leave:
+    ldp x12, x13, [sp], #16
+    ldp x10, x11, [sp], #16
+    ldp x30, x9, [sp], #16
+    ret
+.size lengua_ask, . - lengua_ask
+
+// == lengua_note: lengua_wire
+.text
+.type lengua_note, @function
+// In: w17 = what is told, LENGUA_NOTE_CLOSED and the like; x16 = its value, the token of a file
+// closed. The broker answers none, and a note that can't be sent is lost. Changes x0, x8, x16, x17
+// and the flags only.
+lengua_note:
+    stp x1, x2, [sp, #-16]!
+    sub sp, sp, #96
+    stp x17, x16, [sp]
+    stp xzr, xzr, [sp, #16]
+    add x0, sp, #72
+    mov x8, #1
+    stp x0, x8, [sp, #32]
+    stp xzr, xzr, [sp, #48]
+    str xzr, [sp, #64]
+    mov x8, sp
+    mov x16, #LENGUA_REQUEST_LEN
+    stp x8, x16, [sp, #72]
+    mov x0, #LENGUA_CHANNEL
+    add x1, sp, #16
+    mov x2, #LENGUA_MSG_NOSIGNAL
+    mov x8, #LENGUA_SYS_SENDMSG
+    svc #0
+    add sp, sp, #96
+    ldp x1, x2, [sp], #16
+    ret
+.size lengua_note, . - lengua_note
+
+// == lengua_wait_note: lengua_note lengua_channel_ready
+.text
+.type lengua_wait_note, @function
+// In: w17 = LENGUA_NOTE_WAITING or LENGUA_NOTE_RESUMED. Tells the broker so when a test runs the
+// program over a channel, which waits for the program to wait before it connects. Changes x0, x8,
+// x16, x17 and the flags only.
+lengua_wait_note:
+    stp x30, x17, [sp, #-16]!
+    bl lengua_channel_ready
+    tbz w16, #1, .Llengua_wait_note_none
+    ldr x17, [sp, #8]
+    mov x16, #0
+    bl lengua_note
+.Llengua_wait_note_none:
+    ldp x30, x17, [sp], #16
+    ret
+.size lengua_wait_note, . - lengua_wait_note
+
+// == lengua_list_note: lengua_note lengua_channel_ready
+.text
+.type lengua_list_note, @function
+// Tells the broker that the program lists a folder, once, when a test runs it over a channel.
+// Changes x8, x16, x17 and the flags only.
+lengua_list_note:
+    stp x30, x0, [sp, #-16]!
+    bl lengua_channel_ready
+    tbz w16, #1, .Llengua_list_note_none
+    tbnz w16, #5, .Llengua_list_note_none
+    adrp x17, lengua_channel_state
+    add x17, x17, :lo12:lengua_channel_state
+    ldr w16, [x17]
+    mov w0, #LENGUA_LISTED
+    add w16, w16, w0
+    str w16, [x17]
+    mov w17, #LENGUA_NOTE_LISTED
+    mov x16, #0
+    bl lengua_note
+.Llengua_list_note_none:
+    ldp x30, x0, [sp], #16
+    ret
+.size lengua_list_note, . - lengua_list_note
+
