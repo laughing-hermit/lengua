@@ -297,10 +297,9 @@ fn the_routes_run_the_targets_suite() {
             "routes.yml's {job} job doesn't run scripts/ci/guest.sh"
         );
     }
-    let guest = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/ci/guest.sh"),
-    )
-    .expect("scripts/ci/guest.sh");
+    let guest =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/ci/guest.sh"))
+            .expect("scripts/ci/guest.sh");
     assert!(
         guest.contains("scripts/ci/suite.sh"),
         "scripts/ci/guest.sh doesn't run scripts/ci/suite.sh"
