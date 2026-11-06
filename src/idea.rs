@@ -2491,10 +2491,12 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
         ] {
             assert_eq!(
                 problems(&without),
-                ["line 1: the frontmatter has no `description`; add one sentence that says what \
+                [
+                    "line 1: the frontmatter has no `description`; add one sentence that says what \
                   the program does, such as `description: Adds two whole numbers given as \
                   arguments and prints the sum.`, which the bundle's index.md lists the program \
-                  with"]
+                  with"
+                ]
             );
         }
     }

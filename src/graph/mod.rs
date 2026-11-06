@@ -326,10 +326,7 @@ impl Node {
 #[must_use]
 pub fn resolve(root: &Path, from: &Path, target: &str) -> Option<PathBuf> {
     let target = target.split(['#', '?']).next().unwrap_or_default();
-    if target.is_empty()
-        || target.starts_with("//")
-        || target.contains('\\')
-        || has_scheme(target)
+    if target.is_empty() || target.starts_with("//") || target.contains('\\') || has_scheme(target)
     {
         return None;
     }
@@ -491,7 +488,12 @@ mod tests {
             resolve(root, &from, "/tools/./x/"),
             Some(root.join("tools").join("x"))
         );
-        for outside in ["https://example.com/idea.md", "mailto:me@example.com", "#b2", ""] {
+        for outside in [
+            "https://example.com/idea.md",
+            "mailto:me@example.com",
+            "#b2",
+            "",
+        ] {
             assert_eq!(resolve(root, &from, outside), None, "{outside}");
         }
         assert_eq!(folder_of(&from.join("idea.md")), from.as_path());

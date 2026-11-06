@@ -148,12 +148,14 @@ fn the_index_keeps_every_line_lengua_doesnt_own() {
     let bundle = Bundle::new();
     let add = bundle.program("add", ADD_IDEA, true);
     bundle.program("sort", &idea("sort", "Sorts lines."), false);
-    let by_hand = "# Our programs\n\nWritten by hand.\n\n## Tools\n\n\
+    let by_hand = "---\nokf_version: \"0.2\"\nowner: us\n---\n# Our programs\n\nWritten by \
+                   hand.\n\n## Tools\n\n\
                    * [the manual](https://example.com/manual) - read it first\n\
                    * [add](add/idea.md) - an old description\n\nThe end.\r\n";
     std::fs::write(bundle.root().join("index.md"), by_hand).expect("an index by hand");
     let (_, written) = bundle.write(&add, &[Event::Recorded], "2026-11-06");
-    let kept = "# Our programs\n\nWritten by hand.\n\n## Tools\n\n\
+    let kept = "---\nokf_version: \"0.2\"\nowner: us\n---\n# Our programs\n\nWritten by \
+                hand.\n\n## Tools\n\n\
                 * [the manual](https://example.com/manual) - read it first\n\
                 * [add](add/idea.md) - Adds two whole numbers given as arguments and prints the \
                 sum. Code: [main.s](add/main.s)\n\
@@ -162,7 +164,7 @@ fn the_index_keeps_every_line_lengua_doesnt_own() {
     assert_eq!(written.changed, ["add"]);
     assert_eq!(written.listed, ["sort"]);
     assert!(!written.made);
-    // An index lengua didn't make gets no frontmatter, and add was listed before: an update.
+    // An index lengua didn't make keeps its own frontmatter, and add was listed before: an update.
     assert!(
         bundle
             .read("log.md")
@@ -171,6 +173,37 @@ fn the_index_keeps_every_line_lengua_doesnt_own() {
     let (_, again) = bundle.write(&add, &[], "2026-11-06");
     assert_eq!(again, Written::default());
     assert_eq!(bundle.read("index.md"), kept);
+}
+
+#[test]
+fn an_index_without_okf_version_stays_as_it_is() {
+    let bundle = Bundle::new();
+    let add = bundle.program("add", ADD_IDEA, true);
+    // Such as a site's home page: it isn't lengua's, so lengua writes neither file beside it.
+    let home = "# Welcome\n\nOur site.\n\n* [add](add/idea.md) - our adder\n";
+    std::fs::write(bundle.root().join("index.md"), home).expect("an index of someone else's");
+    let (graph, written) = bundle.write(&add, &[Event::Recorded], "2026-11-06");
+    assert_eq!(written, Written::default());
+    assert_eq!(bundle.read("index.md"), home);
+    assert_eq!(listing(bundle.root()), ["add", "index.md"]);
+    assert!(!graph.root.declared);
+    let lines = graph.lines(&add, Some(&written));
+    let summary = lines.first().expect("the graph's summary");
+    assert!(
+        summary.contains("whose index.md isn't lengua's")
+            && summary.contains("okf_version")
+            && summary.ends_with("lengua writes no index.md or log.md there."),
+        "{lines:?}"
+    );
+    // The index still lists the program, so it is no orphan.
+    assert!(!lines.iter().any(|line| line.contains("orphan")), "{lines:?}");
+    // With `okf_version` it becomes lengua's to keep.
+    let declared = format!("---\nokf_version: \"0.2\"\n---\n{home}");
+    std::fs::write(bundle.root().join("index.md"), &declared).expect("declare the bundle");
+    let (_, written) = bundle.write(&add, &[Event::Recorded], "2026-11-06");
+    assert_eq!(written.changed, ["add"]);
+    assert!(bundle.read("index.md").starts_with("---\nokf_version: \"0.2\"\n---\n# Welcome\n"));
+    assert!(bundle.read("log.md").contains("[add](add/idea.md) recorded."));
 }
 
 #[test]
@@ -246,10 +279,20 @@ fn a_cycle_blocks_only_its_programs_with_its_path() {
     let b = bundle.program("b", &on("b", "a"), true);
     let c = bundle.program("c", &on("c", "a"), true);
     let cycle = graph::builds_on_cycle(&a).expect("a is in a cycle");
-    assert!(cycle.contains("a builds on b, which builds on a"), "{cycle}");
+    assert!(
+        cycle.contains("a builds on b, which builds on a"),
+        "{cycle}"
+    );
     let from_b = graph::builds_on_cycle(&b).unwrap_or_default();
-    assert!(from_b.contains("b builds on a, which builds on b"), "{from_b}");
-    assert_eq!(graph::builds_on_cycle(&c), None, "c builds on the cycle, outside it");
+    assert!(
+        from_b.contains("b builds on a, which builds on b"),
+        "{from_b}"
+    );
+    assert_eq!(
+        graph::builds_on_cycle(&c),
+        None,
+        "c builds on the cycle, outside it"
+    );
     let graph = bundle.graph(&c);
     let seen_from = |folder: &Path| -> Vec<Finding> {
         graph
@@ -262,12 +305,18 @@ fn a_cycle_blocks_only_its_programs_with_its_path() {
     let in_it = seen_from(&a);
     assert_eq!(in_it.len(), 1, "one cycle, said once: {in_it:#?}");
     assert_eq!(in_it[0].severity, Severity::Blocks);
-    assert!(in_it[0].message.starts_with("a builds on b, which builds on a: "));
+    assert!(
+        in_it[0]
+            .message
+            .starts_with("a builds on b, which builds on a: ")
+    );
     let outside = seen_from(&c);
     assert_eq!(outside.len(), 1, "{outside:#?}");
     assert_eq!(outside[0].severity, Severity::Warning);
     assert!(
-        outside[0].message.contains("which blocks those programs only"),
+        outside[0]
+            .message
+            .contains("which blocks those programs only"),
         "{outside:#?}"
     );
 }
@@ -289,7 +338,10 @@ fn a_stale_program_is_reported() {
             features: Vec::new(),
             emulator: None,
         }),
-        ..Lock::requested(Sha256Hex::of(ADD_IDEA.as_bytes()), "Make me an adder".into())
+        ..Lock::requested(
+            Sha256Hex::of(ADD_IDEA.as_bytes()),
+            "Make me an adder".into(),
+        )
     };
     lock::write(&add, &recorded, &key).expect("write the lock");
     let stale = |graph: &Graph| graph.nodes[0].stale;
@@ -335,9 +387,8 @@ fn nothing_is_written_in_the_home_or_temporary_folder_itself() {
         .expect("a program folder in the temporary folder");
     std::fs::write(program.path().join("idea.md"), ADD_IDEA).expect("write idea.md");
     let temporary = std::env::temp_dir();
-    let files = || {
-        ["index.md", "log.md"].map(|name| std::fs::read_to_string(temporary.join(name)).ok())
-    };
+    let files =
+        || ["index.md", "log.md"].map(|name| std::fs::read_to_string(temporary.join(name)).ok());
     let before = files();
     let data = tempfile::tempdir().expect("a data folder");
     let (graph, written) = graph::write(
@@ -386,11 +437,7 @@ fn a_page_without_a_type_is_reported() {
     page("add/plan.md", "---\ntitle: a plan\n---\n");
     bundle.write(&add, &[Event::Recorded], "2026-11-06");
     let graph = bundle.graph(&add);
-    let untyped: Vec<String> = graph
-        .untyped
-        .iter()
-        .map(|page| graph.shown(page))
-        .collect();
+    let untyped: Vec<String> = graph.untyped.iter().map(|page| graph.shown(page)).collect();
     assert_eq!(untyped, ["add/plan.md", "notes.md"]);
     let lines = graph.lines(&add, None);
     assert!(
@@ -417,10 +464,16 @@ fn the_walk_through_a_bundle_is_bounded() {
     let graph = bundle.graph(&top);
     assert_eq!(graph.stopped, Some(Stop::Depth(8)));
     let paths: Vec<&str> = graph.nodes.iter().map(|node| node.path.as_str()).collect();
-    assert_eq!(paths, ["top"], "nothing hidden, built or past 8 folders down");
+    assert_eq!(
+        paths,
+        ["top"],
+        "nothing hidden, built or past 8 folders down"
+    );
     let lines = graph.lines(&top, None);
     assert!(
-        lines.iter().any(|line| line.contains("goes 8 folders deep")),
+        lines
+            .iter()
+            .any(|line| line.contains("goes 8 folders deep")),
         "{lines:#?}"
     );
     // The program checked is in its graph, however deep it lies.
@@ -494,8 +547,7 @@ fn two_writers_at_once_leave_a_consistent_index() {
 #[test]
 fn examples_index_is_lengua_s() {
     let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
-    let committed =
-        std::fs::read_to_string(examples.join("index.md")).expect("examples/index.md");
+    let committed = std::fs::read_to_string(examples.join("index.md")).expect("examples/index.md");
     let data = tempfile::tempdir().expect("a data folder");
     let graph = Graph::build(
         &examples.join("add"),
@@ -547,7 +599,10 @@ async fn check_keeps_the_bundles_index_and_log() {
     let report = session.record(&program).await;
     assert_eq!(report["state"], "write_code", "{report}");
     let lines = strings(&report["graph"]);
-    for said in ["lengua made index.md, listing program", "log.md: add recorded"] {
+    for said in [
+        "lengua made index.md, listing program",
+        "log.md: add recorded",
+    ] {
         assert!(lines.iter().any(|line| line == said), "{said}: {report}");
     }
     let bundle = program.path().parent().expect("the program's bundle");

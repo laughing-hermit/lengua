@@ -164,7 +164,11 @@ fn target_of(inner: &str) -> String {
     let inner = inner.trim();
     match inner.strip_prefix('<') {
         Some(rest) => rest.split('>').next().unwrap_or_default().to_owned(),
-        None => inner.split_whitespace().next().unwrap_or_default().to_owned(),
+        None => inner
+            .split_whitespace()
+            .next()
+            .unwrap_or_default()
+            .to_owned(),
     }
 }
 
@@ -605,10 +609,7 @@ mod tests {
         assert_eq!(Day::from_unix_days(20_089).to_string(), "2025-01-01");
         assert_eq!(Day::from_unix_days(20_763).to_string(), "2026-11-06");
         assert_eq!(Day::from_unix_days(11_016).to_string(), "2000-02-29");
-        assert_eq!(
-            Day::parse("2026-11-06"),
-            Some(Day::from_unix_days(20_763))
-        );
+        assert_eq!(Day::parse("2026-11-06"), Some(Day::from_unix_days(20_763)));
         for text in ["2026-13-01", "2026-11-6", "2026/11/06", "20261106"] {
             assert_eq!(Day::parse(text), None, "{text}");
         }

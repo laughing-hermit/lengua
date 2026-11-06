@@ -72,13 +72,22 @@ pub fn bundle_root(folder: &Path) -> Root {
         .or_else(|| folder.parent())
         .unwrap_or(folder)
         .to_path_buf();
-    let refused = refusal(&path);
+    // An index.md lengua didn't make, such as a site's home page, stays as it is: lengua writes
+    // only into one it made, or one that declares the bundle with `okf_version`.
+    let refused = refusal(&path).or_else(|| {
+        (declared.is_none() && path.join(INDEX_FILE).is_file()).then_some(FOREIGN_INDEX)
+    });
     Root {
         path,
         declared: declared.is_some(),
         refused,
     }
 }
+
+/// Why lengua leaves a parent folder's own index.md alone: it has no `okf_version`, so it isn't
+/// lengua's.
+const FOREIGN_INDEX: &str = "whose index.md isn't lengua's (add `okf_version: \"0.2\"` to its \
+                             frontmatter to let lengua keep it)";
 
 /// Whether `folder`'s index.md declares a bundle, with `okf_version` in its frontmatter.
 #[must_use]
@@ -207,20 +216,32 @@ mod tests {
         assert_eq!(parent.path, outer.join("group"));
         assert!(!parent.declared);
         assert_eq!(parent.refused, None);
-        std::fs::write(outer.join(INDEX_FILE), "---\nokf_version: \"0.2\"\n---\n# Programs\n")
-            .expect("an index");
+        std::fs::write(
+            outer.join(INDEX_FILE),
+            "---\nokf_version: \"0.2\"\n---\n# Programs\n",
+        )
+        .expect("an index");
         let declared = bundle_root(&program);
         assert_eq!(declared.path, outer);
         assert!(declared.declared);
         // An index with no version declares nothing.
         std::fs::write(outer.join(INDEX_FILE), "# Programs\n").expect("an index");
         assert_eq!(bundle_root(&program).path, outer.join("group"));
+        // And lengua leaves one alone in the parent it falls back to.
+        std::fs::write(outer.join("group").join(INDEX_FILE), "# Home\n").expect("an index");
+        let foreign = bundle_root(&program);
+        assert_eq!(foreign.path, outer.join("group"));
+        assert_eq!(foreign.refused, Some(FOREIGN_INDEX));
     }
 
     #[test]
     fn lengua_writes_nothing_in_a_file_systems_root_or_the_temporary_folder() {
         let temporary = std::env::temp_dir();
-        let top = temporary.ancestors().last().unwrap_or(&temporary).to_path_buf();
+        let top = temporary
+            .ancestors()
+            .last()
+            .unwrap_or(&temporary)
+            .to_path_buf();
         assert_eq!(
             bundle_root(&top.join("lengua-program")).refused,
             Some("a file system's root")

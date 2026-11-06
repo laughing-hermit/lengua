@@ -1082,7 +1082,9 @@ impl LenguaServer {
         let previous = match lock::read(folder.path(), Some(&key)) {
             Ok(previous) => previous,
             Err(error) if words.is_none() => {
-                return Ok(Recording::Needs(State::LockInvalid(error).next_step(folder)));
+                return Ok(Recording::Needs(
+                    State::LockInvalid(error).next_step(folder),
+                ));
             }
             Err(_) => None,
         };

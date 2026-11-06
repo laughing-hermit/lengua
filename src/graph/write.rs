@@ -59,7 +59,10 @@ impl Written {
     pub fn lines(&self) -> Vec<String> {
         let mut lines = Vec::new();
         if self.made {
-            lines.push(format!("lengua made index.md, listing {}", names(&self.listed)));
+            lines.push(format!(
+                "lengua made index.md, listing {}",
+                names(&self.listed)
+            ));
         } else {
             if !self.listed.is_empty() {
                 lines.push(format!("index.md lists {} now", names(&self.listed)));
@@ -122,7 +125,10 @@ pub fn write_within(
 ) -> Result<(Graph, Written), String> {
     let root = scan::bundle_root(folder);
     if root.refused.is_some() {
-        return Ok((Graph::of(root, folder, data_dir, bounds), Written::default()));
+        return Ok((
+            Graph::of(root, folder, data_dir, bounds),
+            Written::default(),
+        ));
     }
     let key = std::fs::canonicalize(&root.path).unwrap_or_else(|_| root.path.clone());
     let writers = bundle_mutex(&key);
@@ -270,8 +276,7 @@ fn kept(existing: Option<&str>, graph: &Graph) -> (String, Written) {
         if first {
             first = false;
             for (node, entry) in &entries {
-                if !present.contains(node.folder.as_path())
-                    && placed.insert(node.folder.as_path())
+                if !present.contains(node.folder.as_path()) && placed.insert(node.folder.as_path())
                 {
                     written.listed.push(node.path.clone());
                     run.push((node.path.clone(), entry.clone()));

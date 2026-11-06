@@ -113,9 +113,7 @@ fn about(graph: &Graph, node: &Node, linked: &BTreeSet<PathBuf>, findings: &mut 
         };
         say(
             Severity::Note,
-            format!(
-                "{shown} is an orphan: no index.md lists it, and no idea links to it; {fix}"
-            ),
+            format!("{shown} is an orphan: no index.md lists it, and no idea links to it; {fix}"),
         );
     }
 }
@@ -262,10 +260,19 @@ mod tests {
                     .collect()
             })
         };
-        assert_eq!(names("a").as_deref(), Some(&["a", "c", "a"].map(String::from)[..]));
-        assert_eq!(names("e").as_deref(), Some(&["e", "e"].map(String::from)[..]));
+        assert_eq!(
+            names("a").as_deref(),
+            Some(&["a", "c", "a"].map(String::from)[..])
+        );
+        assert_eq!(
+            names("e").as_deref(),
+            Some(&["e", "e"].map(String::from)[..])
+        );
         // b is in a cycle with d, not with a: from b, the cycle is b's own.
-        assert_eq!(names("b").as_deref(), Some(&["b", "d", "b"].map(String::from)[..]));
+        assert_eq!(
+            names("b").as_deref(),
+            Some(&["b", "d", "b"].map(String::from)[..])
+        );
         assert_eq!(names("f"), None);
         assert_eq!(
             chain(&["a", "c", "a"].map(String::from)),
