@@ -194,7 +194,7 @@ impl Lock {
             .collect();
         let _ = write!(
             text,
-            "\n[request]\nwords = [{}]\nspec = \"{}\"\n",
+            "\n[request]\nwords = [{}]\nidea = \"{}\"\n",
             words.join(", "),
             self.request.idea
         );
