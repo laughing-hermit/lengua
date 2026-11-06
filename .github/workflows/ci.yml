@@ -290,25 +290,16 @@ jobs:
         if: ${{ matrix.mode == 'compile' || matrix.mode == 'test' || matrix.mode == 'ignored' }}
         run: cargo test --release --locked --workspace --no-run
 
+      # The suite's one definition, which routes.yml's guests run too (scripts/ci/suite.sh).
       - name: Tests
         if: ${{ matrix.mode == 'test' }}
         env:
-          LENGUA_PROOF_SECONDS: "60"
-          RUST_TEST_THREADS: "2"
           FILTER: ${{ inputs.filter }}
           TEST_FILES: ${{ inputs.test_files }}
           LENGUA_RANDOM_SEED: ${{ inputs.seed }}
           STALL_SECONDS: ${{ inputs.stall_seconds }}
           LENGUA_SKIP_LOG: ${{ github.workspace }}/skips.log
-        run: |
-          selection=$(bash scripts/ci/test-selection.sh $TEST_FILES)
-          tests='set -o pipefail; cargo test --release --locked --workspace --no-fail-fast '"$selection"' -- $FILTER 2>&1 | tee test.log'
-          if [ -n "$STALL_SECONDS" ]; then
-            bash scripts/stall-report.sh "$STALL_SECONDS" bash -c "$tests"
-          else
-            bash -c "$tests"
-          fi
-          bash scripts/ci/ran-some-tests.sh test.log "$FILTER$TEST_FILES"
+        run: bash scripts/ci/suite.sh
 
       - name: The slow ignored tests
         if: ${{ matrix.mode == 'ignored' }}

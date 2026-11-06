@@ -14,7 +14,8 @@
 //!   each target's own CPU and system, and `ci.yml`'s one test job runs `cargo test` on every
 //!   runner the list names, since a table's cells for a target run natively on that target's
 //!   runner. A target added to lengua without a runner in the list fails, and so does a second
-//!   workflow that runs the suite.
+//!   workflow that runs the suite. The routes (WSL 2 and a Lima VM, in `routes.yml`) run the same
+//!   suite through `scripts/ci/suite.sh`, its one definition.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -274,4 +275,34 @@ fn one_workflow_runs_the_suite() {
         .map(|(name, _)| name)
         .collect();
     assert_eq!(running, ["ci.yml"], "the workflows that run `cargo test`");
+}
+
+/// The suite has one definition, `scripts/ci/suite.sh`: `ci.yml`'s test job runs it on the
+/// runners, and `routes.yml` runs it inside WSL 2 and a Lima VM through `scripts/ci/guest.sh`, so
+/// the routes for Windows and a Mac are tested by the targets' own suite.
+#[test]
+fn the_routes_run_the_targets_suite() {
+    let workflows = workflows();
+    let ci: Value = serde_saphyr::from_str(workflows.get("ci.yml").expect("ci.yml"))
+        .unwrap_or_else(|error| panic!("ci.yml: not YAML: {error}"));
+    assert!(
+        runs(&ci["jobs"]["test"], "scripts/ci/suite.sh"),
+        "ci.yml's test job doesn't run scripts/ci/suite.sh"
+    );
+    let routes: Value = serde_saphyr::from_str(workflows.get("routes.yml").expect("routes.yml"))
+        .unwrap_or_else(|error| panic!("routes.yml: not YAML: {error}"));
+    for job in ["wsl", "lima"] {
+        assert!(
+            runs(&routes["jobs"][job], "scripts/ci/guest.sh"),
+            "routes.yml's {job} job doesn't run scripts/ci/guest.sh"
+        );
+    }
+    let guest = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/ci/guest.sh"),
+    )
+    .expect("scripts/ci/guest.sh");
+    assert!(
+        guest.contains("scripts/ci/suite.sh"),
+        "scripts/ci/guest.sh doesn't run scripts/ci/suite.sh"
+    );
 }

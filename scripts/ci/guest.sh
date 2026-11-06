@@ -28,15 +28,9 @@ export PATH
 # Built first, as on the runners, so that the tests' time is the tests' and not the compiler's.
 cargo test --release --locked --workspace --no-run
 
-export LENGUA_PROOF_SECONDS=60 RUST_TEST_THREADS=2 LENGUA_SKIP_LOG="$root/skips.log"
-test_files="${TEST_FILES:-}"
-filter="${FILTER:-}"
-# shellcheck disable=SC2086 # the selection and the filter are lists of words
-selection=$(bash scripts/ci/test-selection.sh $test_files)
+# The suite as ci.yml's test job runs it, from the same script.
+export LENGUA_SKIP_LOG="$root/skips.log"
 status=0
-# shellcheck disable=SC2086
-cargo test --release --locked --workspace --no-fail-fast $selection -- $filter 2>&1 \
-  | tee test.log || status=$?
-bash scripts/ci/ran-some-tests.sh test.log "$filter$test_files" || status=1
+bash scripts/ci/suite.sh || status=$?
 bash scripts/skip-summary.sh skips.log || true
 exit "$status"

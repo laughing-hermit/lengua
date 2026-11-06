@@ -187,8 +187,7 @@ jobs:
 
       - name: The sandbox tests, built on the runner
         run: |
-          cargo test --release --locked --test limits --test red_team --no-run --message-format=json \
-            | jq -r 'select(.profile.test == true and .executable != null) | .executable' > tests.list
+          bash scripts/ci/test-binaries.sh limits red_team > tests.list
           cat tests.list
 
       - name: QEMU, and Lima pinned by checksum
