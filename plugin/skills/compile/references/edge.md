@@ -8,8 +8,9 @@ are the same on every computer lengua runs on; what differs between computers is
 each CPU passes them in, which [the x86-64 reference](x86_64.md) and
 [the AArch64 reference](aarch64.md) give.
 
-`syscall`, `svc`, a name that starts `os_`, `lengua_` or `LENGUA_`, and a definition of `_start`,
-`assert_fail`, `assert_message`, `fill` or `parallel_for` are refused: they are lengua's.
+`syscall`, `svc`, a name that starts `os_`, `lengua_`, `LENGUA_` or `.Llengua_`, and a definition
+of `_start`, `assert_fail`, `assert_message`, `fill` or `parallel_for` are refused: they are
+lengua's.
 
 ## Calling an operation
 
@@ -19,11 +20,11 @@ each CPU passes them in, which [the x86-64 reference](x86_64.md) and
   nothing else: test it right away, `test rax, rax` and `js` on x86-64, `tbnz x0, #63, …` on
   AArch64. Every operation but `os_exit` is followed by that test (rule 7).
 - **Registers:** an operation changes only the result register, the flags and the registers its
-  CPU's reference lists (x86-64: `rcx`, `r11` and every vector register; AArch64: `x8`, `x16`,
-  `x17`, `x30`, the vector registers `v0` to `v7` and `v16` to `v31`, and SVE's). Every other
-  register, the argument registers included, comes back as it went, so a loop's counter in
-  `rbx` or `x19` survives a call, and so does a pointer in `rsi`. A register the operation
-  changes can't be read after the call until something sets it.
+  CPU's reference lists (x86-64: `rcx`, `r11`, every vector register and the mask registers `k0`
+  to `k7`; AArch64: `x8`, `x16`, `x17`, `x30`, the vector registers `v0` to `v7` and `v16` to
+  `v31`, and SVE's). Every other register, the argument registers included, comes back as it
+  went, so a loop's counter in `rbx` or `x19` survives a call, and so does a pointer in `rsi`. A
+  register the operation changes can't be read after the call until something sets it.
 - **Never returns:** `os_exit`. A function that calls one of these keeps the CPU's own rules
   for its frame and the link register.
 
@@ -82,7 +83,8 @@ numbers are the same on every system: `ENOENT` 2, `EIO` 5, `EBADF` 9, `EAGAIN` 1
 | `os_mkdir` | `ENOENT` `EIO` `EACCES` `EEXIST` `ENOTDIR` `EINVAL` `ENOSPC` `ENAMETOOLONG` `EILSEQ` |
 | `os_remove` | `ENOENT` `EIO` `EACCES` `EBUSY` `ENOTDIR` `EISDIR` `EINVAL` `ENOTEMPTY` `ENAMETOOLONG` `EILSEQ` |
 | `os_rename` | `ENOENT` `EIO` `EACCES` `EBUSY` `EEXIST` `ENOTDIR` `EISDIR` `EINVAL` `ENOSPC` `ENOTEMPTY` `ENAMETOOLONG` `EILSEQ` |
-| `os_clock`, `os_sleep`, `os_poll`, `os_thread_join` | `EINVAL` |
+| `os_clock`, `os_sleep`, `os_thread_join` | `EINVAL` |
+| `os_poll` | `EBADF` `EINVAL` |
 | `os_random` | `EIO` `EINVAL` |
 | `os_accept` | `EIO` `EBADF` `EAGAIN` `EINVAL` `EMFILE` `ECONNRESET` |
 | `os_shutdown` | `EBADF` `EINVAL` `ENOTCONN` |
@@ -121,8 +123,10 @@ open.
 
 Open an input with mode 0, create or replace an output with mode 1, and `os_close` each when
 done. lengua runs a program in a working folder of its own, an empty temporary folder, or the
-user's folder when they ask to run it on their files. A test gives the program the files its
-`Files:` lines name and reads back what it leaves.
+user's folder when they ask to run it on their files. A test gives the program the files and
+folders its Given steps name (``a file `notes.txt` holding TEXT``, ``an empty folder `archive` ``)
+and checks what it leaves with its Then steps (``the file `out.txt` holds TEXT``,
+``there is no file `notes.txt` ``).
 
 ## The network
 
@@ -161,10 +165,10 @@ at once. Check each result like any call's.
 Functions a program calls without defining them, with the same register convention as its own
 functions, which the CPU's reference gives:
 
-- `assert_fail(id)`: the assertion's number, 1 to 999, in the first argument register. It prints
+- `assert_fail(id)`: the assertion's number, in the first argument register. It prints
   `lengua: assertion NNN failed` to standard error and ends the program, every thread of it, with
-  code 134. A program's assertions are numbered from 1 and each number is used once; lengua's own
-  start at 990.
+  code 134. A program's assertions are numbered from 1 to 899 and each number is used once;
+  lengua's own are 901 to 903 (`parallel_for`) and 990 to 992 (`fill`).
 - `fill(descriptor, buffer, size, stop)`: reads into the `size` bytes (at least 1) until they are
   full, the input ends, or, when `stop` is a byte, the last byte read is it; `stop` -1 reads to the
   end. However the input arrives, it reads the same, so a proof covers every way it can be cut.

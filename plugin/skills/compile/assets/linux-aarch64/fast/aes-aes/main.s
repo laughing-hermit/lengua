@@ -80,14 +80,14 @@ input:
 .size input, . - input
 
 // The key's 16 bytes.
-// shared: _start passes it to expand_key; parse_input decodes the key line into it
+// shared: main passes it to expand_key; parse_input decodes the key line into it
 .type key, @object
 key:
     .zero KEY_LEN
 .size key, . - key
 
 // The data's bytes, up to 4096 blocks.
-// shared: parse_input decodes the data into it; _start passes it to encrypt_blocks
+// shared: parse_input decodes the data into it; main passes it to encrypt_blocks
 .type plain, @object
 plain:
     .zero PLAIN_LEN

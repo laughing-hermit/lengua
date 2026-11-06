@@ -11,15 +11,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use rustix::fs::{
-    AtFlags, Dir, Mode as FileMode, OFlags, ResolveFlags, mkdirat, openat2, renameat, unlinkat,
+    AtFlags, Dir, FileType, Mode as FileMode, OFlags, ResolveFlags, fstat, mkdirat, openat2,
+    renameat, unlinkat,
 };
 use rustix::net::{SendAncillaryBuffer, SendAncillaryMessage, SendFlags, sendmsg};
 
 use super::{
-    Hello, Kind, REQUEST_LEN, Refusal, Request, encode_reply, parse_header, parse_request,
+    Hello, Kind, Permit, REQUEST_LEN, Refusal, Request, encode_reply, parse_header, parse_request,
 };
 use crate::edge::Op;
-use crate::edge::error::{EACCES, EBUSY, EEXIST, EINVAL, EIO};
+use crate::edge::error::{EACCES, EBUSY, EEXIST, EINVAL, EIO, EMFILE};
 use crate::names;
 use crate::supply::Supply;
 
@@ -108,6 +109,8 @@ pub enum Outcome {
     Closed,
     /// The program sent what isn't a message of the protocol.
     Refused(Refusal),
+    /// The program asked for what its spec doesn't allow.
+    Forbidden(Kind),
     /// The channel failed.
     Failed(std::io::Error),
 }
@@ -119,6 +122,8 @@ pub struct Broker {
     root: OwnedFd,
     /// What the program is told first.
     hello: Hello,
+    /// What its spec lets it ask for.
+    permit: Permit,
     /// What a test supplies.
     supply: Supply,
     /// What the program has told it.
@@ -175,12 +180,13 @@ fn names_of(path: &[u8]) -> Result<Vec<&[u8]>, u32> {
 }
 
 impl Broker {
-    /// A broker for a program whose folder is `root`.
+    /// A broker for a program whose folder is `root`, which does for it what `permit` says.
     #[must_use]
-    pub fn new(root: OwnedFd, hello: Hello, supply: Supply) -> Self {
+    pub fn new(root: OwnedFd, hello: Hello, supply: Supply, permit: Permit) -> Self {
         Self {
             root,
             hello,
+            permit,
             supply,
             notes: Arc::new(Notes::default()),
             clock_next: 0,
@@ -194,6 +200,12 @@ impl Broker {
     #[must_use]
     pub const fn hello(&self) -> Hello {
         self.hello
+    }
+
+    /// What the program's spec lets it ask for.
+    #[must_use]
+    pub const fn permit(&self) -> Permit {
+        self.permit
     }
 
     /// What the program has told the broker.
@@ -339,6 +351,11 @@ impl Broker {
             3 => (OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL, true),
             _ => (OFlags::RDONLY | OFlags::DIRECTORY, false),
         };
+        // A program holds at most [`crate::runner::OPEN_FILES`] descriptors, and its edge tells
+        // the broker of each close: one that asks for more than that has hidden its closes.
+        if u64::try_from(self.opens.len()).unwrap_or(u64::MAX) >= crate::runner::OPEN_FILES {
+            return Answer::error(EMFILE);
+        }
         if creates && self.clashes(&names) {
             return Answer::error(EEXIST);
         }
@@ -349,15 +366,30 @@ impl Broker {
         } else {
             FileMode::empty()
         };
+        // Without O_NONBLOCK, opening a named pipe waits in the kernel for its other end, and the
+        // broker, a thread of the server, would wait with it whatever becomes of the program.
         let opened = openat2(
             &self.root,
             target,
-            flags | OFlags::CLOEXEC | OFlags::NOCTTY,
+            flags | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK,
             permissions,
             resolve(),
         );
         match opened {
             Ok(descriptor) => {
+                // Only a file or a folder goes to the program: a named pipe, a device or a socket
+                // in its folder is no business of its.
+                match fstat(&descriptor) {
+                    Ok(details)
+                        if matches!(
+                            FileType::from_raw_mode(details.st_mode),
+                            FileType::RegularFile | FileType::Directory
+                        ) => {}
+                    Ok(_) => return Answer::error(EACCES),
+                    Err(errno) => {
+                        return Answer::error(closed(Op::Open, errno.raw_os_error()));
+                    }
+                }
                 if creates {
                     self.folders.clear();
                 }
@@ -557,6 +589,11 @@ pub fn answer_all(broker: &mut Broker, stream: &mut UnixStream) -> Outcome {
             Ok(request) => request,
             Err(refusal) => return Outcome::Refused(refusal),
         };
+        // What the spec doesn't allow ends the service, as what isn't a request does: an honest
+        // edge asks for nothing its program's spec didn't name.
+        if !broker.permit().allows(request.kind) {
+            return Outcome::Forbidden(request.kind);
+        }
         let answer = broker.answer(&request);
         if request.kind.has_reply()
             && let Err(error) = send(stream, &answer)
@@ -596,6 +633,7 @@ mod tests {
                 file_limit: 0,
             },
             Supply::default(),
+            Permit::ALL,
         )
     }
 
@@ -796,7 +834,7 @@ mod tests {
             flags: flag::RANDOM | flag::CLOCK,
             file_limit: 0,
         };
-        let mut broker = Broker::new(root, hello, supply);
+        let mut broker = Broker::new(root, hello, supply, Permit::ALL);
         let random = |count: u64| Request {
             kind: Kind::Random,
             argument: 0,
@@ -931,5 +969,145 @@ mod tests {
             service.join().expect("the service ends"),
             Outcome::Closed
         ));
+    }
+
+    /// Sends `request` over `stream`, whole, as the edge does.
+    fn send_request(stream: &mut UnixStream, request: &Request) {
+        stream
+            .write_all(&request.encode())
+            .expect("the request is sent");
+    }
+
+    #[test]
+    fn what_the_spec_does_not_allow_ends_the_service() {
+        // A spec of the clock alone: no names, no random bytes.
+        let calls = [crate::spec::Syscall::ClockGettime];
+        let allowed = Permit::of(&calls);
+        assert!(
+            allowed.clock && !allowed.names && !allowed.random,
+            "{allowed:?}"
+        );
+        for kind in [
+            Kind::Open,
+            Kind::Mkdir,
+            Kind::Remove,
+            Kind::Rename,
+            Kind::Random,
+        ] {
+            let folder = tempfile::tempdir().expect("a folder");
+            let root = rustix::fs::open(
+                folder.path(),
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+                FileMode::empty(),
+            )
+            .expect("the folder opens");
+            let hello = Hello {
+                mode: Mode::Run,
+                flags: 0,
+                file_limit: 0,
+            };
+            let mut broker = Broker::new(root, hello, Supply::default(), allowed);
+            let (mut client, mut server) = UnixStream::pair().expect("a channel");
+            let service = std::thread::spawn(move || answer_all(&mut broker, &mut server));
+            let asked = match kind {
+                Kind::Random => Request {
+                    kind,
+                    argument: 0,
+                    value: 4,
+                    first: Vec::new(),
+                    second: Vec::new(),
+                },
+                Kind::Open => request(kind, 1, "made", ""),
+                Kind::Rename => request(kind, 0, "made", "renamed"),
+                _ => request(kind, 0, "made", ""),
+            };
+            send_request(&mut client, &asked);
+            let outcome = service.join().expect("the service ends");
+            assert!(
+                matches!(outcome, Outcome::Forbidden(found) if found == kind),
+                "{kind:?}: {outcome:?}"
+            );
+            assert!(
+                std::fs::read_dir(folder.path())
+                    .expect("the folder")
+                    .next()
+                    .is_none(),
+                "{kind:?} left something in the folder"
+            );
+        }
+        // What the spec names is answered, and the notes always are.
+        let folder = tempfile::tempdir().expect("a folder");
+        let everything = broker_in(folder.path());
+        assert!(everything.permit().allows(Kind::Open));
+        let nothing = Permit::default();
+        for kind in [Kind::Closed, Kind::Waiting, Kind::Listed, Kind::Resumed] {
+            assert!(nothing.allows(kind), "{kind:?}");
+        }
+        assert!(!nothing.allows(Kind::Clock));
+    }
+
+    #[test]
+    fn a_named_pipe_is_refused_and_does_not_hold_the_broker() {
+        let folder = tempfile::tempdir().expect("a folder");
+        rustix::fs::mknodat(
+            rustix::fs::CWD,
+            folder.path().join("pipe"),
+            FileType::Fifo,
+            FileMode::from_raw_mode(0o600),
+            0,
+        )
+        .expect("a named pipe is made");
+        let mut broker = broker_in(folder.path());
+        let started = std::time::Instant::now();
+        for mode in [0, 1, 2] {
+            let answer = broker.answer(&request(Kind::Open, mode, "pipe", ""));
+            assert!(answer.handover.is_none(), "mode {mode}");
+            assert!(errno(&answer) > 0, "mode {mode}: a refusal");
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "the open waited for the pipe's other end"
+        );
+    }
+
+    #[test]
+    fn a_program_that_hides_its_closes_cannot_fill_the_brokers_table() {
+        let folder = tempfile::tempdir().expect("a folder");
+        std::fs::write(folder.path().join("file"), "x").expect("a file");
+        let mut broker = broker_in(folder.path());
+        let held = usize::try_from(crate::runner::OPEN_FILES).expect("a count");
+        for number in 0..held {
+            let answer = broker.answer(&request(Kind::Open, 0, "file", ""));
+            assert_eq!(errno(&answer), 0, "open {number}");
+        }
+        let answer = broker.answer(&request(Kind::Open, 0, "file", ""));
+        assert_eq!(
+            errno(&answer),
+            i64::from(EMFILE),
+            "one more than a program can hold"
+        );
+    }
+
+    #[test]
+    fn a_program_that_never_reads_cannot_hold_the_broker_for_ever() {
+        let folder = tempfile::tempdir().expect("a folder");
+        let mut broker = broker_in(folder.path());
+        let (mut client, mut server) = UnixStream::pair().expect("a channel");
+        server
+            .set_write_timeout(Some(std::time::Duration::from_millis(300)))
+            .expect("a timeout");
+        let service = std::thread::spawn(move || answer_all(&mut broker, &mut server));
+        // Clock requests are answered, and the answers pile up unread until the channel is full.
+        let asked = request(Kind::Clock, 0, "", "");
+        for _ in 0..20_000 {
+            if client.write_all(&asked.encode()).is_err() {
+                break;
+            }
+        }
+        let outcome = service.join().expect("the service ends");
+        assert!(
+            matches!(outcome, Outcome::Failed(_) | Outcome::Closed),
+            "{outcome:?}"
+        );
     }
 }

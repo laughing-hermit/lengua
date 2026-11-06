@@ -47,7 +47,7 @@ too_long_msg:
 .section .bss
 
 // READ_MAX bytes of input, rounded up to whole 16-byte chunks so vector loads stay inside.
-// shared: read_line fills it, find_newline and shout work on it, and _start prints it
+// shared: read_line fills it, find_newline and shout work on it, and main prints it
 .type line_buf, @object
 line_buf:
     .zero LINE_BUF_LEN

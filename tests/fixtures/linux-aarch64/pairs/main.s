@@ -24,7 +24,7 @@
 .section .bss
 
 // One buffer-full of standard input.
-// shared: _start fills it, and count_pairs reads it
+// shared: main fills it, and count_pairs reads it
 .type buffer, @object
 buffer:
     .zero BUF_LEN

@@ -31,8 +31,8 @@ checker for assembly. Each violation's label says which: `rule 9` or `rule M3`.
   Data directives: `.ascii`, `.asciz`, `.byte`, `.short`, `.long`, `.quad` (numbers only),
   `.double` and `.float` (plain decimals, such as `100.0`),
   `.zero NAME` and `.skip NAME` (sizes are named constants), and `.balign N`. `.bss` holds only
-  `.zero` and `.skip`. `.balign N` (1 to 64) between `.type name, @object` and `name:` makes the
-  symbol start at a multiple of N.
+  `.zero` and `.skip`. `.balign N` (a power of two, 1 to 64) between `.type name, @object` and
+  `name:` makes the symbol start at a multiple of N.
 - **A function:**
 
   ```
@@ -215,9 +215,9 @@ holds the worker's deepest call path, which `check` computes.
 
 No two threads ever write the same byte, so results are the same on every run: combine `results`
 in index order for a reduction (a count, a sum), or lay the slots end to end for a map (each
-worker writes its part of the output, and one `os_write` prints them all). lengua's own
-assertions are numbered 990 and up; number yours from 1 to 899. The kernel lets a threaded program
-call `clone` only with `parallel_for`'s flags.
+worker writes its part of the output, and one `os_write` prints them all). The kernel lets a
+threaded program run `clone` only with the flags of lengua's `os_thread_start`, which
+`parallel_for` calls.
 
 Threads pay off when each worker has real work: starting one costs about 10 to 20 microseconds,
 and splitting a fast vector loop over a megabyte saves little. Pick the worker count from the
@@ -290,7 +290,8 @@ starts them only through lengua's `parallel_for` (see "Threads" below). It calls
 operations of what its spec names (`- Uses:` and `- Network:`), which are the capabilities the
 program is granted ([the edge](edge.md) says which each allows), and makes no system call of its
 own. The stack changes only through 64-bit `push` and
-`pop`, `call`, `ret`, and `sub rsp, N` / `add rsp, N`; every path into a line has the same depth,
+`pop` of registers (not of memory, and never `pop rsp`), `call`, `ret`, and `sub rsp, N` /
+`add rsp, N`; every path into a line has the same depth,
 and nothing reads or writes below `rsp` (no red zone). `check` checks the deepest stack
 over all call paths, lengua's own frames included.
 
@@ -315,18 +316,23 @@ Calls to `assert_fail` don't need alignment. A function that changes `rbx`, `rbp
     call assert_fail
 ```
 
-An assertion is exactly a label, `mov edi, <number from 1 to 999>` and `call assert_fail`. It's
+An assertion is exactly a label, `mov edi, <number from 1 to 899>` and `call assert_fail`. It's
 reached by one jump only: a conditional jump, or a `jmp` right after one (the end of a comparison
 chain, or a loop that ran out). Numbers are unique in the program, and functions average at least
 2 assertions. `assert_fail` is lengua's: it prints `lengua: assertion NNN failed` to standard
 error and exits with code 134, which `check` reports as the assertion's line. Call it, never
-define it; lengua's own assertions are numbered 990 and up.
+define it; lengua's own assertions are numbered 901 and up, so number yours from 1 to 899.
 
 ### 6. Smallest scope
 
 Nothing is exported. `[rip + name]` operands name data symbols, and read-only data is never
 written. Writable data (`.data`, `.bss`) belongs to one function; others receive a pointer and a
 length, unless the data is marked `# shared: <reason>` right above its `.type` line.
+
+After a call that reaches an operation, a register the operation changes (`rcx`, `r11`, the
+vector and mask registers) can't be read until something sets it; a function that reaches no
+operation and sets one itself, a third result in `rcx`, gives it back. `check` reports it as
+rule 6.
 
 ### 7. Checked results
 
@@ -342,10 +348,7 @@ jump, with no label or jump before it:
 
 An operation's result is 0 or more on success and the negative of one of
 [the edge's errors](edge.md) otherwise, and a result function's `rax` is negative on error too. A
-result function returns its value in another register, such as `rdx`. After a call that reaches
-an operation, a register the operation changes (`rcx`, `r11`) can't be read until something sets
-it; a function that reaches no operation and sets one itself, a third result in `rcx`, gives it
-back.
+result function returns its value in another register, such as `rdx`.
 
 ### 8. No macros, named constants
 

@@ -1183,9 +1183,7 @@ pub const DELIVERY: &str = "(delivery)";
 /// formula.
 pub const UNSAFE: &str = "(unsafe)";
 
-/// What one pipe write holds, which one read of standard input returns whole: past it, input
-/// arrives in pieces, which only a program that reads with fill takes right however they fall.
-pub const PIPE_WRITE: usize = 4096;
+pub use crate::edge::PIPE_WRITE;
 
 /// The most text lengths one proof lays out past where it starts, more than its time reaches: a
 /// text is proven up to the length the spec gives it, shortest first, as far as the proof's time

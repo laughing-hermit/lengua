@@ -233,7 +233,15 @@ pub fn folded(name: &str) -> String {
 /// only in case or normalization as one: the same folded, but not the same bytes.
 #[must_use]
 pub fn clashes(name: &str, other: &str) -> bool {
-    name != other && folded(name) == folded(other)
+    if name == other {
+        return false;
+    }
+    // Two ASCII names meet when they differ only in case, which is all folding does to them; the
+    // broker asks this of every entry of a folder for every name a program makes.
+    if name.is_ascii() && other.is_ascii() {
+        return name.eq_ignore_ascii_case(other);
+    }
+    folded(name) == folded(other)
 }
 
 #[cfg(test)]

@@ -40,11 +40,22 @@ use tokio::net::UnixListener;
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
-use crate::broker::{self, Broker, Hello, Mode, Notes, Outcome, flag};
+use crate::broker::{self, Broker, Hello, Mode, Notes, Outcome, Permit, flag};
 use crate::connect::{self, Made, Reach, Relay};
 use crate::platform::{Allowed, Pin};
 use crate::runner::{End, Job, LAUNCH_FLAG, Limits, OPEN_FILES, Run, portable_run};
-use crate::syscalls::host::{RECVMSG, SENDMSG};
+use crate::syscalls::host::{MKDIRAT, OPENAT, RECVMSG, RENAMEAT, SENDMSG, UNLINKAT};
+
+/// The calls that make or find a path, which a program with a broker never makes itself.
+const PATH_CALLS: [i64; 4] = [OPENAT, MKDIRAT, UNLINKAT, RENAMEAT];
+
+/// How long a write to the program's channel may take before the broker gives up on a program that
+/// doesn't read: an honest edge reads each reply as soon as it has asked for it.
+const BROKER_WRITE_WITHIN: Duration = Duration::from_secs(5);
+
+/// How long the broker has to stop once the program has ended and the broker's end of the channel
+/// is shut.
+const BROKER_STOPS_WITHIN: Duration = Duration::from_secs(5);
 
 /// How long the launcher may take to start.
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -152,6 +163,10 @@ struct Brokered {
     notes: Arc<Notes>,
     /// Whether the test supplies random bytes, so that how many the program asks for matters.
     random: bool,
+    /// The broker's end of the channel, to shut once the program has ended: a descriptor the
+    /// program sent over the channel keeps its end open past the program's end, and the service,
+    /// waiting on it, would never see that the program has gone.
+    wake: std::os::unix::net::UnixStream,
 }
 
 /// lengua's ends of the connections it made for a running program.
@@ -261,25 +276,41 @@ impl Started {
         let stdout = self.stdout.await.map_err(io::Error::other)??;
         let stderr = self.stderr.await.map_err(io::Error::other)??;
         let (supplied, random_asked, listed) = match self.broker.take() {
-            // The program ended, so its end of the channel has closed and the service with it.
+            // The program ended, so its end of the channel has closed and the service with it,
+            // but for a descriptor of the channel the program sent in flight: shutting the
+            // broker's own end wakes a service waiting on it, and the wait for it has a limit.
             Some(Brokered {
                 service,
                 notes,
                 random,
+                wake,
             }) => {
-                let outcome = tokio::task::spawn_blocking(move || service.join())
-                    .await
-                    .map_err(io::Error::other)?;
-                let problem = match outcome {
-                    Ok(Outcome::Closed) => None,
-                    Ok(Outcome::Refused(refusal)) => Some(format!(
-                        "lengua's broker stopped serving the program, which sent what isn't a \
-                         message of the protocol ({refusal:?})"
+                let _ = wake.shutdown(std::net::Shutdown::Both);
+                let joined = tokio::time::timeout(
+                    BROKER_STOPS_WITHIN,
+                    tokio::task::spawn_blocking(move || service.join()),
+                )
+                .await;
+                let problem = match joined {
+                    Err(_) => Some(format!(
+                        "lengua's broker didn't stop within {} seconds of the program's end",
+                        BROKER_STOPS_WITHIN.as_secs()
                     )),
-                    Ok(Outcome::Failed(error)) => Some(format!(
-                        "lengua's broker stopped serving the program: {error}"
-                    )),
-                    Err(_) => Some("lengua's broker stopped serving the program".to_owned()),
+                    Ok(outcome) => match outcome.map_err(io::Error::other)? {
+                        Ok(Outcome::Closed) => None,
+                        Ok(Outcome::Refused(refusal)) => Some(format!(
+                            "lengua's broker stopped serving the program, which sent what isn't \
+                             a message of the protocol ({refusal:?})"
+                        )),
+                        Ok(Outcome::Forbidden(kind)) => Some(format!(
+                            "lengua's broker stopped serving the program, which asked for what \
+                             its spec doesn't allow ({kind:?})"
+                        )),
+                        Ok(Outcome::Failed(error)) => Some(format!(
+                            "lengua's broker stopped serving the program: {error}"
+                        )),
+                        Err(_) => Some("lengua's broker stopped serving the program".to_owned()),
+                    },
                 };
                 (
                     problem,
@@ -563,6 +594,10 @@ async fn launch_job(
     } else {
         job.syscalls
             .iter()
+            // A program with a broker has it make and find every path, and its edge never makes
+            // these calls where it has a channel: the kernel stops the program's own, so that it
+            // can't probe what Landlock keeps it from opening.
+            .filter(|allowed| job.channel.is_none() || !PATH_CALLS.contains(&allowed.number))
             .map(|allowed| format!("{}{}", allowed.number, allowed.pin.encode()))
             // The edge looks for its channel at its first need. Where lengua gave it none the
             // look finds nothing, which the kernel lets it do on that descriptor alone.
@@ -575,8 +610,8 @@ async fn launch_job(
     // A program in the edge form that links the channel has a broker, a thread of this process:
     // the program's end of the channel goes to the launcher with the go signal, and the first
     // message is in it already, so that the program finds it when it starts.
-    let (channel, broker) = if job.channel {
-        let (program, broker) = start_broker(job, limits, folder)?;
+    let (channel, broker) = if let Some(permit) = job.channel {
+        let (program, broker) = start_broker(job, permit, limits, folder)?;
         (Some(program), Some(broker))
     } else {
         (None, None)
@@ -587,7 +622,7 @@ async fn launch_job(
         .arg(&socket)
         .arg(syscalls.join(","))
         .arg(file_limit)
-        .arg(if job.channel {
+        .arg(if job.channel.is_some() {
             format!("{};channel", net.encode())
         } else {
             net.encode()
@@ -698,11 +733,18 @@ async fn launch_job(
 /// thread answers what the program asks until it ends.
 fn start_broker(
     job: &Job<'_>,
+    permit: Permit,
     limits: &Limits,
     folder: &Path,
 ) -> io::Result<(std::os::unix::net::UnixStream, Brokered)> {
     use rustix::fs::{Mode as FileMode, OFlags};
     let (program, mut lengua) = std::os::unix::net::UnixStream::pair()?;
+    // An honest edge reads each reply as soon as it has asked for it, so a write that can't finish
+    // in this time is a program that doesn't read: the service ends, and with it the descriptors
+    // the program may have sent over its channel.
+    lengua.set_write_timeout(Some(BROKER_WRITE_WITHIN))?;
+    // Another handle on the broker's end, to wake the service when the program has ended.
+    let wake = lengua.try_clone()?;
     let root = rustix::fs::open(
         folder,
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
@@ -729,7 +771,7 @@ fn start_broker(
         flags,
         file_limit: limits.max_file_size.unwrap_or(0),
     };
-    let mut broker = Broker::new(root, hello, supply);
+    let mut broker = Broker::new(root, hello, supply, permit);
     broker::greet(&broker, &mut lengua)?;
     let notes = broker.notes();
     let service = std::thread::Builder::new()
@@ -741,6 +783,7 @@ fn start_broker(
             service,
             notes,
             random,
+            wake,
         },
     ))
 }
@@ -1255,8 +1298,9 @@ const NEVER_EMULATED: [i64; 37] = [
     nix::libc::SYS_clock_settime,
 ];
 
-/// Reads the launcher's system call list ("0,1,56:3477248,4352:channel": a number and, after a
-/// colon, the only first argument allowed or the name of a pin; or [`EMULATED`]) and file limit ("1048576" or "none").
+/// Reads the launcher's system call list ("0,1,56:3477248,46:channel,47:channel": a number and,
+/// after a colon, the only first argument allowed or the name of a pin; or [`EMULATED`]) and
+/// file limit ("1048576" or "none").
 fn parse_confinement(syscalls: &OsString, file_limit: &OsString) -> Result<Confinement, String> {
     let syscalls = syscalls.to_string_lossy();
     let emulated = syscalls == EMULATED;
@@ -1393,12 +1437,12 @@ fn confine(
         // binds a server's socket before it starts.
         .and_then(|ruleset| ruleset.restrict_self())
         .map_err(|error| format!("Landlock: {error}"))?;
-    // With no path granted, only Landlock stands between the program and the names it could open
-    // for itself: a kernel with none doesn't run it.
-    if no_path && status.ruleset == RulesetStatus::NotEnforced {
+    // Landlock holds every program to its working folder, or to no file at all when its broker
+    // opens them for it, and the spec's system calls don't: a kernel with none doesn't run any.
+    if status.ruleset == RulesetStatus::NotEnforced {
         return Err(
-            "this kernel has no Landlock, which holds a program to the files its broker opens \
-             for it; that needs Linux 5.13 or newer with Landlock on"
+            "this kernel has no Landlock, which holds a program to its working folder or to the \
+             files its broker opens for it; that needs Linux 5.13 or newer with Landlock on"
                 .into(),
         );
     }
@@ -1407,7 +1451,7 @@ fn confine(
     if net.is_used() && status.ruleset != RulesetStatus::FullyEnforced {
         return Err(
             "this kernel can't hold the program off the network by Landlock; that needs Linux \
-             6.7 or newer"
+             6.12 or newer"
                 .into(),
         );
     }

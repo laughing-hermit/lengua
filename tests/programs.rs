@@ -9,9 +9,9 @@
 //! words counted for every length, text capitalized with vectors, and the benchmark's programs.
 //!
 //! A target added to lengua breaks every table until its cells are filled. A case is tried on
-//! every target this computer runs, natively or through QEMU's user mode (where the supervisor
-//! can't follow a program, so the tests that need it are not run); the other targets' cells are
-//! read for well-formedness on any computer, and tried on their own runners.
+//! every target this computer runs, natively or through QEMU's user mode (where the kernel can't
+//! hold a program to its spec's system calls and nothing is measured); the other targets' cells
+//! are read for well-formedness on any computer, and tried on their own runners.
 
 mod common;
 mod per_target;
@@ -815,9 +815,8 @@ async fn a_program_lists_its_folder_and_deletes_inside_it() {
     }
 }
 
-/// nap sleeps 30 seconds, more than a test may run: the test's supervisor ends the sleep at
-/// once, so the test passes in a moment. Under QEMU's user mode the supervisor can't follow the
-/// program and a test that needs it is not run, so there it passes in a moment too.
+/// nap sleeps 30 seconds, more than a test may run: the edge ends a test's sleep at once, so the
+/// test passes in a moment, under QEMU's user mode too.
 #[tokio::test]
 async fn a_test_answers_a_sleep_at_once() {
     let programs = fixture("nap");

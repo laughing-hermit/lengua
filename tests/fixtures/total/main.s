@@ -55,7 +55,7 @@ bad_msg:
 .section .bss
 
 # The whole expenses file.
-# shared: load_file reads the file into it and _start lends it to sum_lines
+# shared: load_file reads the file into it and main lends it to sum_lines
 .type file_buf, @object
 file_buf:
     .zero FILE_MAX

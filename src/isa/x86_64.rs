@@ -277,6 +277,21 @@ fn value(instruction: &Instruction, name: &str) -> Value {
 fn stack(instruction: &Instruction, name: &str, writes: RegSet) -> Stack {
     match instruction.mnemonic() {
         Mnemonic::Push | Mnemonic::Pop => {
+            // A push or a pop of memory reads or writes where no memory rule looks: after a
+            // `push`, `pop qword ptr [rsp]` writes over the return address.
+            if instruction.op_kind(0) == OpKind::Memory {
+                return Stack::Refused(format!(
+                    "`{name}` of memory reaches memory no rule follows; push and pop 64-bit \
+                     registers"
+                ));
+            }
+            // And `pop rsp` makes rsp a value from memory, which the stack's depth can't follow.
+            if instruction.mnemonic() == Mnemonic::Pop && first_is(instruction, Register::RSP) {
+                return Stack::Refused(format!(
+                    "`{name} rsp` loads the stack pointer from memory, which the stack's depth \
+                     can't follow"
+                ));
+            }
             let wide = match instruction.op_kind(0) {
                 OpKind::Register => instruction.op_register(0).size() == 8,
                 _ => instruction.stack_pointer_increment().abs() == 8,

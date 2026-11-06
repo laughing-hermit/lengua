@@ -14,8 +14,8 @@
 //!   other register at the call holds the same address, as with Rust's `&mut`. Separate parts of
 //!   one buffer, such as objects carved from an arena, may be lent together; the rules don't
 //!   check that the parts stay apart. The program's arguments are only read. Which registers a
-//!   function reads and writes through comes from its code and what it calls, system calls
-//!   included, so no header has to say it.
+//!   function reads and writes through comes from its code and what it calls, the edge's
+//!   operations included, so no header has to say it.
 //! - **M5, initialization.** No frame byte is read before every path has written it.
 //! - **M6, immutability.** Read-only data is never written, through any register, and no memory
 //!   is both writable and executable.

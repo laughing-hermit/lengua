@@ -210,8 +210,9 @@ working folder at all: lengua stops it.
 | `choice(a, b, …)` | One of the values: all whole numbers, all decimals or all strings | Every value (the first and last when there are more than 16) |
 | `string(min, max, "chars")` | `min` to `max` characters (at most 1048576) drawn from `chars` | The shortest string of the first character, the longest of the last |
 
-An argument holds at most 131072 bytes, so `check` refuses a run whose argument is longer;
-long text belongs on standard input.
+The arguments of a run take at most 32000 characters of a command line together (UTF-16 units,
+each argument after a space and quoted as Windows quotes it), the same limit on every computer, so
+`check` refuses a run whose arguments take more; long text belongs on standard input.
 
 Arguments must be literal values. The limits of `int` and `decimal` and the lengths of `string`
 must be numbers that the `# Purpose` section writes in backticks, so every range comes from the

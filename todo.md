@@ -116,8 +116,8 @@ Then by finish-line point:
 | | now | what's left |
 |---|---|---|
 | 1. AI language, Agent Plugin | On Linux x86-64 and Linux ARM64: both skills, `check` and `run`, the spec format, the `Builds on` graph. On the other four the server builds and the tests that run no program pass, but no program runs. | The release check through a plain MCP client on every target (round 6). Knowledge-graph indexing past program folders: not designed. |
-| 2. Six targets | Linux x86-64 and Linux ARM64 pass the whole suite natively. The other four pass every test that runs no program (the table above). | The edge and broker (round 2); programs running on macOS (round 3) and Windows (round 4). |
-| 3. Tailored | CPU tiers for x86-64 and ARM64, each with a baseline form beside it. For the OS, Linux programs call the kernel directly; no edge exists yet for any OS. | One edge per OS (rounds 2, 3 and 4). |
+| 2. Six targets | Linux x86-64 and Linux ARM64 pass the whole suite natively. The other four pass every test that runs no program (the table above). | Programs running on macOS (round 3) and Windows (round 4). |
+| 3. Tailored | CPU tiers for x86-64 and ARM64, each with a baseline form beside it. For the OS, every Linux program reaches it only through lengua's edge: 21 operations in `src/edge/linux-x86_64.s` and `linux-aarch64.s`; no edge exists yet for macOS or Windows. | An edge for macOS (round 3) and for Windows (round 4). |
 | 4. Faster, leaner | Measured on Linux x86-64 and Linux ARM64 (the table above): most rows ahead, some level, none gated. The other four are not measured. | The gate on all six runners (round 5). |
 | 5. A replacement | Scope written in DESIGN. | Prover reach (round 6). |
 | 6. Truthful documents | README and DESIGN state the stricter bar and name the targets each claim covers. | A last pass (round 6). |
@@ -222,7 +222,11 @@ plan is ROADMAP.md's R2). Done, with the runs that show it:
   canonical copies, the start-stack owners and the frozen templates are deleted), a program may
   not call `os_thread_start` or `os_thread_join` itself, the shipped `fill.s` assets are gone,
   and the checker's, the integration and the prover's tests stand on the shipped edge-form
-  templates. The compile run 42161170289 built every target under clippy `-D warnings`.
+  templates. The compile run 42161170289 built every target under clippy `-D warnings`. The red
+  team gained 14 attempts for the edge form on each CPU, and a reading of the checker against
+  them found three holes that were older than the round, now closed with their rows: a push or a
+  pop of memory and `pop rsp` on x86-64, and a page address (`adrp`) with no `add` after it on
+  AArch64.
 - **8c, the documents**: DESIGN.md has the broker, the sandbox as built and a section on the
   edge; the CPU references are `x86_64.md` and `aarch64.md`; the compile skill teaches the edge
   form.
@@ -252,22 +256,21 @@ golden ledger against `e4163d4`, the bench against it, and the merge to main.
   emulated report differs (it says "under qemu-aarch64", and has no counters or timings). Make
   each cell say what an emulated run says, then take `continue-on-error` off the job in `ci.yml`
   so that the gate requires it.
-- **The goldens compare nothing on a runner.** `checker::golden` and `prove::golden` compare a
-  run with a recording made at an earlier commit, and a fresh runner has none, so they record
-  and note that they compared nothing: the four "passed" that way on both Linux targets (run
-  42084426990). Before the edge changes what the checker reads, a job records them at the
-  merge-base and at the head, both on the runner, and diffs the two. The prover's two take about
-  30 minutes each. Filter `explains_a_mutant` out: it is a helper that needs
-  `LENGUA_GOLDEN_MUTANT`.
+- **The goldens compare nothing on a runner by themselves.** `checker::golden` and
+  `prove::golden` compare a run with a recording made at an earlier commit, and a fresh runner
+  has none, so they record and note that they compared nothing: the four "passed" that way on
+  both Linux targets (run 42084426990). The `golden` mode of `ci.yml` records the base and the
+  head in one dispatch, and `scripts/ci/golden-diff.sh` compares the two; a golden leg takes
+  about 100 minutes on the x86-64 runner (the head leg of the first run, 42152180357, was cut
+  off at the old limit of 120).
 - `upcase` retries writes 4096 times on x86-64 and 64 times on ARM64. The ARM64 main template's
   assertions skip number 3.
 - The stamp lengua writes into `main.s` and `lengua.lock` (`needs SSE4.2, …`) lists SSE3 to
   SSE4.2 and POPCNT as extensions, because the checker's own floor is SSE2 (`Facts.features`).
   The edge rewrites the header to name the CPU and leave the baseline out.
-- The static system call summary is missing `ppoll`'s timeout and signal-mask pointers. This
-  goes away with the edge's `os_poll`.
-- The model-against-CPU harnesses differ between the CPUs in feature gating and host. They move
-  onto the edge, so they run on every runner with one gating.
+- The model-against-CPU harnesses differ between the CPUs in feature gating and host. They still
+  assemble raw `_start` programs; they move onto the edge with the prover's raw model (round 6),
+  so they run on every runner with one gating.
 
 ### Round 3
 
@@ -331,6 +334,39 @@ golden ledger against `e4163d4`, the bench against it, and the merge to main.
 
 ### Round 6
 
+- **The sandbox's known limits** (DESIGN.md, "Threat model and known limits"), found by the
+  round 2 security review (three layers read, every finding checked by a second reader), and
+  not closed in round 2: threads are pinned by flags but not counted; there is no memory limit
+  and no total disk quota; QEMU's user mode runs under a denylist, so sockets and local sockets
+  stay open there; a program outlives a killed server (no parent-death signal is set);
+  descriptors in flight over the
+  channel can fail other programs' replies where the soft descriptor limit is low (`SO_PASSRIGHTS`
+  closes it on kernels from 6.16); `close_strays` runs after the listener and connections are
+  placed; the broker's EBUSY is not applied to the target of a rename (the prover's model agrees
+  with it); the clash check refuses to open an existing file for writing, and a case-only rename
+  of one file, when a case-variant sibling exists (the prover's model agrees); a failed open
+  with `EMFILE` has already made or truncated the file; `os_close` keeps its token when the
+  close fails with anything but `EBADF`; the filter doesn't pin the clock id. Closed in round 2: the broker serves only what the spec
+  allows, a bounded stop of its service, named pipes refused, a cap on its table of open files,
+  no `openat` family for a program with a channel, Landlock required of every program, the
+  fuzz target seeded with valid messages, a stopped broker named in `run`'s report.
+- **Checks planned and not built**: main.s's `.equ` lines for the errors and modes it compares
+  against, held to the edge's values; a test holding lengua's edge files and libraries to the
+  dialect's rules apart from their calls into the system.
+- **A data pointer moved by a register.** main.s can move a pointer to its data by a register
+  (`add rax, rcx`, `lea rcx, [rax + rdx]`) or launder it (`or`, `imul` on a pointer). The memory
+  rules then know the owner but not the offset, or neither, and run M2 only where they know the
+  offset, so a store through it that leaves its object, into lengua's own data (the assertion
+  message, the error tables, the channel's buffer) too, is refused by no static rule. The proofs
+  hold it (the `memory` line says "tested, not proven") and the sandbox limits what a corrupted
+  edge could do. Refusing it statically needs a bound on the register, as rule 9 asks of an index.
+- **The layout** (left over from round 2). One `spec.md` per program, so each twin's copy and the
+  same-bytes test (`every_program_has_its_twin_on_the_other_cpu`, tests/every_program.rs) go;
+  the assets split into `assets/x86_64/` and `assets/aarch64/`, and `tests/fixtures/linux-aarch64`
+  becomes `tests/fixtures/aarch64`.
+- **The prover's raw system-call model** (`Cpu::syscall`, `Image::linux`, the raw `_start`
+  entry) and the spec's `Spec.syscalls` and `Use::syscalls`: the plan had them deleted in round
+  2; the sandbox's allow-list still comes from the spec's list, and the prover's raw tests stay.
 - **Prover reach on x86-64.** x86-64's prover can't follow dozens of vector instructions that the
   ARM64 prover models: `palignr`, `pblendw`, `punpck*`, `pack*`, saturating and widening
   arithmetic, string compares, `pextr*`/`pinsr*`, `pmovzx*`, `gf2p8*` and more
@@ -346,7 +382,7 @@ golden ledger against `e4163d4`, the bench against it, and the merge to main.
   only, so its SSE2, AVX2, AES, SHA and PCLMUL probes meet real silicon on every draw.
 - **A zero-register branch after another branch.** The "assertion always fails" check reads a
   jump that follows any branch as conditional, because the loop-exhaustion and chain-default
-  idioms 167 shipped programs use rely on it. So a `cbz xzr` right after another branch passes
+  idioms, which 167 places in shipped programs use, rely on it. So a `cbz xzr` right after another branch passes
   that check, though the dead-code check catches it. No shipped program has one.
 - **The AArch64 dialect** has no add-with-carry (`adc`, `sbc`).
 - **Small items.**

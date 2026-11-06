@@ -1,6 +1,6 @@
-//! Values a test gives a program in place of the kernel's: the bytes its `getrandom` calls
-//! receive and what its `clock_gettime` calls read. They make output that depends on chance or
-//! the time exact, so tests can compare it and proofs can cover it.
+//! Values a test gives a program in place of the kernel's: the bytes its `os_random` calls
+//! receive and what its `os_clock` calls read. They make output that depends on chance or the
+//! time exact, so tests can compare it and proofs can cover it.
 
 /// The most random bytes one test may supply.
 pub const MAX_RANDOM_BYTES: usize = 65_536;
@@ -84,10 +84,10 @@ pub fn hex(text: &str) -> Result<Vec<u8>, String> {
 /// What a test supplies in place of the kernel.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Supply {
-    /// The bytes `getrandom` calls receive, in order, or `None` when the kernel draws them.
+    /// The bytes `os_random` calls receive, in order, or `None` when the kernel draws them.
     pub random: Option<Vec<u8>>,
-    /// What successive `clock_gettime` calls read, the last one repeating; empty when the
-    /// kernel's clock answers.
+    /// What successive `os_clock` calls read, the last one repeating; empty when the kernel's
+    /// clock answers.
     pub clock: Vec<Time>,
 }
 

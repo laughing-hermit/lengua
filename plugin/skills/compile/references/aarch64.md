@@ -142,8 +142,8 @@ them.
 - **Results:** the first instruction to touch `x0` after a call to a `// returns: result`
   function or an operation (`bl os_…`), is `tbnz x0, #63, …`, `cmp x0, #0` with `b.lt`, or `cbz`/`cbnz x0`.
 - **Assertions:** `mov w0, #N` and `bl assert_fail`, each number reached from one place, at least
-  two a function on average, numbered 1 to 999 as on x86-64, each once; lengua's own, in `fill` and
-  `parallel_for`, are 990 and up, so keep a program's below them.
+  two a function on average, numbered 1 to 899 as on x86-64, each once; lengua's own, in
+  `parallel_for` and `fill`, are 901 to 903 and 990 to 992.
 - **Checked jump tables:** a `switch` over a dense range of small numbers jumps through a table
   of the function's own labels in `.rodata` (`.long .Lcase - table` entries), the index bounds-
   checked as any index is, as the calculator fixture does:

@@ -21,7 +21,8 @@ pub use crate::os::{Started, attached, launch, start};
 /// The command-line flag that starts the binary as a launcher.
 pub const LAUNCH_FLAG: &str = "--launch";
 
-/// The most bytes a file may hold when tests run: writing past it stops the program.
+/// The most bytes a file may hold when tests run: the write that crosses it is cut short and the
+/// next fails with `EFBIG`, as on every target.
 pub const TEST_FILE_LIMIT: u64 = 64 * 1024 * 1024;
 
 /// The most files, connections and folders a program holds open at once, the same on every
@@ -120,7 +121,8 @@ pub struct Limits {
     pub timeout: Duration,
     /// Killed once standard output or standard error passes this many bytes.
     pub max_output: usize,
-    /// Stopped when it writes a file past this many bytes, if there's a limit.
+    /// A write that takes a file past this many bytes is cut short and the next fails with
+    /// `EFBIG`, if there's a limit.
     pub max_file_size: Option<u64>,
 }
 
@@ -164,8 +166,8 @@ pub struct Job<'a> {
     pub net: Option<&'a Net>,
     /// Whether QEMU's user mode runs it, for another CPU: then the kernel sees QEMU's own
     /// system calls rather than the program's, so it can't hold the program to `syscalls`, and
-    /// neither the supervisor nor the CPU's counters can follow it. Landlock and the limits
-    /// hold as on any run.
+    /// the CPU's counters would count QEMU's instructions, not the program's, so none are taken.
+    /// Landlock and the limits still hold, and lengua's broker still serves it.
     pub emulated: bool,
     /// Whether each folder listing comes turned round, last entry first, as a test's second run
     /// has it, to find a result that depends on the order a file system lists in.
@@ -173,11 +175,12 @@ pub struct Job<'a> {
     /// Whether its standard output is a pipe nobody reads, as after `prog | head -1` has read its
     /// line: every write to it fails with `EPIPE`, never a signal, since SIGPIPE stays ignored.
     pub stdout_closed: bool,
-    /// Whether lengua's broker serves the program over descriptor 4,352
-    /// ([`crate::edge::CHANNEL`]), as it does a program in the edge form that links the channel's
-    /// code: its names, and in a test its clock and random bytes, go through the broker, and no
-    /// supervisor follows its system calls.
-    pub channel: bool,
+    /// What lengua's broker does for the program, when it serves it over descriptor 4,352
+    /// ([`crate::edge::CHANNEL`]), as it does a program that links the channel's code: its names,
+    /// and in a test its clock and random bytes, go through the broker, which does only what the
+    /// permit, from the program's spec, says. A program with a broker keeps no raw call that
+    /// makes or finds a path.
+    pub channel: Option<crate::broker::Permit>,
 }
 
 impl<'a> Job<'a> {
@@ -207,7 +210,7 @@ impl<'a> Job<'a> {
             emulated: false,
             reversed: false,
             stdout_closed: false,
-            channel: false,
+            channel: None,
         }
     }
 }
@@ -283,13 +286,14 @@ pub struct Run {
     pub files: Result<BTreeMap<String, Vec<u8>>, String>,
     /// Every folder in it afterwards, by name relative to it, empty ones included.
     pub folders: BTreeSet<String>,
-    /// Why the test's random bytes or clock readings couldn't answer the program.
+    /// Why lengua's broker stopped serving the program, if it did, such as a message from the
+    /// program that isn't of the protocol or a channel that failed.
     pub supplied: Option<String>,
     /// How many random bytes the program asked for, when the test supplied them.
     pub random_asked: Option<usize>,
     /// What became of each connection lengua made for it, in order.
     pub connections: Vec<Made>,
-    /// Whether it listed a folder, where lengua's supervisor follows its file calls.
+    /// Whether it listed a folder, which its edge tells lengua's broker once, in a test.
     pub listed: bool,
 }
 

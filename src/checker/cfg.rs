@@ -103,7 +103,7 @@ pub fn constant_before(
 }
 
 /// Builds the control flow of a function and checks it (rule 1) and its stack (rules 3 and 4).
-/// `exits` holds the system call numbers that end the program.
+/// `exit_numbers` holds the system call numbers that end the program.
 pub fn analyze(
     function: &MappedFunction<'_>,
     program: &Program<'_>,
@@ -227,7 +227,7 @@ pub fn analyze(
                     Rule::ControlFlow,
                     function.steps[index].source.line,
                     format!("control runs off the end of {name} after this line"),
-                    "end every path with ret, jmp, an exit system call or an assertion",
+                    "end every path with ret, jmp, a call to os_exit or an assertion",
                 );
             }
         }

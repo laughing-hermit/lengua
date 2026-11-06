@@ -52,6 +52,7 @@ assert_fail:
 
 // == fill: assert_fail os_read
 .text
+// returns: result
 .type fill, @function
 // Reads from file descriptor x0 into the x2 bytes at x1 until they're full, the input ends,
 // or, when w3 is a byte (0 to 255), the last byte read is w3; with w3 = -1 it reads to the

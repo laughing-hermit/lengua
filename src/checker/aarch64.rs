@@ -390,9 +390,45 @@ fn low_bits_of<'a>(step: &'a Step<'_>) -> Option<&'a str> {
 }
 
 /// Each `add xD, xD, :lo12:name` comes right after `adrp xD, name`: only then does it make
-/// name's address, as its facts say.
+/// name's address, as its facts say. And each `adrp xD, name` is followed right away by that
+/// `add`: a page address alone is a pointer to anywhere in its page, which no rule follows.
 pub(super) fn check_pairs(function: &MappedFunction<'_>, violations: &mut Vec<Violation>) {
     for (index, step) in function.steps.iter().enumerate() {
+        if step.source.mnemonic == "adrp" {
+            let symbol = match step.source.operands.as_slice() {
+                [Operand::Register(page), Operand::Target(name)] => {
+                    let paired = function.steps.get(index + 1).is_some_and(|next| {
+                        function.label_before(index + 1).is_none()
+                            && next.source.mnemonic == "add"
+                            && matches!(
+                                next.source.operands.as_slice(),
+                                [Operand::Register(rd), Operand::Register(rn), _]
+                                    if rd == page && rn == page
+                            )
+                            && low_bits_of(next) == Some(name.as_str())
+                    });
+                    if paired {
+                        continue;
+                    }
+                    name.as_str()
+                }
+                _ => "its symbol",
+            };
+            violations.push(Violation {
+                rule: Rule::Dialect,
+                line: Some(step.source.line),
+                problem: format!(
+                    "`{}` isn't followed right away by `add` of {symbol}'s low bits into the \
+                     same register, so its page address reaches anywhere in the page",
+                    step.source.text
+                ),
+                fix: format!(
+                    "make an address with `adrp xN, {symbol}` and, on the next line, \
+                     `add xN, xN, :lo12:{symbol}`"
+                ),
+            });
+            continue;
+        }
         let Some(symbol) = low_bits_of(step) else {
             continue;
         };
@@ -477,10 +513,10 @@ const WORDS: [(&str, &str); 43] = [
          them with ldp in reverse order right before ret",
     ),
     (
-        "calls change rax, rcx, rdx, rsi, rdi and r8-r11, and syscall changes rax, rcx and r11, so \
-         loops with calls count in rbx or r12-r15",
-        "calls change x0 to x18 and x30, and svc changes x0, so loops with calls count in x19 to \
-         x28",
+        "calls change rax, rcx, rdx, rsi, rdi and r8-r11, and a call to an operation changes rax, \
+         rcx and r11, so loops with calls count in rbx or r12-r15",
+        "calls change x0 to x18 and x30, and a call to an operation changes x0, x8, x16, x17 and \
+         x30, so loops with calls count in x19 to x28",
     ),
     (
         "change rsp only with push, pop, call, ret, and add or sub rsp with a constant",
@@ -501,8 +537,8 @@ const WORDS: [(&str, &str); 43] = [
         "restore the same registers with ldp in reverse order, immediately before ret",
     ),
     (
-        "`mov edi, <number 1-999>` and `call assert_fail`",
-        "`mov w0, #<number 1-999>` and `bl assert_fail`",
+        "`mov edi, <number 1-899>` and `call assert_fail`",
+        "`mov w0, #<number 1-899>` and `bl assert_fail`",
     ),
     (
         "then dec R and jnz .Lname",

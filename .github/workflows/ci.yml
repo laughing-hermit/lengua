@@ -284,9 +284,10 @@ jobs:
           key: ci-${{ matrix.base }}-${{ hashFiles('Cargo.lock', 'scripts/ci/setup.sh') }}
           restore-keys: ci-${{ matrix.base }}-
 
+      # --keep-going: every target's errors in one run, not the first target's alone.
       - name: Clippy
         if: ${{ matrix.mode != 'golden' }}
-        run: cargo clippy --release --all-targets --locked --workspace -- -D warnings
+        run: cargo clippy --release --all-targets --locked --workspace --keep-going -- -D warnings
 
       # Built first, so that the time a test run may take (stall_seconds) is the tests' and not the
       # compiler's.
@@ -427,7 +428,9 @@ jobs:
           # The base's: from this run, or from an earlier one whose recordings are reused.
           gh run download "${BASE_RUN:-$RUN}" --pattern 'golden-base-*' --dir golden/base
 
+      # `shell: bash` runs with pipefail, so that the script's exit decides the job and not tee's.
       - name: Compare
+        shell: bash
         env:
           VIEW: ${{ inputs.golden_view }}
         run: bash scripts/ci/golden-diff.sh "$VIEW" golden/base golden/head | tee -a "$GITHUB_STEP_SUMMARY"

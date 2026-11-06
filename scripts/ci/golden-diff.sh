@@ -16,8 +16,8 @@
 # scripts/ci/golden-rename.sed renames the base's programs to the head's, for the ledger.
 #
 # Exit: 0 when the two agree; 1 when they differ or a recording is missing; 2 when the only
-# differences are proofs that ran out of time on one side (the machine's speed, not the code):
-# run the legs again.
+# differences are proofs that ran out of time or of memory on one side (the machine's speed and
+# load, not the code): run the legs again.
 set -eu
 
 view=$1
@@ -105,8 +105,11 @@ case "$view" in
       ledger "$h" | without_expected /dev/stdin \
         | sed -E 's/^(.* B[0-9]+): /\1\t/' | sort > "$work/head.ledger"
       awk -F'\t' -v name="$name" '
-        # A proof that ran out of time says nothing of the code: it differs only in the machine.
-        function unknown(text) { return text ~ /~ (out of time|proven as far as the time allowed)/ }
+        # A proof that ran out of time or of memory says nothing of the code: it differs only in
+        # the machine (src/prove/watch.rs: how much memory is free as the terms of a proof grow).
+        function unknown(text) {
+          return text ~ /~ (out of time|proven as far as the time allowed)|terms grew too large for the memory|ran low on memory/
+        }
         NR == FNR { base[$1] = $2; next }
         { head[$1] = $2 }
         END {
@@ -115,7 +118,7 @@ case "$view" in
             if (!(key in head)) { print name ": only in the base: " key; missing++; continue }
             if (base[key] == head[key]) { same++; continue }
             if (unknown(base[key]) || unknown(head[key])) {
-              print name ": TIME " key; print "    base: " base[key]; print "    head: " head[key]
+              print name ": LIMIT " key; print "    base: " base[key]; print "    head: " head[key]
               rerun++
             } else {
               print name ": DIFFERS " key; print "    base: " base[key]; print "    head: " head[key]
@@ -123,7 +126,7 @@ case "$view" in
             }
           }
           for (key in head) if (!(key in base)) { print name ": only in the head: " key; missing++ }
-          print name ": " same " blocks agree, " differ " differ, " rerun " ran out of time on one side, " missing " missing"
+          print name ": " same " blocks agree, " differ " differ, " rerun " ran out of time or memory on one side, " missing " missing"
           code = 0
           if (differ + missing > 0) code = 1
           else if (rerun > 0) code = 2

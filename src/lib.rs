@@ -1,5 +1,6 @@
 //! lengua: an AI language. A person's spec, in behavior-driven natural language with its tests
-//! inside, is compiled by the AI agent into checked x86-64 assembly.
+//! inside, is compiled by the AI agent into checked assembly for the target's CPU, x86-64 or
+//! AArch64.
 //!
 //! A lengua program is a folder with two files, `spec.md` (the source of truth, tests included)
 //! and `main.s` (the code compiled from it for this computer), plus `lengua.lock`, this

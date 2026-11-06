@@ -1139,7 +1139,7 @@ impl State {
             .collect()
     }
 
-    /// Whether some system would refuse `name` for a file call, as lengua's supervisor does in a
+    /// Whether some system would refuse `name` for a file call, as lengua's broker does in a
     /// run (`crate::names`): the error number, when it would. A new name (`creates`) may not
     /// differ only in case or normalization from another in its folder, and a name a call
     /// renames or removes (`removes`) may not be open.
@@ -3896,7 +3896,7 @@ impl<'a> Cpu<'a> {
                     "listing a folder, whose entries the kernel gives in an order of its own",
                 ));
             }
-            // Each name held to every system's, as lengua's supervisor holds it in a run.
+            // Each name held to every system's, as lengua's broker holds it in a run.
             Some(Call::Mkdirat) => {
                 let name = self.name_at(rdi, 1, "mkdirat")?;
                 match self.state.refused(&name, true, false) {
@@ -3924,7 +3924,7 @@ impl<'a> Cpu<'a> {
                     None => self.rename(from, to)?,
                 }
             }
-            // The test's readings, as the supervisor gives them, the last one repeating.
+            // The test's readings, as the broker gives them, the last one repeating.
             Some(Call::ClockGettime) if !self.state.clock.is_empty() => {
                 let buffer = self.constant(rsi)?;
                 self.lent(1, buffer, 16, true, "clock_gettime")?;
@@ -3936,7 +3936,7 @@ impl<'a> Cpu<'a> {
                 self.state.readings_used += 1;
                 0
             }
-            // The test's bytes, as the supervisor gives them: zeros past their end.
+            // The test's bytes, as the broker gives them: zeros past their end.
             Some(Call::Getrandom) if self.state.random.is_some() => {
                 let buffer = self.constant(rdi)?;
                 let count = self.constant(rsi)?;

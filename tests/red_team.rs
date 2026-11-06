@@ -1,10 +1,13 @@
 //! The red team: programs written to get past lengua's own checks, on every target. Each attempt
 //! is the target's template with one change that tries it, and `check` must refuse it up front:
-//! a system call of main.s's own, an operation the spec doesn't allow, a function named for one
-//! of lengua's operations, a jump into lengua's code, an access past a buffer, an unchecked or
-//! late index, an address made from a plain number, a write to read-only data, a return address
-//! changed or written over, a read below the stack pointer, a loop the rules miscount, a stray
-//! backward jump, recursion, a call through a register, a missing `ret`, and an ignored result.
+//! a system call of main.s's own, an operation the spec doesn't allow, a name lengua keeps (a
+//! function, a label, an assertion handler or its message), a jump or call that lands anywhere but
+//! the start of an operation or a function, lengua's data read or written, an operation called
+//! through a register, an exit status or an assertion number lengua keeps for itself, an access
+//! past a buffer, an unchecked or late index, an address made from a plain number, a write to
+//! read-only data, a return address changed or written over, a read below the stack pointer, a
+//! loop the rules miscount, a stray backward jump, recursion, a call through a register, a
+//! missing `ret`, and an ignored result.
 //! Two attempts no rule can follow are held to what does hold: a pointer read from memory is
 //! never stamped `done` when it is wrong and never reported proven when it is good, and a wrong
 //! program is never stamped `done` once the proof has run. None is ever run when a rule refuses
@@ -49,7 +52,8 @@ enum Expect {
 /// The attempts that run together, as one test.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Family {
-    /// Ways to the OS other than an operation the spec allows, and into lengua's own code.
+    /// Ways to the OS other than an operation the spec allows, and into lengua's own code, data
+    /// and names.
     Edge,
     /// Accesses outside their owner.
     Accesses,
@@ -106,6 +110,41 @@ const OWN_OS_WRITE: &[Edit] = &[(
         "    ret\n",
         ".size os_write, . - os_write\n"
     ),
+)];
+
+/// A function of main.s's own named with lengua's prefix, after `main`: `ret` is the same on both
+/// CPUs.
+const OWN_LENGUA_ERROR: &[Edit] = &[(
+    ".size main, . - main\n",
+    concat!(
+        ".size main, . - main\n\n",
+        ".type lengua_error, @function\n",
+        "lengua_error:\n",
+        "    ret\n",
+        ".size lengua_error, . - lengua_error\n"
+    ),
+)];
+
+/// A label named with lengua's prefix, in `main` right before its exit.
+const OWN_LENGUA_LABEL: &[Edit] = &[(".Lmain_exit:\n", ".Llengua_exit:\n.Lmain_exit:\n")];
+
+/// A data symbol of main.s's own named `assert_message`, which says an assertion passed, after
+/// `nan_msg` in the read-only data: data is the same on both CPUs.
+const OWN_ASSERT_MESSAGE: &[Edit] = &[(
+    ".section .bss\n",
+    concat!(
+        ".type assert_message, @object\n",
+        "assert_message:\n",
+        "    .ascii \"lengua: assertion 000 passed\"\n",
+        ".size assert_message, . - assert_message\n\n",
+        ".section .bss\n"
+    ),
+)];
+
+/// The exit status of a failed write set to 134, which assertions use, through its constant.
+const EXIT_AS_ASSERTION: &[Edit] = &[(
+    ".equ EXIT_WRITE_FAILED, 3\n",
+    ".equ EXIT_WRITE_FAILED, 134\n",
 )];
 
 /// Every attempt.
@@ -173,6 +212,344 @@ const ATTEMPTS: &[Attempt] = &[
             aarch64: Cell::Try {
                 edits: &[("    bl os_exit\n", "    b os_open\n    bl os_exit\n")],
                 needles: &["jumps outside main"],
+            },
+        },
+    },
+    // A jump or call that lands anywhere but the start of a function or an operation: at a label
+    // inside an operation (os_write's), at a label of another function, at a label of main's own,
+    // or just past an operation's first instruction (os_exit's says which system call it makes).
+    // The first two name no label of main and no function; the third calls no function's start;
+    // the fourth is a sum, which x86-64's operands have no place for and which names no label on
+    // AArch64.
+    Attempt {
+        family: Family::Edge,
+        what: "a jump into the middle of an operation",
+        expect: Expect::Refused,
+        cells: PerCpu {
+            x86_64: Cell::Try {
+                edits: &[(
+                    "    call os_exit\n",
+                    "    jmp .Llengua_write_refused\n    call os_exit\n",
+                )],
+                needles: &["isn't a label"],
+            },
+            aarch64: Cell::Try {
+                edits: &[(
+                    "    bl os_exit\n",
+                    "    b .Llengua_write_refused\n    bl os_exit\n",
+                )],
+                needles: &["isn't a label"],
+            },
+        },
+    },
+    Attempt {
+        family: Family::Edge,
+        what: "a jump into another function's label",
+        expect: Expect::Refused,
+        cells: PerCpu {
+            x86_64: Cell::Try {
+                edits: &[(
+                    "    call os_exit\n",
+                    "    jmp .Lwrite_all_return\n    call os_exit\n",
+                )],
+                needles: &["isn't a label"],
+            },
+            aarch64: Cell::Try {
+                edits: &[(
+                    "    bl os_exit\n",
+                    "    b .Lwrite_all_return\n    bl os_exit\n",
+                )],
+                needles: &["isn't a label"],
+            },
+        },
+    },
+    Attempt {
+        family: Family::Edge,
+        what: "a call to a label of main's own",
+        expect: Expect::Refused,
+        cells: PerCpu {
+            x86_64: Cell::Try {
+                edits: &[(
+                    "    call os_exit\n",
+                    "    call .Lmain_not_a_number\n    call os_exit\n",
+                )],
+                needles: &["doesn't call the start of a function"],
+            },
+            aarch64: Cell::Try {
+                edits: &[(
+                    "    bl os_exit\n",
+                    "    bl .Lmain_not_a_number\n    bl os_exit\n",
+                )],
+                needles: &["doesn't call the start of a function"],
+            },
+        },
+    },
+    Attempt {
+        family: Family::Edge,
+        what: "a call just past an operation's first instruction",
+        expect: Expect::Refused,
+        cells: PerCpu {
+            // `mov eax, LENGUA_SYS_EXIT_GROUP` is 5 bytes: the `syscall` after it would make the
+            // system call the caller left the number of in eax.
+            x86_64: Cell::Try {
+                edits: &[(
+                    "    call os_exit\n",
+                    "    call os_exit + 5\n    call os_exit\n",
+                )],
+                needles: &["isn't a constant defined above"],
+            },
+            // `mov x8, #LENGUA_SYS_EXIT_GROUP` is 4 bytes: the `svc #0` after it would make the
+            // system call the caller left the number of in x8.
+            aarch64: Cell::Try {
+                edits: &[("    bl os_exit\n", "    bl os_exit + 4\n    bl os_exit\n")],
+                needles: &["isn't a label"],
+            },
+        },
+    },
+    // lengua's data is lengua's, though it is assembled beside main.s: main.s names none of it,
+    // neither the error table of an operation it calls, which it reads here, nor the assertion
+    // message and the buffer of the channel to lengua's broker, which it writes (a program that
+    // opens files links the buffer, so that attempt calls os_open too, which the data is refused
+    // before).
+    Attempt {
+        family: Family::Edge,
+        what: "a read of lengua's error table",
+        expect: Expect::Refused,
+        cells: PerCpu {
+            x86_64: Cell::Try {
+                edits: &[(
+                    "    mov rdi, qword ptr [rsi + 8]\n",
+                    concat!(
+                        "    mov rax, qword ptr [rip + os_write_errors]\n",
+                        "    mov rdi, qword ptr [rsi + 8]\n"
+                    ),
+                )],
+                needles: &["isn't a data symbol"],
+            },
+            aarch64: Cell::Try {
+                edits: &[(
+                    "    cbz x0, .Lmain_assert_argv\n",
+                    concat!(
+                        "    cbz x0, .Lmain_assert_argv\n",
+                        "    adrp x9, os_write_errors\n",
+                        "    add x9, x9, :lo12:os_write_errors\n",
+                        "    ldr x10, [x9]\n"
+                    ),
+                )],
+                needles: &["isn't a data symbol"],
+            },
+        },
+    },
+    Attempt {
+        family: Family::Edge,
+        what: "a write to lengua's assertion message",
+        expect: Expect::Refused,
+        cells: PerCpu {
+            x86_64: Cell::Try {
+                edits: &[(
+                    "    mov rdi, qword ptr [rsi + 8]\n",
+                    concat!(
+                        "    mov byte ptr [rip + assert_message], 0\n",
+                        "    mov rdi, qword ptr [rsi + 8]\n"
+                    ),
+                )],
+                needles: &["isn't a data symbol"],
+            },
+            aarch64: Cell::Try {
+                edits: &[(
+                    "    cbz x0, .Lmain_assert_argv\n",
+                    concat!(
+                        "    cbz x0, .Lmain_assert_argv\n",
+                        "    adrp x9, assert_message\n",
+                        "    add x9, x9, :lo12:assert_message\n",
+                        "    strb wzr, [x9]\n"
+                    ),
+                )],
+                needles: &["isn't a data symbol"],
+            },
+        },
+    },
+    Attempt {
+        family: Family::Edge,
+        what: "a write to lengua's channel buffer",
+        expect: Expect::Refused,
+        cells: PerCpu {
+            x86_64: Cell::Try {
+                edits: &[
+                    ("    call os_exit\n", "    call os_open\n    call os_exit\n"),
+                    (
+                        "    mov rdi, qword ptr [rsi + 8]\n",
+                        concat!(
+                            "    mov byte ptr [rip + lengua_wire], 0\n",
+                            "    mov rdi, qword ptr [rsi + 8]\n"
+                        ),
+                    ),
+                ],
+                needles: &["isn't a data symbol"],
+            },
+            aarch64: Cell::Try {
+                edits: &[
+                    ("    bl os_exit\n", "    bl os_open\n    bl os_exit\n"),
+                    (
+                        "    cbz x0, .Lmain_assert_argv\n",
+                        concat!(
+                            "    cbz x0, .Lmain_assert_argv\n",
+                            "    adrp x9, lengua_wire\n",
+                            "    add x9, x9, :lo12:lengua_wire\n",
+                            "    strb wzr, [x9]\n"
+                        ),
+                    ),
+                ],
+                needles: &["isn't a data symbol"],
+            },
+        },
+    },
+    // An operation called through a register. x86-64 makes no address of an operation (`lea` takes
+    // a data symbol's), and its call through a register is refused on its own; AArch64 makes one
+    // with adrp and add, and its `blr` is refused.
+    Attempt {
+        family: Family::Edge,
+        what: "an operation called through a register",
+        expect: Expect::Refused,
+        cells: PerCpu {
+            x86_64: Cell::Try {
+                edits: &[(
+                    "    mov rdi, qword ptr [rsi + 8]\n",
+                    concat!(
+                        "    lea rax, [rip + os_write]\n",
+                        "    call rax\n",
+                        "    mov rdi, qword ptr [rsi + 8]\n"
+                    ),
+                )],
+                needles: &["jumps through a register or memory"],
+            },
+            aarch64: Cell::Try {
+                edits: &[(
+                    "    cbz x0, .Lmain_assert_argv\n",
+                    concat!(
+                        "    cbz x0, .Lmain_assert_argv\n",
+                        "    adrp x9, os_write\n",
+                        "    add x9, x9, :lo12:os_write\n",
+                        "    blr x9\n"
+                    ),
+                )],
+                needles: &["calls through a register"],
+            },
+        },
+    },
+    // What lengua keeps for itself: 134, the exit status of a failed assertion, which no named
+    // constant may give as a status either, and the assertion numbers of lengua's own library
+    // (901 to 903 and 990 to 992), above the 899 a program numbers its own.
+    Attempt {
+        family: Family::Edge,
+        what: "an exit status of 134",
+        expect: Expect::Refused,
+        cells: PerCpu {
+            x86_64: Cell::Try {
+                edits: EXIT_AS_ASSERTION,
+                needles: &["or to 134, which assertions use"],
+            },
+            aarch64: Cell::Try {
+                edits: EXIT_AS_ASSERTION,
+                needles: &["or to 134, which assertions use"],
+            },
+        },
+    },
+    Attempt {
+        family: Family::Edge,
+        what: "an assertion number lengua keeps for its own code",
+        expect: Expect::Refused,
+        cells: PerCpu {
+            x86_64: Cell::Try {
+                edits: &[("    mov edi, 2\n", "    mov edi, 990\n")],
+                needles: &["one lengua keeps for its own code"],
+            },
+            aarch64: Cell::Try {
+                edits: &[("    mov w0, #2\n", "    mov w0, #990\n")],
+                needles: &["one lengua keeps for its own code"],
+            },
+        },
+    },
+    // lengua's names are lengua's. main.s has no assertion handler of its own (one that exits with
+    // 0 would make every failed assertion pass) and no message for one that says passed, and
+    // nothing with lengua's prefix: `lengua_` for a function, `.Llengua_` for a label.
+    Attempt {
+        family: Family::Edge,
+        what: "an assertion handler of its own that exits with 0",
+        expect: Expect::Refused,
+        cells: PerCpu {
+            x86_64: Cell::Try {
+                edits: &[(
+                    ".size main, . - main\n",
+                    concat!(
+                        ".size main, . - main\n\n",
+                        ".type assert_fail, @function\n",
+                        "assert_fail:\n",
+                        "    mov edi, EXIT_OK\n",
+                        "    call os_exit\n",
+                        ".size assert_fail, . - assert_fail\n"
+                    ),
+                )],
+                needles: &["assert_fail is a name lengua keeps"],
+            },
+            aarch64: Cell::Try {
+                edits: &[(
+                    ".size main, . - main\n",
+                    concat!(
+                        ".size main, . - main\n\n",
+                        ".type assert_fail, @function\n",
+                        "assert_fail:\n",
+                        "    mov w0, #EXIT_OK\n",
+                        "    bl os_exit\n",
+                        ".size assert_fail, . - assert_fail\n"
+                    ),
+                )],
+                needles: &["assert_fail is a name lengua keeps"],
+            },
+        },
+    },
+    Attempt {
+        family: Family::Edge,
+        what: "an assertion message of its own that says passed",
+        expect: Expect::Refused,
+        cells: PerCpu {
+            x86_64: Cell::Try {
+                edits: OWN_ASSERT_MESSAGE,
+                needles: &["assert_message is a name lengua keeps"],
+            },
+            aarch64: Cell::Try {
+                edits: OWN_ASSERT_MESSAGE,
+                needles: &["assert_message is a name lengua keeps"],
+            },
+        },
+    },
+    Attempt {
+        family: Family::Edge,
+        what: "a function named with lengua's prefix",
+        expect: Expect::Refused,
+        cells: PerCpu {
+            x86_64: Cell::Try {
+                edits: OWN_LENGUA_ERROR,
+                needles: &["lengua_error is a name lengua keeps"],
+            },
+            aarch64: Cell::Try {
+                edits: OWN_LENGUA_ERROR,
+                needles: &["lengua_error is a name lengua keeps"],
+            },
+        },
+    },
+    Attempt {
+        family: Family::Edge,
+        what: "a label named with lengua's prefix",
+        expect: Expect::Refused,
+        cells: PerCpu {
+            x86_64: Cell::Try {
+                edits: OWN_LENGUA_LABEL,
+                needles: &[".Llengua_exit is a name lengua keeps"],
+            },
+            aarch64: Cell::Try {
+                edits: OWN_LENGUA_LABEL,
+                needles: &[".Llengua_exit is a name lengua keeps"],
             },
         },
     },
@@ -333,6 +710,30 @@ const ATTEMPTS: &[Attempt] = &[
     },
     Attempt {
         family: Family::Addresses,
+        what: "a page address used without its offset",
+        expect: Expect::Refused,
+        cells: PerCpu {
+            x86_64: Cell::NotApplicable(
+                "x86-64 has no instruction that makes a page address: `lea` of `[rip + symbol]` \
+                 makes the whole address, whose offset the rules follow",
+            ),
+            // The page of out_buf holds more than out_buf: a store 64 bytes in reaches whatever
+            // is there, with no add that names where the pointer points.
+            aarch64: Cell::Try {
+                edits: &[(
+                    "    cbz x0, .Lmain_assert_argv\n",
+                    concat!(
+                        "    cbz x0, .Lmain_assert_argv\n",
+                        "    adrp x9, out_buf\n",
+                        "    strb wzr, [x9, #64]\n"
+                    ),
+                )],
+                needles: &["isn't followed right away by `add`"],
+            },
+        },
+    },
+    Attempt {
+        family: Family::Addresses,
         what: "a wrong pointer loaded from memory",
         expect: Expect::NeverDone,
         cells: PerCpu {
@@ -456,6 +857,42 @@ const ATTEMPTS: &[Attempt] = &[
                 )],
                 needles: &["return address", "rule M3"],
             },
+        },
+    },
+    Attempt {
+        family: Family::Writes,
+        what: "a pop of memory over the saved return address",
+        expect: Expect::Refused,
+        cells: PerCpu {
+            // write_all's return address is at [rsp] when it starts: the push makes room, and the
+            // pop's address is that of [rsp] after rsp has moved back up, so it is the return
+            // address.
+            x86_64: Cell::Try {
+                edits: &[(
+                    "write_all:\n",
+                    "write_all:\n    push rcx\n    pop qword ptr [rsp]\n",
+                )],
+                needles: &["of memory reaches memory no rule follows"],
+            },
+            aarch64: Cell::NotApplicable(
+                "AArch64 has no push or pop: the return address a function saved in its frame \
+                 record is written by an ordinary store, which the row above tries",
+            ),
+        },
+    },
+    Attempt {
+        family: Family::Writes,
+        what: "a stack pointer popped from the stack",
+        expect: Expect::Refused,
+        cells: PerCpu {
+            x86_64: Cell::Try {
+                edits: &[("write_all:\n", "write_all:\n    push rcx\n    pop rsp\n")],
+                needles: &["loads the stack pointer from memory"],
+            },
+            aarch64: Cell::NotApplicable(
+                "AArch64 has no pop: the ways to load sp from a register, `mov sp, x9` and \
+                 `add sp, x9, #0`, are refused as setting sp",
+            ),
         },
     },
     Attempt {
@@ -1000,7 +1437,8 @@ fn every_cell_edits_text_its_template_has() {
         }
         assert!(applies, "{}: no target tries it", attempt.what);
     }
-    // Every attempt, but the changed return address that only ARM64 can write.
-    assert!(tried.x86_64 >= 25, "{} on x86-64", tried.x86_64);
-    assert!(tried.aarch64 >= 26, "{} on ARM64", tried.aarch64);
+    // Every attempt, but those one CPU alone can write: ARM64's changed return address and page
+    // address, x86-64's two pops.
+    assert!(tried.x86_64 >= 41, "{} on x86-64", tried.x86_64);
+    assert!(tried.aarch64 >= 41, "{} on ARM64", tried.aarch64);
 }
