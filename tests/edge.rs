@@ -1480,7 +1480,7 @@ async fn the_model_runs_every_operation_as_the_system_does() {
                 lengua::checker::decode::read(&std::fs::read(&executable).expect("the executable"))
                     .expect("an executable lengua reads");
             let image = Image::new(&machine).expect("an image of it");
-            let mut pool = Pool::new();
+            let mut pool = Pool::default();
             let arguments: Vec<Vec<Term>> = case
                 .arguments
                 .iter()
