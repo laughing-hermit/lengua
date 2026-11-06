@@ -1295,7 +1295,7 @@ async fn every_operation_does_what_it_promises() {
                     }
                     _ => String::new(),
                 };
-                assert_eq!(ran.end, End::Exited(exit), "{what}{hint}");
+                assert_eq!(ran.end, End::Exited(exit), "{what}{hint}: {}", String::from_utf8_lossy(&ran.stderr));
                 assert_eq!(ran.stdout, case.stdout, "{what}");
                 if !case.stderr.is_empty() {
                     assert_eq!(ran.stderr, case.stderr, "{what}");
@@ -1410,7 +1410,7 @@ async fn a_test_gives_the_program_its_clock_and_random_bytes_through_the_broker(
             .await
             .expect("the program runs");
         let what = target.name();
-        assert_eq!(ran.end, End::Exited(0), "{what}");
+        assert_eq!(ran.end, End::Exited(0), "{what}: {}", String::from_utf8_lossy(&ran.stderr));
         assert_eq!(ran.stdout, case.stdout, "{what}");
         assert_eq!(ran.supplied, None, "{what}");
         assert_eq!(ran.random_asked, Some(4), "{what}");
@@ -1475,7 +1475,7 @@ async fn a_listing_is_turned_round_for_a_second_run_and_the_broker_is_told_of_it
                 .await
                 .expect("the program runs");
             let what = format!("{}, turned round {reversed}", target.name());
-            assert_eq!(ran.end, End::Exited(0), "{what}");
+            assert_eq!(ran.end, End::Exited(0), "{what}: {}", String::from_utf8_lossy(&ran.stderr));
             assert!(ran.listed, "{what}: the broker wasn't told");
             assert_eq!(ran.supplied, None, "{what}");
             // Three entries of 8 bytes each: a length, a kind, the name's length, the name, a NUL.
@@ -1598,7 +1598,7 @@ async fn the_broker_holds_names_to_what_every_system_does() {
             .await
             .expect("the program runs");
         let what = target.name();
-        assert_eq!(ran.end, End::Exited(0), "{what}");
+        assert_eq!(ran.end, End::Exited(0), "{what}: {}", String::from_utf8_lossy(&ran.stderr));
         assert_eq!(ran.stdout, case.stdout, "{what}");
     }
 }

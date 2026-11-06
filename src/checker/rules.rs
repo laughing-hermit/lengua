@@ -291,10 +291,13 @@ impl Checker<'_, '_> {
         let (pushed, popped) = (registers(&pushing), registers(&popping));
         // A call overwrites the link register, so a function that calls saves it first.
         if let Some(link) = abi.link {
-            let calls = flow
-                .exits
-                .iter()
-                .any(|exit| matches!(exit, Exit::Call { callee } if callee != ASSERT_FAIL));
+            let calls = flow.exits.iter().any(|exit| match exit {
+                Exit::Call { callee } => callee != ASSERT_FAIL,
+                // An operation returns to its caller, overwriting the link register, but for
+                // os_exit, which never does.
+                Exit::Edge { op } => *op != crate::edge::Op::Exit,
+                _ => false,
+            });
             if calls && !pushed.contains(&link) {
                 self.violation(
                     Rule::Functions,

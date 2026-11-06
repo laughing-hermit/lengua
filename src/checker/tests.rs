@@ -5318,6 +5318,34 @@ async fn the_edge_form_rules_refuse_what_they_name() {
     }
 }
 
+/// A function that calls an operation overwrites the link register as any call does, so on AArch64
+/// it saves it first; one that doesn't couldn't return.
+#[tokio::test]
+async fn a_function_that_calls_an_operation_saves_the_link_register() {
+    let call = |saved: bool| {
+        let (open, close) = if saved {
+            ("    stp x29, x30, [sp, #-16]!\n", "    ldp x29, x30, [sp], #16\n")
+        } else {
+            ("", "")
+        };
+        format!(
+            "{}\n.type helper, @function\nhelper:\n{open}    bl os_write\n{close}    ret\n.size helper, . - helper\n",
+            EDGE_BASE.aarch64
+        )
+    };
+    for (saved, flagged) in [(false, true), (true, false)] {
+        let report = check_edge(&call(saved), &BASE_OPS).await;
+        let found: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            found
+                .iter()
+                .any(|violation| violation.contains("calls functions but doesn't save x30")),
+            flagged,
+            "the link register saved: {saved}: {found:#?}"
+        );
+    }
+}
+
 /// A function that doesn't reach the OS gives back what it sets: a result it leaves in a register
 /// the edge changes (a third one, in rcx on x86-64) is readable after its call, while a register
 /// it leaves alone is still the one the operation changed.
