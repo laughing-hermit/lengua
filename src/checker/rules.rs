@@ -97,6 +97,7 @@ pub fn check(
     let mut assertions = 0;
     let mut users: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let reaching = checker.reaching_the_os();
+    let changing = checker.changed_by_functions();
     for function in &program.functions {
         let Some(flow) = flows.get(function.name()) else {
             continue;
@@ -115,7 +116,7 @@ pub fn check(
         }
         checker.operations(function, flow, ops);
         checker.frame(function, flow);
-        checker.changed_by_calls(function, flow, &reaching);
+        checker.changed_by_calls(function, flow, &reaching, &changing);
         checker.exit_statuses(function, flow);
         checker.results(function, flow);
         checker.indexes(function, flow);
@@ -569,14 +570,59 @@ impl Checker<'_, '_> {
         }
     }
 
+    /// What each function of main.s may set among the registers the edge's convention changes, as
+    /// a mask over [`isa::Abi::edge_clobbers`]: what its own instructions write and what the
+    /// functions it calls set, so a result it gives back in one of them (a third one, in rcx)
+    /// counts. A call that never returns, to `assert_fail`, sets nothing.
+    fn changed_by_functions(&self) -> BTreeMap<String, u64> {
+        let clobbers = self.program.abi().edge_clobbers;
+        let mut changed: BTreeMap<String, u64> = self
+            .program
+            .functions
+            .iter()
+            .map(|function| {
+                let own = function.steps.iter().fold(0, |mask, step| {
+                    clobbers
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, register)| step.insn.writes.contains(**register))
+                        .fold(mask, |mask, (index, _)| mask | (1_u64 << index))
+                });
+                (function.name().to_owned(), own)
+            })
+            .collect();
+        loop {
+            let mut grew = false;
+            for function in &self.program.functions {
+                let Some(flow) = self.flows.get(function.name()) else {
+                    continue;
+                };
+                let known = changed.get(function.name()).copied().unwrap_or(0);
+                let mask = flow.exits.iter().fold(known, |mask, exit| match exit {
+                    Exit::Call { callee } => mask | changed.get(callee).copied().unwrap_or(0),
+                    _ => mask,
+                });
+                if mask != known {
+                    changed.insert(function.name().to_owned(), mask);
+                    grew = true;
+                }
+            }
+            if !grew {
+                return changed;
+            }
+        }
+    }
+
     /// Rule 6, for the edge form: after a call that reaches the OS, a register the edge's
     /// convention changes isn't read until something sets it. An operation changes only those;
-    /// a function that reaches the OS gives back what a function does, and changes them too.
+    /// a function that reaches the OS gives back what a function does, and changes them too; one
+    /// that doesn't sets the ones it writes (`changing`).
     fn changed_by_calls(
         &mut self,
         function: &MappedFunction<'_>,
         flow: &Flow,
         reaching: &BTreeSet<String>,
+        changing: &BTreeMap<String, u64>,
     ) {
         if self.program.source.form != crate::edge::Form::Edge {
             return;
@@ -639,6 +685,8 @@ impl Checker<'_, '_> {
             };
             if let Some(defined) = defined {
                 after = all & !defined;
+            } else if let Exit::Call { callee } = &flow.exits[at] {
+                after &= !changing.get(callee).copied().unwrap_or(0);
             }
             for &next in &flow.successors[at] {
                 let joined = states[next].map_or(after, |known| known | after);

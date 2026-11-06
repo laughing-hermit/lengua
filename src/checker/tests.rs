@@ -5312,6 +5312,43 @@ async fn the_edge_form_rules_refuse_what_they_name() {
     }
 }
 
+/// A function that doesn't reach the OS gives back what it sets: a result it leaves in a register
+/// the edge changes (a third one, in rcx on x86-64) is readable after its call, while a register
+/// it leaves alone is still the one the operation changed.
+#[tokio::test]
+async fn a_result_a_function_sets_in_a_register_the_edge_changes_is_readable() {
+    for (profile, from, to, sets, leaves) in [
+        (
+            Profile::LinuxX86_64,
+            "    mov edi, EXIT_OK\n",
+            "    call helper\n    mov r8, rcx\n    mov edi, EXIT_OK\n",
+            "    xor ecx, ecx\n",
+            "    xor r9d, r9d\n",
+        ),
+        (
+            Profile::LinuxAarch64,
+            "    mov x0, #EXIT_OK\n",
+            "    bl helper\n    mov x9, x16\n    mov x0, #EXIT_OK\n",
+            "    mov x16, #1\n",
+            "    mov x15, #1\n",
+        ),
+    ] {
+        for (body, stale) in [(sets, false), (leaves, true)] {
+            let text = EDGE_BASE.get(profile).replacen(from, to, 1)
+                + &format!("\n.type helper, @function\nhelper:\n{body}    ret\n.size helper, . - helper\n");
+            let report = check_edge(&text, &BASE_OPS).await;
+            let found: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+            assert_eq!(
+                found
+                    .iter()
+                    .any(|violation| violation.contains("is read after a call that reaches the OS")),
+                stale,
+                "{profile:?}, a function that sets {body:?}: {found:#?}"
+            );
+        }
+    }
+}
+
 /// What the edge keeps is still there after a call: an argument register, which the program gave
 /// the operation, is read again with no word from the checker.
 #[tokio::test]
