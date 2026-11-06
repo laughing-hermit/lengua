@@ -196,14 +196,25 @@ fn an_index_without_okf_version_stays_as_it_is() {
         "{lines:?}"
     );
     // The index still lists the program, so it is no orphan.
-    assert!(!lines.iter().any(|line| line.contains("orphan")), "{lines:?}");
+    assert!(
+        !lines.iter().any(|line| line.contains("orphan")),
+        "{lines:?}"
+    );
     // With `okf_version` it becomes lengua's to keep.
     let declared = format!("---\nokf_version: \"0.2\"\n---\n{home}");
     std::fs::write(bundle.root().join("index.md"), &declared).expect("declare the bundle");
     let (_, written) = bundle.write(&add, &[Event::Recorded], "2026-11-06");
     assert_eq!(written.changed, ["add"]);
-    assert!(bundle.read("index.md").starts_with("---\nokf_version: \"0.2\"\n---\n# Welcome\n"));
-    assert!(bundle.read("log.md").contains("[add](add/idea.md) recorded."));
+    assert!(
+        bundle
+            .read("index.md")
+            .starts_with("---\nokf_version: \"0.2\"\n---\n# Welcome\n")
+    );
+    assert!(
+        bundle
+            .read("log.md")
+            .contains("[add](add/idea.md) recorded.")
+    );
 }
 
 #[test]
