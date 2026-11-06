@@ -6,6 +6,11 @@ set -u
 target="${1:-unknown}"
 summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
 
+# WSL doesn't mount securityfs, which holds the list of the kernel's security modules read below.
+if [ "$(uname -s)" = Linux ] && ! mountpoint -q /sys/kernel/security 2> /dev/null; then
+  sudo mount -t securityfs securityfs /sys/kernel/security 2> /dev/null || true
+fi
+
 yes_no() { # yes_no <word> <the line to look in>
   if grep -qw "$1" <<< "$2"; then echo "- $1: yes"; else echo "- $1: no"; fi
 }

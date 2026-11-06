@@ -1,0 +1,243 @@
+name: routes
+
+# lengua's suite inside the Linuxes that Windows and a Mac use (README.md, "Windows and Mac"):
+# Ubuntu 24.04 inside WSL 2 on a Windows runner, and Ubuntu 24.04 in a Lima VM, the image a Mac
+# boots, on the x86-64 Linux runner, which has KVM. Weekly and on demand (todo.md, "Round 3").
+# Each full job clones the repository onto the guest's own disk and runs scripts/ci/guest.sh, the
+# suite ci.yml's test job runs on a runner. The free ARM64 runner has no KVM, so the ARM64 VM an
+# Apple-silicon Mac runs is emulated there and gets a smoke test: the sandbox tests alone.
+
+on:
+  schedule:
+    - cron: "17 6 * * 3"
+  workflow_dispatch:
+    inputs:
+      test_files:
+        description: "Only these test files, by name, separated by spaces (lib for the library's own tests)"
+        type: string
+        default: ""
+      filter:
+        description: "Only the tests whose names contain this (libtest's filters)"
+        type: string
+        default: ""
+  # Only while the jobs are being built; removed before the merge.
+  push:
+    branches:
+      - wip/routes-ci
+
+concurrency:
+  group: routes-${{ github.ref }}-${{ github.event_name }}-${{ inputs.test_files }}-${{ inputs.filter }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  # A push (the branch the jobs are built on) runs two quick files, to try the plumbing; the weekly
+  # run and a dispatch run what they ask, the whole suite by default.
+  TEST_FILES: ${{ github.event_name == 'push' && 'skills parity_inventory' || inputs.test_files }}
+  FILTER: ${{ inputs.filter }}
+
+jobs:
+  wsl:
+    name: wsl (windows-2025)
+    runs-on: windows-2025
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      WSL_UTF8: "1"
+      # TEST_FILES and FILTER cross into WSL.
+      WSLENV: TEST_FILES/u:FILTER/u
+    steps:
+      - name: WSL 2 with Ubuntu 24.04
+        run: |
+          # Most of the runner's memory and all of its cores for the VM, set before it starts.
+          "[wsl2]`nmemory=12GB`nprocessors=4`n" | Out-File -FilePath "$env:USERPROFILE\.wslconfig" -Encoding ascii
+          wsl --shutdown
+          wsl --update
+          wsl --install --no-launch --web-download -d Ubuntu-24.04
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          wsl --list --verbose
+          wsl -d Ubuntu-24.04 -u root -- uname -r
+
+      - name: A user like the runner's, with passwordless sudo
+        run: |
+          wsl -d Ubuntu-24.04 -u root -- sh -c 'apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -y -q ca-certificates git sudo && useradd -m -s /bin/bash lengua && echo "lengua ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/lengua && chmod 0440 /etc/sudoers.d/lengua'
+
+      # Cloned inside, not taken from the Windows checkout, which has CRLF line endings and lies on
+      # /mnt/d, slow and case-insensitive.
+      - name: The repository, cloned on WSL's own disk
+        run: |
+          wsl -d Ubuntu-24.04 -u lengua -- sh -c 'cd ~ && git clone --quiet https://github.com/${{ github.repository }} lengua && cd lengua && git checkout --quiet ${{ github.sha }} && git log --oneline -1'
+
+      - name: The suite inside WSL 2
+        run: wsl -d Ubuntu-24.04 -u lengua -- bash -c 'cd ~/lengua && bash scripts/ci/guest.sh linux-x86_64'
+
+      - name: The logs, out of WSL
+        if: always()
+        run: |
+          $dest = wsl -d Ubuntu-24.04 -u lengua -- wslpath -a "$env:GITHUB_WORKSPACE"
+          wsl -d Ubuntu-24.04 -u lengua -- sh -c "cp ~/lengua/test.log ~/lengua/skips.log '$dest/' 2> /dev/null; true"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: routes-wsl-${{ github.run_number }}
+          path: |
+            test.log
+            skips.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+  lima:
+    name: lima (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: KVM for the VM
+        run: |
+          if [ ! -e /dev/kvm ]; then
+            echo "This runner has no /dev/kvm: the VM would be emulated, too slowly for the suite." >&2
+            exit 1
+          fi
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: QEMU, and Lima pinned by checksum
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q qemu-system-x86 qemu-utils ovmf
+          bash scripts/ci/setup.sh linux-x86_64 lima
+
+      - name: Ubuntu 24.04 in Lima, the image a Mac boots
+        run: |
+          limactl start --tty=false --name=ubuntu --cpus=4 --memory=12 --disk=40 template:ubuntu-24.04
+          limactl list
+
+      - name: Ubuntu's HWE kernel in the VM, as README's Mac steps install it
+        run: |
+          limactl shell ubuntu sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q linux-generic-hwe-24.04
+          limactl stop ubuntu
+          limactl start --tty=false ubuntu
+          kernel=$(limactl shell ubuntu uname -r)
+          echo "The VM's kernel: $kernel" | tee -a "$GITHUB_STEP_SUMMARY"
+          if ! printf '%s\n' 6.12 "${kernel%%-*}" | sort -V -C; then
+            echo "The VM's kernel is older than 6.12, lengua's floor for network programs." >&2
+            exit 1
+          fi
+
+      - name: The repository, cloned on the VM's own disk
+        run: |
+          limactl shell ubuntu sh -c 'cd ~ && git clone --quiet https://github.com/${{ github.repository }} lengua && cd lengua && git checkout --quiet ${{ github.sha }} && git log --oneline -1'
+
+      - name: The suite inside the VM
+        run: |
+          limactl shell ubuntu env TEST_FILES="$TEST_FILES" FILTER="$FILTER" \
+            bash -c 'cd ~/lengua && bash scripts/ci/guest.sh linux-x86_64'
+
+      - name: The logs, out of the VM
+        if: always()
+        run: |
+          limactl shell ubuntu sh -c 'cat ~/lengua/test.log' > test.log 2> /dev/null || true
+          limactl shell ubuntu sh -c 'cat ~/lengua/skips.log' > skips.log 2> /dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: routes-lima-${{ github.run_number }}
+          path: |
+            test.log
+            skips.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # The ARM64 VM an Apple-silicon Mac runs, emulated (this runner has no KVM): too slow to build
+  # lengua or to run the whole suite inside, so the sandbox tests are built on the runner and run
+  # inside the VM, from the runner's checkout, which Lima mounts at the same path.
+  lima-smoke:
+    name: lima smoke (ubuntu-24.04-arm)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 330
+    continue-on-error: true
+    defaults:
+      run:
+        shell: bash
+    env:
+      VM_WAIT: |
+        for i in $(seq 1 90); do
+          if limactl shell ubuntu true 2> /dev/null; then exit 0; fi
+          sleep 30
+        done
+        echo "The VM didn't answer in 45 minutes." >&2
+        exit 1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust, LLVM and the solvers on the runner
+        run: bash scripts/ci/setup.sh linux-aarch64 rust llvm solvers
+
+      - name: The sandbox tests, built on the runner
+        run: |
+          cargo test --release --locked --test limits --test red_team --no-run --message-format=json \
+            | jq -r 'select(.profile.test == true and .executable != null) | .executable' > tests.list
+          cat tests.list
+
+      - name: QEMU, and Lima pinned by checksum
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q qemu-system-arm qemu-efi-aarch64 qemu-utils
+          bash scripts/ci/setup.sh linux-aarch64 lima
+
+      - name: Ubuntu 24.04 in an emulated ARM64 VM
+        run: |
+          # Lima stops waiting after 10 minutes; the emulated VM goes on booting.
+          limactl start --tty=false --name=ubuntu --cpus=4 --memory=12 --disk=40 --mount-writable \
+            template:ubuntu-24.04 || true
+          bash -c "$VM_WAIT"
+          limactl shell ubuntu uname -m
+
+      - name: Ubuntu's HWE kernel in the VM
+        run: |
+          limactl shell ubuntu sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q linux-generic-hwe-24.04
+          limactl stop ubuntu
+          limactl start --tty=false ubuntu || true
+          bash -c "$VM_WAIT"
+          {
+            echo "### The emulated ARM64 VM"
+            echo '```'
+            limactl shell ubuntu sh -c 'uname -m; uname -r; cat /sys/kernel/security/lsm; echo'
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # limactl shell passes no host variables, so the checkout's path goes in as an argument.
+      - name: LLVM and the solvers in the VM
+        run: |
+          limactl shell ubuntu env WORKSPACE="$GITHUB_WORKSPACE" bash -c 'cd "$WORKSPACE" && sudo apt-get update -q && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q ca-certificates curl unzip wget && SETUP_PATH_FILE=~/ci-path bash scripts/ci/setup.sh linux-aarch64 llvm solvers'
+
+      - name: The sandbox tests inside the VM
+        run: |
+          limactl shell ubuntu env WORKSPACE="$GITHUB_WORKSPACE" bash -c '
+            cd "$WORKSPACE"
+            while read -r dir; do PATH="$dir:$PATH"; done < ~/ci-path
+            export PATH CARGO_MANIFEST_DIR="$WORKSPACE" LENGUA_PROOF_SECONDS=60 RUST_TEST_THREADS=2
+            status=0
+            while read -r test; do "$test" || status=1; done < tests.list
+            exit "$status"
+          ' 2>&1 | tee smoke.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: routes-lima-smoke-${{ github.run_number }}
+          path: smoke.log
+          retention-days: 7
+          if-no-files-found: ignore

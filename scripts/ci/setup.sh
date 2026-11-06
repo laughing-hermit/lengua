@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
-# For CI: installs what a job needs, the same way on both runners (Linux on x86-64 and on ARM64).
+# For CI: installs what a job needs, the same way on both runners (Linux on x86-64 and on ARM64)
+# and inside a guest Linux (scripts/ci/guest.sh, in WSL 2 or a Lima VM).
 # Usage: bash scripts/ci/setup.sh <target> <step>...
 #
 # Steps:
 #   rust     the pinned Rust with clippy and rustfmt, first on PATH
 #   llvm     LLVM 22, for lengua's assembler and linker, from apt.llvm.org
 #   solvers  z3 and cvc5, pinned by SHA-256 in tools.tsv
+#   lima     Lima, pinned by SHA-256 in tools.tsv, for routes.yml's VM jobs
+#
+# Each folder a step puts on PATH also goes to $GITHUB_PATH on a runner, and to $SETUP_PATH_FILE
+# when that is set, for a guest script to read.
 set -euo pipefail
 
 RUST_VERSION="1.99.1"
@@ -27,6 +32,9 @@ add_to_path() {
   export PATH="$1:$PATH"
   if [ -n "${GITHUB_PATH:-}" ]; then
     echo "$1" >> "$GITHUB_PATH"
+  fi
+  if [ -n "${SETUP_PATH_FILE:-}" ]; then
+    echo "$1" >> "$SETUP_PATH_FILE"
   fi
 }
 
@@ -89,6 +97,23 @@ solvers() {
   add_to_path "$dest/bin"
   z3 --version
   cvc5 --version | head -1
+}
+
+# Lima's release archive for this CPU, checked against tools.tsv and unpacked into /usr/local.
+lima() {
+  row="$(awk -F'\t' -v g="$target" '$1 == "lima" && $2 == g { print $3 " " $4 }' "$here/tools.tsv")"
+  [ -n "$row" ] || { echo "tools.tsv has no lima for $target" >&2; exit 1; }
+  url="${row%% *}"
+  sha="${row##* }"
+  download="$(mktemp -d)"
+  (
+    cd "$download"
+    curl -sSfL -o lima.tar.gz "$url"
+    check_sha lima.tar.gz "$sha"
+  )
+  sudo tar -C /usr/local -xzf "$download/lima.tar.gz"
+  rm -rf "$download"
+  limactl --version
 }
 
 for step in "$@"; do

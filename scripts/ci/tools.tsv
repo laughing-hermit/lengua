@@ -1,7 +1,10 @@
 # What every runner installs, pinned by SHA-256 (setup.sh reads this; so does nothing else).
 # Columns: tool, target, url, sha256. The digests are the ones GitHub shows for each release asset.
-# z3 4.16.0 and cvc5 1.3.4, both native builds on both targets (LLVM comes from apt.llvm.org).
+# z3 4.16.0 and cvc5 1.3.4, both native builds on both targets (LLVM comes from apt.llvm.org), and
+# Lima 2.3.0 for routes.yml's VM jobs.
 z3	linux-x86_64	https://github.com/Z3Prover/z3/releases/download/z3-4.16.0/z3-4.16.0-x64-glibc-2.39.zip	7288c49a5bd6dbafd7b0b0d1f65956b91672da24b08f09242919af159be3418e
 z3	linux-aarch64	https://github.com/Z3Prover/z3/releases/download/z3-4.16.0/z3-4.16.0-arm64-glibc-2.38.zip	87fcd963d3eecb0f12cf1c3ef0ad74e84a3a7bd3caed5d94445645ef94ae6274
 cvc5	linux-x86_64	https://github.com/cvc5/cvc5/releases/download/cvc5-1.3.4/cvc5-Linux-x86_64-static.zip	dcdbfada0ce493ee98259c0816e0daafc561c223aadb3af298c2968e73ea39c6
 cvc5	linux-aarch64	https://github.com/cvc5/cvc5/releases/download/cvc5-1.3.4/cvc5-Linux-arm64-static.zip	2a4c108367f20b0c8990abd6b9535a5d62e08908d471d4671c00734e408f85bc
+lima	linux-x86_64	https://github.com/lima-vm/lima/releases/download/v2.3.0/lima-2.3.0-Linux-x86_64.tar.gz	cc8ba97f1c801b899f7c9eda9919dfc4ce4fa2c140c53e5add15aa2d0a1936f9
+lima	linux-aarch64	https://github.com/lima-vm/lima/releases/download/v2.3.0/lima-2.3.0-Linux-aarch64.tar.gz	7e295d243d9b9439fa05628500daff4371a6861cc7e995ac4af4a0781f736cc6

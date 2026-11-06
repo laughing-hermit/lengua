@@ -18,10 +18,15 @@ permissions:
   contents: read
 
 jobs:
+  # On windows-2025 (x86-64) and windows-11-arm, for Windows on ARM laptops.
   windows-wsl:
-    name: windows-wsl (windows-2025)
-    runs-on: windows-2025
+    name: windows-wsl (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-2025, windows-11-arm]
     defaults:
       run:
         shell: pwsh
@@ -48,7 +53,7 @@ jobs:
           # WSL doesn't mount securityfs by default, so the LSM list is missing until it is mounted.
           $out = wsl -d Ubuntu-24.04 -u root -- sh -c 'uname -r; mountpoint -q /sys/kernel/security || mount -t securityfs securityfs /sys/kernel/security; cat /sys/kernel/security/lsm; echo; . /etc/os-release; echo "$PRETTY_NAME"'
           $out
-          $text = "### WSL on windows-2025`n" + '```' + "`n" + ($out -join "`n") + "`n" + '```'
+          $text = "### WSL on ${{ matrix.runner }}`n" + '```' + "`n" + ($out -join "`n") + "`n" + '```'
           $text | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
 
   mac-lima:
