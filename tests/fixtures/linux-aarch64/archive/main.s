@@ -1,12 +1,9 @@
 .arch armv8-a
 
-// File descriptors and the working folder
+// File descriptors, and os_open's mode
 .equ STDOUT, 1
 .equ STDERR, 2
-.equ AT_FDCWD, -100
-// Opening to look, and the new folder's mode, rwxr-xr-x
-.equ O_RDONLY, 0
-.equ FOLDER_MODE, 0x1ed
+.equ OPEN_READ, 0
 // Exit codes
 .equ EXIT_OK, 0
 .equ EXIT_USAGE, 1
@@ -78,10 +75,9 @@ message:
 // missing, and says so.
 .type main, @function
 main:
-    ldr x0, [sp]
     cmp x0, #ARGC_EXPECTED
     b.ne .Lmain_usage
-    ldr x19, [sp, #16]
+    ldr x19, [x1, #8]
     cbz x19, .Lmain_assert_argv
     mov x0, x19
     bl name_length
@@ -182,21 +178,14 @@ archive_file:
     b.hi .Larchive_file_assert_long
     mov x19, x0
     mov x20, x1
-    mov x1, x0
-    mov x0, #AT_FDCWD
-    mov x2, #O_RDONLY
-    mov x3, #0
-    mov x8, #SYS_OPENAT
-    svc #0
+    mov x1, #OPEN_READ
+    bl os_open
     tbnz x0, #63, .Larchive_file_return
     bl os_close
     tbnz x0, #63, .Larchive_file_return
-    mov x0, #AT_FDCWD
-    adrp x1, folder_name
-    add x1, x1, :lo12:folder_name
-    mov x2, #FOLDER_MODE
-    mov x8, #SYS_MKDIRAT
-    svc #0
+    adrp x0, folder_name
+    add x0, x0, :lo12:folder_name
+    bl os_mkdir
     cbz x0, .Larchive_file_folder
     cmp x0, #ERROR_EXISTS
     b.ne .Larchive_file_return
@@ -204,12 +193,9 @@ archive_file:
     mov x0, x19
     mov x1, x20
     bl build_target
-    mov x3, x0
-    mov x0, #AT_FDCWD
-    mov x1, x19
-    mov x2, #AT_FDCWD
-    mov x8, #SYS_RENAMEAT
-    svc #0
+    mov x1, x0
+    mov x0, x19
+    bl os_rename
     tbnz x0, #63, .Larchive_file_return
     mov x0, #0
 .Larchive_file_return:

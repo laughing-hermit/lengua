@@ -498,10 +498,8 @@ const INLINE_FORM: &[&str] = &[
     "benches/programs/shout/neon-one.s",
     "benches/programs/upcase/avx512.s",
     "benches/programs/upcase/neon.s",
-    "examples/archive/main.s",
     "examples/echo/main.s",
     "examples/fetch/main.s",
-    "examples/upcase/main.s",
     "plugin/skills/compile/assets/fast/aes-ni/main.s",
     "plugin/skills/compile/assets/fast/crc32c/main.s",
     "plugin/skills/compile/assets/fast/crc32c-pclmul/main.s",
@@ -522,14 +520,8 @@ const INLINE_FORM: &[&str] = &[
     "plugin/skills/compile/assets/parallel-template.s",
     "plugin/skills/compile/assets/server-template.s",
     "plugin/skills/compile/assets/terminal-template.s",
-    "tests/fixtures/linux-aarch64/archive/main.s",
     "tests/fixtures/linux-aarch64/echo/main.s",
     "tests/fixtures/linux-aarch64/fetch/main.s",
-    "tests/fixtures/linux-aarch64/sweep/main.s",
-    "tests/fixtures/linux-aarch64/total/main.s",
-    "tests/fixtures/linux-aarch64/upcase/main.s",
-    "tests/fixtures/sweep/main.s",
-    "tests/fixtures/total/main.s",
 ];
 
 /// Every `.s` file under `folder` that defines `_start`, by its path from the repository's root.

@@ -1,10 +1,9 @@
 .intel_syntax noprefix
 
-# File descriptors and open flags
+# File descriptors and os_open's mode
 .equ STDOUT, 1
 .equ STDERR, 2
-.equ AT_FDCWD, -100
-.equ O_RDONLY, 0
+.equ OPEN_READ, 0
 # Exit codes
 .equ EXIT_OK, 0
 .equ EXIT_USAGE, 1
@@ -72,10 +71,10 @@ num_buf:
 # Opens the file named by the argument, reads it, adds its amounts and prints the total.
 .type main, @function
 main:
-    mov rax, qword ptr [rsp]
-    cmp rax, ARGC_EXPECTED
+    sub rsp, 8
+    cmp rdi, ARGC_EXPECTED
     jne .Lmain_usage
-    mov rdi, qword ptr [rsp + 16]
+    mov rdi, qword ptr [rsi + 8]
     test rdi, rdi
     jz .Lmain_assert_argv
     call load_file
@@ -140,12 +139,8 @@ load_file:
     push rbx
     test rdi, rdi
     jz .Lload_file_assert_null
-    mov rsi, rdi
-    mov edi, AT_FDCWD
-    mov edx, O_RDONLY
-    xor r10d, r10d
-    mov eax, SYS_OPENAT
-    syscall
+    mov esi, OPEN_READ
+    call os_open
     test rax, rax
     js .Lload_file_open_failed
     mov rbx, rax

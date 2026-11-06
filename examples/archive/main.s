@@ -1,11 +1,9 @@
 .intel_syntax noprefix
 
-# File descriptors and flags
+# File descriptors and os_open's mode
 .equ STDOUT, 1
 .equ STDERR, 2
-.equ AT_FDCWD, -100
-.equ O_RDONLY, 0
-.equ FOLDER_MODE, 0x1ed
+.equ OPEN_READ, 0
 # Exit codes
 .equ EXIT_OK, 0
 .equ EXIT_USAGE, 1
@@ -77,10 +75,10 @@ message:
 # Moves the file the argument names into the archive folder, and says so.
 .type main, @function
 main:
-    mov rax, qword ptr [rsp]
-    cmp rax, ARGC_EXPECTED
+    sub rsp, 8
+    cmp rdi, ARGC_EXPECTED
     jne .Lmain_usage
-    mov rbx, qword ptr [rsp + 16]
+    mov rbx, qword ptr [rsi + 8]
     test rbx, rbx
     jz .Lmain_assert_argv
     mov rdi, rbx
@@ -190,22 +188,17 @@ archive_file:
     ja .Larchive_file_assert_long
     mov rbx, rdi
     mov r12, rsi
-    mov edi, AT_FDCWD
-    mov rsi, rbx
-    mov edx, O_RDONLY
-    mov eax, SYS_OPENAT
-    syscall
+    mov rdi, rbx
+    mov esi, OPEN_READ
+    call os_open
     test rax, rax
     js .Larchive_file_return
     mov edi, eax
     call os_close
     test rax, rax
     js .Larchive_file_return
-    mov edi, AT_FDCWD
-    lea rsi, [rip + folder_name]
-    mov edx, FOLDER_MODE
-    mov eax, SYS_MKDIRAT
-    syscall
+    lea rdi, [rip + folder_name]
+    call os_mkdir
     test rax, rax
     jz .Larchive_file_folder
     cmp rax, ERROR_EXISTS
@@ -214,12 +207,9 @@ archive_file:
     mov rdi, rbx
     mov rsi, r12
     call build_target
-    mov r10, rax
-    mov edi, AT_FDCWD
-    mov rsi, rbx
-    mov edx, AT_FDCWD
-    mov eax, SYS_RENAMEAT
-    syscall
+    mov rsi, rax
+    mov rdi, rbx
+    call os_rename
     test rax, rax
     js .Larchive_file_return
     xor eax, eax

@@ -1,11 +1,9 @@
 .arch armv8-a
 
-// File descriptors, and openat's: the working folder, reading, and a new or emptied file to write
+// File descriptors, and os_open's modes: reading, and a new or emptied file to write
 .equ STDERR, 2
-.equ AT_FDCWD, -100
-.equ O_RDONLY, 0
-.equ O_OUT_FLAGS, 0x241
-.equ OUT_MODE, 420
+.equ OPEN_READ, 0
+.equ OPEN_WRITE, 1
 // Exit codes
 .equ EXIT_OK, 0
 .equ EXIT_USAGE, 1
@@ -71,11 +69,10 @@ input:
 // Writes the file named first to the file named second with its ASCII letters in capitals.
 .type main, @function
 main:
-    ldr x0, [sp]
     cmp x0, #ARGC_EXPECTED
     b.ne .Lmain_usage
-    ldr x19, [sp, #16]
-    ldr x20, [sp, #24]
+    ldr x19, [x1, #8]
+    ldr x20, [x1, #16]
     cbz x19, .Lmain_assert_input
     cbz x20, .Lmain_assert_output
     adrp x22, input
@@ -143,12 +140,8 @@ load_input:
     cbz x0, .Lload_input_assert_name
     cbz x1, .Lload_input_assert_buffer
     mov x20, x1
-    mov x1, x0
-    mov x0, #AT_FDCWD
-    mov x2, #O_RDONLY
-    mov x3, #0
-    mov x8, #SYS_OPENAT
-    svc #0
+    mov x1, #OPEN_READ
+    bl os_open
     tbnz x0, #63, .Lload_input_cannot_open
     mov x19, x0
     mov x1, x20
@@ -237,12 +230,8 @@ write_output:
     b.hi .Lwrite_output_assert_length
     mov x21, x1
     mov x20, x2
-    mov x1, x0
-    mov x0, #AT_FDCWD
-    mov x2, #O_OUT_FLAGS
-    mov x3, #OUT_MODE
-    mov x8, #SYS_OPENAT
-    svc #0
+    mov x1, #OPEN_WRITE
+    bl os_open
     tbnz x0, #63, .Lwrite_output_failed
     mov x19, x0
     cbz x20, .Lwrite_output_close

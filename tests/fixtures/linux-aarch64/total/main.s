@@ -1,10 +1,9 @@
 .arch armv8-a
 
-// File descriptors and open flags
+// File descriptors and os_open's mode
 .equ STDOUT, 1
 .equ STDERR, 2
-.equ AT_FDCWD, -100
-.equ O_RDONLY, 0
+.equ OPEN_READ, 0
 // Exit codes
 .equ EXIT_OK, 0
 .equ EXIT_USAGE, 1
@@ -70,16 +69,12 @@ num_buf:
 // Opens the file named by the argument, reads it, adds its amounts and prints the total.
 .type main, @function
 main:
-    ldr x0, [sp]
     cmp x0, #ARGC_EXPECTED
     b.ne .Lmain_usage
-    ldr x1, [sp, #16]
-    cbz x1, .Lmain_assert_argv
-    mov x0, #AT_FDCWD
-    mov x2, #O_RDONLY
-    mov x3, #0
-    mov x8, #SYS_OPENAT
-    svc #0
+    ldr x0, [x1, #8]
+    cbz x0, .Lmain_assert_argv
+    mov x1, #OPEN_READ
+    bl os_open
     tbnz x0, #63, .Lmain_open_failed
     mov x19, x0
     adrp x1, file_buf
