@@ -127,8 +127,9 @@ free runners, whose id is written in the table below, and by nothing else.
    musl for other Linuxes). The archives are unsigned, and the owner publishes them.
 
 **Where each stands.** Updated as rounds merge, with the run that shows it. First by target, from
-run 42192900115 (2026-11-06, main at aa30020; libtest counts a test that notes why it did nothing
-as passed; that run also had macOS and Windows jobs, which went with those targets):
+run 42246108012 (2026-11-06, main at e0c8cfb, after the two-target re-scope; run 42234861216 at
+d346bfb gave the same counts; libtest counts a test that notes why it did nothing as passed; the
+QEMU job, which may fail, failed only its seven known cases):
 
 | target | runner | suite | programs run | against C, C++ and Rust | archive |
 |---|---|---|---|---|---|
