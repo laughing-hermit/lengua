@@ -9,11 +9,11 @@ Agent Plugin, skills and one Rust MCP server only, so it runs in any agent harne
 **Where lengua stands (2026-11-06).** lengua has two targets, Linux on x86-64 and Linux on ARM64,
 one product held by one suite, every program reaching the OS only through lengua's edge, and the
 mutation test passes on both (run 42178888801). The owner decided the same day that these are the
-only targets: Windows runs lengua directly inside WSL 2 (Ubuntu, the agent inside it), and a Mac,
-an older Linux or an agent on the Windows side reach it through its image, run by Docker or Podman
-(round 3; Apple has no WSL), and native macOS and Windows ports are deferred ("Deferred"). The
-project has not tested those routes: a free runner can run the container's, and a probe (Round
-3) will try WSL 2 on a Windows runner and Colima on an Intel macOS one. The record
+only targets, and then that every system runs lengua the same way: on a real Linux next to the
+agent, Ubuntu 24.04 everywhere, natively on Linux, inside WSL 2 on Windows and inside a Lima VM
+on a Mac (Apple has no WSL); a container image may come later, and native macOS and Windows ports
+are deferred ("Deferred"). The project has not tested the Windows and Mac kernels: a probe (Round
+3) tries WSL 2 on a Windows runner and Lima on an Intel macOS one. The record
 of the finished work is in the git history, DESIGN.md, README.md, SESSIONS.md and the BENCHMARKS
 files.
 
@@ -59,24 +59,24 @@ free runners, whose id is written in the table below, and by nothing else.
    - each proof line has the same verdict on both. Where a line's time budget cuts it short, the
      verdict is the same kind: proven, or bounded to a length.
 
-   A Linux that meets the floor runs lengua directly, with no container, and so does Ubuntu 24.04
-   inside WSL 2 on Windows, the recommended Windows route (`wsl --install -d Ubuntu-24.04`, the
-   agent inside it). Other systems (a Mac, an older Linux, an agent on the Windows side) reach
-   the two targets through the lengua image (Ubuntu 24.04), run by a working Docker (a `docker`
-   command talking to an engine, from whichever provider: Docker Desktop, Rancher Desktop, Colima
-   or the Docker Engine on Linux), with Podman supported as the compatible alternative; on a Mac
-   this waits on Landlock (round 3). The image is the one container route the project promises
-   and tests (round 3); a Linux VM is the same Linux set up by hand. The floor
-   of the product is a default Docker or Podman container, on any host: what
-   such a container doesn't give everywhere, lengua doesn't need (it does not use io_uring, which
-   both runtimes' default profiles block; hardware counters are optional; the proofs' memory guard
-   reads the container's own limit), and a container job on both runners holds it there. A limit
-   of the container is a limit of lengua, on every system. Landlock is the exception to settle:
-   its support depends on the host's kernel (round 3 decides whether the promise rests on it).
-   And the route is seamless, not cumbersome: on Windows or a Mac with Docker or Podman
-   installed, installing the plugin is the only step. lengua starts the image itself, mounts the
-   project, keeps its signing key, and says in one sentence what to fix when something is
-   missing; the user never types a `docker run`.
+   Every system runs lengua the same way (the owner, 2026-11-06: "standardized for all, but all 3
+   will use Linux", and testable on the runners): on a real Linux kernel, next to the agent, on
+   Ubuntu 24.04, the same Ubuntu GitHub's runners run. A Linux laptop runs it directly (Ubuntu
+   24.04 promised; Fedora 40+ and Debian 13+ when `doctor` passes), Windows inside WSL 2
+   (`wsl --install -d Ubuntu-24.04`) and a Mac inside a Lima VM (`limactl start
+   template:ubuntu-24.04`), with the agent inside too. lengua ships as one package for that
+   Ubuntu: an archive for each CPU, whose install script runs the steps CI runs, with the same
+   pinned tools. CI tests that package on clean runners of both CPUs. Everything is tested on
+   GitHub's runners (the owner, 2026-11-06: "everything needs to be testable via GitHub
+   runners"), so a route is promised only once a runner has run lengua's checks inside it: WSL 2
+   on a Windows runner, and the Ubuntu cloud image a Lima VM boots on the Linux runners (Round
+   3). Once the Linux is there, installing the package is the only step. lengua uses nothing a
+   default container lacks (no io_uring, which the default profiles of Docker and Podman block;
+   hardware counters are optional; the proofs' memory guard will read a container's own limit),
+   so a container image of the same package can come later without changing the product, and a
+   limit of a container would be a limit of lengua on every system. Landlock is the exception to
+   settle: its support depends on the kernel (round 3 decides whether the promise rests on it,
+   and the network floor).
 3. **Tailored to the CPU and to Linux for speed.** main.s is written for the CPU: the widest
    vectors it has (AVX-512, AVX2, NEON, SVE) as named fast tiers, each beside a baseline form that
    runs on every machine of that CPU. The edge, which main.s calls for everything that reaches
@@ -120,10 +120,11 @@ free runners, whose id is written in the table below, and by nothing else.
    "Deferred" below says what would bring each in.
 6. **Truthful documents.** README, DESIGN, BENCHMARKS and the white paper say what the runs show,
    per target, and nothing more.
-7. **Shippable.** A release archive for each of the two targets builds, installs and passes its
-   check in CI, driven through a plain MCP client, on every Linux the documents promise (round 3
-   decides which, and whether the server is built as musl). The archives are unsigned, and the
-   owner publishes them.
+7. **Shippable.** One package for Ubuntu 24.04, the Linux every route ends in: a release archive
+   for each of the two targets, with an install script that runs the same steps CI runs and the
+   same pinned tools. It builds, installs on clean runners of both CPUs and passes its check in
+   CI, driven through a plain MCP client (round 3 decides whether the server is also built as
+   musl for other Linuxes). The archives are unsigned, and the owner publishes them.
 
 **Where each stands.** Updated as rounds merge, with the run that shows it. First by target, from
 run 42192900115 (2026-11-06, main at aa30020; libtest counts a test that notes why it did nothing
@@ -134,27 +135,28 @@ as passed; that run also had macOS and Windows jobs, which went with those targe
 | Linux x86-64 | ubuntu-24.04 | 569 passed | yes | BENCHMARKS.md (the owner's computer, 2026-11-02) | built |
 | Linux ARM64 | ubuntu-24.04-arm | 565 passed | yes | BENCHMARKS-aarch64.md (the runner) | built |
 
-A Linux that meets the floor (glibc 2.39, Landlock: Fedora 40 and later, Ubuntu 24.04 and later,
-Debian 13 and later) runs lengua directly, which is the route CI tests above. The other systems
-reach those two targets. The project has tested none of these routes yet:
+Ubuntu 24.04 is the one Linux every route ends in, and it is the runners' own system, so the table
+above is the userland every user runs. A Linux laptop runs lengua directly (Ubuntu 24.04 promised;
+Fedora 40 and later and Debian 13 and later work when `doctor` passes: glibc 2.39, Landlock). The
+other systems get the same Ubuntu; the project has not tested their kernels yet:
 
 | route | how | what it needs | tested by |
 |---|---|---|---|
-| Windows: WSL 2 (recommended) | `wsl --install -d Ubuntu-24.04` in an administrator PowerShell, a restart, then the agent and lengua inside Ubuntu, where lengua runs directly as on Linux | Microsoft's WSL 2 kernel: Landlock on by default (its 6.18 config has `CONFIG_SECURITY_LANDLOCK=y` and `CONFIG_LSM="landlock,..."`, above the 6.12 network floor); glibc 2.39 from Ubuntu 24.04 | the probe on a Windows runner, if a hosted runner can run WSL 2 (disputed); otherwise by hand |
-| The image: a Mac, an older Linux, an agent on the Windows side | the lengua image run by a working Docker (any provider), with Podman supported (round 3: Ubuntu 24.04 pinned by digest, LLVM, the solvers and lengua-mcp, for both CPUs). Mac: Colima first, then Rancher Desktop, or Docker Desktop once its VM passes the check. Windows-side agent: Docker Desktop (the easiest installer) or Rancher Desktop. Older Linux: Docker Engine | a kernel with Landlock under the container: Linux hosts; WSL 2's kernel; the VMs of Colima, Rancher Desktop and Podman Desktop, all unverified on a Mac; Docker Desktop on a Mac reportedly has none (a report of 2026-10-02), so it works only after round 3's Landlock policy | a default container under Docker and under Podman on both Linux runners (round 3); the owner's Fedora under Podman, by hand; a Mac, by the one-line check in "Round 3" and the Colima probe on an Intel macOS runner |
-| Mac: a Linux VM, by hand | Colima, Lima, UTM or Parallels (Ubuntu 24.04 arm64); Apple's `container` (macOS 26) is unverified | a kernel with Landlock, and glibc 2.39 | nobody yet |
+| Windows: WSL 2 | `wsl --install -d Ubuntu-24.04` in an administrator PowerShell, a restart, then the agent and lengua inside Ubuntu, where lengua runs directly as on Linux | Microsoft's WSL 2 kernel: Landlock on by default (its 6.18 config has `CONFIG_SECURITY_LANDLOCK=y` and `CONFIG_LSM="landlock,..."`, above the 6.12 network floor) | the probe on a Windows runner, if a hosted runner can run WSL 2 (disputed); otherwise by hand |
+| Mac: a Lima VM | `brew install lima`, `limactl start template:ubuntu-24.04`, then the agent and lengua inside the VM (Claude Code runs on Linux ARM64; Lima mounts the Mac's home read-only, so projects live in the VM) | the VM's kernel with Landlock; whether Lima's Ubuntu 24.04 boots the stock 6.8 (below the 6.12 network floor) or a newer one is unchecked | the probe on an Intel macOS runner (Apple-silicon runners can't run a VM; the Intel VM is a proxy); by hand on a Mac |
+| Later: the image | the same package in an Ubuntu 24.04 image, run by a working Docker (any provider) with Podman supported, for dev containers, Codespaces or an agent that stays on the Windows or Mac side | a kernel with Landlock under the container; Docker Desktop's Mac VM reportedly has none (a report of 2026-10-02) | a default container under Docker and under Podman on the Linux runners, when it comes |
 
 Then by finish-line point:
 
 | | now | what's left |
 |---|---|---|
 | 1. AI language, Agent Plugin | On Linux x86-64 and Linux ARM64: both skills, `check` and `run`, the spec format, the `Builds on` graph. | The release check through a plain MCP client on both targets (round 6). Knowledge-graph indexing past program folders: not designed. |
-| 2. Two targets | Both pass the whole suite natively (the table above). | The routes for other systems: documented, and tested as far as free runners allow (round 3). |
+| 2. Two targets | Both pass the whole suite natively (the table above). | WSL 2 and Lima documented, their kernels probed, the package tested on clean runners (round 3). |
 | 3. Tailored | CPU tiers for x86-64 and ARM64, each with a baseline form beside it. Every program reaches the OS only through lengua's edge: 21 operations in `src/edge/linux-x86_64.s` and `linux-aarch64.s`. | Linux's own fast paths where a benchmark shows a loss (round 5). |
 | 4. Faster, leaner | Measured on both targets (the table above): most rows ahead, some level, none gated. | The gate on both runners (round 5). |
 | 5. A replacement | Scope written in DESIGN. | Prover reach (round 6). |
 | 6. Truthful documents | README and DESIGN state the stricter bar and name the targets each claim covers. | A last pass (round 6). |
-| 7. Shippable | Archives for Linux x86-64 and Linux ARM64, built on glibc 2.39. | Builds for older Linux and an image (round 3); the release check (round 6). |
+| 7. Shippable | Archives for Linux x86-64 and Linux ARM64, built on glibc 2.39. | The Ubuntu 24.04 package with its install script and a CI install test (round 3); the release check (round 6); the image later. |
 
 ## Roadmap (2026-11-05)
 
@@ -180,32 +182,24 @@ Then by finish-line point:
      clock, random bytes, sleeps and waits, and does only what the program's spec allows.
    - The benchmarks are level with the pre-edge build but for two gaps, in round 5's list: the
      ARM64 histogram, and the executables' size.
-3. **Reach: the image first** (an Opus plan comes first):
-   - the lengua image, on Ubuntu 24.04 pinned by digest (the userland the native jobs run), for
-     both CPUs, and a container job that runs the suite inside it under Docker and under Podman
-     on both Linux runners: the one route a free runner can test, and the check that lengua needs
-     nothing a default container lacks;
+3. **Reach: a Linux next to the agent** (an Opus plan comes first). Every system runs lengua on
+   Ubuntu 24.04, the runners' own system: natively on Linux, inside WSL 2 on Windows and inside a
+   Lima VM on a Mac, with the agent inside too:
+   - the package: an archive for each CPU (the plugin and its server) with an install script that
+     runs the same steps as `scripts/ci/setup.sh` and the same pinned tools, so every user gets
+     the versions CI tested;
+   - a CI job that installs the package on clean `ubuntu-24.04` and `ubuntu-24.04-arm` runners
+     and runs the suite through it;
    - the kernel floor and the Landlock policy (Landlock for every program, Linux 6.12 for the
-     network);
-   - the host launcher, so that the route is seamless: the command the plugin's `.mcp.json` runs
-     on a Mac and for an agent on the Windows side (and on a Linux that doesn't meet the floor).
-     On a Linux that does, and inside WSL 2, it runs the native server when that is installed and
-     `doctor` passes, and the image otherwise.
-     It tries `docker`, then `podman`, pulls the image for the plugin's version on first use,
-     starts or reuses one container, mounts the project, maps host paths to container paths,
-     keeps the signing key in a volume, stops the container when idle, runs `doctor`, and
-     explains a failure in a sentence (no runtime installed, no Landlock under it, a folder it
-     can't mount). The two runtimes differ on a Linux host: a bind mount needs a `:Z` label on an
-     SELinux host (Fedora) under either, and files lengua writes into the project must belong to
-     the user, which takes `--userns=keep-id` on rootless Podman and `--user` on Docker Engine.
-     It holds no confinement and no OS code, only process and path plumbing, and the server
-     stays in the image: the plugin is still skills and one MCP server. Whether it is a small
-     binary or a script is for the plan;
-   - a `lengua-mcp doctor` that says what a kernel lacks;
-   - a dev container, for an agent that runs inside the container instead;
-   - the documents for the other routes (a Linux VM by hand), and optionally a server that
-     installs on more Linux (musl or older-glibc builds, and which LLVM versions lengua needs,
-     including whether Ubuntu's own LLVM 18 would do instead of apt.llvm.org's 22);
+     network; an Ubuntu 24.04 on its stock 6.8 kernel is the case to settle);
+   - a `lengua-mcp doctor` that says in a sentence what a kernel or a Linux lacks;
+   - the documents for WSL 2 and Lima, and the probe of their kernels, turned into CI jobs where a
+     free runner can run them;
+   - optionally a server that installs on more Linux (musl or older-glibc builds, and which LLVM
+     versions lengua needs, including whether Ubuntu's own LLVM 18 would do instead of
+     apt.llvm.org's 22).
+
+   Later, only if wanted: the image ("Later: the image", under Round 3 below).
 4. **Deferred: native macOS and Windows ports** (the owner, 2026-11-06). Their design stays in
    ROADMAP.md, and "Deferred" says what would bring them back.
 5. **Performance:**
@@ -296,108 +290,127 @@ What round 2 left:
 
 ### Round 3: reach
 
-An Opus plan comes first. What it must settle, from what the research found on 2026-11-06:
+An Opus plan comes first. The shape (the owner, 2026-11-06): every system runs lengua on a real
+Linux next to the agent, Ubuntu 24.04 everywhere, and lengua ships as one package for it, tested on
+the runners. What the plan must settle, from what the research found on 2026-11-06:
+- **The package.** An archive for each CPU (the plugin and its server) and an install script that
+  runs the steps `scripts/ci/setup.sh` runs on the runners: LLVM 22 from apt.llvm.org's noble
+  repository, and z3 4.16.0 and cvc5 1.3.4 pinned by SHA-256 in `scripts/ci/tools.tsv`. Every user
+  gets the versions CI tested, so a proof's verdict doesn't depend on the route (distributions ship
+  other z3 and cvc5: Fedora's z3 4.16 has bit-vector bugs the prover works around), and `doctor`
+  prints the versions it finds. A CI job installs the package on clean `ubuntu-24.04` and
+  `ubuntu-24.04-arm` runners and runs the suite through it.
 - **The routes' kernels.** lengua needs Landlock for every program, and Landlock ABI 6 (Linux
   6.12) for a program that uses the network.
   - WSL 2's kernel has Landlock (since 5.15.57.1; the current one is 6.18.58.1, whose config sets
     `CONFIG_SECURITY_LANDLOCK=y` and `CONFIG_LSM="landlock,lockdown,yama,..."`, so Landlock is on
-    by default and ABI 6 is met). Docker Desktop on
-    a Mac reportedly has none (its kernel is 6.12.54-linuxkit, a user report of 2026-10-02;
-    LinuxKit's request to enable it, #3928, has been open since 2023, and Docker Desktop's release
-    notes don't mention it), and Apple's `container` kernel is unverified: its repo's old 6.1.68
-    config has the security framework off.
-  - **A Mac is the test case,** since a Mac is a third of professional developers and many already
-    run Docker Desktop. First the one-line check, on a real Mac (the owner's to arrange, since no
-    free runner can run it): `docker run --rm ubuntu:24.04 cat /sys/kernel/security/lsm` must
-    list `landlock`, under Docker Desktop, Rancher Desktop, Colima and Podman Desktop. Where it
-    doesn't, the options are the VM's maker enabling Landlock (out of our hands), lengua not
-    requiring Landlock where seccomp and the broker already keep the promise (a sandbox change: a
-    review, `tests/limits.rs` and the red team; it would also remove the Linux 6.12 floor), or
-    sending that Mac user to a VM that has it (against the audience goal). Which of them is the
-    owner's call, in the round 3 plan; if lengua stops requiring Landlock, the coherence rule says
-    that must hold on every host, Linux included.
-  - Ubuntu 24.04's stock 6.8 has ABI 4, so it would refuse programs that use the network. ABI 4
-    (Linux 6.7) gives the network rules, and seccomp already stops signals, which the scoping that
-    ABI 6 adds would also do. Decide the floor, and put each route's check (`cat
-    /sys/kernel/security/lsm`) into a `lengua-mcp doctor` that says what a kernel lacks.
+    by default and ABI 6 is met).
+  - Ubuntu 24.04's stock 6.8 kernel has ABI 4, so it would refuse programs that use the network.
+    That is the kernel of an Ubuntu 24.04 server and perhaps of Lima's Ubuntu 24.04 VM (the probe
+    shows which); the runners boot 6.17 Azure kernels. ABI 4 (Linux 6.7) gives the network rules,
+    and seccomp already stops signals, which the scoping that ABI 6 adds would also do. Decide the
+    floor (ABI 4, or the install script adding Ubuntu's newer HWE kernel), and put each route's
+    check (`cat /sys/kernel/security/lsm`) into a `lengua-mcp doctor` that says what a kernel
+    lacks.
+  - Whether lengua should require Landlock at all where seccomp and the broker already keep the
+    promise is the owner's call (a sandbox change: a review, `tests/limits.rs` and the red team);
+    if it stops requiring it, the coherence rule says that must hold on every host.
 - **The server on more Linux.** It is built on Ubuntu 24.04 and `install.sh` refuses glibc older
-  than 2.39, which rules out Ubuntu 22.04, Debian 12, RHEL 9, Amazon Linux 2023 and Alpine. Old
-  distributions also ship old LLVM: which versions does lengua need? DESIGN.md says musl builds
-  are coming. Decide between static musl builds, an older-glibc build or both, and which
-  distributions the documents promise.
-- **The container tool: a working Docker** (the owner, 2026-11-06; Podman supported). The owner
-  chose Docker over Podman, then Docker over Docker Desktop; a side agent then pointed out that
-  the Docker Engine alone isn't one-click on Windows or a Mac, so the standard became the
-  interface: a `docker` command that talks to an engine, from any provider. Why Docker: in Stack
-  Overflow's 2025 survey ([source](https://survey.stackoverflow.co/2025/technology)) Docker is at
-  71.1% of respondents (73.8% of professionals) and Podman at 11.1% (10.9%); dev containers, CI
-  and MCP-server documents say `docker run`; and Podman speaks the same commands (Fedora's
-  `podman-docker` package adds a `docker` command), so Podman users stay supported and the
-  container job tests both (the runner has Docker 28.0.4 and Podman 4.9.3). The `docker` command
-  and the Docker Engine are open source (Apache 2.0), but the Engine runs only on Linux (Docker's
-  install page offers it on Windows and a Mac "through Docker Desktop"), so a Mac needs a Linux VM
-  from a provider (and Windows has WSL 2 built in): Docker Desktop (one installer; free for
-  personal use, education,
-  non-commercial open source and companies under 250 employees and $10 million revenue, paid
-  above that; its Mac VM reportedly has no Landlock), Rancher Desktop (SUSE, open source, Apache
-  2.0, no size limit, Windows, Mac and Linux), Colima (Mac, MIT, `brew install colima docker`) or
-  the Docker Engine inside WSL 2 (Windows). None of this is containers' fault: a container shares
-  the host's kernel and lengua's programs are Linux programs, so something must supply a Linux
-  kernel; only the deferred native ports would avoid it. No free runner can test a provider's VM,
-  but they test the Engine. This Fedora laptop needs no container at all (glibc 2.43, Landlock,
-  llvm-mc, ld.lld, z3 and cvc5 are installed): it runs lengua directly, and its Podman is for
-  trying the image by hand.
-- **The lengua image.** Ubuntu 24.04, pinned by digest, not a moving tag. The owner suggested
-  Debian (stable), and Debian 13 would work (glibc 2.41, security support to 2028 and LTS to 2030,
-  apt.llvm.org's `trixie` repositories with LLVM 22 and 23, the official image for both CPUs). It
-  was not chosen because GitHub has no Debian runner: Debian can be tested in a container on an
-  Ubuntu runner, but it would be a second userland that nothing tests natively, with its own
-  install steps. Ubuntu 24.04 is what the native jobs run (glibc 2.39, the server's floor), so the
-  image reuses the install steps of `scripts/ci/setup.sh` (LLVM 22 from apt.llvm.org's noble
-  repository, the solvers pinned in `scripts/ci/tools.tsv`) and adds lengua-mcp, and its standard
-  support runs to about April 2029; a digest keeps it stable. One multi-arch image for
-  linux/amd64 and linux/arm64 (a Mac on Apple silicon runs arm64 natively); TLS needs no
-  certificate package, since the server bundles `webpki-roots`. A CI job runs the suite inside a
-  default Docker container and a default Podman one on both Linux runners, under each runtime's
-  default seccomp profile (both allow `landlock_*`, `seccomp` and `prctl`, and block io_uring): the
-  one route a free runner can test, in the same userland as the native jobs.
-- **One set of solvers.** Distributions ship different z3 and cvc5 (Fedora's z3 4.16 has
-  bit-vector bugs the prover works around). Decide whether a native install takes the image's
-  pinned versions too, so that a proof's verdict doesn't depend on the route, and have `doctor`
-  print the versions it found.
-- **Windows: WSL 2 first** (the owner asked, 2026-11-06, which is best for a Windows user:
-  Docker Desktop or WSL). `wsl --install -d Ubuntu-24.04` in an administrator PowerShell, a
-  restart, then the agent and the plugin inside Ubuntu: lengua runs directly, exactly as in CI's
-  native jobs (the same Ubuntu 24.04), with no container, launcher or path mapping. Claude Code
-  runs in WSL 2 (third-party guides say its sandbox works there and not on native Windows, and
-  that the Windows-side and WSL installs keep separate logins), so the plugin is an ordinary Linux
-  plugin; the project lives on ext4, not on `/mnt/c`, which is slow and case-insensitive. Docker
-  Desktop on Windows runs on this same WSL 2 kernel, so it adds an engine, a container, a
-  launcher and Windows-to-container path mapping and gains only that the agent can stay on the
-  Windows side: that is the image's job (Docker Desktop or Rancher Desktop), after round 3. An
-  agent on the Windows side calling `lengua-mcp` through `wsl.exe` in `.mcp.json` would meet path
-  and environment translation: not planned, not tested.
-- **A Mac.** The image under a working Docker from any provider: Colima first (free, MIT, and an
-  Ubuntu VM), then Rancher Desktop, or Docker Desktop once its VM passes the check. When the
-  launcher finds a Docker whose kernel has no Landlock (Docker Desktop's Mac VM reportedly), it
-  says so in a sentence and names a VM that should have it. A Linux VM (Colima, Lima, UTM,
-  Parallels) with the agent inside it is the same Linux set up by hand: documented, not promised.
-  Apple's own `container` (macOS 26, Apple silicon only, a Docker-like but different command, a
-  VM per container, kernel unverified) is not promised either. The owner tests what CI can't, and
-  the documents say so until they have.
-- **The probe** (`.github/workflows/probe.yml`, manual, read-only). It tries the two routes a free
-  runner might run, and prints each VM's kernel and `/sys/kernel/security/lsm`: `windows-wsl` on
+  than 2.39, which rules out Ubuntu 22.04, Debian 12, RHEL 9, Amazon Linux 2023 and Alpine. Ubuntu
+  24.04 is the one Linux promised; decide whether static musl builds or an older-glibc build are
+  worth it for the others, and which LLVM versions lengua needs (whether Ubuntu's own LLVM 18 would
+  do instead of apt.llvm.org's 22).
+- **Windows: WSL 2** (the owner asked, 2026-11-06, which is best for a Windows user: Docker
+  Desktop or WSL). `wsl --install -d Ubuntu-24.04` in an administrator PowerShell, a restart, then
+  the agent and the package inside Ubuntu: lengua runs directly, exactly as in CI's native jobs
+  (the same Ubuntu 24.04), with no container, launcher or path mapping. Claude Code runs in WSL 2
+  (third-party guides say its sandbox works there and not on native Windows, and that the
+  Windows-side and WSL installs keep separate logins), so the plugin is an ordinary Linux plugin;
+  the project lives on ext4, not on `/mnt/c`, which is slow and case-insensitive. Docker Desktop
+  on Windows runs on this same WSL 2 kernel and would only add a layer. An agent on the Windows
+  side calling `lengua-mcp` through `wsl.exe` in `.mcp.json` would meet path and environment
+  translation: not planned, not tested.
+- **A Mac: a Lima VM.** `brew install lima`, `limactl start template:ubuntu-24.04`, then the agent
+  and the package inside the VM (`limactl shell ubuntu-24.04`). Lima is free and open source, uses
+  Apple's Virtualization framework, and mounts the Mac's home read-only by default, so projects
+  live in the VM, as with WSL's ext4; Claude Code's docs list Linux on ARM64. The cost: a Mac user
+  works inside a VM, agent and all. A container route would need a VM too, plus a launcher, and its
+  kernel would be the provider's, where a Lima VM's is ours to choose. Other VMs (UTM, Parallels)
+  work when `doctor` passes; Apple's own `container` (macOS 26, Apple silicon only, a Docker-like
+  but different command, a VM per container, kernel unverified) is not promised.
+- **The probe** (`.github/workflows/probe.yml`, manual, read-only). It tries the two kernels a free
+  runner might run and prints each one's version and `/sys/kernel/security/lsm`: `windows-wsl` on
   `windows-2025` (WSL 2 with Ubuntu-24.04; whether a hosted Windows runner can run WSL 2 is
-  disputed: older sources say WSL 1 only) and `mac-colima` on `macos-26-intel` (Colima's VM; the
-  Apple-silicon macOS runners can't run Colima or Docker, which need nested virtualization, but
-  Intel ones can, and an Intel VM is a proxy for Apple silicon). A failing step is itself the
-  answer. If WSL 2 works there, a CI job that runs the suite inside it would test the Windows
-  route; if Colima's VM lists `landlock`, a Mac with Colima is as far as free runners can say.
+  disputed: older sources say WSL 1 only) and `mac-lima` on `macos-26-intel` (Lima's Ubuntu 24.04
+  VM; the Apple-silicon macOS runners can't run a VM, since they lack nested virtualization, but
+  Intel ones can, and an Intel VM is a proxy for Apple silicon), and `linux-lima` on both Linux
+  runners (the same Ubuntu 24.04 cloud image under Lima and QEMU, with or without KVM). A failing
+  step is itself the answer. Where a route works there, a CI job that runs the suite inside it
+  tests that route.
+- **Tested on a runner before a promise** (the owner, 2026-11-06: "everything needs to be testable
+  via GitHub runners"; a side agent's note that day: CI fully tests the Ubuntu part, but the kernel
+  under WSL 2 or a Mac VM decides whether lengua runs, and the probe only reads it). A route is
+  promised only once a runner has run lengua's checks inside it, in a CI job:
+  - Windows: inside WSL 2 on `windows-2025`, if the probe shows a hosted runner can run WSL 2. If
+    it can't, the Windows route stays "documented, not tested", with Microsoft's published kernel
+    config as its only evidence.
+  - A Mac: what lengua meets there is the guest, and Lima boots Ubuntu's own 24.04 cloud image
+    (cloud-images.ubuntu.com, the same file on any host). Lima runs on Linux too, with QEMU (and
+    KVM where the runner offers it), so a job on `ubuntu-24.04` and `ubuntu-24.04-arm` can run
+    lengua's checks inside the very VM a Mac boots, on both CPUs. Only Apple's hypervisor stays
+    untested, and it changes nothing lengua uses. The probe's `linux-lima` job reads whether
+    `/dev/kvm` is there and which kernel that image boots on each runner.
+
+  Until a route's job is green, the documents say "documented, not yet tested".
+
+### Later: the image
+
+Kept for the day it is wanted (dev containers, Codespaces, an agent that must stay on the Windows or
+Mac side), with the decisions of 2026-11-06:
+- **The container tool: a working Docker**, Podman supported. The owner chose Docker over Podman,
+  then Docker over Docker Desktop; a side agent then pointed out that the Docker Engine alone isn't
+  one-click on Windows or a Mac, so the standard became the interface: a `docker` command that
+  talks to an engine, from any provider. Why Docker: in Stack Overflow's 2025 survey
+  ([source](https://survey.stackoverflow.co/2025/technology)) Docker is at 71.1% of respondents
+  (73.8% of professionals) and Podman at 11.1% (10.9%); dev containers, CI and MCP-server documents
+  say `docker run`; and Podman speaks the same commands (Fedora's `podman-docker` package adds a
+  `docker` command), so Podman users stay supported. The `docker` command and the Docker Engine are
+  open source (Apache 2.0), but the Engine runs only on Linux, so a Mac needs a Linux VM from a
+  provider: Docker Desktop (one installer; free for personal use, education, non-commercial open
+  source and companies under 250 employees and $10 million revenue, paid above that; its Mac VM
+  reportedly has no Landlock: a user report of 2026-10-02 against 6.12.54-linuxkit, LinuxKit's
+  request #3928 open since 2023), Rancher Desktop (SUSE, Apache 2.0, no size limit), Colima (MIT,
+  `brew install colima docker`) or Podman Desktop. The one-line check, under each, on a real Mac:
+  `docker run --rm ubuntu:24.04 cat /sys/kernel/security/lsm` must list `landlock`.
+- **The image.** Ubuntu 24.04, pinned by digest, not a moving tag. The owner suggested Debian
+  (stable), and Debian 13 would work (glibc 2.41, security support to 2028 and LTS to 2030,
+  apt.llvm.org's `trixie` repositories with LLVM 22 and 23); it was not chosen because GitHub has no
+  Debian runner, so it would be a second userland that nothing tests natively. The image holds the
+  same package, installed by the same script, as one multi-arch image for linux/amd64 and
+  linux/arm64; TLS needs no certificate package, since the server bundles `webpki-roots`. A CI job
+  runs the suite inside a default Docker container and a default Podman one on both Linux runners
+  (the runner has Docker 28.0.4 and Podman 4.9.3; both default profiles allow `landlock_*`,
+  `seccomp` and `prctl`, and block io_uring).
+- **The launcher.** The command the plugin's `.mcp.json` would run on a Mac or for an agent on the
+  Windows side. It tries `docker`, then `podman`, pulls the image for the plugin's version, starts
+  or reuses one container, mounts the project, maps host paths to container paths, keeps the
+  signing key in a volume, stops the container when idle, runs `doctor`, and explains a failure in
+  a sentence. On a Linux host a bind mount needs a `:Z` label under SELinux, and files lengua
+  writes must belong to the user (`--userns=keep-id` on rootless Podman, `--user` on Docker
+  Engine). It holds no confinement and no OS code; the server stays in the image.
 - **Inside a container,** `/proc/meminfo` shows the host's memory, so the proofs' memory guard
-  overestimates what is free, and hardware counters may be missing; runs still work.
+  would overestimate what is free, and hardware counters may be missing; runs still work.
 
 ### Round 5
 
+- **The toolchain A/B** (the owner, 2026-11-06: "evaluate if LLVM is optimized for Linux"). An
+  assembler doesn't optimize: it encodes each instruction as written, which the prover needs, and
+  LLVM is a first-class Linux toolchain (the Linux kernel builds with `LLVM=1`, Android, ChromeOS
+  and Google's and Meta's fleets run Clang-built kernels, and Rust 1.90 made LLD its default linker
+  on x86-64 Linux). One `llvm-mc` assembles both CPUs on any host, where GNU `as` needs a cross
+  binary per CPU. Still, measure it: GNU `as` and `ld` against `llvm-mc` and `ld.lld` on every
+  shipped program, on both runners, comparing the bytes, the executable's size (already a gap
+  here) and startup time. Keep LLVM unless the numbers say otherwise.
 - **The bench takes one program.** Its table (`ratio` in `benches/against_rust_and_c.rs`) now takes
   lengua's best value for each measure, which can be a different version for each. It takes the
   four measures of the one program the compile skill picks for the machine, and reports the other

@@ -16,8 +16,8 @@ lengua is an [Agent Plugin](https://agent-plugins.org): two skills and an MCP se
 open standards, so it works in Claude Code, Codex, Cursor and other agent harnesses.
 
 > Status: dialect 4 on Linux x86-64 and Linux ARM64, with memory rules that check every address has an owner and
-> stays inside it. Windows and Mac will reach it through the lengua image, run by Docker or Podman
-> (planned; see "Windows and Mac" below and [todo.md](todo.md)). It covers whole numbers, exact decimals, floating point in double and single
+> stays inside it. Windows and Mac will run it on the same Ubuntu 24.04, inside WSL 2 and a Lima VM
+> (see "Windows and Mac" below and [todo.md](todo.md)). It covers whole numbers, exact decimals, floating point in double and single
 > precision with fused multiply-add, vectors from SSE2 to AVX-512 and from NEON to SVE,
 > hashing and checksums, files
 > and folders, environment variables, fork-join threads, waiting, the clock and random bytes
@@ -47,10 +47,9 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 
 ## Requirements
 
-- Linux on x86-64 or ARM64 (AArch64), with glibc 2.39 or newer: Ubuntu 24.04, Debian 13 or Fedora
-  40 and later, where lengua runs directly, and so does Ubuntu inside WSL 2 on Windows. On a Mac or
-  an older Linux it runs from its image under a working Docker (or Podman) once that exists, and on
-  a Linux you set up until then ("Windows and Mac" below).
+- Linux on x86-64 or ARM64 (AArch64), with glibc 2.39 or newer: Ubuntu 24.04, the one CI tests and
+  the project promises, or Debian 13 or Fedora 40 and later. On Windows that Linux is WSL 2, and on
+  a Mac a Lima VM ("Windows and Mac" below).
 - A kernel with Landlock on, which every run needs: Linux 5.13 or newer, and 6.12 or newer for a
   program that uses the network. lengua won't run a program without it. `cat
   /sys/kernel/security/lsm` should list `landlock`.
@@ -62,10 +61,17 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 
 ## Windows and Mac
 
-lengua runs on Linux, so on Windows and a Mac it runs inside a Linux.
+lengua runs the same way on every system: on a real Linux kernel, next to your agent, on Ubuntu
+24.04, the same Ubuntu that CI runs on GitHub's runners for both CPUs. A Linux laptop already has
+that; Windows and a Mac get it once, in a few minutes:
 
-**Windows: WSL 2, with your agent inside it.** Windows has a real Linux built in, and lengua runs
-there exactly as on a Linux laptop, with no container:
+| system | the Linux | once |
+|---|---|---|
+| Linux | itself (Ubuntu 24.04 is the one promised; Fedora 40+ and Debian 13+ work when the requirements above hold) | the plugin and the tools in "Requirements" |
+| Windows | WSL 2 with Ubuntu 24.04, built into Windows | `wsl --install -d Ubuntu-24.04`, then your agent and lengua inside it |
+| Mac | a Lima VM with Ubuntu 24.04, free | `brew install lima`, `limactl start template:ubuntu-24.04`, then your agent and lengua inside it |
+
+**Windows: WSL 2.**
 
 1. In an administrator PowerShell, run `wsl --install -d Ubuntu-24.04`, restart, and create a Linux
    user when Ubuntu asks.
@@ -76,70 +82,41 @@ there exactly as on a Linux laptop, with no container:
 3. Keep your projects in Ubuntu's home folder, not under `/mnt/c`, which is slow and ignores case.
 
 Microsoft's WSL 2 kernel (6.18) has Landlock on by default, above lengua's 6.12 floor for programs
-that use the network. The project has not run this route yet ([todo.md](todo.md) has the probe that
-tries it on a Windows runner), and it needs your agent inside WSL: if your agent must stay on the
-Windows side, use the image below.
+that use the network.
 
-**A Mac, an older Linux, or an agent on the Windows side: the lengua image.** The project means to
-promise one container route there: **the lengua image, run by a working Docker**, a `docker`
-command that talks to an engine, from any provider below, with Podman supported as the compatible
-alternative. It does not exist yet. It will be Ubuntu 24.04 pinned to an exact build, the userland
-CI tests natively, with glibc 2.39, LLVM, z3, cvc5 and lengua-mcp, one image for both CPUs, and a CI
-job will run lengua's suite inside it under Docker's and Podman's default seccomp profiles on both
-Linux runners ([todo.md](todo.md), "Round 3"). The aim is that installing the plugin is the only
-step: the plugin starts the image itself, mounts your project and keeps lengua's signing key, so
-you never type a `docker run`. Native macOS and Windows ports are deferred ("Deferred" there). Once
-the image exists, the routes are:
+**Mac: a Lima VM.**
 
-| system | how lengua runs | runtime |
-|---|---|---|
-| Linux with glibc 2.39+ and Landlock (Fedora 40+, Ubuntu 24.04+, Debian 13+) | directly, the default | none |
-| Windows | directly inside WSL 2 (above), the easiest; or the image if your agent stays on Windows | `wsl --install -d Ubuntu-24.04`; or any Docker |
-| Mac | the image, or a Linux VM you set up with your agent inside it | any Docker whose VM passes the Landlock check below: Colima first, then Rancher Desktop; Docker Desktop reportedly not yet |
-| An older Linux (Ubuntu 22.04, Debian 12, RHEL 9) | the image | Docker Engine (Podman also works) |
+1. Install Lima and start Ubuntu 24.04: `brew install lima`, then `limactl start
+   template:ubuntu-24.04`.
+2. Open a shell in it (`limactl shell ubuntu-24.04`) and install your agent (Claude Code runs on
+   Linux on ARM64), the lengua plugin and the tools in "Requirements".
+3. Keep your projects inside the VM: Lima mounts your Mac's home folder read-only by default.
 
-The standard for the image is the interface, not one product: lengua needs a working Docker,
-meaning a `docker` command that talks to an engine, and any provider will do, since the plugin only
-calls `docker`. The `docker` command and the Docker Engine are open source, but the Engine runs only
-on Linux, so on Windows and a Mac it runs inside a small Linux VM that a provider sets up for you:
-- **Docker Desktop**, one installer and the quickest start: free for personal use, education and
-  companies under 250 people and $10 million a year, paid above that.
-- **Rancher Desktop**, open source and free at any size, for Windows and Mac.
-- **Colima**, free, for Mac (`brew install colima docker`).
+Which kernel Lima's Ubuntu 24.04 boots is not checked yet. On Ubuntu 24.04's stock 6.8 kernel,
+lengua runs every program but refuses those that use the network, below the 6.12 floor, until
+round 3 settles the floor ([todo.md](todo.md), "Round 3").
 
-CI tests the Engine, since the runners have it.
+**One package, tested where it runs.** Every route ends in the same Ubuntu 24.04, so lengua ships as
+one package for it, an archive for each CPU, whose install script will run the same steps CI runs
+on the runners, with the same pinned tools (planned: [todo.md](todo.md), "Round 3"). CI tests that
+package on clean Ubuntu 24.04 runners of both CPUs. Only the kernels under WSL 2 and Lima differ,
+and everything is tested on GitHub's runners, so each route is promised once a runner has run
+lengua's checks inside it: WSL 2 on a Windows runner, and the Ubuntu cloud image Lima boots on a
+Mac, which the Linux runners can boot too. Until then the Windows and Mac routes are documented,
+not yet tested; a probe is reading their kernels first. Native macOS and Windows ports are
+deferred ("Deferred" there).
 
-A Linux laptop needs no container: lengua is the same product run directly, and the image is for
-the systems that have no Linux of their own. On Fedora, which ships Podman, run lengua directly;
-Podman also runs the image with the same commands (the `podman-docker` package adds a `docker`
-command).
+**Containers, later.** A container image of the same package may come later, for dev containers,
+Codespaces or an agent that must stay on the Windows or Mac side: run by a working Docker (a
+`docker` command and an engine from any provider: Docker Desktop, Rancher Desktop, Colima) with
+Podman supported, wherever the provider's kernel has Landlock, which Docker Desktop's Mac VM
+reportedly lacks. lengua already uses nothing a default container lacks (no io_uring; hardware
+counters optional), so the image can come without changing the product.
 
-One thing decides a Mac: lengua refuses to run without Landlock, and Docker Desktop's Mac VM
-reportedly has none (a report of October 2026; Docker's release notes don't mention it). Whatever
-Docker you use, check its kernel with `docker run --rm ubuntu:24.04 cat
-/sys/kernel/security/lsm`: the output must list `landlock`. Nobody has run that check yet on the VMs
-of Colima, Rancher Desktop or Podman Desktop either. Round 3 decides whether lengua can run without
-Landlock where its other walls already hold ([todo.md](todo.md)).
-
-A limit of a default container, on any system, is a limit of lengua: it doesn't use io_uring, which
-those containers block, and hardware counters are optional, so it behaves the same inside Docker or
-Podman on Windows, on a Mac and on Linux.
-
-Until the image exists, a Mac needs a Linux you set up by hand, with your agent inside it. The
-project has not tested that route, since no free CI runner can run an Apple-silicon Mac's VM:
-
-- **Mac: a Linux VM that has Landlock.** Podman machine (Fedora CoreOS) or Colima (free; expected
-  to have it, not verified), or Lima, UTM or Parallels with Ubuntu 24.04 arm64; your agent and
-  lengua go inside. Docker Desktop on a Mac reportedly has no Landlock in its VM. Apple has no WSL:
-  its own `container` tool (macOS 26, Apple silicon only, Docker-like but a different command) runs
-  each container in a small VM whose kernel may lack it, so the project doesn't promise it. Check
-  `cat /sys/kernel/security/lsm` before relying on any of them.
-- **Your own image,** from a Linux image with glibc 2.39 or newer (`ubuntu:24.04`, or
-  `debian:trixie-slim`, which is Debian 13; `debian:12`, `ubuntu:22.04` and Alpine are too old),
-  `linux/arm64` on Apple silicon.
-
-The network floor, Linux 6.12, is above Ubuntu 24.04's stock kernel (6.8): a program that uses the
-network needs a newer kernel there, until round 3 decides whether the floor can be lower.
+Other Linuxes work too when they meet the requirements above, though the project doesn't test
+them: a VM in UTM or Parallels, or your own image from `ubuntu:24.04` (or `debian:trixie-slim`,
+which is Debian 13; `debian:12`, `ubuntu:22.04` and Alpine are too old). In any of them, `cat
+/sys/kernel/security/lsm` must list `landlock`.
 
 ## Build
 

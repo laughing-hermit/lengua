@@ -2,9 +2,10 @@
 
 lengua has two targets, Linux on x86-64 and Linux on ARM64. This roadmap began as the plan for six
 (macOS and Windows on each CPU too). On 2026-11-06 the owner dropped macOS on x86-64, since Apple
-no longer makes Intel Macs, and then decided that the native macOS and Windows ports wait: Windows
-and Mac reach lengua through its image, run by Docker or Podman (todo.md, "Round 3" and
-"Deferred"). What this file holds is the way to the finish line set on 2026-11-05: lengua
+no longer makes Intel Macs, and then decided that the native macOS and Windows ports wait: every
+system runs lengua on Ubuntu 24.04, natively, inside WSL 2 on Windows and inside a Lima VM on a
+Mac, and everything is tested on GitHub's runners (todo.md, "Round 3" and "Deferred"). What this
+file holds is the way to the finish line set on 2026-11-05: lengua
 *perfected*, a replacement for and an improvement on C, C++ and Rust, faster and leaner than them,
 the same product on both targets. The finish line itself, and what is left, are in
 [todo.md](todo.md). This file holds:
@@ -661,76 +662,64 @@ The build differs from the plan in these ways:
   `needs`; MACHINE_WORDS' Windows words and AArch64's registers; the model-against-CPU harnesses,
   which still build raw `_start` programs; and a broker for the bench's `run` lines.
 
-### R3 — reach: the image first
+### R3 — reach: a Linux next to the agent
 
-**Goal.** A person on a Mac, on an older Linux or with an agent on the Windows side can use lengua
-through one route that CI tests: the lengua image, run by a working Docker (a `docker` command
-talking to an engine, from any provider; Podman is supported), which is a Linux with the same two
-targets inside. A Linux that meets the floor needs no container and runs lengua directly, and on
-Windows the simpler route is WSL 2 with Ubuntu 24.04 and the agent inside it, where lengua runs
-directly too and no round 3 work is needed. The image route is seamless: with Docker or Podman
-installed, installing the plugin is the only step. A default container, on any host, is the floor
-of the product: what it doesn't give on every host, lengua doesn't need. todo.md's "Round 3" holds
-the questions the plan must settle, and an Opus plan makes these candidate steps executable.
+**Goal.** Every system runs lengua the same way, on a real Linux kernel next to the agent, on
+Ubuntu 24.04, the runners' own system: natively on Linux, inside WSL 2 on Windows and inside a Lima
+VM on a Mac, with the agent inside too. lengua ships as one package for that Ubuntu, and CI tests
+that package as users install it. Once the Linux is there, installing the package is the only
+step. todo.md's "Round 3" holds the questions the plan must settle, and an Opus plan makes these
+candidate steps executable.
 
 **Steps.**
-1. **The lengua image.** Ubuntu 24.04, pinned by digest: the userland CI's native jobs run, so
-   the image's install steps are the ones `scripts/ci/setup.sh` already runs on the runners (LLVM
-   22 from apt.llvm.org's noble repository, and the solvers pinned in `scripts/ci/tools.tsv`),
-   plus lengua-mcp. One multi-arch image for linux/amd64 and linux/arm64, built and published by a
-   workflow. Not Ubuntu 22.04 or Debian 12: their glibc (2.35, 2.36) is below the server's 2.39.
-   Whether a native install takes the same pinned solvers, so that a proof's verdict doesn't
-   depend on the route, is for the plan to settle.
-2. **A container job.** `ci.yml` runs the suite inside the image on both Linux runners, under
-   Docker's and under Podman's default seccomp profile (the runner has both). It is the test that
-   lengua uses nothing a default container lacks: no io_uring, hardware counters optional. The
-   image and the native jobs share one userland, so a difference between the two runs is the
-   container's.
-3. **The kernel floor and the Landlock policy.** Decide what the launcher requires: Landlock for
-   every program, or a promise that rests on seccomp and the broker with Landlock as reported
-   hardening; and the Landlock ABI the network needs (6 today, Linux 6.12; 4 would be Linux 6.7).
-   A sandbox change gets a review and its tests (`tests/limits.rs`, the red team). A Mac is the
-   test case: Docker Desktop's VM reportedly has no Landlock, and Colima's, Rancher Desktop's and
-   Podman Desktop's are unchecked (todo.md, "Round 3", has the one-line check).
-4. **The host launcher.** The command the plugin's `.mcp.json` runs on a Mac and for an agent on
-   the Windows side (and on a Linux that doesn't meet the floor). On a Linux that does, and inside
-   WSL 2, it runs the native server when that is installed and `doctor` passes, and the image
-   otherwise. It tries `docker`, then `podman`,
-   pulls the image for the plugin's version, starts or reuses one container, mounts the project,
-   maps host paths to container paths, keeps the signing key in a volume, stops the container
-   when idle, and explains a failure in a sentence; when the Docker it found has no Landlock
-   (Docker Desktop's Mac VM reportedly) the sentence names a VM that should have it. The two
-   runtimes differ on a Linux host (a `:Z` label under SELinux; `--userns=keep-id` on rootless
-   Podman, `--user` on Docker Engine). No confinement and no OS code, only plumbing; the server
-   stays in the image.
-5. **`lengua-mcp doctor`.** It prints the route (native, Docker or Podman), the kernel, the
-   Landlock ABI, seccomp, glibc, the solvers' versions, the CPU's features and the counters, and
-   says in words a person can act on what a route lacks.
-6. **The container's own limits.** The proofs' memory guard reads the container's cgroup limit
-   instead of the host's `/proc/meminfo`, and nothing needs a hardware counter.
-7. **The documents** (WSL 2 first for Windows), and the other routes: a Linux VM (Podman machine,
-   Colima, Lima) with the agent inside it, a dev container. Optionally the server on more Linux:
-   static musl builds or an older-glibc build for both CPUs, chosen with the LLVM versions lengua
-   needs (and whether Ubuntu's own LLVM 18 would do instead of apt.llvm.org's 22);
-   `scripts/install.sh` and `scripts/release.sh` follow.
+1. **The package.** An archive for each CPU, the plugin and its server, with an install script
+   that runs the steps `scripts/ci/setup.sh` runs on the runners (LLVM 22 from apt.llvm.org's noble
+   repository, z3 and cvc5 pinned by SHA-256 in `scripts/ci/tools.tsv`), so every user gets the
+   versions CI tested and the same verdicts. `scripts/install.sh` and `scripts/release.sh` follow.
+2. **A CI install test.** A job installs the package with that script on clean `ubuntu-24.04` and
+   `ubuntu-24.04-arm` runners and runs the suite through it: the same artifact and the same steps
+   a user takes.
+3. **The kernel floor and the Landlock policy.** Decide what lengua requires: Landlock for every
+   program, or a promise that rests on seccomp and the broker with Landlock as reported hardening;
+   and the Landlock ABI the network needs (6 today, Linux 6.12; 4 would be Linux 6.7). An Ubuntu
+   24.04 on its stock 6.8 kernel is the case to settle (a server, perhaps Lima's VM); the
+   alternative is the install script adding Ubuntu's newer HWE kernel. A sandbox change gets a
+   review and its tests (`tests/limits.rs`, the red team).
+4. **`lengua-mcp doctor`.** It prints the kernel, the Landlock ABI, seccomp, glibc, the tools'
+   versions, the CPU's features and the counters, and says in words a person can act on what a
+   Linux lacks.
+5. **The documents** for WSL 2 (`wsl --install -d Ubuntu-24.04`, the agent inside) and Lima
+   (`limactl start template:ubuntu-24.04`, the agent inside), and the other Linuxes that work
+   when `doctor` passes.
+6. **The probe, then the routes in CI.** `.github/workflows/probe.yml` reads the kernel and
+   Landlock under WSL 2 on `windows-2025`, under Lima's Ubuntu 24.04 VM on `macos-26-intel`
+   (Apple-silicon runners can't run a VM), and under the same Ubuntu cloud image in Lima on both
+   Linux runners. Where a runner can run a route, a CI job runs the suite inside it: a route is
+   promised only once that job is green.
+7. **Optionally the server on more Linux:** static musl builds or an older-glibc build for both
+   CPUs, chosen with the LLVM versions lengua needs (and whether Ubuntu's own LLVM 18 would do).
+
+**Later, if wanted: the image.** The same package in an Ubuntu 24.04 image, for dev containers,
+Codespaces or an agent that must stay on the Windows or Mac side: run by a working Docker (any
+provider) with Podman supported, a container job under both, and a host launcher. todo.md, "Later:
+the image", keeps the decisions of 2026-11-06.
 
 **Verified by.**
-- `compile`, then a full `test`, on both runners.
-- The container job, green on both runners under both runtimes.
-- The probe (`.github/workflows/probe.yml`, manual): WSL 2 on a Windows runner and Colima on an
-  Intel macOS runner, each printing its kernel and Landlock status (todo.md, "Round 3").
-- Hand tests: the owner's Fedora, directly and under Podman; and WSL 2 and Docker Desktop on
-  Windows, Colima, Rancher Desktop and Docker Desktop on a Mac, where someone has them and the
-  probe can't, noted in todo.md.
+- `compile`, then a full `test`, on both runners, and the CI install test green on both.
+- The probe's readings recorded in todo.md, then CI jobs that run lengua's checks inside WSL 2
+  and inside Lima's Ubuntu 24.04 VM wherever a runner can run them; a route is promised only once
+  its job is green (the owner: "everything needs to be testable via GitHub runners").
 
-**Size and risks.** Size M. The kernels under Docker Desktop, WSL 2 and the Mac VMs differ and some
-have no Landlock (todo.md, "Round 3"); who tests the Mac and Windows routes by hand is open.
+**Size and risks.** Size S to M. The kernels under WSL 2 and Lima are the users'. A Mac's guest is
+Ubuntu's own cloud image, which a Linux runner can boot, so it can be tested on the runners. WSL 2
+needs a Windows runner that can run it, and the probe decides whether there is one; if not, the
+Windows route stays documented, not tested.
 
 ### R4 — native macOS and Windows ports (deferred 2026-11-06)
 
 The owner deferred these ports when lengua became two targets: Windows is reached through WSL 2
-and a Mac through the lengua image, run by Docker or Podman (R3). What follows, the plans of the
-old rounds 3 and 4, is kept so that they can come back (todo.md, "Deferred").
+and a Mac through a Lima VM, both running Ubuntu 24.04 (R3). What follows, the plans of the old
+rounds 3 and 4, is kept so that they can come back (todo.md, "Deferred").
 
 #### macOS, ARM64 (was R3)
 
@@ -833,8 +822,12 @@ windows-11-arm.
   floor). The gate is enforced in `bench` mode and in the weekly run.
 - Linux's own fast paths, each measured before and after: the vDSO clock, one `epoll` operation
   for the servers, `splice` for the pipe rows. Not io_uring, which Docker's default profile blocks,
-  and nothing else that a default container refuses: a fast path counts only if the R3 container
-  job passes with it, so the lead the gate shows is one every user gets, on any host.
+  and nothing else that a default container refuses, so that the later image would change nothing:
+  a fast path needs no privilege or host setting, and the lead the gate shows is one every user
+  gets.
+- The toolchain A/B: GNU `as` and `ld` against `llvm-mc` and `ld.lld` on every shipped program, on
+  both runners, comparing the bytes, the executable's size and startup time; LLVM stays unless the
+  numbers say otherwise (todo.md, "Round 5").
 - The known gaps, closed by A/B runs.
 - BENCHMARKS-<target>.md, generated from the artifacts.
 - README, DESIGN and the bench's own text made true to the runs; "threads on AArch64 come later"
