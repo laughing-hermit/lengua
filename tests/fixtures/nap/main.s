@@ -1,9 +1,5 @@
 .intel_syntax noprefix
 
-# System calls (Linux x86-64)
-.equ SYS_WRITE, 1
-.equ SYS_EXIT, 60
-.equ SYS_CLOCK_NANOSLEEP, 230
 # File descriptors
 .equ STDOUT, 1
 # Clocks
@@ -32,47 +28,38 @@ awake_msg:
     .ascii "awake\n"
 .size awake_msg, . - awake_msg
 
-.type assert_message, @object
-assert_message:
-    .ascii "lengua: assertion 000 failed\n"
-.size assert_message, . - assert_message
-
 .text
-.globl _start
-
 # Naps for 30 seconds, then says it's awake.
-.type _start, @function
-_start:
+.type main, @function
+main:
+    sub rsp, 8
     mov edi, CLOCK_MONOTONIC
     xor esi, esi
     lea rdx, [rip + nap]
     test rdx, rdx
-    jz .Lstart_assert_nap
-    xor r10d, r10d
-    mov eax, SYS_CLOCK_NANOSLEEP
-    syscall
+    jz .Lmain_assert_nap
+    call os_sleep
     test rax, rax
-    jnz .Lstart_sleep_failed
+    jnz .Lmain_sleep_failed
     mov edi, STDOUT
     lea rsi, [rip + awake_msg]
     mov edx, AWAKE_LEN
     call write_all
     test rax, rax
-    js .Lstart_write_failed
+    js .Lmain_write_failed
     mov edi, EXIT_OK
-    jmp .Lstart_exit
-.Lstart_sleep_failed:
+    jmp .Lmain_exit
+.Lmain_sleep_failed:
     mov edi, EXIT_SLEEP_FAILED
-    jmp .Lstart_exit
-.Lstart_write_failed:
+    jmp .Lmain_exit
+.Lmain_write_failed:
     mov edi, EXIT_WRITE_FAILED
-.Lstart_exit:
-    mov eax, SYS_EXIT
-    syscall
-.Lstart_assert_nap:
+.Lmain_exit:
+    call os_exit
+.Lmain_assert_nap:
     mov edi, 4
     call assert_fail
-.size _start, . - _start
+.size main, . - main
 
 # Writes rdx bytes from rsi to file descriptor edi, retrying partial writes.
 # In: edi = the file descriptor, rsi = the bytes, rdx = how many, at least 1.
@@ -80,14 +67,14 @@ _start:
 # returns: result
 .type write_all, @function
 write_all:
+    sub rsp, 8
     test rsi, rsi
     jz .Lwrite_all_assert_null
     test rdx, rdx
     jz .Lwrite_all_assert_empty
     mov r8, MAX_WRITES
 .Lwrite_all_loop:  # bound: 64
-    mov eax, SYS_WRITE
-    syscall
+    call os_write
     test rax, rax
     js .Lwrite_all_return
     cmp rax, rdx
@@ -102,6 +89,7 @@ write_all:
 .Lwrite_all_done:
     xor eax, eax
 .Lwrite_all_return:
+    add rsp, 8
     ret
 .Lwrite_all_assert_null:
     mov edi, 1
@@ -114,42 +102,3 @@ write_all:
     call assert_fail
 .size write_all, . - write_all
 
-# lengua's assertion handler. check_code compares it word for word: copy it exactly.
-# In: edi = the assertion's number, 1 to 999. Prints "lengua: assertion NNN failed" to
-# standard error and ends the program, every thread of it, with code 134.
-.type assert_fail, @function
-assert_fail:
-    sub rsp, 40
-    mov rax, qword ptr [rip + assert_message]
-    mov qword ptr [rsp], rax
-    mov rax, qword ptr [rip + assert_message + 8]
-    mov qword ptr [rsp + 8], rax
-    mov rax, qword ptr [rip + assert_message + 16]
-    mov qword ptr [rsp + 16], rax
-    mov eax, dword ptr [rip + assert_message + 24]
-    mov dword ptr [rsp + 24], eax
-    mov al, byte ptr [rip + assert_message + 28]
-    mov byte ptr [rsp + 28], al
-    mov eax, edi
-    xor edx, edx
-    mov ecx, 100
-    div ecx
-    add al, 48
-    mov byte ptr [rsp + 18], al
-    mov eax, edx
-    xor edx, edx
-    mov ecx, 10
-    div ecx
-    add al, 48
-    mov byte ptr [rsp + 19], al
-    add dl, 48
-    mov byte ptr [rsp + 20], dl
-    mov eax, 1
-    mov edi, 2
-    mov rsi, rsp
-    mov edx, 29
-    syscall
-    mov eax, 231
-    mov edi, 134
-    syscall
-.size assert_fail, . - assert_fail

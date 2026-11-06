@@ -1,9 +1,5 @@
 .intel_syntax noprefix
 
-# System calls (Linux x86-64)
-.equ SYS_WRITE, 1
-.equ SYS_EXIT, 60
-.equ SYS_CLOCK_GETTIME, 228
 # Clocks and file descriptors
 .equ CLOCK_REALTIME, 0
 .equ STDOUT, 1
@@ -84,11 +80,6 @@ month_days:
     .byte 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
 .size month_days, . - month_days
 
-.type assert_message, @object
-assert_message:
-    .ascii "lengua: assertion 000 failed\n"
-.size assert_message, . - assert_message
-
 .section .data
 
 # hh:mm:ss and a newline; print_time fills in the digits.
@@ -106,88 +97,85 @@ out_buf:
 .size out_buf, . - out_buf
 
 .text
-.globl _start
-
 # Prints the time with no argument, the days until a date with one, and usage otherwise.
-.type _start, @function
-_start:
-    mov rax, qword ptr [rsp]
-    cmp rax, ARGC_TIME
-    je .Lstart_time
-    cmp rax, ARGC_DATE
-    jne .Lstart_usage
-    mov rbx, qword ptr [rsp + 16]
+.type main, @function
+main:
+    sub rsp, 8
+    cmp rdi, ARGC_TIME
+    je .Lmain_time
+    cmp rdi, ARGC_DATE
+    jne .Lmain_usage
+    mov rbx, qword ptr [rsi + 8]
     mov rdi, rbx
     call days_until
     test rax, rax
-    jns .Lstart_days
+    jns .Lmain_days
     cmp rax, ERROR_INVALID
-    je .Lstart_usage
+    je .Lmain_usage
     cmp rax, ERROR_NO_DATE
-    je .Lstart_no_date
-    jmp .Lstart_assert_error
-.Lstart_days:
+    je .Lmain_no_date
+    jmp .Lmain_assert_error
+.Lmain_days:
     mov rdi, rdx
     call write_i64
     test rax, rax
-    js .Lstart_write_failed
+    js .Lmain_write_failed
     mov edi, EXIT_OK
-    jmp .Lstart_exit
-.Lstart_time:
+    jmp .Lmain_exit
+.Lmain_time:
     call print_time
     test rax, rax
-    js .Lstart_write_failed
+    js .Lmain_write_failed
     mov edi, EXIT_OK
-    jmp .Lstart_exit
-.Lstart_no_date:
+    jmp .Lmain_exit
+.Lmain_no_date:
     mov edi, STDERR
     lea rsi, [rip + no_date_msg]
     mov edx, NO_DATE_MSG_LEN
     call write_all
     test rax, rax
-    js .Lstart_write_failed
+    js .Lmain_write_failed
     mov edi, STDERR
     mov rsi, rbx
     mov edx, DATE_LEN
     call write_all
     test rax, rax
-    js .Lstart_write_failed
+    js .Lmain_write_failed
     mov edi, STDERR
     lea rsi, [rip + newline_msg]
     mov edx, NEWLINE_MSG_LEN
     call write_all
     test rax, rax
-    js .Lstart_write_failed
+    js .Lmain_write_failed
     mov edi, EXIT_NO_DATE
-    jmp .Lstart_exit
-.Lstart_usage:
+    jmp .Lmain_exit
+.Lmain_usage:
     mov edi, STDERR
     lea rsi, [rip + usage_msg]
     mov edx, USAGE_MSG_LEN
     call write_all
     test rax, rax
-    js .Lstart_write_failed
+    js .Lmain_write_failed
     mov edi, EXIT_USAGE
-    jmp .Lstart_exit
-.Lstart_write_failed:
+    jmp .Lmain_exit
+.Lmain_write_failed:
     mov edi, EXIT_WRITE_FAILED
-.Lstart_exit:
-    mov eax, SYS_EXIT
-    syscall
-.Lstart_assert_error:
+.Lmain_exit:
+    call os_exit
+.Lmain_assert_error:
     mov edi, 1
     call assert_fail
-.size _start, . - _start
+.size main, . - main
 
 # Reads the time of day.
 # Out: rax = seconds since 1970, from 0 to MAX_CLOCK.
 .type read_clock, @function
 read_clock:
+    sub rsp, 8
     sub rsp, TIMESPEC_SIZE
-    mov eax, SYS_CLOCK_GETTIME
     mov edi, CLOCK_REALTIME
     mov rsi, rsp
-    syscall
+    call os_clock
     test rax, rax
     js .Lread_clock_assert_failed
     mov rax, qword ptr [rsp]
@@ -195,6 +183,7 @@ read_clock:
     cmp rax, rcx
     ja .Lread_clock_assert_range
     add rsp, TIMESPEC_SIZE
+    add rsp, 8
     ret
 .Lread_clock_assert_failed:
     mov edi, 2
@@ -607,14 +596,14 @@ write_i64:
 # returns: result
 .type write_all, @function
 write_all:
+    sub rsp, 8
     test rsi, rsi
     jz .Lwrite_all_assert_null
     test rdx, rdx
     jz .Lwrite_all_assert_empty
     mov r8, MAX_WRITES
 .Lwrite_all_loop:  # bound: 64
-    mov eax, SYS_WRITE
-    syscall
+    call os_write
     test rax, rax
     js .Lwrite_all_return
     cmp rax, rdx
@@ -629,6 +618,7 @@ write_all:
 .Lwrite_all_done:
     xor eax, eax
 .Lwrite_all_return:
+    add rsp, 8
     ret
 .Lwrite_all_assert_null:
     mov edi, 24
@@ -641,42 +631,3 @@ write_all:
     call assert_fail
 .size write_all, . - write_all
 
-# lengua's assertion handler. check_code compares it word for word: copy it exactly.
-# In: edi = the assertion's number, 1 to 999. Prints "lengua: assertion NNN failed" to
-# standard error and ends the program, every thread of it, with code 134.
-.type assert_fail, @function
-assert_fail:
-    sub rsp, 40
-    mov rax, qword ptr [rip + assert_message]
-    mov qword ptr [rsp], rax
-    mov rax, qword ptr [rip + assert_message + 8]
-    mov qword ptr [rsp + 8], rax
-    mov rax, qword ptr [rip + assert_message + 16]
-    mov qword ptr [rsp + 16], rax
-    mov eax, dword ptr [rip + assert_message + 24]
-    mov dword ptr [rsp + 24], eax
-    mov al, byte ptr [rip + assert_message + 28]
-    mov byte ptr [rsp + 28], al
-    mov eax, edi
-    xor edx, edx
-    mov ecx, 100
-    div ecx
-    add al, 48
-    mov byte ptr [rsp + 18], al
-    mov eax, edx
-    xor edx, edx
-    mov ecx, 10
-    div ecx
-    add al, 48
-    mov byte ptr [rsp + 19], al
-    add dl, 48
-    mov byte ptr [rsp + 20], dl
-    mov eax, 1
-    mov edi, 2
-    mov rsi, rsp
-    mov edx, 29
-    syscall
-    mov eax, 231
-    mov edi, 134
-    syscall
-.size assert_fail, . - assert_fail
