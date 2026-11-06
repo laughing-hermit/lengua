@@ -7,6 +7,8 @@ use std::io::{IoSlice, Read as _, Write as _};
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd as _, OwnedFd};
 use std::os::unix::net::UnixStream;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use rustix::fs::{
     AtFlags, Dir, Mode as FileMode, OFlags, ResolveFlags, mkdirat, openat2, renameat, unlinkat,
@@ -69,15 +71,33 @@ impl Answer {
     }
 }
 
-/// What the program told the broker while it ran.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// What the program has told the broker while it ran, which anyone holding the handle reads as it
+/// happens: a test waits for the note of a server's wait before it connects.
+#[derive(Debug, Default)]
 pub struct Notes {
-    /// It waited for a connection or a key.
-    pub waited: bool,
-    /// It listed a folder.
-    pub listed: bool,
-    /// How many random bytes it asked for.
-    pub random_asked: usize,
+    waited: AtomicBool,
+    listed: AtomicBool,
+    random_asked: AtomicUsize,
+}
+
+impl Notes {
+    /// Whether the program waited for a connection or a key.
+    #[must_use]
+    pub fn waited(&self) -> bool {
+        self.waited.load(Ordering::SeqCst)
+    }
+
+    /// Whether the program listed a folder.
+    #[must_use]
+    pub fn listed(&self) -> bool {
+        self.listed.load(Ordering::SeqCst)
+    }
+
+    /// How many random bytes the program asked for.
+    #[must_use]
+    pub fn random_asked(&self) -> usize {
+        self.random_asked.load(Ordering::SeqCst)
+    }
 }
 
 /// How the service ended.
@@ -101,7 +121,7 @@ pub struct Broker {
     /// What a test supplies.
     supply: Supply,
     /// What the program has told it.
-    notes: Notes,
+    notes: Arc<Notes>,
     /// Which clock reading the next call gets.
     clock_next: usize,
     /// The path of each file the program holds open, by the token its reply carried.
@@ -161,7 +181,7 @@ impl Broker {
             root,
             hello,
             supply,
-            notes: Notes::default(),
+            notes: Arc::new(Notes::default()),
             clock_next: 0,
             opens: BTreeMap::new(),
             token: 0,
@@ -177,8 +197,8 @@ impl Broker {
 
     /// What the program has told the broker.
     #[must_use]
-    pub const fn notes(&self) -> Notes {
-        self.notes
+    pub fn notes(&self) -> Arc<Notes> {
+        Arc::clone(&self.notes)
     }
 
     /// Answers a request. The notes get no answer, and the caller sends none.
@@ -195,11 +215,11 @@ impl Broker {
                 Answer::result(0)
             }
             Kind::Waiting => {
-                self.notes.waited = true;
+                self.notes.waited.store(true, Ordering::SeqCst);
                 Answer::result(0)
             }
             Kind::Listed => {
-                self.notes.listed = true;
+                self.notes.listed.store(true, Ordering::SeqCst);
                 Answer::result(0)
             }
             Kind::Clock => self.clock(),
@@ -229,10 +249,10 @@ impl Broker {
         let Some(bytes) = &self.supply.random else {
             return Answer::error(EINVAL);
         };
-        let start = self.notes.random_asked.min(bytes.len());
+        let start = self.notes.random_asked().min(bytes.len());
         let mut payload: Vec<u8> = bytes[start..].iter().take(count).copied().collect();
         payload.resize(count, 0);
-        self.notes.random_asked = self.notes.random_asked.saturating_add(count);
+        self.notes.random_asked.fetch_add(count, Ordering::SeqCst);
         Answer {
             result: i64::try_from(count).unwrap_or(i64::MAX),
             payload,
@@ -766,7 +786,7 @@ mod tests {
         // The bytes in order, then zeros, however they are asked for.
         assert_eq!(broker.answer(&random(2)).payload, vec![1, 2]);
         assert_eq!(broker.answer(&random(3)).payload, vec![3, 0, 0]);
-        assert_eq!(broker.notes().random_asked, 5);
+        assert_eq!(broker.notes().random_asked(), 5);
         // The readings in order, the last one repeating.
         let reading = |broker: &mut Broker| {
             let answer = broker.answer(&request(Kind::Clock, 0, "", ""));
@@ -785,7 +805,7 @@ mod tests {
         // The notes.
         broker.answer(&request(Kind::Waiting, 0, "", ""));
         broker.answer(&request(Kind::Listed, 0, "", ""));
-        assert!(broker.notes().waited && broker.notes().listed);
+        assert!(broker.notes().waited() && broker.notes().listed());
     }
 
     /// A client's side of the channel: a request goes out, and the reply and its descriptor come
@@ -873,7 +893,7 @@ mod tests {
             matches!(outcome, Outcome::Refused(Refusal::Kind(255))),
             "{outcome:?}"
         );
-        assert!(notes.waited);
+        assert!(notes.waited());
     }
 
     #[test]
