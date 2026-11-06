@@ -161,7 +161,11 @@ fn data(case: &Case) -> String {
     let mut text = String::from(".section .rodata\n");
     for (name, bytes) in case.data {
         let list: Vec<String> = bytes.iter().map(u8::to_string).collect();
-        let _ = writeln!(text, "{name}:\n    .byte {}", list.join(", "));
+        let _ = writeln!(
+            text,
+            ".type {name}, @object\n{name}:\n    .byte {}\n.size {name}, . - {name}",
+            list.join(", ")
+        );
     }
     text
 }
