@@ -464,8 +464,8 @@ async fn a_server_that_waits_for_its_client_to_close_fails_as_with_curl() {
 fn with_short_paths_and_bodies(idea: &str) -> String {
     let idea = respelled(
         idea,
-        "path holds `1` to `100` characters",
-        "path holds `1` to `100` characters (tests: `6` and `11`)",
+        "path has `1` to `100` characters",
+        "path has `1` to `100` characters (tests: `6` and `11`)",
     );
     let idea = respelled(&idea, "`string(1, 100, ", "`string(1, 6, ");
     let idea = respelled(&idea, "`string(0, 65000, ", "`string(0, 11, ");
@@ -595,15 +595,15 @@ async fn a_closed_standard_output_fails_every_write() {
 fn with_lines_the_tests_cut_past(idea: &str) -> String {
     let changed = respelled(
         idea,
-        "Each line is `1` to `20`\nlowercase letters followed by a newline.",
-        "The first line is `1` to `5`\nlowercase letters and the second `12` to `20`, each \
-         followed by a newline.",
+        "Each line is `1` to `20`\nlowercase letters and a newline.",
+        "The first line is `1` to `5`\nlowercase letters and a newline. The second line is `12` to \
+         `20` lowercase letters and a newline.",
     );
     let changed = respelled(&changed, "`ab\\ncd\\n`", "`ab\\nijklmnopqrst\\n`");
     let changed = respelled(
         &changed,
-        "prints `cd` followed",
-        "prints `ijklmnopqrst` followed",
+        "prints `cd` and a newline",
+        "prints `ijklmnopqrst` and a newline",
     );
     let changed = changed
         .replacen("string(1, 20,", "string(1, 5,", 1)

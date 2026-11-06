@@ -2563,20 +2563,20 @@ title: add
 description: Adds two whole numbers given as arguments and prints the sum.
 ---
 # Purpose
-Adds two whole numbers between `-1000000000` and `1000000000`.
+The program adds two whole numbers between `-1000000000` and `1000000000`.
 
 # Behaviors
 ## B1: Adds two numbers
 - Given the arguments `2` and `3`
 - When the program runs
-- Then it prints `5` followed by a newline
+- Then it prints `5` and a newline
 - And it exits with code `0`
 
 {outline}
-## B2: Missing arguments
+## B2: Shows the usage line without arguments
 - Given no arguments
 - When the program runs
-- Then it prints `usage: add <a> <b>` followed by a newline to standard error
+- Then it prints `usage: add <a> <b>` and a newline to standard error
 - And it exits with code `1`
 "
         )
@@ -2585,7 +2585,7 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
     const GENERATED: &str = "### For any `a` and `b`
 - Given the arguments `{a}` and `{b}`
 - When the program runs
-- Then it prints `{a + b}` followed by a newline
+- Then it prints `{a + b}` and a newline
 - And it exits with code `0`
 
 | a | b | runs |
@@ -2680,19 +2680,19 @@ title: roll
 description: Rolls a die for a player.
 ---
 # Purpose
-Rolls a die for a player numbered from `1` to `9`.
+The program rolls a die for a player numbered from `1` to `9`.
 
 # Behaviors
 ## B1: Rolls a die
 - Given the argument `1`
 - When the program runs
-- Then it prints text matching `rolled {any(1, 6)}` followed by a newline
+- Then it prints text that matches `rolled {any(1, 6)}` and a newline
 - And it exits with code `0`
 
 ### For any `player`
 - Given the argument `{player}`
 - When the program runs
-- Then it prints `rolled {any(1, 6)}` followed by a newline
+- Then it prints `rolled {any(1, 6)}` and a newline
 - And it exits with code `0`
 
 | player |
@@ -2720,17 +2720,17 @@ Rolls a die for a player numbered from `1` to `9`.
 
     #[test]
     fn rules_bound_only_expected_output() {
-        let rule = "matching `rolled {any(1, 6)}`";
+        let rule = "matches `rolled {any(1, 6)}`";
         let formula = "prints `rolled {any(1, 6)}`";
         for (from, to, needle) in [
             (
                 rule,
-                "matching `rolled {player}`",
+                "matches `rolled {player}`",
                 "a rule's placeholders are any(lo, hi) only",
             ),
             (
                 rule,
-                "matching `rolled {any(6, 1)}`",
+                "matches `rolled {any(6, 1)}`",
                 "smallest number after its largest",
             ),
             (
@@ -2756,7 +2756,7 @@ Rolls a die for a player numbered from `1` to `9`.
             // Where the number ends must be clear: "30" isn't a 3 and a 0.
             (
                 rule,
-                "matching `rolled {any(1, 6)}0`",
+                "matches `rolled {any(1, 6)}0`",
                 "followed directly by a digit",
             ),
             (
@@ -2777,19 +2777,19 @@ title: clock
 description: Prints the time for a player.
 ---
 # Purpose
-Prints the time in Unix seconds for a player numbered from `1` to `9`.
+The program prints the time in Unix seconds for a player numbered from `1` to `9`.
 
 # Behaviors
 ## B1: Prints the time
 - Given the argument `1`
 - When the program runs
-- Then it prints text matching `{any(now - 2, now + 2)}` followed by a newline
+- Then it prints text that matches `{any(now - 2, now + 2)}` and a newline
 - And it exits with code `0`
 
 ### For any `player`
 - Given the argument `{player}`
 - When the program runs
-- Then it prints `{any(now - 2, now + 2)}` followed by a newline
+- Then it prints `{any(now - 2, now + 2)}` and a newline
 - And it exits with code `0`
 
 | player |
@@ -2904,21 +2904,21 @@ title: hour
 description: Prints the hour of the day.
 ---
 # Purpose
-Prints the hour of the day in UTC, from `0` to `23`, for a reader numbered from `1` to `9`.
+The program prints the UTC hour of the day, from `0` to `23`, for a reader numbered from `1` to `9`.
 
 # Behaviors
 ## B1: Prints the hour
 - Given the argument `1`
 - And the clock at `1735693200.5`
 - When the program runs
-- Then it prints `1` followed by a newline
+- Then it prints `1` and a newline
 - And it exits with code `0`
 
 ### For any `reader` and `t`
 - Given the argument `{reader}`
 - And the clock at `{t}`
 - When the program runs
-- Then it prints `{floor(t) % 86400 / 3600}` followed by a newline
+- Then it prints `{floor(t) % 86400 / 3600}` and a newline
 - And it exits with code `0`
 
 | reader | t |
@@ -2953,18 +2953,18 @@ Prints the hour of the day in UTC, from `0` to `23`, for a reader numbered from 
         let crlf = edit(
             &edit(
                 &idea_text("echo"),
-                "`hello` followed by a newline",
-                "`hello\\r\\n`",
+                "`hello` and a newline\n",
+                "`hello\\r\\n`\n",
             ),
-            "`{line}` followed by a newline",
-            "`{line}\\r\\n`",
+            "`{line}` and a newline\n",
+            "`{line}\\r\\n`\n",
         );
         let suite = tests_of(&crlf).expect("`hello\\r\\n` is in the example");
         assert_eq!(suite.examples[0].client[0].sends, "hello\r\n");
         let repeated = edit(
             &crlf,
             "sends `hello\\r\\n`",
-            "sends `hel` repeated `1` times followed by `lo\\r\\n`",
+            "sends `hel` `1` times then `lo\\r\\n`",
         );
         tests_of(&repeated).expect("repeats work in network steps");
         // When the generated tests can't produce the example, the message names what doesn't fit.
@@ -3003,28 +3003,28 @@ Prints the hour of the day in UTC, from `0` to `23`, for a reader numbered from 
         assert_problem(
             &edit(&idea, "up to 8 clients", "up to 2 clients")
                 .replacen(
-                    "- And a client that sends `second` followed by a newline\n",
-                    "- And a client that sends `second` followed by a newline\n- And a client \
-                     that sends `third` followed by a newline\n",
+                    "- And a client that sends `second` and a newline\n",
+                    "- And a client that sends `second` and a newline\n- And a client that \
+                     sends `third` and a newline\n",
                     1,
                 )
                 .replacen(
-                    "- And the client gets back `second` followed by a newline\n",
-                    "- And the client gets back `second` followed by a newline\n- And the \
-                     client gets back `third` followed by a newline\n",
+                    "- And the client receives `second` and a newline\n",
+                    "- And the client receives `second` and a newline\n- And the client \
+                     receives `third` and a newline\n",
                     1,
                 ),
             "3 clients connect at once, more than the 2 idea.md serves at once",
         );
         let alone = edit(
             &idea,
-            "- And a client that sends `second` followed by a newline\n",
+            "- And a client that sends `second` and a newline\n",
             "",
         );
         assert_problem(
             &edit(
                 &alone,
-                "- And the client gets back `second` followed by a newline\n",
+                "- And the client receives `second` and a newline\n",
                 "",
             ),
             "its clients connect at once, but it has 1",
@@ -3048,8 +3048,8 @@ Prints the hour of the day in UTC, from `0` to `23`, for a reader numbered from 
             "B1's generated tests: lengua reads each step as one of its phrasings",
         );
         problem(
-            "`{a + b}` followed by a newline\n- And it exits with code `0`\n",
-            "`{a + b}` followed by a newline\n",
+            "`{a + b}` and a newline\n- And it exits with code `0`\n",
+            "`{a + b}` and a newline\n",
             "needs its exit code, the one B1 states",
         );
         problem(
@@ -3067,8 +3067,8 @@ Prints the hour of the day in UTC, from `0` to `23`, for a reader numbered from 
             "B1 has inputs, so it needs generated tests that try fresh inputs on every run. \
              Write them under its steps, starting from this, with a formula where `{…}` stands \
              and a generator in each cell:\n\n### For any …\n- Given the arguments `{a}` and \
-             `{b}`\n- When the program runs\n- Then it prints `{…}` followed by a newline\n- And \
-             it exits with code `0`\n\n| a | b |\n|---|---|\n| `…` | `…` |",
+             `{b}`\n- When the program runs\n- Then it prints `{…}` and a newline\n- And it \
+             exits with code `0`\n\n| a | b |\n|---|---|\n| `…` | `…` |",
         );
     }
 
@@ -3096,12 +3096,12 @@ Prints the hour of the day in UTC, from `0` to `23`, for a reader numbered from 
 
     #[test]
     fn checks_exit_codes() {
-        let ending = "`{a + b}` followed by a newline\n- And it exits with code `0`";
+        let ending = "`{a + b}` and a newline\n- And it exits with code `0`";
         assert_problem(
             &edit(
                 &valid(),
                 ending,
-                "`{a + b}` followed by a newline\n- And it exits with code `3`",
+                "`{a + b}` and a newline\n- And it exits with code `3`",
             ),
             "generated B1 expects exit code 3",
         );
@@ -3109,7 +3109,7 @@ Prints the hour of the day in UTC, from `0` to `23`, for a reader numbered from 
             &edit(
                 &valid(),
                 ending,
-                "`{a + b}` followed by a newline\n- And it exits with code `{if(a > 0, 0, 134)}`",
+                "`{a + b}` and a newline\n- And it exits with code `{if(a > 0, 0, 134)}`",
             ),
             "reserved for failed assertions",
         );
@@ -3181,9 +3181,9 @@ Prints the hour of the day in UTC, from `0` to `23`, for a reader numbered from 
         assert_problem(
             &edit(
                 &greet,
-                "- Given the environment variable `HOME` set to `/home/ada`",
-                "- Given the environment variable `HOME` set to `/home/ada`\n- And the \
-                 environment variable `home` set to `/home/bob`",
+                "- Given the environment variable `HOME` with the value `/home/ada`",
+                "- Given the environment variable `HOME` with the value `/home/ada`\n- And the \
+                 environment variable `home` with the value `/home/bob`",
             ),
             "differ only in case",
         );
@@ -3281,19 +3281,19 @@ title: negate
 description: Negates a whole number.
 ---
 # Purpose
-Negates a whole number between `{lo}` and `{hi}`.
+The program negates a whole number between `{lo}` and `{hi}`.
 
 # Behaviors
 ## B1: Negates a number
 - Given the argument `7`
 - When the program runs
-- Then it prints `-7` followed by a newline
+- Then it prints `-7` and a newline
 - And it exits with code `0`
 
 ### For any `n`
 - Given the argument `{{n}}`
 - When the program runs
-- Then it prints `{{-n}}` followed by a newline
+- Then it prints `{{-n}}` and a newline
 - And it exits with code `0`
 
 | n |
@@ -3310,19 +3310,19 @@ title: lines
 description: Counts the lines of a text.
 ---
 # Purpose
-Counts the lines of at most `1048576` bytes of text.
+The program counts the lines of at most `1048576` bytes of text.
 
 # Behaviors
 ## B1: Counts lines
-- Given standard input holding `a` followed by a newline
+- Given standard input that contains `a` and a newline
 - When the program runs
-- Then it prints `1` followed by a newline
+- Then it prints `1` and a newline
 - And it exits with code `0`
 
 ### For any `text`
-- Given standard input holding `{text}`
+- Given standard input that contains `{text}`
 - When the program runs
-- Then it prints `{count(text, \"\\n\")}` followed by a newline
+- Then it prints `{count(text, \"\\n\")}` and a newline
 - And it exits with code `0`
 
 | text |
@@ -3337,13 +3337,13 @@ Counts the lines of at most `1048576` bytes of text.
         // Long example text is written as repeats, up to the most a test may hold.
         let long = edit(
             LINES,
-            "holding `a` followed by a newline",
-            "holding `a` repeated `3` times followed by a newline",
+            "contains `a` and a newline",
+            "contains `a` `3` times and a newline",
         );
         let suite = tests_of(&long).expect("valid tests");
         assert_eq!(suite.examples[0].stdin, "aaa\n");
         assert_problem(
-            &edit(LINES, "holding `a`", "holding `a` repeated `9000000` times"),
+            &edit(LINES, "contains `a`", "contains `a` `9000000` times"),
             "the whole value must stay within",
         );
     }
@@ -3358,19 +3358,19 @@ title: half
 description: Halves a price.
 ---
 # Purpose
-Halves a price between {purpose}.
+The program halves a price between {purpose}.
 
 # Behaviors
 ## B1: Halves a price
 - Given the argument `3.00`
 - When the program runs
-- Then it prints `1.50` followed by a newline
+- Then it prints `1.50` and a newline
 - And it exits with code `0`
 
 ### For any `x`
 - Given the argument `{{x}}`
 - When the program runs
-- Then it prints `{{fixed(x / 2.0, 2)}}` followed by a newline
+- Then it prints `{{fixed(x / 2.0, 2)}}` and a newline
 - And it exits with code `0`
 
 | x |
@@ -3448,19 +3448,19 @@ title: len
 description: Prints the length of a word.
 ---
 # Purpose
-Prints the length of a word of `1` to `200000` letters.
+The program prints the length of a word of `1` to `200000` letters.
 
 # Behaviors
 ## B1: Prints the length
 - Given the argument `abc`
 - When the program runs
-- Then it prints `3` followed by a newline
+- Then it prints `3` and a newline
 - And it exits with code `0`
 
 ### For any `w`
 - Given the argument `{{w}}`
 - When the program runs
-- Then it prints `{{len(w)}}` followed by a newline
+- Then it prints `{{len(w)}}` and a newline
 - And it exits with code `0`
 
 | w |
@@ -3521,19 +3521,19 @@ title: shout-file
 description: Uppercases a text file.
 ---
 # Purpose
-Uppercases a text file of at most `1000` bytes, `notes.txt`, into `loud.txt`.
+The program uppercases a text file of at most `1000` bytes, `notes.txt`, into `loud.txt`.
 
 # Behaviors
 ## B1: Uppercases the file
-- Given a file named `notes.txt` holding `hello`
+- Given a file `notes.txt` that contains `hello`
 - When the program runs
-- Then the file `loud.txt` holds `HELLO`
+- Then the file `loud.txt` contains `HELLO`
 - And it exits with code `0`
 
 ### For any `s`
-- Given a file `notes.txt` holding `{s}`
+- Given a file `notes.txt` that contains `{s}`
 - When the program runs
-- Then the file `loud.txt` holds `{upper(s)}`
+- Then the file `loud.txt` contains `{upper(s)}`
 - And it exits with code `0`
 
 | s |
@@ -3555,27 +3555,27 @@ Uppercases a text file of at most `1000` bytes, `notes.txt`, into `loud.txt`.
         );
         for (from, to, needle) in [
             (
-                "file named `notes.txt`",
-                "file named `/tmp/notes.txt`",
+                "file `notes.txt` that contains `hello`",
+                "file `/tmp/notes.txt` that contains `hello`",
                 "is an absolute path",
             ),
             (
-                "a file `notes.txt` holding `{s}`",
-                "a file `../notes.txt` holding `{s}`",
+                "a file `notes.txt` that contains `{s}`",
+                "a file `../notes.txt` that contains `{s}`",
                 "must stay inside the working folder",
             ),
             (
-                "holding `{s}`",
-                "holding `{upper(s)}`",
+                "contains `{s}`",
+                "contains `{upper(s)}`",
                 "may only hold bare variables",
             ),
             (
-                "holds `{upper(s)}`",
-                "holds `{lower(s)}`",
+                "contains `{upper(s)}`",
+                "contains `{lower(s)}`",
                 "formula disagrees with the idea",
             ),
             (
-                "Given a file named `notes.txt` holding `hello`",
+                "Given a file `notes.txt` that contains `hello`",
                 "Given no arguments",
                 "the steps give []",
             ),
@@ -3589,9 +3589,9 @@ Uppercases a text file of at most `1000` bytes, `notes.txt`, into `loud.txt`.
         let idea = edit(
             &edit(
                 &add("### For any `a` and `b`
-- Given standard input holding `{a} {b}` followed by a newline
+- Given standard input that contains `{a} {b}` and a newline
 - When the program runs
-- Then it prints `{a + b}` followed by a newline
+- Then it prints `{a + b}` and a newline
 - And it exits with code `0`
 
 | a | b |
@@ -3599,7 +3599,7 @@ Uppercases a text file of at most `1000` bytes, `notes.txt`, into `loud.txt`.
 | `int(-1000000000, 1000000000)` | `int(-1000000000, 1000000000)` |
 "),
                 "Given the arguments `2` and `3`",
-                "Given standard input holding `2 3` followed by a newline",
+                "Given standard input that contains `2 3` and a newline",
             ),
             "- And it exits with code `1`\n",
             "- And it exits with code `1`\n\n# Constraints\n- Uses: standard input\n",

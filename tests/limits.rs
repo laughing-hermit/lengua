@@ -2142,12 +2142,12 @@ async fn runs_at_once_report_what_runs_one_at_a_time_do() {
     // order, naming the block's first failing run.
     let wrong = |text: &str| {
         text.replace(
-            "`usage: negate <n>` followed by a newline",
-            "`usage: negate <n>\\n` followed by a newline",
+            "`usage: negate <n>` and a newline",
+            "`usage: negate <n>\\n` and a newline",
         )
         .replace(
-            "prints `{-n}` followed by a newline",
-            "prints `{if(n > 1000, n, -n)}` followed by a newline",
+            "prints `{-n}` and a newline",
+            "prints `{if(n > 1000, n, -n)}` and a newline",
         )
     };
     let edited = wrong(&asset("template-idea.md"));

@@ -36,32 +36,32 @@ enum Proving {
 pub const ADD_IDEA: &str = r#"---
 type: lengua/program-idea
 title: add
-description: Adds two whole numbers given as arguments and prints the sum.
+description: Adds the two whole numbers in its arguments and prints the sum.
 ---
 # Purpose
-Adds two whole numbers between `-1000000000` and `1000000000`.
+The program adds two whole numbers between `-1000000000` and `1000000000`.
 
 # Behaviors
 ## B1: Adds two numbers
 - Given the arguments `2` and `3`
 - When the program runs
-- Then it prints `5` followed by a newline
+- Then it prints `5` and a newline
 - And it exits with code `0`
 
 ### For any `a` and `b`
 - Given the arguments `{a}` and `{b}`
 - When the program runs
-- Then it prints `{a + b}` followed by a newline
+- Then it prints `{a + b}` and a newline
 - And it exits with code `0`
 
 | a | b | runs |
 |---|---|---|
 | `int(-1000000000, 1000000000)` | `int(-1000000000, 1000000000)` | 200 |
 
-## B2: Missing arguments
+## B2: Shows the usage line without arguments
 - Given no arguments
 - When the program runs
-- Then it prints `usage: add <a> <b>` followed by a newline to standard error
+- Then it prints `usage: add <a> <b>` and a newline to standard error
 - And it exits with code `1`
 
 # Constraints

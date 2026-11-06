@@ -370,21 +370,21 @@ title: roll
 description: Prints a number.
 ---
 # Purpose
-Prints a number.
+The program prints a number.
 
 # Behaviors
 ## B1: Prints it
 - Given the argument `2`
 - When the program runs
-- Then it prints `rolled 4` followed by a newline
-- And the file `out.txt` holds `4` followed by a newline
+- Then it prints `rolled 4` and a newline
+- And the file `out.txt` contains `4` and a newline
 - And it exits with code `0`
 
 ### For any `n`
 - Given the argument `{n}`
 - When the program runs
-- Then it prints `{n}` followed by a newline
-- And the file `out.txt` holds `{n}` followed by a newline
+- Then it prints `{n}` and a newline
+- And the file `out.txt` contains `{n}` and a newline
 - And it exits with code `0`
 
 | n | s | c | d | runs |
@@ -436,7 +436,7 @@ Prints a number.
         let rule = marks(|text| {
             text.replace(
                 "prints `rolled 4`",
-                "prints text matching `rolled {any(1, 6)}`",
+                "prints text that matches `rolled {any(1, 6)}`",
             )
         });
         assert_eq!(
@@ -451,8 +451,8 @@ Prints a number.
         );
         let no_file = marks(|text| {
             text.replace(
-                "- And the file `out.txt` holds `4` followed by a newline\n",
-                "",
+                "`rolled 4` and a newline\n- And the file `out.txt` contains `4` and a newline\n",
+                "`rolled 4` and a newline\n",
             )
         });
         assert_eq!(

@@ -1005,7 +1005,7 @@ mod tests {
     fn idea_with(steps: &str, constraints: &str) -> Idea {
         let text = format!(
             "---\ntype: lengua/program-idea\ntitle: t\ndescription: A test.\n---\n# Purpose\n\
-             A test of `1` to `9`.\n\n\
+             It tests `1` to `9`.\n\n\
              # Behaviors\n## B1: Does it\n{steps}\n\n# Constraints\n{constraints}\n"
         );
         crate::idea::parse(&text).unwrap_or_else(|problems| panic!("{problems:?}"))
@@ -1057,7 +1057,7 @@ mod tests {
     fn reads_arguments_input_and_output() {
         let read = table(
             "- Given the arguments `2` and `3`\n- When the program runs\n- Then it prints `5` \
-             followed by a newline\n- And it exits with code `0`",
+             and a newline\n- And it exits with code `0`",
             "",
         );
         let args: Vec<String> = read.args.iter().map(plain).collect();
@@ -1065,8 +1065,8 @@ mod tests {
         assert_eq!(plain(&read.stdout), "5\n");
 
         let read = table(
-            "- Given standard input holding `a\\t\\tb   \\rc`\n- When the program runs\n- Then it \
-             prints `usage: x` followed by a newline to standard error\n- And it exits with code \
+            "- Given standard input that contains `a\\t\\tb   \\rc`\n- When the program runs\n- \
+             Then it prints `usage: x` and a newline to standard error\n- And it exits with code \
              `1`",
             "- Uses: standard input",
         );
@@ -1077,10 +1077,10 @@ mod tests {
     #[test]
     fn reads_files_repeats_and_rules() {
         let mut read = table(
-            "- Given a file named `big.txt` holding `a` repeated `5` times followed by `x`\n- And \
-             the arguments `big.txt` and `out.txt`\n- When the program runs\n- Then the file \
-             `out.txt` holds `A` followed by a newline\n- And it prints text matching `rolled \
-             {any(1, 6)}` followed by a newline\n- And it exits with code `0`",
+            "- Given a file `big.txt` that contains `a` `5` times then `x`\n- And the arguments \
+             `big.txt` and `out.txt`\n- When the program runs\n- Then the file `out.txt` \
+             contains `A` and a newline\n- And it prints text that matches `rolled {any(1, \
+             6)}` and a newline\n- And it exits with code `0`",
             "- Uses: files",
         );
         let big = read.files.remove("big.txt").expect("the file");
@@ -1094,9 +1094,9 @@ mod tests {
     #[test]
     fn reads_environment_variables() {
         let read = table(
-            "- Given the environment variable `NAME` set to `Ada`\n- And the environment variable \
-             `HOME` set to `/home/ada`\n- When the program runs\n- Then it prints `Hello, Ada!` \
-             followed by a newline\n- And it exits with code `0`",
+            "- Given the environment variable `NAME` with the value `Ada`\n- And the environment \
+             variable `HOME` with the value `/home/ada`\n- When the program runs\n- Then it prints \
+             `Hello, Ada!` and a newline\n- And it exits with code `0`",
             "- Uses: the environment",
         );
         let env: Vec<(&str, String)> = read
@@ -1111,9 +1111,9 @@ mod tests {
     fn reads_folders_and_files_that_go() {
         let read = table(
             "- Given the argument `todo.txt`\n- And an empty folder `archive`\n- And a file \
-             `todo.txt` holding `milk`\n- When the program runs\n- Then there is no file \
+             `todo.txt` that contains `milk`\n- When the program runs\n- Then there is no file \
              `todo.txt`\n- And there is no folder `tmp`\n- And there is a folder `archive`\n- And \
-             the file `archive/todo.txt` holds `milk`\n- And it exits with code `0`",
+             the file `archive/todo.txt` contains `milk`\n- And it exits with code `0`",
             "- Uses: files",
         );
         assert_eq!(read.folders.iter().collect::<Vec<_>>(), ["archive"]);
@@ -1213,7 +1213,7 @@ mod tests {
         assert!(
             problems[0]
                 .message
-                .contains("`- Given standard input holding `abc``"),
+                .contains("`- Given standard input that contains `abc``"),
             "{problems:?}"
         );
         assert!(
@@ -1223,7 +1223,7 @@ mod tests {
     }
 
     const EXAMPLE: &str = "- Given the arguments `2` and `3`\n- When the program runs\n- Then it \
-                           prints `5` followed by a newline\n- And it exits with code `0`\n\n";
+                           prints `5` and a newline\n- And it exits with code `0`\n\n";
 
     #[test]
     fn reads_generated_tests_as_templates_over_their_table() {
@@ -1231,7 +1231,7 @@ mod tests {
             &format!(
                 "{EXAMPLE}### For any two numbers\nSome prose about them.\n\n- Given the \
                  arguments `{{a}}` and `{{b}}`\n- When the program runs\n- Then it prints \
-                 `{{a + b}}` followed by a newline\n- And it exits with code `{{if(a < 0, 1, \
+                 `{{a + b}}` and a newline\n- And it exits with code `{{if(a < 0, 1, \
                  0)}}`\n\n| a | b | runs |\n|---|---|---|\n| `int(1, 9)` | `int(1, 9)` | 50 |\n| \
                  `choice(1)` | `int(1, 9)` | |\n"
             ),
@@ -1275,7 +1275,7 @@ mod tests {
     fn generated_tests_draw_text_instead_of_repeating_it() {
         let idea = idea_with(
             &format!(
-                "{EXAMPLE}### For any text\n- Given standard input holding `a` repeated `3` \
+                "{EXAMPLE}### For any text\n- Given standard input that contains `a` `3` \
                  times\n- When the program runs\n- Then it prints `x`\n- And it exits with code \
                  `0`\n\n| a |\n|---|\n| `int(1, 9)` |\n"
             ),
