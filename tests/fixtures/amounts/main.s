@@ -151,7 +151,6 @@ main:
 # returns: result
 .type read_input, @function
 read_input:
-    sub rsp, 8
     push rbx
     test rdi, rdi
     jz .Lread_assert_null
@@ -185,7 +184,6 @@ read_input:
     xor eax, eax
 .Lread_return:
     pop rbx
-    add rsp, 8
     ret
 .Lread_assert_null:
     mov edi, 2
