@@ -1,4 +1,7 @@
 [
   { "target": "linux-x86_64", "runner": "ubuntu-24.04" },
-  { "target": "linux-aarch64", "runner": "ubuntu-24.04-arm" }
+  { "target": "linux-aarch64", "runner": "ubuntu-24.04-arm" },
+  { "target": "macos-aarch64", "runner": "macos-26" },
+  { "target": "windows-x86_64", "runner": "windows-2025" },
+  { "target": "windows-aarch64", "runner": "windows-11-arm" }
 ]

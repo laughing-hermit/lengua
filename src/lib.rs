@@ -7,8 +7,8 @@
 //! computer's signed record of what it checked. This crate is the MCP server that checks, stamps
 //! and runs them. See `DESIGN.md` at the repository root for every design decision.
 
-// A program's launch, confinement and counters exist only on Linux, the only system lengua runs
-// programs on: elsewhere, what only they use is dead.
+// A native program's launch, confinement and counters exist only on Linux, where lengua runs
+// native programs: elsewhere, what only they use is dead (WebAssembly programs run everywhere).
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 pub mod aes;

@@ -27,7 +27,8 @@ pub enum Way {
     Emulated,
 }
 
-/// The target this computer is, when lengua has one for it: only the two Linux targets.
+/// The native target this computer is, when lengua has one for it: macOS and Windows have none;
+/// their programs are WebAssembly (todo.md, the pivot).
 pub fn this_target() -> Option<Profile> {
     Profile::for_target(std::env::consts::OS, std::env::consts::ARCH)
 }
@@ -44,7 +45,7 @@ pub fn runs_programs() -> bool {
     let runs = this_target().is_some();
     if !runs {
         lengua::skiplog::note(
-            "lengua runs programs on Linux only (Windows through WSL 2, a Mac through a Linux VM)",
+            "native programs run on Linux only",
         );
     }
     runs

@@ -1,6 +1,7 @@
-//! A system lengua doesn't run programs on: anything but Linux. Windows reaches lengua through
-//! WSL 2 and a Mac through a Linux VM or container, which are Linux. Everything that needs a
-//! running program says so, and says it once, here.
+//! A system lengua doesn't run native programs on: anything but Linux. During the pivot to
+//! WebAssembly (todo.md), macOS and Windows run lengua's WebAssembly programs instead; a native
+//! program, `main.s`, says here that it needs Linux, and says it once. Checking and proving it
+//! don't run it and work as everywhere.
 
 use std::ffi::OsString;
 use std::io;
@@ -14,8 +15,8 @@ use crate::runner::{End, Job, Limits, Run};
 fn cannot() -> io::Error {
     io::Error::new(
         io::ErrorKind::Unsupported,
-        "lengua runs programs on Linux only: on Windows use WSL 2, and on a Mac a Linux VM or \
-         container, and run your agent and lengua there (README.md, \"Windows and Mac\")",
+        "lengua runs native programs (main.s) on Linux only; on this system its programs are \
+         WebAssembly (main.wat), which come with the pivot in todo.md",
     )
 }
 

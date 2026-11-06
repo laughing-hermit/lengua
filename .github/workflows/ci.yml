@@ -1,15 +1,15 @@
 name: ci
 
-# lengua built and tested natively on both of its targets, on GitHub's free runners (the repository
-# is public): Linux on x86-64 and Linux on ARM64. Windows and Mac reach lengua through its image,
-# run by Docker or Podman, which holds these same two targets (todo.md, "Round 3" plans a job that
-# tests it on these runners); no free runner can test WSL 2 or a Mac VM, the same Linux set up by
-# hand. scripts/ci/targets.json names the two runners; scripts/ci/tools.tsv pins what they
-# install; scripts/ci/setup.sh installs it.
+# lengua built and tested natively on five runners, GitHub's free ones (the repository is public):
+# Linux on x86-64 and ARM64, macOS on ARM64 (Apple stopped making Intel Macs), and Windows on
+# x86-64 and ARM64. During the pivot to WebAssembly (todo.md), the native assembly path runs
+# programs on the two Linux runners only, and the WebAssembly path everywhere.
+# scripts/ci/targets.json names the five runners; scripts/ci/tools.tsv pins what they install;
+# scripts/ci/setup.sh installs it.
 #
-# - A push to a branch runs the suite on both (a branch named wip/... gets no push run: its
+# - A push to a branch runs the suite on all five (a branch named wip/... gets no push run: its
 #   author dispatches the run it wants, so work in progress doesn't cost a long suite per push).
-# - Every week it runs the suite and the slow ignored tests on both.
+# - Every week it runs the suite and the slow ignored tests on all five.
 # - A dispatch picks the targets and the mode: compile (clippy and the tests built), test (the
 #   suite), ignored (the slow ignored tests, optionally one folder's check), golden (the checker's
 #   and the prover's recordings of every program, made at two commits and compared), bench (lengua
@@ -43,7 +43,7 @@ on:
         type: string
         default: "all"
       mode:
-        description: "compile, test, ignored, golden, bench or release (golden: linux-x86_64 only)"
+        description: "compile, test, ignored, golden, bench or release (golden, bench and release: linux-x86_64 and linux-aarch64 so far)"
         type: choice
         options:
           - compile
@@ -146,6 +146,11 @@ jobs:
             include=$(jq -c --arg t ",$TARGETS," \
               '[.[] | . as $e | select($t | contains("," + $e.target + ","))]' <<< "$listed")
           fi
+          # The benchmarks, the goldens and the release archive exist for linux-x86_64 and
+          # linux-aarch64 so far.
+          case "$MODE" in
+            bench|release) include=$(jq -c '[.[] | select(.target | startswith("linux-"))]' <<< "$include") ;;
+          esac
           # A job's checkout is shallow unless it must read another commit (a bench against one).
           depth=1
           if [ "$MODE" = bench ] && [ -n "$BENCH_AGAINST" ]; then depth=0; fi
@@ -168,7 +173,7 @@ jobs:
             matrix=$(jq -c --argjson legs "$legs" \
               '[.[] | select(.target == "linux-x86_64") as $t | $legs[] | $t + . + {mode: "golden", base: $t.target, qemu: false, depth: 0}]' <<< "$listed")
           fi
-          # The suite on x86-64 Linux with QEMU's user mode, beside the two.
+          # The suite on x86-64 Linux with QEMU's user mode, beside the five.
           if [ "$MODE" = test ] && { [ -z "$TARGETS" ] || [ "$TARGETS" = all ] || [[ ",$TARGETS," == *,qemu,* ]]; }; then
             matrix=$(jq -c '. + [{target: "linux-x86_64-qemu", runner: "ubuntu-24.04", mode: "test", base: "linux-x86_64", qemu: true, ref: "", label: "", depth: 1}]' <<< "$matrix")
           fi
@@ -211,6 +216,27 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+      # Nothing builds on the owner's computer, so a new dependency's lock entries are made here:
+      # when Cargo.lock is behind Cargo.toml, the resolved Cargo.lock is kept (cargo-lock), to copy
+      # into the repository, and the job fails.
+      - name: Lock file
+        if: ${{ !cancelled() }}
+        run: |
+          if ! cargo metadata --locked --format-version 1 > /dev/null; then
+            cargo metadata --format-version 1 > /dev/null
+            mkdir -p lock && cp Cargo.lock lock/Cargo.lock
+            exit 1
+          fi
+
+      - name: Keep the lock file
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-lock-${{ github.run_number }}
+          path: lock/Cargo.lock
+          retention-days: 7
+          if-no-files-found: ignore
+
   test:
     name: ${{ matrix.mode }} (${{ matrix.target }})${{ matrix.label && format(' {0}', matrix.label) || '' }}
     needs: plan
@@ -247,11 +273,14 @@ jobs:
       - name: Rust
         run: bash scripts/ci/setup.sh ${{ matrix.base }} rust
 
-      # The solvers are kept between runs.
+      # The tools are kept between runs: the solvers, and LLVM where it is installed by hand.
       - uses: actions/cache@v4
         if: ${{ matrix.mode != 'compile' }}
         with:
-          path: ~/solvers
+          path: |
+            ~/solvers
+            ~/llvm
+            ~/micromamba
           key: tools-${{ matrix.base }}-${{ hashFiles('scripts/ci/tools.tsv', 'scripts/ci/setup.sh') }}
 
       - name: LLVM
@@ -393,6 +422,7 @@ jobs:
             BENCHMARKS.md
             BENCHMARKS-aarch64.md
             target/release/lengua-mcp
+            target/release/lengua-mcp.exe
             dist/*.tar.gz
             dist/*.sha256
           retention-days: 7
