@@ -1,12 +1,5 @@
 .intel_syntax noprefix
 
-# System calls (Linux x86-64)
-.equ SYS_WRITE, 1
-.equ SYS_CLOSE, 3
-.equ SYS_EXIT, 60
-.equ SYS_OPENAT, 257
-.equ SYS_MKDIRAT, 258
-.equ SYS_RENAMEAT, 264
 # File descriptors and flags
 .equ STDOUT, 1
 .equ STDERR, 2
@@ -66,11 +59,6 @@ usage_msg:
     .ascii "usage: archive <file>\n"
 .size usage_msg, . - usage_msg
 
-.type assert_message, @object
-assert_message:
-    .ascii "lengua: assertion 000 failed\n"
-.size assert_message, . - assert_message
-
 .section .bss
 
 # Where the file goes: "archive/", its name, and a NUL.
@@ -86,29 +74,27 @@ message:
 .size message, . - message
 
 .text
-.globl _start
-
 # Moves the file the argument names into the archive folder, and says so.
-.type _start, @function
-_start:
+.type main, @function
+main:
     mov rax, qword ptr [rsp]
     cmp rax, ARGC_EXPECTED
-    jne .Lstart_usage
+    jne .Lmain_usage
     mov rbx, qword ptr [rsp + 16]
     test rbx, rbx
-    jz .Lstart_assert_argv
+    jz .Lmain_assert_argv
     mov rdi, rbx
     call name_length
     test rax, rax
-    js .Lstart_usage
+    js .Lmain_usage
     mov r12, rax
     mov rdi, rbx
     mov rsi, r12
     call archive_file
     test rax, rax
-    jz .Lstart_archived
+    jz .Lmain_archived
     cmp rax, ERROR_MISSING
-    jne .Lstart_failed
+    jne .Lmain_failed
     mov edi, STDERR
     lea rsi, [rip + missing_msg]
     mov edx, MISSING_LEN
@@ -116,10 +102,10 @@ _start:
     mov r8, r12
     call report
     test rax, rax
-    js .Lstart_failed
+    js .Lmain_failed
     mov edi, EXIT_MISSING
-    jmp .Lstart_exit
-.Lstart_archived:
+    jmp .Lmain_exit
+.Lmain_archived:
     mov edi, STDOUT
     lea rsi, [rip + archived_msg]
     mov edx, ARCHIVED_LEN
@@ -127,27 +113,26 @@ _start:
     mov r8, r12
     call report
     test rax, rax
-    js .Lstart_failed
+    js .Lmain_failed
     mov edi, EXIT_OK
-    jmp .Lstart_exit
-.Lstart_usage:
+    jmp .Lmain_exit
+.Lmain_usage:
     mov edi, STDERR
     lea rsi, [rip + usage_msg]
     mov edx, USAGE_LEN
     call write_all
     test rax, rax
-    js .Lstart_failed
+    js .Lmain_failed
     mov edi, EXIT_USAGE
-    jmp .Lstart_exit
-.Lstart_failed:
+    jmp .Lmain_exit
+.Lmain_failed:
     mov edi, EXIT_FAILED
-.Lstart_exit:
-    mov eax, SYS_EXIT
-    syscall
-.Lstart_assert_argv:
+.Lmain_exit:
+    call os_exit
+.Lmain_assert_argv:
     mov edi, 1
     call assert_fail
-.size _start, . - _start
+.size main, . - main
 
 # How long a file name is, when it's one the program takes.
 # In: rdi = a NUL-terminated name.
@@ -213,8 +198,7 @@ archive_file:
     test rax, rax
     js .Larchive_file_return
     mov edi, eax
-    mov eax, SYS_CLOSE
-    syscall
+    call os_close
     test rax, rax
     js .Larchive_file_return
     mov edi, AT_FDCWD
@@ -401,14 +385,14 @@ copy_bytes:
 # returns: result
 .type write_all, @function
 write_all:
+    sub rsp, 8
     test rsi, rsi
     jz .Lwrite_all_assert_null
     test rdx, rdx
     jz .Lwrite_all_assert_empty
     mov r8, MAX_WRITES
 .Lwrite_all_loop:  # bound: 64
-    mov eax, SYS_WRITE
-    syscall
+    call os_write
     test rax, rax
     js .Lwrite_all_return
     cmp rax, rdx
@@ -423,6 +407,7 @@ write_all:
 .Lwrite_all_done:
     xor eax, eax
 .Lwrite_all_return:
+    add rsp, 8
     ret
 .Lwrite_all_assert_null:
     mov edi, 16
@@ -435,42 +420,3 @@ write_all:
     call assert_fail
 .size write_all, . - write_all
 
-# lengua's assertion handler. check_code compares it word for word: copy it exactly.
-# In: edi = the assertion's number, 1 to 999. Prints "lengua: assertion NNN failed" to
-# standard error and ends the program, every thread of it, with code 134.
-.type assert_fail, @function
-assert_fail:
-    sub rsp, 40
-    mov rax, qword ptr [rip + assert_message]
-    mov qword ptr [rsp], rax
-    mov rax, qword ptr [rip + assert_message + 8]
-    mov qword ptr [rsp + 8], rax
-    mov rax, qword ptr [rip + assert_message + 16]
-    mov qword ptr [rsp + 16], rax
-    mov eax, dword ptr [rip + assert_message + 24]
-    mov dword ptr [rsp + 24], eax
-    mov al, byte ptr [rip + assert_message + 28]
-    mov byte ptr [rsp + 28], al
-    mov eax, edi
-    xor edx, edx
-    mov ecx, 100
-    div ecx
-    add al, 48
-    mov byte ptr [rsp + 18], al
-    mov eax, edx
-    xor edx, edx
-    mov ecx, 10
-    div ecx
-    add al, 48
-    mov byte ptr [rsp + 19], al
-    add dl, 48
-    mov byte ptr [rsp + 20], dl
-    mov eax, 1
-    mov edi, 2
-    mov rsi, rsp
-    mov edx, 29
-    syscall
-    mov eax, 231
-    mov edi, 134
-    syscall
-.size assert_fail, . - assert_fail

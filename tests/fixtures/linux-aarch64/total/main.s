@@ -1,11 +1,5 @@
 .arch armv8-a
 
-// System calls (Linux AArch64)
-.equ SYS_READ, 63
-.equ SYS_WRITE, 64
-.equ SYS_CLOSE, 57
-.equ SYS_EXIT, 93
-.equ SYS_OPENAT, 56
 // File descriptors and open flags
 .equ STDOUT, 1
 .equ STDERR, 2
@@ -58,11 +52,6 @@ bad_msg:
     .ascii "total: bad line "
 .size bad_msg, . - bad_msg
 
-.type assert_message, @object
-assert_message:
-    .ascii "lengua: assertion 000 failed\n"
-.size assert_message, . - assert_message
-
 .section .bss
 
 // The whole expenses file.
@@ -78,79 +67,75 @@ num_buf:
 .size num_buf, . - num_buf
 
 .text
-.globl _start
-
 // Opens the file named by the argument, reads it, adds its amounts and prints the total.
-.type _start, @function
-_start:
+.type main, @function
+main:
     ldr x0, [sp]
     cmp x0, #ARGC_EXPECTED
-    b.ne .Lstart_usage
+    b.ne .Lmain_usage
     ldr x1, [sp, #16]
-    cbz x1, .Lstart_assert_argv
+    cbz x1, .Lmain_assert_argv
     mov x0, #AT_FDCWD
     mov x2, #O_RDONLY
     mov x3, #0
     mov x8, #SYS_OPENAT
     svc #0
-    tbnz x0, #63, .Lstart_open_failed
+    tbnz x0, #63, .Lmain_open_failed
     mov x19, x0
     adrp x1, file_buf
     add x1, x1, :lo12:file_buf
     mov x2, #FILE_MAX
     bl read_all
-    tbnz x0, #63, .Lstart_read_failed
+    tbnz x0, #63, .Lmain_read_failed
     mov x20, x0
     mov x0, x19
-    mov x8, #SYS_CLOSE
-    svc #0
-    tbnz x0, #63, .Lstart_read_failed
+    bl os_close
+    tbnz x0, #63, .Lmain_read_failed
     adrp x0, file_buf
     add x0, x0, :lo12:file_buf
     mov x1, x20
     bl sum_lines
-    tbnz x0, #63, .Lstart_bad_line
+    tbnz x0, #63, .Lmain_bad_line
     mov x0, x1
     mov x1, #CENT_PLACES
     mov x2, #STDOUT
     bl write_decimal
-    tbnz x0, #63, .Lstart_write_failed
+    tbnz x0, #63, .Lmain_write_failed
     mov w0, #EXIT_OK
-    b .Lstart_exit
-.Lstart_usage:
+    b .Lmain_exit
+.Lmain_usage:
     adrp x0, usage_msg
     add x0, x0, :lo12:usage_msg
     mov x1, #USAGE_MSG_LEN
     bl report
-    tbnz x0, #63, .Lstart_write_failed
+    tbnz x0, #63, .Lmain_write_failed
     mov w0, #EXIT_USAGE
-    b .Lstart_exit
-.Lstart_open_failed:
+    b .Lmain_exit
+.Lmain_open_failed:
     adrp x0, open_msg
     add x0, x0, :lo12:open_msg
     mov x1, #OPEN_MSG_LEN
     bl report
-    tbnz x0, #63, .Lstart_write_failed
+    tbnz x0, #63, .Lmain_write_failed
     mov w0, #EXIT_OPEN_FAILED
-    b .Lstart_exit
-.Lstart_bad_line:
+    b .Lmain_exit
+.Lmain_bad_line:
     mov x0, x1
     bl report_bad_line
-    tbnz x0, #63, .Lstart_write_failed
+    tbnz x0, #63, .Lmain_write_failed
     mov w0, #EXIT_BAD_LINE
-    b .Lstart_exit
-.Lstart_read_failed:
+    b .Lmain_exit
+.Lmain_read_failed:
     mov w0, #EXIT_READ_FAILED
-    b .Lstart_exit
-.Lstart_write_failed:
+    b .Lmain_exit
+.Lmain_write_failed:
     mov w0, #EXIT_WRITE_FAILED
-.Lstart_exit:
-    mov x8, #SYS_EXIT
-    svc #0
-.Lstart_assert_argv:
+.Lmain_exit:
+    bl os_exit
+.Lmain_assert_argv:
     mov w0, #1
     bl assert_fail
-.size _start, . - _start
+.size main, . - main
 
 // Prints a message to standard error.
 // In: x0 = the message; x1 = its length.
@@ -206,6 +191,7 @@ report_bad_line:
 // returns: result
 .type read_all, @function
 read_all:
+    stp x29, x30, [sp, #-16]!
     cbz x1, .Lread_all_assert_null
     cbz x2, .Lread_all_assert_empty
     mov x9, x0
@@ -215,8 +201,7 @@ read_all:
 .Lread_all_loop:  // bound: 1024
     sub x2, x11, x12
     mov x0, x9
-    mov x8, #SYS_READ
-    svc #0
+    bl os_read
     tbnz x0, #63, .Lread_all_return
     cbz x0, .Lread_all_done
     cmp x0, x2
@@ -232,6 +217,7 @@ read_all:
 .Lread_all_done:
     mov x0, x12
 .Lread_all_return:
+    ldp x29, x30, [sp], #16
     ret
 .Lread_all_assert_null:
     mov w0, #2
@@ -544,14 +530,14 @@ write_decimal:
 // returns: result
 .type write_all, @function
 write_all:
+    stp x29, x30, [sp, #-16]!
     cbz x1, .Lwrite_all_assert_null
     cbz x2, .Lwrite_all_assert_empty
     mov x9, x0
     mov x10, #MAX_WRITES
 .Lwrite_all_loop:  // bound: 64
     mov x0, x9
-    mov x8, #SYS_WRITE
-    svc #0
+    bl os_write
     tbnz x0, #63, .Lwrite_all_return
     cmp x0, x2
     b.hi .Lwrite_all_assert_count
@@ -565,6 +551,7 @@ write_all:
 .Lwrite_all_done:
     mov x0, #0
 .Lwrite_all_return:
+    ldp x29, x30, [sp], #16
     ret
 .Lwrite_all_assert_null:
     mov w0, #22
@@ -576,42 +563,4 @@ write_all:
     mov w0, #24
     bl assert_fail
 .size write_all, . - write_all
-
-// lengua's assertion handler. check compares it word for word: copy it exactly.
-// In: w0 = the assertion's number, 1 to 999. Prints "lengua: assertion NNN failed" to
-// standard error and ends the program, every thread of it, with code 134.
-.type assert_fail, @function
-assert_fail:
-    sub sp, sp, #32
-    adrp x1, assert_message
-    add x1, x1, :lo12:assert_message
-    ldp x2, x3, [x1]
-    stp x2, x3, [sp]
-    ldr x2, [x1, #16]
-    str x2, [sp, #16]
-    ldr w2, [x1, #24]
-    str w2, [sp, #24]
-    ldrb w2, [x1, #28]
-    strb w2, [sp, #28]
-    mov w2, #100
-    udiv w3, w0, w2
-    msub w0, w3, w2, w0
-    add w3, w3, #48
-    strb w3, [sp, #18]
-    mov w2, #10
-    udiv w3, w0, w2
-    msub w0, w3, w2, w0
-    add w3, w3, #48
-    strb w3, [sp, #19]
-    add w0, w0, #48
-    strb w0, [sp, #20]
-    mov x0, #2
-    mov x1, sp
-    mov x2, #29
-    mov x8, #64
-    svc #0
-    mov x0, #134
-    mov x8, #94
-    svc #0
-.size assert_fail, . - assert_fail
 

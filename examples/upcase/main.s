@@ -1,17 +1,9 @@
 .intel_syntax noprefix
 
-# System calls (Linux x86-64)
-.equ SYS_READ, 0
-.equ SYS_WRITE, 1
-.equ SYS_CLOSE, 3
-.equ SYS_EXIT, 60
-.equ SYS_OPENAT, 257
-# File descriptors and openat arguments
+# File descriptors and os_open's modes
 .equ STDERR, 2
-.equ AT_FDCWD, -100
-.equ O_RDONLY, 0
-.equ O_OUT_FLAGS, 0x241
-.equ OUT_MODE, 420
+.equ OPEN_READ, 0
+.equ OPEN_WRITE, 1
 # Exit codes
 .equ EXIT_OK, 0
 .equ EXIT_USAGE, 1
@@ -63,11 +55,6 @@ large_suffix:
     .ascii " is larger than 1048576 bytes\n"
 .size large_suffix, . - large_suffix
 
-.type assert_message, @object
-assert_message:
-    .ascii "lengua: assertion 000 failed\n"
-.size assert_message, . - assert_message
-
 .section .bss
 
 # The input file, one byte more than the largest allowed, rounded up to whole chunks.
@@ -77,75 +64,70 @@ buf:
 .size buf, . - buf
 
 .text
-.globl _start
-
 # Checks the arguments, reads the input, capitalizes it and writes the output, then exits.
-.type _start, @function
-_start:
-    mov rax, qword ptr [rsp]
-    cmp rax, ARGC_EXPECTED
-    jne .Lstart_usage
-    mov rsi, qword ptr [rsp + 16]
-    test rsi, rsi
-    jz .Lstart_assert_argv
-    mov edi, AT_FDCWD
-    mov edx, O_RDONLY
-    xor r10d, r10d
-    mov eax, SYS_OPENAT
-    syscall
+.type main, @function
+main:
+    sub rsp, 8
+    mov r14, rsi
+    cmp rdi, ARGC_EXPECTED
+    jne .Lmain_usage
+    mov rdi, qword ptr [r14 + 8]
+    test rdi, rdi
+    jz .Lmain_assert_argv
+    mov esi, OPEN_READ
+    call os_open
     test rax, rax
-    js .Lstart_cannot_open
+    js .Lmain_cannot_open
     mov edi, eax
     lea rsi, [rip + buf]
     call load_input
     test rax, rax
-    js .Lstart_io_failed
+    js .Lmain_io_failed
     mov r12, rdx
     cmp r12, MAX_INPUT
-    ja .Lstart_too_large
+    ja .Lmain_too_large
     lea rdi, [rip + buf]
     mov rsi, r12
     call upcase_buf
-    mov rdi, qword ptr [rsp + 24]
+    mov rdi, qword ptr [r14 + 16]
     lea rsi, [rip + buf]
     mov rdx, r12
     call write_output
     test rax, rax
-    js .Lstart_io_failed
+    js .Lmain_io_failed
     mov edi, EXIT_OK
-    jmp .Lstart_exit
-.Lstart_usage:
+    jmp .Lmain_exit
+.Lmain_usage:
     mov edi, STDERR
     lea rsi, [rip + usage_msg]
     mov edx, USAGE_MSG_LEN
     call write_all
     test rax, rax
-    js .Lstart_io_failed
+    js .Lmain_io_failed
     mov edi, EXIT_USAGE
-    jmp .Lstart_exit
-.Lstart_cannot_open:
-    mov rdi, qword ptr [rsp + 16]
+    jmp .Lmain_exit
+.Lmain_cannot_open:
+    mov rdi, qword ptr [r14 + 8]
     call report_cannot_open
     test rax, rax
-    js .Lstart_io_failed
+    js .Lmain_io_failed
     mov edi, EXIT_CANNOT_OPEN
-    jmp .Lstart_exit
-.Lstart_too_large:
-    mov rdi, qword ptr [rsp + 16]
+    jmp .Lmain_exit
+.Lmain_too_large:
+    mov rdi, qword ptr [r14 + 8]
     call report_too_large
     test rax, rax
-    js .Lstart_io_failed
+    js .Lmain_io_failed
     mov edi, EXIT_TOO_LARGE
-    jmp .Lstart_exit
-.Lstart_io_failed:
+    jmp .Lmain_exit
+.Lmain_io_failed:
     mov edi, EXIT_IO_FAILED
-.Lstart_exit:
-    mov eax, SYS_EXIT
-    syscall
-.Lstart_assert_argv:
+.Lmain_exit:
+    call os_exit
+.Lmain_assert_argv:
     mov edi, 1
     call assert_fail
-.size _start, . - _start
+.size main, . - main
 
 # Reads all of file descriptor edi into rsi, then closes it.
 # In: edi = the file descriptor, rsi = a buffer of at least READ_CAP bytes.
@@ -166,8 +148,7 @@ load_input:
     js .Lload_return
     mov r12, rdx
     mov edi, ebx
-    mov eax, SYS_CLOSE
-    syscall
+    call os_close
     test rax, rax
     js .Lload_return
     mov rdx, r12
@@ -242,6 +223,7 @@ report_too_large:
 # returns: result
 .type read_all, @function
 read_all:
+    sub rsp, 8
     test rsi, rsi
     jz .Lread_all_assert_null
     mov r10, rsi
@@ -253,8 +235,7 @@ read_all:
     lea rsi, [r10 + r9]
     mov edx, READ_CAP
     sub rdx, r9
-    mov eax, SYS_READ
-    syscall
+    call os_read
     test rax, rax
     js .Lread_all_return
     jz .Lread_all_done
@@ -268,6 +249,7 @@ read_all:
     mov rdx, r9
     xor eax, eax
 .Lread_all_return:
+    add rsp, 8
     ret
 .Lread_all_assert_null:
     mov edi, 2
@@ -352,12 +334,8 @@ write_output:
     ja .Lwrite_output_assert_len
     mov r12, rsi
     mov r13, rdx
-    mov rsi, rdi
-    mov edi, AT_FDCWD
-    mov edx, O_OUT_FLAGS
-    mov r10d, OUT_MODE
-    mov eax, SYS_OPENAT
-    syscall
+    mov esi, OPEN_WRITE
+    call os_open
     test rax, rax
     js .Lwrite_output_return
     mov rbx, rax
@@ -371,8 +349,7 @@ write_output:
     js .Lwrite_output_return
 .Lwrite_output_close:
     mov edi, ebx
-    mov eax, SYS_CLOSE
-    syscall
+    call os_close
     test rax, rax
     js .Lwrite_output_return
     xor eax, eax
@@ -480,14 +457,14 @@ str_len:
 # returns: result
 .type write_all, @function
 write_all:
+    sub rsp, 8
     test rsi, rsi
     jz .Lwrite_all_assert_null
     test rdx, rdx
     jz .Lwrite_all_assert_empty
     mov r8, MAX_WRITES
 .Lwrite_all_loop:  # bound: 4096
-    mov eax, SYS_WRITE
-    syscall
+    call os_write
     test rax, rax
     js .Lwrite_all_return
     cmp rax, rdx
@@ -502,6 +479,7 @@ write_all:
 .Lwrite_all_done:
     xor eax, eax
 .Lwrite_all_return:
+    add rsp, 8
     ret
 .Lwrite_all_assert_null:
     mov edi, 16
@@ -514,42 +492,3 @@ write_all:
     call assert_fail
 .size write_all, . - write_all
 
-# lengua's assertion handler. check_code compares it word for word: copy it exactly.
-# In: edi = the assertion's number, 1 to 999. Prints "lengua: assertion NNN failed" to
-# standard error and ends the program, every thread of it, with code 134.
-.type assert_fail, @function
-assert_fail:
-    sub rsp, 40
-    mov rax, qword ptr [rip + assert_message]
-    mov qword ptr [rsp], rax
-    mov rax, qword ptr [rip + assert_message + 8]
-    mov qword ptr [rsp + 8], rax
-    mov rax, qword ptr [rip + assert_message + 16]
-    mov qword ptr [rsp + 16], rax
-    mov eax, dword ptr [rip + assert_message + 24]
-    mov dword ptr [rsp + 24], eax
-    mov al, byte ptr [rip + assert_message + 28]
-    mov byte ptr [rsp + 28], al
-    mov eax, edi
-    xor edx, edx
-    mov ecx, 100
-    div ecx
-    add al, 48
-    mov byte ptr [rsp + 18], al
-    mov eax, edx
-    xor edx, edx
-    mov ecx, 10
-    div ecx
-    add al, 48
-    mov byte ptr [rsp + 19], al
-    add dl, 48
-    mov byte ptr [rsp + 20], dl
-    mov eax, 1
-    mov edi, 2
-    mov rsi, rsp
-    mov edx, 29
-    syscall
-    mov eax, 231
-    mov edi, 134
-    syscall
-.size assert_fail, . - assert_fail
