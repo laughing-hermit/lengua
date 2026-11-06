@@ -1309,7 +1309,10 @@ const STACK: Fixtures = &[
             x86_64: Plan::Breaks {
                 edits: &[
                     ("write_i64:\n    sub rsp, 8\n", "write_i64:\n"),
-                    (".Lwrite_i64_return:\n    add rsp, 8\n", ".Lwrite_i64_return:\n"),
+                    (
+                        ".Lwrite_i64_return:\n    add rsp, 8\n",
+                        ".Lwrite_i64_return:\n",
+                    ),
                 ],
                 finds: &[(
                     Rule::Functions,

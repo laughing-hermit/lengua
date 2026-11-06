@@ -992,17 +992,10 @@ pub fn launch(mut args: impl Iterator<Item = OsString>) -> ExitCode {
         eprintln!("lengua-mcp: {problem}");
         return ExitCode::from(127);
     }
-    let confined = parse_confinement(&syscalls, &file_limit).and_then(
-        |(syscalls, file_limit, emulated)| {
-            confine(
-                Path::new(&program),
-                &syscalls,
-                file_limit,
-                &net,
-                emulated,
-            )
-        },
-    );
+    let confined =
+        parse_confinement(&syscalls, &file_limit).and_then(|(syscalls, file_limit, emulated)| {
+            confine(Path::new(&program), &syscalls, file_limit, &net, emulated)
+        });
     if let Err(problem) = confined {
         eprintln!("lengua-mcp: couldn't confine the program: {problem}");
         return ExitCode::from(127);

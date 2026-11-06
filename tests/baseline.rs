@@ -644,7 +644,10 @@ async fn a_program_beyond_the_baseline_is_found() {
     let template = |target: Profile| {
         read(&format!("{}/main-template.s", PLACES.get(target).assets)).expect("the main template")
     };
-    let (x86, arm) = (template(Profile::LinuxX86_64), template(Profile::LinuxAarch64));
+    let (x86, arm) = (
+        template(Profile::LinuxX86_64),
+        template(Profile::LinuxAarch64),
+    );
     for (target, plain, leaning, needed) in [
         (
             Profile::LinuxX86_64,
