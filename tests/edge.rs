@@ -1414,6 +1414,191 @@ async fn a_test_gives_the_program_its_clock_and_random_bytes_through_the_broker(
     }
 }
 
+/// A test's second run has each folder listing turned round, the last entry first, and the broker
+/// is told that the program lists.
+#[tokio::test]
+async fn a_listing_is_turned_round_for_a_second_run_and_the_broker_is_told_of_it() {
+    use lengua::supply::Supply;
+
+    let case = Case {
+        calls: &[Syscall::Openat, Syscall::Getdents64],
+        data: &[("dot", b".\0")],
+        ..Case::new(
+            "listing",
+            &[
+                Call {
+                    op: "os_open",
+                    args: &[Data("dot"), N(4)],
+                    keep: Some(30),
+                },
+                Call {
+                    op: "os_list",
+                    args: &[Kept(30), Scratch(256), N(128)],
+                    keep: Some(0),
+                },
+            ],
+            280,
+            Vec::new(),
+        )
+    };
+    let files: BTreeMap<String, String> = ["a", "b", "c"]
+        .iter()
+        .map(|name| ((*name).to_owned(), "1".to_owned()))
+        .collect();
+    let supply = Supply::default();
+    let folder = tempfile::tempdir().expect("a folder");
+    for target in Profile::ALL {
+        let place = folder.path().join(target.name());
+        let executable =
+            per_target::build(target, &place, case.name, &program(target, &case)).await;
+        let Some(how) = per_target::way(target) else {
+            continue;
+        };
+        let mut spec = vec![Syscall::Write, Syscall::Exit];
+        spec.extend_from_slice(case.calls);
+        let allowed = target.allowed_syscalls(&spec, false);
+        let mut listed = Vec::new();
+        for reversed in [false, true] {
+            let job = Job {
+                emulated: how == Way::Emulated,
+                files: &files,
+                supply: Some(&supply),
+                channel: true,
+                reversed,
+                ..Job::new(&executable, &[], b"", &allowed)
+            };
+            let ran = run(launcher(), job, Limits::default())
+                .await
+                .expect("the program runs");
+            let what = format!("{}, turned round {reversed}", target.name());
+            assert_eq!(ran.end, End::Exited(0), "{what}");
+            assert!(ran.listed, "{what}: the broker wasn't told");
+            assert_eq!(ran.supplied, None, "{what}");
+            // Three entries of 8 bytes each: a length, a kind, the name's length, the name, a NUL.
+            let names: Vec<u8> = ran.stdout[256..280]
+                .chunks(8)
+                .map(|entry| entry[4])
+                .collect();
+            listed.push(names);
+        }
+        let mut turned = listed[1].clone();
+        turned.reverse();
+        assert_eq!(listed[0], turned, "{}", target.name());
+        let mut sorted = listed[0].clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, b"abc", "{}", target.name());
+    }
+}
+
+/// A name of 1,024 bytes, and the NUL a name ends with.
+static LONG_NAME: [u8; 1025] = {
+    let mut bytes = [b'a'; 1025];
+    bytes[1024] = 0;
+    bytes
+};
+
+/// What every system does with a name, which the broker holds the program to and the system
+/// itself doesn't: a file the program holds open is busy for a rename and a remove until it is
+/// closed, a name past a path's length, or none, is refused, and a new name that differs from one
+/// in its folder only in case is taken.
+#[tokio::test]
+async fn the_broker_holds_names_to_what_every_system_does() {
+    let case = Case {
+        calls: &[
+            Syscall::Openat,
+            Syscall::Close,
+            Syscall::Unlinkat,
+            Syscall::Renameat,
+        ],
+        data: &[
+            ("f", b"f\0"),
+            ("g", b"g\0"),
+            ("long", &LONG_NAME),
+            ("none", b"\0"),
+            ("upper", b"A\0"),
+        ],
+        files: &[("f", "x"), ("a", "y")],
+        ..Case::new(
+            "names",
+            &[
+                Call {
+                    op: "os_open",
+                    args: &[Data("f"), N(0)],
+                    keep: Some(0),
+                },
+                Call {
+                    op: "os_remove",
+                    args: &[Data("f"), N(0)],
+                    keep: Some(1),
+                },
+                Call {
+                    op: "os_rename",
+                    args: &[Data("f"), Data("g")],
+                    keep: Some(2),
+                },
+                Call {
+                    op: "os_close",
+                    args: &[Kept(0)],
+                    keep: Some(3),
+                },
+                Call {
+                    op: "os_remove",
+                    args: &[Data("f"), N(0)],
+                    keep: Some(4),
+                },
+                Call {
+                    op: "os_open",
+                    args: &[Data("long"), N(1)],
+                    keep: Some(5),
+                },
+                Call {
+                    op: "os_open",
+                    args: &[Data("none"), N(1)],
+                    keep: Some(6),
+                },
+                Call {
+                    op: "os_open",
+                    args: &[Data("upper"), N(3)],
+                    keep: Some(7),
+                },
+            ],
+            64,
+            // The descriptor, the two refusals of a file held open, the close and the remove that
+            // then work, a name too long, none, and a name that is taken.
+            image(64, &[3, -16, -16, 0, 0, -36, -2, -17], &[]),
+        )
+    };
+    let files: BTreeMap<String, String> = case
+        .files
+        .iter()
+        .map(|(name, contents)| ((*name).to_owned(), (*contents).to_owned()))
+        .collect();
+    let folder = tempfile::tempdir().expect("a folder");
+    for target in Profile::ALL {
+        let place = folder.path().join(target.name());
+        let executable =
+            per_target::build(target, &place, case.name, &program(target, &case)).await;
+        let Some(how) = per_target::way(target) else {
+            continue;
+        };
+        let mut spec = vec![Syscall::Write, Syscall::Exit];
+        spec.extend_from_slice(case.calls);
+        let allowed = target.allowed_syscalls(&spec, false);
+        let job = Job {
+            emulated: how == Way::Emulated,
+            files: &files,
+            channel: true,
+            ..Job::new(&executable, &[], b"", &allowed)
+        };
+        let ran = run(launcher(), job, Limits::default())
+            .await
+            .expect("the program runs");
+        let what = target.name();
+        assert_eq!(ran.end, End::Exited(0), "{what}");
+        assert_eq!(ran.stdout, case.stdout, "{what}");
+    }
+}
+
 /// Every operation and library function builds on its own, with what it needs, and all of them
 /// build together, on both CPUs, whatever the arguments: what the table of cases doesn't call is
 /// still assembled, and no name is twice.

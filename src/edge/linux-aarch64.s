@@ -768,7 +768,7 @@ os_info:
     ret
 .size os_info, . - os_info
 
-// == os_list: lengua_error lengua_list_note
+// == os_list: lengua_error lengua_list_note lengua_list_turn
 .section .bss
 .balign 8
 .type lengua_dirents, @object
@@ -809,6 +809,14 @@ os_list:
     svc #0
     tbnz x0, #63, .Llengua_list_failed
     cbz x0, .Llengua_list_done
+    adrp x16, lengua_channel_state
+    add x16, x16, :lo12:lengua_channel_state
+    ldr w16, [x16]
+    tbz w16, #2, .Llengua_list_turned
+    str x30, [sp, #-16]!
+    bl lengua_list_turn
+    ldr x30, [sp], #16
+.Llengua_list_turned:
     add x12, x1, x0
     mov x11, x1
 .Llengua_list_entry:  // bound: 171
@@ -1494,3 +1502,79 @@ lengua_list_note:
     ret
 .size lengua_list_note, . - lengua_list_note
 
+
+// == lengua_list_turn
+.section .bss
+.balign 8
+.type lengua_turned, @object
+// The entries of a listing turned round, before they go back where the kernel put them.
+lengua_turned:
+    .zero 4096
+.size lengua_turned, . - lengua_turned
+
+.balign 2
+.type lengua_offsets, @object
+// Where each entry of a listing starts, 2 bytes each: a listing of 4,096 bytes has at most 171.
+lengua_offsets:
+    .zero 352
+.size lengua_offsets, . - lengua_offsets
+
+.text
+.type lengua_list_turn, @function
+// In: x1 = the entries getdents64 gave, x0 = how many bytes. Turns them round, the last entry
+// first, as a test's second run lists. Changes x8, x16, x17 and the flags only.
+lengua_list_turn:
+    stp x2, x3, [sp, #-16]!
+    stp x4, x5, [sp, #-16]!
+    stp x6, x7, [sp, #-16]!
+    adrp x2, lengua_offsets
+    add x2, x2, :lo12:lengua_offsets
+    adrp x3, lengua_turned
+    add x3, x3, :lo12:lengua_turned
+    mov x4, #0
+    mov x5, #0
+.Llengua_turn_scan:  // bound: 171
+    cmp x4, x0
+    b.hs .Llengua_turn_scanned
+    add x16, x2, x5, lsl #1
+    strh w4, [x16]
+    add x5, x5, #1
+    add x16, x1, x4
+    ldrh w16, [x16, #16]
+    add x4, x4, x16
+    b .Llengua_turn_scan
+.Llengua_turn_scanned:
+    mov x6, x3
+.Llengua_turn_copy:  // bound: 171
+    cbz x5, .Llengua_turn_copied
+    sub x5, x5, #1
+    add x16, x2, x5, lsl #1
+    ldrh w16, [x16]
+    add x7, x1, x16
+    ldrh w17, [x7, #16]
+    mov x8, #0
+.Llengua_turn_bytes:  // bound: 280
+    add x16, x7, x8
+    ldrb w16, [x16]
+    add x4, x6, x8
+    strb w16, [x4]
+    add x8, x8, #1
+    cmp x8, x17
+    b.lo .Llengua_turn_bytes
+    add x6, x6, x17
+    b .Llengua_turn_copy
+.Llengua_turn_copied:
+    mov x4, #0
+.Llengua_turn_back:  // bound: 4096
+    add x16, x3, x4
+    ldrb w16, [x16]
+    add x17, x1, x4
+    strb w16, [x17]
+    add x4, x4, #1
+    cmp x4, x0
+    b.lo .Llengua_turn_back
+    ldp x6, x7, [sp], #16
+    ldp x4, x5, [sp], #16
+    ldp x2, x3, [sp], #16
+    ret
+.size lengua_list_turn, . - lengua_list_turn

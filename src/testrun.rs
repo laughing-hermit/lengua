@@ -469,6 +469,7 @@ fn compare(
 /// # Errors
 ///
 /// Fails when the program can't be started.
+#[allow(clippy::too_many_arguments)]
 pub async fn check_case(
     launcher: &Path,
     program: &Path,

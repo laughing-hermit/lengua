@@ -691,7 +691,7 @@ os_info:
     ret
 .size os_info, . - os_info
 
-# == os_list: lengua_error lengua_list_note
+# == os_list: lengua_error lengua_list_note lengua_list_turn
 .section .bss
 .balign 8
 .type lengua_dirents, @object
@@ -729,6 +729,11 @@ os_list:
     test rax, rax
     js .Llengua_list_failed
     jz .Llengua_list_done
+    lea r11, [rip + lengua_channel_state]
+    test dword ptr [r11], LENGUA_REVERSED
+    jz .Llengua_list_turned
+    call lengua_list_turn
+.Llengua_list_turned:
     lea r8, [rsi + rax]
     mov rbx, rsi
 .Llengua_list_entry:  # bound: 171
@@ -1467,3 +1472,77 @@ lengua_list_note:
 .Llengua_list_note_none:
     ret
 .size lengua_list_note, . - lengua_list_note
+
+# == lengua_list_turn
+.section .bss
+.balign 8
+.type lengua_turned, @object
+# The entries of a listing turned round, before they go back where the kernel put them.
+lengua_turned:
+    .zero 4096
+.size lengua_turned, . - lengua_turned
+
+.balign 2
+.type lengua_offsets, @object
+# Where each entry of a listing starts, 2 bytes each: a listing of 4,096 bytes has at most 171.
+lengua_offsets:
+    .zero 352
+.size lengua_offsets, . - lengua_offsets
+
+.text
+.type lengua_list_turn, @function
+# In: rsi = the entries getdents64 gave, rax = how many bytes. Turns them round, the last entry
+# first, as a test's second run lists. Changes rcx, r11 and the flags only.
+lengua_list_turn:
+    push rbx
+    push rdx
+    push rdi
+    push r8
+    push r9
+    push r10
+    lea rdi, [rip + lengua_turned]
+    lea r8, [rip + lengua_offsets]
+    xor ecx, ecx
+    xor edx, edx
+.Llengua_turn_scan:  # bound: 171
+    cmp ecx, eax
+    jae .Llengua_turn_scanned
+    mov word ptr [r8 + 2*rdx], cx
+    inc edx
+    movzx r11d, word ptr [rsi + rcx + 16]
+    add ecx, r11d
+    jmp .Llengua_turn_scan
+.Llengua_turn_scanned:
+    mov r9, rdi
+.Llengua_turn_copy:  # bound: 171
+    test edx, edx
+    jz .Llengua_turn_copied
+    dec edx
+    movzx ecx, word ptr [r8 + 2*rdx]
+    lea r10, [rsi + rcx]
+    movzx ebx, word ptr [r10 + 16]
+    xor ecx, ecx
+.Llengua_turn_bytes:  # bound: 280
+    movzx r11d, byte ptr [r10 + rcx]
+    mov byte ptr [r9 + rcx], r11b
+    inc ecx
+    cmp ecx, ebx
+    jb .Llengua_turn_bytes
+    add r9, rbx
+    jmp .Llengua_turn_copy
+.Llengua_turn_copied:
+    xor ecx, ecx
+.Llengua_turn_back:  # bound: 4096
+    movzx r11d, byte ptr [rdi + rcx]
+    mov byte ptr [rsi + rcx], r11b
+    inc ecx
+    cmp ecx, eax
+    jb .Llengua_turn_back
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rdx
+    pop rbx
+    ret
+.size lengua_list_turn, . - lengua_list_turn
