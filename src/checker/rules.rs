@@ -1295,9 +1295,10 @@ impl Checker<'_, '_> {
     /// Whether the instruction at `index` starts an assertion block.
     fn is_assertion(&self, function: &MappedFunction<'_>, index: usize) -> bool {
         let steps = &function.steps;
+        // In the edge form assert_fail is lengua's, not main.s's.
         let assert_fail = self
             .program
-            .function(ASSERT_FAIL)
+            .any_function(ASSERT_FAIL)
             .map_or(0, |assert| assert.address);
         steps
             .get(index)
