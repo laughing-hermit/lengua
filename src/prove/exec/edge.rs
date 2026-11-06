@@ -104,7 +104,9 @@ impl Cpu<'_> {
                 if !self.state.open.contains_key(&descriptor) {
                     return self.finish(op, (-EBADF).cast_unsigned());
                 }
-                Err(unsupported("seeking in a file, which the model doesn't follow"))
+                Err(unsupported(
+                    "seeking in a file, which the model doesn't follow",
+                ))
             }
             Op::Mkdir => {
                 let name = self.name_at(fdcwd, 0, "os_mkdir")?;

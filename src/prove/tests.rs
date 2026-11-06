@@ -184,15 +184,13 @@ async fn machine(source: &str) -> Machine {
     } else {
         features
     };
-    if let Some(program) =
-        crate::checker::decode::map(
-            &parsed,
-            lengua.as_ref(),
-            &machine,
-            features,
-            &mut Vec::new(),
-        )
-    {
+    if let Some(program) = crate::checker::decode::map(
+        &parsed,
+        lengua.as_ref(),
+        &machine,
+        features,
+        &mut Vec::new(),
+    ) {
         machine.named = program.named_symbols();
         let jumps = crate::checker::tables::every(&program, &mut Vec::new());
         machine.tables = crate::checker::tables::addresses(&program, &jumps);
