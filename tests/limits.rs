@@ -2136,6 +2136,241 @@ fn connected(connections: Vec<Reach>, listen: bool) -> Net {
     }
 }
 
+/// A system call that takes a descriptor first, with what the kernel's pin on it looks at.
+struct OnTheChannel {
+    name: &'static str,
+    spec: Syscall,
+    numbers: PerCpu<i64>,
+    /// The second argument, for the calls whose pin looks at it.
+    second: i64,
+    /// A descriptor of the program's own to make the same call on.
+    own: u32,
+}
+
+/// The calls a spec can allow that take a descriptor first and could reach lengua's channel to
+/// its broker, which is descriptor 4,352.
+const ON_THE_CHANNEL: [OnTheChannel; 10] = [
+    OnTheChannel {
+        name: "read",
+        spec: Syscall::Read,
+        numbers: PerCpu {
+            x86_64: x86_64::READ,
+            aarch64: aarch64::READ,
+        },
+        second: 0,
+        own: 0,
+    },
+    OnTheChannel {
+        name: "write",
+        spec: Syscall::Write,
+        numbers: PerCpu {
+            x86_64: x86_64::WRITE,
+            aarch64: aarch64::WRITE,
+        },
+        second: 0,
+        own: 1,
+    },
+    OnTheChannel {
+        name: "close",
+        spec: Syscall::Close,
+        numbers: PerCpu {
+            x86_64: x86_64::CLOSE,
+            aarch64: aarch64::CLOSE,
+        },
+        second: 0,
+        own: 9,
+    },
+    OnTheChannel {
+        name: "lseek",
+        spec: Syscall::Lseek,
+        numbers: PerCpu {
+            x86_64: x86_64::LSEEK,
+            aarch64: aarch64::LSEEK,
+        },
+        second: 0,
+        own: 0,
+    },
+    OnTheChannel {
+        name: "fstat",
+        spec: Syscall::Fstat,
+        numbers: PerCpu {
+            x86_64: x86_64::FSTAT,
+            aarch64: aarch64::FSTAT,
+        },
+        second: 0,
+        own: 0,
+    },
+    OnTheChannel {
+        name: "getdents64",
+        spec: Syscall::Getdents64,
+        numbers: PerCpu {
+            x86_64: x86_64::GETDENTS64,
+            aarch64: aarch64::GETDENTS64,
+        },
+        second: 0,
+        own: 0,
+    },
+    OnTheChannel {
+        name: "ioctl",
+        spec: Syscall::Ioctl,
+        numbers: PerCpu {
+            x86_64: x86_64::IOCTL,
+            aarch64: aarch64::IOCTL,
+        },
+        // TCGETS, which the terminal's pin allows on standard input, output and error.
+        second: 0x5401,
+        own: 1,
+    },
+    OnTheChannel {
+        name: "shutdown",
+        spec: Syscall::Shutdown,
+        numbers: PerCpu {
+            x86_64: x86_64::SHUTDOWN,
+            aarch64: aarch64::SHUTDOWN,
+        },
+        second: 0,
+        own: 1,
+    },
+    OnTheChannel {
+        name: "sendto",
+        spec: Syscall::Sendto,
+        numbers: PerCpu {
+            x86_64: x86_64::SENDTO,
+            aarch64: aarch64::SENDTO,
+        },
+        second: 0,
+        own: 1,
+    },
+    OnTheChannel {
+        name: "accept4",
+        spec: Syscall::Accept4,
+        numbers: PerCpu {
+            x86_64: x86_64::ACCEPT4,
+            aarch64: aarch64::ACCEPT4,
+        },
+        second: 0,
+        own: 3,
+    },
+];
+
+/// A program that makes one system call, `number` on each CPU, on `descriptor` with every other
+/// argument zero but the second, and exits with 0 if the call returned.
+fn one_call(numbers: &PerCpu<i64>, descriptor: u32, second: i64) -> Programs {
+    let x86_lines = [
+        format!("mov eax, {}", numbers.x86_64),
+        format!("mov edi, {descriptor}"),
+        format!("mov esi, {second}"),
+        "xor edx, edx".to_owned(),
+        "xor r10d, r10d".to_owned(),
+        "xor r8d, r8d".to_owned(),
+        "xor r9d, r9d".to_owned(),
+        "syscall".to_owned(),
+        "xor edi, edi".to_owned(),
+        "mov eax, 231".to_owned(),
+        "syscall".to_owned(),
+    ];
+    let a64_lines = [
+        format!("mov x8, #{}", numbers.aarch64),
+        format!("mov x0, #{descriptor}"),
+        format!("mov x1, #{second}"),
+        "mov x2, #0".to_owned(),
+        "mov x3, #0".to_owned(),
+        "mov x4, #0".to_owned(),
+        "mov x5, #0".to_owned(),
+        "svc #0".to_owned(),
+        "mov x0, #0".to_owned(),
+        "mov x8, #94".to_owned(),
+        "svc #0".to_owned(),
+    ];
+    PerCpu {
+        x86_64: x86(
+            &x86_lines.iter().map(String::as_str).collect::<Vec<_>>(),
+            &[],
+        ),
+        aarch64: a64(
+            &a64_lines.iter().map(String::as_str).collect::<Vec<_>>(),
+            &[],
+        ),
+    }
+}
+
+/// The kernel holds a program off lengua's channel to its broker, descriptor 4,352: every call
+/// that takes a descriptor first is stopped on it and goes on on a descriptor of the program's
+/// own, and `sendmsg` and `recvmsg`, which the channel is for, are allowed on it alone.
+#[tokio::test]
+async fn the_kernel_holds_a_program_off_the_channel_but_for_the_two_calls_it_is_for() {
+    if !per_target::runs_programs() {
+        return;
+    }
+    let folder = tempfile::tempdir().expect("temporary folder");
+    let spec: Vec<Syscall> = ON_THE_CHANNEL
+        .iter()
+        .map(|call| call.spec)
+        .chain([Syscall::Exit])
+        .collect();
+    let allowed = calls(&spec);
+    let channel = lengua::edge::CHANNEL;
+    let run_it = |program: PathBuf| {
+        let allowed = allowed.clone();
+        async move {
+            let job = Job {
+                channel: true,
+                ..Job::new(&program, &[], b"", &allowed)
+            };
+            run(launcher(), job, Limits::default()).await.expect("run")
+        }
+    };
+    for call in &ON_THE_CHANNEL {
+        let on_it = built(
+            folder.path(),
+            &format!("{}-on-the-channel", call.name),
+            &one_call(&call.numbers, channel, call.second),
+        )
+        .await;
+        let own = built(
+            folder.path(),
+            &format!("{}-on-its-own", call.name),
+            &one_call(&call.numbers, call.own, call.second),
+        )
+        .await;
+        let refused = run_it(on_it).await;
+        assert_eq!(
+            refused.end,
+            End::Signaled(31),
+            "{} on the channel: {refused:?}",
+            call.name
+        );
+        let allowed_on_its_own = run_it(own).await;
+        assert_eq!(
+            allowed_on_its_own.end,
+            End::Exited(0),
+            "{} on descriptor {}: {allowed_on_its_own:?}",
+            call.name,
+            call.own
+        );
+    }
+    let messages = PerCpu {
+        x86_64: x86_64::RECVMSG,
+        aarch64: aarch64::RECVMSG,
+    };
+    let on_it = built(
+        folder.path(),
+        "recvmsg-on-the-channel",
+        &one_call(&messages, channel, 0),
+    )
+    .await;
+    let elsewhere = built(
+        folder.path(),
+        "recvmsg-on-another",
+        &one_call(&messages, 5, 0),
+    )
+    .await;
+    let allowed_here = run_it(on_it).await;
+    assert_eq!(allowed_here.end, End::Exited(0), "{allowed_here:?}");
+    let refused = run_it(elsewhere).await;
+    assert_eq!(refused.end, End::Signaled(31), "{refused:?}");
+}
+
 #[tokio::test]
 async fn a_program_never_holds_the_network() {
     if !per_target::runs_programs() {

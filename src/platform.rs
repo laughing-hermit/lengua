@@ -137,6 +137,15 @@ impl Profile {
                     Syscall::Accept4 => Pin::ListeningSocket,
                     Syscall::Sendto => Pin::NoAddress,
                     Syscall::Ioctl => Pin::Terminal,
+                    // The calls that take a descriptor first never take the channel, which the
+                    // edge refuses too: a program past the checker can't talk to the broker.
+                    Syscall::Read
+                    | Syscall::Write
+                    | Syscall::Close
+                    | Syscall::Lseek
+                    | Syscall::Fstat
+                    | Syscall::Getdents64
+                    | Syscall::Shutdown => Pin::NotChannel,
                     _ => Pin::Any,
                 },
             })
@@ -192,11 +201,14 @@ pub enum Pin {
     Terminal,
     /// `sendmsg` or `recvmsg` on descriptor 4,352 alone, lengua's channel to its broker.
     Channel,
+    /// Any descriptor but 4,352, which is lengua's: the calls that take one first and are not
+    /// pinned to others.
+    NotChannel,
 }
 
 impl Pin {
     /// How the launcher's argument writes it after the call's number: nothing, `:N`, `:tcp`,
-    /// `:listening`, `:noaddress`, `:terminal` or `:channel`.
+    /// `:listening`, `:noaddress`, `:terminal`, `:channel` or `:notchannel`.
     #[must_use]
     pub fn encode(self) -> String {
         match self {
@@ -206,6 +218,7 @@ impl Pin {
             Self::NoAddress => ":noaddress".into(),
             Self::Terminal => ":terminal".into(),
             Self::Channel => ":channel".into(),
+            Self::NotChannel => ":notchannel".into(),
         }
     }
 
@@ -217,6 +230,7 @@ impl Pin {
             "noaddress" => Some(Self::NoAddress),
             "terminal" => Some(Self::Terminal),
             "channel" => Some(Self::Channel),
+            "notchannel" => Some(Self::NotChannel),
             argument => argument.parse().ok().map(Self::First),
         }
     }

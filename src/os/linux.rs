@@ -1507,6 +1507,13 @@ fn pin_rules(pin: Pin) -> Result<Vec<SeccompRule>, seccompiler::BackendError> {
             SeccompCmpOp::Eq,
             u64::from(crate::edge::CHANNEL),
         )?])?]),
+        // Any descriptor but the channel.
+        Pin::NotChannel => Ok(vec![SeccompRule::new(vec![condition(
+            0,
+            Dword,
+            SeccompCmpOp::Ne,
+            u64::from(crate::edge::CHANNEL),
+        )?])?]),
         // TCGETS, TCSETS, TCSETSW, TCSETSF and TIOCGWINSZ, on standard input, output or error.
         Pin::Terminal => {
             let mut rules = Vec::new();
@@ -1520,8 +1527,14 @@ fn pin_rules(pin: Pin) -> Result<Vec<SeccompRule>, seccompiler::BackendError> {
             }
             Ok(rules)
         }
-        // No flag but MSG_NOSIGNAL (MSG_FASTOPEN would connect), and no address.
+        // No flag but MSG_NOSIGNAL (MSG_FASTOPEN would connect), no address, and not the channel.
         Pin::NoAddress => Ok(vec![SeccompRule::new(vec![
+            condition(
+                0,
+                Dword,
+                SeccompCmpOp::Ne,
+                u64::from(crate::edge::CHANNEL),
+            )?,
             condition(
                 3,
                 Dword,
@@ -1535,7 +1548,8 @@ fn pin_rules(pin: Pin) -> Result<Vec<SeccompRule>, seccompiler::BackendError> {
 }
 
 /// Confines this process, and so the program it becomes: files only inside the current folder
-/// (its working folder), executing only `program`, no network and no signals to other
+/// (its working folder), or none at all for a program with a channel to its broker, which opens
+/// every name for it, executing only `program`, no network and no signals to other
 /// processes (Landlock); files of at most `file_limit` bytes and no core files; and only the
 /// system calls in `syscalls` (seccomp), so any other stops it with SIGSYS. A program QEMU's
 /// user mode runs (`emulated`) is held by Landlock and the limits alike, but its calls reach
@@ -1551,22 +1565,39 @@ fn confine(
     let abi = ABI::V6;
     let folder = PathFd::new(".").map_err(|error| format!("working folder: {error}"))?;
     let executable = PathFd::new(program).map_err(|error| format!("program: {error}"))?;
-    let status = Ruleset::default()
+    // A program with a channel to the broker gets no path but its own binary: the broker, which
+    // runs outside this confinement, opens every name it asks for. A program QEMU runs needs what
+    // QEMU needs, so it keeps its folder.
+    let no_path = net.channel && !emulated;
+    let mut ruleset = Ruleset::default()
         .handle_access(AccessFs::from_all(abi))
         .and_then(|ruleset| ruleset.handle_access(AccessNet::from_all(abi)))
         .and_then(|ruleset| ruleset.scope(Scope::from_all(abi)))
         .and_then(Ruleset::create)
-        .and_then(|ruleset| ruleset.add_rule(PathBeneath::new(folder, AccessFs::from_all(abi))))
-        .and_then(|ruleset| {
-            ruleset.add_rule(PathBeneath::new(
-                executable,
-                AccessFs::Execute | AccessFs::ReadFile,
-            ))
-        })
+        .map_err(|error| format!("Landlock: {error}"))?;
+    if !no_path {
+        ruleset = ruleset
+            .add_rule(PathBeneath::new(folder, AccessFs::from_all(abi)))
+            .map_err(|error| format!("Landlock: {error}"))?;
+    }
+    let status = ruleset
+        .add_rule(PathBeneath::new(
+            executable,
+            AccessFs::Execute | AccessFs::ReadFile,
+        ))
         // No TCP connection or binding at all: lengua makes the program's connections and
         // binds a server's socket before it starts.
         .and_then(|ruleset| ruleset.restrict_self())
         .map_err(|error| format!("Landlock: {error}"))?;
+    // With no path granted, only Landlock stands between the program and the names it could open
+    // for itself: a kernel with none doesn't run it.
+    if no_path && status.ruleset == RulesetStatus::NotEnforced {
+        return Err(
+            "this kernel has no Landlock, which holds a program to the files its broker opens \
+             for it; that needs Linux 5.13 or newer with Landlock on"
+                .into(),
+        );
+    }
     // A program on the network is held off connecting or binding by Landlock as well as
     // seccomp: a kernel that can't hold it so doesn't run it.
     if net.is_used() && status.ruleset != RulesetStatus::FullyEnforced {
