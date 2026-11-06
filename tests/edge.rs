@@ -1474,6 +1474,8 @@ async fn the_model_runs_every_operation_as_the_system_does() {
     use lengua::prove::term::{Pool, Term};
 
     let folder = tempfile::tempdir().expect("a folder");
+    // Every run's difference is kept, so that one test run shows them all.
+    let mut differs: Vec<String> = Vec::new();
     for case in cases() {
         if case.model.is_some() {
             continue;
@@ -1509,33 +1511,55 @@ async fn the_model_runs_every_operation_as_the_system_does() {
             let start = State::start(&image, &mut pool, &arguments, &environment, stdin)
                 .with_files(files)
                 .with_folders(folders);
-            let finished =
-                explore(&image, start, &mut pool, &mut Concrete, 16).unwrap_or_else(|error| {
-                    panic!("{what}: {error}");
-                });
-            assert_eq!(finished.len(), 1, "{what}");
+            let finished = match explore(&image, start, &mut pool, &mut Concrete, 16) {
+                Ok(finished) if finished.len() == 1 => finished,
+                Ok(finished) => {
+                    differs.push(format!("{what}: {} runs, not one", finished.len()));
+                    continue;
+                }
+                Err(error) => {
+                    differs.push(format!("{what}: {error}"));
+                    continue;
+                }
+            };
             let run = &finished[0];
             let Some(End::Exit(status)) = &run.end else {
-                panic!("{what}: it ended {:?}", run.end);
+                differs.push(format!("{what}: it ended {:?}", run.end));
+                continue;
             };
-            assert_eq!(
-                pool.constant(*status),
-                u128::try_from(case.exit).ok(),
-                "{what}"
-            );
-            let known = |terms: &[Term]| -> Vec<u8> {
+            if pool.constant(*status) != u128::try_from(case.exit).ok() {
+                differs.push(format!(
+                    "{what}: it exited with {:?}, not {}",
+                    pool.constant(*status),
+                    case.exit
+                ));
+            }
+            let known = |terms: &[Term]| -> Option<Vec<u8>> {
                 terms
                     .iter()
-                    .map(|term| {
-                        let value = pool.constant(*term).expect("a byte it knows");
-                        u8::try_from(value).expect("a byte")
-                    })
+                    .map(|term| pool.constant(*term).and_then(|value| u8::try_from(value).ok()))
                     .collect()
             };
-            assert_eq!(known(&run.stdout), case.stdout, "{what}");
-            if !case.stderr.is_empty() {
-                assert_eq!(known(&run.stderr), case.stderr, "{what}");
+            if known(&run.stdout).as_ref() != Some(&case.stdout) {
+                differs.push(format!(
+                    "{what}: it printed {:?}, not {:?}",
+                    known(&run.stdout),
+                    case.stdout
+                ));
+            }
+            if !case.stderr.is_empty() && known(&run.stderr).as_deref() != Some(case.stderr) {
+                differs.push(format!(
+                    "{what}: it printed {:?} to standard error, not {:?}",
+                    known(&run.stderr),
+                    case.stderr
+                ));
             }
         }
     }
+    assert!(
+        differs.is_empty(),
+        "the model differs from the system in {} runs:\n{}",
+        differs.len(),
+        differs.join("\n")
+    );
 }
