@@ -1,9 +1,5 @@
 .arch armv8-a
 
-// System calls (Linux AArch64)
-.equ SYS_READ, 63
-.equ SYS_WRITE, 64
-.equ SYS_EXIT, 93
 // File descriptors
 .equ STDIN, 0
 .equ STDOUT, 1
@@ -33,7 +29,6 @@
 .equ MAX_LINES, MAX_INPUT + 1
 .equ LINES_LEN, MAX_LINES * 8
 .equ MAX_PASSES, 21
-.equ MAX_FILL_READS, 1099511627776
 .equ MAX_WRITES, 64
 .equ USAGE_MSG_LEN, 17
 .equ TOO_LONG_MSG_LEN, 39
@@ -49,11 +44,6 @@ usage_msg:
 too_long_msg:
     .ascii "error: input longer than 1048576 bytes\n"
 .size too_long_msg, . - too_long_msg
-
-.type assert_message, @object
-assert_message:
-    .ascii "lengua: assertion 000 failed\n"
-.size assert_message, . - assert_message
 
 .section .bss
 
@@ -83,23 +73,20 @@ out_buf:
 .size out_buf, . - out_buf
 
 .text
-.globl _start
-
 // Checks the arguments, reads standard input, sorts its lines and prints them.
-.type _start, @function
-_start:
+.type main, @function
+main:
     mov x21, #0
-    ldr x9, [sp]
-    cmp x9, #ARGC_PLAIN
-    b.eq .Lstart_read
-    cmp x9, #ARGC_OPTION
-    b.ne .Lstart_usage
-    ldr x0, [sp, #16]
-    cbz x0, .Lstart_assert_argv
+    cmp x0, #ARGC_PLAIN
+    b.eq .Lmain_read
+    cmp x0, #ARGC_OPTION
+    b.ne .Lmain_usage
+    ldr x0, [x1, #8]
+    cbz x0, .Lmain_assert_argv
     bl is_unique_option
-    tbnz x0, #63, .Lstart_usage
+    tbnz x0, #63, .Lmain_usage
     mov x21, #1
-.Lstart_read:
+.Lmain_read:
     mov x0, #STDIN
     adrp x1, in_buf
     add x1, x1, :lo12:in_buf
@@ -107,10 +94,10 @@ _start:
     movk x2, #TEXT_MAX >> 16, lsl #16
     mov w3, #READ_TO_END
     bl fill
-    tbnz x0, #63, .Lstart_read_failed
+    tbnz x0, #63, .Lmain_read_failed
     cmp x0, #MAX_INPUT
-    b.hi .Lstart_too_long
-    cbz x0, .Lstart_ok
+    b.hi .Lmain_too_long
+    cbz x0, .Lmain_ok
     mov x1, x0
     adrp x19, in_buf
     add x19, x19, :lo12:in_buf
@@ -120,40 +107,39 @@ _start:
     mov x0, x19
     mov x2, x21
     bl sort_text
-    tbnz x0, #63, .Lstart_write_failed
-.Lstart_ok:
+    tbnz x0, #63, .Lmain_write_failed
+.Lmain_ok:
     mov w0, #EXIT_OK
-    b .Lstart_exit
-.Lstart_usage:
+    b .Lmain_exit
+.Lmain_usage:
     mov x0, #STDERR
     adrp x1, usage_msg
     add x1, x1, :lo12:usage_msg
     mov x2, #USAGE_MSG_LEN
     bl write_all
-    tbnz x0, #63, .Lstart_write_failed
+    tbnz x0, #63, .Lmain_write_failed
     mov w0, #EXIT_USAGE
-    b .Lstart_exit
-.Lstart_too_long:
+    b .Lmain_exit
+.Lmain_too_long:
     mov x0, #STDERR
     adrp x1, too_long_msg
     add x1, x1, :lo12:too_long_msg
     mov x2, #TOO_LONG_MSG_LEN
     bl write_all
-    tbnz x0, #63, .Lstart_write_failed
+    tbnz x0, #63, .Lmain_write_failed
     mov w0, #EXIT_TOO_LONG
-    b .Lstart_exit
-.Lstart_read_failed:
+    b .Lmain_exit
+.Lmain_read_failed:
     mov w0, #EXIT_READ_FAILED
-    b .Lstart_exit
-.Lstart_write_failed:
+    b .Lmain_exit
+.Lmain_write_failed:
     mov w0, #EXIT_WRITE_FAILED
-.Lstart_exit:
-    mov x8, #SYS_EXIT
-    svc #0
-.Lstart_assert_argv:
+.Lmain_exit:
+    bl os_exit
+.Lmain_assert_argv:
     mov w0, #1
     bl assert_fail
-.size _start, . - _start
+.size main, . - main
 
 // Gives a text's last line a newline when it lacks one.
 // In: x0 = the text, with room for TEXT_MAX bytes, x1 = its length, 1 to MAX_INPUT.
@@ -691,14 +677,14 @@ emit_lines:
 // returns: result
 .type write_all, @function
 write_all:
+    stp x29, x30, [sp, #-16]!
     cbz x1, .Lwrite_all_assert_null
     cbz x2, .Lwrite_all_assert_empty
     mov x9, x0
     mov x10, #MAX_WRITES
 .Lwrite_all_loop:  // bound: 64
     mov x0, x9
-    mov x8, #SYS_WRITE
-    svc #0
+    bl os_write
     tbnz x0, #63, .Lwrite_all_return
     cmp x0, x2
     b.hi .Lwrite_all_assert_count
@@ -712,6 +698,7 @@ write_all:
 .Lwrite_all_done:
     mov x0, #0
 .Lwrite_all_return:
+    ldp x29, x30, [sp], #16
     ret
 .Lwrite_all_assert_null:
     mov w0, #25
@@ -724,88 +711,3 @@ write_all:
     bl assert_fail
 .size write_all, . - write_all
 
-// Reads from file descriptor x0 into the x2 bytes at x1 until they're full, the input ends,
-// or, when w3 is a byte (0 to 255), the last byte read is w3; with w3 = -1 it reads to the
-// end. However the input arrives, it reads the same.
-// In: x0 = the file descriptor, x1 = the buffer, x2 = its size, at least 1, w3 = the end
-// byte or -1.
-// Out: x0 = how many bytes it read, or a negative error code.
-// returns: result
-.type fill, @function
-fill:
-    cbz x1, .Lfill_assert_null
-    cbz x2, .Lfill_assert_empty
-    mov x9, x0
-    mov x10, x2
-    mov w11, w3
-    mov x12, #MAX_FILL_READS
-.Lfill_loop:  // bound: 1099511627776
-    mov x0, x9
-    mov x8, #SYS_READ
-    svc #0
-    tbnz x0, #63, .Lfill_return
-    cbz x0, .Lfill_done
-    cmp x0, x2
-    b.hi .Lfill_assert_count
-    add x1, x1, x0
-    subs x2, x2, x0
-    b.eq .Lfill_done
-    ldurb w13, [x1, #-1]
-    cmp w13, w11
-    b.eq .Lfill_done
-    subs x12, x12, #1
-    b.ne .Lfill_loop
-    mov x0, #ERROR_IO
-    b .Lfill_return
-.Lfill_done:
-    sub x0, x10, x2
-.Lfill_return:
-    ret
-.Lfill_assert_null:
-    mov w0, #990
-    bl assert_fail
-.Lfill_assert_empty:
-    mov w0, #991
-    bl assert_fail
-.Lfill_assert_count:
-    mov w0, #992
-    bl assert_fail
-.size fill, . - fill
-
-// lengua's assertion handler. check compares it word for word: copy it exactly.
-// In: w0 = the assertion's number, 1 to 999. Prints "lengua: assertion NNN failed" to
-// standard error and ends the program, every thread of it, with code 134.
-.type assert_fail, @function
-assert_fail:
-    sub sp, sp, #32
-    adrp x1, assert_message
-    add x1, x1, :lo12:assert_message
-    ldp x2, x3, [x1]
-    stp x2, x3, [sp]
-    ldr x2, [x1, #16]
-    str x2, [sp, #16]
-    ldr w2, [x1, #24]
-    str w2, [sp, #24]
-    ldrb w2, [x1, #28]
-    strb w2, [sp, #28]
-    mov w2, #100
-    udiv w3, w0, w2
-    msub w0, w3, w2, w0
-    add w3, w3, #48
-    strb w3, [sp, #18]
-    mov w2, #10
-    udiv w3, w0, w2
-    msub w0, w3, w2, w0
-    add w3, w3, #48
-    strb w3, [sp, #19]
-    add w0, w0, #48
-    strb w0, [sp, #20]
-    mov x0, #2
-    mov x1, sp
-    mov x2, #29
-    mov x8, #64
-    svc #0
-    mov x0, #134
-    mov x8, #94
-    svc #0
-.size assert_fail, . - assert_fail

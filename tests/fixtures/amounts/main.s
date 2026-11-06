@@ -1,9 +1,5 @@
 .intel_syntax noprefix
 
-# System calls (Linux x86-64)
-.equ SYS_READ, 0
-.equ SYS_WRITE, 1
-.equ SYS_EXIT, 60
 # File descriptors
 .equ STDIN, 0
 .equ STDOUT, 1
@@ -60,11 +56,6 @@ missing_msg:
     .ascii "total: missing amount on line "
 .size missing_msg, . - missing_msg
 
-.type assert_message, @object
-assert_message:
-    .ascii "lengua: assertion 000 failed\n"
-.size assert_message, . - assert_message
-
 .section .bss
 
 # All of standard input, plus one byte to notice input that is too long.
@@ -86,74 +77,72 @@ cents_buf:
 .size cents_buf, . - cents_buf
 
 .text
-.globl _start
-
 # Reads the CSV, finds the amount column, totals it and prints the total or an error.
-.type _start, @function
-_start:
+.type main, @function
+main:
+    sub rsp, 8
     lea rbx, [rip + in_buf]
     mov rdi, rbx
     mov esi, IN_BUF_LEN
     call read_input
     test rax, rax
-    js .Lstart_io_failed
+    js .Lmain_io_failed
     mov r12, rdx
     mov rdi, rbx
     mov rsi, r12
     call find_column
     test rax, rax
-    js .Lstart_no_column
+    js .Lmain_no_column
     mov rdi, rbx
     mov rsi, r12
     call sum_rows
     test rax, rax
-    js .Lstart_row_error
+    js .Lmain_row_error
     mov rdi, rdx
     call write_cents
     test rax, rax
-    js .Lstart_io_failed
+    js .Lmain_io_failed
     mov edi, EXIT_OK
-    jmp .Lstart_exit
-.Lstart_no_column:
+    jmp .Lmain_exit
+.Lmain_no_column:
     mov edi, STDERR
     lea rsi, [rip + no_column_msg]
     mov edx, NO_COLUMN_MSG_LEN
     call write_all
     test rax, rax
-    js .Lstart_io_failed
+    js .Lmain_io_failed
     mov edi, EXIT_NO_COLUMN
-    jmp .Lstart_exit
-.Lstart_row_error:
+    jmp .Lmain_exit
+.Lmain_row_error:
     cmp rax, ERROR_BAD
-    je .Lstart_bad
+    je .Lmain_bad
     cmp rax, ERROR_MISSING
-    je .Lstart_missing
-    jmp .Lstart_assert_error
-.Lstart_bad:
+    je .Lmain_missing
+    jmp .Lmain_assert_error
+.Lmain_bad:
     lea rdi, [rip + bad_msg]
     mov esi, BAD_MSG_LEN
     call report_line
     test rax, rax
-    js .Lstart_io_failed
+    js .Lmain_io_failed
     mov edi, EXIT_BAD_AMOUNT
-    jmp .Lstart_exit
-.Lstart_missing:
+    jmp .Lmain_exit
+.Lmain_missing:
     lea rdi, [rip + missing_msg]
     mov esi, MISSING_MSG_LEN
     call report_line
     test rax, rax
-    js .Lstart_io_failed
+    js .Lmain_io_failed
     mov edi, EXIT_MISSING_AMOUNT
-    jmp .Lstart_exit
-.Lstart_io_failed:
+    jmp .Lmain_exit
+.Lmain_io_failed:
     mov edi, EXIT_IO_FAILED
-.Lstart_exit:
-    mov eax, SYS_EXIT
-    syscall
-.Lstart_assert_error:
+.Lmain_exit:
+    call os_exit
+.Lmain_assert_error:
     mov edi, 1
     call assert_fail
-.size _start, . - _start
+.size main, . - main
 
 # Reads all of standard input into a buffer.
 # In: rdi = the buffer, rsi = its size, one more than the largest input.
@@ -162,6 +151,7 @@ _start:
 # returns: result
 .type read_input, @function
 read_input:
+    sub rsp, 8
     push rbx
     test rdi, rdi
     jz .Lread_assert_null
@@ -177,8 +167,7 @@ read_input:
     jz .Lread_too_long
     mov edi, STDIN
     lea rsi, [r9 + r8]
-    mov eax, SYS_READ
-    syscall
+    call os_read
     test rax, rax
     js .Lread_return
     jz .Lread_done
@@ -196,6 +185,7 @@ read_input:
     xor eax, eax
 .Lread_return:
     pop rbx
+    add rsp, 8
     ret
 .Lread_assert_null:
     mov edi, 2
@@ -773,14 +763,14 @@ write_i64:
 # returns: result
 .type write_all, @function
 write_all:
+    sub rsp, 8
     test rsi, rsi
     jz .Lwrite_all_assert_null
     test rdx, rdx
     jz .Lwrite_all_assert_empty
     mov r8, MAX_WRITES
 .Lwrite_all_loop:  # bound: 64
-    mov eax, SYS_WRITE
-    syscall
+    call os_write
     test rax, rax
     js .Lwrite_all_return
     cmp rax, rdx
@@ -795,6 +785,7 @@ write_all:
 .Lwrite_all_done:
     xor eax, eax
 .Lwrite_all_return:
+    add rsp, 8
     ret
 .Lwrite_all_assert_null:
     mov edi, 31
@@ -807,42 +798,3 @@ write_all:
     call assert_fail
 .size write_all, . - write_all
 
-# lengua's assertion handler. check_code compares it word for word: copy it exactly.
-# In: edi = the assertion's number, 1 to 999. Prints "lengua: assertion NNN failed" to
-# standard error and ends the program, every thread of it, with code 134.
-.type assert_fail, @function
-assert_fail:
-    sub rsp, 40
-    mov rax, qword ptr [rip + assert_message]
-    mov qword ptr [rsp], rax
-    mov rax, qword ptr [rip + assert_message + 8]
-    mov qword ptr [rsp + 8], rax
-    mov rax, qword ptr [rip + assert_message + 16]
-    mov qword ptr [rsp + 16], rax
-    mov eax, dword ptr [rip + assert_message + 24]
-    mov dword ptr [rsp + 24], eax
-    mov al, byte ptr [rip + assert_message + 28]
-    mov byte ptr [rsp + 28], al
-    mov eax, edi
-    xor edx, edx
-    mov ecx, 100
-    div ecx
-    add al, 48
-    mov byte ptr [rsp + 18], al
-    mov eax, edx
-    xor edx, edx
-    mov ecx, 10
-    div ecx
-    add al, 48
-    mov byte ptr [rsp + 19], al
-    add dl, 48
-    mov byte ptr [rsp + 20], dl
-    mov eax, 1
-    mov edi, 2
-    mov rsi, rsp
-    mov edx, 29
-    syscall
-    mov eax, 231
-    mov edi, 134
-    syscall
-.size assert_fail, . - assert_fail

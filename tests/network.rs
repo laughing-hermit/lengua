@@ -68,15 +68,16 @@ const READS_TO_THE_END: PerCpu<Edit> = PerCpu {
     ),
 };
 
-/// Where the programs call fill, one read of their own instead.
+/// Where the programs call fill, one read of their own instead: a call of the operation, which
+/// takes the same first three arguments.
 const READS_ONCE: PerCpu<Edit> = PerCpu {
     x86_64: (
         "    mov ecx, NEWLINE\n    call fill\n",
-        "    mov eax, SYS_READ\n    syscall\n",
+        "    call os_read\n",
     ),
     aarch64: (
         "    mov w3, #NEWLINE\n    bl fill\n",
-        "    mov x8, #SYS_READ\n    svc #0\n",
+        "    bl os_read\n",
     ),
 };
 

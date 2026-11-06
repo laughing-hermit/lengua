@@ -1,9 +1,5 @@
 .arch armv8-a
 
-// System calls (Linux AArch64)
-.equ SYS_READ, 63
-.equ SYS_WRITE, 64
-.equ SYS_EXIT, 93
 // File descriptors
 .equ STDIN, 0
 .equ STDOUT, 1
@@ -49,11 +45,6 @@ usage_msg:
     .ascii "usage: count < input\n"
 .size usage_msg, . - usage_msg
 
-.type assert_message, @object
-assert_message:
-    .ascii "lengua: assertion 000 failed\n"
-.size assert_message, . - assert_message
-
 .section .bss
 
 // One read's worth of standard input.
@@ -69,31 +60,27 @@ out:
 .size out, . - out
 
 .text
-.globl _start
-
 // Counts the lines and words of standard input of any length, a read at a time, and prints both.
 // What crosses from one read to the next is x23: 0xff when the last byte read is whitespace, or
 // nothing has been read, else 0.
-.type _start, @function
-_start:
-    ldr x0, [sp]
+.type main, @function
+main:
     cmp x0, #ARGC_EXPECTED
-    b.ne .Lstart_usage
+    b.ne .Lmain_usage
     mov x21, #0
     mov x22, #0
     mov x23, #0xff
     mov x19, #MAX_READS
-.Lstart_read:  // bound: 1099511627776
+.Lmain_read:  // bound: 1099511627776
     mov x0, #STDIN
     adrp x1, input
     add x1, x1, :lo12:input
     mov x2, #BUF_LEN
-    mov x8, #SYS_READ
-    svc #0
-    tbnz x0, #63, .Lstart_read_failed
-    cbz x0, .Lstart_print
+    bl os_read
+    tbnz x0, #63, .Lmain_read_failed
+    cbz x0, .Lmain_print
     cmp x0, #BUF_LEN
-    b.hi .Lstart_assert_count
+    b.hi .Lmain_assert_count
     mov x1, x0
     adrp x0, input
     add x0, x0, :lo12:input
@@ -103,39 +90,38 @@ _start:
     add x22, x22, x1
     mov x23, x2
     subs x19, x19, #1
-    b.ne .Lstart_read
-    b .Lstart_assert_reads
-.Lstart_print:
+    b.ne .Lmain_read
+    b .Lmain_assert_reads
+.Lmain_print:
     mov x0, x21
     mov x1, x22
     bl print_counts
-    tbnz x0, #63, .Lstart_write_failed
+    tbnz x0, #63, .Lmain_write_failed
     mov w0, #EXIT_OK
-    b .Lstart_exit
-.Lstart_usage:
+    b .Lmain_exit
+.Lmain_usage:
     mov x0, #STDERR
     adrp x1, usage_msg
     add x1, x1, :lo12:usage_msg
     mov x2, #USAGE_MSG_LEN
     bl write_all
-    tbnz x0, #63, .Lstart_write_failed
+    tbnz x0, #63, .Lmain_write_failed
     mov w0, #EXIT_USAGE
-    b .Lstart_exit
-.Lstart_read_failed:
+    b .Lmain_exit
+.Lmain_read_failed:
     mov w0, #EXIT_READ_FAILED
-    b .Lstart_exit
-.Lstart_write_failed:
+    b .Lmain_exit
+.Lmain_write_failed:
     mov w0, #EXIT_WRITE_FAILED
-.Lstart_exit:
-    mov x8, #SYS_EXIT
-    svc #0
-.Lstart_assert_count:
+.Lmain_exit:
+    bl os_exit
+.Lmain_assert_count:
     mov w0, #1
     bl assert_fail
-.Lstart_assert_reads:
+.Lmain_assert_reads:
     mov w0, #2
     bl assert_fail
-.size _start, . - _start
+.size main, . - main
 
 // Counts the newlines and word starts in a piece of the buffer, 16 bytes a step with NEON.
 // Each step's bytes past the end are masked off, lanes whose place isn't below the bytes left,
@@ -297,14 +283,14 @@ digits:
 // returns: result
 .type write_all, @function
 write_all:
+    stp x29, x30, [sp, #-16]!
     cbz x1, .Lwrite_all_assert_null
     cbz x2, .Lwrite_all_assert_empty
     mov x9, x0
     mov x10, #MAX_WRITES
 .Lwrite_all_loop:  // bound: 64
     mov x0, x9
-    mov x8, #SYS_WRITE
-    svc #0
+    bl os_write
     tbnz x0, #63, .Lwrite_all_return
     cmp x0, x2
     b.hi .Lwrite_all_assert_count
@@ -318,6 +304,7 @@ write_all:
 .Lwrite_all_done:
     mov x0, #0
 .Lwrite_all_return:
+    ldp x29, x30, [sp], #16
     ret
 .Lwrite_all_assert_null:
     mov w0, #5
@@ -329,42 +316,4 @@ write_all:
     mov w0, #7
     bl assert_fail
 .size write_all, . - write_all
-
-// lengua's assertion handler. check compares it word for word: copy it exactly.
-// In: w0 = the assertion's number, 1 to 999. Prints "lengua: assertion NNN failed" to
-// standard error and ends the program, every thread of it, with code 134.
-.type assert_fail, @function
-assert_fail:
-    sub sp, sp, #32
-    adrp x1, assert_message
-    add x1, x1, :lo12:assert_message
-    ldp x2, x3, [x1]
-    stp x2, x3, [sp]
-    ldr x2, [x1, #16]
-    str x2, [sp, #16]
-    ldr w2, [x1, #24]
-    str w2, [sp, #24]
-    ldrb w2, [x1, #28]
-    strb w2, [sp, #28]
-    mov w2, #100
-    udiv w3, w0, w2
-    msub w0, w3, w2, w0
-    add w3, w3, #48
-    strb w3, [sp, #18]
-    mov w2, #10
-    udiv w3, w0, w2
-    msub w0, w3, w2, w0
-    add w3, w3, #48
-    strb w3, [sp, #19]
-    add w0, w0, #48
-    strb w0, [sp, #20]
-    mov x0, #2
-    mov x1, sp
-    mov x2, #29
-    mov x8, #64
-    svc #0
-    mov x0, #134
-    mov x8, #94
-    svc #0
-.size assert_fail, . - assert_fail
 

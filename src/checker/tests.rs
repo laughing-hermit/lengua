@@ -498,14 +498,10 @@ const INLINE_FORM: &[&str] = &[
     "benches/programs/shout/neon-one.s",
     "benches/programs/upcase/avx512.s",
     "benches/programs/upcase/neon.s",
-    "examples/aes/main.s",
     "examples/archive/main.s",
-    "examples/count/main.s",
     "examples/dice/main.s",
     "examples/echo/main.s",
     "examples/fetch/main.s",
-    "examples/sha256/main.s",
-    "examples/sort/main.s",
     "examples/upcase/main.s",
     "plugin/skills/compile/assets/fast/aes-ni/main.s",
     "plugin/skills/compile/assets/fast/crc32c/main.s",
@@ -523,49 +519,27 @@ const INLINE_FORM: &[&str] = &[
     "plugin/skills/compile/assets/linux-aarch64/fast/wc-sve/main.s",
     "plugin/skills/compile/assets/linux-aarch64/parallel-template.s",
     "plugin/skills/compile/assets/linux-aarch64/server-template.s",
-    "plugin/skills/compile/assets/linux-aarch64/stream-template.s",
-    "plugin/skills/compile/assets/linux-aarch64/tally-template.s",
     "plugin/skills/compile/assets/linux-aarch64/terminal-template.s",
-    "plugin/skills/compile/assets/linux-aarch64/vector-template.s",
     "plugin/skills/compile/assets/parallel-template.s",
     "plugin/skills/compile/assets/server-template.s",
-    "plugin/skills/compile/assets/stream-template.s",
-    "plugin/skills/compile/assets/tally-template.s",
     "plugin/skills/compile/assets/terminal-template.s",
-    "plugin/skills/compile/assets/vector-template.s",
-    "tests/fixtures/amounts/main.s",
     "tests/fixtures/clock/main.s",
     "tests/fixtures/dates/main.s",
     "tests/fixtures/days/main.s",
-    "tests/fixtures/lines/main.s",
-    "tests/fixtures/linux-aarch64/aes/main.s",
-    "tests/fixtures/linux-aarch64/amounts/main.s",
     "tests/fixtures/linux-aarch64/archive/main.s",
     "tests/fixtures/linux-aarch64/clock/main.s",
-    "tests/fixtures/linux-aarch64/count/main.s",
     "tests/fixtures/linux-aarch64/dates/main.s",
     "tests/fixtures/linux-aarch64/days/main.s",
     "tests/fixtures/linux-aarch64/dice/main.s",
     "tests/fixtures/linux-aarch64/echo/main.s",
     "tests/fixtures/linux-aarch64/fetch/main.s",
-    "tests/fixtures/linux-aarch64/lines/main.s",
     "tests/fixtures/linux-aarch64/nap/main.s",
-    "tests/fixtures/linux-aarch64/padded/main.s",
-    "tests/fixtures/linux-aarch64/pairs/main.s",
-    "tests/fixtures/linux-aarch64/second/main.s",
-    "tests/fixtures/linux-aarch64/sha256/main.s",
-    "tests/fixtures/linux-aarch64/sort/main.s",
     "tests/fixtures/linux-aarch64/sweep/main.s",
     "tests/fixtures/linux-aarch64/total/main.s",
     "tests/fixtures/linux-aarch64/upcase/main.s",
-    "tests/fixtures/linux-aarch64/words/main.s",
     "tests/fixtures/nap/main.s",
-    "tests/fixtures/padded/main.s",
-    "tests/fixtures/pairs/main.s",
-    "tests/fixtures/second/main.s",
     "tests/fixtures/sweep/main.s",
     "tests/fixtures/total/main.s",
-    "tests/fixtures/words/main.s",
 ];
 
 /// Every `.s` file under `folder` that defines `_start`, by its path from the repository's root.
@@ -3571,12 +3545,10 @@ async fn only_a_server_takes_connections_forever() {
     );
 }
 
-/// A program that reads with fill, in tests/fixtures.
+/// A program of the inline form that reads with fill, as tests/fixtures/second was before it
+/// moved to the edge form.
 fn with_fill() -> String {
-    std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/second/main.s"),
-    )
-    .expect("the fixture")
+    include_str!("inline_form/second.s").to_owned()
 }
 
 #[tokio::test]
@@ -4078,9 +4050,9 @@ async fn an_aarch64_file_program_passes_every_rule() {
 pub(crate) fn from_rodata(text: &str) -> String {
     let changed = text
         .replacen(
-            ".type assert_message, @object\n",
+            ".type usage_msg, @object\n",
             ".type thousand, @object\nthousand:\n    .double 1000.0\n.size thousand, . - thousand\n\n\
-             .type assert_message, @object\n",
+             .type usage_msg, @object\n",
             1,
         )
         .replacen(

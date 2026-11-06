@@ -359,9 +359,9 @@ const HYPOTENUSE: Folders = PerCpu {
 const SCALE_FROM_RODATA: PerCpu<&[Edit]> = PerCpu {
     x86_64: &[
         (
-            ".type assert_message, @object\n",
+            ".type usage_msg, @object\n",
             ".type thousand, @object\nthousand:\n    .double 1000.0\n.size thousand, . - thousand\n\n\
-             .type assert_message, @object\n",
+             .type usage_msg, @object\n",
         ),
         (
             "    mov eax, UNITS\n    cvtsi2sd xmm2, rax\n",
@@ -370,9 +370,9 @@ const SCALE_FROM_RODATA: PerCpu<&[Edit]> = PerCpu {
     ],
     aarch64: &[
         (
-            ".type assert_message, @object\n",
+            ".type usage_msg, @object\n",
             ".type thousand, @object\nthousand:\n    .double 1000.0\n.size thousand, . - thousand\n\n\
-             .type assert_message, @object\n",
+             .type usage_msg, @object\n",
         ),
         (
             "    mov x2, #UNITS\n    scvtf d2, x2\n",
@@ -406,7 +406,7 @@ const ROUNDED_TOWARD_ZERO: PerCpu<Edit> = PerCpu {
 /// the program divides each side's thousandths by 1000, squares, adds, takes the square root and
 /// scales back, the formula's own steps, so the two outputs are one float computed alike. The
 /// scale read from a `.double` is the same double; a pointer moved one double past it is caught,
-/// rather than taken for assert_message's bytes, which come next; and rounding toward zero rather
+/// rather than taken for usage_msg's bytes, which come next; and rounding toward zero rather
 /// than to the nearest is caught.
 #[tokio::test]
 async fn proves_the_hypotenuse() {
@@ -3847,16 +3847,10 @@ const SECOND: Folders = PerCpu {
     aarch64: "tests/fixtures/linux-aarch64/second",
 };
 
-/// The edit that reads with one raw `read` in place of fill, on each target.
+/// The edit that reads with one read of the operation in place of fill, on each target.
 const RAW_READ: PerCpu<Edit> = PerCpu {
-    x86_64: (
-        "    mov ecx, NEWLINE\n    call fill\n",
-        "    mov eax, SYS_READ\n    syscall\n",
-    ),
-    aarch64: (
-        "    mov w3, #NEWLINE\n    bl fill\n",
-        "    mov x8, #SYS_READ\n    svc #0\n",
-    ),
+    x86_64: ("    mov ecx, NEWLINE\n    call fill\n", "    call os_read\n"),
+    aarch64: ("    mov w3, #NEWLINE\n    bl fill\n", "    bl os_read\n"),
 };
 
 /// One read of its own in place of fill is right only when both lines arrive in one read: with
