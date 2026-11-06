@@ -137,15 +137,6 @@ impl Profile {
                     Syscall::Accept4 => Pin::ListeningSocket,
                     Syscall::Sendto => Pin::NoAddress,
                     Syscall::Ioctl => Pin::Terminal,
-                    // The calls that take a descriptor first never take the channel, which the
-                    // edge refuses too: a program past the checker can't talk to the broker.
-                    Syscall::Read
-                    | Syscall::Write
-                    | Syscall::Close
-                    | Syscall::Lseek
-                    | Syscall::Fstat
-                    | Syscall::Getdents64
-                    | Syscall::Shutdown => Pin::NotChannel,
                     _ => Pin::Any,
                 },
             })
