@@ -91,9 +91,9 @@ and the CPU features the code needs; never write that line yourself.
    to one path; a branch per byte doubles the paths with each byte, and the proof stops early.
 4. Write the code by [the rules](references/power-of-10.md), with
    [the edge](references/edge.md) for the operations, the errors and the library, and
-   [the Linux x86-64 reference](references/linux-x86_64.md), or on `linux-aarch64`
-   [the Linux AArch64 reference](references/linux-aarch64.md), for the calling convention and the
-   dialect's form on the CPU. Write it correct first; speed comes in step 6.
+   [the x86-64 reference](references/x86_64.md), or when the machine line names AArch64
+   [the AArch64 reference](references/aarch64.md), for the calling convention and the dialect's
+   form on the CPU. Write it correct first; speed comes in step 6.
 5. Call `check` with `path`. It checks the rules first and lists each violation as
    `rule N (name) main.s:LINE: problem. Fix: …`. Then it runs every test: each behavior's example,
    and the generated tests with fresh random inputs (boundary values first). A failure shows the

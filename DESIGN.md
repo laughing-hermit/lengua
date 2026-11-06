@@ -1323,7 +1323,7 @@ question, its loop leaving where its index reaches the bytes read as the NEON on
    as x86-64's SSE2 one is; and the vector template from its spec unchanged, every line with
    no solver question. CPU feature detection is per CPU too (x86's `is_x86_feature_detected!`).
 4. **Dialect:** the Power of 10 in that CPU's mnemonics and registers, with its reference (today
-   `references/linux-x86_64.md` and the x86 parts of `references/power-of-10.md`). The rules
+   `references/x86_64.md` and the x86 parts of `references/power-of-10.md`). The rules
    themselves read only the facts, so they're shared; what's per CPU is the syntax and what the
    dialect allows of it. AArch64's (`checker/aarch64.rs`, and the AArch64 half of
    `checker/source.rs`): line 1 is `.arch armv8-a` and comments start `//`; no x18, the platform

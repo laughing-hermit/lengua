@@ -5,8 +5,8 @@ lengua's operations, `os_read`, `os_write` and the rest, which lengua links afte
 file of its own, `lengua.s`: its `_start`, the operations the program calls, and the library
 functions it calls without defining them (`assert_fail`, `fill`, `parallel_for`). The operations
 are the same on every computer lengua runs on; what differs between computers is the registers
-each CPU passes them in, which [the x86-64 reference](linux-x86_64.md) and
-[the AArch64 reference](linux-aarch64.md) give.
+each CPU passes them in, which [the x86-64 reference](x86_64.md) and
+[the AArch64 reference](aarch64.md) give.
 
 `syscall`, `svc`, a name that starts `os_`, `lengua_` or `LENGUA_`, and a definition of `_start`,
 `assert_fail`, `assert_message`, `fill` or `parallel_for` are refused: they are lengua's.

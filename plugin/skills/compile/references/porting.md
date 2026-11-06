@@ -51,7 +51,7 @@ Each new target needs:
    refused by construction, and tests that decoder against LLVM's disassembler.
 3. **Prover model** — the CPU's instructions in `src/prove/exec`, and CPU-feature detection.
 4. **Dialect** — the Power of 10 in that CPU's mnemonics and registers, with its own reference
-   beside `linux-x86_64.md`.
+   beside `x86_64.md`.
 5. **The OS edge** — a file for the OS and CPU, `src/edge/<os>-<cpu>.s`, holding `_start` and the
    21 operations of [the edge](edge.md), `os_read` to `os_exit`, written for the OS. On Linux each
    is a system call with a few instructions around it: the numbers, the instruction and registers
@@ -131,7 +131,7 @@ each item with its own hardware's means.
   point, vectors (NEON, and SVE's scalable bytes), text, standard input of any length through
   `fill`, files and folders, hash tables, sorting, servers and clients, the terminal, threads,
   and the CPU's CRC, carry-less multiply, AES and SHA instructions ([its
-  reference](linux-aarch64.md)); its fast `wc` is proven for every length with a 64 KiB buffer,
+  reference](aarch64.md)); its fast `wc` is proven for every length with a 64 KiB buffer,
   as x86-64's is. Each example and fixture has its twin on the other CPU, compiled from the very
   same spec (`every_program_has_its_twin_on_the_other_cpu`, `tests/every_program.rs`).
 - **macOS (ARM64, x86-64)** and **Windows (x86-64, ARM64)** need all six, the OS edge and the

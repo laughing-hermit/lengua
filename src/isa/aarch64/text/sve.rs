@@ -384,7 +384,7 @@ impl Line<'_> {
             }
             _ => Err(self.problem(
                 "isn't in the dialect's SVE, the integer subset of bytes a streaming loop needs: \
-                 see the SVE facts in references/linux-aarch64.md",
+                 see the SVE facts in references/aarch64.md",
             )),
         }
     }

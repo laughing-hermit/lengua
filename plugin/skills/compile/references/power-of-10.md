@@ -4,7 +4,7 @@
 builds it, reads the machine code back, matches it to `main.s` line by line (operands included),
 and checks the rules below. Nothing runs before every rule passes. Each violation names its rule,
 its line and a fix. The rules are the same on every target; the examples below are x86-64's, and
-[the Linux AArch64 reference](linux-aarch64.md) gives each in AArch64's form.
+[the AArch64 reference](aarch64.md) gives each in AArch64's form.
 
 These are NASA's "Power of 10" rules for safety-critical code (Holzmann, 2006), adapted for
 assembly and combined with ideas from C, C++ and Rust, then the memory rules M1 to M8, a borrow

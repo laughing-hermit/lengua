@@ -1604,7 +1604,7 @@ impl Parser {
                     self.dialect(
                         number,
                         format!("`{text}`: {problem}"),
-                        "see the operand forms in references/linux-aarch64.md",
+                        "see the operand forms in references/aarch64.md",
                     );
                     return;
                 }
@@ -1617,7 +1617,7 @@ impl Parser {
             self.dialect(
                 number,
                 problem,
-                "see the instructions and operand forms in references/linux-aarch64.md",
+                "see the instructions and operand forms in references/aarch64.md",
             );
             return;
         }

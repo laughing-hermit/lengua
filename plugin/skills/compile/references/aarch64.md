@@ -1,6 +1,6 @@
-# Linux AArch64 reference
+# AArch64 reference
 
-For a computer whose `machine` line starts `linux-aarch64`: an ARM64 computer running Linux, or
+For a computer whose `machine` line names AArch64 (`linux-aarch64` today): an ARM64 computer, or
 an x86-64 one testing AArch64 code through QEMU. The rules are the same as x86-64's
 ([the rules](power-of-10.md)), written in AArch64's instructions, and a program calls the same
 operations and library functions ([the edge](edge.md)); this page is what is AArch64's. Start from
