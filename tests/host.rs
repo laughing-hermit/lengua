@@ -141,11 +141,7 @@ async fn check(pool: &Pool, wat: &str, case: &Case) -> Result<(), String> {
             .collect(),
     };
     // A case has no server of its own: each connection its network names is handed over ended.
-    let connections: Vec<Reach> = network
-        .connections
-        .iter()
-        .map(|_| Reach::Nowhere)
-        .collect();
+    let connections: Vec<Reach> = network.connections.iter().map(|_| Reach::Nowhere).collect();
     let spec = Spec {
         files: &files,
         folders: &folders,
@@ -218,8 +214,11 @@ async fn check(pool: &Pool, wat: &str, case: &Case) -> Result<(), String> {
                             .chain(&wanted_folders)
                             .any(|name| name.starts_with(&format!("{folder}/")))
                 };
-                let unnamed: Vec<&String> =
-                    run.folders.iter().filter(|folder| !named(*folder)).collect();
+                let unnamed: Vec<&String> = run
+                    .folders
+                    .iter()
+                    .filter(|folder| !named(*folder))
+                    .collect();
                 let missing: Vec<&String> = wanted_folders
                     .iter()
                     .filter(|folder| !run.folders.contains(*folder))
@@ -255,7 +254,10 @@ fn case_files() -> Vec<(PathBuf, PathBuf)> {
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().is_some_and(|extension| extension == "toml") {
+            if path
+                .extension()
+                .is_some_and(|extension| extension == "toml")
+            {
                 found.push((path.with_extension("wat"), path));
             }
         }
@@ -283,7 +285,10 @@ async fn every_case_in_host_cases_does_what_its_file_says() {
                     .map_err(|problem| format!("{}: {problem}", case.about)),
                 Err(error) => Err(format!("the case doesn't read: {error}")),
             },
-            (Err(error), _) => Err(format!("its module {} doesn't read: {error}", wat.display())),
+            (Err(error), _) => Err(format!(
+                "its module {} doesn't read: {error}",
+                wat.display()
+            )),
             (_, Err(error)) => Err(format!("it doesn't read: {error}")),
         };
         if let Err(problem) = outcome {

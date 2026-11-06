@@ -792,8 +792,7 @@ async fn check_one(
     let (run, mut problem) =
         check_one_way(target, test, network, delivery, assertions, false).await?;
     if problem.is_none() && run.listed {
-        let (_, turned) =
-            check_one_way(target, test, network, delivery, assertions, true).await?;
+        let (_, turned) = check_one_way(target, test, network, delivery, assertions, true).await?;
         if let Some(turned) = turned {
             problem = Some(format!(
                 "with its folder's entries listed the other way round, {turned}: each file \

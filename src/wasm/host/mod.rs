@@ -12,8 +12,8 @@ pub mod fds;
 pub mod files;
 pub mod limits;
 pub mod net;
-pub mod poll;
 pub mod policy;
+pub mod poll;
 pub mod random;
 pub mod stdio;
 
@@ -28,9 +28,7 @@ use self::files::{Files, Folder};
 use self::policy::Policy;
 use crate::supply::Time;
 use crate::wasm::job::Event;
-use crate::wasm::wasi::{
-    self, Function, Unasked, errno, fdflags, filetype, rights, size, whence,
-};
+use crate::wasm::wasi::{self, Function, Unasked, errno, fdflags, filetype, rights, size, whence};
 
 /// Why the host stops the whole program rather than answer it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -856,15 +854,25 @@ fn define(linker: &mut Linker<Host>) -> wasmtime::Result<()> {
     linker.func_wrap(MODULE, "fd_allocate", |_: i32, _: i64, _: i64| NOSYS)?;
     linker.func_wrap(MODULE, "fd_datasync", |_: i32| NOSYS)?;
     linker.func_wrap(MODULE, "fd_fdstat_set_flags", |_: i32, _: i32| NOSYS)?;
-    linker.func_wrap(MODULE, "fd_fdstat_set_rights", |_: i32, _: i64, _: i64| NOSYS)?;
+    linker.func_wrap(MODULE, "fd_fdstat_set_rights", |_: i32, _: i64, _: i64| {
+        NOSYS
+    })?;
     linker.func_wrap(MODULE, "fd_filestat_set_size", |_: i32, _: i64| NOSYS)?;
     linker.func_wrap(
         MODULE,
         "fd_filestat_set_times",
         |_: i32, _: i64, _: i64, _: i32| NOSYS,
     )?;
-    linker.func_wrap(MODULE, "fd_pread", |_: i32, _: i32, _: i32, _: i64, _: i32| NOSYS)?;
-    linker.func_wrap(MODULE, "fd_pwrite", |_: i32, _: i32, _: i32, _: i64, _: i32| NOSYS)?;
+    linker.func_wrap(
+        MODULE,
+        "fd_pread",
+        |_: i32, _: i32, _: i32, _: i64, _: i32| NOSYS,
+    )?;
+    linker.func_wrap(
+        MODULE,
+        "fd_pwrite",
+        |_: i32, _: i32, _: i32, _: i64, _: i32| NOSYS,
+    )?;
     linker.func_wrap(MODULE, "fd_renumber", |_: i32, _: i32| NOSYS)?;
     linker.func_wrap(MODULE, "fd_sync", |_: i32| NOSYS)?;
     linker.func_wrap(
@@ -901,7 +909,11 @@ fn strings_sizes(
     memory::check(memory, count, 4)?;
     memory::check(memory, bytes, 4)?;
     let total: usize = strings.iter().map(|string| string.len() + 1).sum();
-    memory::write_u32(memory, count, u32::try_from(strings.len()).unwrap_or(u32::MAX))?;
+    memory::write_u32(
+        memory,
+        count,
+        u32::try_from(strings.len()).unwrap_or(u32::MAX),
+    )?;
     memory::write_u32(memory, bytes, u32::try_from(total).unwrap_or(u32::MAX))
 }
 

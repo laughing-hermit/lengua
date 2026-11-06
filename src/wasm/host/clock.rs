@@ -66,7 +66,9 @@ impl Clock {
         } else if id == clock::REALTIME {
             SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
-                .map_or(0, |since| u64::try_from(since.as_nanos()).unwrap_or(u64::MAX))
+                .map_or(0, |since| {
+                    u64::try_from(since.as_nanos()).unwrap_or(u64::MAX)
+                })
         } else {
             u64::try_from(self.started.elapsed().as_nanos()).unwrap_or(u64::MAX)
         };

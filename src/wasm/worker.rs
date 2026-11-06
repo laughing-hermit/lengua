@@ -47,8 +47,7 @@ impl Worker {
         }
         let engine = engine::engine(setup, self.cache.as_deref())?;
         let linker = host::linker(&engine)?;
-        self.engines
-            .insert(setup, (engine.clone(), linker.clone()));
+        self.engines.insert(setup, (engine.clone(), linker.clone()));
         Ok((engine, linker))
     }
 

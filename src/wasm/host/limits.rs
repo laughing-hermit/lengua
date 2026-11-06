@@ -71,7 +71,10 @@ impl Limits {
         if self.stop.load(Ordering::SeqCst) {
             return Err(Stop::Stopped);
         }
-        if self.deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
             return Err(Stop::TimedOut);
         }
         Ok(())

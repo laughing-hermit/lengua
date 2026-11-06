@@ -72,7 +72,10 @@ fn files() -> Policy {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_program_past_its_time_is_stopped() {
-    let text = module(&[], r#"(func (export "_start") (loop $forever (br $forever)))"#);
+    let text = module(
+        &[],
+        r#"(func (export "_start") (loop $forever (br $forever)))"#,
+    );
     let limits = Limits {
         timeout: Duration::from_millis(300),
         ..Limits::default()
@@ -118,14 +121,20 @@ async fn memory_grows_only_as_far_as_its_module_declares() {
     );
     let none = Policy::default();
     // The first page more fits its maximum of two; the next doesn't.
-    assert_eq!(exited(&run(&bounded, Spec::new(&[], &[], none), Limits::default()).await), 11);
+    assert_eq!(
+        exited(&run(&bounded, Spec::new(&[], &[], none), Limits::default()).await),
+        11
+    );
     let unbounded = format!(
         r#"(module {EXIT} (memory (export "memory") 1)
   (func (export "_start")
     (call $exit (i32.eq (memory.grow (i32.const 1)) (i32.const -1)))))"#
     );
     // No maximum declared: its size is all it has.
-    assert_eq!(exited(&run(&unbounded, Spec::new(&[], &[], none), Limits::default()).await), 1);
+    assert_eq!(
+        exited(&run(&unbounded, Spec::new(&[], &[], none), Limits::default()).await),
+        1
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -384,7 +393,11 @@ async fn nothing_past_the_working_folder_is_reached() {
     let folder = tempfile::tempdir().expect("the working folder");
     for name in ["../secret.txt", "a/../../secret.txt", "/secret.txt"] {
         let (text, spec) = in_folder(folder.path(), name, false);
-        assert_eq!(exited(&run(&text, spec, Limits::default()).await), 2, "{name}");
+        assert_eq!(
+            exited(&run(&text, spec, Limits::default()).await),
+            2,
+            "{name}"
+        );
     }
     if link(outside.path(), &folder.path().join("away")).is_err() {
         lengua::skiplog::note("this system doesn't let the test make a link");
@@ -392,7 +405,11 @@ async fn nothing_past_the_working_folder_is_reached() {
     }
     for name in ["away/secret.txt", "away"] {
         let (text, spec) = in_folder(folder.path(), name, false);
-        assert_eq!(exited(&run(&text, spec, Limits::default()).await), 2, "{name}");
+        assert_eq!(
+            exited(&run(&text, spec, Limits::default()).await),
+            2,
+            "{name}"
+        );
     }
     let (text, spec) = in_folder(folder.path(), "away/made.txt", true);
     assert_eq!(exited(&run(&text, spec, Limits::default()).await), 2);
@@ -418,7 +435,10 @@ async fn a_folder_lists_in_order_and_turned_round_in_a_second_run() {
         ("a.txt".to_owned(), String::new()),
     ]);
     let folders = BTreeSet::from(["c".to_owned()]);
-    for (reversed, wanted) in [(false, ["a.txt", "b.txt", "c"]), (true, ["c", "b.txt", "a.txt"])] {
+    for (reversed, wanted) in [
+        (false, ["a.txt", "b.txt", "c"]),
+        (true, ["c", "b.txt", "a.txt"]),
+    ] {
         let spec = Spec {
             files: &given,
             folders: &folders,
@@ -717,5 +737,8 @@ fn a_worker_ends_when_its_server_does() {
     if !ended {
         let _ = worker.kill();
     }
-    assert!(ended, "the worker kept its program running after its server ended");
+    assert!(
+        ended,
+        "the worker kept its program running after its server ended"
+    );
 }

@@ -130,22 +130,34 @@ mod tests {
     /// Each capability allows its functions, as the idea's words read.
     #[test]
     fn each_capability_allows_its_functions() {
-        let (uses, network) = crate::idea::constraints(&["files", "the clock"], "")
-            .expect("valid words");
+        let (uses, network) =
+            crate::idea::constraints(&["files", "the clock"], "").expect("valid words");
         let policy = Policy::of(&uses, &network);
         assert!(policy.files && policy.clock && !policy.random);
         let reached = allowed(&policy);
-        for name in ["path_open", "fd_readdir", "clock_time_get", "poll_oneoff", "fd_close"] {
+        for name in [
+            "path_open",
+            "fd_readdir",
+            "clock_time_get",
+            "poll_oneoff",
+            "fd_close",
+        ] {
             assert!(reached.contains(&name), "{name}");
         }
         assert!(!reached.contains(&"random_get"));
         assert!(!reached.contains(&"sock_accept"));
-        let (uses, network) = crate::idea::constraints(&[], "listens on TCP port 8080")
-            .expect("a server's line");
+        let (uses, network) =
+            crate::idea::constraints(&[], "listens on TCP port 8080").expect("a server's line");
         let server = Policy::of(&uses, &network);
         assert!(server.listens && server.network() && !server.at_once);
         let reached = allowed(&server);
-        for name in ["sock_accept", "sock_recv", "sock_send", "sock_shutdown", "fd_read"] {
+        for name in [
+            "sock_accept",
+            "sock_recv",
+            "sock_send",
+            "sock_shutdown",
+            "fd_read",
+        ] {
             assert!(reached.contains(&name), "{name}");
         }
         assert!(crate::idea::constraints(&["the moon"], "").is_err());
