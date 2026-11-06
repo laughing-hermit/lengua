@@ -39,7 +39,7 @@ on:
   workflow_dispatch:
     inputs:
       targets:
-        description: "Which targets: all, or a comma-separated list from scripts/ci/targets.json (and qemu)"
+        description: "Which targets: all, or a comma-separated list from scripts/ci/targets.json (and qemu, which runs only when named)"
         type: string
         default: "all"
       mode:
@@ -173,8 +173,9 @@ jobs:
             matrix=$(jq -c --argjson legs "$legs" \
               '[.[] | select(.target == "linux-x86_64") as $t | $legs[] | $t + . + {mode: "golden", base: $t.target, qemu: false, depth: 0}]' <<< "$listed")
           fi
-          # The suite on x86-64 Linux with QEMU's user mode, beside the five.
-          if [ "$MODE" = test ] && { [ -z "$TARGETS" ] || [ "$TARGETS" = all ] || [[ ",$TARGETS," == *,qemu,* ]]; }; then
+          # The suite on x86-64 Linux with QEMU's user mode, only when `targets` names `qemu`:
+          # ARM64 Linux has its own runner, and the pivot retires the job (todo.md, "Superseded").
+          if [ "$MODE" = test ] && [[ ",$TARGETS," == *,qemu,* ]]; then
             matrix=$(jq -c '. + [{target: "linux-x86_64-qemu", runner: "ubuntu-24.04", mode: "test", base: "linux-x86_64", qemu: true, ref: "", label: "", depth: 1}]' <<< "$matrix")
           fi
           if [ "$matrix" = "[]" ]; then

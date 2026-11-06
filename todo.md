@@ -201,7 +201,7 @@ Runs, as they land:
 | Milestone | Runs |
 |---|---|
 | W0 | 42295197937 (compile, both Linux runners); tag `native-final` at 723879e; main at fc86dd3 |
-| W1 | (to come) |
+| W1 | 42304173338 (test, both Linux runners, at ff68d40; the QEMU job's known failures aside); 42296519743 (the golden ledger against `native-final`: no checker or prover verdict changed) |
 
 ## Superseded by the pivot
 
@@ -210,7 +210,8 @@ this file at the tag `native-final`.
 - **Round 2's leftovers:** the QEMU job's seven failing cases, plain runs' goldens, sha256's
   load-dependent proof bound on x86-64, upcase's retries and the skipped assertion, the stamp's
   CPU names, moving the CPU harnesses onto the edge. The WebAssembly lengua has no QEMU, no
-  per-CPU code and no CPU stamp; its own goldens come with W5 and W8.
+  per-CPU code and no CPU stamp; its own goldens come with W5 and W8. The QEMU job now runs only
+  when a dispatch's `targets` names `qemu`.
 - **Round 3:** the Ubuntu package with LLVM, the install test through `setup.sh`, the kernel
   floor and Landlock, `doctor` for Linux kernels, musl or an older glibc, LLVM's version, WSL 2 on
   `windows-11-arm`, and the routes in CI. `lengua-mcp` needs no LLVM, no kernel feature and no VM
