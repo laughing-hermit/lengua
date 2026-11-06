@@ -718,8 +718,8 @@ struct ClientTable<T> {
 }
 
 /// A step's text: plain, or parts with repeated runs, so a long input such as a file one byte
-/// over a limit stays short to write: ``- Given a file `big.txt` holding `a` repeated `1048576`
-/// times followed by `x` ``. An expected output may instead be a rule, ``it prints text matching
+/// over a limit stays short to write: ``- Given a file `big.txt` that contains `a` `1048576`
+/// times then `x` ``. An expected output may instead be a rule, ``it prints text that matches
 /// `rolled {any(1, 6)}` ``.
 #[derive(Debug)]
 enum Text {
@@ -757,7 +757,7 @@ impl Text {
     fn expected(self) -> Result<String, String> {
         match self {
             Self::Rule(Rule { matches }) => Template::parse(&matches)
-                .map_err(|error| format!("text matching {matches:?}: {error}"))?
+                .map_err(|error| format!("text that matches {matches:?}: {error}"))?
                 .rule(),
             text => text.expand(),
         }
@@ -1089,14 +1089,14 @@ fn words(field: &str) -> String {
         "server" | "server.receives" => "what the server receives".into(),
         "server.replies" => "what the server replies".into(),
         "client" | "client.sends" => "what the client sends".into(),
-        "client.receives" => "what the client gets back".into(),
+        "client.receives" => "what the client receives".into(),
         other => match (
             other.strip_prefix("files."),
             other.strip_prefix("files_after."),
             other.strip_prefix("env."),
         ) {
             (Some(file), ..) => format!("the file `{file}`"),
-            (_, Some(file), _) => format!("what `{file}` holds after"),
+            (_, Some(file), _) => format!("what `{file}` contains after"),
             (.., Some(name)) => format!("the environment variable `{name}`"),
             _ => other.to_owned(),
         },
@@ -1168,7 +1168,7 @@ impl<'a> Checker<'a> {
                 .files_after
                 .into_iter()
                 .map(|(file, contents)| {
-                    let contents = expand(&format!("what `{file}` holds after"), contents, true);
+                    let contents = expand(&format!("what `{file}` contains after"), contents, true);
                     (file, contents)
                 })
                 .collect();
@@ -1200,7 +1200,7 @@ impl<'a> Checker<'a> {
                 .into_iter()
                 .map(|table| Exchange {
                     sends: expand("what the client sends", table.sends, false),
-                    receives: expand("what the client gets back", table.receives, true),
+                    receives: expand("what the client receives", table.receives, true),
                 })
                 .collect();
             for problem in file_set_problems(files.keys().chain(files_after.keys())) {
@@ -1579,8 +1579,8 @@ impl<'a> Checker<'a> {
             (true, true, false) => return Some(0),
             (false, false, true) => return Some(i64::from(behavior.exit_code)),
             (true, false, _) => format!(
-                "{name}: {id} keeps serving, so its generated tests end with `- And it keeps \
-                 serving` too"
+                "{name}: {id} does not stop, so its generated tests end with `- And it does not \
+                 stop` too"
             ),
             (false, true, _) => format!(
                 "{name} keeps serving, but {id} exits with code {code}: end its generated tests \

@@ -10,7 +10,10 @@ records the idea the tests are part of, so nothing carries a label.
 ## The steps
 
 lengua reads each step as one of these phrasings. A step it can't read is a problem in the idea,
-reported with the phrasing to write instead. Values go in backticks, with `\n`, `\r`, `\t` and
+reported with the phrasing to write instead. The phrasings are in ASD-STE100 Simplified Technical
+English, as the rest of the idea is ([STE in idea files](ste.md)): a step in one of lengua's old
+phrasings, such as ``standard input holding `…` ``, is refused with the STE phrasing that
+replaces it. Values go in backticks, with `\n`, `\r`, `\t` and
 `\\` for the characters they name, so a protocol's line breaks are written as they're sent:
 `` `GET / HTTP/1.0\r\n\r\n` ``. A value that holds a backtick goes in double backticks:
 ``` ``a`b`` ```.
@@ -21,12 +24,12 @@ reported with the phrasing to write instead. Values go in backticks, with `\n`, 
 |---|---|
 | ``the arguments `2` and `3` ``, ``the argument `x` `` | Its command-line arguments, in order |
 | `no arguments` | None |
-| ``standard input holding TEXT`` | Everything it can read; then input ends |
+| ``standard input that contains TEXT`` | Everything it can read; then input ends |
 | `no standard input`, `empty standard input` | Input that ends at once |
-| ``a file `notes.txt` holding TEXT``, ``an empty file `notes.txt` `` | A file in its working folder |
+| ``a file `notes.txt` that contains TEXT``, ``an empty file `notes.txt` `` | A file in its working folder |
 | ``no file `notes.txt` `` | Nothing: the folder starts empty, and the step says so |
 | ``an empty folder `archive` `` | A folder in its working folder, for an idea that uses `files` |
-| ``the environment variable `NAME` set to TEXT`` | That variable, for an idea that uses `the environment`; it gets no others |
+| ``the environment variable `NAME` with the value TEXT`` | That variable, for an idea that uses `the environment`; it gets no others |
 | ``the clock at `1735689600` `` | What the program reads from the clock, in seconds since 1970; ``then `1735689601` `` adds a later reading |
 | ``the random bytes `fc` and `2a` `` | The random bytes the program asks the computer for, one byte of hex a value |
 | ``a server on port `8080` that receives TEXT and replies TEXT`` | The test's own server on the program's connection to that port, one a connection; ``a server at `example.com` on port `443` …`` when two places share a port, and ``a server that receives …`` when the idea names one |
@@ -43,19 +46,19 @@ reported with the phrasing to write instead. Values go in backticks, with `\n`, 
 | ``it prints TEXT`` | Exactly that on standard output |
 | ``it prints TEXT to standard error`` | Exactly that on standard error |
 | `it prints nothing` | Nothing on either; also what a behavior means when it says neither |
-| ``it prints text matching `rolled {any(1, 6)}` `` | Output the program chooses: a [rule](#rules-output-the-program-chooses), here `rolled ` and a number from 1 to 6 |
-| ``the file `loud.txt` holds TEXT`` | A file the program leaves, with exactly that in it, or ``text matching `…` `` |
+| ``it prints text that matches `rolled {any(1, 6)}` `` | Output the program chooses: a [rule](#rules-output-the-program-chooses), here `rolled ` and a number from 1 to 6 |
+| ``the file `loud.txt` contains TEXT`` | A file the program leaves, with exactly that in it, or ``text that matches `…` `` |
 | ``there is no file `notes.txt` ``, ``there is no folder `tmp` `` | A file or folder the program deleted, moved away, or never made |
 | ``there is a folder `archive` `` | A folder the program made or kept |
-| ``the client gets back TEXT`` | What the program answers that client, in the order of the clients' steps; or ``text matching `…` `` |
+| ``the client receives TEXT`` | What the program answers that client, in the order of the clients' steps; or ``text that matches `…` `` |
 | ``it exits with code `0` `` | Its exit code: 0 to 255, never 134 |
-| `it keeps serving` | A server still waiting for its next connection, with no exit code |
+| `it does not stop` | A server that still waits for its next connection, with no exit code |
 
 **TEXT** is a value in backticks, where `\n`, `\r`, `\t`, `\e` (the escape that starts a
-terminal's sequences) and `\\` stand for those characters. ``followed by a newline`` adds a line break,
-``repeated `N` times`` repeats a value, and `followed by` or `then` joins parts:
-``- Given standard input holding `a` repeated `4096` times followed by `x` `` is 4096 `a`s and an
-`x`, up to 8 MiB a value. Several printing steps print one after another.
+terminal's sequences) and `\\` stand for those characters. `and a newline` adds a line break,
+`` `N` times`` after a value repeats it, and `then` joins parts:
+``- Given standard input that contains `a` `4096` times then `x` `` is 4096 `a`s and an `x`, up
+to 8 MiB a value. Several printing steps print one after another.
 
 A program that connects needs no port in its arguments or input: lengua makes each connection
 its idea names before the program starts, and the test's server for it answers there.
@@ -70,7 +73,7 @@ table. Prose under the heading is the idea's own.
 ### For any two numbers
 - Given the arguments `{a}` and `{b}`
 - When the program runs
-- Then it prints `{a + b}` followed by a newline
+- Then it prints `{a + b}` and a newline
 - And it exits with code `0`
 
 | a | b | runs |
@@ -81,10 +84,10 @@ table. Prose under the heading is the idea's own.
 - **The steps** use the example's phrasings. In what the program is given (its arguments,
   standard input, files, clock readings, random bytes, the test server's replies and the test
   client's messages), a placeholder holds a bare variable, as in `{a}` or `--n={a}`; what it
-  prints, the files it leaves, what the server receives and the client gets back, and its exit
-  code, may hold any formula: `{a + b}`, ``it exits with code `{if(a < 0, 1, 0)}` ``. `{{` and
-  `}}` stand for braces. Escapes such as `\n` are read in the text around placeholders, while a
-  formula's own strings keep theirs: ``it prints `{count(text, "\n")}` followed by a newline``.
+  prints, the files it leaves, what the server receives and what the client receives, and its
+  exit code, may hold any formula: `{a + b}`, ``it exits with code `{if(a < 0, 1, 0)}` ``. `{{`
+  and `}}` stand for braces. Escapes such as `\n` are read in the text around placeholders, while
+  a formula's own strings keep theirs: ``it prints `{count(text, "\n")}` and a newline``.
 - **The table** has a column for each variable, holding its generator, and an optional `runs`
   column: 1 to 1000, or empty for 100. Each row is one generated test, so several rows cover
   inputs one range can't, such as divisors on both sides of zero; all rows share the steps.
@@ -129,7 +132,7 @@ variable as bytes, and ``the clock at `{t}` `` reads a variable.
 
 An idea that uses `the terminal` gets its keys as standard input in tests, a key a byte or an
 escape sequence of several, such as `\e[A` for up, and its tests write what it prints with `\e`
-for the escape that starts each sequence: ``it prints `\e[2J\e[H` followed by …``. A test's
+for the escape that starts each sequence: ``it prints `\e[2J\e[H` then …``. A test's
 standard input is a pipe, so the program can't set the terminal's mode there and goes on as from
 a pipe; every wait for a key finds one, or the end of the input.
 
@@ -152,15 +155,15 @@ tests with their own servers or client: never the real places, which only `run` 
   sends its text and keeps its side of the connection open until the program starts answering
   (or closes it at once when it expects no answer), then reads everything the program answers
   until it closes the connection. So a server must answer once the request is complete, by its
-  newline, blank line or length, never by waiting for the client to close. A behavior that keeps
-  serving ends with the program waiting for the next connection; lengua stops it.
+  newline, blank line or length, never by waiting for the client to close. A behavior that ends
+  with ``it does not stop`` leaves the program to wait for the next connection; lengua stops it.
 - **Clients at once:** a server whose `- Network:` line ends with `, up to N clients at once`
   shows it in a behavior with two or more ``a client that sends …`` steps and ``- And the
   clients connect at once``, at most N of them. Its test opens every connection; all but the
   newest send all but their last byte and hold it, and the newest sends everything and must be
   answered while the others hold; then each, from the newest, sends its last byte and must be
   answered. A server that serves one client at a time is caught waiting on the first. Each
-  ``the client gets back …`` belongs to its client, in order.
+  ``the client receives …`` belongs to its client, in order.
 - **Pieces:** on every other generated run, standard input and the test's server and client
   arrive in three pieces with short pauses, as a pipe or a network may deliver them, so a program
   must read until it has what it needs. A program that reads with lengua's `fill` is proven for every way a message
@@ -172,16 +175,16 @@ When the program chooses part of its output, such as a die's roll or the current
 can't know the exact text. A rule stands for that part: `{any(lo, hi)}` is any whole number from
 `lo` to `hi`, written plainly (an optional `-`, then digits with no leading zero).
 
-- **In the steps,** ``it prints text matching `rolled {any(1, 6)}` followed by a newline``. Its
+- **In the steps,** ``it prints text that matches `rolled {any(1, 6)}` and a newline``. Its
   placeholders are `any(…)` only, with bounds that are whole numbers or `now` plus or minus a
   whole number; `{{` and `}}` stand for braces.
 - **In a generated test,** `any(lo, hi)` is a function, and its bounds may be formulas:
-  ``it prints `rolled {any(1, sides)}` followed by a newline``.
+  ``it prints `rolled {any(1, sides)}` and a newline``.
 - **`now`** is when the run starts, in whole Unix seconds. No test knows that second exactly, so
   `now` only bounds a rule: `{any(now - 2, now + 2)}`. A table with a column named `now` draws
   it like any other variable.
 - **Only expected output holds rules,** in what the program prints, the files it leaves and what
-  a client gets back: a test's inputs are exact. Text functions such as `len` and `upper` can't
+  a client receives: a test's inputs are exact. Text functions such as `len` and `upper` can't
   look inside a rule.
 - **Proofs cover rules:** the proof shows the printed number is in range for every input and for
   every value the clock or the random bytes could give, unless the test uses `now`.
@@ -293,8 +296,8 @@ adds two prices in cents, and any rounding rule the idea states is whole-number 
 
 ## What check checks
 
-1. Every step is one of the phrasings above, and no value or cell holds the characters U+FDD0,
-   U+FDD1 and U+FDD2, which mark rules inside lengua.
+1. Every step is one of the phrasings above, in its STE form, and no value or cell holds the
+   characters U+FDD0, U+FDD1 and U+FDD2, which mark rules inside lengua.
 2. Each behavior's generated tests sit under one `###` heading after its steps, with Given, When
    and Then steps, and a table below them: a header, a separator such as `|---|`, and rows with a
    cell for each column. Tests written in TOML are refused, with this form to write instead.
@@ -334,15 +337,15 @@ capital letters.
 
 # Behaviors
 ## B1: Shouts a line
-- Given standard input holding `hello world` followed by a newline
+- Given standard input that contains `hello world` and a newline
 - When the program runs
-- Then it prints `HELLO WORLD` followed by a newline
+- Then it prints `HELLO WORLD` and a newline
 - And it exits with code `0`
 
 ### For any line
-- Given standard input holding `{line}` followed by a newline
+- Given standard input that contains `{line}` and a newline
 - When the program runs
-- Then it prints `{upper(line)}` followed by a newline
+- Then it prints `{upper(line)}` and a newline
 - And it exits with code `0`
 
 | line |
@@ -352,7 +355,7 @@ capital letters.
 ## B2: Rejects empty input
 - Given no standard input
 - When the program runs
-- Then it prints `error: no input` followed by a newline to standard error
+- Then it prints `error: no input` and a newline to standard error
 - And it exits with code `1`
 
 # Constraints
@@ -369,21 +372,21 @@ description: Divides one whole number by another and prints the quotient, rounde
 ---
 # Purpose
 Divides a whole number between `-1000000` and `1000000` by a whole number between `-1000` and
-`-1` or between `1` and `1000`, and prints the quotient rounded toward zero.
+`-1` or between `1` and `1000`. It prints the quotient, rounded toward zero.
 
 # Behaviors
 ## B1: Divides two numbers
 - Given the arguments `7` and `2`
 - When the program runs
-- Then it prints `3` followed by a newline
+- Then it prints `3` and a newline
 - And it exits with code `0`
 
 ### For any two numbers
-Negative divisors, then positive ones: one range can't hold both without 0.
+Negative divisors, then positive ones: one range cannot hold both without 0.
 
 - Given the arguments `{a}` and `{b}`
 - When the program runs
-- Then it prints `{a / b}` followed by a newline
+- Then it prints `{a / b}` and a newline
 - And it exits with code `0`
 
 | a | b |
@@ -394,13 +397,13 @@ Negative divisors, then positive ones: one range can't hold both without 0.
 ## B2: Rejects division by zero
 - Given the arguments `7` and `0`
 - When the program runs
-- Then it prints `error: division by zero` followed by a newline to standard error
+- Then it prints `error: division by zero` and a newline to standard error
 - And it exits with code `2`
 
 ### For any number divided by zero
 - Given the arguments `{a}` and `0`
 - When the program runs
-- Then it prints `error: division by zero` followed by a newline to standard error
+- Then it prints `error: division by zero` and a newline to standard error
 - And it exits with code `2`
 
 | a | runs |
@@ -421,23 +424,25 @@ description: Rolls a fair six-sided die and prints the roll.
 ---
 # Purpose
 Rolls a fair six-sided die for a board game and prints the roll, a whole number from `1` to `6`.
-It reads random bytes from the computer and rolls with the first byte below `252`: the roll is
-that byte's remainder after dividing by 6, plus 1. Bytes from `252` to `255` are set aside, so
-every face is equally likely. If the computer gives no random bytes, or the first 64 are all set
-aside (which a fair source practically never does), the program exits with code 3. If writing
-the output fails, it exits with code 2.
+It reads random bytes from the computer and uses the first byte below `252`. The roll is the
+remainder of that byte divided by 6, plus 1. Bytes from `252` to `255` are set aside, so each
+face has the same chance.
+
+If the computer gives no random bytes, the program exits with code 3. It also exits with code 3
+when the first 64 bytes are all set aside, which a fair source almost never does. If the program
+cannot write its output, it exits with code 2.
 
 # Behaviors
 ## B1: Rolls a die
 - Given the random bytes `fc` and `2a`
 - When the program runs
-- Then it prints `rolled 1` followed by a newline
+- Then it prints `rolled 1` and a newline
 - And it exits with code `0`
 
 ### For any random bytes
 - Given the random bytes `{hex(first, 1)}` and `{hex(second, 1)}`
 - When the program runs
-- Then it prints `rolled {if(first < 252, first % 6, if(second < 252, second % 6, 0)) + 1}` followed by a newline
+- Then it prints `rolled {if(first < 252, first % 6, if(second < 252, second % 6, 0)) + 1}` and a newline
 - And it exits with code `0`
 
 | first | second | runs |
@@ -460,20 +465,20 @@ title: roll
 description: Rolls a six-sided die for a player and prints the roll.
 ---
 # Purpose
-Rolls a fair six-sided die for a player numbered from `1` to `9`, given as an argument. If
-writing the output fails, the program exits with code 2.
+Rolls a fair six-sided die for a player with a number from `1` to `9`, given as an argument. If
+the program cannot write its output, it exits with code 2.
 
 # Behaviors
 ## B1: Rolls a die
 - Given the argument `3`
 - When the program runs
-- Then it prints text matching `player 3 rolled {any(1, 6)}` followed by a newline
+- Then it prints text that matches `player 3 rolled {any(1, 6)}` and a newline
 - And it exits with code `0`
 
 ### For any player
 - Given the argument `{player}`
 - When the program runs
-- Then it prints `player {player} rolled {any(1, 6)}` followed by a newline
+- Then it prints `player {player} rolled {any(1, 6)}` and a newline
 - And it exits with code `0`
 
 | player |

@@ -315,7 +315,7 @@ fn outputs_less(name: &str, old: &Table, new: &Table, marks: &mut Vec<String>) {
     }
 }
 
-/// Whether an expected value is a rule: `text matching` in a behavior's steps, which reads as
+/// Whether an expected value is a rule: `text that matches` in a behavior's steps, which reads as
 /// `{ matches = … }`, or a template that calls `any(…)` in a generated block.
 fn is_rule(value: &Value) -> bool {
     match value {

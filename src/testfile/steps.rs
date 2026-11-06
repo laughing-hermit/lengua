@@ -2,13 +2,15 @@
 //! values. The steps under its `###` heading are its generated tests: the same phrasings, whose
 //! values are templates over the variables of the table below them, one row a generated test.
 //! lengua reads steps in a fixed vocabulary, as Gherkin's step definitions do, so the idea's own
-//! words are the tests and nothing is written twice.
+//! words are the tests and nothing is written twice. The vocabulary is in ASD-STE100 Simplified
+//! Technical English, as the rest of an idea is: a step in one of lengua's old phrasings is
+//! refused, with the STE phrasing that replaces it (`crate::ste`).
 //!
 //! Given:
 //! - ``the arguments `a` and `b` ``, ``the argument `a` ``, `no arguments`
-//! - ``standard input holding TEXT``, `no standard input` or `empty standard input`
-//! - ``a file `name` holding TEXT``, ``an empty file `name` ``, ``no file `name` ``
-//! - ``the environment variable `NAME` set to TEXT``
+//! - ``standard input that contains TEXT``, `no standard input` or `empty standard input`
+//! - ``a file `name` that contains TEXT``, ``an empty file `name` ``, ``no file `name` ``
+//! - ``the environment variable `NAME` with the value TEXT``
 //! - ``an empty folder `name` ``
 //! - ``the clock at `seconds` ``, with ``then `seconds` `` for later readings
 //! - ``the random bytes `fc` and `2a` ``
@@ -21,17 +23,17 @@
 //!
 //! Then:
 //! - ``it prints TEXT``, with `to standard error` for standard error, and `it prints nothing`
-//! - ``it prints text matching `rule` `` for output the program chooses, such as
+//! - ``it prints text that matches `rule` `` for output the program chooses, such as
 //!   `` `rolled {any(1, 6)}` ``
-//! - ``the file `name` holds TEXT``
+//! - ``the file `name` contains TEXT``
 //! - ``there is no file `name` ``, ``there is no folder `name` ``, ``there is a folder `name` ``
-//! - ``the client gets back TEXT``
-//! - ``it exits with code `0` ``, `it keeps serving`
+//! - ``the client receives TEXT``
+//! - ``it exits with code `0` ``, `it does not stop`
 //!
 //! TEXT is a value in backticks, written with `\n`, `\r`, `\t`, `\e` and `\\` for the characters
-//! they name; ``followed by a newline`` adds one, ``repeated `N` times`` repeats a value in an example,
-//! and `followed by` or `then` joins parts. In a generated test, `{…}` holds a formula, whose own
-//! strings keep their escapes.
+//! they name; `and a newline` adds one, `` `N` times`` after a value repeats it in an example,
+//! and `then` joins parts. In a generated test, `{…}` holds a formula, whose own strings keep
+//! their escapes.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -46,16 +48,15 @@ const RUNS: &str = "runs";
 
 /// The phrasings lengua reads, for a step it can't.
 const GIVEN_PHRASES: &str = "`Given the arguments `…` and `…``, `Given no arguments`, `Given \
-     standard input holding `…``, `Given a file `name` holding `…``, `Given no file `name``, \
-     `Given the environment variable `NAME` set to `…``, `Given an empty folder `name``, `Given \
-     the clock at `…``, `Given the \
-     random bytes `…``, `Given a server on port \
+     standard input that contains `…``, `Given a file `name` that contains `…``, `Given no file \
+     `name``, `Given the environment variable `NAME` with the value `…``, `Given an empty folder \
+     `name``, `Given the clock at `…``, `Given the random bytes `…``, `Given a server on port \
      `…` that receives `…` and replies `…``, `Given a client that sends `…``, `And the clients \
      connect at once`, `And standard output is closed`";
 const THEN_PHRASES: &str = "`Then it prints `…``, `Then it prints `…` to standard error`, \
-     `Then it prints nothing`, `Then it prints text matching `rule``, `Then the file `name` \
-     holds `…``, `Then there is no file `name``, `Then there is a folder `name``, `Then the \
-     client gets back `…``, `And it exits with code `N``, `And it keeps serving`";
+     `Then it prints nothing`, `Then it prints text that matches `rule``, `Then the file `name` \
+     contains `…``, `Then there is no file `name``, `Then there is a folder `name``, `Then the \
+     client receives `…``, `And it exits with code `N``, `And it does not stop`";
 
 /// How a step's values read.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -132,7 +133,8 @@ fn rows(outline: &Outline) -> Vec<OutlineRow> {
         .collect()
 }
 
-/// Reads `steps` in `mode`, reporting each step it can't read with its rewrite.
+/// Reads `steps` in `mode`, reporting each step it can't read with its rewrite, and each of
+/// lengua's old phrasings with the STE phrasing that replaces it.
 fn read(
     steps: &[Step],
     behavior: &Behavior,
@@ -169,17 +171,28 @@ fn read(
             });
             continue;
         }
-        reading.line = step.line;
         let tokens = step.tokens();
+        let old = crate::ste::old_forms(&tokens);
+        if !old.is_empty() {
+            // STE refuses the old phrasing, and says the one lengua reads instead.
+            for form in old {
+                problems.push(Problem {
+                    line: Some(step.line),
+                    message: format!("STE: {whose}: {}", form.fix()),
+                });
+            }
+            continue;
+        }
+        reading.line = step.line;
         let read = match phase {
             Keyword::When => when(&tokens),
             Keyword::Then => reading.output(&tokens),
             _ => reading.input(&tokens),
         };
         if read.is_none() {
-            let rewrite = if mode == Mode::Generated && step.text.contains("repeated") {
+            let rewrite = if mode == Mode::Generated && repeats(&tokens) {
                 "a value drawn from the table: a generated test's text comes from its variables, \
-                 and `repeated` is for examples"
+                 and a value written `` `N` times`` or `repeated` is for examples"
                     .to_owned()
             } else {
                 rewrite(step, phase)
@@ -203,7 +216,7 @@ fn read(
         problems.push(Problem {
             line: steps.first().map(|step| step.line),
             message: format!(
-                "{whose}: each `a client that sends …` needs its `the client gets back …`, in the \
+                "{whose}: each `a client that sends …` needs its `the client receives …`, in the \
                  same order"
             ),
         });
@@ -283,12 +296,10 @@ impl Reading {
             at.value()?;
             return at.end();
         }
-        if at.words(&["no", "server"]) || at.words(&["nothing", "listening"]) {
+        if at.words(&["no", "server"]) {
             // The connection to the place it names is handed over already ended.
             let host = at.is("at").then(|| at.value()).flatten();
-            let port = (at.words(&["on", "port"]) || at.words(&["there", "on", "port"]))
-                .then(|| at.value())
-                .flatten();
+            let port = at.words(&["on", "port"]).then(|| at.value()).flatten();
             if port.is_some() || host.is_some() {
                 self.connection(host.as_deref(), port.as_deref());
             }
@@ -308,8 +319,9 @@ impl Reading {
             }
             if at.words(&["environment", "variable"]) {
                 let name = at.value()?;
-                at.word("set")?;
-                at.word("to")?;
+                at.word("with")?;
+                at.word("the")?;
+                at.word("value")?;
                 self.wrote(format!("env.{name}"));
                 self.env.insert(name, text(&mut at, mode)?);
                 return at.end();
@@ -338,7 +350,7 @@ impl Reading {
             }
             return None;
         }
-        if at.words(&["standard", "input", "holding"]) {
+        if at.words(&["standard", "input", "that", "contains"]) {
             self.wrote("stdin".into());
             self.stdin = Some(text(&mut at, mode)?);
             return at.end();
@@ -358,7 +370,8 @@ impl Reading {
         if at.words(&["a", "file"]) {
             at.word("named");
             let name = at.value()?;
-            at.word("holding")?;
+            at.word("that")?;
+            at.word("contains")?;
             self.wrote(format!("files.{name}"));
             self.files.insert(name, text(&mut at, mode)?);
             return at.end();
@@ -422,7 +435,7 @@ impl Reading {
             self.exit_code = Some(code);
             return at.end();
         }
-        if at.words(&["it", "keeps", "serving"]) {
+        if at.words(&["it", "does", "not", "stop"]) {
             self.serves = true;
             return at.end();
         }
@@ -431,7 +444,7 @@ impl Reading {
                 stream(&mut at)?;
                 return at.end();
             }
-            let printed = if at.words(&["text", "matching"]) {
+            let printed = if at.words(&["text", "that", "matches"]) {
                 rule(&mut at, mode)?
             } else {
                 text(&mut at, mode)?
@@ -456,8 +469,8 @@ impl Reading {
             }
             return at.end();
         }
-        if at.words(&["the", "client", "gets", "back"]) {
-            let answer = if at.words(&["text", "matching"]) {
+        if at.words(&["the", "client", "receives"]) {
+            let answer = if at.words(&["text", "that", "matches"]) {
                 rule(&mut at, mode)?
             } else {
                 text(&mut at, mode)?
@@ -477,8 +490,8 @@ impl Reading {
         at.word("the");
         at.word("file");
         let name = at.value()?;
-        at.word("holds")?;
-        let held = if at.words(&["text", "matching"]) {
+        at.word("contains")?;
+        let held = if at.words(&["text", "that", "matches"]) {
             rule(&mut at, mode)?
         } else {
             text(&mut at, mode)?
@@ -767,8 +780,8 @@ fn stream(at: &mut Cursor<'_>) -> Option<Stream> {
     Some(Stream::Out)
 }
 
-/// TEXT: values joined by `followed by` or `then`, each optionally ``repeated `N` times`` in an
-/// example, with `a newline` for a line break.
+/// TEXT: values joined by `then`, each optionally with `` `N` times`` after it in an example, and
+/// `a newline` for a line break, which `and` joins too: ``- Then it prints `5` and a newline``.
 fn text(at: &mut Cursor<'_>, mode: Mode) -> Option<Text> {
     let mut parts = Vec::new();
     loop {
@@ -776,22 +789,23 @@ fn text(at: &mut Cursor<'_>, mode: Mode) -> Option<Text> {
             push_plain(&mut parts, "\n");
         } else {
             let value = mode.value(&at.value()?);
-            if at.is("repeated") {
+            if let Some(count) = at.times() {
                 if mode == Mode::Generated {
                     return None;
                 }
-                let times = at.value()?.parse().ok()?;
-                at.word("times")?;
                 parts.push(TextPart::Repeat(Repeat {
                     repeat: value,
-                    times,
+                    times: count.parse().ok()?,
                 }));
             } else {
                 push_plain(&mut parts, &value);
             }
         }
+        while at.words(&["and", "a", "newline"]) {
+            push_plain(&mut parts, "\n");
+        }
         let before = at.at;
-        if at.words(&["followed", "by"]) || at.words(&["and", "then"]) || at.is("then") {
+        if at.words(&["and", "then"]) || at.is("then") {
             continue;
         }
         at.at = before;
@@ -812,14 +826,22 @@ fn push_plain(parts: &mut Vec<TextPart>, plain: &str) {
     }
 }
 
-/// A rule for output the program chooses: the test language in backticks, optionally
-/// `followed by a newline`. In a generated test, `any(…)` in a template is a rule already.
+/// A rule for output the program chooses: the test language in backticks, optionally with
+/// `and a newline`. In a generated test, `any(…)` in a template is a rule already.
 fn rule(at: &mut Cursor<'_>, mode: Mode) -> Option<Text> {
     let mut matches = mode.value(&at.value()?);
-    if at.words(&["followed", "by", "a", "newline"]) {
+    if at.words(&["and", "a", "newline"]) {
         matches.push('\n');
     }
     Some(Text::Rule(Rule { matches }))
+}
+
+/// Whether a step repeats a value, as `` `a` `4097` times`` does.
+fn repeats(tokens: &[Token]) -> bool {
+    tokens.windows(3).any(|three| match three {
+        [Token::Value(_), Token::Value(_), Token::Word(word)] => word == "times",
+        _ => false,
+    })
 }
 
 /// Outputs printed by several steps, joined in order.
@@ -871,10 +893,10 @@ fn rewrite(step: &Step, phase: Keyword) -> String {
     let suggestion = match phase {
         Keyword::When => Some("the program runs".to_owned()),
         Keyword::Then if has("exit") => Some(format!("it exits with code {first}")),
-        Keyword::Then if has("serv") || has("listen") => Some("it keeps serving".to_owned()),
-        Keyword::Then if has("client") => Some(format!("the client gets back {first}")),
+        Keyword::Then if has("serv") || has("listen") => Some("it does not stop".to_owned()),
+        Keyword::Then if has("client") => Some(format!("the client receives {first}")),
         Keyword::Then if has("hold") || has("file") || has("writ") => Some(format!(
-            "the file {first} holds {}",
+            "the file {first} contains {}",
             values.get(1).cloned().unwrap_or_else(|| "`…`".into())
         )),
         Keyword::Then if has("error") => Some(format!("it prints {first} to standard error")),
@@ -883,7 +905,7 @@ fn rewrite(step: &Step, phase: Keyword) -> String {
         }
         Keyword::Then => None,
         _ if has("argument") => Some(format!("the arguments {}", values.join(" and "))),
-        _ if has("input") => Some(format!("standard input holding {first}")),
+        _ if has("input") => Some(format!("standard input that contains {first}")),
         _ if has("clock") || has("time") => Some(format!("the clock at {first}")),
         _ if has("random") || has("byte") => {
             Some(format!("the random bytes {}", values.join(" and ")))
@@ -893,7 +915,7 @@ fn rewrite(step: &Step, phase: Keyword) -> String {
         }
         _ if has("client") => Some(format!("a client that sends {first}")),
         _ if has("file") => Some(format!(
-            "a file {first} holding {}",
+            "a file {first} that contains {}",
             values.get(1).cloned().unwrap_or_else(|| "`…`".into())
         )),
         _ => None,
@@ -950,6 +972,17 @@ impl<'a> Cursor<'a> {
             Some(Token::Value(value)) => {
                 self.at += 1;
                 Some(value.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// Takes `` `N` times`` when it comes next, giving `N`.
+    fn times(&mut self) -> Option<String> {
+        match (self.tokens.get(self.at), self.tokens.get(self.at + 1)) {
+            (Some(Token::Value(count)), Some(Token::Word(word))) if word == "times" => {
+                self.at += 2;
+                Some(count.clone())
             }
             _ => None,
         }
@@ -1252,6 +1285,160 @@ mod tests {
             .expect_err("a repeat");
         assert!(
             problems[0].message.contains("`repeated` is for examples"),
+            "{problems:?}"
+        );
+    }
+
+    /// A behavior's steps in lengua's STE phrasings, for the tests below to change.
+    const STE_STEPS: &str = "- Given standard input that contains `x`\n- When the program runs\n- \
+                             Then it prints `x` and a newline\n- And it exits with code `0`";
+
+    /// The problems lengua finds once the step at `at` in [`STE_STEPS`] says `text` instead: an
+    /// idea that holds such a step needn't come from idea.md's own reading.
+    fn changed(at: usize, text: &str) -> Vec<Problem> {
+        let mut idea = idea_with(STE_STEPS, "- Uses: standard input");
+        idea.behaviors[0].steps[at].text = text.to_owned();
+        example(&idea.behaviors[0], &idea).expect_err("a step it doesn't read")
+    }
+
+    /// Each STE phrasing reads as the old one it replaces meant.
+    #[test]
+    fn reads_the_ste_phrasings() {
+        let mut read = table(
+            "- Given standard input that contains `a` and a newline\n- And a file `in.txt` that \
+             contains `b` `3` times then `c`\n- And a file named `x.txt` that contains `d`\n- And \
+             the environment variable `NAME` with the value `Ada`\n- When the program runs\n- Then \
+             it prints `e` and a newline then `f`\n- And the file `out.txt` contains `g` and a \
+             newline\n- And it exits with code `0`",
+            "- Uses: standard input, files, the environment",
+        );
+        assert_eq!(plain(&read.stdin), "a\n");
+        let repeated = read.files.remove("in.txt").expect("the file");
+        assert_eq!(repeated.expand(), Ok("bbbc".into()));
+        assert_eq!(plain(&read.files["x.txt"]), "d");
+        assert_eq!(plain(&read.env["NAME"]), "Ada");
+        assert_eq!(plain(&read.stdout), "e\nf");
+        assert_eq!(plain(&read.files_after["out.txt"]), "g\n");
+    }
+
+    /// Rules, the test's client, and a server that does not stop, in their STE phrasings.
+    #[test]
+    fn reads_the_ste_phrasings_of_rules_and_servers() {
+        let read = table(
+            "- Given the argument `x`\n- When the program runs\n- Then it prints text that matches \
+             `rolled {any(1, 6)}` and a newline\n- And the file `out.txt` contains text that \
+             matches `{any(1, 9)}`\n- And it exits with code `0`",
+            "- Uses: files",
+        );
+        let Text::Rule(Rule { matches }) = &read.stdout else {
+            panic!("{:?}", read.stdout);
+        };
+        assert_eq!(matches, "rolled {any(1, 6)}\n");
+        let Text::Rule(Rule { matches }) = &read.files_after["out.txt"] else {
+            panic!("{:?}", read.files_after);
+        };
+        assert_eq!(matches, "{any(1, 9)}");
+        let (steps, rows) = outline(
+            "- Given a client that sends `hi` and a newline\n- When the program runs\n- Then the \
+             client receives `hello` and a newline\n- And it does not stop\n\n### For any text\n\
+             - Given a client that sends `{text}` and a newline\n- When the program runs\n- Then \
+             the client receives text that matches `{any(1, 9)}`\n- And it does not stop\n\n| \
+             text |\n|---|\n| `string(1, 9, \"ab\")` |",
+            "- Network: listens on TCP port 8080",
+        );
+        assert!(steps.serves);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(steps.client.len(), 1);
+        assert_eq!(steps.client[0].0.text, "{text}\n");
+        assert_eq!(steps.client[0].1.text, "{any(1, 9)}");
+    }
+
+    /// A step in one of lengua's old phrasings is refused with the STE phrasing that replaces it,
+    /// and nothing else is said of it.
+    #[test]
+    fn refuses_the_old_phrasings_with_their_ste_phrasings() {
+        for old in [
+            "standard input holding `x`",
+            "a file `in.txt` holding `x`",
+            "a file named `in.txt` holding `x`",
+            "the environment variable `NAME` set to `x`",
+            "it prints text matching `{any(1, 6)}`",
+            "the file `out.txt` holds `x`",
+            "the client gets back `x`",
+            "it keeps serving",
+            "nothing listening on port `8080`",
+            "it prints `x` followed by a newline",
+            "it prints `x` followed by `y`",
+            "standard input that contains `a` repeated `3` times",
+        ] {
+            let problems = changed(0, old);
+            assert!(
+                problems
+                    .iter()
+                    .all(|problem| problem.message.starts_with("STE: B1: write ")),
+                "{old}: {problems:?}"
+            );
+        }
+        let problems = changed(0, "standard input holding `x` followed by a newline");
+        let messages: Vec<&str> = problems
+            .iter()
+            .map(|problem| problem.message.as_str())
+            .collect();
+        assert_eq!(
+            messages,
+            [
+                "STE: B1: write `standard input that contains `…``, not `standard input holding \
+                 `…``",
+                "STE: B1: write ``…` and a newline`, not ``…` followed by a newline`",
+            ]
+        );
+    }
+
+    /// What lengua suggests for a step it can't read is in its STE phrasings.
+    #[test]
+    fn suggestions_say_the_ste_phrasings() {
+        for phrases in [GIVEN_PHRASES, THEN_PHRASES] {
+            for old in [
+                "holding",
+                "holds",
+                "matching",
+                "set to",
+                "gets back",
+                "keeps serving",
+                "followed by",
+                "repeated",
+            ] {
+                assert!(!phrases.contains(old), "{old}");
+            }
+        }
+        let suggested = |at: usize, text: &str| changed(at, text)[0].message.clone();
+        let input = suggested(0, "the input `abc`");
+        assert!(input.ends_with("as `- Given standard input that contains `abc``"));
+        let file = suggested(2, "the file `out.txt` has `y`");
+        assert!(file.ends_with("as `- Then the file `out.txt` contains `y``"));
+        let client = suggested(2, "the client gets `y`");
+        assert!(client.ends_with("as `- Then the client receives `y``"));
+        let serves = suggested(3, "the server stays up");
+        assert!(serves.ends_with("as `- And it does not stop`"));
+    }
+
+    /// A generated test's text comes from its table: a repeat is for examples.
+    #[test]
+    fn generated_tests_draw_text_instead_of_repeating_it_in_ste() {
+        let idea = idea_with(
+            &format!(
+                "{STE_STEPS}\n\n### For any text\n- Given standard input that contains `a` `3` \
+                 times\n- When the program runs\n- Then it prints `x`\n- And it exits with code \
+                 `0`\n\n| a |\n|---|\n| `int(1, 9)` |\n"
+            ),
+            "- Uses: standard input",
+        );
+        let behavior = &idea.behaviors[0];
+        let problems = generated(behavior, behavior.outline.as_ref().expect("tests"), &idea)
+            .expect_err("a repeat");
+        let message = &problems[0].message;
+        assert!(
+            message.contains("`` `N` times`` or `repeated` is for examples"),
             "{problems:?}"
         );
     }

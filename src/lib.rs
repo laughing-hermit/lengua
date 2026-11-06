@@ -34,6 +34,7 @@ pub mod runner;
 pub mod server;
 pub mod skiplog;
 pub mod state;
+pub mod ste;
 pub mod supply;
 pub mod syscalls;
 pub mod targets;
