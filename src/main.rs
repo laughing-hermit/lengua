@@ -15,7 +15,8 @@ use tracing_subscriber::EnvFilter;
 
 const USAGE: &str = "usage: lengua-mcp [--data-dir <absolute path>] [--version]
        lengua-mcp [--data-dir <absolute path>] run <program folder> [--in <folder>] \
-[--env NAME=value]... [-- <argument>...]";
+[--env NAME=value]... [-- <argument>...]
+       lengua-mcp link <main.s>";
 
 /// The exit code when lengua won't run a program or can't start it, as `timeout` and `env` use:
 /// the program's own codes stay its own.
@@ -60,6 +61,7 @@ fn main() -> ExitCode {
     let data_dir = match parse_args(arguments.into_iter()) {
         Ok(Command::Serve(data_dir)) => data_dir,
         Ok(Command::Run(data_dir, request)) => return run_from_shell(&data_dir, &request),
+        Ok(Command::Link(path)) => return link(&path),
         Ok(Command::Version) => {
             println!("lengua-mcp {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
@@ -97,6 +99,24 @@ fn run_from_shell(data_dir: &DataDir, request: &ShellRun) -> ExitCode {
     }
 }
 
+/// Prints the text a program is built from: main.s, and for one in the edge form lengua.s after
+/// it, so that it can be assembled outside lengua.
+fn link(path: &std::path::Path) -> ExitCode {
+    let linked = std::fs::read_to_string(path)
+        .map_err(|error| format!("can't read {}: {error}", path.display()))
+        .and_then(|text| lengua::edge::linked(&text));
+    match linked {
+        Ok(text) => {
+            print!("{text}");
+            ExitCode::SUCCESS
+        }
+        Err(message) => {
+            eprintln!("lengua-mcp: {message}");
+            ExitCode::from(REFUSED)
+        }
+    }
+}
+
 async fn serve(data_dir: DataDir) -> ExitCode {
     let server = LenguaServer::new(data_dir);
     let running = match server.serve(stdio()).await {
@@ -118,6 +138,7 @@ async fn serve(data_dir: DataDir) -> ExitCode {
 enum Command {
     Serve(DataDir),
     Run(DataDir, ShellRun),
+    Link(PathBuf),
     Version,
 }
 
@@ -165,6 +186,13 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Command, String>
                     .or_else(DataDir::from_env)
                     .ok_or(lengua::data_dir::NOT_FOUND)?;
                 return Ok(Command::Run(data_dir, request));
+            }
+            "link" => {
+                let path = args.next().ok_or("link needs a main.s")?;
+                if let Some(extra) = args.next() {
+                    return Err(format!("link takes one file, not {extra:?}"));
+                }
+                return Ok(Command::Link(PathBuf::from(path)));
             }
             "--data-dir" => {
                 let value = args.next().ok_or("--data-dir needs a path")?;

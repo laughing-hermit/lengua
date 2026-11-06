@@ -2596,12 +2596,20 @@ async fn build(code: &str, profile: Profile) -> Result<Build, String> {
     built.map_err(|error| format!("{CODE_FILE} doesn't build: {error}"))?;
     let bytes = std::fs::read(&executable)
         .map_err(|error| format!("couldn't read the built program: {error}"))?;
+    // A program in the edge form is built with lengua's text, which changes when lengua does: the
+    // stamp names it, so that a refusal after such a change says what differs.
+    let edge = crate::edge::lengua_text(profile, code)
+        .map(|text| {
+            let hash = Sha256Hex::of(text.as_bytes());
+            format!(", lengua's edge {}", &hash.as_str()[..8])
+        })
+        .unwrap_or_default();
     Ok(Build {
         folder: Arc::new(folder),
         executable,
         bytes,
         toolchain: format!(
-            "llvm-mc {}, ld.lld {}",
+            "llvm-mc {}, ld.lld {}{edge}",
             toolchain.assembler.version, toolchain.linker.version
         ),
     })

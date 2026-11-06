@@ -748,6 +748,34 @@ pub fn lengua_text(profile: Profile, main: &str) -> Option<String> {
     Some(text)
 }
 
+/// The text a program is built from: main.s, and for a program in the edge form lengua.s after it,
+/// for the CPU main.s's first line names and the system this is. It is what lengua assembles, so
+/// that a program can be built outside lengua.
+///
+/// # Errors
+///
+/// Fails when main.s doesn't start with a CPU's first line, or lengua has no edge for this system.
+pub fn linked(main: &str) -> Result<String, String> {
+    let (isa, arch) = [(Isa::X86_64, "x86_64"), (Isa::Aarch64, "aarch64")]
+        .into_iter()
+        .find(|(isa, _)| main.starts_with(crate::checker::source::header(*isa)))
+        .ok_or("main.s doesn't start with a CPU's first line: .intel_syntax noprefix or .arch armv8-a")?;
+    let profile = Profile::for_target(std::env::consts::OS, arch).ok_or_else(|| {
+        format!(
+            "lengua has no edge for {} on this system yet",
+            match isa {
+                Isa::X86_64 => "x86-64",
+                Isa::Aarch64 => "AArch64",
+            }
+        )
+    })?;
+    Ok(match lengua_text(profile, main) {
+        Some(text) if main.ends_with('\n') => format!("{main}{text}"),
+        Some(text) => format!("{main}\n{text}"),
+        None => main.to_owned(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1156,5 +1184,25 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A program in the edge form is built from main.s and lengua.s after it; one in the inline
+    /// form from main.s alone; and main.s names its CPU.
+    #[test]
+    fn a_program_is_linked_with_lengua_s_only_in_the_edge_form() {
+        if Profile::for_target(std::env::consts::OS, "x86_64").is_none() {
+            return;
+        }
+        let edge = ".intel_syntax noprefix\n.text\nmain:\n    call os_exit\n";
+        let linked = linked(edge).expect("the edge form links");
+        assert!(linked.starts_with(edge), "{linked}");
+        assert!(linked.contains("_start:") && linked.contains("os_exit:"), "{linked}");
+        let inline = ".intel_syntax noprefix\n.text\n_start:\n    ret\n";
+        assert_eq!(linked_inline(inline), inline);
+        assert!(super::linked("main:\n").is_err());
+    }
+
+    fn linked_inline(text: &str) -> String {
+        super::linked(text).expect("the inline form is its own text")
     }
 }
