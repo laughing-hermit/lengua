@@ -1,0 +1,12 @@
+about = "path_rename onto a file that is there replaces it"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = { "a.txt" = "new", "b.txt" = "old" }
+
+[expect]
+exit = 0
+stdout = ""
+stderr = ""
+files = { "b.txt" = "new" }

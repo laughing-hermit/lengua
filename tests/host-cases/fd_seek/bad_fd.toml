@@ -1,0 +1,11 @@
+about = "fd_seek on a descriptor not in use gives BADF"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = {}
+
+[expect]
+exit = 8
+stdout = ""
+stderr = ""

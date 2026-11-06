@@ -1,0 +1,12 @@
+about = "path_open making a name of 256 bytes gives NAMETOOLONG"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = {}
+
+[expect]
+exit = 37
+stdout = ""
+stderr = ""
+files = {}

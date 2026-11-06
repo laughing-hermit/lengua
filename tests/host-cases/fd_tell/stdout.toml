@@ -1,0 +1,11 @@
+about = "fd_tell on standard output gives SPIPE"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = {}
+
+[expect]
+exit = 70
+stdout = ""
+stderr = ""

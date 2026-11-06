@@ -1,0 +1,11 @@
+about = "fd_readdir writes an entry as its 24-byte head and then its name, with no NUL"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = { "only.txt" = "x" }
+
+[expect]
+exit = 0
+stdout = "only.txt 4 32\n"
+stderr = ""

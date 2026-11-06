@@ -1,0 +1,11 @@
+about = "path_filestat_get beneath a descriptor not in use gives BADF"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = { "f.txt" = "x" }
+
+[expect]
+exit = 8
+stdout = ""
+stderr = ""

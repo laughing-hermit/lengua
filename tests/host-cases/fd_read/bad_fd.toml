@@ -1,0 +1,11 @@
+about = "fd_read from a descriptor not in use gives BADF"
+uses = ["standard input"]
+network = ""
+args = []
+stdin = "abc"
+files = {}
+
+[expect]
+exit = 8
+stdout = ""
+stderr = ""

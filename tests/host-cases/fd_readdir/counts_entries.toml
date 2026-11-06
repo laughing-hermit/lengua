@@ -1,0 +1,11 @@
+about = "fd_readdir lists entries with their types and without the dot entries"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = { "a.txt" = "1", "b.txt" = "22", "empty/" = "" }
+
+[expect]
+exit = 0
+stdout = "3 2 1\n0 0 0\n"
+stderr = ""

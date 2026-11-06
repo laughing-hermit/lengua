@@ -1,0 +1,12 @@
+about = "path_remove_directory beneath a descriptor not in use gives BADF"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = { "dir/" = "" }
+
+[expect]
+exit = 8
+stdout = ""
+stderr = ""
+files = { "dir/" = "" }

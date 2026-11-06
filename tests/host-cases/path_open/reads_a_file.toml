@@ -1,0 +1,12 @@
+about = "path_open opens a file that is there to read"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = { "in.txt" = "hello\n" }
+
+[expect]
+exit = 0
+stdout = "hello\n"
+stderr = ""
+files = { "in.txt" = "hello\n" }

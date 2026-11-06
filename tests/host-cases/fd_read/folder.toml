@@ -1,0 +1,11 @@
+about = "fd_read from the working folder's descriptor gives ISDIR"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = { "in.txt" = "x" }
+
+[expect]
+exit = 31
+stdout = ""
+stderr = ""

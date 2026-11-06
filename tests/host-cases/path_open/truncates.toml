@@ -1,0 +1,12 @@
+about = "path_open with creat and trunc empties a file that is there"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = { "out.txt" = "old contents\n" }
+
+[expect]
+exit = 0
+stdout = ""
+stderr = ""
+files = { "out.txt" = "new\n" }

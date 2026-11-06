@@ -1,0 +1,12 @@
+about = "path_create_directory of a reserved device name gives INVAL on every system"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = {}
+
+[expect]
+exit = 28
+stdout = ""
+stderr = ""
+files = {}

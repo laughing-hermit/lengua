@@ -1,0 +1,11 @@
+about = "path_remove_directory of a name that isn't there gives NOENT"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = {}
+
+[expect]
+exit = 44
+stdout = ""
+stderr = ""
