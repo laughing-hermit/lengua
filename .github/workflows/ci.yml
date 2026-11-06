@@ -220,7 +220,9 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
+    # A golden leg, the mutation test and the bench run longer than the suite: the first golden
+    # head leg (run 42152180357) was cut off at 120 minutes, where its base leg took 101.
+    timeout-minutes: ${{ (matrix.mode == 'test' || matrix.mode == 'compile') && 120 || 330 }}
     # The QEMU job reports without failing the run until its seven failing cases are fixed
     # (todo.md, round 2): they expect a native run's wording, which an emulated one doesn't have.
     continue-on-error: ${{ matrix.qemu }}
