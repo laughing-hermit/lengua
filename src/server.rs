@@ -493,6 +493,14 @@ fn ended_report(
     assertions: &BTreeMap<i64, usize>,
     limits: Limits,
 ) -> RunReport {
+    let mut ended = testrun::explain_end(result, assertions, limits);
+    // A broker that stopped serving the program left it without names, clock or random bytes: the
+    // report says why.
+    if let Some(problem) = &result.supplied
+        && !ended.contains(problem.as_str())
+    {
+        ended = format!("{ended}; {problem}");
+    }
     RunReport {
         stdout: String::from_utf8_lossy(&result.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&result.stderr).into_owned(),
@@ -500,7 +508,7 @@ fn ended_report(
             End::Exited(code) => Some(code),
             _ => None,
         },
-        ended: testrun::explain_end(result, assertions, limits),
+        ended,
         instructions: result.instructions,
         cycles: result.cycles,
         cpu_time_us: result.cpu_time_ns.map(|nanoseconds| nanoseconds / 1000),
@@ -781,6 +789,8 @@ impl LenguaServer {
                         fix(),
                     )));
                 }
+                let channel = crate::edge::uses_channel(profile, &code)
+                    .then(|| crate::broker::Permit::of(&spec.syscalls));
                 self.start_checking(
                     &folder,
                     files,
@@ -791,7 +801,7 @@ impl LenguaServer {
                         built,
                         report,
                         profile,
-                        channel: crate::edge::uses_channel(profile, &code),
+                        channel,
                         emulator: target.emulator.clone(),
                     },
                     params.prove_further,
@@ -940,9 +950,9 @@ struct Code {
     built: Build,
     report: checker::Report,
     profile: Profile,
-    /// Whether lengua's broker serves the program: it is in the edge form and links the channel's
-    /// code.
-    channel: bool,
+    /// What lengua's broker does for the program, when it serves it: the program links the
+    /// channel's code, and its spec says what it may ask.
+    channel: Option<crate::broker::Permit>,
     /// QEMU, when this computer runs the target's programs only through it.
     emulator: Option<Emulator>,
 }
@@ -2350,9 +2360,9 @@ struct Runnable {
     spec: Spec,
     syscalls: Vec<crate::platform::Allowed>,
     net: Net,
-    /// Whether lengua's broker serves the program: it is in the edge form and links the channel's
-    /// code.
-    channel: bool,
+    /// What lengua's broker does for the program, when it serves it: the program links the
+    /// channel's code, and its spec says what it may ask.
+    channel: Option<crate::broker::Permit>,
     /// QEMU, when this computer runs the target's programs only through it.
     emulator: Option<Emulator>,
 }
@@ -2478,7 +2488,8 @@ async fn runnable(
         serve_anywhere: spec.network.serves_anywhere,
     };
     Ok(Runnable {
-        channel: crate::edge::uses_channel(profile, &code),
+        channel: crate::edge::uses_channel(profile, &code)
+            .then(|| crate::broker::Permit::of(&spec.syscalls)),
         built,
         source,
         spec,

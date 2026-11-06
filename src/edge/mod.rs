@@ -36,8 +36,8 @@ pub const THREAD_STACK_HEAD: i64 = 64;
 /// The most bytes `os_random` fills in one call.
 pub const RANDOM_MOST: u64 = 256;
 
-/// How much of a test's standard input is in its pipe before the program starts, and how much
-/// a write to a pipe is taken whole: one read then returns all of it.
+/// What one pipe write holds, which one read of standard input returns whole: past it, input
+/// arrives in pieces, which only a program that reads with fill takes right however they fall.
 pub const PIPE_WRITE: usize = 4096;
 
 /// The modes `os_open` takes.
@@ -310,7 +310,8 @@ impl Op {
                 ENAMETOOLONG,
                 EILSEQ,
             ],
-            Self::Clock | Self::Sleep | Self::Poll | Self::ThreadJoin => &[EINVAL],
+            Self::Clock | Self::Sleep | Self::ThreadJoin => &[EINVAL],
+            Self::Poll => &[EBADF, EINVAL],
             Self::Random => &[EIO, EINVAL],
             Self::Accept => &[EIO, EBADF, EAGAIN, EINVAL, EMFILE, ECONNRESET],
             Self::Shutdown => &[EBADF, EINVAL, ENOTCONN],
@@ -743,8 +744,8 @@ pub fn lengua_text(profile: Profile, main: &str) -> Option<String> {
 }
 
 /// Whether a program links the channel's code, and so talks to lengua's broker where it has one:
-/// the programs that open files, make or remove folders, ask the clock or for random bytes, sleep,
-/// wait for a connection or list a folder.
+/// the programs that open files, make, remove or rename files and folders, ask the clock or for
+/// random bytes, sleep, wait for a connection or a key, or list a folder.
 #[must_use]
 pub fn uses_channel(profile: Profile, main: &str) -> bool {
     lengua_text(profile, main).is_some_and(|text| text.contains("lengua_channel_ready:"))

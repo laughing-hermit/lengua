@@ -121,13 +121,16 @@ agent.
 
   So "the fast `wc` is proven" doesn't mean every streaming program is. lengua says which
   programs, never that all are.
-- **The kernel holds every run to what its spec allows.** A spec names what its program uses:
-  standard input, files and folders, the network, threads, the terminal, the clock, random bytes.
-  Every run, in tests and for the person, is sandboxed to exactly that, by seccomp and Landlock
-  and a broker of lengua's own that opens the program's files for it, since the program may touch
-  no path itself. A program that names no network has none. A program that connects
-  doesn't connect at all: lengua makes each connection its spec names, does TLS itself for HTTPS,
-  and hands the program a plain stream, so the program holds no network and no crypto.
+- **The kernel holds every run to the system calls, files and network its spec names.** A spec
+  names what its program uses: standard input, files and folders, the network, threads, the
+  terminal, the clock, random bytes. Every run, in tests and for the person, is sandboxed to
+  that, by seccomp and Landlock and a broker of lengua's own that opens the program's files for
+  it, since the program may touch no path itself. A program that names no network has none. A
+  program that connects doesn't connect at all: lengua makes each connection its spec names, does
+  TLS itself for HTTPS, and hands the program a plain stream, so the program holds no network and
+  no crypto. What the sandbox doesn't hold is how many threads a program starts and how much
+  memory and disk it uses in all, and, when QEMU runs the other CPU's program, its sockets;
+  DESIGN.md's threat model lists these limits.
 
 The checks are fast enough to sit inside the agent's loop: every call to lengua's tools comes
 back in under about 40 seconds, with proofs that need longer continued in the background.

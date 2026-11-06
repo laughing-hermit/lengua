@@ -477,10 +477,10 @@ const WORDS: [(&str, &str); 43] = [
          them with ldp in reverse order right before ret",
     ),
     (
-        "calls change rax, rcx, rdx, rsi, rdi and r8-r11, and syscall changes rax, rcx and r11, so \
-         loops with calls count in rbx or r12-r15",
-        "calls change x0 to x18 and x30, and svc changes x0, so loops with calls count in x19 to \
-         x28",
+        "calls change rax, rcx, rdx, rsi, rdi and r8-r11, and a call to an operation changes rax, \
+         rcx and r11, so loops with calls count in rbx or r12-r15",
+        "calls change x0 to x18 and x30, and a call to an operation changes x0, x8, x16, x17 and \
+         x30, so loops with calls count in x19 to x28",
     ),
     (
         "change rsp only with push, pop, call, ret, and add or sub rsp with a constant",
@@ -501,8 +501,8 @@ const WORDS: [(&str, &str); 43] = [
         "restore the same registers with ldp in reverse order, immediately before ret",
     ),
     (
-        "`mov edi, <number 1-999>` and `call assert_fail`",
-        "`mov w0, #<number 1-999>` and `bl assert_fail`",
+        "`mov edi, <number 1-899>` and `call assert_fail`",
+        "`mov w0, #<number 1-899>` and `bl assert_fail`",
     ),
     (
         "then dec R and jnz .Lname",

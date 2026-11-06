@@ -142,8 +142,8 @@ pub struct Outcome {
 pub struct Setting {
     /// Whether QEMU's user mode runs the program, for the target's CPU.
     pub emulated: bool,
-    /// Whether lengua's broker serves the program over a channel.
-    pub channel: bool,
+    /// What lengua's broker does for the program, when it serves it over a channel.
+    pub channel: Option<crate::broker::Permit>,
 }
 
 impl Outcome {
@@ -361,7 +361,8 @@ fn compare(
         serves,
         ..
     } = *expected;
-    // Running out of supplied random bytes stops the program; that's the failure to report.
+    // A broker that stopped serving the program is the failure to report; running out of the
+    // test's random bytes stops nothing (the rest are zeros), and a failing test says so below.
     if let Some(problem) = &run.supplied {
         return Some(problem.clone());
     }
@@ -447,7 +448,7 @@ pub async fn check_case(
     syscalls: &[Allowed],
     network: &Network,
     delivery: Delivery,
-    channel: bool,
+    channel: Option<crate::broker::Permit>,
 ) -> io::Result<Option<String>> {
     let (_, problem) = check_one(
         launcher,
@@ -486,7 +487,8 @@ impl Delivery {
     /// Every delivery a proof covers.
     pub const ALL: [Self; 4] = [Self::Whole, Self::Pieces, Self::FirstTwo, Self::LastTwo];
 
-    /// The lengths of the pieces `length` bytes arrive in. Fewer than three bytes arrive whole.
+    /// The lengths of the pieces `length` bytes arrive in. Fewer than three bytes arrive whole,
+    /// except where `At` or `Cuts` cut them.
     #[must_use]
     pub fn cuts(self, length: usize) -> Vec<usize> {
         if let Self::Cuts(mask) = self {
@@ -668,7 +670,7 @@ async fn check_one(
     delivery: Delivery,
     assertions: &BTreeMap<i64, usize>,
     emulated: bool,
-    channel: bool,
+    channel: Option<crate::broker::Permit>,
 ) -> io::Result<(Run, Option<String>)> {
     let (run, mut problem) = check_one_way(
         launcher, program, test, syscalls, network, delivery, assertions, emulated, channel, false,
@@ -702,7 +704,7 @@ async fn check_one_way(
     delivery: Delivery,
     assertions: &BTreeMap<i64, usize>,
     emulated: bool,
-    channel: bool,
+    channel: Option<crate::broker::Permit>,
     reversed: bool,
 ) -> io::Result<(Run, Option<String>)> {
     let supply = crate::supply::Supply::parse(test.random, test.clock).unwrap_or_default();

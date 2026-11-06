@@ -21,6 +21,10 @@ const MAX_FRAME_BYTES: i64 = 4096;
 /// The fewest assertions per function, on average.
 pub const MIN_ASSERTIONS_PER_FUNCTION: usize = 2;
 
+/// The highest number a program gives an assertion: lengua's own, in `parallel_for` (901 to 903)
+/// and `fill` (990 to 992), are kept for it.
+const MAX_ASSERTION: i64 = 899;
+
 /// What the rules learned about the program.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Facts {
@@ -30,7 +34,7 @@ pub struct Facts {
     pub assertions: usize,
     /// Functions in main.s.
     pub functions: usize,
-    /// The CPU features beyond the x86-64 baseline its instructions need.
+    /// The CPU features beyond the target's baseline its instructions need.
     pub features: Vec<&'static str>,
     /// The length of SVE's vectors on the CPU it was checked for, in bytes, for its proofs:
     /// 0 where it has none.
@@ -201,7 +205,7 @@ impl Checker<'_, '_> {
                 self.violation(
                     Rule::Functions,
                     function.steps[*first].source.line,
-                    "main returns, but it has nothing to return to",
+                    "main returns, and lengua's `_start` then ends the program with exit code 125",
                     "end main with a call to os_exit",
                 );
             }
@@ -655,8 +659,9 @@ impl Checker<'_, '_> {
                 Exit::Edge { op } if *op != crate::edge::Op::Exit => {
                     format!("{}'s result", op.symbol())
                 }
-                Exit::Call { callee } => match self.program.source.function(callee) {
-                    Some(target) if target.returns_result => format!("{callee}'s result"),
+                // A function of main.s's, or lengua's `fill`: both mark what they return.
+                Exit::Call { callee } => match self.program.any_function(callee) {
+                    Some(target) if target.source.returns_result => format!("{callee}'s result"),
                     _ => continue,
                 },
                 _ => continue,
@@ -1356,8 +1361,8 @@ impl Checker<'_, '_> {
                         step.source.line,
                         format!("this changes the loop counter {name} inside the loop"),
                         "keep the counter in a register nothing in the body changes; calls change \
-                         rax, rcx, rdx, rsi, rdi and r8-r11, and syscall changes rax, rcx and r11, \
-                         so loops with calls count in rbx or r12-r15",
+                         rax, rcx, rdx, rsi, rdi and r8-r11, and a call to an operation changes \
+                         rax, rcx and r11, so loops with calls count in rbx or r12-r15",
                     );
                 }
             }
@@ -1388,7 +1393,7 @@ impl Checker<'_, '_> {
         }
     }
 
-    /// Rule 5: assertions are `label: mov edi, <1-999>; call assert_fail`, each reached from
+    /// Rule 5: assertions are `label: mov edi, <1-899>; call assert_fail`, each reached from
     /// one conditional place, with unique numbers. Returns how many the function has.
     fn assertions(
         &mut self,
@@ -1403,7 +1408,7 @@ impl Checker<'_, '_> {
                 continue;
             }
             let line = steps[index].source.line;
-            let shape = "an assertion is exactly a label, `mov edi, <number 1-999>` and `call \
+            let shape = "an assertion is exactly a label, `mov edi, <number 1-899>` and `call \
                          assert_fail`";
             let Some(start) = index.checked_sub(1) else {
                 self.violation(
@@ -1425,7 +1430,22 @@ impl Checker<'_, '_> {
                         Operand::Register(register),
                         Operand::Immediate { value, name: None },
                     ],
-                ) if *register == number_register && (1..=999).contains(value) => *value,
+                ) if *register == number_register && (1..=MAX_ASSERTION).contains(value) => *value,
+                (
+                    Op::MovImm { .. } | Op::Move,
+                    [
+                        Operand::Register(register),
+                        Operand::Immediate { value, name: None },
+                    ],
+                ) if *register == number_register && (MAX_ASSERTION + 1..=999).contains(value) => {
+                    self.violation(
+                        Rule::Assertions,
+                        steps[start].source.line,
+                        format!("assertion number {value} is one lengua keeps for its own code"),
+                        format!("number your assertions from 1 to {MAX_ASSERTION}"),
+                    );
+                    continue;
+                }
                 _ => {
                     self.violation(
                         Rule::Assertions,
@@ -1451,7 +1471,7 @@ impl Checker<'_, '_> {
                     Rule::Assertions,
                     id_line,
                     format!("assertion number {id} is used twice (also on line {first})"),
-                    "number each assertion uniquely, from 1 to 999",
+                    "number each assertion uniquely, from 1 to 899",
                 );
             }
             let entries = &flow.predecessors[start];

@@ -75,7 +75,7 @@ CPU has what they use.
 
 **The prover proves both twins of a fixture from the same cases.** The prover's tests
 (`src/prove/tests.rs`) and the executor's (`src/prove/exec.rs`) are written once, as tables with a
-cell for each target (`PerTarget`): a fixture's two twins are proven from the very same `spec.md`
+cell for each CPU (`PerCpu`): a fixture's two twins are proven from the very same `spec.md`
 blocks, each test reading its target's folder (`tests/fixtures/<name>` and
 `tests/fixtures/linux-aarch64/<name>`), and a planted bug is an edit of each target's own
 `main.s`, listed beside the other's. Both CPUs' cells run on either runner, since a proof is

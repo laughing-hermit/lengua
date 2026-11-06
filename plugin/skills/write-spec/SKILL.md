@@ -120,7 +120,7 @@ by one concrete example in its steps, and its generated tests try that rule with
   or `- Uses: nothing`. lengua programs can't start processes or handle signals, and their memory
   is fixed by the spec's limits. lengua holds the program to this line when it runs, so it's a promise the user can rely
   on, and it means the same on every kind of computer. `# Constraints` holds only `- Uses:`,
-  `- Network:` and `- Threads:` lines; anything else goes in Purpose.
+  `- Network:`, `- Threads:` and `- Builds on:` lines; anything else goes in Purpose.
 - **Network:** plain TCP, to the places the spec names, and nothing else. A program never opens
   a connection itself: lengua makes each one its spec names before the program starts and hands
   it over, so it's the same on every kind of computer. Choose the places yourself, without

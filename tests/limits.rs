@@ -6,16 +6,16 @@
 //! left open, signals, files and the size they may grow to, the names every system takes
 //! (`EINVAL`, `EILSEQ`, `ENAMETOOLONG`, `EEXIST`), `EBUSY` for a file held open, the 4,352 open
 //! files, folder listings turned round on a test's second run, the spec's approval of the clock
-//! and the random bytes, the test's own bytes and readings, the supervisor's failure paths and
+//! and the random bytes, the test's own bytes and readings, the broker's failure paths and
 //! threads, the pin on `clone`'s flags, and a network the program never holds.
 //!
 //! Each program is a table with a source for each target (`PerCpu`), in that CPU's assembly;
 //! a target added to lengua breaks every table until its sources are written. Every target's
 //! source is built on every computer (LLVM builds for all of them), so a typo in a cell fails
 //! on every runner; the program for the target this computer is runs natively, on that target's
-//! own runner in CI. QEMU's user mode can't hold a program to its spec's system calls or follow
-//! it with the supervisor, so a program of the other CPU runs under it only to check what it does
-//! hold: its connections, Landlock and the stop of the calls QEMU never makes.
+//! own runner in CI. QEMU's user mode can't hold a program to its spec's system calls, so a
+//! program of the other CPU runs under it only to check what it does hold: its connections,
+//! Landlock and the stop of the calls QEMU never makes.
 
 mod common;
 mod per_target;
@@ -24,6 +24,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use lengua::broker::Permit;
 use lengua::connect::Reach;
 use lengua::platform::{Allowed, Pin};
 use lengua::runner::{End, Job, Limits, Net, Run, run, start};
@@ -1631,7 +1632,7 @@ async fn the_kernel_holds_a_program_off_the_channel_but_for_the_two_calls_it_is_
         let allowed = allowed.clone();
         async move {
             let job = Job {
-                channel: true,
+                channel: Some(Permit::ALL),
                 ..Job::new(&program, &[], b"", &allowed)
             };
             run(launcher(), job, Limits::default()).await.expect("run")
@@ -1686,6 +1687,30 @@ async fn the_kernel_holds_a_program_off_the_channel_but_for_the_two_calls_it_is_
     assert_eq!(allowed_here.end, End::Exited(0), "{allowed_here:?}");
     let refused = run_it(elsewhere).await;
     assert_eq!(refused.end, End::Signaled(31), "{refused:?}");
+}
+
+/// A program with a channel to the broker has the broker make and find every path for it, so the
+/// kernel stops its own `openat` and the calls like it: where Landlock would have refused the
+/// file, the program is stopped before it can ask, and learns nothing of what is outside.
+#[tokio::test]
+async fn a_program_with_a_channel_makes_no_path_call_of_its_own() {
+    if !per_target::runs_programs() {
+        return;
+    }
+    let folder = tempfile::tempdir().expect("temporary folder");
+    let outside = built(folder.path(), "outside", &opens_a_file_outside_its_folder()).await;
+    let allowed = file_syscalls();
+    let with_channel = Job {
+        channel: Some(Permit::ALL),
+        ..Job::new(&outside, &[], b"", &allowed)
+    };
+    let stopped = run(launcher(), with_channel, Limits::default())
+        .await
+        .expect("run");
+    assert_eq!(stopped.end, End::Signaled(31), "{stopped:?}");
+    // Without a channel the same call goes on to Landlock, which refuses the file.
+    let alone = run_simply(&outside, &[], b"").await;
+    assert_eq!(alone.end, End::Exited(13), "EACCES: {alone:?}");
 }
 
 #[tokio::test]

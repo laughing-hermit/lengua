@@ -75,7 +75,7 @@ and the CPU features the code needs; never write that line yourself.
    proof doesn't finish. A server whose
    spec serves several clients at once starts from
    [the event-loop server](assets/server-template.s) ([its spec](assets/server-template-spec.md)):
-   `poll` over the listening socket and a fixed table of connections, a line buffer for each,
+   `os_poll` over the listening socket and a fixed table of connections, a line buffer for each,
    and answering each client as its request completes; its proof follows the clients' steps in
    every order between polls; on AArch64 [its form](assets/linux-aarch64/server-template.s) is
    the same program. A program for the terminal starts from
@@ -151,9 +151,9 @@ and the CPU features the code needs; never write that line yourself.
    and POPCNT, of AArch64 ARMv8.0 with NEON: no SHA, AES, PCLMUL, CRC32 or PMULL instructions,
    no AVX, no SVE. For the checksums and ciphers: [crc32c](assets/fast/crc32c/main.s) is one
    `crc32` chain of SSE4.2, 8 bytes a step, proven for every text as far as the proof's time
-   reaches (a minute reached 1,520 and 1,897 bytes on two of GitHub's runners), and on AArch64
+   reaches (each line of `proofs` says how far), and on AArch64
    [its baseline](assets/linux-aarch64/fast/crc32c/main.s) is a table of 256 words a byte at a
-   time, which the prover reads for texts of one byte and the tests check beyond; SHA-256 and
+   time, which the tests check, and `proofs` says how far the prover reads it; SHA-256 and
    AES-128 are plain integer code, rotates and adds, with a table of 256 words for AES (the
    repository's `examples/sha256` and `examples/aes`, and their AArch64 twins in
    `tests/fixtures/linux-aarch64`), and their tiers are
@@ -209,10 +209,10 @@ and the CPU features the code needs; never write that line yourself.
 
 ### Running it for the user
 
-`run` runs the checked program with `path`, plus `args` and `stdin` when it reads them, within 40
-seconds. A program that works on files runs in a folder of the user's: pass it as `folder` and
-name the files in `args` relative to it; the program can't touch anything outside it, and lengua
-opens every name it asks for. A server
+`run` runs the checked program with `path`, plus `args` and `stdin` when it reads them, within 10
+seconds, or within the `timeout_seconds` you pass, up to 40. A program that works on files runs in
+a folder of the user's: pass it as `folder` and name the files in `args` relative to it; the
+program can't touch anything outside it, and lengua opens every name it asks for. A server
 starts in the background on its spec's port and `run` returns its address: try it with your own
 tools, such as `curl` or `nc`, then call `run` with `stop: true` to stop it and see what it
 printed. A program that connects gets its connections from lengua, made before it starts to the
@@ -264,7 +264,7 @@ Keep every vector access inside its buffer: see "Vectors" in
 With AVX-512BW, a byte test is one compare into a mask register and the change one masked
 instruction: `vpsubb zmm4, zmm0, zmm1` (subtract `'a'`), `vpcmpub k1, zmm4, zmm2, 1` (below 26),
 `vpsubb zmm0 {k1}, zmm0, zmm3` (subtract the case bit). Measured against Rust and C on a 1 MiB
-file, that loop takes 4 times fewer cycles than `gcc -O3 -march=native`, where the 16-byte one
+file, that loop takes 5 times fewer cycles than `gcc -O3 -march=native`, where the 16-byte one
 takes more instructions than C. Memory the program touches costs kernel time too, a page fault
 per 4 KiB: work in place where the rules allow it. For floating point, packed instructions do 2
 to 8 doubles at once, or 4 to 16 singles, as long as each element's steps stay in the formula's

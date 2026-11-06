@@ -283,7 +283,10 @@ fn readers() -> Vec<Reader> {
             "broker request",
             Box::new(|input: &[u8]| {
                 // A request whole, and its fixed part and first message on their own.
-                let _ = crate::broker::parse_request(input);
+                if let Ok(request) = crate::broker::parse_request(input) {
+                    // What the parser accepts is exactly what a client sends for it.
+                    assert_eq!(request.encode(), input, "an accepted request re-encodes");
+                }
                 let _ = crate::broker::parse_header(input);
                 let _ = crate::broker::Hello::decode(input);
                 let _ = crate::broker::parse_reply(input);
@@ -347,6 +350,7 @@ fn fuzz(count: usize, seed: u64) {
                 .map(|(_, bytes)| shrunk(bytes))
                 .collect(),
             "lock" => vec![LOCK.as_bytes().to_vec()],
+            "broker request" => broker_messages(),
             "executable" if executables.is_empty() => {
                 eprintln!("llvm-mc or ld.lld isn't installed: the executable reader isn't fuzzed");
                 continue;
@@ -383,6 +387,43 @@ fn fuzz(count: usize, seed: u64) {
             },
         );
     }
+}
+
+/// The messages of the broker's protocol, each whole, for the reader of them to start from: a text
+/// file never gets past a message's first byte.
+fn broker_messages() -> Vec<Vec<u8>> {
+    use crate::broker::{Hello, Kind, Mode, Request, encode_reply};
+    let request = |kind, argument, value, first: &str, second: &str| {
+        Request {
+            kind,
+            argument,
+            value,
+            first: first.as_bytes().to_vec(),
+            second: second.as_bytes().to_vec(),
+        }
+        .encode()
+    };
+    vec![
+        request(Kind::Open, 1, 0, "out.txt", ""),
+        request(Kind::Open, 4, 0, "a/b/c", ""),
+        request(Kind::Mkdir, 0, 0, "folder/sub", ""),
+        request(Kind::Remove, 1, 0, "folder", ""),
+        request(Kind::Rename, 0, 0, "old.txt", "new.txt"),
+        request(Kind::Closed, 0, 7, "", ""),
+        request(Kind::Waiting, 0, 0, "", ""),
+        request(Kind::Listed, 0, 0, "", ""),
+        request(Kind::Resumed, 0, 0, "", ""),
+        request(Kind::Clock, 1, 0, "", ""),
+        request(Kind::Random, 0, 16, "", ""),
+        encode_reply(-2, b"payload"),
+        Hello {
+            mode: Mode::Test,
+            flags: 7,
+            file_limit: 1 << 20,
+        }
+        .encode()
+        .to_vec(),
+    ]
 }
 
 /// A lock as lengua writes one, to start mutating from.

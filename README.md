@@ -26,8 +26,8 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 > hands over, with TLS for HTTPS done by lengua so the
 > program holds no crypto, servers on the port it names, for other
 > computers and many clients at once when it says so, and `switch`es
-> as checked jump tables. The kernel holds every run to what its spec allows. lengua proves
-> programs right for every input, not just
+> as checked jump tables. The kernel holds every run to the system calls, files and network its
+> spec names. lengua proves programs right for every input, not just
 > the tested ones, over whole numbers, decimals, choices, texts beyond ASCII and text formulas,
 > checksums, files and the network, servers that poll in every order their clients' steps can come
 > in, threads, and floats computed in the formula's order, in integer, bit, vector and float code
@@ -122,7 +122,8 @@ its behaviors and ranges.
 
 lengua relies on nothing from your harness's permission prompts, so it is as safe with every tool
 allowed or in an auto mode: what a program may touch is what its spec names, which the kernel enforces
-on every run, and lengua runs no build its checks didn't pass. The first `check` creates a
+on every run (the sandbox's known limits are in DESIGN.md's threat model), and lengua runs no
+build its checks didn't pass. The first `check` creates a
 signing key in `~/.local/share/lengua`.
 
 ## Examples
@@ -209,9 +210,10 @@ every language. On 64 MiB through a pipe, the kernel's copying is most of the wa
 lead in the program's own cycles shows as level on the clock. Measured 2026-11-02, with where the
 cycles go (stalls, L1 misses, mispredicted branches) for each large workload; BENCHMARKS-aarch64.md
 measures the same programs on GitHub's ARM64 runner. GitHub's x86-64 runners are a mixed pool, about
-half without AVX-512: on six draws of them (2026-11-04, [todo.md](todo.md) has each), including
-two CPUs without AVX-512, the baseline SSE2 word count took from level to 1.6 times less CPU time
-and wall time than the best of C, C++ and Rust.
+half without AVX-512: on six draws of them (2026-11-04, workflow runs 41893737162, 41893742012,
+41893747152, 41895807100, 41895812441 and 41895817808), including two CPUs without AVX-512, the
+baseline SSE2 word count took from level to 1.6 times less CPU time, and from level to 1.5 times
+less wall time, than the best of C, C++ and Rust.
 
 Where lengua isn't ahead:
 - **Instructions.** It runs more instructions than the best other on the histogram (0.7×) and the

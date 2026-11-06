@@ -2603,6 +2603,101 @@ async fn an_edge_form_programs_threads_follow_the_rules() {
     }
 }
 
+/// What a target's chain of small functions is made of, and the changes that have the parallel
+/// template's worker call the first of them.
+struct Nesting {
+    /// The lines after a function's label that make its frame.
+    open: &'static str,
+    /// The start of the line that calls the next function.
+    call: &'static str,
+    /// The lines that undo the frame and return.
+    close: &'static str,
+    /// The changes to the parallel template that have worker call `chain_001`, after it holds its
+    /// slot and with the stack aligned for the call.
+    worker: &'static [Edit],
+}
+
+/// Each target's chain. A frame is near a page and under the 4,096 bytes rule 3 allows: 4,008
+/// bytes beside x86-64's return address and 4,064 beside AArch64's frame record, so that each
+/// call finds the stack a multiple of 16. Worker calls, so on AArch64 it saves the link register
+/// where it saved x20, which it never uses.
+const NESTINGS: PerCpu<Nesting> = PerCpu {
+    x86_64: Nesting {
+        open: "    sub rsp, 4008\n",
+        call: "    call ",
+        close: "    add rsp, 4008\n    ret\n",
+        worker: &[(
+            "worker:\n    push rbx\n    mov rbx, rsi\n",
+            "worker:\n    push rbx\n    mov rbx, rsi\n    call chain_001\n",
+        )],
+    },
+    aarch64: Nesting {
+        open: "    stp x29, x30, [sp, #-16]!\n    sub sp, sp, #4064\n",
+        call: "    bl ",
+        close: "    add sp, sp, #4064\n    ldp x29, x30, [sp], #16\n    ret\n",
+        worker: &[
+            (
+                "worker:\n    stp x19, x20, [sp, #-16]!\n    mov x19, x1\n",
+                "worker:\n    stp x19, x30, [sp, #-16]!\n    mov x19, x1\n    bl chain_001\n",
+            ),
+            (
+                "    mov x0, x12\n    ldp x19, x20, [sp], #16\n    ret\n",
+                "    mov x0, x12\n    ldp x19, x30, [sp], #16\n    ret\n",
+            ),
+        ],
+    },
+};
+
+/// `target`'s parallel template with a worker that calls `chain_001`, and `count` functions after
+/// it: each makes a frame of just under a page and calls the next, and the last calls none.
+fn nested(target: Profile, count: usize) -> String {
+    let nesting = NESTINGS.get(target);
+    let (open, close) = (nesting.open, nesting.close);
+    let mut text = edited(*PARALLEL_TEMPLATES.get(target), nesting.worker)
+        .expect("the parallel template has the lines worker's call is made at");
+    let name = |number: usize| format!("chain_{number:03}");
+    for number in 1..=count {
+        let this = name(number);
+        let call = if number < count {
+            format!("{}{}\n", nesting.call, name(number + 1))
+        } else {
+            String::new()
+        };
+        text.push_str(&format!(
+            ".type {this}, @function\n{this}:\n{open}{call}{close}.size {this}, . - {this}\n\n"
+        ));
+    }
+    text
+}
+
+/// A worker whose calls nest past the stack its thread has, with no frame as big as a page and no
+/// function that calls itself: only a chain of hundreds of small functions does, and the rule on a
+/// worker's stack adds their frames up. A chain that fits is let through.
+#[tokio::test]
+async fn a_worker_whose_calls_nest_past_its_thread_s_stack_is_refused() {
+    // About 260 frames of about 4,000 bytes take the 1,048,512 bytes a thread has to use.
+    const FITS: usize = 100;
+    const TOO_MANY: usize = 300;
+    let reaches = "a worker's stack can reach";
+    for target in Profile::ALL {
+        let name = target.name();
+        let text = nested(target, FITS);
+        let report = check_edge_threads(&text, Some(16)).await;
+        let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+        let said = all.iter().any(|violation| violation.contains(reaches));
+        assert!(
+            !said,
+            "{name}: {FITS} functions fit a thread's stack: {all:#?}"
+        );
+        let text = nested(target, TOO_MANY);
+        let report = check_edge_threads(&text, Some(16)).await;
+        let line = line_of(&text, "worker:\n");
+        for words in [reaches, "but each thread has 1048512 bytes to use"] {
+            assert_violation(&report, Rule::Resources, line, words);
+        }
+    }
+}
+
 /// Every target's main template passes every rule, and the rules read all of it.
 #[tokio::test]
 async fn the_template_passes_every_rule() {
@@ -4638,6 +4733,96 @@ const EDGE_FIXTURES: &[EdgeFixture] = &[
         says: "os_thread_start is called by lengua's parallel_for alone",
     },
     EdgeFixture {
+        what: "a thread joined by the program itself, though the spec allows threads",
+        edits: PerCpu {
+            x86_64: &[("    call os_write\n", "    call os_thread_join\n")],
+            aarch64: &[("    bl os_write\n", "    bl os_thread_join\n")],
+        },
+        ops: &[
+            crate::edge::Op::Write,
+            crate::edge::Op::Exit,
+            crate::edge::Op::ThreadJoin,
+        ],
+        says: "os_thread_join is called by lengua's parallel_for alone",
+    },
+    EdgeFixture {
+        what: "the result of lengua's fill nobody tests",
+        edits: PerCpu {
+            x86_64: &[(
+                "    call os_write\n    test rax, rax\n    js .Lmain_write_failed\n",
+                "    call fill\n",
+            )],
+            aarch64: &[(
+                "    bl os_write\n    tbnz x0, #63, .Lmain_write_failed\n",
+                "    bl fill\n",
+            )],
+        },
+        ops: &[
+            crate::edge::Op::Write,
+            crate::edge::Op::Exit,
+            crate::edge::Op::Read,
+        ],
+        says: "fill's result isn't checked",
+    },
+    EdgeFixture {
+        what: "an assertion number that lengua keeps for its own code",
+        edits: PerCpu {
+            x86_64: &[("    mov edi, 2\n", "    mov edi, 990\n")],
+            aarch64: &[("    mov w0, #2\n", "    mov w0, #990\n")],
+        },
+        ops: &BASE_OPS,
+        says: "assertion number 990 is one lengua keeps for its own code",
+    },
+    EdgeFixture {
+        what: "a function named assert_fail",
+        edits: both(&[(
+            ".size main, . - main\n",
+            ".size main, . - main\n\n.type assert_fail, @function\nassert_fail:\n    ret\n\
+             .size assert_fail, . - assert_fail\n",
+        )]),
+        ops: &BASE_OPS,
+        says: "assert_fail is a name lengua keeps",
+    },
+    EdgeFixture {
+        what: "a function named parallel_for",
+        edits: both(&[(
+            ".size main, . - main\n",
+            ".size main, . - main\n\n.type parallel_for, @function\nparallel_for:\n    ret\n\
+             .size parallel_for, . - parallel_for\n",
+        )]),
+        ops: &BASE_OPS,
+        says: "parallel_for is a name lengua keeps",
+    },
+    EdgeFixture {
+        what: "a data symbol named assert_message",
+        edits: both(&[(
+            ".section .rodata\n\n",
+            ".section .rodata\n\n.type assert_message, @object\nassert_message:\n    .ascii \"x\"\n\
+             .size assert_message, . - assert_message\n\n",
+        )]),
+        ops: &BASE_OPS,
+        says: "assert_message is a name lengua keeps",
+    },
+    EdgeFixture {
+        what: "a function named with lengua's prefix",
+        edits: both(&[(
+            ".size main, . - main\n",
+            ".size main, . - main\n\n.type lengua_error, @function\nlengua_error:\n    ret\n\
+             .size lengua_error, . - lengua_error\n",
+        )]),
+        ops: &BASE_OPS,
+        says: "lengua_error is a name lengua keeps",
+    },
+    EdgeFixture {
+        what: "a label with lengua's prefix",
+        edits: both(&[(
+            ".Lmain_write_failed:\n",
+            ".Llengua_hidden:\n.Lmain_write_failed:\n",
+        )]),
+        ops: &BASE_OPS,
+        says: ".Llengua_hidden is a name lengua keeps",
+    },
+    EdgeFixture {
         what: "a library function whose operations the spec doesn't allow",
         edits: PerCpu {
             x86_64: &[("    call os_write\n", "    call fill\n")],
@@ -4668,7 +4853,7 @@ const EDGE_FIXTURES: &[EdgeFixture] = &[
         what: "a main that returns",
         edits: both(&[(".size main, . - main\n", "    ret\n.size main, . - main\n")]),
         ops: &BASE_OPS,
-        says: "main returns, but it has nothing to return to",
+        says: "main returns, and lengua's `_start` then ends the program with exit code 125",
     },
     EdgeFixture {
         what: "a call on a stack that isn't aligned",

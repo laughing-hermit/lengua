@@ -176,6 +176,58 @@ impl Kind {
     }
 }
 
+/// What a program's spec lets it ask the broker for: names (opening, making, removing and
+/// renaming files and folders), the clock and random bytes. The broker does these in the server,
+/// outside the program's confinement, so the kernel can't hold the program to its spec for them:
+/// the broker does. A note, which asks for nothing, is always allowed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Permit {
+    /// Opening, making, removing and renaming: the spec names files.
+    pub names: bool,
+    /// The clock: the spec names it.
+    pub clock: bool,
+    /// Random bytes: the spec names them.
+    pub random: bool,
+}
+
+impl Permit {
+    /// Everything: for a test of the broker or of the edge, which asks for each thing.
+    pub const ALL: Self = Self {
+        names: true,
+        clock: true,
+        random: true,
+    };
+
+    /// What a spec allows, from the system calls it allows: names when it allows any call that
+    /// makes or finds a path (a spec that names files allows them all), the clock when it allows
+    /// reading it, random bytes when it allows drawing them.
+    #[must_use]
+    pub fn of(calls: &[crate::spec::Syscall]) -> Self {
+        use crate::spec::Syscall;
+        Self {
+            names: calls.iter().any(|call| {
+                matches!(
+                    call,
+                    Syscall::Openat | Syscall::Mkdirat | Syscall::Unlinkat | Syscall::Renameat
+                )
+            }),
+            clock: calls.contains(&Syscall::ClockGettime),
+            random: calls.contains(&Syscall::Getrandom),
+        }
+    }
+
+    /// Whether a request of `kind` is allowed.
+    #[must_use]
+    pub const fn allows(self, kind: Kind) -> bool {
+        match kind {
+            Kind::Open | Kind::Mkdir | Kind::Remove | Kind::Rename => self.names,
+            Kind::Clock => self.clock,
+            Kind::Random => self.random,
+            Kind::Closed | Kind::Waiting | Kind::Listed | Kind::Resumed => true,
+        }
+    }
+}
+
 /// The fixed part of a request, once it is read: what to read next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Header {

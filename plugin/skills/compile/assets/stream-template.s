@@ -26,7 +26,7 @@
 .section .bss
 
 # One buffer-full of standard input, capitalized in place, then written.
-# shared: _start fills and writes it, and shout capitalizes it
+# shared: main fills and writes it, and shout capitalizes it
 .type buffer, @object
 buffer:
     .zero BUF_LEN

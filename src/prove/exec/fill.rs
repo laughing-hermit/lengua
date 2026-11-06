@@ -45,7 +45,7 @@ impl FillAbi {
     }
 }
 
-/// Where fill's code is, found by its canonical shape.
+/// Where fill's code is, found by the shape of lengua's own `fill`.
 #[derive(Debug, Clone, Copy)]
 pub struct Fill {
     /// The loop's head, where its read starts.

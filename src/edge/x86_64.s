@@ -54,6 +54,7 @@ assert_fail:
 
 # == fill: assert_fail os_read
 .text
+# returns: result
 .type fill, @function
 # Reads from file descriptor edi into the rdx bytes at rsi until they're full, the input ends,
 # or, when ecx is a byte (0 to 255), the last byte read is ecx; with ecx = -1 it reads to the

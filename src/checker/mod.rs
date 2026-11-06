@@ -1,5 +1,5 @@
-//! The rule checker for dialect 4: the lengua Power of 10 for x86-64 assembly, and the memory
-//! rules M1 to M8.
+//! The rule checker for dialect 4: the lengua Power of 10 for x86-64 and AArch64 assembly, and
+//! the memory rules M1 to M8.
 //!
 //! It reads main.s ([`source`]), reads the linked executable back and matches every instruction
 //! to its line ([`decode`]), builds each function's control flow and stack depths ([`cfg`]), and
