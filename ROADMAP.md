@@ -672,17 +672,18 @@ doesn't need. todo.md's "Round 3" holds the questions the plan must settle, and 
 these candidate steps executable.
 
 **Steps.**
-1. **The lengua image.** Debian 13 ("trixie") slim, pinned by digest, with LLVM 22 from
-   apt.llvm.org's trixie repository, the pinned z3 and cvc5 and lengua-mcp, as one multi-arch
-   image for linux/amd64 and linux/arm64, built and published by a workflow. Debian 13, not 12:
-   glibc 2.41 meets the server's 2.39 floor, where 12's 2.36 doesn't. Whether a native install
-   takes the same pinned solvers, so that a proof's verdict doesn't depend on the route, is for
-   the plan to settle.
+1. **The lengua image.** Ubuntu 24.04, pinned by digest: the userland CI's native jobs run, so
+   the image's install steps are the ones `scripts/ci/setup.sh` already runs on the runners (LLVM
+   22 from apt.llvm.org's noble repository, and the solvers pinned in `scripts/ci/tools.tsv`),
+   plus lengua-mcp. One multi-arch image for linux/amd64 and linux/arm64, built and published by a
+   workflow. Not Ubuntu 22.04 or Debian 12: their glibc (2.35, 2.36) is below the server's 2.39.
+   Whether a native install takes the same pinned solvers, so that a proof's verdict doesn't
+   depend on the route, is for the plan to settle.
 2. **A container job.** `ci.yml` runs the suite inside the image on both Linux runners, under
    Docker's and under Podman's default seccomp profile (the runner has both). It is the test that
-   lengua uses nothing a default container lacks: no io_uring, hardware counters optional. It is
-   also the only test of the Debian userland, since GitHub has no Debian runner and the native
-   jobs stay on Ubuntu 24.04.
+   lengua uses nothing a default container lacks: no io_uring, hardware counters optional. The
+   image and the native jobs share one userland, so a difference between the two runs is the
+   container's.
 3. **The kernel floor and the Landlock policy.** Decide what the launcher requires: Landlock for
    every program, or a promise that rests on seccomp and the broker with Landlock as reported
    hardening; and the Landlock ABI the network needs (6 today, Linux 6.12; 4 would be Linux 6.7).

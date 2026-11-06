@@ -64,9 +64,10 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 
 lengua runs on Linux, so on Windows and a Mac it runs inside a Linux. The project means to promise
 one route there: **the lengua image, run by Docker or by Podman**. It does not exist yet. It will
-be Debian 13 ("trixie", slim, pinned to an exact build), with glibc 2.41, LLVM, z3, cvc5 and
-lengua-mcp, one image for both CPUs, and a CI job will run lengua's suite inside it under Docker's
-and Podman's default seccomp profiles on both Linux runners ([todo.md](todo.md), "Round 3"). The
+be Ubuntu 24.04 pinned to an exact build, the userland CI tests natively, with glibc 2.39, LLVM,
+z3, cvc5 and lengua-mcp, one image for both CPUs, and a CI job will run lengua's suite inside it
+under Docker's and Podman's default seccomp profiles on both Linux runners ([todo.md](todo.md),
+"Round 3"). The
 aim is that installing the plugin is the only step: the plugin starts the image itself, mounts your
 project and keeps lengua's signing key, so you never type a `docker run`. Native macOS and Windows
 ports are deferred ("Deferred" there). Once the image exists, the routes are:
@@ -103,9 +104,9 @@ CI runner can run them:
   lengua go inside. Docker Desktop on a Mac reportedly has no Landlock in its VM, and Apple has no
   WSL: its `container` tool (macOS 26, Apple silicon) runs each container in a small VM whose
   kernel may lack it. Check `cat /sys/kernel/security/lsm` before relying on any of them.
-- **Your own image,** from a Linux image with glibc 2.39 or newer (`debian:trixie-slim`, which is
-  Debian 13, or `ubuntu:24.04`; `debian:12`, `ubuntu:22.04` and Alpine are too old), `linux/arm64`
-  on Apple silicon.
+- **Your own image,** from a Linux image with glibc 2.39 or newer (`ubuntu:24.04`, or
+  `debian:trixie-slim`, which is Debian 13; `debian:12`, `ubuntu:22.04` and Alpine are too old),
+  `linux/arm64` on Apple silicon.
 
 The network floor, Linux 6.12, is above Ubuntu 24.04's stock kernel (6.8): a program that uses the
 network needs a newer kernel there, until round 3 decides whether the floor can be lower.

@@ -59,7 +59,7 @@ free runners, whose id is written in the table below, and by nothing else.
      verdict is the same kind: proven, or bounded to a length.
 
    A Linux that meets the floor runs lengua directly, with no container. Other systems reach the
-   two targets through the lengua image (Debian 13 slim), run by Docker or Podman: Docker Desktop
+   two targets through the lengua image (Ubuntu 24.04), run by Docker or Podman: Docker Desktop
    or Podman Desktop on Windows, and Podman Desktop on a Mac, since Docker Desktop's VM
    reportedly has no Landlock. The image is the one route the project promises and tests (round
    3); WSL 2 and a Linux VM are the same Linux set up by hand. The floor of the product is a
@@ -136,7 +136,7 @@ reach those two targets. The project has tested none of these routes yet:
 
 | route | how | what it needs | tested by |
 |---|---|---|---|
-| The image: Windows, a Mac, an older Linux | the lengua image run by Docker or Podman (round 3: Debian 13 slim pinned by digest, LLVM, the solvers and lengua-mcp, for both CPUs). Windows: Docker Desktop or Podman Desktop. Mac: Podman Desktop. Older Linux: Podman or Docker | a kernel with Landlock under the container: Linux hosts; Docker Desktop on Windows (its WSL 2 backend); Podman machine (Fedora CoreOS) on a Mac, unverified; Docker Desktop on a Mac reportedly has none | a default container under Docker and under Podman on both Linux runners (round 3); the owner's Fedora under Podman, by hand |
+| The image: Windows, a Mac, an older Linux | the lengua image run by Docker or Podman (round 3: Ubuntu 24.04 pinned by digest, LLVM, the solvers and lengua-mcp, for both CPUs). Windows: Docker Desktop or Podman Desktop. Mac: Podman Desktop. Older Linux: Podman or Docker | a kernel with Landlock under the container: Linux hosts; Docker Desktop on Windows (its WSL 2 backend); Podman machine (Fedora CoreOS) on a Mac, unverified; Docker Desktop on a Mac reportedly has none | a default container under Docker and under Podman on both Linux runners (round 3); the owner's Fedora under Podman, by hand |
 | Windows: WSL 2, by hand | `wsl --install -d Ubuntu-24.04`, then the agent and lengua inside it | Microsoft's kernel has Landlock (since 2022; the current one is 6.18); glibc 2.39 | nobody yet |
 | Mac: a Linux VM, by hand | Colima, Lima, UTM or Parallels (Ubuntu 24.04 arm64); Apple's `container` (macOS 26) is unverified | a kernel with Landlock, and glibc 2.39 | nobody yet |
 
@@ -177,10 +177,10 @@ Then by finish-line point:
    - The benchmarks are level with the pre-edge build but for two gaps, in round 5's list: the
      ARM64 histogram, and the executables' size.
 3. **Reach: the image first** (an Opus plan comes first):
-   - the lengua image, on Debian 13 slim pinned by digest, for both CPUs, and a container job
-     that runs the suite inside it under Docker and under Podman on both Linux runners: the one
-     route a free runner can test, the check that lengua needs nothing a default container lacks,
-     and the only test of the Debian userland, since GitHub has no Debian runner;
+   - the lengua image, on Ubuntu 24.04 pinned by digest (the userland the native jobs run), for
+     both CPUs, and a container job that runs the suite inside it under Docker and under Podman
+     on both Linux runners: the one route a free runner can test, and the check that lengua needs
+     nothing a default container lacks;
    - the kernel floor and the Landlock policy (Landlock for every program, Linux 6.12 for the
      network);
    - the host launcher, so that the route is seamless: the command the plugin's `.mcp.json` runs
@@ -303,16 +303,20 @@ An Opus plan comes first. What it must settle, from what the research found on 2
   distributions also ship old LLVM: which versions does lengua need? DESIGN.md says musl builds
   are coming. Decide between static musl builds, an older-glibc build or both, and which
   distributions the documents promise.
-- **The lengua image.** Debian 13 ("trixie") slim, pinned by digest (never `debian:stable`, which
-  moves to Debian 14), not Debian 12, whose glibc 2.36 is below the server's 2.39. Debian 13 has
-  glibc 2.41, security support to 2028 and LTS to 2030, and apt.llvm.org's `trixie` repositories
-  carry LLVM 22 and 23 for both CPUs. The image holds LLVM 22 (what CI uses), the pinned z3 and
-  cvc5 (`scripts/ci/tools.tsv`) and lengua-mcp, as one multi-arch image for linux/amd64 and
-  linux/arm64 (a Mac on Apple silicon runs arm64 natively); TLS needs no certificate package, since
-  the server bundles `webpki-roots`. A CI job runs the suite inside a default Docker container and
-  a default Podman one on both Linux runners, under each runtime's default seccomp profile (both
-  allow `landlock_*`, `seccomp` and `prctl`, and block io_uring): the one route a free runner can
-  test, and the only test of the Debian userland, since the native jobs stay on Ubuntu 24.04.
+- **The lengua image.** Ubuntu 24.04, pinned by digest, not a moving tag. The owner suggested
+  Debian (stable), and Debian 13 would work (glibc 2.41, security support to 2028 and LTS to 2030,
+  apt.llvm.org's `trixie` repositories with LLVM 22 and 23, the official image for both CPUs). It
+  was not chosen because GitHub has no Debian runner: Debian can be tested in a container on an
+  Ubuntu runner, but it would be a second userland that nothing tests natively, with its own
+  install steps. Ubuntu 24.04 is what the native jobs run (glibc 2.39, the server's floor), so the
+  image reuses the install steps of `scripts/ci/setup.sh` (LLVM 22 from apt.llvm.org's noble
+  repository, the solvers pinned in `scripts/ci/tools.tsv`) and adds lengua-mcp, and its standard
+  support runs to about April 2029; a digest keeps it stable. One multi-arch image for
+  linux/amd64 and linux/arm64 (a Mac on Apple silicon runs arm64 natively); TLS needs no
+  certificate package, since the server bundles `webpki-roots`. A CI job runs the suite inside a
+  default Docker container and a default Podman one on both Linux runners, under each runtime's
+  default seccomp profile (both allow `landlock_*`, `seccomp` and `prctl`, and block io_uring): the
+  one route a free runner can test, in the same userland as the native jobs.
 - **One set of solvers.** Distributions ship different z3 and cvc5 (Fedora's z3 4.16 has
   bit-vector bugs the prover works around). Decide whether a native install takes the image's
   pinned versions too, so that a proof's verdict doesn't depend on the route, and have `doctor`

@@ -1197,7 +1197,7 @@ lengua builds, checks, proves and runs programs for Linux on x86-64 and on ARM64
 the system through lengua's edge; tested natively on GitHub's runners of both, and the ARM64 ones
 also under QEMU on the x86-64 one), assembled by LLVM's `llvm-mc` and linked by `ld.lld`. Those
 are its two targets. A Linux that meets the floor runs lengua directly, with no container. Windows
-and Mac reach lengua through the lengua image, a Debian 13 userland pinned by digest, run by
+and Mac reach lengua through the lengua image, an Ubuntu 24.04 userland pinned by digest, run by
 Docker or Podman (Podman on a Mac, since Docker Desktop's VM reportedly has no Landlock): a Linux
 with the same two targets inside, the one route the project means to promise and test (planned:
 todo.md, "Round 3"), which an older Linux can use too. WSL 2 and a Linux VM are the same Linux set
