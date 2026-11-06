@@ -115,7 +115,7 @@ impl Cpu<'_> {
     /// The s or d register's value: the low 4 or 8 bytes of its V register.
     fn v(&mut self, register: FpReg) -> Term {
         let bytes = fp_width(register) as usize / 8;
-        let parts = self.state.vectors[usize::from(register.number)][..bytes].to_vec();
+        let parts = self.core.vectors[usize::from(register.number)][..bytes].to_vec();
         self.join(&parts)
     }
 
@@ -124,7 +124,7 @@ impl Cpu<'_> {
     fn set_v(&mut self, register: FpReg, value: Term) {
         let parts = self.split(value, V_BYTES);
         let zero = self.pool.bv(8, 0);
-        let vector = Rc::make_mut(&mut self.state.vectors[usize::from(register.number)]);
+        let vector = Rc::make_mut(&mut self.core.vectors[usize::from(register.number)]);
         vector[..V_BYTES].copy_from_slice(&parts);
         for byte in &mut vector[V_BYTES..] {
             *byte = zero;
@@ -361,11 +361,11 @@ impl Cpu<'_> {
         let less = self.fp_test(FloatTest::Less, a, b);
         let equal = self.fp_test(FloatTest::Equal, a, b);
         let unordered = self.fp_test(FloatTest::Unordered, a, b);
-        self.state.sign = less;
-        self.state.zero = equal;
-        self.state.carry = self.pool.bool_not(less);
-        self.state.overflow = unordered;
-        self.state.last = Last::Other;
+        self.core.sign = less;
+        self.core.zero = equal;
+        self.core.carry = self.pool.bool_not(less);
+        self.core.overflow = unordered;
+        self.core.last = Last::Other;
     }
 
     /// The conversions between whole numbers and floats, and `fmov` of the bits between a

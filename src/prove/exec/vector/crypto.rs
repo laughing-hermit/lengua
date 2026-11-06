@@ -379,7 +379,7 @@ impl Cpu<'_> {
                 [w19, w18, w17, w16]
             }
             Mnemonic::Sha256rnds2 => {
-                let k = self.state.vectors[0][..8].to_vec();
+                let k = self.core.vectors[0][..8].to_vec();
                 let wk = [self.word(&k[..4]), self.word(&k[4..8])];
                 let (mut va, mut vb, mut vc, mut vd) = (b[3], b[2], a[3], a[2]);
                 let (mut ve, mut vf, mut vg, mut vh) = (b[1], b[0], a[1], a[0]);

@@ -5173,20 +5173,24 @@ const NOT_ABOUT_A_CPU: &[&str] = &[
     "the_speed_probe_reads",
 ];
 
-/// The suite stays one suite for every target: each test of the prover and of its executor runs
-/// on every target (its body, or the function it calls, goes through `Profile::ALL` or a table's
-/// cells), or is listed as about no CPU's code, and none is named for one CPU. A test written for
-/// one CPU only, which the other would lack, fails here until it has its cell.
+/// The suite stays one suite for every target: each test of the prover, of its executor and of
+/// its world runs on every target (its body, or the function it calls, goes through
+/// `Profile::ALL` or a table's cells), or is listed as about no CPU's code, and none is named for
+/// one CPU. A test written for one CPU only, which the other would lack, fails here until it has
+/// its cell.
 #[test]
 fn every_prover_test_runs_on_every_target() {
     let executor = repository_file("src/prove/exec.rs");
     let from = executor
         .find("\nmod tests {")
         .expect("the executor's tests");
+    let world = repository_file("src/prove/world.rs");
+    let at = world.find("\nmod tests {").expect("the world's tests");
     let mut problems = Vec::new();
     for functions in [
         functions_of(&repository_file("src/prove/tests.rs"), ""),
         functions_of(&executor[from..], "    "),
+        functions_of(&world[at..], "    "),
     ] {
         let covers = |body: &str| body.contains("Profile::ALL") || body.contains(".cells()");
         for test in functions.iter().filter(|function| function.is_test) {

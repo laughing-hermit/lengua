@@ -402,12 +402,12 @@ impl Cpu<'_> {
         let equal = self.pool.float_test(FloatTest::Equal, a, b);
         let unordered = self.pool.float_test(FloatTest::Unordered, a, b);
         let no = self.pool.boolean(false);
-        self.state.last = Last::Other;
-        self.state.zero = self.pool.bool_or(equal, unordered);
-        self.state.parity = unordered;
-        self.state.carry = self.pool.bool_or(less, unordered);
-        self.state.sign = no;
-        self.state.overflow = no;
+        self.core.last = Last::Other;
+        self.core.zero = self.pool.bool_or(equal, unordered);
+        self.core.parity = unordered;
+        self.core.carry = self.pool.bool_or(less, unordered);
+        self.core.sign = no;
+        self.core.overflow = no;
         Ok(())
     }
 

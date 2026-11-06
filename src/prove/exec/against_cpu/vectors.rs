@@ -629,27 +629,27 @@ fn compare(
     let mut pool = Pool::default();
     let mut state = State::start(image, &mut pool, &[], &[], Vec::new());
     for number in 0..16 {
-        state.registers[number] = pool.bv(64, u128::from(word(input, GPRS + number * 8)));
+        state.core.registers[number] = pool.bv(64, u128::from(word(input, GPRS + number * 8)));
     }
     let flags = word(input, FLAGS_AT);
     let bit = |pool: &mut Pool, mask: u64| pool.boolean(flags & mask != 0);
-    state.carry = bit(&mut pool, 1);
-    state.parity = bit(&mut pool, 1 << 2);
-    state.zero = bit(&mut pool, 1 << 6);
-    state.sign = bit(&mut pool, 1 << 7);
-    state.overflow = bit(&mut pool, 1 << 11);
-    state.last = Last::Other;
+    state.core.carry = bit(&mut pool, 1);
+    state.core.parity = bit(&mut pool, 1 << 2);
+    state.core.zero = bit(&mut pool, 1 << 6);
+    state.core.sign = bit(&mut pool, 1 << 7);
+    state.core.overflow = bit(&mut pool, 1 << 11);
+    state.core.last = Last::Other;
     for number in 0..8 {
         let bytes: [Term; VECTOR_BYTES] =
             std::array::from_fn(|at| pool.bv(8, u128::from(input[ZMMS + number * 64 + at])));
-        state.vectors[number] = Rc::new(bytes);
-        state.masks[number] = pool.bv(64, u128::from(word(input, KS + number * 8)));
+        state.core.vectors[number] = Rc::new(bytes);
+        state.core.masks[number] = pool.bv(64, u128::from(word(input, KS + number * 8)));
     }
     for at in 0..CELL_BYTES {
         let byte = pool.bv(8, u128::from(input[CELL + at]));
-        state.store(&mut pool, cell_address + at as u64, byte);
+        state.core.store(&mut pool, cell_address + at as u64, byte);
     }
-    state.rip = word(input, ADDRESS);
+    state.core.rip = word(input, ADDRESS);
     for _ in code {
         match step(image, &mut state, &mut pool) {
             Ok(Step::Next) => {}
@@ -667,15 +667,15 @@ fn compare(
     };
     for (number, name) in NAMES[3].iter().enumerate() {
         let expected = u128::from(word(real, GPRS + number * 8));
-        check((*name).to_owned(), state.registers[number], expected);
+        check((*name).to_owned(), state.core.registers[number], expected);
     }
     let real_flags = word(real, FLAGS_AT);
     for ((mask, name), flag) in FLAGS.iter().zip([
-        state.carry,
-        state.parity,
-        state.zero,
-        state.sign,
-        state.overflow,
+        state.core.carry,
+        state.core.parity,
+        state.core.zero,
+        state.core.sign,
+        state.core.overflow,
     ]) {
         check((*name).to_owned(), flag, u128::from(real_flags & mask != 0));
     }
@@ -684,15 +684,16 @@ fn compare(
             let expected = u128::from(real[ZMMS + number * 64 + at]);
             check(
                 format!("zmm{number} byte {at}"),
-                state.vectors[number][at],
+                state.core.vectors[number][at],
                 expected,
             );
         }
         let expected = u128::from(word(real, KS + number * 8));
-        check(format!("k{number}"), state.masks[number], expected);
+        check(format!("k{number}"), state.core.masks[number], expected);
     }
     for at in 0..CELL_BYTES {
         let term = state
+            .core
             .memory
             .get(cell_address + at as u64)
             .ok_or("the cell is gone")?;

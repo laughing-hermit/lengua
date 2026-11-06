@@ -186,14 +186,14 @@ impl Cpu<'_> {
     }
 
     pub(super) fn v_bytes(&self, number: u8) -> Vec<Term> {
-        self.state.vectors[usize::from(number)][..V_BYTES].to_vec()
+        self.core.vectors[usize::from(number)][..V_BYTES].to_vec()
     }
 
     /// Sets V`number` to `bytes` from its lowest, zeros above them, up through the Z register
     /// it's the low part of, as a NEON write clears SVE's bytes above it.
     pub(super) fn set_v_bytes(&mut self, number: u8, bytes: &[Term]) {
         let zero = self.pool.bv(8, 0);
-        let vector = Rc::make_mut(&mut self.state.vectors[usize::from(number)]);
+        let vector = Rc::make_mut(&mut self.core.vectors[usize::from(number)]);
         for (at, byte) in vector.iter_mut().enumerate() {
             *byte = bytes.get(at).copied().unwrap_or(zero);
         }

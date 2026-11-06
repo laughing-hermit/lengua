@@ -1963,7 +1963,7 @@ async fn the_model_runs_every_operation_as_the_system_does() {
                     continue;
                 }
             };
-            let run = &finished[0];
+            let run = &finished[0].world;
             let Some(End::Exit(status)) = &run.end else {
                 differs.push(format!("{what}: it ended {:?}", run.end));
                 continue;
