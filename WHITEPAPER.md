@@ -211,9 +211,10 @@ rules, tests and proof engine on both, with each CPU's own instruction model. Ev
 has a twin on the other CPU, compiled from the very same spec, and both pass the same checks. In
 real interactive sessions of Claude Code with the plugin, programs come from one plain request:
 in the suites of 2026-11-02, all twelve requests on each Linux target, from a wc to an HTTPS
-fetch to a multi-client server, gave a program that passed every check (SESSIONS.md). Windows reaches
-lengua through WSL 2 or Docker and a Mac through a Linux VM or Docker, which run these same two
-targets; native macOS and Windows ports wait, and would be held to every limit the Linux targets have.
+fetch to a multi-client server, gave a program that passed every check (SESSIONS.md). Windows and
+Mac will reach lengua through its image, run by Docker or Podman, a Linux with these same two
+targets inside; native macOS and Windows ports wait, and would be held to every limit the Linux
+targets have.
 
 lengua is an Agent Plugin: two skills and one MCP server, using only open standards, so it works
 in Claude Code and other agent harnesses alike.

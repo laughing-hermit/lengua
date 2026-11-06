@@ -60,25 +60,36 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 
 ## Windows and Mac
 
-lengua runs on Linux. Windows and macOS don't run it natively (native ports are deferred:
-[todo.md](todo.md), "Deferred"), so run your agent and lengua together inside a Linux that has what
-the requirements above list. The project has not tested any of these routes, since no free CI
-runner can run them; todo.md's "Round 3" says what is planned.
+lengua runs on Linux, so on Windows and a Mac it runs inside a Linux. The project means to promise
+one route there: **the lengua image, run by Docker or by Podman**, the same image on Windows, on a
+Mac and on Linux (Fedora's own tool is Podman). It does not exist yet: it will hold glibc 2.39,
+LLVM, z3, cvc5 and lengua-mcp for both CPUs, and a CI job will run lengua's suite inside it under
+Docker's and Podman's default seccomp profiles on both Linux runners ([todo.md](todo.md), "Round
+3"). The aim is that installing the plugin is the only step: the plugin starts the image itself,
+mounts your project and keeps lengua's signing key, so you never type a `docker run`. A Linux
+laptop can run lengua directly instead, as the requirements above say, or use the same image: the
+product is the same either way. Native macOS and Windows ports are deferred ("Deferred" there).
 
-- **Windows: WSL 2** (recommended). Run `wsl --install -d Ubuntu-24.04`, then install your agent
-  and the lengua plugin inside Ubuntu (Claude Code runs there, so the plugin is an ordinary Linux
-  plugin), and keep your projects in its home folder, not under `/mnt/c`, which is slow and
-  ignores case. Microsoft's WSL 2 kernel has had Landlock since 2022.
-- **Docker, on Windows or a Mac.** Use a Linux image with glibc 2.39 or newer (`ubuntu:24.04`;
-  `ubuntu:22.04`, `debian:12` and Alpine are too old) and, on Apple silicon, a `linux/arm64`
-  image. The Linux kernel under Docker must have Landlock: Docker Desktop on Windows (its WSL 2
-  backend) should, and Docker Desktop on a Mac reportedly doesn't, so use Colima or another Linux
-  VM there. An image with lengua inside is planned, best as a dev container that holds your agent
-  and lengua together.
-- **Mac: a Linux VM.** Colima or Lima (an Ubuntu 24.04 arm64 VM), UTM or Parallels, with your
-  agent and lengua inside. Apple has no WSL. Its `container` tool (macOS 26, Apple silicon) runs
-  each container in a small Linux VM whose kernel may lack Landlock, so check `cat
-  /sys/kernel/security/lsm` before relying on it.
+A limit of a default container, on any system, is a limit of lengua: it doesn't use io_uring, which
+those containers block, and hardware counters are optional, so it behaves the same inside Docker
+on Windows, on a Mac and on Linux.
+
+Until the image exists, run your agent and lengua together on a Linux that has what the
+requirements above list. The project has not tested these routes on Windows or a Mac, since no free
+CI runner can run them:
+
+- **Windows: WSL 2.** Run `wsl --install -d Ubuntu-24.04`, then install your agent and the lengua
+  plugin inside Ubuntu (Claude Code runs there, so the plugin is an ordinary Linux plugin), and
+  keep your projects in its home folder, not under `/mnt/c`, which is slow and ignores case.
+  Microsoft's WSL 2 kernel has had Landlock since 2022, and Docker Desktop on Windows runs on WSL 2
+  too.
+- **Mac: a Linux VM that has Landlock.** Podman machine or Colima (free; expected to have it, not
+  verified), or Lima, UTM or Parallels with Ubuntu 24.04 arm64; your agent and lengua go inside.
+  Docker Desktop on a Mac reportedly has no Landlock in its VM, and Apple has no WSL: its
+  `container` tool (macOS 26, Apple silicon) runs each container in a small VM whose kernel may
+  lack it. Check `cat /sys/kernel/security/lsm` before relying on any of them.
+- **Your own image,** from a Linux image with glibc 2.39 or newer (`ubuntu:24.04`; `ubuntu:22.04`,
+  `debian:12` and Alpine are too old), `linux/arm64` on Apple silicon.
 
 The network floor, Linux 6.12, is above Ubuntu 24.04's stock kernel (6.8): a program that uses the
 network needs a newer kernel there, until round 3 decides whether the floor can be lower.

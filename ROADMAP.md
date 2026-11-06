@@ -3,7 +3,7 @@
 lengua has two targets, Linux on x86-64 and Linux on ARM64. This roadmap began as the plan for six
 (macOS and Windows on each CPU too). On 2026-11-06 the owner dropped macOS on x86-64, since Apple
 no longer makes Intel Macs, and then decided that the native macOS and Windows ports wait: Windows
-reaches lengua through WSL 2 or Docker, and a Mac through a Linux VM or Docker (todo.md,
+and Mac reach lengua through its image, run by Docker or Podman (todo.md, "Round 3" and
 "Deferred"). What this file holds is the way to the finish line set on 2026-11-05: lengua
 *perfected*, a replacement for and an improvement on C, C++ and Rust, faster and leaner than them,
 the same product on both targets. The finish line itself, and what is left, are in
@@ -661,41 +661,52 @@ The build differs from the plan in these ways:
   `needs`; MACHINE_WORDS' Windows words and AArch64's registers; the model-against-CPU harnesses,
   which still build raw `_start` programs; and a broker for the bench's `run` lines.
 
-### R3 — reach: other systems, and more Linux
+### R3 — reach: the image first
 
-**Goal.** A person on Windows, on a Mac or on an older Linux can run lengua on one of its two
-targets, and the documents say exactly what each route needs and what has been tested. todo.md's
-"Round 3" holds the questions the plan must settle, and an Opus plan makes these candidate steps
-executable.
+**Goal.** A person on Windows, on a Mac or on an older Linux can use lengua through one route that
+CI tests: the lengua image, run by Docker or Podman, which is a Linux with the same two targets
+inside. The route is seamless: with Docker or Podman installed, installing the plugin is the only
+step. A default container, on any host, is the floor of the product: what it doesn't give on every
+host, lengua doesn't need. todo.md's "Round 3" holds the questions the plan must settle, and an
+Opus plan makes these candidate steps executable.
 
 **Steps.**
-1. **The kernel floor.** Decide what the launcher requires: Landlock for every program, and the
-   Landlock ABI the network needs (6 today, Linux 6.12; 4 would be Linux 6.7). A sandbox change
-   gets a review and its tests (`tests/limits.rs`, the red team).
-2. **`lengua-mcp doctor`.** It prints the kernel, the Landlock ABI, seccomp, glibc, the CPU's
-   features and the counters, and says in words a person can act on what a route lacks.
-3. **The server on more Linux.** Static musl builds or an older-glibc build for both CPUs, chosen
-   with the LLVM versions lengua needs; `scripts/install.sh` and `scripts/release.sh` follow.
-4. **The lengua image.** Ubuntu 24.04 with LLVM 22, z3, cvc5 and lengua-mcp, for linux/amd64 and
+1. **The lengua image.** Ubuntu 24.04 with LLVM 22, z3, cvc5 and lengua-mcp, for linux/amd64 and
    linux/arm64, built and published by a workflow.
-5. **A container job.** `ci.yml` runs the suite inside the image on both Linux runners, under
-   Docker's default seccomp profile.
-6. **The documents.** README and the plugin README say how to use lengua on Windows (WSL 2 first,
-   Docker second) and on a Mac (a Linux VM, or Docker through one), what each needs, and what the
-   project has not tested.
+2. **A container job.** `ci.yml` runs the suite inside the image on both Linux runners, under
+   Docker's and under Podman's default seccomp profile (the runner has both). It is the test that
+   lengua uses nothing a default container lacks: no io_uring, hardware counters optional.
+3. **The kernel floor and the Landlock policy.** Decide what the launcher requires: Landlock for
+   every program, or a promise that rests on seccomp and the broker with Landlock as reported
+   hardening; and the Landlock ABI the network needs (6 today, Linux 6.12; 4 would be Linux 6.7).
+   A sandbox change gets a review and its tests (`tests/limits.rs`, the red team).
+4. **The host launcher.** The command the plugin's `.mcp.json` runs on Windows and macOS (and on
+   Linux with Podman): it finds Docker or Podman, pulls the image for the plugin's version, starts
+   or reuses one container, mounts the project, maps host paths to container paths, keeps the
+   signing key in a volume, stops the container when idle, and explains a failure in a sentence.
+   No confinement and no OS code, only plumbing; the server stays in the image.
+5. **`lengua-mcp doctor`.** It prints the kernel, the Landlock ABI, seccomp, glibc, the CPU's
+   features and the counters, and says in words a person can act on what a route lacks.
+6. **The container's own limits.** The proofs' memory guard reads the container's cgroup limit
+   instead of the host's `/proc/meminfo`, and nothing needs a hardware counter.
+7. **The documents,** and the other routes: WSL 2 with the agent inside it, a Linux VM (Podman
+   machine, Colima, Lima), a dev container. Optionally the server on more Linux: static musl
+   builds or an older-glibc build for both CPUs, chosen with the LLVM versions lengua needs;
+   `scripts/install.sh` and `scripts/release.sh` follow.
 
 **Verified by.**
 - `compile`, then a full `test`, on both runners.
-- The container job, green on both.
-- Hand tests of WSL 2 and of a Mac VM, noted in todo.md: no free runner can run them.
+- The container job, green on both runners under both runtimes.
+- Hand tests: the owner's Fedora under Podman, and WSL 2 and a Mac VM where someone has them,
+  noted in todo.md (no free runner can run those two).
 
-**Size and risks.** Size M. The routes' kernels differ and some have no Landlock (todo.md, "Round
-3"); who tests the Mac and Windows routes by hand is open.
+**Size and risks.** Size M. The kernels under Docker Desktop, WSL 2 and the Mac VMs differ and some
+have no Landlock (todo.md, "Round 3"); who tests the Mac and Windows routes by hand is open.
 
 ### R4 — native macOS and Windows ports (deferred 2026-11-06)
 
-The owner deferred these ports when lengua became two targets: Windows is reached through WSL 2 or
-Docker, and a Mac through a Linux VM or Docker. What follows, the plans of the old rounds 3 and 4,
+The owner deferred these ports when lengua became two targets: Windows and Mac are reached through
+the lengua image, run by Docker or Podman (R3). What follows, the plans of the old rounds 3 and 4,
 is kept so that they can come back (todo.md, "Deferred").
 
 #### macOS, ARM64 (was R3)
@@ -798,7 +809,9 @@ windows-11-arm.
 - §7's bench, gate and workloads on both runners (the empty program is a workload and also the
   floor). The gate is enforced in `bench` mode and in the weekly run.
 - Linux's own fast paths, each measured before and after: the vDSO clock, one `epoll` operation
-  for the servers, `splice` for the pipe rows. Not io_uring, which Docker's default profile blocks.
+  for the servers, `splice` for the pipe rows. Not io_uring, which Docker's default profile blocks,
+  and nothing else that a default container refuses: a fast path counts only if the R3 container
+  job passes with it, so the lead the gate shows is one every user gets, on any host.
 - The known gaps, closed by A/B runs.
 - BENCHMARKS-<target>.md, generated from the artifacts.
 - README, DESIGN and the bench's own text made true to the runs; "threads on AArch64 come later"

@@ -1,10 +1,11 @@
 name: ci
 
 # lengua built and tested natively on both of its targets, on GitHub's free runners (the repository
-# is public): Linux on x86-64 and Linux on ARM64. Windows reaches lengua through WSL 2 or Docker
-# and a Mac through a Linux VM or Docker, which run these same two targets: no free runner can
-# test WSL 2 or a Mac VM. scripts/ci/targets.json names the two runners; scripts/ci/tools.tsv pins
-# what they install; scripts/ci/setup.sh installs it.
+# is public): Linux on x86-64 and Linux on ARM64. Windows and Mac reach lengua through its image,
+# run by Docker or Podman, which holds these same two targets (todo.md, "Round 3" plans a job that
+# tests it on these runners); no free runner can test WSL 2 or a Mac VM, the same Linux set up by
+# hand. scripts/ci/targets.json names the two runners; scripts/ci/tools.tsv pins what they
+# install; scripts/ci/setup.sh installs it.
 #
 # - A push to a branch runs the suite on both (a branch named wip/... gets no push run: its
 #   author dispatches the run it wants, so work in progress doesn't cost a long suite per push).

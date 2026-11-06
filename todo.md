@@ -9,9 +9,10 @@ Agent Plugin, skills and one Rust MCP server only, so it runs in any agent harne
 **Where lengua stands (2026-11-06).** lengua has two targets, Linux on x86-64 and Linux on ARM64,
 one product held by one suite, every program reaching the OS only through lengua's edge, and the
 mutation test passes on both (run 42178888801). The owner decided the same day that these are the
-only targets: Windows reaches lengua through WSL 2 or Docker, and a Mac through a Linux VM or
-Docker (Apple has no WSL), and native macOS and Windows ports are deferred ("Deferred"). The
-project has not tested those routes, and a free runner can run only Docker's (round 3). The record
+only targets: Windows and Mac reach lengua through its image, run by Docker or Podman (round 3;
+WSL 2 and a Linux VM are the same Linux set up by hand, Apple has no WSL), and native macOS and
+Windows ports are deferred ("Deferred"). The project has not tested those routes, and a free
+runner can run only the container's. The record
 of the finished work is in the git history, DESIGN.md, README.md, SESSIONS.md and the BENCHMARKS
 files.
 
@@ -57,14 +58,28 @@ free runners, whose id is written in the table below, and by nothing else.
    - each proof line has the same verdict on both. Where a line's time budget cuts it short, the
      verdict is the same kind: proven, or bounded to a length.
 
-   Other systems reach those two: Windows through WSL 2 or Docker, and a Mac through a Linux VM
-   or Docker (round 3). The documents say how, what the Linux kernel and libc must have
-   (Landlock, glibc 2.39 or a build that needs less), and what the project has not tested.
+   Other systems reach those two through the lengua image, run by Docker or Podman, which is the
+   one route the project promises and tests (round 3); WSL 2 and a Linux VM are the same Linux set
+   up by hand, and a Linux host runs lengua directly or through the same image. The floor of the
+   product is a default Docker or Podman container, on any host: what
+   such a container doesn't give everywhere, lengua doesn't need (it does not use io_uring, which
+   both runtimes' default profiles block; hardware counters are optional; the proofs' memory guard
+   reads the container's own limit), and a container job on both runners holds it there. A limit
+   of the container is a limit of lengua, on every system. Landlock is the exception to settle:
+   its support depends on the host's kernel (round 3 decides whether the promise rests on it).
+   And the route is seamless, not cumbersome: on Windows or a Mac with Docker or Podman
+   installed, installing the plugin is the only step. lengua starts the image itself, mounts the
+   project, keeps its signing key, and says in one sentence what to fix when something is
+   missing; the user never types a `docker run`.
 3. **Tailored to the CPU and to Linux for speed.** main.s is written for the CPU: the widest
    vectors it has (AVX-512, AVX2, NEON, SVE) as named fast tiers, each beside a baseline form that
    runs on every machine of that CPU. The edge, which main.s calls for everything that reaches
-   the OS, is Linux's: raw system calls, with no loader and no libc. The spec, the checks and the
-   behavior are the same on both targets; only the instructions differ.
+   the OS, is Linux's: raw system calls, with no loader and no libc. Linux's own fast paths are
+   welcome where a benchmark shows a loss and a default container allows them (the vDSO clock,
+   `epoll`, `splice`); none that needs a privilege or a host setting a default container lacks
+   (io_uring, reserved huge pages) is in the product, since the product is the same on every
+   host. The spec, the checks and the behavior are the same on both targets; only the
+   instructions differ.
 4. **Faster and leaner than C, C++ and Rust, on both targets.** On every workload and on each
    target, one lengua program, the one lengua ships for that machine, takes less CPU time and less wall time,
    and uses less peak memory and a smaller executable, than the best C, C++ or Rust does on each of
@@ -117,9 +132,9 @@ The other systems reach those two targets. The project has tested none of these 
 
 | route | how | what it needs | tested by |
 |---|---|---|---|
-| Windows: WSL 2 | `wsl --install -d Ubuntu-24.04`, then the agent and lengua inside it | Microsoft's kernel has Landlock (since 2022; the current one is 6.18) | nobody yet |
-| Docker, on any host | the lengua image (round 3: Ubuntu 24.04, LLVM, the solvers and lengua-mcp, for both CPUs) | a Docker whose VM kernel has Landlock: Docker Desktop on Windows (its WSL 2 backend), Colima on a Mac; Docker Desktop on a Mac reportedly has none | a default container on both Linux runners (round 3) |
-| Mac: a Linux VM | Colima or Lima (Ubuntu 24.04 arm64), UTM or Parallels; Apple's `container` (macOS 26) is unverified | a kernel with Landlock, and glibc 2.39 | nobody yet |
+| The image, on any host | the lengua image run by Docker or Podman (round 3: Ubuntu 24.04, LLVM, the solvers and lengua-mcp, for both CPUs) | a kernel with Landlock under the container: Linux hosts; Docker Desktop on Windows (its WSL 2 backend); Podman machine or Colima on a Mac, unverified; Docker Desktop on a Mac reportedly has none | a default container under Docker and under Podman on both Linux runners (round 3); the owner's Fedora under Podman, by hand |
+| Windows: WSL 2, by hand | `wsl --install -d Ubuntu-24.04`, then the agent and lengua inside it | Microsoft's kernel has Landlock (since 2022; the current one is 6.18); glibc 2.39 | nobody yet |
+| Mac: a Linux VM, by hand | Colima, Lima, UTM or Parallels (Ubuntu 24.04 arm64); Apple's `container` (macOS 26) is unverified | a kernel with Landlock, and glibc 2.39 | nobody yet |
 
 Then by finish-line point:
 
@@ -157,14 +172,24 @@ Then by finish-line point:
      clock, random bytes, sleeps and waits, and does only what the program's spec allows.
    - The benchmarks are level with the pre-edge build but for two gaps, in round 5's list: the
      ARM64 histogram, and the executables' size.
-3. **Reach: other systems, and more Linux** (an Opus plan comes first):
-   - the routes for Windows and Mac (WSL 2, Docker, a Linux VM): documents, a `lengua-mcp doctor`
-     that says what a kernel lacks, and tests where free runners allow, among them a default
-     Docker container on both Linux runners;
-   - the lengua image, on Ubuntu 24.04, for both CPUs;
-   - a server that installs on more Linux: musl or older-glibc builds, and which LLVM versions
-     lengua needs;
-   - the kernel floor (Landlock for every program, Linux 6.12 for the network).
+3. **Reach: the image first** (an Opus plan comes first):
+   - the lengua image, on Ubuntu 24.04, for both CPUs, and a container job that runs the suite
+     inside it under Docker and under Podman on both Linux runners: the one route a free runner
+     can test, and the check that lengua needs nothing a default container lacks;
+   - the kernel floor and the Landlock policy (Landlock for every program, Linux 6.12 for the
+     network);
+   - the host launcher, so that the route is seamless: the command the plugin's `.mcp.json` runs
+     on Windows and macOS (and on Linux with Podman). It finds Docker or Podman, pulls the image
+     for the plugin's version on first use, starts or reuses one container, mounts the project,
+     maps host paths to container paths, keeps the signing key in a volume, stops the container
+     when idle, runs `doctor`, and explains a failure in a sentence (Docker not installed, no
+     Landlock under it, a folder it can't mount). It holds no confinement and no OS code, only
+     process and path plumbing, and the server stays in the image: the plugin is still skills and
+     one MCP server. Whether it is a small binary or a script is for the plan;
+   - a `lengua-mcp doctor` that says what a kernel lacks;
+   - a dev container, for an agent that runs inside the container instead;
+   - the documents for the other routes (WSL 2, a Linux VM), and optionally a server that installs
+     on more Linux (musl or older-glibc builds, and which LLVM versions lengua needs).
 4. **Deferred: native macOS and Windows ports** (the owner, 2026-11-06). Their design stays in
    ROADMAP.md, and "Deferred" says what would bring them back.
 5. **Performance:**
