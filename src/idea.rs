@@ -1,6 +1,6 @@
 //! `idea.md`: a program's source of truth, written in Open Knowledge Format (OKF) markdown.
 //!
-//! The file starts with YAML frontmatter (`type: lengua/program-idea`, `title`, an optional
+//! The file starts with YAML frontmatter (`type: lengua/program-idea`, `title` and
 //! `description`), followed by markdown sections: `# Purpose`, `# Behaviors` with one
 //! `## B<n>: <title>` heading per behavior written as Given/When/Then steps, each followed by its
 //! generated tests under a `###` heading, and `# Constraints`, which names what the program uses:
@@ -28,8 +28,9 @@ const MAX_PROBLEMS: usize = 20;
 pub struct Idea {
     /// Short program name from the frontmatter.
     pub title: String,
-    /// One-sentence summary from the frontmatter, if any.
-    pub description: Option<String>,
+    /// One-sentence summary from the frontmatter, which the bundle's index.md lists the program
+    /// with.
+    pub description: String,
     /// The behaviors, in file order.
     pub behaviors: Vec<Behavior>,
     /// What the program may use beyond its output, as the idea names it.
@@ -49,6 +50,20 @@ pub struct Idea {
     /// The programs it builds on, each a folder with its own idea and code: the nodes it links to
     /// in the graph of programs.
     pub parts: Vec<Part>,
+    /// The plain markdown links in its text, outside code and its `- Builds on:` line: with its
+    /// parts, the graph's edges where they lead to other ideas.
+    pub links: Vec<Link>,
+}
+
+/// A plain markdown link in an idea's text: `[sort lines](../sort/idea.md)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Link {
+    /// The line it's on.
+    pub line: usize,
+    /// What the link says.
+    pub text: String,
+    /// Where it leads, as written.
+    pub target: String,
 }
 
 /// A program another builds on, as its idea links to it: `[sort lines](../sort/idea.md)`.
@@ -68,14 +83,14 @@ impl Part {
     }
 }
 
-/// The folder a link to a part names, without a trailing `idea.md`, `main.s` or slash: `../sort`
+/// The folder a link to a part names, without a trailing `idea.md`, code file or slash: `../sort`
 /// for `../sort/idea.md`.
 #[must_use]
 pub fn folder_of_link(link: &str) -> String {
     let trimmed = link.trim().trim_end_matches('/');
-    let trimmed = trimmed
-        .strip_suffix("/idea.md")
-        .or_else(|| trimmed.strip_suffix("/main.s"))
+    let trimmed = std::iter::once(crate::state::IDEA_FILE)
+        .chain(crate::state::CODE_FILES)
+        .find_map(|file| trimmed.strip_suffix(file)?.strip_suffix('/'))
         .unwrap_or(trimmed);
     trimmed.trim_end_matches('/').to_owned()
 }
@@ -758,6 +773,7 @@ pub fn parse(text: &str) -> Result<Idea, Vec<Problem>> {
             None => {
                 parser.portable(number, line, &subject);
                 parser.line(number, line);
+                parser.links_line(number, line);
             }
         }
     }
@@ -830,6 +846,7 @@ struct Parser {
     threads: Option<u32>,
     network: Network,
     parts: Vec<Part>,
+    links: Vec<Link>,
     /// Whether `# Purpose` holds any text.
     purpose_written: bool,
     purpose_values: Vec<String>,
@@ -850,6 +867,7 @@ impl Default for Parser {
             threads: None,
             network: Network::default(),
             parts: Vec::new(),
+            links: Vec::new(),
             purpose_written: false,
             purpose_values: Vec::new(),
         }
@@ -946,7 +964,29 @@ impl Parser {
             .description
             .map(|description| description.trim().to_owned())
             .filter(|description| !description.is_empty());
+        if description.is_none() {
+            self.problem(
+                Some(1),
+                "the frontmatter has no `description`; add one sentence that says what the \
+                 program does, such as `description: Adds two whole numbers given as arguments \
+                 and prints the sum.`, which the bundle's index.md lists the program with",
+            );
+        }
         title.map(|title| (title, description))
+    }
+
+    /// Keeps the markdown links on the line, but a `- Builds on:` line's, which are its parts.
+    fn links_line(&mut self, number: usize, line: &str) {
+        if self.section == Section::Constraints && builds_on_item(line).is_some() {
+            return;
+        }
+        for (text, target) in crate::graph::okf::links(line) {
+            self.links.push(Link {
+                line: number,
+                text,
+                target,
+            });
+        }
     }
 
     /// A code block: under a behavior, a ```toml block is its tests for every input; anywhere
@@ -1748,7 +1788,7 @@ impl Parser {
         let ops = crate::edge::ops_for(&uses, &self.network, self.threads);
         self.check_network();
         match header {
-            Some((title, description)) if self.problems.is_empty() => Ok(Idea {
+            Some((title, Some(description))) if self.problems.is_empty() => Ok(Idea {
                 title,
                 description,
                 behaviors: self.behaviors,
@@ -1759,6 +1799,7 @@ impl Parser {
                 purpose_values: self.purpose_values,
                 network: self.network,
                 parts: self.parts,
+                links: self.links,
             }),
             _ => Err(self.into_problems()),
         }
@@ -2007,7 +2048,8 @@ fn cell_text(cell: &str) -> String {
     cell.to_owned()
 }
 
-fn heading(line: &str, level: usize) -> Option<&str> {
+/// The text of a heading of `level` (`#` is 1), when `line` is one.
+pub(crate) fn heading(line: &str, level: usize) -> Option<&str> {
     let hashes = line.bytes().take_while(|&byte| byte == b'#').count();
     if hashes != level {
         return None;
@@ -2021,6 +2063,11 @@ fn heading(line: &str, level: usize) -> Option<&str> {
 
 fn is_heading(line: &str) -> bool {
     (1..=6).any(|level| heading(line, level).is_some())
+}
+
+/// What follows `- Builds on:` when `line` is that list item, in any case.
+pub(crate) fn builds_on_item(line: &str) -> Option<&str> {
+    strip_prefix_ignore_case(list_item(line)?.trim(), "builds on:")
 }
 
 /// The item text when `line` is a top-level list item (`- `, `* `, `+ ` or `1. `).
@@ -2122,7 +2169,7 @@ fn machine_words(line: &str) -> Vec<String> {
 }
 
 /// Finds a run of exactly `run` backticks.
-fn find_exact_run(text: &str, run: usize) -> Option<usize> {
+pub(crate) fn find_exact_run(text: &str, run: usize) -> Option<usize> {
     let bytes = text.as_bytes();
     let mut index = 0;
     while index < bytes.len() {
@@ -2313,8 +2360,8 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
         let idea = parse(ADD).expect("valid idea");
         assert_eq!(idea.title, "add");
         assert_eq!(
-            idea.description.as_deref(),
-            Some("Adds two whole numbers given as arguments and prints the sum.")
+            idea.description,
+            "Adds two whole numbers given as arguments and prints the sum."
         );
         assert_eq!(idea.behaviors.len(), 2);
         let first = &idea.behaviors[0];
@@ -2432,6 +2479,50 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
             &ADD.replace("title: add", "title: \"  \""),
             "has no `title`",
         );
+    }
+
+    /// The bundle's index.md lists each program with its description, so every idea has one.
+    #[test]
+    fn requires_a_description() {
+        let line = "description: Adds two whole numbers given as arguments and prints the sum.\n";
+        for without in [
+            ADD.replace(line, ""),
+            ADD.replace(line, "description: \" \"\n"),
+        ] {
+            assert_eq!(
+                problems(&without),
+                ["line 1: the frontmatter has no `description`; add one sentence that says what \
+                  the program does, such as `description: Adds two whole numbers given as \
+                  arguments and prints the sum.`, which the bundle's index.md lists the program \
+                  with"]
+            );
+        }
+    }
+
+    /// An idea links to others in its text with plain markdown links: with its parts, the edges
+    /// of the graph of programs.
+    #[test]
+    fn reads_the_links_to_other_ideas() {
+        let linked = ADD
+            .replace(
+                "# Purpose\n",
+                "# Purpose\nLike [subtract](../subtract/idea.md), but `[not](this.md)`.\n",
+            )
+            .replace(
+                "- Uses: nothing",
+                "- Uses: nothing\n- Builds on: [numbers](../numbers/idea.md)",
+            );
+        let idea = parse(&linked).expect("valid idea");
+        assert_eq!(
+            idea.links,
+            [Link {
+                line: 7,
+                text: "subtract".into(),
+                target: "../subtract/idea.md".into(),
+            }]
+        );
+        assert_eq!(idea.parts[0].idea, "../numbers/idea.md");
+        assert_eq!(folder_of_link("../numbers/main.wat"), "../numbers");
     }
 
     #[test]

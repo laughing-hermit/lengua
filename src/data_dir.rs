@@ -74,6 +74,14 @@ impl DataDir {
     pub fn path(&self) -> &Path {
         &self.0
     }
+
+    /// The file that keeps lengua's processes from writing one bundle's index.md and log.md at
+    /// once: kept here, never beside the user's files, and named by the bundle's root.
+    #[must_use]
+    pub fn graph_lock(&self, root: &Path) -> PathBuf {
+        let name = crate::hash::Sha256Hex::of(root.to_string_lossy().as_bytes());
+        self.0.join("graph").join(format!("{name}.lock"))
+    }
 }
 
 #[cfg(test)]

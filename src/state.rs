@@ -21,6 +21,13 @@ pub const LEGACY_IDEA_FILE: &str = "spec.md";
 /// The code's file name inside a program folder.
 pub const CODE_FILE: &str = "main.s";
 
+/// The WebAssembly code's file name inside a program folder: during the pivot a folder holds
+/// main.s or main.wat, and the code file chooses the path (todo.md).
+pub const WASM_CODE_FILE: &str = "main.wat";
+
+/// Every code file a program folder may hold, in the order lengua looks for them.
+pub const CODE_FILES: [&str; 2] = [CODE_FILE, WASM_CODE_FILE];
+
 /// Where the server keeps a copy of each idea.md it recorded, by hash, so later changes can be
 /// shown against them.
 #[must_use]

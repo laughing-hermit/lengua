@@ -435,26 +435,32 @@ fn params(tool: &'static str, arguments: Value) -> CallToolRequestParams {
 
 /// A temporary program folder.
 pub struct Program {
-    dir: TempDir,
+    /// Deletes the folder when the program is dropped, with the bundle it stands in when it has
+    /// one of its own.
+    _dir: TempDir,
+    /// The folder.
+    path: PathBuf,
 }
 
 impl Program {
-    /// An empty program folder.
+    /// An empty program folder, `<tmp>/bundle/program`: alone in a bundle of its own, so the
+    /// index.md and log.md that check keeps land there, never in the temporary folder itself.
     pub fn new() -> Self {
-        Self {
-            dir: tempfile::tempdir().expect("create a temporary program folder"),
-        }
+        let dir = tempfile::tempdir().expect("create a temporary folder");
+        let path = dir.path().join("bundle").join("program");
+        std::fs::create_dir_all(&path).expect("create a program folder");
+        Self { _dir: dir, path }
     }
 
     /// An empty program folder named for `name` inside `parent`, beside the others there, as the
     /// programs a graph links stand.
     pub fn new_in(parent: &Path, name: &str) -> Self {
-        Self {
-            dir: tempfile::Builder::new()
-                .prefix(name)
-                .tempdir_in(parent)
-                .expect("create a program folder"),
-        }
+        let dir = tempfile::Builder::new()
+            .prefix(name)
+            .tempdir_in(parent)
+            .expect("create a program folder");
+        let path = dir.path().to_path_buf();
+        Self { _dir: dir, path }
     }
 
     /// The folder's own name.
@@ -475,7 +481,7 @@ impl Program {
 
     /// The folder.
     pub fn path(&self) -> &Path {
-        self.dir.path()
+        &self.path
     }
 
     /// The folder as a tool argument.

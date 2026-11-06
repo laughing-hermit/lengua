@@ -971,7 +971,8 @@ mod tests {
 
     fn idea_with(steps: &str, constraints: &str) -> Idea {
         let text = format!(
-            "---\ntype: lengua/program-idea\ntitle: t\n---\n# Purpose\nA test of `1` to `9`.\n\n\
+            "---\ntype: lengua/program-idea\ntitle: t\ndescription: A test.\n---\n# Purpose\n\
+             A test of `1` to `9`.\n\n\
              # Behaviors\n## B1: Does it\n{steps}\n\n# Constraints\n{constraints}\n"
         );
         crate::idea::parse(&text).unwrap_or_else(|problems| panic!("{problems:?}"))

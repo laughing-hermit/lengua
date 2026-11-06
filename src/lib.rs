@@ -21,6 +21,7 @@ pub mod expect;
 pub mod expr;
 #[cfg(test)]
 mod fuzz;
+pub mod graph;
 pub mod hash;
 pub mod header;
 pub mod idea;

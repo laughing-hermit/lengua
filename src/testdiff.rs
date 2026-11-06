@@ -367,6 +367,7 @@ mod tests {
     const IDEA: &str = r#"---
 type: lengua/program-idea
 title: roll
+description: Prints a number.
 ---
 # Purpose
 Prints a number.

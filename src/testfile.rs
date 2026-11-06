@@ -2560,6 +2560,7 @@ mod tests {
             "---
 type: lengua/program-idea
 title: add
+description: Adds two whole numbers given as arguments and prints the sum.
 ---
 # Purpose
 Adds two whole numbers between `-1000000000` and `1000000000`.
@@ -2622,12 +2623,12 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
         assert_eq!(suite.examples.len(), 2);
         assert_eq!(suite.examples[0].args, ["2", "3"]);
         assert_eq!(suite.examples[0].stdout, "5\n");
-        assert_eq!(suite.examples[1].line, 25);
+        assert_eq!(suite.examples[1].line, 26);
         assert_eq!(suite.examples[1].stderr, "usage: add <a> <b>\n");
         assert_eq!(suite.examples[1].exit_code, 1);
         let block = &suite.generated[0];
         assert_eq!(block.runs, 200);
-        assert_eq!(block.line, 23, "a generated test's line is its row's");
+        assert_eq!(block.line, 24, "a generated test's line is its row's");
         let cases: Vec<Case> = block
             .cases(42)
             .collect::<Result<_, _>>()
@@ -2649,7 +2650,7 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
         let suite = tests_of(&two).expect("valid tests");
         assert_eq!(suite.generated.len(), 2);
         assert_eq!(suite.generated[1].runs, DEFAULT_RUNS);
-        assert_eq!(suite.generated[1].line, 24);
+        assert_eq!(suite.generated[1].line, 25);
         assert_eq!(suite.generated[1].stdout, suite.generated[0].stdout);
     }
 
@@ -2659,7 +2660,7 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
         assert!(
             problems
                 .iter()
-                .any(|problem| problem.starts_with("line 18:")
+                .any(|problem| problem.starts_with("line 19:")
                     && problem.contains("generated B1: what it prints: in {a +* b}")),
             "{problems:#?}"
         );
@@ -2667,7 +2668,7 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
         assert!(
             problems
                 .iter()
-                .any(|problem| problem.starts_with("line 23:")
+                .any(|problem| problem.starts_with("line 24:")
                     && problem.contains("runs must be from 1 to 1000")),
             "{problems:#?}"
         );
@@ -2676,6 +2677,7 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
     const DICE: &str = "---
 type: lengua/program-idea
 title: roll
+description: Rolls a die for a player.
 ---
 # Purpose
 Rolls a die for a player numbered from `1` to `9`.
@@ -2772,6 +2774,7 @@ Rolls a die for a player numbered from `1` to `9`.
         const CLOCK: &str = "---
 type: lengua/program-idea
 title: clock
+description: Prints the time for a player.
 ---
 # Purpose
 Prints the time in Unix seconds for a player numbered from `1` to `9`.
@@ -2898,6 +2901,7 @@ Prints the time in Unix seconds for a player numbered from `1` to `9`.
         const HOUR: &str = "---
 type: lengua/program-idea
 title: hour
+description: Prints the hour of the day.
 ---
 # Purpose
 Prints the hour of the day in UTC, from `0` to `23`, for a reader numbered from `1` to `9`.
@@ -3274,6 +3278,7 @@ Prints the hour of the day in UTC, from `0` to `23`, for a reader numbered from 
             "---
 type: lengua/program-idea
 title: negate
+description: Negates a whole number.
 ---
 # Purpose
 Negates a whole number between `{lo}` and `{hi}`.
@@ -3302,6 +3307,7 @@ Negates a whole number between `{lo}` and `{hi}`.
         const LINES: &str = "---
 type: lengua/program-idea
 title: lines
+description: Counts the lines of a text.
 ---
 # Purpose
 Counts the lines of at most `1048576` bytes of text.
@@ -3349,6 +3355,7 @@ Counts the lines of at most `1048576` bytes of text.
                 "---
 type: lengua/program-idea
 title: half
+description: Halves a price.
 ---
 # Purpose
 Halves a price between {purpose}.
@@ -3438,6 +3445,7 @@ Halves a price between {purpose}.
                 "---
 type: lengua/program-idea
 title: len
+description: Prints the length of a word.
 ---
 # Purpose
 Prints the length of a word of `1` to `200000` letters.
@@ -3510,6 +3518,7 @@ Prints the length of a word of `1` to `200000` letters.
         const SHOUT: &str = "---
 type: lengua/program-idea
 title: shout-file
+description: Uppercases a text file.
 ---
 # Purpose
 Uppercases a text file of at most `1000` bytes, `notes.txt`, into `loud.txt`.
