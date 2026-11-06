@@ -435,7 +435,7 @@ pub(super) fn check_pairs(function: &MappedFunction<'_>, violations: &mut Vec<Vi
 
 /// The rules' messages say x86-64's instructions and registers; on AArch64 these phrases say
 /// AArch64's instead, longest first so a long phrase is replaced before a shorter one inside it.
-const WORDS: [(&str, &str); 51] = [
+const WORDS: [(&str, &str); 43] = [
     (
         "it gets its index in rdi and its slot in rsi, and returns a result in rax",
         "it gets its index in x0 and its slot in x1, and returns a result in x0",
@@ -469,10 +469,6 @@ const WORDS: [(&str, &str); 51] = [
     (
         "uses rbx before it holds the slot",
         "uses x19 before it holds the slot",
-    ),
-    (
-        "assets/parallel-template.s",
-        "assets/linux-aarch64/parallel-template.s",
     ),
     (
         "push callee-saved registers (rbx, rbp, r12-r15) at the start and pop them in reverse order \
@@ -531,9 +527,6 @@ const WORDS: [(&str, &str); 51] = [
     ("lea [rip + name]", "adrp and add :lo12:"),
     ("as [rip + name]", "with adrp and add :lo12:"),
     ("[rsp + d]", "[sp, #d]"),
-    ("right before the syscall", "right before `svc #0`"),
-    ("`mov eax, SYS_NAME`", "`mov x8, #SYS_NAME`"),
-    ("`mov eax, ", "`mov x8, #"),
     ("`mov edi, EXIT_NAME`", "`mov w0, #EXIT_NAME`"),
     ("set edi with", "set w0 with"),
     ("`mov R, NAME`", "`mov xR, #NAME`"),
@@ -545,8 +538,6 @@ const WORDS: [(&str, &str); 51] = [
     ("# unsafe:", "// unsafe:"),
     ("# end unsafe", "// end unsafe"),
     ("# shared:", "// shared:"),
-    ("# returns:", "// returns:"),
-    ("# from:", "// from:"),
     (", LEN)", ", #LEN)"),
     (", LEN`", ", #LEN`"),
     ("(jae)", "(b.hs)"),
@@ -557,11 +548,9 @@ const WORDS: [(&str, &str); 51] = [
         "assets/main-template.s",
         "assets/linux-aarch64/main-template.s",
     ),
-    ("assets/fill.s", "assets/linux-aarch64/fill.s"),
     ("below rsp", "below sp"),
     ("sub rsp", "sub sp"),
     ("at rsp + ", "at sp + "),
-    ("the syscall", "`svc #0`"),
 ];
 
 /// `violation` in AArch64's words.

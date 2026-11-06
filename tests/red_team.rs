@@ -1,15 +1,14 @@
 //! The red team: programs written to get past lengua's own checks, on every target. Each attempt
 //! is the target's template with one change that tries it, and `check` must refuse it up front:
-//! a system call the spec doesn't allow, a system call number chosen by a register or a label,
-//! an access past a buffer, an unchecked or late index, an address made from a plain number, a
-//! write to read-only data, a return address changed or written over, a read below the stack
-//! pointer, a loop the rules miscount, a stray backward jump, recursion, a call through a
-//! register, a missing `ret`, a tampered assertion handler, and an ignored result. Two
-//! attempts no rule can follow are held to what does hold: a pointer read from memory is never
-//! stamped `done` when it is wrong and never reported proven when it is good, and a wrong
-//! program is never stamped `done` once the proof has run. None is ever run when a rule
-//! refuses it first. Any attempt that isn't refused is a bug in lengua to fix before anything
-//! else.
+//! a system call of main.s's own, an operation the spec doesn't allow, a function named for one
+//! of lengua's operations, a jump into lengua's code, an access past a buffer, an unchecked or
+//! late index, an address made from a plain number, a write to read-only data, a return address
+//! changed or written over, a read below the stack pointer, a loop the rules miscount, a stray
+//! backward jump, recursion, a call through a register, a missing `ret`, and an ignored result.
+//! Two attempts no rule can follow are held to what does hold: a pointer read from memory is
+//! never stamped `done` when it is wrong and never reported proven when it is good, and a wrong
+//! program is never stamped `done` once the proof has run. None is ever run when a rule refuses
+//! it first. Any attempt that isn't refused is a bug in lengua to fix before anything else.
 //!
 //! There is one table of attempts, and each has a cell for every target (`PerCpu`): the change
 //! to that target's template and what a refusal must name, or why the attempt can't be written
@@ -50,10 +49,8 @@ enum Expect {
 /// The attempts that run together, as one test.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Family {
-    /// System calls the spec doesn't allow.
-    SystemCalls,
-    /// A system call number chosen by something the rules can't see.
-    CallChoice,
+    /// Ways to the OS other than an operation the spec allows, and into lengua's own code.
+    Edge,
     /// Accesses outside their owner.
     Accesses,
     /// Addresses made from a plain number or a pointer read from memory.
@@ -64,8 +61,6 @@ enum Family {
     Loops,
     /// Recursion, calls through registers and functions that don't return.
     Calls,
-    /// A tampered assertion handler.
-    Handler,
     /// Code that ignores a failed result.
     Results,
     /// A wrong program the proof must catch.
@@ -80,8 +75,6 @@ enum Cell {
         edits: &'static [Edit],
         needles: &'static [&'static str],
     },
-    /// The target's template with a system call of this number made just before its exit.
-    Call(i64),
     /// The attempt can't be written on this CPU, for this reason of its hardware.
     NotApplicable(&'static str),
 }
@@ -102,79 +95,84 @@ const TEMPLATES: PerCpu<&str> = PerCpu {
     aarch64: "linux-aarch64/main-template.s",
 };
 
-/// The template's exit, in each target's instructions.
-const EXITS: PerCpu<&str> = PerCpu {
-    x86_64: "    mov eax, SYS_EXIT\n    syscall\n",
-    aarch64: "    mov x8, #SYS_EXIT\n    svc #0\n",
-};
+/// A function of main.s's own named for one of lengua's operations, after `main`: `ret` is the
+/// same on both CPUs.
+const OWN_OS_WRITE: &[Edit] = &[(
+    ".size main, . - main\n",
+    concat!(
+        ".size main, . - main\n\n",
+        ".type os_write, @function\n",
+        "os_write:\n",
+        "    ret\n",
+        ".size os_write, . - os_write\n"
+    ),
+)];
 
-/// What a refusal of a system call names: not one the spec allows, or a connection a program
-/// never makes by itself.
-const CALL_NEEDLES: &[&str] = &["isn't one the spec allows", "never connects by itself"];
-
-/// System calls the template's spec doesn't allow and both CPUs have, each with its number on
-/// x86-64 and on AArch64. Each is a call a program could use to reach beyond its folder, its
-/// memory or its user; the kernel's filter kills it too, but the rules refuse the program first.
-const CALLS: &[(&str, i64, i64)] = &[
-    ("openat", 257, 56),
-    ("mmap", 9, 222),
-    ("mprotect", 10, 226),
-    ("clone", 56, 220),
-    ("execve", 59, 221),
-    ("kill", 62, 129),
-    ("ptrace", 101, 117),
-    ("setuid", 105, 146),
-    ("prctl", 157, 167),
-    ("mount", 165, 40),
-    ("unshare", 272, 97),
-    ("execveat", 322, 281),
-    ("io_uring_setup", 425, 425),
-    ("socket", 41, 198),
-    ("connect", 42, 203),
-];
-
-/// Every attempt but the system calls, which `call_attempts` makes.
+/// Every attempt.
 const ATTEMPTS: &[Attempt] = &[
-    // A system call number chosen by a value the rules can't see.
+    // Ways to the OS other than an operation the spec allows. main.s reaches the OS by calling the
+    // operations in lengua's text, which is assembled after it: it makes no system call of its
+    // own, calls no operation its spec doesn't name, defines none of lengua's names, and enters
+    // lengua's code only by a call to an operation or to a library function.
     Attempt {
-        family: Family::CallChoice,
-        what: "a number from a register",
+        family: Family::Edge,
+        what: "a system call of its own",
         expect: Expect::Refused,
         cells: PerCpu {
             x86_64: Cell::Try {
-                edits: &[(
-                    "    mov eax, SYS_EXIT\n    syscall\n",
-                    "    mov eax, edi\n    syscall\n    mov eax, SYS_EXIT\n    syscall\n",
-                )],
-                needles: &["isn't chosen by a `mov eax, SYS_NAME`"],
+                edits: &[("    call os_exit\n", "    syscall\n    call os_exit\n")],
+                needles: &["makes a system call by itself"],
             },
             aarch64: Cell::Try {
-                edits: &[(
-                    "    mov x8, #SYS_EXIT\n    svc #0\n",
-                    "    mov x8, x9\n    svc #0\n    mov x8, #SYS_EXIT\n    svc #0\n",
-                )],
-                needles: &["isn't chosen by a `mov"],
+                edits: &[("    bl os_exit\n", "    svc #0\n    bl os_exit\n")],
+                needles: &["makes a system call by itself"],
             },
         },
     },
     Attempt {
-        family: Family::CallChoice,
-        what: "a label between the number and the call",
+        family: Family::Edge,
+        what: "an operation the spec doesn't allow",
         expect: Expect::Refused,
         cells: PerCpu {
             x86_64: Cell::Try {
-                edits: &[(
-                    "    mov eax, SYS_EXIT\n    syscall\n",
-                    "    mov eax, SYS_EXIT\n.Lstart_sneak:\n    syscall\n",
-                )],
-                needles: &["isn't chosen by a `mov eax, SYS_NAME`", "rule 1"],
+                edits: &[("    call os_exit\n", "    call os_open\n    call os_exit\n")],
+                needles: &["isn't one the spec allows"],
             },
             aarch64: Cell::Try {
-                edits: &[(
-                    "    mov x8, #SYS_EXIT\n    svc #0\n",
-                    "    mov x8, #SYS_EXIT\n.Lstart_sneak:\n    svc #0\n",
-                )],
-                needles: &["isn't chosen by a `mov", "rule 1"],
+                edits: &[("    bl os_exit\n", "    bl os_open\n    bl os_exit\n")],
+                needles: &["isn't one the spec allows"],
+            },
+        },
+    },
+    Attempt {
+        family: Family::Edge,
+        what: "an os_write of its own",
+        expect: Expect::Refused,
+        cells: PerCpu {
+            x86_64: Cell::Try {
+                edits: OWN_OS_WRITE,
+                needles: &["is a name lengua keeps"],
+            },
+            aarch64: Cell::Try {
+                edits: OWN_OS_WRITE,
+                needles: &["is a name lengua keeps"],
+            },
+        },
+    },
+    // A jump to an operation the spec doesn't allow, which is no call of it for the rule on
+    // operations to see.
+    Attempt {
+        family: Family::Edge,
+        what: "a jump into lengua's code",
+        expect: Expect::Refused,
+        cells: PerCpu {
+            x86_64: Cell::Try {
+                edits: &[("    call os_exit\n", "    jmp os_open\n    call os_exit\n")],
+                needles: &["jumps outside main"],
+            },
+            aarch64: Cell::Try {
+                edits: &[("    bl os_exit\n", "    b os_open\n    bl os_exit\n")],
+                needles: &["jumps outside main"],
             },
         },
     },
@@ -187,19 +185,19 @@ const ATTEMPTS: &[Attempt] = &[
         cells: PerCpu {
             x86_64: Cell::Try {
                 edits: &[(
-                    "    mov rdi, qword ptr [rsp + 16]\n",
+                    "    mov rdi, qword ptr [rsi + 8]\n",
                     concat!(
                         "    movzx ecx, byte ptr [rip + usage_msg + 18]\n",
-                        "    mov rdi, qword ptr [rsp + 16]\n"
+                        "    mov rdi, qword ptr [rsi + 8]\n"
                     ),
                 )],
                 needles: &["rule M2", "past the end of"],
             },
             aarch64: Cell::Try {
                 edits: &[(
-                    "    cbz x0, .Lstart_assert_argv\n",
+                    "    cbz x0, .Lmain_assert_argv\n",
                     concat!(
-                        "    cbz x0, .Lstart_assert_argv\n",
+                        "    cbz x0, .Lmain_assert_argv\n",
                         "    adrp x9, usage_msg\n",
                         "    add x9, x9, :lo12:usage_msg\n",
                         "    ldrb w10, [x9, #18]\n"
@@ -216,19 +214,19 @@ const ATTEMPTS: &[Attempt] = &[
         cells: PerCpu {
             x86_64: Cell::Try {
                 edits: &[(
-                    "    mov rdi, qword ptr [rsp + 16]\n",
+                    "    mov rdi, qword ptr [rsi + 8]\n",
                     concat!(
                         "    movzx ecx, byte ptr [rip + usage_msg + 4096]\n",
-                        "    mov rdi, qword ptr [rsp + 16]\n"
+                        "    mov rdi, qword ptr [rsi + 8]\n"
                     ),
                 )],
                 needles: &["rule M2", "past the end of"],
             },
             aarch64: Cell::Try {
                 edits: &[(
-                    "    cbz x0, .Lstart_assert_argv\n",
+                    "    cbz x0, .Lmain_assert_argv\n",
                     concat!(
-                        "    cbz x0, .Lstart_assert_argv\n",
+                        "    cbz x0, .Lmain_assert_argv\n",
                         "    adrp x9, usage_msg\n",
                         "    add x9, x9, :lo12:usage_msg\n",
                         "    ldrb w10, [x9, #4095]\n"
@@ -245,10 +243,10 @@ const ATTEMPTS: &[Attempt] = &[
         cells: PerCpu {
             x86_64: Cell::Try {
                 edits: &[(
-                    "    mov rdi, qword ptr [rsp + 16]\n    test rdi, rdi\n",
+                    "    mov rdi, qword ptr [rsi + 8]\n    test rdi, rdi\n",
                     concat!(
-                        "    mov rdi, qword ptr [rsp + 16]\n",
-                        "    mov rcx, qword ptr [rsp + 8]\n",
+                        "    mov rdi, qword ptr [rsi + 8]\n",
+                        "    mov rcx, qword ptr [rsi]\n",
                         "    movzx edx, byte ptr [rdi + rcx]\n",
                         "    test rdi, rdi\n"
                     ),
@@ -257,10 +255,10 @@ const ATTEMPTS: &[Attempt] = &[
             },
             aarch64: Cell::Try {
                 edits: &[(
-                    "    cbz x0, .Lstart_assert_argv\n",
+                    "    cbz x0, .Lmain_assert_argv\n",
                     concat!(
-                        "    cbz x0, .Lstart_assert_argv\n",
-                        "    ldr x11, [sp, #8]\n",
+                        "    cbz x0, .Lmain_assert_argv\n",
+                        "    ldr x11, [x1]\n",
                         "    ldrb w10, [x0, x11]\n"
                     ),
                 )],
@@ -275,13 +273,13 @@ const ATTEMPTS: &[Attempt] = &[
         cells: PerCpu {
             x86_64: Cell::Try {
                 edits: &[(
-                    "    mov rdi, qword ptr [rsp + 16]\n    test rdi, rdi\n",
+                    "    mov rdi, qword ptr [rsi + 8]\n    test rdi, rdi\n",
                     concat!(
-                        "    mov rdi, qword ptr [rsp + 16]\n",
-                        "    mov rcx, qword ptr [rsp + 8]\n",
+                        "    mov rdi, qword ptr [rsi + 8]\n",
+                        "    mov rcx, qword ptr [rsi]\n",
                         "    movzx edx, byte ptr [rdi + rcx]\n",
                         "    cmp rcx, 8\n",
-                        "    jae .Lstart_assert_argv\n",
+                        "    jae .Lmain_assert_argv\n",
                         "    test rdi, rdi\n"
                     ),
                 )],
@@ -289,21 +287,21 @@ const ATTEMPTS: &[Attempt] = &[
             },
             aarch64: Cell::Try {
                 edits: &[(
-                    "    cbz x0, .Lstart_assert_argv\n",
+                    "    cbz x0, .Lmain_assert_argv\n",
                     concat!(
-                        "    cbz x0, .Lstart_assert_argv\n",
-                        "    ldr x11, [sp, #8]\n",
+                        "    cbz x0, .Lmain_assert_argv\n",
+                        "    ldr x11, [x1]\n",
                         "    ldrb w10, [x0, x11]\n",
                         "    cmp x11, #8\n",
-                        "    b.hs .Lstart_assert_argv\n"
+                        "    b.hs .Lmain_assert_argv\n"
                     ),
                 )],
                 needles: &["rule 9", "rule M2"],
             },
         },
     },
-    // An address made from a plain number, and a pointer read from memory, which has no owner
-    // the rules can follow: tested, not proven.
+    // An address made from a plain number, and pointers read from memory: a wrong one, which
+    // the sandbox stops, and a good one, which the report says is tested, not proven.
     Attempt {
         family: Family::Addresses,
         what: "a fixed address",
@@ -311,20 +309,20 @@ const ATTEMPTS: &[Attempt] = &[
         cells: PerCpu {
             x86_64: Cell::Try {
                 edits: &[(
-                    "    mov rdi, qword ptr [rsp + 16]\n",
+                    "    mov rdi, qword ptr [rsi + 8]\n",
                     concat!(
-                        "    mov esi, 4096\n",
-                        "    movzx ecx, byte ptr [rsi]\n",
-                        "    mov rdi, qword ptr [rsp + 16]\n"
+                        "    mov eax, 4096\n",
+                        "    movzx ecx, byte ptr [rax]\n",
+                        "    mov rdi, qword ptr [rsi + 8]\n"
                     ),
                 )],
                 needles: &["rule M1"],
             },
             aarch64: Cell::Try {
                 edits: &[(
-                    "    cbz x0, .Lstart_assert_argv\n",
+                    "    cbz x0, .Lmain_assert_argv\n",
                     concat!(
-                        "    cbz x0, .Lstart_assert_argv\n",
+                        "    cbz x0, .Lmain_assert_argv\n",
                         "    mov x9, #4096\n",
                         "    ldrb w10, [x9]\n"
                     ),
@@ -340,21 +338,21 @@ const ATTEMPTS: &[Attempt] = &[
         cells: PerCpu {
             x86_64: Cell::Try {
                 edits: &[(
-                    "    mov rdi, qword ptr [rsp + 16]\n",
+                    "    mov rdi, qword ptr [rsi + 8]\n",
                     concat!(
                         "    lea rax, [rip + usage_msg]\n",
-                        "    mov rsi, qword ptr [rax]\n",
-                        "    movzx ecx, byte ptr [rsi]\n",
-                        "    mov rdi, qword ptr [rsp + 16]\n"
+                        "    mov rdx, qword ptr [rax]\n",
+                        "    movzx ecx, byte ptr [rdx]\n",
+                        "    mov rdi, qword ptr [rsi + 8]\n"
                     ),
                 )],
                 needles: &[],
             },
             aarch64: Cell::Try {
                 edits: &[(
-                    "    cbz x0, .Lstart_assert_argv\n",
+                    "    cbz x0, .Lmain_assert_argv\n",
                     concat!(
-                        "    cbz x0, .Lstart_assert_argv\n",
+                        "    cbz x0, .Lmain_assert_argv\n",
                         "    adrp x9, usage_msg\n",
                         "    add x9, x9, :lo12:usage_msg\n",
                         "    ldr x10, [x9]\n",
@@ -372,21 +370,21 @@ const ATTEMPTS: &[Attempt] = &[
         cells: PerCpu {
             x86_64: Cell::Try {
                 edits: &[(
-                    "    mov rdi, qword ptr [rsp + 16]\n",
+                    "    mov rdi, qword ptr [rsi + 8]\n",
                     concat!(
-                        "    mov rsi, qword ptr [rsp + 8]\n",
-                        "    movzx ecx, byte ptr [rsi]\n",
-                        "    mov rdi, qword ptr [rsp + 16]\n"
+                        "    mov rdx, qword ptr [rsi]\n",
+                        "    movzx ecx, byte ptr [rdx]\n",
+                        "    mov rdi, qword ptr [rsi + 8]\n"
                     ),
                 )],
                 needles: &[],
             },
             aarch64: Cell::Try {
                 edits: &[(
-                    "    cbz x0, .Lstart_assert_argv\n",
+                    "    cbz x0, .Lmain_assert_argv\n",
                     concat!(
-                        "    cbz x0, .Lstart_assert_argv\n",
-                        "    ldr x9, [sp, #8]\n",
+                        "    cbz x0, .Lmain_assert_argv\n",
+                        "    ldr x9, [x1]\n",
                         "    ldrb w10, [x9]\n"
                     ),
                 )],
@@ -403,19 +401,19 @@ const ATTEMPTS: &[Attempt] = &[
         cells: PerCpu {
             x86_64: Cell::Try {
                 edits: &[(
-                    "    mov rdi, qword ptr [rsp + 16]\n",
+                    "    mov rdi, qword ptr [rsi + 8]\n",
                     concat!(
                         "    mov byte ptr [rip + usage_msg], 0\n",
-                        "    mov rdi, qword ptr [rsp + 16]\n"
+                        "    mov rdi, qword ptr [rsi + 8]\n"
                     ),
                 )],
                 needles: &["rule M6", "read-only"],
             },
             aarch64: Cell::Try {
                 edits: &[(
-                    "    cbz x0, .Lstart_assert_argv\n",
+                    "    cbz x0, .Lmain_assert_argv\n",
                     concat!(
-                        "    cbz x0, .Lstart_assert_argv\n",
+                        "    cbz x0, .Lmain_assert_argv\n",
                         "    adrp x9, usage_msg\n",
                         "    add x9, x9, :lo12:usage_msg\n",
                         "    strb wzr, [x9]\n"
@@ -560,22 +558,22 @@ const ATTEMPTS: &[Attempt] = &[
         cells: PerCpu {
             x86_64: Cell::Try {
                 edits: &[(
-                    "    mov edi, EXIT_WRITE_FAILED\n.Lstart_exit:\n",
+                    "    mov edi, EXIT_WRITE_FAILED\n.Lmain_exit:\n",
                     concat!(
                         "    mov edi, EXIT_WRITE_FAILED\n",
-                        "    jmp .Lstart_usage\n",
-                        ".Lstart_exit:\n"
+                        "    jmp .Lmain_usage\n",
+                        ".Lmain_exit:\n"
                     ),
                 )],
                 needles: &["rule 2", "rule 1"],
             },
             aarch64: Cell::Try {
                 edits: &[(
-                    "    mov w0, #EXIT_WRITE_FAILED\n.Lstart_exit:\n",
+                    "    mov w0, #EXIT_WRITE_FAILED\n.Lmain_exit:\n",
                     concat!(
                         "    mov w0, #EXIT_WRITE_FAILED\n",
-                        "    b .Lstart_usage\n",
-                        ".Lstart_exit:\n"
+                        "    b .Lmain_usage\n",
+                        ".Lmain_exit:\n"
                     ),
                 )],
                 needles: &["rule 2", "rule 1"],
@@ -620,20 +618,20 @@ const ATTEMPTS: &[Attempt] = &[
         cells: PerCpu {
             x86_64: Cell::Try {
                 edits: &[(
-                    "    mov rdi, qword ptr [rsp + 16]\n",
+                    "    mov rdi, qword ptr [rsi + 8]\n",
                     concat!(
                         "    lea rax, [rip + parse_i64]\n",
                         "    call rax\n",
-                        "    mov rdi, qword ptr [rsp + 16]\n"
+                        "    mov rdi, qword ptr [rsi + 8]\n"
                     ),
                 )],
                 needles: &["rule 9", "dialect", "rule M1", "rule 1"],
             },
             aarch64: Cell::Try {
                 edits: &[(
-                    "    cbz x0, .Lstart_assert_argv\n",
+                    "    cbz x0, .Lmain_assert_argv\n",
                     concat!(
-                        "    cbz x0, .Lstart_assert_argv\n",
+                        "    cbz x0, .Lmain_assert_argv\n",
                         "    adrp x9, parse_i64\n",
                         "    add x9, x9, :lo12:parse_i64\n",
                         "    blr x9\n"
@@ -650,60 +648,17 @@ const ATTEMPTS: &[Attempt] = &[
         cells: PerCpu {
             x86_64: Cell::Try {
                 edits: &[(
-                    ".Lwrite_all_return:\n    ret\n",
-                    ".Lwrite_all_return:\n    nop\n",
+                    ".Lwrite_all_return:\n    add rsp, 8\n    ret\n",
+                    ".Lwrite_all_return:\n    add rsp, 8\n    nop\n",
                 )],
                 needles: &["rule 1", "rule 4"],
             },
             aarch64: Cell::Try {
                 edits: &[(
-                    ".Lwrite_all_return:\n    ret\n",
-                    ".Lwrite_all_return:\n    nop\n",
+                    ".Lwrite_all_return:\n    ldp x29, x30, [sp], #16\n    ret\n",
+                    ".Lwrite_all_return:\n    ldp x29, x30, [sp], #16\n    nop\n",
                 )],
                 needles: &["rule 1", "rule 4", "dialect"],
-            },
-        },
-    },
-    // The assertion handler must be the template's, word for word.
-    Attempt {
-        family: Family::Handler,
-        what: "an assertion handler that exits with 0",
-        expect: Expect::Refused,
-        cells: PerCpu {
-            x86_64: Cell::Try {
-                edits: &[(
-                    "    mov eax, 231\n    mov edi, 134\n    syscall\n",
-                    "    mov eax, 231\n    mov edi, 0\n    syscall\n",
-                )],
-                needles: &["assert_fail", "rule 5"],
-            },
-            aarch64: Cell::Try {
-                edits: &[(
-                    "    mov x0, #134\n    mov x8, #94\n    svc #0\n",
-                    "    mov x0, #0\n    mov x8, #94\n    svc #0\n",
-                )],
-                needles: &["assert_fail", "rule 5"],
-            },
-        },
-    },
-    Attempt {
-        family: Family::Handler,
-        what: "an assertion message that says passed",
-        expect: Expect::Refused,
-        cells: PerCpu {
-            x86_64: Cell::Try {
-                edits: &[(
-                    "    .ascii \"lengua: assertion 000 failed\\n\"\n",
-                    "    .ascii \"lengua: assertion 000 passed\\n\"\n",
-                )],
-                needles: &["assert_message", "assert_fail", "rule 5"],
-            },
-            aarch64: Cell::Try {
-                edits: &[(
-                    "    .ascii \"lengua: assertion 000 failed\\n\"\n",
-                    "    .ascii \"lengua: assertion 000 passed\\n\"\n",
-                )],
-                needles: &["assert_message", "assert_fail", "rule 5"],
             },
         },
     },
@@ -715,23 +670,23 @@ const ATTEMPTS: &[Attempt] = &[
         cells: PerCpu {
             x86_64: Cell::Try {
                 edits: &[(
-                    "    call parse_i64\n    test rax, rax\n    js .Lstart_not_a_number\n",
+                    "    call parse_i64\n    test rax, rax\n    js .Lmain_not_a_number\n",
                     concat!(
                         "    call parse_i64\n",
                         "    mov rbx, rax\n",
                         "    test rax, rax\n",
-                        "    js .Lstart_not_a_number\n"
+                        "    js .Lmain_not_a_number\n"
                     ),
                 )],
                 needles: &["rule 7"],
             },
             aarch64: Cell::Try {
                 edits: &[(
-                    "    bl parse_i64\n    tbnz x0, #63, .Lstart_not_a_number\n",
+                    "    bl parse_i64\n    tbnz x0, #63, .Lmain_not_a_number\n",
                     concat!(
                         "    bl parse_i64\n",
                         "    mov x9, x0\n",
-                        "    tbnz x0, #63, .Lstart_not_a_number\n"
+                        "    tbnz x0, #63, .Lmain_not_a_number\n"
                     ),
                 )],
                 needles: &["rule 7"],
@@ -745,10 +700,9 @@ const ATTEMPTS: &[Attempt] = &[
         cells: PerCpu {
             x86_64: Cell::Try {
                 edits: &[(
-                    "    mov eax, SYS_WRITE\n    syscall\n    test rax, rax\n    js .Lwrite_all_return\n",
+                    "    call os_write\n    test rax, rax\n    js .Lwrite_all_return\n",
                     concat!(
-                        "    mov eax, SYS_WRITE\n",
-                        "    syscall\n",
+                        "    call os_write\n",
                         "    mov rbx, rax\n",
                         "    test rax, rax\n",
                         "    js .Lwrite_all_return\n"
@@ -758,10 +712,9 @@ const ATTEMPTS: &[Attempt] = &[
             },
             aarch64: Cell::Try {
                 edits: &[(
-                    "    mov x8, #SYS_WRITE\n    svc #0\n    tbnz x0, #63, .Lwrite_all_return\n",
+                    "    bl os_write\n    tbnz x0, #63, .Lwrite_all_return\n",
                     concat!(
-                        "    mov x8, #SYS_WRITE\n",
-                        "    svc #0\n",
+                        "    bl os_write\n",
                         "    mov x11, x0\n",
                         "    tbnz x0, #63, .Lwrite_all_return\n"
                     ),
@@ -784,15 +737,15 @@ const ATTEMPTS: &[Attempt] = &[
                         ".equ OUT_BUF_LEN, 21\n.equ BIG, 0x4000000000000000\n",
                     ),
                     (
-                        "    neg rdx\n    jo .Lstart_assert_negate\n",
+                        "    neg rdx\n    jo .Lmain_assert_negate\n",
                         concat!(
                             "    neg rdx\n",
-                            "    jo .Lstart_assert_negate\n",
+                            "    jo .Lmain_assert_negate\n",
                             "    mov rcx, BIG\n",
                             "    cmp rdx, rcx\n",
-                            "    jle .Lstart_fine\n",
+                            "    jle .Lmain_fine\n",
                             "    inc rdx\n",
-                            ".Lstart_fine:\n"
+                            ".Lmain_fine:\n"
                         ),
                     ),
                 ],
@@ -805,15 +758,15 @@ const ATTEMPTS: &[Attempt] = &[
                         ".equ OUT_BUF_LEN, 21\n.equ BIG, 0x4000000000000000\n",
                     ),
                     (
-                        "    negs x0, x1\n    b.vs .Lstart_assert_negate\n",
+                        "    negs x0, x1\n    b.vs .Lmain_assert_negate\n",
                         concat!(
                             "    negs x0, x1\n",
-                            "    b.vs .Lstart_assert_negate\n",
+                            "    b.vs .Lmain_assert_negate\n",
                             "    mov x9, #BIG\n",
                             "    cmp x0, x9\n",
-                            "    b.le .Lstart_fine\n",
+                            "    b.le .Lmain_fine\n",
                             "    add x0, x0, #1\n",
-                            ".Lstart_fine:\n"
+                            ".Lmain_fine:\n"
                         ),
                     ),
                 ],
@@ -823,62 +776,8 @@ const ATTEMPTS: &[Attempt] = &[
     },
 ];
 
-/// The attempts at system calls, one per call of [`CALLS`] and the calls only one CPU has.
-fn call_attempts() -> Vec<Attempt> {
-    let mut attempts: Vec<Attempt> = CALLS
-        .iter()
-        .map(|&(what, x86_64, aarch64)| Attempt {
-            family: Family::SystemCalls,
-            what,
-            expect: Expect::Refused,
-            cells: PerCpu {
-                x86_64: Cell::Call(x86_64),
-                aarch64: Cell::Call(aarch64),
-            },
-        })
-        .collect();
-    attempts.push(Attempt {
-        family: Family::SystemCalls,
-        what: "open",
-        expect: Expect::Refused,
-        cells: PerCpu {
-            x86_64: Cell::Call(2),
-            aarch64: Cell::NotApplicable(
-                "AArch64 Linux has no `open`: its table keeps only `openat`, which is its own \
-                 attempt",
-            ),
-        },
-    });
-    attempts.push(Attempt {
-        family: Family::SystemCalls,
-        what: "fork",
-        expect: Expect::Refused,
-        cells: PerCpu {
-            x86_64: Cell::Call(57),
-            aarch64: Cell::NotApplicable(
-                "AArch64 Linux has no `fork`: its table keeps only `clone`, which is its own \
-                 attempt",
-            ),
-        },
-    });
-    attempts
-}
-
-/// Every attempt, in the table's order.
-fn attempts() -> Vec<Attempt> {
-    call_attempts()
-        .into_iter()
-        .chain(ATTEMPTS.iter().copied())
-        .collect()
-}
-
-/// The text of a file in the compile skill's assets; the inline form's templates are the frozen
-/// copies its rules were written against (src/checker/inline_form/), which the shipped ones leave
-/// as programs move to the edge form.
+/// The text of a file in the compile skill's assets.
 fn asset(name: &str) -> String {
-    if let Some(text) = lengua::checker::frozen(name) {
-        return text.to_owned();
-    }
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("plugin/skills/compile/assets")
         .join(name);
@@ -918,18 +817,6 @@ fn planned(target: Profile, cell: Cell) -> Option<(String, &'static [&'static st
     match cell {
         Cell::NotApplicable(_) => None,
         Cell::Try { edits, needles } => Some((changed(target, edits.iter().copied()), needles)),
-        Cell::Call(number) => {
-            let exit = *EXITS.get(target);
-            let call = match target {
-                Profile::LinuxX86_64 => format!("    mov eax, {number}\n    syscall\n"),
-                Profile::LinuxAarch64 => format!("    mov x8, #{number}\n    svc #0\n"),
-            };
-            let replacement = format!("{call}{exit}");
-            Some((
-                changed(target, [(exit, replacement.as_str())]),
-                CALL_NEEDLES,
-            ))
-        }
     }
 }
 
@@ -977,9 +864,9 @@ async fn try_attempt(
             );
         }
         Expect::TestedNotProven => {
-            // A pointer that happens to be good (argv[0], put there by the kernel) isn't wrong,
-            // but the rules can't follow it to an owner: the program may be done, and then the
-            // report must say that memory is tested, not proven.
+            // A pointer that happens to be good (argv[0], put there by the kernel) isn't wrong:
+            // the program may be done, and then the report must say that memory is tested, not
+            // proven.
             let report = session.check(&program).await;
             assert!(
                 report["memory"]
@@ -1000,8 +887,8 @@ async fn try_attempt(
 
 /// Tries every attempt of `family` on every target this computer runs.
 async fn run_family(family: Family) {
-    let attempts: Vec<Attempt> = attempts()
-        .into_iter()
+    let attempts: Vec<&Attempt> = ATTEMPTS
+        .iter()
         .filter(|attempt| attempt.family == family)
         .collect();
     assert!(!attempts.is_empty(), "no attempts in {family:?}");
@@ -1038,13 +925,8 @@ async fn run_family(family: Family) {
 }
 
 #[tokio::test]
-async fn a_system_call_the_spec_doesnt_allow_is_refused() {
-    run_family(Family::SystemCalls).await;
-}
-
-#[tokio::test]
-async fn a_system_call_chosen_by_a_value_the_rules_cant_see_is_refused() {
-    run_family(Family::CallChoice).await;
+async fn the_os_is_reached_only_by_an_operation_the_spec_allows() {
+    run_family(Family::Edge).await;
 }
 
 #[tokio::test]
@@ -1073,11 +955,6 @@ async fn recursion_calls_through_registers_and_a_missing_return_are_refused() {
 }
 
 #[tokio::test]
-async fn a_tampered_assertion_handler_is_refused() {
-    run_family(Family::Handler).await;
-}
-
-#[tokio::test]
 async fn code_that_ignores_a_failed_result_is_refused() {
     run_family(Family::Results).await;
 }
@@ -1089,14 +966,14 @@ async fn a_wrong_program_is_never_stamped_done() {
 
 /// The table is well formed on any computer, even for a target it cannot run: every edit's text
 /// is in the template as the edits before it left it, a cell that can't be written says why, and
-/// no target tries fewer attempts than the two files this table replaced did.
+/// no target tries fewer attempts than it does now.
 #[test]
 fn every_cell_edits_text_its_template_has() {
     let mut tried = PerCpu {
         x86_64: 0,
         aarch64: 0,
     };
-    for attempt in attempts() {
+    for attempt in ATTEMPTS {
         let mut applies = false;
         for (target, cell) in attempt.cells.cells() {
             match planned(target, *cell) {
@@ -1123,7 +1000,7 @@ fn every_cell_edits_text_its_template_has() {
         }
         assert!(applies, "{}: no target tries it", attempt.what);
     }
-    // The 41 attempts each file held, and the x86-64 `openat` this table adds.
-    assert!(tried.x86_64 >= 42, "{} on x86-64", tried.x86_64);
-    assert!(tried.aarch64 >= 41, "{} on ARM64", tried.aarch64);
+    // Every attempt, but the changed return address that only ARM64 can write.
+    assert!(tried.x86_64 >= 25, "{} on x86-64", tried.x86_64);
+    assert!(tried.aarch64 >= 26, "{} on ARM64", tried.aarch64);
 }

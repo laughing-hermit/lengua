@@ -218,12 +218,8 @@ fn budget(seconds: u64) -> Budget {
     }
 }
 
-/// The text of a file in the compile skill's assets; the inline form's templates are the frozen
-/// copies its rules were written against (src/checker/inline_form/).
+/// The text of a file in the compile skill's assets.
 fn asset(name: &str) -> String {
-    if let Some(text) = crate::checker::frozen(name) {
-        return text.to_owned();
-    }
     std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("plugin/skills/compile/assets")
@@ -258,8 +254,8 @@ fn edited(source: &str, edits: &[(&str, &str)]) -> String {
 
 /// The template of each target, in the compile skill's assets.
 const TEMPLATES: PerCpu<&str> = PerCpu {
-    x86_64: crate::checker::TEMPLATE,
-    aarch64: crate::checker::AARCH64_TEMPLATE,
+    x86_64: "main-template.s",
+    aarch64: "linux-aarch64/main-template.s",
 };
 
 /// The template is proven for every input from its spec, every generated block of it, on each
@@ -277,7 +273,7 @@ async fn proves_the_template_for_every_input() {
         crate::testfile::check(&spec).unwrap_or_else(|problems| panic!("{problems:?}"))
     };
     for target in Profile::ALL {
-        let machine = machine(TEMPLATES.get(target)).await;
+        let machine = machine(&asset(TEMPLATES.get(target))).await;
         for (number, _) in suite.generated.iter().enumerate() {
             let block = block(&spec, number);
             let started = Instant::now();
@@ -336,8 +332,7 @@ async fn proves_a_streaming_filter_for_every_length() {
     }
 }
 
-/// The prover finds lengua's own `fill` in a program of the edge form on each target, as it finds
-/// the inline form's copy in a program that has one.
+/// The prover finds lengua's own `fill` in a program that calls it, on each target.
 #[tokio::test]
 async fn finds_the_library_fill_on_every_cpu() {
     for target in Profile::ALL {
@@ -583,16 +578,16 @@ const UNLUCKY_NUMBER: PerCpu<&[Edit]> = PerCpu {
             ".equ OUT_BUF_LEN, 21\n.equ UNLUCKY, -1234567\n",
         ),
         (
-            "    neg rdx\n    jo .Lstart_assert_negate\n",
-            "    neg rdx\n    jo .Lstart_assert_negate\n    cmp rdx, UNLUCKY\n    \
-             jne .Lstart_lucky\n    inc rdx\n.Lstart_lucky:\n",
+            "    neg rdx\n    jo .Lmain_assert_negate\n",
+            "    neg rdx\n    jo .Lmain_assert_negate\n    cmp rdx, UNLUCKY\n    \
+             jne .Lmain_lucky\n    inc rdx\n.Lmain_lucky:\n",
         ),
     ],
     aarch64: &[(
-        "    negs x0, x1\n    b.vs .Lstart_assert_negate\n",
-        "    negs x0, x1\n    b.vs .Lstart_assert_negate\n    mov x2, #0xd687\n    \
-         movk x2, #0x12, lsl #16\n    neg x2, x2\n    cmp x0, x2\n    b.ne .Lstart_lucky\n    \
-         add x0, x0, #1\n.Lstart_lucky:\n",
+        "    negs x0, x1\n    b.vs .Lmain_assert_negate\n",
+        "    negs x0, x1\n    b.vs .Lmain_assert_negate\n    mov x2, #0xd687\n    \
+         movk x2, #0x12, lsl #16\n    neg x2, x2\n    cmp x0, x2\n    b.ne .Lmain_lucky\n    \
+         add x0, x0, #1\n.Lmain_lucky:\n",
     )],
 };
 
@@ -603,7 +598,7 @@ async fn finds_a_bug_the_samples_miss() {
     }
     let block = block(&asset("template-spec.md"), 0);
     for target in Profile::ALL {
-        let buggy = edited(TEMPLATES.get(target), UNLUCKY_NUMBER.get(target));
+        let buggy = edited(&asset(TEMPLATES.get(target)), UNLUCKY_NUMBER.get(target));
         let machine = machine(&buggy).await;
         // Seconds alone; minutes when every test runs at once, with each question slower too.
         let verdict = prove(
@@ -776,17 +771,17 @@ const MEMORY_BUGS: &[(&str, PerCpu<MemoryBug>)] = &[
         PerCpu {
             x86_64: MemoryBug {
                 edits: &[(
-                    "    mov rdi, qword ptr [rsp + 16]\n",
-                    "    mov rdi, qword ptr [rsp + 8]\n    add rdi, 13\n    \
-                     movzx ecx, byte ptr [rdi]\n    mov rdi, qword ptr [rsp + 16]\n",
+                    "    mov rdi, qword ptr [rsi + 8]\n",
+                    "    mov rdi, qword ptr [rsi]\n    add rdi, 13\n    \
+                     movzx ecx, byte ptr [rdi]\n    mov rdi, qword ptr [rsi + 8]\n",
                 )],
                 needle: "reads 1 byte at byte 13 of the program's argument 0, which has 13 bytes",
             },
             aarch64: MemoryBug {
                 edits: &[(
-                    "    ldr x0, [sp, #16]\n",
-                    "    ldr x1, [sp, #8]\n    add x1, x1, #13\n    ldrb w2, [x1]\n    \
-                     ldr x0, [sp, #16]\n",
+                    "    ldr x0, [x1, #8]\n",
+                    "    ldr x2, [x1]\n    add x2, x2, #13\n    ldrb w3, [x2]\n    \
+                     ldr x0, [x1, #8]\n",
                 )],
                 needle: "reads 1 byte at byte 13 of the program's argument 0, which has 13 bytes",
             },
@@ -824,7 +819,7 @@ async fn finds_memory_bugs_the_rules_cannot_see() {
     let mut problems = Vec::new();
     for (name, cells) in MEMORY_BUGS {
         for (target, cell) in cells.cells() {
-            let buggy = edited(TEMPLATES.get(target), cell.edits);
+            let buggy = edited(&asset(TEMPLATES.get(target)), cell.edits);
             let machine = machine(&buggy).await;
             let verdict = prove(&machine, &block, &budget(120));
             let found = match &verdict {
@@ -3389,8 +3384,7 @@ async fn proves_a_tally_for_short_texts() {
     }
 }
 
-/// The parallel template of each target, in the skill's assets: x86-64's with `clone` and
-/// `futex`, AArch64's with `clone`, `futex` and `ldar`.
+/// The parallel template of each target, in the skill's assets.
 const PARALLEL_TEMPLATES: PerCpu<&str> = PerCpu {
     x86_64: "parallel-template.s",
     aarch64: "linux-aarch64/parallel-template.s",
@@ -3417,46 +3411,6 @@ async fn proves_a_program_on_several_threads() {
     for target in Profile::ALL {
         // Sixteen chunks of 128 bytes hold at most 2048.
         let source = asset(PARALLEL_TEMPLATES.get(target))
-            .replace(".equ CHUNK, 65536", ".equ CHUNK, 128")
-            .replace(".equ INPUT_MAX, 1048576", ".equ INPUT_MAX, 2048");
-        assert!(source.contains(".equ CHUNK, 128") && source.contains(".equ INPUT_MAX, 2048"));
-        let machine = machine(&source).await;
-        let verdict = prove(&machine, &block(&spec, 0), &text_budget());
-        assert!(
-            matches!(
-                &verdict,
-                Verdict::Proven {
-                    bound: None,
-                    unreached,
-                    ..
-                } if unreached.is_empty()
-            ),
-            "{}: {verdict:?}",
-            target.name()
-        );
-    }
-}
-
-/// The same through lengua's own `parallel_for`: the template as shipped, in the edge form, whose
-/// threads lengua starts, proves like any other program, each worker run to its end as it starts.
-#[tokio::test]
-async fn proves_an_edge_form_program_on_several_threads() {
-    let spec = asset("parallel-template-spec.md")
-        .replacen(
-            "# Behaviors",
-            "Tests here give it up to `300` bytes.\n\n# Behaviors",
-            1,
-        )
-        .replace("string(0, 1048576,", "string(0, 300,");
-    for target in Profile::ALL {
-        let name = *PARALLEL_TEMPLATES.get(target);
-        let shipped = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("plugin/skills/compile/assets")
-                .join(name),
-        )
-        .expect("the template");
-        let source = shipped
             .replace(".equ CHUNK, 65536", ".equ CHUNK, 128")
             .replace(".equ INPUT_MAX, 1048576", ".equ INPUT_MAX, 2048");
         assert!(source.contains(".equ CHUNK, 128") && source.contains(".equ INPUT_MAX, 2048"));

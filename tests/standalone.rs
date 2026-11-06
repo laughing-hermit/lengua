@@ -1,13 +1,14 @@
 //! The templates built and run alone, with no server, on every target: LLVM assembles and links
-//! each target's main template and a program made of its fill and assert_fail, and these tests
-//! read the machine code and run the programs themselves. What they hold is written once, with a
-//! cell for each target (`PerCpu`):
+//! each target's main template and a program that drives lengua's fill and assert_fail, each with
+//! lengua.s after it, and these tests read the machine code and run the programs themselves. What
+//! they hold is written once, with a cell for each target (`PerCpu`):
 //!
 //! - one machine instruction per source line, function by function, as `llvm-objdump` prints
-//!   them: the step from main.s to machine code that `check` relies on;
+//!   them, in main.s and in lengua.s: the step from the text to machine code that `check` relies
+//!   on;
 //! - the template against its spec's examples, run as a program of its own;
 //! - fill and assert_fail as a program of their own: the same bytes however they arrive, and an
-//!   assertion that fails as the template's handler says;
+//!   assertion that fails as lengua's handler says;
 //! - every word of both programs read by lengua's decoder as LLVM's disassembler reads it:
 //!   AArch64's through lengua's own decoder and parser, x86-64's through iced-x86, the decoder
 //!   `check` reads machine code with, held to LLVM's disassembly instruction by instruction.
@@ -31,18 +32,10 @@ use lengua::targets::PerCpu;
 /// Functions by name, each with the mnemonics of its instructions in order.
 type Functions = Vec<(String, Vec<String>)>;
 
-/// Each target's main template, as the inline form's rules hold it: the frozen copy in
-/// src/checker/inline_form/, which the shipped template leaves behind as programs move to the edge
-/// form.
+/// Each target's main template, in the compile skill's assets.
 const TEMPLATES: PerCpu<&str> = PerCpu {
-    x86_64: lengua::checker::TEMPLATE,
-    aarch64: lengua::checker::AARCH64_TEMPLATE,
-};
-
-/// Each target's fill, frozen the same way.
-const FILLS: PerCpu<&str> = PerCpu {
-    x86_64: lengua::checker::FILL_TEMPLATE,
-    aarch64: lengua::checker::AARCH64_FILL_TEMPLATE,
+    x86_64: include_str!("../plugin/skills/compile/assets/main-template.s"),
+    aarch64: include_str!("../plugin/skills/compile/assets/linux-aarch64/main-template.s"),
 };
 
 /// The first line of each target's programs, which names the CPU's syntax.
@@ -51,17 +44,16 @@ const FIRST_LINES: PerCpu<&str> = PerCpu {
     aarch64: ".arch armv8-a\n",
 };
 
-/// What a target's program of fill and assert_fail is made of besides their own text: the `_start`
+/// What a target's program of fill and assert_fail is made of besides lengua's text: the `main`
 /// that drives them. With no arguments it copies standard input up to a newline that a read ends
 /// with into a buffer of 64 bytes and writes what it read; with one it fails assertion 123.
 const DRIVERS: PerCpu<&str> = PerCpu {
     x86_64: concat!(
         ".text\n",
-        ".globl _start\n",
-        ".type _start, @function\n",
-        "_start:\n",
-        "    mov rax, qword ptr [rsp]\n",
-        "    cmp rax, 2\n",
+        ".type main, @function\n",
+        "main:\n",
+        "    sub rsp, 8\n",
+        "    cmp rdi, 2\n",
         "    je .Lassert\n",
         "    xor edi, edi\n",
         "    lea rsi, [rip + buf]\n",
@@ -71,25 +63,21 @@ const DRIVERS: PerCpu<&str> = PerCpu {
         "    test rax, rax\n",
         "    js .Lout\n",
         "    mov rdx, rax\n",
-        "    mov eax, 1\n",
         "    mov edi, 1\n",
         "    lea rsi, [rip + buf]\n",
-        "    syscall\n",
+        "    call os_write\n",
         ".Lout:\n",
-        "    mov eax, 60\n",
         "    xor edi, edi\n",
-        "    syscall\n",
+        "    call os_exit\n",
         ".Lassert:\n",
         "    mov edi, 123\n",
         "    call assert_fail\n",
-        ".size _start, . - _start\n"
+        ".size main, . - main\n"
     ),
     aarch64: concat!(
         ".text\n",
-        ".globl _start\n",
-        ".type _start, @function\n",
-        "_start:\n",
-        "    ldr x0, [sp]\n",
+        ".type main, @function\n",
+        "main:\n",
         "    cmp x0, #2\n",
         "    b.eq .Lassert\n",
         "    mov x0, #0\n",
@@ -103,50 +91,33 @@ const DRIVERS: PerCpu<&str> = PerCpu {
         "    mov x0, #1\n",
         "    adrp x1, buf\n",
         "    add x1, x1, :lo12:buf\n",
-        "    mov x8, #64\n",
-        "    svc #0\n",
+        "    bl os_write\n",
         ".Lout:\n",
         "    mov x0, #0\n",
-        "    mov x8, #93\n",
-        "    svc #0\n",
+        "    bl os_exit\n",
         ".Lassert:\n",
         "    mov w0, #123\n",
         "    bl assert_fail\n",
-        ".size _start, . - _start\n"
+        ".size main, . - main\n"
     ),
 };
 
-/// The text of `text` from the first `start` to the end of the first `end` after it, and a
-/// newline.
-fn between(text: &str, start: &str, end: &str) -> String {
-    let from = text.find(start).expect("the start");
-    let to = from + text[from..].find(end).expect("the end") + end.len();
-    format!("{}\n", &text[from..to])
+/// `target`'s program of fill and assert_fail: a buffer and the driver.
+fn fill_program(target: Profile) -> String {
+    format!(
+        "{first}.section .bss\n.type buf, @object\nbuf:\n    .zero 64\n.size buf, . - buf\n\n\
+         {driver}",
+        first = FIRST_LINES.get(target),
+        driver = DRIVERS.get(target),
+    )
 }
 
-/// `target`'s program of fill and assert_fail: fill's constants and function, the template's
-/// assertion handler and its message, a buffer, and the driver.
-fn fill_program(target: Profile) -> String {
-    let template = *TEMPLATES.get(target);
-    let fill = *FILLS.get(target);
-    format!(
-        "{first}{constants}\n.section .rodata\n{message}\n.section .bss\n\
-         .type buf, @object\nbuf:\n    .zero 64\n.size buf, . - buf\n\n{driver}\n{fill}\n{assert}",
-        first = FIRST_LINES.get(target),
-        constants = between(fill, ".equ SYS_READ", "MAX_FILL_READS, 1099511627776"),
-        message = between(
-            template,
-            ".type assert_message",
-            ".size assert_message, . - assert_message"
-        ),
-        driver = DRIVERS.get(target),
-        fill = between(fill, ".type fill, @function", ".size fill, . - fill"),
-        assert = between(
-            template,
-            ".type assert_fail, @function",
-            ".size assert_fail, . - assert_fail"
-        ),
-    )
+/// What `per_target::build` assembles for `source`, a program of the edge form: main.s with
+/// lengua's text after it, whose `_start` calls `main` and which holds the operations and the
+/// library functions it calls.
+fn assembled(target: Profile, source: &str) -> String {
+    let edge = lengua::edge::lengua_text(target, source).expect("a program of the edge form");
+    format!("{source}\n{edge}")
 }
 
 /// The condition codes an assembler takes under several names, each with the name LLVM's
@@ -327,7 +298,8 @@ async fn the_template_links_one_instruction_per_line() {
         );
         let place = folder.path().join(target.name());
         let executable = per_target::build(target, &place, "main", source).await;
-        one_instruction_per_line(target, "the template", source, &executable);
+        let program = assembled(target, source);
+        one_instruction_per_line(target, "the template", &program, &executable);
     }
 }
 
@@ -384,7 +356,8 @@ async fn fill_and_assert_fail_behave_as_a_program_of_their_own() {
         let source = fill_program(target);
         let place = folder.path().join(target.name());
         let executable = per_target::build(target, &place, "main", &source).await;
-        one_instruction_per_line(target, "the fill program", &source, &executable);
+        let program = assembled(target, &source);
+        one_instruction_per_line(target, "the fill program", &program, &executable);
         if per_target::way(target).is_none() {
             continue;
         }

@@ -120,9 +120,9 @@ impl Toolchain {
     }
 
     /// Assembles `source` into the object file `object`, treating warnings as errors. A program
-    /// in the edge form ([`crate::edge::form`]) is assembled with lengua.s after it
+    /// ([`crate::edge::is_program`]) is assembled with lengua.s after it
     /// ([`crate::edge::lengua_text`]), as one input written beside the object, so main.s's line
-    /// numbers are the same.
+    /// numbers are the same, and the assembler's messages name main.s, not that input.
     pub async fn assemble(
         &self,
         profile: Profile,
@@ -139,7 +139,16 @@ impl Toolchain {
             "-o".as_ref(),
             object.as_os_str(),
         ];
-        run_build_tool(BuildStep::Assemble, &self.assembler.path, &args).await
+        let mut built = run_build_tool(BuildStep::Assemble, &self.assembler.path, &args).await;
+        if let Err(error) = &mut built
+            && assembly != source
+        {
+            error.message = error.message.replace(
+                assembly.to_string_lossy().as_ref(),
+                source.to_string_lossy().as_ref(),
+            );
+        }
+        built
     }
 
     /// What `assemble` reads: `source` itself, or, for a program in the edge form, a file beside

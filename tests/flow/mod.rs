@@ -71,11 +71,11 @@ pub fn isa_name(target: Profile) -> &'static str {
     }
 }
 
-/// An instruction that changes the stack pointer, put just before a program's first one: rule 3
-/// refuses it, and says so with the line and what it says of the instruction.
+/// An instruction that changes the stack pointer, put before one of a program's: rule 3 refuses
+/// it, and says so with the line and what it says of the instruction.
 #[derive(Debug, Clone, Copy)]
 pub struct Offence {
-    /// The program's first instruction, with its newline, which the new line goes before.
+    /// The instruction, with its newline, which the new line goes before.
     pub before: &'static str,
     /// The new line, without its newline.
     pub line: &'static str,
@@ -84,22 +84,8 @@ pub struct Offence {
 }
 
 /// Each target's instruction that moves its stack pointer where only a push, a pop or an add or
-/// a subtract of a constant may.
-pub static MOVES_THE_STACK_POINTER: PerCpu<Offence> = PerCpu {
-    x86_64: Offence {
-        before: "    mov rax, qword ptr [rsp]\n",
-        line: "    and rsp, -16",
-        says: "`and` changes rsp",
-    },
-    aarch64: Offence {
-        before: "    ldr x0, [sp]\n",
-        line: "    and sp, x9, #-16",
-        says: "`and` sets sp",
-    },
-};
-
-/// The same instruction for a program in the edge form, which has no read of the stack to put it
-/// before: it goes before the comparison of the argument count that starts every `main`.
+/// a subtract of a constant may, and the comparison of the argument count that starts a `main`,
+/// which it goes before.
 pub static MOVES_THE_STACK_POINTER_IN_EDGE_FORM: PerCpu<Offence> = PerCpu {
     x86_64: Offence {
         before: "    cmp rdi, ARGC_EXPECTED\n",
@@ -114,7 +100,7 @@ pub static MOVES_THE_STACK_POINTER_IN_EDGE_FORM: PerCpu<Offence> = PerCpu {
 };
 
 impl Offence {
-    /// `code` with the instruction put before its first one.
+    /// `code` with the new line put before the first `before` in it.
     pub fn applied_to(&self, code: &str) -> String {
         assert!(
             code.contains(self.before),
@@ -136,14 +122,9 @@ fn read(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
 }
 
-/// The text of a file in the compile skill's assets. The inline form's templates are the frozen
-/// copies its rules were written against (src/checker/inline_form/), which the shipped ones leave
-/// as programs move to the edge form.
+/// The text of a file in the compile skill's assets.
 pub fn asset(name: &str) -> String {
-    match lengua::checker::frozen(name) {
-        Some(text) => text.to_owned(),
-        None => read(&root().join("plugin/skills/compile/assets").join(name)),
-    }
+    read(&root().join("plugin/skills/compile/assets").join(name))
 }
 
 /// The text of `target`'s template program.

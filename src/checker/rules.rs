@@ -360,6 +360,22 @@ impl Checker<'_, '_> {
                 _ => continue,
             };
             let line = function.steps[index].source.line;
+            // Only lengua's parallel_for starts and joins threads: a program's own call would run
+            // its worker outside every rule the thread code is held to.
+            if matches!(
+                exit,
+                Exit::Edge {
+                    op: Operation::ThreadStart | Operation::ThreadJoin
+                }
+            ) {
+                self.violation(
+                    Rule::Resources,
+                    line,
+                    format!("{name} is called by lengua's parallel_for alone"),
+                    "start threads with parallel_for, which runs worker(index, slot) on each",
+                );
+                continue;
+            }
             for op in reached {
                 if allowed.contains(op) {
                     continue;

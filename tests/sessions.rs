@@ -24,12 +24,12 @@ use serde_json::{Value, json};
 /// A program that always prints -7: right for the example, wrong for the rest.
 static HARDCODED: PerCpu<Edits> = PerCpu {
     x86_64: &[(
-        "    js .Lstart_not_a_number\n    neg rdx\n",
-        "    js .Lstart_not_a_number\n    mov rdx, 7\n    neg rdx\n",
+        "    js .Lmain_not_a_number\n    neg rdx\n",
+        "    js .Lmain_not_a_number\n    mov rdx, 7\n    neg rdx\n",
     )],
     aarch64: &[(
-        "    tbnz x0, #63, .Lstart_not_a_number\n    negs x0, x1\n",
-        "    tbnz x0, #63, .Lstart_not_a_number\n    mov x1, #7\n    negs x0, x1\n",
+        "    tbnz x0, #63, .Lmain_not_a_number\n    negs x0, x1\n",
+        "    tbnz x0, #63, .Lmain_not_a_number\n    mov x1, #7\n    negs x0, x1\n",
     )],
 };
 
@@ -112,41 +112,36 @@ static UNLUCKY: PerCpu<Edits> = PerCpu {
             ".equ OUT_BUF_LEN, 21\n.equ UNLUCKY, -1234567\n",
         ),
         (
-            "    neg rdx\n    jo .Lstart_assert_negate\n",
+            "    neg rdx\n    jo .Lmain_assert_negate\n",
             concat!(
                 "    neg rdx\n",
-                "    jo .Lstart_assert_negate\n",
+                "    jo .Lmain_assert_negate\n",
                 "    cmp rdx, UNLUCKY\n",
-                "    jne .Lstart_lucky\n",
+                "    jne .Lmain_lucky\n",
                 "    inc rdx\n",
-                ".Lstart_lucky:\n"
+                ".Lmain_lucky:\n"
             ),
         ),
     ],
     aarch64: &[(
-        "    negs x0, x1\n    b.vs .Lstart_assert_negate\n",
+        "    negs x0, x1\n    b.vs .Lmain_assert_negate\n",
         concat!(
             "    negs x0, x1\n",
-            "    b.vs .Lstart_assert_negate\n",
+            "    b.vs .Lmain_assert_negate\n",
             "    movn x9, #0xd686\n",
             "    movk x9, #0xffed, lsl #16\n",
             "    cmp x0, x9\n",
-            "    b.ne .Lstart_lucky\n",
+            "    b.ne .Lmain_lucky\n",
             "    add x0, x0, #1\n",
-            ".Lstart_lucky:\n"
+            ".Lmain_lucky:\n"
         ),
     )],
 };
 
 /// A change that leaves what a program does as it was, and makes it a new build: a `nop` first.
 /// The tests and the proofs must be made again for it, and a proof of the old build must not
-/// land on it. Both CPUs have a `nop`; `main` starts every program of the edge form, which `cat`
-/// is, and `_start` the inline form, which the template is here (the copy its rules were written
-/// against).
+/// land on it. Both CPUs have a `nop`, and `main` starts every program.
 const NOP: flow::Edit = ("main:\n", "main:\n    nop\n");
-
-/// The same change to the template, which is in the inline form.
-const TEMPLATE_NOP: flow::Edit = ("_start:\n", "_start:\n    nop\n");
 
 /// The template, with its spec recorded, passes every rule and all 274 test runs, is stamped
 /// with lengua's line, and the lock says what built it.
@@ -437,7 +432,7 @@ async fn violations_come_with_rule_line_and_fix() {
             continue;
         };
         let name = target.name();
-        let offence = flow::MOVES_THE_STACK_POINTER.get(target);
+        let offence = flow::MOVES_THE_STACK_POINTER_IN_EDGE_FORM.get(target);
         let program = flow::checked_template(&session).await;
         let code = offence.applied_to(&flow::template(target));
         program.write("main.s", &code);
@@ -695,10 +690,7 @@ async fn the_template_is_proven_for_every_input() {
         assert_eq!(again["state"], "done", "{name}: {again}");
         assert_eq!(again["proofs"], report["proofs"], "{name}: {again}");
         // A new build is tested and proven again by itself.
-        program.write(
-            "main.s",
-            &flow::template(target).replacen(TEMPLATE_NOP.0, TEMPLATE_NOP.1, 1),
-        );
+        program.write("main.s", &flow::template(target).replacen(NOP.0, NOP.1, 1));
         let report = done(&session, &program).await;
         assert!(
             any_line(&report["proofs"], "proven for every input in range"),
@@ -1010,11 +1002,11 @@ fn every_cell_edits_text_its_program_has() {
             trip.sets_the_number
         );
         // The instruction that moves the stack pointer goes before one the template has.
-        let offence = flow::MOVES_THE_STACK_POINTER.get(target);
+        let offence = flow::MOVES_THE_STACK_POINTER_IN_EDGE_FORM.get(target);
         assert_ne!(offence.applied_to(&template), template, "{name}");
         // A `nop` goes first in the template and in cat, and every program starts with the line
         // that says which CPU's code it is.
-        assert!(template.contains(TEMPLATE_NOP.0), "the template on {name}");
+        assert!(template.contains(NOP.0), "the template on {name}");
         assert!(
             flow::program_file(target, "cat", "main.s").contains(NOP.0),
             "cat on {name}"

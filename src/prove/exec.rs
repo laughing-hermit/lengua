@@ -5246,44 +5246,29 @@ mod tests {
         }
     }
 
-    /// fill's function from assets/fill.s, as main.s copies it.
-    fn fill_function(asset: &str) -> &str {
-        let start = asset.find(".type fill, @function").expect("fill's start");
-        let end = asset.find(".size fill, . - fill").expect("fill's end");
-        &asset[start..end + ".size fill, . - fill".len()]
-    }
-
     /// A program that calls `fill` on standard input with a buffer of `capacity` bytes and the
     /// end byte `end` (-1 for none), prints what it read and exits with fill's result.
-    fn fill_program(fill: &str, capacity: u32, end: i32) -> String {
+    fn fill_program(capacity: u32, end: i32) -> String {
         format!(
-            ".intel_syntax noprefix\n.equ SYS_READ, 0\n.equ ERROR_IO, -5\n\
-             .equ MAX_FILL_READS, 1099511627776\n.globl _start\n.text\n\
-             .type _start, @function\n_start:\n    xor edi, edi\n    lea rsi, [rip + buffer]\n    \
-             mov edx, {capacity}\n    mov ecx, {end}\n    call fill\n    mov rbx, rax\n    \
-             test rax, rax\n    js .Lstart_exit\n    mov rdx, rax\n    mov eax, 1\n    \
-             mov edi, 1\n    lea rsi, [rip + buffer]\n    syscall\n.Lstart_exit:\n    \
-             mov rdi, rbx\n    mov eax, 60\n    syscall\n.size _start, . - _start\n{fill}\n\
-             .type assert_fail, @function\nassert_fail:\n    mov edi, 134\n    mov eax, 60\n    \
-             syscall\n.size assert_fail, . - assert_fail\n.bss\n.type buffer, @object\n\
-             buffer:\n    .zero 16\n.size buffer, 16\n"
+            ".intel_syntax noprefix\n.text\n.type main, @function\nmain:\n    sub rsp, 8\n    \
+             xor edi, edi\n    lea rsi, [rip + buffer]\n    mov edx, {capacity}\n    \
+             mov ecx, {end}\n    call fill\n    mov rbx, rax\n    test rax, rax\n    \
+             js .Lmain_exit\n    mov rdx, rax\n    mov edi, 1\n    lea rsi, [rip + buffer]\n    \
+             call os_write\n.Lmain_exit:\n    mov rdi, rbx\n    call os_exit\n\
+             .size main, . - main\n.bss\n.type buffer, @object\nbuffer:\n    .zero 16\n\
+             .size buffer, 16\n"
         )
     }
 
     /// [`fill_program`] for AArch64: the same program in its instructions.
-    fn fill_program_aarch64(fill: &str, capacity: u32, end: i32) -> String {
+    fn fill_program_aarch64(capacity: u32, end: i32) -> String {
         format!(
-            ".arch armv8-a\n.equ SYS_READ, 63\n.equ ERROR_IO, -5\n\
-             .equ MAX_FILL_READS, 1099511627776\n.globl _start\n.text\n\
-             .type _start, @function\n_start:\n    mov x0, #0\n    adrp x1, buffer\n    \
-             add x1, x1, :lo12:buffer\n    mov x2, #{capacity}\n    mov w3, #{end}\n    \
-             bl fill\n    mov x19, x0\n    tbnz x0, #63, .Lstart_exit\n    mov x2, x0\n    \
-             mov x0, #1\n    adrp x1, buffer\n    add x1, x1, :lo12:buffer\n    mov x8, #64\n    \
-             svc #0\n.Lstart_exit:\n    mov x0, x19\n    mov x8, #93\n    svc #0\n\
-             .size _start, . - _start\n{fill}\n\
-             .type assert_fail, @function\nassert_fail:\n    mov x0, #134\n    mov x8, #93\n    \
-             svc #0\n.size assert_fail, . - assert_fail\n.bss\n.type buffer, @object\n\
-             buffer:\n    .zero 16\n.size buffer, 16\n"
+            ".arch armv8-a\n.text\n.type main, @function\nmain:\n    mov x0, #0\n    \
+             adrp x1, buffer\n    add x1, x1, :lo12:buffer\n    mov x2, #{capacity}\n    \
+             mov w3, #{end}\n    bl fill\n    mov x19, x0\n    tbnz x0, #63, .Lmain_exit\n    \
+             mov x2, x0\n    mov x0, #1\n    adrp x1, buffer\n    add x1, x1, :lo12:buffer\n    \
+             bl os_write\n.Lmain_exit:\n    mov x0, x19\n    bl os_exit\n.size main, . - main\n\
+             .bss\n.type buffer, @object\nbuffer:\n    .zero 16\n.size buffer, 16\n"
         )
     }
 
@@ -5347,19 +5332,17 @@ mod tests {
     /// A bug planted in `fill`: what it does, and the edit that plants it.
     type FillMutant = (&'static str, &'static str, &'static str);
 
-    /// One target's cell of the fill test: its own `fill`, as the compile skill ships it, the
-    /// program that calls it, and four bugs planted in it.
+    /// One target's cell of the fill test: the program that calls lengua's own `fill`, and four
+    /// bugs planted in it.
     #[derive(Clone, Copy)]
     struct FillCell {
-        asset: &'static str,
-        program: fn(&str, u32, i32) -> String,
+        program: fn(u32, i32) -> String,
         mutants: [FillMutant; 4],
     }
 
     /// The fill test of each target, with the same four bugs planted in each CPU's `fill`.
     const FILLS: PerCpu<FillCell> = PerCpu {
         x86_64: FillCell {
-            asset: crate::checker::FILL_TEMPLATE,
             program: fill_program,
             mutants: [
                 (
@@ -5369,8 +5352,8 @@ mod tests {
                 ),
                 (
                     "stops a byte short of full",
-                    "    sub rdx, rax\n    jz .Lfill_done\n",
-                    "    sub rdx, rax\n    cmp rdx, 1\n    jbe .Lfill_done\n",
+                    "    sub rdx, rax\n    jz .Llengua_fill_done\n",
+                    "    sub rdx, rax\n    cmp rdx, 1\n    jbe .Llengua_fill_done\n",
                 ),
                 (
                     "checks the byte after the last",
@@ -5385,7 +5368,6 @@ mod tests {
             ],
         },
         aarch64: FillCell {
-            asset: crate::checker::AARCH64_FILL_TEMPLATE,
             program: fill_program_aarch64,
             mutants: [
                 (
@@ -5395,8 +5377,8 @@ mod tests {
                 ),
                 (
                     "stops a byte short of full",
-                    "    subs x2, x2, x0\n    b.eq .Lfill_done\n",
-                    "    subs x2, x2, x0\n    cmp x2, #1\n    b.ls .Lfill_done\n",
+                    "    subs x2, x2, x0\n    b.eq .Llengua_fill_done\n",
+                    "    subs x2, x2, x0\n    cmp x2, #1\n    b.ls .Llengua_fill_done\n",
                 ),
                 (
                     "checks the byte after the last",
@@ -5416,25 +5398,18 @@ mod tests {
     async fn fill_read_whole_is_its_code_for_every_cut() {
         for target in Profile::ALL {
             let cell = *FILLS.get(target);
-            fill_read_whole_is_its_code(
-                target,
-                fill_function(cell.asset),
-                cell.program,
-                cell.mutants,
-            )
-            .await;
+            fill_read_whole_is_its_code(target, cell.program, cell.mutants).await;
         }
     }
 
     /// fill read as a whole gives exactly what its code gives, over every way its input can be
     /// cut: every input of up to 5 bytes of `a` and newlines, every capacity up to 7, with a
-    /// newline as the end byte and with none. Bugs planted in its code each give something the
-    /// whole doesn't. `program` makes the test program around `canonical`, a CPU's own fill.
+    /// newline as the end byte and with none. Bugs planted in lengua's own fill each give
+    /// something the whole doesn't. `program` makes the program that calls it.
     async fn fill_read_whole_is_its_code(
         profile: Profile,
-        canonical: &str,
-        program: fn(&str, u32, i32) -> String,
-        mutants: [(&str, &str, &str); 4],
+        program: fn(u32, i32) -> String,
+        mutants: [FillMutant; 4],
     ) {
         let inputs: Vec<Vec<u8>> = (0..=5_u32)
             .flat_map(|length| {
@@ -5448,13 +5423,18 @@ mod tests {
         let mut caught = [false; 4];
         for capacity in 1..=7 {
             for end in [i32::from(b'\n'), -1] {
-                let whole = image_for(profile, &program(canonical, capacity, end)).await;
-                assert!(whole.has_fill(), "the canonical fill is found");
+                let main = program(capacity, end);
+                let whole = image_for(profile, &main).await;
+                assert!(whole.has_fill(), "lengua's fill is found");
+                // What a build assembles, main.s and lengua.s after it: the bugs go in the fill
+                // that lengua.s holds.
+                let library = crate::edge::lengua_text(profile, &main).expect("lengua.s for it");
+                let linked = format!("{main}\n{library}");
                 let mut planted = Vec::new();
                 for (_, from, to) in mutants {
-                    let mutant = canonical.replacen(from, to, 1);
-                    assert_ne!(mutant, canonical);
-                    planted.push(image_for(profile, &program(&mutant, capacity, end)).await);
+                    let mutant = linked.replacen(from, to, 1);
+                    assert_ne!(mutant, linked);
+                    planted.push(image_for(profile, &mutant).await);
                 }
                 for input in &inputs {
                     let summary = outcomes(&whole, input, None);
@@ -5505,16 +5485,16 @@ mod tests {
         }
     }
 
-    /// The template of each target.
+    /// The template of each target, in the compile skill's assets.
     const TEMPLATES: PerCpu<&str> = PerCpu {
-        x86_64: crate::checker::TEMPLATE,
-        aarch64: crate::checker::AARCH64_TEMPLATE,
+        x86_64: "plugin/skills/compile/assets/main-template.s",
+        aarch64: "plugin/skills/compile/assets/linux-aarch64/main-template.s",
     };
 
     #[tokio::test]
     async fn runs_the_template_like_the_cpu() {
         for target in Profile::ALL {
-            let image = image_for(target, TEMPLATES.get(target)).await;
+            let image = image_for(target, &repository_text(TEMPLATES.get(target))).await;
             let name = target.name();
             assert_eq!(
                 run(&image, &["7"], ""),

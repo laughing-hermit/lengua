@@ -1503,8 +1503,9 @@ and the line is written again after the next pass.
 
 main.s's second line, `# lengua: compiled from spec.md sha256:… for linux-x86_64; needs AVX2`,
 ties the code to the version of the spec it was compiled from. It names the code; it doesn't
-protect it: main.s is plain text anyone can build outside lengua, past its checks and the kernel's
-limits, so lengua's guarantees hold only for a program that `run` runs after `check`.
+protect it: main.s is plain text anyone can build outside lengua (`lengua-mcp link main.s` prints
+it with lengua's own file after it, which is what lengua assembles), past its checks and the
+kernel's limits, so lengua's guarantees hold only for a program that `run` runs after `check`.
 
 ## Programs built from programs
 

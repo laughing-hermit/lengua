@@ -1705,26 +1705,30 @@ mod tests {
         );
     }
 
+    /// The shipped main template of x86-64.
+    const TEMPLATE: &str = include_str!("../plugin/skills/compile/assets/main-template.s");
+
+    /// The shipped main template of AArch64.
+    const AARCH64_TEMPLATE: &str =
+        include_str!("../plugin/skills/compile/assets/linux-aarch64/main-template.s");
+
     #[test]
     fn finds_assertion_lines_in_the_source() {
-        let (source, _) = crate::checker::source::parse(crate::checker::TEMPLATE);
+        let (source, _) = crate::checker::source::parse(TEMPLATE);
         let lines = assertion_lines(&source);
         assert_eq!(lines.len(), 11);
         let line = lines[&4];
-        let text = crate::checker::TEMPLATE
-            .lines()
-            .nth(line - 1)
-            .expect("the line");
+        let text = TEMPLATE.lines().nth(line - 1).expect("the line");
         assert_eq!(text.trim(), "mov edi, 4");
     }
 
     #[test]
     fn finds_assertion_lines_in_the_aarch64_source_as_in_the_x86_64_one() {
-        let (source, _) = crate::checker::source::parse(crate::checker::AARCH64_TEMPLATE);
+        let (source, _) = crate::checker::source::parse(AARCH64_TEMPLATE);
         let lines = assertion_lines(&source);
         // As many as the x86-64 template's, one at each place its code calls assert_fail.
         assert_eq!(lines.len(), 11);
-        let text = crate::checker::AARCH64_TEMPLATE
+        let text = AARCH64_TEMPLATE
             .lines()
             .nth(lines[&4] - 1)
             .expect("the line");

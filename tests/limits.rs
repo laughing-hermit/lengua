@@ -39,13 +39,8 @@ fn args(list: &[&str]) -> Vec<String> {
     list.iter().map(|arg| (*arg).to_owned()).collect()
 }
 
-/// The text of a file in the compile skill's assets. The inline form's templates and fill are the
-/// frozen copies its rules were written against (src/checker/inline_form/), which the shipped ones
-/// leave as programs move to the edge form.
+/// The text of a file in the compile skill's assets.
 fn asset(name: &str) -> String {
-    if let Some(text) = lengua::checker::frozen(name) {
-        return text.to_owned();
-    }
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("plugin/skills/compile/assets")
         .join(name);

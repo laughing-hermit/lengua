@@ -5,38 +5,31 @@ use super::*;
 use crate::targets::PerCpu;
 use crate::toolchain::Toolchain;
 
-/// What the template's spec allows.
-const SYSCALLS: [Syscall; 2] = [Syscall::Write, Syscall::Exit];
+/// The x86-64 main template as shipped, which the planted bugs are made from.
+const TEMPLATE: &str = include_str!("../../plugin/skills/compile/assets/main-template.s");
+
+/// The AArch64 main template as shipped.
+const AARCH64_TEMPLATE: &str =
+    include_str!("../../plugin/skills/compile/assets/linux-aarch64/main-template.s");
 
 async fn check_with(text: &str, features: CpuFeatures) -> Report {
-    check_full(text, features, &SYSCALLS, None).await
+    check_full(text, features, None).await
 }
 
-async fn check_full(
-    text: &str,
-    features: CpuFeatures,
-    syscalls: &[Syscall],
-    threads: Option<u32>,
-) -> Report {
-    // A program in the edge form is given every operation: these helpers check a program's own
-    // rules, not which operations its spec allows (`check_edge` says them).
-    let ops: &[crate::edge::Op] = if crate::edge::form(text) == crate::edge::Form::Edge {
-        &crate::edge::Op::ALL
-    } else {
-        &[]
-    };
-    check_allowing(text, features, syscalls, ops, threads).await
+/// A program is given every operation: these helpers check its own rules, not which operations its
+/// spec allows (`check_edge` says them).
+async fn check_full(text: &str, features: CpuFeatures, threads: Option<u32>) -> Report {
+    check_allowing(text, features, &crate::edge::Op::ALL, threads).await
 }
 
-/// A program in the edge form, checked with the operations its spec allows.
+/// A program checked with the operations its spec allows.
 async fn check_edge(text: &str, ops: &[crate::edge::Op]) -> Report {
-    check_allowing(text, CpuFeatures::all(), &SYSCALLS, ops, None).await
+    check_allowing(text, CpuFeatures::all(), ops, None).await
 }
 
 async fn check_allowing(
     text: &str,
     features: CpuFeatures,
-    syscalls: &[Syscall],
     ops: &[crate::edge::Op],
     threads: Option<u32>,
 ) -> Report {
@@ -70,7 +63,6 @@ async fn check_allowing(
         &source,
         &bytes,
         Context {
-            syscalls,
             ops,
             threads,
             lengua: lengua.as_ref(),
@@ -189,14 +181,15 @@ async fn operands_must_mean_what_the_machine_does() {
             .await
             .expect("link");
         let bytes = std::fs::read(folder.path().join("main")).expect("read");
+        // The executable holds lengua's functions too, which the checker matches to lengua.s.
+        let lengua = lengua_source(target, program);
         let report = check_program(
             &source,
             &bytes,
             Context {
-                syscalls: &SYSCALLS,
                 ops: &[],
                 threads: None,
-                lengua: None,
+                lengua: lengua.as_ref(),
                 features: CpuFeatures::all(),
                 profile: target,
             },
@@ -477,7 +470,7 @@ async fn every_program_in_the_repository_follows_every_rule() {
         } else {
             features
         };
-        let report = check_allowing(&text, features, &spec.syscalls, &spec.ops, spec.threads).await;
+        let report = check_allowing(&text, features, &spec.ops, spec.threads).await;
         if !report.passed() {
             let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
             failed.push(format!("{}: {all:#?}", code.display()));
@@ -485,52 +478,6 @@ async fn every_program_in_the_repository_follows_every_rule() {
     }
     assert!(programs.len() >= 25, "{} programs", programs.len());
     assert!(failed.is_empty(), "{failed:#?}");
-}
-
-/// The programs that still define `_start`, in the inline form: they make their own system calls
-/// and carry their own `assert_fail`. The list only shrinks: a program that moves to the edge form
-/// leaves it in the same commit, and none joins it. Round 2 ends with it empty and the form gone.
-const INLINE_FORM: &[&str] = &[];
-
-/// Every `.s` file under `folder` that defines `_start`, by its path from the repository's root.
-fn defining_start(root: &std::path::Path, folder: &std::path::Path, found: &mut Vec<String>) {
-    for entry in std::fs::read_dir(folder).expect("a folder of programs") {
-        let path = entry.expect("an entry").path();
-        if path.is_dir() {
-            defining_start(root, &path, found);
-        } else if path.extension().is_some_and(|extension| extension == "s")
-            && std::fs::read_to_string(&path)
-                .is_ok_and(|text| text.lines().any(|line| line == "_start:"))
-        {
-            let relative = path.strip_prefix(root).expect("under the root");
-            found.push(relative.to_string_lossy().replace('\\', "/"));
-        }
-    }
-}
-
-/// The inline form is for the programs not yet moved to the edge form, and the list says which.
-#[test]
-fn the_inline_form_is_only_for_the_programs_not_yet_moved() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut found = Vec::new();
-    for folder in [
-        "examples",
-        "tests/fixtures",
-        "plugin/skills/compile/assets",
-        "benches/programs",
-    ] {
-        defining_start(root, &root.join(folder), &mut found);
-    }
-    let found: std::collections::BTreeSet<&str> = found.iter().map(String::as_str).collect();
-    let listed: std::collections::BTreeSet<&str> = INLINE_FORM.iter().copied().collect();
-    let joined: Vec<&&str> = found.difference(&listed).collect();
-    let moved: Vec<&&str> = listed.difference(&found).collect();
-    assert!(
-        joined.is_empty() && moved.is_empty(),
-        "in the inline form and not on the list (the list only shrinks, so this one must move to \
-         the edge form): {joined:?}; on the list and no longer in the inline form (take it off): \
-         {moved:?}"
-    );
 }
 
 /// Where a planted bug's violation is reported.
@@ -541,8 +488,8 @@ enum At {
     /// On the `ret` right after the first line that starts with this text: an address that is
     /// returned is reported where it is returned.
     Ret(&'static str),
-    /// On the line right after the first that starts with this text: a system call is reported
-    /// on the instruction that makes it, after the one that names it.
+    /// On the line right after the first that starts with this text: a call is reported on the
+    /// instruction that makes it, after the one that sets its argument.
     After(&'static str),
     /// On no line of its own: the stack's size is the program's.
     Nowhere,
@@ -628,15 +575,15 @@ const PLANTED: &[(&str, PerCpu<Cell>)] = &[
         "an address made from a plain number (M1)",
         PerCpu {
             x86_64: Cell::Plant(Planted {
-                old: ".Lstart_usage:\n",
-                new: ".Lstart_usage:\n    mov esi, MAX_WRITES\n    mov byte ptr [rsi], 0\n",
+                old: ".Lmain_usage:\n",
+                new: ".Lmain_usage:\n    mov esi, MAX_WRITES\n    mov byte ptr [rsi], 0\n",
                 at: At::Line("    mov byte ptr [rsi], 0"),
                 rule: Rule::Owners,
                 needle: "holds a plain number here, not a pointer",
             }),
             aarch64: Cell::Plant(Planted {
-                old: ".Lstart_usage:\n",
-                new: ".Lstart_usage:\n    mov x1, #MAX_WRITES\n    strb wzr, [x1]\n",
+                old: ".Lmain_usage:\n",
+                new: ".Lmain_usage:\n    mov x1, #MAX_WRITES\n    strb wzr, [x1]\n",
                 at: At::Line("    strb wzr, [x1]"),
                 rule: Rule::Owners,
                 needle: "holds a plain number here, not a pointer",
@@ -647,9 +594,9 @@ const PLANTED: &[(&str, PerCpu<Cell>)] = &[
         "a constant offset one byte past a symbol (M2)",
         PerCpu {
             x86_64: Cell::Plant(Planted {
-                old: ".Lstart_write_failed:\n",
+                old: ".Lmain_write_failed:\n",
                 new: concat!(
-                    ".Lstart_write_failed:\n",
+                    ".Lmain_write_failed:\n",
                     "    lea rsi, [rip + out_buf]\n",
                     "    mov byte ptr [rsi + OUT_BUF_LEN], 0\n"
                 ),
@@ -658,9 +605,9 @@ const PLANTED: &[(&str, PerCpu<Cell>)] = &[
                 needle: "reaches byte 21 of out_buf, which has 21 bytes",
             }),
             aarch64: Cell::Plant(Planted {
-                old: ".Lstart_write_failed:\n",
+                old: ".Lmain_write_failed:\n",
                 new: concat!(
-                    ".Lstart_write_failed:\n",
+                    ".Lmain_write_failed:\n",
                     "    adrp x1, out_buf\n",
                     "    add x1, x1, :lo12:out_buf\n",
                     "    strb wzr, [x1, #OUT_BUF_LEN]\n"
@@ -675,9 +622,9 @@ const PLANTED: &[(&str, PerCpu<Cell>)] = &[
         "a direct reference one byte past a symbol (M2): the next symbol starts there",
         PerCpu {
             x86_64: Cell::Plant(Planted {
-                old: ".Lstart_write_failed:\n",
+                old: ".Lmain_write_failed:\n",
                 new: concat!(
-                    ".Lstart_write_failed:\n",
+                    ".Lmain_write_failed:\n",
                     "    movzx eax, byte ptr [rip + usage_msg + USAGE_MSG_LEN]\n"
                 ),
                 at: At::Line("    movzx eax, byte ptr [rip + usage_msg + USAGE_MSG_LEN]"),
@@ -695,9 +642,9 @@ const PLANTED: &[(&str, PerCpu<Cell>)] = &[
         "a pointer just past a symbol's end, as main.s makes it (M2)",
         PerCpu {
             x86_64: Cell::Plant(Planted {
-                old: ".Lstart_write_failed:\n",
+                old: ".Lmain_write_failed:\n",
                 new: concat!(
-                    ".Lstart_write_failed:\n",
+                    ".Lmain_write_failed:\n",
                     "    lea rsi, [rip + usage_msg + USAGE_MSG_LEN]\n",
                     "    movzx eax, byte ptr [rsi]\n"
                 ),
@@ -706,9 +653,9 @@ const PLANTED: &[(&str, PerCpu<Cell>)] = &[
                 needle: "reaches byte 18 of usage_msg, which has 18 bytes",
             }),
             aarch64: Cell::Plant(Planted {
-                old: ".Lstart_write_failed:\n",
+                old: ".Lmain_write_failed:\n",
                 new: concat!(
-                    ".Lstart_write_failed:\n",
+                    ".Lmain_write_failed:\n",
                     "    adrp x1, usage_msg\n",
                     "    add x1, x1, :lo12:usage_msg\n",
                     "    ldrb w2, [x1, #USAGE_MSG_LEN]\n"
@@ -914,11 +861,11 @@ const PLANTED: &[(&str, PerCpu<Cell>)] = &[
                 needle: "uses rax as an address, but it holds a plain number here",
             }),
             aarch64: Cell::Plant(Planted {
-                old: "    bl parse_i64\n    tbnz x0, #63, .Lstart_not_a_number\n",
+                old: "    bl parse_i64\n    tbnz x0, #63, .Lmain_not_a_number\n",
                 new: concat!(
                     "    bl parse_i64\n",
                     "    strb wzr, [x0]\n",
-                    "    tbnz x0, #63, .Lstart_not_a_number\n"
+                    "    tbnz x0, #63, .Lmain_not_a_number\n"
                 ),
                 at: At::Line("    strb wzr, [x0]"),
                 rule: Rule::Owners,
@@ -930,15 +877,15 @@ const PLANTED: &[(&str, PerCpu<Cell>)] = &[
         "the program's arguments written (M4): they are only read",
         PerCpu {
             x86_64: Cell::Plant(Planted {
-                old: "    mov rdi, qword ptr [rsp + 16]\n",
-                new: "    mov rdi, qword ptr [rsp + 16]\n    mov byte ptr [rdi], 0\n",
+                old: "    mov rdi, qword ptr [rsi + 8]\n",
+                new: "    mov rdi, qword ptr [rsi + 8]\n    mov byte ptr [rdi], 0\n",
                 at: At::Line("    mov byte ptr [rdi], 0"),
                 rule: Rule::ExclusiveWrites,
                 needle: "writes into the program's arguments, which it only reads",
             }),
             aarch64: Cell::Plant(Planted {
-                old: "    cbz x0, .Lstart_assert_argv\n",
-                new: "    cbz x0, .Lstart_assert_argv\n    strb wzr, [x0]\n",
+                old: "    cbz x0, .Lmain_assert_argv\n",
+                new: "    cbz x0, .Lmain_assert_argv\n    strb wzr, [x0]\n",
                 at: At::Line("    strb wzr, [x0]"),
                 rule: Rule::ExclusiveWrites,
                 needle: "writes into the program's arguments, which it only reads",
@@ -982,9 +929,9 @@ const PLANTED: &[(&str, PerCpu<Cell>)] = &[
         "read-only data written through a register (M6)",
         PerCpu {
             x86_64: Cell::Plant(Planted {
-                old: ".Lstart_usage:\n",
+                old: ".Lmain_usage:\n",
                 new: concat!(
-                    ".Lstart_usage:\n",
+                    ".Lmain_usage:\n",
                     "    lea rsi, [rip + usage_msg]\n",
                     "    mov byte ptr [rsi], 0\n"
                 ),
@@ -993,9 +940,9 @@ const PLANTED: &[(&str, PerCpu<Cell>)] = &[
                 needle: "writes to read-only usage_msg",
             }),
             aarch64: Cell::Plant(Planted {
-                old: ".Lstart_usage:\n",
+                old: ".Lmain_usage:\n",
                 new: concat!(
-                    ".Lstart_usage:\n",
+                    ".Lmain_usage:\n",
                     "    adrp x1, usage_msg\n",
                     "    add x1, x1, :lo12:usage_msg\n",
                     "    strb wzr, [x1]\n"
@@ -1010,15 +957,15 @@ const PLANTED: &[(&str, PerCpu<Cell>)] = &[
         "a frame bigger than the stack's limit (M8)",
         PerCpu {
             x86_64: Cell::Plant(Planted {
-                old: "_start:\n",
-                new: "_start:\n    sub rsp, 2097152\n",
+                old: "main:\n",
+                new: "main:\n    sub rsp, 2097152\n",
                 at: At::Nowhere,
                 rule: Rule::StackSize,
                 needle: "bytes of stack, more than 1048576",
             }),
             aarch64: Cell::Plant(Planted {
-                old: "_start:\n",
-                new: "_start:\n    sub sp, sp, #1024, lsl #12\n",
+                old: "main:\n",
+                new: "main:\n    sub sp, sp, #1024, lsl #12\n",
                 at: At::Nowhere,
                 rule: Rule::StackSize,
                 needle: "more than 1048576",
@@ -1131,11 +1078,10 @@ enum Plan {
 /// added to lengua breaks every table until its cells are written.
 type Fixtures = &'static [(&'static str, PerCpu<Plan>)];
 
-/// The programs a table's fixtures are made of: one for each target, the system calls its spec
-/// allows, and the threads.
+/// The programs a table's fixtures are made of: one for each target, and the threads its spec
+/// allows.
 struct Programs {
     texts: PerCpu<&'static str>,
-    syscalls: &'static [Syscall],
     threads: Option<u32>,
 }
 
@@ -1145,23 +1091,21 @@ const TEMPLATES: PerCpu<&str> = PerCpu {
     aarch64: AARCH64_TEMPLATE,
 };
 
-/// Each target's parallel template.
+/// Each target's parallel template, as shipped.
 const PARALLEL_TEMPLATES: PerCpu<&str> = PerCpu {
-    x86_64: PARALLEL_TEMPLATE,
-    aarch64: PARALLEL_TEMPLATE_AARCH64,
+    x86_64: include_str!("../../plugin/skills/compile/assets/parallel-template.s"),
+    aarch64: include_str!("../../plugin/skills/compile/assets/linux-aarch64/parallel-template.s"),
 };
 
 /// The main templates, with what their spec allows.
 const ON_THE_TEMPLATE: Programs = Programs {
     texts: TEMPLATES,
-    syscalls: &SYSCALLS,
     threads: None,
 };
 
 /// The parallel templates, with what their spec allows.
 const ON_THE_PARALLEL_TEMPLATE: Programs = Programs {
     texts: PARALLEL_TEMPLATES,
-    syscalls: &PARALLEL_SYSCALLS,
     threads: Some(16),
 };
 
@@ -1218,7 +1162,7 @@ async fn checked(
 ) -> Result<(String, Report), String> {
     let text = edited(programs.texts.get(target), edits)?;
     let features = CpuFeatures::all();
-    let report = check_full(&text, features, programs.syscalls, programs.threads).await;
+    let report = check_full(&text, features, programs.threads).await;
     Ok((text, report))
 }
 
@@ -1314,15 +1258,15 @@ const STACK: Fixtures = &[
         PerCpu {
             x86_64: Plan::Breaks {
                 edits: &[(
-                    "    mov rax, qword ptr [rsp]\n",
-                    "    and rsp, -16\n    mov rax, qword ptr [rsp]\n",
+                    "    cmp rdi, ARGC_EXPECTED\n",
+                    "    and rsp, -16\n    cmp rdi, ARGC_EXPECTED\n",
                 )],
                 finds: &[(Rule::Resources, At::Line("    and rsp, -16"), "changes rsp")],
             },
             aarch64: Plan::Breaks {
                 edits: &[(
-                    "    ldr x0, [sp]\n    cmp x0, #ARGC_EXPECTED\n",
-                    "    mov sp, x9\n    ldr x0, [sp]\n    cmp x0, #ARGC_EXPECTED\n",
+                    "    cmp x0, #ARGC_EXPECTED\n",
+                    "    mov sp, x9\n    cmp x0, #ARGC_EXPECTED\n",
                 )],
                 finds: &[(Rule::Resources, At::Line("    mov sp, x9"), "sets sp")],
             },
@@ -1331,7 +1275,7 @@ const STACK: Fixtures = &[
     (
         "a call made with the stack off its multiple of 16",
         PerCpu {
-            // A call in _start is aligned with nothing pushed; one push misaligns it.
+            // main's calls are aligned once its `sub rsp, 8` is made; one push misaligns them.
             x86_64: Plan::Breaks {
                 edits: &[(
                     "    call parse_i64\n",
@@ -1363,7 +1307,10 @@ const STACK: Fixtures = &[
         PerCpu {
             // A normal function enters 8 bytes deep, so write_i64 needs its sub rsp, 8.
             x86_64: Plan::Breaks {
-                edits: &[("    sub rsp, 8\n", ""), ("    add rsp, 8\n", "")],
+                edits: &[
+                    ("write_i64:\n    sub rsp, 8\n", "write_i64:\n"),
+                    (".Lwrite_i64_return:\n    add rsp, 8\n", ".Lwrite_i64_return:\n"),
+                ],
                 finds: &[(
                     Rule::Functions,
                     At::After("    mov edi, STDOUT"),
@@ -1388,9 +1335,9 @@ async fn the_stack_is_tracked_exactly() {
 /// with a bound the counter starts within.
 const LOOPS: Fixtures = &[
     (
-        "a counter that the loop's system call changes",
+        "a counter that the loop's call of an operation changes",
         PerCpu {
-            // A counter in rcx doesn't survive the syscall in the loop.
+            // A counter in rcx doesn't survive the call of os_write in the loop.
             x86_64: Plan::Breaks {
                 edits: &[
                     ("    mov r8, MAX_WRITES\n", "    mov rcx, MAX_WRITES\n"),
@@ -1401,12 +1348,11 @@ const LOOPS: Fixtures = &[
                 ],
                 finds: &[(
                     Rule::Loops,
-                    At::Line("    syscall\n    test rax, rax\n    js .Lwrite_all_return"),
+                    At::Line("    call os_write\n    test rax, rax\n    js .Lwrite_all_return"),
                     "changes the loop counter rcx",
                 )],
             },
-            // A counter in x0 is the system call's result, and the loop's first instruction sets
-            // it too.
+            // A counter in x0 is os_write's result, and the loop's first instruction sets it too.
             aarch64: Plan::Breaks {
                 edits: &[
                     ("    mov x10, #MAX_WRITES\n", "    mov x0, #MAX_WRITES\n"),
@@ -1417,7 +1363,7 @@ const LOOPS: Fixtures = &[
                 ],
                 finds: &[(
                     Rule::Loops,
-                    At::Line("    mov x0, x9\n    mov x8, #SYS_WRITE"),
+                    At::Line("    mov x0, x9\n    bl os_write"),
                     "changes the loop counter x0",
                 )],
             },
@@ -1469,7 +1415,7 @@ const LOOPS: Fixtures = &[
                 )],
                 finds: &[(
                     Rule::Loops,
-                    At::Line("    mov eax, SYS_WRITE"),
+                    At::Line("    call os_write"),
                     "outside 1 to the bound 8",
                 )],
             },
@@ -1480,7 +1426,7 @@ const LOOPS: Fixtures = &[
                 )],
                 finds: &[(
                     Rule::Loops,
-                    At::Line("    mov x0, x9\n    mov x8, #SYS_WRITE"),
+                    At::Line("    mov x0, x9\n    bl os_write"),
                     "outside 1 to the bound 8",
                 )],
             },
@@ -1493,8 +1439,7 @@ async fn loops_must_be_counted() {
     hold(&ON_THE_TEMPLATE, LOOPS).await;
 }
 
-/// Rule 5: an assertion has one place to be reached from, a number of its own, and the template's
-/// handler.
+/// Rule 5: an assertion has one place to be reached from and a number of its own.
 const ASSERTIONS: Fixtures = &[
     (
         "two checks that share one assertion",
@@ -1587,27 +1532,6 @@ const ASSERTIONS: Fixtures = &[
             },
         },
     ),
-    (
-        "an assertion handler that isn't the template's",
-        PerCpu {
-            x86_64: Plan::Breaks {
-                edits: &[("    add dl, 48\n", "    add dl, 49\n")],
-                finds: &[(
-                    Rule::Assertions,
-                    At::Line("assert_fail:"),
-                    "assert_fail differs from the template",
-                )],
-            },
-            aarch64: Plan::Breaks {
-                edits: &[("    add w0, w0, #48\n", "    add w0, w0, #49\n")],
-                finds: &[(
-                    Rule::Assertions,
-                    At::Line("assert_fail:"),
-                    "assert_fail differs from the template",
-                )],
-            },
-        },
-    ),
 ];
 
 #[tokio::test]
@@ -1622,8 +1546,8 @@ const CHAINS: Fixtures = &[(
         x86_64: Plan::Breaks {
             edits: &[(
                 "    mov rdi, rdx\n",
-                "    cmp rdx, 1\n    je .Lstart_one\n    cmp rdx, 2\n    je .Lstart_one\n\
-                 .Lstart_one:\n    mov rdi, rdx\n",
+                "    cmp rdx, 1\n    je .Lmain_one\n    cmp rdx, 2\n    je .Lmain_one\n\
+                 .Lmain_one:\n    mov rdi, rdx\n",
             )],
             finds: &[(
                 Rule::ControlFlow,
@@ -1634,8 +1558,8 @@ const CHAINS: Fixtures = &[(
         aarch64: Plan::Breaks {
             edits: &[(
                 "    bl write_i64\n",
-                "    cmp x1, #1\n    b.eq .Lstart_one\n    cmp x1, #2\n    b.eq .Lstart_one\n\
-                 .Lstart_one:\n    bl write_i64\n",
+                "    cmp x1, #1\n    b.eq .Lmain_one\n    cmp x1, #2\n    b.eq .Lmain_one\n\
+                 .Lmain_one:\n    bl write_i64\n",
             )],
             finds: &[(
                 Rule::ControlFlow,
@@ -1659,7 +1583,7 @@ const RESULTS: Fixtures = &[
             x86_64: Plan::Breaks {
                 edits: &[(
                     "    call parse_i64\n    test rax, rax\n",
-                    "    call parse_i64\n.Lstart_parsed:\n    test rax, rax\n",
+                    "    call parse_i64\n.Lmain_parsed:\n    test rax, rax\n",
                 )],
                 finds: &[(
                     Rule::Results,
@@ -1669,8 +1593,8 @@ const RESULTS: Fixtures = &[
             },
             aarch64: Plan::Breaks {
                 edits: &[(
-                    "    bl parse_i64\n    tbnz x0, #63, .Lstart_not_a_number\n",
-                    "    bl parse_i64\n.Lstart_parsed:\n    tbnz x0, #63, .Lstart_not_a_number\n",
+                    "    bl parse_i64\n    tbnz x0, #63, .Lmain_not_a_number\n",
+                    "    bl parse_i64\n.Lmain_parsed:\n    tbnz x0, #63, .Lmain_not_a_number\n",
                 )],
                 finds: &[(
                     Rule::Results,
@@ -1681,27 +1605,28 @@ const RESULTS: Fixtures = &[
         },
     ),
     (
-        "a system call's result used before it's checked",
+        "an operation's result used before it's checked",
         PerCpu {
             x86_64: Plan::Breaks {
                 edits: &[(
-                    "    syscall\n    test rax, rax\n    js .Lwrite_all_return\n",
-                    "    syscall\n    mov r9, rax\n    test rax, rax\n    js .Lwrite_all_return\n",
+                    "    call os_write\n    test rax, rax\n    js .Lwrite_all_return\n",
+                    "    call os_write\n    mov r9, rax\n    test rax, rax\n    js \
+                     .Lwrite_all_return\n",
                 )],
                 finds: &[(
                     Rule::Results,
-                    At::Line("    syscall\n    mov r9, rax"),
+                    At::Line("    call os_write\n    mov r9, rax"),
                     "rax is used before it's checked",
                 )],
             },
             aarch64: Plan::Breaks {
                 edits: &[(
-                    "    svc #0\n    tbnz x0, #63, .Lwrite_all_return\n",
-                    "    svc #0\n    mov x11, x0\n    tbnz x0, #63, .Lwrite_all_return\n",
+                    "    bl os_write\n    tbnz x0, #63, .Lwrite_all_return\n",
+                    "    bl os_write\n    mov x11, x0\n    tbnz x0, #63, .Lwrite_all_return\n",
                 )],
                 finds: &[(
                     Rule::Results,
-                    At::Line("    svc #0\n    mov x11, x0"),
+                    At::Line("    bl os_write\n    mov x11, x0"),
                     "x0 is used before it's checked",
                 )],
             },
@@ -1712,91 +1637,6 @@ const RESULTS: Fixtures = &[
 #[tokio::test]
 async fn results_are_checked_right_away() {
     hold(&ON_THE_TEMPLATE, RESULTS).await;
-}
-
-/// Rules 3 and 8: an exit status and a system call are named constants, and a system call is one
-/// the spec allows.
-const CALLS: Fixtures = &[
-    (
-        "an exit status that isn't a named constant",
-        PerCpu {
-            x86_64: Plan::Breaks {
-                edits: &[("    mov edi, EXIT_OK\n", "    mov edi, 0\n")],
-                finds: &[(
-                    Rule::Constants,
-                    At::Line("    mov edi, 0\n"),
-                    "without a named constant",
-                )],
-            },
-            aarch64: Plan::Breaks {
-                edits: &[("    mov w0, #EXIT_OK\n", "    mov w0, #0\n")],
-                finds: &[(
-                    Rule::Constants,
-                    At::Line("    mov w0, #0\n"),
-                    "without a named constant",
-                )],
-            },
-        },
-    ),
-    (
-        "a system call that isn't named",
-        PerCpu {
-            x86_64: Plan::Breaks {
-                edits: &[("    mov eax, SYS_EXIT\n", "    mov eax, 60\n")],
-                finds: &[(
-                    Rule::Constants,
-                    At::Line("    mov eax, 60\n"),
-                    "isn't named",
-                )],
-            },
-            aarch64: Plan::Breaks {
-                edits: &[("    mov x8, #SYS_EXIT\n", "    mov x8, #93\n")],
-                finds: &[(
-                    Rule::Constants,
-                    At::Line("    mov x8, #93\n"),
-                    "isn't named",
-                )],
-            },
-        },
-    ),
-    (
-        "a system call the spec doesn't allow",
-        PerCpu {
-            x86_64: Plan::Breaks {
-                edits: &[
-                    (
-                        ".equ SYS_EXIT, 60\n",
-                        ".equ SYS_EXIT, 60\n.equ SYS_READ, 0\n",
-                    ),
-                    ("    mov eax, SYS_WRITE\n", "    mov eax, SYS_READ\n"),
-                ],
-                finds: &[(
-                    Rule::Resources,
-                    At::After("    mov eax, SYS_READ"),
-                    "isn't one the spec allows",
-                )],
-            },
-            aarch64: Plan::Breaks {
-                edits: &[
-                    (
-                        ".equ SYS_EXIT, 93\n",
-                        ".equ SYS_EXIT, 93\n.equ SYS_READ, 63\n",
-                    ),
-                    ("    mov x8, #SYS_WRITE\n", "    mov x8, #SYS_READ\n"),
-                ],
-                finds: &[(
-                    Rule::Resources,
-                    At::After("    mov x8, #SYS_READ"),
-                    "isn't one the spec allows",
-                )],
-            },
-        },
-    ),
-];
-
-#[tokio::test]
-async fn system_calls_and_exit_codes_are_named_and_allowed() {
-    hold(&ON_THE_TEMPLATE, CALLS).await;
 }
 
 /// Rule 6: data is named by its size, written only where it's writable, and used by one function.
@@ -2063,12 +1903,12 @@ const FUNCTIONS: Fixtures = &[
         "recursion",
         PerCpu {
             x86_64: Plan::Breaks {
-                edits: &[("    call parse_i64\n", "    call _start\n")],
-                finds: &[(Rule::ControlFlow, At::Line("    call _start"), "recursion")],
+                edits: &[("    call parse_i64\n", "    call main\n")],
+                finds: &[(Rule::ControlFlow, At::Line("    call main"), "recursion")],
             },
             aarch64: Plan::Breaks {
-                edits: &[("    bl parse_i64\n", "    bl _start\n")],
-                finds: &[(Rule::ControlFlow, At::Line("    bl _start"), "recursion")],
+                edits: &[("    bl parse_i64\n", "    bl main\n")],
+                finds: &[(Rule::ControlFlow, At::Line("    bl main"), "recursion")],
             },
         },
     ),
@@ -2296,8 +2136,29 @@ async fn layout_hazards_are_dialect_violations() {
     hold(&ON_THE_TEMPLATE, LAYOUT).await;
 }
 
-/// Rule 8: the constants come first, are numbers, and are named once.
+/// Rule 8: the constants come first, are numbers, are named once, and every exit status is one.
 const CONSTANTS: Fixtures = &[
+    (
+        "an exit status that isn't a named constant",
+        PerCpu {
+            x86_64: Plan::Breaks {
+                edits: &[("    mov edi, EXIT_OK\n", "    mov edi, 0\n")],
+                finds: &[(
+                    Rule::Constants,
+                    At::Line("    mov edi, 0\n"),
+                    "without a named constant",
+                )],
+            },
+            aarch64: Plan::Breaks {
+                edits: &[("    mov w0, #EXIT_OK\n", "    mov w0, #0\n")],
+                finds: &[(
+                    Rule::Constants,
+                    At::Line("    mov w0, #0\n"),
+                    "without a named constant",
+                )],
+            },
+        },
+    ),
     (
         "a constant below the header block",
         PerCpu {
@@ -2380,9 +2241,8 @@ async fn constants_must_come_first_and_stay_numbers() {
     hold(&ON_THE_TEMPLATE, CONSTANTS).await;
 }
 
-/// M7 and the thread rules: threads need the spec's approval and the template's own code, a
-/// worker writes only its stack and its slot, reads only inside the slot, makes no system call and
-/// leaves the register that holds the slot alone, and only the thread code starts threads.
+/// M7 and the thread rules: a worker writes only its stack and its slot, reads only inside the slot
+/// and leaves the register that holds the slot alone, and a slot is a multiple of 64 bytes.
 const THREADS: Fixtures = &[
     (
         "a worker's index bounded only by a register",
@@ -2469,54 +2329,6 @@ const THREADS: Fixtures = &[
         },
     ),
     (
-        "parallel_for changed",
-        PerCpu {
-            x86_64: Plan::Breaks {
-                edits: &[(
-                    "    mov ebx, 1\n    mov r13, THREADS\n.Lparallel_for_start:",
-                    "    mov ebx, 2\n    mov r13, THREADS\n.Lparallel_for_start:",
-                )],
-                finds: &[(
-                    Rule::Resources,
-                    At::Line("parallel_for:"),
-                    "parallel_for differs from the template",
-                )],
-            },
-            aarch64: Plan::Breaks {
-                edits: &[(
-                    "    mov x21, #THREADS\n.Lparallel_for_start:",
-                    "    mov x21, #THREADS - 1\n.Lparallel_for_start:",
-                )],
-                finds: &[(
-                    Rule::Resources,
-                    At::Line("parallel_for:"),
-                    "parallel_for differs from the template",
-                )],
-            },
-        },
-    ),
-    (
-        "clone's flags changed",
-        PerCpu {
-            x86_64: Plan::Breaks {
-                edits: &[(".equ CLONE_FLAGS, 0x350F00", ".equ CLONE_FLAGS, 0x50F00")],
-                finds: &[(
-                    Rule::Resources,
-                    At::Line(".equ CLONE_FLAGS"),
-                    "CLONE_FLAGS must be 3477248",
-                )],
-            },
-            aarch64: Plan::Breaks {
-                edits: &[(".equ CLONE_FLAGS, 0x350F00", ".equ CLONE_FLAGS, 0x50F00")],
-                finds: &[(
-                    Rule::Resources,
-                    At::Line(".equ CLONE_FLAGS"),
-                    "CLONE_FLAGS must be 3477248",
-                )],
-            },
-        },
-    ),
-    (
         "a slot that isn't a multiple of 64 bytes",
         PerCpu {
             x86_64: Plan::Breaks {
@@ -2535,49 +2347,6 @@ const THREADS: Fixtures = &[
                     Rule::Resources,
                     At::Line(".equ SLOT_SIZE"),
                     "isn't a positive multiple of 64",
-                )],
-            },
-        },
-    ),
-    (
-        "a thread's stack too small for the worker's deepest path",
-        PerCpu {
-            // Each thread's stack must hold the worker's deepest path: here 128 bytes, in 64.
-            x86_64: Plan::Breaks {
-                edits: &[
-                    (".equ STACK_SIZE, 4096", ".equ STACK_SIZE, 64"),
-                    (
-                        "worker:\n    push rbx\n",
-                        "worker:\n    push rbx\n    sub rsp, 64\n",
-                    ),
-                    (
-                        ".Lworker_done:\n    mov rax, rdx\n    pop rbx\n",
-                        ".Lworker_done:\n    mov rax, rdx\n    add rsp, 64\n    pop rbx\n",
-                    ),
-                ],
-                finds: &[(
-                    Rule::Resources,
-                    At::Line(".equ STACK_SIZE"),
-                    "a worker's stack can reach 128 bytes, but STACK_SIZE is 64",
-                )],
-            },
-            aarch64: Plan::Breaks {
-                edits: &[
-                    (".equ STACK_SIZE, 4096", ".equ STACK_SIZE, 64"),
-                    (
-                        "worker:\n    stp x19, x20, [sp, #-16]!\n",
-                        "worker:\n    stp x19, x20, [sp, #-16]!\n    sub sp, sp, #64\n",
-                    ),
-                    (
-                        ".Lworker_done:\n    mov x0, x12\n    ldp x19, x20, [sp], #16\n",
-                        ".Lworker_done:\n    mov x0, x12\n    add sp, sp, #64\n    ldp x19, x20, \
-                         [sp], #16\n",
-                    ),
-                ],
-                finds: &[(
-                    Rule::Resources,
-                    At::Line(".equ STACK_SIZE"),
-                    "but STACK_SIZE is 64",
                 )],
             },
         },
@@ -2696,109 +2465,6 @@ const THREADS: Fixtures = &[
             },
         },
     ),
-    (
-        "a system call on a worker thread",
-        PerCpu {
-            x86_64: Plan::Breaks {
-                edits: &[
-                    (
-                        ".Lworker_done:\n    mov rax, rdx\n",
-                        ".Lworker_done:\n    mov eax, SYS_WRITE\n    syscall\n    test rax, rax\n    \
-                         js .Lworker_done_assert\n    mov rax, rdx\n",
-                    ),
-                    (
-                        ".Lworker_assert_index:\n",
-                        ".Lworker_done_assert:\n    mov edi, 16\n    call \
-                         assert_fail\n.Lworker_assert_index:\n",
-                    ),
-                ],
-                finds: &[(
-                    Rule::Resources,
-                    At::After("    mov eax, SYS_WRITE"),
-                    "makes a system call on a worker thread",
-                )],
-            },
-            aarch64: Plan::Breaks {
-                edits: &[
-                    (
-                        ".Lworker_done:\n    mov x0, x12\n",
-                        ".Lworker_done:\n    mov x8, #SYS_WRITE\n    svc #0\n    tbnz x0, #63, \
-                         .Lworker_done_assert\n    mov x0, x12\n",
-                    ),
-                    (
-                        ".Lworker_assert_index:\n",
-                        ".Lworker_done_assert:\n    mov w0, #16\n    bl \
-                         assert_fail\n.Lworker_assert_index:\n",
-                    ),
-                ],
-                finds: &[(
-                    Rule::Resources,
-                    At::After("    mov x8, #SYS_WRITE"),
-                    "makes a system call on a worker thread",
-                )],
-            },
-        },
-    ),
-    (
-        "a thread started outside the thread code",
-        PerCpu {
-            // clone anywhere else is a system call the spec doesn't list.
-            x86_64: Plan::Breaks {
-                edits: &[(
-                    "_start:\n    call read_input\n",
-                    "_start:\n    mov edi, CLONE_FLAGS\n    mov eax, SYS_CLONE\n    syscall\n    test \
-                     rax, rax\n    js .Lstart_assert_length\n    call read_input\n",
-                )],
-                finds: &[(
-                    Rule::Resources,
-                    At::After("    mov eax, SYS_CLONE"),
-                    "system call 56 isn't one the spec allows",
-                )],
-            },
-            aarch64: Plan::Breaks {
-                edits: &[(
-                    "_start:\n    bl read_input\n",
-                    "_start:\n    mov x0, #CLONE_FLAGS & 0xffff\n    movk x0, #CLONE_FLAGS >> 16, \
-                     lsl #16\n    mov x8, #SYS_CLONE\n    svc #0\n    tbnz x0, #63, \
-                     .Lstart_read_failed\n    bl read_input\n",
-                )],
-                finds: &[(
-                    Rule::Resources,
-                    At::After("    mov x8, #SYS_CLONE"),
-                    "system call 220 isn't one the spec allows",
-                )],
-            },
-        },
-    ),
-    (
-        "the main thread calling a function of the workers",
-        PerCpu {
-            x86_64: Plan::Breaks {
-                edits: &[(
-                    "    mov rdi, r12\n    call total_results\n",
-                    "    mov rdi, r12\n    call total_results\n    xor edi, edi\n    lea rsi, [rip + \
-                     slots]\n    call worker\n",
-                )],
-                finds: &[(
-                    Rule::Resources,
-                    At::Line("    call worker\n    cmp rax, rbx"),
-                    "_start calls worker, which only the thread code may call",
-                )],
-            },
-            aarch64: Plan::Breaks {
-                edits: &[(
-                    "    mov x0, x20\n    bl total_results\n",
-                    "    mov x0, x20\n    bl total_results\n    mov x0, #0\n    adrp x1, slots\n    \
-                     add x1, x1, :lo12:slots\n    bl worker\n",
-                )],
-                finds: &[(
-                    Rule::Resources,
-                    At::Line("    bl worker\n    cmp x0, x19"),
-                    "_start calls worker, which only the thread code may call",
-                )],
-            },
-        },
-    ),
 ];
 
 #[tokio::test]
@@ -2806,56 +2472,8 @@ async fn threads_follow_the_rules_of_the_thread_code() {
     hold(&ON_THE_PARALLEL_TEMPLATE, THREADS).await;
 }
 
-/// Threads need the spec's approval: a program that starts them under a spec that allows none is
-/// refused, and so is one whose THREADS is more than the spec allows.
-#[tokio::test]
-async fn threads_need_the_specs_approval() {
-    for (_, template) in PARALLEL_TEMPLATES.cells() {
-        let report = check_full(template, CpuFeatures::all(), &PARALLEL_SYSCALLS, None).await;
-        assert_violation(
-            &report,
-            Rule::Resources,
-            line_of(template, "parallel_for:"),
-            "spec.md doesn't allow threads",
-        );
-        let report = check_full(template, CpuFeatures::all(), &PARALLEL_SYSCALLS, Some(8)).await;
-        assert_violation(
-            &report,
-            Rule::Resources,
-            line_of(template, ".equ THREADS, 16"),
-            "THREADS is 16, but the spec allows from 1 to 8 threads",
-        );
-    }
-}
-
-/// Every target's parallel template passes every rule.
-#[tokio::test]
-async fn the_parallel_templates_pass_every_rule() {
-    for (target, template) in PARALLEL_TEMPLATES.cells() {
-        let report = check_parallel(template).await;
-        let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
-        assert!(report.passed(), "{}: {all:#?}", target.name());
-    }
-}
-
-/// The parallel template of a CPU as shipped, in the edge form: lengua's parallel_for starts its
-/// threads and calls its worker.
-fn edge_parallel_template(target: Profile) -> String {
-    let file = if target == Profile::LinuxAarch64 {
-        "linux-aarch64/parallel-template.s"
-    } else {
-        "parallel-template.s"
-    };
-    std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("plugin/skills/compile/assets")
-            .join(file),
-    )
-    .expect("the template")
-}
-
-/// A program in the edge form that starts threads, with the operations the template's spec
-/// allows and `threads` threads.
+/// A program that starts threads, with the operations the template's spec allows and `threads`
+/// threads.
 async fn check_edge_threads(text: &str, threads: Option<u32>) -> Report {
     use crate::edge::Op;
     let ops = [
@@ -2865,13 +2483,13 @@ async fn check_edge_threads(text: &str, threads: Option<u32>) -> Report {
         Op::ThreadStart,
         Op::ThreadJoin,
     ];
-    check_allowing(text, CpuFeatures::all(), &SYSCALLS, &ops, threads).await
+    check_allowing(text, CpuFeatures::all(), &ops, threads).await
 }
 
-/// An edge-form program's threads follow the rules of the thread code, as the inline form's do:
-/// the template passes, a spec that allows no threads or fewer is held to, and a count that isn't
-/// shown to be at most THREADS, a wrong slot size or slots, a worker that reaches the OS and a
-/// call of worker from main.s are found.
+/// A program's threads follow the rules of the thread code: the template passes, a spec that
+/// allows no threads or fewer is held to, and a count that isn't shown to be at most THREADS, a
+/// wrong slot size or slots, a worker that reaches the OS and a call of worker from main.s are
+/// found.
 #[tokio::test]
 async fn an_edge_form_programs_threads_follow_the_rules() {
     // Each CPU's call of parallel_for and its edits: what to change, the line it is found on
@@ -2945,9 +2563,9 @@ async fn an_edge_form_programs_threads_follow_the_rules() {
         (Profile::LinuxX86_64, x86_64),
         (Profile::LinuxAarch64, aarch64),
     ] {
-        let template = edge_parallel_template(target);
+        let template = *PARALLEL_TEMPLATES.get(target);
         let name = target.name();
-        let report = check_edge_threads(&template, Some(16)).await;
+        let report = check_edge_threads(template, Some(16)).await;
         let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
         assert!(report.passed(), "{name}: {all:#?}");
         // The spec's approval.
@@ -2956,18 +2574,18 @@ async fn an_edge_form_programs_threads_follow_the_rules() {
         } else {
             "    call parallel_for\n"
         };
-        let report = check_edge_threads(&template, None).await;
+        let report = check_edge_threads(template, None).await;
         assert_violation(
             &report,
             Rule::Resources,
-            line_of(&template, call),
+            line_of(template, call),
             "spec.md doesn't allow threads",
         );
-        let report = check_edge_threads(&template, Some(8)).await;
+        let report = check_edge_threads(template, Some(8)).await;
         assert_violation(
             &report,
             Rule::Resources,
-            line_of(&template, ".equ THREADS, 16"),
+            line_of(template, ".equ THREADS, 16"),
             "THREADS is 16, but the spec allows from 1 to 8 threads",
         );
         for (old, new, at, needle) in cases {
@@ -2998,11 +2616,9 @@ async fn the_template_passes_every_rule() {
 }
 
 /// What a target's fillers are made of and where they go: the function that writes through its
-/// first argument and reads through its second (`fill`) and the one that calls it (`refill`), put
-/// before the template's `write_all`, and the call that lends 8 bytes to either.
+/// first argument and reads through its second (`writer`) and the one that calls it (`rewriter`),
+/// put before the template's `write_all`, and the call that lends 8 bytes to either.
 struct Kit {
-    /// A constant the fillers name, added: this line of the template becomes the other.
-    constant: Option<Edit>,
     /// The fillers.
     fillers: &'static str,
     /// The comment of the function the fillers go before.
@@ -3015,51 +2631,46 @@ struct Kit {
     call: &'static str,
 }
 
-/// AArch64's `fill` and `refill`: `fill` stores a byte through x0 and returns the byte at x1.
+/// AArch64's `writer` and `rewriter`: `writer` stores a byte through x0 and returns the byte at x1.
 const AARCH64_FILLERS: &str = "// Stores a byte through x0, and returns the byte at x1.
 // In: x0 = the buffer, x1 = a byte to look at, x2 = how many, at least 1.
 // Out: x0 = the byte.
 // returns: result
-.type fill, @function
-fill:
+.type writer, @function
+writer:
     strb w2, [x0]
     ldrb w0, [x1]
     ret
-.size fill, . - fill
+.size writer, . - writer
 
-// Stores a byte through x0, by fill, and returns the byte at x1.
+// Stores a byte through x0, by writer, and returns the byte at x1.
 // In: x0 = the buffer, x1 = a byte to look at.
 // Out: x0 = the byte.
 // returns: result
-.type refill, @function
-refill:
+.type rewriter, @function
+rewriter:
     stp x29, x30, [sp, #-16]!
     mov x2, #8
-    bl fill
+    bl writer
     ldp x29, x30, [sp], #16
     ret
-.size refill, . - refill
+.size rewriter, . - rewriter
 
 ";
 
 /// Each target's fillers.
 const KITS: PerCpu<Kit> = PerCpu {
     x86_64: Kit {
-        constant: Some((
-            ".equ SYS_WRITE, 1\n",
-            ".equ SYS_READ, 0\n.equ SYS_WRITE, 1\n",
-        )),
         fillers: FILLERS,
         before: "# Writes rdx bytes from rsi to file descriptor edi",
-        label: ".Lstart_usage:\n",
+        label: ".Lmain_usage:\n",
         size: "    mov edx, 8\n",
         call: "    call ",
     },
     aarch64: Kit {
-        constant: None,
         fillers: AARCH64_FILLERS,
         before: "// Writes x2 bytes from x1 to file descriptor x0, retrying partial writes.",
-        label: ".Lstart_usage:\n",
+        label: ".Lmain_usage:\n",
         size: "    mov x2, #8\n",
         call: "    bl ",
     },
@@ -3081,17 +2692,18 @@ const LENDINGS: &[(&str, PerCpu<Lending>)] = &[
         PerCpu {
             x86_64: Lending {
                 setup: "    lea rdi, [rip + out_buf]\n    lea rsi, [rip + out_buf]\n",
-                callee: "fill",
+                callee: "writer",
                 refused: Some(
-                    "lends one address, out_buf, in both rdi and rsi, and fill writes through rdi",
+                    "lends one address, out_buf, in both rdi and rsi, and writer writes through \
+                     rdi",
                 ),
             },
             aarch64: Lending {
                 setup: "    adrp x0, out_buf\n    add x0, x0, :lo12:out_buf\n    adrp x1, out_buf\n    \
                         add x1, x1, :lo12:out_buf\n",
-                callee: "fill",
+                callee: "writer",
                 refused: Some(
-                    "lends one address, out_buf, in both x0 and x1, and fill writes through x0",
+                    "lends one address, out_buf, in both x0 and x1, and writer writes through x0",
                 ),
             },
         },
@@ -3101,13 +2713,13 @@ const LENDINGS: &[(&str, PerCpu<Lending>)] = &[
         PerCpu {
             x86_64: Lending {
                 setup: "    lea rdi, [rip + out_buf + 4]\n    mov rsi, rdi\n",
-                callee: "fill",
+                callee: "writer",
                 refused: Some("lends one address, out_buf + 4, in both rdi and rsi"),
             },
             aarch64: Lending {
                 setup: "    adrp x0, out_buf\n    add x0, x0, :lo12:out_buf\n    add x0, x0, #4\n    \
                         mov x1, x0\n",
-                callee: "fill",
+                callee: "writer",
                 refused: Some("lends one address, out_buf + 4, in both x0 and x1"),
             },
         },
@@ -3117,14 +2729,14 @@ const LENDINGS: &[(&str, PerCpu<Lending>)] = &[
         PerCpu {
             x86_64: Lending {
                 setup: "    lea rdi, [rip + out_buf]\n    lea rsi, [rip + out_buf]\n",
-                callee: "refill",
-                refused: Some("and refill writes through rdi"),
+                callee: "rewriter",
+                refused: Some("and rewriter writes through rdi"),
             },
             aarch64: Lending {
                 setup: "    adrp x0, out_buf\n    add x0, x0, :lo12:out_buf\n    adrp x1, out_buf\n    \
                         add x1, x1, :lo12:out_buf\n",
-                callee: "refill",
-                refused: Some("and refill writes through x0"),
+                callee: "rewriter",
+                refused: Some("and rewriter writes through x0"),
             },
         },
     ),
@@ -3133,13 +2745,13 @@ const LENDINGS: &[(&str, PerCpu<Lending>)] = &[
         PerCpu {
             x86_64: Lending {
                 setup: "    lea rdi, [rip + out_buf]\n    lea rsi, [rip + out_buf + 8]\n",
-                callee: "fill",
+                callee: "writer",
                 refused: None,
             },
             aarch64: Lending {
                 setup: "    adrp x0, out_buf\n    add x0, x0, :lo12:out_buf\n    adrp x1, out_buf\n    \
                         add x1, x1, :lo12:out_buf\n    add x1, x1, #8\n",
-                callee: "fill",
+                callee: "writer",
                 refused: None,
             },
         },
@@ -3149,13 +2761,13 @@ const LENDINGS: &[(&str, PerCpu<Lending>)] = &[
         PerCpu {
             x86_64: Lending {
                 setup: "    lea rdi, [rip + out_buf]\n    lea rsi, [rip + usage_msg]\n",
-                callee: "fill",
+                callee: "writer",
                 refused: None,
             },
             aarch64: Lending {
                 setup: "    adrp x0, out_buf\n    add x0, x0, :lo12:out_buf\n    adrp x1, usage_msg\n    \
                         add x1, x1, :lo12:usage_msg\n",
-                callee: "fill",
+                callee: "writer",
                 refused: None,
             },
         },
@@ -3167,10 +2779,6 @@ const LENDINGS: &[(&str, PerCpu<Lending>)] = &[
 fn lending(target: Profile, setup: &str, callee: &str) -> String {
     let kit = KITS.get(target);
     let mut text = (*TEMPLATES.get(target)).to_owned();
-    if let Some((old, new)) = kit.constant {
-        assert!(text.contains(old), "{old:?} isn't in the template");
-        text = text.replacen(old, new, 1);
-    }
     assert!(
         text.contains(kit.before),
         "{:?} isn't in the template",
@@ -3192,7 +2800,7 @@ async fn one_address_is_never_lent_twice_for_writing() {
     for (name, cells) in LENDINGS {
         for (target, cell) in cells.cells() {
             let text = lending(target, cell.setup, cell.callee);
-            let report = check_full(&text, CpuFeatures::all(), &PARALLEL_SYSCALLS, None).await;
+            let report = check_full(&text, CpuFeatures::all(), None).await;
             let refusals: Vec<String> = report
                 .violations
                 .iter()
@@ -3232,7 +2840,6 @@ const TABLES: &[(&str, Fixtures)] = &[
     ("assertions", ASSERTIONS),
     ("chains", CHAINS),
     ("results", RESULTS),
-    ("calls", CALLS),
     ("scope", SCOPES),
     ("indexes", INDEXES),
     ("bounds", BOUNDS),
@@ -3244,7 +2851,7 @@ const TABLES: &[(&str, Fixtures)] = &[
 ];
 
 /// Every fixture is written on a target or says why that CPU can't have it, and no target writes
-/// fewer than the tests these tables replaced did.
+/// fewer than it does today: 48 on x86-64 and 40 on AArch64.
 #[test]
 fn every_fixture_is_written_or_excused_on_every_target() {
     let mut written = PerCpu {
@@ -3278,8 +2885,8 @@ fn every_fixture_is_written_or_excused_on_every_target() {
             _ => panic!("a lending is refused on one target and allowed on the other"),
         }
     }
-    assert!(written.x86_64 >= 57, "{}", written.x86_64);
-    assert!(written.aarch64 >= 48, "{}", written.aarch64);
+    assert!(written.x86_64 >= 48, "{}", written.x86_64);
+    assert!(written.aarch64 >= 40, "{}", written.aarch64);
 }
 
 /// A pointer just past a symbol's end belongs to the symbol main.s names, whatever starts there:
@@ -3289,7 +2896,7 @@ async fn a_pointer_past_a_symbol_s_end_is_that_symbol_s() {
     let allowed = [
         // nan_msg starts where usage_msg ends.
         (
-            ".Lstart_write_failed:\n",
+            ".Lmain_write_failed:\n",
             "    lea rsi, [rip + usage_msg + USAGE_MSG_LEN]\n    movzx eax, byte ptr [rsi - 1]\n",
         ),
         // Nothing comes after out_buf.
@@ -3305,8 +2912,8 @@ async fn a_pointer_past_a_symbol_s_end_is_that_symbol_s() {
         assert!(report.passed(), "{lines:?}: {all:#?}");
     }
     let text = with(
-        ".Lstart_write_failed:\n",
-        ".Lstart_write_failed:\n    lea rsi, [rip + usage_msg + USAGE_MSG_LEN + 1]\n",
+        ".Lmain_write_failed:\n",
+        ".Lmain_write_failed:\n    lea rsi, [rip + usage_msg + USAGE_MSG_LEN + 1]\n",
     );
     assert_violation(
         &check(&text).await,
@@ -3316,38 +2923,37 @@ async fn a_pointer_past_a_symbol_s_end_is_that_symbol_s() {
     );
 }
 
-/// Two functions that write through rdi and read through rsi: `fill` with a `read` system call,
-/// `refill` by calling `fill`.
+/// Two functions that write through rdi and read through rsi: `writer` by calling `os_read`,
+/// `rewriter` by calling `writer`.
 const FILLERS: &str =
     "# Reads up to rdx bytes of standard input into rdi, and returns the byte at rsi.
 # In: rdi = the buffer, rsi = a byte to look at, rdx = how many, at least 1.
 # Out: rax = the byte.
 # returns: result
-.type fill, @function
-fill:
+.type writer, @function
+writer:
     push rbx
     mov rbx, rsi
     mov rsi, rdi
     xor edi, edi
-    mov eax, SYS_READ
-    syscall
+    call os_read
     movzx eax, byte ptr [rbx]
     pop rbx
     ret
-.size fill, . - fill
+.size writer, . - writer
 
 # Reads up to 8 bytes of standard input into rdi, and returns the byte at rsi.
 # In: rdi = the buffer, rsi = a byte to look at.
 # Out: rax = the byte.
 # returns: result
-.type refill, @function
-refill:
+.type rewriter, @function
+rewriter:
     sub rsp, 8
     mov edx, 8
-    call fill
+    call writer
     add rsp, 8
     ret
-.size refill, . - refill
+.size rewriter, . - rewriter
 
 ";
 
@@ -3486,7 +3092,7 @@ async fn vector_accesses_stay_inside_their_data() {
 
     // A [rip + name] access must fit the symbol over its whole width.
     let text = with_after(
-        "_start:",
+        "main:",
         "    movdqu xmm0, xmmword ptr [rip + usage_msg + 8]\n",
     );
     let report = check(&text).await;
@@ -3593,13 +3199,6 @@ async fn single_precision_and_fma_are_in_dialect_2() {
     );
 }
 
-/// What the parallel template's spec allows.
-const PARALLEL_SYSCALLS: [Syscall; 3] = [Syscall::Read, Syscall::Write, Syscall::Exit];
-
-async fn check_parallel(text: &str) -> Report {
-    check_full(text, CpuFeatures::all(), &PARALLEL_SYSCALLS, Some(16)).await
-}
-
 #[tokio::test]
 async fn only_a_server_takes_connections_forever() {
     use crate::edge::Op;
@@ -3634,51 +3233,7 @@ async fn only_a_server_takes_connections_forever() {
     );
 }
 
-/// A program of the inline form that reads with fill, as tests/fixtures/second was before it
-/// moved to the edge form.
-fn with_fill() -> String {
-    include_str!("inline_form/second.s").to_owned()
-}
-
-#[tokio::test]
-async fn fill_is_copied_word_for_word_with_its_constants() {
-    let syscalls = [Syscall::Read, Syscall::Write, Syscall::Exit];
-    let text = with_fill();
-    let report = check_full(&text, CpuFeatures::all(), &syscalls, None).await;
-    assert!(report.passed(), "{:?}", report.violations);
-
-    // fill read as a whole for every cut is only as right as its code is the template's.
-    let changed = text.replacen(
-        "    sub rdx, rax\n    jz .Lfill_done\n",
-        "    sub rdx, rax\n    cmp rdx, 1\n    jbe .Lfill_done\n",
-        1,
-    );
-    assert_ne!(changed, text);
-    let report = check_full(&changed, CpuFeatures::all(), &syscalls, None).await;
-    assert_violation(
-        &report,
-        Rule::Assertions,
-        line_of(&changed, "fill:"),
-        "fill differs from the template",
-    );
-
-    let fewer = text.replacen(
-        ".equ MAX_FILL_READS, 1099511627776\n",
-        ".equ MAX_FILL_READS, 64\n",
-        1,
-    );
-    assert_ne!(fewer, text);
-    let report = check_full(&fewer, CpuFeatures::all(), &syscalls, None).await;
-    assert_violation(
-        &report,
-        Rule::Constants,
-        line_of(&fewer, ".equ MAX_FILL_READS"),
-        "MAX_FILL_READS must be 1099511627776",
-    );
-}
-
-/// Every AArch64 asset and fixture passes every rule, held to the calls its own spec names, as
-/// x86-64's are.
+/// Every AArch64 asset and fixture passes every rule, as x86-64's do.
 #[tokio::test]
 async fn every_aarch64_asset_follows_every_rule() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -3732,7 +3287,7 @@ async fn every_aarch64_asset_follows_every_rule() {
         let spec = crate::spec::parse(&std::fs::read_to_string(spec).expect("a spec"))
             .unwrap_or_else(|problems| panic!("{}: {problems:?}", spec.display()));
         let text = std::fs::read_to_string(code).expect("a program");
-        let report = check_full(&text, CpuFeatures::all(), &spec.syscalls, spec.threads).await;
+        let report = check_full(&text, CpuFeatures::all(), spec.threads).await;
         if !report.passed() {
             let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
             failed.push(format!("{}: {all:#?}", code.display()));
@@ -3749,12 +3304,11 @@ async fn aarch64_crc_needs_a_cpu_with_crc() {
             .join("plugin/skills/compile/assets/linux-aarch64/fast/crc32c-crc/main.s"),
     )
     .expect("the program");
-    let syscalls = [Syscall::Read, Syscall::Write, Syscall::Exit];
     let without = CpuFeatures {
         crc: false,
         ..CpuFeatures::all()
     };
-    let report = check_full(&text, without, &syscalls, None).await;
+    let report = check_full(&text, without, None).await;
     assert_violation(
         &report,
         Rule::Dialect,
@@ -3772,12 +3326,11 @@ async fn aarch64_pmull_needs_a_cpu_with_pmull() {
             .join("plugin/skills/compile/assets/linux-aarch64/fast/crc32c-crc/main.s"),
     )
     .expect("the program");
-    let syscalls = [Syscall::Read, Syscall::Write, Syscall::Exit];
     let without = CpuFeatures {
         pmull: false,
         ..CpuFeatures::all()
     };
-    let report = check_full(&text, without, &syscalls, None).await;
+    let report = check_full(&text, without, None).await;
     assert_violation(
         &report,
         Rule::Dialect,
@@ -3789,7 +3342,7 @@ async fn aarch64_pmull_needs_a_cpu_with_pmull() {
         "    pmull v16.8h, v0.8b, v24.8b",
         1,
     );
-    let report = check_full(&bytes, without, &syscalls, None).await;
+    let report = check_full(&bytes, without, None).await;
     assert!(
         !report
             .violations
@@ -3804,24 +3357,23 @@ async fn aarch64_pmull_needs_a_cpu_with_pmull() {
 /// x86-64's are to one with AES-NI and SHA.
 #[tokio::test]
 async fn aarch64_aes_and_sha_need_a_cpu_with_them() {
-    let text = crate::checker::AARCH64_TEMPLATE
+    let text = AARCH64_TEMPLATE
         .replacen(
             ".arch armv8-a\n",
             ".arch armv8-a\n.arch_extension aes\n.arch_extension sha2\n",
             1,
         )
         .replacen(
-            "_start:\n",
-            "_start:\n    aese v0.16b, v1.16b\n    sha256h q0, q1, v2.4s\n",
+            "main:\n",
+            "main:\n    aese v0.16b, v1.16b\n    sha256h q0, q1, v2.4s\n",
             1,
         );
-    let syscalls = [Syscall::Write, Syscall::Exit];
     let without = CpuFeatures {
         aes: false,
         sha: false,
         ..CpuFeatures::all()
     };
-    let report = check_full(&text, without, &syscalls, None).await;
+    let report = check_full(&text, without, None).await;
     assert_violation(
         &report,
         Rule::Dialect,
@@ -3834,7 +3386,7 @@ async fn aarch64_aes_and_sha_need_a_cpu_with_them() {
         line_of(&text, "    sha256h q0, q1, v2.4s"),
         "needs the SHA2 extension, which this CPU doesn't have",
     );
-    let with = check_full(&text, CpuFeatures::all(), &syscalls, None).await;
+    let with = check_full(&text, CpuFeatures::all(), None).await;
     assert!(
         !with
             .violations
@@ -3858,7 +3410,7 @@ fn with_aarch64(old: &str, new: &str) -> String {
 /// replaces `old` with `new`, and the violation is on the line that starts `at`.
 #[tokio::test]
 async fn the_aarch64_dialect_refuses_what_it_should() {
-    let cases: [(&str, &str, &str, Rule, &str); 16] = [
+    let cases: [(&str, &str, &str, Rule, &str); 15] = [
         // The low bits of one symbol's address on another's page.
         (
             "    adrp x1, usage_msg\n    add x1, x1, :lo12:usage_msg\n",
@@ -3890,7 +3442,7 @@ async fn the_aarch64_dialect_refuses_what_it_should() {
             "returns through a register other than x30",
         ),
         (
-            "    ldr x0, [sp, #16]\n",
+            "    ldr x0, [x1, #8]\n",
             "    ldr x0, [x1, :lo12:usage_msg]\n",
             "    ldr x0, [x1, :lo12:usage_msg]",
             Rule::Dialect,
@@ -3904,7 +3456,7 @@ async fn the_aarch64_dialect_refuses_what_it_should() {
             "adr isn't in the dialect",
         ),
         (
-            "    ldr x0, [sp]\n",
+            "    ldr x0, [x1, #8]\n",
             "    ldr x0, usage_msg\n",
             "    ldr x0, usage_msg",
             Rule::Dialect,
@@ -3930,13 +3482,6 @@ async fn the_aarch64_dialect_refuses_what_it_should() {
             "    add x2, x2, #5000",
             Rule::Dialect,
             "isn't a number an add can hold",
-        ),
-        (
-            "    svc #0\n",
-            "    svc #1\n",
-            "    svc #1",
-            Rule::Dialect,
-            "Linux takes system calls as `svc #0`",
         ),
         (
             "    bl write_all\n",
@@ -3988,18 +3533,18 @@ async fn the_aarch64_dialect_refuses_what_it_should() {
 #[tokio::test]
 async fn code_after_an_always_taken_aarch64_branch_can_never_run() {
     for branch in [
-        "b.al .Lstart_exit",
-        "b.nv .Lstart_exit",
-        "cbz xzr, .Lstart_exit",
-        "cbz wzr, .Lstart_exit",
-        "tbz xzr, #5, .Lstart_exit",
-        "tbz wzr, #31, .Lstart_exit",
+        "b.al .Lmain_exit",
+        "b.nv .Lmain_exit",
+        "cbz xzr, .Lmain_exit",
+        "cbz wzr, .Lmain_exit",
+        "tbz xzr, #5, .Lmain_exit",
+        "tbz wzr, #31, .Lmain_exit",
     ] {
         let text = with_aarch64(
-            "    mov w0, #EXIT_OK\n    b .Lstart_exit\n",
+            "    mov w0, #EXIT_OK\n    b .Lmain_exit\n",
             &format!(
                 "    mov w0, #EXIT_OK\n    {branch}\n    mov w0, #99\n    b \
-                 .Lstart_exit\n"
+                 .Lmain_exit\n"
             ),
         );
         let report = check(&text).await;
@@ -4018,10 +3563,10 @@ async fn code_after_an_always_taken_aarch64_branch_can_never_run() {
 async fn code_only_a_never_taken_aarch64_branch_reaches_can_never_run() {
     for branch in ["cbnz xzr", "cbnz wzr", "tbnz xzr, #5", "tbnz wzr, #31"] {
         let text = with_aarch64(
-            "    mov w0, #EXIT_OK\n    b .Lstart_exit\n",
+            "    mov w0, #EXIT_OK\n    b .Lmain_exit\n",
             &format!(
-                "    mov w0, #EXIT_OK\n    {branch}, .Lstart_never\n    b .Lstart_exit\n\
-                 .Lstart_never:\n    mov w0, #99\n    b .Lstart_exit\n"
+                "    mov w0, #EXIT_OK\n    {branch}, .Lmain_never\n    b .Lmain_exit\n\
+                 .Lmain_never:\n    mov w0, #99\n    b .Lmain_exit\n"
             ),
         );
         let report = check(&text).await;
@@ -4079,11 +3624,10 @@ async fn the_aarch64_messages_say_aarch64() {
         "jmp", "`test ", "lea ", "`call ", "# bound", "# unsafe", "# shared",
     ];
     let mutants = [
-        // A result used unchecked, a system call and an exit status not named, a loop counter
-        // set from a bare number, an index unchecked, memory below sp, an assertion's number in
-        // the wrong register, and the canonical assert_fail changed.
-        ("    tbnz x0, #63, .Lstart_not_a_number\n", "    nop\n"),
-        ("    mov x8, #SYS_EXIT\n", "    mov x8, #93\n"),
+        // A result used unchecked, an exit status not named, a loop counter set from a bare
+        // number, an index unchecked, memory below sp, an assertion's number in the wrong register,
+        // and an assertion's number used twice.
+        ("    tbnz x0, #63, .Lmain_not_a_number\n", "    nop\n"),
         ("    mov w0, #EXIT_OK\n", "    mov w0, #0\n"),
         ("    mov x3, #MAX_CHARS\n", "    mov x3, #20\n"),
         ("    cmp x2, #MAX_CHARS\n", "    cmp x1, #MAX_CHARS\n"),
@@ -4106,30 +3650,17 @@ async fn the_aarch64_messages_say_aarch64() {
     }
 }
 
-/// An AArch64 program of the inline form that reads with fill: cat over standard input of any
-/// length, as tests/fixtures/linux-aarch64/cat-stream was before it moved to the edge form.
-fn aarch64_with_fill() -> String {
-    include_str!("inline_form/linux-aarch64/cat-stream.s").to_owned()
-}
-
 /// An AArch64 file program, the upcase example's spec compiled for AArch64: it reads one file
 /// whole, capitalizes its letters with no branch on a byte, and writes another, passing every
 /// rule, memory rules included.
 #[tokio::test]
 async fn an_aarch64_file_program_passes_every_rule() {
-    let syscalls = [
-        Syscall::Openat,
-        Syscall::Close,
-        Syscall::Read,
-        Syscall::Write,
-        Syscall::Exit,
-    ];
     let text = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/linux-aarch64/upcase/main.s"),
     )
     .expect("the fixture");
-    let report = check_full(&text, CpuFeatures::all(), &syscalls, None).await;
+    let report = check_full(&text, CpuFeatures::all(), None).await;
     let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
     assert!(report.passed(), "{all:#?}");
 }
@@ -4192,24 +3723,23 @@ pub(crate) fn on_vectors(text: &str) -> String {
 /// restored in mirror order, as x19 to x28 are; half precision isn't in the dialect.
 #[tokio::test]
 async fn an_aarch64_float_program_passes_every_rule() {
-    let syscalls = [Syscall::Write, Syscall::Exit];
     let text = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/linux-aarch64/hypotenuse/main.s"),
     )
     .expect("the fixture");
-    let report = check_full(&text, CpuFeatures::all(), &syscalls, None).await;
+    let report = check_full(&text, CpuFeatures::all(), None).await;
     let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
     assert!(report.passed(), "{all:#?}");
     let vectors = on_vectors(&text);
-    let report = check_full(&vectors, CpuFeatures::all(), &syscalls, None).await;
+    let report = check_full(&vectors, CpuFeatures::all(), None).await;
     let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
     assert!(report.passed(), "{all:#?}");
 
     // The scale kept in d8, which a caller expects back.
     let unsaved = text.replace(" d2", " d8");
     assert_ne!(unsaved, text);
-    let report = check_full(&unsaved, CpuFeatures::all(), &syscalls, None).await;
+    let report = check_full(&unsaved, CpuFeatures::all(), None).await;
     assert_violation(
         &report,
         Rule::Functions,
@@ -4230,7 +3760,7 @@ async fn an_aarch64_float_program_passes_every_rule() {
             ".Lprint_hypotenuse_return:\n    ldp d8, d9, [sp], #16\n    ldp x29, x30, [sp], #16\n",
             1,
         );
-    let report = check_full(&saved, CpuFeatures::all(), &syscalls, None).await;
+    let report = check_full(&saved, CpuFeatures::all(), None).await;
     let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
     assert!(report.passed(), "{all:#?}");
 
@@ -4246,7 +3776,7 @@ async fn an_aarch64_float_program_passes_every_rule() {
             ".Lprint_hypotenuse_return:\n    ldp x29, x30, [sp], #16\n    ldp d8, d9, [sp], #16\n",
             1,
         );
-    let report = check_full(&unmirrored, CpuFeatures::all(), &syscalls, None).await;
+    let report = check_full(&unmirrored, CpuFeatures::all(), None).await;
     assert_violation(
         &report,
         Rule::Functions,
@@ -4256,13 +3786,13 @@ async fn an_aarch64_float_program_passes_every_rule() {
 
     // The scale as a constant in .rodata, read through its address.
     let constant = from_rodata(&text);
-    let report = check_full(&constant, CpuFeatures::all(), &syscalls, None).await;
+    let report = check_full(&constant, CpuFeatures::all(), None).await;
     let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
     assert!(report.passed(), "{all:#?}");
 
     let half = text.replacen("    fadd d0, d0, d1\n", "    fadd h0, h0, h1\n", 1);
     assert_ne!(half, text);
-    let report = check_full(&half, CpuFeatures::all(), &syscalls, None).await;
+    let report = check_full(&half, CpuFeatures::all(), None).await;
     assert_violation(
         &report,
         Rule::Dialect,
@@ -4278,13 +3808,12 @@ async fn an_aarch64_float_program_passes_every_rule() {
 /// on vectors stay out.
 #[tokio::test]
 async fn the_aarch64_vector_template_passes_every_rule() {
-    let syscalls = [Syscall::Read, Syscall::Write, Syscall::Exit];
     let text = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("plugin/skills/compile/assets/linux-aarch64/vector-template.s"),
     )
     .expect("the template");
-    let report = check_full(&text, CpuFeatures::all(), &syscalls, None).await;
+    let report = check_full(&text, CpuFeatures::all(), None).await;
     let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
     assert!(report.passed(), "{all:#?}");
 
@@ -4328,7 +3857,7 @@ async fn the_aarch64_vector_template_passes_every_rule() {
     for (from, to, rule, at, needle) in cases {
         let changed = text.replacen(from, to, 1);
         assert_ne!(changed, text, "{to}");
-        let report = check_full(&changed, CpuFeatures::all(), &syscalls, None).await;
+        let report = check_full(&changed, CpuFeatures::all(), None).await;
         assert_violation(&report, rule, line_of(&changed, at), needle);
     }
 }
@@ -4337,13 +3866,12 @@ async fn the_aarch64_vector_template_passes_every_rule() {
 /// that masks each 16-byte step to the bytes left, passes every rule.
 #[tokio::test]
 async fn the_aarch64_fast_wc_passes_every_rule() {
-    let syscalls = [Syscall::Read, Syscall::Write, Syscall::Exit];
     let text = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("plugin/skills/compile/assets/linux-aarch64/fast/wc/main.s"),
     )
     .expect("the asset");
-    let report = check_full(&text, CpuFeatures::all(), &syscalls, None).await;
+    let report = check_full(&text, CpuFeatures::all(), None).await;
     let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
     assert!(report.passed(), "{all:#?}");
 
@@ -4361,7 +3889,7 @@ async fn the_aarch64_fast_wc_passes_every_rule() {
             1,
         );
     assert_eq!(writeback.matches("#-1]!").count(), 2);
-    let report = check_full(&writeback, CpuFeatures::all(), &syscalls, None).await;
+    let report = check_full(&writeback, CpuFeatures::all(), None).await;
     let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
     assert!(report.passed(), "{all:#?}");
 }
@@ -4370,73 +3898,18 @@ async fn the_aarch64_fast_wc_passes_every_rule() {
 /// what the benchmark measures is lengua's own code.
 #[tokio::test]
 async fn the_aarch64_benchmark_programs_pass_every_rule() {
-    let files = [
-        Syscall::Openat,
-        Syscall::Close,
-        Syscall::Read,
-        Syscall::Write,
-        Syscall::Exit,
-    ];
-    for (path, syscalls) in [
-        (
-            "tests/fixtures/linux-aarch64/add/main.s",
-            &[Syscall::Write, Syscall::Exit][..],
-        ),
-        ("benches/programs/upcase/neon.s", &files[..]),
-        (
-            "benches/programs/shout/neon-one.s",
-            &[Syscall::Read, Syscall::Write, Syscall::Exit][..],
-        ),
+    for path in [
+        "tests/fixtures/linux-aarch64/add/main.s",
+        "benches/programs/upcase/neon.s",
+        "benches/programs/shout/neon-one.s",
     ] {
         let text =
             std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path))
                 .expect("the program");
-        let report = check_full(&text, CpuFeatures::all(), syscalls, None).await;
+        let report = check_full(&text, CpuFeatures::all(), None).await;
         let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
         assert!(report.passed(), "{path}: {all:#?}");
     }
-}
-
-/// AArch64's fill passes every rule, and is held to its template as x86-64's is: its code and
-/// its constants.
-#[tokio::test]
-async fn aarch64_fill_is_copied_word_for_word_with_its_constants() {
-    let syscalls = [Syscall::Read, Syscall::Write, Syscall::Exit];
-    let text = aarch64_with_fill();
-    let report = check_full(&text, CpuFeatures::all(), &syscalls, None).await;
-    let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
-    assert!(report.passed(), "{all:#?}");
-    let facts = report.facts.expect("the rules ran");
-    assert_eq!((facts.functions, facts.assertions), (3, 7), "{facts:?}");
-    assert!(facts.max_stack_bytes >= 32, "{facts:?}");
-
-    let changed = text.replacen(
-        "    subs x2, x2, x0\n    b.eq .Lfill_done\n",
-        "    subs x2, x2, x0\n    cmp x2, #1\n    b.ls .Lfill_done\n",
-        1,
-    );
-    assert_ne!(changed, text);
-    let report = check_full(&changed, CpuFeatures::all(), &syscalls, None).await;
-    assert_violation(
-        &report,
-        Rule::Assertions,
-        line_of(&changed, "fill:"),
-        "fill differs from the template",
-    );
-
-    let fewer = text.replacen(
-        ".equ MAX_FILL_READS, 1099511627776\n",
-        ".equ MAX_FILL_READS, 64\n",
-        1,
-    );
-    assert_ne!(fewer, text);
-    let report = check_full(&fewer, CpuFeatures::all(), &syscalls, None).await;
-    assert_violation(
-        &report,
-        Rule::Constants,
-        line_of(&fewer, ".equ MAX_FILL_READS"),
-        "MAX_FILL_READS must be 1099511627776",
-    );
 }
 
 /// A constant's expression means to lengua what it means to llvm-mc, on either CPU: the same
@@ -4802,31 +4275,11 @@ async fn a_bounds_check_against_a_constant_in_a_register_is_held_to_the_buffer()
     }
 }
 
-/// The frozen texts are the inline form's: each is the constant it is looked up by, none defines
-/// `main`, and a name that isn't one of them has none.
-#[test]
-fn the_frozen_texts_are_the_inline_forms() {
-    let frozen = [
-        ("main-template.s", TEMPLATE),
-        ("parallel-template.s", PARALLEL_TEMPLATE),
-        ("fill.s", FILL_TEMPLATE),
-        ("linux-aarch64/main-template.s", AARCH64_TEMPLATE),
-        (
-            "linux-aarch64/parallel-template.s",
-            PARALLEL_TEMPLATE_AARCH64,
-        ),
-        ("linux-aarch64/fill.s", AARCH64_FILL_TEMPLATE),
-    ];
-    for (name, text) in frozen {
-        assert_eq!(super::frozen(name), Some(text), "{name}");
-        assert_eq!(crate::edge::form(text), crate::edge::Form::Inline, "{name}");
-    }
-    assert_eq!(super::frozen("server-template.s"), None);
-}
-
 /// lengua.s read as a program, with the first line main.s gives it: every function it declares is
 /// there, and the dialect's parser finds fault only with how its data is laid out (alignment
-/// directives and sizes that are bare numbers), which is not a program's rule to hold lengua to.
+/// directives and sizes that are bare numbers) and with what a program may not do and lengua's own
+/// text does: system calls, its reserved names, an exported `_start` and no `main`. None of that
+/// is a program's rule to hold lengua to.
 #[test]
 fn the_dialect_finds_only_the_data_layout_of_lengua_s_at_fault() {
     for profile in Profile::ALL {
@@ -4852,58 +4305,19 @@ fn the_dialect_finds_only_the_data_layout_of_lengua_s_at_fault() {
             .iter()
             .map(ToString::to_string)
             .filter(|violation| {
-                !violation.contains(".balign emits bytes outside a data symbol")
-                    && !violation.contains("uses a bare number")
+                [
+                    ".balign emits bytes outside a data symbol",
+                    "uses a bare number",
+                    "makes a system call by itself",
+                    "is a name lengua keeps for its own text",
+                    "is exported",
+                    "there's no main function",
+                ]
+                .iter()
+                .all(|known| !violation.contains(*known))
             })
             .collect();
         assert!(others.is_empty(), "{profile:?}: {others:#?}");
-    }
-}
-
-/// The smallest program that ends with 0, in the inline form and in the edge form, for each CPU.
-const EXITS_INLINE: PerCpu<&str> = PerCpu {
-    x86_64: ".intel_syntax noprefix\n.equ SYS_EXIT, 231\n.equ EXIT_OK, 0\n\n.text\n.globl _start\n\
-             .type _start, @function\n_start:\n    mov edi, EXIT_OK\n    mov eax, SYS_EXIT\n    syscall\n\
-             .size _start, . - _start\n",
-    aarch64: ".arch armv8-a\n.equ SYS_EXIT, 94\n.equ EXIT_OK, 0\n\n.text\n.globl _start\n\
-              .type _start, @function\n_start:\n    mov w0, #EXIT_OK\n    mov x8, #SYS_EXIT\n    svc #0\n\
-              .size _start, . - _start\n",
-};
-
-/// The same program against the edge: `main` is entered by a call, and ends with `os_exit`.
-const EXITS_EDGE: PerCpu<&str> = PerCpu {
-    x86_64: ".intel_syntax noprefix\n.equ EXIT_OK, 0\n\n.text\n.type main, @function\nmain:\n\
-             \x20   sub rsp, 8\n    mov edi, EXIT_OK\n    call os_exit\n.size main, . - main\n",
-    aarch64: ".arch armv8-a\n.equ EXIT_OK, 0\n\n.text\n.type main, @function\nmain:\n\
-              \x20   stp x29, x30, [sp, #-16]!\n    mov w0, #EXIT_OK\n    bl os_exit\n.size main, . - main\n",
-};
-
-/// The same program in the two forms has the same facts, apart from the deepest the stack gets,
-/// which counts the edge's own frames in the edge form: lengua's code doesn't leak into what the
-/// rules learn of the program.
-#[tokio::test]
-async fn the_two_forms_have_the_same_facts() {
-    for profile in Profile::ALL {
-        let facts = |text: &'static str| async move {
-            check_full(text, CpuFeatures::all(), &SYSCALLS, None)
-                .await
-                .facts
-                .expect("the rules got far enough to learn the facts")
-        };
-        let inline = facts(EXITS_INLINE.get(profile)).await;
-        let edge = facts(EXITS_EDGE.get(profile)).await;
-        assert_eq!(edge.features, inline.features, "{profile:?}");
-        assert_eq!(edge.named, inline.named, "{profile:?}");
-        assert_eq!(edge.tables, inline.tables, "{profile:?}");
-        assert_eq!(edge.functions, inline.functions, "{profile:?}");
-        assert_eq!(edge.assertions, inline.assertions, "{profile:?}");
-        assert_eq!(edge.sve_bytes, inline.sve_bytes, "{profile:?}");
-        assert!(
-            edge.max_stack_bytes > inline.max_stack_bytes,
-            "{profile:?}: {} and {}",
-            edge.max_stack_bytes,
-            inline.max_stack_bytes
-        );
     }
 }
 
@@ -5160,7 +4574,7 @@ const EDGE_FIXTURES: &[EdgeFixture] = &[
             ".text\n.globl _start\n.type _start, @function\n_start:\n    nop\n.size _start, . - _start\n",
         )]),
         ops: &BASE_OPS,
-        says: "main.s defines main as well as _start",
+        says: "_start is a name lengua keeps for its own text",
     },
     EdgeFixture {
         what: "main exported",
@@ -5191,6 +4605,19 @@ const EDGE_FIXTURES: &[EdgeFixture] = &[
         },
         ops: &BASE_OPS,
         says: "os_clock isn't one the spec allows",
+    },
+    EdgeFixture {
+        what: "a thread started by the program itself, though the spec allows threads",
+        edits: PerCpu {
+            x86_64: &[("    call os_write\n", "    call os_thread_start\n")],
+            aarch64: &[("    bl os_write\n", "    bl os_thread_start\n")],
+        },
+        ops: &[
+            crate::edge::Op::Write,
+            crate::edge::Op::Exit,
+            crate::edge::Op::ThreadStart,
+        ],
+        says: "os_thread_start is called by lengua's parallel_for alone",
     },
     EdgeFixture {
         what: "a library function whose operations the spec doesn't allow",
