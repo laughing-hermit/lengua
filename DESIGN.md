@@ -1198,12 +1198,14 @@ the system through lengua's edge; tested natively on GitHub's runners of both, a
 also under QEMU on the x86-64 one), assembled by LLVM's `llvm-mc` and linked by `ld.lld`. Those
 are its two targets. A Linux that meets the floor runs lengua directly, with no container. Windows
 and Mac reach lengua through the lengua image, an Ubuntu 24.04 userland pinned by digest, run by
-Docker or Podman (Podman on a Mac, since Docker Desktop's VM reportedly has no Landlock): a Linux
-with the same two targets inside, the one route the project means to promise and test (planned:
-todo.md, "Round 3"), which an older Linux can use too. WSL 2 and a Linux VM are the same Linux set
-up by hand (README.md, "Windows and Mac"). Native macOS and Windows ports are deferred: each
-would bring its own edge file and confinement (the plans are in ROADMAP.md), and macOS on x86-64
-is not planned at all, since Apple makes no Intel Macs any more (todo.md, "Deferred").
+Docker, meaning the Docker Engine (inside WSL 2 on Windows, in a Linux VM such as Colima on a Mac)
+rather than Docker Desktop, with Podman supported: a Linux with the same two targets inside, the
+one route the project means to promise and test (planned: todo.md, "Round 3"), which an older
+Linux can use too. A Mac needs a VM kernel with Landlock, which Docker Desktop's reportedly lacks.
+WSL 2 and a Linux VM are also the same Linux set up by hand (README.md, "Windows and Mac").
+Native macOS and Windows ports are deferred: each would bring its own edge file and confinement
+(the plans are in ROADMAP.md), and macOS on x86-64 is not planned at all, since Apple makes no
+Intel Macs any more (todo.md, "Deferred").
 
 The spec is the portable part and already agnostic: it names no CPU or OS, and `check` rejects a
 CPU or OS term in a spec's prose, so the same spec means the same on every target. The per-target
