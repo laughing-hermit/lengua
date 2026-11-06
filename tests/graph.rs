@@ -17,7 +17,7 @@ use tempfile::TempDir;
 
 /// The add idea's description, as its frontmatter writes it.
 const ADD_DESCRIPTION: &str =
-    "description: Adds two whole numbers given as arguments and prints the sum.";
+    "description: Adds the two whole numbers in its arguments and prints the sum.";
 
 /// A bundle of program folders made for one test, with a data folder for lengua beside it.
 struct Bundle {
@@ -129,8 +129,8 @@ fn lengua_makes_the_index_with_okf_version() {
     assert_eq!(written.listed, ["add"]);
     assert_eq!(
         bundle.read("index.md"),
-        "---\nokf_version: \"0.2\"\n---\n# Programs\n\n* [add](add/idea.md) - Adds two whole \
-         numbers given as arguments and prints the sum. Code: [main.s](add/main.s)\n"
+        "---\nokf_version: \"0.2\"\n---\n# Programs\n\n* [add](add/idea.md) - Adds the two \
+         whole numbers in its arguments and prints the sum. Code: [main.s](add/main.s)\n"
     );
     assert_eq!(
         bundle.read("log.md"),
@@ -157,8 +157,8 @@ fn the_index_keeps_every_line_lengua_doesnt_own() {
     let kept = "---\nokf_version: \"0.2\"\nowner: us\n---\n# Our programs\n\nWritten by \
                 hand.\n\n## Tools\n\n\
                 * [the manual](https://example.com/manual) - read it first\n\
-                * [add](add/idea.md) - Adds two whole numbers given as arguments and prints the \
-                sum. Code: [main.s](add/main.s)\n\
+                * [add](add/idea.md) - Adds the two whole numbers in its arguments and prints \
+                the sum. Code: [main.s](add/main.s)\n\
                 * [sort](sort/idea.md) - Sorts lines.\n\nThe end.\r\n";
     assert_eq!(bundle.read("index.md"), kept);
     assert_eq!(written.changed, ["add"]);
@@ -609,8 +609,8 @@ async fn check_keeps_the_bundles_index_and_log() {
     let read = |name: &str| std::fs::read_to_string(bundle.join(name)).unwrap_or_default();
     assert_eq!(
         read("index.md"),
-        "---\nokf_version: \"0.2\"\n---\n# Programs\n\n* [add](program/idea.md) - Adds two \
-         whole numbers given as arguments and prints the sum.\n"
+        "---\nokf_version: \"0.2\"\n---\n# Programs\n\n* [add](program/idea.md) - Adds the \
+         two whole numbers in its arguments and prints the sum.\n"
     );
     let log = read("log.md");
     assert!(
@@ -689,8 +689,8 @@ async fn two_checks_at_once_leave_a_consistent_index() {
         .iter()
         .map(|program| {
             format!(
-                "* [add]({}/idea.md) - Adds two whole numbers given as arguments and prints the \
-                 sum.",
+                "* [add]({}/idea.md) - Adds the two whole numbers in its arguments and prints \
+                 the sum.",
                 program.name()
             )
         })

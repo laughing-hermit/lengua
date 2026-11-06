@@ -1035,8 +1035,9 @@ impl Parser {
             self.problem(
                 Some(1),
                 "the frontmatter has no `description`; add one sentence that says what the \
-                 program does, such as `description: Adds two whole numbers given as arguments \
-                 and prints the sum.`, which the bundle's index.md lists the program with",
+                 program does, such as `description: Adds the two whole numbers in its \
+                 arguments and prints the sum.`, which the bundle's index.md lists the program \
+                 with",
             );
         }
         title.map(|title| (title, description))
@@ -2561,7 +2562,7 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
     /// The bundle's index.md lists each program with its description, so every idea has one.
     #[test]
     fn requires_a_description() {
-        let line = "description: Adds two whole numbers given as arguments and prints the sum.\n";
+        let line = "description: Adds the two whole numbers in its arguments and prints the sum.\n";
         for without in [
             ADD.replace(line, ""),
             ADD.replace(line, "description: \" \"\n"),
@@ -2570,7 +2571,7 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
                 problems(&without),
                 [
                     "line 1: the frontmatter has no `description`; add one sentence that says what \
-                  the program does, such as `description: Adds two whole numbers given as \
+                  the program does, such as `description: Adds the two whole numbers in its \
                   arguments and prints the sum.`, which the bundle's index.md lists the program \
                   with"
                 ]
