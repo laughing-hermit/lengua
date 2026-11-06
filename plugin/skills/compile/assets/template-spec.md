@@ -45,7 +45,7 @@ negative. If writing the output fails, the program exits with code 3.
 
 | s | runs |
 |---|---|
-| `choice("12x", "abc", "", "-", "--5", "+5", "1-2", "9223372036854775808", "-9223372036854775808")` | 50 |
+| `choice("12x", "abc", "", "-", "--5", "+5", "1-2", "1:", "9223372036854775808", "-9223372036854775808")` | 50 |
 
 ## B4: Exits with code 3 when its output can't be written
 - Given the argument `7`

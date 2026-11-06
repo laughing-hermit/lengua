@@ -49,9 +49,16 @@ const EQUIVALENT: &[(&str, &str)] = &[
     // on the top bit and `msub` as x86-64's reads them (2026-11-05): add's proof is complete on
     // ARM64 now, where the mutant used to come out unproven.
     (
-        "tests/fixtures/linux-aarch64/add/main.s L273:imm+1",
+        "tests/fixtures/linux-aarch64/add/main.s L263:imm+1",
         "write_all's success value, 1 for 0: every caller tests only its sign (`tbnz x0, #63`) \
          and then sets the result itself, so the output and the exit code are the same",
+    ),
+    // Found by the first run on the edge form (2026-11-06), which moved every line again.
+    (
+        "tests/fixtures/linux-aarch64/echo/main.s L31:cond",
+        "echo_line's failure closes the connection and goes on; the flipped test asserts on it \
+         instead, and no behavior of the spec has a failed read: its clients send whole lines \
+         and close",
     ),
 ];
 

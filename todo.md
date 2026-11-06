@@ -304,7 +304,19 @@ golden ledger against `e4163d4`, the bench against it, and the merge to main.
 - **`move_front`** could copy 16 bytes a step with `movdqu`. That halves the iterations; the
   scalar copy is a few percent of the CPU time.
 - **The histogram** on x86-64 takes about 2% more CPU time and wall time than Rust's
-  (BENCHMARKS.md). Try more tables or unrolling, A/B.
+  (BENCHMARKS.md). Try more tables or unrolling, A/B. After the edge moved the programs' text
+  (run 42162207179, now against `e4163d4`) it took 1.11× the time on x86-64 (quartiles 0.98 to
+  1.26, so level within the spread) and 1.17× on ARM64 (1.15 to 1.18, a real loss), and it is
+  0.9× the best other on both. Its counting loops are the same instructions as before: only
+  the program's start and `write_all` changed, so the cause is where the loops now sit in the
+  text, which the dialect gives a program no way to align. Fix with the other gaps: an
+  alignment lengua owns (functions on 16 bytes, say), or a loop the placement can't hurt.
+- **The executables are 2.0 to 2.3 times the size they were**: `add` is 6,480 bytes where it
+  was 2,800 (the same run), still 2.2× less than C's 14 KiB. The edge's text is a part, the rest
+  is how the linker lays out one more read-only and one more writable piece. Look at the
+  segments, and at `-z noseparate-code` if the checker can hold the layout it makes.
+- **The `run` workload over many files** isn't built, so the broker's round trips against the
+  supervisor's ptrace stops for names are unmeasured. The bench's other workloads are level.
 - **The shout.** On a CPU without AVX-512, lengua's best shout is the SSE2 form on 16 threads.
   Against plain Rust it takes 814 µs of CPU time to 603 µs (0.74×), and 1100 µs of wall time to
   989 µs (BENCHMARKS.md). A one-thread SSE2 shout would match ARM64's `shout/neon-one.s`.
