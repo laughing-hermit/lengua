@@ -7,6 +7,11 @@ compatibility: Needs the lengua MCP server from the lengua plugin, on Linux x86-
 
 # Compile a lengua idea
 
+> lengua is moving to WebAssembly: a program's code becomes `main.wat`, the same on every
+> computer, held to [the WebAssembly dialect](references/power-of-10-webassembly.md) and calling
+> only [lengua's host](references/host.md). Until `check` takes `main.wat`, compile `main.s` as
+> below.
+
 `main.s` is the program: assembly for this computer's target, Linux on x86-64 or on AArch64,
 that you compile from `idea.md`; the first word of `check`'s `machine` line names the target,
 `linux-x86_64` or `linux-aarch64`. You are the compiler. You write `main`, and reach the system
