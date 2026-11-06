@@ -3916,14 +3916,10 @@ async fn the_aarch64_messages_say_aarch64() {
     }
 }
 
-/// An AArch64 program that reads with fill: cat over standard input of any length, in
-/// tests/fixtures/linux-aarch64.
+/// An AArch64 program of the inline form that reads with fill: cat over standard input of any
+/// length, as tests/fixtures/linux-aarch64/cat-stream was before it moved to the edge form.
 fn aarch64_with_fill() -> String {
-    std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/linux-aarch64/cat-stream/main.s"),
-    )
-    .expect("the fixture")
+    include_str!("inline_form/linux-aarch64/cat-stream.s").to_owned()
 }
 
 /// An AArch64 file program, the upcase example's spec compiled for AArch64: it reads one file

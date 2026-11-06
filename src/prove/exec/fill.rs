@@ -1,9 +1,10 @@
-//! The canonical `fill`, which check holds word for word to assets/fill.s, read as a whole: at
+//! The canonical `fill`, which check holds word for word to assets/fill.s in the inline form and
+//! which is lengua's own library in the edge form, read as a whole: at
 //! its loop's head the run takes, at once, what every possible sequence of reads leaves, for
 //! every way the input can be cut. A read can end after any byte, so fill can stop after any end
 //! byte that has arrived, or else when its buffer is full or the input has ended.
 
-use super::{Cpu, End, Image, State, Step, Stop};
+use super::{Cpu, End, State, Step, Stop};
 use crate::isa::Isa;
 use crate::prove::term::Term;
 
@@ -48,90 +49,161 @@ impl FillAbi {
 /// Where fill's code is, found by its canonical shape.
 #[derive(Debug, Clone, Copy)]
 pub struct Fill {
-    /// The loop's head, `mov eax, SYS_READ`.
+    /// The loop's head, where its read starts.
     head: u64,
-    /// The instruction after its `syscall`, which the kernel leaves in rcx.
+    /// The instruction after its read, which the model leaves in rcx as a system call does.
     after_call: u64,
     /// `.Lfill_done`, where it works out how much it read.
     done: u64,
 }
 
-/// fill's instructions, by mnemonic, as assets/fill.s assembles them.
-const SHAPE: [&str; 27] = [
-    "test", "je", "test", "je", "mov", "mov", "mov", "mov", "syscall", "test", "js", "je", "cmp",
-    "ja", "add", "sub", "je", "movzx", "cmp", "je", "dec", "jne", "mov", "jmp", "mov", "sub",
-    "ret",
+/// A fill's instructions, by mnemonic on x86-64 and by the decoder's kind on AArch64, through
+/// its `ret`; and which of them are the loop's head, the one after its read and `.Lfill_done`.
+struct Shape {
+    names: &'static [&'static str],
+    head: usize,
+    after_call: usize,
+    done: usize,
+}
+
+impl Shape {
+    /// The places in a fill of this shape, given where each of its instructions is.
+    fn at(&self, address: impl Fn(usize) -> u64) -> Fill {
+        Fill {
+            head: address(self.head),
+            after_call: address(self.after_call),
+            done: address(self.done),
+        }
+    }
+}
+
+/// x86-64's fills: the inline form's, as assets/fill.s assembles it, and lengua's own, which has
+/// a `call os_read` where that has `syscall`, and a frame of its own to keep the stack aligned.
+const X86_64: [Shape; 2] = [
+    Shape {
+        names: &[
+            "test", "je", "test", "je", "mov", "mov", "mov", "mov", "syscall", "test", "js", "je",
+            "cmp", "ja", "add", "sub", "je", "movzx", "cmp", "je", "dec", "jne", "mov", "jmp",
+            "mov", "sub", "ret",
+        ],
+        head: 7,
+        after_call: 9,
+        done: 24,
+    },
+    Shape {
+        names: &[
+            "sub", "test", "je", "test", "je", "mov", "mov", "mov", "call", "test", "js", "je",
+            "cmp", "ja", "add", "sub", "je", "movzx", "cmp", "je", "dec", "jne", "mov", "jmp",
+            "mov", "sub", "add", "ret",
+        ],
+        head: 8,
+        after_call: 9,
+        done: 24,
+    },
 ];
 
-/// AArch64's fill, as assets/linux-aarch64/fill.s assembles it: each instruction's kind in the
-/// canonical form the decoder reads, through its `ret`.
-const SHAPE_AARCH64: [&str; 25] = [
-    "CompareBranch",
-    "CompareBranch",
-    "LogicalShifted",
-    "LogicalShifted",
-    "LogicalShifted",
-    "MoveWide",
-    "LogicalShifted",
-    "MoveWide",
-    "Svc",
-    "TestBranch",
-    "CompareBranch",
-    "AddShifted",
-    "BranchCond",
-    "AddShifted",
-    "AddShifted",
-    "BranchCond",
-    "LoadStore",
-    "AddShifted",
-    "BranchCond",
-    "AddImm",
-    "BranchCond",
-    "MoveWide",
-    "Branch",
-    "AddShifted",
-    "BranchReg",
+/// AArch64's fills, as the decoder reads them: the inline form's (assets/linux-aarch64/fill.s)
+/// and lengua's own, which has a `bl os_read` where that has `svc`, and saves the link register.
+const AARCH64: [Shape; 2] = [
+    Shape {
+        names: &[
+            "CompareBranch",
+            "CompareBranch",
+            "LogicalShifted",
+            "LogicalShifted",
+            "LogicalShifted",
+            "MoveWide",
+            "LogicalShifted",
+            "MoveWide",
+            "Svc",
+            "TestBranch",
+            "CompareBranch",
+            "AddShifted",
+            "BranchCond",
+            "AddShifted",
+            "AddShifted",
+            "BranchCond",
+            "LoadStore",
+            "AddShifted",
+            "BranchCond",
+            "AddImm",
+            "BranchCond",
+            "MoveWide",
+            "Branch",
+            "AddShifted",
+            "BranchReg",
+        ],
+        head: 6,
+        after_call: 9,
+        done: 23,
+    },
+    Shape {
+        names: &[
+            "Pair",
+            "CompareBranch",
+            "CompareBranch",
+            "LogicalShifted",
+            "LogicalShifted",
+            "LogicalShifted",
+            "MoveWide",
+            "LogicalShifted",
+            "Branch",
+            "TestBranch",
+            "CompareBranch",
+            "AddShifted",
+            "BranchCond",
+            "AddShifted",
+            "AddShifted",
+            "BranchCond",
+            "LoadStore",
+            "AddShifted",
+            "BranchCond",
+            "AddImm",
+            "BranchCond",
+            "MoveWide",
+            "Branch",
+            "AddShifted",
+            "Pair",
+            "BranchReg",
+        ],
+        head: 7,
+        after_call: 9,
+        done: 23,
+    },
 ];
 
 impl Fill {
-    /// fill's places in `image`, when it has a function named fill of the canonical shape.
-    pub fn find(image: &Image, machine: &crate::checker::decode::Machine) -> Option<Self> {
+    /// fill's places, when the program has a function named fill of a canonical shape.
+    pub fn find(machine: &crate::checker::decode::Machine) -> Option<Self> {
         let function = machine.functions.get("fill")?;
         let words = function.words();
         if !words.is_empty() {
-            if words.len() < SHAPE_AARCH64.len() {
-                return None;
-            }
-            let same = words.iter().zip(SHAPE_AARCH64).all(|(word, kind)| {
-                word.inst.as_ref().is_ok_and(|inst| {
-                    let name = format!("{inst:?}");
-                    name.split(|character: char| !character.is_alphanumeric())
-                        .next()
-                        == Some(kind)
-                })
-            });
-            // Its loop's head, `mov x0, x9`; after `svc`; and `.Lfill_done`.
-            return same.then(|| Self {
-                head: words[6].address,
-                after_call: words[9].address,
-                done: words[23].address,
+            return AARCH64.iter().find_map(|shape| {
+                let words = words.get(..shape.names.len())?;
+                words
+                    .iter()
+                    .zip(shape.names)
+                    .all(|(word, kind)| {
+                        word.inst.as_ref().is_ok_and(|inst| {
+                            let name = format!("{inst:?}");
+                            name.split(|character: char| !character.is_alphanumeric())
+                                .next()
+                                == Some(*kind)
+                        })
+                    })
+                    .then(|| shape.at(|index| words[index].address))
             });
         }
         let instructions = function.x86();
-        if instructions.len() < SHAPE.len() {
-            return None;
-        }
-        let same = instructions
-            .iter()
-            .zip(SHAPE)
-            .all(|(instruction, mnemonic)| {
-                format!("{:?}", instruction.mnemonic()).to_ascii_lowercase() == mnemonic
-            });
-        let _ = image;
-        same.then(|| Self {
-            head: instructions[7].ip(),
-            after_call: instructions[9].ip(),
-            done: instructions[24].ip(),
+        X86_64.iter().find_map(|shape| {
+            let instructions = instructions.get(..shape.names.len())?;
+            instructions
+                .iter()
+                .zip(shape.names)
+                .all(|(instruction, mnemonic)| {
+                    format!("{:?}", instruction.mnemonic()).to_ascii_lowercase() == *mnemonic
+                })
+                .then(|| shape.at(|index| instructions[index].ip()))
         })
     }
 

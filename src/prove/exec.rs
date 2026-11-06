@@ -332,7 +332,7 @@ impl Image {
             ops,
             edge,
         };
-        image.fill = fill::Fill::find(&image, machine);
+        image.fill = fill::Fill::find(machine);
         Some(image)
     }
 

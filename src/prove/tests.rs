@@ -336,6 +336,18 @@ async fn proves_a_streaming_filter_for_every_length() {
     }
 }
 
+/// The prover finds lengua's own `fill` in a program of the edge form on each target, as it finds
+/// the inline form's copy in a program that has one.
+#[tokio::test]
+async fn finds_the_library_fill_on_every_cpu() {
+    for target in Profile::ALL {
+        let machine = machine(&twin(&CAT_STREAM, target, "main.s")).await;
+        let image = super::exec::Image::new(&machine).expect("an image of it");
+        assert!(image.has_fill(), "{}", target.name());
+        assert!(image.fill_head().is_some(), "{}", target.name());
+    }
+}
+
 /// The folders of the hypotenuse.
 const HYPOTENUSE: Folders = PerCpu {
     x86_64: "examples/hypotenuse",

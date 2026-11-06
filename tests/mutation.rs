@@ -35,13 +35,13 @@ const EQUIVALENT: &[(&str, &str)] = &[
         "a jump to the very next line, flipped",
     ),
     (
-        "tests/fixtures/linux-aarch64/cat-stream/main.s L18:const+1",
+        "tests/fixtures/linux-aarch64/cat-stream/main.s L13:const+1",
         "fill's end byte 0, which the spec's input never holds",
     ),
     // Found by the first run that moved AArch64's numbers (2026-11-04), after the mutator stopped
     // cutting every line at its first `#`.
     (
-        "plugin/skills/compile/assets/linux-aarch64/main-template.s L167:imm+1",
+        "plugin/skills/compile/assets/linux-aarch64/main-template.s L159:imm+1",
         "write_i64's sign test against 1 sends zero down the negating path, and zero negated is \
          zero: the output is the same for every number",
     ),

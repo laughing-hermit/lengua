@@ -140,8 +140,9 @@ static UNLUCKY: PerCpu<Edits> = PerCpu {
 
 /// A change that leaves what a program does as it was, and makes it a new build: a `nop` first.
 /// The tests and the proofs must be made again for it, and a proof of the old build must not
-/// land on it. Both CPUs have a `nop`, and `_start` in every program.
-const NOP: flow::Edit = ("_start:\n", "_start:\n    nop\n");
+/// land on it. Both CPUs have a `nop`, and `main` in every program of the edge form, which the
+/// template and `cat`, the programs it is made in, are in.
+const NOP: flow::Edit = ("main:\n", "main:\n    nop\n");
 
 /// The template, with its spec recorded, passes every rule and all 274 test runs, is stamped
 /// with lengua's line, and the lock says what built it.
