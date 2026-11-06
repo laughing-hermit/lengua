@@ -13,6 +13,10 @@ use serde::Deserialize;
 /// The OKF `type` that every lengua idea declares.
 pub const IDEA_TYPE: &str = "lengua/program-idea";
 
+/// The `type` lengua's ideas declared when the file was called `spec.md`: still read, so a renamed
+/// file works as it was.
+pub const LEGACY_IDEA_TYPE: &str = "lengua/program-spec";
+
 /// The exit code reserved for failed assertions.
 pub const ASSERTION_EXIT_CODE: u8 = 134;
 
@@ -916,7 +920,7 @@ impl Parser {
             }
         };
         match frontmatter.kind.as_deref() {
-            Some(IDEA_TYPE) => {}
+            Some(IDEA_TYPE | LEGACY_IDEA_TYPE) => {}
             Some(other) => self.problem(
                 Some(1),
                 format!(

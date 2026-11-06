@@ -18,9 +18,9 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use lengua::broker::Permit;
+use lengua::idea::Syscall;
 use lengua::platform::Profile;
 use lengua::runner::{End, Job, Limits, run};
-use lengua::idea::Syscall;
 use per_target::Way;
 
 fn launcher() -> &'static Path {

@@ -10,8 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::cfg::{ASSERT_FAIL, Exit, Flow, constant_before, deepest, run_start};
 use super::decode::{MappedFunction, Program};
 use super::{Rule, Violation};
-use crate::isa::{Abi, Cond, Control, MemRef, Op, Operand, Reg, Value};
 use crate::idea::MAX_THREADS;
+use crate::isa::{Abi, Cond, Control, MemRef, Op, Operand, Reg, Value};
 
 /// The data symbols the program gives the threads, with the alignment each needs and its size per
 /// thread, given the constant that sets it.

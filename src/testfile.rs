@@ -9,7 +9,7 @@ use crate::expr::{
     self, Env, EvalError, Function, Generator, HexPart, Limit, PatternPart, Template, Value,
 };
 use crate::hash::Sha256Hex;
-use crate::idea::{ASSERTION_EXIT_CODE, Behavior, BehaviorId, Keyword, Idea, Step, Syscall, Use};
+use crate::idea::{ASSERTION_EXIT_CODE, Behavior, BehaviorId, Idea, Keyword, Step, Syscall, Use};
 use crate::supply::Supply;
 
 mod steps;

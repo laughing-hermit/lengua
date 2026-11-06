@@ -19,14 +19,15 @@ use crate::data_dir::DataDir;
 use crate::expr;
 use crate::hash::Sha256Hex;
 use crate::header::{self, Header};
+use crate::idea::{self, Idea};
 use crate::isa::Isa;
-use crate::lock::{self, CodeStamp, Key, Lock, ProofStamp, IdeaStamp};
+use crate::lock::{self, CodeStamp, IdeaStamp, Key, Lock, ProofStamp};
 use crate::platform::{Emulator, Machine, Profile, Target};
 use crate::prove;
 use crate::runner::{self, End, Job, Limits, Net, Started};
-use crate::idea::{self, Idea};
 use crate::state::{
-    CODE_FILE, LEGACY_TESTS_FILE, ProgramFolder, IDEA_FILE, Snapshot, State, stamped_copy,
+    CODE_FILE, IDEA_FILE, LEGACY_IDEA_FILE, LEGACY_TESTS_FILE, ProgramFolder, Snapshot, State,
+    stamped_copy,
 };
 use crate::testdiff;
 use crate::testfile::{self, TestSuite};
@@ -637,6 +638,19 @@ impl LenguaServer {
         // idea.md, tests included: recorded with the user's words once it parses and its tests
         // check.
         let Some(idea_text) = read_optional(&folder, IDEA_FILE)? else {
+            if read_optional(&folder, LEGACY_IDEA_FILE)?.is_some() {
+                return Ok(Json(CheckReport {
+                    machine: Some(machine_line()),
+                    ..CheckReport::new(
+                        "write_idea",
+                        format!(
+                            "Next: rename {folder}/{LEGACY_IDEA_FILE} to {IDEA_FILE}, the idea \
+                             file's name now (what it says stays as it is), then call check with \
+                             path {folder}."
+                        ),
+                    )
+                }));
+            }
             return Ok(Json(CheckReport {
                 machine: Some(machine_line()),
                 ..CheckReport::new("write_idea", State::NoIdea.next_step(&folder))

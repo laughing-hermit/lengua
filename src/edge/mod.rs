@@ -18,9 +18,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
+use crate::idea::{Network, Syscall, Use};
 use crate::isa::Isa;
 use crate::platform::Profile;
-use crate::idea::{Network, Syscall, Use};
 
 /// The descriptor of the channel to lengua's broker, which every operation refuses when a
 /// program passes it: a program holds [`crate::runner::OPEN_FILES`] descriptors, 0 to 4,351.

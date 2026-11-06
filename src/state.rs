@@ -14,6 +14,10 @@ pub const IDEA_FILE: &str = "idea.md";
 /// move them.
 pub const LEGACY_TESTS_FILE: &str = "tests.toml";
 
+/// The idea file's name before idea files (2026-11-06): a folder that still has only it is asked
+/// to rename it.
+pub const LEGACY_IDEA_FILE: &str = "spec.md";
+
 /// The code's file name inside a program folder.
 pub const CODE_FILE: &str = "main.s";
 

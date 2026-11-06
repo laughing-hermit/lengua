@@ -6,8 +6,8 @@
 
 use serde::Serialize;
 
-use crate::isa::Isa;
 use crate::idea::Syscall;
+use crate::isa::Isa;
 use crate::syscalls;
 
 /// The OS + CPU combinations lengua knows how to build for.

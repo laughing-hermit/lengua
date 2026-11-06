@@ -181,6 +181,32 @@ async fn paths_must_be_absolute_and_a_new_folder_asks_for_an_idea() {
 }
 
 #[tokio::test]
+async fn a_folder_with_only_the_old_spec_md_is_asked_to_rename_it() {
+    if !per_target::runs_programs() {
+        return;
+    }
+    let session = Session::start(Protocol::Discover).await;
+    let program = Program::new();
+    // An idea file from before the rename: the old name and the old type.
+    program.write(
+        "spec.md",
+        &ADD_IDEA.replace("type: lengua/program-idea", "type: lengua/program-spec"),
+    );
+    let report = session.record(&program).await;
+    assert_eq!(report["state"], "write_idea", "{report}");
+    assert!(
+        text(&report["next_step"]).contains("to idea.md"),
+        "{report}"
+    );
+    assert!(program.read("lengua.lock").is_none());
+    // Renamed, its old type still reads.
+    program.write("idea.md", &program.read("spec.md").expect("spec.md"));
+    let report = session.record(&program).await;
+    assert_ne!(report["state"], "write_idea", "{report}");
+    session.service.cancel().await.expect("close the session");
+}
+
+#[tokio::test]
 async fn an_edited_idea_is_recorded_under_the_same_words() {
     if !per_target::runs_programs() {
         return;

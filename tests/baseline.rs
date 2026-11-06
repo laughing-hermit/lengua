@@ -19,9 +19,9 @@
 use std::path::Path;
 
 use lengua::checker::{self, Context};
+use lengua::idea::Idea;
 use lengua::isa::Isa;
 use lengua::platform::{CpuFeatures, Profile};
-use lengua::idea::Idea;
 use lengua::targets::PerCpu;
 use lengua::toolchain::Toolchain;
 

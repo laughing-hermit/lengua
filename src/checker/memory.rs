@@ -30,9 +30,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::cfg::{ASSERT_FAIL, Exit, Flow, constant_before};
 use super::decode::{MappedFunction, Program};
 use super::{Rule, Violation};
+use crate::idea::Syscall;
 use crate::isa::{Abi, BaseMove, Control, Insn, Op, Operand, Reg, Stack, Value};
 use crate::platform::Profile;
-use crate::idea::Syscall;
 
 /// The most stack a program may use on any path.
 pub const MAX_STACK_BYTES: u64 = 1 << 20;

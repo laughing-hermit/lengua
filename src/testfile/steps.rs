@@ -39,7 +39,7 @@ use super::{
     ClientTable, ExampleTable, OutlineRow, OutlineSteps, Problem, Repeat, Rule, ServerTable, Text,
     TextPart, Written, unescape,
 };
-use crate::idea::{Behavior, Endpoint, Keyword, Outline, Idea, Step, Token};
+use crate::idea::{Behavior, Endpoint, Idea, Keyword, Outline, Step, Token};
 
 /// The column of a table that gives its row's number of runs, not a variable.
 const RUNS: &str = "runs";

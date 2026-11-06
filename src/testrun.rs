@@ -16,10 +16,10 @@ use serde::Serialize;
 
 use crate::checker::source::{Item, Operand, Source};
 use crate::connect::Reach;
-use crate::platform::Allowed;
-use crate::runner::{self, End, Job, Limits, Net, Run};
 use crate::idea::ASSERTION_EXIT_CODE;
 use crate::idea::Network;
+use crate::platform::Allowed;
+use crate::runner::{self, End, Job, Limits, Net, Run};
 use crate::testfile::{Case, Example, Exchange, Reply};
 use crate::testfile::{TestSuite, describe_inputs};
 

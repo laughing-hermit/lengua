@@ -23,9 +23,9 @@ pub(crate) mod tests;
 use std::collections::BTreeMap;
 use std::fmt;
 
+use crate::idea::Syscall;
 use crate::isa::Isa;
 use crate::platform::{CpuFeatures, Profile};
-use crate::idea::Syscall;
 
 pub use rules::Facts;
 pub use source::{Source, UnsafeBlock};

@@ -8,8 +8,8 @@ use super::cfg::{ASSERT_FAIL, Exit, Flow, constant_before, deepest, run_start};
 use super::decode::{MappedFunction, Program};
 use super::source::Operand;
 use super::{Rule, Violation};
-use crate::isa::{self, Cond, Control, Op, Reg};
 use crate::idea::ASSERTION_EXIT_CODE;
+use crate::isa::{self, Cond, Control, Op, Reg};
 
 /// The most instructions a function may have.
 pub const MAX_INSTRUCTIONS: usize = 60;

@@ -11,3 +11,8 @@
 s/, "\(fill\|start_worker\|join_worker\)"//g
 s/\["\(fill\|start_worker\|join_worker\)", /[/g
 s/\["\(fill\|start_worker\|join_worker\)"\]/[]/g
+
+# Idea files (2026-11-06): every spec.md, and every *-spec.md asset, was renamed to idea.md and
+# *-idea.md.
+s|/spec\.md|/idea.md|g
+s|-spec\.md|-idea.md|g

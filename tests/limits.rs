@@ -26,9 +26,9 @@ use std::time::{Duration, Instant};
 
 use lengua::broker::Permit;
 use lengua::connect::Reach;
+use lengua::idea::{Syscall, Use};
 use lengua::platform::{Allowed, Pin};
 use lengua::runner::{End, Job, Limits, Net, Run, run, start};
-use lengua::idea::{Syscall, Use};
 use lengua::syscalls::{aarch64, x86_64};
 use lengua::targets::PerCpu;
 
