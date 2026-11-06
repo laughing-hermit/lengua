@@ -187,7 +187,7 @@ runs that show each part:
 | the hardening of the broker and the sandbox; three checker holes closed | compile on six 42175924178; the red team 42178828714; the checker's tests 42178837518; the full run on six 42178871938 |
 | the mutation test | 42164995419; at the end 42178888801 |
 | the bench against `e4163d4` | 42162207179 |
-| the golden ledger against `e4163d4` | the 6d tip 42164445967; at the end 42178880153 |
+| the golden ledger against `e4163d4` | the 6d tip 42164445967; at the end 42178880153: 162 blocks agree on x86-64 and 157 on ARM64, none differs, and one x86-64 line is a resource stop (below) |
 
 Decided while building (the owner's to reverse):
 - The prover keeps its raw system-call model (`Cpu::syscall`, `Image::linux`, the raw `_start`
@@ -223,9 +223,12 @@ What round 2 left:
   `scripts/ci/golden-diff.sh` diffs them. A leg takes about 100 minutes on the x86-64 runner.
 - **A proof that ends for memory differs between runs.** `examples/sha256`'s proofs end in a
   memory stop ("terms grew too large for the memory the computer has free", at 10 and 20 million
-  terms even on an idle runner), in "ran out of time", or in "doesn't model sha256 yet",
-  depending on the load. All are "tested, not proven", and the ledger counts a memory stop like
-  a time-out: run again, not a difference.
+  terms even on an idle runner, at the base as at the head: runs 42191806673 and 42181180890), in
+  "ran out of time", or in "doesn't model sha256 yet", depending on the load. All are "tested,
+  not proven". The ledger counts a memory stop like a time-out (run again, not a difference),
+  and `scripts/ci/golden-expected.txt` leaves out x86-64's sha256 B5 while it says "not proven",
+  since that one line differed between the base and the head in both golden runs. The proof
+  needs a bound that doesn't depend on the load (round 6, prover reach).
 - `upcase` retries writes 4096 times on x86-64 and 64 times on ARM64. The ARM64 main template's
   assertions skip number 3.
 - The stamp lengua writes into `main.s` and `lengua.lock` (`needs SSE4.2, …`) lists SSE3 to
