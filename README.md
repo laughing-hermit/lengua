@@ -90,13 +90,15 @@ in WSL 2 there and ran it on that kernel (6.18.54.1), so CI can test it.
 
 1. Install Lima and start Ubuntu 24.04: `brew install lima`, then `limactl start
    template:ubuntu-24.04`.
-2. Open a shell in it (`limactl shell ubuntu-24.04`) and install your agent (Claude Code runs on
+2. Give the VM Ubuntu's newer kernel. The image boots the stock 6.8, below lengua's 6.12 floor for
+   programs that use the network: `limactl shell ubuntu-24.04 sudo apt-get install -y
+   linux-generic-hwe-24.04`, then `limactl stop ubuntu-24.04` and `limactl start ubuntu-24.04`.
+3. Open a shell in it (`limactl shell ubuntu-24.04`) and install your agent (Claude Code runs on
    Linux on ARM64), the lengua plugin and the tools in "Requirements".
-3. Keep your projects inside the VM: Lima mounts your Mac's home folder read-only by default.
+4. Keep your projects inside the VM: Lima mounts your Mac's home folder read-only by default.
 
-Which kernel Lima's Ubuntu 24.04 boots is not checked yet. On Ubuntu 24.04's stock 6.8 kernel,
-lengua runs every program but refuses those that use the network, below the 6.12 floor, until
-round 3 settles the floor ([todo.md](todo.md), "Round 3").
+On Linux, lengua runs natively. The same Lima VM works there too, if you want lengua and your
+agent walled off from the rest of the computer.
 
 **One package, tested where it runs.** Every route ends in the same Ubuntu 24.04, so lengua ships as
 one package for it, an archive for each CPU, whose install script will run the same steps CI runs
