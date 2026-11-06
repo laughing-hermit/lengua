@@ -3884,13 +3884,19 @@ const SECOND: Folders = PerCpu {
     aarch64: "tests/fixtures/linux-aarch64/second",
 };
 
-/// The edit that reads with one read of the operation in place of fill, on each target.
+/// The edit that reads with one read of the operation in place of fill, on each target. The call
+/// of fill stays, past a jump nothing takes, so that the program still has fill, as one that reads
+/// with fill elsewhere and with a read of its own here does: a proof takes every count a read can
+/// return only for a program that has fill.
 const RAW_READ: PerCpu<Edit> = PerCpu {
     x86_64: (
         "    mov ecx, NEWLINE\n    call fill\n",
-        "    call os_read\n",
+        "    call os_read\n    jmp .Lraw_read_done\n    mov ecx, NEWLINE\n    call fill\n.Lraw_read_done:\n",
     ),
-    aarch64: ("    mov w3, #NEWLINE\n    bl fill\n", "    bl os_read\n"),
+    aarch64: (
+        "    mov w3, #NEWLINE\n    bl fill\n",
+        "    bl os_read\n    b .Lraw_read_done\n    mov w3, #NEWLINE\n    bl fill\n.Lraw_read_done:\n",
+    ),
 };
 
 /// One read of its own in place of fill is right only when both lines arrive in one read: with
