@@ -279,7 +279,10 @@ fn x86_program(case: &Case) -> String {
     let _ = writeln!(text, "    sub rsp, {}", SCRATCH + 8);
     // main's arguments to the scratch area's last words, and the rest zeroed.
     text.push_str("    mov r8, rdi\n    mov r9, rsi\n    mov r10, rdx\n");
-    text.push_str("    xor eax, eax\n    mov rdi, rsp\n    mov ecx, 64\n    rep stosq\n");
+    text.push_str("    xor eax, eax\n");
+    for word in 0..SCRATCH / 8 {
+        let _ = writeln!(text, "    mov qword ptr [rsp + {}], rax", 8 * word);
+    }
     let _ = writeln!(text, "    mov qword ptr [rsp + {ARGC_AT}], r8");
     let _ = writeln!(text, "    mov qword ptr [rsp + {ARGV_AT}], r9");
     let _ = writeln!(text, "    mov qword ptr [rsp + {ENVP_AT}], r10");
