@@ -983,8 +983,17 @@ mod tests {
         // A spec of the clock alone: no names, no random bytes.
         let calls = [crate::spec::Syscall::ClockGettime];
         let allowed = Permit::of(&calls);
-        assert!(allowed.clock && !allowed.names && !allowed.random, "{allowed:?}");
-        for kind in [Kind::Open, Kind::Mkdir, Kind::Remove, Kind::Rename, Kind::Random] {
+        assert!(
+            allowed.clock && !allowed.names && !allowed.random,
+            "{allowed:?}"
+        );
+        for kind in [
+            Kind::Open,
+            Kind::Mkdir,
+            Kind::Remove,
+            Kind::Rename,
+            Kind::Random,
+        ] {
             let folder = tempfile::tempdir().expect("a folder");
             let root = rustix::fs::open(
                 folder.path(),
@@ -1019,7 +1028,10 @@ mod tests {
                 "{kind:?}: {outcome:?}"
             );
             assert!(
-                std::fs::read_dir(folder.path()).expect("the folder").next().is_none(),
+                std::fs::read_dir(folder.path())
+                    .expect("the folder")
+                    .next()
+                    .is_none(),
                 "{kind:?} left something in the folder"
             );
         }
@@ -1069,7 +1081,11 @@ mod tests {
             assert_eq!(errno(&answer), 0, "open {number}");
         }
         let answer = broker.answer(&request(Kind::Open, 0, "file", ""));
-        assert_eq!(errno(&answer), i64::from(EMFILE), "one more than a program can hold");
+        assert_eq!(
+            errno(&answer),
+            i64::from(EMFILE),
+            "one more than a program can hold"
+        );
     }
 
     #[test]

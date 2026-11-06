@@ -2653,7 +2653,7 @@ const NESTINGS: PerCpu<Nesting> = PerCpu {
 fn nested(target: Profile, count: usize) -> String {
     let nesting = NESTINGS.get(target);
     let (open, close) = (nesting.open, nesting.close);
-    let mut text = edited(*PARALLEL_TEMPLATES.get(target), nesting.worker)
+    let mut text = edited(PARALLEL_TEMPLATES.get(target), nesting.worker)
         .expect("the parallel template has the lines worker's call is made at");
     let name = |number: usize| format!("chain_{number:03}");
     for number in 1..=count {

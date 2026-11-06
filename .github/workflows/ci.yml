@@ -284,9 +284,10 @@ jobs:
           key: ci-${{ matrix.base }}-${{ hashFiles('Cargo.lock', 'scripts/ci/setup.sh') }}
           restore-keys: ci-${{ matrix.base }}-
 
+      # --keep-going: every target's errors in one run, not the first target's alone.
       - name: Clippy
         if: ${{ matrix.mode != 'golden' }}
-        run: cargo clippy --release --all-targets --locked --workspace -- -D warnings
+        run: cargo clippy --release --all-targets --locked --workspace --keep-going -- -D warnings
 
       # Built first, so that the time a test run may take (stall_seconds) is the tests' and not the
       # compiler's.
