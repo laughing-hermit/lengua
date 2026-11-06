@@ -491,27 +491,9 @@ async fn every_program_in_the_repository_follows_every_rule() {
 /// and carry their own `assert_fail`. The list only shrinks: a program that moves to the edge form
 /// leaves it in the same commit, and none joins it. Round 2 ends with it empty and the form gone.
 const INLINE_FORM: &[&str] = &[
-    "benches/programs/count/avx512.s",
-    "benches/programs/count/sve.s",
     "benches/programs/shout/avx512-one.s",
     "benches/programs/shout/avx512.s",
     "benches/programs/shout/neon-one.s",
-    "benches/programs/upcase/avx512.s",
-    "benches/programs/upcase/neon.s",
-    "plugin/skills/compile/assets/fast/aes-ni/main.s",
-    "plugin/skills/compile/assets/fast/crc32c/main.s",
-    "plugin/skills/compile/assets/fast/crc32c-pclmul/main.s",
-    "plugin/skills/compile/assets/fast/histogram/main.s",
-    "plugin/skills/compile/assets/fast/sha256-ni/main.s",
-    "plugin/skills/compile/assets/fast/wc-avx512/main.s",
-    "plugin/skills/compile/assets/fast/wc/main.s",
-    "plugin/skills/compile/assets/linux-aarch64/fast/aes-aes/main.s",
-    "plugin/skills/compile/assets/linux-aarch64/fast/crc32c-crc/main.s",
-    "plugin/skills/compile/assets/linux-aarch64/fast/crc32c/main.s",
-    "plugin/skills/compile/assets/linux-aarch64/fast/histogram/main.s",
-    "plugin/skills/compile/assets/linux-aarch64/fast/sha256-sha2/main.s",
-    "plugin/skills/compile/assets/linux-aarch64/fast/wc/main.s",
-    "plugin/skills/compile/assets/linux-aarch64/fast/wc-sve/main.s",
     "plugin/skills/compile/assets/linux-aarch64/parallel-template.s",
     "plugin/skills/compile/assets/parallel-template.s",
 ];

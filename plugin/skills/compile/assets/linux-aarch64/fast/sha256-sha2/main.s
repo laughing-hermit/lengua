@@ -1,10 +1,6 @@
 .arch armv8-a
 .arch_extension sha2
 
-// System calls (Linux AArch64)
-.equ SYS_READ, 63
-.equ SYS_WRITE, 64
-.equ SYS_EXIT, 93
 // File descriptors
 .equ STDIN, 0
 .equ STDOUT, 1
@@ -14,7 +10,6 @@
 // Error codes returned by functions marked "returns: result"
 .equ ERROR_IO, -5
 // fill's constants
-.equ MAX_FILL_READS, 1099511627776
 .equ READ_TO_END, -1
 // Sizes and limits: standard input is hashed in pieces of INPUT_LEN bytes, 64 blocks of 64
 .equ INPUT_LEN, 4096
@@ -74,11 +69,6 @@ hex_digits:
     .ascii "0123456789abcdef"
 .size hex_digits, . - hex_digits
 
-.type assert_message, @object
-assert_message:
-    .ascii "lengua: assertion 000 failed\n"
-.size assert_message, . - assert_message
-
 .section .bss
 
 // Standard input as it comes, one piece at a time.
@@ -113,12 +103,10 @@ out:
 .size out, . - out
 
 .text
-.globl _start
-
 // Hashes standard input a piece at a time, whole blocks as they come, then the tail with the
 // padding, and prints the digest.
-.type _start, @function
-_start:
+.type main, @function
+main:
     adrp x0, initial_state
     add x0, x0, :lo12:initial_state
     ldr q0, [x0]
@@ -129,17 +117,17 @@ _start:
     str q1, [x1, #16]
     mov x20, #0
     mov x19, #MAX_CHUNKS
-.Lstart_read:  // bound: 268435456
+.Lmain_read:  // bound: 268435456
     mov x0, #STDIN
     adrp x1, input
     add x1, x1, :lo12:input
     mov x2, #INPUT_LEN
     mov w3, #READ_TO_END
     bl fill
-    tbnz x0, #63, .Lstart_failed
+    tbnz x0, #63, .Lmain_failed
     mov x21, x0
     cmp x21, #INPUT_LEN
-    b.hi .Lstart_assert_count
+    b.hi .Lmain_assert_count
     add x20, x20, x21
     adrp x0, state
     add x0, x0, :lo12:state
@@ -148,11 +136,11 @@ _start:
     mov x2, x21
     bl hash_blocks
     cmp x21, #INPUT_LEN
-    b.lo .Lstart_finish
+    b.lo .Lmain_finish
     subs x19, x19, #1
-    b.ne .Lstart_read
-    b .Lstart_assert_reads
-.Lstart_finish:
+    b.ne .Lmain_read
+    b .Lmain_assert_reads
+.Lmain_finish:
     mov x9, #BLOCK_BYTES
     udiv x22, x21, x9
     msub x22, x22, x9, x21
@@ -168,21 +156,20 @@ _start:
     adrp x0, state
     add x0, x0, :lo12:state
     bl print_digest
-    tbnz x0, #63, .Lstart_failed
+    tbnz x0, #63, .Lmain_failed
     mov w0, #EXIT_OK
-    b .Lstart_exit
-.Lstart_failed:
+    b .Lmain_exit
+.Lmain_failed:
     mov w0, #EXIT_IO_FAILED
-.Lstart_exit:
-    mov x8, #SYS_EXIT
-    svc #0
-.Lstart_assert_count:
+.Lmain_exit:
+    bl os_exit
+.Lmain_assert_count:
     mov w0, #1
     bl assert_fail
-.Lstart_assert_reads:
+.Lmain_assert_reads:
     mov w0, #2
     bl assert_fail
-.size _start, . - _start
+.size main, . - main
 
 // Hashes every whole block of a piece of the message.
 // In: x0 = the state; x1 = the bytes; x2 = how many, up to INPUT_LEN. A partial block at the
@@ -453,68 +440,20 @@ print_digest:
     bl assert_fail
 .size print_digest, . - print_digest
 
-// Reads from file descriptor x0 into the x2 bytes at x1 until they're full, the input ends,
-// or, when w3 is a byte (0 to 255), the last byte read is w3; with w3 = -1 it reads to the
-// end. However the input arrives, it reads the same.
-// In: x0 = the file descriptor, x1 = the buffer, x2 = its size, at least 1, w3 = the end
-// byte or -1.
-// Out: x0 = how many bytes it read, or a negative error code.
-// returns: result
-.type fill, @function
-fill:
-    cbz x1, .Lfill_assert_null
-    cbz x2, .Lfill_assert_empty
-    mov x9, x0
-    mov x10, x2
-    mov w11, w3
-    mov x12, #MAX_FILL_READS
-.Lfill_loop:  // bound: 1099511627776
-    mov x0, x9
-    mov x8, #SYS_READ
-    svc #0
-    tbnz x0, #63, .Lfill_return
-    cbz x0, .Lfill_done
-    cmp x0, x2
-    b.hi .Lfill_assert_count
-    add x1, x1, x0
-    subs x2, x2, x0
-    b.eq .Lfill_done
-    ldurb w13, [x1, #-1]
-    cmp w13, w11
-    b.eq .Lfill_done
-    subs x12, x12, #1
-    b.ne .Lfill_loop
-    mov x0, #ERROR_IO
-    b .Lfill_return
-.Lfill_done:
-    sub x0, x10, x2
-.Lfill_return:
-    ret
-.Lfill_assert_null:
-    mov w0, #990
-    bl assert_fail
-.Lfill_assert_empty:
-    mov w0, #991
-    bl assert_fail
-.Lfill_assert_count:
-    mov w0, #992
-    bl assert_fail
-.size fill, . - fill
-
 // Writes x2 bytes from x1 to file descriptor x0, retrying partial writes.
 // In: x0 = the file descriptor, x1 = the bytes, x2 = how many, at least 1.
 // Out: x0 = 0, or a negative error code.
 // returns: result
 .type write_all, @function
 write_all:
+    stp x29, x30, [sp, #-16]!
     cbz x1, .Lwrite_all_assert_null
     cbz x2, .Lwrite_all_assert_empty
     mov x9, x0
     mov x10, #MAX_WRITES
 .Lwrite_all_loop:  // bound: 64
     mov x0, x9
-    mov x8, #SYS_WRITE
-    svc #0
+    bl os_write
     tbnz x0, #63, .Lwrite_all_return
     cmp x0, x2
     b.hi .Lwrite_all_assert_count
@@ -528,6 +467,7 @@ write_all:
 .Lwrite_all_done:
     mov x0, #0
 .Lwrite_all_return:
+    ldp x29, x30, [sp], #16
     ret
 .Lwrite_all_assert_null:
     mov w0, #30
@@ -540,40 +480,3 @@ write_all:
     bl assert_fail
 .size write_all, . - write_all
 
-// lengua's assertion handler. check compares it word for word: copy it exactly.
-// In: w0 = the assertion's number, 1 to 999. Prints "lengua: assertion NNN failed" to
-// standard error and ends the program, every thread of it, with code 134.
-.type assert_fail, @function
-assert_fail:
-    sub sp, sp, #32
-    adrp x1, assert_message
-    add x1, x1, :lo12:assert_message
-    ldp x2, x3, [x1]
-    stp x2, x3, [sp]
-    ldr x2, [x1, #16]
-    str x2, [sp, #16]
-    ldr w2, [x1, #24]
-    str w2, [sp, #24]
-    ldrb w2, [x1, #28]
-    strb w2, [sp, #28]
-    mov w2, #100
-    udiv w3, w0, w2
-    msub w0, w3, w2, w0
-    add w3, w3, #48
-    strb w3, [sp, #18]
-    mov w2, #10
-    udiv w3, w0, w2
-    msub w0, w3, w2, w0
-    add w3, w3, #48
-    strb w3, [sp, #19]
-    add w0, w0, #48
-    strb w0, [sp, #20]
-    mov x0, #2
-    mov x1, sp
-    mov x2, #29
-    mov x8, #64
-    svc #0
-    mov x0, #134
-    mov x8, #94
-    svc #0
-.size assert_fail, . - assert_fail

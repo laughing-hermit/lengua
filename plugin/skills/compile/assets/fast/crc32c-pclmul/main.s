@@ -1,9 +1,5 @@
 .intel_syntax noprefix
 
-# System calls (Linux x86-64)
-.equ SYS_READ, 0
-.equ SYS_WRITE, 1
-.equ SYS_EXIT, 60
 # File descriptors
 .equ STDIN, 0
 .equ STDOUT, 1
@@ -44,11 +40,6 @@ shift_one:
     .quad 0x82f89c77
 .size shift_one, . - shift_one
 
-.type assert_message, @object
-assert_message:
-    .ascii "lengua: assertion 000 failed\n"
-.size assert_message, . - assert_message
-
 .section .bss
 
 # Standard input as it comes, after the bytes kept from the last read.
@@ -64,47 +55,45 @@ out:
 .size out, . - out
 
 .text
-.globl _start
-
 # Reads standard input as it comes, folding whole blocks into the checksum and keeping the rest
 # for the next read, then prints the checksum.
-.type _start, @function
-_start:
+.type main, @function
+main:
+    sub rsp, 8
     mov r12d, CRC_START
     xor r13d, r13d
     mov rbx, MAX_READS
-.Lstart_read:  # bound: 1099511627776
-    mov eax, SYS_READ
+.Lmain_read:  # bound: 1099511627776
     mov edi, STDIN
     lea rsi, [rip + input]
     add rsi, r13
     mov edx, INPUT_LEN
     sub edx, r13d
-    syscall
+    call os_read
     test rax, rax
-    js .Lstart_failed
-    jz .Lstart_finish
+    js .Lmain_failed
+    jz .Lmain_finish
     add r13, rax
     cmp r13, INPUT_LEN
-    ja .Lstart_assert_count
+    ja .Lmain_assert_count
     mov edi, r12d
     lea rsi, [rip + input]
     mov rdx, r13
     call crc_blocks
     mov r12d, eax
     sub r13, rdx
-    jz .Lstart_next
+    jz .Lmain_next
     test rdx, rdx
-    jz .Lstart_next
+    jz .Lmain_next
     lea rdi, [rip + input]
     lea rsi, [rdi + rdx]
     mov rdx, r13
     call move_front
-.Lstart_next:
+.Lmain_next:
     dec rbx
-    jnz .Lstart_read
-    jmp .Lstart_assert_reads
-.Lstart_finish:
+    jnz .Lmain_read
+    jmp .Lmain_assert_reads
+.Lmain_finish:
     mov edi, r12d
     lea rsi, [rip + input]
     mov rdx, r13
@@ -113,21 +102,20 @@ _start:
     mov edi, eax
     call print_number
     test rax, rax
-    js .Lstart_failed
+    js .Lmain_failed
     mov edi, EXIT_OK
-    jmp .Lstart_exit
-.Lstart_failed:
+    jmp .Lmain_exit
+.Lmain_failed:
     mov edi, EXIT_IO_FAILED
-.Lstart_exit:
-    mov eax, SYS_EXIT
-    syscall
-.Lstart_assert_count:
+.Lmain_exit:
+    call os_exit
+.Lmain_assert_count:
     mov edi, 1
     call assert_fail
-.Lstart_assert_reads:
+.Lmain_assert_reads:
     mov edi, 2
     call assert_fail
-.size _start, . - _start
+.size main, . - main
 
 # Prints a whole number from 0 to 4294967295 and a newline to standard output.
 # In: edi = the number.
@@ -407,14 +395,14 @@ digits:
 # returns: result
 .type write_all, @function
 write_all:
+    sub rsp, 8
     test rsi, rsi
     jz .Lwrite_all_assert_null
     test rdx, rdx
     jz .Lwrite_all_assert_empty
     mov r8, MAX_WRITES
 .Lwrite_all_loop:  # bound: 64
-    mov eax, SYS_WRITE
-    syscall
+    call os_write
     test rax, rax
     js .Lwrite_all_return
     cmp rax, rdx
@@ -429,6 +417,7 @@ write_all:
 .Lwrite_all_done:
     xor eax, eax
 .Lwrite_all_return:
+    add rsp, 8
     ret
 .Lwrite_all_assert_null:
     mov edi, 30
@@ -441,42 +430,3 @@ write_all:
     call assert_fail
 .size write_all, . - write_all
 
-# lengua's assertion handler. check_code compares it word for word: copy it exactly.
-# In: edi = the assertion's number, 1 to 999. Prints "lengua: assertion NNN failed" to
-# standard error and ends the program, every thread of it, with code 134.
-.type assert_fail, @function
-assert_fail:
-    sub rsp, 40
-    mov rax, qword ptr [rip + assert_message]
-    mov qword ptr [rsp], rax
-    mov rax, qword ptr [rip + assert_message + 8]
-    mov qword ptr [rsp + 8], rax
-    mov rax, qword ptr [rip + assert_message + 16]
-    mov qword ptr [rsp + 16], rax
-    mov eax, dword ptr [rip + assert_message + 24]
-    mov dword ptr [rsp + 24], eax
-    mov al, byte ptr [rip + assert_message + 28]
-    mov byte ptr [rsp + 28], al
-    mov eax, edi
-    xor edx, edx
-    mov ecx, 100
-    div ecx
-    add al, 48
-    mov byte ptr [rsp + 18], al
-    mov eax, edx
-    xor edx, edx
-    mov ecx, 10
-    div ecx
-    add al, 48
-    mov byte ptr [rsp + 19], al
-    add dl, 48
-    mov byte ptr [rsp + 20], dl
-    mov eax, 1
-    mov edi, 2
-    mov rsi, rsp
-    mov edx, 29
-    syscall
-    mov eax, 231
-    mov edi, 134
-    syscall
-.size assert_fail, . - assert_fail

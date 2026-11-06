@@ -1,17 +1,9 @@
 .arch armv8-a
 
-// System calls (Linux AArch64)
-.equ SYS_OPENAT, 56
-.equ SYS_CLOSE, 57
-.equ SYS_READ, 63
-.equ SYS_WRITE, 64
-.equ SYS_EXIT, 93
-// File descriptors, and openat's: the working folder, reading, and a new or emptied file to write
+// File descriptors, and os_open's modes: reading, and a new or emptied file to write
 .equ STDERR, 2
-.equ AT_FDCWD, -100
-.equ O_RDONLY, 0
-.equ O_OUT_FLAGS, 0x241
-.equ OUT_MODE, 420
+.equ OPEN_READ, 0
+.equ OPEN_WRITE, 1
 // Exit codes
 .equ EXIT_OK, 0
 .equ EXIT_USAGE, 1
@@ -22,8 +14,7 @@
 .equ ERROR_CANNOT_OPEN, -2
 .equ ERROR_TOO_LARGE, -3
 .equ ERROR_IO, -5
-// fill's limit on reads, as assets/linux-aarch64/fill.s has it, and its end byte for none
-.equ MAX_FILL_READS, 1099511627776
+// fill's end byte for none
 .equ READ_TO_END, -1
 // Sizes and limits: the input's most bytes, the buffer one more so a larger file shows, the
 // letters a to z, and the longest argument the kernel passes
@@ -73,11 +64,6 @@ large_suffix:
     .ascii " is larger than 1048576 bytes\n"
 .size large_suffix, . - large_suffix
 
-.type assert_message, @object
-assert_message:
-    .ascii "lengua: assertion 000 failed\n"
-.size assert_message, . - assert_message
-
 .section .bss
 
 // The input file's bytes: one more than it may hold, so a larger file shows.
@@ -87,24 +73,21 @@ input:
 .size input, . - input
 
 .text
-.globl _start
-
 // Writes the file named first to the file named second with its ASCII letters in capitals.
-.type _start, @function
-_start:
-    ldr x0, [sp]
+.type main, @function
+main:
     cmp x0, #ARGC_EXPECTED
-    b.ne .Lstart_usage
-    ldr x19, [sp, #16]
-    ldr x20, [sp, #24]
-    cbz x19, .Lstart_assert_input
-    cbz x20, .Lstart_assert_output
+    b.ne .Lmain_usage
+    ldr x19, [x1, #8]
+    ldr x20, [x1, #16]
+    cbz x19, .Lmain_assert_input
+    cbz x20, .Lmain_assert_output
     adrp x22, input
     add x22, x22, :lo12:input
     mov x0, x19
     mov x1, x22
     bl load_input
-    tbnz x0, #63, .Lstart_load_failed
+    tbnz x0, #63, .Lmain_load_failed
     mov x21, x0
     mov x1, x22
     bl upcase_input
@@ -112,46 +95,45 @@ _start:
     mov x1, x22
     mov x2, x21
     bl write_output
-    tbnz x0, #63, .Lstart_io_failed
+    tbnz x0, #63, .Lmain_io_failed
     mov w0, #EXIT_OK
-    b .Lstart_exit
-.Lstart_load_failed:
+    b .Lmain_exit
+.Lmain_load_failed:
     cmp x0, #ERROR_CANNOT_OPEN
-    b.eq .Lstart_cannot_open
+    b.eq .Lmain_cannot_open
     cmp x0, #ERROR_TOO_LARGE
-    b.ne .Lstart_io_failed
+    b.ne .Lmain_io_failed
     mov x0, x19
     bl report_too_large
-    tbnz x0, #63, .Lstart_io_failed
+    tbnz x0, #63, .Lmain_io_failed
     mov w0, #EXIT_TOO_LARGE
-    b .Lstart_exit
-.Lstart_cannot_open:
+    b .Lmain_exit
+.Lmain_cannot_open:
     mov x0, x19
     bl report_cannot_open
-    tbnz x0, #63, .Lstart_io_failed
+    tbnz x0, #63, .Lmain_io_failed
     mov w0, #EXIT_CANNOT_OPEN
-    b .Lstart_exit
-.Lstart_usage:
+    b .Lmain_exit
+.Lmain_usage:
     mov x0, #STDERR
     adrp x1, usage_msg
     add x1, x1, :lo12:usage_msg
     mov x2, #USAGE_MSG_LEN
     bl write_all
-    tbnz x0, #63, .Lstart_io_failed
+    tbnz x0, #63, .Lmain_io_failed
     mov w0, #EXIT_USAGE
-    b .Lstart_exit
-.Lstart_io_failed:
+    b .Lmain_exit
+.Lmain_io_failed:
     mov w0, #EXIT_IO_FAILED
-.Lstart_exit:
-    mov x8, #SYS_EXIT
-    svc #0
-.Lstart_assert_input:
+.Lmain_exit:
+    bl os_exit
+.Lmain_assert_input:
     mov w0, #1
     bl assert_fail
-.Lstart_assert_output:
+.Lmain_assert_output:
     mov w0, #2
     bl assert_fail
-.size _start, . - _start
+.size main, . - main
 
 // Reads the file named x0, all of it, into the buffer at x1, of BUF_LEN bytes.
 // In: x0 = the file's name; x1 = the buffer.
@@ -165,12 +147,8 @@ load_input:
     cbz x0, .Lload_input_assert_name
     cbz x1, .Lload_input_assert_buffer
     mov x20, x1
-    mov x1, x0
-    mov x0, #AT_FDCWD
-    mov x2, #O_RDONLY
-    mov x3, #0
-    mov x8, #SYS_OPENAT
-    svc #0
+    mov x1, #OPEN_READ
+    bl os_open
     tbnz x0, #63, .Lload_input_cannot_open
     mov x19, x0
     mov x1, x20
@@ -181,8 +159,7 @@ load_input:
     tbnz x0, #63, .Lload_input_failed
     mov x20, x0
     mov x0, x19
-    mov x8, #SYS_CLOSE
-    svc #0
+    bl os_close
     tbnz x0, #63, .Lload_input_failed
     cmp x20, #MAX_INPUT
     b.hi .Lload_input_too_large
@@ -268,12 +245,8 @@ write_output:
     b.hi .Lwrite_output_assert_length
     mov x21, x1
     mov x20, x2
-    mov x1, x0
-    mov x0, #AT_FDCWD
-    mov x2, #O_OUT_FLAGS
-    mov x3, #OUT_MODE
-    mov x8, #SYS_OPENAT
-    svc #0
+    mov x1, #OPEN_WRITE
+    bl os_open
     tbnz x0, #63, .Lwrite_output_failed
     mov x19, x0
     cbz x20, .Lwrite_output_close
@@ -284,8 +257,7 @@ write_output:
     tbnz x0, #63, .Lwrite_output_failed
 .Lwrite_output_close:
     mov x0, x19
-    mov x8, #SYS_CLOSE
-    svc #0
+    bl os_close
     tbnz x0, #63, .Lwrite_output_failed
     mov x0, #0
     b .Lwrite_output_return
@@ -443,14 +415,14 @@ str_len:
 // returns: result
 .type write_all, @function
 write_all:
+    stp x29, x30, [sp, #-16]!
     cbz x1, .Lwrite_all_assert_null
     cbz x2, .Lwrite_all_assert_empty
     mov x9, x0
     mov x10, #MAX_WRITES
 .Lwrite_all_loop:  // bound: 64
     mov x0, x9
-    mov x8, #SYS_WRITE
-    svc #0
+    bl os_write
     tbnz x0, #63, .Lwrite_all_return
     cmp x0, x2
     b.hi .Lwrite_all_assert_count
@@ -464,6 +436,7 @@ write_all:
 .Lwrite_all_done:
     mov x0, #0
 .Lwrite_all_return:
+    ldp x29, x30, [sp], #16
     ret
 .Lwrite_all_assert_null:
     mov w0, #10
@@ -476,88 +449,3 @@ write_all:
     bl assert_fail
 .size write_all, . - write_all
 
-// Reads from file descriptor x0 into the x2 bytes at x1 until they're full, the input ends,
-// or, when w3 is a byte (0 to 255), the last byte read is w3; with w3 = -1 it reads to the
-// end. However the input arrives, it reads the same.
-// In: x0 = the file descriptor, x1 = the buffer, x2 = its size, at least 1, w3 = the end
-// byte or -1.
-// Out: x0 = how many bytes it read, or a negative error code.
-// returns: result
-.type fill, @function
-fill:
-    cbz x1, .Lfill_assert_null
-    cbz x2, .Lfill_assert_empty
-    mov x9, x0
-    mov x10, x2
-    mov w11, w3
-    mov x12, #MAX_FILL_READS
-.Lfill_loop:  // bound: 1099511627776
-    mov x0, x9
-    mov x8, #SYS_READ
-    svc #0
-    tbnz x0, #63, .Lfill_return
-    cbz x0, .Lfill_done
-    cmp x0, x2
-    b.hi .Lfill_assert_count
-    add x1, x1, x0
-    subs x2, x2, x0
-    b.eq .Lfill_done
-    ldurb w13, [x1, #-1]
-    cmp w13, w11
-    b.eq .Lfill_done
-    subs x12, x12, #1
-    b.ne .Lfill_loop
-    mov x0, #ERROR_IO
-    b .Lfill_return
-.Lfill_done:
-    sub x0, x10, x2
-.Lfill_return:
-    ret
-.Lfill_assert_null:
-    mov w0, #990
-    bl assert_fail
-.Lfill_assert_empty:
-    mov w0, #991
-    bl assert_fail
-.Lfill_assert_count:
-    mov w0, #992
-    bl assert_fail
-.size fill, . - fill
-
-// lengua's assertion handler. check compares it word for word: copy it exactly.
-// In: w0 = the assertion's number, 1 to 999. Prints "lengua: assertion NNN failed" to
-// standard error and ends the program, every thread of it, with code 134.
-.type assert_fail, @function
-assert_fail:
-    sub sp, sp, #32
-    adrp x1, assert_message
-    add x1, x1, :lo12:assert_message
-    ldp x2, x3, [x1]
-    stp x2, x3, [sp]
-    ldr x2, [x1, #16]
-    str x2, [sp, #16]
-    ldr w2, [x1, #24]
-    str w2, [sp, #24]
-    ldrb w2, [x1, #28]
-    strb w2, [sp, #28]
-    mov w2, #100
-    udiv w3, w0, w2
-    msub w0, w3, w2, w0
-    add w3, w3, #48
-    strb w3, [sp, #18]
-    mov w2, #10
-    udiv w3, w0, w2
-    msub w0, w3, w2, w0
-    add w3, w3, #48
-    strb w3, [sp, #19]
-    add w0, w0, #48
-    strb w0, [sp, #20]
-    mov x0, #2
-    mov x1, sp
-    mov x2, #29
-    mov x8, #64
-    svc #0
-    mov x0, #134
-    mov x8, #94
-    svc #0
-.size assert_fail, . - assert_fail
