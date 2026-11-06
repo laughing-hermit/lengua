@@ -1,8 +1,5 @@
 .intel_syntax noprefix
 
-# System calls (Linux x86-64)
-.equ SYS_WRITE, 1
-.equ SYS_EXIT, 60
 # File descriptors
 .equ STDOUT, 1
 .equ STDERR, 2
@@ -27,7 +24,7 @@
 .equ NAN_MSG_LEN, 28
 .equ RANGE_MSG_LEN, 29
 .equ OUT_BUF_LEN, 21
-.equ FRAME_SIZE, 16
+.equ FRAME_SIZE, 24
 
 .section .rodata
 
@@ -46,11 +43,6 @@ range_msg:
     .ascii "absdiff: number out of range\n"
 .size range_msg, . - range_msg
 
-.type assert_message, @object
-assert_message:
-    .ascii "lengua: assertion 000 failed\n"
-.size assert_message, . - assert_message
-
 .section .bss
 
 # Sign, 19 digits and a newline.
@@ -60,73 +52,71 @@ out_buf:
 .size out_buf, . - out_buf
 
 .text
-.globl _start
-
 # Checks the argument count, parses both numbers, prints their absolute difference and exits.
-# The frame holds a at [rsp] and the second argument's address at [rsp + 8].
-.type _start, @function
-_start:
+# lengua's `_start` calls main with the argument count and the array of arguments in rdi and rsi;
+# main never returns. The frame holds a at [rsp] and the second argument's address at [rsp + 8],
+# and is 8 bytes more than that to keep the stack aligned at calls.
+.type main, @function
+main:
     sub rsp, FRAME_SIZE
-    mov rax, qword ptr [rsp + FRAME_SIZE]
-    cmp rax, ARGC_EXPECTED
-    jne .Lstart_usage
-    mov rdi, qword ptr [rsp + FRAME_SIZE + 16]
-    mov rax, qword ptr [rsp + FRAME_SIZE + 24]
+    cmp rdi, ARGC_EXPECTED
+    jne .Lmain_usage
+    mov rdi, qword ptr [rsi + 8]
+    mov rax, qword ptr [rsi + 16]
     test rax, rax
-    jz .Lstart_assert_argv
+    jz .Lmain_assert_argv
     mov qword ptr [rsp + 8], rax
     call parse_bounded
     test rax, rax
-    js .Lstart_parse_error
+    js .Lmain_parse_error
     mov qword ptr [rsp], rdx
     mov rdi, qword ptr [rsp + 8]
     call parse_bounded
     test rax, rax
-    js .Lstart_parse_error
+    js .Lmain_parse_error
     mov rax, qword ptr [rsp]
     sub rax, rdx
     mov rdi, rax
     neg rdi
     cmovs rdi, rax
     test rdi, rdi
-    js .Lstart_assert_abs
+    js .Lmain_assert_abs
     call write_i64
     test rax, rax
-    js .Lstart_write_failed
+    js .Lmain_write_failed
     mov edi, EXIT_OK
-    jmp .Lstart_exit
-.Lstart_parse_error:
+    jmp .Lmain_exit
+.Lmain_parse_error:
     mov qword ptr [rsp], rax
     mov rdi, rax
     call report_parse_error
     test rax, rax
-    js .Lstart_write_failed
+    js .Lmain_write_failed
     mov edi, EXIT_NOT_A_NUMBER
     cmp qword ptr [rsp], ERROR_INVALID
-    je .Lstart_exit
+    je .Lmain_exit
     mov edi, EXIT_OUT_OF_RANGE
-    jmp .Lstart_exit
-.Lstart_usage:
+    jmp .Lmain_exit
+.Lmain_usage:
     mov edi, STDERR
     lea rsi, [rip + usage_msg]
     mov edx, USAGE_MSG_LEN
     call write_all
     test rax, rax
-    js .Lstart_write_failed
+    js .Lmain_write_failed
     mov edi, EXIT_USAGE
-    jmp .Lstart_exit
-.Lstart_write_failed:
+    jmp .Lmain_exit
+.Lmain_write_failed:
     mov edi, EXIT_WRITE_FAILED
-.Lstart_exit:
-    mov eax, SYS_EXIT
-    syscall
-.Lstart_assert_argv:
+.Lmain_exit:
+    call os_exit
+.Lmain_assert_argv:
     mov edi, 1
     call assert_fail
-.Lstart_assert_abs:
+.Lmain_assert_abs:
     mov edi, 2
     call assert_fail
-.size _start, . - _start
+.size main, . - main
 
 # Prints the message for an argument parse_bounded rejected.
 # In: rdi = ERROR_INVALID or ERROR_RANGE.
@@ -298,14 +288,14 @@ write_i64:
 # returns: result
 .type write_all, @function
 write_all:
+    sub rsp, 8
     test rsi, rsi
     jz .Lwrite_all_assert_null
     test rdx, rdx
     jz .Lwrite_all_assert_empty
     mov r8, MAX_WRITES
 .Lwrite_all_loop:  # bound: 64
-    mov eax, SYS_WRITE
-    syscall
+    call os_write
     test rax, rax
     js .Lwrite_all_return
     cmp rax, rdx
@@ -320,6 +310,7 @@ write_all:
 .Lwrite_all_done:
     xor eax, eax
 .Lwrite_all_return:
+    add rsp, 8
     ret
 .Lwrite_all_assert_null:
     mov edi, 9
@@ -332,42 +323,3 @@ write_all:
     call assert_fail
 .size write_all, . - write_all
 
-# lengua's assertion handler. check_code compares it word for word: copy it exactly.
-# In: edi = the assertion's number, 1 to 999. Prints "lengua: assertion NNN failed" to
-# standard error and ends the program, every thread of it, with code 134.
-.type assert_fail, @function
-assert_fail:
-    sub rsp, 40
-    mov rax, qword ptr [rip + assert_message]
-    mov qword ptr [rsp], rax
-    mov rax, qword ptr [rip + assert_message + 8]
-    mov qword ptr [rsp + 8], rax
-    mov rax, qword ptr [rip + assert_message + 16]
-    mov qword ptr [rsp + 16], rax
-    mov eax, dword ptr [rip + assert_message + 24]
-    mov dword ptr [rsp + 24], eax
-    mov al, byte ptr [rip + assert_message + 28]
-    mov byte ptr [rsp + 28], al
-    mov eax, edi
-    xor edx, edx
-    mov ecx, 100
-    div ecx
-    add al, 48
-    mov byte ptr [rsp + 18], al
-    mov eax, edx
-    xor edx, edx
-    mov ecx, 10
-    div ecx
-    add al, 48
-    mov byte ptr [rsp + 19], al
-    add dl, 48
-    mov byte ptr [rsp + 20], dl
-    mov eax, 1
-    mov edi, 2
-    mov rsi, rsp
-    mov edx, 29
-    syscall
-    mov eax, 231
-    mov edi, 134
-    syscall
-.size assert_fail, . - assert_fail

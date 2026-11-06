@@ -397,7 +397,7 @@ async fn code_that_breaks_a_rule_runs_no_tests() {
             continue;
         };
         let name = target.name();
-        let offence = flow::MOVES_THE_STACK_POINTER.get(target);
+        let offence = flow::MOVES_THE_STACK_POINTER_IN_EDGE_FORM.get(target);
         for protocol in Protocol::ALL {
             let what = format!("{name} with {protocol:?}");
             let session = flow::plain_in(target, way, protocol).await;
@@ -504,7 +504,7 @@ async fn a_shared_program_is_checked_again_where_it_lands() {
 fn the_workflow_has_its_programs_and_cells_for_every_target() {
     for target in Profile::ALL {
         let name = target.name();
-        let offence = flow::MOVES_THE_STACK_POINTER.get(target);
+        let offence = flow::MOVES_THE_STACK_POINTER_IN_EDGE_FORM.get(target);
         let code = flow::program_file(target, "add", "main.s");
         assert_ne!(offence.applied_to(&code), code, "{name}");
         let spec = flow::program_file(target, "add", "spec.md");

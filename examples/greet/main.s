@@ -1,8 +1,5 @@
 .intel_syntax noprefix
 
-# System calls (Linux x86-64)
-.equ SYS_WRITE, 1
-.equ SYS_EXIT, 60
 # File descriptors
 .equ STDOUT, 1
 .equ STDERR, 2
@@ -44,11 +41,6 @@ usage_msg:
     .ascii "usage: NAME=<who> greet\n"
 .size usage_msg, . - usage_msg
 
-.type assert_message, @object
-assert_message:
-    .ascii "lengua: assertion 000 failed\n"
-.size assert_message, . - assert_message
-
 .section .bss
 
 # The greeting, as written.
@@ -58,48 +50,47 @@ out_buf:
 .size out_buf, . - out_buf
 
 .text
-.globl _start
-
-# Greets whoever NAME names, or prints how to use the program.
-.type _start, @function
-_start:
-    mov rax, qword ptr [rsp]
-    cmp rax, MAX_ARGS
-    jae .Lstart_assert_argc
-    lea rdi, [rsp + rax*8 + 16]
+# Greets whoever NAME names, or prints how to use the program. lengua's `_start` calls main with
+# the argument count, the array of arguments and the array of environment variables in rdi, rsi and
+# rdx; main never returns.
+.type main, @function
+main:
+    sub rsp, 8
+    cmp rdi, MAX_ARGS
+    jae .Lmain_assert_argc
+    mov rdi, rdx
     call find_name
     test rax, rax
-    jz .Lstart_usage
+    jz .Lmain_usage
     mov rbx, rax
     mov rdi, rax
     call name_length
     test rax, rax
-    js .Lstart_usage
+    js .Lmain_usage
     mov rsi, rax
     mov rdi, rbx
     call greet
     test rax, rax
-    js .Lstart_write_failed
+    js .Lmain_write_failed
     mov edi, EXIT_OK
-    jmp .Lstart_exit
-.Lstart_usage:
+    jmp .Lmain_exit
+.Lmain_usage:
     mov edi, STDERR
     lea rsi, [rip + usage_msg]
     mov edx, USAGE_LEN
     call write_all
     test rax, rax
-    js .Lstart_write_failed
+    js .Lmain_write_failed
     mov edi, EXIT_USAGE
-    jmp .Lstart_exit
-.Lstart_write_failed:
+    jmp .Lmain_exit
+.Lmain_write_failed:
     mov edi, EXIT_WRITE_FAILED
-.Lstart_exit:
-    mov eax, SYS_EXIT
-    syscall
-.Lstart_assert_argc:
+.Lmain_exit:
+    call os_exit
+.Lmain_assert_argc:
     mov edi, 1
     call assert_fail
-.size _start, . - _start
+.size main, . - main
 
 # Finds the NAME variable in the environment.
 # In: rdi = the environment's pointers, each to a NUL-terminated "NAME=value", then 0.
@@ -287,14 +278,14 @@ greet:
 # returns: result
 .type write_all, @function
 write_all:
+    sub rsp, 8
     test rsi, rsi
     jz .Lwrite_all_assert_null
     test rdx, rdx
     jz .Lwrite_all_assert_empty
     mov r8, MAX_WRITES
 .Lwrite_all_loop:  # bound: 64
-    mov eax, SYS_WRITE
-    syscall
+    call os_write
     test rax, rax
     js .Lwrite_all_return
     cmp rax, rdx
@@ -309,6 +300,7 @@ write_all:
 .Lwrite_all_done:
     xor eax, eax
 .Lwrite_all_return:
+    add rsp, 8
     ret
 .Lwrite_all_assert_null:
     mov edi, 14
@@ -321,42 +313,3 @@ write_all:
     call assert_fail
 .size write_all, . - write_all
 
-# lengua's assertion handler. check_code compares it word for word: copy it exactly.
-# In: edi = the assertion's number, 1 to 999. Prints "lengua: assertion NNN failed" to
-# standard error and ends the program, every thread of it, with code 134.
-.type assert_fail, @function
-assert_fail:
-    sub rsp, 40
-    mov rax, qword ptr [rip + assert_message]
-    mov qword ptr [rsp], rax
-    mov rax, qword ptr [rip + assert_message + 8]
-    mov qword ptr [rsp + 8], rax
-    mov rax, qword ptr [rip + assert_message + 16]
-    mov qword ptr [rsp + 16], rax
-    mov eax, dword ptr [rip + assert_message + 24]
-    mov dword ptr [rsp + 24], eax
-    mov al, byte ptr [rip + assert_message + 28]
-    mov byte ptr [rsp + 28], al
-    mov eax, edi
-    xor edx, edx
-    mov ecx, 100
-    div ecx
-    add al, 48
-    mov byte ptr [rsp + 18], al
-    mov eax, edx
-    xor edx, edx
-    mov ecx, 10
-    div ecx
-    add al, 48
-    mov byte ptr [rsp + 19], al
-    add dl, 48
-    mov byte ptr [rsp + 20], dl
-    mov eax, 1
-    mov edi, 2
-    mov rsi, rsp
-    mov edx, 29
-    syscall
-    mov eax, 231
-    mov edi, 134
-    syscall
-.size assert_fail, . - assert_fail

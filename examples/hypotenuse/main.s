@@ -1,8 +1,5 @@
 .intel_syntax noprefix
 
-# System calls (Linux x86-64)
-.equ SYS_WRITE, 1
-.equ SYS_EXIT, 60
 # File descriptors
 .equ STDOUT, 1
 .equ STDERR, 2
@@ -48,11 +45,6 @@ range_msg:
     .ascii "error: side out of range\n"
 .size range_msg, . - range_msg
 
-.type assert_message, @object
-assert_message:
-    .ascii "lengua: assertion 000 failed\n"
-.size assert_message, . - assert_message
-
 .section .bss
 
 # Up to 16 whole digits, a point, 3 decimals and a newline.
@@ -62,79 +54,79 @@ out_buf:
 .size out_buf, . - out_buf
 
 .text
-.globl _start
-
 # Checks the argument count, parses both sides, prints the hypotenuse and exits.
-.type _start, @function
-_start:
-    mov rax, qword ptr [rsp]
-    cmp rax, ARGC_EXPECTED
-    jne .Lstart_usage
-    mov rdi, qword ptr [rsp + 16]
+# lengua's `_start` calls main with the argument count and the array of arguments in rdi and rsi;
+# main never returns.
+.type main, @function
+main:
+    sub rsp, 8
+    mov r12, rsi
+    cmp rdi, ARGC_EXPECTED
+    jne .Lmain_usage
+    mov rdi, qword ptr [r12 + 8]
     test rdi, rdi
-    jz .Lstart_assert_argv1
+    jz .Lmain_assert_argv1
     call parse_side
     test rax, rax
-    js .Lstart_bad_side
+    js .Lmain_bad_side
     mov rbx, rdx
-    mov rdi, qword ptr [rsp + 24]
+    mov rdi, qword ptr [r12 + 16]
     test rdi, rdi
-    jz .Lstart_assert_argv2
+    jz .Lmain_assert_argv2
     call parse_side
     test rax, rax
-    js .Lstart_bad_side
+    js .Lmain_bad_side
     mov rdi, rbx
     mov rsi, rdx
     call print_hypotenuse
     test rax, rax
-    js .Lstart_write_failed
+    js .Lmain_write_failed
     mov edi, EXIT_OK
-    jmp .Lstart_exit
-.Lstart_bad_side:
+    jmp .Lmain_exit
+.Lmain_bad_side:
     cmp rax, ERROR_INVALID
-    je .Lstart_not_a_number
+    je .Lmain_not_a_number
     cmp rax, ERROR_RANGE
-    je .Lstart_out_of_range
-    jmp .Lstart_assert_error
-.Lstart_usage:
+    je .Lmain_out_of_range
+    jmp .Lmain_assert_error
+.Lmain_usage:
     lea rdi, [rip + usage_msg]
     mov esi, USAGE_MSG_LEN
     call write_error
     test rax, rax
-    js .Lstart_write_failed
+    js .Lmain_write_failed
     mov edi, EXIT_USAGE
-    jmp .Lstart_exit
-.Lstart_not_a_number:
+    jmp .Lmain_exit
+.Lmain_not_a_number:
     lea rdi, [rip + nan_msg]
     mov esi, NAN_MSG_LEN
     call write_error
     test rax, rax
-    js .Lstart_write_failed
+    js .Lmain_write_failed
     mov edi, EXIT_NOT_A_NUMBER
-    jmp .Lstart_exit
-.Lstart_out_of_range:
+    jmp .Lmain_exit
+.Lmain_out_of_range:
     lea rdi, [rip + range_msg]
     mov esi, RANGE_MSG_LEN
     call write_error
     test rax, rax
-    js .Lstart_write_failed
+    js .Lmain_write_failed
     mov edi, EXIT_OUT_OF_RANGE
-    jmp .Lstart_exit
-.Lstart_write_failed:
+    jmp .Lmain_exit
+.Lmain_write_failed:
     mov edi, EXIT_WRITE_FAILED
-.Lstart_exit:
-    mov eax, SYS_EXIT
-    syscall
-.Lstart_assert_argv1:
+.Lmain_exit:
+    call os_exit
+.Lmain_assert_argv1:
     mov edi, 1
     call assert_fail
-.Lstart_assert_argv2:
+.Lmain_assert_argv2:
     mov edi, 2
     call assert_fail
-.Lstart_assert_error:
+.Lmain_assert_error:
     mov edi, 3
     call assert_fail
-.size _start, . - _start
+.size main, . - main
 
 # Parses a side: digits, optionally a point and 1 to 3 more digits.
 # In: rdi = a NUL-terminated string.
@@ -412,14 +404,14 @@ write_error:
 # returns: result
 .type write_all, @function
 write_all:
+    sub rsp, 8
     test rsi, rsi
     jz .Lwrite_all_assert_null
     test rdx, rdx
     jz .Lwrite_all_assert_empty
     mov r8, MAX_WRITES
 .Lwrite_all_loop:  # bound: 64
-    mov eax, SYS_WRITE
-    syscall
+    call os_write
     test rax, rax
     js .Lwrite_all_return
     cmp rax, rdx
@@ -434,6 +426,7 @@ write_all:
 .Lwrite_all_done:
     xor eax, eax
 .Lwrite_all_return:
+    add rsp, 8
     ret
 .Lwrite_all_assert_null:
     mov edi, 12
@@ -446,42 +439,3 @@ write_all:
     call assert_fail
 .size write_all, . - write_all
 
-# lengua's assertion handler. check_code compares it word for word: copy it exactly.
-# In: edi = the assertion's number, 1 to 999. Prints "lengua: assertion NNN failed" to
-# standard error and ends the program, every thread of it, with code 134.
-.type assert_fail, @function
-assert_fail:
-    sub rsp, 40
-    mov rax, qword ptr [rip + assert_message]
-    mov qword ptr [rsp], rax
-    mov rax, qword ptr [rip + assert_message + 8]
-    mov qword ptr [rsp + 8], rax
-    mov rax, qword ptr [rip + assert_message + 16]
-    mov qword ptr [rsp + 16], rax
-    mov eax, dword ptr [rip + assert_message + 24]
-    mov dword ptr [rsp + 24], eax
-    mov al, byte ptr [rip + assert_message + 28]
-    mov byte ptr [rsp + 28], al
-    mov eax, edi
-    xor edx, edx
-    mov ecx, 100
-    div ecx
-    add al, 48
-    mov byte ptr [rsp + 18], al
-    mov eax, edx
-    xor edx, edx
-    mov ecx, 10
-    div ecx
-    add al, 48
-    mov byte ptr [rsp + 19], al
-    add dl, 48
-    mov byte ptr [rsp + 20], dl
-    mov eax, 1
-    mov edi, 2
-    mov rsi, rsp
-    mov edx, 29
-    syscall
-    mov eax, 231
-    mov edi, 134
-    syscall
-.size assert_fail, . - assert_fail

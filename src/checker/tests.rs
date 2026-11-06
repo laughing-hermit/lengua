@@ -18,7 +18,14 @@ async fn check_full(
     syscalls: &[Syscall],
     threads: Option<u32>,
 ) -> Report {
-    check_allowing(text, features, syscalls, &[], threads).await
+    // A program in the edge form is given every operation: these helpers check a program's own
+    // rules, not which operations its spec allows (`check_edge` says them).
+    let ops: &[crate::edge::Op] = if crate::edge::form(text) == crate::edge::Form::Edge {
+        &crate::edge::Op::ALL
+    } else {
+        &[]
+    };
+    check_allowing(text, features, syscalls, ops, threads).await
 }
 
 /// A program in the edge form, checked with the operations its spec allows.
@@ -318,10 +325,10 @@ async fn jumps_go_through_registers_only_as_checked_tables() {
         ),
         // Entries naming what isn't a case of this jump.
         (
-            calc_with(entries, "    .long .Lstart_exit - operations\n"),
+            calc_with(entries, "    .long .Lmain_exit - operations\n"),
             Rule::Indirection,
             jump,
-            "names .Lstart_exit, which isn't a label of apply",
+            "names .Lmain_exit, which isn't a label of apply",
         ),
         (
             calc_with(
@@ -478,6 +485,128 @@ async fn every_program_in_the_repository_follows_every_rule() {
     }
     assert!(programs.len() >= 25, "{} programs", programs.len());
     assert!(failed.is_empty(), "{failed:#?}");
+}
+
+/// The programs that still define `_start`, in the inline form: they make their own system calls
+/// and carry their own `assert_fail`. The list only shrinks: a program that moves to the edge form
+/// leaves it in the same commit, and none joins it. Round 2 ends with it empty and the form gone.
+const INLINE_FORM: &[&str] = &[
+    "benches/programs/count/avx512.s",
+    "benches/programs/count/sve.s",
+    "benches/programs/shout/avx512-one.s",
+    "benches/programs/shout/avx512.s",
+    "benches/programs/shout/neon-one.s",
+    "benches/programs/upcase/avx512.s",
+    "benches/programs/upcase/neon.s",
+    "examples/aes/main.s",
+    "examples/archive/main.s",
+    "examples/count/main.s",
+    "examples/dice/main.s",
+    "examples/echo/main.s",
+    "examples/fetch/main.s",
+    "examples/sha256/main.s",
+    "examples/sort/main.s",
+    "examples/upcase/main.s",
+    "plugin/skills/compile/assets/fast/aes-ni/main.s",
+    "plugin/skills/compile/assets/fast/crc32c/main.s",
+    "plugin/skills/compile/assets/fast/crc32c-pclmul/main.s",
+    "plugin/skills/compile/assets/fast/histogram/main.s",
+    "plugin/skills/compile/assets/fast/sha256-ni/main.s",
+    "plugin/skills/compile/assets/fast/wc-avx512/main.s",
+    "plugin/skills/compile/assets/fast/wc/main.s",
+    "plugin/skills/compile/assets/linux-aarch64/fast/aes-aes/main.s",
+    "plugin/skills/compile/assets/linux-aarch64/fast/crc32c-crc/main.s",
+    "plugin/skills/compile/assets/linux-aarch64/fast/crc32c/main.s",
+    "plugin/skills/compile/assets/linux-aarch64/fast/histogram/main.s",
+    "plugin/skills/compile/assets/linux-aarch64/fast/sha256-sha2/main.s",
+    "plugin/skills/compile/assets/linux-aarch64/fast/wc/main.s",
+    "plugin/skills/compile/assets/linux-aarch64/fast/wc-sve/main.s",
+    "plugin/skills/compile/assets/linux-aarch64/parallel-template.s",
+    "plugin/skills/compile/assets/linux-aarch64/server-template.s",
+    "plugin/skills/compile/assets/linux-aarch64/stream-template.s",
+    "plugin/skills/compile/assets/linux-aarch64/tally-template.s",
+    "plugin/skills/compile/assets/linux-aarch64/terminal-template.s",
+    "plugin/skills/compile/assets/linux-aarch64/vector-template.s",
+    "plugin/skills/compile/assets/parallel-template.s",
+    "plugin/skills/compile/assets/server-template.s",
+    "plugin/skills/compile/assets/stream-template.s",
+    "plugin/skills/compile/assets/tally-template.s",
+    "plugin/skills/compile/assets/terminal-template.s",
+    "plugin/skills/compile/assets/vector-template.s",
+    "tests/fixtures/amounts/main.s",
+    "tests/fixtures/clock/main.s",
+    "tests/fixtures/dates/main.s",
+    "tests/fixtures/days/main.s",
+    "tests/fixtures/lines/main.s",
+    "tests/fixtures/linux-aarch64/aes/main.s",
+    "tests/fixtures/linux-aarch64/amounts/main.s",
+    "tests/fixtures/linux-aarch64/archive/main.s",
+    "tests/fixtures/linux-aarch64/clock/main.s",
+    "tests/fixtures/linux-aarch64/count/main.s",
+    "tests/fixtures/linux-aarch64/dates/main.s",
+    "tests/fixtures/linux-aarch64/days/main.s",
+    "tests/fixtures/linux-aarch64/dice/main.s",
+    "tests/fixtures/linux-aarch64/echo/main.s",
+    "tests/fixtures/linux-aarch64/fetch/main.s",
+    "tests/fixtures/linux-aarch64/lines/main.s",
+    "tests/fixtures/linux-aarch64/nap/main.s",
+    "tests/fixtures/linux-aarch64/padded/main.s",
+    "tests/fixtures/linux-aarch64/pairs/main.s",
+    "tests/fixtures/linux-aarch64/second/main.s",
+    "tests/fixtures/linux-aarch64/sha256/main.s",
+    "tests/fixtures/linux-aarch64/sort/main.s",
+    "tests/fixtures/linux-aarch64/sweep/main.s",
+    "tests/fixtures/linux-aarch64/total/main.s",
+    "tests/fixtures/linux-aarch64/upcase/main.s",
+    "tests/fixtures/linux-aarch64/words/main.s",
+    "tests/fixtures/nap/main.s",
+    "tests/fixtures/padded/main.s",
+    "tests/fixtures/pairs/main.s",
+    "tests/fixtures/second/main.s",
+    "tests/fixtures/sweep/main.s",
+    "tests/fixtures/total/main.s",
+    "tests/fixtures/words/main.s",
+];
+
+/// Every `.s` file under `folder` that defines `_start`, by its path from the repository's root.
+fn defining_start(root: &std::path::Path, folder: &std::path::Path, found: &mut Vec<String>) {
+    for entry in std::fs::read_dir(folder).expect("a folder of programs") {
+        let path = entry.expect("an entry").path();
+        if path.is_dir() {
+            defining_start(root, &path, found);
+        } else if path.extension().is_some_and(|extension| extension == "s")
+            && std::fs::read_to_string(&path)
+                .is_ok_and(|text| text.lines().any(|line| line == "_start:"))
+        {
+            let relative = path.strip_prefix(root).expect("under the root");
+            found.push(relative.to_string_lossy().replace('\\', "/"));
+        }
+    }
+}
+
+/// The inline form is for the programs not yet moved to the edge form, and the list says which.
+#[test]
+fn the_inline_form_is_only_for_the_programs_not_yet_moved() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut found = Vec::new();
+    for folder in [
+        "examples",
+        "tests/fixtures",
+        "plugin/skills/compile/assets",
+        "benches/programs",
+    ] {
+        defining_start(root, &root.join(folder), &mut found);
+    }
+    let found: std::collections::BTreeSet<&str> = found.iter().map(String::as_str).collect();
+    let listed: std::collections::BTreeSet<&str> = INLINE_FORM.iter().copied().collect();
+    let joined: Vec<&&str> = found.difference(&listed).collect();
+    let moved: Vec<&&str> = listed.difference(&found).collect();
+    assert!(
+        joined.is_empty() && moved.is_empty(),
+        "in the inline form and not on the list (the list only shrinks, so this one must move to \
+         the edge form): {joined:?}; on the list and no longer in the inline form (take it off): \
+         {moved:?}"
+    );
 }
 
 /// Where a planted bug's violation is reported.
@@ -4380,10 +4509,10 @@ async fn aarch64_jumps_go_through_registers_only_as_checked_tables() {
         ),
         // Entries naming what isn't a case of this jump.
         (
-            aarch64_calc_with(entries, "    .long .Lstart_exit - operations\n"),
+            aarch64_calc_with(entries, "    .long .Lmain_exit - operations\n"),
             Rule::Indirection,
             jump,
-            "names .Lstart_exit, which isn't a label of apply",
+            "names .Lmain_exit, which isn't a label of apply",
         ),
         (
             aarch64_calc_with(

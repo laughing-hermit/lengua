@@ -1,8 +1,5 @@
 .intel_syntax noprefix
 
-# System calls (Linux x86-64)
-.equ SYS_WRITE, 1
-.equ SYS_EXIT, 60
 # File descriptors
 .equ STDOUT, 1
 .equ STDERR, 2
@@ -53,11 +50,6 @@ newline_msg:
     .ascii "\n"
 .size newline_msg, . - newline_msg
 
-.type assert_message, @object
-assert_message:
-    .ascii "lengua: assertion 000 failed\n"
-.size assert_message, . - assert_message
-
 .section .bss
 
 # Sign, 19 digits, a point, 2 decimals and a newline.
@@ -67,29 +59,29 @@ out_buf:
 .size out_buf, . - out_buf
 
 .text
-.globl _start
-
 # Checks the argument count, parses both numbers in cents, prints their mean and exits.
-.type _start, @function
-_start:
-    mov rax, qword ptr [rsp]
-    cmp rax, ARGC_EXPECTED
-    jne .Lstart_usage
-    mov r12, qword ptr [rsp + 16]
-    mov r13, qword ptr [rsp + 24]
+# lengua's `_start` calls main with the argument count and the array of arguments in rdi and rsi;
+# main never returns.
+.type main, @function
+main:
+    sub rsp, 8
+    cmp rdi, ARGC_EXPECTED
+    jne .Lmain_usage
+    mov r12, qword ptr [rsi + 8]
+    mov r13, qword ptr [rsi + 16]
     test r12, r12
-    jz .Lstart_assert_argv_a
+    jz .Lmain_assert_argv_a
     test r13, r13
-    jz .Lstart_assert_argv_b
+    jz .Lmain_assert_argv_b
     mov rdi, r12
     call parse_cents
     test rax, rax
-    js .Lstart_a_bad
+    js .Lmain_a_bad
     mov r14, rdx
     mov rdi, r13
     call parse_cents
     test rax, rax
-    js .Lstart_bad
+    js .Lmain_bad
     add rdx, r14
     lea rax, [rdx + 1]
     lea rcx, [rdx - 1]
@@ -101,44 +93,43 @@ _start:
     mov rdi, rax
     call print_cents
     test rax, rax
-    js .Lstart_write_failed
+    js .Lmain_write_failed
     mov edi, EXIT_OK
-    jmp .Lstart_exit
-.Lstart_a_bad:
+    jmp .Lmain_exit
+.Lmain_a_bad:
     mov r13, r12
-.Lstart_bad:
+.Lmain_bad:
     mov r14, rax
     mov rdi, rax
     mov rsi, r13
     call report_bad_number
     test rax, rax
-    js .Lstart_write_failed
+    js .Lmain_write_failed
     mov edi, EXIT_OUT_OF_RANGE
     cmp r14, ERROR_RANGE
-    je .Lstart_exit
+    je .Lmain_exit
     mov edi, EXIT_NOT_A_NUMBER
-    jmp .Lstart_exit
-.Lstart_usage:
+    jmp .Lmain_exit
+.Lmain_usage:
     mov edi, STDERR
     lea rsi, [rip + usage_msg]
     mov edx, USAGE_MSG_LEN
     call write_all
     test rax, rax
-    js .Lstart_write_failed
+    js .Lmain_write_failed
     mov edi, EXIT_USAGE
-    jmp .Lstart_exit
-.Lstart_write_failed:
+    jmp .Lmain_exit
+.Lmain_write_failed:
     mov edi, EXIT_WRITE_FAILED
-.Lstart_exit:
-    mov eax, SYS_EXIT
-    syscall
-.Lstart_assert_argv_a:
+.Lmain_exit:
+    call os_exit
+.Lmain_assert_argv_a:
     mov edi, 1
     call assert_fail
-.Lstart_assert_argv_b:
+.Lmain_assert_argv_b:
     mov edi, 2
     call assert_fail
-.size _start, . - _start
+.size main, . - main
 
 # Reports an argument that isn't a number, or is out of range, on standard error.
 # In: rdi = ERROR_INVALID or ERROR_RANGE, rsi = the NUL-terminated argument.
@@ -458,14 +449,14 @@ str_len:
 # returns: result
 .type write_all, @function
 write_all:
+    sub rsp, 8
     test rsi, rsi
     jz .Lwrite_all_assert_null
     test rdx, rdx
     jz .Lwrite_all_assert_empty
     mov r8, MAX_WRITES
 .Lwrite_all_loop:  # bound: 64
-    mov eax, SYS_WRITE
-    syscall
+    call os_write
     test rax, rax
     js .Lwrite_all_return
     cmp rax, rdx
@@ -480,6 +471,7 @@ write_all:
 .Lwrite_all_done:
     xor eax, eax
 .Lwrite_all_return:
+    add rsp, 8
     ret
 .Lwrite_all_assert_null:
     mov edi, 15
@@ -492,42 +484,3 @@ write_all:
     call assert_fail
 .size write_all, . - write_all
 
-# lengua's assertion handler. check_code compares it word for word: copy it exactly.
-# In: edi = the assertion's number, 1 to 999. Prints "lengua: assertion NNN failed" to
-# standard error and ends the program, every thread of it, with code 134.
-.type assert_fail, @function
-assert_fail:
-    sub rsp, 40
-    mov rax, qword ptr [rip + assert_message]
-    mov qword ptr [rsp], rax
-    mov rax, qword ptr [rip + assert_message + 8]
-    mov qword ptr [rsp + 8], rax
-    mov rax, qword ptr [rip + assert_message + 16]
-    mov qword ptr [rsp + 16], rax
-    mov eax, dword ptr [rip + assert_message + 24]
-    mov dword ptr [rsp + 24], eax
-    mov al, byte ptr [rip + assert_message + 28]
-    mov byte ptr [rsp + 28], al
-    mov eax, edi
-    xor edx, edx
-    mov ecx, 100
-    div ecx
-    add al, 48
-    mov byte ptr [rsp + 18], al
-    mov eax, edx
-    xor edx, edx
-    mov ecx, 10
-    div ecx
-    add al, 48
-    mov byte ptr [rsp + 19], al
-    add dl, 48
-    mov byte ptr [rsp + 20], dl
-    mov eax, 1
-    mov edi, 2
-    mov rsi, rsp
-    mov edx, 29
-    syscall
-    mov eax, 231
-    mov edi, 134
-    syscall
-.size assert_fail, . - assert_fail

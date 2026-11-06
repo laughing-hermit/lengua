@@ -98,6 +98,21 @@ pub static MOVES_THE_STACK_POINTER: PerCpu<Offence> = PerCpu {
     },
 };
 
+/// The same instruction for a program in the edge form, which has no read of the stack to put it
+/// before: it goes before the comparison of the argument count that starts every `main`.
+pub static MOVES_THE_STACK_POINTER_IN_EDGE_FORM: PerCpu<Offence> = PerCpu {
+    x86_64: Offence {
+        before: "    cmp rdi, ARGC_EXPECTED\n",
+        line: "    and rsp, -16",
+        says: "`and` changes rsp",
+    },
+    aarch64: Offence {
+        before: "    cmp x0, #ARGC_EXPECTED\n",
+        line: "    and sp, x9, #-16",
+        says: "`and` sets sp",
+    },
+};
+
 impl Offence {
     /// `code` with the instruction put before its first one.
     pub fn applied_to(&self, code: &str) -> String {

@@ -1,8 +1,5 @@
 .arch armv8-a
 
-// System calls (Linux AArch64)
-.equ SYS_WRITE, 64
-.equ SYS_EXIT, 93
 // File descriptors
 .equ STDOUT, 1
 .equ STDERR, 2
@@ -38,11 +35,6 @@ nan_msg:
     .ascii "error: not a number\n"
 .size nan_msg, . - nan_msg
 
-.type assert_message, @object
-assert_message:
-    .ascii "lengua: assertion 000 failed\n"
-.size assert_message, . - assert_message
-
 .section .bss
 
 // Sign, 19 digits and a newline.
@@ -52,76 +44,74 @@ out_buf:
 .size out_buf, . - out_buf
 
 .text
-.globl _start
-
 // Adds the two whole numbers its arguments hold, each from MIN_VALUE to MAX_VALUE, and prints
 // the sum.
-.type _start, @function
-_start:
-    ldr x0, [sp]
+// lengua's `_start` calls main with the argument count and the array of arguments in x0 and x1;
+// main never returns.
+.type main, @function
+main:
     cmp x0, #ARGC_EXPECTED
-    b.ne .Lstart_usage
-    ldr x19, [sp, #16]
-    ldr x20, [sp, #24]
-    cbz x19, .Lstart_assert_first
-    cbz x20, .Lstart_assert_second
+    b.ne .Lmain_usage
+    ldr x19, [x1, #8]
+    ldr x20, [x1, #16]
+    cbz x19, .Lmain_assert_first
+    cbz x20, .Lmain_assert_second
     mov x22, #MAX_VALUE & 0xffff
     movk x22, #MAX_VALUE >> 16, lsl #16
     mov x0, x19
     bl parse_i64
-    tbnz x0, #63, .Lstart_not_a_number
+    tbnz x0, #63, .Lmain_not_a_number
     // From MIN_VALUE to MAX_VALUE: at most MAX_VALUE, and at least its negative.
     cmp x1, x22
-    b.gt .Lstart_not_a_number
+    b.gt .Lmain_not_a_number
     cmn x1, x22
-    b.lt .Lstart_not_a_number
+    b.lt .Lmain_not_a_number
     mov x21, x1
     mov x0, x20
     bl parse_i64
-    tbnz x0, #63, .Lstart_not_a_number
+    tbnz x0, #63, .Lmain_not_a_number
     cmp x1, x22
-    b.gt .Lstart_not_a_number
+    b.gt .Lmain_not_a_number
     cmn x1, x22
-    b.lt .Lstart_not_a_number
+    b.lt .Lmain_not_a_number
     adds x0, x21, x1
-    b.vs .Lstart_assert_sum
+    b.vs .Lmain_assert_sum
     bl write_i64
-    tbnz x0, #63, .Lstart_write_failed
+    tbnz x0, #63, .Lmain_write_failed
     mov w0, #EXIT_OK
-    b .Lstart_exit
-.Lstart_usage:
+    b .Lmain_exit
+.Lmain_usage:
     mov x0, #STDERR
     adrp x1, usage_msg
     add x1, x1, :lo12:usage_msg
     mov x2, #USAGE_MSG_LEN
     bl write_all
-    tbnz x0, #63, .Lstart_write_failed
+    tbnz x0, #63, .Lmain_write_failed
     mov w0, #EXIT_USAGE
-    b .Lstart_exit
-.Lstart_not_a_number:
+    b .Lmain_exit
+.Lmain_not_a_number:
     mov x0, #STDERR
     adrp x1, nan_msg
     add x1, x1, :lo12:nan_msg
     mov x2, #NAN_MSG_LEN
     bl write_all
-    tbnz x0, #63, .Lstart_write_failed
+    tbnz x0, #63, .Lmain_write_failed
     mov w0, #EXIT_NOT_A_NUMBER
-    b .Lstart_exit
-.Lstart_write_failed:
+    b .Lmain_exit
+.Lmain_write_failed:
     mov w0, #EXIT_WRITE_FAILED
-.Lstart_exit:
-    mov x8, #SYS_EXIT
-    svc #0
-.Lstart_assert_first:
+.Lmain_exit:
+    bl os_exit
+.Lmain_assert_first:
     mov w0, #1
     bl assert_fail
-.Lstart_assert_second:
+.Lmain_assert_second:
     mov w0, #2
     bl assert_fail
-.Lstart_assert_sum:
+.Lmain_assert_sum:
     mov w0, #3
     bl assert_fail
-.size _start, . - _start
+.size main, . - main
 
 // Parses a decimal whole number with an optional leading minus sign.
 // In: x0 = a NUL-terminated string.
@@ -251,14 +241,14 @@ write_i64:
 // returns: result
 .type write_all, @function
 write_all:
+    stp x29, x30, [sp, #-16]!
     cbz x1, .Lwrite_all_assert_null
     cbz x2, .Lwrite_all_assert_empty
     mov x9, x0
     mov x10, #MAX_WRITES
 .Lwrite_all_loop:  // bound: 64
     mov x0, x9
-    mov x8, #SYS_WRITE
-    svc #0
+    bl os_write
     tbnz x0, #63, .Lwrite_all_return
     cmp x0, x2
     b.hi .Lwrite_all_assert_count
@@ -272,6 +262,7 @@ write_all:
 .Lwrite_all_done:
     mov x0, #0
 .Lwrite_all_return:
+    ldp x29, x30, [sp], #16
     ret
 .Lwrite_all_assert_null:
     mov w0, #10
@@ -284,40 +275,3 @@ write_all:
     bl assert_fail
 .size write_all, . - write_all
 
-// lengua's assertion handler. check compares it word for word: copy it exactly.
-// In: w0 = the assertion's number, 1 to 999. Prints "lengua: assertion NNN failed" to
-// standard error and ends the program, every thread of it, with code 134.
-.type assert_fail, @function
-assert_fail:
-    sub sp, sp, #32
-    adrp x1, assert_message
-    add x1, x1, :lo12:assert_message
-    ldp x2, x3, [x1]
-    stp x2, x3, [sp]
-    ldr x2, [x1, #16]
-    str x2, [sp, #16]
-    ldr w2, [x1, #24]
-    str w2, [sp, #24]
-    ldrb w2, [x1, #28]
-    strb w2, [sp, #28]
-    mov w2, #100
-    udiv w3, w0, w2
-    msub w0, w3, w2, w0
-    add w3, w3, #48
-    strb w3, [sp, #18]
-    mov w2, #10
-    udiv w3, w0, w2
-    msub w0, w3, w2, w0
-    add w3, w3, #48
-    strb w3, [sp, #19]
-    add w0, w0, #48
-    strb w0, [sp, #20]
-    mov x0, #2
-    mov x1, sp
-    mov x2, #29
-    mov x8, #64
-    svc #0
-    mov x0, #134
-    mov x8, #94
-    svc #0
-.size assert_fail, . - assert_fail
