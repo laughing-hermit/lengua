@@ -267,10 +267,12 @@ fn case_files() -> Vec<(PathBuf, PathBuf)> {
 #[tokio::test(flavor = "multi_thread")]
 async fn every_case_in_host_cases_does_what_its_file_says() {
     let cases = case_files();
-    if cases.is_empty() {
-        lengua::skiplog::note("tests/host-cases holds no cases yet");
-        return;
-    }
+    // The cases are the host's check, written apart from it: a run that finds none checked nothing.
+    assert!(
+        cases.len() >= 100,
+        "tests/host-cases holds {} cases",
+        cases.len()
+    );
     let pool = Pool::new(launcher(), None);
     let mut failures = Vec::new();
     for (wat, toml) in &cases {
