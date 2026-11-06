@@ -75,10 +75,7 @@ const READS_ONCE: PerCpu<Edit> = PerCpu {
         "    mov ecx, NEWLINE\n    call fill\n",
         "    call os_read\n",
     ),
-    aarch64: (
-        "    mov w3, #NEWLINE\n    bl fill\n",
-        "    bl os_read\n",
-    ),
+    aarch64: ("    mov w3, #NEWLINE\n    bl fill\n", "    bl os_read\n"),
 };
 
 /// The echo server made to exit after its first connection, where its spec says it keeps
