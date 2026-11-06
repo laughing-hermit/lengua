@@ -49,6 +49,12 @@ impl Started {
         match self.never {}
     }
 
+    /// Whether the program's broker knows it waits for a connection or a key.
+    #[must_use]
+    pub fn waiting(&self) -> Option<bool> {
+        match self.never {}
+    }
+
     /// Waits for the program to end.
     ///
     /// # Errors

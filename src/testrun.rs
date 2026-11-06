@@ -477,6 +477,7 @@ pub async fn check_case(
     syscalls: &[Allowed],
     network: &Network,
     delivery: Delivery,
+    channel: bool,
 ) -> io::Result<Option<String>> {
     let (_, problem) = check_one(
         launcher,
@@ -487,6 +488,7 @@ pub async fn check_case(
         delivery,
         &assertion_lines(source),
         false,
+        channel,
     )
     .await?;
     Ok(problem)
@@ -697,9 +699,10 @@ async fn check_one(
     delivery: Delivery,
     assertions: &BTreeMap<i64, usize>,
     emulated: bool,
+    channel: bool,
 ) -> io::Result<(Run, Option<String>)> {
     let (run, mut problem) = check_one_way(
-        launcher, program, test, syscalls, network, delivery, assertions, emulated, false,
+        launcher, program, test, syscalls, network, delivery, assertions, emulated, channel, false,
     )
     .await?;
     if emulated && problem.is_none() {
@@ -707,7 +710,8 @@ async fn check_one(
     }
     if problem.is_none() && run.listed {
         let (_, turned) = check_one_way(
-            launcher, program, test, syscalls, network, delivery, assertions, emulated, true,
+            launcher, program, test, syscalls, network, delivery, assertions, emulated, channel,
+            true,
         )
         .await?;
         if let Some(turned) = turned {
@@ -745,6 +749,7 @@ async fn check_one_way(
     delivery: Delivery,
     assertions: &BTreeMap<i64, usize>,
     emulated: bool,
+    channel: bool,
     reversed: bool,
 ) -> io::Result<(Run, Option<String>)> {
     let supply = crate::supply::Supply::parse(test.random, test.clock).unwrap_or_default();
@@ -788,6 +793,7 @@ async fn check_one_way(
         stdin_pieces: &stdin_pieces,
         emulated,
         reversed,
+        channel,
         stdout_closed: test.stdout_closed,
         ..Job::new(program, &args, stdin.as_bytes(), syscalls)
     };
@@ -823,7 +829,7 @@ async fn check_one_way(
             talk(port, test.client, delivery, now).await.err()
         };
         if test.serves {
-            if problem.is_none() && !waiting_for_connections(started.pid()).await {
+            if problem.is_none() && !waiting_for_connections(&started).await {
                 problem = Some(
                     "after its connections the program wasn't waiting for the next one, as a \
                      server that keeps serving does"
@@ -1130,11 +1136,21 @@ async fn talk_at_once(port: u16, exchanges: &[Exchange], now: i128) -> Result<()
     Ok(())
 }
 
-/// Whether the program is waiting for the next connection, in `accept4` on file descriptor 3,
-/// or, serving clients at once, in `poll` or `ppoll`, checked for up to half a second. The
-/// numbers are this computer's: an AArch64 server here, emulated, waits in QEMU's own calls.
-async fn waiting_for_connections(pid: i32) -> bool {
-    let path = format!("/proc/{pid}/syscall");
+/// Whether the program is waiting for the next connection, checked for up to half a second: its
+/// broker has been told that it waits in `os_accept` or `os_poll`, or, where it has none, it is in
+/// `accept4` on file descriptor 3 or, serving clients at once, in `poll` or `ppoll`. The numbers
+/// are this computer's: an AArch64 server here, emulated, waits in QEMU's own calls.
+async fn waiting_for_connections(started: &runner::Started) -> bool {
+    if started.waiting().is_some() {
+        for _ in 0..100 {
+            if started.waiting() == Some(true) {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        return false;
+    }
+    let path = format!("/proc/{}/syscall", started.pid());
     for _ in 0..100 {
         match tokio::fs::read_to_string(&path).await {
             Ok(call) if waits_for_connections(&call) => return true,
@@ -1277,6 +1293,7 @@ async fn run_one(
         delivery,
         &shared.assertions,
         shared.setting.emulated,
+        shared.setting.channel,
     )
     .await
 }

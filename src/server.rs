@@ -796,6 +796,7 @@ impl LenguaServer {
                         built,
                         report,
                         profile,
+                        channel: crate::edge::uses_channel(profile, &code),
                         emulator: target.emulator.clone(),
                     },
                     params.prove_further,
@@ -944,6 +945,9 @@ struct Code {
     built: Build,
     report: checker::Report,
     profile: Profile,
+    /// Whether lengua's broker serves the program: it is in the edge form and links the channel's
+    /// code.
+    channel: bool,
     /// QEMU, when this computer runs the target's programs only through it.
     emulator: Option<Emulator>,
 }
@@ -1192,6 +1196,7 @@ impl LenguaServer {
             testrun::Setting {
                 emulated: code.emulator.is_some(),
                 sleeps: code.spec.syscalls.contains(&spec::Syscall::ClockNanosleep),
+                channel: code.channel,
             },
         )
         .await
@@ -1692,6 +1697,7 @@ impl LenguaServer {
             syscalls,
             &code.spec.network,
             delivery,
+            code.channel,
         )
         .await
         {
