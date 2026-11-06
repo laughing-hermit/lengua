@@ -33,9 +33,8 @@ permissions:
   contents: read
 
 env:
-  # A push (the branch the jobs are built on) runs two quick files, to try the plumbing; the weekly
-  # run and a dispatch run what they ask, the whole suite by default.
-  TEST_FILES: ${{ github.event_name == 'push' && 'skills parity_inventory' || inputs.test_files }}
+  # The whole suite unless a dispatch asks for less.
+  TEST_FILES: ${{ inputs.test_files }}
   FILTER: ${{ inputs.filter }}
 
 jobs:
