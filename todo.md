@@ -9,10 +9,11 @@ Agent Plugin, skills and one Rust MCP server only, so it runs in any agent harne
 **Where lengua stands (2026-11-06).** lengua has two targets, Linux on x86-64 and Linux on ARM64,
 one product held by one suite, every program reaching the OS only through lengua's edge, and the
 mutation test passes on both (run 42178888801). The owner decided the same day that these are the
-only targets: Windows and Mac reach lengua through its image, run by Docker or Podman (round 3;
-WSL 2 and a Linux VM are the same Linux set up by hand, Apple has no WSL), and native macOS and
-Windows ports are deferred ("Deferred"). The project has not tested those routes, and a free
-runner can run only the container's. The record
+only targets: Windows runs lengua directly inside WSL 2 (Ubuntu, the agent inside it), and a Mac,
+an older Linux or an agent on the Windows side reach it through its image, run by Docker or Podman
+(round 3; Apple has no WSL), and native macOS and Windows ports are deferred ("Deferred"). The
+project has not tested those routes: a free runner can run the container's, and a probe (Round
+3) will try WSL 2 on a Windows runner and Colima on an Intel macOS one. The record
 of the finished work is in the git history, DESIGN.md, README.md, SESSIONS.md and the BENCHMARKS
 files.
 
@@ -58,12 +59,14 @@ free runners, whose id is written in the table below, and by nothing else.
    - each proof line has the same verdict on both. Where a line's time budget cuts it short, the
      verdict is the same kind: proven, or bounded to a length.
 
-   A Linux that meets the floor runs lengua directly, with no container. Other systems reach the
-   two targets through the lengua image (Ubuntu 24.04), run by a working Docker (a `docker`
+   A Linux that meets the floor runs lengua directly, with no container, and so does Ubuntu 24.04
+   inside WSL 2 on Windows, the recommended Windows route (`wsl --install -d Ubuntu-24.04`, the
+   agent inside it). Other systems (a Mac, an older Linux, an agent on the Windows side) reach
+   the two targets through the lengua image (Ubuntu 24.04), run by a working Docker (a `docker`
    command talking to an engine, from whichever provider: Docker Desktop, Rancher Desktop, Colima
-   or the Docker Engine in WSL 2 or on Linux), with Podman supported as the compatible
-   alternative; on a Mac this waits on Landlock (round 3). The image is the one route the project
-   promises and tests (round 3); WSL 2 and a Linux VM are the same Linux set up by hand. The floor
+   or the Docker Engine on Linux), with Podman supported as the compatible alternative; on a Mac
+   this waits on Landlock (round 3). The image is the one container route the project promises
+   and tests (round 3); a Linux VM is the same Linux set up by hand. The floor
    of the product is a default Docker or Podman container, on any host: what
    such a container doesn't give everywhere, lengua doesn't need (it does not use io_uring, which
    both runtimes' default profiles block; hardware counters are optional; the proofs' memory guard
@@ -137,8 +140,8 @@ reach those two targets. The project has tested none of these routes yet:
 
 | route | how | what it needs | tested by |
 |---|---|---|---|
-| The image: Windows, a Mac, an older Linux | the lengua image run by a working Docker (any provider), with Podman supported (round 3: Ubuntu 24.04 pinned by digest, LLVM, the solvers and lengua-mcp, for both CPUs). Windows: Docker Desktop (the easiest installer), Rancher Desktop or Docker Engine inside WSL 2. Mac: Colima or Rancher Desktop, or Docker Desktop once its VM passes the check. Older Linux: Docker Engine | a kernel with Landlock under the container: Linux hosts; WSL 2's kernel; the VMs of Colima, Rancher Desktop and Podman Desktop, all unverified on a Mac; Docker Desktop on a Mac reportedly has none (a report of 2026-10-02), so it works only after round 3's Landlock policy | a default container under Docker and under Podman on both Linux runners (round 3); the owner's Fedora under Podman, by hand; a Mac, by the one-line check in "Round 3" |
-| Windows: WSL 2, by hand | `wsl --install -d Ubuntu-24.04`, then the agent and lengua inside it | Microsoft's kernel has Landlock (since 2022; the current one is 6.18); glibc 2.39 | nobody yet |
+| Windows: WSL 2 (recommended) | `wsl --install -d Ubuntu-24.04` in an administrator PowerShell, a restart, then the agent and lengua inside Ubuntu, where lengua runs directly as on Linux | Microsoft's WSL 2 kernel: Landlock on by default (its 6.18 config has `CONFIG_SECURITY_LANDLOCK=y` and `CONFIG_LSM="landlock,..."`, above the 6.12 network floor); glibc 2.39 from Ubuntu 24.04 | the probe on a Windows runner, if a hosted runner can run WSL 2 (disputed); otherwise by hand |
+| The image: a Mac, an older Linux, an agent on the Windows side | the lengua image run by a working Docker (any provider), with Podman supported (round 3: Ubuntu 24.04 pinned by digest, LLVM, the solvers and lengua-mcp, for both CPUs). Mac: Colima first, then Rancher Desktop, or Docker Desktop once its VM passes the check. Windows-side agent: Docker Desktop (the easiest installer) or Rancher Desktop. Older Linux: Docker Engine | a kernel with Landlock under the container: Linux hosts; WSL 2's kernel; the VMs of Colima, Rancher Desktop and Podman Desktop, all unverified on a Mac; Docker Desktop on a Mac reportedly has none (a report of 2026-10-02), so it works only after round 3's Landlock policy | a default container under Docker and under Podman on both Linux runners (round 3); the owner's Fedora under Podman, by hand; a Mac, by the one-line check in "Round 3" and the Colima probe on an Intel macOS runner |
 | Mac: a Linux VM, by hand | Colima, Lima, UTM or Parallels (Ubuntu 24.04 arm64); Apple's `container` (macOS 26) is unverified | a kernel with Landlock, and glibc 2.39 | nobody yet |
 
 Then by finish-line point:
@@ -185,8 +188,9 @@ Then by finish-line point:
    - the kernel floor and the Landlock policy (Landlock for every program, Linux 6.12 for the
      network);
    - the host launcher, so that the route is seamless: the command the plugin's `.mcp.json` runs
-     on Windows and macOS (and on a Linux that doesn't meet the floor). On a Linux that does, it
-     runs the native server when that is installed and `doctor` passes, and the image otherwise.
+     on a Mac and for an agent on the Windows side (and on a Linux that doesn't meet the floor).
+     On a Linux that does, and inside WSL 2, it runs the native server when that is installed and
+     `doctor` passes, and the image otherwise.
      It tries `docker`, then `podman`, pulls the image for the plugin's version on first use,
      starts or reuses one container, mounts the project, maps host paths to container paths,
      keeps the signing key in a volume, stops the container when idle, runs `doctor`, and
@@ -199,8 +203,9 @@ Then by finish-line point:
      binary or a script is for the plan;
    - a `lengua-mcp doctor` that says what a kernel lacks;
    - a dev container, for an agent that runs inside the container instead;
-   - the documents for the other routes (WSL 2, a Linux VM), and optionally a server that installs
-     on more Linux (musl or older-glibc builds, and which LLVM versions lengua needs).
+   - the documents for the other routes (a Linux VM by hand), and optionally a server that
+     installs on more Linux (musl or older-glibc builds, and which LLVM versions lengua needs,
+     including whether Ubuntu's own LLVM 18 would do instead of apt.llvm.org's 22);
 4. **Deferred: native macOS and Windows ports** (the owner, 2026-11-06). Their design stays in
    ROADMAP.md, and "Deferred" says what would bring them back.
 5. **Performance:**
@@ -294,7 +299,9 @@ What round 2 left:
 An Opus plan comes first. What it must settle, from what the research found on 2026-11-06:
 - **The routes' kernels.** lengua needs Landlock for every program, and Landlock ABI 6 (Linux
   6.12) for a program that uses the network.
-  - WSL 2's kernel has Landlock (since 5.15.57.1; the current one is 6.18.58.1). Docker Desktop on
+  - WSL 2's kernel has Landlock (since 5.15.57.1; the current one is 6.18.58.1, whose config sets
+    `CONFIG_SECURITY_LANDLOCK=y` and `CONFIG_LSM="landlock,lockdown,yama,..."`, so Landlock is on
+    by default and ABI 6 is met). Docker Desktop on
     a Mac reportedly has none (its kernel is 6.12.54-linuxkit, a user report of 2026-10-02;
     LinuxKit's request to enable it, #3928, has been open since 2023, and Docker Desktop's release
     notes don't mention it), and Apple's `container` kernel is unverified: its repo's old 6.1.68
@@ -328,8 +335,9 @@ An Opus plan comes first. What it must settle, from what the research found on 2
   `podman-docker` package adds a `docker` command), so Podman users stay supported and the
   container job tests both (the runner has Docker 28.0.4 and Podman 4.9.3). The `docker` command
   and the Docker Engine are open source (Apache 2.0), but the Engine runs only on Linux (Docker's
-  install page offers it on Windows and a Mac "through Docker Desktop"), so Windows and a Mac need
-  a Linux VM from a provider: Docker Desktop (one installer; free for personal use, education,
+  install page offers it on Windows and a Mac "through Docker Desktop"), so a Mac needs a Linux VM
+  from a provider (and Windows has WSL 2 built in): Docker Desktop (one installer; free for
+  personal use, education,
   non-commercial open source and companies under 250 employees and $10 million revenue, paid
   above that; its Mac VM reportedly has no Landlock), Rancher Desktop (SUSE, open source, Apache
   2.0, no size limit, Windows, Mac and Linux), Colima (Mac, MIT, `brew install colima docker`) or
@@ -357,17 +365,34 @@ An Opus plan comes first. What it must settle, from what the research found on 2
   bit-vector bugs the prover works around). Decide whether a native install takes the image's
   pinned versions too, so that a proof's verdict doesn't depend on the route, and have `doctor`
   print the versions it found.
-- **Windows and Mac.** The image comes first, under a working Docker from any provider: on Windows
-  Docker Desktop (the easiest installer), Rancher Desktop or the Docker Engine inside WSL 2, on a
-  Mac Colima or Rancher Desktop, or Docker Desktop once its VM passes the check. When the
+- **Windows: WSL 2 first** (the owner asked, 2026-11-06, which is best for a Windows user:
+  Docker Desktop or WSL). `wsl --install -d Ubuntu-24.04` in an administrator PowerShell, a
+  restart, then the agent and the plugin inside Ubuntu: lengua runs directly, exactly as in CI's
+  native jobs (the same Ubuntu 24.04), with no container, launcher or path mapping. Claude Code
+  runs in WSL 2 (third-party guides say its sandbox works there and not on native Windows, and
+  that the Windows-side and WSL installs keep separate logins), so the plugin is an ordinary Linux
+  plugin; the project lives on ext4, not on `/mnt/c`, which is slow and case-insensitive. Docker
+  Desktop on Windows runs on this same WSL 2 kernel, so it adds an engine, a container, a
+  launcher and Windows-to-container path mapping and gains only that the agent can stay on the
+  Windows side: that is the image's job (Docker Desktop or Rancher Desktop), after round 3. An
+  agent on the Windows side calling `lengua-mcp` through `wsl.exe` in `.mcp.json` would meet path
+  and environment translation: not planned, not tested.
+- **A Mac.** The image under a working Docker from any provider: Colima first (free, MIT, and an
+  Ubuntu VM), then Rancher Desktop, or Docker Desktop once its VM passes the check. When the
   launcher finds a Docker whose kernel has no Landlock (Docker Desktop's Mac VM reportedly), it
-  says so in a sentence and names a VM that should have it. WSL 2 with the agent inside it
-  (Claude Code runs there, so the plugin is an ordinary Linux plugin: no bridge, no container
-  needed, and the project lives on ext4, not on `/mnt/c`, which is slow and case-insensitive) and
-  a Linux VM (Colima, Lima, UTM, Parallels) are the same Linux set up by hand: documented, not
-  promised. An agent on the Windows side calling `lengua-mcp` through `wsl.exe` in `.mcp.json`
-  would meet path and environment translation: not planned, not tested. The owner tests what CI
-  can't, and the documents say so until they have.
+  says so in a sentence and names a VM that should have it. A Linux VM (Colima, Lima, UTM,
+  Parallels) with the agent inside it is the same Linux set up by hand: documented, not promised.
+  Apple's own `container` (macOS 26, Apple silicon only, a Docker-like but different command, a
+  VM per container, kernel unverified) is not promised either. The owner tests what CI can't, and
+  the documents say so until they have.
+- **The probe** (`.github/workflows/probe.yml`, manual, read-only). It tries the two routes a free
+  runner might run, and prints each VM's kernel and `/sys/kernel/security/lsm`: `windows-wsl` on
+  `windows-2025` (WSL 2 with Ubuntu-24.04; whether a hosted Windows runner can run WSL 2 is
+  disputed: older sources say WSL 1 only) and `mac-colima` on `macos-26-intel` (Colima's VM; the
+  Apple-silicon macOS runners can't run Colima or Docker, which need nested virtualization, but
+  Intel ones can, and an Intel VM is a proxy for Apple silicon). A failing step is itself the
+  answer. If WSL 2 works there, a CI job that runs the suite inside it would test the Windows
+  route; if Colima's VM lists `landlock`, a Mac with Colima is as far as free runners can say.
 - **Inside a container,** `/proc/meminfo` shows the host's memory, so the proofs' memory guard
   overestimates what is free, and hardware counters may be missing; runs still work.
 

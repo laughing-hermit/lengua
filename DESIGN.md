@@ -1196,16 +1196,18 @@ tested, not proven, today.
 lengua builds, checks, proves and runs programs for Linux on x86-64 and on ARM64 (ELF, reaching
 the system through lengua's edge; tested natively on GitHub's runners of both, and the ARM64 ones
 also under QEMU on the x86-64 one), assembled by LLVM's `llvm-mc` and linked by `ld.lld`. Those
-are its two targets. A Linux that meets the floor runs lengua directly, with no container. Windows
-and Mac reach lengua through the lengua image, an Ubuntu 24.04 userland pinned by digest, run by
-a working Docker, meaning a `docker` command talking to an engine that, on Windows and a Mac, runs
-in a Linux VM from a provider (Docker Desktop, Rancher Desktop, Colima, or WSL 2), with Podman
-supported: a Linux with the same two targets inside, the one route the project means to promise
-and test (planned: todo.md, "Round 3"), which an older Linux can use too. A Mac needs a VM kernel
-with Landlock, which Docker Desktop's reportedly lacks. WSL 2 and a Linux VM are also the same
-Linux set up by hand (README.md, "Windows and Mac"). Native macOS and Windows ports are deferred:
-each would bring its own edge file and confinement (the plans are in ROADMAP.md), and macOS on
-x86-64 is not planned at all, since Apple makes no Intel Macs any more (todo.md, "Deferred").
+are its two targets. A Linux that meets the floor runs lengua directly, with no container, and so
+does Ubuntu inside WSL 2 on Windows, the recommended Windows route: the agent runs inside it, and
+Microsoft's WSL 2 kernel has Landlock on. A Mac, an older Linux and an agent on the Windows side
+reach lengua through the lengua image, an Ubuntu 24.04 userland pinned by digest, run by a working
+Docker, meaning a `docker` command talking to an engine that, on a Mac, runs in a Linux VM from a
+provider (Colima, Rancher Desktop or Docker Desktop), with Podman supported: a Linux with the same
+two targets inside, the one container route the project means to promise and test (planned:
+todo.md, "Round 3"). A Mac needs a VM kernel with Landlock, which Docker Desktop's reportedly
+lacks. A Linux VM set up by hand is the same Linux again (README.md, "Windows and Mac"). Native
+macOS and Windows ports are deferred: each would bring its own edge file and confinement (the
+plans are in ROADMAP.md), and macOS on x86-64 is not planned at all, since Apple makes no Intel
+Macs any more (todo.md, "Deferred").
 
 The spec is the portable part and already agnostic: it names no CPU or OS, and `check` rejects a
 CPU or OS term in a spec's prose, so the same spec means the same on every target. The per-target
@@ -1263,9 +1265,10 @@ distributions, and an image, are planned: todo.md, "Round 3"); the skills are th
 **Building and testing without owning the hardware.** A target doesn't need its machine bought,
 and nothing is built or run on the owner's computer. GitHub's free runners are real Linux
 machines on both CPUs, and `ci.yml` builds and tests each target natively on its own; QEMU's user
-mode adds the other CPU's Linux programs on the x86-64 Linux runner. No free runner can run WSL 2
-or a Mac VM; the image's route can be tested in a container on those runners, under Docker and
-under Podman (todo.md, "Round 3").
+mode adds the other CPU's Linux programs on the x86-64 Linux runner. No free runner is known to
+run WSL 2 or an Apple-silicon Mac's VM (a probe will try a Windows runner and an Intel macOS one);
+the image's route can be tested in a container on the Linux runners, under Docker and under
+Podman (todo.md, "Round 3").
 What's written per target is the backend and that host's runner.
 
 ### Porting a target
@@ -1466,9 +1469,10 @@ program of each target through the server, where each follows every rule and pas
 (`second` fails its tests on both CPUs, by design). The mutation test covers the same programs on
 both CPUs, x86-64's under its own decoder and ARM64's under QEMU or on ARM64.
 
-**The floor is a default container.** The same rule holds for where lengua runs: Windows and Mac
-users reach it through the lengua image, run by Docker or Podman, so what a default container
-gives on any host is the floor of the product, and a limit of the container is a limit of lengua
+**The floor is a default container.** The same rule holds for where lengua runs: a Mac, an older
+Linux and an agent on the Windows side reach it through the lengua image, run by Docker or Podman,
+so what a default container gives on any host is the floor of the product, and a limit of the
+container is a limit of lengua
 on every system, Linux included. lengua uses no io_uring, which the default seccomp profiles of
 both runtimes block; the hardware counters are optional, since containers and VMs often lack them;
 the proofs' memory guard is meant to read the container's own limit, not the host's
@@ -1696,9 +1700,10 @@ allocation while running, recursion, function pointers, and running other progra
 
 lengua has two targets, as one product: Linux on x86-64 and Linux on ARM64, each tested natively
 on its own GitHub runner (`.github/workflows/ci.yml`; nothing runs on the owner's computer),
-every x86-64 program with its AArch64 twin. Windows and Mac reach it through its image, run by
-Docker or Podman (README.md, "Windows and Mac"), a route not built yet that a container job will
-test (todo.md, "Round 3"); WSL 2 and a Linux VM are the same Linux set up by hand, untested.
+every x86-64 program with its AArch64 twin. Windows reaches it inside WSL 2 and a Mac through its
+image, run by Docker or Podman (README.md, "Windows and Mac"): WSL 2 is untested so far, and the
+image route is not built yet and a container job will test it (todo.md, "Round 3"); a Linux VM
+set up by hand is the same Linux again, untested.
 A native macOS or Windows port, deferred, would need more than a new CPU, since those systems
 forbid the direct system calls lengua's edge makes on Linux and have neither seccomp nor
 Landlock: each would be a profile with its own toolchain, executable reader, edge file, runner and

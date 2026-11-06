@@ -48,9 +48,9 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 ## Requirements
 
 - Linux on x86-64 or ARM64 (AArch64), with glibc 2.39 or newer: Ubuntu 24.04, Debian 13 or Fedora
-  40 and later, where lengua runs directly. On Windows, on a Mac or on an older Linux, it runs from
-  its image under a working Docker (or Podman) once that exists, and on a Linux you set up until
-  then ("Windows and Mac" below).
+  40 and later, where lengua runs directly, and so does Ubuntu inside WSL 2 on Windows. On a Mac or
+  an older Linux it runs from its image under a working Docker (or Podman) once that exists, and on
+  a Linux you set up until then ("Windows and Mac" below).
 - A kernel with Landlock on, which every run needs: Linux 5.13 or newer, and 6.12 or newer for a
   program that uses the network. lengua won't run a program without it. `cat
   /sys/kernel/security/lsm` should list `landlock`.
@@ -62,33 +62,50 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 
 ## Windows and Mac
 
-lengua runs on Linux, so on Windows and a Mac it runs inside a Linux. The project means to promise
-one route there: **the lengua image, run by a working Docker**: a `docker` command that talks to an
-engine, from any provider below, with Podman supported as the compatible alternative. It does not
-exist yet. It will be Ubuntu 24.04 pinned to an exact build, the userland CI tests natively, with
-glibc 2.39, LLVM, z3, cvc5 and lengua-mcp, one image for both CPUs, and a CI job will run lengua's
-suite inside it under Docker's and Podman's default seccomp profiles on both Linux runners
-([todo.md](todo.md), "Round 3"). The aim is that installing the plugin is the only step: the plugin
-starts the image itself, mounts your project and keeps lengua's signing key, so you never type a
-`docker run`. Native macOS and Windows ports are deferred ("Deferred" there). Once the image
-exists, the routes are:
+lengua runs on Linux, so on Windows and a Mac it runs inside a Linux.
+
+**Windows: WSL 2, with your agent inside it.** Windows has a real Linux built in, and lengua runs
+there exactly as on a Linux laptop, with no container:
+
+1. In an administrator PowerShell, run `wsl --install -d Ubuntu-24.04`, restart, and create a Linux
+   user when Ubuntu asks.
+2. Open Ubuntu (from Windows Terminal or the Start menu) and install your agent and the lengua
+   plugin there, and the tools in "Requirements" above. Claude Code runs in WSL, and the plugin is
+   an ordinary Linux plugin. A Claude Code installed on the Windows side keeps its own login and
+   settings, so use the one inside Ubuntu.
+3. Keep your projects in Ubuntu's home folder, not under `/mnt/c`, which is slow and ignores case.
+
+Microsoft's WSL 2 kernel (6.18) has Landlock on by default, above lengua's 6.12 floor for programs
+that use the network. The project has not run this route yet ([todo.md](todo.md) has the probe that
+tries it on a Windows runner), and it needs your agent inside WSL: if your agent must stay on the
+Windows side, use the image below.
+
+**A Mac, an older Linux, or an agent on the Windows side: the lengua image.** The project means to
+promise one container route there: **the lengua image, run by a working Docker**, a `docker`
+command that talks to an engine, from any provider below, with Podman supported as the compatible
+alternative. It does not exist yet. It will be Ubuntu 24.04 pinned to an exact build, the userland
+CI tests natively, with glibc 2.39, LLVM, z3, cvc5 and lengua-mcp, one image for both CPUs, and a CI
+job will run lengua's suite inside it under Docker's and Podman's default seccomp profiles on both
+Linux runners ([todo.md](todo.md), "Round 3"). The aim is that installing the plugin is the only
+step: the plugin starts the image itself, mounts your project and keeps lengua's signing key, so
+you never type a `docker run`. Native macOS and Windows ports are deferred ("Deferred" there). Once
+the image exists, the routes are:
 
 | system | how lengua runs | runtime |
 |---|---|---|
 | Linux with glibc 2.39+ and Landlock (Fedora 40+, Ubuntu 24.04+, Debian 13+) | directly, the default | none |
+| Windows | directly inside WSL 2 (above), the easiest; or the image if your agent stays on Windows | `wsl --install -d Ubuntu-24.04`; or any Docker |
+| Mac | the image, or a Linux VM you set up with your agent inside it | any Docker whose VM passes the Landlock check below: Colima first, then Rancher Desktop; Docker Desktop reportedly not yet |
 | An older Linux (Ubuntu 22.04, Debian 12, RHEL 9) | the image | Docker Engine (Podman also works) |
-| Windows | the image | any Docker: Docker Desktop (the easiest installer), Rancher Desktop, or Docker Engine inside WSL 2 |
-| Mac | the image | any Docker whose VM passes the Landlock check below: Colima or Rancher Desktop; Docker Desktop reportedly not yet |
 
-The standard is the interface, not one product: lengua needs a working Docker, meaning a `docker`
-command that talks to an engine, and any provider will do, since the plugin only calls `docker`.
-The `docker` command and the Docker Engine are open source, but the Engine runs only on Linux, so on
-Windows and a Mac it runs inside a small Linux VM that a provider sets up for you:
+The standard for the image is the interface, not one product: lengua needs a working Docker,
+meaning a `docker` command that talks to an engine, and any provider will do, since the plugin only
+calls `docker`. The `docker` command and the Docker Engine are open source, but the Engine runs only
+on Linux, so on Windows and a Mac it runs inside a small Linux VM that a provider sets up for you:
 - **Docker Desktop**, one installer and the quickest start: free for personal use, education and
   companies under 250 people and $10 million a year, paid above that.
 - **Rancher Desktop**, open source and free at any size, for Windows and Mac.
 - **Colima**, free, for Mac (`brew install colima docker`).
-- **Docker Engine inside WSL 2**, free, for Windows.
 
 CI tests the Engine, since the runners have it.
 
@@ -108,20 +125,15 @@ A limit of a default container, on any system, is a limit of lengua: it doesn't 
 those containers block, and hardware counters are optional, so it behaves the same inside Docker or
 Podman on Windows, on a Mac and on Linux.
 
-Until the image exists, run your agent and lengua together on a Linux that has what the
-requirements above list. The project has not tested these routes on Windows or a Mac, since no free
-CI runner can run them:
+Until the image exists, a Mac needs a Linux you set up by hand, with your agent inside it. The
+project has not tested that route, since no free CI runner can run an Apple-silicon Mac's VM:
 
-- **Windows: WSL 2.** Run `wsl --install -d Ubuntu-24.04`, then install your agent and the lengua
-  plugin inside Ubuntu (Claude Code runs there, so the plugin is an ordinary Linux plugin), and
-  keep your projects in its home folder, not under `/mnt/c`, which is slow and ignores case.
-  Microsoft's WSL 2 kernel has had Landlock since 2022, and Docker Desktop on Windows runs on WSL 2
-  too.
 - **Mac: a Linux VM that has Landlock.** Podman machine (Fedora CoreOS) or Colima (free; expected
   to have it, not verified), or Lima, UTM or Parallels with Ubuntu 24.04 arm64; your agent and
-  lengua go inside. Docker Desktop on a Mac reportedly has no Landlock in its VM, and Apple has no
-  WSL: its `container` tool (macOS 26, Apple silicon) runs each container in a small VM whose
-  kernel may lack it. Check `cat /sys/kernel/security/lsm` before relying on any of them.
+  lengua go inside. Docker Desktop on a Mac reportedly has no Landlock in its VM. Apple has no WSL:
+  its own `container` tool (macOS 26, Apple silicon only, Docker-like but a different command) runs
+  each container in a small VM whose kernel may lack it, so the project doesn't promise it. Check
+  `cat /sys/kernel/security/lsm` before relying on any of them.
 - **Your own image,** from a Linux image with glibc 2.39 or newer (`ubuntu:24.04`, or
   `debian:trixie-slim`, which is Debian 13; `debian:12`, `ubuntu:22.04` and Alpine are too old),
   `linux/arm64` on Apple silicon.

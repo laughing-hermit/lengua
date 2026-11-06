@@ -1,0 +1,74 @@
+name: probe
+
+# What a free runner can say about the two routes lengua offers Windows and a Mac: a Linux inside
+# WSL 2, and a Linux VM under Colima. Manual, read-only, no secrets, nothing is built or tested
+# here. Each job prints its kernel and the Linux security modules it lists (landlock must be one,
+# which every lengua run needs), and a step that fails is itself the answer: for example, that a
+# hosted Windows runner can't run WSL 2. todo.md, "Round 3", "The probe", says how to read it.
+#
+# The Apple-silicon macOS runners can't run Colima or Docker (no nested virtualization), so the
+# Mac job uses an Intel runner: its VM is x86-64 Linux, a proxy for the Apple-silicon one.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-wsl:
+    name: windows-wsl (windows-2025)
+    runs-on: windows-2025
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      WSL_UTF8: "1"
+    steps:
+      - name: What the runner has
+        continue-on-error: true
+        run: |
+          Get-ComputerInfo | Select-Object WindowsProductName, WindowsVersion, OsBuildNumber, HyperVisorPresent | Format-List
+          wsl --status
+          wsl --version
+
+      - name: Update WSL and install Ubuntu 24.04
+        continue-on-error: true
+        run: |
+          wsl --update
+          wsl --install --no-launch --web-download -d Ubuntu-24.04
+          wsl --list --verbose
+
+      - name: The kernel and Linux security modules inside WSL
+        continue-on-error: true
+        run: |
+          $out = wsl -d Ubuntu-24.04 -u root -- sh -c 'uname -r; cat /sys/kernel/security/lsm'
+          $out
+          $text = "### WSL on windows-2025`n" + '```' + "`n" + ($out -join "`n") + "`n" + '```'
+          $text | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+
+  mac-colima:
+    name: mac-colima (macos-26-intel)
+    runs-on: macos-26-intel
+    timeout-minutes: 30
+    steps:
+      - name: Install Colima and the Docker CLI
+        run: brew install colima docker
+
+      - name: Start Colima
+        continue-on-error: true
+        run: |
+          colima start --cpu 2 --memory 4 --disk 20 || colima start --vm-type vz --cpu 2 --memory 4 --disk 20
+          colima status
+          docker info --format 'engine {{.ServerVersion}}, kernel {{.KernelVersion}}, {{.OperatingSystem}}'
+
+      - name: The kernel and Linux security modules inside Colima's VM
+        continue-on-error: true
+        run: |
+          {
+            echo '### Colima on macos-26-intel'
+            echo '```'
+            docker run --rm ubuntu:24.04 sh -c 'uname -r; cat /sys/kernel/security/lsm'
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"

@@ -663,14 +663,15 @@ The build differs from the plan in these ways:
 
 ### R3 — reach: the image first
 
-**Goal.** A person on Windows, on a Mac or on an older Linux can use lengua through one route that
-CI tests: the lengua image, run by a working Docker (a `docker` command talking to an engine, from
-any provider; Podman is supported), which is a Linux with the same two targets inside. A Linux
-that meets the floor needs no container and runs lengua directly. The route is seamless: with
-Docker or Podman installed, installing the plugin is the only step. A default container, on any
-host, is the floor of the product: what it doesn't give on every host, lengua doesn't need.
-todo.md's "Round 3" holds the questions the plan must settle, and an Opus plan makes these
-candidate steps executable.
+**Goal.** A person on a Mac, on an older Linux or with an agent on the Windows side can use lengua
+through one route that CI tests: the lengua image, run by a working Docker (a `docker` command
+talking to an engine, from any provider; Podman is supported), which is a Linux with the same two
+targets inside. A Linux that meets the floor needs no container and runs lengua directly, and on
+Windows the simpler route is WSL 2 with Ubuntu 24.04 and the agent inside it, where lengua runs
+directly too and no round 3 work is needed. The image route is seamless: with Docker or Podman
+installed, installing the plugin is the only step. A default container, on any host, is the floor
+of the product: what it doesn't give on every host, lengua doesn't need. todo.md's "Round 3" holds
+the questions the plan must settle, and an Opus plan makes these candidate steps executable.
 
 **Steps.**
 1. **The lengua image.** Ubuntu 24.04, pinned by digest: the userland CI's native jobs run, so
@@ -691,9 +692,10 @@ candidate steps executable.
    A sandbox change gets a review and its tests (`tests/limits.rs`, the red team). A Mac is the
    test case: Docker Desktop's VM reportedly has no Landlock, and Colima's, Rancher Desktop's and
    Podman Desktop's are unchecked (todo.md, "Round 3", has the one-line check).
-4. **The host launcher.** The command the plugin's `.mcp.json` runs on Windows and macOS (and on a
-   Linux that doesn't meet the floor). On a Linux that does, it runs the native server when that
-   is installed and `doctor` passes, and the image otherwise. It tries `docker`, then `podman`,
+4. **The host launcher.** The command the plugin's `.mcp.json` runs on a Mac and for an agent on
+   the Windows side (and on a Linux that doesn't meet the floor). On a Linux that does, and inside
+   WSL 2, it runs the native server when that is installed and `doctor` passes, and the image
+   otherwise. It tries `docker`, then `podman`,
    pulls the image for the plugin's version, starts or reuses one container, mounts the project,
    maps host paths to container paths, keeps the signing key in a volume, stops the container
    when idle, and explains a failure in a sentence; when the Docker it found has no Landlock
@@ -706,26 +708,29 @@ candidate steps executable.
    says in words a person can act on what a route lacks.
 6. **The container's own limits.** The proofs' memory guard reads the container's cgroup limit
    instead of the host's `/proc/meminfo`, and nothing needs a hardware counter.
-7. **The documents,** and the other routes: WSL 2 with the agent inside it, a Linux VM (Podman
-   machine, Colima, Lima), a dev container. Optionally the server on more Linux: static musl
-   builds or an older-glibc build for both CPUs, chosen with the LLVM versions lengua needs;
+7. **The documents** (WSL 2 first for Windows), and the other routes: a Linux VM (Podman machine,
+   Colima, Lima) with the agent inside it, a dev container. Optionally the server on more Linux:
+   static musl builds or an older-glibc build for both CPUs, chosen with the LLVM versions lengua
+   needs (and whether Ubuntu's own LLVM 18 would do instead of apt.llvm.org's 22);
    `scripts/install.sh` and `scripts/release.sh` follow.
 
 **Verified by.**
 - `compile`, then a full `test`, on both runners.
 - The container job, green on both runners under both runtimes.
-- Hand tests: the owner's Fedora, directly and under Podman; and Docker Desktop and Docker Engine
-  inside WSL 2 on Windows, Colima, Rancher Desktop and Docker Desktop on a Mac, where someone has
-  them, noted in todo.md (no free runner can run those).
+- The probe (`.github/workflows/probe.yml`, manual): WSL 2 on a Windows runner and Colima on an
+  Intel macOS runner, each printing its kernel and Landlock status (todo.md, "Round 3").
+- Hand tests: the owner's Fedora, directly and under Podman; and WSL 2 and Docker Desktop on
+  Windows, Colima, Rancher Desktop and Docker Desktop on a Mac, where someone has them and the
+  probe can't, noted in todo.md.
 
 **Size and risks.** Size M. The kernels under Docker Desktop, WSL 2 and the Mac VMs differ and some
 have no Landlock (todo.md, "Round 3"); who tests the Mac and Windows routes by hand is open.
 
 ### R4 — native macOS and Windows ports (deferred 2026-11-06)
 
-The owner deferred these ports when lengua became two targets: Windows and Mac are reached through
-the lengua image, run by Docker or Podman (R3). What follows, the plans of the old rounds 3 and 4,
-is kept so that they can come back (todo.md, "Deferred").
+The owner deferred these ports when lengua became two targets: Windows is reached through WSL 2
+and a Mac through the lengua image, run by Docker or Podman (R3). What follows, the plans of the
+old rounds 3 and 4, is kept so that they can come back (todo.md, "Deferred").
 
 #### macOS, ARM64 (was R3)
 
