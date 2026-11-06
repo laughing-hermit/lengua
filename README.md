@@ -52,7 +52,8 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
   a Mac a Lima VM ("Windows and Mac" below).
 - A kernel with Landlock on, which every run needs: Linux 5.13 or newer, and 6.12 or newer for a
   program that uses the network. lengua won't run a program without it. `cat
-  /sys/kernel/security/lsm` should list `landlock`.
+  /sys/kernel/security/lsm` should list `landlock` (inside WSL 2 that file is missing until `sudo
+  mount -t securityfs securityfs /sys/kernel/security` mounts it).
 - Rust 1.89 or newer (to build the server)
 - LLVM's assembler and linker: `sudo dnf install llvm lld` (Fedora) or `sudo apt install llvm lld`
   (Debian/Ubuntu)
@@ -82,7 +83,8 @@ that; Windows and a Mac get it once, in a few minutes:
 3. Keep your projects in Ubuntu's home folder, not under `/mnt/c`, which is slow and ignores case.
 
 Microsoft's WSL 2 kernel (6.18) has Landlock on by default, above lengua's 6.12 floor for programs
-that use the network.
+that use the network. GitHub's Windows runner can run this route: the probe installed Ubuntu 24.04
+in WSL 2 there and ran it on that kernel (6.18.54.1), so CI can test it.
 
 **Mac: a Lima VM.**
 

@@ -45,7 +45,8 @@ jobs:
       - name: The kernel and Linux security modules inside WSL
         continue-on-error: true
         run: |
-          $out = wsl -d Ubuntu-24.04 -u root -- sh -c 'uname -r; cat /sys/kernel/security/lsm'
+          # WSL doesn't mount securityfs by default, so the LSM list is missing until it is mounted.
+          $out = wsl -d Ubuntu-24.04 -u root -- sh -c 'uname -r; mountpoint -q /sys/kernel/security || mount -t securityfs securityfs /sys/kernel/security; cat /sys/kernel/security/lsm; echo; . /etc/os-release; echo "$PRETTY_NAME"'
           $out
           $text = "### WSL on windows-2025`n" + '```' + "`n" + ($out -join "`n") + "`n" + '```'
           $text | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
@@ -75,7 +76,7 @@ jobs:
           {
             echo '### Lima, Ubuntu 24.04, on macos-26-intel'
             echo '```'
-            limactl shell ubuntu sh -c 'uname -r; cat /sys/kernel/security/lsm; . /etc/os-release; echo "$PRETTY_NAME"'
+            limactl shell ubuntu sh -c 'uname -m; uname -r; cat /sys/kernel/security/lsm; echo; . /etc/os-release; echo "$PRETTY_NAME"'
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
@@ -131,6 +132,6 @@ jobs:
           {
             echo "### Lima, Ubuntu 24.04, on ${{ matrix.runner }}"
             echo '```'
-            limactl shell ubuntu sh -c 'uname -m; uname -r; cat /sys/kernel/security/lsm; . /etc/os-release; echo "$PRETTY_NAME"'
+            limactl shell ubuntu sh -c 'uname -m; uname -r; cat /sys/kernel/security/lsm; echo; . /etc/os-release; echo "$PRETTY_NAME"'
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"

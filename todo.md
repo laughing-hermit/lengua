@@ -339,30 +339,43 @@ the runners. What the plan must settle, from what the research found on 2026-11-
   kernel would be the provider's, where a Lima VM's is ours to choose. Other VMs (UTM, Parallels)
   work when `doctor` passes; Apple's own `container` (macOS 26, Apple silicon only, a Docker-like
   but different command, a VM per container, kernel unverified) is not promised.
-- **The probe** (`.github/workflows/probe.yml`, manual, read-only). It tries the two kernels a free
-  runner might run and prints each one's version and `/sys/kernel/security/lsm`: `windows-wsl` on
-  `windows-2025` (WSL 2 with Ubuntu-24.04; whether a hosted Windows runner can run WSL 2 is
-  disputed: older sources say WSL 1 only) and `mac-lima` on `macos-26-intel` (Lima's Ubuntu 24.04
-  VM; the Apple-silicon macOS runners can't run a VM, since they lack nested virtualization, but
-  Intel ones can, and an Intel VM is a proxy for Apple silicon), and `linux-lima` on both Linux
-  runners (the same Ubuntu 24.04 cloud image under Lima and QEMU, with or without KVM). A failing
-  step is itself the answer. Where a route works there, a CI job that runs the suite inside it
-  tests that route.
+- **The probe** (`.github/workflows/probe.yml`, manual, read-only) and what it found ([run
+  42257189853](https://github.com/laughing-hermit/lengua/actions/runs/42257189853), 2026-11-06).
+  Each job prints the kernel and `/sys/kernel/security/lsm`; a failing step is itself the answer.
+  - `windows-wsl` on `windows-2025`: Hyper-V present, WSL 3.0.3.0 with kernel 6.18.54.1; `wsl
+    --install --no-launch --web-download -d Ubuntu-24.04` installed Ubuntu 24.04 as WSL 2 and ran
+    it (`6.18.54.1-microsoft-standard-WSL2`). WSL doesn't mount securityfs, so the LSM list is
+    missing until it is mounted (the probe and `machine.sh` now mount it); Landlock doesn't need it.
+    So a hosted Windows runner can run the Windows route.
+  - `linux-lima` on `ubuntu-24.04`: `/dev/kvm` present; Lima 2.3.0 booted Ubuntu's own
+    `release-20261017` amd64 cloud image with KVM in about a minute: Ubuntu 24.04.5, kernel
+    6.8.0-147-generic, LSMs `lockdown,capability,landlock,yama,apparmor`.
+  - `linux-lima` on `ubuntu-24.04-arm`: no `/dev/kvm`, so QEMU emulated the arm64 VM; Lima gave up
+    waiting after 10 minutes, but the VM came up: aarch64, the same 6.8.0-147 kernel and LSMs.
+  - `mac-lima` on `macos-26-intel`: Homebrew's Lima 2.2.0 couldn't start a `vz` VM (it gave up
+    after 11 minutes), and QEMU booted Ubuntu 24.04.4 (`release-20260705`) after about 9 more:
+    kernel 6.8.0-134-generic, Landlock on. That is slow, so the Mac VM's job runs on the Linux
+    runner with KVM instead.
+  - What follows: Lima's Ubuntu 24.04 boots the stock 6.8 kernel (Landlock ABI 4), below the 6.12
+    floor for network programs. The owner chose Ubuntu's HWE kernel inside the VM (README's Mac
+    steps), so the floor stays as it is.
 - **Tested on a runner before a promise** (the owner, 2026-11-06: "everything needs to be testable
-  via GitHub runners"; a side agent's note that day: CI fully tests the Ubuntu part, but the kernel
-  under WSL 2 or a Mac VM decides whether lengua runs, and the probe only reads it). A route is
-  promised only once a runner has run lengua's checks inside it, in a CI job:
-  - Windows: inside WSL 2 on `windows-2025`, if the probe shows a hosted runner can run WSL 2. If
-    it can't, the Windows route stays "documented, not tested", with Microsoft's published kernel
-    config as its only evidence.
-  - A Mac: what lengua meets there is the guest, and Lima boots Ubuntu's own 24.04 cloud image
-    (cloud-images.ubuntu.com, the same file on any host). Lima runs on Linux too, with QEMU (and
-    KVM where the runner offers it), so a job on `ubuntu-24.04` and `ubuntu-24.04-arm` can run
-    lengua's checks inside the very VM a Mac boots, on both CPUs. Only Apple's hypervisor stays
-    untested, and it changes nothing lengua uses. The probe's `linux-lima` job reads whether
-    `/dev/kvm` is there and which kernel that image boots on each runner.
+  via GitHub runners"). A route is promised only once a runner has run lengua's checks inside it.
+  `.github/workflows/routes.yml`, weekly and on demand (the owner's choice), does that:
 
-  Until a route's job is green, the documents say "documented, not yet tested".
+  | route | what is tested, where |
+  |---|---|
+  | Linux, both CPUs | the full suite, natively on `ubuntu-24.04` and `ubuntu-24.04-arm` (`ci.yml`, every push) |
+  | Windows (x86-64) | the full suite inside WSL 2 (Ubuntu 24.04 on Microsoft's kernel) on `windows-2025` |
+  | Mac: the CPU | ARM64 lengua, the full suite natively on `ubuntu-24.04-arm` (`ci.yml`, every push) |
+  | Mac: the VM | the full suite inside Lima's Ubuntu 24.04 cloud image with the HWE kernel, on `ubuntu-24.04` with KVM (the image, kernel package and Lima a Mac uses, on x86-64) |
+  | Mac: both at once | an emulated ARM64 Lima VM on `ubuntu-24.04-arm`: boot, the HWE kernel, the Landlock reading and the sandbox tests (`limits`, `red_team`), as a smoke test |
+  | Mac: Apple's hypervisor | not testable on free runners (no nested virtualization); it changes nothing lengua sees |
+
+  The free ARM64 runner has no KVM, so the full suite can't run inside an ARM64 VM in time (a side
+  agent's note, 2026-11-06): the CPU and the VM are tested apart at full speed, and together as a
+  smoke test. Windows on ARM: the probe tries WSL 2 on `windows-11-arm` too. Until a route's job is
+  green, the documents say "documented, not yet tested".
 
 ### Later: the image
 
