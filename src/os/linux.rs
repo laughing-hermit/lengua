@@ -1529,12 +1529,7 @@ fn pin_rules(pin: Pin) -> Result<Vec<SeccompRule>, seccompiler::BackendError> {
         }
         // No flag but MSG_NOSIGNAL (MSG_FASTOPEN would connect), no address, and not the channel.
         Pin::NoAddress => Ok(vec![SeccompRule::new(vec![
-            condition(
-                0,
-                Dword,
-                SeccompCmpOp::Ne,
-                u64::from(crate::edge::CHANNEL),
-            )?,
+            condition(0, Dword, SeccompCmpOp::Ne, u64::from(crate::edge::CHANNEL))?,
             condition(
                 3,
                 Dword,
