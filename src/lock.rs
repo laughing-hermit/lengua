@@ -678,8 +678,10 @@ fn unhex(text: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
+/// Makes the folder `path`, with its parents, readable only by this user where the system
+/// says who may read a folder.
 #[cfg(unix)]
-fn create_private_dir(path: &Path) -> io::Result<()> {
+pub(crate) fn create_private_dir(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::DirBuilderExt as _;
     std::fs::DirBuilder::new()
         .recursive(true)
@@ -687,8 +689,9 @@ fn create_private_dir(path: &Path) -> io::Result<()> {
         .create(path)
 }
 
+/// Makes the folder `path`, with its parents.
 #[cfg(not(unix))]
-fn create_private_dir(path: &Path) -> io::Result<()> {
+pub(crate) fn create_private_dir(path: &Path) -> io::Result<()> {
     std::fs::create_dir_all(path)
 }
 

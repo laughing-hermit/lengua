@@ -17,6 +17,7 @@ use tokio::sync::watch;
 use crate::checker::{self, source::Source};
 use crate::data_dir::DataDir;
 use crate::expr;
+use crate::graph;
 use crate::hash::Sha256Hex;
 use crate::header::{self, Header};
 use crate::idea::{self, Idea};
@@ -364,6 +365,11 @@ pub struct CheckReport {
     /// the shell's own input and output, and files read and written in the folder it starts in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell: Option<String>,
+    /// How the graph of program folders that this one belongs to stands: its bundle, what
+    /// index.md and log.md now say of the program, and what needs care, each line starting with
+    /// how much: `blocks` (fix it first), `warning` or `note`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub graph: Vec<String>,
     /// The single next thing to do.
     pub next_step: String,
 }
@@ -606,7 +612,9 @@ impl LenguaServer {
             lengua.lock, and stops at the first that needs work: it checks idea.md, the source \
             of truth, and the tests in it, and records it with the user's words that asked for \
             it; checks main.s against lengua's rules; runs every test with fresh random inputs; \
-            and proves the program for every input it can. Call it after every edit to idea.md \
+            and proves the program for every input it can. It keeps the index.md and log.md of \
+            the folder's bundle, the graph of program folders, and says how the graph stands. \
+            Call it after every edit to idea.md \
             or main.s. It replies within about 40 seconds; the tests and the proof go on in the \
             background, so while it says testing or proving, call it again to wait. path: \
             absolute path of the program folder; request: the user's words that \
@@ -624,210 +632,11 @@ impl LenguaServer {
         &self,
         Parameters(params): Parameters<CheckParams>,
     ) -> Result<Json<CheckReport>, String> {
-        let began = Instant::now();
         let folder = folder_of(&params.path)?;
-        let machine = Machine::detect();
-        let toolchain = Toolchain::discover().await;
-        if let Some(blocked) = machine_blocker(&machine, toolchain.as_ref().err()) {
-            return Ok(Json(CheckReport::new("blocked", blocked)));
-        }
-        let target = session_target(&machine)?;
-        let profile = target.profile;
-        let machine_line = || machine_line(&machine, &target);
-
-        // idea.md, tests included: recorded with the user's words once it parses and its tests
-        // check.
-        let Some(idea_text) = read_optional(&folder, IDEA_FILE)? else {
-            if read_optional(&folder, LEGACY_IDEA_FILE)?.is_some() {
-                return Ok(Json(CheckReport {
-                    machine: Some(machine_line()),
-                    ..CheckReport::new(
-                        "write_idea",
-                        format!(
-                            "Next: rename {folder}/{LEGACY_IDEA_FILE} to {IDEA_FILE}, the idea \
-                             file's name now (what it says stays as it is), then call check with \
-                             path {folder}."
-                        ),
-                    )
-                }));
-            }
-            return Ok(Json(CheckReport {
-                machine: Some(machine_line()),
-                ..CheckReport::new("write_idea", State::NoIdea.next_step(&folder))
-            }));
-        };
-        let request = match params.request.as_deref().map(str::trim) {
-            Some(words) if !words.is_empty() => Some(words.to_owned()),
-            _ => self.held.lock().await.get(folder.path()).cloned(),
-        };
-        let fix_idea = || {
-            format!(
-                "Next: fix {folder}/{IDEA_FILE} with the write-idea skill, then call check with \
-                 path {folder}."
-            )
-        };
-        let problems = if read_optional(&folder, LEGACY_TESTS_FILE)?.is_some() {
-            Err(vec![format!(
-                "{LEGACY_TESTS_FILE}: the tests live in {IDEA_FILE} now. Make each behavior's \
-                 steps say what its [[example]] said, write its [[generated]] tables as its \
-                 generated tests, a `###` section of the same steps with a table of their vars \
-                 and runs, as the write-idea skill shows, then delete {LEGACY_TESTS_FILE}."
-            )])
-        } else {
-            match idea::parse(&idea_text) {
-                Err(problems) => Err(problems.iter().map(ToString::to_string).collect()),
-                Ok(idea) => match testfile::check(&idea) {
-                    Err(problems) => Err(problems.iter().map(ToString::to_string).collect()),
-                    Ok(_) if !missing_parts(&folder, &idea).is_empty() => {
-                        Err(missing_parts(&folder, &idea))
-                    }
-                    Ok(suite) => Ok((idea, suite)),
-                },
-            }
-        };
-        let (idea, suite) = match problems {
-            Ok(parsed) => parsed,
-            Err(problems) => {
-                if let Some(words) = &request {
-                    self.held
-                        .lock()
-                        .await
-                        .insert(folder.path().to_path_buf(), words.clone());
-                }
-                return Ok(Json(CheckReport::problems(
-                    "idea_problems",
-                    problems,
-                    fix_idea(),
-                )));
-            }
-        };
-        if let Some(next_step) = self.record(&folder, &idea_text, request.as_deref()).await? {
-            return Ok(Json(CheckReport::new("needs_request", next_step)));
-        }
-        self.held.lock().await.remove(folder.path());
-        let idea_hash = Sha256Hex::of(idea_text.as_bytes());
-
-        // main.s, checked against the rules, then tested and proven in the background.
-        let Some(code) = read_optional(&folder, CODE_FILE)? else {
-            return Ok(Json(CheckReport {
-                machine: Some(machine_line()),
-                ..CheckReport::new("write_code", State::CodeMissing.next_step(&folder))
-            }));
-        };
-        // main.s's first line says which CPU's code it is: it never chooses the target.
-        if let Some(other) = code_for_another_cpu(&code, &target) {
-            return Ok(Json(CheckReport::problems(
-                "code_problems",
-                vec![other],
-                format!(
-                    "Next: compile {folder}/{IDEA_FILE} into {folder}/{CODE_FILE} for {} with \
-                     the compile skill, then call check with path {folder}.",
-                    match target.emulator {
-                        None => "this computer".to_owned(),
-                        Some(_) => format!("{}, the target LENGUA_TARGET names", profile.name()),
-                    }
-                ),
-            )));
-        }
-        // Code compiled for another computer is compiled again for this one: the target's CPU,
-        // under QEMU the emulated one's.
-        let features = target.features(&machine);
-        if let Some(elsewhere) =
-            Header::of(&code).and_then(|header| header.elsewhere(profile, &features))
-        {
-            return Ok(Json(CheckReport::problems(
-                "code_problems",
-                vec![elsewhere],
-                format!(
-                    "Next: compile {folder}/{IDEA_FILE} into {folder}/{CODE_FILE} for this \
-                     computer with the compile skill, then call check with path {folder}."
-                ),
-            )));
-        }
-        let files = [idea_hash, header::code_hash(code.as_bytes())];
-        let checking = match self
-            .current_checking(&folder, &files, params.prove_further)
-            .await
-        {
-            Some(checking) => checking,
-            None => {
-                let fix = || {
-                    format!(
-                        "Next: fix {folder}/{CODE_FILE} with the compile skill (the full rules \
-                         are in its references/power-of-10.md), then call check with path \
-                         {folder}."
-                    )
-                };
-                let (source, layout) = checker::check_layout(&code);
-                if !layout.passed() {
-                    return Ok(Json(CheckReport::problems(
-                        "code_problems",
-                        violation_lines(&layout),
-                        fix(),
-                    )));
-                }
-                let from_parts = parts_problems(&self.data_dir, &folder, &idea, &source);
-                if !from_parts.is_empty() {
-                    return Ok(Json(CheckReport::problems(
-                        "code_problems",
-                        from_parts,
-                        fix(),
-                    )));
-                }
-                let built = match build(&code, profile).await {
-                    Ok(built) => built,
-                    Err(error) => {
-                        return Ok(Json(CheckReport::problems(
-                            "code_problems",
-                            vec![error],
-                            fix(),
-                        )));
-                    }
-                };
-                let lengua = checker::lengua_source(profile, &code);
-                let report = checker::check_program(
-                    &source,
-                    &built.bytes,
-                    checker::Context {
-                        ops: &idea.ops,
-                        threads: idea.threads,
-                        lengua: lengua.as_ref(),
-                        features: target.features(&machine),
-                        profile,
-                    },
-                );
-                if !report.passed() {
-                    return Ok(Json(CheckReport::problems(
-                        "code_problems",
-                        violation_lines(&report),
-                        fix(),
-                    )));
-                }
-                let channel = crate::edge::uses_channel(profile, &code)
-                    .then(|| crate::broker::Permit::of(&idea.syscalls));
-                self.start_checking(
-                    &folder,
-                    files,
-                    Code {
-                        idea,
-                        suite,
-                        source,
-                        built,
-                        report,
-                        profile,
-                        channel,
-                        emulator: target.emulator.clone(),
-                    },
-                    params.prove_further,
-                )
-                .await
-            }
-        };
-        wait_for(&checking, began + check_wait()).await;
-        if *checking.stage.borrow() == Stage::Ended {
-            self.write_header(&folder, &checking).await;
-        }
-        Ok(Json(self.checking_report(&folder, &checking)))
+        let mut events = Vec::new();
+        let mut report = self.check_stages(&folder, &params, &mut events).await?;
+        report.graph = self.graph_lines(&folder, events).await;
+        Ok(Json(report))
     }
 
     #[tool(
@@ -956,6 +765,16 @@ impl LenguaServer {
     }
 }
 
+/// What recording idea.md came to.
+enum Recording {
+    /// The lock already recorded the idea as it is.
+    Unchanged,
+    /// The lock records it now.
+    Recorded,
+    /// It can't be recorded without the user's words: this next step says so.
+    Needs(String),
+}
+
 /// Everything a checking job needs about the code it checks.
 struct Code {
     idea: Idea,
@@ -991,6 +810,237 @@ async fn wait_for(checking: &Checking, until: Instant) {
 }
 
 impl LenguaServer {
+    /// `check`'s stages, up to the first that needs work, adding to `events` what the bundle's
+    /// log records of them: the idea recorded, the program done, a proof that found it wrong.
+    async fn check_stages(
+        &self,
+        folder: &ProgramFolder,
+        params: &CheckParams,
+        events: &mut Vec<graph::Event>,
+    ) -> Result<CheckReport, String> {
+        let began = Instant::now();
+        let machine = Machine::detect();
+        let toolchain = Toolchain::discover().await;
+        if let Some(blocked) = machine_blocker(&machine, toolchain.as_ref().err()) {
+            return Ok(CheckReport::new("blocked", blocked));
+        }
+        let target = session_target(&machine)?;
+        let profile = target.profile;
+        let machine_line = || machine_line(&machine, &target);
+
+        // idea.md, tests included: recorded with the user's words once it parses and its tests
+        // check.
+        let Some(idea_text) = read_optional(folder, IDEA_FILE)? else {
+            if read_optional(folder, LEGACY_IDEA_FILE)?.is_some() {
+                return Ok(CheckReport {
+                    machine: Some(machine_line()),
+                    ..CheckReport::new(
+                        "write_idea",
+                        format!(
+                            "Next: rename {folder}/{LEGACY_IDEA_FILE} to {IDEA_FILE}, the idea \
+                             file's name now (what it says stays as it is), then call check with \
+                             path {folder}."
+                        ),
+                    )
+                });
+            }
+            return Ok(CheckReport {
+                machine: Some(machine_line()),
+                ..CheckReport::new("write_idea", State::NoIdea.next_step(folder))
+            });
+        };
+        let request = match params.request.as_deref().map(str::trim) {
+            Some(words) if !words.is_empty() => Some(words.to_owned()),
+            _ => self.held.lock().await.get(folder.path()).cloned(),
+        };
+        let fix_idea = || {
+            format!(
+                "Next: fix {folder}/{IDEA_FILE} with the write-idea skill, then call check with \
+                 path {folder}."
+            )
+        };
+        let problems = if read_optional(folder, LEGACY_TESTS_FILE)?.is_some() {
+            Err(vec![format!(
+                "{LEGACY_TESTS_FILE}: the tests live in {IDEA_FILE} now. Make each behavior's \
+                 steps say what its [[example]] said, write its [[generated]] tables as its \
+                 generated tests, a `###` section of the same steps with a table of their vars \
+                 and runs, as the write-idea skill shows, then delete {LEGACY_TESTS_FILE}."
+            )])
+        } else {
+            match idea::parse(&idea_text) {
+                Err(problems) => Err(problems.iter().map(ToString::to_string).collect()),
+                Ok(idea) => match testfile::check(&idea) {
+                    Err(problems) => Err(problems.iter().map(ToString::to_string).collect()),
+                    Ok(suite) => {
+                        let missing = missing_parts(folder, &idea);
+                        // A cycle of `- Builds on:` links blocks the programs in it, and only
+                        // them.
+                        if !missing.is_empty() {
+                            Err(missing)
+                        } else if let Some(cycle) = graph::builds_on_cycle(folder.path()) {
+                            Err(vec![cycle])
+                        } else {
+                            Ok((idea, suite))
+                        }
+                    }
+                },
+            }
+        };
+        let (idea, suite) = match problems {
+            Ok(parsed) => parsed,
+            Err(problems) => {
+                if let Some(words) = &request {
+                    self.held
+                        .lock()
+                        .await
+                        .insert(folder.path().to_path_buf(), words.clone());
+                }
+                return Ok(CheckReport::problems("idea_problems", problems, fix_idea()));
+            }
+        };
+        match self.record(folder, &idea_text, request.as_deref()).await? {
+            Recording::Needs(next_step) => {
+                return Ok(CheckReport::new("needs_request", next_step));
+            }
+            Recording::Recorded => events.push(graph::Event::Recorded),
+            Recording::Unchanged => {}
+        }
+        self.held.lock().await.remove(folder.path());
+        let idea_hash = Sha256Hex::of(idea_text.as_bytes());
+
+        // main.s, checked against the rules, then tested and proven in the background.
+        let Some(code) = read_optional(folder, CODE_FILE)? else {
+            return Ok(CheckReport {
+                machine: Some(machine_line()),
+                ..CheckReport::new("write_code", State::CodeMissing.next_step(folder))
+            });
+        };
+        // main.s's first line says which CPU's code it is: it never chooses the target.
+        if let Some(other) = code_for_another_cpu(&code, &target) {
+            return Ok(CheckReport::problems(
+                "code_problems",
+                vec![other],
+                format!(
+                    "Next: compile {folder}/{IDEA_FILE} into {folder}/{CODE_FILE} for {} with \
+                     the compile skill, then call check with path {folder}.",
+                    match target.emulator {
+                        None => "this computer".to_owned(),
+                        Some(_) => format!("{}, the target LENGUA_TARGET names", profile.name()),
+                    }
+                ),
+            ));
+        }
+        // Code compiled for another computer is compiled again for this one: the target's CPU,
+        // under QEMU the emulated one's.
+        let features = target.features(&machine);
+        if let Some(elsewhere) =
+            Header::of(&code).and_then(|header| header.elsewhere(profile, &features))
+        {
+            return Ok(CheckReport::problems(
+                "code_problems",
+                vec![elsewhere],
+                format!(
+                    "Next: compile {folder}/{IDEA_FILE} into {folder}/{CODE_FILE} for this \
+                     computer with the compile skill, then call check with path {folder}."
+                ),
+            ));
+        }
+        let files = [idea_hash, header::code_hash(code.as_bytes())];
+        let checking = match self
+            .current_checking(folder, &files, params.prove_further)
+            .await
+        {
+            Some(checking) => checking,
+            None => {
+                let fix = || {
+                    format!(
+                        "Next: fix {folder}/{CODE_FILE} with the compile skill (the full rules \
+                         are in its references/power-of-10.md), then call check with path \
+                         {folder}."
+                    )
+                };
+                let (source, layout) = checker::check_layout(&code);
+                if !layout.passed() {
+                    return Ok(CheckReport::problems(
+                        "code_problems",
+                        violation_lines(&layout),
+                        fix(),
+                    ));
+                }
+                let from_parts = parts_problems(&self.data_dir, folder, &idea, &source);
+                if !from_parts.is_empty() {
+                    return Ok(CheckReport::problems("code_problems", from_parts, fix()));
+                }
+                let built = match build(&code, profile).await {
+                    Ok(built) => built,
+                    Err(error) => {
+                        return Ok(CheckReport::problems("code_problems", vec![error], fix()));
+                    }
+                };
+                let lengua = checker::lengua_source(profile, &code);
+                let report = checker::check_program(
+                    &source,
+                    &built.bytes,
+                    checker::Context {
+                        ops: &idea.ops,
+                        threads: idea.threads,
+                        lengua: lengua.as_ref(),
+                        features: target.features(&machine),
+                        profile,
+                    },
+                );
+                if !report.passed() {
+                    return Ok(CheckReport::problems(
+                        "code_problems",
+                        violation_lines(&report),
+                        fix(),
+                    ));
+                }
+                let channel = crate::edge::uses_channel(profile, &code)
+                    .then(|| crate::broker::Permit::of(&idea.syscalls));
+                self.start_checking(
+                    folder,
+                    files,
+                    Code {
+                        idea,
+                        suite,
+                        source,
+                        built,
+                        report,
+                        profile,
+                        channel,
+                        emulator: target.emulator.clone(),
+                    },
+                    params.prove_further,
+                )
+                .await
+            }
+        };
+        wait_for(&checking, began + check_wait()).await;
+        if *checking.stage.borrow() == Stage::Ended {
+            self.write_header(folder, &checking).await;
+        }
+        let report = self.checking_report(folder, &checking);
+        let proven_wrong = checking.found.lock().is_ok_and(|found| found.wrong);
+        if report.state == "done" {
+            events.push(graph::Event::Done);
+        } else if proven_wrong {
+            events.push(graph::Event::ProvenWrong);
+        }
+        Ok(report)
+    }
+
+    /// The reply's lines about the graph of program folders that `folder` belongs to, once the
+    /// bundle's index.md and log.md say what `events` did, when there are any.
+    async fn graph_lines(&self, folder: &ProgramFolder, events: Vec<graph::Event>) -> Vec<String> {
+        let data_dir = Arc::clone(&self.data_dir);
+        let folder = folder.path().to_path_buf();
+        let today = graph::Day::today();
+        tokio::task::spawn_blocking(move || graph::pass(&data_dir, &folder, &events, today))
+            .await
+            .unwrap_or_else(|error| vec![format!("lengua couldn't read the graph: {error}")])
+    }
+
     /// What the proof found wrong in the code now in `folder`, when its job confirmed a
     /// counterexample: the tests passed, but these inputs, run for real, show main.s is wrong.
     async fn proven_wrong(&self, folder: &ProgramFolder) -> Option<String> {
@@ -1018,7 +1068,7 @@ impl LenguaServer {
         folder: &ProgramFolder,
         text: &str,
         request: Option<&str>,
-    ) -> Result<Option<String>, String> {
+    ) -> Result<Recording, String> {
         let words = request.map(str::trim).filter(|words| !words.is_empty());
         if words.is_some_and(|words| words.chars().count() > MAX_REQUEST_CHARS) {
             return Err(format!(
@@ -1032,7 +1082,7 @@ impl LenguaServer {
         let previous = match lock::read(folder.path(), Some(&key)) {
             Ok(previous) => previous,
             Err(error) if words.is_none() => {
-                return Ok(Some(State::LockInvalid(error).next_step(folder)));
+                return Ok(Recording::Needs(State::LockInvalid(error).next_step(folder)));
             }
             Err(_) => None,
         };
@@ -1043,10 +1093,12 @@ impl LenguaServer {
                 .is_none_or(|lock| !lock.request.words.iter().any(|known| known == words))
         });
         let lock = match (previous, new_words) {
-            (None, None) => return Ok(Some(State::IdeaUnrecorded.next_step(folder))),
+            (None, None) => {
+                return Ok(Recording::Needs(State::IdeaUnrecorded.next_step(folder)));
+            }
             (Some(lock), None) => {
                 if lock.idea.sha256 == current {
-                    return Ok(None);
+                    return Ok(Recording::Unchanged);
                 }
                 // The idea was revised under a request it already has: it's checked again, and
                 // the change is shown.
@@ -1088,7 +1140,7 @@ impl LenguaServer {
         write_stamped_copy(&self.data_dir, &current, text)?;
         lock::write(folder.path(), &lock, &key)
             .map_err(|error| format!("couldn't write {folder}/{}: {error}", lock::LOCK_FILE))?;
-        Ok(None)
+        Ok(Recording::Recorded)
     }
 
     /// The checking job for these files, running or ended, unless it ended with failed tests,

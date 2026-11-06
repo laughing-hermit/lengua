@@ -989,6 +989,7 @@ async fn proves_decimal_inputs_where_the_output_is_fixed() {
 const ROLL_IDEA: &str = r#"---
 type: lengua/program-idea
 title: roll
+description: Rolls a die.
 ---
 # Purpose
 Rolls a die for a player numbered from `1` to `9`.
@@ -1143,6 +1144,7 @@ async fn proves_a_roll_stays_in_its_range() {
 const MODULO_IDEA: &str = r#"---
 type: lengua/program-idea
 title: weekday
+description: Prints the day of the week.
 ---
 # Purpose
 Exits with the clock's seconds since 1970 modulo 7, from `0` to `6`.
@@ -1622,6 +1624,7 @@ async fn proves_each_case_a_jump_table_can_take() {
 const LETTERS_IDEA: &str = r#"---
 type: lengua/program-idea
 title: letters
+description: Turns letters into capitals.
 ---
 # Purpose
 Turns `1` character of standard input into a capital: `h` to `k` become `W` to `Z`, and `l`
@@ -2154,6 +2157,7 @@ async fn proves_the_csv_totals_free_text_blocks() {
 const WEEKDAY_IDEA: &str = r#"---
 type: lengua/program-idea
 title: weekday
+description: Prints the day of the week.
 ---
 # Purpose
 Exits with the day of the week of the clock's seconds since 1970, from `0` (Sunday) to `6`.
@@ -2320,6 +2324,7 @@ async fn proves_the_hh_mm_ss_clock() {
 const SHOUT_IDEA: &str = r#"---
 type: lengua/program-idea
 title: shout
+description: Turns text into capitals.
 ---
 # Purpose
 Capitalizes standard input of `0` to `16` characters.
@@ -2476,6 +2481,7 @@ async fn proves_a_text_formula() {
 const COUNT_A_IDEA: &str = r#"---
 type: lengua/program-idea
 title: count a
+description: Counts the letter a.
 ---
 # Purpose
 Counts the `a` bytes in standard input of `0` to `16` characters.
@@ -2763,6 +2769,7 @@ fn echo_block(stdout: &str, example: &str) -> Generated {
         r#"---
 type: lengua/program-idea
 title: echo
+description: Prints standard input back.
 ---
 # Purpose
 Prints standard input of `0` to `5000` characters back.
@@ -4498,6 +4505,7 @@ const CAPITALS: PerCpu<fn(u8) -> String> = PerCpu {
 const CAPITALS_IDEA: &str = r#"---
 type: lengua/program-idea
 title: capitals
+description: Turns text into capitals.
 ---
 # Purpose
 Prints standard input of `0` to `8` characters back with each ASCII letter in capitals.

@@ -268,6 +268,21 @@ fn readers() -> Vec<Reader> {
             }),
         ),
         (
+            "okf",
+            Box::new(|input: &[u8]| {
+                // The graph reads every page of a bundle, and lengua's index.md and log.md.
+                let text = String::from_utf8_lossy(input);
+                let _ = crate::graph::okf::frontmatter(&text);
+                let _ = crate::graph::okf::idea_links(&text);
+                for line in text.lines().take(64) {
+                    let _ = crate::graph::okf::entry_target(line);
+                }
+                let day = crate::graph::Day::from_unix_days(20_763);
+                let entry = "* **Update**: [add](add/idea.md) recorded.";
+                let _ = crate::graph::okf::logged(Some(&*text), day, entry);
+            }),
+        ),
+        (
             "lock",
             Box::new(|input: &[u8]| {
                 let _ = crate::lock::parse_body(&String::from_utf8_lossy(input));
@@ -344,7 +359,7 @@ fn fuzz(count: usize, seed: u64) {
     for (reader, read) in readers() {
         // Readers start from their own kind of text; the lock from a lock lengua writes.
         let starts: Vec<Vec<u8>> = match reader {
-            "idea" | "formula" => corpus
+            "idea" | "formula" | "okf" => corpus
                 .iter()
                 .filter(|(path, _)| path.extension().is_some_and(|extension| extension == "md"))
                 .map(|(_, bytes)| shrunk(bytes))

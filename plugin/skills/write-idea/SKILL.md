@@ -31,7 +31,9 @@ what it promises.
    call `check` then.
 4. `check` lists every problem at once, in the idea and in its tests, with the fix for each; fix
    them all and call it again. If its `next_step` starts with "Blocked", tell the user and stop.
-   Then follow its `next_step`: next comes `main.s`, with the compile skill.
+   Then follow its `next_step`: next comes `main.s`, with the compile skill. Its `graph` lines
+   say how the program's bundle stands, each starting with how much it matters: fix what
+   `blocks` first, then the warnings in the ideas you wrote; tell the user the rest.
 
 ## The idea
 
@@ -44,8 +46,9 @@ by one concrete example in its steps, and its generated tests try that rule with
   program whose subject is such a thing, such as an instruction decoder, names it, in its title
   too; `check` points out any other.
 - **Frontmatter:** `type: lengua/program-idea`, a short `title` and a one-sentence
-  `description`. Never add a `status` field: the record lives in `lengua.lock`, and any edit to
-  the idea, even a status change, is recorded again.
+  `description`, which `check` requires and the bundle's `index.md` lists the program with.
+  Never add a `status` field: the record lives in `lengua.lock`, and any edit to the idea, even a
+  status change, is recorded again.
 - **Sections:** `# Purpose`, `# Behaviors` and `# Constraints`.
 - **Purpose** says in plain words what the program does, for whom and why. It then gives in
   backticks the range of every number the program reads and the length of any text it reads,
@@ -196,9 +199,21 @@ by one concrete example in its steps, and its generated tests try that rule with
   needs what another program already does, such as sorting, parsing numbers or a hash table,
   rather than doing it again. A part is a whole program, with its own behaviors and tests: a
   library, such as a hash table, is specified through a small program that uses it, so the same
-  steps test it. Keep the parts in sibling folders, and an `index.md` in their common folder
-  that links each one with its description, as an OKF bundle's index does. Each part is written,
-  compiled and checked on its own, before the programs that build on it.
+  steps test it. Keep the parts in sibling folders, in one bundle. Each part is written,
+  compiled and checked on its own, before the programs that build on it. A cycle of
+  `- Builds on:` links, such as a part that builds on the program, blocks every program in it.
+- **The graph:** program folders are the nodes of a knowledge graph in the Open Knowledge
+  Format, and `check` keeps it. A program's bundle is the nearest folder above it whose
+  `index.md` has `okf_version` in its frontmatter, or else the folder that holds the program.
+  There `check` keeps `index.md`, with one entry per program: its title, its description and
+  its code; and `log.md`, newest first, of what it recorded and checked, never the user's words.
+  Don't write lengua's entries yourself; every other line of `index.md` is yours, and stays as
+  it is. lengua writes neither file in the home folder, the temporary folder itself, or a file
+  system's root. Link an idea to another it relates to with a plain markdown link in its text,
+  as `[sort lines](../sort/idea.md)`, by a path relative to the idea, or from the bundle's root
+  starting with `/`: these links and `- Builds on:` are the graph's edges, and `check` warns of
+  one that leads nowhere. Any other page in the bundle needs a frontmatter `type`, as
+  `type: note`, as every Open Knowledge Format page does.
 - **Threads:** when the user wants a program that does heavy work on large inputs as fast as
   possible, add `- Threads: up to N` under `# Constraints`, with N up to the machine's cores
   (`check` reports them in `machine`; at most 64). The program may then split its work across
