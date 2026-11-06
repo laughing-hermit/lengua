@@ -767,7 +767,6 @@ impl LenguaServer {
                     &source,
                     &built.bytes,
                     checker::Context {
-                        syscalls: &spec.syscalls,
                         ops: &spec.ops,
                         threads: spec.threads,
                         lengua: lengua.as_ref(),

@@ -337,13 +337,12 @@ fn programs_of(target: Profile) -> Vec<Program> {
 }
 
 /// The assets of `target` that are neither a template nor a fast program: nothing may ship
-/// without the baseline looking at it, so each of these is a problem, but for `fill.s`, the
-/// function programs copy word for word, which is not a program of its own.
+/// without the baseline looking at it, so each of these is a problem.
 fn unrecognized(target: Profile) -> Vec<String> {
     let assets: &str = PLACES.get(target).assets;
     names(assets)
         .into_iter()
-        .filter(|name| name.ends_with(".s") && !name.ends_with("-template.s") && name != "fill.s")
+        .filter(|name| name.ends_with(".s") && !name.ends_with("-template.s"))
         .map(|name| format!("{assets}/{name}"))
         .collect()
 }
@@ -411,7 +410,6 @@ async fn needs_beyond_baseline(
             &source,
             &bytes,
             Context {
-                syscalls: &spec.syscalls,
                 ops: &spec.ops,
                 threads: spec.threads,
                 lengua: lengua.as_ref(),
@@ -643,21 +641,24 @@ async fn a_program_beyond_the_baseline_is_found() {
         .expect("llvm-mc and ld.lld are installed");
     let spec_text = read(&format!("{SKILL_ASSETS}/template-spec.md")).expect("the template's spec");
     let spec = lengua::spec::parse(&spec_text).expect("a valid spec");
+    let template = |target: Profile| {
+        read(&format!("{}/main-template.s", PLACES.get(target).assets)).expect("the main template")
+    };
+    let (x86, arm) = (template(Profile::LinuxX86_64), template(Profile::LinuxAarch64));
     for (target, plain, leaning, needed) in [
         (
             Profile::LinuxX86_64,
-            checker::TEMPLATE.to_owned(),
-            checker::TEMPLATE.replacen("    xor r9d, r9d\n", "    shlx r9, r9, rcx\n", 1),
+            x86.clone(),
+            x86.replacen("    xor r9d, r9d\n", "    shlx r9, r9, rcx\n", 1),
             "BMI2",
         ),
         (
             Profile::LinuxAarch64,
-            checker::AARCH64_TEMPLATE.to_owned(),
-            checker::AARCH64_TEMPLATE
-                .replacen(".arch armv8-a\n", ".arch armv8-a\n.arch_extension crc\n", 1)
+            arm.clone(),
+            arm.replacen(".arch armv8-a\n", ".arch armv8-a\n.arch_extension crc\n", 1)
                 .replacen(
-                    "    ldr x0, [sp]\n",
-                    "    ldr x0, [sp]\n    crc32cb w9, w0, w0\n",
+                    "    ldr x0, [x1, #8]\n",
+                    "    ldr x0, [x1, #8]\n    crc32cb w9, w0, w0\n",
                     1,
                 ),
             "crc",

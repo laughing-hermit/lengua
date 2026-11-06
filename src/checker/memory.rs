@@ -67,7 +67,7 @@ pub enum Owner {
         /// The offset from the address lent, when it's known.
         offset: Option<i64>,
     },
-    /// The program's argument strings, or the array of them `_start` finds on its stack.
+    /// The program's argument strings, or an array of them: what lengua's `_start` hands `main`.
     Arguments,
 }
 
@@ -275,16 +275,6 @@ impl State {
     }
 }
 
-/// Where a function's frame starts: the frame's top is at rsp plus the depth less this, the
-/// return address for every function but `_start`, which has none.
-fn frame_base(function: &MappedFunction<'_>, abi: &Abi) -> i64 {
-    if function.name() == "_start" {
-        0
-    } else {
-        abi.return_address
-    }
-}
-
 /// Checks M1 to M6 in every function, each after the functions it calls, then M8 and M6's
 /// segments for the program.
 pub fn check(
@@ -320,7 +310,7 @@ pub fn check(
             if let Exit::Call { callee } = &flow.exits[at]
                 && let Some(summary) = summaries.get(callee)
             {
-                let frame = depth.map(|depth| depth - frame_base(function, abi));
+                let frame = depth.map(|depth| depth - abi.return_address);
                 found.extend(exclusive(
                     &step.source.text,
                     callee,
@@ -440,15 +430,14 @@ fn states(
         return states;
     }
     let abi = program.abi();
-    let start = function.name() == "_start";
     let mut entry = State::unknown(abi);
-    // In the edge form lengua's `_start` calls `main` with the argument count and the two arrays
-    // of strings in its first three argument registers.
-    if program.source.form == crate::edge::Form::Edge && function.name() == "main" {
+    // lengua's `_start` calls `main` with the argument count and the two arrays of strings in its
+    // first three argument registers.
+    if function.name() == "main" {
         entry.set(abi.edge_arguments[0], Owner::Number);
         entry.set(abi.edge_arguments[1], Owner::Arguments);
         entry.set(abi.edge_arguments[2], Owner::Arguments);
-    } else if !start {
+    } else {
         for &register in abi.arguments {
             entry.set(
                 register,
@@ -498,7 +487,7 @@ fn transfer(
     let abi = program.abi();
     let mut after = before.clone();
     let depth = flow.depth[at];
-    let base = frame_base(function, abi);
+    let base = abi.return_address;
     // Frame bytes this instruction writes: by push, at a constant offset from rsp, or through a
     // pointer to a known place in the frame.
     if let Some(depth) = depth {
@@ -756,7 +745,7 @@ fn result(
         match operand {
             // The stack pointer itself is the address of the frame's lowest byte.
             Operand::Reg(register) if register == abi.stack_pointer => Owner::Frame {
-                key: depth.map(|depth| depth - frame_base(function, abi)),
+                key: depth.map(|depth| depth - abi.return_address),
             },
             Operand::Reg(register) => before.get(register),
             Operand::Mem => Owner::Unknown,
@@ -772,7 +761,7 @@ fn result(
         Value::Address => address_owner(function, at, before, depth, program),
         Value::Copy(operand) => source(operand),
         Value::Number => Owner::Number,
-        Value::Load => load_owner(function, at, before, depth, abi),
+        Value::Load => load_owner(function, at, before),
         Value::Add(base, by) => {
             let (from, other) = (source(base), source(by));
             match (from.is_pointer(), other.is_pointer()) {
@@ -844,7 +833,7 @@ fn address_owner(
         let key = memory
             .index
             .is_none()
-            .then(|| depth.map(|depth| depth - frame_base(function, program.abi()) - displacement))
+            .then(|| depth.map(|depth| depth - program.abi().return_address - displacement))
             .flatten();
         return Owner::Frame { key };
     }
@@ -862,15 +851,9 @@ fn address_owner(
     }
 }
 
-/// The owner of a 64-bit value an instruction loads: `_start`'s argument count and strings on
-/// the stack it starts with, an entry of the array of strings, or otherwise not followed.
-fn load_owner(
-    function: &MappedFunction<'_>,
-    at: usize,
-    before: &State,
-    depth: Option<i64>,
-    abi: &Abi,
-) -> Owner {
+/// The owner of a 64-bit value an instruction loads: an entry of the array of strings, or
+/// otherwise not followed.
+fn load_owner(function: &MappedFunction<'_>, at: usize, before: &State) -> Owner {
     let insn = &function.steps[at].insn;
     let (Some(destination), Some(memory)) = (insn.dst, insn.memory) else {
         return Owner::Unknown;
@@ -878,22 +861,7 @@ fn load_owner(
     if destination.bits() != 64 {
         return Owner::Number;
     }
-    let base = memory.base;
-    if function.name() == "_start"
-        && base == Some(abi.stack_pointer)
-        && memory.index.is_none()
-        && let Some(depth) = depth
-    {
-        let displacement = memory.displacement;
-        // The count sits at the stack's top as the program starts, the strings above it.
-        if displacement == depth {
-            return Owner::Number;
-        }
-        if displacement > depth {
-            return Owner::Arguments;
-        }
-    }
-    if owner_of(before, base) == Owner::Arguments {
+    if owner_of(before, memory.base) == Owner::Arguments {
         return Owner::Arguments;
     }
     Owner::Unknown
@@ -985,7 +953,7 @@ fn access(
     // first byte is.
     let first = match (index, base, owner_of(before, base)) {
         (None, Some(register), _) if register == abi.stack_pointer => {
-            Some(depth.map(|depth| depth - frame_base(function, abi) - memory.displacement))
+            Some(depth.map(|depth| depth - abi.return_address - memory.displacement))
         }
         (None, _, Owner::Frame { key: Some(key) }) => {
             Some(depth.map(|_| key - memory.displacement))
@@ -995,11 +963,8 @@ fn access(
     if let Some(first) = first {
         if let (Some(depth), Some(first)) = (depth, first) {
             let width = width(insn);
-            let own = depth - frame_base(function, abi);
-            let start = function.name() == "_start";
+            let own = depth - abi.return_address;
             let inside = first <= own && first - width + 1 >= 1;
-            // _start reads the argument count and strings above its frame.
-            let reads_arguments = start && !writes && first <= own;
             // Where the CPU keeps the return address in a register, the function saves it with
             // its first instruction, as the top of its frame: ret returns through those bytes,
             // as x86-64's does through the slot above the frame.
@@ -1020,16 +985,12 @@ fn access(
                      record's saved return address"
                         .into(),
                 ));
-            } else if !inside && !reads_arguments {
+            } else if !inside {
                 found.push((
                     Rule::Lifetimes,
                     format!(
-                        "`{text}` reaches past this function's frame of {own} bytes, into {}",
-                        if start {
-                            "the program's arguments"
-                        } else {
-                            "its return address or its caller's frame"
-                        }
+                        "`{text}` reaches past this function's frame of {own} bytes, into its \
+                         return address or its caller's frame"
                     ),
                     "keep every access at [rsp + d] inside the frame the function made with push \
                      and sub rsp"

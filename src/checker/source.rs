@@ -204,9 +204,6 @@ pub struct UnsafeBlock {
 pub struct Source {
     /// The CPU it's written for, as its first line says.
     pub isa: Isa,
-    /// Whether it defines `_start` and makes its own system calls, or defines `main` and calls the
-    /// edge's operations.
-    pub form: crate::edge::Form,
     /// The constants, by name.
     pub constants: BTreeMap<String, Constant>,
     /// The data symbols, in order.
@@ -867,7 +864,6 @@ struct Parser {
     pending_type: Option<(String, bool, usize)>,
     function: Option<OpenFunction>,
     data: Option<DataSymbol>,
-    globals: Vec<(String, usize)>,
     /// Whether the first statement, the line that names the CPU, has been read.
     seen_header: bool,
 }
@@ -1180,22 +1176,12 @@ impl Parser {
                 ),
             },
             ".globl" | ".global" => {
-                if self.source.form == crate::edge::Form::Edge {
-                    self.violation(
-                        Rule::Scope,
-                        number,
-                        format!("{arguments} is exported"),
-                        "lengua exports `_start`; every symbol of main.s stays local",
-                    );
-                } else if arguments != "_start" {
-                    self.violation(
-                        Rule::Scope,
-                        number,
-                        format!("{arguments} is exported"),
-                        "export only _start; every other symbol stays local",
-                    );
-                }
-                self.globals.push((arguments.to_owned(), number));
+                self.violation(
+                    Rule::Scope,
+                    number,
+                    format!("{arguments} is exported"),
+                    "lengua exports `_start`; every symbol of main.s stays local",
+                );
             }
             ".type" => self.type_directive(number, arguments),
             ".size" => self.size(number, arguments),
@@ -1717,9 +1703,9 @@ impl Parser {
         })
     }
 
-    /// What only the edge form refuses: a system call a program makes by itself, and the names
-    /// lengua keeps for its own text, which is assembled with main.s as one.
-    fn edge_form_names(&mut self) {
+    /// What a program may not do: make a system call by itself, or use a name lengua keeps for
+    /// its own text, which is assembled with main.s as one.
+    fn edge_rules(&mut self) {
         let mut found: Vec<(usize, String, &'static str)> = Vec::new();
         for function in &self.source.functions {
             for instruction in function.instructions() {
@@ -1827,46 +1813,15 @@ impl Parser {
                 "give each symbol its own name",
             );
         }
-        match self.source.form {
-            crate::edge::Form::Inline => {
-                // A program is in one form or the other: lengua's `_start` and a `_start` of its
-                // own can't both begin it.
-                if let Some(main) = self.source.function("main") {
-                    let line = main.line;
-                    self.dialect(
-                        line,
-                        "main.s defines main as well as _start",
-                        "a program defines `_start` and makes its own system calls, or defines \
-                         `main` and calls the edge's operations: not both",
-                    );
-                }
-                if self.source.function("_start").is_none() {
-                    self.dialect(
-                        last_line,
-                        "there's no _start function",
-                        "start from the template, which has one",
-                    );
-                }
-                if !self.globals.iter().any(|(name, _)| name == "_start") {
-                    self.violation(
-                        Rule::Scope,
-                        last_line,
-                        "_start isn't exported",
-                        "add `.globl _start` in .text",
-                    );
-                }
-            }
-            crate::edge::Form::Edge => {
-                if self.source.function("main").is_none() {
-                    self.dialect(
-                        last_line,
-                        "there's no main function",
-                        "define `main` with `.type main, @function` and `.size main, . - main`",
-                    );
-                }
-                self.edge_form_names();
-            }
+        // A program begins at `main`, which lengua's `_start` calls.
+        if self.source.function("main").is_none() {
+            self.dialect(
+                last_line,
+                "there's no main function",
+                "define `main` with `.type main, @function` and `.size main, . - main`",
+            );
         }
+        self.edge_rules();
         (self.source, self.violations)
     }
 }
@@ -2052,7 +2007,6 @@ pub fn parse(text: &str) -> (Source, Vec<Violation>) {
     let mut parser = Parser {
         source: Source {
             isa: isa_of(text),
-            form: crate::edge::form(text),
             ..Source::default()
         },
         violations: Vec::new(),
@@ -2063,7 +2017,6 @@ pub fn parse(text: &str) -> (Source, Vec<Violation>) {
         pending_type: None,
         function: None,
         data: None,
-        globals: Vec::new(),
         seen_header: false,
     };
     let mut last = 1;
@@ -2093,7 +2046,7 @@ mod tests {
         }
     }
 
-    const TEMPLATE: &str = include_str!("inline_form/main-template.s");
+    const TEMPLATE: &str = include_str!("../../plugin/skills/compile/assets/main-template.s");
 
     fn violations(text: &str) -> Vec<String> {
         parse(text).1.iter().map(ToString::to_string).collect()
@@ -2111,22 +2064,13 @@ mod tests {
     fn reads_the_template() {
         let (source, violations) = parse(TEMPLATE);
         assert!(violations.is_empty(), "{violations:#?}");
-        assert_eq!(source.constants["SYS_EXIT"].value, 60);
+        assert_eq!(source.constants["ARGC_EXPECTED"].value, 2);
         assert_eq!(source.constants["ERROR_INVALID"].value, -22);
         let names: Vec<&str> = source.functions.iter().map(|f| f.name.as_str()).collect();
-        assert_eq!(
-            names,
-            [
-                "_start",
-                "parse_i64",
-                "write_i64",
-                "write_all",
-                "assert_fail"
-            ]
-        );
+        assert_eq!(names, ["main", "parse_i64", "write_i64", "write_all"]);
         let parse_i64 = source.function("parse_i64").expect("parse_i64");
         assert!(parse_i64.returns_result);
-        assert!(!source.function("_start").expect("_start").returns_result);
+        assert!(!source.function("main").expect("main").returns_result);
         let bounds: Vec<u64> = parse_i64
             .items
             .iter()
@@ -2146,7 +2090,6 @@ mod tests {
             [
                 ("usage_msg", SectionKind::ReadOnly),
                 ("nan_msg", SectionKind::ReadOnly),
-                ("assert_message", SectionKind::ReadOnly),
                 ("out_buf", SectionKind::Bss),
             ]
         );
@@ -2161,10 +2104,10 @@ mod tests {
             Ok(Operand::Register(Reg::X86(Register::RAX)))
         );
         assert_eq!(
-            operand("SYS_WRITE", false, constants),
+            operand("STDOUT", false, constants),
             Ok(Operand::Immediate {
                 value: 1,
-                name: Some("SYS_WRITE".into())
+                name: Some("STDOUT".into())
             })
         );
         assert_eq!(

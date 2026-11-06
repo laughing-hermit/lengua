@@ -1,20 +1,19 @@
 //! The edge: lengua's own code between a program and the operating system.
 //!
-//! A program in the edge form defines `main` and reaches the OS only by calling one of 21
-//! operations, `os_read`, `os_write` and the rest ([`Op`]). Each build appends to main.s a
-//! second text, lengua.s ([`lengua_text`]): `_start`, the operations main.s calls, and the
-//! library functions it calls and doesn't define (`assert_fail`, `fill`, `parallel_for`). They are
-//! assembled together as one object, so main.s's line numbers do not move, and lengua's code is
-//! the same for every program, written once per CPU (`x86_64.s`, `aarch64.s`) and once per
-//! operating system and CPU (`linux-x86_64.s`, `linux-aarch64.s`).
+//! A program defines `main` and reaches the OS only by calling one of 21 operations, `os_read`,
+//! `os_write` and the rest ([`Op`]). Each build appends to main.s a second text, lengua.s
+//! ([`lengua_text`]): `_start`, the operations main.s calls, and the library functions it calls
+//! and doesn't define (`assert_fail`, `fill`, `parallel_for`). They are assembled together as one
+//! object, so main.s's line numbers do not move, and lengua's code is the same for every program,
+//! written once per CPU (`x86_64.s`, `aarch64.s`) and once per operating system and CPU
+//! (`linux-x86_64.s`, `linux-aarch64.s`).
 //!
 //! What a program may rely on from an operation is defined here once: the closed set of errors,
 //! the open modes, the descriptor that is lengua's own, and the errors each operation gives.
 //! Everything an operating system does differently is in its edge file alone.
 //!
-//! A program that defines `_start` is in the inline form: it makes its own system calls and
-//! carries its own copies of the library, and nothing is appended to it. The two forms exist
-//! side by side while programs move from one to the other.
+//! Text that defines `_start`, or no `main`, is no program: nothing is appended to it, which is how
+//! the sandbox's own tests build the raw programs that probe it, and the checker refuses it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -545,8 +544,8 @@ pub struct Lend {
     pub written: bool,
 }
 
-/// The library functions a program in the edge form may call, besides the operations: lengua's
-/// own, so main.s defines none of them.
+/// The library functions a program may call, besides the operations: lengua's own, so main.s
+/// defines none of them.
 pub const LIBRARY: [&str; 3] = ["assert_fail", "fill", "parallel_for"];
 
 /// The operations one of the library's functions calls, which a program that calls it needs
@@ -571,16 +570,6 @@ pub fn reserved(name: &str) -> bool {
             .any(|prefix| name.starts_with(prefix))
 }
 
-/// How a program is written: with its own system calls, or against the edge.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum Form {
-    /// It defines `_start`, makes its own system calls and carries its own library.
-    #[default]
-    Inline,
-    /// It defines `main` and calls the edge.
-    Edge,
-}
-
 /// Whether `text` defines the label `name` at the start of a line.
 fn defines(text: &str, name: &str) -> bool {
     text.lines().any(|line| {
@@ -590,14 +579,12 @@ fn defines(text: &str, name: &str) -> bool {
     })
 }
 
-/// The form main.s is in: the edge form when it defines `main` and not `_start`.
+/// Whether main.s is a program for the edge: it defines `main`, which lengua's `_start` calls, and
+/// not `_start`. Any other text is built as it stands, which is how the sandbox's own tests make
+/// raw programs of their own; the checker refuses it.
 #[must_use]
-pub fn form(main: &str) -> Form {
-    if defines(main, "main") && !defines(main, "_start") {
-        Form::Edge
-    } else {
-        Form::Inline
-    }
+pub fn is_program(main: &str) -> bool {
+    defines(main, "main") && !defines(main, "_start")
 }
 
 /// A piece of an edge file: what it holds between one `== name` line and the next.
@@ -697,12 +684,12 @@ fn error_tables(ops: &[Op]) -> String {
     text
 }
 
-/// lengua.s for a main.s in the edge form, else `None`: `_start`, every operation main.s calls,
-/// the library functions it calls and doesn't define, and what they need, in the same order
-/// every time, so that the checker can match it line by line to what was assembled.
+/// lengua.s for a main.s that is a program for the edge, else `None`: `_start`, every operation
+/// main.s calls, the library functions it calls and doesn't define, and what they need, in the
+/// same order every time, so that the checker can match it line by line to what was assembled.
 #[must_use]
 pub fn lengua_text(profile: Profile, main: &str) -> Option<String> {
-    if form(main) != Form::Edge {
+    if !is_program(main) {
         return None;
     }
     let isa = profile.isa();
@@ -755,17 +742,17 @@ pub fn lengua_text(profile: Profile, main: &str) -> Option<String> {
     Some(text)
 }
 
-/// Whether a program in the edge form links the channel's code, and so talks to lengua's broker
-/// where it has one: the programs that open files, make or remove folders, ask the clock or for
-/// random bytes, sleep, wait for a connection or list a folder.
+/// Whether a program links the channel's code, and so talks to lengua's broker where it has one:
+/// the programs that open files, make or remove folders, ask the clock or for random bytes, sleep,
+/// wait for a connection or list a folder.
 #[must_use]
 pub fn uses_channel(profile: Profile, main: &str) -> bool {
     lengua_text(profile, main).is_some_and(|text| text.contains("lengua_channel_ready:"))
 }
 
-/// The text a program is built from: main.s, and for a program in the edge form lengua.s after it,
-/// for the CPU main.s's first line names and the system this is. It is what lengua assembles, so
-/// that a program can be built outside lengua.
+/// The text a program is built from: main.s, and lengua.s after it, for the CPU main.s's first line
+/// names and the system this is. It is what lengua assembles, so that a program can be built
+/// outside lengua.
 ///
 /// # Errors
 ///
@@ -842,23 +829,20 @@ mod tests {
         assert_eq!(Op::from_symbol("write"), None);
     }
 
-    /// The form is the edge's when main.s defines `main` and not `_start`.
+    /// A program for the edge defines `main` and not `_start`.
     #[test]
-    fn the_entry_symbol_says_the_form() {
-        assert_eq!(form(".text\nmain:\n    ret\n"), Form::Edge);
-        assert_eq!(form(".text\n_start:\n    ret\n"), Form::Inline);
-        // A mix is the inline form's: the checker refuses it.
-        assert_eq!(form("_start:\n    ret\nmain:\n    ret\n"), Form::Inline);
-        assert_eq!(
-            form("# main: a comment\n    call main_loop\n"),
-            Form::Inline
-        );
-        assert_eq!(form("    main: nop\n"), Form::Edge);
+    fn the_entry_symbol_says_whether_it_is_a_program() {
+        assert!(is_program(".text\nmain:\n    ret\n"));
+        assert!(!is_program(".text\n_start:\n    ret\n"));
+        // A mix is no program: the checker refuses it.
+        assert!(!is_program("_start:\n    ret\nmain:\n    ret\n"));
+        assert!(!is_program("# main: a comment\n    call main_loop\n"));
+        assert!(is_program("    main: nop\n"));
     }
 
-    /// Nothing is appended to an inline program, and an edge one gets `_start` and what it calls.
+    /// Nothing is appended to a raw program, and a program gets `_start` and what it calls.
     #[test]
-    fn lengua_text_is_for_the_edge_form_alone() {
+    fn lengua_text_is_for_a_program_alone() {
         for profile in Profile::ALL {
             assert_eq!(lengua_text(profile, "_start:\n    ret\n"), None);
             let call = match profile.isa() {
@@ -1255,26 +1239,22 @@ mod tests {
         }
     }
 
-    /// A program in the edge form is built from main.s and lengua.s after it; one in the inline
-    /// form from main.s alone; and main.s names its CPU.
+    /// A program is built from main.s and lengua.s after it; raw text from itself alone; and main.s
+    /// names its CPU.
     #[test]
-    fn a_program_is_linked_with_lengua_s_only_in_the_edge_form() {
+    fn a_program_is_linked_with_lengua_s_and_raw_text_is_not() {
         if Profile::for_target(std::env::consts::OS, "x86_64").is_none() {
             return;
         }
-        let edge = ".intel_syntax noprefix\n.text\nmain:\n    call os_exit\n";
-        let linked = linked(edge).expect("the edge form links");
-        assert!(linked.starts_with(edge), "{linked}");
+        let program = ".intel_syntax noprefix\n.text\nmain:\n    call os_exit\n";
+        let linked = linked(program).expect("a program links");
+        assert!(linked.starts_with(program), "{linked}");
         assert!(
             linked.contains("_start:") && linked.contains("os_exit:"),
             "{linked}"
         );
-        let inline = ".intel_syntax noprefix\n.text\n_start:\n    ret\n";
-        assert_eq!(linked_inline(inline), inline);
+        let raw = ".intel_syntax noprefix\n.text\n_start:\n    ret\n";
+        assert_eq!(super::linked(raw).expect("raw text is its own"), raw);
         assert!(super::linked("main:\n").is_err());
-    }
-
-    fn linked_inline(text: &str) -> String {
-        super::linked(text).expect("the inline form is its own text")
     }
 }

@@ -24,7 +24,6 @@ use std::sync::Arc;
 use super::{Context, Report, check_layout, check_program, lengua_source};
 use crate::hash::Sha256Hex;
 use crate::platform::{CpuFeatures, Profile};
-use crate::spec::Syscall;
 use crate::targets::PerCpu;
 use crate::toolchain::Toolchain;
 
@@ -223,7 +222,6 @@ pub(crate) struct Program {
     pub(crate) name: String,
     pub(crate) text: String,
     pub(crate) spec: Arc<crate::spec::Spec>,
-    syscalls: Arc<Vec<Syscall>>,
     ops: Arc<Vec<crate::edge::Op>>,
     threads: Option<u32>,
 }
@@ -330,7 +328,6 @@ pub(crate) fn programs(profile: Profile) -> Vec<Program> {
                     .display()
                     .to_string(),
                 text: std::fs::read_to_string(&code).expect("a program"),
-                syscalls: Arc::new(spec.syscalls.clone()),
                 ops: Arc::new(spec.ops.clone()),
                 threads: spec.threads,
                 spec: Arc::new(spec),
@@ -670,7 +667,6 @@ async fn report(
     profile: Profile,
     toolchain: &Toolchain,
     text: &str,
-    syscalls: &[Syscall],
     ops: &[crate::edge::Op],
     threads: Option<u32>,
 ) -> String {
@@ -684,7 +680,6 @@ async fn report(
             &source,
             &bytes,
             Context {
-                syscalls,
                 ops,
                 threads,
                 lengua: lengua.as_ref(),
@@ -720,14 +715,10 @@ async fn record(profile: Profile) -> String {
                 continue;
             }
             let (toolchain, permits) = (Arc::clone(&toolchain), Arc::clone(&permits));
-            let (syscalls, ops, threads) = (
-                Arc::clone(&program.syscalls),
-                Arc::clone(&program.ops),
-                program.threads,
-            );
+            let (ops, threads) = (Arc::clone(&program.ops), program.threads);
             tasks.spawn(async move {
                 let _permit = permits.acquire_owned().await.expect("never closed");
-                let found = report(profile, &toolchain, &text, &syscalls, &ops, threads).await;
+                let found = report(profile, &toolchain, &text, &ops, threads).await;
                 (key, found)
             });
         }
@@ -843,8 +834,8 @@ async fn every_report_is_as_recorded_on_aarch64() {
 
 /// The template of each target, whose mutants the next test looks at.
 const TEMPLATES: PerCpu<&str> = PerCpu {
-    x86_64: super::TEMPLATE,
-    aarch64: super::AARCH64_TEMPLATE,
+    x86_64: include_str!("../../plugin/skills/compile/assets/main-template.s"),
+    aarch64: include_str!("../../plugin/skills/compile/assets/linux-aarch64/main-template.s"),
 };
 
 #[test]
@@ -958,14 +949,6 @@ async fn explains_a_mutant() {
     let toolchain = Toolchain::discover().await.expect("llvm-mc and ld.lld");
     eprintln!(
         "{}",
-        report(
-            profile,
-            &toolchain,
-            &text,
-            &program.syscalls,
-            &program.ops,
-            program.threads
-        )
-        .await
+        report(profile, &toolchain, &text, &program.ops, program.threads).await
     );
 }

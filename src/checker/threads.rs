@@ -1,63 +1,36 @@
-//! Fork-join threads: the canonical `parallel_for` code, the threads the spec allows, and what a
-//! worker may touch. A worker and every function it calls write only their own stack frames and
-//! the worker's slot, through `rbx`, each index bounded by a constant, and read the other
-//! threads' parts of the per-thread data never, so no thread writes a byte another thread reads
-//! or writes (M7): the guarantee Rust's `&mut` slices give, checked on the machine code.
+//! Fork-join threads: the threads the spec allows, and what a worker may touch. lengua's own
+//! `parallel_for` starts them and calls the program's `worker`, which and every function it calls
+//! write only their own stack frames and the worker's slot, through `rbx`, each index bounded by a
+//! constant, and read the other threads' parts of the per-thread data never, so no thread writes
+//! a byte another thread reads or writes (M7): the guarantee Rust's `&mut` slices give, checked on
+//! the machine code.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::cfg::{ASSERT_FAIL, Exit, Flow, constant_before, deepest, run_start};
 use super::decode::{MappedFunction, Program};
-use super::source::Source;
 use super::{Rule, Violation};
-use crate::edge::Form;
 use crate::isa::{Abi, Cond, Control, MemRef, Op, Operand, Reg, Value};
 use crate::spec::MAX_THREADS;
 
-/// The canonical functions, copied word for word from the parallel template.
-pub const FUNCTIONS: [&str; 3] = ["parallel_for", "start_worker", "join_worker"];
-
-/// The canonical data symbols, with the alignment each needs and its size per thread, given the
-/// constant that sets it.
-const DATA: [(&str, u64, Size); 4] = [
-    ("stacks", 64, Size::Constant("STACK_SIZE")),
-    ("tids", 4, Size::Bytes(4)),
+/// The data symbols the program gives the threads, with the alignment each needs and its size per
+/// thread, given the constant that sets it.
+const DATA: [(&str, u64, Size); 2] = [
     ("results", 8, Size::Bytes(8)),
     ("slots", 64, Size::Constant("SLOT_SIZE")),
 ];
 
-/// How big each thread's part of a canonical data symbol is.
+/// How big each thread's part of a data symbol is.
 #[derive(Clone, Copy)]
 enum Size {
     Bytes(u64),
     Constant(&'static str),
 }
 
-/// Constants the canonical code depends on, which must hold the template's values.
-const FIXED_CONSTANTS: [&str; 7] = [
-    "SYS_CLONE",
-    "SYS_FUTEX",
-    "SYS_EXIT",
-    "CLONE_FLAGS",
-    "FUTEX_WAIT",
-    "THREAD_EXIT",
-    "MAX_WAITS",
-];
-
 /// The function every thread runs.
 pub const WORKER: &str = "worker";
 
-/// Where the canonical code is, for messages.
-const TEMPLATE_PATH: &str = "assets/parallel-template.s";
-
-/// Whether main.s of the inline form starts threads: it has the thread code. In the edge form
-/// the code is lengua's, and main.s starts threads by calling its `parallel_for`.
-#[must_use]
-pub fn used(source: &Source) -> bool {
-    FUNCTIONS.iter().any(|name| source.function(name).is_some())
-}
-
-/// What lengua's `parallel_for` is called by in the edge form.
+/// What lengua's `parallel_for` is called by.
 const LIBRARY_PARALLEL_FOR: &str = "parallel_for";
 
 struct Checker<'a, 'p> {
@@ -91,40 +64,23 @@ impl Checker<'_, '_> {
     }
 }
 
-/// Checks a program that starts threads: the spec allows them, the canonical code is copied
-/// exactly, its sizes and alignments hold, and workers write only their own stack and slot.
-/// `allowed` is how many threads the spec allows at once.
+/// Checks a program that starts threads: the spec allows them, its sizes and alignments hold, and
+/// workers write only their own stack and slot. `allowed` is how many threads the spec allows at
+/// once.
 pub fn check(
     program: &Program<'_>,
     flows: &BTreeMap<String, Flow>,
-    template: &Source,
     allowed: Option<u32>,
     violations: &mut Vec<Violation>,
 ) {
-    let source = program.source;
-    let edge = source.form == Form::Edge;
     let mut checker = Checker {
         program,
         flows,
         violations,
     };
-    // Where main.s starts threads: its own thread code, or, in the edge form, its calls of
-    // lengua's parallel_for.
-    let line = if edge {
-        let Some(first) = checker.starts().first().copied() else {
-            return;
-        };
-        first
-    } else {
-        if !used(source) {
-            return;
-        }
-        FUNCTIONS
-            .iter()
-            .filter_map(|name| source.function(name))
-            .map(|function| function.line)
-            .min()
-            .unwrap_or(1)
+    // Where main.s starts threads: its calls of lengua's parallel_for.
+    let Some(line) = checker.starts().first().copied() else {
+        return;
     };
     let Some(allowed) = allowed else {
         checker.violation(
@@ -136,15 +92,9 @@ pub fn check(
         );
         return;
     };
-    if edge {
-        checker.worker_defined(line);
-    } else if !checker.canonical(template) {
-        return;
-    }
+    checker.worker_defined(line);
     checker.sizes(allowed);
-    if edge {
-        checker.counts();
-    }
+    checker.counts();
     let region = checker.region();
     checker.callers(&region);
     checker.stack();
@@ -156,87 +106,7 @@ pub fn check(
 }
 
 impl Checker<'_, '_> {
-    /// The canonical functions, data and constants match the template. Returns whether they do,
-    /// since nothing else can be trusted otherwise.
-    fn canonical(&mut self, template: &Source) -> bool {
-        let source = self.program.source;
-        let before = self.violations.len();
-        for name in FUNCTIONS {
-            let expected = template.function(name).map(|function| &function.body);
-            match source.function(name) {
-                Some(function) if Some(&function.body) == expected => {}
-                Some(function) => {
-                    let line = function.line;
-                    self.violation(
-                        Rule::Resources,
-                        line,
-                        format!("{name} differs from the template"),
-                        format!("copy {name} word for word from {TEMPLATE_PATH}"),
-                    );
-                }
-                None => {
-                    let line = source.functions.last().map_or(1, |function| function.line);
-                    self.violation(
-                        Rule::Resources,
-                        line,
-                        format!("main.s starts threads but has no {name}"),
-                        format!(
-                            "copy parallel_for, start_worker and join_worker word for word from \
-                             {TEMPLATE_PATH}"
-                        ),
-                    );
-                }
-            }
-        }
-        if source.function(WORKER).is_none() {
-            let line = source.functions.last().map_or(1, |function| function.line);
-            self.violation(
-                Rule::Resources,
-                line,
-                "main.s calls parallel_for but has no worker function",
-                "write `worker`: it gets its index in rdi and its slot in rsi, and returns a \
-                 result in rax",
-            );
-        }
-        for (name, _, _) in DATA {
-            let found = source.data.iter().find(|data| data.name == name);
-            let expected = template.data.iter().find(|data| data.name == name);
-            let same = match (found, expected) {
-                (Some(found), Some(expected)) => {
-                    found.body == expected.body && found.section == expected.section
-                }
-                _ => false,
-            };
-            if !same {
-                let line = found.map_or(1, |data| data.line);
-                self.violation(
-                    Rule::Resources,
-                    line,
-                    format!("{name} differs from the template, or is missing"),
-                    format!("copy {name} word for word into .bss from {TEMPLATE_PATH}"),
-                );
-            }
-        }
-        for name in FIXED_CONSTANTS {
-            let expected = template.constants.get(name).map(|constant| constant.value);
-            let found = source.constants.get(name);
-            if found.map(|constant| constant.value) != expected {
-                let line = found.map_or(1, |constant| constant.line);
-                self.violation(
-                    Rule::Resources,
-                    line,
-                    format!(
-                        "{name} must be {}, as in the template",
-                        expected.unwrap_or_default()
-                    ),
-                    format!("copy `.equ {name}` from {TEMPLATE_PATH}"),
-                );
-            }
-        }
-        self.violations.len() == before
-    }
-
-    /// The lines of main.s's calls of lengua's parallel_for, in the edge form.
+    /// The lines of main.s's calls of lengua's parallel_for.
     fn starts(&self) -> Vec<usize> {
         self.calls()
             .into_iter()
@@ -245,7 +115,7 @@ impl Checker<'_, '_> {
             .collect()
     }
 
-    /// lengua's parallel_for calls main.s's `worker`, so the edge form needs one.
+    /// lengua's parallel_for calls main.s's `worker`, so a program that starts threads needs one.
     fn worker_defined(&mut self, line: usize) {
         if self.program.source.function(WORKER).is_none() {
             self.violation(
@@ -258,7 +128,7 @@ impl Checker<'_, '_> {
         }
     }
 
-    /// Each call of parallel_for in the edge form hands it what the threads' data is sized for:
+    /// Each call of parallel_for hands it what the threads' data is sized for:
     /// a count of at most THREADS, and the program's own `slots` and `results`, with SLOT_SIZE
     /// for each slot, so lengua's code never reaches past them.
     fn counts(&mut self) {
@@ -314,8 +184,8 @@ impl Checker<'_, '_> {
         }
     }
 
-    /// THREADS is at most what the spec allows; each stack and slot is a multiple of 64 bytes;
-    /// and the data symbols are as big and as aligned as the threads need.
+    /// THREADS is at most what the spec allows; each slot is a multiple of 64 bytes; and the data
+    /// symbols are as big and as aligned as the threads need.
     fn sizes(&mut self, allowed: u32) {
         let source = self.program.source;
         let line = |name: &str| {
@@ -335,25 +205,16 @@ impl Checker<'_, '_> {
             );
             return;
         }
-        // The stacks are lengua's in the edge form, so only the slots are the program's to size.
-        let sized: &[&str] = if source.form == Form::Edge {
-            &["SLOT_SIZE"]
-        } else {
-            &["STACK_SIZE", "SLOT_SIZE"]
-        };
-        for name in sized {
-            let value = self.constant(name).unwrap_or(0);
-            if value <= 0 || value % 64 != 0 {
-                self.violation(
-                    Rule::Resources,
-                    line(name),
-                    format!("{name} is {value}, which isn't a positive multiple of 64"),
-                    format!(
-                        "make {name} a multiple of 64, so each thread's part starts on its own \
-                         cache line"
-                    ),
-                );
-            }
+        // The stacks are lengua's, so only the slots are the program's to size.
+        let slot_size = self.constant("SLOT_SIZE").unwrap_or(0);
+        if slot_size <= 0 || slot_size % 64 != 0 {
+            self.violation(
+                Rule::Resources,
+                line("SLOT_SIZE"),
+                format!("SLOT_SIZE is {slot_size}, which isn't a positive multiple of 64"),
+                "make SLOT_SIZE a multiple of 64, so each thread's part starts on its own cache \
+                 line",
+            );
         }
         for (name, alignment, size) in DATA {
             let Some(data) = self.program.data.get(name) else {
@@ -430,15 +291,12 @@ impl Checker<'_, '_> {
         calls
     }
 
-    /// Only parallel_for starts and joins threads and only the canonical code calls worker,
-    /// whose functions run on worker threads alone. In the edge form that code is lengua's, so
-    /// main.s never calls worker, and has no thread code of its own to call.
+    /// Only lengua's parallel_for starts and joins threads and calls worker, whose functions run
+    /// on worker threads alone, so main.s never calls worker.
     fn callers(&mut self, region: &BTreeSet<String>) {
-        let edge = self.program.source.form == Form::Edge;
         for (caller, callee, line) in self.calls() {
             let allowed = match callee.as_str() {
-                "start_worker" | "join_worker" => !edge && caller == "parallel_for",
-                WORKER => !edge && (caller == "parallel_for" || caller == "start_worker"),
+                WORKER => false,
                 _ if region.contains(&callee) => region.contains(&caller),
                 _ => true,
             };
@@ -462,49 +320,23 @@ impl Checker<'_, '_> {
 
     /// Each thread's stack holds the worker's deepest call path.
     fn stack(&mut self) {
-        // In the edge form lengua gives each thread its stack, and a worker starts at its top.
-        if self.program.source.form == Form::Edge {
-            let needed = deepest(WORKER, self.program, self.flows);
-            if needed > crate::edge::THREAD_STACK - crate::edge::THREAD_STACK_HEAD {
-                let line = self
-                    .program
-                    .source
-                    .function(WORKER)
-                    .map_or(1, |function| function.line);
-                self.violation(
-                    Rule::Resources,
-                    line,
-                    format!(
-                        "a worker's stack can reach {needed} bytes, but each thread has {} \
-                         bytes to use",
-                        crate::edge::THREAD_STACK - crate::edge::THREAD_STACK_HEAD
-                    ),
-                    "use less stack in the worker",
-                );
-            }
-            return;
-        }
-        let Some(stack_size) = self.constant("STACK_SIZE") else {
-            return;
-        };
+        // lengua gives each thread its stack, and a worker starts at its top.
         let needed = deepest(WORKER, self.program, self.flows);
-        if needed > stack_size {
+        if needed > crate::edge::THREAD_STACK - crate::edge::THREAD_STACK_HEAD {
             let line = self
                 .program
                 .source
-                .constants
-                .get("STACK_SIZE")
-                .map_or(1, |constant| constant.line);
+                .function(WORKER)
+                .map_or(1, |function| function.line);
             self.violation(
                 Rule::Resources,
                 line,
                 format!(
-                    "a worker's stack can reach {needed} bytes, but STACK_SIZE is {stack_size}"
+                    "a worker's stack can reach {needed} bytes, but each thread has {} bytes to \
+                     use",
+                    crate::edge::THREAD_STACK - crate::edge::THREAD_STACK_HEAD
                 ),
-                format!(
-                    "raise STACK_SIZE to a multiple of 64 of at least {needed}, or use less stack \
-                     in the worker"
-                ),
+                "use less stack in the worker",
             );
         }
     }

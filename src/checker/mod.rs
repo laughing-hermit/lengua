@@ -30,46 +30,6 @@ use crate::spec::Syscall;
 pub use rules::Facts;
 pub use source::{Source, UnsafeBlock};
 
-/// The template program; its assert_fail and assert_message are the canonical ones. This and the
-/// five below are the inline form's texts, frozen in `inline_form/` as the shipped templates were
-/// when programs began to move to the edge form: the shipped ones change as programs do, and the
-/// rules hold the inline form to these until the form is gone.
-pub const TEMPLATE: &str = include_str!("inline_form/main-template.s");
-
-/// The parallel template; its parallel_for, start_worker and join_worker, their data and their
-/// constants are the canonical thread code.
-pub const PARALLEL_TEMPLATE: &str = include_str!("inline_form/parallel-template.s");
-
-/// AArch64's parallel template: the same threads in AArch64's instructions.
-pub const PARALLEL_TEMPLATE_AARCH64: &str =
-    include_str!("inline_form/linux-aarch64/parallel-template.s");
-
-/// fill, which reads until a buffer is full, the input ends or an end byte arrives; its body
-/// and constants are canonical, so the proof can cover every way the input arrives.
-pub const FILL_TEMPLATE: &str = include_str!("inline_form/fill.s");
-
-/// The AArch64 template; its assert_fail and assert_message are the canonical ones there.
-pub const AARCH64_TEMPLATE: &str = include_str!("inline_form/linux-aarch64/main-template.s");
-
-/// AArch64's fill, canonical as x86-64's is.
-pub const AARCH64_FILL_TEMPLATE: &str = include_str!("inline_form/linux-aarch64/fill.s");
-
-/// The frozen text of the shipped asset called `name`, as the compile skill's assets folder names
-/// it (`main-template.s`, `parallel-template.s` and `fill.s`, and AArch64's under
-/// `linux-aarch64/`), for a test that holds the inline form to what its rules were written against.
-#[must_use]
-pub fn frozen(name: &str) -> Option<&'static str> {
-    Some(match name {
-        "main-template.s" => TEMPLATE,
-        "parallel-template.s" => PARALLEL_TEMPLATE,
-        "fill.s" => FILL_TEMPLATE,
-        "linux-aarch64/main-template.s" => AARCH64_TEMPLATE,
-        "linux-aarch64/parallel-template.s" => PARALLEL_TEMPLATE_AARCH64,
-        "linux-aarch64/fill.s" => AARCH64_FILL_TEMPLATE,
-        _ => return None,
-    })
-}
-
 /// At most this many violations are reported at once.
 pub const MAX_VIOLATIONS: usize = 20;
 
@@ -220,14 +180,11 @@ impl fmt::Display for Violation {
 /// What the checker needs besides main.s and the executable.
 #[derive(Debug, Clone, Copy)]
 pub struct Context<'a> {
-    /// The system calls the spec allows.
-    pub syscalls: &'a [Syscall],
-    /// The edge's operations the spec allows, which a program in the edge form may call.
+    /// The edge's operations the spec allows, which a program may call.
     pub ops: &'a [crate::edge::Op],
     /// How many threads the spec allows at once, when it allows more than one.
     pub threads: Option<u32>,
-    /// lengua.s as lengua assembled it after main.s, for a program in the edge form (see
-    /// [`lengua_source`]).
+    /// lengua.s as lengua assembled it after main.s, for a program (see [`lengua_source`]).
     pub lengua: Option<&'a Source>,
     /// This CPU's extensions.
     pub features: CpuFeatures,
@@ -344,20 +301,7 @@ pub fn check_program(source: &Source, executable: &[u8], context: Context<'_>) -
         let flow = cfg::analyze(function, &program, &exit_numbers, &[], &mut Vec::new());
         flows.insert(function.name().to_owned(), flow);
     }
-    let (template, fill_template) = match program.isa {
-        Isa::X86_64 => (TEMPLATE, FILL_TEMPLATE),
-        Isa::Aarch64 => (AARCH64_TEMPLATE, AARCH64_FILL_TEMPLATE),
-    };
-    let (template, fill_template) = (source::parse(template).0, source::parse(fill_template).0);
-    let mut facts = rules::check(
-        &program,
-        &flows,
-        context.syscalls,
-        context.ops,
-        context.profile,
-        [&template, &fill_template],
-        &mut violations,
-    );
+    let mut facts = rules::check(&program, &flows, context.ops, &mut violations);
     facts.features = match program.isa {
         Isa::X86_64 => x86_64::features_needed(&machine),
         Isa::Aarch64 => aarch64::features_needed(&machine, context.features),
@@ -373,20 +317,8 @@ pub fn check_program(source: &Source, executable: &[u8], context: Context<'_>) -
         machine.writable_executable,
         &mut violations,
     );
-    let parallel_template = source::parse(match program.isa {
-        Isa::X86_64 => PARALLEL_TEMPLATE,
-        Isa::Aarch64 => PARALLEL_TEMPLATE_AARCH64,
-    })
-    .0;
-    // The thread code is canonical in the inline form; in the edge form it is lengua's, and what
-    // main.s hands it and its worker are held to the same rules.
-    threads::check(
-        &program,
-        &flows,
-        &parallel_template,
-        context.threads,
-        &mut violations,
-    );
+    // The thread code is lengua's; what main.s hands it and its worker are held to the rules.
+    threads::check(&program, &flows, context.threads, &mut violations);
     if program.isa == Isa::Aarch64 {
         violations.iter_mut().for_each(aarch64::in_words);
     }

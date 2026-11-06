@@ -1,22 +1,21 @@
 //! The lengua Power of 10 rules that need control flow or the whole program: loops, assertions,
-//! system calls, checked results, data scope, named constants, checked indexes, and the
-//! canonical assertion handler.
+//! the operations a program may call, checked results, data scope, named constants and checked
+//! indexes.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::cfg::{ASSERT_FAIL, Exit, Flow, constant_before, deepest, run_start};
 use super::decode::{MappedFunction, Program};
-use super::source::{Operand, Source};
+use super::source::Operand;
 use super::{Rule, Violation};
 use crate::isa::{self, Cond, Control, Op, Reg};
-use crate::platform::Profile;
-use crate::spec::{ASSERTION_EXIT_CODE, Syscall};
+use crate::spec::ASSERTION_EXIT_CODE;
 
-/// The most instructions a function may have (assert_fail excluded).
+/// The most instructions a function may have.
 pub const MAX_INSTRUCTIONS: usize = 60;
 
-/// A function in the edge form keeps its frame under this many bytes: a stack of lengua's own,
-/// the threads', has no guard page below it, so what a frame may reach is what a page covers.
+/// A function keeps its frame under this many bytes: a stack of lengua's own, the threads', has no
+/// guard page below it, so what a frame may reach is what a page covers.
 const MAX_FRAME_BYTES: i64 = 4096;
 
 /// The fewest assertions per function, on average.
@@ -25,11 +24,11 @@ pub const MIN_ASSERTIONS_PER_FUNCTION: usize = 2;
 /// What the rules learned about the program.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Facts {
-    /// The deepest the stack can get, in bytes, across every call path from `_start`.
+    /// The deepest the stack can get, in bytes, across every call path from `main`.
     pub max_stack_bytes: u64,
     /// Assertions in the program.
     pub assertions: usize,
-    /// Functions, assert_fail excluded.
+    /// Functions in main.s.
     pub functions: usize,
     /// The CPU features beyond the x86-64 baseline its instructions need.
     pub features: Vec<&'static str>,
@@ -63,29 +62,16 @@ impl Checker<'_, '_> {
             fix: fix.into(),
         });
     }
-
-    /// Whether `name` is where the program starts and never returns from: `_start` in the inline
-    /// form, `main` in the edge form.
-    fn is_entry(&self, name: &str) -> bool {
-        match self.program.source.form {
-            crate::edge::Form::Inline => name == "_start",
-            crate::edge::Form::Edge => name == "main",
-        }
-    }
 }
 
-/// The canonical reading function, and the constants its body names.
-pub const FILL: &str = "fill";
-const FILL_CONSTANTS: [&str; 3] = ["SYS_READ", "ERROR_IO", "MAX_FILL_READS"];
+/// The function a program starts in, and never returns from: lengua's `_start` calls it.
+const ENTRY: &str = "main";
 
 /// Checks every rule that needs control flow, given each function's flow.
 pub fn check(
     program: &Program<'_>,
     flows: &BTreeMap<String, Flow>,
-    syscalls: &[Syscall],
     ops: &[crate::edge::Op],
-    profile: Profile,
-    [template, fill_template]: [&Source; 2],
     violations: &mut Vec<Violation>,
 ) -> Facts {
     let mut checker = Checker {
@@ -103,17 +89,9 @@ pub fn check(
             continue;
         };
         checker.data_access(function, &mut users);
-        if function.name() == ASSERT_FAIL {
-            continue;
-        }
         checker.size_and_returns(function, flow);
         checker.callee_saved(function, flow);
         checker.red_zone(function);
-        // The thread code's clone and futex calls aren't the spec's to list: the spec allows
-        // threads instead, and the code is checked word for word against the template.
-        if !super::threads::FUNCTIONS.contains(&function.name()) {
-            checker.syscalls(function, flow, syscalls, profile);
-        }
         checker.operations(function, flow, ops);
         checker.frame(function, flow);
         checker.changed_by_calls(function, flow, &reaching, &changing);
@@ -121,27 +99,13 @@ pub fn check(
         checker.results(function, flow);
         checker.indexes(function, flow);
         checker.chains(function, flow);
-        checker.loops(
-            function,
-            flow,
-            syscalls.contains(&Syscall::Accept4) || ops.contains(&crate::edge::Op::Accept),
-        );
+        checker.loops(function, flow, ops.contains(&crate::edge::Op::Accept));
         assertions += checker.assertions(function, flow, &mut ids);
     }
     checker.recursion();
     checker.shared_data(&users);
     checker.lengths();
-    // The inline form carries copies of assert_fail and fill, held to the template's; in the edge
-    // form they are lengua's and main.s has none.
-    if program.source.form == crate::edge::Form::Inline {
-        checker.canonical(template);
-        checker.canonical_fill(fill_template);
-    }
-    let functions = program
-        .functions
-        .iter()
-        .filter(|function| function.name() != ASSERT_FAIL)
-        .count();
+    let functions = program.functions.len();
     if assertions < MIN_ASSERTIONS_PER_FUNCTION * functions {
         let line = program
             .functions
@@ -210,7 +174,7 @@ fn split_point(function: &MappedFunction<'_>, flow: &Flow) -> Option<String> {
 }
 
 impl Checker<'_, '_> {
-    /// Rule 4: at most 60 instructions, one ret (none in _start).
+    /// Rule 4: at most 60 instructions, one ret (none in main).
     fn size_and_returns(&mut self, function: &MappedFunction<'_>, flow: &Flow) {
         let name = function.name();
         if function.steps.len() > MAX_INSTRUCTIONS {
@@ -232,24 +196,13 @@ impl Checker<'_, '_> {
             .filter(|(_, exit)| **exit == Exit::Return)
             .map(|(index, _)| index)
             .collect();
-        if self.is_entry(name) {
+        if name == ENTRY {
             if let Some(first) = returns.first() {
-                let (problem, fix) = if name == "_start" {
-                    (
-                        "_start returns, but it has nothing to return to",
-                        "end _start with the exit system call",
-                    )
-                } else {
-                    (
-                        "main returns, but it has nothing to return to",
-                        "end main with a call to os_exit",
-                    )
-                };
                 self.violation(
                     Rule::Functions,
                     function.steps[*first].source.line,
-                    problem,
-                    fix,
+                    "main returns, but it has nothing to return to",
+                    "end main with a call to os_exit",
                 );
             }
         } else if returns.len() != 1 {
@@ -265,7 +218,7 @@ impl Checker<'_, '_> {
     /// Rule 4: callee-saved registers the function changes are pushed first and popped, in
     /// mirror order, right before its ret.
     fn callee_saved(&mut self, function: &MappedFunction<'_>, flow: &Flow) {
-        if self.is_entry(function.name()) {
+        if function.name() == ENTRY {
             return;
         }
         let steps = &function.steps;
@@ -389,105 +342,8 @@ impl Checker<'_, '_> {
         }
     }
 
-    /// Rule 3 and 8: each system call is set up by `mov eax, SYS_NAME` in its straight-line
-    /// run, for a call the spec allows.
-    fn syscalls(
-        &mut self,
-        function: &MappedFunction<'_>,
-        flow: &Flow,
-        allowed: &[Syscall],
-        profile: Profile,
-    ) {
-        for (index, exit) in flow.exits.iter().enumerate() {
-            if !matches!(exit, Exit::Syscall { .. }) {
-                continue;
-            }
-            let line = function.steps[index].source.line;
-            let allowed_names: Vec<&str> = allowed
-                .iter()
-                .map(|syscall| profile.syscall_name(*syscall))
-                .collect();
-            let abi = self.program.abi();
-            let Some((setter, number)) = constant_before(function, index, abi.syscall_number, abi)
-            else {
-                self.violation(
-                    Rule::Resources,
-                    line,
-                    "this system call isn't chosen by a `mov eax, SYS_NAME` in the same \
-                     straight-line code",
-                    "put `mov eax, SYS_NAME` right before the syscall, with no label or call \
-                     between them",
-                );
-                continue;
-            };
-            let Some(syscall) = allowed
-                .iter()
-                .find(|syscall| profile.syscall_number(**syscall) == number)
-            else {
-                // What the spec would have to name for this call, when it's one lengua knows.
-                let known = Syscall::ALL
-                    .into_iter()
-                    .find(|syscall| profile.syscall_number(*syscall) == number);
-                let (problem, fix) = match known {
-                    Some(call) => {
-                        let needs = match crate::spec::Use::of(call) {
-                            Some(found) => format!("`{}` in its `- Uses:` line", found.name()),
-                            None => "a `- Network:` line".to_owned(),
-                        };
-                        (
-                            format!(
-                                "system call {} isn't one the spec allows: it needs {needs}, \
-                                 which spec.md doesn't name",
-                                profile.syscall_name(call)
-                            ),
-                            format!(
-                                "use only what spec.md's Constraints name, or, when the program \
-                                 needs it, add {needs} to spec.md and tell the user"
-                            ),
-                        )
-                    }
-                    None if crate::syscalls::connects(profile, number) => (
-                        "a program never connects by itself: lengua makes each connection its \
-                         spec names before the program starts and hands it over, as file \
-                         descriptors 4, 5 and on, in the order of `- Network: connects to …`"
-                            .to_owned(),
-                        "take out the socket and connect calls, and read and write the \
-                         connection lengua hands over: descriptor 4 for the first place spec.md \
-                         names"
-                            .to_owned(),
-                    ),
-                    None => (
-                        format!(
-                            "system call {number} isn't one the spec allows (it allows {})",
-                            allowed_names.join(", ")
-                        ),
-                        "use only what spec.md's Constraints name".to_owned(),
-                    ),
-                };
-                self.violation(Rule::Resources, line, problem, fix);
-                continue;
-            };
-            let name = profile.syscall_name(*syscall);
-            let expected = format!("SYS_{}", name.to_ascii_uppercase());
-            let named = matches!(
-                function.steps[setter].source.operands.get(1),
-                Some(Operand::Immediate { name: Some(name), .. }) if *name == expected
-            );
-            if !named {
-                self.violation(
-                    Rule::Constants,
-                    function.steps[setter].source.line,
-                    format!("system call {name} isn't named"),
-                    format!(
-                        "write `mov eax, {expected}` with `.equ {expected}, {number}` at the top"
-                    ),
-                );
-            }
-        }
-    }
-
-    /// Rule 3, for the edge form: each operation a program calls is one the spec allows, and a
-    /// call to one of lengua's library functions counts as the operations it calls.
+    /// Rule 3: each operation a program calls is one the spec allows, and a call to one of
+    /// lengua's library functions counts as the operations it calls.
     fn operations(
         &mut self,
         function: &MappedFunction<'_>,
@@ -627,9 +483,6 @@ impl Checker<'_, '_> {
         reaching: &BTreeSet<String>,
         changing: &BTreeMap<String, u64>,
     ) {
-        if self.program.source.form != crate::edge::Form::Edge {
-            return;
-        }
         let abi = self.program.abi();
         let clobbers = abi.edge_clobbers;
         let all: u64 = (0..clobbers.len()).fold(0, |mask, index| mask | (1_u64 << index));
@@ -701,12 +554,9 @@ impl Checker<'_, '_> {
         }
     }
 
-    /// Rule 3, for the edge form: no function's frame reaches a page, the least a stack that has
-    /// no guard page below it can take.
+    /// Rule 3: no function's frame reaches a page, the least a stack that has no guard page below
+    /// it can take.
     fn frame(&mut self, function: &MappedFunction<'_>, flow: &Flow) {
-        if self.program.source.form != crate::edge::Form::Edge {
-            return;
-        }
         let frame = flow.max_depth - self.program.abi().return_address;
         if frame >= MAX_FRAME_BYTES {
             self.violation(
@@ -1169,7 +1019,7 @@ impl Checker<'_, '_> {
                     "move data the program changes to .data or .bss",
                 );
             }
-            if writable && function.name() != ASSERT_FAIL {
+            if writable {
                 users
                     .entry(name)
                     .or_default()
@@ -1346,7 +1196,7 @@ impl Checker<'_, '_> {
     /// Whether the instruction at `index` starts an assertion block.
     fn is_assertion(&self, function: &MappedFunction<'_>, index: usize) -> bool {
         let steps = &function.steps;
-        // In the edge form assert_fail is lengua's, not main.s's.
+        // assert_fail is lengua's, not main.s's.
         let assert_fail = self
             .program
             .any_function(ASSERT_FAIL)
@@ -1621,98 +1471,9 @@ impl Checker<'_, '_> {
         count
     }
 
-    /// assert_fail and its message are copied word for word from the template.
-    fn canonical(&mut self, template: &Source) {
-        let source = self.program.source;
-        let expected_function = template
-            .function(ASSERT_FAIL)
-            .map(|function| &function.body);
-        match source.function(ASSERT_FAIL) {
-            Some(function) if Some(&function.body) == expected_function => {}
-            Some(function) => {
-                let line = function.line;
-                self.violation(
-                    Rule::Assertions,
-                    line,
-                    "assert_fail differs from the template",
-                    "copy assert_fail word for word from assets/main-template.s",
-                );
-            }
-            None => {
-                let line = source.functions.last().map_or(1, |function| function.line);
-                self.violation(
-                    Rule::Assertions,
-                    line,
-                    "main.s has no assert_fail",
-                    "copy assert_fail and assert_message from assets/main-template.s",
-                );
-            }
-        }
-        let message = |source: &Source| {
-            source
-                .data
-                .iter()
-                .find(|data| data.name == "assert_message")
-                .map(|data| (data.body.clone(), data.section, data.line))
-        };
-        match (message(source), message(template)) {
-            (Some((body, section, _)), Some((expected, expected_section, _)))
-                if body == expected && section == expected_section => {}
-            (found, _) => {
-                let line = found.map_or(1, |(_, _, line)| line);
-                self.violation(
-                    Rule::Assertions,
-                    line,
-                    "assert_message differs from the template",
-                    "copy assert_message word for word into .rodata from assets/main-template.s",
-                );
-            }
-        }
-    }
-
-    /// fill, when main.s has it, is copied word for word with its constants: the proof reads
-    /// it as a whole, for every way its input can arrive.
-    fn canonical_fill(&mut self, template: &Source) {
-        let source = self.program.source;
-        let Some(function) = source.function(FILL) else {
-            return;
-        };
-        if Some(&function.body) != template.function(FILL).map(|expected| &expected.body) {
-            let line = function.line;
-            self.violation(
-                Rule::Assertions,
-                line,
-                "fill differs from the template",
-                "copy fill word for word from assets/fill.s",
-            );
-        }
-        for name in FILL_CONSTANTS {
-            let expected = template.constants.get(name).map(|constant| constant.value);
-            let found = source.constants.get(name);
-            if found.map(|constant| constant.value) != expected {
-                let line = found.map_or(function.line, |constant| constant.line);
-                self.violation(
-                    Rule::Constants,
-                    line,
-                    format!(
-                        "{name} must be {}, as fill needs",
-                        expected.unwrap_or_default()
-                    ),
-                    format!("copy `.equ {name}` from assets/fill.s"),
-                );
-            }
-        }
-    }
-
-    /// The deepest stack over every call path from the program's start: `_start` in the inline
-    /// form, and `main` in the edge form, which lengua's `_start` calls and whose own frames count
-    /// where an operation is called.
+    /// The deepest stack over every call path from `main`, which lengua's `_start` calls and whose
+    /// own frames count where an operation is called.
     fn max_stack(&self) -> u64 {
-        let start = if self.program.function("_start").is_some() {
-            "_start"
-        } else {
-            "main"
-        };
-        u64::try_from(deepest(start, self.program, self.flows)).unwrap_or(0)
+        u64::try_from(deepest(ENTRY, self.program, self.flows)).unwrap_or(0)
     }
 }
