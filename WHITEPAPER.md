@@ -112,7 +112,7 @@ agent.
     request.
   - A filter or count that streams its input a buffer-full at a time is proven for every length,
     by induction over its read loop. The fast word count, a 64 KiB buffer and one vector loop, is
-    proven for every length on both CPUs. Programs that read with the skill's `fill` are proven
+    proven for every length on both CPUs. Programs that read with lengua's `fill` are proven
     however their input arrives, cut into any pieces.
   - Sorting and word tallies are proven for short texts and tested beyond. A folder's listing
     order is the kernel's, floats computed in another order than the formula's really differ, and
@@ -123,8 +123,9 @@ agent.
   programs, never that all are.
 - **The kernel holds every run to what its spec allows.** A spec names what its program uses:
   standard input, files and folders, the network, threads, the terminal, the clock, random bytes.
-  Every run, in tests and for the person, is sandboxed to exactly that, by seccomp and Landlock and
-  a supervisor of lengua's own. A program that names no network has none. A program that connects
+  Every run, in tests and for the person, is sandboxed to exactly that, by seccomp and Landlock
+  and a broker of lengua's own that opens the program's files for it, since the program may touch
+  no path itself. A program that names no network has none. A program that connects
   doesn't connect at all: lengua makes each connection its spec names, does TLS itself for HTTPS,
   and hands the program a plain stream, so the program holds no network and no crypto.
 

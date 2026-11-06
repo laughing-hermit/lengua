@@ -187,12 +187,18 @@ one, or for `run` a folder of the user's files), a time limit (2 s per test, 10 
 
 Before it becomes the program, the launcher confines itself, so the kernel enforces what the
 spec allows:
-- Landlock lets the program touch files only inside its working folder, execute only itself,
-  make no network connection and bind no port at all, and signal no other process;
+- Landlock lets the program touch no file at all: it may execute and read its own binary and
+  nothing else, make no network connection and bind no port, and signal no other process. Every
+  file and folder it uses is opened for it by lengua's broker (below), which hands the descriptor
+  over. The launcher refuses to start a program on a kernel where Landlock isn't in force. The one
+  exception is a program QEMU's user mode runs (an ARM64 program on an x86-64 computer), whose
+  own system calls QEMU needs the folder for, so there the folder stays granted and the broker
+  serves the same names;
 - the program gets no descriptor but its standard input, output and error, a server's listener
-  and its connections: the launcher closes every other one it holds before it confines the
-  program, so one a parent of lengua's left open, a harness or a CI runner, never reaches it
-  (Landlock holds paths, not descriptors already open; GitHub's x86-64 runner showed two);
+  and its connections, and its channel to the broker at 4,352: the launcher closes every other
+  one it holds before it confines the program, so one a parent of lengua's left open, a harness
+  or a CI runner, never reaches it (Landlock holds paths, not descriptors already open;
+  GitHub's x86-64 runner showed two);
 - the program holds no network of its own. lengua makes each connection its spec names before
   the program starts, outside its confinement (a TCP port of this computer, tried on 127.0.0.1
   and then ::1, of a computer the spec names, or of the computer one of the program's arguments
@@ -216,8 +222,8 @@ spec allows:
   (a socketpair on Linux and macOS, a pipe or socket handle on Windows), and none of them must
   police the program's own connections: the strict rule of one product on every target
   (below);
-- a program that uses files is held to the names every system takes, by lengua's supervisor,
-  which stops each `openat`, `mkdirat`, `unlinkat` and `renameat` and reads its name
+- a program that uses files is held to the names every system takes, by lengua's broker, which
+  answers each `os_open`, `os_mkdir`, `os_remove` and `os_rename` and reads its name
   (`src/names.rs`): a name Windows refuses (its characters `< > : " \ | ? *`, controls, a dot or
   space at the end, a device name it reserves, such as `CON` or `com1.txt`, or the shape of a
   short (8.3) name, such as `REPORT~1.TXT`, by which Windows can open another file) gets `EINVAL`; one
@@ -225,38 +231,60 @@ spec allows:
   name past 255 bytes or a path past 1,023 (macOS's `PATH_MAX`), `ENAMETOOLONG`; a new name that
   differs only in case or Unicode normalization from another in its folder, one file on macOS and
   Windows, `EEXIST`; and a file renamed or removed while the program holds it open, which Windows
-  refuses, `EBUSY`. The supervisor also notes whether the program listed a folder: a test whose
-  program did runs again with each listing turned round, since no system promises an order, and
-  fails if its result changes. The prover gives the same answers for names it knows, and splits
-  a name the input chooses on Windows's ASCII rules;
+  refuses, `EBUSY`. The edge also tells the broker whether the program listed a folder: a test
+  whose program did runs again with each listing turned round, since no system promises an order,
+  and fails if its result changes. The prover gives the same answers for names it knows, and
+  splits a name the input chooses on Windows's ASCII rules;
 - the program holds at most 4,352 files open (one number on every target, within macOS's
   `OPEN_MAX`); its arguments take at most 32,000 characters of Windows's command line and its
   environment's names are unique ignoring case, or it doesn't start; and a write to a closed
   pipe or connection returns `EPIPE` rather than raising SIGPIPE, as on Windows;
-- seccomp kills it at any system call its spec doesn't list (plus `write` and `exit`, which
-  `assert_fail` may always make);
-- resource limits cap the files it writes (64 MiB in tests) and leave no core files.
+- seccomp kills it at any system call its spec doesn't allow: the calls the operations its spec
+  names make, plus the `write` and `exit` that `assert_fail` may always make. Its channel is
+  held to the edge's own use: `sendmsg` and `recvmsg` work only on descriptor 4,352, and every
+  call that takes a descriptor first (`read`, `write`, `close`, `lseek`, `fstat`, `getdents64`,
+  `shutdown`, `sendto`) is refused on it, so nothing but lengua's edge talks to the broker;
+- resource limits cap the files it writes (64 MiB in tests) and leave no core files. A write that
+  would take a file past the limit is cut short, and the next fails with `EFBIG`, on every
+  target: the launcher ignores SIGXFSZ, so the system's own answer reaches the program
+  (Windows has no such limit, so its edge counts the bytes and answers the same way).
 
-The checker already proves the code makes no other system calls; the kernel makes the promise hold
-even if the checker missed something.
+The checker already proves the code makes no system call of its own: every operation is a call
+into lengua's edge, which makes only the calls its operations need. The kernel makes the promise
+hold even if the checker missed something.
 
-When a test supplies random bytes or clock readings, a second process of the server's binary, the
-supervisor, traces the launcher with ptrace before it becomes the program. The launcher installs
-one more seccomp filter first, which stops only `getrandom` and `clock_gettime` for the
-supervisor; the supervisor writes the test's bytes or reading into the program's memory with
-`process_vm_writev` and skips the kernel's call, so the program sees the test's values. On
-AArch64 a call can't be skipped without a register set nix gives no safe way to write
-(`NT_ARM_SYSTEM_CALL`), so the supervisor makes the kernel's call harmless instead (`getrandom`
-for no bytes, a clock that doesn't exist), lets it return
-at once, and at its exit puts the answer in x0 and the count it changed back in x1; every other
-register stays as the program left it. A test of a program that may sleep has the supervisor
-too: it ends each `clock_nanosleep` at once,
-since what the program does next can't depend on how long it slept, and a test shouldn't wait
-for it; a real `run` sleeps as long as the program asks. Signals, threads, the exit status, the
-counters and the time limit work as in any run, and runs that need none of this have no
-supervisor at all. Each supplied call adds a few microseconds of wall
-time, never instructions or cycles. The counters report three
-measures, which the optimize step compares by their medians: instructions executed in the
+**The broker** is lengua's one service for what a program may not do for itself. It runs in the
+process that started the program (the server, or `lengua-mcp run`), as a thread for each program,
+and talks to the program's edge over a local stream the program inherits at descriptor 4,352
+(`src/broker.rs`). It speaks first, before the program starts, with a message naming the protocol
+(a magic number and a version), whether this is a test or a `run`, and the file limit; an
+inherited descriptor 4,352 that doesn't begin so is not a broker, and the edge calls the system
+itself, as a program run outside lengua does (lengua's guarantees hold for what `run` runs after
+`check`). Every message the program sends is hostile input: the parser accepts exactly the
+messages of the protocol and the service ends at the first that isn't, and it has its own fuzz
+target.
+- *Names.* A request for a name carries the name, at most 1,023 bytes. The broker holds it to
+  what every system takes (`src/names.rs`), matches it against the folder's entries byte for
+  byte, answers `EBUSY` for a file the program holds open and then renames or removes (the edge
+  tells it of each close), and resolves every path beneath the program's folder without
+  following links (`openat2` with `RESOLVE_BENEATH`, `RESOLVE_NO_SYMLINKS` and
+  `RESOLVE_NO_MAGICLINKS` on Linux; a link or a way out is `EACCES`). A file or folder comes back
+  as a descriptor sent with the reply (`SCM_RIGHTS`). One round trip is what a name costs, about
+  what a ptrace stop used to.
+- *Tests.* The broker also answers the clock and random bytes from the test's supply, in the
+  order the program asks, and the edge ends every sleep at once, since what the program does
+  next can't depend on how long it slept and a test shouldn't wait for it; a real `run` sleeps
+  as long as the program asks. A program that waits for a connection or for input tells the
+  broker, so the test knows it is waiting. A program that lists a folder tells it too, and the
+  test runs again with each listing turned round.
+- *`run`.* The broker serves names alone: reads, writes, seeks, polls, listings of a handed
+  folder, the clock, random bytes and sleeps go straight to the system, and a spec that uses no
+  files gets no channel at all.
+
+Signals, threads, the exit status, the counters and the time limit work as in any run. A supplied
+call adds wall time, a message each way, and a few of the edge's instructions to the program's
+count, the same few for every program, and never any of the program's own. The counters report
+three measures, which the optimize step compares by their medians: instructions executed in the
 program's own code (the steadiest measure of work, though a count can be one higher now and then,
 because the CPU counts the odd interrupt or page fault as one), CPU cycles in its own code (time,
 where slow instructions such as division weigh more), and CPU time including the kernel's work for
@@ -292,6 +320,82 @@ table finds wrong, however often lengua restarts, and a later `check` shows what
 test proven there is proven memory-safe on the same runs, so the table says that too, with no
 field of its own. Checking tests again drops them; a build that is byte for byte the same keeps
 them, and any other build is proven again by itself.
+
+## The edge
+
+A program defines `main` and reaches the system only by calling one of 21 operations of lengua's
+**edge**, which lengua links after it: `src/edge/mod.rs` defines them once, and each operating
+system's edge file (`src/edge/linux-x86_64.s`, `linux-aarch64.s`) does them in that OS's way and
+turns its answers into the same ones. So a program's text is written once per CPU and means the
+same on every OS, the OS's layer is written once per target, and each edge is as thin as its OS
+allows (raw system calls on Linux; libSystem's thinnest calls on macOS and kernel32 on Windows,
+which come with their ports).
+
+| operation | arguments → result | allowed by |
+|---|---|---|
+| `os_read`, `os_write` | fd, buffer, length → count | input, files, network, terminal; write always |
+| `os_open`, `os_close` | name, mode → fd; fd → 0 | files (close: network too) |
+| `os_seek`, `os_info` | fd, offset, whence → offset; fd, out[16] → 0 | files |
+| `os_list` | folder fd, buffer, length → bytes (0 at the end) | files |
+| `os_mkdir`, `os_remove`, `os_rename` | name; name, kind; from, to → 0 | files |
+| `os_clock`, `os_sleep` | clock, out[16] → 0; clock, absolute?, time[16] → 0 | the clock |
+| `os_random` | buffer, length (at most 256) → count | random bytes |
+| `os_accept`, `os_shutdown` | listener → fd; fd, how → 0 | a server; network |
+| `os_poll` | table, count, milliseconds (−1: forever) → ready | several clients, the terminal |
+| `os_terminal`, `os_window` | mode → 0 or −ENOTTY; out[8] → 0 or −ENOTTY | the terminal |
+| `os_thread_start`, `os_thread_join` | index, slot → 0; index → the worker's result | threads (lengua's library only) |
+| `os_exit` | status → never returns | always |
+
+- **Arguments and results.** On x86-64 the arguments go in rdi, rsi, rdx, r10, r8, r9 and the
+  result comes back in rax; on AArch64 in x0 to x5 and x0. An operation changes only the
+  registers its CPU's convention lets it: rax, rcx, r11, the flags and the vector registers on
+  x86-64; x0, x8, x16, x17, x30, the flags and the vector state on AArch64 (v8 to v15's low
+  halves are kept). After a call that reaches the OS, directly or through `fill`, `parallel_for`
+  or one of the program's functions that makes one, a register in that set can't be read before
+  it is written, which the checker holds the program to and the prover models by giving them
+  fresh values: a program reloads its vector constants after a read, a few loads per 64 KiB,
+  which costs less than saving AVX-512 or SVE state on every call.
+- **Errors** are one closed set, Linux's numbers negated, on every OS: 2, 5, 9, 11, 13, 16, 17,
+  20, 21, 22, 24, 25, 27, 28, 29, 32, 36, 39, 84, 104 and 107. Each operation lists its subset,
+  the prover returns exactly that subset, and an error outside it is `EIO`, on the error path
+  only. macOS's `errno` and Windows's `GetLastError` map through tables in their edge files, and
+  a test requires each table to cover the set.
+- **Data** is the same bytes on every OS. `os_info` gives {size, kind}: kind 0 a file, 1 a
+  folder, 2 anything else, the size 0 unless a file. A listing entry is {u16 length (a multiple
+  of 8), u8 kind, u8 name length, name, NUL, padding}, with `.` and `..` left out. The open modes
+  are READ 0, WRITE 1, APPEND 2, NEW 3 and FOLDER 4, and names are relative to the working
+  folder and use `/` on every OS. `os_poll` takes Linux's 8-byte entries with POLLIN 1, POLLERR
+  8, POLLHUP 16 and POLLNVAL 32. The terminal's RAW mode is no echo and no line editing, with
+  signals and output processing kept.
+- **Start and end.** lengua's `_start` calls `main(argc, argv, envp)` with the three in the first
+  argument registers (on Linux from the start stack), and `main` never returns: it ends with
+  `os_exit` (`exit_group` on Linux). A program has 4,352 descriptors, 0 to 4,351; the channel to
+  its broker is 4,352, which every operation refuses when a program passes it.
+- **Threads.** lengua's `parallel_for(count, slots, slot_size, results)` runs the program's
+  `worker(index, slot)` on up to 64 threads, each with a static 1 MiB stack of lengua's own (on
+  Linux a `clone` into `.bss` and a `futex` to join them); the checker holds the worker's deepest
+  call path under what a stack gives it, and every frame under 4,096 bytes, since Windows grows a
+  stack a page at a time and these stacks have no guard page.
+- **Standard input** of up to 4,096 bytes is in its pipe before a test's program starts, so one
+  read returns it whole on every OS, which is the condition the proofs state.
+
+**Sources.** Two OS-neutral CPU libraries (`src/edge/x86_64.s`, `aarch64.s`: `assert_fail`,
+`fill`, `parallel_for`) and one edge file for each OS and CPU are embedded in the server. Each
+build writes lengua.s, the `_start`, the operations main.s calls, the library functions it calls
+and doesn't define, and what they need, always in the same order, and assembles it with main.s as
+one object after main.s's last line, so main.s's line numbers don't move and a name clash is an
+assembler error. `lengua-mcp link main.s` prints the same text, so a program can still be built
+by hand. Only what a program calls is linked.
+
+**What the checker holds.** The executable's functions form two units, main.s's under every rule
+and lengua's, matched line by line to the text lengua assembled and exempt from the program's
+rules. It refuses `syscall` and `svc` in main.s; a name lengua keeps (`_start`, `os_*`,
+`lengua_*`, `assert_fail`, `assert_message`, `fill`, `parallel_for`); `main` returning; a call of
+an operation the spec doesn't allow (a call of a library function counts as the operations it
+makes); and main.s entering lengua anywhere but an operation's or a library function's entry, or
+touching its data. The `.equ` lines of main.s for the errors and modes it compares against are
+held to the edge's values. The edge files and the libraries are themselves held to the dialect's
+rules, but for their calls into the OS.
 
 ## Performance
 
@@ -342,7 +446,8 @@ instructions (see the vector instructions it follows, below).
 lengua is an agent plugin: skills plus an MCP server, nothing else. The server does only what the
 agent can't be trusted or equipped to do: recording the request and the signed lock, the checks
 that keep tests and code true to the recorded spec, marking test changes that test less,
-building, running under the kernel's confinement, measuring, supervising test runs and proving. Everything generative or advisory is the agent's, guided by the
+building, running under the kernel's confinement, serving a program's names and a test's clock and
+random bytes (the broker), measuring and proving. Everything generative or advisory is the agent's, guided by the
 skills: specs, tests, code, optimization, explanations, fetching from the web, and comparisons with
 other languages. Style rules, such as the order of Given, When and Then, live in the skills; the
 server checks only what it parses and relies on.
@@ -359,12 +464,12 @@ adapted for assembly. The full rule text lives in
 
 1. Simple control flow: jumps stay in their function, no recursion, compare chains end in an assertion, and a checked jump table picks among dense cases.
 2. Every loop counts down from a named maximum.
-3. Resources reserved up front: memory is static (`.bss` sized from the spec's limits) plus the stack, nothing is allocated while running, one thread, and only the system calls of what the spec names (write and exit by default), with a computed maximum stack size.
+3. Resources reserved up front: memory is static (`.bss` sized from the spec's limits) plus the stack, nothing is allocated while running, one thread unless the spec allows more, and only the operations of what the spec names (write and exit by default), with a computed maximum stack size.
 4. Functions of at most 60 instructions, standard calling convention, one exit.
 5. At least two assertions per function on average; a failed assertion exits with code 134.
-6. Smallest scope: one owning function per buffer, only `_start` exported, read-only data stays read-only.
+6. Smallest scope: one owning function per buffer, nothing exported (`main` is the entry, which lengua's `_start` calls), read-only data stays read-only.
 7. Every result is checked (`rax` < 0 means error).
-8. No macros; named constants for system calls, exit codes, sizes and loop bounds.
+8. No macros; named constants for exit codes, sizes and loop bounds.
 9. No function pointers, and no jump through a register but a checked jump table's; indexed accesses are bounds-checked over their full width (16 to 64 bytes for vectors), except inside a reported `unsafe` block.
 10. Warnings are errors, every change is checked, and the dialect is versioned.
 
@@ -373,11 +478,13 @@ runs before it passes the rules. It reads `main.s` (one instruction per line, co
 use, no macros), builds it, decodes the executable with iced-x86 and matches every instruction to
 its line, operands included; anything that doesn't match is a violation, so what runs is exactly
 what `main.s` says. Then it builds each function's control flow and exact stack depth and checks
-the rules: unreachable lines are violations too. `assert_fail` is lengua's own code: it's compared
-word for word with the template and is exempt from the rules it must break (it may always write
-its message to standard error and exit with 134, whatever the spec allows). An assertion is
-reached through a conditional jump, the fall-through of one, or a `jmp` right after one (the end
-of a comparison chain or of an exhausted loop).
+the rules: unreachable lines are violations too. `assert_fail`, `fill` and `parallel_for` are
+lengua's own code, linked after main.s from lengua's library and never copied into it: the
+executable's functions form two units, main.s's, matched line by line to main.s under every rule,
+and lengua's, matched to the text lengua assembled and exempt from the rules a program's code
+must keep (`assert_fail` may always write its message to standard error and exit with 134,
+whatever the spec allows). An assertion is reached through a conditional jump, the fall-through of
+one, or a `jmp` right after one (the end of a comparison chain or of an exhausted loop).
 
 Instruction sets: dialect 4 (the current one) uses x86-64's integer instructions, its integer vector
 instructions and floating point in double and single precision, with fused multiply-add (scalar and
@@ -422,7 +529,7 @@ references, on the assembly itself. A dataflow over each function gives every re
 data symbol's address, the function's own frame, a pointer the caller lent in a register, the
 program's arguments, a plain number, or a value it doesn't follow. Functions are checked callees
 first, and each one's summary (the registers it reads and writes through, itself and in what it
-calls, system calls included, and what it returns) carries owners across calls, so no header has to
+calls, operations included, and what it returns) carries owners across calls, so no header has to
 declare them. Then the M rules hold:
 - no address is made from a plain number (M1);
 - constant offsets stay inside their symbol, the one main.s names even where the next symbol
@@ -614,8 +721,8 @@ How the proof works (`src/prove/`):
   every line in range in under a second, and two at once as far as the time goes, every pair
   of lines up to 122 bytes each in a check's five minutes, with no solver question; serving its
   first slot alone, or never closing a connection, is found.
-- **fill is read as a whole.** `fill` (in the skill's `assets/fill.s`, copied word for word with
-  its constants, which the checker holds to) reads until its buffer is full, the input ends, or
+- **fill is read as a whole.** `fill` (lengua's own library function, linked after main.s, which
+  the proof finds by its shape) reads until its buffer is full, the input ends, or
   the last byte read is its end byte. At its loop's head the proof takes at once each place a
   read could stop: after any end byte that has arrived, or where the buffer fills or the input
   ends, each a run of its own, with the counters the reads leave unknown. A block whose program
@@ -1028,22 +1135,23 @@ Rust share: everything a program may touch must be something the checker can acc
 | Need | C and C++ | Rust | lengua |
 |---|---|---|---|
 | Memory | `malloc`/`free`, `new`/`delete`: leaks, double frees, use after free | Ownership frees memory automatically; arenas without the standard library | Reserved up front: static buffers sized from the spec's limits, plus the stack. Nothing is allocated or freed while running (rule 3), and `.bss` costs nothing until touched |
-| Threads | pthreads: any thread may write anything, and data races are undefined behavior | `Send`/`Sync`, scoped threads and rayon: no data races, checked at compile time | Fork-join only, when the spec allows threads. A canonical `parallel_for` (copied word for word, like `assert_fail`) starts workers with `clone` on static stacks and waits on `futex` for them all. Each worker owns its stack and one output slot, like Rust's `chunks_mut`: the checker proves it writes nothing else (JPL: one owner per shared object). No locks, atomics or shared mutation, so results stay deterministic and testable |
-| System access | Any system call | The standard library, within the OS's permissions | Capabilities: the spec names what the program uses (standard input, files and folders, the clock, random bytes, environment variables, the network), each target allows only those calls, and the kernel enforces them (seccomp) and keeps files inside the program's working folder (Landlock) |
-| Files and folders | `fopen`, `stat`, `readdir`, `mkdir`, `unlink`, `rename` | `std::fs`: `File`, `metadata`, `read_dir`, `create_dir`, `remove_file`, `rename` | Under `files`, inside the working folder only: open, read, write, seek, close, a file's size (`fstat`), a folder's entries (`getdents64`), and making, removing and renaming. Tests give empty folders and check what's gone and what folders remain. The proof follows folders, deletes and renames; a folder's listing stays tested, not proven, since the kernel orders it its own way |
+| Threads | pthreads: any thread may write anything, and data races are undefined behavior | `Send`/`Sync`, scoped threads and rayon: no data races, checked at compile time | Fork-join only, when the spec allows threads. lengua's `parallel_for` (linked from its library, like `assert_fail`) starts workers on static stacks (`clone` on Linux) and waits for them all (a `futex` there). Each worker owns its stack and one output slot, like Rust's `chunks_mut`: the checker proves it writes nothing else (JPL: one owner per shared object). No locks, atomics or shared mutation, so results stay deterministic and testable |
+| System access | Any system call | The standard library, within the OS's permissions | Capabilities: the spec names what the program uses (standard input, files and folders, the clock, random bytes, environment variables, the network), the program reaches the system only through the operations of lengua's edge that those allow, and the kernel enforces them (seccomp) and grants the program no path at all (Landlock): its broker opens the files, inside the working folder |
+| Files and folders | `fopen`, `stat`, `readdir`, `mkdir`, `unlink`, `rename` | `std::fs`: `File`, `metadata`, `read_dir`, `create_dir`, `remove_file`, `rename` | Under `files`, inside the working folder only: open, read, write, seek, close, a file's size and kind (`os_info`), a folder's entries (`os_list`), and making, removing and renaming. Tests give empty folders and check what's gone and what folders remain. The proof follows folders, deletes and renames; a folder's listing stays tested, not proven, since the kernel orders it its own way |
 | Environment | `getenv` | `std::env::var` | Under `the environment`: only the variables a test, or the user's `run`, names, set only as the launcher becomes the program |
-| Waiting | `nanosleep` | `thread::sleep` | Under `the clock`: `clock_nanosleep`, which a test ends at once and a real run doesn't |
-| The terminal | `termios`, `poll`, `TIOCGWINSZ` | crossterm and the like | Under `the terminal`: `ioctl` on standard input, output or error for its mode (`TCGETS`, `TCSETS`) and its window's size, and nothing else, and `poll` to wait for a key. Tests give the keys as standard input, a pipe, where the mode can't be set, so a program goes on as from a pipe, and `\e` writes escape sequences; the proof models the same. `lengua-mcp run` puts the terminal back as it found it when the program ends, however it ends (`assets/terminal-template.s`) |
+| Waiting | `nanosleep` | `thread::sleep` | Under `the clock`: `os_sleep`, which a test ends at once and a real run doesn't |
+| The terminal | `termios`, `poll`, `TIOCGWINSZ` | crossterm and the like | Under `the terminal`: `os_terminal` for the mode of standard input and `os_window` for its window's size, and nothing else, and `os_poll` to wait for a key. Tests give the keys as standard input, a pipe, where the mode can't be set, so a program goes on as from a pipe, and `\e` writes escape sequences; the proof models the same. `lengua-mcp run` puts the terminal back as it found it when the program ends, however it ends (`assets/terminal-template.s`) |
 | Left out, by design | `fork`/`exec`, `malloc`, recursion, function pointers | `std::process`, `Box`/`Vec`, recursion, `dyn` | Running other programs (their code isn't checked); allocating while running (rule 3: buffers and arenas in `.bss`, sized from the spec, cost nothing until touched, and input of any length streams through `fill`); recursion and function pointers (rules 1 and 9: explicit stacks, and dispatch by comparison) |
-| Clock, random | `time()`, `rand()` | `Instant`, `SystemTime`, `rand` | Capabilities the spec names, `the clock` and `random bytes` (on this target `clock_gettime` and `getrandom`), enforced by the kernel like the rest. Tests supply the bytes and readings, so output that depends on them is exact, and the prover covers every value the test's variables can take; without a supply, a rule such as "a number from 1 to 6" (`{any(1, 6)}`) checks the output, and the prover treats the kernel's values as any value |
+| Clock, random | `time()`, `rand()` | `Instant`, `SystemTime`, `rand` | Capabilities the spec names, `the clock` and `random bytes` (`os_clock` and `os_random`), enforced by the kernel like the rest. Tests supply the bytes and readings, so output that depends on them is exact, and the prover covers every value the test's variables can take; without a supply, a rule such as "a number from 1 to 6" (`{any(1, 6)}`) checks the output, and the prover treats the kernel's values as any value |
 | Network | Sockets | `std::net` | Plain TCP to the places the spec names, each a TCP port of this computer, of a computer it names, or of the computer an argument names, and TLS on a named computer's when the line says `over TLS`, done by lengua outside the program. The program never opens a socket or connects: lengua makes each connection before it starts and hands it over as descriptors 4, 5 and on, relaying it both ways, and one it couldn't make comes ended. seccomp allows no `socket` or `connect`, `sendto` only without an address, and `accept4` only on descriptor 3; Landlock allows no TCP connection or binding of the program's own. A server never binds: the launcher listens on its port, on the loopback unless the spec says `for any computer`, and hands it the socket as descriptor 3, and only its accept loop, or its loop around `poll`, may run forever (`# bound: forever`, NASA's exception). A server serves one client at a time unless its spec says `up to N clients at once`: then seccomp allows `poll`, the event loop C servers use, over a fixed table of connections (`assets/server-template.s`), and a test whose clients connect at once makes each wait for another's answer, so a server that serves one at a time fails; the proof follows a server that polls through every order its clients' steps can come in, and through the test's own. A test's servers speak on the program's own connections, and its clients connect to the program's listener on a free loopback port. Each `connects to` line names one connection to each place, at most 16 |
 
 A worker gets its index and its slot. It and every function it calls write only their own stack
-frames and the slot, which it keeps in `rbx`, inside bounds checks; they make no system calls; and
-each thread's stack is sized from the worker's deepest call path. Combining `results` in index
-order makes reductions deterministic, and laying the slots end to end makes a map's output one
-`write`. The kernel allows `clone` only with `parallel_for`'s flags, and `assert_fail` ends every
-thread with `exit_group`, so a failed check anywhere stops the whole program.
+frames and the slot, which it keeps in `rbx`, inside bounds checks; they call no operation; and
+each thread's stack, 1 MiB of lengua's own, holds the worker's deepest call path, which the
+checker holds under that. Combining `results` in index order makes reductions deterministic,
+and laying the slots end to end makes a map's output one `write`. The kernel allows `clone` only
+with the flags lengua's `parallel_for` gives it, and `assert_fail` ends every thread with
+`exit_group`, so a failed check anywhere stops the whole program.
 
 Roadmap, in order:
 1. the fastest streaming programs proven for every length, whose buffer-fulls are too large for
@@ -1055,11 +1163,12 @@ Roadmap, in order:
 
 ## Platforms
 
-The MVP builds for Linux x86-64 (ELF, direct system calls), assembled by LLVM's `llvm-mc` and
-linked by `ld.lld`. Later, in this order: Linux ARM64 (tested on GitHub's ARM64 runner, and under
-QEMU on the x86-64 one), macOS ARM64 and
-macOS x86-64 (on a Mac, through Apple's LLVM; Rosetta 2 runs no AVX-512), Windows x86-64 and
-Windows ARM64 (import libraries generated by `llvm-dlltool`, no Windows SDK).
+lengua builds, checks, proves and runs programs for Linux on x86-64 and on ARM64 (ELF, reaching
+the system through lengua's edge; tested natively on GitHub's runners of both, and the ARM64 ones
+also under QEMU on the x86-64 one), assembled by LLVM's `llvm-mc` and linked by `ld.lld`. macOS on
+ARM64 and x86-64 (on a Mac, through Apple's LLVM; Rosetta 2 runs no AVX-512) and Windows on x86-64
+and ARM64 (import libraries generated by `llvm-dlltool`, no Windows SDK) follow, each with its own
+edge file and confinement.
 
 The spec is the portable part and already agnostic: it names no CPU or OS, and `check` rejects a
 CPU or OS term in a spec's prose, so the same spec means the same on every target. The per-target
@@ -1080,15 +1189,15 @@ What needs the host, and what doesn't:
   server build can carry every target's decoder, prover model and dialect, whatever host it runs
   on.
 - **Testing and running need the target's CPU.** `check` runs the spec's tests and `run` runs the
-  program, under the host's own sandbox — seccomp, Landlock and the test supervisor on Linux,
+  program, under the host's own sandbox — seccomp and Landlock and the broker on Linux,
   something else on macOS and Windows — so both need that CPU, natively or under an emulator.
   Under QEMU's user mode, which runs Linux ARM64 programs on an x86-64 Linux host, the kernel sees
   QEMU's own system calls, not the program's: Landlock and resource limits still confine a run,
-  but the spec-exact system-call filter, the tests' supplied random bytes and clock, and the cycle
-  counts need the target natively (Round 9 tests those on GitHub's ARM64 runners). So the per-host
-  part of the server is the runner (item 6 below). It's also why programs run only on Linux
-  x86-64 and Linux ARM64 today: seccomp and Landlock are Linux's, so macOS and Windows each need
-  a confinement of their own, and the server builds on all six targets meanwhile (todo.md).
+  but the spec-exact system-call filter and the cycle counts need the target natively (GitHub's
+  ARM64 runners). The broker serves such a program as any other. So the per-host part of the
+  server is the runner (item 6 below). It's also why programs run only on Linux x86-64 and Linux
+  ARM64 today: seccomp and Landlock are Linux's, so macOS and Windows each need a confinement of
+  their own, and the server builds on all six targets meanwhile (todo.md).
 
 **The plugin decides per target.** The server detects its host at startup (`Profile::for_target`
 over `std::env::consts`) and uses that target, so the user installs one plugin and it picks what it
@@ -1105,9 +1214,9 @@ AArch64 code on an x86-64 computer through QEMU's user mode, when its binfmt_mis
 machine line starts `linux-aarch64 (emulated by qemu-aarch64 10.2.2 on linux-x86_64)`. Under QEMU
 each run keeps Landlock, the file and core limits and the time and output limits, and the kernel
 stops the calls QEMU never needs to make, such as tracing, mounts, namespaces, modules and
-io_uring; but the spec's exact filter, the supervisor and the counters would see QEMU, not the
-program. So tests that need the supervisor (supplied random bytes or clock, instant sleeps) are
-reported as not run there; a client's tests run, since lengua makes its connections. Nothing is
+io_uring; but the spec's exact filter and the counters would see QEMU, not the program. The
+broker serves the emulated program as any other, so its tests' names, supplied random bytes and
+clock and instant sleeps work, and a client's too, since lengua makes its connections. Nothing is
 measured, and the reply says what held the runs. lengua.lock records what ran the tests
 (`emulator = "qemu-aarch64 10.2.2"`), and `run` won't run code tested one way in a session of
 the other. lengua's line in main.s is the target CPU's comment, `// lengua: …` on AArch64. Distribution is then: one server build per host OS,
@@ -1225,17 +1334,25 @@ question, its loop leaving where its index reaches the bytes read as the NEON on
    wide for one `mov` built from a `mov` and `movk`s that each name the same constant, which
    together count as `mov xR, #NAME`. Its messages say AArch64's registers and instructions. Its
    reference comes with the skills.
-5. **The OS edge:** on Linux, the system calls' numbers, the instruction and registers that make
-   them, and the ABI's details, which differ between CPUs even on one OS. On AArch64 there is no
-   `poll`, only `ppoll`; `clone`'s child-tid argument moves; `struct stat` is 128 bytes with
-   `st_mode` at 16 (x86-64: 144 and 24); and `O_DIRECTORY` is `0o40000`, x86-64's value for
-   `O_DIRECT`. macOS and Windows don't allow a program to call the OS directly: a program must go
-   through the system library (libSystem, ntdll), code lengua never checked, so those need the
-   system-library calling convention modelled instead.
-6. **The runner and sandbox:** on Linux, seccomp and Landlock (`runner.rs`), and the supervisor
-   that supplies tests' random bytes and clock (`supervise.rs`, which reads the CPU's registers:
-   x86-64's and AArch64's, each in its own small `cpu` module). macOS and Windows have neither;
-   each needs its own confinement.
+5. **The OS edge:** one file for each OS on each CPU (`src/edge/linux-x86_64.s`,
+   `linux-aarch64.s`; macOS's and Windows's are to come), in that CPU's assembly, holding the 21
+   operations every program calls (`os_read`, `os_write`, `os_open`, ... `os_exit`), which
+   `src/edge/mod.rs` defines once: their arguments, results, errors, modes and layouts, the same
+   on every OS (see "The edge" below). Each routine does what its OS does and turns the OS's
+   answers into those. On Linux an operation is `mov eax, SYS_X`, `syscall` and `ret` with its
+   normalization, and the ABI's details, which differ between CPUs even on one OS, are in these
+   files alone: on AArch64 there is no `poll`, only `ppoll`; `clone`'s child-tid argument moves;
+   `struct stat` is 128 bytes with `st_mode` at 16 (x86-64: 144 and 24); and `O_DIRECTORY` is
+   `0o40000`, x86-64's value for `O_DIRECT`. macOS and Windows don't allow a program to call the
+   OS directly: a program must go through the system library (libSystem, kernel32), code lengua
+   never checked, so their edges call it, and lengua checks the edge's own text and nothing of
+   what the library does. The CPU's own library (`src/edge/x86_64.s`, `aarch64.s`: `assert_fail`,
+   `fill`, `parallel_for`) is the same on every OS.
+6. **The runner and sandbox:** on Linux, seccomp and Landlock (`runner.rs`, `os/linux.rs`), and
+   the broker that serves the names, the clock and the random bytes (`broker.rs`: one wire on
+   every OS; what differs is how a descriptor or handle reaches the program and how a path is
+   held beneath its folder). macOS and Windows have none of the first two; each needs its own
+   confinement.
 7. **The tests' column, and a runner to run it.** Every table of cases is a `PerTarget`
    (`src/targets.rs`), a struct with a field for each target, so a new `Profile` stops every one
    of them compiling until the new target has its cell, and a case can't be left out of one
@@ -1250,7 +1367,7 @@ question, its loop leaving where its index reaches the bytes read as the NEON on
      lacks is skipped, with a note in the run's summary);
    - `tests/limits.rs`: an assembly source of the target's CPU for each program that pins a
      limit: time, output, the environment, names, open files, listing order, the clock and the
-     random bytes, the supervisor, threads, the network, and the rest of "Running programs".
+     random bytes, the broker, threads, the network, and the rest of "Running programs".
      Every runner builds every target's source (LLVM builds for all of them), so a typo fails
      everywhere, and runs its own;
    - `tests/programs.rs`: for each case that takes the examples, fixtures, templates and fast
@@ -1270,7 +1387,7 @@ question, its loop leaving where its index reaches the bytes read as the NEON on
    for one target (`#![cfg(target_arch = ...)]`, or a target in its name) is on its `DEBT` list
    with what the other targets lack, so a new such file fails and the list only shrinks. QEMU's
    user mode is for a developer's computer: it checks and runs, but the kernel sees QEMU's
-   system calls, so it can't hold a program to its spec's, and the supervisor can't follow it.
+   system calls, so it can't hold a program to its spec's.
    What the suite still tests on one target only is that `DEBT` list.
 
 **One product on every target.** A port adds a CPU's or an OS's means, never a different lengua.
@@ -1335,10 +1452,10 @@ Every write to a closed pipe or connection is an error (`EPIPE`) rather than a s
 Windows: the launcher keeps SIGPIPE ignored into the program.
 
 **Linux ARM64 was nearest:** the same OS, so the same kinds of system calls, the same sandbox and
-ELF, but 2, 3 and 4 and a new triple were new, and 5 and 6 changed in detail (the call numbers,
-the ABI details above, the supervisor's registers). macOS and Windows need all six, the OS edge
+ELF, but 2, 3 and 4 and a new triple were new, and 5 and 6 changed in detail (its own edge file,
+with the call numbers and the ABI details above). macOS and Windows need all six, the OS edge
 and sandbox most of all. QEMU's user mode, on the x86-64 Linux runner, tests Linux ARM64 for all
-but the sandbox's exact filter and supplies, which GitHub's ARM64 runner tests natively.
+but the sandbox's exact filter, which GitHub's ARM64 runner tests natively.
 
 The plugin's own server binary will ship for x86_64/aarch64 Linux (musl), aarch64 macOS and
 x86_64/aarch64 Windows; that is the server running, separate from which targets it can compile and
@@ -1495,9 +1612,10 @@ with its AArch64 twin. CI builds lengua natively on all six of GitHub's runners,
 Windows on both CPUs (`.github/workflows/ci.yml`), and runs the suite on each; on macOS and
 Windows, each on x86-64 and ARM64, it passes every test that runs no program, and the tests that
 would run one say they can't until their ports. Those four need more than a new CPU, since they
-forbid the direct system calls lengua's programs make and have neither seccomp nor Landlock: each
-is a profile with its own decoder, prover model, dialect reference, runner and sandbox, as
-"Porting a target" sets out, and each must hold every limit the Linux targets do. The white paper (WHITEPAPER.md) says what lengua
+forbid the direct system calls lengua's edge makes on Linux and have neither seccomp nor
+Landlock: each is a profile with its own edge file, decoder, prover model, dialect reference,
+runner and sandbox, as "Porting a target" sets out, and each must hold every limit the Linux
+targets do. The white paper (WHITEPAPER.md) says what lengua
 is and isn't, and a site where people share specs (`site/`) runs locally: the spec travels, each
 computer compiles it for itself, and code is checked again wherever it runs. todo.md holds only
 what's left for people.

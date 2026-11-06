@@ -217,7 +217,9 @@ only where `machine` lists the extension. `check` refuses an instruction the mac
   register in loads and stores, and `v1.b[3]` one lane.
 - `d8` to `d15`, the low halves of `v8` to `v15`, are all a call keeps: a function that changes
   `v8` to `v15` saves `d8` to `d15` (see floating point below), and after a `bl` every other
-  vector register holds anything. System calls keep them all.
+  vector register holds anything. So does the upper half of `v8` to `v15` after a call of an
+  operation (`os_*`, or `fill` and `parallel_for`, which call them), as do `v0` to `v7` and `v16`
+  to `v31`: reload what you need from memory.
 - Load and store 16 bytes with `ldr q0, [x1, x2]` and `str q0, [x1, x2]`, after `cmp x2, LIMIT`
   and `b.hs` away with `LIMIT` the buffer's size less 15, so the whole vector stays inside; a
   limit too wide for `cmp`'s number is a named constant in a register. A pointer moved by `add`,

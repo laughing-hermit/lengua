@@ -163,7 +163,7 @@ tests with their own servers or client: never the real places, which only `run` 
   ``the client gets back …`` belongs to its client, in order.
 - **Pieces:** on every other generated run, standard input and the test's server and client
   arrive in three pieces with short pauses, as a pipe or a network may deliver them, so a program
-  must read until it has what it needs. A program that reads with the compile skill's `fill` is proven for every way a message
+  must read until it has what it needs. A program that reads with lengua's `fill` is proven for every way a message
   can be cut, not only these.
 
 ## Rules: output the program chooses

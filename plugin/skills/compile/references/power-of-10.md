@@ -230,7 +230,7 @@ rises.
 ### 1. Simple control flow
 
 Jumps land on labels in the same function; calls name functions. No recursion. Every path ends
-in `ret`, `jmp`, an exit system call or an assertion; no line is unreachable, and control never
+in `ret`, `jmp`, a call to `os_exit` or an assertion; no line is unreachable, and control never
 runs off a function's end. A chain of two or more `cmp R, constant` + `je` on one register ends in
 an assertion, so an unexpected value can't slip through:
 
