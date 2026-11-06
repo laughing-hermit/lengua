@@ -1,0 +1,12 @@
+about = "path_unlink_file beneath a descriptor not in use gives BADF"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = { "f.txt" = "x" }
+
+[expect]
+exit = 8
+stdout = ""
+stderr = ""
+files = { "f.txt" = "x" }

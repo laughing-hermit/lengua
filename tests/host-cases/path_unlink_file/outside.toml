@@ -1,0 +1,11 @@
+about = "path_unlink_file of a path out of the working folder gives NOTCAPABLE"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = {}
+
+[expect]
+exit = 76
+stdout = ""
+stderr = ""

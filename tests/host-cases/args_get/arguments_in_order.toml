@@ -1,0 +1,11 @@
+about = "args_get gives each argument after the program's name whole and in order"
+uses = []
+network = ""
+args = ["first", "", "café x"]
+stdin = ""
+files = {}
+
+[expect]
+exit = 0
+stdout = "[first]\n[]\n[café x]\n"
+stderr = ""

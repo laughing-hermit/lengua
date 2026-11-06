@@ -1,0 +1,11 @@
+about = "proc_exit ends the program at once with its code, keeping what was written before"
+uses = []
+network = ""
+args = []
+stdin = ""
+files = {}
+
+[expect]
+exit = 3
+stdout = "before\n"
+stderr = ""

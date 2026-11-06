@@ -1,0 +1,11 @@
+about = "fd_read hands over standard input byte for byte, in small reads, until it returns 0"
+uses = ["standard input"]
+network = ""
+args = []
+stdin_hex = "00ff0a61626364656667"
+files = {}
+
+[expect]
+exit = 0
+stdout_hex = "00ff0a61626364656667"
+stderr = ""

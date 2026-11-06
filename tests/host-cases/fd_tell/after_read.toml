@@ -1,0 +1,11 @@
+about = "fd_tell gives 0 for a file just opened and 3 after three bytes are read"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = { "f.txt" = "hello" }
+
+[expect]
+exit = 0
+stdout = "0 3\n"
+stderr = ""

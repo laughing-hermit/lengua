@@ -1,0 +1,12 @@
+about = "path_remove_directory of a folder with a file in it gives NOTEMPTY"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = { "dir/" = "", "dir/f.txt" = "x" }
+
+[expect]
+exit = 55
+stdout = ""
+stderr = ""
+files = { "dir/" = "", "dir/f.txt" = "x" }

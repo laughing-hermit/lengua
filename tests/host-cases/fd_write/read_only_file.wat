@@ -1,0 +1,31 @@
+;; fd_write to a file opened only to read gives BADF, 8, and the file stays as it was.
+(module
+  (import "wasi_snapshot_preview1" "path_open"
+    (func $path_open (param i32 i32 i32 i32 i32 i64 i64 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "fd_write"
+    (func $fd_write (param i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "proc_exit"
+    (func $proc_exit (param i32)))
+  (memory (export "memory") 1 1)
+  (data (i32.const 2048) "in.txt")
+  (data (i32.const 2056) "x")
+  ;; One iovec over "x" at 2056.
+  (data (i32.const 3072) "\08\08\00\00\01\00\00\00")
+  ;; Exits with 150 plus the errno when a step that must succeed fails.
+  (func $need (param $errno i32)
+    (if (local.get $errno)
+      (then (call $proc_exit (i32.add (i32.const 150) (local.get $errno))))))
+  ;; Opens the $len-byte path at $at beneath the working folder, descriptor 3: the errno, and
+  ;; the new descriptor at 1056.
+  (func $open (param $at i32) (param $len i32) (param $oflags i32) (param $rights i64)
+    (param $fdflags i32) (result i32)
+    (call $path_open (i32.const 3) (i32.const 0) (local.get $at) (local.get $len)
+      (local.get $oflags) (local.get $rights) (i64.const 0) (local.get $fdflags)
+      (i32.const 1056)))
+  (func $main (export "_start")
+    ;; in.txt with the rights to read and none to write.
+    (call $need (call $open (i32.const 2048) (i32.const 6) (i32.const 0)
+      (i64.const 2113574) (i32.const 0)))
+    (call $proc_exit
+      (call $fd_write (i32.load (i32.const 1056)) (i32.const 3072) (i32.const 1)
+        (i32.const 1064)))))

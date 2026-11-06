@@ -1,0 +1,12 @@
+about = "fd_close of a file the program wrote returns success, and the file holds the bytes"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = {}
+
+[expect]
+exit = 0
+stdout = "0\n"
+stderr = ""
+files = { "c.txt" = "x" }

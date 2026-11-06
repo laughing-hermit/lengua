@@ -1,0 +1,12 @@
+about = "environ_get gives exactly the variables the test sets, as NAME=value"
+uses = ["the environment"]
+network = ""
+args = []
+env = { A = "1", KEY = "a=b" }
+stdin = ""
+files = {}
+
+[expect]
+exit = 0
+stdout = "A=1\nKEY=a=b\n"
+stderr = ""

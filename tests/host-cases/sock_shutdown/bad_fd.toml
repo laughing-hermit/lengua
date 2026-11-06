@@ -1,0 +1,11 @@
+about = "sock_shutdown of a descriptor not in use gives BADF"
+uses = []
+network = "listens on TCP port 8080"
+args = []
+stdin = ""
+files = {}
+
+[expect]
+exit = 8
+stdout = ""
+stderr = ""

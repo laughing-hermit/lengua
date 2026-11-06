@@ -1,0 +1,11 @@
+about = "clock_time_get rounds both clocks' real readings to a microsecond"
+uses = ["the clock"]
+network = ""
+args = []
+stdin = ""
+files = {}
+
+[expect]
+exit = 0
+stdout = "0 1 0\n"
+stderr = ""

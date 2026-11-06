@@ -1,0 +1,11 @@
+about = "fd_write gathers its iovecs in order and counts what it took; fd 2 is standard error"
+uses = []
+network = ""
+args = []
+stdin = ""
+files = {}
+
+[expect]
+exit = 0
+stdout = "abcd\n"
+stderr = "oops\n"

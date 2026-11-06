@@ -1,0 +1,12 @@
+about = "path_open with creat and excl of a file that is there gives EXIST"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = { "f.txt" = "x" }
+
+[expect]
+exit = 20
+stdout = ""
+stderr = ""
+files = { "f.txt" = "x" }

@@ -1,0 +1,11 @@
+about = "fd_seek moves the offset from the start, from where it is and from the end"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = { "f.txt" = "hello" }
+
+[expect]
+exit = 0
+stdout = "1 e 3 l 4 o\n"
+stderr = ""
