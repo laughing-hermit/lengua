@@ -169,6 +169,10 @@ impl Cpu<'_> {
             Inst::Adr { .. } => Err(unsupported("adr, which the dialect doesn't have")),
             Inst::Branch { link, target } => {
                 if link {
+                    // An operation of lengua's is modelled whole, with no link register set.
+                    if let Some(op) = self.image.op_at(target) {
+                        return self.edge_call(op);
+                    }
                     self.call_a64(target)?;
                 } else {
                     self.state.rip = target;

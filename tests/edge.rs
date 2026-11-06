@@ -104,6 +104,9 @@ struct Case {
     calls: &'static [Syscall],
     /// Whether it starts threads.
     threads: bool,
+    /// Why the prover's model of the operations doesn't follow it, when it doesn't: the case is
+    /// then run natively and not in the model.
+    model: Option<&'static str>,
     /// Assembly appended to the program for each CPU, such as a `worker`: x86-64's, then AArch64's.
     extra: (&'static str, &'static str),
     /// What it prints, all of it, the report included.
@@ -128,6 +131,7 @@ impl Case {
             after: &[],
             calls: &[],
             threads: false,
+            model: None,
             extra: ("", ""),
             stdout,
         }
@@ -752,6 +756,7 @@ fn cases() -> Vec<Case> {
         Case {
             stdin: b"x",
             calls: &[Syscall::Poll],
+            model: Some("it says a key is ready, where the pipe has also hung up"),
             ..Case::new(
                 "poll",
                 &[
@@ -890,6 +895,7 @@ fn cases() -> Vec<Case> {
         Case {
             threads: true,
             extra: (X86_WORKER, A64_WORKER),
+            model: Some("it starts no threads of its own: lengua's library does"),
             ..Case::new(
                 "parallel_for",
                 &[Function {
@@ -942,6 +948,7 @@ fn cases() -> Vec<Case> {
         // is kept in a word the report leaves out.
         Case {
             data: &[("in", b"in.txt\0"), ("none", b"none\0")],
+            model: Some("it doesn't follow a seek in an open file"),
             files: &[("in.txt", "hello")],
             calls: &[
                 Syscall::Openat,
@@ -1006,6 +1013,7 @@ fn cases() -> Vec<Case> {
         // The ways to write a file: made and emptied, appended to, and made only if it is not
         // there (EEXIST when it is). The folder holds what they wrote afterwards.
         Case {
+            model: Some("it doesn't add to a file or make one only when it is new"),
             data: &[
                 ("out", b"out.txt\0"),
                 ("new", b"new.txt\0"),
@@ -1076,6 +1084,7 @@ fn cases() -> Vec<Case> {
         // file that is no folder (ENOTDIR), a descriptor that isn't open, and the kind and size of
         // a folder, a file and a pipe.
         Case {
+            model: Some("it doesn't list a folder, whose order is the system's"),
             data: &[
                 ("one", b"one\0"),
                 ("two", b"two\0"),
@@ -1447,5 +1456,79 @@ async fn the_terminal_operations_change_the_mode_and_put_it_back() {
             .await
             .expect("the terminal test ends");
         assert_eq!(printed, case.stdout, "{} on {}", case.name, target.name());
+    }
+}
+
+/// Every case the prover's model follows runs in it as it does natively: how it ends and what it
+/// prints, with no code of the edge run, on both CPUs.
+#[tokio::test]
+async fn the_model_runs_every_operation_as_the_system_does() {
+    use lengua::prove::exec::{Concrete, End, Image, State, bytes, explore};
+    use lengua::prove::term::{Pool, Term};
+
+    let folder = tempfile::tempdir().expect("a folder");
+    for case in cases() {
+        if case.model.is_some() {
+            continue;
+        }
+        for target in Profile::ALL {
+            let what = format!("{} on {}", case.name, target.name());
+            let place = folder.path().join(format!("model-{}", target.name()));
+            let executable =
+                per_target::build(target, &place, case.name, &program(target, &case)).await;
+            let machine =
+                lengua::checker::decode::read(&std::fs::read(&executable).expect("the executable"))
+                    .expect("an executable lengua reads");
+            let image = Image::new(&machine).expect("an image of it");
+            let mut pool = Pool::new();
+            let arguments: Vec<Vec<Term>> = case
+                .arguments
+                .iter()
+                .map(|text| bytes(&mut pool, text.as_bytes()))
+                .collect();
+            let environment: Vec<Vec<Term>> = case
+                .environment
+                .iter()
+                .map(|(name, value)| bytes(&mut pool, format!("{name}={value}").as_bytes()))
+                .collect();
+            let stdin = bytes(&mut pool, case.stdin);
+            let files: BTreeMap<String, Vec<Term>> = case
+                .files
+                .iter()
+                .map(|(name, contents)| ((*name).to_owned(), bytes(&mut pool, contents.as_bytes())))
+                .collect();
+            let folders: BTreeSet<String> =
+                case.folders.iter().map(|name| (*name).to_owned()).collect();
+            let start = State::start(&image, &mut pool, &arguments, &environment, stdin)
+                .with_files(files)
+                .with_folders(folders);
+            let finished =
+                explore(&image, start, &mut pool, &mut Concrete, 16).unwrap_or_else(|error| {
+                    panic!("{what}: {error}");
+                });
+            assert_eq!(finished.len(), 1, "{what}");
+            let run = &finished[0];
+            let Some(End::Exit(status)) = &run.end else {
+                panic!("{what}: it ended {:?}", run.end);
+            };
+            assert_eq!(
+                pool.constant(*status),
+                u128::try_from(case.exit).ok(),
+                "{what}"
+            );
+            let mut known = |terms: &[Term]| -> Vec<u8> {
+                terms
+                    .iter()
+                    .map(|term| {
+                        let value = pool.constant(*term).expect("a byte it knows");
+                        u8::try_from(value).expect("a byte")
+                    })
+                    .collect()
+            };
+            assert_eq!(known(&run.stdout), case.stdout, "{what}");
+            if !case.stderr.is_empty() {
+                assert_eq!(known(&run.stderr), case.stderr, "{what}");
+            }
+        }
     }
 }

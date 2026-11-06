@@ -140,9 +140,10 @@ const SMALLER: PerCpu<&[Smaller]> = PerCpu {
 fn machine_of(profile: Profile, text: &str, bytes: &[u8]) -> Machine {
     let mut machine = crate::checker::decode::read(bytes).expect("decode");
     let (parsed, _) = crate::checker::check_layout(text);
+    let lengua = crate::checker::lengua_source(profile, text);
     if let Some(program) = crate::checker::decode::map(
         &parsed,
-        None,
+        lengua.as_ref(),
         &machine,
         crate::platform::CpuFeatures::all(),
         &mut Vec::new(),

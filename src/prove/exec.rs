@@ -206,6 +206,11 @@ pub struct Image {
     isa: Isa,
     /// The length of SVE's vectors on the CPU it runs on, in bytes; 0 for none.
     sve_bytes: u16,
+    /// lengua's operations, by the address of each one's entry: a call to one is modelled
+    /// rather than run, in the edge form.
+    ops: HashMap<u64, crate::edge::Op>,
+    /// Whether the program is in the edge form: it has `main`, which lengua's `_start` calls.
+    edge: bool,
 }
 
 impl Image {
@@ -220,7 +225,22 @@ impl Image {
     /// Loads the functions and data the decoder read from the executable.
     #[must_use]
     pub fn new(machine: &Machine) -> Option<Self> {
-        let entry = machine.functions.get("_start")?.address;
+        let edge = machine.functions.contains_key("main");
+        let entry = machine
+            .functions
+            .get(if edge { "main" } else { "_start" })?
+            .address;
+        let ops = if edge {
+            machine
+                .functions
+                .iter()
+                .filter_map(|(name, function)| {
+                    crate::edge::Op::from_symbol(name).map(|op| (function.address, op))
+                })
+                .collect()
+        } else {
+            HashMap::new()
+        };
         let mut instructions = HashMap::new();
         let mut words = HashMap::new();
         let mut functions = Vec::new();
@@ -309,6 +329,8 @@ impl Image {
             entered,
             isa: machine.isa,
             sve_bytes: machine.sve_bytes,
+            ops,
+            edge,
         };
         image.fill = fill::Fill::find(&image, machine);
         Some(image)
@@ -357,6 +379,11 @@ impl Image {
         }
     }
 
+    /// The operation of lengua's whose entry is at `address`, in the edge form.
+    fn op_at(&self, address: u64) -> Option<crate::edge::Op> {
+        self.ops.get(&address).copied()
+    }
+
     /// Notes that a run called the function at `address`.
     fn enter(&self, address: u64) {
         if let Some(index) = self
@@ -379,6 +406,9 @@ impl Image {
             .filter(|((_, _, name), entered)| {
                 !entered.load(Ordering::Relaxed)
                     && !matches!(name.as_str(), "_start" | "assert_fail")
+                    // In the edge form `main` is where every run begins, and lengua's own
+                    // functions are lengua's to answer for.
+                    && !(self.edge && (name == "main" || crate::edge::reserved(name)))
             })
             .map(|((start, _, name), _)| (*start, name.as_str()))
             .collect();
@@ -962,7 +992,28 @@ impl State {
                 state.pointers.insert(address, Owner::Argument(string + 1));
             }
         }
-        state.registers[Convention::of(image.isa).stack] = pool.bv(64, u128::from(STACK_TOP));
+        let convention = Convention::of(image.isa);
+        state.registers[convention.stack] = pool.bv(64, u128::from(STACK_TOP));
+        if image.edge {
+            // lengua's `_start` has called `main` with the argument count and the two arrays of
+            // strings in its first three argument registers, as it reads them off the start
+            // stack. Where the call pushes its return address, there is one on the stack,
+            // which nothing may return to.
+            let argc = words[0];
+            let environment = STACK_TOP + 8 * (argc + 2);
+            let values = [argc, STACK_TOP + 8, environment];
+            for (slot, value) in convention.arguments.iter().zip(values) {
+                state.registers[*slot] = pool.bv(64, u128::from(value));
+            }
+            for slot in &convention.arguments[1..3] {
+                state.owners[*slot] = Some(Owner::Argument(0));
+            }
+            if image.isa == Isa::X86_64 {
+                let back = pool.bv(64, 0);
+                state.store(pool, STACK_TOP - 8, back);
+                state.registers[convention.stack] = pool.bv(64, u128::from(STACK_TOP - 8));
+            }
+        }
         state
     }
 
@@ -2637,6 +2688,11 @@ impl<'a> Cpu<'a> {
                 }
             }
             Mnemonic::Call => {
+                // An operation of lengua's is modelled whole: nothing is pushed and no code of
+                // its runs.
+                if let Some(op) = self.image.op_at(instruction.near_branch_target()) {
+                    return self.edge_call(op);
+                }
                 let back = self.pool.bv(64, u128::from(instruction.next_ip()));
                 self.push(back)?;
                 let slot = self.constant(self.state.registers[4])?;
@@ -3097,13 +3153,18 @@ impl<'a> Cpu<'a> {
             self.state.registers[arguments[0]],
             self.state.registers[arguments[2]],
         );
+        self.open_with(folder, 1, flags)
+    }
+
+    /// `openat` of the name at argument `path`, in `folder`, with `flags`.
+    fn open_with(&mut self, folder: Term, path: usize, flags: Term) -> Result<Step, Stop> {
         let flags = self.constant(flags)? & 0xffff_ffff;
         if flags & self.image.linux().o_directory != 0 {
             return Err(unsupported(
                 "listing a folder, whose entries the kernel gives in an order of its own",
             ));
         }
-        let bytes = match self.name_or_choice(folder, 1, "openat")? {
+        let bytes = match self.name_or_choice(folder, path, "openat")? {
             Name::Known(name) => {
                 let result = match self.state.refused(&name, flags & O_CREAT != 0, false) {
                     Some(errno) => (-errno).cast_unsigned(),
@@ -3628,6 +3689,14 @@ impl<'a> Cpu<'a> {
         let call = i64::try_from(raw)
             .ok()
             .and_then(|number| Call::of(self.image.isa, number));
+        self.perform(call, raw)
+    }
+
+    /// What the kernel does for `call`, which the program made with `raw` as its number, with
+    /// its arguments in the registers: the same for a system call and for an operation of
+    /// lengua's that is one.
+    fn perform(&mut self, call: Option<Call>, raw: u64) -> Result<Step, Stop> {
+        let convention = Convention::of(self.image.isa);
         let arguments = convention.arguments.map(|slot| self.state.registers[slot]);
         let (rdi, rsi, rdx) = (arguments[0], arguments[1], arguments[2]);
         let result = match call {
@@ -4606,6 +4675,7 @@ fn unwritten_stack(at: u64) -> bool {
 mod aarch64;
 mod bits;
 mod calls;
+mod edge;
 mod fill;
 pub mod induction;
 mod logs;

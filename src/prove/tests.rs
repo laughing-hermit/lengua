@@ -161,6 +161,7 @@ async fn machine(source: &str) -> Machine {
     // Which symbol each [rip + name] names, and each checked jump table's cases, as the server
     // passes them on.
     let (parsed, _) = crate::checker::check_layout(source);
+    let lengua = crate::checker::lengua_source(profile, source);
     // The CPU that runs it: this one, or under QEMU the emulated one, with its SVE length.
     let host = crate::platform::Machine::detect();
     let features = if profile == Profile::LinuxAarch64 && !cfg!(target_arch = "aarch64") {
@@ -184,7 +185,13 @@ async fn machine(source: &str) -> Machine {
         features
     };
     if let Some(program) =
-        crate::checker::decode::map(&parsed, None, &machine, features, &mut Vec::new())
+        crate::checker::decode::map(
+            &parsed,
+            lengua.as_ref(),
+            &machine,
+            features,
+            &mut Vec::new(),
+        )
     {
         machine.named = program.named_symbols();
         let jumps = crate::checker::tables::every(&program, &mut Vec::new());
