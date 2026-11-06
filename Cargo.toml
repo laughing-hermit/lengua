@@ -49,6 +49,8 @@ nix = { version = "0.31", default-features = false, features = ["process", "sign
 
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = "0.4.7"
+# The broker opens each path beneath a program's folder (openat2) and hands descriptors back.
+rustix = { version = "1", features = ["fs"] }
 nix = { version = "0.31", default-features = false, features = ["process", "ptrace", "signal", "uio"] }
 perf-event2 = "0.7.4"
 seccompiler = "0.5"

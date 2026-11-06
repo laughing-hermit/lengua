@@ -11,6 +11,7 @@
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 pub mod aes;
+pub mod broker;
 pub mod checker;
 pub mod connect;
 pub mod data_dir;

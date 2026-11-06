@@ -279,6 +279,16 @@ fn readers() -> Vec<Reader> {
                 let _ = crate::checker::decode::read(input);
             }),
         ),
+        (
+            "broker request",
+            Box::new(|input: &[u8]| {
+                // A request whole, and its fixed part and first message on their own.
+                let _ = crate::broker::parse_request(input);
+                let _ = crate::broker::parse_header(input);
+                let _ = crate::broker::Hello::decode(input);
+                let _ = crate::broker::parse_reply(input);
+            }),
+        ),
     ]
 }
 
