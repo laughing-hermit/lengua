@@ -58,10 +58,12 @@ free runners, whose id is written in the table below, and by nothing else.
    - each proof line has the same verdict on both. Where a line's time budget cuts it short, the
      verdict is the same kind: proven, or bounded to a length.
 
-   Other systems reach those two through the lengua image, run by Docker or Podman, which is the
-   one route the project promises and tests (round 3); WSL 2 and a Linux VM are the same Linux set
-   up by hand, and a Linux host runs lengua directly or through the same image. The floor of the
-   product is a default Docker or Podman container, on any host: what
+   A Linux that meets the floor runs lengua directly, with no container. Other systems reach the
+   two targets through the lengua image (Debian 13 slim), run by Docker or Podman: Docker Desktop
+   or Podman Desktop on Windows, and Podman Desktop on a Mac, since Docker Desktop's VM
+   reportedly has no Landlock. The image is the one route the project promises and tests (round
+   3); WSL 2 and a Linux VM are the same Linux set up by hand. The floor of the product is a
+   default Docker or Podman container, on any host: what
    such a container doesn't give everywhere, lengua doesn't need (it does not use io_uring, which
    both runtimes' default profiles block; hardware counters are optional; the proofs' memory guard
    reads the container's own limit), and a container job on both runners holds it there. A limit
@@ -128,11 +130,13 @@ as passed; that run also had macOS and Windows jobs, which went with those targe
 | Linux x86-64 | ubuntu-24.04 | 569 passed | yes | BENCHMARKS.md (the owner's computer, 2026-11-02) | built |
 | Linux ARM64 | ubuntu-24.04-arm | 565 passed | yes | BENCHMARKS-aarch64.md (the runner) | built |
 
-The other systems reach those two targets. The project has tested none of these routes yet:
+A Linux that meets the floor (glibc 2.39, Landlock: Fedora 40 and later, Ubuntu 24.04 and later,
+Debian 13 and later) runs lengua directly, which is the route CI tests above. The other systems
+reach those two targets. The project has tested none of these routes yet:
 
 | route | how | what it needs | tested by |
 |---|---|---|---|
-| The image, on any host | the lengua image run by Docker or Podman (round 3: Ubuntu 24.04, LLVM, the solvers and lengua-mcp, for both CPUs) | a kernel with Landlock under the container: Linux hosts; Docker Desktop on Windows (its WSL 2 backend); Podman machine or Colima on a Mac, unverified; Docker Desktop on a Mac reportedly has none | a default container under Docker and under Podman on both Linux runners (round 3); the owner's Fedora under Podman, by hand |
+| The image: Windows, a Mac, an older Linux | the lengua image run by Docker or Podman (round 3: Debian 13 slim pinned by digest, LLVM, the solvers and lengua-mcp, for both CPUs). Windows: Docker Desktop or Podman Desktop. Mac: Podman Desktop. Older Linux: Podman or Docker | a kernel with Landlock under the container: Linux hosts; Docker Desktop on Windows (its WSL 2 backend); Podman machine (Fedora CoreOS) on a Mac, unverified; Docker Desktop on a Mac reportedly has none | a default container under Docker and under Podman on both Linux runners (round 3); the owner's Fedora under Podman, by hand |
 | Windows: WSL 2, by hand | `wsl --install -d Ubuntu-24.04`, then the agent and lengua inside it | Microsoft's kernel has Landlock (since 2022; the current one is 6.18); glibc 2.39 | nobody yet |
 | Mac: a Linux VM, by hand | Colima, Lima, UTM or Parallels (Ubuntu 24.04 arm64); Apple's `container` (macOS 26) is unverified | a kernel with Landlock, and glibc 2.39 | nobody yet |
 
@@ -173,19 +177,23 @@ Then by finish-line point:
    - The benchmarks are level with the pre-edge build but for two gaps, in round 5's list: the
      ARM64 histogram, and the executables' size.
 3. **Reach: the image first** (an Opus plan comes first):
-   - the lengua image, on Ubuntu 24.04, for both CPUs, and a container job that runs the suite
-     inside it under Docker and under Podman on both Linux runners: the one route a free runner
-     can test, and the check that lengua needs nothing a default container lacks;
+   - the lengua image, on Debian 13 slim pinned by digest, for both CPUs, and a container job
+     that runs the suite inside it under Docker and under Podman on both Linux runners: the one
+     route a free runner can test, the check that lengua needs nothing a default container lacks,
+     and the only test of the Debian userland, since GitHub has no Debian runner;
    - the kernel floor and the Landlock policy (Landlock for every program, Linux 6.12 for the
      network);
    - the host launcher, so that the route is seamless: the command the plugin's `.mcp.json` runs
-     on Windows and macOS (and on Linux with Podman). It finds Docker or Podman, pulls the image
-     for the plugin's version on first use, starts or reuses one container, mounts the project,
-     maps host paths to container paths, keeps the signing key in a volume, stops the container
-     when idle, runs `doctor`, and explains a failure in a sentence (Docker not installed, no
-     Landlock under it, a folder it can't mount). It holds no confinement and no OS code, only
-     process and path plumbing, and the server stays in the image: the plugin is still skills and
-     one MCP server. Whether it is a small binary or a script is for the plan;
+     on Windows and macOS (and on a Linux that doesn't meet the floor). On a Linux that does, it
+     runs the native server when that is installed and `doctor` passes, and the image otherwise.
+     It finds Docker or Podman, whichever is there, pulls the image for the plugin's version on
+     first use, starts or reuses one container, mounts the project, maps host paths to container
+     paths, keeps the signing key in a volume, stops the container when idle, runs `doctor`, and
+     explains a failure in a sentence (no runtime installed, no Landlock under it, a folder it
+     can't mount, a Mac with only Docker Desktop: install Podman Desktop). It holds no
+     confinement and no OS code, only process and path plumbing, and the server stays in the
+     image: the plugin is still skills and one MCP server. Whether it is a small binary or a
+     script is for the plan;
    - a `lengua-mcp doctor` that says what a kernel lacks;
    - a dev container, for an agent that runs inside the container instead;
    - the documents for the other routes (WSL 2, a Linux VM), and optionally a server that installs
@@ -295,18 +303,29 @@ An Opus plan comes first. What it must settle, from what the research found on 2
   distributions also ship old LLVM: which versions does lengua need? DESIGN.md says musl builds
   are coming. Decide between static musl builds, an older-glibc build or both, and which
   distributions the documents promise.
-- **The lengua image.** Ubuntu 24.04 with LLVM 22, z3, cvc5 and lengua-mcp, for linux/amd64 and
-  linux/arm64 (a Mac on Apple silicon runs arm64 natively). A CI job runs the suite inside a
-  default Docker container on both Linux runners, under Docker's default seccomp profile (it
-  allows `landlock_*`, `seccomp` and `prctl`, and blocks io_uring): the one route a free runner
-  can test.
-- **Windows and Mac.** On Windows, WSL 2 first, with the agent inside it (Claude Code runs there,
-  so the plugin is an ordinary Linux plugin: no bridge, and the project lives on ext4, not on
-  `/mnt/c`, which is slow and case-insensitive) and Docker second, best as a dev container that
-  holds the agent and lengua together. An agent on the Windows side calling `lengua-mcp` through
-  `wsl.exe` in `.mcp.json` would meet path and environment translation: not planned, not tested.
-  On a Mac, a Linux VM (Colima, Lima, UTM, Parallels) or Docker through one whose kernel has
-  Landlock. The owner tests what CI can't, and the documents say so until they have.
+- **The lengua image.** Debian 13 ("trixie") slim, pinned by digest (never `debian:stable`, which
+  moves to Debian 14), not Debian 12, whose glibc 2.36 is below the server's 2.39. Debian 13 has
+  glibc 2.41, security support to 2028 and LTS to 2030, and apt.llvm.org's `trixie` repositories
+  carry LLVM 22 and 23 for both CPUs. The image holds LLVM 22 (what CI uses), the pinned z3 and
+  cvc5 (`scripts/ci/tools.tsv`) and lengua-mcp, as one multi-arch image for linux/amd64 and
+  linux/arm64 (a Mac on Apple silicon runs arm64 natively); TLS needs no certificate package, since
+  the server bundles `webpki-roots`. A CI job runs the suite inside a default Docker container and
+  a default Podman one on both Linux runners, under each runtime's default seccomp profile (both
+  allow `landlock_*`, `seccomp` and `prctl`, and block io_uring): the one route a free runner can
+  test, and the only test of the Debian userland, since the native jobs stay on Ubuntu 24.04.
+- **One set of solvers.** Distributions ship different z3 and cvc5 (Fedora's z3 4.16 has
+  bit-vector bugs the prover works around). Decide whether a native install takes the image's
+  pinned versions too, so that a proof's verdict doesn't depend on the route, and have `doctor`
+  print the versions it found.
+- **Windows and Mac.** The image comes first: on Windows under Docker Desktop (its WSL 2 backend)
+  or Podman Desktop, on a Mac under Podman Desktop, because Docker Desktop's VM reportedly has no
+  Landlock (the launcher says so in a sentence when it is the only runtime there). WSL 2 with the
+  agent inside it (Claude Code runs there, so the plugin is an ordinary Linux plugin: no bridge,
+  and the project lives on ext4, not on `/mnt/c`, which is slow and case-insensitive) and a Linux
+  VM (Colima, Lima, UTM, Parallels) are the same Linux set up by hand: documented, not promised.
+  An agent on the Windows side calling `lengua-mcp` through `wsl.exe` in `.mcp.json` would meet
+  path and environment translation: not planned, not tested. The owner tests what CI can't, and
+  the documents say so until they have.
 - **Inside a container,** `/proc/meminfo` shows the host's memory, so the proofs' memory guard
   overestimates what is free, and hardware counters may be missing; runs still work.
 

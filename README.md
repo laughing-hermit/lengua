@@ -48,8 +48,9 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 ## Requirements
 
 - Linux on x86-64 or ARM64 (AArch64), with glibc 2.39 or newer: Ubuntu 24.04, Debian 13 or Fedora
-  40 and later. On Windows or a Mac, use a Linux ("Windows and Mac" below): the lengua image under
-  Docker or Podman once it exists, WSL 2 or a Linux VM until then.
+  40 and later, where lengua runs directly. On Windows, on a Mac or on an older Linux, it runs from
+  its image under Docker or Podman once that exists, and on a Linux you set up until then
+  ("Windows and Mac" below).
 - A kernel with Landlock on, which every run needs: Linux 5.13 or newer, and 6.12 or newer for a
   program that uses the network. lengua won't run a program without it. `cat
   /sys/kernel/security/lsm` should list `landlock`.
@@ -62,18 +63,31 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 ## Windows and Mac
 
 lengua runs on Linux, so on Windows and a Mac it runs inside a Linux. The project means to promise
-one route there: **the lengua image, run by Docker or by Podman**, the same image on Windows, on a
-Mac and on Linux (Fedora's own tool is Podman). It does not exist yet: it will hold glibc 2.39,
-LLVM, z3, cvc5 and lengua-mcp for both CPUs, and a CI job will run lengua's suite inside it under
-Docker's and Podman's default seccomp profiles on both Linux runners ([todo.md](todo.md), "Round
-3"). The aim is that installing the plugin is the only step: the plugin starts the image itself,
-mounts your project and keeps lengua's signing key, so you never type a `docker run`. A Linux
-laptop can run lengua directly instead, as the requirements above say, or use the same image: the
-product is the same either way. Native macOS and Windows ports are deferred ("Deferred" there).
+one route there: **the lengua image, run by Docker or by Podman**. It does not exist yet. It will
+be Debian 13 ("trixie", slim, pinned to an exact build), with glibc 2.41, LLVM, z3, cvc5 and
+lengua-mcp, one image for both CPUs, and a CI job will run lengua's suite inside it under Docker's
+and Podman's default seccomp profiles on both Linux runners ([todo.md](todo.md), "Round 3"). The
+aim is that installing the plugin is the only step: the plugin starts the image itself, mounts your
+project and keeps lengua's signing key, so you never type a `docker run`. Native macOS and Windows
+ports are deferred ("Deferred" there). Once the image exists, the routes are:
+
+| system | how lengua runs | runtime |
+|---|---|---|
+| Linux with glibc 2.39+ and Landlock (Fedora 40+, Ubuntu 24.04+, Debian 13+) | directly, the default | none |
+| An older Linux (Ubuntu 22.04, Debian 12, RHEL 9) | the image | Podman or Docker |
+| Windows | the image | Docker Desktop (its WSL 2 backend) or Podman Desktop |
+| Mac | the image | Podman Desktop; Docker Desktop once its VM has Landlock |
+
+A Linux laptop needs no container: lengua is the same product run directly, and the image is for
+the systems that have no Linux of their own. On a Mac, Podman comes first because Docker Desktop's
+VM reportedly has no Landlock, which every run needs, so lengua would refuse to run there.
+Podman's VM is built on Fedora CoreOS and Fedora's kernels have Landlock, though nobody has
+checked a Podman VM on a Mac yet. Podman Desktop is also free and open source, while Docker
+Desktop needs a paid plan in a company of more than 250 people or $10 million a year.
 
 A limit of a default container, on any system, is a limit of lengua: it doesn't use io_uring, which
-those containers block, and hardware counters are optional, so it behaves the same inside Docker
-on Windows, on a Mac and on Linux.
+those containers block, and hardware counters are optional, so it behaves the same inside Docker or
+Podman on Windows, on a Mac and on Linux.
 
 Until the image exists, run your agent and lengua together on a Linux that has what the
 requirements above list. The project has not tested these routes on Windows or a Mac, since no free
@@ -84,13 +98,14 @@ CI runner can run them:
   keep your projects in its home folder, not under `/mnt/c`, which is slow and ignores case.
   Microsoft's WSL 2 kernel has had Landlock since 2022, and Docker Desktop on Windows runs on WSL 2
   too.
-- **Mac: a Linux VM that has Landlock.** Podman machine or Colima (free; expected to have it, not
-  verified), or Lima, UTM or Parallels with Ubuntu 24.04 arm64; your agent and lengua go inside.
-  Docker Desktop on a Mac reportedly has no Landlock in its VM, and Apple has no WSL: its
-  `container` tool (macOS 26, Apple silicon) runs each container in a small VM whose kernel may
-  lack it. Check `cat /sys/kernel/security/lsm` before relying on any of them.
-- **Your own image,** from a Linux image with glibc 2.39 or newer (`ubuntu:24.04`; `ubuntu:22.04`,
-  `debian:12` and Alpine are too old), `linux/arm64` on Apple silicon.
+- **Mac: a Linux VM that has Landlock.** Podman machine (Fedora CoreOS) or Colima (free; expected
+  to have it, not verified), or Lima, UTM or Parallels with Ubuntu 24.04 arm64; your agent and
+  lengua go inside. Docker Desktop on a Mac reportedly has no Landlock in its VM, and Apple has no
+  WSL: its `container` tool (macOS 26, Apple silicon) runs each container in a small VM whose
+  kernel may lack it. Check `cat /sys/kernel/security/lsm` before relying on any of them.
+- **Your own image,** from a Linux image with glibc 2.39 or newer (`debian:trixie-slim`, which is
+  Debian 13, or `ubuntu:24.04`; `debian:12`, `ubuntu:22.04` and Alpine are too old), `linux/arm64`
+  on Apple silicon.
 
 The network floor, Linux 6.12, is above Ubuntu 24.04's stock kernel (6.8): a program that uses the
 network needs a newer kernel there, until round 3 decides whether the floor can be lower.

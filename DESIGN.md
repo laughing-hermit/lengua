@@ -1196,13 +1196,14 @@ tested, not proven, today.
 lengua builds, checks, proves and runs programs for Linux on x86-64 and on ARM64 (ELF, reaching
 the system through lengua's edge; tested natively on GitHub's runners of both, and the ARM64 ones
 also under QEMU on the x86-64 one), assembled by LLVM's `llvm-mc` and linked by `ld.lld`. Those
-are its two targets. Windows and Mac reach lengua through the lengua image, run by Docker or
-Podman, which is a Linux with the same two targets inside and the one route the project means to
-promise and test (planned: todo.md, "Round 3"); a Linux host runs lengua directly or through the
-same image, and WSL 2 or a Linux VM are the same Linux set up by hand (README.md, "Windows and
-Mac"). Native macOS and Windows ports are deferred: each would bring its own edge file and
-confinement (the plans are in ROADMAP.md), and macOS on x86-64 is not planned at all, since Apple
-makes no Intel Macs any more (todo.md, "Deferred").
+are its two targets. A Linux that meets the floor runs lengua directly, with no container. Windows
+and Mac reach lengua through the lengua image, a Debian 13 userland pinned by digest, run by
+Docker or Podman (Podman on a Mac, since Docker Desktop's VM reportedly has no Landlock): a Linux
+with the same two targets inside, the one route the project means to promise and test (planned:
+todo.md, "Round 3"), which an older Linux can use too. WSL 2 and a Linux VM are the same Linux set
+up by hand (README.md, "Windows and Mac"). Native macOS and Windows ports are deferred: each
+would bring its own edge file and confinement (the plans are in ROADMAP.md), and macOS on x86-64
+is not planned at all, since Apple makes no Intel Macs any more (todo.md, "Deferred").
 
 The spec is the portable part and already agnostic: it names no CPU or OS, and `check` rejects a
 CPU or OS term in a spec's prose, so the same spec means the same on every target. The per-target
