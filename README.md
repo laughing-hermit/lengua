@@ -1,5 +1,12 @@
 # lengua
 
+> **Moving to WebAssembly (2026-11-06).** The owner decided to move lengua's code from assembly to
+> WebAssembly. A program becomes a folder of `idea.md`, the idea file, and `main.wat`, the agent's
+> WebAssembly, which `lengua-mcp` checks, proves and runs the same way on Linux, Windows and macOS,
+> on x86-64 and ARM64. The work lands in milestones W0 to W13 ([todo.md](todo.md),
+> [ROADMAP.md](ROADMAP.md)). Until it does, this page describes the native lengua below, which the
+> tag `native-final` keeps.
+
 Natural language in, checked machine code out. lengua is an AI language, not a programming
 language: you describe a program in plain words, and your AI agent is the compiler. A program is
 two files. `spec.md` is the source: what the program does, as behaviors shown by examples, with
@@ -16,8 +23,8 @@ lengua is an [Agent Plugin](https://agent-plugins.org): two skills and an MCP se
 open standards, so it works in Claude Code, Codex, Cursor and other agent harnesses.
 
 > Status: dialect 4 on Linux x86-64 and Linux ARM64, with memory rules that check every address has an owner and
-> stays inside it. Windows and Mac will run it on the same Ubuntu 24.04, inside WSL 2 and a Lima VM
-> (see "Windows and Mac" below and [todo.md](todo.md)). It covers whole numbers, exact decimals, floating point in double and single
+> stays inside it. Windows and Mac will run the WebAssembly lengua natively (above; the WSL 2 and
+> Lima routes below are superseded). It covers whole numbers, exact decimals, floating point in double and single
 > precision with fused multiply-add, vectors from SSE2 to AVX-512 and from NEON to SVE,
 > hashing and checksums, files
 > and folders, environment variables, fork-join threads, waiting, the clock and random bytes

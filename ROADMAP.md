@@ -1,4 +1,143 @@
-# lengua's roadmap: two targets, one product
+# lengua's roadmap: the pivot to WebAssembly
+
+On 2026-11-06 the owner decided that lengua's code is WebAssembly: "we are now pivoting into web
+assembly", to "build end 2 end, this new iteration of lengua", "a good product so we can compete
+with c/c++ and rust", still "just a agent plugin {Skills + rust mcp}". A program becomes a folder
+of `idea.md`, an idea file in the Open Knowledge Format, and `main.wat`, the agent's WebAssembly.
+`lengua-mcp` embeds a WebAssembly engine (Wasmtime) and its own WASI preview 1 host, so it checks,
+proves and runs every program the same way on five runners: Linux on x86-64 and ARM64, Windows on
+x86-64 and ARM64, and macOS on ARM64. The finish line, the decisions made for the owner, and what
+is left are in [todo.md](todo.md). The native lengua's roadmap follows below this part, kept until
+W11 and at the tag `native-final`.
+
+Every milestone works on the branch `pivot/wasm`, merges to main when its runs are green, and
+records their ids in todo.md. The native path and the WebAssembly path live side by side, chosen
+by the code file (`main.s` or `main.wat`), until W10.
+
+## W0. Record the decision
+
+todo.md's finish line, decisions, roadmap and superseded list; this part; README's opening; the
+tag `native-final` at 723879e. *Verified by:* `compile` green on both Linux runners.
+
+## W1. Idea files
+
+`spec.md` becomes `idea.md` everywhere (examples, fixtures, the skills' assets), and the skill
+`write-spec` becomes `write-idea`. In Rust, `src/spec.rs` becomes `src/idea.rs` and `Spec` becomes
+`Idea`; messages, next steps and docs follow. The lock's `[spec]` table becomes `[idea]`, and its
+format version goes from 4 to 5, so old locks are checked again. *Verified by:* `test` and
+`golden` green on both Linux runners, and no `spec.md` left outside history notes.
+
+## W2. The WebAssembly foundation
+
+- **Engine** (`src/wasm/mod.rs`): Wasmtime with Cranelift, pinned. On: SIMD, bulk memory,
+  multi-value, sign extension, saturating conversions, and wide arithmetic where the pinned
+  release has it stable. Off: threads, relaxed SIMD, 64-bit memory, GC, exceptions.
+- **Build** (`src/wasm/build.rs`): the text parsed by `wat`, validated by `wasmparser` with the same
+  features, hashed, and compiled with `Module::new`. The compiled-module cache comes with W8.
+- **Host** (`src/wasm/host.rs`): lengua's WASI preview 1 subset, with the semantics of the native
+  edge's 21 operations, the broker's rules for names (`src/names.rs`), and the closed error set
+  mapped to WASI's error numbers: arguments; the environment when the idea uses it; reading,
+  writing and closing; files under the working folder's preopened directory; the clock (rounded to
+  a microsecond); random bytes; `poll_oneoff`; `sock_accept`, `sock_recv`, `sock_send` and
+  `sock_shutdown` on the listener and connections lengua makes; exit. Descriptors: 0 to 2, then
+  the folder, then the listener, then the connections.
+- **Run** (`src/wasm/run.rs`): one store per run, with memory, time (epoch deadlines), output and
+  file limits, as the runner seam's implementation for `main.wat`.
+- **Server:** `check` and `run` take `main.wat`; until W4 such programs are "tested, not proven".
+  The `machine` line names the engine, its features and the CPU's caches.
+- **Fixtures:** hand-written WebAssembly under `tests/fixtures-wasm/`.
+- **CI:** five rows in `scripts/ci/targets.json`; `setup.sh` under bash on every runner; z3 and
+  cvc5 pinned per system and CPU in `tools.tsv`, with Windows on ARM64 using the x64 builds under
+  emulation where no native build exists; `tests/parity_inventory.rs` requires every row to run
+  the one suite natively, with the native-only test files listed until W10.
+
+*Verified by:* the WebAssembly fixtures checked, tested and run on all five runners, and the native
+suite still green on both Linux runners.
+
+## W3. The WebAssembly dialect's rules
+
+`src/checker/wasm/`: the module (imports the idea allows, exports, memory within the idea's size,
+tables only as checked tables), structured control and the call graph, rules 1 to 10 in their
+WebAssembly meaning (an assertion is `call $assert_fail` with its number and exits 134; loop bounds
+are annotations or counters the checker can follow; every host call's result is checked; indexed
+accesses are bounds-checked), and the memory rules over named regions of linear memory. Reports
+keep their format. *Verified by:* every WebAssembly fixture follows every rule, and every red-team
+edit is refused, on all five runners.
+
+## W4. The prover's WebAssembly front end
+
+`src/prove/wasm/`: an image, a state and a step for every instruction the programs use, feeding
+the existing prover core (the term pool, the two solvers, exploring and merging, the host
+semantics, induction). Not trapping is an obligation: no access outside memory, no division by
+zero, no `unreachable`, no overflow in a truncation. *Verified by:* a verdict for every fixture's
+proof line within CI's budget, planted bugs found, and the two solvers agreeing, on all five
+runners.
+
+## W5. Every program in WebAssembly
+
+The examples, the fixtures, the compile skill's templates and fast forms (SIMD128 and wide
+arithmetic), and the benchmark's lengua versions, each as `idea.md` and `main.wat`; the parallel
+template retired. The compile skill rewritten for WebAssembly, with references for the dialect,
+the host, the rules, the caches and constant time. *Verified by:* the whole-repository checks green
+on all five runners.
+
+## W6. The knowledge graph
+
+Each idea's frontmatter an Open Knowledge Format `Attested Computation`; `check` writes `verified`,
+builds the graph from the folder to the bundle's root, checks it (both files, links, no cycles,
+listed in `index.md`, no orphans, no idea newer than its proof), keeps `index.md` and `log.md`,
+says how the graph stands in its reply, and offers it as the read-only resource `lengua://graph`.
+*Verified by:* the graph's tests and an Open Knowledge Format conformance test over the
+repository, on all five runners.
+
+## W7. Constant time
+
+The `- Secret:` line, and a pass that follows secret data through locals, globals, the stack and
+memory, refusing it in a condition, an address, an indirect call's index, division, remainder,
+floating point, and a host call's arguments other than buffer contents. *Verified by:* fixtures
+that pass and fixtures that are refused, and a new example, on all five runners.
+
+## W8. Performance and the gate
+
+The bench rewritten: lengua's module against C, C++ and Rust natively and compiled to WebAssembly
+under the same engine; the workloads of todo.md's point 4; CPU time, wall time, peak memory and
+size through `lengua-mcp --measure`, and Linux's counters; alternating runs, the one-sided
+Mann–Whitney test, KNOWN_BEHIND and its ratchet, the gate in `bench` mode and the weekly run; the
+BENCHMARKS files generated from the artifacts; the compiled-module and proof caches. *Verified by:*
+the gate green on all five runners against WebAssembly builds, and the native gaps published.
+
+## W9. Package, `doctor` and release
+
+One archive per runner's system and CPU: the plugin (skills, manifests), `lengua-mcp`, pinned z3
+and cvc5, and an install script; `lengua-mcp doctor`; the release check as a Rust MCP client.
+*Verified by:* `release` green on clean runners of all five.
+
+## W10. The native product retired
+
+The assembly path removed (ISA models, per-CPU checker and prover front ends, the edge's assembly,
+the Linux sandbox, the LLVM toolchain, QEMU), with its tests, assets and dependencies; the tag
+keeps it. *Verified by:* the full suite green on all five runners.
+
+## W11. The documents and the finish line
+
+README, DESIGN (with the threat model), the white paper, this file, todo.md, the plugin README and
+the skills say what the runs show. *Verified by:* the documentation tests green, and a three-reader
+review.
+
+## W12. The agent's test, in the interactive session
+
+The Linux x86-64 archive connected to the live session, and an idea written, compiled, checked,
+run and read back through the graph by the agent there. *Verified by:* the outcome written in
+todo.md.
+
+## W13. The finish-line run
+
+`test`, `ignored`, `bench` and `release` on all five runners, their ids against each point in
+todo.md, and the report to the owner.
+
+---
+
+# Before the pivot: the native roadmap (superseded 2026-11-06)
 
 lengua has two targets, Linux on x86-64 and Linux on ARM64. This roadmap began as the plan for six
 (macOS and Windows on each CPU too). On 2026-11-06 the owner dropped macOS on x86-64, since Apple
