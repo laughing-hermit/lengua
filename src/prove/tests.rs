@@ -3849,7 +3849,10 @@ const SECOND: Folders = PerCpu {
 
 /// The edit that reads with one read of the operation in place of fill, on each target.
 const RAW_READ: PerCpu<Edit> = PerCpu {
-    x86_64: ("    mov ecx, NEWLINE\n    call fill\n", "    call os_read\n"),
+    x86_64: (
+        "    mov ecx, NEWLINE\n    call fill\n",
+        "    call os_read\n",
+    ),
     aarch64: ("    mov w3, #NEWLINE\n    bl fill\n", "    bl os_read\n"),
 };
 
