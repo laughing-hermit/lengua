@@ -217,7 +217,7 @@ async fn check(pool: &Pool, wat: &str, case: &Case) -> Result<(), String> {
                 let unnamed: Vec<&String> = run
                     .folders
                     .iter()
-                    .filter(|folder| !named(*folder))
+                    .filter(|folder| !named(folder))
                     .collect();
                 let missing: Vec<&String> = wanted_folders
                     .iter()
