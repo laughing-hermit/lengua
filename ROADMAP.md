@@ -45,9 +45,21 @@ folder above with an `index.md` that has `okf_version`, else the program folder'
 it (both files, links, no cycles in `Builds on`, every node listed, no orphans, no idea newer than
 its lock, `type` on every page), keeps `index.md` (the Open Knowledge Format's §8) and `log.md`
 (§9) at the root, changing only its own entries and never writing in a home folder, a
-filesystem's root or the temporary folder, and says how the graph stands in its reply. The scan
-is bounded, and writes are serialized. *Verified by:* `tests/graph.rs` and the whole suite on all
-five runners, and `examples/index.md` reproduced byte for byte.
+filesystem's root, the temporary folder, or beside an `index.md` without `okf_version` that isn't
+lengua's, and says how the graph stands in its reply. The scan is bounded, and writes are
+serialized. *Verified by:* `tests/graph.rs` and the whole suite on all five runners, and
+`examples/index.md` reproduced byte for byte.
+
+## W3b. Idea files in Simplified Technical English
+
+Idea files are written in ASD-STE100 Simplified Technical English, in the style of
+behavior-driven development (the owner's words). `check` holds an idea's prose (its description,
+purpose, behaviors' titles and steps) to what a computer can see without STE's dictionary: at most
+25 words a sentence and six sentences a paragraph, no -ing form but technical names, and every
+step in the step vocabulary's STE forms, an old phrasing refused with its rewrite. The
+`write-idea` skill teaches the rest, in lengua's own words, and every idea file in the repository
+is rewritten in STE. *Verified by:* `tests/ste.rs` (every idea file in the repository passes) and
+the whole suite on all five runners.
 
 ## W4. The WebAssembly runtime
 

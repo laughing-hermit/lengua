@@ -141,10 +141,18 @@ Each can be reversed.
   recorded, and keeps anyone else's. The lock's hash of the idea leaves out `verified` and
   `generated`. The lock's format is 5 after the rename and 6 with the WebAssembly code stamp.
 - **The skill `write-spec` is now `write-idea`.**
+- **Idea files are in ASD-STE100 Simplified Technical English** (the owner's words), in the
+  style of behavior-driven development. `check` holds an idea's prose to what a computer can see
+  without STE's dictionary: 25 words a sentence, six sentences a paragraph, no -ing form but
+  technical names, and the steps in the step vocabulary's STE forms, each old phrasing refused
+  with its rewrite. The rest of STE is the `write-idea` skill's to teach. lengua states the rules
+  in its own words and copies nothing of STE's dictionary.
 - **The knowledge graph's root** is the nearest folder above whose `index.md` has `okf_version`,
   else the program folder's parent; lengua never writes `index.md` or `log.md` in a home folder,
   a filesystem's root or the system's temporary folder; it changes only its own entries; `log.md`
-  never quotes a request's words. **No MCP resource**: the files are the graph.
+  never quotes a request's words. An `index.md` in the parent without `okf_version`, such as a
+  site's home page, isn't lengua's: lengua leaves it as it is and writes no `log.md` beside it.
+  **No MCP resource**: the files are the graph.
 - **The signing key stays in the per-user data folder**, so a lock made in one agent harness
   verifies in another; `PLUGIN_DATA` holds only caches.
 - **Memory regions** in `main.wat`: a region `$x` is an immutable global holding its address,
@@ -169,6 +177,8 @@ Each merges to main when green on the runners it names; [ROADMAP.md](ROADMAP.md)
 - **W2. CI on all five runners** again: lengua builds and its tests pass natively on each (native
   programs on Linux only).
 - **W3. The knowledge graph**, in the Open Knowledge Format, on today's program folders.
+- **W3b. Idea files in Simplified Technical English**: `check`'s STE checks, and every idea file
+  in the repository rewritten in STE.
 - **W4. The WebAssembly runtime**: lengua's WASI host, the engine, the worker pool.
 - **W5. The WebAssembly dialect's rules.**
 - **W6. `check` and `run` for WebAssembly ideas**, end to end, with `idea.md` an Attested
