@@ -5,7 +5,8 @@
 //! code on terms for each shape ([`exec`]), and asks an SMT solver ([`smt`]) whether any input
 //! on any path could make the output differ from the formulas ([`formula`]). A printed number is
 //! matched through its digits' common root, so "prints the formula's value" becomes one linear
-//! question instead of twenty divisions.
+//! question instead of twenty divisions. What a run did beyond its machine, its output, files and
+//! network, and the conditions it met, is its [`world`], which the checks of a finished run read.
 
 pub mod exec;
 pub mod formula;
@@ -13,6 +14,7 @@ pub mod induction;
 pub mod smt;
 pub mod term;
 pub mod watch;
+pub mod world;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -27,10 +29,12 @@ use crate::expr::{Generator, HexPart, PatternPart, Piece, Template, Value};
 use crate::testfile::{ExitCode, Generated};
 use crate::testrun::Delivery;
 
+use exec::induction::Slot;
 use exec::{End, Image, Oracle, State};
 use formula::{Formula, Number, WIDTH};
 use smt::{Answer, Solver};
 use term::{Node, Pool, Term};
+use world::World;
 
 /// What proving a generated block found.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1920,11 +1924,11 @@ struct Offset {
 }
 
 /// In the base of an induction whose counts look back, where each run reads a fresh
-/// buffer-full from the head before its final piece: for each count, its register, the value
-/// it starts at, its placeholder's formula and how far back it looks; and the text's
-/// characters, which that buffer-full is held to.
+/// buffer-full from the head before its final piece: for each count, its slot, the value it
+/// starts at, its placeholder's formula and how far back it looks; and the text's characters,
+/// which that buffer-full is held to.
 struct Relative {
-    folds: Vec<(usize, u128, *const crate::expr::Expr, usize)>,
+    folds: Vec<(Slot, u128, *const crate::expr::Expr, usize)>,
     characters: Vec<u8>,
 }
 
@@ -2452,7 +2456,7 @@ fn passes(
     pool: &mut Pool,
     block: &Generated,
     known: &Known<'_>,
-    run: &State,
+    run: &World,
     status: Term,
 ) -> Result<Term, String> {
     let fixed = known.fixed;
@@ -2861,7 +2865,7 @@ fn replay(image: &Image, block: &Generated, input: &[u8]) -> Result<Option<Verdi
     let start =
         State::start(image, &mut pool, &[], &[], stdin).with_stdout_closed(case.stdout_closed);
     let mut runs = exec::explore(image, start, &mut pool, &mut exec::Concrete, 2)?;
-    let Some(run) = runs.pop() else {
+    let Some(run) = runs.pop().map(|run| run.world) else {
         return Ok(None);
     };
     let bytes = |terms: &[Term]| -> Option<Vec<u8>> {
@@ -3226,7 +3230,7 @@ fn talks(
     pool: &mut Pool,
     block: &Generated,
     known: &Known<'_>,
-    run: &State,
+    run: &World,
     receives: &[Vec<Term>],
 ) -> Result<Term, String> {
     let ended_serving = matches!(run.end, Some(End::Serving));
@@ -3282,7 +3286,7 @@ fn serving(
     pool: &mut Pool,
     block: &Generated,
     known: &Known<'_>,
-    run: &State,
+    run: &World,
 ) -> Result<Term, String> {
     if !block.files_after.is_empty() {
         return Err("a server's files after its run".into());
@@ -3641,7 +3645,7 @@ fn prove_shape(
     // holding its last byte until every newer client has its answer, as the test's do: then a
     // server that waits on one client while another waits on it is caught.
     let newest = sends.len().saturating_sub(1);
-    let network_for = |delivery: Delivery, hold: bool| exec::net::Network {
+    let network_for = |delivery: Delivery, hold: bool| world::net::Network {
         server: receives
             .iter()
             .zip(&replies)
@@ -3662,7 +3666,7 @@ fn prove_shape(
                     pieces.push(bytes[bytes.len() - 1..].to_vec());
                 }
                 pieces.retain(|piece| !piece.is_empty());
-                exec::net::Client {
+                world::net::Client {
                     pieces,
                     waits: *waits,
                     held,
@@ -3704,7 +3708,7 @@ fn prove_shape(
         base = base.with_hook(std::rc::Rc::new(hook.clone()));
         let pieces = block.stdout.pieces();
         let mut folds = Vec::new();
-        for (register, fold) in &hook.folds {
+        for (slot, fold) in &hook.folds {
             let Some(Piece::Expr(expr)) = pieces.get(fold.placeholder) else {
                 return Err("a count with no placeholder".into());
             };
@@ -3714,28 +3718,28 @@ fn prove_shape(
                     .first()
                     .and_then(|(name, _)| formula::lookback(expr, name))
                     .ok_or("a count that doesn't look back")?;
-                folds.push((*register, fold.start, std::ptr::from_ref(*expr), back));
+                folds.push((*slot, fold.start, std::ptr::from_ref(*expr), back));
                 continue;
             }
-            let value = fold.value(&mut pool, *register);
+            let value = fold.value(&mut pool, *slot);
             let wide = pool.zero_extend(value, WIDTH - 64);
             let start = pool.bv(WIDTH, fold.start);
             let before = pool.sub(wide, start);
             let most = i128::try_from(fold.most).map_err(|_| "a count too large")?;
-            // A count of a part that overlaps itself goes on from the phase its register
-            // stands for at the head, the same value the head gives it.
+            // A count of a part that overlaps itself goes on from the phase its slot stands
+            // for at the head, the same value the head gives it.
             let phase = match hook
                 .phases
                 .iter()
                 .find(|(_, phase)| phase.placeholder == fold.placeholder)
             {
-                Some((phase_register, phase)) => {
+                Some((phase_slot, phase)) => {
                     let part = block
                         .vars
                         .first()
                         .and_then(|(name, _)| formula::bordered_part(expr, name))
                         .ok_or("a phase for a count of a part with no border")?;
-                    let held = phase.value(&mut pool, *phase_register);
+                    let held = phase.value(&mut pool, *phase_slot);
                     Some(phase.phase(&mut pool, held, part.len()))
                 }
                 None => None,
@@ -3758,7 +3762,7 @@ fn prove_shape(
             });
         }
     }
-    base.path = constraints;
+    base.world.path = constraints;
     let networked = !block.server.is_empty() || !block.client.is_empty();
     let began = Instant::now();
     let limits = (budget.deadline, budget.deadline.max(began + MIN_SHAPE_TIME));
@@ -3785,17 +3789,17 @@ fn prove_shape(
             let runs = exec::explore(image, start, &mut pool, &mut oracle, budget.max_paths)?;
             (runs, oracle.guessed)
         };
-        let (runs, guessed) =
-            if guessed && runs.iter().any(|run| run.end == Some(End::TooManyPaths)) {
-                let mut oracle = Witnessed::new(solvers, limits, combination as u64, false);
-                let runs = exec::explore(image, careful, &mut pool, &mut oracle, budget.max_paths)?;
-                (runs, false)
-            } else {
-                (runs, guessed)
-            };
+        let too_many = Some(End::TooManyPaths);
+        let (runs, guessed) = if guessed && runs.iter().any(|run| run.world.end == too_many) {
+            let mut oracle = Witnessed::new(solvers, limits, combination as u64, false);
+            let runs = exec::explore(image, careful, &mut pool, &mut oracle, budget.max_paths)?;
+            (runs, false)
+        } else {
+            (runs, guessed)
+        };
         // A run that reads a stream with read itself sees the pieces it arrives in: what a
         // test's peer sends is then proven as each of the tests' cuts delivers it.
-        if runs.iter().any(|run| run.raw_reads) {
+        if runs.iter().any(|run| run.world.raw_reads) {
             if any_cut && networked {
                 for other in Delivery::ALL.into_iter().filter(|other| *other != delivery) {
                     deliveries.extend(holds.iter().map(|hold| (other, *hold)));
@@ -3821,7 +3825,7 @@ fn prove_shape(
             &mut pool,
             block,
             &known,
-            runs,
+            runs.into_iter().map(|run| run.world).collect(),
             &receives,
             guessed,
             budget,
@@ -3853,14 +3857,14 @@ fn prove_shape(
     Ok((count, questions - questions_before, alone, any_cut))
 }
 
-/// Checks each of `runs` against the test's formulas: where the terms don't settle it, the
-/// solvers look for inputs that take the run and break the check.
+/// Checks each of `runs`, by the world each finished in, against the test's formulas: where the
+/// terms don't settle it, the solvers look for inputs that take the run and break the check.
 #[allow(clippy::too_many_arguments)]
 fn check_runs(
     pool: &mut Pool,
     block: &Generated,
     known: &Known<'_>,
-    runs: Vec<State>,
+    runs: Vec<World>,
     receives: &[Vec<Term>],
     guessed: bool,
     budget: &Budget,
@@ -3928,7 +3932,7 @@ fn check_runs(
     }
     // The inputs a model gives, with how what the program read arrived.
     let found =
-        |model: &HashMap<Term, u128>, run: &State| -> Result<BTreeMap<String, Value>, Stop> {
+        |model: &HashMap<Term, u128>, run: &World| -> Result<BTreeMap<String, Value>, Stop> {
             let mut found = chosen.clone();
             // Cut where fill stopped short, or as the test's peer delivered it.
             let arrived = run
@@ -4054,8 +4058,8 @@ fn check_runs(
                 };
                 let lead = &run.stdin_bytes()[snapshot.stdin_read..second.stdin_read];
                 let mut offsets = HashMap::new();
-                for (register, start, expr, back) in &relative.folds {
-                    let value = second.registers[*register];
+                for (slot, start, expr, back) in &relative.folds {
+                    let value = second.held(*slot);
                     let wide = pool.zero_extend(value, WIDTH - 64);
                     let first = pool.bv(WIDTH, *start);
                     let before = pool.sub(wide, first);
@@ -4284,14 +4288,14 @@ fn sample_start(
                 vec![bytes]
             };
             pieces.retain(|piece| !piece.is_empty());
-            exec::net::Client {
+            world::net::Client {
                 pieces,
                 waits: !exchange.receives.is_empty(),
                 held,
             }
         })
         .collect();
-    let network = exec::net::Network {
+    let network = world::net::Network {
         server,
         made,
         client,
@@ -4387,7 +4391,7 @@ pub fn agrees_until(
         let fill = sample_text;
         let start = sample_start(&image, &mut pool, case, listens);
         let mut runs = exec::explore(&image, start, &mut pool, &mut ConcreteUntil(deadline), 2)?;
-        let run = runs.pop().ok_or("the model didn't run")?;
+        let run = runs.pop().ok_or("the model didn't run")?.world;
         if let Some(End::Unsafe(problem)) = &run.end {
             let mut values = case.inputs.clone();
             values.insert(UNSAFE.to_owned(), Value::Str(problem.clone()));

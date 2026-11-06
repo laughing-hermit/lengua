@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
-use super::{Cpu, End, Held, MAX_PLACES, Object, Owner, PAGE, State, Stop, Through, unsupported};
+use super::{Cpu, End, Held, MAX_PLACES, Native, Object, Owner, PAGE, Stop, Through, unsupported};
 use crate::prove::term::{Pool, Term};
 
 /// The most bytes of an object, as its log begins, that may hold other than its common value.
@@ -70,7 +70,7 @@ impl Log {
     }
 }
 
-impl State {
+impl Native {
     /// The log of the object holding `address`, where it has one.
     pub(super) fn log_at(&self, address: u64) -> Option<usize> {
         self.logs
@@ -179,7 +179,7 @@ impl Cpu<'_> {
                 )));
             }
         }
-        if self.state.threads > 0 {
+        if self.core.threads > 0 {
             return Err(unsupported(
                 "memory the input chooses where, while threads run",
             ));
@@ -205,7 +205,7 @@ impl Cpu<'_> {
             self.pool.bool_not(inside)
         };
         if self.pool.truth(outside) != Some(false) {
-            self.state.obligations.push((outside, problem));
+            self.world.obligations.push((outside, problem));
         }
         Ok(Some(object))
     }
@@ -217,12 +217,12 @@ impl Cpu<'_> {
     /// An object too full of different bytes to follow.
     pub(super) fn log_of(&mut self, object: &Object) -> Result<usize, Stop> {
         if let Some(index) = self
-            .state
+            .core
             .logs
             .iter()
             .position(|log| log.start == object.start)
         {
-            if self.state.logs[index].entries.len() > MAX_ENTRIES {
+            if self.core.logs[index].entries.len() > MAX_ENTRIES {
                 return Err(unsupported(
                     "more stores where the input chooses than a proof follows",
                 ));
@@ -239,7 +239,7 @@ impl Cpu<'_> {
         }
         let first_page = start / PAGE as u64;
         let last_page = (end - 1) / PAGE as u64;
-        for (page, bytes) in self.state.memory.pages.range(first_page..=last_page) {
+        for (page, bytes) in self.core.memory.pages.range(first_page..=last_page) {
             for (offset, byte) in bytes.iter().enumerate() {
                 let at = page * PAGE as u64 + offset as u64;
                 if let Some(byte) = byte
@@ -272,20 +272,20 @@ impl Cpu<'_> {
             ));
         }
         // The values stored whole, and the pointers, in it are its log's now.
-        self.state.stored.retain(|at, value| {
+        self.core.stored.retain(|at, value| {
             *at >= end || *at + u64::from(self.pool.width(*value) / 8) <= start
         });
-        self.state
+        self.core
             .pointers
             .retain(|at, _| *at >= end || *at + 8 <= start);
-        Rc::make_mut(&mut self.state.logs).push(Log {
+        Rc::make_mut(&mut self.core.logs).push(Log {
             start,
             end,
             common,
             others,
             entries: Vec::new(),
         });
-        Ok(self.state.logs.len() - 1)
+        Ok(self.core.logs.len() - 1)
     }
 
     /// The `bytes` bytes at `address` in log `index`, the lowest first.
@@ -294,7 +294,7 @@ impl Cpu<'_> {
         for offset in 0..bytes {
             let shift = self.pool.bv(64, u128::from(offset));
             let at = self.pool.add(address, shift);
-            let byte = self.state.logged(self.pool, index, at);
+            let byte = self.core.logged(self.pool, index, at);
             value = Some(match value {
                 None => byte,
                 Some(low) => self.pool.concat(byte, low),
@@ -310,7 +310,7 @@ impl Cpu<'_> {
             let shift = self.pool.bv(64, u128::from(offset));
             let at = self.pool.add(address, shift);
             let part = self.pool.extract(value, offset * 8 + 7, offset * 8);
-            self.state.log_store(index, at, part);
+            self.core.log_store(index, at, part);
         }
     }
 }

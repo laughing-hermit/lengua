@@ -73,12 +73,12 @@ impl Cpu<'_> {
         let width = self.pool.width(result);
         let zero = self.pool.bv(width, 0);
         let no = self.pool.boolean(false);
-        self.state.last = Last::Other;
-        self.state.zero = self.pool.eq(result, zero);
-        self.state.sign = self.bit(result, width - 1);
-        self.state.carry = no;
-        self.state.overflow = no;
-        self.state.parity = self.unknown();
+        self.core.last = Last::Other;
+        self.core.zero = self.pool.eq(result, zero);
+        self.core.sign = self.bit(result, width - 1);
+        self.core.carry = no;
+        self.core.overflow = no;
+        self.core.parity = self.unknown();
     }
 
     /// `popcnt`: the number of set bits, as a count of them, so a mask's popcount is the count
@@ -92,12 +92,12 @@ impl Cpu<'_> {
         let count = self.pool.count(width, &bits);
         let zero = self.pool.bv(width, 0);
         let no = self.pool.boolean(false);
-        self.state.last = Last::Other;
-        self.state.zero = self.pool.eq(source, zero);
-        self.state.carry = no;
-        self.state.sign = no;
-        self.state.overflow = no;
-        self.state.parity = no;
+        self.core.last = Last::Other;
+        self.core.zero = self.pool.eq(source, zero);
+        self.core.carry = no;
+        self.core.sign = no;
+        self.core.overflow = no;
+        self.core.parity = no;
         self.write(0, count)?;
         Ok(Step::Next)
     }
@@ -128,30 +128,30 @@ impl Cpu<'_> {
             result = self.pool.ite(set, at, result);
         }
         let scans = matches!(mnemonic, Mnemonic::Bsf | Mnemonic::Bsr);
-        self.state.last = Last::Other;
-        self.state.overflow = self.unknown();
-        self.state.sign = self.unknown();
-        self.state.parity = self.unknown();
+        self.core.last = Last::Other;
+        self.core.overflow = self.unknown();
+        self.core.sign = self.unknown();
+        self.core.parity = self.unknown();
         if scans {
-            self.state.zero = empty;
-            self.state.carry = self.unknown();
+            self.core.zero = empty;
+            self.core.carry = self.unknown();
         } else {
             // The count is 0 exactly when the first bit looked at is set.
-            self.state.carry = empty;
+            self.core.carry = empty;
             let first = if lowest { 0 } else { width - 1 };
-            self.state.zero = self.bit(source, first);
+            self.core.zero = self.bit(source, first);
         }
         self.write(0, result)?;
         // A run that has already found the source isn't zero, as a test and branch before a
         // scan do, has no undefined case.
         let nonzero = self.pool.bool_not(empty);
-        if scans && !self.state.path.contains(&nonzero) {
+        if scans && !self.world.path.contains(&nonzero) {
             // AMD documents the destination as kept, Intel as undefined: a proof holds for any.
             let index = slot(self.instruction.op_register(0))
                 .ok_or_else(|| unsupported("a bit scan into an unusual register"))?;
-            let written = self.state.registers[index];
+            let written = self.core.registers[index];
             let anything = self.undefined(64);
-            self.state.registers[index] = self.pool.ite(empty, anything, written);
+            self.core.registers[index] = self.pool.ite(empty, anything, written);
         }
         Ok(Step::Next)
     }
@@ -170,7 +170,7 @@ impl Cpu<'_> {
                 let result = self.pool.and(inverted, other);
                 self.bmi_flags(result);
                 // Flags as `and` leaves them, so a branch reads them as a comparison.
-                self.state.last = Last::Logic(result);
+                self.core.last = Last::Logic(result);
                 result
             }
             Mnemonic::Blsr | Mnemonic::Blsi | Mnemonic::Blsmsk => {
@@ -184,13 +184,13 @@ impl Cpu<'_> {
                     _ => self.pool.xor(source, below),
                 };
                 self.bmi_flags(result);
-                self.state.carry = if mnemonic == Mnemonic::Blsi {
+                self.core.carry = if mnemonic == Mnemonic::Blsi {
                     self.pool.bool_not(empty)
                 } else {
                     empty
                 };
                 if mnemonic == Mnemonic::Blsmsk {
-                    self.state.zero = self.pool.boolean(false);
+                    self.core.zero = self.pool.boolean(false);
                 }
                 result
             }
@@ -207,7 +207,7 @@ impl Cpu<'_> {
                 let limit = self.pool.bv(width, u128::from(width));
                 let inside = self.pool.ult(index, limit);
                 self.bmi_flags(result);
-                self.state.carry = self.pool.bool_not(inside);
+                self.core.carry = self.pool.bool_not(inside);
                 result
             }
             _ => {
@@ -223,7 +223,7 @@ impl Cpu<'_> {
                 let mask = self.pool.sub(bit, one);
                 let result = self.pool.and(shifted, mask);
                 self.bmi_flags(result);
-                self.state.sign = self.unknown();
+                self.core.sign = self.unknown();
                 result
             }
         };
@@ -272,7 +272,7 @@ impl Cpu<'_> {
             Register::EDX
         };
         let factor = self
-            .state
+            .core
             .register(self.pool, implicit)
             .ok_or_else(|| unsupported("mulx"))?;
         let (wide_a, wide_b) = (
@@ -292,9 +292,9 @@ impl Cpu<'_> {
         let width = self.width(0);
         let (a, b) = (self.read(0, width)?, self.read(1, width)?);
         let flag = if mnemonic == Mnemonic::Adcx {
-            self.state.carry
+            self.core.carry
         } else {
-            self.state.overflow
+            self.core.overflow
         };
         let (one, zero) = (self.pool.bv(width + 1, 1), self.pool.bv(width + 1, 0));
         let carry_in = self.pool.ite(flag, one, zero);
@@ -303,11 +303,11 @@ impl Cpu<'_> {
         let sum = self.pool.add(sum, carry_in);
         let result = self.pool.extract(sum, width - 1, 0);
         let out = self.bit(sum, width);
-        self.state.last = Last::Other;
+        self.core.last = Last::Other;
         if mnemonic == Mnemonic::Adcx {
-            self.state.carry = out;
+            self.core.carry = out;
         } else {
-            self.state.overflow = out;
+            self.core.overflow = out;
         }
         self.write(0, result)?;
         Ok(Step::Next)
@@ -366,11 +366,11 @@ impl Cpu<'_> {
             })
         };
         // ZF stays as it was.
-        self.state.last = Last::Other;
-        self.state.carry = carry;
-        self.state.overflow = self.unknown();
-        self.state.sign = self.unknown();
-        self.state.parity = self.unknown();
+        self.core.last = Last::Other;
+        self.core.carry = carry;
+        self.core.overflow = self.unknown();
+        self.core.sign = self.unknown();
+        self.core.parity = self.unknown();
         match (changed, address) {
             (Some(changed), Some(address)) => self.save(address, changed)?,
             (Some(changed), None) => self.write(0, changed)?,
@@ -393,15 +393,15 @@ impl Cpu<'_> {
             self.write(0, destination)?;
             return Ok(Step::Next);
         }
-        self.state.last = Last::Other;
+        self.core.last = Last::Other;
         if count > width {
             // Only a 16-bit operand can be shifted past its width, which leaves it undefined.
             let anything = self.undefined(width);
-            self.state.carry = self.unknown();
-            self.state.zero = self.unknown();
-            self.state.sign = self.unknown();
-            self.state.overflow = self.unknown();
-            self.state.parity = self.unknown();
+            self.core.carry = self.unknown();
+            self.core.zero = self.unknown();
+            self.core.sign = self.unknown();
+            self.core.overflow = self.unknown();
+            self.core.parity = self.unknown();
             self.write(0, anything)?;
             return Ok(Step::Next);
         }
@@ -416,8 +416,8 @@ impl Cpu<'_> {
             let result = self.pool.extract(both, count + width - 1, count);
             (result, self.bit(destination, count - 1))
         };
-        self.state.carry = out;
-        self.state.overflow = if count == 1 {
+        self.core.carry = out;
+        self.core.overflow = if count == 1 {
             let before = self.bit(destination, width - 1);
             let after = self.bit(result, width - 1);
             let same = self.pool.eq(before, after);
@@ -476,11 +476,11 @@ impl Cpu<'_> {
 
     /// `stc`, `clc` and `cmc`.
     pub(super) fn set_carry(&mut self, mnemonic: Mnemonic) {
-        self.state.last = Last::Other;
-        self.state.carry = match mnemonic {
+        self.core.last = Last::Other;
+        self.core.carry = match mnemonic {
             Mnemonic::Stc => self.pool.boolean(true),
             Mnemonic::Clc => self.pool.boolean(false),
-            _ => self.pool.bool_not(self.state.carry),
+            _ => self.pool.bool_not(self.core.carry),
         };
     }
 }

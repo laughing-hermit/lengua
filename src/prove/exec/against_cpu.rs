@@ -911,18 +911,18 @@ fn model(
     let mut pool = Pool::default();
     let mut state = State::start(image, &mut pool, &[], &[], Vec::new());
     for (slot, value) in registers.iter().enumerate() {
-        state.registers[slot] = pool.bv(64, u128::from(*value));
+        state.core.registers[slot] = pool.bv(64, u128::from(*value));
     }
     let bit = |pool: &mut Pool, mask: u64| pool.boolean(flags & mask != 0);
-    state.carry = bit(&mut pool, 1);
-    state.parity = bit(&mut pool, 1 << 2);
-    state.zero = bit(&mut pool, 1 << 6);
-    state.sign = bit(&mut pool, 1 << 7);
-    state.overflow = bit(&mut pool, 1 << 11);
-    state.last = Last::Other;
+    state.core.carry = bit(&mut pool, 1);
+    state.core.parity = bit(&mut pool, 1 << 2);
+    state.core.zero = bit(&mut pool, 1 << 6);
+    state.core.sign = bit(&mut pool, 1 << 7);
+    state.core.overflow = bit(&mut pool, 1 << 11);
+    state.core.last = Last::Other;
     let cell_value = pool.bv(64, u128::from(cell));
-    state.store(&mut pool, cell_address, cell_value);
-    state.rip = address;
+    state.core.store(&mut pool, cell_address, cell_value);
+    state.core.rip = address;
     for _ in &probe.code {
         match step(image, &mut state, &mut pool) {
             Ok(Step::Next) => {}
@@ -933,26 +933,21 @@ fn model(
         }
     }
     // x86-64's sixteen, rax to r15, of the model's slots.
-    let registers = state.registers[..16]
+    let core = &state.core;
+    let registers = core.registers[..16]
         .iter()
         .enumerate()
         .map(|(slot, register)| {
             possible(&pool, *register).map_err(|problem| format!("{} {problem}", NAMES[3][slot]))
         })
         .collect::<Result<_, _>>()?;
-    let flags = [
-        state.carry,
-        state.parity,
-        state.zero,
-        state.sign,
-        state.overflow,
-    ]
-    .iter()
-    .map(|flag| possible(&pool, *flag))
-    .collect::<Result<_, _>>()?;
+    let flags = [core.carry, core.parity, core.zero, core.sign, core.overflow]
+        .iter()
+        .map(|flag| possible(&pool, *flag))
+        .collect::<Result<_, _>>()?;
     let mut bytes = Vec::new();
     for byte in 0..8 {
-        let term = state
+        let term = core
             .memory
             .get(cell_address + byte)
             .ok_or("the memory cell is gone")?;

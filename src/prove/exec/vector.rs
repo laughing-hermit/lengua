@@ -128,10 +128,10 @@ impl Cpu<'_> {
             OpKind::Register => {
                 let register = instruction.op_register(index);
                 if let Some(number) = vector_number(register) {
-                    return Ok(self.state.vectors[number][..bytes.min(VECTOR_BYTES)].to_vec());
+                    return Ok(self.core.vectors[number][..bytes.min(VECTOR_BYTES)].to_vec());
                 }
                 if let Some(number) = mask_number(register) {
-                    let mask = self.state.masks[number];
+                    let mask = self.core.masks[number];
                     return Ok(self.split(mask, bytes));
                 }
                 let width = u32::try_from(register.size() * 8).unwrap_or(64);
@@ -166,7 +166,7 @@ impl Cpu<'_> {
                 };
                 let keeps = instruction.encoding() == EncodingKind::Legacy;
                 let zero = self.pool.bv(8, 0);
-                let vector = Rc::make_mut(&mut self.state.vectors[number]);
+                let vector = Rc::make_mut(&mut self.core.vectors[number]);
                 for (at, byte) in vector.iter_mut().enumerate() {
                     if let Some(new) = value.get(at) {
                         *byte = *new;
@@ -194,7 +194,7 @@ impl Cpu<'_> {
     fn write_mask(&self) -> Option<Term> {
         mask_number(self.instruction.op_mask())
             .filter(|number| *number != 0)
-            .map(|number| self.state.masks[number])
+            .map(|number| self.core.masks[number])
     }
 
     /// Writes `result` to operand 0 under the write mask, element by element of `element`
@@ -370,7 +370,7 @@ impl Cpu<'_> {
         }
         let number = mask_number(self.instruction.op_register(0))
             .ok_or_else(|| unsupported("a mask written to something else"))?;
-        self.state.masks[number] = mask;
+        self.core.masks[number] = mask;
         Ok(())
     }
 
@@ -390,7 +390,7 @@ impl Cpu<'_> {
         let instruction = self.instruction;
         let value = match instruction.op_kind(index) {
             OpKind::Register if instruction.op_register(index).is_k() => {
-                self.state.masks[instruction.op_register(index).number()]
+                self.core.masks[instruction.op_register(index).number()]
             }
             _ => {
                 let bytes = self.bytes_in(index, (width / 8) as usize)?;
@@ -426,7 +426,7 @@ impl Cpu<'_> {
                     0
                 };
                 for number in 0..16 {
-                    let vector = Rc::make_mut(&mut self.state.vectors[number]);
+                    let vector = Rc::make_mut(&mut self.core.vectors[number]);
                     for byte in &mut vector[from..] {
                         *byte = zero;
                     }
@@ -753,12 +753,12 @@ impl Cpu<'_> {
                     clear_outside.push(self.pool.eq(outside, zero));
                 }
                 let no = self.pool.boolean(false);
-                self.state.last = Last::Other;
-                self.state.zero = self.pool.all(&clear);
-                self.state.carry = self.pool.all(&clear_outside);
-                self.state.sign = no;
-                self.state.overflow = no;
-                self.state.parity = no;
+                self.core.last = Last::Other;
+                self.core.zero = self.pool.all(&clear);
+                self.core.carry = self.pool.all(&clear_outside);
+                self.core.sign = no;
+                self.core.overflow = no;
+                self.core.parity = no;
             }
             Mnemonic::Psllw
             | Mnemonic::Pslld
@@ -892,7 +892,7 @@ impl Cpu<'_> {
                 let value = self.mask_in(1, width)?;
                 let destination = instruction.op_register(0);
                 if let Some(number) = mask_number(destination) {
-                    self.state.masks[number] = value;
+                    self.core.masks[number] = value;
                 } else {
                     let bytes = self.split(value, (width / 8) as usize);
                     if instruction.op_kind(0) == OpKind::Memory {
@@ -947,7 +947,7 @@ impl Cpu<'_> {
                 };
                 let number = mask_number(instruction.op_register(0))
                     .ok_or_else(|| unsupported("a mask operation into something else"))?;
-                self.state.masks[number] = value;
+                self.core.masks[number] = value;
             }
             Mnemonic::Knotb | Mnemonic::Knotw | Mnemonic::Knotd | Mnemonic::Knotq => {
                 let width = Self::mask_width(&name);
@@ -961,7 +961,7 @@ impl Cpu<'_> {
                 };
                 let number = mask_number(instruction.op_register(0))
                     .ok_or_else(|| unsupported("a mask operation into something else"))?;
-                self.state.masks[number] = value;
+                self.core.masks[number] = value;
             }
             Mnemonic::Kshiftlb
             | Mnemonic::Kshiftlw
@@ -992,7 +992,7 @@ impl Cpu<'_> {
                 };
                 let number = mask_number(instruction.op_register(0))
                     .ok_or_else(|| unsupported("a mask shift into something else"))?;
-                self.state.masks[number] = value;
+                self.core.masks[number] = value;
             }
             Mnemonic::Kortestb
             | Mnemonic::Kortestw
@@ -1018,12 +1018,12 @@ impl Cpu<'_> {
                     (self.pool.eq(both, zero), self.pool.eq(outside, narrow_zero))
                 };
                 let no = self.pool.boolean(false);
-                self.state.last = Last::Other;
-                self.state.zero = zero_flag;
-                self.state.carry = carry;
-                self.state.sign = no;
-                self.state.overflow = no;
-                self.state.parity = no;
+                self.core.last = Last::Other;
+                self.core.zero = zero_flag;
+                self.core.carry = carry;
+                self.core.sign = no;
+                self.core.overflow = no;
+                self.core.parity = no;
             }
             // Across lanes, by indices in a vector: each element of the result is the table's
             // element the index's low bits name, or, for the two-table forms, the table the

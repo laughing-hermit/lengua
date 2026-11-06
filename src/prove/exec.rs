@@ -9,14 +9,20 @@
 //! data symbol, a live frame, the program's arguments), even where the CPU would let it through
 //! into a neighbour that starts just past its end; no return address is written, and each `ret`
 //! goes back where its call came from; and no stack byte is read before something wrote it.
+//!
+//! A run's [`State`] is its core, the machine its code runs on, and its [`World`], what the run
+//! reads, writes and meets beyond the machine. x86-64's and AArch64's code share one core,
+//! [`Native`]; a front end for other code brings its own [`Core`], and [`explore`] follows its
+//! runs the same way, calling the world's models for what a call of the system does.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use iced_x86::{ConditionCode, Instruction, Mnemonic, OpKind, Register};
 
 use super::term::{Pool, Term};
+use super::world::{Chosen, EBADF, ENOENT, Host, Reading, World, net};
 use crate::checker::decode::Machine;
 use crate::isa::{Isa, aarch64 as a64};
 use calls::{Call, Convention};
@@ -38,10 +44,6 @@ const STEPS_BETWEEN_TIME_CHECKS: u64 = 4096;
 
 /// Why a run past [`MAX_STEPS`] proves nothing.
 pub const TOO_LONG: &str = "a run took too many instructions to follow";
-
-/// The most bytes of standard input left for which a proof takes every count a read can
-/// return: every way 8 bytes can be cut is 128 runs.
-const RAW_CUT_BYTES: u64 = 8;
 
 /// The most places an address that depends on the input may be, such as a table's entries for
 /// each value of an input byte.
@@ -580,37 +582,37 @@ impl Plan {
         }
     }
 
-    /// Brings `state`'s owners up to date, after the instruction left it, from `before`, its
+    /// Brings `core`'s owners up to date, after the instruction left it, from `before`, its
     /// registers before.
-    fn apply(&self, state: &mut State, before: &[Term; SLOTS]) {
-        for (owner, (now, then)) in state
+    fn apply(&self, core: &mut Native, before: &[Term; SLOTS]) {
+        for (owner, (now, then)) in core
             .owners
             .iter_mut()
-            .zip(state.registers.iter().zip(before))
+            .zip(core.registers.iter().zip(before))
         {
             if now != then {
                 *owner = None;
             }
         }
         for (index, owner) in self.registers.iter().flatten() {
-            state.owners[*index] = *owner;
+            core.owners[*index] = *owner;
         }
         for (address, value, owner) in self.stores.iter().flatten() {
-            if state.stored.get(address) == Some(value) {
-                state.pointers.insert(*address, *owner);
+            if core.stored.get(address) == Some(value) {
+                core.pointers.insert(*address, *owner);
             }
         }
     }
 
     /// The same for every state `step` leaves.
     fn apply_all(&self, state: &mut State, step: &mut Step, before: &[Term; SLOTS]) {
-        self.apply(state, before);
+        self.apply(&mut state.core, before);
         match step {
             Step::Next => {}
-            Step::Split(_, other) => self.apply(other, before),
+            Step::Split(_, other) => self.apply(&mut other.core, before),
             Step::Choose(choices) => {
                 for (_, choice) in choices {
-                    self.apply(choice, before);
+                    self.apply(&mut choice.core, before);
                 }
             }
         }
@@ -674,9 +676,59 @@ struct Frame {
     number: u64,
 }
 
-/// One run's state.
+/// What a front end's runs hold beside their [`World`]: the machine its code runs on, and how a
+/// run of that code takes a step. x86-64's and AArch64's code share [`Native`]; [`explore`]
+/// follows the runs of any core the same way.
+pub trait Core: Clone + std::fmt::Debug {
+    /// The program as the front end loads it.
+    type Image;
+
+    /// Runs one step of `state`'s code: an instruction, and what the world does for a call of
+    /// the system it makes.
+    ///
+    /// # Errors
+    ///
+    /// How the run ends, where the step ends it.
+    fn step(
+        image: &Self::Image,
+        state: &mut State<Self>,
+        pool: &mut Pool,
+    ) -> Result<Step<Self>, End>;
+
+    /// Where `state` takes a branch both sides of which can happen, `state` going one way and
+    /// `other` the other: `other` back, to follow as a run of its own, or `None` where the core
+    /// keeps a side to merge with the rest later, as [`Native`] merges a loop's exits. The
+    /// default keeps nothing.
+    fn park(
+        _image: &Self::Image,
+        _pool: &mut Pool,
+        _state: &mut State<Self>,
+        other: State<Self>,
+        _condition: Term,
+    ) -> Option<State<Self>> {
+        Some(other)
+    }
+
+    /// Merges what the core kept of `state`'s branches, once the run is done with them: into
+    /// `state`, or into runs of their own in `pending`. The default keeps none.
+    fn settle(_pool: &mut Pool, _state: &mut State<Self>, _pending: &mut Vec<State<Self>>) {}
+
+    /// While the core keeps branches to merge, where the run is still the one it goes on with:
+    /// what the run must meet from then on, it must meet only there.
+    fn alive(&self) -> Option<Term> {
+        None
+    }
+
+    /// Hands the branches the core keeps over to `other`, where only `other`'s side of a branch
+    /// can happen.
+    fn hand_over(&mut self, _other: &mut Self) {}
+}
+
+/// The machine x86-64's and AArch64's code runs on, as a run holds it: the registers, flags,
+/// vectors and memory, the calls under way and the threads, and how the run goes round a loop
+/// whose exits it merges and takes the read loop's head in a proof by induction.
 #[derive(Debug, Clone)]
-pub struct State {
+pub struct Native {
     /// The CPU whose code runs.
     isa: Isa,
     registers: [Term; SLOTS],
@@ -701,89 +753,21 @@ pub struct State {
     /// have rewritten.
     stored: BTreeMap<u64, Term>,
     rip: u64,
-    /// The conditions the inputs meet on this run.
-    pub path: Vec<Term>,
-    stdin: Rc<Vec<Term>>,
-    stdin_read: usize,
-    /// Where standard input ends, when its length is the input's choice: `stdin` then holds as
-    /// many bytes as it can be long, those past the end standing for nothing read.
-    stdin_length: Option<Term>,
-    /// Where in `stdin` the text of that length starts: the bytes before it, such as a whole
-    /// buffer-full an induction's base puts first, are there whatever the length.
-    stdin_from: usize,
-    /// A loop whose exits that length decides are being merged, while the run goes round it.
+    /// A loop whose exits the length of standard input decides, where the input chooses it, is
+    /// having them merged, while the run goes round it.
     merging: Option<Box<Merging>>,
-    /// The pieces standard input arrives in, by length, when it doesn't arrive whole: each read
-    /// gets at most what its piece has left.
-    stdin_pieces: Rc<Vec<usize>>,
-    /// Whether standard output is closed, a pipe nobody reads: every write to it fails with
-    /// `EPIPE`, as the test's own run has it.
-    stdout_closed: bool,
-    /// The files in the working folder before the run, by name.
-    files: Rc<BTreeMap<String, Vec<Term>>>,
-    /// The files the run created or replaced, by name, with everything written to them.
-    pub written: BTreeMap<String, Vec<Term>>,
-    /// The empty folders in the working folder before the run.
-    folders_before: Rc<BTreeSet<String>>,
-    /// The folders the run made.
-    made: BTreeSet<String>,
-    /// The files and folders the run deleted, or renamed away.
-    removed: BTreeSet<String>,
-    /// The files open, by descriptor.
-    open: BTreeMap<u64, Open>,
-    /// The test's network.
-    network: Rc<net::Network>,
-    /// The sockets open, by descriptor, with their connection's number once they have one.
-    sockets: BTreeMap<u64, Option<usize>>,
-    /// Where each of the test's clients stands, once the program waits on its connections with
-    /// poll.
-    peers: Option<Vec<net::Peer>>,
-    /// The states the runs from one start have come back from poll in, after the clients took
-    /// steps, shared by them all: one that comes to a state another already has goes no further.
-    polled: Rc<std::cell::RefCell<HashSet<Vec<u64>>>>,
-    /// The states this run came back from poll in.
-    history: Option<Rc<net::History>>,
-    /// Every connection the run made or took, in order.
-    pub connections: Vec<net::Connection>,
-    /// Bytes written to standard output, shared with the runs a fork made until one writes.
-    pub stdout: Rc<Vec<Term>>,
-    /// Bytes written to standard error, shared the same way.
-    pub stderr: Rc<Vec<Term>>,
-    steps: u64,
-    /// How the run ended, once it has.
-    pub end: Option<End>,
     /// How the run takes the read loop's head, in a proof by induction.
     hook: Option<Rc<induction::Hook>>,
     /// How many times it has reached that head.
     arrivals: u32,
-    /// Where it stood the first time.
+    /// What it held the first time, beyond what the world keeps of it ([`World::at_head`]).
     head: Option<Box<induction::Snapshot>>,
-    /// Where it stood the second time, one buffer-full on.
-    second: Option<Box<induction::Second>>,
+    /// What one buffer-full changed, by the second time, for a run that reads two from the
+    /// head.
+    changed: Option<Box<induction::Changes>>,
     /// The data symbols an address the input chooses reached among more places than a run
     /// follows one by one, each with its stores since.
     logs: Rc<Vec<logs::Log>>,
-    /// The bytes a test supplies for `getrandom`, in order, when it supplies them: the kernel's
-    /// are any value.
-    random: Option<Rc<Vec<Term>>>,
-    random_used: usize,
-    /// The readings a test supplies for `clock_gettime`, seconds and nanoseconds, 64 bits each;
-    /// the last one repeats. Empty, the kernel's are any time.
-    clock: Rc<Vec<(Term, Term)>>,
-    readings_used: usize,
-    /// Whether the run read standard input or a connection with `read` itself rather than
-    /// through fill, so how its input was cut matters.
-    pub raw_reads: bool,
-    /// Where fill stopped short of everything that had arrived, after an end byte: the cut a
-    /// real run needs to stop there too.
-    pub fill_cut: Option<usize>,
-    /// Whether fill takes every way its input can be cut, as a proof does, or what one read
-    /// gives, as a run of a test's sample does. Where it does, a read of standard input with
-    /// at most [`RAW_CUT_BYTES`] left takes every count too.
-    every_cut: bool,
-    /// Where this run's reads of standard input stopped short of what had arrived: bit `i`
-    /// after byte `i + 1`.
-    pub raw_cuts: u16,
     /// The return addresses on the stack, the newest last.
     returns: Vec<Return>,
     /// How many calls the run has made: the newest frame's number.
@@ -807,18 +791,17 @@ pub struct State {
     /// The program's arguments and environment as the run began, each from its start to its
     /// end with its name: the array of pointers first, then each string with its NUL.
     arguments: Rc<Vec<(u64, u64, String)>>,
-    /// Accesses at addresses the input chooses that may leave their object: each the condition
-    /// under which one does, and what it does then. The proof asks whether any can hold.
-    pub obligations: Vec<(Term, String)>,
 }
 
-/// A file the program has open.
+/// One run's state: the machine its code runs on, and the world it runs in.
 #[derive(Debug, Clone)]
-struct Open {
-    name: String,
-    /// The next byte a read gets.
-    position: usize,
-    writing: bool,
+pub struct State<C = Native> {
+    /// The machine: for x86-64's and AArch64's code, the registers, flags, vectors, memory and
+    /// calls ([`Native`]).
+    pub core: C,
+    /// The world: standard input, output and error, the files and folders, the network, the
+    /// clock and random bytes, and the proof's account of the run.
+    pub world: World,
 }
 
 /// `openat`'s directory meaning the working folder, as the kernel reads it: the low 32 bits,
@@ -828,17 +811,8 @@ const O_ACCMODE: u64 = 3;
 const O_WRONLY: u64 = 1;
 const O_CREAT: u64 = 0o100;
 const O_TRUNC: u64 = 0o1000;
-const ENOENT: i64 = 2;
-const EEXIST: i64 = 17;
-const ENOTDIR: i64 = 20;
-const EISDIR: i64 = 21;
-const ENOTEMPTY: i64 = 39;
-const AT_REMOVEDIR: u64 = 0x200;
 /// A regular file that its owner may read and write and others may read.
 const REGULAR_FILE: u128 = 0o100_644;
-const EBADF: i64 = 9;
-/// `EPIPE`: a write to a pipe nobody reads, such as a closed standard output.
-const EPIPE: i64 = 32;
 const EINVAL: i64 = 22;
 const ENOTTY: i64 = 25;
 const EAGAIN: i64 = 11;
@@ -876,7 +850,7 @@ impl State {
         let zero = pool.bv(64, 0);
         let zero_byte = pool.bv(8, 0);
         let no = pool.boolean(false);
-        let mut state = Self {
+        let core = Native {
             isa: image.isa,
             registers: [zero; SLOTS],
             last: Last::Other,
@@ -897,44 +871,13 @@ impl State {
             },
             memory: Memory::default(),
             stored: BTreeMap::new(),
+            rip: image.entry,
+            merging: None,
             hook: None,
             arrivals: 0,
             head: None,
-            second: None,
+            changed: None,
             logs: Rc::new(Vec::new()),
-            rip: image.entry,
-            path: Vec::new(),
-            stdin: Rc::new(stdin),
-            stdin_read: 0,
-            stdin_length: None,
-            stdin_from: 0,
-            merging: None,
-            stdin_pieces: Rc::new(Vec::new()),
-            stdout_closed: false,
-            files: Rc::new(BTreeMap::new()),
-            written: BTreeMap::new(),
-            folders_before: Rc::new(BTreeSet::new()),
-            made: BTreeSet::new(),
-            removed: BTreeSet::new(),
-            open: BTreeMap::new(),
-            network: Rc::new(net::Network::default()),
-            sockets: BTreeMap::new(),
-            peers: None,
-            polled: Rc::default(),
-            history: None,
-            connections: Vec::new(),
-            stdout: Rc::new(Vec::new()),
-            stderr: Rc::new(Vec::new()),
-            steps: 0,
-            end: None,
-            random: None,
-            random_used: 0,
-            clock: Rc::new(Vec::new()),
-            readings_used: 0,
-            raw_reads: false,
-            fill_cut: None,
-            every_cut: false,
-            raw_cuts: 0,
             returns: Vec::new(),
             calls: 0,
             owners: [None; SLOTS],
@@ -944,7 +887,10 @@ impl State {
             stack_top: None,
             base_frame: 0,
             arguments: Rc::new(Vec::new()),
-            obligations: Vec::new(),
+        };
+        let mut state = Self {
+            core,
+            world: World::new(stdin),
         };
         // The strings above the pointers: the program's path, then each argument.
         let program_name: Vec<Term> = b"/lengua/main"
@@ -959,11 +905,11 @@ impl State {
             strings.push(cursor);
             let start = cursor;
             for byte in text {
-                state.memory.insert(cursor, *byte);
+                state.core.memory.insert(cursor, *byte);
                 cursor += 1;
             }
             let nul = pool.bv(8, 0);
-            state.memory.insert(cursor, nul);
+            state.core.memory.insert(cursor, nul);
             cursor += 1;
             let name = match index.checked_sub(args.len() + 1) {
                 None => format!("the program's argument {index}"),
@@ -989,20 +935,20 @@ impl State {
                 "the array of the program's arguments".into(),
             ),
         );
-        state.arguments = Rc::new(objects);
+        state.core.arguments = Rc::new(objects);
         for (index, word) in words.iter().enumerate() {
             let value = pool.bv(64, u128::from(*word));
             let address = STACK_TOP + 8 * index as u64;
-            state.store(pool, address, value);
+            state.core.store(pool, address, value);
             // Each pointer to a string is owned by that string.
             if index > 0
                 && let Some(string) = strings.iter().position(|start| start == word)
             {
-                state.pointers.insert(address, Owner::Argument(string + 1));
+                state.core.pointers.insert(address, Owner::Argument(string + 1));
             }
         }
         let convention = Convention::of(image.isa);
-        state.registers[convention.stack] = pool.bv(64, u128::from(STACK_TOP));
+        state.core.registers[convention.stack] = pool.bv(64, u128::from(STACK_TOP));
         if image.edge {
             // lengua's `_start` has called `main` with the argument count and the two arrays of
             // strings in its first three argument registers, as it reads them off the start
@@ -1012,46 +958,48 @@ impl State {
             let environment = STACK_TOP + 8 * (argc + 2);
             let values = [argc, STACK_TOP + 8, environment];
             for (slot, value) in convention.arguments.iter().zip(values) {
-                state.registers[*slot] = pool.bv(64, u128::from(value));
+                state.core.registers[*slot] = pool.bv(64, u128::from(value));
             }
             for slot in &convention.arguments[1..3] {
-                state.owners[*slot] = Some(Owner::Argument(0));
+                state.core.owners[*slot] = Some(Owner::Argument(0));
             }
             if image.isa == Isa::X86_64 {
                 let back = pool.bv(64, 0);
-                state.store(pool, STACK_TOP - 8, back);
-                state.registers[convention.stack] = pool.bv(64, u128::from(STACK_TOP - 8));
+                state.core.store(pool, STACK_TOP - 8, back);
+                state.core.registers[convention.stack] = pool.bv(64, u128::from(STACK_TOP - 8));
             }
         }
         state
     }
 
-    /// The same state, its standard input ending after `length` of its bytes, a length the
-    /// input chooses: `stdin` holds as many bytes as it can be long.
-    #[must_use]
-    pub fn with_stdin_length(mut self, length: Term) -> Self {
-        self.stdin_length = Some(length);
-        self
-    }
-
     /// Takes the read loop's head as `hook` says, for a proof by induction.
     #[must_use]
     pub fn with_hook(mut self, hook: Rc<induction::Hook>) -> Self {
-        self.hook = Some(hook);
+        self.core.hook = Some(hook);
+        self
+    }
+}
+
+impl<C> State<C> {
+    /// The same state, its standard input ending after `length` of its bytes, a length the
+    /// input chooses: standard input holds as many bytes as it can be long.
+    #[must_use]
+    pub fn with_stdin_length(mut self, length: Term) -> Self {
+        self.world.stdin_length = Some(length);
         self
     }
 
     /// The same state with `files` in its working folder.
     #[must_use]
     pub fn with_files(mut self, files: BTreeMap<String, Vec<Term>>) -> Self {
-        self.files = Rc::new(files);
+        self.world.files = Rc::new(files);
         self
     }
 
     /// The same state with these empty folders in its working folder.
     #[must_use]
     pub fn with_folders(mut self, folders: BTreeSet<String>) -> Self {
-        self.folders_before = Rc::new(folders);
+        self.world.folders_before = Rc::new(folders);
         self
     }
 
@@ -1059,14 +1007,14 @@ impl State {
     /// to it fails with `EPIPE`.
     #[must_use]
     pub fn with_stdout_closed(mut self, closed: bool) -> Self {
-        self.stdout_closed = closed;
+        self.world.stdout_closed = closed;
         self
     }
 
     /// The same state with standard input arriving in pieces of these lengths.
     #[must_use]
     pub fn with_stdin_pieces(mut self, pieces: Vec<usize>) -> Self {
-        self.stdin_pieces = Rc::new(pieces);
+        self.world.stdin_pieces = Rc::new(pieces);
         self
     }
 
@@ -1075,123 +1023,33 @@ impl State {
     pub fn with_network(mut self, network: net::Network) -> Self {
         // The connections lengua made before the program started, each at its own number.
         for (index, script) in network.made.iter().enumerate() {
-            let number = self.connections.len();
-            self.connections.push(net::Connection::made(*script));
+            let number = self.world.connections.len();
+            self.world.connections.push(net::Connection::made(*script));
             let fd = u64::try_from(crate::connect::FIRST_DESCRIPTOR).unwrap_or(4) + index as u64;
-            self.sockets.insert(fd, Some(number));
+            self.world.sockets.insert(fd, Some(number));
         }
-        self.network = Rc::new(network);
+        self.world.network = Rc::new(network);
         self
     }
 
     /// The same state with a test's random bytes and clock readings in place of the kernel's.
     #[must_use]
     pub fn with_supply(mut self, random: Option<Vec<Term>>, clock: Vec<(Term, Term)>) -> Self {
-        self.random = random.map(Rc::new);
-        self.clock = Rc::new(clock);
+        self.world.random = random.map(Rc::new);
+        self.world.clock = Rc::new(clock);
         self
     }
 
-    /// What the file `name` holds after the run, if it exists: what the run wrote, or else what
-    /// it held before.
+    /// The same state, proving for every way the input can be cut rather than running as one
+    /// read gives it.
     #[must_use]
-    pub fn file(&self, name: &str) -> Option<&[Term]> {
-        if let Some(written) = self.written.get(name) {
-            return Some(written);
-        }
-        if self.removed.contains(name) {
-            return None;
-        }
-        self.files.get(name).map(Vec::as_slice)
+    pub fn for_every_cut(mut self) -> Self {
+        self.world.every_cut = true;
+        self
     }
+}
 
-    /// Whether `name` is a folder now: given or made, or holding a file or folder, and not
-    /// removed since.
-    #[must_use]
-    pub fn is_folder(&self, name: &str) -> bool {
-        if self.made.contains(name) {
-            return true;
-        }
-        if self.removed.contains(name) {
-            return false;
-        }
-        let inside = format!("{name}/");
-        self.folders_before.contains(name)
-            || self
-                .folders_before
-                .iter()
-                .chain(&self.made)
-                .any(|folder| folder.starts_with(&inside))
-            || self
-                .files
-                .keys()
-                .chain(self.written.keys())
-                .any(|file| file.starts_with(&inside) && self.file(file).is_some())
-    }
-
-    /// The folders the run made that weren't there before it.
-    #[must_use]
-    pub fn folders_made(&self) -> Vec<&str> {
-        self.made
-            .iter()
-            .filter(|folder| !self.folders_before.contains(*folder))
-            .map(String::as_str)
-            .collect()
-    }
-
-    /// Whether some system would refuse `name` for a file call, as lengua's broker does in a
-    /// run (`crate::names`): the error number, when it would. A new name (`creates`) may not
-    /// differ only in case or normalization from another in its folder, and a name a call
-    /// renames or removes (`removes`) may not be open.
-    #[must_use]
-    pub fn refused(&self, name: &str, creates: bool, removes: bool) -> Option<i64> {
-        if let Some(broken) = crate::names::broken(name.as_bytes()) {
-            return Some(broken.errno);
-        }
-        if creates {
-            let (folder, last) = name
-                .rsplit_once('/')
-                .map_or(("", name), |(folder, last)| (folder, last));
-            let inside = if folder.is_empty() {
-                String::new()
-            } else {
-                format!("{folder}/")
-            };
-            let clash = self
-                .files
-                .keys()
-                .chain(self.written.keys())
-                .chain(self.folders_before.iter())
-                .chain(&self.made)
-                .filter_map(|other| other.strip_prefix(&inside))
-                .filter(|rest| !rest.contains('/'))
-                .any(|rest| {
-                    let full = format!("{inside}{rest}");
-                    (self.file(&full).is_some() || self.is_folder(&full))
-                        && crate::names::clashes(last, rest)
-                });
-            if clash {
-                return Some(crate::names::EEXIST);
-            }
-        }
-        if removes && self.open.values().any(|open| open.name == name) {
-            return Some(crate::names::EBUSY);
-        }
-        None
-    }
-
-    /// Whether the folder holding `name` is there: the working folder, or a folder in it.
-    fn parent_is_there(&self, name: &str) -> bool {
-        name.rsplit_once('/')
-            .is_none_or(|(parent, _)| self.is_folder(parent))
-    }
-
-    /// The files the working folder held before the run.
-    #[must_use]
-    pub fn files_before(&self) -> &BTreeMap<String, Vec<Term>> {
-        &self.files
-    }
-
+impl Native {
     /// Writes `value` little-endian at `address`, which must be known to be writable.
     fn store(&mut self, pool: &mut Pool, address: u64, value: Term) {
         if self.store_logged(pool, address, value) {
@@ -1226,8 +1084,6 @@ impl State {
         }
     }
 
-    /// The owner of the pointer in `register`, a 64-bit general register, where the run
-    /// followed it.
     /// The owner of what slot `slot` holds: the stack pointer's is the function's frame.
     fn owner_of_slot(&self, slot: usize, stack: usize) -> Option<Owner> {
         if slot == stack {
@@ -1237,6 +1093,8 @@ impl State {
         }
     }
 
+    /// The owner of the pointer in `register`, a 64-bit general register, where the run
+    /// followed it.
     fn owner(&self, register: Register) -> Option<Owner> {
         if register.size() != 8 {
             return None;
@@ -1290,20 +1148,22 @@ impl State {
     }
 }
 
-/// Why a step stopped the run, or the condition it split on.
-enum Step {
+/// Why a step stopped the run, or the condition it split on, for runs of the core `C`.
+pub enum Step<C = Native> {
     /// Go on with the state as changed.
     Next,
     /// Split: the state continues where `condition` holds, and `other` where it doesn't.
-    Split(Term, Box<State>),
+    Split(Term, Box<State<C>>),
     /// Several ways the run can go for the same inputs, as a read can be cut, each where its
     /// condition holds: the state lives on as all of them.
-    Choose(Vec<(Term, State)>),
+    Choose(Vec<(Term, State<C>)>),
 }
 
-type Stop = End;
+/// How a step stops a run: how the run ends.
+pub(super) type Stop = End;
 
-fn unsupported(text: impl Into<String>) -> Stop {
+/// A run that ends on something the prover doesn't model, for `text`.
+pub(super) fn unsupported(text: impl Into<String>) -> Stop {
     End::Unsupported(text.into())
 }
 
@@ -1322,47 +1182,47 @@ fn step(image: &Image, state: &mut State, pool: &mut Pool) -> Result<Step, Stop>
     let none = Instruction::default();
     let (instruction, word, next) = match image.isa {
         Isa::X86_64 => {
-            let Some(instruction) = image.instructions.get(&state.rip).copied() else {
+            let Some(instruction) = image.instructions.get(&state.core.rip).copied() else {
                 return Err(End::Signal("SIGSEGV"));
             };
             let next = instruction.next_ip();
             (instruction, None, next)
         }
         Isa::Aarch64 => {
-            let Some(word) = image.words.get(&state.rip).copied() else {
+            let Some(word) = image.words.get(&state.core.rip).copied() else {
                 return Err(End::Signal("SIGSEGV"));
             };
-            (none, Some(word), state.rip + 4)
+            (none, Some(word), state.core.rip + 4)
         }
     };
     let running = Running {
         instruction: &instruction,
         word,
-        at: state.rip,
+        at: state.core.rip,
         next,
     };
-    state.steps += 1;
-    if state.steps > MAX_STEPS {
+    state.world.steps += 1;
+    if state.world.steps > MAX_STEPS {
         return Err(unsupported(TOO_LONG));
     }
-    let before = state.registers;
+    let before = state.core.registers;
     // The read loop's head, in a proof by induction.
-    if let Some(hook) = state.hook.clone()
-        && state.every_cut
-        && hook.head == state.rip
+    if let Some(hook) = state.core.hook.clone()
+        && state.world.every_cut
+        && hook.head == state.core.rip
     {
         state.arrive(pool, &hook)?;
     }
     // fill read as a whole, where the proof takes every way its input can be cut; elsewhere,
     // as for a test's sample, its code runs as it is.
     if let Some(fill) = image.fill
-        && state.every_cut
-        && fill.at_head(state.rip)
+        && state.world.every_cut
+        && fill.at_head(state.core.rip)
     {
         // fill moves its cursor through the buffer it was lent.
-        let cursor = fill::FillAbi::of(image.isa).cursor;
+        let cursor = fill::FillAbi::of(image.isa).cursor.0;
         let plan = Plan {
-            registers: [Some((cursor, state.owners[cursor])), None, None],
+            registers: [Some((cursor, state.core.owners[cursor])), None, None],
             stores: [None, None],
         };
         let mut cpu = Cpu::new(image, state, pool, running);
@@ -1371,9 +1231,9 @@ fn step(image: &Image, state: &mut State, pool: &mut Pool) -> Result<Step, Stop>
             return Ok(step);
         }
     }
-    state.rip = next;
-    let stack = Convention::of(state.isa).stack;
-    let below = pool.constant(state.registers[stack]);
+    state.core.rip = next;
+    let stack = Convention::of(state.core.isa).stack;
+    let below = pool.constant(state.core.registers[stack]);
     let mut cpu = Cpu::new(image, state, pool, running);
     let plan = cpu.plan();
     let mut step = cpu.execute();
@@ -1382,17 +1242,19 @@ fn step(image: &Image, state: &mut State, pool: &mut Pool) -> Result<Step, Stop>
     }
     // Stack the instruction released, by pop, ret or add rsp, is gone: reading it again before
     // writing it reads nothing written.
-    if let (Some(below), Some(above)) = (below, pool.constant(state.registers[stack]))
+    if let (Some(below), Some(above)) = (below, pool.constant(state.core.registers[stack]))
         && let (Ok(below), Ok(above)) = (u64::try_from(below), u64::try_from(above))
         && let (below, above) = (below.max(STACK_TOP - STACK_SIZE), above.min(STACK_TOP))
         && below < above
     {
-        state.memory.forget(below, above);
+        state.core.memory.forget(below, above);
         // A whole value is at most 8 bytes.
         state
+            .core
             .stored
             .retain(|start, _| start.saturating_add(8) <= below || *start >= above);
         state
+            .core
             .pointers
             .retain(|start, _| start.saturating_add(8) <= below || *start >= above);
     }
@@ -1422,46 +1284,47 @@ impl State {
                 None => format!("?{}", terms.len()),
             }
         };
-        let end = match &self.end {
+        let (core, world) = (&self.core, &self.world);
+        let end = match &world.end {
             Some(End::Exit(status)) => format!("exit {}", value(*status)),
             Some(other) => format!("{other:?}"),
             None => "running".to_owned(),
         };
-        let used = match self.isa {
+        let used = match core.isa {
             Isa::X86_64 => 16,
             Isa::Aarch64 => SLOTS,
         };
-        let registers: Vec<String> = self.registers[..used]
+        let registers: Vec<String> = core.registers[..used]
             .iter()
             .map(|term| value(*term))
             .collect();
-        let flags: Vec<String> = [self.carry, self.zero, self.sign, self.overflow, self.parity]
+        let flags: Vec<String> = [core.carry, core.zero, core.sign, core.overflow, core.parity]
             .iter()
             .map(|term| value(*term))
             .collect();
-        let written: Vec<String> = self
+        let written: Vec<String> = world
             .written
             .iter()
             .map(|(name, contents)| format!("{name}={}", bytes(contents)))
             .collect();
         format!(
             "{end}; {} steps; rip {:x}; registers {}; flags {}; out {}; err {}; written [{}]",
-            self.steps,
-            self.rip,
+            world.steps,
+            core.rip,
             registers.join(","),
             flags.join(","),
-            bytes(&self.stdout),
-            bytes(&self.stderr),
+            bytes(&world.stdout),
+            bytes(&world.stderr),
             written.join(",")
         )
     }
 }
 
-impl State {
+impl Native {
     /// A system call's return: `result` where the program reads it, and the registers the kernel
     /// changes, for the run to go on at `next`. On x86-64 that's rax, and rcx and r11, which
     /// hold where it goes on and the flags; on AArch64, only x0 and the SVE state
-    /// ([`State::clear_sve`]).
+    /// ([`Native::clear_sve`]).
     pub(super) fn returns(&mut self, pool: &mut Pool, result: u64, next: u64) {
         self.registers[0] = pool.bv(64, u128::from(result));
         if self.isa == Isa::X86_64 {
@@ -1494,10 +1357,14 @@ impl State {
     }
 }
 
-/// One instruction being executed on a state.
+/// One instruction being executed on a state: on its core, and, for a call of the system, on
+/// its world.
 struct Cpu<'a> {
     image: &'a Image,
-    state: &'a mut State,
+    /// The run's machine.
+    core: &'a mut Native,
+    /// The world the run is in.
+    world: &'a mut World,
     pool: &'a mut Pool,
     /// The x86-64 instruction running, on x86-64.
     instruction: &'a Instruction,
@@ -1533,6 +1400,26 @@ pub(crate) fn carry_less(pool: &mut Pool, a: Term, b: Term, width: u32) -> Term 
     product
 }
 
+/// The world's models act on the run through the instruction that calls them: its memory is
+/// held to the memory rules as the instruction's own accesses are.
+impl Host for Cpu<'_> {
+    fn world(&mut self) -> &mut World {
+        &mut *self.world
+    }
+
+    fn pool(&mut self) -> &mut Pool {
+        &mut *self.pool
+    }
+
+    fn save(&mut self, address: u64, value: Term) -> Result<(), Stop> {
+        Cpu::save(self, address, value)
+    }
+
+    fn load(&mut self, address: u64, bytes: u32) -> Result<Term, Stop> {
+        Cpu::load(self, address, bytes)
+    }
+}
+
 impl<'a> Cpu<'a> {
     fn new(
         image: &'a Image,
@@ -1540,15 +1427,31 @@ impl<'a> Cpu<'a> {
         pool: &'a mut Pool,
         running: Running<'a>,
     ) -> Self {
+        let State { core, world } = state;
         Self {
             image,
-            state,
+            core,
+            world,
             pool,
             instruction: running.instruction,
             word: running.word,
             at: running.at,
             next: running.next,
         }
+    }
+
+    /// The run as it stands, core and world, for a side of a fork.
+    fn fork(&self) -> State {
+        State {
+            core: self.core.clone(),
+            world: self.world.clone(),
+        }
+    }
+
+    /// Swaps the run, core and world, with `other`.
+    fn swap(&mut self, other: &mut State) {
+        std::mem::swap(self.core, &mut other.core);
+        std::mem::swap(self.world, &mut other.world);
     }
 
     fn constant(&self, term: Term) -> Result<u64, Stop> {
@@ -1567,14 +1470,14 @@ impl<'a> Cpu<'a> {
         let mut address = instruction.memory_displacement64();
         if instruction.memory_base() != Register::None {
             let base = self
-                .state
+                .core
                 .register(self.pool, instruction.memory_base())
                 .ok_or_else(|| unsupported("an unusual base register"))?;
             address = address.wrapping_add(self.constant(base)?);
         }
         if instruction.memory_index() != Register::None {
             let index = self
-                .state
+                .core
                 .register(self.pool, instruction.memory_index())
                 .ok_or_else(|| unsupported("an unusual index register"))?;
             let scale = u64::from(instruction.memory_index_scale());
@@ -1585,11 +1488,11 @@ impl<'a> Cpu<'a> {
 
     fn load(&mut self, address: u64, bytes: u32) -> Result<Term, Stop> {
         // Memory an address the input chooses reached is its log's.
-        if let Some(index) = self.state.log_span(address, bytes)? {
+        if let Some(index) = self.core.log_span(address, bytes)? {
             let address = self.pool.bv(64, u128::from(address));
             return Ok(self.logged_value(index, address, bytes));
         }
-        if let Some(whole) = self.state.stored.get(&address).copied()
+        if let Some(whole) = self.core.stored.get(&address).copied()
             && self.pool.width(whole) == bytes * 8
             && self.image.region(address).is_some()
             && self.image.region(address + u64::from(bytes) - 1).is_some()
@@ -1602,7 +1505,7 @@ impl<'a> Cpu<'a> {
             if self.image.region(at).is_none() {
                 return Err(End::Signal("SIGSEGV"));
             }
-            let byte = match self.state.memory.get(at) {
+            let byte = match self.core.memory.get(at) {
                 Some(byte) => byte,
                 None if unwritten_stack(at) => {
                     return Err(End::Unsafe(format!(
@@ -1623,18 +1526,18 @@ impl<'a> Cpu<'a> {
 
     /// The byte at `at` as it stands, to merge with: never-written stack is whatever was there.
     fn peek(&mut self, at: u64) -> Term {
-        if let Some(index) = self.state.log_at(at) {
+        if let Some(index) = self.core.log_at(at) {
             let address = self.pool.bv(64, u128::from(at));
-            return self.state.logged(self.pool, index, address);
+            return self.core.logged(self.pool, index, address);
         }
-        if let Some(byte) = self.state.memory.get(at) {
+        if let Some(byte) = self.core.memory.get(at) {
             return byte;
         }
         match self.image.initial.get(&at) {
             Some(byte) => self.pool.bv(8, u128::from(*byte)),
             None if unwritten_stack(at) => {
                 let unknown = self.pool.var(8, &format!("stack{at:x}"));
-                self.state.memory.insert(at, unknown);
+                self.core.memory.insert(at, unknown);
                 unknown
             }
             // Zero-filled data (.bss) and the arguments' padding, as the kernel leaves them.
@@ -1656,14 +1559,14 @@ impl<'a> Cpu<'a> {
     fn frames(&self) -> Vec<Frame> {
         let Some(mut low) = self
             .pool
-            .constant(self.state.registers[Convention::of(self.image.isa).stack])
+            .constant(self.core.registers[Convention::of(self.image.isa).stack])
             .and_then(|rsp| u64::try_from(rsp).ok())
         else {
             return Vec::new();
         };
         let mut frames = Vec::new();
         let mut running = self.at;
-        for back in self.state.returns.iter().rev() {
+        for back in self.core.returns.iter().rev() {
             frames.push(Frame {
                 low,
                 top: back.top,
@@ -1673,8 +1576,8 @@ impl<'a> Cpu<'a> {
             low = back.top + back.pushed;
             running = back.back;
         }
-        let top = self.state.stack_top.unwrap_or_else(|| {
-            self.state
+        let top = self.core.stack_top.unwrap_or_else(|| {
+            self.core
                 .arguments
                 .first()
                 .map_or(STACK_TOP, |(_, end, _)| *end)
@@ -1683,7 +1586,7 @@ impl<'a> Cpu<'a> {
             low,
             top,
             running,
-            number: self.state.base_frame,
+            number: self.core.base_frame,
         });
         frames
     }
@@ -1711,7 +1614,7 @@ impl<'a> Cpu<'a> {
         };
         match owner {
             Owner::Symbol(place) => self.image.symbols.get(place).map(object),
-            Owner::Argument(place) => self.state.arguments.get(place).map(object),
+            Owner::Argument(place) => self.core.arguments.get(place).map(object),
             Owner::Frame(number) => self
                 .frames()
                 .into_iter()
@@ -1738,7 +1641,7 @@ impl<'a> Cpu<'a> {
             for (index, frame) in self.frames().into_iter().enumerate() {
                 objects.push(self.frame_object(frame, index == 0));
             }
-            for (start, end, name) in self.state.arguments.iter() {
+            for (start, end, name) in self.core.arguments.iter() {
                 objects.push(Object {
                     start: *start,
                     end: *end,
@@ -1772,7 +1675,7 @@ impl<'a> Cpu<'a> {
     /// Where `address` is, for a report: in a data symbol, a frame, a return address, or the
     /// program's arguments.
     fn describe(&self, address: u64) -> String {
-        if let Some(back) = self.state.returns.iter().find(|back| {
+        if let Some(back) = self.core.returns.iter().find(|back| {
             back.saved
                 .is_some_and(|saved| (saved..saved + 8).contains(&address))
         }) {
@@ -1889,9 +1792,9 @@ impl<'a> Cpu<'a> {
                 .image
                 .symbol_owner(instruction.ip(), instruction.ip_rel_memory_address());
         }
-        let base = self.state.owner(instruction.memory_base());
+        let base = self.core.owner(instruction.memory_base());
         let index = if instruction.memory_index_scale() == 1 {
-            self.state.owner(instruction.memory_index())
+            self.core.owner(instruction.memory_index())
         } else {
             None
         };
@@ -1913,14 +1816,14 @@ impl<'a> Cpu<'a> {
                 .then(|| instruction.op_register(operand))
         };
         let (first, second) = (register(0), register(1));
-        let owner = |cpu: &Self, register: Option<Register>| cpu.state.owner(register?);
+        let owner = |cpu: &Self, register: Option<Register>| cpu.core.owner(register?);
         let (mine, theirs) = (owner(self, first), owner(self, second));
         // The pointer a store keeps whole, at its address, while its bytes stay as they are.
         let store = |cpu: &Self, plan: &mut Plan, address: Option<u64>, from: Option<Register>| {
             if let (Some(address), Some(from)) = (address, from)
-                && let (Some(owner), Some(index)) = (cpu.state.owner(from), slot(from))
+                && let (Some(owner), Some(index)) = (cpu.core.owner(from), slot(from))
             {
-                plan.stores[0] = Some((address, cpu.state.registers[index], owner));
+                plan.stores[0] = Some((address, cpu.core.registers[index], owner));
             }
         };
         let rsp = self.value_of(Register::RSP);
@@ -1939,13 +1842,13 @@ impl<'a> Cpu<'a> {
                 let address = self.address().ok();
                 plan.set(
                     to,
-                    address.and_then(|address| self.state.pointers.get(&address).copied()),
+                    address.and_then(|address| self.core.pointers.get(&address).copied()),
                 );
             }
             Mnemonic::Push => store(self, &mut plan, rsp.map(|rsp| rsp.wrapping_sub(8)), first),
             Mnemonic::Pop => plan.set(
                 to,
-                rsp.and_then(|rsp| self.state.pointers.get(&rsp).copied()),
+                rsp.and_then(|rsp| self.core.pointers.get(&rsp).copied()),
             ),
             // A pointer plus or minus a number points into the same object; the distance
             // between two pointers is a number.
@@ -1994,7 +1897,7 @@ impl<'a> Cpu<'a> {
         if register == Register::None {
             return None;
         }
-        let term = self.state.register(self.pool, register)?;
+        let term = self.core.register(self.pool, register)?;
         self.pool
             .constant(term)
             .and_then(|value| u64::try_from(value).ok())
@@ -2031,7 +1934,7 @@ impl<'a> Cpu<'a> {
         };
         let convention = Convention::of(self.image.isa);
         let held = self
-            .state
+            .core
             .owner_of_slot(convention.arguments[argument], convention.stack)
             .map_or(Held::Pointer(buffer), Held::Owner);
         self.reach(held, buffer, count, writing, &what)
@@ -2047,11 +1950,11 @@ impl<'a> Cpu<'a> {
         }
         let end = address.wrapping_add(u64::from(bytes));
         if let Some(back) = self
-            .state
+            .core
             .returns
             .iter()
             .chain(
-                self.state
+                self.core
                     .suspended
                     .iter()
                     .flat_map(|thread| &thread.returns),
@@ -2067,7 +1970,7 @@ impl<'a> Cpu<'a> {
                 self.image.function_at(back.callee)
             )));
         }
-        self.state.store(self.pool, address, value);
+        self.core.store(self.pool, address, value);
         Ok(())
     }
 
@@ -2111,7 +2014,7 @@ impl<'a> Cpu<'a> {
                 chosen = self.pool.bool_or(chosen, here);
             }
             let problem = format!("for some input, {problem}");
-            self.state.obligations.push((chosen, problem));
+            self.world.obligations.push((chosen, problem));
         }
         Ok(places)
     }
@@ -2184,7 +2087,7 @@ impl<'a> Cpu<'a> {
             object.name,
             object.end - object.start
         );
-        self.state.obligations.push((outside, problem));
+        self.world.obligations.push((outside, problem));
         Some(places)
     }
 
@@ -2228,7 +2131,7 @@ impl<'a> Cpu<'a> {
                 let old = self.peek(at);
                 let new = self.pool.extract(value, offset * 8 + 7, offset * 8);
                 let byte = self.pool.ite(chosen, new, old);
-                self.state.store(self.pool, at, byte);
+                self.core.store(self.pool, at, byte);
             }
         }
         Ok(())
@@ -2254,7 +2157,7 @@ impl<'a> Cpu<'a> {
         let instruction = self.instruction;
         match instruction.op_kind(index) {
             OpKind::Register => self
-                .state
+                .core
                 .register(self.pool, instruction.op_register(index))
                 .ok_or_else(|| {
                     unsupported(format!("register {:?}", instruction.op_register(index)))
@@ -2290,7 +2193,7 @@ impl<'a> Cpu<'a> {
         let instruction = self.instruction;
         match instruction.op_kind(index) {
             OpKind::Register => self
-                .state
+                .core
                 .set_register(self.pool, instruction.op_register(index), value)
                 .ok_or_else(|| unsupported("writing an unusual register")),
             OpKind::Memory => match self.address() {
@@ -2323,11 +2226,11 @@ impl<'a> Cpu<'a> {
 
     /// Sets ZF, SF and PF from a result.
     fn result_flags(&mut self, result: Term) {
-        self.state.last = Last::Other;
+        self.core.last = Last::Other;
         let width = self.pool.width(result);
         let zero = self.pool.bv(width, 0);
-        self.state.zero = self.pool.eq(result, zero);
-        self.state.sign = self.bit(result, width - 1);
+        self.core.zero = self.pool.eq(result, zero);
+        self.core.sign = self.bit(result, width - 1);
         let low = self.pool.extract(result, 7, 0);
         let mut folded = low;
         for shift in [4_u128, 2, 1] {
@@ -2336,14 +2239,14 @@ impl<'a> Cpu<'a> {
             folded = self.pool.xor(folded, shifted);
         }
         let odd = self.bit(folded, 0);
-        self.state.parity = self.pool.bool_not(odd);
+        self.core.parity = self.pool.bool_not(odd);
     }
 
     fn condition(&mut self, code: ConditionCode) -> Result<Term, Stop> {
         // After a comparison or a logic operation, a branch is a plain comparison of values,
         // which value ranges can often settle without the solver.
         let pool = &mut *self.pool;
-        match self.state.last {
+        match self.core.last {
             Last::Compare(a, b) => {
                 let found = match code {
                     ConditionCode::e => Some(pool.eq(a, b)),
@@ -2393,7 +2296,7 @@ impl<'a> Cpu<'a> {
             }
             Last::Other => {}
         }
-        let state = &*self.state;
+        let state = &*self.core;
         let (carry, zero, sign, overflow, parity) = (
             state.carry,
             state.zero,
@@ -2434,21 +2337,21 @@ impl<'a> Cpu<'a> {
     }
 
     fn push(&mut self, value: Term) -> Result<(), Stop> {
-        let rsp = self.state.registers[4];
+        let rsp = self.core.registers[4];
         let eight = self.pool.bv(64, 8);
         let lower = self.pool.sub(rsp, eight);
         let address = self.constant(lower)?;
         self.save(address, value)?;
-        self.state.registers[4] = lower;
+        self.core.registers[4] = lower;
         Ok(())
     }
 
     fn pop(&mut self) -> Result<Term, Stop> {
-        let rsp = self.state.registers[4];
+        let rsp = self.core.registers[4];
         let address = self.constant(rsp)?;
         let value = self.load(address, 8)?;
         let eight = self.pool.bv(64, 8);
-        self.state.registers[4] = self.pool.add(rsp, eight);
+        self.core.registers[4] = self.pool.add(rsp, eight);
         Ok(value)
     }
 
@@ -2533,7 +2436,7 @@ impl<'a> Cpu<'a> {
                 } else {
                     self.pool.bv(width, 1_u128 << (width - 1))
                 };
-                self.state.overflow = self.pool.eq(a, edge);
+                self.core.overflow = self.pool.eq(a, edge);
                 self.result_flags(result);
                 self.write(0, result)?;
                 Ok(Step::Next)
@@ -2544,9 +2447,9 @@ impl<'a> Cpu<'a> {
                 let result = self.pool.neg(a);
                 let zero = self.pool.bv(width, 0);
                 let is_zero = self.pool.eq(a, zero);
-                self.state.carry = self.pool.bool_not(is_zero);
+                self.core.carry = self.pool.bool_not(is_zero);
                 let minimum = self.pool.bv(width, 1_u128 << (width - 1));
-                self.state.overflow = self.pool.eq(a, minimum);
+                self.core.overflow = self.pool.eq(a, minimum);
                 self.result_flags(result);
                 self.write(0, result)?;
                 Ok(Step::Next)
@@ -2560,10 +2463,10 @@ impl<'a> Cpu<'a> {
                     _ => self.pool.and(a, b),
                 };
                 let no = self.pool.boolean(false);
-                self.state.carry = no;
-                self.state.overflow = no;
+                self.core.carry = no;
+                self.core.overflow = no;
                 self.result_flags(result);
-                self.state.last = Last::Logic(result);
+                self.core.last = Last::Logic(result);
                 if mnemonic != Mnemonic::Test {
                     self.write(0, result)?;
                 }
@@ -2589,12 +2492,12 @@ impl<'a> Cpu<'a> {
                     _ => (Register::EAX, Register::RAX),
                 };
                 let value = self
-                    .state
+                    .core
                     .register(self.pool, from)
                     .ok_or_else(|| unsupported("cbw"))?;
                 let width = self.pool.width(value);
                 let wide = self.pool.sign_extend(value, width);
-                self.state.set_register(self.pool, register, wide);
+                self.core.set_register(self.pool, register, wide);
                 Ok(Step::Next)
             }
             Mnemonic::Cwd | Mnemonic::Cdq | Mnemonic::Cqo => {
@@ -2604,13 +2507,13 @@ impl<'a> Cpu<'a> {
                     _ => (Register::RAX, Register::RDX),
                 };
                 let value = self
-                    .state
+                    .core
                     .register(self.pool, from)
                     .ok_or_else(|| unsupported("cqo"))?;
                 let width = self.pool.width(value);
                 let amount = self.pool.bv(width, u128::from(width - 1));
                 let fill = self.pool.ashr(value, amount);
-                self.state.set_register(self.pool, to, fill);
+                self.core.set_register(self.pool, to, fill);
                 Ok(Step::Next)
             }
             Mnemonic::Cmovo
@@ -2662,7 +2565,7 @@ impl<'a> Cpu<'a> {
             }
             Mnemonic::Jmp if instruction.op_kind(0) == OpKind::Register => self.table_jump(),
             Mnemonic::Jmp => {
-                self.state.rip = instruction.near_branch_target();
+                self.core.rip = instruction.near_branch_target();
                 Ok(Step::Next)
             }
             Mnemonic::Jo
@@ -2685,13 +2588,13 @@ impl<'a> Cpu<'a> {
                 let target = instruction.near_branch_target();
                 match self.pool.truth(condition) {
                     Some(true) => {
-                        self.state.rip = target;
+                        self.core.rip = target;
                         Ok(Step::Next)
                     }
                     Some(false) => Ok(Step::Next),
                     None => {
-                        let other = self.state.clone();
-                        self.state.rip = target;
+                        let other = self.fork();
+                        self.core.rip = target;
                         Ok(Step::Split(condition, Box::new(other)))
                     }
                 }
@@ -2704,25 +2607,25 @@ impl<'a> Cpu<'a> {
                 }
                 let back = self.pool.bv(64, u128::from(instruction.next_ip()));
                 self.push(back)?;
-                let slot = self.constant(self.state.registers[4])?;
+                let slot = self.constant(self.core.registers[4])?;
                 self.image.enter(instruction.near_branch_target());
-                self.state.calls += 1;
-                self.state.returns.push(Return {
+                self.core.calls += 1;
+                self.core.returns.push(Return {
                     top: slot,
                     pushed: 8,
                     saved: Some(slot),
                     back: instruction.next_ip(),
                     callee: instruction.near_branch_target(),
-                    frame: self.state.calls,
+                    frame: self.core.calls,
                 });
-                self.state.rip = instruction.near_branch_target();
+                self.core.rip = instruction.near_branch_target();
                 Ok(Step::Next)
             }
             Mnemonic::Ret => {
-                let slot = self.constant(self.state.registers[4])?;
+                let slot = self.constant(self.core.registers[4])?;
                 let target = self.pop()?;
                 let target = self.constant(target)?;
-                match self.state.returns.pop() {
+                match self.core.returns.pop() {
                     Some(back) if back.saved == Some(slot) && back.back == target => {}
                     _ => {
                         return Err(End::Unsafe(format!(
@@ -2731,7 +2634,7 @@ impl<'a> Cpu<'a> {
                         )));
                     }
                 }
-                self.state.rip = target;
+                self.core.rip = target;
                 Ok(Step::Next)
             }
             Mnemonic::Syscall => self.syscall(),
@@ -2785,7 +2688,7 @@ impl<'a> Cpu<'a> {
             if !cases.contains(&known) {
                 return Err(stray());
             }
-            self.state.rip = known;
+            self.core.rip = known;
             return Ok(Step::Next);
         }
         let mut choices = Vec::new();
@@ -2795,13 +2698,13 @@ impl<'a> Cpu<'a> {
             let here = self.pool.eq(target, at);
             let not_here = self.pool.bool_not(here);
             elsewhere = self.pool.bool_and(elsewhere, not_here);
-            let mut choice = self.state.clone();
-            choice.rip = *case;
+            let mut choice = self.fork();
+            choice.core.rip = *case;
             choices.push((here, choice));
         }
         // Where no case is the target, the proof stops there: it follows only the cases.
-        let mut astray = self.state.clone();
-        astray.end = Some(stray());
+        let mut astray = self.fork();
+        astray.world.end = Some(stray());
         choices.push((elsewhere, astray));
         Ok(Step::Choose(choices))
     }
@@ -2819,7 +2722,7 @@ impl<'a> Cpu<'a> {
             .bv(64, u128::from(instruction.memory_displacement64()));
         if instruction.memory_base() != Register::None {
             let base = self
-                .state
+                .core
                 .register(self.pool, instruction.memory_base())
                 .ok_or_else(|| unsupported("lea with an unusual base"))?;
             let base = self.widen(base);
@@ -2827,7 +2730,7 @@ impl<'a> Cpu<'a> {
         }
         if instruction.memory_index() != Register::None {
             let index = self
-                .state
+                .core
                 .register(self.pool, instruction.memory_index())
                 .ok_or_else(|| unsupported("lea with an unusual index"))?;
             let index = self.widen(index);
@@ -2852,7 +2755,7 @@ impl<'a> Cpu<'a> {
         let with_carry = matches!(mnemonic, Mnemonic::Adc | Mnemonic::Sbb);
         let carry_in = if with_carry {
             let (one, zero) = (self.pool.bv(width + 1, 1), self.pool.bv(width + 1, 0));
-            self.pool.ite(self.state.carry, one, zero)
+            self.pool.ite(self.core.carry, one, zero)
         } else {
             self.pool.bv(width + 1, 0)
         };
@@ -2866,7 +2769,7 @@ impl<'a> Cpu<'a> {
             self.pool.sub(difference, carry_in)
         };
         let result = self.pool.extract(wide, width - 1, 0);
-        self.state.carry = self.bit(wide, width);
+        self.core.carry = self.bit(wide, width);
         let (sign_a, sign_b, sign_result) = (
             self.bit(a, width - 1),
             self.bit(b, width - 1),
@@ -2897,7 +2800,7 @@ impl<'a> Cpu<'a> {
                     .checked_sub(b_low)
                     .is_some_and(|high| high <= maximum)
         };
-        self.state.overflow = if width <= 64 && fits {
+        self.core.overflow = if width <= 64 && fits {
             self.pool.boolean(false)
         } else if adding {
             self.pool.bool_and(operands_agree, result_flipped)
@@ -2907,12 +2810,12 @@ impl<'a> Cpu<'a> {
         if mnemonic == Mnemonic::Add {
             // Carry out of a plain addition is a result below what was added to; with a carry
             // in, the result can equal it, so adc keeps the bit computed above.
-            self.state.carry = self.pool.ult(result, a);
+            self.core.carry = self.pool.ult(result, a);
         } else if !with_carry {
-            self.state.carry = self.pool.ult(a, b);
+            self.core.carry = self.pool.ult(a, b);
         }
         self.result_flags(result);
-        self.state.last = if matches!(mnemonic, Mnemonic::Sub | Mnemonic::Cmp) {
+        self.core.last = if matches!(mnemonic, Mnemonic::Sub | Mnemonic::Cmp) {
             Last::Compare(a, b)
         } else {
             Last::Other
@@ -2950,13 +2853,13 @@ impl<'a> Cpu<'a> {
                     (self.pool.lshr(a, rotate), self.pool.shl(a, back))
                 };
                 let result = self.pool.or(left, right);
-                self.state.carry = if mnemonic == Mnemonic::Rol {
+                self.core.carry = if mnemonic == Mnemonic::Rol {
                     self.bit(result, 0)
                 } else {
                     self.bit(result, width - 1)
                 };
-                self.state.overflow = self.unknown();
-                self.state.last = Last::Other;
+                self.core.overflow = self.unknown();
+                self.core.last = Last::Other;
                 self.write(0, result)?;
                 return Ok(Step::Next);
             }
@@ -2966,15 +2869,15 @@ impl<'a> Cpu<'a> {
                 Mnemonic::Shl => width - count,
                 _ => count - 1,
             };
-            self.state.carry = self.bit(a, out);
+            self.core.carry = self.bit(a, out);
         } else {
-            self.state.carry = self.unknown();
+            self.core.carry = self.unknown();
         }
-        self.state.overflow = if count == 1 {
+        self.core.overflow = if count == 1 {
             match mnemonic {
                 Mnemonic::Shl => {
                     let top = self.bit(result, width - 1);
-                    let same = self.pool.eq(top, self.state.carry);
+                    let same = self.pool.eq(top, self.core.carry);
                     self.pool.bool_not(same)
                 }
                 Mnemonic::Shr => self.bit(a, width - 1),
@@ -3007,12 +2910,12 @@ impl<'a> Cpu<'a> {
         let refit = self.pool.sign_extend(result, width);
         let fits = self.pool.eq(refit, product);
         let overflow = self.pool.bool_not(fits);
-        self.state.last = Last::Other;
-        self.state.carry = overflow;
-        self.state.overflow = overflow;
-        self.state.zero = self.unknown();
-        self.state.sign = self.unknown();
-        self.state.parity = self.unknown();
+        self.core.last = Last::Other;
+        self.core.carry = overflow;
+        self.core.overflow = overflow;
+        self.core.zero = self.unknown();
+        self.core.sign = self.unknown();
+        self.core.parity = self.unknown();
         self.write(0, result)?;
         Ok(Step::Next)
     }
@@ -3032,7 +2935,7 @@ impl<'a> Cpu<'a> {
         let source = self.read(0, width)?;
         let (low_register, high_register) = self.halves(width);
         let a = self
-            .state
+            .core
             .register(self.pool, low_register)
             .ok_or_else(|| unsupported("mul"))?;
         let (wide_a, wide_b) = if signed {
@@ -3057,17 +2960,17 @@ impl<'a> Cpu<'a> {
             self.pool.eq(high, zero)
         };
         let overflow = self.pool.bool_not(fits);
-        self.state.last = Last::Other;
-        self.state.carry = overflow;
-        self.state.overflow = overflow;
-        self.state.zero = self.unknown();
-        self.state.sign = self.unknown();
-        self.state.parity = self.unknown();
+        self.core.last = Last::Other;
+        self.core.carry = overflow;
+        self.core.overflow = overflow;
+        self.core.zero = self.unknown();
+        self.core.sign = self.unknown();
+        self.core.parity = self.unknown();
         if width == 8 {
-            self.state.set_register(self.pool, Register::AX, product);
+            self.core.set_register(self.pool, Register::AX, product);
         } else {
-            self.state.set_register(self.pool, low_register, low);
-            self.state.set_register(self.pool, high_register, high);
+            self.core.set_register(self.pool, low_register, low);
+            self.core.set_register(self.pool, high_register, high);
         }
         Ok(Step::Next)
     }
@@ -3078,16 +2981,16 @@ impl<'a> Cpu<'a> {
         let divisor = self.read(0, width)?;
         let (low_register, high_register) = self.halves(width);
         let dividend = if width == 8 {
-            self.state
+            self.core
                 .register(self.pool, Register::AX)
                 .ok_or_else(|| unsupported("div"))?
         } else {
             let low = self
-                .state
+                .core
                 .register(self.pool, low_register)
                 .ok_or_else(|| unsupported("div"))?;
             let high = self
-                .state
+                .core
                 .register(self.pool, high_register)
                 .ok_or_else(|| unsupported("div"))?;
             self.pool.concat(high, low)
@@ -3122,26 +3025,26 @@ impl<'a> Cpu<'a> {
         };
         let fault = self.pool.bool_or(by_zero, too_big);
         let low_remainder = self.pool.extract(remainder, width - 1, 0);
-        self.state.last = Last::Other;
+        self.core.last = Last::Other;
         for flag in 0..5 {
             let unknown = self.unknown();
             match flag {
-                0 => self.state.carry = unknown,
-                1 => self.state.zero = unknown,
-                2 => self.state.sign = unknown,
-                3 => self.state.overflow = unknown,
-                _ => self.state.parity = unknown,
+                0 => self.core.carry = unknown,
+                1 => self.core.zero = unknown,
+                2 => self.core.sign = unknown,
+                3 => self.core.overflow = unknown,
+                _ => self.core.parity = unknown,
             }
         }
-        let mut faulted = self.state.clone();
-        faulted.end = Some(End::Signal("SIGFPE"));
+        let mut faulted = self.fork();
+        faulted.world.end = Some(End::Signal("SIGFPE"));
         if width == 8 {
             let both = self.pool.concat(low_remainder, low_quotient);
-            self.state.set_register(self.pool, Register::AX, both);
+            self.core.set_register(self.pool, Register::AX, both);
         } else {
-            self.state
+            self.core
                 .set_register(self.pool, low_register, low_quotient);
-            self.state
+            self.core
                 .set_register(self.pool, high_register, low_remainder);
         }
         match self.pool.truth(fault) {
@@ -3159,8 +3062,8 @@ impl<'a> Cpu<'a> {
     fn open_chosen(&mut self) -> Result<Step, Stop> {
         let arguments = Convention::of(self.image.isa).arguments;
         let (folder, flags) = (
-            self.state.registers[arguments[0]],
-            self.state.registers[arguments[2]],
+            self.core.registers[arguments[0]],
+            self.core.registers[arguments[2]],
         );
         self.open_with(folder, 1, flags)
     }
@@ -3175,11 +3078,11 @@ impl<'a> Cpu<'a> {
         }
         let bytes = match self.name_or_choice(folder, path, "openat")? {
             Name::Known(name) => {
-                let result = match self.state.refused(&name, flags & O_CREAT != 0, false) {
+                let result = match self.world.refused(&name, flags & O_CREAT != 0, false) {
                     Some(errno) => (-errno).cast_unsigned(),
                     None => self.open_name(name, flags)?,
                 };
-                self.state.returns(self.pool, result, self.next);
+                self.core.returns(self.pool, result, self.next);
                 return Ok(Step::Next);
             }
             Name::Chosen(bytes) => bytes,
@@ -3197,33 +3100,7 @@ impl<'a> Cpu<'a> {
             O_WRONLY if flags & !O_ACCMODE & !harmless & !O_TRUNC == O_CREAT => true,
             _ => return Err(unsupported(format!("opening a file with flags {flags:#o}"))),
         };
-        if self.state.is_folder(&name) {
-            return Ok((-EISDIR).cast_unsigned());
-        }
-        if writing {
-            if !self.state.parent_is_there(&name) {
-                return Ok((-ENOENT).cast_unsigned());
-            }
-            let exists = self.state.file(&name).is_some();
-            if exists && flags & O_TRUNC == 0 {
-                return Err(unsupported("writing into a file without emptying it first"));
-            }
-            self.state.written.insert(name.clone(), Vec::new());
-        } else if self.state.written.contains_key(&name) {
-            return Err(unsupported("reading a file the program wrote"));
-        } else if self.state.file(&name).is_none() {
-            return Ok((-ENOENT).cast_unsigned());
-        }
-        let fd = self.free_descriptor();
-        self.state.open.insert(
-            fd,
-            Open {
-                name,
-                position: 0,
-                writing,
-            },
-        );
-        Ok(fd)
+        self.world.open(name, writing, flags & O_TRUNC != 0)
     }
 
     /// The name a call is given in the working folder: a NUL-terminated path relative to it,
@@ -3246,7 +3123,7 @@ impl<'a> Cpu<'a> {
                 "{call} other than in the working folder"
             )));
         }
-        let path = self.state.registers[Convention::of(self.image.isa).arguments[argument]];
+        let path = self.core.registers[Convention::of(self.image.isa).arguments[argument]];
         let start = self.constant(path)?;
         let mut address = start;
         let mut bytes = Vec::new();
@@ -3299,114 +3176,43 @@ impl<'a> Cpu<'a> {
     /// A read of standard input that may return any count from 1 to `most`: a run for each,
     /// each noting where it stopped short.
     fn read_every_count(&mut self, buffer: u64, most: u64) -> Result<Step, Stop> {
-        let original = self.state.clone();
+        let original = self.fork();
         let next = self.next;
         let yes = self.pool.boolean(true);
         let mut choices = Vec::new();
         for taken in 1..=most {
             let mut outcome = original.clone();
-            std::mem::swap(self.state, &mut outcome);
-            let mut saved = Ok(());
-            for offset in 0..taken {
-                let byte = self.state.stdin[self.state.stdin_read + offset as usize];
-                saved = saved.and_then(|()| self.save(buffer + offset, byte));
+            self.swap(&mut outcome);
+            match World::take_stdin(self, buffer, taken) {
+                Ok(()) => self.core.returns(self.pool, taken, next),
+                Err(stop) => self.world.end = Some(stop),
             }
-            match saved {
-                Ok(()) => {
-                    self.state.stdin_read += taken as usize;
-                    if self.state.stdin_read < self.state.stdin.len() && self.state.stdin_read <= 16
-                    {
-                        self.state.raw_cuts |= 1 << (self.state.stdin_read - 1);
-                    }
-                    self.state.returns(self.pool, taken, next);
-                }
-                Err(stop) => self.state.end = Some(stop),
-            }
-            std::mem::swap(self.state, &mut outcome);
+            self.swap(&mut outcome);
             choices.push((yes, outcome));
         }
         Ok(Step::Choose(choices))
     }
 
-    /// `openat` with `flags` on a name the input chooses: a run for each file or folder of the
-    /// test's the name can be, with its bytes those on the run's path, and one where it's none
-    /// of them, each as the system call leaves it. Where it's none of them, the name must be
-    /// one the working folder could hold, never `/`, `.` or `..` in it, or the kernel's answer
-    /// isn't the model's.
+    /// `openat` with `flags` on a name the input chooses: a run for each way the world says the
+    /// name can be ([`World::chosen`]), each as the system call leaves it.
     fn open_choosing(&mut self, bytes: &[Term], flags: u64) -> Result<Step, Stop> {
-        let mut names: Vec<String> = self
-            .state
-            .files
-            .keys()
-            .chain(self.state.written.keys())
-            .chain(self.state.folders_before.iter())
-            .chain(&self.state.made)
-            .filter(|name| name.len() == bytes.len())
-            .cloned()
-            .collect();
-        names.sort_unstable();
-        names.dedup();
-        let mut outcomes = Vec::new();
-        let mut none = self.pool.boolean(true);
-        for name in names {
-            let mut same = self.pool.boolean(true);
-            for (byte, wanted) in bytes.iter().zip(name.bytes()) {
-                let wanted = self.pool.bv(8, u128::from(wanted));
-                let equal = self.pool.eq(*byte, wanted);
-                same = self.pool.bool_and(same, equal);
-            }
-            let other = self.pool.bool_not(same);
-            none = self.pool.bool_and(none, other);
-            outcomes.push((same, Some(name)));
-        }
-        let may = |pool: &Pool, byte: &Term, value: u8| {
-            let (low, high) = pool.range(*byte);
-            (low..=high).contains(&u128::from(value))
-        };
-        let strange = bytes.iter().any(|byte| may(self.pool, byte, b'/'))
-            || (bytes.len() <= 2 && bytes.iter().all(|byte| may(self.pool, byte, b'.')));
-        if strange && self.pool.truth(none) != Some(false) {
-            return Err(unsupported(
-                "a file name the input chooses that may leave the working folder",
-            ));
-        }
-        // Where it's none of the test's, the name is held to every system's as a run holds it:
-        // past every system's length, refused whole; Windows's ASCII rules, a split. A byte
-        // past ASCII would need UTF-8's and Unicode's rules, which only a run checks.
-        if self.pool.truth(none) != Some(false) {
-            if bytes.len() > crate::names::MAX_NAME {
-                self.state.returns(
-                    self.pool,
-                    (-crate::names::ENAMETOOLONG).cast_unsigned(),
-                    self.next,
-                );
+        let ways = match self.world.chosen(self.pool, bytes)? {
+            Chosen::Refused(errno) => {
+                let result = (-errno).cast_unsigned();
+                self.core.returns(self.pool, result, self.next);
                 return Ok(Step::Next);
             }
-            if bytes.iter().any(|byte| self.pool.range(*byte).1 >= 0x80) {
-                return Err(unsupported(
-                    "a file name the input chooses that may hold characters past ASCII, which \
-                     lengua's naming rules check when it runs",
-                ));
-            }
-        }
-        let broken = self.breaks_windows_rules(bytes);
-        let fine = self.pool.bool_not(broken);
-        let missing = self.pool.bool_and(none, fine);
-        let refused = self.pool.bool_and(none, broken);
-        outcomes.push((missing, None));
-        let original = self.state.clone();
+            Chosen::Ways(ways) => ways,
+        };
+        let original = self.fork();
         let next = self.next;
         let mut choices = Vec::new();
-        for (condition, name) in outcomes
-            .into_iter()
-            .map(|(condition, name)| (condition, name.map(Ok)))
-            .chain([(refused, Some(Err(crate::names::EINVAL)))])
-        {
+        for (condition, name) in ways {
             if self.pool.truth(condition) == Some(false) {
                 continue;
             }
             let mut outcome = original.clone();
-            std::mem::swap(self.state, &mut outcome);
+            self.swap(&mut outcome);
             let opened = match name {
                 Some(Ok(name)) => self.open_name(name, flags),
                 Some(Err(errno)) => Ok((-errno).cast_unsigned()),
@@ -3415,79 +3221,14 @@ impl<'a> Cpu<'a> {
             };
             match opened {
                 Ok(result) => {
-                    self.state.returns(self.pool, result, next);
+                    self.core.returns(self.pool, result, next);
                 }
-                Err(stop) => self.state.end = Some(stop),
+                Err(stop) => self.world.end = Some(stop),
             }
-            std::mem::swap(self.state, &mut outcome);
+            self.swap(&mut outcome);
             choices.push((condition, outcome));
         }
         Ok(Step::Choose(choices))
-    }
-
-    /// Whether a name of these ASCII bytes breaks one of Windows's rules (`crate::names`): a
-    /// control character or one of `< > : " \ | ? *`, a dot or space at the end, a device name
-    /// Windows reserves, with any extension, in any case, or a short name's shape.
-    fn breaks_windows_rules(&mut self, bytes: &[Term]) -> Term {
-        let mut broken = Vec::new();
-        let space = self.pool.bv(8, 0x20);
-        for byte in bytes {
-            broken.push(self.pool.ult(*byte, space));
-            for refused in *b"<>:\"\\|?*" {
-                let value = self.pool.bv(8, u128::from(refused));
-                broken.push(self.pool.eq(*byte, value));
-            }
-        }
-        if let Some(last) = bytes.last() {
-            for ending in *b". " {
-                let value = self.pool.bv(8, u128::from(ending));
-                broken.push(self.pool.eq(*last, value));
-            }
-        }
-        // Whether the bytes from `at` spell `word` in any case.
-        let spells = |pool: &mut Pool, at: usize, word: &[u8]| -> Term {
-            let mut letters = Vec::new();
-            for (offset, wanted) in word.iter().enumerate() {
-                let byte = bytes[at + offset];
-                let upper = pool.bv(8, u128::from(*wanted));
-                let lower = pool.bv(8, u128::from(wanted.to_ascii_lowercase()));
-                let as_upper = pool.eq(byte, upper);
-                let as_lower = pool.eq(byte, lower);
-                letters.push(pool.bool_or(as_upper, as_lower));
-            }
-            pool.all(&letters)
-        };
-        // A stem of `stem` letters, alone or before a dot.
-        let ends_stem = |pool: &mut Pool, stem: usize| -> Option<Term> {
-            match bytes.len() {
-                length if length == stem => Some(pool.boolean(true)),
-                length if length > stem => {
-                    let dot = pool.bv(8, u128::from(b'.'));
-                    Some(pool.eq(bytes[stem], dot))
-                }
-                _ => None,
-            }
-        };
-        if let Some(ended) = ends_stem(self.pool, 3) {
-            for device in [b"CON", b"PRN", b"AUX", b"NUL"] {
-                let named = spells(self.pool, 0, device);
-                broken.push(self.pool.bool_and(named, ended));
-            }
-        }
-        if let Some(ended) = ends_stem(self.pool, 4) {
-            let one = self.pool.bv(8, u128::from(b'1'));
-            let nine = self.pool.bv(8, u128::from(b'9'));
-            let low = self.pool.ule(one, bytes[3]);
-            let high = self.pool.ule(bytes[3], nine);
-            let digit = self.pool.bool_and(low, high);
-            for device in [b"COM", b"LPT"] {
-                let named = spells(self.pool, 0, device);
-                let numbered = self.pool.bool_and(named, digit);
-                broken.push(self.pool.bool_and(numbered, ended));
-            }
-        }
-        broken.push(short_name_shape(self.pool, bytes));
-        self.pool.any(&broken)
     }
 
     /// `fstat(fd, details)`: an open file's kind and size, the file's own; the kernel's other
@@ -3496,13 +3237,12 @@ impl<'a> Cpu<'a> {
         // The bytes of `struct stat`, and where its kind and size are, on this CPU.
         let linux = self.image.linux();
         self.lent(1, buffer, linux.stat_len, true, "fstat")?;
-        let Some(open) = self.state.open.get(&fd).cloned() else {
+        let Some(size) = self.world.size_of_open(fd) else {
             if fd <= 2 {
                 return Err(unsupported("the details of standard input or output"));
             }
             return Ok((-EBADF).cast_unsigned());
         };
-        let size = self.state.file(&open.name).map_or(0, <[Term]>::len);
         let fresh = self.pool.len();
         for offset in 0..linux.stat_len {
             let byte = self.pool.var(8, &format!("stat{fresh}.{offset}"));
@@ -3515,80 +3255,6 @@ impl<'a> Cpu<'a> {
         Ok(0)
     }
 
-    /// `mkdirat(folder, name, mode)`: a new folder, where its parent is.
-    fn make_folder(&mut self, name: String) -> u64 {
-        if self.state.is_folder(&name) || self.state.file(&name).is_some() {
-            return (-EEXIST).cast_unsigned();
-        }
-        if !self.state.parent_is_there(&name) {
-            return (-ENOENT).cast_unsigned();
-        }
-        self.state.removed.remove(&name);
-        self.state.made.insert(name);
-        0
-    }
-
-    /// `unlinkat(folder, name, flags)`: a file deleted, or with `AT_REMOVEDIR`, an empty folder.
-    fn remove(&mut self, name: String, flags: u64) -> Result<u64, Stop> {
-        let inside = format!("{name}/");
-        let errno = match flags {
-            0 if self.state.file(&name).is_some() => {
-                self.state.written.remove(&name);
-                self.state.removed.insert(name);
-                return Ok(0);
-            }
-            0 if self.state.is_folder(&name) => EISDIR,
-            AT_REMOVEDIR if self.state.is_folder(&name) => {
-                let holds = self
-                    .state
-                    .files
-                    .keys()
-                    .chain(self.state.written.keys())
-                    .any(|file| file.starts_with(&inside) && self.state.file(file).is_some())
-                    || self
-                        .state
-                        .folders_before
-                        .iter()
-                        .chain(&self.state.made)
-                        .any(|folder| folder.starts_with(&inside) && self.state.is_folder(folder));
-                if holds {
-                    ENOTEMPTY
-                } else {
-                    self.state.made.remove(&name);
-                    self.state.removed.insert(name);
-                    return Ok(0);
-                }
-            }
-            AT_REMOVEDIR if self.state.file(&name).is_some() => ENOTDIR,
-            0 | AT_REMOVEDIR => ENOENT,
-            other => return Err(unsupported(format!("unlinkat with flags {other:#x}"))),
-        };
-        Ok((-errno).cast_unsigned())
-    }
-
-    /// `renameat(folder, from, folder, to)`: a file moved to a name, replacing what's there.
-    fn rename(&mut self, from: String, to: String) -> Result<u64, Stop> {
-        if self.state.is_folder(&from) {
-            return Err(unsupported("renaming a folder"));
-        }
-        let Some(contents) = self.state.file(&from).map(<[Term]>::to_vec) else {
-            return Ok((-ENOENT).cast_unsigned());
-        };
-        if self.state.is_folder(&to) {
-            return Ok((-EISDIR).cast_unsigned());
-        }
-        if !self.state.parent_is_there(&to) {
-            return Ok((-ENOENT).cast_unsigned());
-        }
-        if from != to {
-            self.state.written.remove(&from);
-            self.state.removed.insert(from);
-            self.state.removed.remove(&to);
-            self.state.written.insert(to, contents);
-        }
-        Ok(0)
-    }
-
     /// `clone` as `parallel_for` makes it, with [`Profile::CLONE_FLAGS`]: a thread on the stack
     /// it's given, which runs to its end now, while this thread waits to go on with the new
     /// thread's id. Its id is where this thread asked (`CLONE_PARENT_SETTID`) before either runs.
@@ -3596,7 +3262,7 @@ impl<'a> Cpu<'a> {
     /// [`Profile::CLONE_FLAGS`]: crate::platform::Profile::CLONE_FLAGS
     fn start_thread(&mut self) -> Result<Step, Stop> {
         let convention = Convention::of(self.image.isa);
-        let registers = self.state.registers;
+        let registers = self.core.registers;
         let argument = |number: usize| registers[convention.arguments[number]];
         let flags = self.constant(argument(0))?;
         if flags != crate::platform::Profile::CLONE_FLAGS {
@@ -3607,12 +3273,12 @@ impl<'a> Cpu<'a> {
             self.constant(argument(2))?,
             self.constant(argument(convention.child_tid))?,
         );
-        self.state.threads += 1;
-        let tid = FIRST_TID + self.state.threads;
+        self.core.threads += 1;
+        let tid = FIRST_TID + self.core.threads;
         let id = self.pool.bv(32, u128::from(tid));
         self.save(parent_tid, id)?;
         // Both threads come back from the system call, which clears AArch64's SVE state.
-        self.state.clear_sve(self.pool);
+        self.core.clear_sve(self.pool);
         let next = self.next;
         let (next_term, flags_word) = (self.pool.bv(64, u128::from(next)), self.pool.bv(64, 0x202));
         let mut waiting = registers;
@@ -3621,7 +3287,7 @@ impl<'a> Cpu<'a> {
             waiting[back] = next_term;
             waiting[flags_at] = flags_word;
         }
-        let state = &mut *self.state;
+        let state = &mut *self.core;
         state.suspended.push(Suspended {
             registers: waiting,
             last: state.last,
@@ -3659,12 +3325,12 @@ impl<'a> Cpu<'a> {
     /// A started thread's `exit`: the kernel clears its id (`CLONE_CHILD_CLEARTID`), and the
     /// thread that started it goes on where it waited.
     fn end_thread(&mut self) -> Result<Step, Stop> {
-        let Some(waiting) = self.state.suspended.pop() else {
+        let Some(waiting) = self.core.suspended.pop() else {
             return Err(unsupported("a thread's end with no thread to go back to"));
         };
         let cleared = self.pool.bv(32, 0);
         self.save(waiting.clear_at, cleared)?;
-        let state = &mut *self.state;
+        let state = &mut *self.core;
         state.registers = waiting.registers;
         state.last = waiting.last;
         [
@@ -3689,7 +3355,7 @@ impl<'a> Cpu<'a> {
 
     fn syscall(&mut self) -> Result<Step, Stop> {
         let convention = Convention::of(self.image.isa);
-        let raw = self.state.registers[convention.number];
+        let raw = self.core.registers[convention.number];
         let raw = self
             .pool
             .constant(raw)
@@ -3706,7 +3372,7 @@ impl<'a> Cpu<'a> {
     /// lengua's that is one.
     fn perform(&mut self, call: Option<Call>, raw: u128) -> Result<Step, Stop> {
         let convention = Convention::of(self.image.isa);
-        let arguments = convention.arguments.map(|slot| self.state.registers[slot]);
+        let arguments = convention.arguments.map(|slot| self.core.registers[slot]);
         let (rdi, rsi, rdx) = (arguments[0], arguments[1], arguments[2]);
         let result = match call {
             Some(Call::Read) => {
@@ -3714,88 +3380,23 @@ impl<'a> Cpu<'a> {
                 let buffer = self.constant(rsi)?;
                 let count = self.constant(rdx)?;
                 self.lent(1, buffer, count, true, "read")?;
-                if fd == 0 {
-                    self.state.raw_reads = true;
-                    if self.state.stdin_length.is_some() {
-                        return Err(unsupported(
-                            "standard input of a length the input chooses, read with read \
-                             itself rather than fill",
-                        ));
-                    }
-                    // A pipe hands over at most 4096 bytes whole; past that, how the input
-                    // arrives matters, which only fill makes not matter. A test's sample is run
-                    // as one read gives it.
-                    if self.state.every_cut && self.state.stdin.len() > super::PIPE_WRITE {
-                        return Err(End::Unsupported(format!(
-                            "standard input past {} bytes is more than one pipe write, which the \
-                             proof reads whole; read it with fill to be proven for any length",
-                            super::PIPE_WRITE
-                        )));
-                    }
-                    let available = (self.state.stdin.len() - self.state.stdin_read) as u64;
-                    // Short input read with read itself may arrive in any pieces: each count
-                    // a read can return is its own run.
-                    if self.state.every_cut
-                        && self.state.stdin_pieces.is_empty()
-                        && available <= RAW_CUT_BYTES
-                        && count.min(available) > 1
-                    {
-                        return self.read_every_count(buffer, count.min(available));
-                    }
-                    let mut taken = count.min(available);
-                    if !self.state.stdin_pieces.is_empty() {
-                        let mut boundary = 0;
-                        for piece in self.state.stdin_pieces.iter() {
-                            boundary += piece;
-                            if boundary > self.state.stdin_read {
-                                break;
-                            }
-                        }
-                        taken = taken.min(boundary.saturating_sub(self.state.stdin_read) as u64);
-                    }
-                    for offset in 0..taken {
-                        let byte = self.state.stdin[self.state.stdin_read + offset as usize];
-                        self.save(buffer + offset, byte)?;
-                    }
-                    self.state.stdin_read += taken as usize;
-                    taken
-                } else if let Ok(socket) = self.connection_of(fd) {
-                    self.state.raw_reads = true;
-                    match socket {
-                        Some(number) => self.receive(number, buffer, count)?,
-                        None => self.not_connected(),
-                    }
-                } else if let Some(open) = self.state.open.get(&fd).cloned()
-                    && !open.writing
-                {
-                    // A regular file gives everything asked for, up to its end.
-                    let files = Rc::clone(&self.state.files);
-                    let contents = files.get(&open.name).map_or(&[][..], Vec::as_slice);
-                    let available = (contents.len() - open.position.min(contents.len())) as u64;
-                    let taken = count.min(available);
-                    for offset in 0..taken {
-                        let byte = contents[open.position + offset as usize];
-                        self.save(buffer + offset, byte)?;
-                    }
-                    if let Some(open) = self.state.open.get_mut(&fd) {
-                        open.position += taken as usize;
-                    }
-                    taken
-                } else {
-                    (-EBADF).cast_unsigned()
+                match World::read(self, fd, buffer, count)? {
+                    Reading::Done(result) => result,
+                    Reading::EveryCount(most) => return self.read_every_count(buffer, most),
                 }
             }
             Some(Call::Write)
                 if self
+                    .world
                     .connection_of(self.constant(rdi)? & 0xffff_ffff)
                     .is_ok() =>
             {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 let (buffer, count) = (self.constant(rsi)?, self.constant(rdx)?);
                 self.lent(1, buffer, count, false, "write")?;
-                match self.connection_of(fd) {
-                    Ok(Some(number)) => self.send(number, buffer, count, 0)?,
-                    _ => self.not_connected(),
+                match self.world.connection_of(fd) {
+                    Ok(Some(number)) => World::send(self, number, buffer, count, 0)?,
+                    _ => World::not_connected(),
                 }
             }
             Some(Call::Write) => {
@@ -3803,44 +3404,11 @@ impl<'a> Cpu<'a> {
                 let buffer = self.constant(rsi)?;
                 let count = self.constant(rdx)?;
                 self.lent(1, buffer, count, false, "write")?;
-                // Standard output or error, a file open for writing, or nothing that can be. A
-                // closed standard output takes nothing: the write fails, as on a pipe nobody reads.
-                let target = match fd {
-                    1 if self.state.stdout_closed => Err(EPIPE),
-                    1 | 2 => Ok(None),
-                    _ => match self.state.open.get(&fd) {
-                        Some(open) if open.writing => Ok(Some(open.name.clone())),
-                        _ => Err(EBADF),
-                    },
-                };
-                match target {
-                    Err(errno) => (-errno).cast_unsigned(),
-                    Ok(file) => {
-                        for offset in 0..count {
-                            let byte = self.load(buffer + offset, 1)?;
-                            match (&file, fd) {
-                                (Some(name), _) => {
-                                    self.state
-                                        .written
-                                        .entry(name.clone())
-                                        .or_default()
-                                        .push(byte);
-                                }
-                                (None, 1) => Rc::make_mut(&mut self.state.stdout).push(byte),
-                                (None, _) => Rc::make_mut(&mut self.state.stderr).push(byte),
-                            }
-                        }
-                        count
-                    }
-                }
+                World::write(self, fd, buffer, count)?
             }
             Some(Call::Close) => {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
-                if self.state.open.remove(&fd).is_some() || self.close_socket(fd) {
-                    0
-                } else {
-                    (-EBADF).cast_unsigned()
-                }
+                self.world.close(fd)
             }
             Some(Call::Accept | Call::Accept4) => {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
@@ -3854,7 +3422,7 @@ impl<'a> Cpu<'a> {
                     self.lent(1, address, 16, true, "accept")?;
                     self.lent(2, length, 4, true, "accept")?;
                 }
-                self.accept(fd, address, length)?
+                World::accept(self, fd, address, length)?
             }
             Some(Call::Sendto | Call::Recvfrom) => {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
@@ -3866,24 +3434,24 @@ impl<'a> Cpu<'a> {
                 let sending = call == Some(Call::Sendto);
                 let call = if sending { "sendto" } else { "recvfrom" };
                 self.lent(1, buffer, count, !sending, call)?;
-                match self.connection_of(fd) {
+                match self.world.connection_of(fd) {
                     Err(()) => (-EBADF).cast_unsigned(),
-                    Ok(None) => self.not_connected(),
+                    Ok(None) => World::not_connected(),
                     Ok(Some(connection)) if sending => {
-                        self.send(connection, buffer, count, flags)?
+                        World::send(self, connection, buffer, count, flags)?
                     }
                     Ok(Some(connection)) => {
                         if flags != 0 {
                             return Err(unsupported(format!("receiving with flags {flags:#x}")));
                         }
-                        self.receive(connection, buffer, count)?
+                        World::receive(self, connection, buffer, count)?
                     }
                 }
             }
             Some(Call::Shutdown) => {
                 let fd = self.constant(rdi)? & 0xffff_ffff;
                 let how = self.constant(rsi)? & 0xffff_ffff;
-                self.shutdown(fd, how)?
+                self.world.shutdown(fd, how)
             }
             Some(Call::Openat) => return self.open_chosen(),
             Some(Call::Fstat) => {
@@ -3899,101 +3467,60 @@ impl<'a> Cpu<'a> {
             // Each name held to every system's, as lengua's broker holds it in a run.
             Some(Call::Mkdirat) => {
                 let name = self.name_at(rdi, 1, "mkdirat")?;
-                match self.state.refused(&name, true, false) {
+                match self.world.refused(&name, true, false) {
                     Some(errno) => (-errno).cast_unsigned(),
-                    None => self.make_folder(name),
+                    None => self.world.make_folder(name),
                 }
             }
             Some(Call::Unlinkat) => {
                 let name = self.name_at(rdi, 1, "unlinkat")?;
                 let flags = self.constant(rdx)? & 0xffff_ffff;
-                match self.state.refused(&name, false, true) {
+                match self.world.refused(&name, false, true) {
                     Some(errno) => (-errno).cast_unsigned(),
-                    None => self.remove(name, flags)?,
+                    None => self.world.remove(name, flags)?,
                 }
             }
             Some(Call::Renameat) => {
                 let from = self.name_at(rdi, 1, "renameat")?;
                 let to = self.name_at(rdx, 3, "renameat")?;
                 let refused = self
-                    .state
+                    .world
                     .refused(&from, false, true)
-                    .or_else(|| self.state.refused(&to, true, true));
+                    .or_else(|| self.world.refused(&to, true, true));
                 match refused {
                     Some(errno) => (-errno).cast_unsigned(),
-                    None => self.rename(from, to)?,
+                    None => self.world.rename(from, to)?,
                 }
             }
-            // The test's readings, as the broker gives them, the last one repeating.
-            Some(Call::ClockGettime) if !self.state.clock.is_empty() => {
-                let buffer = self.constant(rsi)?;
-                self.lent(1, buffer, 16, true, "clock_gettime")?;
-                let readings = Rc::clone(&self.state.clock);
-                let index = self.state.readings_used.min(readings.len() - 1);
-                let (seconds, nanoseconds) = readings[index];
-                self.save(buffer, seconds)?;
-                self.save(buffer + 8, nanoseconds)?;
-                self.state.readings_used += 1;
-                0
-            }
-            // The test's bytes, as the broker gives them: zeros past their end.
-            Some(Call::Getrandom) if self.state.random.is_some() => {
-                let buffer = self.constant(rdi)?;
-                let count = self.constant(rsi)?;
-                self.lent(0, buffer, count, true, "getrandom")?;
-                let flags = self.constant(rdx)?;
-                if flags & !7 != 0 || flags & 6 == 6 {
-                    (-EINVAL).cast_unsigned()
-                } else {
-                    if count > 4096 {
-                        return Err(unsupported("getrandom for more than 4096 bytes at once"));
-                    }
-                    let bytes = self.state.random.clone().unwrap_or_default();
-                    let used = self.state.random_used;
-                    for offset in 0..count {
-                        let index = used + usize::try_from(offset).unwrap_or(usize::MAX);
-                        let byte = match bytes.get(index) {
-                            Some(byte) => *byte,
-                            None => self.pool.bv(8, 0),
-                        };
-                        self.save(buffer + offset, byte)?;
-                    }
-                    self.state.random_used += usize::try_from(count).unwrap_or(usize::MAX);
-                    count
-                }
-            }
-            // Values the kernel chooses: any at all, a fresh variable for each.
+            // The test's readings, as the broker gives them, whatever the clock; else the
+            // kernel's, of the two clocks the model follows.
             Some(Call::ClockGettime) => {
-                let clock = self.constant(rdi)? & 0xffff_ffff;
-                if !matches!(clock, 0 | 1) {
-                    return Err(unsupported(format!("reading clock {clock}")));
+                if self.world.clock.is_empty() {
+                    let clock = self.constant(rdi)? & 0xffff_ffff;
+                    if !matches!(clock, 0 | 1) {
+                        return Err(unsupported(format!("reading clock {clock}")));
+                    }
                 }
                 let buffer = self.constant(rsi)?;
                 self.lent(1, buffer, 16, true, "clock_gettime")?;
-                let fresh = self.pool.len();
-                let seconds =
-                    self.pool
-                        .var_in(64, &format!("clock{fresh}.seconds"), 0, (1 << 62) - 1);
-                let nanoseconds =
-                    self.pool
-                        .var_in(64, &format!("clock{fresh}.nanoseconds"), 0, 999_999_999);
-                self.save(buffer, seconds)?;
-                self.save(buffer + 8, nanoseconds)?;
+                World::read_clock(self, buffer)?;
                 0
             }
+            // The test's bytes, as the broker gives them, with the flags it takes; else the
+            // kernel's.
             Some(Call::Getrandom) => {
                 let buffer = self.constant(rdi)?;
                 let count = self.constant(rsi)?;
                 self.lent(0, buffer, count, true, "getrandom")?;
-                if count > 256 {
-                    return Err(unsupported("getrandom for more than 256 bytes at once"));
+                let refused = self.world.random.is_some() && {
+                    let flags = self.constant(rdx)?;
+                    flags & !7 != 0 || flags & 6 == 6
+                };
+                if refused {
+                    (-EINVAL).cast_unsigned()
+                } else {
+                    World::random(self, buffer, count)?
                 }
-                let fresh = self.pool.len();
-                for offset in 0..count {
-                    let byte = self.pool.var(8, &format!("random{fresh}.{offset}"));
-                    self.save(buffer + offset, byte)?;
-                }
-                count
             }
             // A sleep ends at once: what the program does next doesn't depend on how long it
             // slept. It reads the time it's given, and may write what's left of it.
@@ -4010,7 +3537,7 @@ impl<'a> Cpu<'a> {
             Some(Call::Clone) => return self.start_thread(),
             // A thread's end: the kernel clears its id and wakes whoever waits on it, and the
             // thread that started it goes on.
-            Some(Call::Exit) if !self.state.suspended.is_empty() => return self.end_thread(),
+            Some(Call::Exit) if !self.core.suspended.is_empty() => return self.end_thread(),
             Some(Call::Exit | Call::ExitGroup) => {
                 let status = self.pool.extract(rdi, 7, 0);
                 return Err(End::Exit(status));
@@ -4060,7 +3587,7 @@ impl<'a> Cpu<'a> {
                 };
                 // A server's wait on its listener and connections.
                 if !waits_for_input
-                    && (self.state.network.listening || !self.state.sockets.is_empty())
+                    && (self.world.network.listening || !self.world.sockets.is_empty())
                 {
                     if count == 0 || count > 1024 {
                         return Err(unsupported(format!("poll over {count} descriptors")));
@@ -4105,7 +3632,7 @@ impl<'a> Cpu<'a> {
             }
             _ => return Err(unsupported(format!("system call {raw}"))),
         };
-        self.state.returns(self.pool, result, self.next);
+        self.core.returns(self.pool, result, self.next);
         Ok(Step::Next)
     }
 }
@@ -4171,6 +3698,44 @@ impl Merging {
     }
 }
 
+/// x86-64's and AArch64's runs, each instruction a step, and the loops whose exits the length
+/// of standard input decides merged.
+impl Core for Native {
+    type Image = Image;
+
+    fn step(image: &Image, state: &mut State, pool: &mut Pool) -> Result<Step, Stop> {
+        step(image, state, pool)
+    }
+
+    fn park(
+        image: &Image,
+        pool: &mut Pool,
+        state: &mut State,
+        other: State,
+        condition: Term,
+    ) -> Option<State> {
+        park(image, pool, state, other, condition)
+    }
+
+    /// A run done going round a loop whose exits it merged, or ending in it: the exits and it,
+    /// one run where they can be.
+    fn settle(pool: &mut Pool, state: &mut State, pending: &mut Vec<State>) {
+        if state.core.merging.as_ref().is_some_and(|merging| {
+            state.world.end.is_some() || !(merging.head..=merging.latch).contains(&state.core.rip)
+        }) {
+            finish_merging(pool, state, pending);
+        }
+    }
+
+    fn alive(&self) -> Option<Term> {
+        self.merging.as_ref().map(|merging| merging.alive)
+    }
+
+    fn hand_over(&mut self, other: &mut Self) {
+        other.merging = self.merging.take();
+    }
+}
+
 /// Where `state`, a run whose input's length is its choice, leaves a loop at a branch both sides
 /// of which can happen and `other` doesn't, or the other way round: the side that leaves waits at
 /// the exit and `state` becomes the one that stays, still going round. `other` back where the
@@ -4182,22 +3747,27 @@ fn park(
     other: State,
     condition: Term,
 ) -> Option<State> {
-    if state.stdin_length.is_none() {
+    if state.world.stdin_length.is_none() {
         return Some(other);
     }
     let inside = |found: &Loop, rip: u64| (found.head..=found.latch).contains(&rip);
     // The innermost loop the branch leaves.
     let Some(found) = image
         .loops()
-        .filter(|found| inside(found, state.rip) != inside(found, other.rip))
+        .filter(|found| inside(found, state.core.rip) != inside(found, other.core.rip))
         .min_by_key(|found| found.latch - found.head)
         .copied()
     else {
         return Some(other);
     };
-    let state_leaves = !inside(&found, state.rip);
-    let target = if state_leaves { state.rip } else { other.rip };
+    let state_leaves = !inside(&found, state.core.rip);
+    let target = if state_leaves {
+        state.core.rip
+    } else {
+        other.core.rip
+    };
     if state
+        .core
         .merging
         .as_ref()
         .is_some_and(|merging| merging.head != found.head || merging.target != target)
@@ -4212,7 +3782,7 @@ fn park(
     // Only an exit on the length itself, as a loop over what was read leaves where its index
     // reaches the end: a loop that leaves on what it computed, as a print loop on how many
     // digits its number has, keeps its own runs, which the output's checks follow.
-    if pool.interval_subject(leaves) != state.stdin_length {
+    if pool.interval_subject(leaves) != state.world.stdin_length {
         return Some(other);
     }
     let mut leaving = if state_leaves {
@@ -4220,9 +3790,9 @@ fn park(
     } else {
         other
     };
-    leaving.merging = None;
+    leaving.core.merging = None;
     let yes = pool.boolean(true);
-    let mut merging = state.merging.take().unwrap_or_else(|| {
+    let mut merging = state.core.merging.take().unwrap_or_else(|| {
         Box::new(Merging {
             head: found.head,
             latch: found.latch,
@@ -4240,32 +3810,24 @@ fn park(
     }));
     let stays = pool.bool_not(leaves);
     merging.alive = pool.bool_and(alive, stays);
-    state.merging = Some(merging);
+    state.core.merging = Some(merging);
     None
 }
 
 /// Whether `a` and `b` have done the same, so they differ only in what they hold: the same
 /// place, calls, owners, output, input read and everything else a run does.
 fn mergeable(a: &State, b: &State) -> bool {
-    let same_stream = |x: &Rc<Vec<Term>>, y: &Rc<Vec<Term>>| Rc::ptr_eq(x, y) || x[..] == y[..];
+    if !a.world.did_the_same(&b.world) {
+        return false;
+    }
+    let (a, b) = (&a.core, &b.core);
     a.rip == b.rip
-        && a.end.is_none()
-        && b.end.is_none()
         && a.returns == b.returns
         && a.owners == b.owners
         && a.pointers == b.pointers
-        && same_stream(&a.stdout, &b.stdout)
-        && same_stream(&a.stderr, &b.stderr)
-        && a.stdin_read == b.stdin_read
         && a.arrivals == b.arrivals
         && a.calls == b.calls
         && a.threads == b.threads
-        && a.random_used == b.random_used
-        && a.readings_used == b.readings_used
-        && a.fill_cut == b.fill_cut
-        && a.raw_cuts == b.raw_cuts
-        && a.written.len() == b.written.len()
-        && a.open.len() == b.open.len()
         && a.suspended.is_empty()
         && b.suspended.is_empty()
         && (Rc::ptr_eq(&a.logs, &b.logs) || (a.logs.is_empty() && b.logs.is_empty()))
@@ -4284,52 +3846,52 @@ fn mergeable(a: &State, b: &State) -> bool {
 /// choices. `None` where one holds a byte of memory the other never wrote.
 fn merged(pool: &mut Pool, leaves: Term, a: &State, b: State, registers: bool) -> Option<State> {
     let mut merged = b;
+    let (into, from) = (&mut merged.core, &a.core);
     if registers {
         for slot in 0..SLOTS {
-            if a.registers[slot] != merged.registers[slot] {
-                merged.registers[slot] =
-                    pool.ite(leaves, a.registers[slot], merged.registers[slot]);
+            if from.registers[slot] != into.registers[slot] {
+                let (theirs, ours) = (from.registers[slot], into.registers[slot]);
+                into.registers[slot] = pool.ite(leaves, theirs, ours);
             }
         }
     }
     for (flag, from) in [
-        (&mut merged.carry, a.carry),
-        (&mut merged.zero, a.zero),
-        (&mut merged.sign, a.sign),
-        (&mut merged.overflow, a.overflow),
-        (&mut merged.parity, a.parity),
+        (&mut into.carry, from.carry),
+        (&mut into.zero, from.zero),
+        (&mut into.sign, from.sign),
+        (&mut into.overflow, from.overflow),
+        (&mut into.parity, from.parity),
     ] {
         if *flag != from {
             *flag = pool.ite(leaves, from, *flag);
         }
     }
-    merged.last = Last::Other;
-    for (number, vector) in a.vectors.iter().enumerate() {
-        if !Rc::ptr_eq(vector, &merged.vectors[number]) && vector[..] != merged.vectors[number][..]
-        {
-            let mut bytes = *merged.vectors[number];
+    into.last = Last::Other;
+    for (number, vector) in from.vectors.iter().enumerate() {
+        if !Rc::ptr_eq(vector, &into.vectors[number]) && vector[..] != into.vectors[number][..] {
+            let mut bytes = *into.vectors[number];
             for (byte, from) in bytes.iter_mut().zip(vector.iter()) {
                 if *byte != *from {
                     *byte = pool.ite(leaves, *from, *byte);
                 }
             }
-            merged.vectors[number] = Rc::new(bytes);
+            into.vectors[number] = Rc::new(bytes);
         }
     }
-    for (mask, from) in merged.masks.iter_mut().zip(a.masks) {
+    for (mask, from) in into.masks.iter_mut().zip(from.masks) {
         if *mask != from {
             *mask = pool.ite(leaves, from, *mask);
         }
     }
-    let pages: BTreeSet<u64> = a
+    let pages: BTreeSet<u64> = from
         .memory
         .pages
         .keys()
-        .chain(merged.memory.pages.keys())
+        .chain(into.memory.pages.keys())
         .copied()
         .collect();
     for page in pages {
-        let (from, to) = (a.memory.pages.get(&page), merged.memory.pages.get(&page));
+        let (from, to) = (from.memory.pages.get(&page), into.memory.pages.get(&page));
         match (from, to) {
             (Some(from), Some(to)) if Rc::ptr_eq(from, to) => {}
             (Some(from), Some(to)) => {
@@ -4341,13 +3903,13 @@ fn merged(pool: &mut Pool, leaves: Term, a: &State, b: State, registers: bool) -
                         _ => return None,
                     }
                 }
-                merged.memory.pages.insert(page, Rc::new(bytes));
+                into.memory.pages.insert(page, Rc::new(bytes));
             }
             _ => return None,
         }
     }
-    merged.stored.clear();
-    merged.steps = merged.steps.max(a.steps);
+    into.stored.clear();
+    merged.world.steps = merged.world.steps.max(a.world.steps);
     Some(merged)
 }
 
@@ -4369,16 +3931,17 @@ fn merge_all(pool: &mut Pool, exits: &[Rc<Parked>], last: &State, alive: Term) -
         .map(|exit| exit.alive)
         .chain([alive])
         .collect();
+    let length = last.world.stdin_length;
     for slot in 0..SLOTS {
         let values: Vec<Term> = exits
             .iter()
-            .map(|exit| exit.state.registers[slot])
-            .chain([last.registers[slot]])
+            .map(|exit| exit.state.core.registers[slot])
+            .chain([last.core.registers[slot]])
             .collect();
         if values.iter().all(|value| *value == values[0]) {
             continue;
         }
-        merged_state.registers[slot] = match grown_count(pool, &values, &after, last.stdin_length) {
+        merged_state.core.registers[slot] = match grown_count(pool, &values, &after, length) {
             Some(count) => count,
             None => chosen_by_exit(pool, &values, exits, slot),
         };
@@ -4389,59 +3952,63 @@ fn merge_all(pool: &mut Pool, exits: &[Rc<Parked>], last: &State, alive: Term) -
         let fresh = |pool: &mut Pool, name: &str, width: u32| {
             pool.var(width, &format!("merged{count}.{name}"))
         };
-        let differs =
-            |pick: fn(&State) -> Term| exits.iter().any(|exit| pick(&exit.state) != pick(last));
-        if differs(|state| state.carry) {
-            merged_state.carry = pool.bool_var(&format!("merged{count}.cf"));
+        let (into, last) = (&mut merged_state.core, &last.core);
+        let differs = |pick: fn(&Native) -> Term| {
+            let now = pick(last);
+            exits.iter().any(|exit| pick(&exit.state.core) != now)
+        };
+        if differs(|core| core.carry) {
+            into.carry = pool.bool_var(&format!("merged{count}.cf"));
         }
-        if differs(|state| state.zero) {
-            merged_state.zero = pool.bool_var(&format!("merged{count}.zf"));
+        if differs(|core| core.zero) {
+            into.zero = pool.bool_var(&format!("merged{count}.zf"));
         }
-        if differs(|state| state.sign) {
-            merged_state.sign = pool.bool_var(&format!("merged{count}.sf"));
+        if differs(|core| core.sign) {
+            into.sign = pool.bool_var(&format!("merged{count}.sf"));
         }
-        if differs(|state| state.overflow) {
-            merged_state.overflow = pool.bool_var(&format!("merged{count}.of"));
+        if differs(|core| core.overflow) {
+            into.overflow = pool.bool_var(&format!("merged{count}.of"));
         }
-        if differs(|state| state.parity) {
-            merged_state.parity = pool.bool_var(&format!("merged{count}.pf"));
+        if differs(|core| core.parity) {
+            into.parity = pool.bool_var(&format!("merged{count}.pf"));
         }
         for number in 0..last.vectors.len() {
             if exits
                 .iter()
-                .any(|exit| exit.state.vectors[number][..] != last.vectors[number][..])
+                .any(|exit| exit.state.core.vectors[number][..] != last.vectors[number][..])
             {
                 let bytes: [Term; VECTOR_BYTES] =
                     std::array::from_fn(|at| fresh(pool, &format!("v{number}.{at}"), 8));
-                merged_state.vectors[number] = Rc::new(bytes);
+                into.vectors[number] = Rc::new(bytes);
             }
         }
         for number in 0..last.masks.len() {
             if exits
                 .iter()
-                .any(|exit| exit.state.masks[number] != last.masks[number])
+                .any(|exit| exit.state.core.masks[number] != last.masks[number])
             {
-                merged_state.masks[number] = fresh(pool, &format!("k{number}"), 64);
+                into.masks[number] = fresh(pool, &format!("k{number}"), 64);
             }
         }
-        merged_state.last = Last::Other;
-        merged_state.stored.clear();
+        into.last = Last::Other;
+        into.stored.clear();
         return Some(merged_state);
     }
     let mut folded = last.clone();
     for exit in exits.iter().rev() {
         folded = merged(pool, exit.leaves, &exit.state, folded, false)?;
     }
-    merged_state.carry = folded.carry;
-    merged_state.zero = folded.zero;
-    merged_state.sign = folded.sign;
-    merged_state.overflow = folded.overflow;
-    merged_state.parity = folded.parity;
-    merged_state.vectors = folded.vectors;
-    merged_state.masks = folded.masks;
-    merged_state.memory = folded.memory;
-    merged_state.last = Last::Other;
-    merged_state.stored.clear();
+    let (into, folded) = (&mut merged_state.core, folded.core);
+    into.carry = folded.carry;
+    into.zero = folded.zero;
+    into.sign = folded.sign;
+    into.overflow = folded.overflow;
+    into.parity = folded.parity;
+    into.vectors = folded.vectors;
+    into.masks = folded.masks;
+    into.memory = folded.memory;
+    into.last = Last::Other;
+    into.stored.clear();
     Some(merged_state)
 }
 
@@ -4513,11 +4080,11 @@ fn grown_count(
 /// goes on where it's still in the loop. Where the runs can't be merged, each goes on alone,
 /// where it left.
 fn finish_merging(pool: &mut Pool, state: &mut State, pending: &mut Vec<State>) {
-    let Some(merging) = state.merging.take() else {
+    let Some(merging) = state.core.merging.take() else {
         return;
     };
     let exits = merging.exits();
-    if state.end.is_none() && state.rip == merging.target {
+    if state.world.end.is_none() && state.core.rip == merging.target {
         // The merge keeps the staying run's path and what it must meet.
         if let Some(one) = merge_all(pool, &exits, state, merging.alive) {
             *state = one;
@@ -4527,10 +4094,10 @@ fn finish_merging(pool: &mut Pool, state: &mut State, pending: &mut Vec<State>) 
         && let Some(mut one) = merge_all(pool, earlier, &last.state, last.alive)
     {
         let left = pool.bool_not(merging.alive);
-        one.path.push(left);
+        one.world.path.push(left);
         pending.push(one);
         if pool.truth(merging.alive) != Some(true) {
-            state.path.push(merging.alive);
+            state.world.path.push(merging.alive);
         }
         return;
     }
@@ -4538,59 +4105,55 @@ fn finish_merging(pool: &mut Pool, state: &mut State, pending: &mut Vec<State>) 
     for exit in &exits {
         let mut alone = exit.state.clone();
         let here = pool.bool_and(exit.alive, exit.leaves);
-        alone.path.push(here);
+        alone.world.path.push(here);
         pending.push(alone);
     }
     if pool.truth(merging.alive) != Some(true) {
-        state.path.push(merging.alive);
+        state.world.path.push(merging.alive);
     }
 }
 
-/// Every run from `start`, splitting at branches the inputs decide, at most `max_runs`.
+/// Every run from `start`, splitting at branches the inputs decide, at most `max_runs`: the
+/// runs of any core, x86-64's and AArch64's ([`Native`]) among them.
 ///
 /// # Errors
 ///
 /// Fails when the oracle does.
-pub fn explore(
-    image: &Image,
-    start: State,
+pub fn explore<C: Core>(
+    image: &C::Image,
+    start: State<C>,
     pool: &mut Pool,
     oracle: &mut dyn Oracle,
     max_runs: usize,
-) -> Result<Vec<State>, String> {
+) -> Result<Vec<State<C>>, String> {
     // The states poll comes back in are this exploration's own.
     let mut start = start;
-    start.polled = Rc::default();
+    start.world.polled = Rc::default();
     let mut pending = vec![start];
     let mut finished = Vec::new();
     let mut looked = pool.len();
     while let Some(mut state) = pending.pop() {
         if finished.len() + pending.len() > max_runs {
-            state.end = Some(End::TooManyPaths);
+            state.world.end = Some(End::TooManyPaths);
             finished.push(state);
             break;
         }
         loop {
-            // A run done going round a loop whose exits it merged, or ending in it: the exits
-            // and it, one run where they can be.
-            if state.merging.as_ref().is_some_and(|merging| {
-                state.end.is_some() || !(merging.head..=merging.latch).contains(&state.rip)
-            }) {
-                finish_merging(pool, &mut state, &mut pending);
-            }
-            if state.end.is_some() {
+            // What the core kept of the run's branches, merged where the run is done with them.
+            C::settle(pool, &mut state, &mut pending);
+            if state.world.end.is_some() {
                 finished.push(state);
                 break;
             }
-            if state.steps.is_multiple_of(STEPS_BETWEEN_TIME_CHECKS) {
+            if state.world.steps.is_multiple_of(STEPS_BETWEEN_TIME_CHECKS) {
                 oracle.in_time()?;
             }
             if pool.len() >= looked + super::term::TERMS_BETWEEN_MEMORY_LOOKS {
                 looked = pool.len();
                 oracle.has_room()?;
             }
-            let obligations = state.obligations.len();
-            let stepped = step(image, &mut state, pool);
+            let obligations = state.world.obligations.len();
+            let stepped = C::step(image, &mut state, pool);
             // A step can make terms by the million in one extraction, between two looks of this
             // loop's: the pool looks as it grows, and what it made after finding the memory
             // short is nothing to go on.
@@ -4599,10 +4162,10 @@ pub fn explore(
             }
             // While a loop's exits are merged, the run that stays must meet what it meets only
             // where it's still in the loop.
-            if let Some(alive) = state.merging.as_ref().map(|merging| merging.alive)
+            if let Some(alive) = state.core.alive()
                 && pool.truth(alive) != Some(true)
             {
-                for (condition, _) in &mut state.obligations[obligations..] {
+                for (condition, _) in &mut state.world.obligations[obligations..] {
                     *condition = pool.bool_and(alive, *condition);
                 }
             }
@@ -4613,25 +4176,25 @@ pub fn explore(
                     let opposite = pool.bool_not(condition);
                     // A run's conditions can always be met together, so when one side of a
                     // branch is impossible the other is certain, and needs no question.
-                    let yes = oracle.possible(pool, &state.path, condition)?;
-                    let no = !yes || oracle.possible(pool, &other.path, opposite)?;
+                    let yes = oracle.possible(pool, &state.world.path, condition)?;
+                    let no = !yes || oracle.possible(pool, &other.world.path, opposite)?;
                     // A loop's exit the input's length decides waits to be merged.
                     if yes && no {
-                        match park(image, pool, &mut state, other, condition) {
+                        match C::park(image, pool, &mut state, other, condition) {
                             None => continue,
                             Some(back) => other = back,
                         }
                     }
                     // Where only the other side can happen, it carries on the loop's merging.
                     if !yes {
-                        other.merging = state.merging.take();
+                        state.core.hand_over(&mut other.core);
                     }
                     if no {
-                        other.path.push(opposite);
+                        other.world.path.push(opposite);
                         pending.push(other);
                     }
                     if yes {
-                        state.path.push(condition);
+                        state.world.path.push(condition);
                     } else {
                         break;
                     }
@@ -4639,9 +4202,9 @@ pub fn explore(
                 Ok(Step::Choose(choices)) => {
                     for (condition, mut choice) in choices {
                         let certain = pool.truth(condition) == Some(true);
-                        if certain || oracle.possible(pool, &choice.path, condition)? {
+                        if certain || oracle.possible(pool, &choice.world.path, condition)? {
                             if !certain {
-                                choice.path.push(condition);
+                                choice.world.path.push(condition);
                             }
                             pending.push(choice);
                         }
@@ -4650,7 +4213,7 @@ pub fn explore(
                 }
                 Err(end) => {
                     // Ended: the loop's top merges any exits it was carrying, then finishes it.
-                    state.end = Some(end);
+                    state.world.end = Some(end);
                 }
             }
         }
@@ -4688,58 +4251,12 @@ mod edge;
 mod fill;
 pub mod induction;
 mod logs;
-pub mod net;
+mod poll;
 mod vector;
 
 // It runs a harness of x86-64 instructions on this computer's CPU: a Linux program, so on Linux.
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 mod against_cpu;
-
-/// Whether a name of these ASCII bytes has the shape of a Windows short name
-/// (`crate::names::short_name_shape`): a stem of at most eight ending in `~` and digits,
-/// then, if any, one dot and one to three more. The name's length is known, so each place
-/// its dot and its `~` can be is a case.
-fn short_name_shape(pool: &mut Pool, bytes: &[Term]) -> Term {
-    let length = bytes.len();
-    if length > crate::names::SHORT_STEM + 1 + crate::names::SHORT_EXTENSION {
-        return pool.boolean(false);
-    }
-    let dot = pool.bv(8, u128::from(b'.'));
-    let tilde = pool.bv(8, u128::from(b'~'));
-    let zero = pool.bv(8, u128::from(b'0'));
-    let nine = pool.bv(8, u128::from(b'9'));
-    let mut cases = Vec::new();
-    // Where the stem ends: at the name's end, with no dot, or at its one dot.
-    for stem in 1..=length.min(crate::names::SHORT_STEM) {
-        let extension = length - stem;
-        if extension == 1 || extension > crate::names::SHORT_EXTENSION + 1 {
-            continue;
-        }
-        let mut dots = Vec::new();
-        for (at, byte) in bytes.iter().enumerate() {
-            let is_dot = pool.eq(*byte, dot);
-            dots.push(if at == stem {
-                is_dot
-            } else {
-                pool.bool_not(is_dot)
-            });
-        }
-        let mut tildes = Vec::new();
-        for at in 0..stem.saturating_sub(1) {
-            let mut parts = vec![pool.eq(bytes[at], tilde)];
-            for byte in &bytes[at + 1..stem] {
-                let low = pool.ule(zero, *byte);
-                let high = pool.ule(*byte, nine);
-                parts.push(pool.bool_and(low, high));
-            }
-            tildes.push(pool.all(&parts));
-        }
-        let separated = pool.all(&dots);
-        let ended = pool.any(&tildes);
-        cases.push(pool.bool_and(separated, ended));
-    }
-    pool.any(&cases)
-}
 
 // It runs a harness of AArch64 instructions on an AArch64 CPU: this computer's, or QEMU's.
 #[cfg(test)]
@@ -4751,62 +4268,6 @@ mod tests {
     use crate::platform::Profile;
     use crate::targets::PerCpu;
     use crate::toolchain::Toolchain;
-
-    /// The proof's short-name shape, on names whose bytes are known, gives the run's answer
-    /// (`crate::names::short_name_shape`) for every name of up to thirteen bytes it's tried on.
-    #[test]
-    fn the_short_name_shape_the_proof_tests_is_the_runs() {
-        let mut names = vec![
-            "REPORT~1.TXT",
-            "progra~1",
-            "a~12",
-            "~1",
-            "AB12~1.tx",
-            "backup~.txt",
-            "notes~old.txt",
-            "a~1.text",
-            "a~1.b.c",
-            "a1~",
-            "report1.txt",
-            "ABCDEFG~1.T",
-            "ABCDEF~1.TXT",
-            "A~1.",
-            "A~1.B",
-            ".txt",
-            "~",
-            "~~1",
-            "a~1~2",
-            "x.y~1",
-        ]
-        .into_iter()
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-        // Every arrangement of a few telling bytes, up to five long.
-        let alphabet = *b"a~1.";
-        for length in 1..=5 {
-            for mut code in 0..alphabet.len().pow(length) {
-                let mut name = String::new();
-                for _ in 0..length {
-                    name.push(char::from(alphabet[code % alphabet.len()]));
-                    code /= alphabet.len();
-                }
-                names.push(name);
-            }
-        }
-        for name in names {
-            let mut pool = Pool::default();
-            let bytes: Vec<Term> = name
-                .bytes()
-                .map(|byte| pool.bv(8, u128::from(byte)))
-                .collect();
-            let shape = short_name_shape(&mut pool, &bytes);
-            assert_eq!(
-                pool.truth(shape),
-                Some(crate::names::short_name_shape(&name)),
-                "{name}"
-            );
-        }
-    }
 
     /// Builds `source` for `profile`'s CPU and loads it.
     async fn image_for(profile: Profile, source: &str) -> Image {
@@ -4849,7 +4310,7 @@ mod tests {
         let start = State::start(image, &mut pool, &args, &[], stdin);
         let mut runs = explore(image, start, &mut pool, &mut Concrete, 4).expect("concrete");
         assert_eq!(runs.len(), 1);
-        let state = runs.remove(0);
+        let state = runs.remove(0).world;
         let text = |terms: &[Term]| {
             terms
                 .iter()
@@ -4996,7 +4457,7 @@ mod tests {
         let start = State::start(&image, &mut pool, &[], &[], Vec::new()).with_network(network);
         let mut runs = explore(&image, start, &mut pool, &mut Concrete, 4).expect("concrete");
         assert_eq!(runs.len(), 1, "{}", target.name());
-        let answered = runs.remove(0);
+        let answered = runs.remove(0).world;
         assert_eq!(text(&pool, &answered.stdout), "hello", "{}", target.name());
         assert_eq!(
             text(&pool, &answered.connections[0].sent),
@@ -5018,7 +4479,7 @@ mod tests {
         };
         let start = State::start(&image, &mut pool, &[], &[], Vec::new()).with_network(network);
         let mut runs = explore(&image, start, &mut pool, &mut Concrete, 4).expect("concrete");
-        let ended = runs.remove(0);
+        let ended = runs.remove(0).world;
         assert_eq!(text(&pool, &ended.stdout), "", "{}", target.name());
         assert!(ended.connections[0].sent.is_empty(), "{}", target.name());
         assert!(
@@ -5061,7 +4522,7 @@ mod tests {
             let mut pool = Pool::default();
             let start = State::start(&image, &mut pool, &[], &[], Vec::new());
             let runs = explore(&image, start, &mut pool, &mut Concrete, 2).expect("runs");
-            let status = match &runs[0].end {
+            let status = match &runs[0].world.end {
                 Some(End::Exit(status)) => pool.constant(*status),
                 other => panic!("{} ended with {other:?}", target.name()),
             };
@@ -5103,7 +4564,7 @@ mod tests {
             let mut pool = Pool::default();
             let start = State::start(&image, &mut pool, &[], &[], Vec::new());
             let runs = explore(&image, start, &mut pool, &mut Concrete, 2).expect("runs");
-            let status = match &runs[0].end {
+            let status = match &runs[0].world.end {
                 Some(End::Exit(status)) => pool.constant(*status),
                 other => panic!("{} ended with {other:?}", target.name()),
             };
@@ -5314,11 +4775,12 @@ mod tests {
         runs.iter()
             .map(|run| {
                 let printed = run
+                    .world
                     .stdout
                     .iter()
                     .map(|byte| pool.constant(*byte).expect("a byte") as u8)
                     .collect();
-                let ended = match run.end {
+                let ended = match run.world.end {
                     Some(End::Exit(status)) => {
                         format!("exit {}", pool.constant(status).expect("a status"))
                     }

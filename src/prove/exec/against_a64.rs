@@ -1144,27 +1144,27 @@ fn model(
     let mut pool = Pool::default();
     let mut state = State::start(image, &mut pool, &[], &[], Vec::new());
     for (slot, value) in registers.iter().enumerate() {
-        state.registers[slot] = pool.bv(64, u128::from(*value));
+        state.core.registers[slot] = pool.bv(64, u128::from(*value));
     }
     for (number, value) in values.vectors.iter().enumerate() {
-        let vector = std::rc::Rc::make_mut(&mut state.vectors[number]);
+        let vector = std::rc::Rc::make_mut(&mut state.core.vectors[number]);
         for (at, byte) in vector.iter_mut().take(16).enumerate() {
             *byte = pool.bv(8, (value >> (8 * at)) & 0xff);
         }
     }
     let bit = |pool: &mut Pool, mask: u64| pool.boolean(nzcv & mask != 0);
-    state.sign = bit(&mut pool, 1 << 31);
-    state.zero = bit(&mut pool, 1 << 30);
-    state.carry = bit(&mut pool, 1 << 29);
-    state.overflow = bit(&mut pool, 1 << 28);
-    state.last = Last::Other;
+    state.core.sign = bit(&mut pool, 1 << 31);
+    state.core.zero = bit(&mut pool, 1 << 30);
+    state.core.carry = bit(&mut pool, 1 << 29);
+    state.core.overflow = bit(&mut pool, 1 << 28);
+    state.core.last = Last::Other;
     for (word, value) in cell.iter().enumerate() {
         let value = pool.bv(64, u128::from(*value));
-        state.store(&mut pool, cell_address + 8 * word as u64, value);
+        state.core.store(&mut pool, cell_address + 8 * word as u64, value);
     }
-    state.rip = start;
+    state.core.rip = start;
     let mut steps = 0;
-    while state.rip != end {
+    while state.core.rip != end {
         steps += 1;
         if steps > 16 {
             return Err("the model ran past the probe".into());
@@ -1185,12 +1185,13 @@ fn model(
             )
         })
     };
-    let registers = state.registers[..REGISTERS]
+    let core = &state.core;
+    let registers = core.registers[..REGISTERS]
         .iter()
         .enumerate()
         .map(|(slot, term)| known(&pool, *term, &format!("x{slot}")))
         .collect::<Result<_, _>>()?;
-    let flags = [state.sign, state.zero, state.carry, state.overflow]
+    let flags = [core.sign, core.zero, core.carry, core.overflow]
         .iter()
         .zip(FLAGS)
         .map(|(flag, (_, name))| {
@@ -1202,7 +1203,7 @@ fn model(
     for (word, slot) in words.iter_mut().enumerate() {
         let mut whole = None;
         for byte in (0..8).rev() {
-            let term = state
+            let term = core
                 .memory
                 .get(cell_address + 8 * word as u64 + byte)
                 .ok_or("the memory cell is gone")?;
@@ -1216,7 +1217,7 @@ fn model(
     let vectors = (0..FP_REGISTERS)
         .map(|number| {
             let mut whole = 0;
-            for (at, byte) in state.vectors[number].iter().take(16).enumerate() {
+            for (at, byte) in core.vectors[number].iter().take(16).enumerate() {
                 whole |= known(&pool, *byte, &format!("v{number}"))? << (8 * at);
             }
             Ok(whole)

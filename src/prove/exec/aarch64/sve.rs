@@ -19,13 +19,13 @@ impl Cpu<'_> {
 
     /// Z`number`'s bytes, lowest first.
     fn z(&self, number: u8) -> Vec<Term> {
-        self.state.vectors[usize::from(number)][..self.sve_lanes()].to_vec()
+        self.core.vectors[usize::from(number)][..self.sve_lanes()].to_vec()
     }
 
     /// Sets Z`number` to `bytes` from its lowest, zeros above them.
     fn set_z(&mut self, number: u8, bytes: &[Term]) {
         let zero = self.pool.bv(8, 0);
-        let vector = Rc::make_mut(&mut self.state.vectors[usize::from(number)]);
+        let vector = Rc::make_mut(&mut self.core.vectors[usize::from(number)]);
         for (at, byte) in vector.iter_mut().enumerate() {
             *byte = bytes.get(at).copied().unwrap_or(zero);
         }
@@ -33,13 +33,13 @@ impl Cpu<'_> {
 
     /// P`number`'s lanes, lowest first.
     fn p(&self, number: u8) -> Vec<Term> {
-        self.state.predicates[usize::from(number)][..self.sve_lanes()].to_vec()
+        self.core.predicates[usize::from(number)][..self.sve_lanes()].to_vec()
     }
 
     /// Sets P`number` to `lanes`, inactive above them.
     fn set_p(&mut self, number: u8, lanes: &[Term]) {
         let no = self.pool.boolean(false);
-        let predicate = Rc::make_mut(&mut self.state.predicates[usize::from(number)]);
+        let predicate = Rc::make_mut(&mut self.core.predicates[usize::from(number)]);
         for (at, lane) in predicate.iter_mut().enumerate() {
             *lane = lanes.get(at).copied().unwrap_or(no);
         }
@@ -70,11 +70,11 @@ impl Cpu<'_> {
         for set in result {
             any = self.pool.bool_or(any, *set);
         }
-        self.state.sign = first;
-        self.state.zero = self.pool.bool_not(any);
-        self.state.carry = self.pool.bool_not(last);
-        self.state.overflow = no;
-        self.state.last = Last::Other;
+        self.core.sign = first;
+        self.core.zero = self.pool.bool_not(any);
+        self.core.carry = self.pool.bool_not(last);
+        self.core.overflow = no;
+        self.core.last = Last::Other;
     }
 
     /// The test `cmp` of two bytes.
