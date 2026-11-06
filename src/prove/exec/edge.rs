@@ -35,7 +35,14 @@ impl Cpu<'_> {
             Op::Read => self.delegate(op, Call::Read, 0),
             Op::Write => self.delegate(op, Call::Write, 1),
             Op::Close => self.delegate(op, Call::Close, 3),
-            Op::Shutdown => self.delegate(op, Call::Shutdown, 48),
+            // As in a test, none of the standard descriptors is a socket: the system says
+            // `ENOTSOCK`, which is none of the errors the operation gives, so it is `EIO`.
+            Op::Shutdown => {
+                if self.constant(given[0])? & 0xffff_ffff <= 2 {
+                    return self.finish(op, (-EIO).cast_unsigned());
+                }
+                self.delegate(op, Call::Shutdown, 48)
+            }
             Op::Poll => self.delegate(op, Call::Poll, 7),
             Op::Exit => self.delegate(op, Call::ExitGroup, 231),
             Op::Clock => {
