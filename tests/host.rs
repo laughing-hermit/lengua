@@ -214,11 +214,8 @@ async fn check(pool: &Pool, wat: &str, case: &Case) -> Result<(), String> {
                             .chain(&wanted_folders)
                             .any(|name| name.starts_with(&format!("{folder}/")))
                 };
-                let unnamed: Vec<&String> = run
-                    .folders
-                    .iter()
-                    .filter(|folder| !named(folder))
-                    .collect();
+                let unnamed: Vec<&String> =
+                    run.folders.iter().filter(|folder| !named(folder)).collect();
                 let missing: Vec<&String> = wanted_folders
                     .iter()
                     .filter(|folder| !run.folders.contains(*folder))
