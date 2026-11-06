@@ -317,8 +317,10 @@ reading seccomp's list from the linked code needs it.
     today);
   - `os_accept` and `os_poll` send a one-way "waiting" note, which replaces the
     `/proc/<pid>/syscall` probe (testrun.rs:1129-1152);
-  - the edge fails a write past the file limit with EFBIG. RLIMIT_FSIZE stays set above that
-    limit, as a backstop.
+  - a write past the file limit fails with EFBIG. As built on Linux (and macOS will do the same),
+    the launcher sets RLIMIT_FSIZE and ignores SIGXFSZ, so the kernel cuts the write that crosses
+    the limit short and fails the next one, at no cost to the program; Windows has no such limit,
+    so its edge counts the bytes and gives the same two answers.
 - **`run`.** The broker handles names only. Reads, writes, seeks, polls, listings of a handed
   folder, the clock, random bytes and sleeps go straight to the OS. A spec that uses no files gets
   no channel.

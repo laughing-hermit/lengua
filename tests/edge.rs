@@ -100,6 +100,8 @@ struct Case {
     folders: &'static [&'static str],
     /// The files the working folder holds afterwards, when the case says; none, when it doesn't.
     after: &'static [(&'static str, &'static str)],
+    /// The most bytes a file may hold, when the case says; a test's limit, when it doesn't.
+    file_limit: Option<u64>,
     /// The system calls its operations make, besides `write` and `exit_group`.
     calls: &'static [Syscall],
     /// Whether it starts threads.
@@ -129,6 +131,7 @@ impl Case {
             files: &[],
             folders: &[],
             after: &[],
+            file_limit: None,
             calls: &[],
             threads: false,
             model: None,
@@ -1086,6 +1089,47 @@ fn cases() -> Vec<Case> {
                 image(56, &[6, 0, 6, 0, -17, 3, 0], &[]),
             )
         },
+        // A file's size limit (ten bytes here): the write that crosses it is cut short, the next
+        // fails with EFBIG, and the file holds what fitted.
+        Case {
+            model: Some("it has no limit on the size of a file"),
+            data: &[("out", b"out.txt\0"), ("greeting", b"hello\n")],
+            after: &[("out.txt", "hello\nhell")],
+            file_limit: Some(10),
+            calls: &[Syscall::Openat, Syscall::Close],
+            ..Case::new(
+                "a_write_past_the_file_limit",
+                &[
+                    Call {
+                        op: "os_open",
+                        args: &[Data("out"), N(1)],
+                        keep: Some(30),
+                    },
+                    Call {
+                        op: "os_write",
+                        args: &[Kept(30), Data("greeting"), N(6)],
+                        keep: Some(0),
+                    },
+                    Call {
+                        op: "os_write",
+                        args: &[Kept(30), Data("greeting"), N(6)],
+                        keep: Some(1),
+                    },
+                    Call {
+                        op: "os_write",
+                        args: &[Kept(30), Data("greeting"), N(6)],
+                        keep: Some(2),
+                    },
+                    Call {
+                        op: "os_close",
+                        args: &[Kept(30)],
+                        keep: Some(3),
+                    },
+                ],
+                32,
+                image(32, &[6, 4, -27, 0], &[]),
+            )
+        },
         // Listing folders: one entry of a file, one of a folder, a folder with nothing in it
         // (`.` and `..` are left out, so the first read has nothing and the next is the end), a
         // file that is no folder (ENOTDIR), a descriptor that isn't open, and the kind and size of
@@ -1278,7 +1322,11 @@ async fn every_operation_does_what_it_promises() {
                     channel: brokered,
                     ..Job::new(&executable, &arguments, case.stdin, &allowed)
                 };
-                let ran = run(launcher(), job, Limits::default())
+                let limits = Limits {
+                    max_file_size: case.file_limit.or(Limits::default().max_file_size),
+                    ..Limits::default()
+                };
+                let ran = run(launcher(), job, limits)
                     .await
                     .expect("the program runs");
                 let what = format!(

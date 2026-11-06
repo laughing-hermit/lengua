@@ -803,6 +803,7 @@ dependencies = [
  "iced-x86",
  "jsonschema",
  "landlock",
+ "lengua-os",
  "nix",
  "object",
  "perf-event2",
@@ -830,6 +831,9 @@ dependencies = [
 [[package]]
 name = "lengua-os"
 version = "0.1.0"
+dependencies = [
+ "nix",
+]
 
 [[package]]
 name = "libc"

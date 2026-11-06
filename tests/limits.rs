@@ -478,7 +478,7 @@ fn opens_a_file_outside_its_folder() -> Programs {
     }
 }
 
-/// A program that writes to `out.txt` for ever.
+/// A program that writes to `out.txt` until a write fails, and exits with the error.
 fn grows_a_file() -> Programs {
     PerCpu {
         x86_64: x86(
@@ -496,7 +496,12 @@ fn grows_a_file() -> Programs {
                 "lea rsi, [rip + buffer]",
                 "mov edx, 4096",
                 "syscall",
-                "jmp again",
+                "test rax, rax",
+                "jns again",
+                "neg eax",
+                "mov edi, eax",
+                "mov eax, 60",
+                "syscall",
             ],
             &[
                 ".data",
@@ -524,7 +529,10 @@ fn grows_a_file() -> Programs {
                 "mov x2, #4096",
                 "mov x8, #64",
                 "svc #0",
-                "b 1b",
+                "tbz x0, #63, 1b",
+                "neg x0, x0",
+                "mov x8, #93",
+                "svc #0",
             ],
             &[
                 ".data",
@@ -1392,15 +1400,15 @@ async fn the_kernel_keeps_programs_inside_what_their_spec_allows() {
     let result = run_simply(&outside, &[], b"").await;
     assert_eq!(result.end, End::Exited(13), "EACCES");
 
-    // A file can't grow past the limit.
+    // A file can't grow past the limit: the write that would is cut short, and the next fails with
+    // EFBIG, which ends the program here and doesn't kill it with a signal.
     let grow = built(folder.path(), "grow", &grows_a_file()).await;
     let limits = Limits {
         max_file_size: Some(10_000),
         ..Limits::default()
     };
     let result = run_with(&grow, &[], b"", &BTreeMap::new(), &file_syscalls(), limits).await;
-    assert_eq!(result.end, End::Signaled(25));
-    assert!(result.end.describe(limits).contains("size limit"));
+    assert_eq!(result.end, End::Exited(27), "EFBIG");
 
     // In a folder of the user's, a file inside opens and one beside it, outside, doesn't.
     let opens = built(folder.path(), "opens", &opens_its_first_argument()).await;

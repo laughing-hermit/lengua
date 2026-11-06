@@ -18,3 +18,7 @@ missing_docs = "warn"
 
 [lints.clippy]
 unwrap_used = "warn"
+
+# The Unix calls that need unsafe code (the nix crate is empty elsewhere).
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", default-features = false, features = ["signal"] }

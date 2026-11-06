@@ -46,6 +46,8 @@ webpki-roots = "1"
 # and 4 of the roadmap.
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", default-features = false, features = ["process", "signal"] }
+# The calls that need unsafe code, each in a safe function (this crate forbids unsafe code).
+lengua-os = { path = "crates/lengua-os" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = "0.4.7"

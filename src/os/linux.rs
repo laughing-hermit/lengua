@@ -1425,6 +1425,10 @@ fn confine(
     if let Some(bytes) = file_limit {
         rustix::process::setrlimit(rustix::process::Resource::Fsize, limit(bytes))
             .map_err(|error| format!("file size limit: {error}"))?;
+        // A write past it fails with EFBIG, as on every target, and doesn't end the program with
+        // SIGXFSZ.
+        lengua_os::ignore_file_size_signal()
+            .map_err(|error| format!("file size signal: {error}"))?;
     }
     // A crash leaves no core file behind.
     rustix::process::setrlimit(rustix::process::Resource::Core, limit(0))

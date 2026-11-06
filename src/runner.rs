@@ -255,7 +255,6 @@ pub fn signal_name(signal: i32) -> String {
         9 => "SIGKILL".into(),
         11 => "SIGSEGV (memory it may not touch)".into(),
         13 => "SIGPIPE".into(),
-        25 => "SIGXFSZ (a file grew past its size limit)".into(),
         31 => "SIGSYS (a system call its spec doesn't allow)".into(),
         other => format!("signal {other}"),
     }
