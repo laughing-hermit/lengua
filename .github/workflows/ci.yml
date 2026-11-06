@@ -8,9 +8,14 @@ name: ci
 #   author dispatches the run it wants, so work in progress doesn't cost a long suite per push).
 # - Every week it runs the suite and the slow ignored tests on all six.
 # - A dispatch picks the targets and the mode: compile (clippy and the tests built), test (the
-#   suite), ignored (the slow ignored tests, optionally one folder's check), bench (lengua against
-#   C, C++ and Rust) or release (the archive). A test run also has a job on x86-64 Linux with
-#   QEMU's user mode, so the ARM64 cells run there too, as on a developer's x86-64 computer.
+#   suite), ignored (the slow ignored tests, optionally one folder's check), golden (the checker's
+#   and the prover's recordings of every program, made at two commits and compared), bench (lengua
+#   against C, C++ and Rust, and against an earlier commit's programs) or release (the archive). A
+#   test run also has a job on x86-64 Linux with QEMU's user mode, so the ARM64 cells run there
+#   too, as on a developer's x86-64 computer.
+# - `filter` matches test *names* only (libtest's filters, after `--`). To run a test *file*, name
+#   it in `test_files` (`lib` is the library's own tests): each becomes `--test <name>`. A run with
+#   a filter or files that matched no test fails, so a gate cannot pass by running nothing.
 on:
   push:
     branches-ignore:
@@ -35,17 +40,22 @@ on:
         type: string
         default: "all"
       mode:
-        description: "compile, test, ignored, bench or release (the last two for linux-x86_64 and linux-aarch64 so far)"
+        description: "compile, test, ignored, golden, bench or release (golden, bench and release: linux-x86_64 and linux-aarch64 so far)"
         type: choice
         options:
           - compile
           - test
           - ignored
+          - golden
           - bench
           - release
         default: compile
       filter:
         description: "Only the tests whose names contain this (libtest's filters: several, separated by spaces)"
+        type: string
+        default: ""
+      test_files:
+        description: "Only these test files, by name, separated by spaces (limits red_team ...; lib for the library's own tests)"
         type: string
         default: ""
       check_folder:
@@ -56,6 +66,10 @@ on:
         description: "The target to check them as (LENGUA_CHECK_TARGET), when not the runner's own: through QEMU"
         type: string
         default: ""
+      mutate_only:
+        description: "The programs the mutation test runs alone (LENGUA_MUTATE_ONLY), in an ignored run"
+        type: string
+        default: ""
       stall_seconds:
         description: "Stop a test or ignored run after this many seconds, keeping where it stood (stall.txt; the two Linux targets)"
         type: string
@@ -64,9 +78,28 @@ on:
         description: "The seed the randomized tests draw from (LENGUA_RANDOM_SEED), to run one again"
         type: string
         default: ""
+      golden_base:
+        description: "golden: the commit to record the goldens at, to compare the dispatched ref's with"
+        type: string
+        default: ""
+      golden_base_run:
+        description: "golden: an earlier golden run whose base recordings to reuse, instead of recording the base again"
+        type: string
+        default: ""
+      golden_view:
+        description: "golden: raw (the recordings byte for byte) or ledger (only the proofs' verdicts, counts left out)"
+        type: choice
+        options:
+          - raw
+          - ledger
+        default: raw
+      bench_against:
+        description: "bench: a commit whose lengua programs the dispatched ref's are measured against, in the same run"
+        type: string
+        default: ""
 
 concurrency:
-  group: ci-${{ github.ref }}-${{ github.event_name }}-${{ inputs.mode }}-${{ inputs.targets }}-${{ inputs.filter }}-${{ inputs.check_folder }}
+  group: ci-${{ github.ref }}-${{ github.event_name }}-${{ inputs.mode }}-${{ inputs.targets }}-${{ inputs.filter }}-${{ inputs.test_files }}-${{ inputs.check_folder }}-${{ inputs.mutate_only }}-${{ inputs.golden_base }}-${{ inputs.golden_base_run }}-${{ inputs.golden_view }}-${{ inputs.bench_against }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
@@ -91,6 +124,10 @@ jobs:
           EVENT: ${{ github.event_name }}
           MODE: ${{ inputs.mode }}
           TARGETS: ${{ inputs.targets }}
+          GOLDEN_BASE: ${{ inputs.golden_base }}
+          GOLDEN_BASE_RUN: ${{ inputs.golden_base_run }}
+          BENCH_AGAINST: ${{ inputs.bench_against }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           # A push runs the suite, the weekly run the suite and the ignored tests, a dispatch what it asks.
           case "$EVENT" in
@@ -106,15 +143,36 @@ jobs:
             include=$(jq -c --arg t ",$TARGETS," \
               '[.[] | . as $e | select($t | contains("," + $e.target + ","))]' <<< "$listed")
           fi
-          # The benchmarks and the release archive exist for linux-x86_64 and linux-aarch64 so far.
+          # The benchmarks, the goldens and the release archive exist for linux-x86_64 and
+          # linux-aarch64 so far.
           case "$MODE" in
             bench|release) include=$(jq -c '[.[] | select(.target | startswith("linux-"))]' <<< "$include") ;;
           esac
-          matrix=$(jq -c --argjson modes "$modes" \
-            '[.[] as $t | $modes[] as $m | $t + {mode: $m, base: $t.target, qemu: false}]' <<< "$include")
+          # A job's checkout is shallow unless it must read another commit (a bench against one).
+          depth=1
+          if [ "$MODE" = bench ] && [ -n "$BENCH_AGAINST" ]; then depth=0; fi
+          matrix=$(jq -c --argjson modes "$modes" --argjson depth "$depth" \
+            '[.[] as $t | $modes[] as $m | $t + {mode: $m, base: $t.target, qemu: false, ref: "", label: "", depth: $depth}]' <<< "$include")
+          if [ "$MODE" = golden ]; then
+            # The goldens: the dispatched ref and, unless an earlier run's are reused, the base,
+            # each recorded on its own runner so that the two legs run at once. The recordings are
+            # the prover's and the checker's for both CPUs, which a x86-64 host makes for both.
+            if [ -z "$GOLDEN_BASE" ] && [ -z "$GOLDEN_BASE_RUN" ]; then
+              echo "golden needs golden_base (a commit) or golden_base_run (an earlier golden run)" >&2
+              exit 1
+            fi
+            legs='[{"label":"head","ref":""}]'
+            if [ -z "$GOLDEN_BASE_RUN" ]; then
+              # actions/checkout takes a branch, a tag or a full commit hash, never a short one.
+              full=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GOLDEN_BASE" --jq .sha)
+              legs=$(jq -c --arg r "$full" '. + [{label: "base", ref: $r}]' <<< "$legs")
+            fi
+            matrix=$(jq -c --argjson legs "$legs" \
+              '[.[] | select(.target == "linux-x86_64") as $t | $legs[] | $t + . + {mode: "golden", base: $t.target, qemu: false, depth: 0}]' <<< "$listed")
+          fi
           # The suite on x86-64 Linux with QEMU's user mode, beside the six.
           if [ "$MODE" = test ] && { [ -z "$TARGETS" ] || [ "$TARGETS" = all ] || [[ ",$TARGETS," == *,qemu,* ]]; }; then
-            matrix=$(jq -c '. + [{target: "linux-x86_64-qemu", runner: "ubuntu-24.04", mode: "test", base: "linux-x86_64", qemu: true}]' <<< "$matrix")
+            matrix=$(jq -c '. + [{target: "linux-x86_64-qemu", runner: "ubuntu-24.04", mode: "test", base: "linux-x86_64", qemu: true, ref: "", label: "", depth: 1}]' <<< "$matrix")
           fi
           if [ "$matrix" = "[]" ]; then
             echo "Nothing to run for: $TARGETS in $MODE" >&2
@@ -156,13 +214,15 @@ jobs:
           if-no-files-found: ignore
 
   test:
-    name: ${{ matrix.mode }} (${{ matrix.target }})
+    name: ${{ matrix.mode }} (${{ matrix.target }})${{ matrix.label && format(' {0}', matrix.label) || '' }}
     needs: plan
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
+    # A golden leg, the mutation test and the bench run longer than the suite: the first golden
+    # head leg (run 42152180357) was cut off at 120 minutes, where its base leg took 101.
+    timeout-minutes: ${{ (matrix.mode == 'test' || matrix.mode == 'compile') && 120 || 330 }}
     # The QEMU job reports without failing the run until its seven failing cases are fixed
     # (todo.md, round 2): they expect a native run's wording, which an emulated one doesn't have.
     continue-on-error: ${{ matrix.qemu }}
@@ -170,7 +230,18 @@ jobs:
       run:
         shell: bash
     steps:
+      # A golden base leg checks out the base commit; the others, the dispatched ref.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+          fetch-depth: ${{ matrix.depth }}
+
+      # The base predates some of the scripts the steps below run (a base leg needs the full
+      # history, which brings the dispatched commit with it), so the leg runs the base's code with
+      # the dispatched ref's scripts.
+      - name: The dispatched ref's scripts
+        if: ${{ matrix.ref != '' }}
+        run: git checkout ${{ github.sha }} -- scripts
 
       - name: The machine
         run: bash scripts/ci/machine.sh ${{ matrix.base }}
@@ -213,8 +284,10 @@ jobs:
           key: ci-${{ matrix.base }}-${{ hashFiles('Cargo.lock', 'scripts/ci/setup.sh') }}
           restore-keys: ci-${{ matrix.base }}-
 
+      # --keep-going: every target's errors in one run, not the first target's alone.
       - name: Clippy
-        run: cargo clippy --release --all-targets --locked --workspace -- -D warnings
+        if: ${{ matrix.mode != 'golden' }}
+        run: cargo clippy --release --all-targets --locked --workspace --keep-going -- -D warnings
 
       # Built first, so that the time a test run may take (stall_seconds) is the tests' and not the
       # compiler's.
@@ -228,16 +301,19 @@ jobs:
           LENGUA_PROOF_SECONDS: "60"
           RUST_TEST_THREADS: "2"
           FILTER: ${{ inputs.filter }}
+          TEST_FILES: ${{ inputs.test_files }}
           LENGUA_RANDOM_SEED: ${{ inputs.seed }}
           STALL_SECONDS: ${{ inputs.stall_seconds }}
           LENGUA_SKIP_LOG: ${{ github.workspace }}/skips.log
         run: |
-          tests='set -o pipefail; cargo test --release --locked --workspace --no-fail-fast -- $FILTER 2>&1 | tee test.log'
+          selection=$(bash scripts/ci/test-selection.sh $TEST_FILES)
+          tests='set -o pipefail; cargo test --release --locked --workspace --no-fail-fast '"$selection"' -- $FILTER 2>&1 | tee test.log'
           if [ -n "$STALL_SECONDS" ]; then
             bash scripts/stall-report.sh "$STALL_SECONDS" bash -c "$tests"
           else
             bash -c "$tests"
           fi
+          bash scripts/ci/ran-some-tests.sh test.log "$FILTER$TEST_FILES"
 
       - name: The slow ignored tests
         if: ${{ matrix.mode == 'ignored' }}
@@ -245,21 +321,54 @@ jobs:
           LENGUA_PROOF_SECONDS: "60"
           RUST_TEST_THREADS: "2"
           FILTER: ${{ inputs.filter }}
+          TEST_FILES: ${{ inputs.test_files }}
           LENGUA_RANDOM_SEED: ${{ inputs.seed }}
           LENGUA_CHECK_FOLDER: ${{ inputs.check_folder }}
           LENGUA_CHECK_TARGET: ${{ inputs.check_target }}
+          LENGUA_MUTATE_ONLY: ${{ inputs.mutate_only }}
           STALL_SECONDS: ${{ inputs.stall_seconds }}
           LENGUA_SKIP_LOG: ${{ github.workspace }}/skips.log
         run: |
-          tests='set -o pipefail; cargo test --release --locked --workspace --no-fail-fast -- --ignored --nocapture $FILTER 2>&1 | tee ignored.log'
+          selection=$(bash scripts/ci/test-selection.sh $TEST_FILES)
+          tests='set -o pipefail; cargo test --release --locked --workspace --no-fail-fast '"$selection"' -- --ignored --nocapture $FILTER 2>&1 | tee ignored.log'
           if [ -n "$STALL_SECONDS" ]; then
             bash scripts/stall-report.sh "$STALL_SECONDS" bash -c "$tests"
           else
             bash -c "$tests"
           fi
+          bash scripts/ci/ran-some-tests.sh ignored.log "$FILTER$TEST_FILES"
+
+      # The checker's and the prover's reports on every program, for both CPUs, recorded. target/
+      # is cached whole, recordings included, and the build cache under it keys on main.s alone, so
+      # both go first: a restored old recording would be compared with silently. One test at a
+      # time: the prover's recordings run under fixed time budgets, and tests run side by side
+      # would make "out of time" differ between the two legs. (Two filters cover the four tests;
+      # the helper explains_a_mutant matches neither.)
+      - name: The goldens, recorded
+        if: ${{ matrix.mode == 'golden' }}
+        env:
+          RUST_TEST_THREADS: "1"
+          LENGUA_SKIP_LOG: ${{ github.workspace }}/skips.log
+        run: |
+          rm -rf target/golden target/golden-cache
+          set -o pipefail
+          LENGUA_GOLDEN=write cargo test --release --locked --lib -- --ignored \
+            every_report_is_as_recorded every_run_and_proof_is_as_recorded 2>&1 | tee golden.log
+          bash scripts/ci/ran-some-tests.sh golden.log goldens
+          ls -l target/golden
+
+      - name: The recordings, kept
+        if: ${{ matrix.mode == 'golden' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-${{ matrix.label }}-${{ matrix.ref || github.sha }}
+          path: target/golden/*.txt
+          retention-days: 30
 
       - name: Benchmarks against C, C++ and Rust
         if: ${{ matrix.mode == 'bench' }}
+        env:
+          LENGUA_BENCH_AGAINST: ${{ inputs.bench_against }}
         run: |
           sudo apt-get install -y -q time
           cargo bench --locked --bench against_rust_and_c 2>&1 | tee bench.log
@@ -278,10 +387,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ci-${{ matrix.target }}-${{ matrix.mode }}-${{ github.run_number }}
+          name: ci-${{ matrix.target }}-${{ matrix.mode }}${{ matrix.label && format('-{0}', matrix.label) || '' }}-${{ github.run_number }}
           path: |
             test.log
             ignored.log
+            golden.log
             skips.log
             stall.txt
             bench.log
@@ -294,10 +404,41 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  # The goldens recorded at the dispatched ref and at the base, compared: byte for byte (raw) or
+  # as the proofs' verdicts alone (ledger); see scripts/ci/golden-diff.sh.
+  golden-diff:
+    name: golden diff
+    needs: test
+    if: ${{ always() && inputs.mode == 'golden' && needs.test.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The recordings of both commits
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN: ${{ github.run_id }}
+          BASE_RUN: ${{ inputs.golden_base_run }}
+        run: |
+          gh run download "$RUN" --pattern 'golden-head-*' --dir golden/head
+          # The base's: from this run, or from an earlier one whose recordings are reused.
+          gh run download "${BASE_RUN:-$RUN}" --pattern 'golden-base-*' --dir golden/base
+
+      # `shell: bash` runs with pipefail, so that the script's exit decides the job and not tee's.
+      - name: Compare
+        shell: bash
+        env:
+          VIEW: ${{ inputs.golden_view }}
+        run: bash scripts/ci/golden-diff.sh "$VIEW" golden/base golden/head | tee -a "$GITHUB_STEP_SUMMARY"
+
   # One check that says whether the whole run passed.
   gate:
     name: gate
-    needs: [plan, format, test]
+    needs: [plan, format, test, golden-diff]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -305,8 +446,11 @@ jobs:
       - name: Every job passed
         env:
           RESULTS: ${{ needs.plan.result }} ${{ needs.format.result }} ${{ needs.test.result }}
+          GOLDEN_DIFF: ${{ needs.golden-diff.result }}
         run: |
-          echo "plan, format, test: $RESULTS"
+          echo "plan, format, test: $RESULTS; golden diff: $GOLDEN_DIFF"
           for result in $RESULTS; do
             [ "$result" = success ] || exit 1
           done
+          # It runs in the golden mode only.
+          [ "$GOLDEN_DIFF" = success ] || [ "$GOLDEN_DIFF" = skipped ] || exit 1
