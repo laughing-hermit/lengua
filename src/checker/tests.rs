@@ -4611,9 +4611,24 @@ const EDGE_FIXTURES: &[EdgeFixture] = &[
     },
     EdgeFixture {
         what: "a thread started by the program itself, though the spec allows threads",
+        // lengua's os_thread_start calls the program's `worker`, so linking it needs one.
         edits: PerCpu {
-            x86_64: &[("    call os_write\n", "    call os_thread_start\n")],
-            aarch64: &[("    bl os_write\n", "    bl os_thread_start\n")],
+            x86_64: &[
+                ("    call os_write\n", "    call os_thread_start\n"),
+                (
+                    ".size main, . - main\n",
+                    ".size main, . - main\n\n.type worker, @function\nworker:\n    xor eax, eax\n    \
+                     ret\n.size worker, . - worker\n",
+                ),
+            ],
+            aarch64: &[
+                ("    bl os_write\n", "    bl os_thread_start\n"),
+                (
+                    ".size main, . - main\n",
+                    ".size main, . - main\n\n.type worker, @function\nworker:\n    mov x0, #0\n    \
+                     ret\n.size worker, . - worker\n",
+                ),
+            ],
         },
         ops: &[
             crate::edge::Op::Write,

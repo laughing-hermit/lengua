@@ -202,15 +202,41 @@ plan is ROADMAP.md's R2). Done, with the runs that show it:
   proof test (it needs `fill` linked), the thread test's op list and the sessions tests' nop.
 - **6a, the broker alone**: its messages, parser (with a fuzz target) and service on Linux
   (run 42144883542).
-- **6b and 6c, in progress**: the edge's channel code on both CPUs (descriptor 4,352, the first
-  message, requests for names, the clock and random bytes, notes of closes, waits and listings,
-  a listing turned round), the launcher's channel and the broker's thread for a job, no
-  supervisor for such a job, and the harness's switch to the broker's notes.
+- **6b, 6c and 6d, the broker's channel and the sandbox switch**: the edge's channel code on both
+  CPUs (descriptor 4,352, the first message, requests for names, the clock and random bytes,
+  notes of closes, waits and listings, a listing turned round), the launcher's channel and the
+  broker's thread for a job, the harness's switch to the broker's notes, Landlock with no path
+  for a program that has a channel (fail closed where Landlock is not enforced; QEMU keeps the
+  folder), and seccomp pins that keep `sendmsg` and `recvmsg` on descriptor 4,352 and every
+  descriptor-first call off it. Runs: targeted, on both Linux runners, 42151476555 (6b, 6c) and
+  42154121624 (6d). The stack's first full gate (run 42152070867, `wip/r2-6a`) failed five lib
+  tests on both Linux CPUs and passed everything else: all five were stale expectations in the
+  tests (two pinned system-call lists without `sendmsg` and `recvmsg`, two checker tests that
+  counted 26 functions in lengua's text, one AArch64 thread fixture's immediate), fixed in
+  `wip/r2-6d`; its full run on six runners is 42158417211.
+- **8a, on `wip/r2-8a`**: the ptrace supervisor and the tests only it served are deleted; a write
+  past a test's file limit is a short write and then `EFBIG` (the launcher ignores SIGXFSZ,
+  through the `lengua-os` crate's first function); the checker no longer reads the inline form
+  (`Form` is gone, `edge::is_program` says whether text is a program; the system-call rule, the
+  canonical copies, the start-stack owners and the frozen templates are deleted), a program may
+  not call `os_thread_start` or `os_thread_join` itself, the shipped `fill.s` assets are gone,
+  and the checker's, the integration and the prover's tests stand on the shipped edge-form
+  templates. The compile run 42161170289 built every target under clippy `-D warnings`.
+- **8c, the documents**: DESIGN.md has the broker, the sandbox as built and a section on the
+  edge; the CPU references are `x86_64.md` and `aarch64.md`; the compile skill teaches the edge
+  form.
 
-Still to do, from round 1 and the plan's later steps: 6d (Landlock with no path, the pins on the
-channel), 7 (the snippets in the tests), 8 (delete the inline form and the supervisor, the
-layout, the documents, the final verification: the full suite on six runners, the mutation test,
-the golden ledger against `e4163d4`, the bench against it).
+Decided while building (the owner's to reverse):
+- The prover keeps its raw system-call model (`Cpu::syscall`, `Image::linux`, the raw `_start`
+  entry) and the spec keeps `Spec.syscalls` and `Use::syscalls`, which still give the sandbox its
+  allow-list: the raw `_start` prover tests stay valid, and round 6's prover parity restructures
+  the edge's models anyway. The plan had them deleted in 8a.
+- Step 7, the snippets: the raw programs that probe the sandbox (`tests/limits.rs`) stay raw by
+  their purpose; the snippets that tested the inline form's rules went with the form.
+- Step 8b, the layout (one `spec.md` per program, assets split per CPU), goes to round 6.
+
+Still to do in round 2: the full suites on six runners at the 8a tip, the mutation test, the
+golden ledger against `e4163d4`, the bench against it, and the merge to main.
 
 - **The QEMU job's seven failing cases** (run 42085247387: 528 passed, 7 failed). In
   `tests/programs.rs`: `a_program_gets_only_the_environment_its_test_or_run_gives`,
