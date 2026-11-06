@@ -2918,7 +2918,7 @@ async fn an_edge_form_programs_threads_follow_the_rules() {
         ),
         (
             "    mov x2, #SLOT_SIZE\n",
-            "    mov x2, #SLOT_SIZE + 64\n",
+            "    mov x2, #SLOT_SIZE - 64\n",
             "    bl parallel_for\n",
             "parallel_for's slot size isn't SLOT_SIZE",
         ),
@@ -4824,7 +4824,7 @@ fn the_frozen_texts_are_the_inline_forms() {
     assert_eq!(super::frozen("server-template.s"), None);
 }
 
-/// lengua.s read as a program, with the first line main.s gives it: its 26 functions are all
+/// lengua.s read as a program, with the first line main.s gives it: every function it declares is
 /// there, and the dialect's parser finds fault only with how its data is laid out (alignment
 /// directives and sizes that are bare numbers), which is not a program's rule to hold lengua to.
 #[test]
@@ -4843,7 +4843,11 @@ fn the_dialect_finds_only_the_data_layout_of_lengua_s_at_fault() {
         }
         let text = crate::edge::lengua_text(profile, &main).expect("the edge form");
         let (source, violations) = source::parse(&format!("{first}{text}"));
-        assert_eq!(source.functions.len(), 26, "{profile:?}");
+        assert_eq!(
+            source.functions.len(),
+            text.matches(", @function").count(),
+            "{profile:?}"
+        );
         let others: Vec<String> = violations
             .iter()
             .map(ToString::to_string)
@@ -4956,7 +4960,7 @@ async fn lengua_s_is_matched_and_an_operation_keeps_what_the_edge_keeps() {
             &mut violations,
         )
         .unwrap_or_else(|| panic!("{profile:?}: {violations:#?}"));
-        assert_eq!(program.lengua.len(), 26, "{profile:?}");
+        assert_eq!(program.lengua.len(), lengua.functions.len(), "{profile:?}");
         assert_eq!(program.functions.len(), 2, "{profile:?}");
         // lengua's data is not main.s's.
         assert!(
