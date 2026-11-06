@@ -5335,7 +5335,9 @@ async fn a_result_a_function_sets_in_a_register_the_edge_changes_is_readable() {
     ] {
         for (body, stale) in [(sets, false), (leaves, true)] {
             let text = EDGE_BASE.get(profile).replacen(from, to, 1)
-                + &format!("\n.type helper, @function\nhelper:\n{body}    ret\n.size helper, . - helper\n");
+                + &format!(
+                    "\n.type helper, @function\nhelper:\n{body}    ret\n.size helper, . - helper\n"
+                );
             let report = check_edge(&text, &BASE_OPS).await;
             let found: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
             assert_eq!(
