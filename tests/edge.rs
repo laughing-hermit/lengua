@@ -1491,7 +1491,7 @@ async fn a_listing_is_turned_round_for_a_second_run_and_the_broker_is_told_of_it
 }
 
 /// A name of 1,024 bytes, and the NUL a name ends with.
-static LONG_NAME: [u8; 1025] = {
+const LONG_NAME: [u8; 1025] = {
     let mut bytes = [b'a'; 1025];
     bytes[1024] = 0;
     bytes
