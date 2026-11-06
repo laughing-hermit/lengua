@@ -1415,6 +1415,24 @@ async fn a_test_gives_the_program_its_clock_and_random_bytes_through_the_broker(
         assert_eq!(ran.supplied, None, "{what}");
         assert_eq!(ran.random_asked, Some(4), "{what}");
         assert!(ran.wall_time_ns < 1_500_000_000, "{what}: {ran:?}");
+        // With only the random bytes supplied, the clock is the system's.
+        let random_only = Supply {
+            random: Some(vec![1, 2, 3, 4]),
+            clock: Vec::new(),
+        };
+        let job = Job {
+            emulated: how == Way::Emulated,
+            supply: Some(&random_only),
+            channel: true,
+            ..Job::new(&executable, &[], b"", &allowed)
+        };
+        let ran = run(launcher(), job, Limits::default())
+            .await
+            .expect("the program runs");
+        assert_eq!(ran.end, End::Exited(0), "{what}");
+        assert_eq!(ran.stdout[80..84], [1, 2, 3, 4], "{what}");
+        let seconds = i64::from_le_bytes(ran.stdout[64..72].try_into().expect("8 bytes"));
+        assert!(seconds > 1_700_000_000, "{what}: the system's time, {seconds}");
     }
 }
 

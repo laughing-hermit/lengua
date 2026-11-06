@@ -1558,7 +1558,6 @@ fn confine(
     emulated: bool,
 ) -> Result<(), String> {
     let abi = ABI::V6;
-    let folder = PathFd::new(".").map_err(|error| format!("working folder: {error}"))?;
     let executable = PathFd::new(program).map_err(|error| format!("program: {error}"))?;
     // A program with a channel to the broker gets no path but its own binary: the broker, which
     // runs outside this confinement, opens every name it asks for. A program QEMU runs needs what
@@ -1570,7 +1569,10 @@ fn confine(
         .and_then(|ruleset| ruleset.scope(Scope::from_all(abi)))
         .and_then(Ruleset::create)
         .map_err(|error| format!("Landlock: {error}"))?;
+    // The folder's descriptor is made only where it is used: one left over would be closed after
+    // seccomp is on, a call the program's list may not have.
     if !no_path {
+        let folder = PathFd::new(".").map_err(|error| format!("working folder: {error}"))?;
         ruleset = ruleset
             .add_rule(PathBeneath::new(folder, AccessFs::from_all(abi)))
             .map_err(|error| format!("Landlock: {error}"))?;
