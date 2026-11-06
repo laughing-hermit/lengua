@@ -25,7 +25,7 @@ use std::fmt;
 
 use crate::isa::Isa;
 use crate::platform::{CpuFeatures, Profile};
-use crate::spec::Syscall;
+use crate::idea::Syscall;
 
 pub use rules::Facts;
 pub use source::{Source, UnsafeBlock};
@@ -180,9 +180,9 @@ impl fmt::Display for Violation {
 /// What the checker needs besides main.s and the executable.
 #[derive(Debug, Clone, Copy)]
 pub struct Context<'a> {
-    /// The edge's operations the spec allows, which a program may call.
+    /// The edge's operations the idea allows, which a program may call.
     pub ops: &'a [crate::edge::Op],
-    /// How many threads the spec allows at once, when it allows more than one.
+    /// How many threads the idea allows at once, when it allows more than one.
     pub threads: Option<u32>,
     /// lengua.s as lengua assembled it after main.s, for a program (see [`lengua_source`]).
     pub lengua: Option<&'a Source>,

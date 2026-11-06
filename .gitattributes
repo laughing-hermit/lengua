@@ -1,3 +1,3 @@
-# Line endings: LF on every OS, so a Windows checkout reads the same bytes as Linux's. (A spec's hash
+# Line endings: LF on every OS, so a Windows checkout reads the same bytes as Linux's. (An idea's hash
 # normalizes CRLF, but the programs' text, the goldens and the scripts must not change with the OS.)
 * text=auto eol=lf

@@ -20,7 +20,7 @@ use std::fmt::Write as _;
 
 use crate::isa::Isa;
 use crate::platform::Profile;
-use crate::spec::{Network, Syscall, Use};
+use crate::idea::{Network, Syscall, Use};
 
 /// The descriptor of the channel to lengua's broker, which every operation refuses when a
 /// program passes it: a program holds [`crate::runner::OPEN_FILES`] descriptors, 0 to 4,351.
@@ -423,10 +423,10 @@ impl Op {
         }
     }
 
-    /// What a spec names to allow it: any one of these.
+    /// What an idea names to allow it: any one of these.
     #[must_use]
     pub const fn allowances(self) -> &'static [Allowance] {
-        use crate::spec::Use::{Clock, Files, RandomBytes, StandardInput, Terminal};
+        use crate::idea::Use::{Clock, Files, RandomBytes, StandardInput, Terminal};
         match self {
             Self::Write | Self::Exit => &[Allowance::Always],
             Self::Read => &[
@@ -453,8 +453,8 @@ impl Op {
         }
     }
 
-    /// The Linux system calls it makes, in the vocabulary of a spec's `Syscall`s: none for the
-    /// thread operations, whose `clone` and `futex` a spec never names.
+    /// The Linux system calls it makes, in the vocabulary of an idea's `Syscall`s: none for the
+    /// thread operations, whose `clone` and `futex` an idea never names.
     #[must_use]
     pub const fn syscalls(self) -> &'static [Syscall] {
         match self {
@@ -481,7 +481,7 @@ impl Op {
     }
 }
 
-/// What a spec names to allow an operation.
+/// What an idea names to allow an operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Allowance {
     /// Every program may call it.
@@ -498,7 +498,7 @@ pub enum Allowance {
     Threads,
 }
 
-/// The operations a spec allows: those any of whose [`Allowance`]s it meets.
+/// The operations an idea allows: those any of whose [`Allowance`]s it meets.
 #[must_use]
 pub fn ops_for(uses: &[Use], network: &Network, threads: Option<u32>) -> Vec<Op> {
     Op::ALL
@@ -1135,12 +1135,12 @@ mod tests {
     }
 
     /// A program on the network is allowed the operations its calls need, and a server of several
-    /// clients the wait; the calls the spec also lists, `sendto` for a write on a connection and the
+    /// clients the wait; the calls the idea also lists, `sendto` for a write on a connection and the
     /// thread's own `exit`, no operation makes.
     #[test]
     fn the_network_allows_the_operations_its_calls_need() {
         let client = Network {
-            connections: vec![crate::spec::Endpoint {
+            connections: vec![crate::idea::Endpoint {
                 host: None,
                 argument: None,
                 port: 80,

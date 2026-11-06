@@ -54,7 +54,7 @@ async fn a_new_folder_shows_the_machine_and_the_first_step() {
         let session = Session::start(protocol).await;
         let program = Program::new();
         let report = session.check(&program).await;
-        assert_eq!(report["state"], "write_spec", "{protocol:?}: {report}");
+        assert_eq!(report["state"], "write_idea", "{protocol:?}: {report}");
         let machine = report["machine"].as_str().unwrap_or_default();
         let host = format!("{}-{}, ", std::env::consts::OS, std::env::consts::ARCH);
         assert!(machine.starts_with(&host), "{report}");

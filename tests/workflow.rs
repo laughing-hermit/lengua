@@ -1,7 +1,7 @@
 //! The whole workflow through the MCP server on every target, in both protocol generations, on
 //! the `add` program: from the request to done through check alone, then run, from a shell, and
 //! every way lengua refuses or recovers. Each target runs its own twin of `add` (one
-//! byte-identical spec.md, a main.s in its CPU's instructions) and the same assertions, on its
+//! byte-identical idea.md, a main.s in its CPU's instructions) and the same assertions, on its
 //! own CPU's runner; what differs between the targets is a cell of a `PerCpu` table in
 //! `tests/flow/mod.rs`.
 
@@ -22,11 +22,11 @@ use per_target::Way;
 use serde_json::json;
 
 /// lengua's line in main.s once a check has passed: what it was compiled from and for.
-fn compiled_from(target: Profile, spec: &str) -> String {
+fn compiled_from(target: Profile, idea: &str) -> String {
     format!(
-        "{} lengua: compiled from spec.md sha256:{} for {}",
+        "{} lengua: compiled from idea.md sha256:{} for {}",
         flow::kit(target).comment,
-        Sha256Hex::of(spec.as_bytes()),
+        Sha256Hex::of(idea.as_bytes()),
         target.name()
     )
 }
@@ -78,7 +78,7 @@ async fn a_checked_program_runs_from_a_shell() {
         };
         let name = target.name();
         let program = Program::new();
-        program.write("spec.md", &flow::program_file(target, "add", "spec.md"));
+        program.write("idea.md", &flow::program_file(target, "add", "idea.md"));
         session.record(&program).await;
         program.write("main.s", &flow::program_file(target, "add", "main.s"));
         let done = session.settle(&program).await;
@@ -98,7 +98,7 @@ async fn a_checked_program_runs_from_a_shell() {
 
         // Standard input streams through, however long.
         let cat = Program::new();
-        cat.write("spec.md", &flow::program_file(target, "cat", "spec.md"));
+        cat.write("idea.md", &flow::program_file(target, "cat", "idea.md"));
         session.record(&cat).await;
         cat.write("main.s", &flow::program_file(target, "cat", "main.s"));
         let done = session.settle(&cat).await;
@@ -121,7 +121,7 @@ async fn a_checked_program_runs_from_a_shell() {
         assert_eq!(refused.status.code(), Some(125), "{name}: {refused:?}");
         let said = String::from_utf8_lossy(&refused.stderr);
         assert!(
-            said.contains("lengua runs a program only when its spec and code match lengua.lock"),
+            said.contains("lengua runs a program only when its idea and code match lengua.lock"),
             "{name}: {said}"
         );
         assert!(refused.stdout.is_empty(), "{name}: {refused:?}");
@@ -129,7 +129,7 @@ async fn a_checked_program_runs_from_a_shell() {
     }
 }
 
-/// A server runs from a shell until something stops it: on its spec's port, and a stop that
+/// A server runs from a shell until something stops it: on its idea's port, and a stop that
 /// reaches lengua-mcp, as a service manager sends one, stops the program too.
 #[cfg(unix)]
 #[tokio::test]
@@ -147,8 +147,8 @@ async fn a_server_from_a_shell_serves_until_it_is_stopped() {
             .port();
         let program = Program::new();
         program.write(
-            "spec.md",
-            &flow::program_file(target, "echo", "spec.md").replace("7007", &port.to_string()),
+            "idea.md",
+            &flow::program_file(target, "echo", "idea.md").replace("7007", &port.to_string()),
         );
         session.record(&program).await;
         program.write("main.s", &flow::program_file(target, "echo", "main.s"));
@@ -211,8 +211,8 @@ fn the_example_is_plain_assembly() {
     }
 }
 
-/// The add workflow in both protocol generations: from no files to a spec to code to done, the
-/// runs, edited code, tests fixed after code ran, a lock edited by hand, an edited spec and a
+/// The add workflow in both protocol generations: from no files to an idea to code to done, the
+/// runs, edited code, tests fixed after code ran, a lock edited by hand, an edited idea and a
 /// new request.
 #[tokio::test]
 async fn add_goes_from_request_to_done_in_both_protocols() {
@@ -221,25 +221,25 @@ async fn add_goes_from_request_to_done_in_both_protocols() {
             continue;
         };
         let name = target.name();
-        let spec = flow::program_file(target, "add", "spec.md");
+        let idea = flow::program_file(target, "add", "idea.md");
         let code = flow::program_file(target, "add", "main.s");
         for protocol in Protocol::ALL {
             let what = format!("{name} with {protocol:?}");
             let session = flow::plain_in(target, way, protocol).await;
             let program = Program::new();
             let report = session.check(&program).await;
-            assert_eq!(report["state"], "write_spec", "{what}: {report}");
+            assert_eq!(report["state"], "write_idea", "{what}: {report}");
 
-            // One call after each file: the spec, tests included, with the user's words, then
+            // One call after each file: the idea, tests included, with the user's words, then
             // the code.
-            program.write("spec.md", &spec);
+            program.write("idea.md", &idea);
             let report = session.record(&program).await;
             assert_eq!(report["state"], "write_code", "{what}: {report}");
             program.write("main.s", &code);
             let done = session.settle(&program).await;
             assert_eq!(done["state"], "done", "{what}: {done}");
             // Code that passed carries lengua's line, which leaves what was checked as it was.
-            assert_eq!(header_of(&program), compiled_from(target, &spec), "{what}");
+            assert_eq!(header_of(&program), compiled_from(target, &idea), "{what}");
             assert_eq!(
                 program.read("main.s").expect("main.s").lines().count(),
                 code.lines().count() + 1,
@@ -311,16 +311,16 @@ async fn add_goes_from_request_to_done_in_both_protocols() {
             assert_eq!(session.settle(&program).await["state"], "done", "{what}");
 
             // Without its line, the checked code is still the checked code, and gets it back.
-            assert_eq!(header_of(&program), compiled_from(target, &spec), "{what}");
+            assert_eq!(header_of(&program), compiled_from(target, &idea), "{what}");
 
             // Tests can be fixed after code ran: the change is shown, lengua marks what tests
-            // less, and main.s's line names the spec it now passed.
-            let fewer = spec.replace("| 200 |", "| 20 |");
-            program.write("spec.md", &fewer);
+            // less, and main.s's line names the idea it now passed.
+            let fewer = idea.replace("| 200 |", "| 20 |");
+            program.write("idea.md", &fewer);
             let done = session.settle(&program).await;
             assert_eq!(done["state"], "done", "{what}: {done}");
             assert!(
-                text(&done["changes"]["spec_changed"]).contains("| 20 |"),
+                text(&done["changes"]["idea_changed"]).contains("| 20 |"),
                 "{what}: {done}"
             );
             assert_eq!(header_of(&program), compiled_from(target, &fewer), "{what}");
@@ -334,11 +334,11 @@ async fn add_goes_from_request_to_done_in_both_protocols() {
                 text(&done["next_step"]).contains("changes lists"),
                 "{what}: {done}"
             );
-            program.write("spec.md", &spec);
+            program.write("idea.md", &idea);
             let done = session.settle(&program).await;
             assert!(done.get("changes").is_none(), "{what}: {done}");
 
-            // A lock edited by hand can't be trusted; the user's words record the spec again.
+            // A lock edited by hand can't be trusted; the user's words record the idea again.
             let lock = program.read("lengua.lock").expect("the lock");
             program.write(
                 "lengua.lock",
@@ -353,16 +353,16 @@ async fn add_goes_from_request_to_done_in_both_protocols() {
             session.record(&program).await;
             assert_eq!(session.settle(&program).await["state"], "done", "{what}");
 
-            // An edited spec is recorded under the same words by the next check, and shown.
-            let edited = spec.replace("Adds two numbers", "Adds two integers");
-            program.write("spec.md", &edited);
+            // An edited idea is recorded under the same words by the next check, and shown.
+            let edited = idea.replace("Adds two numbers", "Adds two integers");
+            program.write("idea.md", &edited);
             let error = session
                 .call_error("run", with_args(&program, &["2", "3"]))
                 .await;
             assert!(error.contains("call check"), "{what}: {error}");
             let done = session.settle(&program).await;
             assert_eq!(done["state"], "done", "{what}: {done}");
-            let changed = text(&done["changes"]["spec_changed"]);
+            let changed = text(&done["changes"]["idea_changed"]);
             assert!(
                 changed.contains("Adds two numbers") && changed.contains("Adds two integers"),
                 "{what}: {done}"
@@ -402,7 +402,7 @@ async fn code_that_breaks_a_rule_runs_no_tests() {
             let what = format!("{name} with {protocol:?}");
             let session = flow::plain_in(target, way, protocol).await;
             let program = Program::new();
-            program.write("spec.md", &flow::program_file(target, "add", "spec.md"));
+            program.write("idea.md", &flow::program_file(target, "add", "idea.md"));
             program.write(
                 "main.s",
                 &offence.applied_to(&flow::program_file(target, "add", "main.s")),
@@ -475,7 +475,7 @@ async fn a_shared_program_is_checked_again_where_it_lands() {
         first.record(&program).await;
         assert_eq!(first.settle(&program).await["state"], "done", "{name}");
         let shared = Program::new();
-        for file in ["spec.md", "main.s"] {
+        for file in ["idea.md", "main.s"] {
             shared.write(file, &program.read(file).expect("a file"));
         }
         assert!(
@@ -507,21 +507,21 @@ fn the_workflow_has_its_programs_and_cells_for_every_target() {
         let offence = flow::MOVES_THE_STACK_POINTER_IN_EDGE_FORM.get(target);
         let code = flow::program_file(target, "add", "main.s");
         assert_ne!(offence.applied_to(&code), code, "{name}");
-        let spec = flow::program_file(target, "add", "spec.md");
+        let idea = flow::program_file(target, "add", "idea.md");
         for needle in ["| 200 |", "Adds two numbers"] {
             assert!(
-                spec.contains(needle),
-                "{name}: add's spec has no {needle:?}"
+                idea.contains(needle),
+                "{name}: add's idea has no {needle:?}"
             );
         }
-        let echo = flow::program_file(target, "echo", "spec.md");
-        assert!(echo.contains("7007"), "{name}: echo's spec names no port");
+        let echo = flow::program_file(target, "echo", "idea.md");
+        assert!(echo.contains("7007"), "{name}: echo's idea names no port");
         assert!(
             !flow::program_file(target, "cat", "main.s").is_empty(),
             "{name}"
         );
         assert!(
-            compiled_from(target, &spec).ends_with(name),
+            compiled_from(target, &idea).ends_with(name),
             "{name}: lengua's line names the target last"
         );
     }

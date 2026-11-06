@@ -892,7 +892,7 @@ mod linux {
         let space = |byte: &u8| matches!(byte, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r');
         match workload.name {
             "add" => b"122469135\n".to_vec(),
-            // fixed(sqrt(a * a + b * b), 3), as the spec computes it.
+            // fixed(sqrt(a * a + b * b), 3), as the idea computes it.
             "hypotenuse" => {
                 let (a, b) = (123_456_789.0_f64 / 1000.0, 98_765_432.0_f64 / 1000.0);
                 #[allow(clippy::cast_possible_truncation)]

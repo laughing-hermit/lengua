@@ -1,7 +1,7 @@
-//! Fuzzing every reader lengua has: what a person or an agent writes (spec.md and its tests, and
+//! Fuzzing every reader lengua has: what a person or an agent writes (idea.md and its tests, and
 //! main.s for each CPU), what lengua reads back (main.s's header, its lock, and the executable
 //! it built), the AArch64 decoder's machine words, and the test language's formulas. No reader may panic, or take long,
-//! on any input: random bytes, and the repository's own specs and programs mutated (bytes
+//! on any input: random bytes, and the repository's own ideas and programs mutated (bytes
 //! changed, lines dropped, doubled and swapped, tricky pieces put in, cut short, and spliced with
 //! each other). The runs are seeded, so a failure comes back the same; each one that fails is
 //! kept under `target/fuzz` to replay.
@@ -72,7 +72,7 @@ const TRICKY: &[&str] = &[
     ".type x, @object\n",
     "x:\n",
     "---\n",
-    "type: lengua/program-spec\n",
+    "type: lengua/program-idea\n",
     "- Uses: ",
     "- Network: connects to TCP port ",
     " over TLS",
@@ -85,7 +85,7 @@ const TRICKY: &[&str] = &[
     "/",
 ];
 
-/// Every spec and program in the repository, with its path.
+/// Every idea and program in the repository, with its path.
 fn corpus() -> Vec<(PathBuf, Vec<u8>)> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut found = Vec::new();
@@ -115,7 +115,7 @@ fn corpus() -> Vec<(PathBuf, Vec<u8>)> {
     found
 }
 
-/// A spec's text with every number past 4,096 brought down to it, so its generated tests' dry
+/// An idea's text with every number past 4,096 brought down to it, so its generated tests' dry
 /// runs stay quick: the fuzzer tries the readers, not the formulas' speed on megabytes. A huge
 /// number a mutation brings in stays as it is.
 fn shrunk(bytes: &[u8]) -> Vec<u8> {
@@ -237,11 +237,11 @@ type Reader = (&'static str, Box<dyn Fn(&[u8])>);
 fn readers() -> Vec<Reader> {
     vec![
         (
-            "spec",
+            "idea",
             Box::new(|input: &[u8]| {
                 let text = String::from_utf8_lossy(input);
-                if let Ok(spec) = crate::spec::parse(&text) {
-                    let _ = crate::testfile::check(&spec);
+                if let Ok(idea) = crate::idea::parse(&text) {
+                    let _ = crate::testfile::check(&idea);
                 }
             }),
         ),
@@ -339,12 +339,12 @@ fn executables() -> Vec<Vec<u8>> {
 fn fuzz(count: usize, seed: u64) {
     let corpus = corpus();
     let executables = executables();
-    assert!(corpus.len() > 20, "the repository's own specs and programs");
+    assert!(corpus.len() > 20, "the repository's own ideas and programs");
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
     for (reader, read) in readers() {
         // Readers start from their own kind of text; the lock from a lock lengua writes.
         let starts: Vec<Vec<u8>> = match reader {
-            "spec" | "formula" => corpus
+            "idea" | "formula" => corpus
                 .iter()
                 .filter(|(path, _)| path.extension().is_some_and(|extension| extension == "md"))
                 .map(|(_, bytes)| shrunk(bytes))
@@ -428,7 +428,7 @@ fn broker_messages() -> Vec<Vec<u8>> {
 
 /// A lock as lengua writes one, to start mutating from.
 const LOCK: &str = "version = 1\n\
-    [spec]\n\
+    [idea]\n\
     sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n\
     request = \"add two numbers\"\n\
     [code]\n\
@@ -454,12 +454,12 @@ fn long_fuzzing_finds_nothing() {
 
 #[test]
 #[ignore = "a measurement"]
-fn how_long_the_corpus_specs_take() {
+fn how_long_the_corpus_ideas_take() {
     for (path, bytes) in corpus() {
         if path.extension().is_some_and(|extension| extension == "md") {
             let started = Instant::now();
-            if let Ok(spec) = crate::spec::parse(&String::from_utf8_lossy(&shrunk(&bytes))) {
-                let _ = crate::testfile::check(&spec);
+            if let Ok(idea) = crate::idea::parse(&String::from_utf8_lossy(&shrunk(&bytes))) {
+                let _ = crate::testfile::check(&idea);
             }
             let took = started.elapsed();
             if took > Duration::from_millis(500) {

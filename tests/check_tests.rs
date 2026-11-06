@@ -1,10 +1,10 @@
-//! The tests inside spec.md: checked with the spec, their problems reported with its own and the
-//! user's words kept until they're fixed, and an old tests.toml moved into the spec.
+//! The tests inside idea.md: checked with the idea, their problems reported with its own and the
+//! user's words kept until they're fixed, and an old tests.toml moved into the idea.
 
 mod common;
 mod per_target;
 
-use common::{ADD_SPEC, Program, Protocol, REQUEST, Session};
+use common::{ADD_IDEA, Program, Protocol, REQUEST, Session};
 use lengua::hash::Sha256Hex;
 use serde_json::Value;
 
@@ -13,13 +13,13 @@ fn text(value: &Value) -> &str {
 }
 
 #[tokio::test]
-async fn records_a_spec_with_its_tests() {
+async fn records_a_idea_with_its_tests() {
     if !per_target::runs_programs() {
         return;
     }
     for protocol in Protocol::ALL {
         let session = Session::start(protocol).await;
-        let program = Program::with_add_spec();
+        let program = Program::with_add_idea();
         let report = session.record(&program).await;
         assert_eq!(report["state"], "write_code", "{protocol:?}: {report}");
         assert!(
@@ -35,16 +35,16 @@ async fn records_a_spec_with_its_tests() {
             "the machine shows while main.s is missing: {report}"
         );
         let lock = program.read("lengua.lock").expect("the lock");
-        let hash = Sha256Hex::of(ADD_SPEC.as_bytes()).to_string();
+        let hash = Sha256Hex::of(ADD_IDEA.as_bytes()).to_string();
         assert!(
-            lock.contains(&format!("[spec]\nsha256 = \"{hash}\"")),
+            lock.contains(&format!("[idea]\nsha256 = \"{hash}\"")),
             "{lock}"
         );
         assert!(!lock.contains("[tests]"), "{lock}");
         let stored = session.data_dir.path().join("stamped").join(&hash);
         assert_eq!(
-            std::fs::read_to_string(&stored).expect("the recorded spec is kept"),
-            ADD_SPEC
+            std::fs::read_to_string(&stored).expect("the recorded idea is kept"),
+            ADD_IDEA
         );
 
         let again = session.check(&program).await;
@@ -60,11 +60,11 @@ async fn tests_can_be_fixed_under_the_same_request() {
         return;
     }
     let session = Session::start(Protocol::Discover).await;
-    let program = Program::with_add_spec();
+    let program = Program::with_add_idea();
     session.record(&program).await;
-    // A fix to the tests is an edit of the spec, recorded under the words it already has.
-    let fixed = ADD_SPEC.replace("| 200 |", "| 300 |");
-    program.write("spec.md", &fixed);
+    // A fix to the tests is an edit of the idea, recorded under the words it already has.
+    let fixed = ADD_IDEA.replace("| 200 |", "| 300 |");
+    program.write("idea.md", &fixed);
     let report = session.check(&program).await;
     assert_eq!(report["state"], "write_code", "{report}");
     let lock = program.read("lengua.lock").expect("the lock");
@@ -86,22 +86,22 @@ async fn problems_are_reported_and_the_words_wait_for_the_fix() {
     }
     let session = Session::start(Protocol::Discover).await;
     let program = Program::new();
-    program.write("spec.md", &ADD_SPEC.replace("{a + b}", "{a - b}"));
+    program.write("idea.md", &ADD_IDEA.replace("{a + b}", "{a - b}"));
     let report = session.record(&program).await;
-    assert_eq!(report["state"], "spec_problems", "{report}");
+    assert_eq!(report["state"], "idea_problems", "{report}");
     assert!(
         report["problems"].as_array().is_some_and(|problems| {
-            problems.len() == 1 && text(&problems[0]).contains("formula disagrees with the spec")
+            problems.len() == 1 && text(&problems[0]).contains("formula disagrees with the idea")
         }),
         "{report}"
     );
     assert!(
-        text(&report["next_step"]).contains("write-spec skill"),
+        text(&report["next_step"]).contains("write-idea skill"),
         "{report}"
     );
     assert!(program.read("lengua.lock").is_none(), "nothing is recorded");
-    // The words came with the spec, so the fixed spec is recorded under them without asking.
-    program.write("spec.md", ADD_SPEC);
+    // The words came with the idea, so the fixed idea is recorded under them without asking.
+    program.write("idea.md", ADD_IDEA);
     let report = session.check(&program).await;
     assert_eq!(report["state"], "write_code", "{report}");
     let lock = program.read("lengua.lock").expect("the lock");
@@ -113,20 +113,20 @@ async fn problems_are_reported_and_the_words_wait_for_the_fix() {
 }
 
 #[tokio::test]
-async fn an_old_tests_file_goes_into_the_spec() {
+async fn an_old_tests_file_goes_into_the_idea() {
     if !per_target::runs_programs() {
         return;
     }
     let session = Session::start(Protocol::Discover).await;
-    let program = Program::with_add_spec();
+    let program = Program::with_add_idea();
     program.write(
         "tests.toml",
         "[[example]]\nid = \"B1\"\nargs = [\"2\", \"3\"]\n",
     );
     let report = session.record(&program).await;
-    assert_eq!(report["state"], "spec_problems", "{report}");
+    assert_eq!(report["state"], "idea_problems", "{report}");
     assert!(
-        text(&report["problems"][0]).contains("the tests live in spec.md now"),
+        text(&report["problems"][0]).contains("the tests live in idea.md now"),
         "{report}"
     );
     std::fs::remove_file(program.file("tests.toml")).expect("delete tests.toml");
@@ -136,33 +136,33 @@ async fn an_old_tests_file_goes_into_the_spec() {
 }
 
 #[tokio::test]
-async fn a_changed_spec_checks_its_tests_again() {
+async fn a_changed_idea_checks_its_tests_again() {
     if !per_target::runs_programs() {
         return;
     }
     let session = Session::start(Protocol::Discover).await;
-    let program = Program::with_add_spec();
+    let program = Program::with_add_idea();
     session.record(&program).await;
 
-    // The tests still fit the edited spec, so one call records it.
-    let edited = ADD_SPEC.replace("Adds two numbers", "Adds two integers");
-    program.write("spec.md", &edited);
+    // The tests still fit the edited idea, so one call records it.
+    let edited = ADD_IDEA.replace("Adds two numbers", "Adds two integers");
+    program.write("idea.md", &edited);
     let report = session.check(&program).await;
     assert_eq!(report["state"], "write_code", "{report}");
     let lock = program.read("lengua.lock").expect("the lock");
     assert!(
         lock.contains(&format!(
-            "[spec]\nsha256 = \"{}\"\n",
+            "[idea]\nsha256 = \"{}\"\n",
             Sha256Hex::of(edited.as_bytes())
         )),
         "{lock}"
     );
 
-    // When they don't fit, they're the spec's problems to fix.
+    // When they don't fit, they're the idea's problems to fix.
     let narrower = edited.replace("`-1000000000`", "`-1000`");
-    program.write("spec.md", &narrower);
+    program.write("idea.md", &narrower);
     let report = session.check(&program).await;
-    assert_eq!(report["state"], "spec_problems", "{report}");
+    assert_eq!(report["state"], "idea_problems", "{report}");
     assert!(
         report["problems"]
             .to_string()

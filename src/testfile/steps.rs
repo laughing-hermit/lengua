@@ -1,7 +1,7 @@
 //! A behavior's Given/When/Then steps as its tests. Its own steps are its example, with literal
 //! values. The steps under its `###` heading are its generated tests: the same phrasings, whose
 //! values are templates over the variables of the table below them, one row a generated test.
-//! lengua reads steps in a fixed vocabulary, as Gherkin's step definitions do, so the spec's own
+//! lengua reads steps in a fixed vocabulary, as Gherkin's step definitions do, so the idea's own
 //! words are the tests and nothing is written twice.
 //!
 //! Given:
@@ -13,7 +13,7 @@
 //! - ``the clock at `seconds` ``, with ``then `seconds` `` for later readings
 //! - ``the random bytes `fc` and `2a` ``
 //! - ``a server on port `8080` that receives TEXT and replies TEXT``, with ``at `example.com` ``
-//!   before `on port` for a computer the spec names, ``no server on port `8080` ``
+//!   before `on port` for a computer the idea names, ``no server on port `8080` ``
 //! - ``a client that sends TEXT``, and `the clients connect at once` for clients that overlap
 //! - `standard output is closed`, a pipe nobody reads, so every write to it fails with `EPIPE`
 //!
@@ -39,7 +39,7 @@ use super::{
     ClientTable, ExampleTable, OutlineRow, OutlineSteps, Problem, Repeat, Rule, ServerTable, Text,
     TextPart, Written, unescape,
 };
-use crate::spec::{Behavior, Endpoint, Keyword, Outline, Spec, Step, Token};
+use crate::idea::{Behavior, Endpoint, Keyword, Outline, Idea, Step, Token};
 
 /// The column of a table that gives its row's number of runs, not a variable.
 const RUNS: &str = "runs";
@@ -72,8 +72,8 @@ enum Mode {
 /// # Errors
 ///
 /// Each step lengua can't read, with the phrasing to write instead.
-pub(super) fn example(behavior: &Behavior, spec: &Spec) -> Result<ExampleTable, Vec<Problem>> {
-    read(&behavior.steps, behavior, Mode::Example, spec).map(Reading::example)
+pub(super) fn example(behavior: &Behavior, idea: &Idea) -> Result<ExampleTable, Vec<Problem>> {
+    read(&behavior.steps, behavior, Mode::Example, idea).map(Reading::example)
 }
 
 /// The generated tests `outline` describes: its steps as templates, and its table's rows.
@@ -84,10 +84,10 @@ pub(super) fn example(behavior: &Behavior, spec: &Spec) -> Result<ExampleTable, 
 pub(super) fn generated(
     behavior: &Behavior,
     outline: &Outline,
-    spec: &Spec,
+    idea: &Idea,
 ) -> Result<(OutlineSteps, Vec<OutlineRow>), Vec<Problem>> {
     let mut problems = Vec::new();
-    let reading = read(&outline.steps, behavior, Mode::Generated, spec)
+    let reading = read(&outline.steps, behavior, Mode::Generated, idea)
         .map_err(|found| problems.extend(found))
         .ok();
     let mut seen = BTreeSet::new();
@@ -137,7 +137,7 @@ fn read(
     steps: &[Step],
     behavior: &Behavior,
     mode: Mode,
-    spec: &Spec,
+    idea: &Idea,
 ) -> Result<Reading, Vec<Problem>> {
     let whose = match mode {
         Mode::Example => behavior.id.to_string(),
@@ -145,7 +145,7 @@ fn read(
     };
     let mut reading = Reading {
         mode,
-        places: spec.network.connections.clone(),
+        places: idea.network.connections.clone(),
         ..Reading::default()
     };
     let mut problems = Vec::new();
@@ -244,7 +244,7 @@ struct Reading {
     serves: bool,
     /// The line of the step that first wrote each field, for problems in generated tests.
     lines: BTreeMap<String, usize>,
-    /// The connections the spec names, which the test's servers stand in for.
+    /// The connections the idea names, which the test's servers stand in for.
     places: Vec<Endpoint>,
     /// What's wrong with steps that read well, with each one's line.
     found: Vec<(usize, String)>,
@@ -387,7 +387,7 @@ impl Reading {
                     self.line,
                     format!(
                         "it has two servers for its connection to {place}; a program gets one \
-                         connection to each place its spec names, so keep one"
+                         connection to each place its idea names, so keep one"
                     ),
                 ));
             }
@@ -412,7 +412,7 @@ impl Reading {
         let mode = self.mode;
         let mut at = Cursor::new(tokens);
         if at.words(&["it", "exits", "with", "code"]) {
-            // An example's code is the behavior's own, which the spec reads; a generated test's
+            // An example's code is the behavior's own, which the idea reads; a generated test's
             // may be a formula.
             let code = at.value()?;
             if mode == Mode::Example || !code.contains('{') {
@@ -488,15 +488,15 @@ impl Reading {
         at.end()
     }
 
-    /// Which of the spec's connections a server step, or a step with no server, names: by its
+    /// Which of the idea's connections a server step, or a step with no server, names: by its
     /// port, and its computer where two places share the port; the only connection when it
-    /// names neither. A name the spec doesn't have is noted as a problem. A spec with no
+    /// names neither. A name the idea doesn't have is noted as a problem. An idea with no
     /// connections at all is told so once, by the test's own check.
     fn connection(&mut self, host: Option<&str>, port: Option<&str>) -> usize {
         if self.places.is_empty() {
             return 0;
         }
-        // A generated test's value can be a template, which the spec's names can't settle.
+        // A generated test's value can be a template, which the idea's names can't settle.
         if port.is_some_and(|port| port.contains('{'))
             || host.is_some_and(|host| host.contains('{'))
         {
@@ -533,7 +533,7 @@ impl Reading {
                 self.found.push((
                     self.line,
                     format!(
-                        "spec.md connects to no {named}: its server stands in for one of the \
+                        "idea.md connects to no {named}: its server stands in for one of the \
                          connections `- Network: connects to …` names ({})",
                         self.named_places()
                     ),
@@ -544,7 +544,7 @@ impl Reading {
                 self.found.push((
                     self.line,
                     format!(
-                        "spec.md connects to more than one place on that port ({}): say which, \
+                        "idea.md connects to more than one place on that port ({}): say which, \
                          as in `a server at `example.com` on port `443` that receives …`",
                         self.named_places()
                     ),
@@ -554,7 +554,7 @@ impl Reading {
         }
     }
 
-    /// The spec's connections in words.
+    /// The idea's connections in words.
     fn named_places(&self) -> String {
         self.places
             .iter()
@@ -969,24 +969,24 @@ impl<'a> Cursor<'a> {
 mod tests {
     use super::*;
 
-    fn spec_with(steps: &str, constraints: &str) -> Spec {
+    fn idea_with(steps: &str, constraints: &str) -> Idea {
         let text = format!(
-            "---\ntype: lengua/program-spec\ntitle: t\n---\n# Purpose\nA test of `1` to `9`.\n\n\
+            "---\ntype: lengua/program-idea\ntitle: t\n---\n# Purpose\nA test of `1` to `9`.\n\n\
              # Behaviors\n## B1: Does it\n{steps}\n\n# Constraints\n{constraints}\n"
         );
-        crate::spec::parse(&text).unwrap_or_else(|problems| panic!("{problems:?}"))
+        crate::idea::parse(&text).unwrap_or_else(|problems| panic!("{problems:?}"))
     }
 
     fn table(steps: &str, constraints: &str) -> ExampleTable {
-        let spec = spec_with(steps, constraints);
-        example(&spec.behaviors[0], &spec).unwrap_or_else(|problems| panic!("{problems:?}"))
+        let idea = idea_with(steps, constraints);
+        example(&idea.behaviors[0], &idea).unwrap_or_else(|problems| panic!("{problems:?}"))
     }
 
     fn outline(steps: &str, constraints: &str) -> (OutlineSteps, Vec<OutlineRow>) {
-        let spec = spec_with(steps, constraints);
-        let behavior = &spec.behaviors[0];
+        let idea = idea_with(steps, constraints);
+        let behavior = &idea.behaviors[0];
         let outline = behavior.outline.as_ref().expect("generated tests");
-        generated(behavior, outline, &spec).unwrap_or_else(|problems| panic!("{problems:?}"))
+        generated(behavior, outline, &idea).unwrap_or_else(|problems| panic!("{problems:?}"))
     }
 
     fn plain(text: &Text) -> String {
@@ -1007,12 +1007,12 @@ mod tests {
             "",
         );
         assert!(read.stdout_closed);
-        let spec = spec_with(
+        let idea = idea_with(
             "- Given the arguments `2` and `3`\n- And standard output is closed\n- When the \
              program runs\n- Then it prints `5`\n- And it exits with code `3`",
             "",
         );
-        let problems = example(&spec.behaviors[0], &spec).expect_err("output it can't print");
+        let problems = example(&idea.behaviors[0], &idea).expect_err("output it can't print");
         assert!(
             format!("{problems:?}").contains("its standard output is closed"),
             "{problems:?}"
@@ -1125,8 +1125,8 @@ mod tests {
         );
         assert_eq!(read.server[0].connection, 0);
         let problems = |steps: &str, constraints: &str| {
-            let spec = spec_with(steps, constraints);
-            example(&spec.behaviors[0], &spec)
+            let idea = idea_with(steps, constraints);
+            example(&idea.behaviors[0], &idea)
                 .expect_err("a problem")
                 .into_iter()
                 .map(|problem| problem.message)
@@ -1169,12 +1169,12 @@ mod tests {
 
     #[test]
     fn a_step_it_cant_read_comes_with_its_rewrite() {
-        let spec = spec_with(
+        let idea = idea_with(
             "- Given the input `abc`\n- When the program runs\n- Then the output is `ABC`\n- And it \
              exits with code `0`",
             "- Uses: standard input",
         );
-        let problems = example(&spec.behaviors[0], &spec).expect_err("two steps it can't read");
+        let problems = example(&idea.behaviors[0], &idea).expect_err("two steps it can't read");
         assert_eq!(problems.len(), 2, "{problems:?}");
         assert!(
             problems[0]
@@ -1239,7 +1239,7 @@ mod tests {
 
     #[test]
     fn generated_tests_draw_text_instead_of_repeating_it() {
-        let spec = spec_with(
+        let idea = idea_with(
             &format!(
                 "{EXAMPLE}### For any text\n- Given standard input holding `a` repeated `3` \
                  times\n- When the program runs\n- Then it prints `x`\n- And it exits with code \
@@ -1247,8 +1247,8 @@ mod tests {
             ),
             "- Uses: standard input",
         );
-        let behavior = &spec.behaviors[0];
-        let problems = generated(behavior, behavior.outline.as_ref().expect("tests"), &spec)
+        let behavior = &idea.behaviors[0];
+        let problems = generated(behavior, behavior.outline.as_ref().expect("tests"), &idea)
             .expect_err("a repeat");
         assert!(
             problems[0].message.contains("`repeated` is for examples"),

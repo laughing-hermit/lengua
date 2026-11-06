@@ -18,8 +18,9 @@ use crate::hash::{Sha256Hex, hex};
 /// The lock's file name inside a program folder.
 pub const LOCK_FILE: &str = "lengua.lock";
 
-/// The lock format this server reads and writes.
-pub const VERSION: u32 = 4;
+/// The lock format this server reads and writes. Version 5 names the idea file (`[idea]`, from
+/// `idea.md`) where version 4 named a spec.
+pub const VERSION: u32 = 5;
 
 /// The lengua dialect this server checks.
 pub const DIALECT: u32 = 4;
@@ -38,10 +39,10 @@ const MAX_LOCK_BYTES: u64 = 64 * 1024;
 /// What `lengua.lock` records.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Lock {
-    /// The user's request the spec was written for, and what was first recorded under it.
+    /// The user's request the idea was written for, and what was first recorded under it.
     pub request: RequestStamp,
-    /// The recorded spec, tests included.
-    pub spec: SpecStamp,
+    /// The recorded idea, tests included.
+    pub idea: IdeaStamp,
     /// The checked code, once stamped.
     pub code: Option<CodeStamp>,
     /// What `prove` proved about that code's build, once it has run. Requires `code`.
@@ -59,17 +60,17 @@ pub struct RequestStamp {
     /// The user's own words asking for the program or a change, as the agent quoted them, oldest
     /// first: the build's first request, then the latest ones.
     pub words: Vec<String>,
-    /// SHA-256 of spec.md when the build's first request was recorded.
-    pub spec: Sha256Hex,
+    /// SHA-256 of idea.md when the build's first request was recorded.
+    pub idea: Sha256Hex,
 }
 
 /// The most request words a build keeps: its first and the latest ones.
 pub const MAX_REQUESTS: usize = 6;
 
-/// The recorded spec.
+/// The recorded idea.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SpecStamp {
-    /// SHA-256 of spec.md.
+pub struct IdeaStamp {
+    /// SHA-256 of idea.md.
     pub sha256: Sha256Hex,
 }
 
@@ -102,7 +103,7 @@ pub struct Bounded {
     pub id: String,
     /// The longest text proven, with every shorter one, in bytes.
     pub bytes: usize,
-    /// The longest the spec lets its texts be.
+    /// The longest the idea lets its texts be.
     pub of: usize,
     /// Whether proving on could reach further, as `check` with `prove_further` does.
     pub more: bool,
@@ -113,7 +114,7 @@ pub struct Bounded {
 pub struct ProofStamp {
     /// SHA-256 of the executable the proofs are about, which must be the checked code's.
     pub executable_sha256: Sha256Hex,
-    /// The ids of the generated tests proven for every input in range, in the spec's order.
+    /// The ids of the generated tests proven for every input in range, in the idea's order.
     pub proven: Vec<String>,
     /// The generated tests proven only for texts up to a length. Never also in `proven`.
     pub bounded: Vec<Bounded>,
@@ -125,28 +126,28 @@ pub struct ProofStamp {
 }
 
 impl Lock {
-    /// A lock that records only a new request and its spec; tests and code must be checked
+    /// A lock that records only a new request and its idea; tests and code must be checked
     /// again.
     #[must_use]
-    pub fn requested(spec: Sha256Hex, words: String) -> Self {
+    pub fn requested(idea: Sha256Hex, words: String) -> Self {
         Self {
             request: RequestStamp {
                 words: vec![words],
-                spec: spec.clone(),
+                idea: idea.clone(),
             },
-            spec: SpecStamp { sha256: spec },
+            idea: IdeaStamp { sha256: idea },
             code: None,
             proofs: None,
         }
     }
 
-    /// One hash over the spec and the code, once both are stamped.
+    /// One hash over the idea and the code, once both are stamped.
     #[must_use]
     pub fn fingerprint(&self) -> Option<Sha256Hex> {
         let code = self.code.as_ref()?;
         let input = format!(
-            "{FINGERPRINT_DOMAIN}spec:{}\ncode:{}\n",
-            self.spec.sha256, code.sha256
+            "{FINGERPRINT_DOMAIN}idea:{}\ncode:{}\n",
+            self.idea.sha256, code.sha256
         );
         Some(Sha256Hex::of(input.as_bytes()))
     }
@@ -195,9 +196,9 @@ impl Lock {
             text,
             "\n[request]\nwords = [{}]\nspec = \"{}\"\n",
             words.join(", "),
-            self.request.spec
+            self.request.idea
         );
-        let _ = write!(text, "\n[spec]\nsha256 = \"{}\"\n", self.spec.sha256);
+        let _ = write!(text, "\n[idea]\nsha256 = \"{}\"\n", self.idea.sha256);
         if let Some(code) = &self.code {
             let features: Vec<String> =
                 code.features.iter().map(|name| toml_string(name)).collect();
@@ -279,7 +280,7 @@ struct LockFile {
     dialect: u32,
     fingerprint: Option<String>,
     request: RequestTable,
-    spec: SpecTable,
+    idea: IdeaTable,
     code: Option<CodeTable>,
     proofs: Option<ProofsTable>,
 }
@@ -318,12 +319,12 @@ struct BoundedTable {
 #[serde(deny_unknown_fields)]
 struct RequestTable {
     words: Vec<String>,
-    spec: String,
+    idea: String,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SpecTable {
+struct IdeaTable {
     sha256: String,
 }
 
@@ -363,10 +364,10 @@ pub(crate) fn parse_body(body: &str) -> Result<Lock, LockError> {
     let lock = Lock {
         request: RequestStamp {
             words: file.request.words,
-            spec: digest(&file.request.spec)?,
+            idea: digest(&file.request.idea)?,
         },
-        spec: SpecStamp {
-            sha256: digest(&file.spec.sha256)?,
+        idea: IdeaStamp {
+            sha256: digest(&file.idea.sha256)?,
         },
         code: file
             .code
@@ -566,7 +567,7 @@ impl fmt::Display for KeyError {
             }
             Self::Damaged(path) => write!(
                 f,
-                "the signing key at {} is damaged; delete it, then record each program's spec \
+                "the signing key at {} is damaged; delete it, then record each program's idea \
                  again",
                 path.display()
             ),
@@ -706,10 +707,10 @@ mod tests {
                     "Make me a program that adds two numbers".into(),
                     "Also take \"negative\" numbers".into(),
                 ],
-                spec: Sha256Hex::of(b"first spec"),
+                idea: Sha256Hex::of(b"first idea"),
             },
-            spec: SpecStamp {
-                sha256: Sha256Hex::of(b"spec"),
+            idea: IdeaStamp {
+                sha256: Sha256Hex::of(b"idea"),
             },
             code: Some(CodeStamp {
                 sha256: Sha256Hex::of(b"code"),
@@ -731,8 +732,8 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_a_spec_only_lock() {
-        let lock = Lock::requested(Sha256Hex::of(b"spec"), "Make it say \"hi\"\nplease".into());
+    fn round_trips_a_idea_only_lock() {
+        let lock = Lock::requested(Sha256Hex::of(b"idea"), "Make it say \"hi\"\nplease".into());
         let text = lock.to_signed_text(&key(1));
         assert!(text.starts_with(HEADER), "{text}");
         assert!(!text.contains("fingerprint"), "{text}");
@@ -907,11 +908,11 @@ mod tests {
     #[test]
     fn unknown_versions_and_dialects_are_reported() {
         let body = full_lock().body();
-        // Version 3 recorded tests.toml apart from the spec.
-        let older = forge(&body.replace("version = 4", "version = 3"), &key(1));
+        // Version 4 named the program's spec.md, before idea files.
+        let older = forge(&body.replace("version = 5", "version = 4"), &key(1));
         assert_eq!(
             Lock::from_signed_text(&older, &key(1)),
-            Err(LockError::UnsupportedVersion("3".into()))
+            Err(LockError::UnsupportedVersion("4".into()))
         );
         // Dialect 3 had no jump tables.
         let dialect = forge(&body.replace("dialect = 4", "dialect = 3"), &key(1));
@@ -926,9 +927,9 @@ mod tests {
         let lock = full_lock();
         let body = lock.body();
         let cases = [
-            body.replace("[spec]", "[spec]\nextra = 1"),
+            body.replace("[idea]", "[idea]\nextra = 1"),
             body.replace("max_stack_bytes = 96", "max_stack_bytes = 96 # note"),
-            body.replace("\n\n[spec]", "\n\n\n[spec]"),
+            body.replace("\n\n[idea]", "\n\n\n[idea]"),
             body.replace(
                 &lock.fingerprint().expect("fingerprint").to_string(),
                 Sha256Hex::of(b"other").as_str(),

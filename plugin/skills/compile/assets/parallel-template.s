@@ -25,7 +25,7 @@
 .equ BELOW_A_X4, 0x60606060
 .equ ABOVE_Z_X4, 0x7b7b7b7b
 .equ CASE_BIT_X4, 0x20202020
-# Threads, the program's choices: at most the threads the spec allows, and each one's output
+# Threads, the program's choices: at most the threads the idea allows, and each one's output
 # slot, a multiple of 64 bytes. lengua gives each thread its stack.
 .equ THREADS, 16
 .equ SLOT_SIZE, CHUNK

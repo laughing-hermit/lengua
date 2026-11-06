@@ -4871,7 +4871,7 @@ mod tests {
             .unwrap_or_else(|error| panic!("{path}: {error}"))
     }
 
-    /// The line counter on each target: twins from the very same spec.
+    /// The line counter on each target: twins from the very same idea.
     const LINES: PerCpu<&str> = PerCpu {
         x86_64: "tests/fixtures/lines/main.s",
         aarch64: "tests/fixtures/linux-aarch64/lines/main.s",

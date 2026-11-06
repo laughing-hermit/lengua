@@ -143,7 +143,7 @@ static UNLUCKY: PerCpu<Edits> = PerCpu {
 /// land on it. Both CPUs have a `nop`, and `main` starts every program.
 const NOP: flow::Edit = ("main:\n", "main:\n    nop\n");
 
-/// The template, with its spec recorded, passes every rule and all 274 test runs, is stamped
+/// The template, with its idea recorded, passes every rule and all 274 test runs, is stamped
 /// with lengua's line, and the lock says what built it.
 #[tokio::test]
 async fn the_template_passes_its_tests_and_is_stamped() {
@@ -186,7 +186,7 @@ async fn the_template_passes_its_tests_and_is_stamped() {
              code 0",
             "{name}: {report}"
         );
-        flow::assert_stamped(&program, target, way, &flow::asset("template-spec.md"));
+        flow::assert_stamped(&program, target, way, &flow::asset("template-idea.md"));
         session.service.cancel().await.expect("close the session");
     }
 }
@@ -219,7 +219,7 @@ async fn a_streaming_program_is_checked_tested_and_stamped() {
         assert_eq!(
             any_line(
                 &report["tests"],
-                "the kernel couldn't hold its system calls to the spec, which only lengua's \
+                "the kernel couldn't hold its system calls to the idea, which only lengua's \
                  rules did"
             ),
             emulated,
@@ -237,8 +237,8 @@ async fn a_streaming_program_is_checked_tested_and_stamped() {
             text(&report["memory"]).contains("the rest is tested, not proven"),
             "{name}: {report}"
         );
-        let spec = program.read("spec.md").expect("spec.md");
-        flow::assert_stamped(&program, target, way, &spec);
+        let idea = program.read("idea.md").expect("idea.md");
+        flow::assert_stamped(&program, target, way, &idea);
         let mut arguments = program.arguments();
         arguments["stdin"] = Value::from("hello, from far away\n".repeat(400));
         let run = session.call_ok("run", arguments).await;
@@ -473,7 +473,7 @@ async fn main_s_needs_no_label_and_must_build() {
         program.write(
             "main.s",
             &format!(
-                "{} lengua: spec sha256:{}\n{code}",
+                "{} lengua: idea sha256:{}\n{code}",
                 flow::kit(target).comment,
                 "0".repeat(64)
             ),
@@ -498,10 +498,10 @@ async fn main_s_needs_no_label_and_must_build() {
     }
 }
 
-/// Code waits for a spec whose tests check: a spec with a test that cannot run is refused first,
+/// Code waits for an idea whose tests check: an idea with a test that cannot run is refused first,
 /// and nothing is locked.
 #[tokio::test]
-async fn code_waits_for_a_spec_whose_tests_check() {
+async fn code_waits_for_a_idea_whose_tests_check() {
     for target in Profile::ALL {
         let Some((session, _)) = per_target::session_with_way(target, Protocol::Discover).await
         else {
@@ -510,12 +510,12 @@ async fn code_waits_for_a_spec_whose_tests_check() {
         let name = target.name();
         let program = Program::new();
         program.write(
-            "spec.md",
-            &flow::asset("template-spec.md").replace("| 50 |", "| 0 |"),
+            "idea.md",
+            &flow::asset("template-idea.md").replace("| 50 |", "| 0 |"),
         );
         program.write("main.s", &flow::template(target));
         let report = session.record(&program).await;
-        assert_eq!(report["state"], "spec_problems", "{name}: {report}");
+        assert_eq!(report["state"], "idea_problems", "{name}: {report}");
         assert!(
             any_line(&report["problems"], "runs must be from 1"),
             "{name}: {report}"
@@ -545,7 +545,7 @@ async fn code_compiled_for_another_computer_is_compiled_again() {
             &code.replacen(
                 &first,
                 &format!(
-                    "{first}{} lengua: compiled from spec.md sha256:00 for {elsewhere}\n",
+                    "{first}{} lengua: compiled from idea.md sha256:00 for {elsewhere}\n",
                     kit.comment
                 ),
                 1,
@@ -565,7 +565,7 @@ async fn code_compiled_for_another_computer_is_compiled_again() {
     }
 }
 
-/// Tests can be fixed after code ran: the change is checked like any version of the spec, shown
+/// Tests can be fixed after code ran: the change is checked like any version of the idea, shown
 /// with lengua's own marks on what tests less, and approved by nobody.
 #[tokio::test]
 async fn tests_can_be_fixed_after_code_ran() {
@@ -579,11 +579,11 @@ async fn tests_can_be_fixed_after_code_ran() {
         program.write("main.s", &flow::template(target));
         let report = done(&session, &program).await;
         assert!(report.get("changes").is_none(), "{name}: {report}");
-        let spec = flow::asset("template-spec.md");
+        let idea = flow::asset("template-idea.md");
 
-        program.write("spec.md", &spec.replace("| 200 |", "| 10 |"));
+        program.write("idea.md", &idea.replace("| 200 |", "| 10 |"));
         let report = done(&session, &program).await;
-        let changed = text(&report["changes"]["spec_changed"]);
+        let changed = text(&report["changes"]["idea_changed"]);
         assert!(
             changed.contains("- ") && changed.contains("+ "),
             "{name}: {report}"
@@ -597,24 +597,24 @@ async fn tests_can_be_fixed_after_code_ran() {
 
         // A change that tests more gets no mark, and going back to the first version shows
         // nothing.
-        program.write("spec.md", &spec.replace("| 200 |", "| 300 |"));
+        program.write("idea.md", &idea.replace("| 200 |", "| 300 |"));
         let report = done(&session, &program).await;
         assert!(
             report["changes"].get("tests_less").is_none(),
             "{name}: {report}"
         );
         assert!(
-            report["changes"]["spec_changed"].is_string(),
+            report["changes"]["idea_changed"].is_string(),
             "{name}: {report}"
         );
-        program.write("spec.md", &spec);
+        program.write("idea.md", &idea);
         let report = done(&session, &program).await;
         assert!(report.get("changes").is_none(), "{name}: {report}");
         session.service.cancel().await.expect("close the session");
     }
 }
 
-/// New words in the middle of a build keep the first spec as what changes are shown against.
+/// New words in the middle of a build keep the first idea as what changes are shown against.
 #[tokio::test]
 async fn new_words_in_the_middle_of_a_build_never_hide_a_change() {
     for target in Profile::ALL {
@@ -624,12 +624,12 @@ async fn new_words_in_the_middle_of_a_build_never_hide_a_change() {
         };
         let name = target.name();
         let program = flow::checked_template(&session).await;
-        // The build isn't finished: no code has passed yet. Changing the spec and recording it
-        // with other words keeps the first spec as what changes are shown against.
-        let spec = flow::asset("template-spec.md");
-        let edited = spec.replacen("# Purpose\n", "# Purpose\nIt is quick. ", 1);
-        assert_ne!(spec, edited, "the edit applies");
-        program.write("spec.md", &edited);
+        // The build isn't finished: no code has passed yet. Changing the idea and recording it
+        // with other words keeps the first idea as what changes are shown against.
+        let idea = flow::asset("template-idea.md");
+        let edited = idea.replacen("# Purpose\n", "# Purpose\nIt is quick. ", 1);
+        assert_ne!(idea, edited, "the edit applies");
+        program.write("idea.md", &edited);
         session
             .call_ok("check", program.request("Also make it quick"))
             .await;
@@ -641,7 +641,7 @@ async fn new_words_in_the_middle_of_a_build_never_hide_a_change() {
             "{name}: {report}"
         );
         assert!(
-            text(&report["changes"]["spec_changed"]).contains("It is quick."),
+            text(&report["changes"]["idea_changed"]).contains("It is quick."),
             "{name}: {report}"
         );
         session.service.cancel().await.expect("close the session");
@@ -1014,7 +1014,7 @@ fn every_cell_edits_text_its_program_has() {
         assert!(template.starts_with(flow::kit(target).first_line), "{name}");
         // The programs the cases start from are shipped, whole.
         for program in ["add", "cat", "cat-stream"] {
-            for file in ["spec.md", "main.s"] {
+            for file in ["idea.md", "main.s"] {
                 assert!(
                     !flow::program_file(target, program, file).is_empty(),
                     "{program}/{file} on {name}"

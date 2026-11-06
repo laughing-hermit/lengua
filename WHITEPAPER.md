@@ -21,7 +21,7 @@ a programming language, and how it makes an untrusted compiler trustworthy.
 
 A lengua program is two files.
 
-- **spec.md** is the source. It holds every behavior of the program and every test of it, in plain
+- **idea.md** is the source. It holds every behavior of the program and every test of it, in plain
   markdown that any person or AI can read. It names no CPU and no operating system, so it can be
   shared as it is.
 - **main.s** is the assembly the agent compiles from the spec for one computer. It's plain text,
@@ -181,7 +181,7 @@ graph of two-file nodes, and lengua holds each program to its parts' current cod
 
 ## The format
 
-spec.md is an Open Knowledge Format document, after Andrej Karpathy's LLM Wiki idea: plain
+idea.md is an Open Knowledge Format document, after Andrej Karpathy's LLM Wiki idea: plain
 markdown that any person or AI can read, made of headings, lists and tables, with no other
 language inside. A spec has a purpose, behaviors and constraints.
 

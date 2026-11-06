@@ -21,7 +21,7 @@ A program is two files, plus lengua's own record of them:
 
 | File | Written by | Purpose |
 |---|---|---|
-| `spec.md` | the AI, from the person's request | The source of truth, the mother of everything else, and the only file people share: natural language, Given/When/Then behaviors with IDs whose steps are their example tests, the generated tests under each behavior, and what the program uses. An [Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledge-format) (OKF) concept document, the same on every target |
+| `idea.md` | the AI, from the person's request | The source of truth, the mother of everything else, and the only file people share: natural language, Given/When/Then behaviors with IDs whose steps are their example tests, the generated tests under each behavior, and what the program uses. An [Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledge-format) (OKF) concept document, the same on every target |
 | `main.s` | the AI, compiling the spec | x86-64 or AArch64 assembly in the lengua dialect for one target. It's disposable: each computer compiles its own from the spec. Once it passes, lengua writes its second line, naming the version of the spec it was compiled from, the target and the CPU features it needs |
 | `lengua.lock` | only the lengua server | This computer's record: the person's requests for the build in progress, SHA-256 of both files and of the checked executable, the target and features, a combined fingerprint, which tests are proven for every input on that executable, and a signature. It isn't shared |
 
@@ -43,10 +43,10 @@ the same steps with `{placeholders}`, then a markdown table with a column for ea
 generator and a row for each variant. So the whole spec is plain markdown, headings, lists and
 tables, which OKF favors, with no other language inside. Steps describe behavior, never
 implementation, and a spec names no CPU, operating system or toolchain: it reads the same on
-every computer. `spec.md` is the living documentation, and the lock keeps the code in step with
+every computer. `idea.md` is the living documentation, and the lock keeps the code in step with
 it. The parser enforces the structure (a Purpose, Given before one When before Then, one exit
 code, unique IDs and titles, generated tests under their behavior with a well-formed table, and
-only `- Uses:`, `- Network:` and `- Threads:` under Constraints); the write-spec skill teaches the
+only `- Uses:`, `- Network:` and `- Threads:` under Constraints); the write-idea skill teaches the
 style.
 
 **A spec names what the program uses, not system calls:** `- Uses:` lists `standard input`,
@@ -61,7 +61,7 @@ them as an argument and sets them only as it becomes the program, so a variable 
 
 | What changed | Result |
 |---|---|
-| `spec.md` | The next `check` records it under the request's words and checks its tests and the code against it again. Changes since the build's first request are shown, with lengua's own marks on test changes that test less |
+| `idea.md` | The next `check` records it under the request's words and checks its tests and the code against it again. Changes since the build's first request are shown, with lengua's own marks on test changes that test less |
 | `main.s` only | The next `check` checks the rules, runs every test and proves it again; once the tests pass, the new code is stamped |
 | main.s's second line only | Nothing: lengua's hash of main.s leaves its own line out, and writes it back after the next pass |
 | nothing | `run` works, and `check` answers from what it found |
@@ -70,13 +70,13 @@ them as an argument and sets them only as it becomes the program, so a variable 
 
 The plugin folder `plugin/` contains:
 
-- **Skills:** `write-spec` writes the spec, its tests included, and `compile` compiles it into
+- **Skills:** `write-idea` writes the spec, its tests included, and `compile` compiles it into
   `main.s` for this computer. Each teaches one file and ends with `check`.
 - **MCP server** `lengua-mcp` (Rust, official `rmcp` SDK) with two tools:
 
 | Tool | Does |
 |---|---|
-| `check` | Every stage, stopping at the first that needs work: validates `spec.md`, its tests included (coverage, cross-checks, red check), and records it with the person's words; assembles, links and checks the rules; then, in the background, runs every test, counts the instructions executed, stamps and signs, proves the program, and writes main.s's second line. Each reply has one `next_step` |
+| `check` | Every stage, stopping at the first that needs work: validates `idea.md`, its tests included (coverage, cross-checks, red check), and records it with the person's words; assembles, links and checks the rules; then, in the background, runs every test, counts the instructions executed, stamps and signs, proves the program, and writes main.s's second line. Each reply has one `next_step` |
 | `run` | Verifies the lock against every file, rebuilds, confirms the build is byte-identical to the checked one, then runs it |
 
 The agent's loop is one call: edit a file, call `check`, follow `next_step`. The person's words go
@@ -607,7 +607,7 @@ it produces, the idea behind translation validation (Pnueli, Siegel and Singerma
 
 | Step | Translated by | How lengua checks it |
 |---|---|---|
-| request → `spec.md` | the AI | No machine can check intent, so lengua shows it instead: the spec is recorded with the person's words, every change after them is kept as a diff, and the agent's report says what the spec promises and what changed. New words in the middle of a build join it rather than start over, so no change drops out |
+| request → `idea.md` | the AI | No machine can check intent, so lengua shows it instead: the spec is recorded with the person's words, every change after them is kept as a diff, and the agent's report says what the spec promises and what changed. New words in the middle of a build join it rather than start over, so no change drops out |
 | behaviors → tests | the AI | Each behavior's steps, in lengua's phrasings, are its example, so the example can't disagree with the behavior; structure and coverage; each formula reproduces its example; generator ranges are numbers that the spec's Purpose states (not an example's own values) |
 | spec → `main.s` | the AI | The rules, then every example plus fresh random tests on every check |
 | `main.s` → machine code | LLVM | The checker reads the linked executable back and matches it to `main.s` instruction by instruction, operands included; the lock records the executable's hash, and `run` refuses any other build |
@@ -873,7 +873,7 @@ Trust:
     the bytes are the formula's text, never for leading zeros, a lost sign or a wrong digit.
 - **Every reader is fuzzed, and the proofs are mutation-tested.** A seeded fuzzer
   (`src/fuzz.rs`) gives every reader lengua has random bytes and the repository's own specs and
-  programs changed, cut, doubled and spliced: spec.md and its tests, main.s for each CPU and its
+  programs changed, cut, doubled and spliced: idea.md and its tests, main.s for each CPU and its
   header, the test language's formulas, the lock, the executable lengua built, and the AArch64
   decoder's machine words. None may panic or take 5 seconds. A short pass runs with every test
   and a long one, 40,000 inputs a reader, by hand; the first found a panic, a letter past ASCII in
@@ -1493,7 +1493,7 @@ runner has them), and on ARM64 ARMv8.0-A with NEON and floating point and
 nothing optional (no CRC-32, PMULL, AES, SHA, LSE atomics or SVE). An extension beyond it (BMI,
 AVX2, AVX-512, SVE, the CPUs' crypto and CRC instructions) is a **fast tier**: a program of its
 own, named for the extension (`wc-sve` beside `wc`), beside its baseline sibling and from the very
-same `spec.md`, the same bytes on both CPUs since a spec names no CPU, so the same tests and
+same `idea.md`, the same bytes on both CPUs since a spec names no CPU, so the same tests and
 proofs hold for both. The agent starts from the baseline form and takes a tier only when the
 machine line lists its extension, so a computer without AVX-512 has every program to learn from
 and copy, and a port to macOS or Windows inherits no gap. `tests/baseline.rs` makes it a failing
@@ -1570,7 +1570,7 @@ for CPU features this computer lacks is refused before building, with the next s
 spec for this computer. A line naming another version of the spec is no problem: the tests decide,
 and the line is written again after the next pass.
 
-main.s's second line, `# lengua: compiled from spec.md sha256:… for linux-x86_64; needs AVX2`,
+main.s's second line, `# lengua: compiled from idea.md sha256:… for linux-x86_64; needs AVX2`,
 ties the code to the version of the spec it was compiled from. It names the code; it doesn't
 protect it: main.s is plain text anyone can build outside lengua (`lengua-mcp link main.s` prints
 it with lengua's own file after it, which is what lengua assembles), past its checks and the
@@ -1578,7 +1578,7 @@ kernel's limits, so lengua's guarantees hold only for a program that `run` runs 
 
 ## Programs built from programs
 
-Programs stack. A spec links to the programs it builds on, `- Builds on: [sort lines](../sort/spec.md)`,
+Programs stack. A spec links to the programs it builds on, `- Builds on: [sort lines](../sort/idea.md)`,
 so the specs are the nodes of a graph and the links its edges, as an OKF bundle's concepts link
 to each other and an LLM Wiki's pages do: a folder of program folders, with an `index.md` that
 lists each with its description, is a bundle to browse. Each node is a folder of two files, its
@@ -1683,7 +1683,7 @@ Interactive round 4 (2026-10-31) ran ten scenarios in real Claude Code sessions,
 request: a CSV total, a line-reversing server, a tiny web server, a fast `wc`, a SIMD ROT13, an
 HTTP fetcher, a clock, a sort, a mean and standard deviation, and a spec shared alone. Every one
 finished with no question, every test passing and every call under 45 seconds, for about $20 at
-list prices; twelve phrasings of a request all chose write-spec first. A word-frequency count
+list prices; twelve phrasings of a request all chose write-idea first. A word-frequency count
 followed the same way: from one request with no question, a 1,034-line hash-table program with
 every test passing, in about eight minutes for about $2. BENCHMARKS.md, measured
 again on 2026-11-02, has lengua's best ahead of or level with C, C++ and Rust on every workload in

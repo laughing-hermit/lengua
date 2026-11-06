@@ -65,7 +65,7 @@ def outcome(folder):
     lock = locks[-1]
     text = lock.read_text()
     if "[code]" not in text:
-        return "spec only", ""
+        return "idea only", ""
     proven = re.search(r"proven = \[(.*?)\]", text)
     bounded = re.search(r"bounded = \[(.*?)\]\n", text)
     return "passed", "; ".join(part for part in (

@@ -109,7 +109,7 @@ pub enum Outcome {
     Closed,
     /// The program sent what isn't a message of the protocol.
     Refused(Refusal),
-    /// The program asked for what its spec doesn't allow.
+    /// The program asked for what its idea doesn't allow.
     Forbidden(Kind),
     /// The channel failed.
     Failed(std::io::Error),
@@ -122,7 +122,7 @@ pub struct Broker {
     root: OwnedFd,
     /// What the program is told first.
     hello: Hello,
-    /// What its spec lets it ask for.
+    /// What its idea lets it ask for.
     permit: Permit,
     /// What a test supplies.
     supply: Supply,
@@ -202,7 +202,7 @@ impl Broker {
         self.hello
     }
 
-    /// What the program's spec lets it ask for.
+    /// What the program's idea lets it ask for.
     #[must_use]
     pub const fn permit(&self) -> Permit {
         self.permit
@@ -589,8 +589,8 @@ pub fn answer_all(broker: &mut Broker, stream: &mut UnixStream) -> Outcome {
             Ok(request) => request,
             Err(refusal) => return Outcome::Refused(refusal),
         };
-        // What the spec doesn't allow ends the service, as what isn't a request does: an honest
-        // edge asks for nothing its program's spec didn't name.
+        // What the idea doesn't allow ends the service, as what isn't a request does: an honest
+        // edge asks for nothing its program's idea didn't name.
         if !broker.permit().allows(request.kind) {
             return Outcome::Forbidden(request.kind);
         }
@@ -979,9 +979,9 @@ mod tests {
     }
 
     #[test]
-    fn what_the_spec_does_not_allow_ends_the_service() {
-        // A spec of the clock alone: no names, no random bytes.
-        let calls = [crate::spec::Syscall::ClockGettime];
+    fn what_the_idea_does_not_allow_ends_the_service() {
+        // An idea of the clock alone: no names, no random bytes.
+        let calls = [crate::idea::Syscall::ClockGettime];
         let allowed = Permit::of(&calls);
         assert!(
             allowed.clock && !allowed.names && !allowed.random,
@@ -1035,7 +1035,7 @@ mod tests {
                 "{kind:?} left something in the folder"
             );
         }
-        // What the spec names is answered, and the notes always are.
+        // What the idea names is answered, and the notes always are.
         let folder = tempfile::tempdir().expect("a folder");
         let everything = broker_in(folder.path());
         assert!(everything.permit().allows(Kind::Open));

@@ -2,7 +2,7 @@
 
 // CRC-32C in plain integer code, a byte at a time through a table of 256 words, so it runs on every
 // ARM64 computer, with or without the CRC32 instructions (an extension before ARMv8.1). The form
-// that uses crc32cx and pmull, from the very same spec, is
+// that uses crc32cx and pmull, from the very same idea, is
 // plugin/skills/compile/assets/linux-aarch64/fast/crc32c-crc.
 
 // File descriptors

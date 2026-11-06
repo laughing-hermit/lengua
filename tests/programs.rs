@@ -4,13 +4,13 @@
 //! `tests/fixtures/linux-aarch64`, a template, a fast program), what the case changes in it, and
 //! whatever the product does with it that depends on the hardware. A program follows every rule
 //! and passes its tests; the ones a case asks about are also proven, run, and held to what their
-//! specs say: files read and written, folders made and swept, a sleep answered at once, the
+//! ideas say: files read and written, folders made and swept, a sleep answered at once, the
 //! environment given, dice rolled with the tests' random bytes, a program built on another,
 //! words counted for every length, text capitalized with vectors, and the benchmark's programs.
 //!
 //! A target added to lengua breaks every table until its cells are filled. A case is tried on
 //! every target this computer runs, natively or through QEMU's user mode (where the kernel can't
-//! hold a program to its spec's system calls and nothing is measured); the other targets' cells
+//! hold a program to its idea's system calls and nothing is measured); the other targets' cells
 //! are read for well-formedness on any computer, and tried on their own runners.
 
 mod common;
@@ -31,40 +31,40 @@ const ASSETS: &str = "plugin/skills/compile/assets";
 /// A change to a file: every `from` in it becomes `to`.
 type Edit = (&'static str, &'static str);
 
-/// A program's spec and code: the files of the repository they are, and what is changed in each
+/// A program's idea and code: the files of the repository they are, and what is changed in each
 /// before the program is checked.
 #[derive(Debug, Clone)]
 struct Files {
-    /// The spec, from the repository's root.
-    spec_file: String,
+    /// The idea, from the repository's root.
+    idea_file: String,
     /// The code, from the repository's root.
     code_file: String,
-    /// What is changed in the spec.
-    spec_edits: Vec<Edit>,
+    /// What is changed in the idea.
+    idea_edits: Vec<Edit>,
     /// What is changed in the code.
     code_edits: Vec<Edit>,
 }
 
 impl Files {
-    /// The spec.md and main.s of a program folder.
+    /// The idea.md and main.s of a program folder.
     fn folder(folder: &str) -> Self {
-        Self::pair(&format!("{folder}/spec.md"), &format!("{folder}/main.s"))
+        Self::pair(&format!("{folder}/idea.md"), &format!("{folder}/main.s"))
     }
 
-    /// A spec and a code file, each by its path from the repository's root.
-    fn pair(spec: &str, code: &str) -> Self {
+    /// An idea and a code file, each by its path from the repository's root.
+    fn pair(idea: &str, code: &str) -> Self {
         Self {
-            spec_file: spec.to_owned(),
+            idea_file: idea.to_owned(),
             code_file: code.to_owned(),
-            spec_edits: Vec::new(),
+            idea_edits: Vec::new(),
             code_edits: Vec::new(),
         }
     }
 
-    /// These files with the spec changed by `edits` instead.
-    fn spec_changed(&self, edits: &[Edit]) -> Self {
+    /// These files with the idea changed by `edits` instead.
+    fn idea_changed(&self, edits: &[Edit]) -> Self {
         Self {
-            spec_edits: edits.to_vec(),
+            idea_edits: edits.to_vec(),
             ..self.clone()
         }
     }
@@ -77,12 +77,12 @@ impl Files {
         }
     }
 
-    /// The spec's text, with its changes.
-    fn spec(&self) -> String {
+    /// The idea's text, with its changes.
+    fn idea(&self) -> String {
         edited(
-            &self.spec_file,
-            repository(&self.spec_file),
-            &self.spec_edits,
+            &self.idea_file,
+            repository(&self.idea_file),
+            &self.idea_edits,
         )
     }
 
@@ -112,7 +112,7 @@ fn edited(file: &str, mut text: String, edits: &[Edit]) -> String {
 }
 
 /// The twins of an example: x86-64's in `examples`, ARM64's among the fixtures. Both are compiled
-/// from the very same spec.
+/// from the very same idea.
 fn example(name: &str) -> PerCpu<Files> {
     PerCpu {
         x86_64: Files::folder(&format!("examples/{name}")),
@@ -128,27 +128,27 @@ fn fixture(name: &str) -> PerCpu<Files> {
     }
 }
 
-/// A template of the compile skill: one spec for both CPUs, and the code of each.
-fn template(spec: &str, x86_64: &str, aarch64: &str) -> PerCpu<Files> {
+/// A template of the compile skill: one idea for both CPUs, and the code of each.
+fn template(idea: &str, x86_64: &str, aarch64: &str) -> PerCpu<Files> {
     PerCpu {
-        x86_64: Files::pair(&format!("{ASSETS}/{spec}"), &format!("{ASSETS}/{x86_64}")),
-        aarch64: Files::pair(&format!("{ASSETS}/{spec}"), &format!("{ASSETS}/{aarch64}")),
+        x86_64: Files::pair(&format!("{ASSETS}/{idea}"), &format!("{ASSETS}/{x86_64}")),
+        aarch64: Files::pair(&format!("{ASSETS}/{idea}"), &format!("{ASSETS}/{aarch64}")),
     }
 }
 
-/// The skill's fast program `workload` for x86-64, with its own spec.
+/// The skill's fast program `workload` for x86-64, with its own idea.
 fn fast_x86_64(workload: &str) -> Files {
     Files::pair(
-        &format!("{ASSETS}/fast/{workload}/spec.md"),
+        &format!("{ASSETS}/fast/{workload}/idea.md"),
         &format!("{ASSETS}/fast/{workload}/main.s"),
     )
 }
 
-/// The skill's fast program `workload` for ARM64, which meets the spec of the x86-64 fast
-/// program `speeds`: the program it speeds up, where the specs of both CPUs' fast programs live.
+/// The skill's fast program `workload` for ARM64, which meets the idea of the x86-64 fast
+/// program `speeds`: the program it speeds up, where the ideas of both CPUs' fast programs live.
 fn fast_aarch64(speeds: &str, workload: &str) -> Files {
     Files::pair(
-        &format!("{ASSETS}/fast/{speeds}/spec.md"),
+        &format!("{ASSETS}/fast/{speeds}/idea.md"),
         &format!("{ASSETS}/linux-aarch64/fast/{workload}/main.s"),
     )
 }
@@ -266,10 +266,10 @@ async fn rig_for(target: Profile, proving: Proving) -> Option<Rig> {
     })
 }
 
-/// A program folder holding `files`, its spec recorded.
+/// A program folder holding `files`, its idea recorded.
 async fn written(session: &Session, files: &Files) -> Program {
     let program = Program::new();
-    program.write("spec.md", &files.spec());
+    program.write("idea.md", &files.idea());
     program.write("main.s", &files.code());
     session.record(&program).await;
     program
@@ -486,7 +486,7 @@ impl Needs {
     }
 }
 
-/// A program of a tier case, where the CPUs have programs of their own for the same spec: what a
+/// A program of a tier case, where the CPUs have programs of their own for the same idea: what a
 /// message calls it, its files and what it needs of the CPU.
 struct Variant {
     name: &'static str,
@@ -531,7 +531,7 @@ async fn pass(name: &str, programs: PerCpu<Files>) {
 // The decimals: exact cents, and doubles.
 
 /// mean computes in exact cents and hypotenuse in doubles, with the CPU's square root: each
-/// passes its tests and prints what the spec says for decimal arguments.
+/// passes its tests and prints what the idea says for decimal arguments.
 #[tokio::test]
 async fn the_decimal_examples_pass_their_tests() {
     let cases = [
@@ -712,7 +712,7 @@ async fn the_file_example_proves_its_file_handling() {
         let report = done(&what, session, &program).await;
         // Usage (B2), a missing input (B3) and a file over the limit (B4, a mebibyte of any of its
         // characters) are proven; capitalizing a file (B1) is proven for every file up to the
-        // length the proof's time reaches, of the mebibyte the spec allows.
+        // length the proof's time reaches, of the mebibyte the idea allows.
         let proofs = &report["proofs"];
         let first = text(&proofs[0]);
         assert!(
@@ -877,7 +877,7 @@ const OFF_BY_ONE: PerCpu<&[Edit]> = PerCpu {
 };
 
 /// The tests supply the random bytes, so each roll is exact: 200 runs, plus the proof that every
-/// pair of first bytes rolls as the spec says.
+/// pair of first bytes rolls as the idea says.
 #[tokio::test]
 async fn the_dice_example_rolls_with_the_tests_random_bytes() {
     let programs = example("dice");
@@ -955,7 +955,7 @@ async fn the_absolute_difference_example_is_proven() {
 
 // The template, narrowed; the jump table; the words and the pairs.
 
-/// The template's spec with its range narrowed to `-100` to `100`, and the tests drawing from it.
+/// The template's idea with its range narrowed to `-100` to `100`, and the tests drawing from it.
 const NARROWED: &[Edit] = &[
     (
         "between `-9223372036854775807`\nand `9223372036854775807`",
@@ -971,13 +971,13 @@ const NARROWED: &[Edit] = &[
 #[tokio::test]
 async fn small_ranges_run_every_value() {
     let templates = template(
-        "template-spec.md",
+        "template-idea.md",
         "main-template.s",
         "linux-aarch64/main-template.s",
     );
     let programs = PerCpu {
-        x86_64: templates.x86_64.spec_changed(NARROWED),
-        aarch64: templates.aarch64.spec_changed(NARROWED),
+        x86_64: templates.x86_64.idea_changed(NARROWED),
+        aarch64: templates.aarch64.idea_changed(NARROWED),
     };
     for target in Profile::ALL {
         let Some(rig) = rig_for(target, Proving::No).await else {
@@ -1122,7 +1122,7 @@ const FROM: PerCpu<&str> = PerCpu {
     aarch64: "// from: ",
 };
 
-/// Programs stack like nodes of a graph: one spec links to another it builds on, and its main.s
+/// Programs stack like nodes of a graph: one idea links to another it builds on, and its main.s
 /// takes the part's checked functions word for word, which check holds to the part's current
 /// code.
 #[tokio::test]
@@ -1138,17 +1138,17 @@ async fn a_program_builds_on_another() {
         let parent = tempfile::tempdir().expect("a folder for both");
         let part = Program::new_in(parent.path(), "sort");
         let node = Program::new_in(parent.path(), "sorted");
-        part.write("spec.md", &files.spec());
+        part.write("idea.md", &files.idea());
         part.write("main.s", &files.code());
         let link = format!("../{}", part.name());
         node.write(
-            "spec.md",
+            "idea.md",
             &files
-                .spec()
+                .idea()
                 .replace("title: sort", "title: sorted")
                 .replace(
                     "- Uses: standard input",
-                    &format!("- Uses: standard input\n- Builds on: [sort]({link}/spec.md)"),
+                    &format!("- Uses: standard input\n- Builds on: [sort]({link}/idea.md)"),
                 ),
         );
         let code = files.code();
@@ -1212,7 +1212,7 @@ async fn the_word_count_claude_code_wrote_passes_its_checks() {
 #[tokio::test]
 async fn the_vector_template_passes_its_tests_and_is_proven() {
     let programs = template(
-        "vector-template-spec.md",
+        "vector-template-idea.md",
         "vector-template.s",
         "linux-aarch64/vector-template.s",
     );
@@ -1249,7 +1249,7 @@ async fn the_vector_template_passes_its_tests_and_is_proven() {
 #[tokio::test]
 async fn the_streaming_filter_is_proven_for_every_length() {
     let programs = template(
-        "stream-template-spec.md",
+        "stream-template-idea.md",
         "stream-template.s",
         "linux-aarch64/stream-template.s",
     );
@@ -1299,7 +1299,7 @@ async fn the_streaming_filter_is_proven_for_every_length() {
 #[tokio::test]
 async fn the_tally_block_passes_its_checks() {
     let programs = template(
-        "tally-template-spec.md",
+        "tally-template-idea.md",
         "tally-template.s",
         "linux-aarch64/tally-template.s",
     );
@@ -1329,7 +1329,7 @@ async fn the_tally_block_passes_its_checks() {
 #[tokio::test]
 async fn the_parallel_template_runs_on_several_cores() {
     let programs = template(
-        "parallel-template-spec.md",
+        "parallel-template-idea.md",
         "parallel-template.s",
         "linux-aarch64/parallel-template.s",
     );
@@ -1361,7 +1361,7 @@ async fn the_parallel_template_runs_on_several_cores() {
 
 // The benchmark's programs.
 
-/// The benchmark's own programs: the skill's fast programs, each with its own spec and tests.
+/// The benchmark's own programs: the skill's fast programs, each with its own idea and tests.
 /// Each runs on any computer of its CPU, but the tier of the word count, which sits beside its
 /// baseline form, needs AVX-512BW on x86-64 and SVE on ARM64.
 fn benchmark_programs() -> PerCpu<Vec<Variant>> {
@@ -1385,64 +1385,64 @@ fn benchmark_programs() -> PerCpu<Vec<Variant>> {
     }
 }
 
-/// The benchmark's shout programs: the parallel template's spec, with the vectors the CPU's
+/// The benchmark's shout programs: the parallel template's idea, with the vectors the CPU's
 /// extension gives (x86-64's AVX-512 on 16 threads and on one, ARM64's NEON on one).
 fn shout_tiers() -> PerCpu<Vec<Variant>> {
-    let spec = format!("{ASSETS}/parallel-template-spec.md");
+    let idea = format!("{ASSETS}/parallel-template-idea.md");
     PerCpu {
         x86_64: vec![
             variant(
                 "avx512 shout",
-                Files::pair(&spec, "benches/programs/shout/avx512.s"),
+                Files::pair(&idea, "benches/programs/shout/avx512.s"),
                 Needs::Avx512bw,
             ),
             variant(
                 "avx512 shout, one thread",
-                Files::pair(&spec, "benches/programs/shout/avx512-one.s"),
+                Files::pair(&idea, "benches/programs/shout/avx512-one.s"),
                 Needs::Avx512bw,
             ),
         ],
         aarch64: vec![variant(
             "neon shout, one thread",
-            Files::pair(&spec, "benches/programs/shout/neon-one.s"),
+            Files::pair(&idea, "benches/programs/shout/neon-one.s"),
             Needs::Nothing,
         )],
     }
 }
 
-/// The benchmark's upcase programs: the example's spec and tests, 64 bytes at a time with AVX-512
+/// The benchmark's upcase programs: the example's idea and tests, 64 bytes at a time with AVX-512
 /// on x86-64 and 16 at a time with NEON on ARM64.
 fn upcase_tiers() -> PerCpu<Vec<Variant>> {
-    let spec = "examples/upcase/spec.md";
+    let idea = "examples/upcase/idea.md";
     PerCpu {
         x86_64: vec![variant(
             "avx512 upcase",
-            Files::pair(spec, "benches/programs/upcase/avx512.s"),
+            Files::pair(idea, "benches/programs/upcase/avx512.s"),
             Needs::Avx512bw,
         )],
         aarch64: vec![variant(
             "neon upcase",
-            Files::pair(spec, "benches/programs/upcase/neon.s"),
+            Files::pair(idea, "benches/programs/upcase/neon.s"),
             Needs::Nothing,
         )],
     }
 }
 
 /// The benchmark's word count: the word count Claude Code wrote through lengua from a plain
-/// request, as it was before the baseline form (the example's spec and tests), a fast tier the
+/// request, as it was before the baseline form (the example's idea and tests), a fast tier the
 /// benchmark still measures: 128 bytes at a time with AVX-512 on x86-64, and on ARM64 the same
 /// program with a vector at a time, as many bytes as the CPU's SVE vectors hold.
 fn count_tiers() -> PerCpu<Vec<Variant>> {
-    let spec = "examples/count/spec.md";
+    let idea = "examples/count/idea.md";
     PerCpu {
         x86_64: vec![variant(
             "avx512 count",
-            Files::pair(spec, "benches/programs/count/avx512.s"),
+            Files::pair(idea, "benches/programs/count/avx512.s"),
             Needs::Avx512bw,
         )],
         aarch64: vec![variant(
             "sve count",
-            Files::pair(spec, "benches/programs/count/sve.s"),
+            Files::pair(idea, "benches/programs/count/sve.s"),
             Needs::Sve,
         )],
     }
@@ -1473,14 +1473,14 @@ async fn the_benchmarks_own_programs_pass_their_checks() {
     }
 }
 
-/// The benchmark's shouts, the parallel template's spec with the CPU's wider vectors, pass their
+/// The benchmark's shouts, the parallel template's idea with the CPU's wider vectors, pass their
 /// checks where the CPU has what they use.
 #[tokio::test]
 async fn the_shouts_in_the_benchmark_pass_their_checks() {
     tiers_pass(shout_tiers()).await;
 }
 
-/// The benchmark's upcase is a lengua program too: the same spec and tests as the example, with
+/// The benchmark's upcase is a lengua program too: the same idea and tests as the example, with
 /// wider vectors.
 #[tokio::test]
 async fn the_upcase_in_the_benchmark_passes_its_checks() {
@@ -1498,7 +1498,7 @@ async fn the_word_count_in_the_benchmark_passes_its_checks() {
 /// Every program table above, by case: the cells that are twins of one program.
 fn twin_tables() -> Vec<(&'static str, PerCpu<Files>)> {
     let templates = template(
-        "template-spec.md",
+        "template-idea.md",
         "main-template.s",
         "linux-aarch64/main-template.s",
     );
@@ -1516,8 +1516,8 @@ fn twin_tables() -> Vec<(&'static str, PerCpu<Files>)> {
         (
             "small ranges",
             PerCpu {
-                x86_64: templates.x86_64.spec_changed(NARROWED),
-                aarch64: templates.aarch64.spec_changed(NARROWED),
+                x86_64: templates.x86_64.idea_changed(NARROWED),
+                aarch64: templates.aarch64.idea_changed(NARROWED),
             },
         ),
         ("calc", fixture("calc")),
@@ -1534,7 +1534,7 @@ fn twin_tables() -> Vec<(&'static str, PerCpu<Files>)> {
         (
             "vector template",
             template(
-                "vector-template-spec.md",
+                "vector-template-idea.md",
                 "vector-template.s",
                 "linux-aarch64/vector-template.s",
             ),
@@ -1542,7 +1542,7 @@ fn twin_tables() -> Vec<(&'static str, PerCpu<Files>)> {
         (
             "stream template",
             template(
-                "stream-template-spec.md",
+                "stream-template-idea.md",
                 "stream-template.s",
                 "linux-aarch64/stream-template.s",
             ),
@@ -1550,7 +1550,7 @@ fn twin_tables() -> Vec<(&'static str, PerCpu<Files>)> {
         (
             "tally template",
             template(
-                "tally-template-spec.md",
+                "tally-template-idea.md",
                 "tally-template.s",
                 "linux-aarch64/tally-template.s",
             ),
@@ -1558,7 +1558,7 @@ fn twin_tables() -> Vec<(&'static str, PerCpu<Files>)> {
         (
             "parallel template",
             template(
-                "parallel-template-spec.md",
+                "parallel-template-idea.md",
                 "parallel-template.s",
                 "linux-aarch64/parallel-template.s",
             ),
@@ -1578,17 +1578,17 @@ fn tier_tables() -> Vec<(&'static str, PerCpu<Vec<Variant>>)> {
 
 /// Every cell names files that exist and edits that find their text, read on any computer even
 /// for a target it cannot run; and the two CPUs' twins of a program are compiled from the very
-/// same spec.
+/// same idea.
 #[test]
 fn every_cell_names_files_and_edits_that_exist() {
     let mut read = 0;
     for (name, programs) in twin_tables() {
-        let specs: Vec<String> = programs.cells().map(|(_, files)| files.spec()).collect();
+        let ideas: Vec<String> = programs.cells().map(|(_, files)| files.idea()).collect();
         assert!(
-            specs
+            ideas
                 .iter()
-                .all(|spec| !spec.is_empty() && *spec == specs[0]),
-            "{name}: the CPUs' programs are compiled from different specs"
+                .all(|idea| !idea.is_empty() && *idea == ideas[0]),
+            "{name}: the CPUs' programs are compiled from different ideas"
         );
         for (target, files) in programs.cells() {
             assert!(!files.code().is_empty(), "{name} on {}", target.name());
@@ -1599,7 +1599,7 @@ fn every_cell_names_files_and_edits_that_exist() {
         for (target, variants) in tiers.cells() {
             assert!(!variants.is_empty(), "{name} on {}", target.name());
             for variant in variants {
-                assert!(!variant.files.spec().is_empty(), "{name}: {}", variant.name);
+                assert!(!variant.files.idea().is_empty(), "{name}: {}", variant.name);
                 assert!(!variant.files.code().is_empty(), "{name}: {}", variant.name);
                 read += 1;
             }

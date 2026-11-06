@@ -178,7 +178,7 @@ pub struct Job<'a> {
     /// What lengua's broker does for the program, when it serves it over descriptor 4,352
     /// ([`crate::edge::CHANNEL`]), as it does a program that links the channel's code: its names,
     /// and in a test its clock and random bytes, go through the broker, which does only what the
-    /// permit, from the program's spec, says. A program with a broker keeps no raw call that
+    /// permit, from the program's idea, says. A program with a broker keeps no raw call that
     /// makes or finds a path.
     pub channel: Option<crate::broker::Permit>,
 }
@@ -258,7 +258,7 @@ pub fn signal_name(signal: i32) -> String {
         9 => "SIGKILL".into(),
         11 => "SIGSEGV (memory it may not touch)".into(),
         13 => "SIGPIPE".into(),
-        31 => "SIGSYS (a system call its spec doesn't allow)".into(),
+        31 => "SIGSYS (a system call its idea doesn't allow)".into(),
         other => format!("signal {other}"),
     }
 }

@@ -9,7 +9,7 @@
 
 Natural language in, checked machine code out. lengua is an AI language, not a programming
 language: you describe a program in plain words, and your AI agent is the compiler. A program is
-two files. `spec.md` is the source: what the program does, as behaviors shown by examples, with
+two files. `idea.md` is the source: what the program does, as behaviors shown by examples, with
 the tests that try each one, in plain markdown anyone can read and share: an idea file, in
 Andrej Karpathy's words, that anyone's agent builds out for their own computer. `main.s` is the fastest
 assembly the agent can compile from it for your computer, x86-64 or ARM64, and it's disposable: the spec is
@@ -151,7 +151,7 @@ claude --plugin-dir /absolute/path/to/lengua/plugin
 Then describe a program, for example: "Use lengua to write a program that adds two whole numbers
 given as arguments and prints the sum." That request is all it takes:
 
-1. The agent writes `spec.md` from your request, and lengua records it with your words in
+1. The agent writes `idea.md` from your request, and lengua records it with your words in
    `lengua.lock`. The agent asks you something only when your request leaves open what only you
    can decide.
 2. It compiles the spec into assembly, calling lengua's one tool, `check`, after each file:

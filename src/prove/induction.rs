@@ -94,7 +94,7 @@ struct Streamed<'a> {
     name: &'a str,
     /// Its characters.
     characters: Vec<u8>,
-    /// The longest the spec lets it be.
+    /// The longest the idea lets it be.
     max: usize,
     /// What the program writes of it.
     output: Output<'a>,
@@ -363,7 +363,7 @@ fn added(
 }
 
 /// The run's standard input held to `characters`, byte by byte: the facts a question that
-/// finds inputs is asked again with, so its inputs are ones the spec can give.
+/// finds inputs is asked again with, so its inputs are ones the idea can give.
 fn held(pool: &mut Pool, run: &State, characters: &[u8]) -> Vec<Term> {
     run.stdin_bytes()
         .iter()
@@ -771,7 +771,7 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
         }
         // The step holds while every counter is at least 3, the base while it's at least 2 (3
         // where a buffer-full comes before each final piece): as many times round as the
-        // smallest counter's start less one, as far as the spec's lengths go. A count is at
+        // smallest counter's start less one, as far as the idea's lengths go. A count is at
         // most what was read before the head.
         let rounds = grown
             .counters

@@ -1,7 +1,7 @@
 .arch armv8-a
 
 // AES-128 in plain integer code and a table of 256 words, so it runs on every ARM64 computer. The
-// form that uses the CPU's AES instructions, from the very same spec, is
+// form that uses the CPU's AES instructions, from the very same idea, is
 // plugin/skills/compile/assets/linux-aarch64/fast/aes-aes.
 
 // File descriptors

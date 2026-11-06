@@ -1,7 +1,7 @@
 .intel_syntax noprefix
 
 # AES-128 in plain integer code and a table of 256 words, so it runs on every x86-64 computer. The
-# form that uses the CPU's AES instructions, from the very same spec, is
+# form that uses the CPU's AES instructions, from the very same idea, is
 # plugin/skills/compile/assets/fast/aes-ni.
 
 # File descriptors

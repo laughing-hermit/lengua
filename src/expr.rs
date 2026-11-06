@@ -529,7 +529,7 @@ impl Function {
         Self::Tally,
     ];
 
-    /// The function's name in the test language, as a spec writes it.
+    /// The function's name in the test language, as an idea writes it.
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {
@@ -1955,7 +1955,7 @@ pub enum Generator {
     },
 }
 
-/// A number as the spec states it, compared by value: `12.5` and `12.50` are the same limit.
+/// A number as the idea states it, compared by value: `12.5` and `12.50` are the same limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Limit {
     m: i128,
@@ -1979,7 +1979,7 @@ impl Limit {
         Self { m, p }
     }
 
-    /// Reads a backtick value from a spec, such as `12`, `-3` or `12.50`, with the places it's
+    /// Reads a backtick value from an idea, such as `12`, `-3` or `12.50`, with the places it's
     /// written with.
     #[must_use]
     pub fn parse(text: &str) -> Option<(Self, u8)> {

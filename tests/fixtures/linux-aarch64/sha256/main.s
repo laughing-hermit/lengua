@@ -2,7 +2,7 @@
 
 // SHA-256 in plain integer code (rotates, adds and xors) and NEON for the byte order and the
 // copies, so it runs on every ARM64 computer. The form that uses the CPU's SHA2 instructions,
-// from the very same spec, is plugin/skills/compile/assets/linux-aarch64/fast/sha256-sha2.
+// from the very same idea, is plugin/skills/compile/assets/linux-aarch64/fast/sha256-sha2.
 
 // File descriptors
 .equ STDIN, 0

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Checks a lengua release as a user gets it: its own server takes a program from its spec to
+"""Checks a lengua release as a user gets it: its own server takes a program from its idea to
 done over MCP, then the program runs from a shell with the command the done reply gives.
 
-usage: release-check.py <lengua-mcp> <example folder with spec.md and main.s>
+usage: release-check.py <lengua-mcp> <example folder with idea.md and main.s>
 """
 
 import json
@@ -70,10 +70,10 @@ def main() -> int:
         answer(1)
         send({"jsonrpc": "2.0", "method": "notifications/initialized"})
 
-        shutil.copy(os.path.join(example, "spec.md"), folder)
+        shutil.copy(os.path.join(example, "idea.md"), folder)
         report = check({"path": folder, "request": REQUEST})
         if report["state"] != "write_code":
-            raise RuntimeError(f"the spec wasn't recorded: {report}")
+            raise RuntimeError(f"the idea wasn't recorded: {report}")
         shutil.copy(os.path.join(example, "main.s"), folder)
         while True:
             report = check({"path": folder})
@@ -93,7 +93,7 @@ def main() -> int:
         )
         if ran.stdout != "5\n" or ran.returncode != 0:
             raise RuntimeError(f"the program didn't run from a shell: {ran}")
-    print(f"The release took add from its spec to done in {calls} checks, and ran it from a shell.")
+    print(f"The release took add from its idea to done in {calls} checks, and ran it from a shell.")
     return 0
 
 

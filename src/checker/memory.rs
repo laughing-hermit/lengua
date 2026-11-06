@@ -32,7 +32,7 @@ use super::decode::{MappedFunction, Program};
 use super::{Rule, Violation};
 use crate::isa::{Abi, BaseMove, Control, Insn, Op, Operand, Reg, Stack, Value};
 use crate::platform::Profile;
-use crate::spec::Syscall;
+use crate::idea::Syscall;
 
 /// The most stack a program may use on any path.
 pub const MAX_STACK_BYTES: u64 = 1 << 20;
@@ -340,7 +340,7 @@ pub fn check(
                 "the program's deepest path uses {max_stack} bytes of stack, more than \
                  {MAX_STACK_BYTES}"
             ),
-            fix: "keep large buffers in .bss, sized from the spec's limits, instead of on the \
+            fix: "keep large buffers in .bss, sized from the idea's limits, instead of on the \
                   stack"
                 .into(),
         });

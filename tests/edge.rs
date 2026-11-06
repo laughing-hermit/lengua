@@ -20,7 +20,7 @@ use std::path::Path;
 use lengua::broker::Permit;
 use lengua::platform::Profile;
 use lengua::runner::{End, Job, Limits, run};
-use lengua::spec::Syscall;
+use lengua::idea::Syscall;
 use per_target::Way;
 
 fn launcher() -> &'static Path {
@@ -1289,9 +1289,9 @@ async fn every_operation_does_what_it_promises() {
             let Some(how) = per_target::way(target) else {
                 continue;
             };
-            let mut spec = vec![Syscall::Write, Syscall::Exit];
-            spec.extend_from_slice(case.calls);
-            let allowed = target.allowed_syscalls(&spec, case.threads);
+            let mut idea = vec![Syscall::Write, Syscall::Exit];
+            idea.extend_from_slice(case.calls);
+            let allowed = target.allowed_syscalls(&idea, case.threads);
             let arguments: Vec<String> = case
                 .arguments
                 .iter()
@@ -1320,7 +1320,7 @@ async fn every_operation_does_what_it_promises() {
                     env: &environment,
                     files: &files,
                     folders: &folders,
-                    channel: brokered.then(|| Permit::of(&spec)),
+                    channel: brokered.then(|| Permit::of(&idea)),
                     ..Job::new(&executable, &arguments, case.stdin, &allowed)
                 };
                 let limits = Limits {
@@ -1451,9 +1451,9 @@ async fn a_test_gives_the_program_its_clock_and_random_bytes_through_the_broker(
         let Some(how) = per_target::way(target) else {
             continue;
         };
-        let mut spec = vec![Syscall::Write, Syscall::Exit];
-        spec.extend_from_slice(case.calls);
-        let allowed = target.allowed_syscalls(&spec, false);
+        let mut idea = vec![Syscall::Write, Syscall::Exit];
+        idea.extend_from_slice(case.calls);
+        let allowed = target.allowed_syscalls(&idea, false);
         let job = Job {
             emulated: how == Way::Emulated,
             supply: Some(&supply),
@@ -1538,9 +1538,9 @@ async fn a_listing_is_turned_round_for_a_second_run_and_the_broker_is_told_of_it
         let Some(how) = per_target::way(target) else {
             continue;
         };
-        let mut spec = vec![Syscall::Write, Syscall::Exit];
-        spec.extend_from_slice(case.calls);
-        let allowed = target.allowed_syscalls(&spec, false);
+        let mut idea = vec![Syscall::Write, Syscall::Exit];
+        idea.extend_from_slice(case.calls);
+        let allowed = target.allowed_syscalls(&idea, false);
         let mut listed = Vec::new();
         for reversed in [false, true] {
             let job = Job {
@@ -1670,9 +1670,9 @@ async fn the_broker_holds_names_to_what_every_system_does() {
         let Some(how) = per_target::way(target) else {
             continue;
         };
-        let mut spec = vec![Syscall::Write, Syscall::Exit];
-        spec.extend_from_slice(case.calls);
-        let allowed = target.allowed_syscalls(&spec, false);
+        let mut idea = vec![Syscall::Write, Syscall::Exit];
+        idea.extend_from_slice(case.calls);
+        let allowed = target.allowed_syscalls(&idea, false);
         let job = Job {
             emulated: how == Way::Emulated,
             files: &files,

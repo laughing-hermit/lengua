@@ -1,4 +1,4 @@
-//! A program folder's state in the spec → code workflow, and the single next step. The spec
+//! A program folder's state in the idea → code workflow, and the single next step. The idea
 //! holds the tests: each behavior's steps are its example, and its generated tests sit under it.
 
 use std::io;
@@ -7,17 +7,17 @@ use std::path::{Component, Path, PathBuf};
 use crate::hash::Sha256Hex;
 use crate::lock::{self, Key, Lock, LockError};
 
-/// The spec's file name inside a program folder.
-pub const SPEC_FILE: &str = "spec.md";
+/// The idea's file name inside a program folder.
+pub const IDEA_FILE: &str = "idea.md";
 
-/// Where tests lived before they moved into the spec: a folder that still has it is asked to
+/// Where tests lived before they moved into the idea: a folder that still has it is asked to
 /// move them.
 pub const LEGACY_TESTS_FILE: &str = "tests.toml";
 
 /// The code's file name inside a program folder.
 pub const CODE_FILE: &str = "main.s";
 
-/// Where the server keeps a copy of each spec.md it recorded, by hash, so later changes can be
+/// Where the server keeps a copy of each idea.md it recorded, by hash, so later changes can be
 /// shown against them.
 #[must_use]
 pub fn stamped_copy(data_dir: &Path, file: &Sha256Hex) -> PathBuf {
@@ -75,8 +75,8 @@ impl std::fmt::Display for ProgramFolder {
 /// Hashes of a program folder's files and its lock's status.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Snapshot {
-    /// SHA-256 of spec.md, when it exists.
-    pub spec: Option<Sha256Hex>,
+    /// SHA-256 of idea.md, when it exists.
+    pub idea: Option<Sha256Hex>,
     /// SHA-256 of main.s without lengua's line in it, when it exists.
     pub code: Option<Sha256Hex>,
     /// Whether lengua.lock exists and can be trusted.
@@ -107,7 +107,7 @@ impl Snapshot {
             Err(error) => Err(error),
         };
         Ok(Self {
-            spec: hash(SPEC_FILE, Sha256Hex::of)?,
+            idea: hash(IDEA_FILE, Sha256Hex::of)?,
             code: hash(CODE_FILE, crate::header::code_hash)?,
             lock: match lock::read(folder.path(), key) {
                 Ok(None) => LockStatus::Missing,
@@ -127,20 +127,20 @@ impl Snapshot {
     }
 }
 
-/// Where a program is in the spec → code workflow.
+/// Where a program is in the idea → code workflow.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum State {
-    /// spec.md doesn't exist.
-    NoSpec,
+    /// idea.md doesn't exist.
+    NoIdea,
     /// lengua.lock exists but can't be trusted.
     LockInvalid(LockError),
-    /// The spec, tests included, was never recorded, or changed since.
-    SpecUnrecorded,
-    /// The spec is recorded; main.s doesn't exist.
+    /// The idea, tests included, was never recorded, or changed since.
+    IdeaUnrecorded,
+    /// The idea is recorded; main.s doesn't exist.
     CodeMissing,
     /// main.s hasn't been checked, or changed since.
     CodeUnchecked,
-    /// The spec and the code both match the lock.
+    /// The idea and the code both match the lock.
     Ready,
 }
 
@@ -148,18 +148,18 @@ impl State {
     /// Evaluates the state table, top row first.
     #[must_use]
     pub fn of(snapshot: &Snapshot) -> Self {
-        let Some(spec) = &snapshot.spec else {
-            return Self::NoSpec;
+        let Some(idea) = &snapshot.idea else {
+            return Self::NoIdea;
         };
         let lock = match &snapshot.lock {
-            LockStatus::Missing => return Self::SpecUnrecorded,
+            LockStatus::Missing => return Self::IdeaUnrecorded,
             LockStatus::Invalid(error) => return Self::LockInvalid(error.clone()),
             LockStatus::Valid(lock) => lock,
         };
-        // The spec, tests included, can be fixed at any time: each version is checked again, and
+        // The idea, tests included, can be fixed at any time: each version is checked again, and
         // what changed after the request is shown, not refused.
-        if lock.spec.sha256 != *spec {
-            return Self::SpecUnrecorded;
+        if lock.idea.sha256 != *idea {
+            return Self::IdeaUnrecorded;
         }
         match (&lock.code, &snapshot.code) {
             (_, None) => Self::CodeMissing,
@@ -172,9 +172,9 @@ impl State {
     #[must_use]
     pub fn name(&self) -> &'static str {
         match self {
-            Self::NoSpec => "no_spec",
+            Self::NoIdea => "no_idea",
             Self::LockInvalid(_) => "lock_invalid",
-            Self::SpecUnrecorded => "spec_unrecorded",
+            Self::IdeaUnrecorded => "idea_unrecorded",
             Self::CodeMissing => "code_missing",
             Self::CodeUnchecked => "code_unchecked",
             Self::Ready => "ready",
@@ -185,10 +185,10 @@ impl State {
     #[must_use]
     pub fn next_step(&self, folder: &ProgramFolder) -> String {
         match self {
-            Self::NoSpec => format!(
-                "Next: write {}, its tests included, with the write-spec skill, then call check \
+            Self::NoIdea => format!(
+                "Next: write {}, its tests included, with the write-idea skill, then call check \
                  with path {folder} and, as request, the user's words that asked for the program.",
-                folder.file(SPEC_FILE).display()
+                folder.file(IDEA_FILE).display()
             ),
             Self::LockInvalid(error) => format!(
                 "Next: {} can't be used: {error}. Call check with path {folder} and, as request, \
@@ -196,14 +196,14 @@ impl State {
                  checked again.",
                 folder.file(lock::LOCK_FILE).display()
             ),
-            Self::SpecUnrecorded => format!(
+            Self::IdeaUnrecorded => format!(
                 "Next: call check with path {folder} and, as request, the user's words that asked \
                  for this program or this change, quoted exactly."
             ),
             Self::CodeMissing => format!(
                 "Next: compile {} into {} with the compile skill, then call check with path \
                  {folder}.",
-                folder.file(SPEC_FILE).display(),
+                folder.file(IDEA_FILE).display(),
                 folder.file(CODE_FILE).display()
             ),
             Self::CodeUnchecked | Self::Ready => {
@@ -223,7 +223,7 @@ mod tests {
     }
 
     fn recorded() -> Lock {
-        Lock::requested(digest("spec"), "Make me an adder".to_owned())
+        Lock::requested(digest("idea"), "Make me an adder".to_owned())
     }
 
     fn with_code() -> Lock {
@@ -243,8 +243,8 @@ mod tests {
     }
 
     fn state(files: [Option<&str>; 2], lock: LockStatus) -> State {
-        let [spec, code] = files.map(|name| name.map(digest));
-        State::of(&Snapshot { spec, code, lock })
+        let [idea, code] = files.map(|name| name.map(digest));
+        State::of(&Snapshot { idea, code, lock })
     }
 
     /// An absolute path on this system: `rest` below its root.
@@ -266,16 +266,16 @@ mod tests {
     }
 
     #[test]
-    fn row_no_spec() {
+    fn row_no_idea() {
         let state = state(
             [None, Some("code")],
             LockStatus::Valid(Box::new(recorded())),
         );
-        assert_eq!(state, State::NoSpec);
+        assert_eq!(state, State::NoIdea);
         assert!(
             next_step(&state).starts_with(&format!(
-                "Next: write {}, its tests included, with the write-spec skill",
-                add().file(SPEC_FILE).display()
+                "Next: write {}, its tests included, with the write-idea skill",
+                add().file(IDEA_FILE).display()
             )),
             "{}",
             next_step(&state)
@@ -285,7 +285,7 @@ mod tests {
     #[test]
     fn row_lock_invalid() {
         let state = state(
-            [Some("spec"), None],
+            [Some("idea"), None],
             LockStatus::Invalid(LockError::BadSignature),
         );
         assert_eq!(state, State::LockInvalid(LockError::BadSignature));
@@ -304,14 +304,14 @@ mod tests {
     }
 
     #[test]
-    fn row_spec_unrecorded() {
-        let missing = state([Some("spec"), None], LockStatus::Missing);
+    fn row_idea_unrecorded() {
+        let missing = state([Some("idea"), None], LockStatus::Missing);
         let changed = state(
-            [Some("edited spec"), Some("code")],
+            [Some("edited idea"), Some("code")],
             LockStatus::Valid(Box::new(with_code())),
         );
-        assert_eq!(missing, State::SpecUnrecorded);
-        assert_eq!(changed, State::SpecUnrecorded);
+        assert_eq!(missing, State::IdeaUnrecorded);
+        assert_eq!(changed, State::IdeaUnrecorded);
         let step = next_step(&missing);
         assert!(
             step.contains(&format!(
@@ -325,7 +325,7 @@ mod tests {
     #[test]
     fn row_code_missing() {
         let state = state(
-            [Some("spec"), None],
+            [Some("idea"), None],
             LockStatus::Valid(Box::new(recorded())),
         );
         assert_eq!(state, State::CodeMissing);
@@ -337,11 +337,11 @@ mod tests {
     #[test]
     fn row_code_unchecked() {
         let unchecked = state(
-            [Some("spec"), Some("code")],
+            [Some("idea"), Some("code")],
             LockStatus::Valid(Box::new(recorded())),
         );
         let edited = state(
-            [Some("spec"), Some("edited code")],
+            [Some("idea"), Some("edited code")],
             LockStatus::Valid(Box::new(with_code())),
         );
         assert_eq!(unchecked, State::CodeUnchecked);
@@ -355,7 +355,7 @@ mod tests {
     #[test]
     fn row_ready() {
         let state = state(
-            [Some("spec"), Some("code")],
+            [Some("idea"), Some("code")],
             LockStatus::Valid(Box::new(with_code())),
         );
         assert_eq!(state, State::Ready);
@@ -380,9 +380,9 @@ mod tests {
         let folder = tempfile::tempdir().expect("temporary folder");
         let program =
             ProgramFolder::new(folder.path().to_str().expect("UTF-8 path")).expect("absolute path");
-        std::fs::write(program.file(SPEC_FILE), "spec").expect("write spec.md");
+        std::fs::write(program.file(IDEA_FILE), "idea").expect("write idea.md");
         let snapshot = Snapshot::read(&program, None).expect("read the folder");
-        assert_eq!(snapshot.spec, Some(digest("spec")));
+        assert_eq!(snapshot.idea, Some(digest("idea")));
         assert_eq!(snapshot.code, None);
         assert_eq!(snapshot.lock, LockStatus::Missing);
         let missing =
@@ -390,7 +390,7 @@ mod tests {
         assert_eq!(
             Snapshot::read(&missing, None)
                 .expect("a missing folder is empty")
-                .spec,
+                .idea,
             None
         );
     }

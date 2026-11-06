@@ -32,9 +32,9 @@ enum Proving {
     Alone(OwnedRwLockWriteGuard<()>),
 }
 
-/// A valid spec, tests included, for a program that adds two numbers.
-pub const ADD_SPEC: &str = r#"---
-type: lengua/program-spec
+/// A valid idea, tests included, for a program that adds two numbers.
+pub const ADD_IDEA: &str = r#"---
+type: lengua/program-idea
 title: add
 description: Adds two whole numbers given as arguments and prints the sum.
 ---
@@ -388,7 +388,7 @@ impl Session {
             .join("\n")
     }
 
-    /// Checks the program the way an agent does after writing its spec from the user's
+    /// Checks the program the way an agent does after writing its idea from the user's
     /// request: with their words.
     pub async fn record(&self, program: &Program) -> Value {
         self.call_ok("check", program.request(REQUEST)).await
@@ -466,10 +466,10 @@ impl Program {
             .to_owned()
     }
 
-    /// A program folder holding the add spec, its tests included.
-    pub fn with_add_spec() -> Self {
+    /// A program folder holding the add idea, its tests included.
+    pub fn with_add_idea() -> Self {
         let program = Self::new();
-        program.write("spec.md", ADD_SPEC);
+        program.write("idea.md", ADD_IDEA);
         program
     }
 

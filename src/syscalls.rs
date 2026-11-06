@@ -39,7 +39,7 @@ pub struct LinuxAbi {
 /// Linux on x86-64.
 pub mod x86_64 {
     use super::{LinuxAbi, Wait};
-    use crate::spec::Syscall;
+    use crate::idea::Syscall;
 
     /// `read` from a file descriptor.
     pub const READ: i64 = 0;
@@ -151,7 +151,7 @@ pub mod x86_64 {
 /// Linux on AArch64: the kernel's generic table, with `renameat` and the older `fstat` kept.
 pub mod aarch64 {
     use super::{LinuxAbi, Wait};
-    use crate::spec::Syscall;
+    use crate::idea::Syscall;
 
     /// `ioctl`, read or set a terminal's mode.
     pub const IOCTL: i64 = 29;
@@ -281,7 +281,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::spec::Syscall;
+    use crate::idea::Syscall;
 
     /// `#define __NR_name number` (and the generic table's `__NR3264_name`) in a kernel header,
     /// when this computer has it.
@@ -394,9 +394,9 @@ mod tests {
         }
     }
 
-    /// Each table maps every call a spec may allow, to a number of its own.
+    /// Each table maps every call an idea may allow, to a number of its own.
     #[test]
-    fn every_call_a_spec_allows_has_a_number() {
+    fn every_call_a_idea_allows_has_a_number() {
         for number in [x86_64::number, aarch64::number] {
             let mut numbers: Vec<i64> = Syscall::ALL.into_iter().map(number).collect();
             numbers.sort_unstable();

@@ -1,4 +1,4 @@
-//! What changed after the user's request: a plain line diff of spec.md against the version
+//! What changed after the user's request: a plain line diff of idea.md against the version
 //! lengua recorded first, and for the tests inside it, lengua's own marks on the changes that
 //! test less. The AI that writes the code also writes the tests, so that judgment stays here;
 //! the agent only explains each change.
@@ -91,7 +91,7 @@ pub fn line_diff(before: &str, after: &str) -> String {
     text
 }
 
-/// The changes from `before` to `after`, two versions of spec.md, that test less, one line each:
+/// The changes from `before` to `after`, two versions of idea.md, that test less, one line each:
 /// fewer runs, a generator that draws fewer values, exact output that became a rule, and removed
 /// blocks, variables or expected files. Empty when none does, or when either version doesn't
 /// parse.
@@ -145,16 +145,16 @@ pub fn tests_less(before: &str, after: &str) -> Vec<String> {
     marks
 }
 
-/// A spec's tests as one table: each behavior's example outputs under `example`, and its
+/// An idea's tests as one table: each behavior's example outputs under `example`, and its
 /// generated tests under `generated`, one table a row of its table, each with its behavior's `id`.
-fn tests_of(spec_text: &str) -> Option<Table> {
-    let spec = crate::spec::parse(spec_text).ok()?;
+fn tests_of(idea_text: &str) -> Option<Table> {
+    let idea = crate::idea::parse(idea_text).ok()?;
     let mut examples = Vec::new();
-    for (id, mut outputs) in crate::testfile::example_outputs(&spec) {
+    for (id, mut outputs) in crate::testfile::example_outputs(&idea) {
         outputs.insert("id".into(), Value::String(id));
         examples.push(Value::Table(outputs));
     }
-    let generated = crate::testfile::generated_tables(&spec)
+    let generated = crate::testfile::generated_tables(&idea)
         .into_iter()
         .map(Value::Table)
         .collect();
@@ -364,8 +364,8 @@ mod tests {
         assert!(diff.contains('…'), "{diff}");
     }
 
-    const SPEC: &str = r#"---
-type: lengua/program-spec
+    const IDEA: &str = r#"---
+type: lengua/program-idea
 title: roll
 ---
 # Purpose
@@ -393,9 +393,9 @@ Prints a number.
 "#;
 
     fn marks(edit: impl Fn(&str) -> String) -> Vec<String> {
-        let edited = edit(SPEC);
-        assert!(crate::spec::parse(&edited).is_ok(), "{edited}");
-        tests_less(SPEC, &edited)
+        let edited = edit(IDEA);
+        assert!(crate::idea::parse(&edited).is_ok(), "{edited}");
+        tests_less(IDEA, &edited)
     }
 
     #[test]
@@ -489,8 +489,8 @@ Prints a number.
             },
         ];
         for edit in edits {
-            assert_eq!(marks(edit), Vec::<String>::new(), "{}", edit(SPEC));
+            assert_eq!(marks(edit), Vec::<String>::new(), "{}", edit(IDEA));
         }
-        assert_eq!(tests_less("not a spec", SPEC), Vec::<String>::new());
+        assert_eq!(tests_less("not an idea", IDEA), Vec::<String>::new());
     }
 }

@@ -17,26 +17,26 @@ scalable vectors of bytes.
 
 ## Templates
 
-Each is x86-64's template compiled for AArch64 from the same spec, checked, tested and proven as
+Each is x86-64's template compiled for AArch64 from the same idea, checked, tested and proven as
 x86-64's is.
 - [The template](../assets/linux-aarch64/main-template.s) prints the negative of a number.
 - [The vector template](../assets/linux-aarch64/vector-template.s) shouts a line 16 bytes at a
   time with NEON.
 - [The streaming template](../assets/linux-aarch64/stream-template.s) capitalizes standard input
   of any length a 4 KiB buffer-full at a time through `fill`, from
-  [its spec](../assets/stream-template-spec.md), and is proven for every length.
+  [its idea](../assets/stream-template-idea.md), and is proven for every length.
 - [The word tally](../assets/linux-aarch64/tally-template.s) counts words through a hash table
   of a million slots and sorts them with a merge sort, from
-  [its spec](../assets/tally-template-spec.md): values the x86-64 form keeps on the stack stay in
+  [its idea](../assets/tally-template-idea.md): values the x86-64 form keeps on the stack stay in
   `x19` to `x28`, and constants too wide for `cmp`, such as `MAX_WORDS`, sit in a register built
   with `mov` and `movk`.
 - [The event-loop server](../assets/linux-aarch64/server-template.s) serves up to 8 clients at
-  once with `os_poll`, from [its spec](../assets/server-template-spec.md), proven in every order
+  once with `os_poll`, from [its idea](../assets/server-template-idea.md), proven in every order
   its clients' steps can come in.
 - [The key reader](../assets/linux-aarch64/terminal-template.s) reads keys one at a time with no
-  echo, from [its spec](../assets/terminal-template-spec.md).
+  echo, from [its idea](../assets/terminal-template-idea.md).
 - [The parallel template](../assets/linux-aarch64/parallel-template.s) capitalizes up to a
-  megabyte on up to 16 threads, from [its spec](../assets/parallel-template-spec.md). It calls
+  megabyte on up to 16 threads, from [its idea](../assets/parallel-template-idea.md). It calls
   `parallel_for`, which is lengua's, as on x86-64; `worker` keeps its slot in `x19`, set by
   `mov x19, x1` after saving x19, and writes only its stack and its slot. lengua's code does the
   threads' part that is AArch64's: `clone` takes where to clear the thread's id in `x4`, and the
@@ -44,17 +44,17 @@ x86-64's is.
   shows it ended: loads on ARM64 can pass each other. `ldar` of a whole `w` or `x` register from a
   base with no offset is the dialect's only ordered access.
 - [The crc32c](../assets/linux-aarch64/fast/crc32c/main.s) prints standard input's CRC-32C from
-  [its spec](../assets/fast/crc32c/spec.md) with no CRC32 instruction, which only ARMv8.1 and
+  [its idea](../assets/fast/crc32c/idea.md) with no CRC32 instruction, which only ARMv8.1 and
   later have, so it runs on every ARM64 computer: a byte at a time through a table of 256 words,
   a 64 KiB piece of standard input at a time through `fill`.
-- [The crc32c-crc tier](../assets/linux-aarch64/fast/crc32c-crc/main.s), beside a `spec.md` that
+- [The crc32c-crc tier](../assets/linux-aarch64/fast/crc32c-crc/main.s), beside a `idea.md` that
   is the same bytes, is the form for a CPU that lists `crc` and `pmull` on the machine line, each
   read's bytes as they come: 64 bytes a step with `ldp` and `crc32cx` while that many are left,
   then 8 bytes a step, and the rest with `crc32cb`.
 - [The sha256-sha2](../assets/linux-aarch64/fast/sha256-sha2/main.s) and
   [aes-aes](../assets/linux-aarch64/fast/aes-aes/main.s) tiers are the SHA-256 and AES-128
   programs with the SHA2 and AES instructions, for a CPU that lists `sha` or `aes` on the machine
-  line, each beside a `spec.md` of the same bytes as its baseline's. The baselines, plain integer
+  line, each beside a `idea.md` of the same bytes as its baseline's. The baselines, plain integer
   code that runs everywhere (`tests/fixtures/linux-aarch64/sha256` and `aes` in the repository),
   are `ror` and `eor` with a rotated register, `ubfx` for a byte and, for AES, a table of 256
   words.
@@ -112,7 +112,7 @@ lengua's `_start` calls `main`, so `main` is entered as a function is: `x0` hold
 number of arguments including the program's path; `x1` the address of an array of pointers to
 them, `argv[0]` the program's path, ending in 0; and `x2` the address of an array of pointers to
 the environment, each variable's `NAME=value`, ending in 0. Each is a NUL-terminated string,
-read-only. `sp` is 16-byte aligned. A program gets environment variables only when its spec uses
+read-only. `sp` is 16-byte aligned. A program gets environment variables only when its idea uses
 `the environment`, and then only those its test or the user's run gives; otherwise the list is
 empty. lengua runs programs in a working folder of their own: an empty temporary folder, or the
 user's folder when they ask to run the program on their files. `main` has nothing to return to:
@@ -161,7 +161,7 @@ lists is an extension: the CRC-32 instructions (`crc`), the carry-less multiply 
 (`pmull`), the AES instructions (`aes`), the SHA-1 and SHA-2 instructions (`sha`) and SVE (`sve`,
 with the vector length). A program that needs one writes `.arch_extension` for it on the line
 after `.arch armv8-a` and is a fast tier: a program of its own, named for the extension (the SVE
-`wc` is `wc-sve`), beside the baseline form and from the very same spec, which you start from
+`wc` is `wc-sve`), beside the baseline form and from the very same idea, which you start from
 only where `machine` lists the extension. `check` refuses an instruction the machine lacks
 (`needs CRC, which this CPU doesn't have`), and lengua's own programs are held to the baseline by
 `tests/baseline.rs`.
@@ -242,7 +242,7 @@ only where `machine` lists the extension. `check` refuses an instruction the mac
   v2.16b, #15`, with `v21` the step before. `tbl v4.16b, { v2.16b }, v4.16b` picks the lanes
   `v4` names.
 - [The vector template](../assets/linux-aarch64/vector-template.s) finds a newline and
-  capitalizes a line 16 bytes at a time, from [its spec](../assets/vector-template-spec.md).
+  capitalizes a line 16 bytes at a time, from [its idea](../assets/vector-template-idea.md).
 - Floats on vectors are singles two or four at a time (`v0.2s`, `v0.4s`) or doubles two at a
   time (`v0.2d`), each lane computed as the scalar instruction computes it, NaNs and zeros' signs
   included: `fadd`, `fsub`, `fmul`, `fdiv`, `fmax`, `fmin`, `fmaxnm`, `fminnm`, `fabd`, `fmla`
@@ -312,7 +312,7 @@ only where `machine` lists the extension. `check` refuses an instruction the mac
   first-fault register, the flag-setting forms of predicate logic (`ands`, `ptrues`), and SVE's
   other instructions.
 - [The SVE wc](../assets/linux-aarch64/fast/wc-sve/main.s) counts lines and words a vector a
-  step, from [the wc's spec](../assets/fast/wc/spec.md), proven for every length.
+  step, from [the wc's idea](../assets/fast/wc/idea.md), proven for every length.
 
 ## Floating-point facts
 

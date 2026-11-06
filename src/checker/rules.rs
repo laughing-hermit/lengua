@@ -9,7 +9,7 @@ use super::decode::{MappedFunction, Program};
 use super::source::Operand;
 use super::{Rule, Violation};
 use crate::isa::{self, Cond, Control, Op, Reg};
-use crate::spec::ASSERTION_EXIT_CODE;
+use crate::idea::ASSERTION_EXIT_CODE;
 
 /// The most instructions a function may have.
 pub const MAX_INSTRUCTIONS: usize = 60;
@@ -346,7 +346,7 @@ impl Checker<'_, '_> {
         }
     }
 
-    /// Rule 3: each operation a program calls is one the spec allows, and a call to one of
+    /// Rule 3: each operation a program calls is one the idea allows, and a call to one of
     /// lengua's library functions counts as the operations it calls.
     fn operations(
         &mut self,
@@ -410,12 +410,12 @@ impl Checker<'_, '_> {
                     Rule::Resources,
                     line,
                     format!(
-                        "{name} isn't one the spec allows{reaches}: it needs {needs}, which \
-                         spec.md doesn't name"
+                        "{name} isn't one the idea allows{reaches}: it needs {needs}, which \
+                         idea.md doesn't name"
                     ),
                     format!(
-                        "use only what spec.md's Constraints name, or, when the program needs \
-                         it, add {needs} to spec.md and tell the user"
+                        "use only what idea.md's Constraints name, or, when the program needs \
+                         it, add {needs} to idea.md and tell the user"
                     ),
                 );
             }
@@ -1255,7 +1255,7 @@ impl Checker<'_, '_> {
                         steps[head].source.line,
                         "only a server's loop that takes connections may run forever",
                         "give the loop a counter and `# bound: N`; `# bound: forever` is for a \
-                         program whose spec says `- Network: listens on TCP port N`",
+                         program whose idea says `- Network: listens on TCP port N`",
                     );
                 } else if !matches!(exit, Exit::Jump(_)) {
                     self.violation(

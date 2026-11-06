@@ -1,8 +1,8 @@
-//! The line lengua writes into main.s once its code has passed a check: the spec it was compiled
+//! The line lengua writes into main.s once its code has passed a check: the idea it was compiled
 //! from, the target it was compiled for, and the CPU features its instructions need beyond that
 //! target's baseline:
 //!
-//! `# lengua: compiled from spec.md sha256:… for linux-x86_64; needs AVX2, BMI2`
+//! `# lengua: compiled from idea.md sha256:… for linux-x86_64; needs AVX2, BMI2`
 //!
 //! It names the code; it doesn't protect it. main.s is plain text anyone can build outside
 //! lengua, so code someone shares is checked again on each computer before lengua runs it. The
@@ -16,13 +16,13 @@ use crate::isa::Isa;
 use crate::platform::{CpuFeatures, Profile};
 
 /// The line after its comment marker.
-const BODY: &str = " lengua: compiled from spec.md sha256:";
+const BODY: &str = " lengua: compiled from idea.md sha256:";
 
 /// What lengua's line in main.s says.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Header {
-    /// SHA-256 of the spec.md the code was compiled from.
-    pub spec: String,
+    /// SHA-256 of the idea.md the code was compiled from.
+    pub idea: String,
     /// The target it was compiled for, such as `linux-x86_64`.
     pub target: String,
     /// The CPU features its instructions need beyond the target's baseline.
@@ -36,7 +36,7 @@ impl Header {
         let comment = Profile::from_name(&self.target)
             .map_or(Isa::X86_64, Profile::isa)
             .comment();
-        let mut line = format!("{comment}{BODY}{} for {}", self.spec, self.target);
+        let mut line = format!("{comment}{BODY}{} for {}", self.idea, self.target);
         if !self.features.is_empty() {
             line.push_str("; needs ");
             line.push_str(&self.features.join(", "));
@@ -48,13 +48,13 @@ impl Header {
     #[must_use]
     pub fn of(code: &str) -> Option<Self> {
         let line = code.lines().find(|line| is_header(line))?;
-        let (spec, rest) = body(line.trim_end())?.split_once(" for ")?;
+        let (idea, rest) = body(line.trim_end())?.split_once(" for ")?;
         let (target, features) = match rest.split_once("; needs ") {
             Some((target, features)) => (target, features.split(", ").map(str::to_owned).collect()),
             None => (rest, Vec::new()),
         };
         Some(Self {
-            spec: spec.to_owned(),
+            idea: idea.to_owned(),
             target: target.to_owned(),
             features,
         })
@@ -153,7 +153,7 @@ mod tests {
 
     fn header(features: &[&str]) -> Header {
         Header {
-            spec: Sha256Hex::of(b"spec").to_string(),
+            idea: Sha256Hex::of(b"idea").to_string(),
             target: "linux-x86_64".into(),
             features: features.iter().map(|&name| name.to_owned()).collect(),
         }
@@ -167,8 +167,8 @@ mod tests {
         assert_eq!(
             lines[1],
             format!(
-                "# lengua: compiled from spec.md sha256:{} for linux-x86_64; needs AVX2, BMI2",
-                Sha256Hex::of(b"spec")
+                "# lengua: compiled from idea.md sha256:{} for linux-x86_64; needs AVX2, BMI2",
+                Sha256Hex::of(b"idea")
             )
         );
         assert_eq!(&lines[2..], &CODE.lines().collect::<Vec<_>>()[1..]);
@@ -195,8 +195,8 @@ mod tests {
         assert_eq!(
             lines[1],
             format!(
-                "// lengua: compiled from spec.md sha256:{} for linux-aarch64",
-                Sha256Hex::of(b"spec")
+                "// lengua: compiled from idea.md sha256:{} for linux-aarch64",
+                Sha256Hex::of(b"idea")
             )
         );
         assert_eq!(Header::of(&written), Some(aarch64.clone()));

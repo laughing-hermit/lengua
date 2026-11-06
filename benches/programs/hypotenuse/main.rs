@@ -1,5 +1,5 @@
 //! hypotenuse in Rust: prints the hypotenuse of two sides from 0.001 to 1000000.000, with three
-//! decimals, computed in doubles as the spec says.
+//! decimals, computed in doubles as the idea says.
 use std::io::Write;
 use std::process::ExitCode;
 

@@ -20,13 +20,13 @@ use crate::expr;
 use crate::hash::Sha256Hex;
 use crate::header::{self, Header};
 use crate::isa::Isa;
-use crate::lock::{self, CodeStamp, Key, Lock, ProofStamp, SpecStamp};
+use crate::lock::{self, CodeStamp, Key, Lock, ProofStamp, IdeaStamp};
 use crate::platform::{Emulator, Machine, Profile, Target};
 use crate::prove;
 use crate::runner::{self, End, Job, Limits, Net, Started};
-use crate::spec::{self, Spec};
+use crate::idea::{self, Idea};
 use crate::state::{
-    CODE_FILE, LEGACY_TESTS_FILE, ProgramFolder, SPEC_FILE, Snapshot, State, stamped_copy,
+    CODE_FILE, LEGACY_TESTS_FILE, ProgramFolder, IDEA_FILE, Snapshot, State, stamped_copy,
 };
 use crate::testdiff;
 use crate::testfile::{self, TestSuite};
@@ -37,8 +37,8 @@ use crate::toolchain::Toolchain;
 ///
 /// Kept under 512 characters and self-contained: some harnesses only show the beginning.
 pub const INSTRUCTIONS: &str = "lengua builds the programs the user asks for, from commands and \
-filters to servers and clients, unless they name another language: you write spec.md, behaviors \
-and tests, with the write-spec skill, then compile it into main.s with the compile skill. After \
+filters to servers and clients, unless they name another language: you write idea.md, behaviors \
+and tests, with the write-idea skill, then compile it into main.s with the compile skill. After \
 each edit, call check with the folder's absolute path, the first time with the user's words as \
 request, and follow its next_step until it says Done. Never edit lengua.lock. Run programs only \
 with run.";
@@ -79,7 +79,7 @@ fn green_grace() -> Duration {
         .map_or(GREEN_GRACE, Duration::from_millis)
 }
 
-/// What a proof that stopped short of the spec's lengths says it can do.
+/// What a proof that stopped short of the idea's lengths says it can do.
 const FURTHER: &str = "; check with prove_further to prove on from there";
 
 /// How long the proof of one version may take: [`PROOF_TIME`], or `LENGUA_PROOF_SECONDS` for
@@ -115,8 +115,8 @@ pub struct LenguaServer {
     background: Arc<tokio::sync::Mutex<BTreeMap<PathBuf, Background>>>,
     /// The tests and proof of each program folder's latest files, running or ended.
     checks: Arc<tokio::sync::Mutex<BTreeMap<PathBuf, Arc<Checking>>>>,
-    /// The user's words given with a spec that still had problems, by program folder: recorded
-    /// once the spec is clean, so they're asked for once.
+    /// The user's words given with an idea that still had problems, by program folder: recorded
+    /// once the idea is clean, so they're asked for once.
     held: Arc<tokio::sync::Mutex<BTreeMap<PathBuf, String>>>,
 }
 
@@ -144,7 +144,7 @@ const BACKGROUND_LIMIT: Duration = Duration::from_secs(600);
 
 /// The tests and then the proof of one version of a program, in the background.
 struct Checking {
-    /// spec.md and main.s, by hash.
+    /// idea.md and main.s, by hash.
     files: [Sha256Hex; 2],
     /// The executable built from main.s, by hash.
     executable: Sha256Hex,
@@ -309,16 +309,16 @@ impl LenguaServer {
 /// Input for `check`.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct CheckParams {
-    /// Absolute path of the program folder, the folder that holds spec.md.
+    /// Absolute path of the program folder, the folder that holds idea.md.
     pub path: String,
     /// The user's own words that asked for this program or this change, quoted exactly, such as
     /// "Make me a program that adds two numbers". Needed the first time, and whenever the user
-    /// asks for something new; without it, an edited spec is recorded under the words already
+    /// asks for something new; without it, an edited idea is recorded under the words already
     /// recorded.
     #[serde(default)]
     pub request: Option<String>,
     /// Proves on from where the last proof of this very build stopped short of the lengths the
-    /// spec gives its texts, for each proof whose line says so: another stretch of proof time,
+    /// idea gives its texts, for each proof whose line says so: another stretch of proof time,
     /// in the background.
     #[serde(default)]
     pub prove_further: bool,
@@ -327,13 +327,13 @@ pub struct CheckParams {
 /// What `check` reports: where the program stands, and the one thing to do next.
 #[derive(Debug, Default, Serialize, schemars::JsonSchema)]
 pub struct CheckReport {
-    /// Where the program stands: blocked, write_spec, spec_problems, needs_request, write_code,
+    /// Where the program stands: blocked, write_idea, idea_problems, needs_request, write_code,
     /// code_problems, testing, tests_failed, proving or done.
     pub state: String,
     /// Every problem to fix before going on, each saying where it is and how to fix it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub problems: Vec<String>,
-    /// The machine main.s runs on, while main.s isn't written yet: its cores, which a spec's
+    /// The machine main.s runs on, while main.s isn't written yet: its cores, which an idea's
     /// threads may use, and the CPU extensions main.s may use.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<String>,
@@ -348,7 +348,7 @@ pub struct CheckReport {
     /// the proofs hold to the rest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory: Option<String>,
-    /// The spec's first example as the tests ran it: what to show the user it does.
+    /// The idea's first example as the tests ran it: what to show the user it does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub example: Option<String>,
     /// What each test cost, once done: instructions a run over all its runs, and from its
@@ -389,9 +389,9 @@ impl CheckReport {
 pub struct ChangesReport {
     /// The user's requests in this build, as recorded, oldest first.
     pub requests: Vec<String>,
-    /// How spec.md, tests included, changed since the build's first request, as `-`/`+` lines.
+    /// How idea.md, tests included, changed since the build's first request, as `-`/`+` lines.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub spec_changed: Option<String>,
+    pub idea_changed: Option<String>,
     /// lengua's own list of the test changes that test less than before.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tests_less: Vec<String>,
@@ -432,7 +432,7 @@ pub struct RunParams {
     /// How many seconds the program may run, 1 to 40; 10 when not given.
     #[serde(default)]
     pub timeout_seconds: Option<u64>,
-    /// Environment variables for a program whose spec uses the environment, by name: only
+    /// Environment variables for a program whose idea uses the environment, by name: only
     /// these reach it.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
@@ -462,7 +462,7 @@ pub struct RunReport {
     /// What held the run, when QEMU's user mode ran it for the target's CPU.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub emulated: Option<String>,
-    /// The connections lengua made for the program before it started, when its spec names any.
+    /// The connections lengua made for the program before it started, when its idea names any.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub connections: Vec<ConnectionReport>,
 }
@@ -602,10 +602,10 @@ impl LenguaServer {
         name = "check",
         title = "Check",
         description = "Checks the lengua program in <path> stage by stage, records each stage in \
-            lengua.lock, and stops at the first that needs work: it checks spec.md, the source \
+            lengua.lock, and stops at the first that needs work: it checks idea.md, the source \
             of truth, and the tests in it, and records it with the user's words that asked for \
             it; checks main.s against lengua's rules; runs every test with fresh random inputs; \
-            and proves the program for every input it can. Call it after every edit to spec.md \
+            and proves the program for every input it can. Call it after every edit to idea.md \
             or main.s. It replies within about 40 seconds; the tests and the proof go on in the \
             background, so while it says testing or proving, call it again to wait. path: \
             absolute path of the program folder; request: the user's words that \
@@ -634,44 +634,44 @@ impl LenguaServer {
         let profile = target.profile;
         let machine_line = || machine_line(&machine, &target);
 
-        // spec.md, tests included: recorded with the user's words once it parses and its tests
+        // idea.md, tests included: recorded with the user's words once it parses and its tests
         // check.
-        let Some(spec_text) = read_optional(&folder, SPEC_FILE)? else {
+        let Some(idea_text) = read_optional(&folder, IDEA_FILE)? else {
             return Ok(Json(CheckReport {
                 machine: Some(machine_line()),
-                ..CheckReport::new("write_spec", State::NoSpec.next_step(&folder))
+                ..CheckReport::new("write_idea", State::NoIdea.next_step(&folder))
             }));
         };
         let request = match params.request.as_deref().map(str::trim) {
             Some(words) if !words.is_empty() => Some(words.to_owned()),
             _ => self.held.lock().await.get(folder.path()).cloned(),
         };
-        let fix_spec = || {
+        let fix_idea = || {
             format!(
-                "Next: fix {folder}/{SPEC_FILE} with the write-spec skill, then call check with \
+                "Next: fix {folder}/{IDEA_FILE} with the write-idea skill, then call check with \
                  path {folder}."
             )
         };
         let problems = if read_optional(&folder, LEGACY_TESTS_FILE)?.is_some() {
             Err(vec![format!(
-                "{LEGACY_TESTS_FILE}: the tests live in {SPEC_FILE} now. Make each behavior's \
+                "{LEGACY_TESTS_FILE}: the tests live in {IDEA_FILE} now. Make each behavior's \
                  steps say what its [[example]] said, write its [[generated]] tables as its \
                  generated tests, a `###` section of the same steps with a table of their vars \
-                 and runs, as the write-spec skill shows, then delete {LEGACY_TESTS_FILE}."
+                 and runs, as the write-idea skill shows, then delete {LEGACY_TESTS_FILE}."
             )])
         } else {
-            match spec::parse(&spec_text) {
+            match idea::parse(&idea_text) {
                 Err(problems) => Err(problems.iter().map(ToString::to_string).collect()),
-                Ok(spec) => match testfile::check(&spec) {
+                Ok(idea) => match testfile::check(&idea) {
                     Err(problems) => Err(problems.iter().map(ToString::to_string).collect()),
-                    Ok(_) if !missing_parts(&folder, &spec).is_empty() => {
-                        Err(missing_parts(&folder, &spec))
+                    Ok(_) if !missing_parts(&folder, &idea).is_empty() => {
+                        Err(missing_parts(&folder, &idea))
                     }
-                    Ok(suite) => Ok((spec, suite)),
+                    Ok(suite) => Ok((idea, suite)),
                 },
             }
         };
-        let (spec, suite) = match problems {
+        let (idea, suite) = match problems {
             Ok(parsed) => parsed,
             Err(problems) => {
                 if let Some(words) = &request {
@@ -681,17 +681,17 @@ impl LenguaServer {
                         .insert(folder.path().to_path_buf(), words.clone());
                 }
                 return Ok(Json(CheckReport::problems(
-                    "spec_problems",
+                    "idea_problems",
                     problems,
-                    fix_spec(),
+                    fix_idea(),
                 )));
             }
         };
-        if let Some(next_step) = self.record(&folder, &spec_text, request.as_deref()).await? {
+        if let Some(next_step) = self.record(&folder, &idea_text, request.as_deref()).await? {
             return Ok(Json(CheckReport::new("needs_request", next_step)));
         }
         self.held.lock().await.remove(folder.path());
-        let spec_hash = Sha256Hex::of(spec_text.as_bytes());
+        let idea_hash = Sha256Hex::of(idea_text.as_bytes());
 
         // main.s, checked against the rules, then tested and proven in the background.
         let Some(code) = read_optional(&folder, CODE_FILE)? else {
@@ -706,7 +706,7 @@ impl LenguaServer {
                 "code_problems",
                 vec![other],
                 format!(
-                    "Next: compile {folder}/{SPEC_FILE} into {folder}/{CODE_FILE} for {} with \
+                    "Next: compile {folder}/{IDEA_FILE} into {folder}/{CODE_FILE} for {} with \
                      the compile skill, then call check with path {folder}.",
                     match target.emulator {
                         None => "this computer".to_owned(),
@@ -725,12 +725,12 @@ impl LenguaServer {
                 "code_problems",
                 vec![elsewhere],
                 format!(
-                    "Next: compile {folder}/{SPEC_FILE} into {folder}/{CODE_FILE} for this \
+                    "Next: compile {folder}/{IDEA_FILE} into {folder}/{CODE_FILE} for this \
                      computer with the compile skill, then call check with path {folder}."
                 ),
             )));
         }
-        let files = [spec_hash, header::code_hash(code.as_bytes())];
+        let files = [idea_hash, header::code_hash(code.as_bytes())];
         let checking = match self
             .current_checking(&folder, &files, params.prove_further)
             .await
@@ -752,7 +752,7 @@ impl LenguaServer {
                         fix(),
                     )));
                 }
-                let from_parts = parts_problems(&self.data_dir, &folder, &spec, &source);
+                let from_parts = parts_problems(&self.data_dir, &folder, &idea, &source);
                 if !from_parts.is_empty() {
                     return Ok(Json(CheckReport::problems(
                         "code_problems",
@@ -775,8 +775,8 @@ impl LenguaServer {
                     &source,
                     &built.bytes,
                     checker::Context {
-                        ops: &spec.ops,
-                        threads: spec.threads,
+                        ops: &idea.ops,
+                        threads: idea.threads,
                         lengua: lengua.as_ref(),
                         features: target.features(&machine),
                         profile,
@@ -790,12 +790,12 @@ impl LenguaServer {
                     )));
                 }
                 let channel = crate::edge::uses_channel(profile, &code)
-                    .then(|| crate::broker::Permit::of(&spec.syscalls));
+                    .then(|| crate::broker::Permit::of(&idea.syscalls));
                 self.start_checking(
                     &folder,
                     files,
                     Code {
-                        spec,
+                        idea,
                         suite,
                         source,
                         built,
@@ -820,21 +820,21 @@ impl LenguaServer {
         name = "run",
         title = "Run program",
         description = "Runs the checked program in <path> with args and stdin. It runs only \
-            when lengua.lock shows that spec.md and main.s are exactly the versions that were \
+            when lengua.lock shows that idea.md and main.s are exactly the versions that were \
             recorded and checked, and a fresh build of main.s is byte for byte the \
             executable check tested. The program gets an empty environment, 10 seconds and \
-            8 MiB of output, and lengua lets it use only what its spec names, reach only the \
+            8 MiB of output, and lengua lets it use only what its idea names, reach only the \
             places it names, through connections lengua makes for it before it starts, and touch \
             files only inside its working folder: \
             an empty temporary folder, or `folder`. A server starts in the background on its \
-            spec's port and run returns its address; call run with stop: true to stop it and get \
+            idea's port and run returns its address; call run with stop: true to stop it and get \
             what it printed (it also stops after ten minutes or when the session ends). path: \
             absolute path of the program folder; args: the program's arguments; stdin: text for \
             its standard input; folder: absolute path of a folder of the user's files to run in, \
             naming the files in args relative to it (\"notes.txt\", not \"/home/me/notes.txt\"); \
             stdin_file: a file in folder to read as standard input instead of stdin, however \
             large; timeout_seconds: up to 40 (10 by default); env: environment variables, for a \
-            spec that uses the environment; stop: true to stop the server run started.",
+            idea that uses the environment; stop: true to stop the server run started.",
         annotations(title = "Run program", read_only_hint = false, open_world_hint = false)
     )]
     async fn run(
@@ -863,7 +863,7 @@ impl LenguaServer {
         let Runnable {
             built,
             source,
-            spec,
+            idea,
             syscalls,
             net,
             channel,
@@ -920,7 +920,7 @@ impl LenguaServer {
             )
         };
         let assertions = testrun::assertion_lines(&source);
-        if spec.network.listens.is_some() {
+        if idea.network.listens.is_some() {
             return self
                 .serve_in_background(&folder, job, Arc::clone(&built.folder), assertions)
                 .await
@@ -933,7 +933,7 @@ impl LenguaServer {
         report.emulated = emulator.map(|emulator| {
             format!(
                 "ran under {}: Landlock held it to its files and network as on any run, but the \
-                 kernel couldn't hold its system calls to the spec, which only lengua's rules \
+                 kernel couldn't hold its system calls to the idea, which only lengua's rules \
                  did, and nothing was measured",
                 emulator.name
             )
@@ -944,14 +944,14 @@ impl LenguaServer {
 
 /// Everything a checking job needs about the code it checks.
 struct Code {
-    spec: Spec,
+    idea: Idea,
     suite: TestSuite,
     source: Source,
     built: Build,
     report: checker::Report,
     profile: Profile,
     /// What lengua's broker does for the program, when it serves it: the program links the
-    /// channel's code, and its spec says what it may ask.
+    /// channel's code, and its idea says what it may ask.
     channel: Option<crate::broker::Permit>,
     /// QEMU, when this computer runs the target's programs only through it.
     emulator: Option<Emulator>,
@@ -997,7 +997,7 @@ impl LenguaServer {
         })
     }
 
-    /// Records spec.md, unless the lock already records it as it is, with the user's words when
+    /// Records idea.md, unless the lock already records it as it is, with the user's words when
     /// given. Returns the next step instead when it can't be recorded without their words.
     async fn record(
         &self,
@@ -1029,15 +1029,15 @@ impl LenguaServer {
                 .is_none_or(|lock| !lock.request.words.iter().any(|known| known == words))
         });
         let lock = match (previous, new_words) {
-            (None, None) => return Ok(Some(State::SpecUnrecorded.next_step(folder))),
+            (None, None) => return Ok(Some(State::IdeaUnrecorded.next_step(folder))),
             (Some(lock), None) => {
-                if lock.spec.sha256 == current {
+                if lock.idea.sha256 == current {
                     return Ok(None);
                 }
-                // The spec was revised under a request it already has: it's checked again, and
+                // The idea was revised under a request it already has: it's checked again, and
                 // the change is shown.
                 Lock {
-                    spec: SpecStamp {
+                    idea: IdeaStamp {
                         sha256: current.clone(),
                     },
                     code: None,
@@ -1055,16 +1055,16 @@ impl LenguaServer {
                 request.words.push(words.to_owned());
                 Lock {
                     request,
-                    spec: SpecStamp {
+                    idea: IdeaStamp {
                         sha256: current.clone(),
                     },
                     code: None,
                     proofs: None,
                 }
             }
-            // A new request after a finished build starts a new build. With the spec unchanged,
+            // A new request after a finished build starts a new build. With the idea unchanged,
             // its checked code stays.
-            (Some(lock), Some(words)) if lock.spec.sha256 == current => {
+            (Some(lock), Some(words)) if lock.idea.sha256 == current => {
                 let request = Lock::requested(current.clone(), words.to_owned()).request;
                 Lock { request, ..lock }
             }
@@ -1181,14 +1181,14 @@ impl LenguaServer {
                 found.failures = failures;
             }
         };
-        let [spec_hash, code_hash] = checking.files.clone();
+        let [idea_hash, code_hash] = checking.files.clone();
         let seed = match random_seed() {
             Ok(seed) => seed,
             Err(error) => return fail(vec![error]),
         };
         let syscalls = code
             .profile
-            .allowed_syscalls(&code.spec.syscalls, code.spec.threads.is_some());
+            .allowed_syscalls(&code.idea.syscalls, code.idea.threads.is_some());
         let outcome = match testrun::run_tests(
             &code.suite,
             &self.launcher,
@@ -1196,8 +1196,8 @@ impl LenguaServer {
             &code.source,
             seed,
             &syscalls,
-            &code.spec.network,
-            testrun::workers(code.spec.threads),
+            &code.idea.network,
+            testrun::workers(code.idea.threads),
             testrun::Setting {
                 emulated: code.emulator.is_some(),
                 channel: code.channel,
@@ -1228,11 +1228,11 @@ impl LenguaServer {
             emulator: code.emulator.as_ref().map(|emulator| emulator.name.clone()),
         };
         let header = Header {
-            spec: spec_hash.to_string(),
+            idea: idea_hash.to_string(),
             target: stamp.target.clone(),
             features: stamp.features.clone(),
         };
-        if let Err(error) = self.stamp_code(folder, &spec_hash, stamp).await {
+        if let Err(error) = self.stamp_code(folder, &idea_hash, stamp).await {
             return fail(vec![error]);
         }
         if let Ok(mut found) = checking.found.lock() {
@@ -1411,7 +1411,7 @@ impl LenguaServer {
             decoded.tables.clone_from(&facts.tables);
             decoded.sve_bytes = facts.sve_bytes;
         }
-        let spec = &code.spec;
+        let idea = &code.idea;
         let deadline = Instant::now() + proof_time();
         // The ids proven, those found wrong, how many the solvers proved, and why any rested on
         // one solver.
@@ -1447,8 +1447,8 @@ impl LenguaServer {
             }
             recorded_solvers = Some(stamp.solvers.clone());
         }
-        let allows = |call: spec::Syscall| spec.syscalls.contains(&call);
-        let listens = spec.network.listens.is_some();
+        let allows = |call: idea::Syscall| idea.syscalls.contains(&call);
+        let listens = idea.network.listens.is_some();
         let blocks = code.suite.generated.len();
         // Small blocks first: they finish in their share and pass the rest on to the big ones.
         let mut order: Vec<usize> = if further.is_empty() {
@@ -1480,8 +1480,8 @@ impl LenguaServer {
             // Every value of a block's variables is every input only when the program reads
             // nothing else: no random bytes or clock readings the test doesn't supply, and no
             // `now` in the expected results.
-            let kernel_values = (allows(spec::Syscall::Getrandom) && block.random.is_none())
-                || (allows(spec::Syscall::ClockGettime) && block.clock.is_empty());
+            let kernel_values = (allows(idea::Syscall::Getrandom) && block.random.is_none())
+                || (allows(idea::Syscall::ClockGettime) && block.clock.is_empty());
             if let Some(every) = block
                 .every_value_text()
                 .filter(|_| !kernel_values && !block.uses_now())
@@ -1690,7 +1690,7 @@ impl LenguaServer {
             &code.source,
             &case,
             syscalls,
-            &code.spec.network,
+            &code.idea.network,
             delivery,
             code.channel,
         )
@@ -1739,9 +1739,9 @@ impl LenguaServer {
                 "tests_failed",
                 found.failures.clone(),
                 format!(
-                    "Next: decide from {SPEC_FILE} whether {CODE_FILE} or the test is wrong, fix \
-                     {CODE_FILE} with the compile skill or the test in {SPEC_FILE} with the \
-                     write-spec skill, then call check with path {folder}. Boundary values run \
+                    "Next: decide from {IDEA_FILE} whether {CODE_FILE} or the test is wrong, fix \
+                     {CODE_FILE} with the compile skill or the test in {IDEA_FILE} with the \
+                     write-idea skill, then call check with path {folder}. Boundary values run \
                      first every time; the other generated inputs are new on every check."
                 ),
             );
@@ -1761,7 +1761,7 @@ impl LenguaServer {
             tests[0].push_str(&format!(" under {emulator}"));
             tests.push(format!(
                 "under {emulator}, Landlock held each run to its files and network as on any \
-                 run, but the kernel couldn't hold its system calls to the spec, which only \
+                 run, but the kernel couldn't hold its system calls to the idea, which only \
                  lengua's rules did, and nothing was measured"
             ));
         }
@@ -1807,11 +1807,11 @@ impl LenguaServer {
         };
         let changes = self.current_changes(folder);
         let changes = (changes.requests.len() > 1
-            || changes.spec.is_some()
+            || changes.idea.is_some()
             || !changes.tests_less.is_empty())
         .then_some(ChangesReport {
             requests: changes.requests,
-            spec_changed: changes.spec,
+            idea_changed: changes.idea,
             tests_less: changes.tests_less,
         });
         let shown = if changes.is_some() {
@@ -1838,7 +1838,7 @@ impl LenguaServer {
             ..CheckReport::new(
                 "done",
                 format!(
-                    "Done: tell the user where the program is, what its spec promises, that it \
+                    "Done: tell the user where the program is, what its idea promises, that it \
                      passed every test, and what's proven, memory included.{running}{shown} run \
                      runs it on their own inputs here; give them the shell command, followed by \
                      its arguments, for their own terminal, scripts and services."
@@ -1882,7 +1882,7 @@ impl LenguaServer {
         lock.map_or_else(Changes::default, |lock| self.changes(folder, &lock))
     }
 
-    /// What changed after the user's request: spec.md, tests included, since the build's first
+    /// What changed after the user's request: idea.md, tests included, since the build's first
     /// request, against the copy lengua kept.
     fn changes(&self, folder: &ProgramFolder, lock: &Lock) -> Changes {
         let kept = |hash: &Sha256Hex| {
@@ -1891,41 +1891,41 @@ impl LenguaServer {
                 .filter(|text| Sha256Hex::of(text.as_bytes()) == *hash)
         };
         let unseen = "the first version isn't on this machine to compare";
-        let spec = match std::fs::read_to_string(folder.file(SPEC_FILE)) {
-            Ok(now) if Sha256Hex::of(now.as_bytes()) != lock.request.spec => {
-                Some(kept(&lock.request.spec).map_or_else(
-                    || format!("{SPEC_FILE} changed; {unseen}"),
+        let idea = match std::fs::read_to_string(folder.file(IDEA_FILE)) {
+            Ok(now) if Sha256Hex::of(now.as_bytes()) != lock.request.idea => {
+                Some(kept(&lock.request.idea).map_or_else(
+                    || format!("{IDEA_FILE} changed; {unseen}"),
                     |before| testdiff::line_diff(&before, &now),
                 ))
             }
             _ => None,
         };
         // Tests that test less than the ones first recorded for the request.
-        let tests_less = match std::fs::read_to_string(folder.file(SPEC_FILE)) {
-            Ok(now) => kept(&lock.request.spec)
+        let tests_less = match std::fs::read_to_string(folder.file(IDEA_FILE)) {
+            Ok(now) => kept(&lock.request.idea)
                 .map(|before| testdiff::tests_less(&before, &now))
                 .unwrap_or_default(),
             Err(_) => Vec::new(),
         };
         Changes {
             requests: lock.request.words.clone(),
-            spec: spec.filter(|diff| !diff.is_empty()),
+            idea: idea.filter(|diff| !diff.is_empty()),
             tests_less,
         }
     }
 
-    /// Records checked code in the lock, provided neither the spec nor the code changed while
+    /// Records checked code in the lock, provided neither the idea nor the code changed while
     /// being checked.
     async fn stamp_code(
         &self,
         folder: &ProgramFolder,
-        spec: &Sha256Hex,
+        idea: &Sha256Hex,
         code: CodeStamp,
     ) -> Result<(), String> {
         let _writing = self.lock_writes.lock().await;
         let changed = || {
             format!(
-                "{SPEC_FILE} or {CODE_FILE} changed while the code was being checked, so nothing \
+                "{IDEA_FILE} or {CODE_FILE} changed while the code was being checked, so nothing \
                  was recorded; call check again."
             )
         };
@@ -1936,8 +1936,8 @@ impl LenguaServer {
             .ok()
             .flatten()
             .ok_or_else(changed)?;
-        let unchanged = lock.spec.sha256 == *spec
-            && Sha256Hex::of(read_spec(folder)?.as_bytes()) == *spec
+        let unchanged = lock.idea.sha256 == *idea
+            && Sha256Hex::of(read_idea(folder)?.as_bytes()) == *idea
             && header::code_hash(read_code(folder)?.as_bytes()) == code.sha256;
         if !unchanged {
             return Err(changed());
@@ -2012,8 +2012,8 @@ impl ServerHandler for LenguaServer {
 struct Changes {
     /// The user's requests in this build, oldest first.
     requests: Vec<String>,
-    /// spec.md since the build's first request.
-    spec: Option<String>,
+    /// idea.md since the build's first request.
+    idea: Option<String>,
     /// The test changes that test less, by lengua's own comparison.
     tests_less: Vec<String>,
 }
@@ -2197,11 +2197,11 @@ fn machine_line(machine: &Machine, target: &Target) -> String {
     )
 }
 
-/// The program folder `path` names: the folder itself or its spec.md.
+/// The program folder `path` names: the folder itself or its idea.md.
 fn folder_of(path: &str) -> Result<ProgramFolder, String> {
     let path = path.trim();
     match Path::new(path).file_name() {
-        Some(name) if name == SPEC_FILE => ProgramFolder::new(
+        Some(name) if name == IDEA_FILE => ProgramFolder::new(
             Path::new(path)
                 .parent()
                 .and_then(Path::to_str)
@@ -2220,9 +2220,9 @@ fn read_optional(folder: &ProgramFolder, name: &str) -> Result<Option<String>, S
     }
 }
 
-fn read_spec(folder: &ProgramFolder) -> Result<String, String> {
-    read_optional(folder, SPEC_FILE)?.ok_or_else(|| {
-        format!("There's no {SPEC_FILE} in {folder}. Write it with the write-spec skill first.")
+fn read_idea(folder: &ProgramFolder) -> Result<String, String> {
+    read_optional(folder, IDEA_FILE)?.ok_or_else(|| {
+        format!("There's no {IDEA_FILE} in {folder}. Write it with the write-idea skill first.")
     })
 }
 
@@ -2233,25 +2233,25 @@ fn read_code(folder: &ProgramFolder) -> Result<String, String> {
 }
 
 /// Where `folder` stands with lengua.lock, as this user's key reads it.
-/// The parts `spec` builds on that aren't lengua specs in their folders, each a problem saying so.
-fn missing_parts(folder: &ProgramFolder, spec: &spec::Spec) -> Vec<String> {
-    spec.parts
+/// The parts `idea` builds on that aren't lengua ideas in their folders, each a problem saying so.
+fn missing_parts(folder: &ProgramFolder, idea: &idea::Idea) -> Vec<String> {
+    idea.parts
         .iter()
         .filter_map(|part| {
-            let path = folder.path().join(&part.spec);
+            let path = folder.path().join(&part.idea);
             match std::fs::read_to_string(&path) {
                 Err(_) => Some(format!(
                     "`- Builds on:` links to [{}]({}), but {} isn't there: make that part first, \
-                     a folder with its own spec.md and main.s, or fix the link",
+                     a folder with its own idea.md and main.s, or fix the link",
                     part.name,
-                    part.spec,
+                    part.idea,
                     path.display()
                 )),
-                Ok(text) if spec::parse(&text).is_err() => Some(format!(
-                    "the part [{}]({}) has spec problems of its own: call check with path {} \
+                Ok(text) if idea::parse(&text).is_err() => Some(format!(
+                    "the part [{}]({}) has idea problems of its own: call check with path {} \
                      first",
                     part.name,
-                    part.spec,
+                    part.idea,
                     path.parent()
                         .map_or(path.clone(), Path::to_path_buf)
                         .display()
@@ -2262,29 +2262,29 @@ fn missing_parts(folder: &ProgramFolder, spec: &spec::Spec) -> Vec<String> {
         .collect()
 }
 
-/// What keeps main.s from building on its spec's parts: a part that isn't checked on this
+/// What keeps main.s from building on its idea's parts: a part that isn't checked on this
 /// computer, a function taken from one that isn't its current code word for word, a function
-/// that names a part the spec doesn't build on, and a part the spec builds on that main.s takes
+/// that names a part the idea doesn't build on, and a part the idea builds on that main.s takes
 /// nothing from. Each part is a node checked on its own: what main.s takes from it is its checked
 /// code, and changes to it show here.
 fn parts_problems(
     data_dir: &DataDir,
     folder: &ProgramFolder,
-    spec: &spec::Spec,
+    idea: &idea::Idea,
     source: &checker::Source,
 ) -> Vec<String> {
     let mut problems = Vec::new();
-    let mut used: Vec<&spec::Part> = Vec::new();
+    let mut used: Vec<&idea::Part> = Vec::new();
     let mut checked: Vec<String> = Vec::new();
     for function in &source.functions {
         let Some(from) = &function.from else {
             continue;
         };
-        let wanted = spec::folder_of_link(from);
-        let Some(part) = spec.parts.iter().find(|part| part.folder() == wanted) else {
+        let wanted = idea::folder_of_link(from);
+        let Some(part) = idea.parts.iter().find(|part| part.folder() == wanted) else {
             problems.push(format!(
-                "{CODE_FILE}'s {} says `# from: {from}`, a part {SPEC_FILE} doesn't build on: add \
-                 `[{wanted}]({wanted}/spec.md)` to its `- Builds on:` line, or drop the line",
+                "{CODE_FILE}'s {} says `# from: {from}`, a part {IDEA_FILE} doesn't build on: add \
+                 `[{wanted}]({wanted}/idea.md)` to its `- Builds on:` line, or drop the line",
                 function.name
             ));
             continue;
@@ -2296,8 +2296,8 @@ fn parts_problems(
         let joined = folder.path().join(part.folder());
         let part_folder = std::fs::canonicalize(&joined).unwrap_or(joined);
         let shown = part_folder.display().to_string();
-        if !checked.contains(&part.spec) {
-            checked.push(part.spec.clone());
+        if !checked.contains(&part.idea) {
+            checked.push(part.idea.clone());
             let ready = part_folder
                 .to_str()
                 .and_then(|path| folder_of(path).ok())
@@ -2307,7 +2307,7 @@ fn parts_problems(
                 problems.push(format!(
                     "the part [{}]({}) isn't checked on this computer: call check with path \
                      {shown} until it's done, then check this program",
-                    part.name, part.spec
+                    part.name, part.idea
                 ));
                 continue;
             }
@@ -2330,14 +2330,14 @@ fn parts_problems(
             Some(_) => {}
         }
     }
-    for part in &spec.parts {
+    for part in &idea.parts {
         if !used.contains(&part) {
             problems.push(format!(
-                "{SPEC_FILE} builds on [{}]({}), but {CODE_FILE} takes nothing from it: copy each \
+                "{IDEA_FILE} builds on [{}]({}), but {CODE_FILE} takes nothing from it: copy each \
                  function it uses with a `# from: {}` line above it, or drop the part from \
                  `- Builds on:`",
                 part.name,
-                part.spec,
+                part.idea,
                 part.folder()
             ));
         }
@@ -2352,24 +2352,24 @@ fn state_of(data_dir: &DataDir, folder: &ProgramFolder) -> Result<State, String>
     Ok(State::of(&snapshot))
 }
 
-/// A program lengua may run: the build check tested, its parsed code and spec, and the calls and
-/// network its spec allows.
+/// A program lengua may run: the build check tested, its parsed code and idea, and the calls and
+/// network its idea allows.
 struct Runnable {
     built: Build,
     source: Source,
-    spec: Spec,
+    idea: Idea,
     syscalls: Vec<crate::platform::Allowed>,
     net: Net,
     /// What lengua's broker does for the program, when it serves it: the program links the
-    /// channel's code, and its spec says what it may ask.
+    /// channel's code, and its idea says what it may ask.
     channel: Option<crate::broker::Permit>,
     /// QEMU, when this computer runs the target's programs only through it.
     emulator: Option<Emulator>,
 }
 
 /// Checks that `folder` holds a program lengua may run, as `run` does from MCP and from a shell:
-/// its spec and code match lengua.lock, no proof found it wrong, and this build of main.s is the
-/// one check tested. Environment variables reach only a program whose spec uses the environment.
+/// its idea and code match lengua.lock, no proof found it wrong, and this build of main.s is the
+/// one check tested. Environment variables reach only a program whose idea uses the environment.
 async fn runnable(
     data_dir: &DataDir,
     folder: &ProgramFolder,
@@ -2378,7 +2378,7 @@ async fn runnable(
     let state = state_of(data_dir, folder)?;
     if state != State::Ready {
         return Err(format!(
-            "lengua runs a program only when its spec and code match lengua.lock, and {folder} \
+            "lengua runs a program only when its idea and code match lengua.lock, and {folder} \
              doesn't. {}",
             state.next_step(folder)
         ));
@@ -2412,11 +2412,11 @@ async fn runnable(
     }
     let code = read_code(folder)?;
     let source = checker::check_layout(&code).0;
-    let spec = read_spec(folder)
-        .and_then(|text| spec::parse(&text).map_err(|problems| spec_problems(folder, &problems)))?;
-    if !env.is_empty() && !spec.uses.contains(&spec::Use::Environment) {
+    let idea = read_idea(folder)
+        .and_then(|text| idea::parse(&text).map_err(|problems| idea_problems(folder, &problems)))?;
+    if !env.is_empty() && !idea.uses.contains(&idea::Use::Environment) {
         return Err(format!(
-            "{SPEC_FILE} doesn't use the environment, so the program gets no environment \
+            "{IDEA_FILE} doesn't use the environment, so the program gets no environment \
              variables; leave env out, or add `the environment` to its `- Uses:` line"
         ));
     }
@@ -2446,7 +2446,7 @@ async fn runnable(
     // Nor does a program checked for a CPU with an extension this one lacks, or proven at
     // another SVE vector length, which a proof holds for alone.
     let checked_for = Header {
-        spec: String::new(),
+        idea: String::new(),
         target: stamp.target.clone(),
         features: stamp.features.clone(),
     };
@@ -2463,11 +2463,11 @@ async fn runnable(
             stamp.toolchain, built.toolchain
         ));
     }
-    let syscalls = profile.allowed_syscalls(&spec.syscalls, spec.threads.is_some());
-    // The connections the spec names, which lengua makes for the program, and for a server, its
+    let syscalls = profile.allowed_syscalls(&idea.syscalls, idea.threads.is_some());
+    // The connections the idea names, which lengua makes for the program, and for a server, its
     // own port on the loopback.
     let net = Net {
-        connections: spec
+        connections: idea
             .network
             .connections
             .iter()
@@ -2484,15 +2484,15 @@ async fn runnable(
                 (Some(host), None) => crate::connect::Reach::Host(host.clone(), place.port),
             })
             .collect(),
-        listen: spec.network.listens,
-        serve_anywhere: spec.network.serves_anywhere,
+        listen: idea.network.listens,
+        serve_anywhere: idea.network.serves_anywhere,
     };
     Ok(Runnable {
         channel: crate::edge::uses_channel(profile, &code)
-            .then(|| crate::broker::Permit::of(&spec.syscalls)),
+            .then(|| crate::broker::Permit::of(&idea.syscalls)),
         built,
         source,
-        spec,
+        idea,
         syscalls,
         net,
         emulator: target.emulator,
@@ -2507,7 +2507,7 @@ pub struct ShellRun {
     /// The folder to run in, which the program may read and write: the shell's current folder
     /// when `None`.
     pub folder: Option<String>,
-    /// Environment variables for a program whose spec uses the environment: only these reach
+    /// Environment variables for a program whose idea uses the environment: only these reach
     /// it.
     pub env: BTreeMap<String, String>,
     /// The program's command-line arguments.
@@ -2706,7 +2706,7 @@ fn violation_lines(report: &checker::Report) -> Vec<String> {
     lines
 }
 
-/// Saves a recorded spec.md under its hash, written atomically.
+/// Saves a recorded idea.md under its hash, written atomically.
 fn write_stamped_copy(data_dir: &DataDir, file: &Sha256Hex, text: &str) -> Result<(), String> {
     use std::io::Write as _;
     let path = stamped_copy(data_dir.path(), file);
@@ -2728,8 +2728,8 @@ fn write_stamped_copy(data_dir: &DataDir, file: &Sha256Hex, text: &str) -> Resul
     Ok(())
 }
 
-fn spec_problems(folder: &ProgramFolder, problems: &[spec::Problem]) -> String {
-    let mut text = format!("{folder}/{SPEC_FILE} has problems; call check:\n");
+fn idea_problems(folder: &ProgramFolder, problems: &[idea::Problem]) -> String {
+    let mut text = format!("{folder}/{IDEA_FILE} has problems; call check:\n");
     for problem in problems {
         let _ = writeln!(text, "- {problem}");
     }
@@ -2770,17 +2770,17 @@ mod tests {
     }
 
     #[test]
-    fn a_check_may_name_the_folder_or_its_spec() {
+    fn a_check_may_name_the_folder_or_its_idea() {
         // An absolute path on this system.
         let root = if cfg!(windows) { "C:\\" } else { "/" };
         let add = Path::new(root).join("home").join("you").join("add");
         let named = add.to_string_lossy().into_owned();
-        let spec = add.join("spec.md");
-        let folder = folder_of(&spec.to_string_lossy()).expect("a spec path");
+        let idea = add.join("idea.md");
+        let folder = folder_of(&idea.to_string_lossy()).expect("an idea path");
         assert_eq!(folder.to_string(), named);
         let folder = folder_of(&format!(" {named} ")).expect("a folder path");
         assert_eq!(folder.to_string(), named);
-        assert!(folder_of("add/spec.md").is_err());
+        assert!(folder_of("add/idea.md").is_err());
     }
 
     #[test]

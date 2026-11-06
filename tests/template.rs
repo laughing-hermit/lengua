@@ -1,5 +1,5 @@
 //! The unmodified main template of every target goes through `check` to `done`, the way an agent
-//! that copies it for a spec like its own would see: the spec recorded, the template's rules, its
+//! that copies it for an idea like its own would see: the idea recorded, the template's rules, its
 //! test runs, its record in lengua.lock and lengua's line in main.s, a comment of the CPU's own.
 //! One case with a cell for each target; each runs on that target's own runner.
 
@@ -40,7 +40,7 @@ async fn the_template_passes_its_tests_and_is_stamped() {
         };
         let name = target.name();
         let program = Program::new();
-        program.write("spec.md", &asset("template-spec.md"));
+        program.write("idea.md", &asset("template-idea.md"));
         let report = session.record(&program).await;
         assert_eq!(report["state"], "write_code", "{name}: {report}");
         program.write("main.s", &asset(TEMPLATES.get(target)));
@@ -86,7 +86,7 @@ async fn the_template_passes_its_tests_and_is_stamped() {
         let line = code.lines().nth(1).unwrap_or_default();
         let comment = target.isa().comment();
         assert!(
-            line.starts_with(&format!("{comment} lengua: compiled from spec.md sha256:")),
+            line.starts_with(&format!("{comment} lengua: compiled from idea.md sha256:")),
             "{name}: {code}"
         );
         let header = Header::of(&code).expect("lengua's line");

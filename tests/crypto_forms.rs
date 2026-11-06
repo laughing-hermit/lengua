@@ -1,7 +1,7 @@
 //! The programs whose only form once needed the CPU's SHA, AES or CRC instructions each have a
 //! baseline form that runs on every computer of its target, in plain integer code (with SSE2 or
 //! NEON for copies), and the form that uses the instructions is a named fast tier beside it,
-//! compiled from the very same spec. The baseline is the shipped example or fixture; the tier
+//! compiled from the very same idea. The baseline is the shipped example or fixture; the tier
 //! lives with the skill's other fast programs:
 //!
 //! - SHA-256: `examples/sha256`, tier `fast/sha256-ni`; on ARM64 the twin in
@@ -87,23 +87,23 @@ fn any_line(lines: &Value, needle: &str) -> bool {
         .is_some_and(|lines| lines.iter().any(|line| text(line).contains(needle)))
 }
 
-/// Every form of a program, on both CPUs, is compiled from the very same spec: the same bytes.
+/// Every form of a program, on both CPUs, is compiled from the very same idea: the same bytes.
 #[test]
-fn every_form_of_a_program_has_the_very_spec_of_the_others() {
+fn every_form_of_a_program_has_the_very_idea_of_the_others() {
     let mut problems = Vec::new();
     for forms in &FORMS {
-        let baseline = root().join(forms.x86_64[0]).join("spec.md");
-        let spec = std::fs::read(&baseline)
+        let baseline = root().join(forms.x86_64[0]).join("idea.md");
+        let idea = std::fs::read(&baseline)
             .unwrap_or_else(|error| panic!("{}: {error}", baseline.display()));
         for folder in forms.x86_64.iter().chain(forms.aarch64) {
             let path = root().join(folder);
             if !path.join("main.s").is_file() {
                 problems.push(format!("{}: {folder} has no main.s", forms.name));
             }
-            match std::fs::read(path.join("spec.md")) {
-                Ok(found) if found == spec => {}
-                Ok(_) => problems.push(format!("{}: {folder}/spec.md differs", forms.name)),
-                Err(error) => problems.push(format!("{folder}/spec.md: {error}")),
+            match std::fs::read(path.join("idea.md")) {
+                Ok(found) if found == idea => {}
+                Ok(_) => problems.push(format!("{}: {folder}/idea.md differs", forms.name)),
+                Err(error) => problems.push(format!("{folder}/idea.md: {error}")),
             }
         }
     }
@@ -188,7 +188,7 @@ fn a_baseline_form_uses_no_extension_beyond_its_cpus_baseline() {
 /// every test.
 async fn passes_its_checks(session: &Session, folder: &str) {
     let program = Program::new();
-    for file in ["spec.md", "main.s"] {
+    for file in ["idea.md", "main.s"] {
         let path = root().join(folder).join(file);
         let contents = std::fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("{}: {error}", path.display()));

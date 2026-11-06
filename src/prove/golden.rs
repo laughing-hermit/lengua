@@ -8,10 +8,10 @@
 //!
 //! The server's proofs go as far as their time allows, which differs from one run to the next, so
 //! here each block is proven in ways that always end the same: by induction, its step over the
-//! read loop as the spec gives the block and its base over the shortest final pieces (with a
+//! read loop as the idea gives the block and its base over the shortest final pieces (with a
 //! smaller buffer for the programs in [`SMALLER`]); and by length over part of its ranges, the
 //! widest of [`CUTS`] with at most [`COMBINATIONS`] input combinations (from a narrower one for
-//! the blocks in [`NARROW`]), so that every combination is proven. The samples keep the spec's
+//! the blocks in [`NARROW`]), so that every combination is proven. The samples keep the idea's
 //! ranges, edges included, but for texts longer than [`SAMPLE_TEXT`]. A proof that still runs
 //! out of time is marked `~`, since how far it gets depends on the machine.
 //!
@@ -40,7 +40,7 @@ const SAMPLES: usize = 24;
 
 /// The longest text a sample runs with: two of the smallest buffer the programs read into, and
 /// two pipe writes, so loops go round many times, without a megabyte's run through the model.
-/// Longer texts take the same instructions round again; induction proves the spec's lengths.
+/// Longer texts take the same instructions round again; induction proves the idea's lengths.
 const SAMPLE_TEXT: usize = 1 << 13;
 
 /// The parts of a block's ranges a proof by length here may go through, widest first: each text
@@ -209,7 +209,7 @@ fn cut(low: i128, high: i128, magnitude: i128) -> (i128, i128) {
 }
 
 /// `block` with each text at most `lengths` bytes past its shortest and each number at most
-/// `magnitude`: a part of every range, so what holds for the spec's holds for it.
+/// `magnitude`: a part of every range, so what holds for the idea's holds for it.
 fn cut_to(block: &Generated, lengths: usize, magnitude: i128) -> Generated {
     let mut block = block.clone();
     for (_, generator) in &mut block.vars {
@@ -254,7 +254,7 @@ fn budget(listens: bool) -> Budget {
     Budget::until(Instant::now() + Duration::from_secs(PROOF_SECONDS), listens)
 }
 
-/// The proof by induction of `block` as the spec gives it: its step over the read loop, and,
+/// The proof by induction of `block` as the idea gives it: its step over the read loop, and,
 /// where that holds, its base from the loop's head over the shortest final pieces, as far as
 /// [`BASE_LENGTHS`] bytes past the shortest. The base the server proves goes on to a whole
 /// buffer-full, as far as its time allows.
@@ -312,7 +312,7 @@ fn induction(image: &Image, block: &Generated, listens: bool) -> String {
     )
 }
 
-/// `block`'s proofs: by induction as the spec gives it, of `induced`, the program or its
+/// `block`'s proofs: by induction as the idea gives it, of `induced`, the program or its
 /// [`SMALLER`] buffer's build; then by length over part of its ranges, from the `from`th of
 /// [`CUTS`]; with how long each took, for whoever watches the recording.
 fn proofs(
@@ -379,14 +379,14 @@ async fn record(profile: Profile) -> String {
             }
             None => machine.clone(),
         };
-        let suite = match crate::testfile::check(&program.spec) {
+        let suite = match crate::testfile::check(&program.idea) {
             Ok(suite) => suite,
             Err(problems) => {
-                let _ = writeln!(recording, "  the spec's tests don't check: {problems:?}");
+                let _ = writeln!(recording, "  the idea's tests don't check: {problems:?}");
                 continue;
             }
         };
-        let listens = program.spec.network.listens.is_some();
+        let listens = program.idea.network.listens.is_some();
         for (index, block) in suite.generated.iter().enumerate() {
             let began = Instant::now();
             let sampled = sampled(block);

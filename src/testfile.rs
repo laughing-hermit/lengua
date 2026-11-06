@@ -1,4 +1,4 @@
-//! A spec's tests: each behavior's steps, read as its example, plus the generated tests under its
+//! An idea's tests: each behavior's steps, read as its example, plus the generated tests under its
 //! `###` heading, the same steps with formulas that compute the expected results for fresh inputs
 //! drawn on every run from the table below them.
 
@@ -9,7 +9,7 @@ use crate::expr::{
     self, Env, EvalError, Function, Generator, HexPart, Limit, PatternPart, Template, Value,
 };
 use crate::hash::Sha256Hex;
-use crate::spec::{ASSERTION_EXIT_CODE, Behavior, BehaviorId, Keyword, Spec, Step, Syscall, Use};
+use crate::idea::{ASSERTION_EXIT_CODE, Behavior, BehaviorId, Keyword, Idea, Step, Syscall, Use};
 use crate::supply::Supply;
 
 mod steps;
@@ -31,7 +31,7 @@ const NOW: &str = "now";
 /// makes its connections. A block that uses it without declaring it is told so.
 const PORT: &str = "port";
 
-/// A spec's checked tests.
+/// An idea's checked tests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TestSuite {
     /// One example per behavior, in file order.
@@ -40,12 +40,12 @@ pub struct TestSuite {
     pub generated: Vec<Generated>,
 }
 
-/// A test with fixed values taken from the spec.
+/// A test with fixed values taken from the idea.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Example {
     /// The behavior it checks.
     pub id: BehaviorId,
-    /// Line of its behavior's heading in spec.md.
+    /// Line of its behavior's heading in idea.md.
     pub line: usize,
     /// Command-line arguments.
     pub args: Vec<String>,
@@ -73,7 +73,7 @@ pub struct Example {
     pub random: Option<String>,
     /// What its `clock_gettime` calls read, in seconds; empty when the kernel's clock answers.
     pub clock: Vec<String>,
-    /// The test's own servers, each standing in for one of the spec's connections.
+    /// The test's own servers, each standing in for one of the idea's connections.
     pub server: Vec<Reply>,
     /// The test's own client, one entry a connection, for a program that serves.
     pub client: Vec<Exchange>,
@@ -85,7 +85,7 @@ pub struct Example {
     pub stdout_closed: bool,
     /// Whether the program must still be serving at the end, instead of exiting.
     pub serves: bool,
-    /// How many connections the spec names: lengua hands the program each, at descriptors 4
+    /// How many connections the idea names: lengua hands the program each, at descriptors 4
     /// and on, answered by one of the test's servers or ended.
     pub connections: usize,
 }
@@ -94,7 +94,7 @@ pub struct Example {
 /// `receives`, sends `replies`, closes its side, and expects nothing more.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Reply {
-    /// The spec's connection it stands in for, by its place in `- Network: connects to …`,
+    /// The idea's connection it stands in for, by its place in `- Network: connects to …`,
     /// from 0.
     pub connection: usize,
     /// What the program must send.
@@ -160,7 +160,7 @@ pub struct Generated {
     pub random: Option<Template>,
     /// The clock reading templates.
     pub clock: Vec<Template>,
-    /// The test server's templates, one a connection: the spec's connection it stands in for,
+    /// The test server's templates, one a connection: the idea's connection it stands in for,
     /// from 0, what it receives and what it replies.
     pub server: Vec<(usize, Template, Template)>,
     /// The test client's templates, one pair a connection: what it sends, what it receives.
@@ -173,7 +173,7 @@ pub struct Generated {
     pub stdout_closed: bool,
     /// Whether the program must still be serving at the end, instead of exiting.
     pub serves: bool,
-    /// How many connections the spec names: lengua hands the program each, at descriptors 4
+    /// How many connections the idea names: lengua hands the program each, at descriptors 4
     /// and on, answered by one of the test's servers or ended.
     pub connections: usize,
 }
@@ -224,7 +224,7 @@ pub struct Case {
     pub random: Option<String>,
     /// What its `clock_gettime` calls read, in seconds; empty when the kernel's clock answers.
     pub clock: Vec<String>,
-    /// The test's own servers, each standing in for one of the spec's connections.
+    /// The test's own servers, each standing in for one of the idea's connections.
     pub server: Vec<Reply>,
     /// The test's own client, one entry a connection.
     pub client: Vec<Exchange>,
@@ -236,7 +236,7 @@ pub struct Case {
     pub stdout_closed: bool,
     /// Whether the program must still be serving at the end, instead of exiting.
     pub serves: bool,
-    /// How many connections the spec names: lengua hands the program each, at descriptors 4
+    /// How many connections the idea names: lengua hands the program each, at descriptors 4
     /// and on, answered by one of the test's servers or ended.
     pub connections: usize,
 }
@@ -661,7 +661,7 @@ pub fn describe_inputs(inputs: &Env) -> String {
         .join(", ")
 }
 
-/// A problem found in a spec's tests.
+/// A problem found in an idea's tests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Problem {
     /// The line it's on, when it belongs to one.
@@ -704,7 +704,7 @@ struct ExampleTable {
 /// What the test's own server does on one connection: it receives exactly this, then replies.
 #[derive(Debug)]
 struct ServerTable<T> {
-    /// The spec's connection it stands in for, from 0.
+    /// The idea's connection it stands in for, from 0.
     connection: usize,
     receives: T,
     replies: T,
@@ -843,21 +843,21 @@ struct OutlineRow {
     vars: Vec<(String, String)>,
 }
 
-/// The spec's tests: each behavior's steps, read as its example, and the generated tests under
-/// its `###` heading, checked against the spec. Every problem is reported (up to 20).
+/// The idea's tests: each behavior's steps, read as its example, and the generated tests under
+/// its `###` heading, checked against the idea. Every problem is reported (up to 20).
 ///
 /// # Errors
 ///
 /// Returns the problems when the tests aren't valid.
-pub fn check(spec: &Spec) -> Result<TestSuite, Vec<Problem>> {
+pub fn check(idea: &Idea) -> Result<TestSuite, Vec<Problem>> {
     let mut checker = Checker {
-        spec,
+        idea,
         problems: Vec::new(),
         hidden: 0,
     };
     let mut tables = Vec::new();
-    for behavior in &spec.behaviors {
-        match steps::example(behavior, spec) {
+    for behavior in &idea.behaviors {
+        match steps::example(behavior, idea) {
             Ok(table) => tables.push((behavior, table)),
             Err(problems) => {
                 for problem in problems {
@@ -869,12 +869,12 @@ pub fn check(spec: &Spec) -> Result<TestSuite, Vec<Problem>> {
     let examples = checker.examples(tables);
     let mut generated = Vec::new();
     let mut written = String::new();
-    for behavior in &spec.behaviors {
+    for behavior in &idea.behaviors {
         let Some(outline) = &behavior.outline else {
             continue;
         };
         written.push_str(&outline.text);
-        match steps::generated(behavior, outline, spec) {
+        match steps::generated(behavior, outline, idea) {
             Ok((steps, rows)) => generated.extend(checker.outline(behavior, &steps, rows)),
             Err(problems) => {
                 for problem in problems {
@@ -887,14 +887,14 @@ pub fn check(spec: &Spec) -> Result<TestSuite, Vec<Problem>> {
     checker.coverage(&examples, &generated);
     checker.formulas(&examples, &generated);
     // A server of several clients at once shows it in a test.
-    if let Some(limit) = spec.network.at_once
+    if let Some(limit) = idea.network.at_once
         && !examples.iter().any(|example| example.clients_at_once)
         && !generated.iter().any(|block| block.clients_at_once)
     {
         checker.problem(
             None,
             format!(
-                "spec.md serves up to {limit} clients at once, but no test's clients connect at \
+                "idea.md serves up to {limit} clients at once, but no test's clients connect at \
                  once: give a behavior two or more `a client that sends …` steps and `- And the \
                  clients connect at once`, so its tests show it"
             ),
@@ -917,9 +917,9 @@ pub fn check(spec: &Spec) -> Result<TestSuite, Vec<Problem>> {
 }
 
 /// Each behavior's example outputs as TOML (`stdout`, `stderr`, `files_after`), each exact text
-/// or `{ matches = … }`, for comparing two versions of a spec's tests.
+/// or `{ matches = … }`, for comparing two versions of an idea's tests.
 #[must_use]
-pub fn example_outputs(spec: &Spec) -> Vec<(String, toml::Table)> {
+pub fn example_outputs(idea: &Idea) -> Vec<(String, toml::Table)> {
     let value = |text: Text| match text {
         Text::Rule(Rule { matches }) => {
             let mut rule = toml::Table::new();
@@ -928,10 +928,10 @@ pub fn example_outputs(spec: &Spec) -> Vec<(String, toml::Table)> {
         }
         other => toml::Value::String(other.expand().unwrap_or_default()),
     };
-    spec.behaviors
+    idea.behaviors
         .iter()
         .filter_map(|behavior| {
-            let table = steps::example(behavior, spec).ok()?;
+            let table = steps::example(behavior, idea).ok()?;
             let mut outputs = toml::Table::new();
             outputs.insert("stdout".into(), value(table.stdout));
             outputs.insert("stderr".into(), value(table.stderr));
@@ -947,15 +947,15 @@ pub fn example_outputs(spec: &Spec) -> Vec<(String, toml::Table)> {
 }
 
 /// Each behavior's generated tests as TOML, one table a row with its behavior's `id`: `runs`,
-/// `vars`, `stdout`, `stderr` and `files_after`, for comparing two versions of a spec's tests.
+/// `vars`, `stdout`, `stderr` and `files_after`, for comparing two versions of an idea's tests.
 #[must_use]
-pub fn generated_tables(spec: &Spec) -> Vec<toml::Table> {
+pub fn generated_tables(idea: &Idea) -> Vec<toml::Table> {
     let mut tables = Vec::new();
-    for behavior in &spec.behaviors {
+    for behavior in &idea.behaviors {
         let Some(outline) = &behavior.outline else {
             continue;
         };
-        let Ok((steps, rows)) = steps::generated(behavior, outline, spec) else {
+        let Ok((steps, rows)) = steps::generated(behavior, outline, idea) else {
             continue;
         };
         let text = |written: &Written| toml::Value::String(written.text.clone());
@@ -989,7 +989,7 @@ pub fn generated_tables(spec: &Spec) -> Vec<toml::Table> {
     tables
 }
 
-/// A spec's backtick value with `\r`, `\n`, `\t` and `\\` read as the characters they name, as
+/// An idea's backtick value with `\r`, `\n`, `\t` and `\\` read as the characters they name, as
 /// people write line breaks and tabs in a protocol.
 fn unescape(written: &str) -> String {
     let mut text = String::with_capacity(written.len());
@@ -1111,7 +1111,7 @@ fn dry_run_seed(text: &str) -> u64 {
 }
 
 struct Checker<'a> {
-    spec: &'a Spec,
+    idea: &'a Idea,
     problems: Vec<Problem>,
     hidden: usize,
 }
@@ -1128,9 +1128,9 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// Each behavior's example, as its steps describe it. The spec already holds each step to a
+    /// Each behavior's example, as its steps describe it. The idea already holds each step to a
     /// phrasing and each behavior to one ending, so what's left is what the steps' values make:
-    /// texts that fit, file names, and what the spec lets a test supply.
+    /// texts that fit, file names, and what the idea lets a test supply.
     fn examples(&mut self, tables: Vec<(&'a Behavior, ExampleTable)>) -> Vec<Example> {
         let mut examples = Vec::new();
         for (behavior, table) in tables {
@@ -1248,7 +1248,7 @@ impl<'a> Checker<'a> {
                 clients_at_once: table.clients_at_once,
                 stdout_closed: table.stdout_closed,
                 serves: behavior.serves,
-                connections: self.spec.network.connections.len(),
+                connections: self.idea.network.connections.len(),
             });
         }
         examples
@@ -1447,7 +1447,7 @@ impl<'a> Checker<'a> {
                     self.problem(
                         Some(written.line),
                         format!(
-                            "{name} expects exit code {code}, but the spec says {id} exits with \
+                            "{name} expects exit code {code}, but the idea says {id} exits with \
                              code {behavior_exit}"
                         ),
                     );
@@ -1513,29 +1513,29 @@ impl<'a> Checker<'a> {
             clients_at_once: steps.clients_at_once,
             stdout_closed: steps.stdout_closed,
             serves: steps.serves,
-            connections: self.spec.network.connections.len(),
+            connections: self.idea.network.connections.len(),
         })
     }
 
     /// A test has its own server only for a program that connects, and its own client, or
     /// expects the program to keep serving, only for one that serves.
     fn check_peers(&mut self, line: usize, name: &str, peers: Peers<'_>) {
-        if peers.server && self.spec.network.connections.is_empty() {
+        if peers.server && self.idea.network.connections.is_empty() {
             self.problem(
                 Some(line),
                 format!(
-                    "{name} has a server for the program to talk to, but spec.md doesn't say \
+                    "{name} has a server for the program to talk to, but idea.md doesn't say \
                      where the program connects: add `- Network: connects to TCP port {}` under \
                      `# Constraints`",
                     peers.port.unwrap_or("N")
                 ),
             );
         }
-        if peers.client && self.spec.network.listens.is_none() {
+        if peers.client && self.idea.network.listens.is_none() {
             self.problem(
                 Some(line),
                 format!(
-                    "{name} has a client or keeps serving, but spec.md doesn't say where it \
+                    "{name} has a client or keeps serving, but idea.md doesn't say where it \
                      serves: add `- Network: listens on TCP port N` under `# Constraints`, with \
                      the port it serves on"
                 ),
@@ -1544,18 +1544,18 @@ impl<'a> Checker<'a> {
         let Some(clients) = peers.at_once else {
             return;
         };
-        let problem = match self.spec.network.at_once {
+        let problem = match self.idea.network.at_once {
             _ if clients < 2 => format!(
                 "{name}: its clients connect at once, but it has {clients}: give it two or more \
                  `a client that sends …` steps"
             ),
             None => format!(
-                "{name}: its clients connect at once, but spec.md serves one at a time: end its \
+                "{name}: its clients connect at once, but idea.md serves one at a time: end its \
                  `- Network: listens on TCP port N` line with `, up to {clients} clients at \
                  once`, or more"
             ),
             Some(limit) if clients > limit as usize => format!(
-                "{name}: {clients} clients connect at once, more than the {limit} spec.md serves \
+                "{name}: {clients} clients connect at once, more than the {limit} idea.md serves \
                  at once"
             ),
             Some(_) => return,
@@ -1563,7 +1563,7 @@ impl<'a> Checker<'a> {
         self.problem(Some(line), problem);
     }
 
-    /// A test ends as its behavior does: with the exit code the spec states, or, for a behavior
+    /// A test ends as its behavior does: with the exit code the idea states, or, for a behavior
     /// that keeps serving, still serving. Returns the exit code the test needs when it gives
     /// none, or `None` after a problem.
     fn check_ending(
@@ -1600,15 +1600,15 @@ impl<'a> Checker<'a> {
         None
     }
 
-    /// A test may supply random bytes only when the spec allows `getrandom`, and clock readings
+    /// A test may supply random bytes only when the idea allows `getrandom`, and clock readings
     /// only when it allows `clock_gettime`.
     fn check_supply(&mut self, line: usize, name: &str, random: bool, clock: bool) {
-        let allows = |call: Syscall| self.spec.syscalls.contains(&call);
+        let allows = |call: Syscall| self.idea.syscalls.contains(&call);
         if random && !allows(Syscall::Getrandom) {
             self.problem(
                 Some(line),
                 format!(
-                    "{name} supplies random bytes, but spec.md's `- Uses:` line doesn't name \
+                    "{name} supplies random bytes, but idea.md's `- Uses:` line doesn't name \
                      `random bytes`; add it there, or drop the random bytes"
                 ),
             );
@@ -1617,7 +1617,7 @@ impl<'a> Checker<'a> {
             self.problem(
                 Some(line),
                 format!(
-                    "{name} supplies clock readings, but spec.md's `- Uses:` line doesn't name \
+                    "{name} supplies clock readings, but idea.md's `- Uses:` line doesn't name \
                      `the clock`; add it there, or drop the readings"
                 ),
             );
@@ -1636,11 +1636,11 @@ impl<'a> Checker<'a> {
         if folders.is_empty() && gone.is_empty() && folders_after.is_empty() {
             return;
         }
-        if !self.spec.uses.contains(&Use::Files) {
+        if !self.idea.uses.contains(&Use::Files) {
             self.problem(
                 Some(line),
                 format!(
-                    "{name} works with folders or files that go, but spec.md's `- Uses:` line \
+                    "{name} works with folders or files that go, but idea.md's `- Uses:` line \
                      doesn't name `files`; add it there"
                 ),
             );
@@ -1664,17 +1664,17 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// A test gives environment variables only to a program whose spec uses the environment, by
+    /// A test gives environment variables only to a program whose idea uses the environment, by
     /// names a shell would take.
     fn check_environment<T>(&mut self, line: usize, name: &str, env: &BTreeMap<String, T>) {
         if env.is_empty() {
             return;
         }
-        if !self.spec.uses.contains(&Use::Environment) {
+        if !self.idea.uses.contains(&Use::Environment) {
             self.problem(
                 Some(line),
                 format!(
-                    "{name} sets environment variables, but spec.md's `- Uses:` line doesn't name \
+                    "{name} sets environment variables, but idea.md's `- Uses:` line doesn't name \
                      `the environment`; add it there, or drop the variables"
                 ),
             );
@@ -1769,13 +1769,13 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// Generators may only use numbers that Purpose states, so their ranges come from the spec.
+    /// Generators may only use numbers that Purpose states, so their ranges come from the idea.
     /// Numbers from behaviors don't count: an example's own inputs would make `int(2, 3)` pass.
     fn check_limits(&mut self, line: usize, name: &str, var: &str, generator: &Generator) {
         // Each value Purpose states, with the most places it's written with.
         let mut stated: BTreeMap<Limit, u8> = BTreeMap::new();
         for (limit, places) in self
-            .spec
+            .idea
             .purpose_values
             .iter()
             .filter_map(|value| Limit::parse(value))
@@ -1784,7 +1784,7 @@ impl<'a> Checker<'a> {
             *most = (*most).max(places);
         }
         let unreadable: Vec<&str> = self
-            .spec
+            .idea
             .purpose_values
             .iter()
             .map(String::as_str)
@@ -1815,9 +1815,9 @@ impl<'a> Checker<'a> {
                 self.problem(
                     Some(line),
                     format!(
-                        "{name}: {var} = {generator} uses {limit}, which spec.md's Purpose \
+                        "{name}: {var} = {generator} uses {limit}, which idea.md's Purpose \
                          doesn't state. Generators take their ranges from Purpose: use the \
-                         numbers it gives in backticks, or add the range to Purpose in spec.md \
+                         numbers it gives in backticks, or add the range to Purpose in idea.md \
                          and call check again{hint}"
                     ),
                 );
@@ -2146,7 +2146,7 @@ impl<'a> Checker<'a> {
                         "{id} has inputs, so it needs generated tests that try fresh inputs on \
                          every run. Write them under its steps, starting from this, with a \
                          formula where `{{…}}` stands and a generator in each cell:\n\n{}",
-                        self.spec
+                        self.idea
                             .behavior(example.id)
                             .map_or_else(String::new, skeleton),
                         id = example.id
@@ -2157,7 +2157,7 @@ impl<'a> Checker<'a> {
     }
 
     /// Each behavior's formulas must reproduce its example, whose values come from the
-    /// recorded spec.
+    /// recorded idea.
     fn formulas(&mut self, examples: &[Example], generated: &[Generated]) {
         for example in examples {
             let blocks: Vec<&Generated> = generated
@@ -2198,7 +2198,7 @@ impl<'a> Checker<'a> {
                     Some(first.line),
                     format!(
                         "the inputs of {id}'s steps aren't in the generated ranges ({}); the \
-                         ranges must include the spec's own example",
+                         ranges must include the idea's own example",
                         outside.join("; ")
                     ),
                 );
@@ -2283,13 +2283,13 @@ impl<'a> Checker<'a> {
             } else {
                 None
             };
-            if let Some((field, formula, spec)) = mismatch {
+            if let Some((field, formula, idea)) = mismatch {
                 self.problem(
                     Some(block.line),
                     format!(
-                        "generated {id}'s formula disagrees with the spec: with the inputs of \
+                        "generated {id}'s formula disagrees with the idea: with the inputs of \
                          {id}'s steps ({}) it expects {} {formula}, but the steps expect \
-                         {spec}. Fix the formula",
+                         {idea}. Fix the formula",
                         describe_inputs(&case.inputs),
                         words(field)
                     ),
@@ -2552,13 +2552,13 @@ fn solve(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spec;
+    use crate::idea;
 
-    /// The add spec, with `outline` as B1's generated tests.
+    /// The add idea, with `outline` as B1's generated tests.
     fn add(outline: &str) -> String {
         format!(
             "---
-type: lengua/program-spec
+type: lengua/program-idea
 title: add
 ---
 # Purpose
@@ -2596,14 +2596,14 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
         add(GENERATED)
     }
 
-    /// The tests of `spec_text`, a spec lengua accepts, or their problems with their lines.
-    fn tests_of(spec_text: &str) -> Result<TestSuite, Vec<String>> {
-        let spec = spec::parse(spec_text).unwrap_or_else(|problems| panic!("{problems:#?}"));
-        check(&spec).map_err(|problems| problems.iter().map(ToString::to_string).collect())
+    /// The tests of `idea_text`, an idea lengua accepts, or their problems with their lines.
+    fn tests_of(idea_text: &str) -> Result<TestSuite, Vec<String>> {
+        let idea = idea::parse(idea_text).unwrap_or_else(|problems| panic!("{problems:#?}"));
+        check(&idea).map_err(|problems| problems.iter().map(ToString::to_string).collect())
     }
 
-    fn assert_problem(spec_text: &str, needle: &str) {
-        let problems = tests_of(spec_text).expect_err("problems");
+    fn assert_problem(idea_text: &str, needle: &str) {
+        let problems = tests_of(idea_text).expect_err("problems");
         assert!(
             problems.iter().any(|problem| problem.contains(needle)),
             "no problem containing {needle:?} in {problems:#?}"
@@ -2674,7 +2674,7 @@ Adds two whole numbers between `-1000000000` and `1000000000`.
     }
 
     const DICE: &str = "---
-type: lengua/program-spec
+type: lengua/program-idea
 title: roll
 ---
 # Purpose
@@ -2734,7 +2734,7 @@ Rolls a die for a player numbered from `1` to `9`.
             (
                 formula,
                 "prints `rolled {any(1, 7)}`",
-                "generated B1's formula disagrees with the spec",
+                "generated B1's formula disagrees with the idea",
             ),
             (
                 formula,
@@ -2770,7 +2770,7 @@ Rolls a die for a player numbered from `1` to `9`.
     #[test]
     fn now_only_bounds_a_rule() {
         const CLOCK: &str = "---
-type: lengua/program-spec
+type: lengua/program-idea
 title: clock
 ---
 # Purpose
@@ -2827,19 +2827,19 @@ Prints the time in Unix seconds for a player numbered from `1` to `9`.
         );
     }
 
-    fn spec_text(name: &str) -> String {
+    fn idea_text(name: &str) -> String {
         std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("examples")
                 .join(name)
-                .join("spec.md"),
+                .join("idea.md"),
         )
-        .expect("an example spec")
+        .expect("an example idea")
     }
 
     #[test]
     fn tests_supply_random_bytes_from_variables() {
-        let suite = tests_of(&spec_text("dice")).expect("valid tests");
+        let suite = tests_of(&idea_text("dice")).expect("valid tests");
         assert_eq!(suite.examples[0].supply().random, Some(vec![0xfc, 0x2a]));
         let block = &suite.generated[0];
         let inputs = BTreeMap::from([
@@ -2854,7 +2854,7 @@ Prints the time in Unix seconds for a player numbered from `1` to `9`.
 
     #[test]
     fn supplied_values_follow_their_rules() {
-        let dice = spec_text("dice");
+        let dice = idea_text("dice");
         for (from, to, needle) in [
             // Random bytes take every value the computer could give.
             (
@@ -2882,7 +2882,7 @@ Prints the time in Unix seconds for a player numbered from `1` to `9`.
         ] {
             assert_problem(&edit(&dice, from, to), needle);
         }
-        // A program whose spec doesn't name random bytes gets none.
+        // A program whose idea doesn't name random bytes gets none.
         assert_problem(
             &edit(
                 &valid(),
@@ -2896,7 +2896,7 @@ Prints the time in Unix seconds for a player numbered from `1` to `9`.
     #[test]
     fn tests_supply_clock_readings() {
         const HOUR: &str = "---
-type: lengua/program-spec
+type: lengua/program-idea
 title: hour
 ---
 # Purpose
@@ -2944,11 +2944,11 @@ Prints the hour of the day in UTC, from `0` to `23`, for a reader numbered from 
 
     #[test]
     fn network_tests_read_like_any_example() {
-        // A spec writes a protocol's line breaks as `\r\n`, and long messages may be written with
+        // An idea writes a protocol's line breaks as `\r\n`, and long messages may be written with
         // repeats.
         let crlf = edit(
             &edit(
-                &spec_text("echo"),
+                &idea_text("echo"),
                 "`hello` followed by a newline",
                 "`hello\\r\\n`",
             ),
@@ -2974,16 +2974,16 @@ Prints the hour of the day in UTC, from `0` to `23`, for a reader numbered from 
         );
     }
 
-    /// A server's clients at once: its spec says how many, its tests show it, and no test has
+    /// A server's clients at once: its idea says how many, its tests show it, and no test has
     /// more than it serves, or only one.
     #[test]
     fn clients_at_once_stay_within_what_the_server_serves() {
-        let spec = std::fs::read_to_string(
+        let idea = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("plugin/skills/compile/assets/server-template-spec.md"),
+                .join("plugin/skills/compile/assets/server-template-idea.md"),
         )
-        .expect("the server template's spec");
-        let suite = tests_of(&spec).expect("valid tests");
+        .expect("the server template's idea");
+        let suite = tests_of(&idea).expect("valid tests");
         let at_once: Vec<&Example> = suite
             .examples
             .iter()
@@ -2993,11 +2993,11 @@ Prints the hour of the day in UTC, from `0` to `23`, for a reader numbered from 
         assert_eq!(at_once[0].client.len(), 2);
         assert!(suite.generated.iter().any(|block| block.clients_at_once));
         assert_problem(
-            &edit(&spec, ", up to 8 clients at once", ""),
-            "its clients connect at once, but spec.md serves one at a time",
+            &edit(&idea, ", up to 8 clients at once", ""),
+            "its clients connect at once, but idea.md serves one at a time",
         );
         assert_problem(
-            &edit(&spec, "up to 8 clients", "up to 2 clients")
+            &edit(&idea, "up to 8 clients", "up to 2 clients")
                 .replacen(
                     "- And a client that sends `second` followed by a newline\n",
                     "- And a client that sends `second` followed by a newline\n- And a client \
@@ -3010,10 +3010,10 @@ Prints the hour of the day in UTC, from `0` to `23`, for a reader numbered from 
                      client gets back `third` followed by a newline\n",
                     1,
                 ),
-            "3 clients connect at once, more than the 2 spec.md serves at once",
+            "3 clients connect at once, more than the 2 idea.md serves at once",
         );
         let alone = edit(
-            &spec,
+            &idea,
             "- And a client that sends `second` followed by a newline\n",
             "",
         );
@@ -3025,7 +3025,7 @@ Prints the hour of the day in UTC, from `0` to `23`, for a reader numbered from 
             ),
             "its clients connect at once, but it has 1",
         );
-        let untested: String = spec
+        let untested: String = idea
             .lines()
             .filter(|line| !line.contains("the clients connect at once"))
             .map(|line| format!("{line}\n"))
@@ -3070,14 +3070,14 @@ Prints the hour of the day in UTC, from `0` to `23`, for a reader numbered from 
 
     #[test]
     fn a_missing_network_line_comes_with_its_port() {
-        let fetch = spec_text("fetch");
+        let fetch = idea_text("fetch");
         let line = fetch
             .lines()
             .find(|line| line.starts_with("- Network:"))
             .expect("the network line");
         let without = edit(&fetch, line, "- Uses: nothing");
-        let spec = spec::parse(&without).expect("valid spec");
-        let problems: Vec<String> = check(&spec)
+        let idea = idea::parse(&without).expect("valid idea");
+        let problems: Vec<String> = check(&idea)
             .expect_err("problems")
             .iter()
             .map(ToString::to_string)
@@ -3154,7 +3154,7 @@ Prints the hour of the day in UTC, from `0` to `23`, for a reader numbered from 
     #[test]
     fn environment_variables_need_the_environment_and_names_a_shell_takes() {
         let greet = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/greet/spec.md"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/greet/idea.md"),
         )
         .expect("the greet example");
         let suite = tests_of(&greet).expect("valid tests");
@@ -3188,7 +3188,7 @@ Prints the hour of the day in UTC, from `0` to `23`, for a reader numbered from 
     #[test]
     fn folder_steps_need_files_and_never_both_keep_and_drop() {
         let archive = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/archive/spec.md"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/archive/idea.md"),
         )
         .expect("the archive example");
         let suite = tests_of(&archive).expect("valid tests");
@@ -3202,7 +3202,7 @@ Prints the hour of the day in UTC, from `0` to `23`, for a reader numbered from 
         );
         assert_problem(
             &edit(&archive, "- Uses: files", "- Uses: standard input"),
-            "works with folders or files that go, but spec.md's `- Uses:` line doesn't name \
+            "works with folders or files that go, but idea.md's `- Uses:` line doesn't name \
              `files`",
         );
         assert_problem(
@@ -3266,13 +3266,13 @@ Prints the hour of the day in UTC, from `0` to `23`, for a reader numbered from 
         );
     }
 
-    /// A spec for negating whole numbers from `lo` to `hi`, with a row of its table for each of
+    /// An idea for negating whole numbers from `lo` to `hi`, with a row of its table for each of
     /// `rows`, the generators of `n`.
     fn negate(lo: i64, hi: i64, rows: &[&str]) -> String {
         let rows: String = rows.iter().map(|n| format!("| `{n}` |\n")).collect();
         format!(
             "---
-type: lengua/program-spec
+type: lengua/program-idea
 title: negate
 ---
 # Purpose
@@ -3300,7 +3300,7 @@ Negates a whole number between `{lo}` and `{hi}`.
     #[test]
     fn text_may_start_empty_without_purpose_saying_so() {
         const LINES: &str = "---
-type: lengua/program-spec
+type: lengua/program-idea
 title: lines
 ---
 # Purpose
@@ -3347,7 +3347,7 @@ Counts the lines of at most `1048576` bytes of text.
         let half = |purpose: &str, generator: &str| {
             format!(
                 "---
-type: lengua/program-spec
+type: lengua/program-idea
 title: half
 ---
 # Purpose
@@ -3381,7 +3381,7 @@ Halves a price between {purpose}.
             tests_of(&half("`0.00` and `$100.00`", "decimal(0.00, 100.00)")).expect_err("problems");
         assert!(
             found.iter().any(
-                |problem| problem.contains("uses 100, which spec.md's Purpose")
+                |problem| problem.contains("uses 100, which idea.md's Purpose")
                     && problem.contains("Purpose writes `$100.00`")
             ),
             "{found:#?}"
@@ -3433,10 +3433,10 @@ Halves a price between {purpose}.
 
     #[test]
     fn arguments_stay_within_every_systems_limits() {
-        let spec = |generator: &str| {
+        let idea = |generator: &str| {
             format!(
                 "---
-type: lengua/program-spec
+type: lengua/program-idea
 title: len
 ---
 # Purpose
@@ -3461,7 +3461,7 @@ Prints the length of a word of `1` to `200000` letters.
 "
             )
         };
-        let problems = tests_of(&spec(r#"string(1, 200000, "abc")"#))
+        let problems = tests_of(&idea(r#"string(1, 200000, "abc")"#))
             .expect_err("a 200000-byte argument was accepted");
         assert!(
             problems
@@ -3470,7 +3470,7 @@ Prints the length of a word of `1` to `200000` letters.
             "{problems:#?}"
         );
         // Within Windows's command line, every system takes it.
-        tests_of(&spec(r#"string(1, 30000, "abc")"#).replace("`200000`", "`30000`"))
+        tests_of(&idea(r#"string(1, 30000, "abc")"#).replace("`200000`", "`30000`"))
             .expect("a 30000-character argument fits");
         assert!(
             problems.iter().all(|problem| problem.len() < 2000),
@@ -3487,28 +3487,28 @@ Prints the length of a word of `1` to `200000` letters.
                 row,
                 "| `int(-1000000000, 1000000000)` | `int(-1000, 1000000000)` | 200 |",
             ),
-            "uses -1000, which spec.md's Purpose doesn't state",
+            "uses -1000, which idea.md's Purpose doesn't state",
         );
         // 2 and 3 are B1's example inputs, not a stated range: int(2, 3) would test almost nothing.
         assert_problem(
             &edit(&valid(), row, "| `int(2, 3)` | `int(2, 3)` | 200 |"),
-            "uses 2, which spec.md's Purpose doesn't state",
+            "uses 2, which idea.md's Purpose doesn't state",
         );
-        // String lengths too: the spec has 1 and 3 only as an exit code and an argument.
+        // String lengths too: the idea has 1 and 3 only as an exit code and an argument.
         assert_problem(
             &edit(
                 &valid(),
                 row,
                 "| `int(-1000000000, 1000000000)` | `string(1, 3, \"123\")` | 200 |",
             ),
-            "uses 1, which spec.md's Purpose doesn't state",
+            "uses 1, which idea.md's Purpose doesn't state",
         );
     }
 
     #[test]
     fn files_go_in_before_the_run_and_are_checked_after() {
         const SHOUT: &str = "---
-type: lengua/program-spec
+type: lengua/program-idea
 title: shout-file
 ---
 # Purpose
@@ -3563,7 +3563,7 @@ Uppercases a text file of at most `1000` bytes, `notes.txt`, into `loud.txt`.
             (
                 "holds `{upper(s)}`",
                 "holds `{lower(s)}`",
-                "formula disagrees with the spec",
+                "formula disagrees with the idea",
             ),
             (
                 "Given a file named `notes.txt` holding `hello`",
@@ -3577,7 +3577,7 @@ Uppercases a text file of at most `1000` bytes, `notes.txt`, into `loud.txt`.
 
     #[test]
     fn reads_inputs_from_stdin_and_text_around_placeholders() {
-        let spec = edit(
+        let idea = edit(
             &edit(
                 &add("### For any `a` and `b`
 - Given standard input holding `{a} {b}` followed by a newline
@@ -3595,16 +3595,16 @@ Uppercases a text file of at most `1000` bytes, `notes.txt`, into `loud.txt`.
             "- And it exits with code `1`\n",
             "- And it exits with code `1`\n\n# Constraints\n- Uses: standard input\n",
         );
-        let suite = tests_of(&spec).expect("valid tests");
+        let suite = tests_of(&idea).expect("valid tests");
         assert_eq!(suite.examples[0].stdin, "2 3\n");
         assert_eq!(suite.generated[0].runs, DEFAULT_RUNS);
-        assert!(tests_of(&edit(&spec, "{a + b}", "{a * b}")).is_err());
+        assert!(tests_of(&edit(&idea, "{a + b}", "{a * b}")).is_err());
     }
 
     #[test]
     fn dry_runs_are_deterministic() {
-        let spec = spec::parse(&valid()).expect("valid spec");
-        assert_eq!(check(&spec), check(&spec));
+        let idea = idea::parse(&valid()).expect("valid idea");
+        assert_eq!(check(&idea), check(&idea));
         assert_eq!(dry_run_seed(GENERATED), dry_run_seed(GENERATED));
     }
 }

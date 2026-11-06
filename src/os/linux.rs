@@ -176,7 +176,7 @@ struct Connected {
     relays: Vec<Relay>,
     /// The ones it handed over already ended, held until the program ends.
     held: Vec<tokio::net::UnixStream>,
-    /// The test's own servers' ends, by the connection's number in the spec, from 0.
+    /// The test's own servers' ends, by the connection's number in the idea, from 0.
     peers: Vec<(usize, tokio::net::UnixStream)>,
     /// What became of each, in order.
     made: Vec<Made>,
@@ -196,7 +196,7 @@ impl Started {
     }
 
     /// lengua's ends of the connections that go to the test's own servers, each with its
-    /// connection's number in the spec, from 0: the test's server speaks on them.
+    /// connection's number in the idea, from 0: the test's server speaks on them.
     pub fn take_peers(&mut self) -> Vec<(usize, tokio::net::UnixStream)> {
         std::mem::take(&mut self.connected.peers)
     }
@@ -304,7 +304,7 @@ impl Started {
                         )),
                         Ok(Outcome::Forbidden(kind)) => Some(format!(
                             "lengua's broker stopped serving the program, which asked for what \
-                             its spec doesn't allow ({kind:?})"
+                             its idea doesn't allow ({kind:?})"
                         )),
                         Ok(Outcome::Failed(error)) => Some(format!(
                             "lengua's broker stopped serving the program: {error}"
@@ -1250,13 +1250,13 @@ fn listen_on_fd3(port: u16, anywhere: bool) -> Result<std::net::TcpListener, Str
 type Confinement = (Vec<Allowed>, Option<u64>, bool);
 
 /// The system call list the launcher gets for a program QEMU's user mode runs: the kernel sees
-/// QEMU's calls, not the program's, so it can't hold the program to its spec's.
+/// QEMU's calls, not the program's, so it can't hold the program to its idea's.
 const EMULATED: &str = "emulated";
 
 /// The calls QEMU's user mode never needs to make for a program, which a program run through it
 /// may not make either: tracing or reading other processes, the kernel's own business (modules,
 /// keys, mounts, namespaces, clocks, rebooting), and the interfaces that reach the kernel past
-/// a filter on calls (io_uring, BPF). The program's own calls are held to its spec by lengua's
+/// a filter on calls (io_uring, BPF). The program's own calls are held to its idea by lengua's
 /// rules; these are the kernel's limit on QEMU.
 const NEVER_EMULATED: [i64; 37] = [
     nix::libc::SYS_ptrace,
@@ -1438,7 +1438,7 @@ fn confine(
         .and_then(|ruleset| ruleset.restrict_self())
         .map_err(|error| format!("Landlock: {error}"))?;
     // Landlock holds every program to its working folder, or to no file at all when its broker
-    // opens them for it, and the spec's system calls don't: a kernel with none doesn't run any.
+    // opens them for it, and the idea's system calls don't: a kernel with none doesn't run any.
     if status.ruleset == RulesetStatus::NotEnforced {
         return Err(
             "this kernel has no Landlock, which holds a program to its working folder or to the \

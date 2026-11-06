@@ -91,14 +91,14 @@ numbers are the same on every system: `ENOENT` 2, `EIO` 5, `EBADF` 9, `EAGAIN` 1
 | `os_terminal`, `os_window` | `ENOTTY` |
 | `os_thread_start` | `EAGAIN` `EINVAL` |
 
-Each error a program meets is a behavior its spec names, with an exit code of its own. A
+Each error a program meets is a behavior its idea names, with an exit code of its own. A
 constant for an error or a mode is a `.equ` line at the top of `main.s` (`.equ ENOENT, -2`), as a
 named exit status is.
 
-## What the spec allows
+## What the idea allows
 
-What the spec names under `# Constraints` decides the operations a program may call, and the
-checker refuses a call to one the spec doesn't allow: `os_write` and `os_exit` always; `os_read`
+What the idea names under `# Constraints` decides the operations a program may call, and the
+checker refuses a call to one the idea doesn't allow: `os_write` and `os_exit` always; `os_read`
 for `standard input`, `files`, `the terminal` and every network; `os_open`, `os_seek`, `os_info`,
 `os_list`, `os_mkdir`, `os_remove` and `os_rename` for `files`, and `os_close` for `files` and
 the network; `os_clock` and `os_sleep` for `the clock`; `os_random` for `random bytes`;
@@ -130,7 +130,7 @@ and checks what it leaves with its Then steps (``the file `out.txt` holds TEXT``
 
 ## The network
 
-A program never connects or binds. lengua makes each connection its spec names before the program
+A program never connects or binds. lengua makes each connection its idea names before the program
 starts and hands it over, the first `- Network: connects to …` place as descriptor 4, the next 5, and
 so on (`.equ CONNECTION, 4`); a server gets its listening socket as descriptor 3 and takes each
 connection with `os_accept`. A client sends with `os_write`, reads until `os_read` returns 0, when
@@ -155,7 +155,7 @@ color text.
 ## Random bytes and the clock
 
 Tests usually supply them in place of the system's, so output that depends on them can be checked
-exactly. Draw the random bytes the spec's Purpose says how to use, in any batch size: bytes asked
+exactly. Draw the random bytes the idea's Purpose says how to use, in any batch size: bytes asked
 for past what a test supplies are zeros, so only the bytes the program uses decide its output. Each
 `os_clock` call reads the test's next reading, and the last one repeats. A test's `os_sleep` ends
 at once. Check each result like any call's.
@@ -176,7 +176,7 @@ functions, which the CPU's reference gives:
   call it again for each buffer-full with `stop` -1.
 - `parallel_for(count, slots, slot_size, results)`: runs `worker(index, slot)` for every index
   from 0 to `count - 1`, each on its own thread (worker 0 on this one), and returns when all have
-  finished. `count` is 1 to 64 and at most the spec's thread count; `worker` is `main.s`'s, takes
+  finished. `count` is 1 to 64 and at most the idea's thread count; `worker` is `main.s`'s, takes
   its index and its slot, writes only its own slot and its own stack, and returns a result,
   which lands in `results[index]`, 8 bytes each. A worker calls no operation. Each thread has 1
   MiB of stack, less 64 bytes.
@@ -186,7 +186,7 @@ functions, which the CPU's reference gives:
 `_start` is lengua's: it calls `main` with the argument count, the array of arguments and the array
 of environment variables in the first three argument registers. Each argument and variable is a
 NUL-terminated string, read-only; the first argument is the program's path. A program gets
-environment variables only when its spec uses `the environment`, and then only those its test or
+environment variables only when its idea uses `the environment`, and then only those its test or
 the user's run gives; otherwise the list is empty. `main` is entered by a call, so its stack is
 as a function's is; it never returns: it ends with `call os_exit` (`bl os_exit` on AArch64) with the
 status in the first argument register, a named constant from 0 to 255.

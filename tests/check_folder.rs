@@ -1,5 +1,5 @@
 //! One program folder's check, for writing a program by hand on a machine that isn't the
-//! developer's: `LENGUA_CHECK_FOLDER` names the folder, which holds spec.md and main.s, and the
+//! developer's: `LENGUA_CHECK_FOLDER` names the folder, which holds idea.md and main.s, and the
 //! test prints what `check` reports (rules, tests, proofs) and fails unless the job ends done.
 //! GitHub's runners run it (the workflow's "ignored" mode with this test's name as the filter).
 //!
@@ -50,7 +50,7 @@ async fn check_one_folder() {
     for folder in folder.split(',') {
         let folder = std::path::PathBuf::from(folder);
         let program = Program::new();
-        for file in ["spec.md", "main.s"] {
+        for file in ["idea.md", "main.s"] {
             let text = std::fs::read_to_string(folder.join(file)).expect("the file");
             program.write(file, &text);
         }

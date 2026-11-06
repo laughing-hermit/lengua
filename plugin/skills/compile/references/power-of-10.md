@@ -134,7 +134,7 @@ Rules for vectors:
   again after one.
 
 [assets/vector-template.s](../assets/vector-template.s) is a complete, checked SSE2 program
-(capitalizing a line 16 bytes at a time) with its spec and tests.
+(capitalizing a line 16 bytes at a time) with its idea and tests.
 
 ### Floating point
 
@@ -191,11 +191,11 @@ Everything else is out: x87, string instructions (`movs`, `stos`, …), `loop`, 
 
 ### Threads
 
-When the spec allows threads (`- Threads: up to N` under Constraints), a program can split its
+When the idea allows threads (`- Threads: up to N` under Constraints), a program can split its
 work across cores with fork-join: lengua's `parallel_for` starts the threads and waits for all of
 them, like Rust's scoped threads. Nothing is copied: write `worker` and what is around it, as
 [the parallel template](../assets/parallel-template.s) does. Choose two constants:
-- `THREADS`, at most the spec's N;
+- `THREADS`, at most the idea's N;
 - `SLOT_SIZE`, each worker's output: a multiple of 64.
 
 Reserve the data `slots`, `THREADS * SLOT_SIZE` bytes with `.balign 64`, and `results`, `THREADS`
@@ -263,7 +263,7 @@ Nothing in the body changes `R`: an operation changes `rax`, `rcx` and `r11`, an
 to `r15`. Every backward jump must be such a loop's end.
 
 One loop may run without a bound, as NASA's rule allows for loops meant never to end: a server's
-loop that takes connections, in a program whose spec says `- Network: listens on TCP port N`, or,
+loop that takes connections, in a program whose idea says `- Network: listens on TCP port N`, or,
 for a server of several clients at once, its loop around `os_poll`. Its
 head label says `# bound: forever` and it closes with an unconditional `jmp` to the head, so it
 provably never ends by itself; leaving early (to exit) uses forward jumps as usual:
@@ -280,14 +280,14 @@ provably never ends by itself; leaving early (to exit) uses forward jumps as usu
 
 NASA's rule is "no dynamic memory allocation after initialization". In lengua all memory is
 reserved before the program runs: data in `.rodata`, `.data` and `.bss`, plus the stack. Size
-every buffer from the spec's limits (the longest input it allows, the most items it holds). A
+every buffer from the idea's limits (the longest input it allows, the most items it holds). A
 large `.bss` buffer costs nothing until it's used, because Linux hands out zeroed pages as the
 program touches them, so a 64 MiB buffer for a program that reads up to 64 MiB is fine. Nothing
 is allocated or freed while the program runs, so there's no leak, double free or use after free.
 
-The program runs as one thread unless its spec allows threads (`- Threads: up to N`); then it
+The program runs as one thread unless its idea allows threads (`- Threads: up to N`); then it
 starts them only through lengua's `parallel_for` (see "Threads" below). It calls only the
-operations of what its spec names (`- Uses:` and `- Network:`), which are the capabilities the
+operations of what its idea names (`- Uses:` and `- Network:`), which are the capabilities the
 program is granted ([the edge](edge.md) says which each allows), and makes no system call of its
 own. The stack changes only through 64-bit `push` and
 `pop` of registers (not of memory, and never `pop rsp`), `call`, `ret`, and `sub rsp, N` /
@@ -471,7 +471,7 @@ written, and no stack may be read before something wrote it.
   its own slot, with every index bounded by a constant, so no thread writes a byte another thread
   reads or writes.
 - **M8, stack size.** The deepest path through the program uses at most 1 MiB of stack. Large
-  buffers go in `.bss`, sized from the spec's limits.
+  buffers go in `.bss`, sized from the idea's limits.
 
 ### 10. Checked by tools
 

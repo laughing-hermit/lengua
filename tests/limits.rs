@@ -5,7 +5,7 @@
 //! output limits, the empty environment and the standard input that ends, a descriptor a parent
 //! left open, signals, files and the size they may grow to, the names every system takes
 //! (`EINVAL`, `EILSEQ`, `ENAMETOOLONG`, `EEXIST`), `EBUSY` for a file held open, the 4,352 open
-//! files, folder listings turned round on a test's second run, the spec's approval of the clock
+//! files, folder listings turned round on a test's second run, the idea's approval of the clock
 //! and the random bytes, the test's own bytes and readings, the broker's failure paths and
 //! threads, the pin on `clone`'s flags, and a network the program never holds.
 //!
@@ -13,7 +13,7 @@
 //! a target added to lengua breaks every table until its sources are written. Every target's
 //! source is built on every computer (LLVM builds for all of them), so a typo in a cell fails
 //! on every runner; the program for the target this computer is runs natively, on that target's
-//! own runner in CI. QEMU's user mode can't hold a program to its spec's system calls, so a
+//! own runner in CI. QEMU's user mode can't hold a program to its idea's system calls, so a
 //! program of the other CPU runs under it only to check what it does hold: its connections,
 //! Landlock and the stop of the calls QEMU never makes.
 
@@ -28,7 +28,7 @@ use lengua::broker::Permit;
 use lengua::connect::Reach;
 use lengua::platform::{Allowed, Pin};
 use lengua::runner::{End, Job, Limits, Net, Run, run, start};
-use lengua::spec::{Syscall, Use};
+use lengua::idea::{Syscall, Use};
 use lengua::syscalls::{aarch64, x86_64};
 use lengua::targets::PerCpu;
 
@@ -117,12 +117,12 @@ const TEMPLATES: Assets = PerCpu {
     aarch64: "linux-aarch64/main-template.s",
 };
 
-/// The system calls of a spec that allows `spec` and no thread.
-fn calls(spec: &[Syscall]) -> Vec<Allowed> {
-    per_target::host().allowed_syscalls(spec, false)
+/// The system calls of an idea that allows `idea` and no thread.
+fn calls(idea: &[Syscall]) -> Vec<Allowed> {
+    per_target::host().allowed_syscalls(idea, false)
 }
 
-/// The system calls of a spec that reads, writes and opens files.
+/// The system calls of an idea that reads, writes and opens files.
 fn file_syscalls() -> Vec<Allowed> {
     calls(&[
         Syscall::Read,
@@ -412,8 +412,8 @@ fn copies_a_file() -> Programs {
     }
 }
 
-/// A program that makes a system call no spec here allows (`getpid`) and exits with 0.
-fn makes_a_call_its_spec_doesnt_allow() -> Programs {
+/// A program that makes a system call no idea here allows (`getpid`) and exits with 0.
+fn makes_a_call_its_idea_doesnt_allow() -> Programs {
     PerCpu {
         x86_64: x86(
             &[
@@ -1320,16 +1320,16 @@ async fn gives_files_and_reads_back_what_the_program_left() {
 }
 
 #[tokio::test]
-async fn the_kernel_keeps_programs_inside_what_their_spec_allows() {
+async fn the_kernel_keeps_programs_inside_what_their_idea_allows() {
     if !per_target::runs_programs() {
         return;
     }
     let folder = tempfile::tempdir().expect("temporary folder");
-    // A system call the spec doesn't allow (getpid) stops the program.
+    // A system call the idea doesn't allow (getpid) stops the program.
     let getpid = built(
         folder.path(),
         "getpid",
-        &makes_a_call_its_spec_doesnt_allow(),
+        &makes_a_call_its_idea_doesnt_allow(),
     )
     .await;
     let result = run_simply(&getpid, &[], b"").await;
@@ -1338,7 +1338,7 @@ async fn the_kernel_keeps_programs_inside_what_their_spec_allows() {
         result
             .end
             .describe(Limits::default())
-            .contains("a system call its spec doesn't allow")
+            .contains("a system call its idea doesn't allow")
     );
 
     // A file outside the working folder can't be opened: the exit code is the error, EACCES.
@@ -1400,7 +1400,7 @@ async fn threads_start_only_with_the_canonical_flags() {
 }
 
 #[tokio::test]
-async fn the_clock_and_random_bytes_need_the_specs_approval() {
+async fn the_clock_and_random_bytes_need_the_ideas_approval() {
     if !per_target::runs_programs() {
         return;
     }
@@ -1426,11 +1426,11 @@ async fn the_clock_and_random_bytes_need_the_specs_approval() {
     assert_eq!(result.end, End::Signaled(31), "not approved: stopped");
 }
 
-fn network_syscalls(spec: &[Syscall]) -> Vec<Allowed> {
-    calls(spec)
+fn network_syscalls(idea: &[Syscall]) -> Vec<Allowed> {
+    calls(idea)
 }
 
-/// The numbers of `socket` and `connect`, which no spec allows a program.
+/// The numbers of `socket` and `connect`, which no idea allows a program.
 const SOCKET_AND_CONNECT: PerCpu<[i64; 2]> = PerCpu {
     x86_64: [x86_64::SOCKET, x86_64::CONNECT],
     aarch64: [aarch64::SOCKET, aarch64::CONNECT],
@@ -1457,7 +1457,7 @@ fn connected(connections: Vec<Reach>, listen: bool) -> Net {
 /// A system call that takes a descriptor first, with what the kernel's pin on it looks at.
 struct OnTheChannel {
     name: &'static str,
-    spec: Syscall,
+    idea: Syscall,
     numbers: PerCpu<i64>,
     /// The second argument, for the calls whose pin looks at it.
     second: i64,
@@ -1465,12 +1465,12 @@ struct OnTheChannel {
     own: u32,
 }
 
-/// The calls a spec can allow that take a descriptor first and could reach lengua's channel to
+/// The calls an idea can allow that take a descriptor first and could reach lengua's channel to
 /// its broker, which is descriptor 4,352.
 const ON_THE_CHANNEL: [OnTheChannel; 10] = [
     OnTheChannel {
         name: "read",
-        spec: Syscall::Read,
+        idea: Syscall::Read,
         numbers: PerCpu {
             x86_64: x86_64::READ,
             aarch64: aarch64::READ,
@@ -1480,7 +1480,7 @@ const ON_THE_CHANNEL: [OnTheChannel; 10] = [
     },
     OnTheChannel {
         name: "write",
-        spec: Syscall::Write,
+        idea: Syscall::Write,
         numbers: PerCpu {
             x86_64: x86_64::WRITE,
             aarch64: aarch64::WRITE,
@@ -1490,7 +1490,7 @@ const ON_THE_CHANNEL: [OnTheChannel; 10] = [
     },
     OnTheChannel {
         name: "close",
-        spec: Syscall::Close,
+        idea: Syscall::Close,
         numbers: PerCpu {
             x86_64: x86_64::CLOSE,
             aarch64: aarch64::CLOSE,
@@ -1500,7 +1500,7 @@ const ON_THE_CHANNEL: [OnTheChannel; 10] = [
     },
     OnTheChannel {
         name: "lseek",
-        spec: Syscall::Lseek,
+        idea: Syscall::Lseek,
         numbers: PerCpu {
             x86_64: x86_64::LSEEK,
             aarch64: aarch64::LSEEK,
@@ -1510,7 +1510,7 @@ const ON_THE_CHANNEL: [OnTheChannel; 10] = [
     },
     OnTheChannel {
         name: "fstat",
-        spec: Syscall::Fstat,
+        idea: Syscall::Fstat,
         numbers: PerCpu {
             x86_64: x86_64::FSTAT,
             aarch64: aarch64::FSTAT,
@@ -1520,7 +1520,7 @@ const ON_THE_CHANNEL: [OnTheChannel; 10] = [
     },
     OnTheChannel {
         name: "getdents64",
-        spec: Syscall::Getdents64,
+        idea: Syscall::Getdents64,
         numbers: PerCpu {
             x86_64: x86_64::GETDENTS64,
             aarch64: aarch64::GETDENTS64,
@@ -1530,7 +1530,7 @@ const ON_THE_CHANNEL: [OnTheChannel; 10] = [
     },
     OnTheChannel {
         name: "ioctl",
-        spec: Syscall::Ioctl,
+        idea: Syscall::Ioctl,
         numbers: PerCpu {
             x86_64: x86_64::IOCTL,
             aarch64: aarch64::IOCTL,
@@ -1541,7 +1541,7 @@ const ON_THE_CHANNEL: [OnTheChannel; 10] = [
     },
     OnTheChannel {
         name: "shutdown",
-        spec: Syscall::Shutdown,
+        idea: Syscall::Shutdown,
         numbers: PerCpu {
             x86_64: x86_64::SHUTDOWN,
             aarch64: aarch64::SHUTDOWN,
@@ -1551,7 +1551,7 @@ const ON_THE_CHANNEL: [OnTheChannel; 10] = [
     },
     OnTheChannel {
         name: "sendto",
-        spec: Syscall::Sendto,
+        idea: Syscall::Sendto,
         numbers: PerCpu {
             x86_64: x86_64::SENDTO,
             aarch64: aarch64::SENDTO,
@@ -1561,7 +1561,7 @@ const ON_THE_CHANNEL: [OnTheChannel; 10] = [
     },
     OnTheChannel {
         name: "accept4",
-        spec: Syscall::Accept4,
+        idea: Syscall::Accept4,
         numbers: PerCpu {
             x86_64: x86_64::ACCEPT4,
             aarch64: aarch64::ACCEPT4,
@@ -1621,12 +1621,12 @@ async fn the_kernel_holds_a_program_off_the_channel_but_for_the_two_calls_it_is_
         return;
     }
     let folder = tempfile::tempdir().expect("temporary folder");
-    let spec: Vec<Syscall> = ON_THE_CHANNEL
+    let idea: Vec<Syscall> = ON_THE_CHANNEL
         .iter()
-        .map(|call| call.spec)
+        .map(|call| call.idea)
         .chain([Syscall::Exit])
         .collect();
-    let allowed = calls(&spec);
+    let allowed = calls(&idea);
     let channel = lengua::edge::CHANNEL;
     let run_it = |program: PathBuf| {
         let allowed = allowed.clone();
@@ -1722,7 +1722,7 @@ async fn a_program_never_holds_the_network() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a free port");
     let port = listener.local_addr().expect("an address").port();
     let client = built(folder.path(), "client", &connects_to(port)).await;
-    // Even with lengua making a connection there for it, its own socket is a call no spec
+    // Even with lengua making a connection there for it, its own socket is a call no idea
     // allows: stopped.
     let net = connected(vec![Reach::ThisComputer(port)], false);
     let calls = network_syscalls(&[Syscall::Read, Syscall::Sendto, Syscall::Exit]);
@@ -1994,16 +1994,16 @@ async fn a_program_holds_as_many_open_files_on_every_system() {
     );
 }
 
-/// Runs the tests of the template's spec, with `edit` applied to it, `workers` at a time.
+/// Runs the tests of the template's idea, with `edit` applied to it, `workers` at a time.
 async fn template_tests(edit: impl Fn(&str) -> String, workers: usize) -> lengua::testrun::Outcome {
-    let spec = lengua::spec::parse(&edit(&asset("template-spec.md"))).expect("the template's spec");
-    let suite = lengua::testfile::check(&spec).expect("the tests check");
+    let idea = lengua::idea::parse(&edit(&asset("template-idea.md"))).expect("the template's idea");
+    let suite = lengua::testfile::check(&idea).expect("the tests check");
     let host = per_target::host();
     let code = asset(TEMPLATES.get(host));
     let (source, _) = lengua::checker::source::parse(&code);
     let folder = tempfile::tempdir().expect("a folder");
     let executable = built_asset(folder.path(), "main", &TEMPLATES).await;
-    let syscalls = host.allowed_syscalls(&spec.syscalls, false);
+    let syscalls = host.allowed_syscalls(&idea.syscalls, false);
     lengua::testrun::run_tests(
         &suite,
         launcher(),
@@ -2011,7 +2011,7 @@ async fn template_tests(edit: impl Fn(&str) -> String, workers: usize) -> lengua
         &source,
         7,
         &syscalls,
-        &spec.network,
+        &idea.network,
         workers,
         lengua::testrun::Setting::default(),
     )
@@ -2019,16 +2019,16 @@ async fn template_tests(edit: impl Fn(&str) -> String, workers: usize) -> lengua
     .expect("the tests run")
 }
 
-/// Runs the tests of the compile skill's asset spec `spec` against the program `code`, which is
+/// Runs the tests of the compile skill's asset idea `idea` against the program `code`, which is
 /// the assembly of the target this computer is.
-async fn asset_tests(spec: &str, code: &str) -> lengua::testrun::Outcome {
-    let spec = lengua::spec::parse(&asset(spec)).expect("the asset's spec");
-    let suite = lengua::testfile::check(&spec).expect("the tests check");
+async fn asset_tests(idea: &str, code: &str) -> lengua::testrun::Outcome {
+    let idea = lengua::idea::parse(&asset(idea)).expect("the asset's idea");
+    let suite = lengua::testfile::check(&idea).expect("the tests check");
     let (source, _) = lengua::checker::source::parse(code);
     let folder = tempfile::tempdir().expect("a folder");
     let host = per_target::host();
     let executable = per_target::build(host, folder.path(), "main", code).await;
-    let syscalls = host.allowed_syscalls(&spec.syscalls, false);
+    let syscalls = host.allowed_syscalls(&idea.syscalls, false);
     lengua::testrun::run_tests(
         &suite,
         launcher(),
@@ -2036,7 +2036,7 @@ async fn asset_tests(spec: &str, code: &str) -> lengua::testrun::Outcome {
         &source,
         7,
         &syscalls,
-        &spec.network,
+        &idea.network,
         8,
         lengua::testrun::Setting::default(),
     )
@@ -2064,11 +2064,11 @@ async fn a_server_for_clients_at_once_answers_each_while_others_send() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let (template, one_at_a_time) = *SERVERS.get(per_target::host());
     let template = asset(template);
-    let outcome = asset_tests("server-template-spec.md", &template).await;
+    let outcome = asset_tests("server-template-idea.md", &template).await;
     assert!(outcome.passed(), "{:#?}", outcome.failures);
     assert!(outcome.runs > 2, "{}", outcome.runs);
     let one_at_a_time = std::fs::read_to_string(root.join(one_at_a_time)).expect("the echo");
-    let outcome = asset_tests("server-template-spec.md", &one_at_a_time).await;
+    let outcome = asset_tests("server-template-idea.md", &one_at_a_time).await;
     assert!(
         outcome
             .failures
@@ -2092,7 +2092,7 @@ async fn a_terminal_program_takes_keys_from_a_pipe_too() {
     };
     let host = per_target::host();
     let template = asset(terminals.get(host));
-    let outcome = asset_tests("terminal-template-spec.md", &template).await;
+    let outcome = asset_tests("terminal-template-idea.md", &template).await;
     assert!(outcome.passed(), "{:#?}", outcome.failures);
     // Asking how many bytes wait to be read, FIONREAD, isn't one of the terminal's requests.
     let folder = tempfile::tempdir().expect("temporary folder");
@@ -2150,7 +2150,7 @@ async fn runs_at_once_report_what_runs_one_at_a_time_do() {
             "prints `{if(n > 1000, n, -n)}` followed by a newline",
         )
     };
-    let edited = wrong(&asset("template-spec.md"));
+    let edited = wrong(&asset("template-idea.md"));
     assert!(edited.contains("{if(n > 1000, n, -n)}") && edited.contains("<n>\\n`"));
     let alone = template_tests(wrong, 1).await;
     let together = template_tests(wrong, 8).await;
@@ -2226,7 +2226,7 @@ async fn an_emulated_program_gets_its_connections_too() {
 }
 
 /// A program QEMU's user mode runs is held by Landlock and the limits as any program is: it
-/// opens files only inside its folder. The kernel can't hold its calls to its spec's, since it
+/// opens files only inside its folder. The kernel can't hold its calls to its idea's, since it
 /// sees QEMU's, but it stops the calls QEMU never needs to make, such as `unshare`; and nothing
 /// is counted, since the instructions would be QEMU's.
 #[tokio::test]
@@ -2287,12 +2287,12 @@ async fn speedup_of_runs_at_once_on_the_word_count() {
     let host = per_target::host();
     let example = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(counts.get(host));
     let read = |name: &str| std::fs::read_to_string(example.join(name)).expect("the example");
-    let spec = lengua::spec::parse(&read("spec.md")).expect("the spec");
-    let suite = lengua::testfile::check(&spec).expect("the tests");
+    let idea = lengua::idea::parse(&read("idea.md")).expect("the idea");
+    let suite = lengua::testfile::check(&idea).expect("the tests");
     let (source, _) = lengua::checker::source::parse(&read("main.s"));
     let folder = tempfile::tempdir().expect("a folder");
     let executable = per_target::build(host, folder.path(), "count", &read("main.s")).await;
-    let syscalls = host.allowed_syscalls(&spec.syscalls, false);
+    let syscalls = host.allowed_syscalls(&idea.syscalls, false);
     for workers in [1, lengua::testrun::workers(None)] {
         let began = Instant::now();
         let outcome = lengua::testrun::run_tests(
@@ -2302,7 +2302,7 @@ async fn speedup_of_runs_at_once_on_the_word_count() {
             &source,
             7,
             &syscalls,
-            &spec.network,
+            &idea.network,
             workers,
             lengua::testrun::Setting::default(),
         )

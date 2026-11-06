@@ -198,9 +198,9 @@ async fn machine(source: &str) -> Machine {
     machine
 }
 
-fn block(spec: &str, index: usize) -> Generated {
-    let spec = crate::spec::parse(spec).unwrap_or_else(|problems| panic!("{problems:?}"));
-    let suite = crate::testfile::check(&spec).unwrap_or_else(|problems| panic!("{problems:?}"));
+fn block(idea: &str, index: usize) -> Generated {
+    let idea = crate::idea::parse(idea).unwrap_or_else(|problems| panic!("{problems:?}"));
+    let suite = crate::testfile::check(&idea).unwrap_or_else(|problems| panic!("{problems:?}"));
     suite.generated[index].clone()
 }
 
@@ -228,8 +228,8 @@ fn asset(name: &str) -> String {
     .expect("an asset")
 }
 
-/// A program the repository has for both targets, compiled from the very same spec: the folder
-/// that holds its `spec.md` and `main.s` on each. A case that proves it is written once, with a
+/// A program the repository has for both targets, compiled from the very same idea: the folder
+/// that holds its `idea.md` and `main.s` on each. A case that proves it is written once, with a
 /// cell for each target where the two differ (an edit that plants a bug, an assembly source).
 type Folders = PerCpu<&'static str>;
 
@@ -258,7 +258,7 @@ const TEMPLATES: PerCpu<&str> = PerCpu {
     aarch64: "linux-aarch64/main-template.s",
 };
 
-/// The template is proven for every input from its spec, every generated block of it, on each
+/// The template is proven for every input from its idea, every generated block of it, on each
 /// target. On AArch64 the digits, which `udiv` and `msub` take off one division at a time, are
 /// the formula's remainders, and the overflow checks, a product's high half against its low
 /// half's sign, settle in the values' ranges, so the proof needs no solver question.
@@ -267,15 +267,15 @@ async fn proves_the_template_for_every_input() {
     if !solvers_installed() {
         return;
     }
-    let spec = asset("template-spec.md");
+    let idea = asset("template-idea.md");
     let suite = {
-        let spec = crate::spec::parse(&spec).unwrap_or_else(|problems| panic!("{problems:?}"));
-        crate::testfile::check(&spec).unwrap_or_else(|problems| panic!("{problems:?}"))
+        let idea = crate::idea::parse(&idea).unwrap_or_else(|problems| panic!("{problems:?}"));
+        crate::testfile::check(&idea).unwrap_or_else(|problems| panic!("{problems:?}"))
     };
     for target in Profile::ALL {
         let machine = machine(&asset(TEMPLATES.get(target))).await;
         for (number, _) in suite.generated.iter().enumerate() {
-            let block = block(&spec, number);
+            let block = block(&idea, number);
             let started = Instant::now();
             let verdict = prove(&machine, &block, &budget(120));
             eprintln!(
@@ -306,10 +306,10 @@ async fn proves_a_streaming_filter_for_every_length() {
         return;
     }
     for target in Profile::ALL {
-        let spec = twin(&CAT_STREAM, target, "spec.md");
+        let idea = twin(&CAT_STREAM, target, "idea.md");
         let source = twin(&CAT_STREAM, target, "main.s");
         let machine = machine(&source).await;
-        let block = block(&spec, 0);
+        let block = block(&idea, 0);
         let started = Instant::now();
         let verdict = prove(&machine, &block, &long_budget());
         eprintln!(
@@ -396,7 +396,7 @@ const ROUNDED_TOWARD_ZERO: PerCpu<Edit> = PerCpu {
     aarch64: ("    frintn d0, d0\n", "    frintz d0, d0\n"),
 };
 
-/// The hypotenuse, from the example's spec: its doubles are the formula's step by step, for
+/// The hypotenuse, from the example's idea: its doubles are the formula's step by step, for
 /// every pair of whole sides the table draws and for decimal sides over their whole range, where
 /// the program divides each side's thousandths by 1000, squares, adds, takes the square root and
 /// scales back, the formula's own steps, so the two outputs are one float computed alike. The
@@ -410,11 +410,11 @@ async fn proves_the_hypotenuse() {
     }
     for target in Profile::ALL {
         let name = target.name();
-        let spec = twin(&HYPOTENUSE, target, "spec.md");
+        let idea = twin(&HYPOTENUSE, target, "idea.md");
         let source = twin(&HYPOTENUSE, target, "main.s");
         let right = machine(&source).await;
         for (number, seconds) in [(0, 120), (1, 240)] {
-            let block = block(&spec, number);
+            let block = block(&idea, number);
             let started = Instant::now();
             let verdict = prove(&right, &block, &budget(seconds));
             eprintln!(
@@ -427,13 +427,13 @@ async fn proves_the_hypotenuse() {
             );
         }
         let constant = edited(&source, SCALE_FROM_RODATA.get(target));
-        let verdict = prove(&machine(&constant).await, &block(&spec, 1), &budget(240));
+        let verdict = prove(&machine(&constant).await, &block(&idea, 1), &budget(240));
         assert!(
             matches!(verdict, Verdict::Proven { .. }),
             "{name}: {verdict:?}"
         );
         let past = edited(&constant, &[*ONE_DOUBLE_PAST_THE_SCALE.get(target)]);
-        let verdict = prove(&machine(&past).await, &block(&spec, 0), &budget(120));
+        let verdict = prove(&machine(&past).await, &block(&idea, 0), &budget(120));
         let Verdict::Counterexample(found) = &verdict else {
             panic!("{name}: {verdict:?}");
         };
@@ -442,7 +442,7 @@ async fn proves_the_hypotenuse() {
         };
         assert!(problem.contains("thousand"), "{name}: {problem}");
         let toward_zero = edited(&source, &[*ROUNDED_TOWARD_ZERO.get(target)]);
-        let verdict = prove(&machine(&toward_zero).await, &block(&spec, 0), &budget(120));
+        let verdict = prove(&machine(&toward_zero).await, &block(&idea, 0), &budget(120));
         assert!(
             matches!(verdict, Verdict::Counterexample(_)),
             "{name}: {verdict:?}"
@@ -492,19 +492,19 @@ async fn proves_the_hypotenuse_on_vectors() {
     }
     for target in Profile::ALL {
         let name = target.name();
-        let spec = twin(&HYPOTENUSE, target, "spec.md");
+        let idea = twin(&HYPOTENUSE, target, "idea.md");
         let on_vectors = *HYPOTENUSE_ON_VECTORS.get(target);
         let vectors = on_vectors(&twin(&HYPOTENUSE, target, "main.s"));
         let right = machine(&vectors).await;
         for (number, seconds) in [(0, 120), (1, 240)] {
-            let verdict = prove(&right, &block(&spec, number), &budget(seconds));
+            let verdict = prove(&right, &block(&idea, number), &budget(seconds));
             assert!(
                 matches!(verdict, Verdict::Proven { .. }),
                 "on vectors, block {number} on {name}: {verdict:?}"
             );
         }
         let other_lane = edited(&vectors, &[*SCALE_FROM_THE_OTHER_LANE.get(target)]);
-        let verdict = prove(&machine(&other_lane).await, &block(&spec, 0), &budget(120));
+        let verdict = prove(&machine(&other_lane).await, &block(&idea, 0), &budget(120));
         assert!(
             matches!(verdict, Verdict::Counterexample(_)),
             "{name}: {verdict:?}"
@@ -553,7 +553,7 @@ async fn proves_add_for_every_pair_of_inputs() {
     }
     for target in Profile::ALL {
         let machine = machine(&twin(&ADD, target, "main.s")).await;
-        let block = block(&twin(&ADD, target, "spec.md"), 0);
+        let block = block(&twin(&ADD, target, "idea.md"), 0);
         let started = Instant::now();
         let verdict = prove(&machine, &block, &budget(300));
         eprintln!(
@@ -596,7 +596,7 @@ async fn finds_a_bug_the_samples_miss() {
     if !solvers_installed() {
         return;
     }
-    let block = block(&asset("template-spec.md"), 0);
+    let block = block(&asset("template-idea.md"), 0);
     for target in Profile::ALL {
         let buggy = edited(&asset(TEMPLATES.get(target)), UNLUCKY_NUMBER.get(target));
         let machine = machine(&buggy).await;
@@ -815,7 +815,7 @@ async fn finds_memory_bugs_the_rules_cannot_see() {
     if !solvers_installed() {
         return;
     }
-    let block = block(&asset("template-spec.md"), 0);
+    let block = block(&asset("template-idea.md"), 0);
     let mut problems = Vec::new();
     for (name, cells) in MEMORY_BUGS {
         for (target, cell) in cells.cells() {
@@ -859,7 +859,7 @@ async fn proves_absolute_difference() {
     }
     for target in Profile::ALL {
         let machine = machine(&twin(&ABSDIFF, target, "main.s")).await;
-        let block = block(&twin(&ABSDIFF, target, "spec.md"), 0);
+        let block = block(&twin(&ABSDIFF, target, "idea.md"), 0);
         let started = Instant::now();
         let verdict = prove(&machine, &block, &budget(300));
         eprintln!(
@@ -889,7 +889,7 @@ const MEAN: Folders = PerCpu {
 async fn proves_the_mean_of_two_prices() {
     for target in Profile::ALL {
         let machine = machine(&twin(&MEAN, target, "main.s")).await;
-        let block = block(&twin(&MEAN, target, "spec.md"), 0);
+        let block = block(&twin(&MEAN, target, "idea.md"), 0);
         let started = Instant::now();
         let verdict = prove(&machine, &block, &budget(300));
         eprintln!(
@@ -921,7 +921,7 @@ async fn proves_a_file_name_the_input_chooses() {
     }
     for target in Profile::ALL {
         let machine = machine(&twin(&ARCHIVE, target, "main.s")).await;
-        let block = block(&twin(&ARCHIVE, target, "spec.md"), 2);
+        let block = block(&twin(&ARCHIVE, target, "idea.md"), 2);
         let verdict = prove(&machine, &block, &budget(120));
         assert!(
             matches!(verdict, Verdict::Proven { .. }),
@@ -946,7 +946,7 @@ async fn proves_the_mean_of_whole_numbers() {
     }
     for target in Profile::ALL {
         let machine = machine(&twin(&MEAN, target, "main.s")).await;
-        let block = block(&twin(&MEAN, target, "spec.md"), 1);
+        let block = block(&twin(&MEAN, target, "idea.md"), 1);
         let started = Instant::now();
         let verdict = prove(&machine, &block, &budget(240));
         eprintln!(
@@ -971,9 +971,9 @@ async fn proves_decimal_inputs_where_the_output_is_fixed() {
     }
     for target in Profile::ALL {
         let machine = machine(&twin(&MEAN, target, "main.s")).await;
-        let spec = twin(&MEAN, target, "spec.md");
+        let idea = twin(&MEAN, target, "idea.md");
         for index in 3..6 {
-            let block = block(&spec, index);
+            let block = block(&idea, index);
             let verdict = prove(&machine, &block, &budget(120));
             assert!(
                 matches!(verdict, Verdict::Proven { .. }),
@@ -985,9 +985,9 @@ async fn proves_decimal_inputs_where_the_output_is_fixed() {
     }
 }
 
-/// The spec of the die.
-const ROLL_SPEC: &str = r#"---
-type: lengua/program-spec
+/// The idea of the die.
+const ROLL_IDEA: &str = r#"---
+type: lengua/program-idea
 title: roll
 ---
 # Purpose
@@ -1115,7 +1115,7 @@ async fn proves_a_roll_stays_in_its_range() {
     if !solvers_installed() {
         return;
     }
-    let block = block(ROLL_SPEC, 0);
+    let block = block(ROLL_IDEA, 0);
     let samples: Vec<crate::testfile::Case> =
         block.cases(1).take(4).filter_map(Result::ok).collect();
     for target in Profile::ALL {
@@ -1139,9 +1139,9 @@ async fn proves_a_roll_stays_in_its_range() {
     }
 }
 
-/// The spec of the weekday modulo 7.
-const MODULO_SPEC: &str = r#"---
-type: lengua/program-spec
+/// The idea of the weekday modulo 7.
+const MODULO_IDEA: &str = r#"---
+type: lengua/program-idea
 title: weekday
 ---
 # Purpose
@@ -1242,7 +1242,7 @@ async fn proves_what_a_program_does_with_the_supplied_clock() {
     if !solvers_installed() {
         return;
     }
-    let block = block(MODULO_SPEC, 0);
+    let block = block(MODULO_IDEA, 0);
     let samples: Vec<crate::testfile::Case> =
         block.cases(1).take(4).filter_map(Result::ok).collect();
     for target in Profile::ALL {
@@ -1266,8 +1266,8 @@ async fn proves_what_a_program_does_with_the_supplied_clock() {
     }
 }
 
-const ECHO_SPEC: &str = r#"---
-type: lengua/program-spec
+const ECHO_IDEA: &str = r#"---
+type: lengua/program-idea
 title: echo
 description: Prints its argument.
 ---
@@ -1343,7 +1343,7 @@ _start:
 async fn a_shape_its_terms_settle_starts_no_solver() {
     for target in Profile::ALL {
         let machine = machine(ECHO.get(target)).await;
-        let block = block(ECHO_SPEC, 0);
+        let block = block(ECHO_IDEA, 0);
         let image = Image::new(&machine).expect("an entry");
         let each = vec![(
             "s".to_owned(),
@@ -1413,7 +1413,7 @@ const TOTAL: Folders = PerCpu {
 async fn proves_the_csv_totals_24696_combinations() {
     for target in Profile::ALL {
         let machine = machine(&twin(&TOTAL, target, "main.s")).await;
-        let block = block(&twin(&TOTAL, target, "spec.md"), 0);
+        let block = block(&twin(&TOTAL, target, "idea.md"), 0);
         let began = Instant::now();
         let verdict = prove(
             &machine,
@@ -1446,7 +1446,7 @@ async fn proves_the_csv_totals_24696_combinations() {
 async fn the_models_runs_of_the_samples_stop_when_the_proofs_time_is_up() {
     for target in Profile::ALL {
         let machine = machine(&twin(&TOTAL, target, "main.s")).await;
-        let block = block(&twin(&TOTAL, target, "spec.md"), 0);
+        let block = block(&twin(&TOTAL, target, "idea.md"), 0);
         let samples: Vec<crate::testfile::Case> =
             block.cases(1).take(4).filter_map(Result::ok).collect();
         let up = Instant::now();
@@ -1477,7 +1477,7 @@ async fn traces_a_few_csv_total_combinations() {
 /// [`traces_a_few_csv_total_combinations`] on one target's CSV total.
 async fn trace_a_few_csv_total_combinations(target: Profile) {
     let machine = machine(&twin(&TOTAL, target, "main.s")).await;
-    let block = block(&twin(&TOTAL, target, "spec.md"), 0);
+    let block = block(&twin(&TOTAL, target, "idea.md"), 0);
     let image = Image::new(&machine).expect("an entry");
     let random = block.random_only();
     let each: Vec<(String, Vec<Part>)> = block
@@ -1532,7 +1532,7 @@ async fn trace_a_few_csv_total_combinations(target: Profile) {
 /// calc with its operator any of the three, one symbolic byte, the numbers fixed, so the run
 /// forks at the jump table into every case. (A `choice` would run each value on its own.)
 const CHOSEN_OPERATOR: &str = r#"---
-type: lengua/program-spec
+type: lengua/program-idea
 title: calc
 description: Combines 6 and 3 with the operator it's given.
 ---
@@ -1588,8 +1588,8 @@ async fn proves_each_case_a_jump_table_can_take() {
         );
         // B6: an operator that isn't one, where of the characters only `,` passes the bounds
         // check, to the table's entry for it.
-        let spec = twin(&CALC, target, "spec.md");
-        let verdict = prove(&right, &block(&spec, 4), &budget(120));
+        let idea = twin(&CALC, target, "idea.md");
+        let verdict = prove(&right, &block(&idea, 4), &budget(120));
         assert!(
             matches!(verdict, Verdict::Proven { .. }),
             "{name}: {verdict:?}"
@@ -1618,9 +1618,9 @@ async fn proves_each_case_a_jump_table_can_take() {
     }
 }
 
-/// The spec of the letters turned into capitals through a jump table.
-const LETTERS_SPEC: &str = r#"---
-type: lengua/program-spec
+/// The idea of the letters turned into capitals through a jump table.
+const LETTERS_IDEA: &str = r#"---
+type: lengua/program-idea
 title: letters
 ---
 # Purpose
@@ -1801,7 +1801,7 @@ async fn proves_a_table_whose_index_only_its_check_bounds() {
     if !solvers_installed() {
         return;
     }
-    let block = block(LETTERS_SPEC, 0);
+    let block = block(LETTERS_IDEA, 0);
     for target in Profile::ALL {
         let (program, indexes) = *LETTERS.get(target);
         for index in indexes {
@@ -1873,10 +1873,10 @@ async fn proves_every_block_of_the_day_count() {
     }
     let mut problems = Vec::new();
     for target in Profile::ALL {
-        let spec = twin(&DAYS, target, "spec.md");
+        let idea = twin(&DAYS, target, "idea.md");
         let machine = machine(&twin(&DAYS, target, "main.s")).await;
         for index in 0..11 {
-            let block = block(&spec, index);
+            let block = block(&idea, index);
             let verdict = prove(&machine, &block, &fixture_budget(120));
             let said = format!("{} ({index}) on {}", block.id, target.name());
             if !matches!(verdict, Verdict::Proven { bound: None, .. }) {
@@ -1891,10 +1891,10 @@ async fn proves_every_block_of_the_day_count() {
     assert!(problems.is_empty(), "{problems:#?}");
 }
 
-/// `spec` with one more generated test right after its `index`th, so at `index + 1`: a copy of
+/// `idea` with one more generated test right after its `index`th, so at `index + 1`: a copy of
 /// that row of its table with the generators `cells` gives by column.
-fn with_row(spec: &str, index: usize, cells: &[(&str, &str)]) -> String {
-    let lines: Vec<&str> = spec.lines().collect();
+fn with_row(idea: &str, index: usize, cells: &[(&str, &str)]) -> String {
+    let lines: Vec<&str> = idea.lines().collect();
     let cells_of = |line: &str| -> Vec<String> {
         line.trim_matches('|')
             .split('|')
@@ -1932,7 +1932,7 @@ fn with_row(spec: &str, index: usize, cells: &[(&str, &str)]) -> String {
         }
         rows += 1;
     }
-    panic!("the spec has no generated test {index}");
+    panic!("the idea has no generated test {index}");
 }
 
 /// The folders of the clock of interactive round 3.
@@ -1953,9 +1953,9 @@ async fn proves_a_number_printed_only_where_the_input_is_valid() {
         return;
     }
     for target in Profile::ALL {
-        let spec = twin(&DATES, target, "spec.md");
+        let idea = twin(&DATES, target, "idea.md");
         let machine = machine(&twin(&DATES, target, "main.s")).await;
-        let verdict = prove(&machine, &block(&spec, 1), &fixture_budget(120));
+        let verdict = prove(&machine, &block(&idea, 1), &fixture_budget(120));
         assert!(
             matches!(verdict, Verdict::Proven { bound: None, .. }),
             "{}: {verdict:?}",
@@ -2001,9 +2001,9 @@ async fn finds_bugs_planted_in_the_day_count() {
         return;
     }
     for target in Profile::ALL {
-        let spec = with_row(&twin(&DAYS, target, "spec.md"), 1, CENTURY_LEAP_DAYS);
+        let idea = with_row(&twin(&DAYS, target, "idea.md"), 1, CENTURY_LEAP_DAYS);
         let source = twin(&DAYS, target, "main.s");
-        let leap_days = block(&spec, 2);
+        let leap_days = block(&idea, 2);
         let verdict = prove(&machine(&source).await, &leap_days, &fixture_budget(120));
         assert!(
             matches!(verdict, Verdict::Proven { .. }),
@@ -2017,7 +2017,7 @@ async fn finds_bugs_planted_in_the_day_count() {
         );
         let verdict = prove(
             &machine(&shifted).await,
-            &block(&spec, 1),
+            &block(&idea, 1),
             &fixture_budget(120),
         );
         assert!(
@@ -2087,16 +2087,16 @@ async fn proves_the_csv_total_for_every_amount() {
     let mut problems = Vec::new();
     for target in Profile::ALL {
         let name = target.name();
-        let spec = with_row(&twin(&AMOUNTS, target, "spec.md"), 0, FIXED_FIELDS);
+        let idea = with_row(&twin(&AMOUNTS, target, "idea.md"), 0, FIXED_FIELDS);
         let source = twin(&AMOUNTS, target, "main.s");
         let machine_of = machine(&source).await;
         for index in [2, 3] {
-            let verdict = prove(&machine_of, &block(&spec, index), &fixture_budget(120));
+            let verdict = prove(&machine_of, &block(&idea, index), &fixture_budget(120));
             if !matches!(verdict, Verdict::Proven { bound: None, .. }) {
                 problems.push(format!("block {index} on {name}: {verdict:?}"));
             }
         }
-        let fixed = block(&spec, 1);
+        let fixed = block(&idea, 1);
         let verdict = prove(&machine_of, &fixed, &fixture_budget(300));
         if !matches!(
             verdict,
@@ -2127,21 +2127,21 @@ async fn proves_the_csv_total_for_every_amount() {
 #[ignore = "takes two minutes"]
 async fn proves_the_csv_totals_free_text_blocks() {
     for target in Profile::ALL {
-        let spec = twin(&AMOUNTS, target, "spec.md");
+        let idea = twin(&AMOUNTS, target, "idea.md");
         let machine = machine(&twin(&AMOUNTS, target, "main.s")).await;
-        let verdict = prove_alone(&machine, &block(&spec, 4), &fixture_budget(120));
+        let verdict = prove_alone(&machine, &block(&idea, 4), &fixture_budget(120));
         assert!(
             matches!(verdict, Verdict::Proven { bound: None, .. }),
             "B5 on {}: {verdict:?}",
             target.name()
         );
-        let verdict = prove_alone(&machine, &block(&spec, 3), &fixture_budget(60));
+        let verdict = prove_alone(&machine, &block(&idea, 3), &fixture_budget(60));
         assert!(
             matches!(&verdict, Verdict::Proven { bound: Some(bound), .. } if bound.bytes >= 7),
             "B4 on {}: {verdict:?}",
             target.name()
         );
-        let verdict = prove_alone(&machine, &block(&spec, 0), &fixture_budget(30));
+        let verdict = prove_alone(&machine, &block(&idea, 0), &fixture_budget(30));
         assert!(
             matches!(verdict, Verdict::Proven { bound: Some(_), .. }),
             "B1 on {}: {verdict:?}",
@@ -2150,9 +2150,9 @@ async fn proves_the_csv_totals_free_text_blocks() {
     }
 }
 
-/// The spec of the day of the week.
-const WEEKDAY_SPEC: &str = r#"---
-type: lengua/program-spec
+/// The idea of the day of the week.
+const WEEKDAY_IDEA: &str = r#"---
+type: lengua/program-idea
 title: weekday
 ---
 # Purpose
@@ -2257,7 +2257,7 @@ const WEEKDAY: PerCpu<fn(u32) -> String> = PerCpu {
 /// the term rules make the formula's own division, so the proof needs no solver to compare them.
 #[tokio::test]
 async fn proves_the_day_of_the_week_with_two_divisions() {
-    let block = block(WEEKDAY_SPEC, 0);
+    let block = block(WEEKDAY_IDEA, 0);
     let samples: Vec<crate::testfile::Case> =
         block.cases(1).take(4).filter_map(Result::ok).collect();
     for target in Profile::ALL {
@@ -2293,7 +2293,7 @@ const CLOCK: Folders = PerCpu {
 #[tokio::test]
 async fn proves_the_hh_mm_ss_clock() {
     for target in Profile::ALL {
-        let block = block(&twin(&CLOCK, target, "spec.md"), 0);
+        let block = block(&twin(&CLOCK, target, "idea.md"), 0);
         let source = twin(&CLOCK, target, "main.s");
         let right = machine(&source).await;
         let verdict = prove(&right, &block, &budget(120));
@@ -2316,9 +2316,9 @@ async fn proves_the_hh_mm_ss_clock() {
     }
 }
 
-/// The spec of the capitals made without branches.
-const SHOUT_SPEC: &str = r#"---
-type: lengua/program-spec
+/// The idea of the capitals made without branches.
+const SHOUT_IDEA: &str = r#"---
+type: lengua/program-idea
 title: shout
 ---
 # Purpose
@@ -2451,7 +2451,7 @@ const SHOUT: PerCpu<fn(u32) -> String> = PerCpu {
 /// branches, against `upper(text)`, for every text up to 16 characters.
 #[tokio::test]
 async fn proves_a_text_formula() {
-    let block = block(SHOUT_SPEC, 0);
+    let block = block(SHOUT_IDEA, 0);
     for target in Profile::ALL {
         let program = *SHOUT.get(target);
         let right = machine(&program(26)).await;
@@ -2472,9 +2472,9 @@ async fn proves_a_text_formula() {
     }
 }
 
-/// The spec of the count made of bit instructions.
-const COUNT_A_SPEC: &str = r#"---
-type: lengua/program-spec
+/// The idea of the count made of bit instructions.
+const COUNT_A_IDEA: &str = r#"---
+type: lengua/program-idea
 title: count a
 ---
 # Purpose
@@ -2652,7 +2652,7 @@ const COUNT_WITH_BITS: PerCpu<fn(u32) -> String> = PerCpu {
 /// (`popcnt`; on AArch64 `cnt` and `addv`), against `count(text, "a")`.
 #[tokio::test]
 async fn proves_a_count_made_of_bit_instructions() {
-    let block = block(COUNT_A_SPEC, 0);
+    let block = block(COUNT_A_IDEA, 0);
     for target in Profile::ALL {
         let program = *COUNT_WITH_BITS.get(target);
         let right = machine(&program(97)).await;
@@ -2759,9 +2759,9 @@ const ECHO_OF_STDIN: PerCpu<EchoProgram> = PerCpu {
 };
 
 fn echo_block(stdout: &str, example: &str) -> Generated {
-    let spec = format!(
+    let idea = format!(
         r#"---
-type: lengua/program-spec
+type: lengua/program-idea
 title: echo
 ---
 # Purpose
@@ -2788,7 +2788,7 @@ Prints standard input of `0` to `5000` characters back.
 - Uses: standard input
 "#
     );
-    block(&spec, 0)
+    block(&idea, 0)
 }
 
 fn long_budget() -> Budget {
@@ -2881,8 +2881,8 @@ async fn explores_a_program() {
         std::fs::read_to_string(std::path::Path::new(&folder).join(name)).expect("a file")
     };
     let machine = machine(&read("main.s")).await;
-    let spec_parsed = crate::spec::parse(&read("spec.md")).expect("valid spec");
-    let suite = crate::testfile::check(&spec_parsed).expect("valid tests");
+    let idea_parsed = crate::idea::parse(&read("idea.md")).expect("valid idea");
+    let suite = crate::testfile::check(&idea_parsed).expect("valid tests");
     for block in &suite.generated {
         let began = Instant::now();
         let verdict = prove(
@@ -2890,7 +2890,7 @@ async fn explores_a_program() {
             block,
             &Budget::until(
                 Instant::now() + Duration::from_secs(120),
-                spec_parsed.network.listens.is_some(),
+                idea_parsed.network.listens.is_some(),
             ),
         );
         eprintln!("{}: {:?} in {:?}", block.id, verdict, began.elapsed());
@@ -2931,12 +2931,12 @@ const VECTOR_TEMPLATES: PerCpu<VectorTemplate> = PerCpu {
 /// write; and capitals that stop at `y` are found.
 #[tokio::test]
 async fn proves_the_vector_template() {
-    let spec = asset("vector-template-spec.md");
+    let idea = asset("vector-template-idea.md");
     for target in Profile::ALL {
         let (template, stops_at_y) = *VECTOR_TEMPLATES.get(target);
         let source = asset(template);
         let right = machine(&source).await;
-        let shout = block(&spec, 0);
+        let shout = block(&idea, 0);
         let started = Instant::now();
         let verdict = prove(&right, &shout, &budget(60));
         eprintln!(
@@ -2956,7 +2956,7 @@ async fn proves_the_vector_template() {
             "{}: {verdict:?}",
             target.name()
         );
-        let too_long = block(&spec, 1);
+        let too_long = block(&idea, 1);
         let verdict = prove(&right, &too_long, &text_budget());
         let Verdict::Proven {
             bound: Some(bound), ..
@@ -3016,12 +3016,12 @@ async fn proves_a_stream_for_every_length_by_induction() {
     if !solvers_installed() {
         return;
     }
-    let spec = asset("stream-template-spec.md");
+    let idea = asset("stream-template-idea.md");
     for target in Profile::ALL {
         let name = target.name();
         let source = asset(STREAM_TEMPLATES.get(target));
         let right = machine(&source).await;
-        let shout = block(&spec, 0);
+        let shout = block(&idea, 0);
         let verdict = prove(&right, &shout, &text_budget());
         assert!(
             matches!(
@@ -3105,7 +3105,7 @@ const COUNTS_THE_LAST_FULL_ALONE: PerCpu<Edit> = PerCpu {
 };
 
 /// Induction over counts: a line count kept in a register, grown by each buffer-full's
-/// newlines, 16 bytes at a time, is proven for every length the spec allows; a count that
+/// newlines, 16 bytes at a time, is proven for every length the idea allows; a count that
 /// misses the last chunk of each buffer-full is found.
 #[tokio::test]
 async fn proves_a_count_for_every_length_by_induction() {
@@ -3113,10 +3113,10 @@ async fn proves_a_count_for_every_length_by_induction() {
         return;
     }
     for target in Profile::ALL {
-        let spec = twin(&LINES, target, "spec.md");
+        let idea = twin(&LINES, target, "idea.md");
         let source = twin(&LINES, target, "main.s");
         let right = machine(&source).await;
-        let lines = block(&spec, 0);
+        let lines = block(&idea, 0);
         // Four minutes, so a machine busy with the other tests still finishes the base.
         let verdict = prove(&right, &lines, &long_budget());
         assert!(
@@ -3195,14 +3195,14 @@ async fn proves_words_for_every_length_by_induction() {
         return;
     }
     for target in Profile::ALL {
-        let spec = twin(&WORDS, target, "spec.md");
+        let idea = twin(&WORDS, target, "idea.md");
         // A smaller buffer than the fixture's, so the base's lengths go by quickly.
         let source = edited(
             &twin(&WORDS, target, "main.s"),
             &[(".equ BUF_LEN, 4096\n", ".equ BUF_LEN, 256\n")],
         );
         let right = machine(&source).await;
-        let words = block(&spec, 0);
+        let words = block(&idea, 0);
         let verdict = prove(&right, &words, &long_budget());
         assert!(
             matches!(
@@ -3270,7 +3270,7 @@ async fn proves_sorting_for_short_texts() {
         return;
     }
     for target in Profile::ALL {
-        let spec = twin(&SORT, target, "spec.md");
+        let idea = twin(&SORT, target, "idea.md");
         let source = twin(&SORT, target, "main.s");
         let right = machine(&source).await;
         // Two minutes each, so a machine busy with other tests' proofs still reaches the
@@ -3282,7 +3282,7 @@ async fn proves_sorting_for_short_texts() {
         };
         // A mebibyte sample is too long for the model to follow, which says nothing of it: the
         // check before the proof goes on with the shorter ones.
-        let samples: Vec<crate::testfile::Case> = block(&spec, 0)
+        let samples: Vec<crate::testfile::Case> = block(&idea, 0)
             .cases(1)
             .take(24)
             .filter_map(Result::ok)
@@ -3291,7 +3291,7 @@ async fn proves_sorting_for_short_texts() {
         let found = agrees(&right, &samples, false).expect("the model agrees with the samples");
         assert!(found.is_none(), "{}: {found:?}", target.name());
         for index in [0, 2] {
-            let verdict = prove(&right, &block(&spec, index), &budget());
+            let verdict = prove(&right, &block(&idea, index), &budget());
             assert!(
                 matches!(&verdict, Verdict::Proven { bound: Some(bound), .. } if bound.bytes >= 5),
                 "{} on block {index}: {verdict:?}",
@@ -3299,7 +3299,7 @@ async fn proves_sorting_for_short_texts() {
             );
         }
         let longer_first = edited(&source, &[*LONGER_LINE_FIRST.get(target)]);
-        let verdict = prove(&machine(&longer_first).await, &block(&spec, 0), &budget());
+        let verdict = prove(&machine(&longer_first).await, &block(&idea, 0), &budget());
         assert!(
             matches!(verdict, Verdict::Counterexample(_)),
             "{}: {verdict:?}",
@@ -3360,13 +3360,13 @@ async fn proves_a_tally_for_short_texts() {
     if !solvers_installed() {
         return;
     }
-    let spec = asset("tally-template-spec.md");
+    let idea = asset("tally-template-idea.md");
     for target in Profile::ALL {
         let name = target.name();
         let (template, mutants) = *TALLY_TEMPLATES.get(target);
         let source = asset(template);
         let right = machine(&source).await;
-        let tally = block(&spec, 0);
+        let tally = block(&idea, 0);
         let verdict = prove_alone(&right, &tally, &budget(90));
         assert!(
             matches!(&verdict, Verdict::Proven { bound: Some(bound), .. } if bound.bytes >= 3),
@@ -3401,7 +3401,7 @@ const TERMINAL_TEMPLATES: PerCpu<&str> = PerCpu {
 /// 128 bytes, so a text of 300 runs on three.
 #[tokio::test]
 async fn proves_a_program_on_several_threads() {
-    let spec = asset("parallel-template-spec.md")
+    let idea = asset("parallel-template-idea.md")
         .replacen(
             "# Behaviors",
             "Tests here give it up to `300` bytes.\n\n# Behaviors",
@@ -3415,7 +3415,7 @@ async fn proves_a_program_on_several_threads() {
             .replace(".equ INPUT_MAX, 1048576", ".equ INPUT_MAX, 2048");
         assert!(source.contains(".equ CHUNK, 128") && source.contains(".equ INPUT_MAX, 2048"));
         let machine = machine(&source).await;
-        let verdict = prove(&machine, &block(&spec, 0), &text_budget());
+        let verdict = prove(&machine, &block(&idea, 0), &text_budget());
         assert!(
             matches!(
                 &verdict,
@@ -3436,11 +3436,11 @@ async fn proves_a_program_on_several_threads() {
 /// AArch64 a `ppoll` with a tenth of a second the kernel reads.
 #[tokio::test]
 async fn proves_a_program_for_the_terminal() {
-    let spec = asset("terminal-template-spec.md");
+    let idea = asset("terminal-template-idea.md");
     for target in Profile::ALL {
         let machine = machine(&asset(TERMINAL_TEMPLATES.get(target))).await;
         for index in 0..2 {
-            let verdict = prove(&machine, &block(&spec, index), &text_budget());
+            let verdict = prove(&machine, &block(&idea, index), &text_budget());
             assert!(
                 matches!(
                     verdict,
@@ -3459,8 +3459,8 @@ async fn proves_a_program_for_the_terminal() {
 
 /// The CRC-32C fast tier of each target, in the skill's assets: x86-64's `crc32` over 8 bytes at
 /// a time and three chains joined by `pclmulqdq`, AArch64's `crc32cx` chain beside carry-less
-/// multiplies that fold the other half of each 32 KiB block. Both meet the very same spec,
-/// `fast/crc32c/spec.md`.
+/// multiplies that fold the other half of each 32 KiB block. Both meet the very same idea,
+/// `fast/crc32c/idea.md`.
 const CRC32C_TIERS: PerCpu<&str> = PerCpu {
     x86_64: "fast/crc32c-pclmul/main.s",
     aarch64: "linux-aarch64/fast/crc32c-crc/main.s",
@@ -3480,11 +3480,11 @@ const CRC32C_UNREACHED: PerCpu<&[&str]> = PerCpu {
 /// without a question to the solvers, and one bit of the start wrong puts every checksum off.
 #[tokio::test]
 async fn proves_the_crc32c_checksum() {
-    let spec = asset("fast/crc32c/spec.md")
+    let idea = asset("fast/crc32c/idea.md")
         .replace("Tests give it up to `1048576`", "Tests give it up to `100`")
         .replace("string(0, 1048576,", "string(0, 100,");
-    assert!(spec.contains("string(0, 100,"), "{spec}");
-    let block = block(&spec, 0);
+    assert!(idea.contains("string(0, 100,"), "{idea}");
+    let block = block(&idea, 0);
     for target in Profile::ALL {
         let name = target.name();
         let source = asset(CRC32C_TIERS.get(target));
@@ -3516,11 +3516,11 @@ async fn proves_the_crc32c_checksum() {
     }
 }
 
-/// The CRC-32C fast tier's own spec, every text up to the 4096 bytes a proof covers.
+/// The CRC-32C fast tier's own idea, every text up to the 4096 bytes a proof covers.
 #[tokio::test]
 #[ignore = "slow: 4097 lengths of text"]
 async fn proves_the_crc32c_checksum_up_to_the_bound() {
-    let block = block(&asset("fast/crc32c/spec.md"), 0);
+    let block = block(&asset("fast/crc32c/idea.md"), 0);
     for target in Profile::ALL {
         let machine = machine(&asset(CRC32C_TIERS.get(target))).await;
         let started = Instant::now();
@@ -3543,7 +3543,7 @@ async fn proves_the_crc32c_checksum_up_to_the_bound() {
 }
 
 /// A form of the fast word count: what it is, and its main.s. All the forms of all the targets
-/// have one spec, `fast/wc/spec.md`, the same bytes in the tier folders beside it.
+/// have one idea, `fast/wc/idea.md`, the same bytes in the tier folders beside it.
 type WordCountForm = (&'static str, &'static str);
 
 /// The fast word count's forms on each target: the baseline form every machine of the target
@@ -3569,8 +3569,8 @@ const WORD_COUNT_FORMS: PerCpu<[WordCountForm; 2]> = PerCpu {
     ],
 };
 
-/// The fast word count's spec, the one every form of it meets.
-const WORD_COUNT_SPEC: &str = "plugin/skills/compile/assets/fast/wc/spec.md";
+/// The fast word count's idea, the one every form of it meets.
+const WORD_COUNT_IDEA: &str = "plugin/skills/compile/assets/fast/wc/idea.md";
 
 /// The fast word count, each form on each target, the baseline and the optional extension's tier
 /// beside it: texts up to 200 bytes, and a carriage return that's one byte too short is found.
@@ -3582,14 +3582,14 @@ async fn proves_the_word_count_of_short_texts() {
     if !solvers_installed() {
         return;
     }
-    let spec = repository_file(WORD_COUNT_SPEC)
+    let idea = repository_file(WORD_COUNT_IDEA)
         .replace(
             "Tests give it up to `1048576` bytes.",
             "Tests give it up to `200` bytes.",
         )
         .replace("string(0, 1048576,", "string(0, 200,");
-    assert!(spec.contains("string(0, 200,"), "{spec}");
-    let block = block(&spec, 0);
+    assert!(idea.contains("string(0, 200,"), "{idea}");
+    let block = block(&idea, 0);
     for target in Profile::ALL {
         for (form, path) in WORD_COUNT_FORMS.get(target) {
             let source = repository_file(path);
@@ -3642,7 +3642,7 @@ const Z_STAYS_SMALL: PerCpu<Edit> = PerCpu {
 #[tokio::test]
 async fn proves_upcase_on_files() {
     for target in Profile::ALL {
-        let spec = twin(&UPCASE, target, "spec.md")
+        let idea = twin(&UPCASE, target, "idea.md")
             .replacen(
                 "# Behaviors",
                 "Tests also give it files of `0` to `300` bytes.\n\n# Behaviors",
@@ -3652,7 +3652,7 @@ async fn proves_upcase_on_files() {
         let source = twin(&UPCASE, target, "main.s");
         let right = machine(&source).await;
         for number in 0..4 {
-            let block = block(&spec, number);
+            let block = block(&idea, number);
             let started = Instant::now();
             let verdict = prove(&right, &block, &text_budget());
             eprintln!(
@@ -3673,7 +3673,7 @@ async fn proves_upcase_on_files() {
             );
         }
         let wrong = machine(&edited(&source, &[*Z_STAYS_SMALL.get(target)])).await;
-        let verdict = prove(&wrong, &block(&spec, 0), &text_budget());
+        let verdict = prove(&wrong, &block(&idea, 0), &text_budget());
         assert!(
             matches!(verdict, Verdict::Counterexample(_)),
             "{}: {verdict:?}",
@@ -3785,13 +3785,13 @@ async fn proves_a_server_for_clients_at_once() {
     if !solvers_installed() {
         return;
     }
-    let spec = asset("server-template-spec.md");
+    let idea = asset("server-template-idea.md");
     for target in Profile::ALL {
         let name = target.name();
         let (template, [first_slot, open]) = *SERVER_TEMPLATES.get(target);
         let source = asset(template);
         let right = machine(&source).await;
-        let (one, two) = (block(&spec, 0), block(&spec, 1));
+        let (one, two) = (block(&idea, 0), block(&idea, 1));
         let budget = |seconds| Budget {
             max_shapes: 100_000,
             listens: true,
@@ -3861,9 +3861,9 @@ async fn a_raw_read_of_short_input_is_proven_for_every_count() {
         return;
     }
     for target in Profile::ALL {
-        let spec = twin(&SECOND, target, "spec.md");
+        let idea = twin(&SECOND, target, "idea.md");
         let raw = edited(&twin(&SECOND, target, "main.s"), &[*RAW_READ.get(target)]);
-        let verdict = prove(&machine(&raw).await, &block(&spec, 0), &budget(60));
+        let verdict = prove(&machine(&raw).await, &block(&idea, 0), &budget(60));
         let Verdict::Counterexample(found) = &verdict else {
             panic!("{}: {verdict:?}", target.name());
         };
@@ -3929,12 +3929,12 @@ async fn buffers_lent_to_the_kernel_hold_every_byte_it_may_touch() {
             ),
             "{name}: {problem}"
         );
-        let spec = twin(&ECHO_SERVER, target, "spec.md");
+        let idea = twin(&ECHO_SERVER, target, "idea.md");
         let source = twin(&ECHO_SERVER, target, "main.s");
         let fill = edited(&source, &[*FILL_LENT_TOO_LITTLE.get(target)]);
         let verdict = prove(
             &machine(&fill).await,
-            &block(&spec, 0),
+            &block(&idea, 0),
             &network_budget(true),
         );
         let Verdict::Counterexample(found) = &verdict else {
@@ -3989,9 +3989,9 @@ const ECHO_SERVER_BUGS: PerCpu<ServerBugs> = PerCpu {
 async fn proves_the_echo_server() {
     for target in Profile::ALL {
         let name = target.name();
-        let spec = twin(&ECHO_SERVER, target, "spec.md");
+        let idea = twin(&ECHO_SERVER, target, "idea.md");
         let source = twin(&ECHO_SERVER, target, "main.s");
-        let block = block(&spec, 0);
+        let block = block(&idea, 0);
         let right = machine(&source).await;
         let verdict = prove(&right, &block, &network_budget(true));
         assert!(
@@ -4064,7 +4064,7 @@ const FETCH_READS_ONCE: PerCpu<Edit> = PerCpu {
 async fn proves_the_fetch_client() {
     for target in Profile::ALL {
         let name = target.name();
-        let spec = twin(&FETCH, target, "spec.md")
+        let idea = twin(&FETCH, target, "idea.md")
             .replacen(
                 "path holds `1` to `100` characters",
                 "path holds `1` to `100` characters (tests: `6` and `11`)",
@@ -4075,7 +4075,7 @@ async fn proves_the_fetch_client() {
         let source = twin(&FETCH, target, "main.s");
         let right = machine(&source).await;
         for index in 0..2 {
-            let verdict = prove(&right, &block(&spec, index), &network_budget(false));
+            let verdict = prove(&right, &block(&idea, index), &network_budget(false));
             // The reply is read with fill: proven however the network cuts it.
             assert!(
                 matches!(
@@ -4090,7 +4090,7 @@ async fn proves_the_fetch_client() {
                 "block {index} on {name}: {verdict:?}"
             );
         }
-        let fetch = block(&spec, 0);
+        let fetch = block(&idea, 0);
         let wrongs = [
             (
                 ".ascii \" HTTP/1.0\\r\\n\\r\\n\"",
@@ -4126,7 +4126,7 @@ const PADDED: Folders = PerCpu {
 async fn proves_counts_padded_to_a_column() {
     for target in Profile::ALL {
         // Texts up to 120 bytes, so counts of one, two and three digits each get their padding.
-        let spec = twin(&PADDED, target, "spec.md")
+        let idea = twin(&PADDED, target, "idea.md")
             .replacen(
                 "of up to `1048576` bytes",
                 "of up to `1048576` bytes (tests: `120`)",
@@ -4134,7 +4134,7 @@ async fn proves_counts_padded_to_a_column() {
             )
             .replacen("string(0, 1048576,", "string(0, 120,", 1);
         let machine = machine(&twin(&PADDED, target, "main.s")).await;
-        let verdict = prove(&machine, &block(&spec, 0), &text_budget());
+        let verdict = prove(&machine, &block(&idea, 0), &text_budget());
         assert!(
             matches!(verdict, Verdict::Proven { bound: None, .. }),
             "{}: {verdict:?}",
@@ -4158,7 +4158,7 @@ async fn explores_a_fixture_block() {
         .and_then(|seconds| seconds.parse().ok())
         .unwrap_or(60);
     let machine = machine(&fixture(&name, "main.s")).await;
-    let block = block(&fixture(&name, "spec.md"), index);
+    let block = block(&fixture(&name, "idea.md"), index);
     let began = Instant::now();
     let verdict = prove(
         &machine,
@@ -4494,9 +4494,9 @@ const CAPITALS: PerCpu<fn(u8) -> String> = PerCpu {
     aarch64: capitals_aarch64,
 };
 
-/// The spec of the capitals over text beyond ASCII.
-const CAPITALS_SPEC: &str = r#"---
-type: lengua/program-spec
+/// The idea of the capitals over text beyond ASCII.
+const CAPITALS_IDEA: &str = r#"---
+type: lengua/program-idea
 title: capitals
 ---
 # Purpose
@@ -4529,7 +4529,7 @@ Prints standard input of `0` to `8` characters back with each ASCII letter in ca
 /// for a letter, and so take bytes up to it, are found.
 #[tokio::test]
 async fn proves_capitals_over_text_beyond_ascii() {
-    let block = block(CAPITALS_SPEC, 0);
+    let block = block(CAPITALS_IDEA, 0);
     // A path for each choice of letter or not at each ASCII place.
     let budget = || Budget {
         max_paths: 512,
@@ -4574,19 +4574,19 @@ const COUNT: Folders = PerCpu {
 #[tokio::test]
 async fn proves_a_word_count_over_text_beyond_ascii() {
     for target in Profile::ALL {
-        let purpose = twin(&COUNT, target, "spec.md").replacen(
+        let purpose = twin(&COUNT, target, "idea.md").replacen(
             "The tests give it standard\ninput of up to `1048576` bytes",
             "The tests give it standard\ninput of up to `1048576` bytes (tests: `16`)",
             1,
         );
-        let spec = purpose.replacen(
+        let idea = purpose.replacen(
             "string(0, 1048576, \"abcdefghijklmnopqrstuvwxyz0123456789 \\n\")",
             "string(0, 16, \"abcdefghijklmnopqrstuvwxyz0123456789 \\né€\")",
             1,
         );
-        assert_ne!(spec, purpose);
+        assert_ne!(idea, purpose);
         let machine = machine(&twin(&COUNT, target, "main.s")).await;
-        let verdict = prove(&machine, &block(&spec, 0), &text_budget());
+        let verdict = prove(&machine, &block(&idea, 0), &text_budget());
         // Characters of three widths in every order, up to 8 of them.
         let Verdict::Proven {
             bound: Some(bound), ..
@@ -4657,7 +4657,7 @@ async fn proves_a_count_of_a_part_that_overlaps_itself_for_every_length() {
     }
     for target in Profile::ALL {
         let source = twin(&PAIRS, target, "main.s");
-        let block = block(&twin(&PAIRS, target, "spec.md"), 0);
+        let block = block(&twin(&PAIRS, target, "idea.md"), 0);
         let right = machine(&source).await;
         let verdict = prove(&right, &block, &text_budget());
         assert!(
@@ -4696,7 +4696,7 @@ async fn proves_every_final_piece_at_once_where_a_loop_leaves_on_the_length() {
         return;
     }
     for target in Profile::ALL {
-        let block = block(&twin(&PAIRS, target, "spec.md"), 0);
+        let block = block(&twin(&PAIRS, target, "idea.md"), 0);
         let source = twin(&PAIRS, target, "main.s");
         let larger = edited(&source, &[(".equ BUF_LEN, 256\n", ".equ BUF_LEN, 4096\n")]);
         let large = machine(&larger).await;
@@ -4849,7 +4849,7 @@ const LONG_WORD_COUNTS: PerCpu<[LongWordCount; 2]> = PerCpu {
 /// its length the input's choice. A word count that forgets the byte before each buffer-full or
 /// before each step, or counts the bytes past the end, is caught.
 async fn proves_a_fast_word_count_for_every_length(form: usize) {
-    let block = block(&repository_file(WORD_COUNT_SPEC), 0);
+    let block = block(&repository_file(WORD_COUNT_IDEA), 0);
     for target in Profile::ALL {
         let name = target.name();
         let count = LONG_WORD_COUNTS.get(target)[form];
@@ -4910,7 +4910,7 @@ async fn proves_the_fast_word_count_for_every_length() {
 }
 
 /// The fast tier beside the baseline word count of each target (AVX-512 masks, SVE with
-/// `whilelo` at the CPU's vector length), from the very same spec.
+/// `whilelo` at the CPU's vector length), from the very same idea.
 #[tokio::test]
 async fn proves_the_fast_word_count_tier_for_every_length() {
     if !solvers_installed() {
@@ -4927,7 +4927,7 @@ async fn a_proof_keeps_its_time_within_one_long_shape() {
     if !solvers_installed() {
         return;
     }
-    let block = block(&repository_file(WORD_COUNT_SPEC), 0);
+    let block = block(&repository_file(WORD_COUNT_IDEA), 0);
     for target in Profile::ALL {
         let (_, path) = WORD_COUNT_FORMS.get(target)[0];
         let asset = machine(&repository_file(path)).await;
@@ -4990,14 +4990,14 @@ fn lines_with_bzhi(source: &str) -> String {
     text
 }
 
-/// `target`'s line counter source with a 64 KiB buffer, C's size, and its spec's block for it.
+/// `target`'s line counter source with a 64 KiB buffer, C's size, and its idea's block for it.
 fn lines_at_64_kib(target: Profile) -> (String, Generated) {
-    let spec = twin(&LINES, target, "spec.md").replace("65536", "1048576");
+    let idea = twin(&LINES, target, "idea.md").replace("65536", "1048576");
     let source = edited(
         &twin(&LINES, target, "main.s"),
         &[(".equ BUF_LEN, 4096\n", ".equ BUF_LEN, 65536\n")],
     );
-    (source, block(&spec, 0))
+    (source, block(&idea, 0))
 }
 
 /// The line counter with a 64 KiB buffer, C's size, as the fixture is written, on the baseline:

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.89"
 license = "Apache-2.0"
-description = "MCP server for lengua: spec-driven programming in checked x86-64 assembly"
+description = "MCP server for lengua: idea-driven programming in checked x86-64 assembly"
 publish = false
 
 [workspace]

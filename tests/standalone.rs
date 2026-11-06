@@ -6,7 +6,7 @@
 //! - one machine instruction per source line, function by function, as `llvm-objdump` prints
 //!   them, in main.s and in lengua.s: the step from the text to machine code that `check` relies
 //!   on;
-//! - the template against its spec's examples, run as a program of its own;
+//! - the template against its idea's examples, run as a program of its own;
 //! - fill and assert_fail as a program of their own: the same bytes however they arrive, and an
 //!   assertion that fails as lengua's handler says;
 //! - every word of both programs read by lengua's decoder as LLVM's disassembler reads it:
@@ -307,8 +307,8 @@ async fn the_template_links_one_instruction_per_line() {
 /// error and the code it exits with.
 type Case = (&'static [&'static str], &'static str, &'static str, i32);
 
-/// template-spec.md's examples, its bounds, and the texts its B3 tries: the same for every
-/// target, as the spec is.
+/// template-idea.md's examples, its bounds, and the texts its B3 tries: the same for every
+/// target, as the idea is.
 const NEGATE_CASES: &[Case] = &[
     (&["7"], "-7\n", "", 0),
     (&["0"], "0\n", "", 0),
@@ -330,7 +330,7 @@ const NEGATE_CASES: &[Case] = &[
 ];
 
 #[tokio::test]
-async fn the_template_does_what_its_spec_says() {
+async fn the_template_does_what_its_idea_says() {
     let folder = tempfile::tempdir().expect("temporary folder");
     for target in Profile::ALL {
         let place = folder.path().join(target.name());

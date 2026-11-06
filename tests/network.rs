@@ -5,8 +5,8 @@
 //! arrives in pieces, a cut only the proof tries, and standard output that is closed.
 //!
 //! Each case is written once, with a cell for each target (`PerCpu`): the program's folder, or
-//! the edit of that target's code that the case makes. The specs of the two targets' programs are
-//! the same bytes, so an edit of a spec is one for both. A target added to lengua breaks this
+//! the edit of that target's code that the case makes. The ideas of the two targets' programs are
+//! the same bytes, so an edit of an idea is one for both. A target added to lengua breaks this
 //! file until its cells are written; every target's edits are checked against its programs on
 //! any computer, and its cases run where this computer runs its programs, natively or through
 //! QEMU's user mode, and note in the run's summary where it cannot.
@@ -28,7 +28,7 @@ const PROOF_SECONDS: u64 = 120;
 /// the runners give by default, which is all x86-64 needs.
 const SHORT_PROOF_SECONDS: u64 = 60;
 
-/// A program's folder on each target, relative to the repository: its spec.md, the same bytes on
+/// A program's folder on each target, relative to the repository: its idea.md, the same bytes on
 /// every target, and its main.s.
 type Folders = PerCpu<&'static str>;
 
@@ -78,7 +78,7 @@ const READS_ONCE: PerCpu<Edit> = PerCpu {
     aarch64: ("    mov w3, #NEWLINE\n    bl fill\n", "    bl os_read\n"),
 };
 
-/// The echo server made to exit after its first connection, where its spec says it keeps
+/// The echo server made to exit after its first connection, where its idea says it keeps
 /// serving: an exit and the constants it names.
 const STOPS_AFTER_ONE: PerCpu<[Edit; 2]> = PerCpu {
     x86_64: [
@@ -106,17 +106,17 @@ const STOPS_AFTER_ONE: PerCpu<[Edit; 2]> = PerCpu {
 /// The exit code add promises when writing its output fails, made another, in both targets' code.
 const WRONG_EXIT: Edit = (".equ EXIT_WRITE_FAILED, 3", ".equ EXIT_WRITE_FAILED, 4");
 
-/// The event-loop server and the key reader of each target: the spec of each in the compile
+/// The event-loop server and the key reader of each target: the idea of each in the compile
 /// skill's assets, and its template.
 const EVENT_LOOPS: PerCpu<[(&str, &str); 2]> = PerCpu {
     x86_64: [
-        ("server-template-spec.md", "server-template.s"),
-        ("terminal-template-spec.md", "terminal-template.s"),
+        ("server-template-idea.md", "server-template.s"),
+        ("terminal-template-idea.md", "terminal-template.s"),
     ],
     aarch64: [
-        ("server-template-spec.md", "linux-aarch64/server-template.s"),
+        ("server-template-idea.md", "linux-aarch64/server-template.s"),
         (
-            "terminal-template-spec.md",
+            "terminal-template-idea.md",
             "linux-aarch64/terminal-template.s",
         ),
     ],
@@ -149,11 +149,11 @@ fn asset(name: &str) -> String {
     read(&format!("plugin/skills/compile/assets/{name}"))
 }
 
-/// A program's spec.md and main.s on `target`.
+/// A program's idea.md and main.s on `target`.
 fn files(folders: &Folders, target: Profile) -> (String, String) {
     let folder = folders.get(target);
     (
-        read(&format!("{folder}/spec.md")),
+        read(&format!("{folder}/idea.md")),
         read(&format!("{folder}/main.s")),
     )
 }
@@ -164,10 +164,10 @@ fn edited(code: &str, (from, to): Edit) -> String {
     code.replacen(from, to, 1)
 }
 
-/// `spec` with every `from` made `to`, which must change it.
-fn respelled(spec: &str, from: &str, to: &str) -> String {
-    assert!(spec.contains(from), "{from:?} isn't in the spec");
-    spec.replace(from, to)
+/// `idea` with every `from` made `to`, which must change it.
+fn respelled(idea: &str, from: &str, to: &str) -> String {
+    assert!(idea.contains(from), "{from:?} isn't in the idea");
+    idea.replace(from, to)
 }
 
 /// The lines of the report's proofs.
@@ -189,10 +189,10 @@ fn all_proven(report: &Value) -> bool {
     !proofs.is_empty() && proofs.iter().all(|line| line.contains(PROVEN))
 }
 
-/// A program folder holding `spec` and `code`, recorded as the user's request.
-async fn written(session: &Session, spec: &str, code: &str) -> Program {
+/// A program folder holding `idea` and `code`, recorded as the user's request.
+async fn written(session: &Session, idea: &str, code: &str) -> Program {
     let program = Program::new();
-    program.write("spec.md", spec);
+    program.write("idea.md", idea);
     program.write("main.s", code);
     session.record(&program).await;
     program
@@ -266,8 +266,8 @@ async fn the_echo_server_answers_the_tests_client() {
             session.service.cancel().await.expect("close the session");
             continue;
         }
-        let (spec, code) = files(&ECHO, target);
-        let program = written(&session, &spec, &code).await;
+        let (idea, code) = files(&ECHO, target);
+        let program = written(&session, &idea, &code).await;
         let report = done(&session, &program, name).await;
         assert!(
             text(&report["example"]).contains("a client that sent"),
@@ -275,7 +275,7 @@ async fn the_echo_server_answers_the_tests_client() {
         );
         assert!(passed(&report), "{name}: {report}");
 
-        // run serves in the background on the spec's port until it's stopped.
+        // run serves in the background on the idea's port until it's stopped.
         let serving = session.call_ok("run", program.arguments()).await;
         assert_eq!(serving["serving"], "127.0.0.1:7007", "{name}: {serving}");
         let again = session.call_error("run", program.arguments()).await;
@@ -300,7 +300,7 @@ async fn the_echo_server_answers_the_tests_client() {
         let nothing = session.call_error("run", stop).await;
         assert!(nothing.contains("no server"), "{name}: {nothing}");
 
-        // A server that stops after one connection fails: the spec says it keeps serving.
+        // A server that stops after one connection fails: the idea says it keeps serving.
         let [constants, exit] = *STOPS_AFTER_ONE.get(target);
         program.write("main.s", &edited(&edited(&code, constants), exit));
         let problems = failed(&session, &program, name).await;
@@ -322,8 +322,8 @@ async fn the_fetch_client_talks_to_the_tests_server() {
             continue;
         };
         let name = target.name();
-        let (spec, code) = files(&FETCH, target);
-        let program = written(&session, &spec, &code).await;
+        let (idea, code) = files(&FETCH, target);
+        let program = written(&session, &idea, &code).await;
         let report = done(&session, &program, name).await;
         assert!(passed(&report), "{name}: {report}");
         // Only where nothing else holds port 8080 here.
@@ -378,15 +378,15 @@ async fn the_fetch_client_talks_to_the_tests_server() {
     }
 }
 
-/// fetch's spec pointed at a named computer over TLS: lengua would do the TLS in a run, so its
+/// fetch's idea pointed at a named computer over TLS: lengua would do the TLS in a run, so its
 /// tests' stand-in server speaks the plain bytes the program sends and reads.
-fn over_tls(spec: &str) -> String {
-    let spec = respelled(
-        spec,
+fn over_tls(idea: &str) -> String {
+    let idea = respelled(
+        idea,
         "- Network: connects to TCP port 8080",
         "- Network: connects to TCP port 443 on example.com over TLS",
     );
-    respelled(&spec, "on port `8080`", "on port `443`")
+    respelled(&idea, "on port `8080`", "on port `443`")
 }
 
 #[tokio::test]
@@ -395,18 +395,18 @@ async fn a_client_over_tls_is_tested_in_plain_bytes() {
         let Some(session) = per_target::session(target, Protocol::Discover).await else {
             continue;
         };
-        let (spec, code) = files(&FETCH, target);
-        let program = written(&session, &over_tls(&spec), &code).await;
+        let (idea, code) = files(&FETCH, target);
+        let program = written(&session, &over_tls(&idea), &code).await;
         done(&session, &program, target.name()).await;
         session.service.cancel().await.expect("close the session");
     }
 }
 
-/// fetch's spec with its server's computer named by its first argument, as a curl-like tool's
+/// fetch's idea with its server's computer named by its first argument, as a curl-like tool's
 /// user types the host.
-fn named_by_an_argument(spec: &str) -> String {
+fn named_by_an_argument(idea: &str) -> String {
     respelled(
-        spec,
+        idea,
         "- Network: connects to TCP port 8080",
         "- Network: connects to TCP port 8080 on the computer its first argument names",
     )
@@ -423,8 +423,8 @@ async fn a_connection_to_the_computer_an_argument_names() {
             continue;
         };
         let name = target.name();
-        let (spec, code) = files(&FETCH, target);
-        let program = written(&session, &named_by_an_argument(&spec), &code).await;
+        let (idea, code) = files(&FETCH, target);
+        let program = written(&session, &named_by_an_argument(&idea), &code).await;
         done(&session, &program, name).await;
         let report = session
             .call_ok("run", with_args(&program, &["/hello"]))
@@ -448,9 +448,9 @@ async fn a_server_that_waits_for_its_client_to_close_fails_as_with_curl() {
             continue;
         };
         let name = target.name();
-        let (spec, code) = files(&ECHO, target);
+        let (idea, code) = files(&ECHO, target);
         let waits = edited(&code, *READS_TO_THE_END.get(target));
-        let program = written(&session, &spec, &waits).await;
+        let program = written(&session, &idea, &waits).await;
         let problems = failed(&session, &program, name).await;
         assert!(
             problems.contains("curl and browsers keep it open until they have the whole answer"),
@@ -460,16 +460,16 @@ async fn a_server_that_waits_for_its_client_to_close_fails_as_with_curl() {
     }
 }
 
-/// fetch's spec with short paths and bodies, so that the proof covers them all.
-fn with_short_paths_and_bodies(spec: &str) -> String {
-    let spec = respelled(
-        spec,
+/// fetch's idea with short paths and bodies, so that the proof covers them all.
+fn with_short_paths_and_bodies(idea: &str) -> String {
+    let idea = respelled(
+        idea,
         "path holds `1` to `100` characters",
         "path holds `1` to `100` characters (tests: `6` and `11`)",
     );
-    let spec = respelled(&spec, "`string(1, 100, ", "`string(1, 6, ");
-    let spec = respelled(&spec, "`string(0, 65000, ", "`string(0, 11, ");
-    respelled(&spec, "`string(1, 65000, ", "`string(1, 11, ")
+    let idea = respelled(&idea, "`string(1, 100, ", "`string(1, 6, ");
+    let idea = respelled(&idea, "`string(0, 65000, ", "`string(0, 11, ");
+    respelled(&idea, "`string(1, 65000, ", "`string(1, 11, ")
 }
 
 #[tokio::test]
@@ -483,8 +483,8 @@ async fn programs_on_the_network_are_proven() {
         };
         let name = target.name();
         // A server: the echo server, as it is.
-        let (spec, code) = files(&ECHO, target);
-        let echo = written(&session, &spec, &code).await;
+        let (idea, code) = files(&ECHO, target);
+        let echo = written(&session, &idea, &code).await;
         let report = done(&session, &echo, name).await;
         assert!(all_proven(&report), "{name}: {report}");
         // It reads its line with fill, so the proof covers every way the line can be cut.
@@ -494,8 +494,8 @@ async fn programs_on_the_network_are_proven() {
             "{name}: {report}"
         );
         // A client: fetch, with short paths and bodies so the proof covers them all.
-        let (spec, code) = files(&FETCH, target);
-        let fetch = written(&session, &with_short_paths_and_bodies(&spec), &code).await;
+        let (idea, code) = files(&FETCH, target);
+        let fetch = written(&session, &with_short_paths_and_bodies(&idea), &code).await;
         let report = done(&session, &fetch, name).await;
         assert!(all_proven(&report), "{name}: {report}");
         session.service.cancel().await.expect("close the session");
@@ -510,9 +510,9 @@ async fn the_event_loop_server_and_the_key_reader_pass_their_tests() {
         let Some(session) = proving(target, PROOF_SECONDS).await else {
             continue;
         };
-        for (spec, code) in EVENT_LOOPS.get(target) {
+        for (idea, code) in EVENT_LOOPS.get(target) {
             let what = format!("{code} on {}", target.name());
-            let program = written(&session, &asset(spec), &asset(code)).await;
+            let program = written(&session, &asset(idea), &asset(code)).await;
             let report = done(&session, &program, &what).await;
             assert!(passed(&report), "{what}: {report}");
         }
@@ -531,8 +531,8 @@ async fn a_raw_read_fails_when_standard_input_arrives_in_pieces() {
             continue;
         };
         let name = target.name();
-        let (spec, code) = files(&SECOND, target);
-        let program = written(&session, &spec, &edited(&code, *READS_ONCE.get(target))).await;
+        let (idea, code) = files(&SECOND, target);
+        let program = written(&session, &idea, &edited(&code, *READS_ONCE.get(target))).await;
         let problems = failed(&session, &program, name).await;
         assert!(
             problems.contains(
@@ -551,14 +551,14 @@ async fn a_raw_read_fails_when_standard_input_arrives_in_pieces() {
 /// 41912035484 on the ARM64 runner) until the prover's model of AArch64 read the overflow flag,
 /// `tbnz` on the top bit and `msub` as x86-64's reads them (the same gaps that `amounts` showed
 /// in todo.md); now it settles the block by its terms alone (400 input combinations, 1014 paths,
-/// run 41942392800). Both catch an exit code that is not the spec's, by the test that closes
+/// run 41942392800). Both catch an exit code that is not the idea's, by the test that closes
 /// standard output.
 const B4_PROOF: PerCpu<&str> = PerCpu {
     x86_64: "generated B4: proven for every input in range",
     aarch64: "generated B4: proven for every input in range",
 };
 
-/// add's spec promises code 3 when writing its output fails, and its B4 shows it with
+/// add's idea promises code 3 when writing its output fails, and its B4 shows it with
 /// `- And standard output is closed`: a pipe nobody reads, as after `prog | head -1`. Every write
 /// then fails with EPIPE, never a signal, so the program passes, proven where the prover reaches
 /// it, and one that exits with another code fails the test that closes its output.
@@ -572,9 +572,9 @@ async fn a_closed_standard_output_fails_every_write() {
             continue;
         };
         let name = target.name();
-        let (spec, code) = files(&ADD, target);
-        assert!(spec.contains("- And standard output is closed"), "add's B4");
-        let program = written(&session, &spec, &code).await;
+        let (idea, code) = files(&ADD, target);
+        assert!(idea.contains("- And standard output is closed"), "add's B4");
+        let program = written(&session, &idea, &code).await;
         let report = done(&session, &program, name).await;
         let proofs = proof_lines(&report);
         let b4 = *B4_PROOF.get(target);
@@ -589,12 +589,12 @@ async fn a_closed_standard_output_fails_every_write() {
     }
 }
 
-/// second's spec with a short first line and a long second one, so the tests' own pieces of
+/// second's idea with a short first line and a long second one, so the tests' own pieces of
 /// standard input, cut after its first byte and at its middle, never end a read right after the
 /// first line: only the proof's cuts do.
-fn with_lines_the_tests_cut_past(spec: &str) -> String {
+fn with_lines_the_tests_cut_past(idea: &str) -> String {
     let changed = respelled(
-        spec,
+        idea,
         "Each line is `1` to `20`\nlowercase letters followed by a newline.",
         "The first line is `1` to `5`\nlowercase letters and the second `12` to `20`, each \
          followed by a newline.",
@@ -627,8 +627,8 @@ async fn a_cut_only_the_proof_tries_is_found_and_run_for_real() {
             continue;
         };
         let name = target.name();
-        let (spec, code) = files(&SECOND, target);
-        let program = written(&session, &with_lines_the_tests_cut_past(&spec), &code).await;
+        let (idea, code) = files(&SECOND, target);
+        let program = written(&session, &with_lines_the_tests_cut_past(&idea), &code).await;
         let problems = failed(&session, &program, name).await;
         assert!(
             problems.contains("the proof found inputs the tests didn't try where main.s is wrong"),
@@ -649,15 +649,15 @@ async fn a_cut_only_the_proof_tries_is_found_and_run_for_real() {
     }
 }
 
-/// Every edit and every spec change above is made to text that its program has, for every
+/// Every edit and every idea change above is made to text that its program has, for every
 /// target, on any computer: a cell for a CPU this computer cannot run is still held to its
 /// program, and a change that changes nothing fails.
 #[test]
 fn every_edit_is_made_to_text_its_program_has() {
     for target in Profile::ALL {
         let (_, echo) = files(&ECHO, target);
-        let (fetch_spec, _) = files(&FETCH, target);
-        let (second_spec, second) = files(&SECOND, target);
+        let (fetch_idea, _) = files(&FETCH, target);
+        let (second_idea, second) = files(&SECOND, target);
         let (_, add) = files(&ADD, target);
         assert_ne!(edited(&echo, *READS_TO_THE_END.get(target)), echo);
         assert_ne!(edited(&second, *READS_TO_THE_END.get(target)), second);
@@ -666,15 +666,15 @@ fn every_edit_is_made_to_text_its_program_has() {
         let [constants, exit] = *STOPS_AFTER_ONE.get(target);
         assert_ne!(edited(&edited(&echo, constants), exit), echo);
         for changed in [
-            over_tls(&fetch_spec),
-            named_by_an_argument(&fetch_spec),
-            with_short_paths_and_bodies(&fetch_spec),
+            over_tls(&fetch_idea),
+            named_by_an_argument(&fetch_idea),
+            with_short_paths_and_bodies(&fetch_idea),
         ] {
-            assert_ne!(changed, fetch_spec);
+            assert_ne!(changed, fetch_idea);
         }
-        assert_ne!(with_lines_the_tests_cut_past(&second_spec), second_spec);
-        for (spec, code) in EVENT_LOOPS.get(target) {
-            assert!(!asset(spec).is_empty() && !asset(code).is_empty());
+        assert_ne!(with_lines_the_tests_cut_past(&second_idea), second_idea);
+        for (idea, code) in EVENT_LOOPS.get(target) {
+            assert!(!asset(idea).is_empty() && !asset(code).is_empty());
         }
     }
 }

@@ -2,7 +2,7 @@
 
 # CRC-32C with the crc32 instruction of SSE4.2, one chain, 8 bytes a step: it runs on every x86-64
 # computer that has SSE4.2, which lengua's x86-64 baseline holds. The form that runs three chains
-# side by side and joins them with pclmulqdq, from the very same spec, is
+# side by side and joins them with pclmulqdq, from the very same idea, is
 # plugin/skills/compile/assets/fast/crc32c-pclmul.
 
 # File descriptors

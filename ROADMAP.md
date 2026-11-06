@@ -21,11 +21,11 @@ tag `native-final` at 723879e. *Verified by:* `compile` green on both Linux runn
 
 ## W1. Idea files
 
-`spec.md` becomes `idea.md` everywhere (examples, fixtures, the skills' assets), and the skill
-`write-spec` becomes `write-idea`. In Rust, `src/spec.rs` becomes `src/idea.rs` and `Spec` becomes
+`idea.md` becomes `idea.md` everywhere (examples, fixtures, the skills' assets), and the skill
+`write-idea` becomes `write-idea`. In Rust, `src/spec.rs` becomes `src/idea.rs` and `Spec` becomes
 `Idea`; messages, next steps and docs follow. The lock's `[spec]` table becomes `[idea]`, and its
 format version goes from 4 to 5, so old locks are checked again. *Verified by:* `test` and
-`golden` green on both Linux runners, and no `spec.md` left outside history notes.
+`golden` green on both Linux runners, and no `idea.md` left outside history notes.
 
 ## W2. The WebAssembly foundation
 
@@ -792,7 +792,7 @@ The build differs from the plan in these ways:
   that has a channel, which is one whose linked code uses names, the clock, random bytes, sleeps,
   listings or waits, in a run too. A program without one keeps its working folder, and so does a
   program QEMU's user mode runs.
-- **The layout** (one `spec.md` per program, the assets split per CPU, `tests/fixtures/aarch64`)
+- **The layout** (one `idea.md` per program, the assets split per CPU, `tests/fixtures/aarch64`)
   moves to round 6.
 - **The programs' batch** is done as far as this: every shipped program, template and benchmark
   is in the edge form, and the bench builds through the edge. Not built, and still open:
@@ -984,7 +984,7 @@ windows-11-arm.
   - The model-against-CPU harness gets its baseline (xmm-only) variant.
   - AArch64 gets adc/sbc.
 - **The layout** (left over from round 2; todo.md).
-  - One `spec.md` per program, so each twin's copy and the same-bytes test
+  - One `idea.md` per program, so each twin's copy and the same-bytes test
     (`every_program_has_its_twin_on_the_other_cpu`) go.
   - The assets split into `assets/x86_64/` and `assets/aarch64/`; x86-64's leave the assets root.
   - `tests/fixtures/linux-aarch64` becomes `tests/fixtures/aarch64`.

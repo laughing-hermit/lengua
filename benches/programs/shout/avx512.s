@@ -21,7 +21,7 @@
 .equ CHUNK_VECTORS, CHUNK / VECTOR
 .equ MAX_WRITES, 64
 .equ TOO_LONG_MSG_LEN, 46
-# Threads, the program's choices: at most the threads the spec allows, and each one's output
+# Threads, the program's choices: at most the threads the idea allows, and each one's output
 # slot, a multiple of 64 bytes. lengua gives each thread its stack.
 .equ THREADS, 16
 .equ SLOT_SIZE, CHUNK

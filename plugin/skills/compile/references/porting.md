@@ -1,7 +1,7 @@
 # Porting lengua to another target
 
-lengua is hardware-agnostic where it matters: the **spec** names no CPU or OS (`check` rejects a
-CPU or OS term in a spec's prose), so the thing people share is the same on every target. What is
+lengua is hardware-agnostic where it matters: the **idea** names no CPU or OS (`check` rejects a
+CPU or OS term in an idea's prose), so the thing people share is the same on every target. What is
 per-target is the compiled `main.s` and lengua's checking of it — and that is per-target by nature:
 you can't check native code without modelling the native machine. This file is the contract for
 adding a target, so "add a target" is a bounded task, not a rewrite. Today lengua has two targets,
@@ -21,11 +21,11 @@ optimizer would rewrite the instructions the prover just checked.
 - **Checking the rules and proving are host-independent.** `llvm-mc` cross-assembles for any
   target and a proof is math, so one server build can carry every target's backend and check and
   prove for any of them, whatever host it runs on.
-- **Testing and running need the target's CPU.** `check` runs the spec's tests, and `run` runs
+- **Testing and running need the target's CPU.** `check` runs the idea's tests, and `run` runs
   the program, so both need that CPU: natively, or under an emulator for development (QEMU's user
   mode runs Linux ARM64 programs on an x86-64 Linux host). Under emulation the kernel sees the
   emulator's own system calls, not the program's, so only Landlock and resource limits still
-  confine a run; the spec-exact system-call filter and the cycle counts need the target natively.
+  confine a run; the idea-exact system-call filter and the cycle counts need the target natively.
   The tests' supplied random bytes and clock come from lengua's broker, so they work under
   emulation too. So the per-host part of the server is the runner, and a target is fully tested
   only on its own CPU (a CI runner counts).
@@ -74,7 +74,7 @@ CPU's, below). Each new target needs:
    the tests' clock and random bytes; and notes of its waits and listings. It talks to the
    program's edge over a channel the program inherits at descriptor 4,352. macOS and Windows each
    need their own confinement and their own channel. The network needs none of a sandbox's own
-   policing: lengua's runner makes each connection a spec names and hands the program its end of
+   policing: lengua's runner makes each connection an idea names and hands the program its end of
    a local stream (a Unix socket pair on Linux, from descriptor 4; a pipe or socket handle on
    Windows), as it binds a server's port, so a target's sandbox only has to keep the program off
    the network altogether. macOS also needs the binary code-signed (ad-hoc via `ld64.lld`) before
@@ -93,10 +93,10 @@ set. Choose the lowest set that every machine the CPU's systems run on has, and 
   it, with the owner, changes it on every system.
 
 Every program lengua ships for a target has a form that runs on its baseline, so no behavior of a
-spec depends on an optional extension, and a computer without AVX-512 or SVE has every program to
+idea depends on an optional extension, and a computer without AVX-512 or SVE has every program to
 learn from and copy. An extension beyond the baseline is a **fast tier**: a program of its own,
 named for the extension (`wc-sve` beside `wc`), beside its baseline sibling and from the very same
-`spec.md`, so the same tests and proofs hold for both. The agent picks the tier from the `machine`
+`idea.md`, so the same tests and proofs hold for both. The agent picks the tier from the `machine`
 line's features, and the baseline form on any other computer. `tests/baseline.rs` holds a new
 target to it from its first program: it rule-checks every shipped `main.s` of every target in
 `Profile::ALL` against that target's baseline, and a program that needs more must be listed as a
@@ -106,21 +106,21 @@ listed one that now passes, so the debt only shrinks.
 
 ## One product on every target
 
-A port adds a CPU's or an OS's means, never a different lengua. The same spec means the same on
+A port adds a CPU's or an OS's means, never a different lengua. The same idea means the same on
 every target: the same skills, tools, reports and messages; the same rules, memory safety, tests
-and proof engine; and the same limits on every target. The capabilities a spec can name, and what
+and proof engine; and the same limits on every target. The capabilities an idea can name, and what
 the sandbox allows of each, are one definition. Every limit one target has, from its OS or its
 CPU, is every target's, whatever their assembly or their OS's permissions: a limit being anything
-a spec or its user can observe, what a program may do, how it behaves, what it's refused and
+an idea or its user can observe, what a program may do, how it behaves, what it's refused and
 when, and what lengua promises of it. No target is excused a limit because something else of its
 own, lengua's checks included, could keep the same promise there: where one OS can't keep a
 promise the way another does, every target takes on its limit, and the capability is reshaped so
 every OS keeps it the same way, or that part is cut on every target, Linux too. Only the hardware
-may differ: its instructions, its vectors' width, its speed, and never so that a spec's behavior
+may differ: its instructions, its vectors' width, its speed, and never so that an idea's behavior
 depends on an optional extension (the baseline, above). Every program has a baseline form that
 runs on every machine of its target (x86-64's SSE2 with SSE4.2 and POPCNT, ARM64's NEON), and an
 optional extension (AVX-512, SVE) is only a named tier beside it, picked from the machine line
-and meeting the same spec, tests and proofs. A target is done when it covers what x86-64 covers,
+and meeting the same idea, tests and proofs. A target is done when it covers what x86-64 covers,
 each item with its own hardware's means.
 
 ## Order of targets
@@ -136,7 +136,7 @@ each item with its own hardware's means.
   and the CPU's CRC, carry-less multiply, AES and SHA instructions ([its
   reference](aarch64.md)); its fast `wc` is proven for every length with a 64 KiB buffer,
   as x86-64's is. Each example and fixture has its twin on the other CPU, compiled from the very
-  same spec (`every_program_has_its_twin_on_the_other_cpu`, `tests/every_program.rs`).
+  same idea (`every_program_has_its_twin_on_the_other_cpu`, `tests/every_program.rs`).
 - **macOS (ARM64)** and **Windows (x86-64, ARM64)** need all six, the OS edge and the
   sandbox most of all: their edges call the system library where those systems forbid direct
   system calls, and each confines a program by its own means.

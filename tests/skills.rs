@@ -1,4 +1,4 @@
-//! The shipped skills follow the Agent Skills format (agentskills.io), and every spec they show
+//! The shipped skills follow the Agent Skills format (agentskills.io), and every idea they show
 //! is one lengua accepts.
 
 use std::collections::BTreeMap;
@@ -100,7 +100,7 @@ fn every_skill_follows_the_agent_skills_format() {
 #[test]
 fn skills_link_only_to_files_that_exist() {
     for (folder, text) in skills() {
-        // A link in backticks is an example of one, such as a spec's `- Builds on:` line.
+        // A link in backticks is an example of one, such as an idea's `- Builds on:` line.
         let mut prose = String::with_capacity(text.len());
         let mut in_code = false;
         for character in text.chars() {
@@ -128,10 +128,10 @@ fn skills_link_only_to_files_that_exist() {
 #[test]
 fn the_assembly_template_is_a_complete_lengua_program() {
     let assets = skills_dir().join("compile/assets");
-    let spec_text = read(&assets.join("template-spec.md"));
-    let spec = lengua::spec::parse(&spec_text)
-        .unwrap_or_else(|problems| panic!("the template's spec has problems: {problems:#?}"));
-    if let Err(problems) = lengua::testfile::check(&spec) {
+    let idea_text = read(&assets.join("template-idea.md"));
+    let idea = lengua::idea::parse(&idea_text)
+        .unwrap_or_else(|problems| panic!("the template's idea has problems: {problems:#?}"));
+    if let Err(problems) = lengua::testfile::check(&idea) {
         panic!("the template's tests fail check: {problems:#?}");
     }
     let code = read(&assets.join("main-template.s"));
@@ -143,11 +143,11 @@ fn the_assembly_template_is_a_complete_lengua_program() {
 }
 
 #[test]
-fn the_spec_template_is_a_valid_spec() {
-    let text = read(&skills_dir().join("write-spec/assets/spec-template.md"));
-    let spec = lengua::spec::parse(&text)
+fn the_idea_template_is_a_valid_idea() {
+    let text = read(&skills_dir().join("write-idea/assets/idea-template.md"));
+    let idea = lengua::idea::parse(&text)
         .unwrap_or_else(|problems| panic!("the template has problems: {problems:#?}"));
-    if let Err(problems) = lengua::testfile::check(&spec) {
+    if let Err(problems) = lengua::testfile::check(&idea) {
         panic!("the template's tests fail check: {problems:#?}");
     }
 }
@@ -201,22 +201,22 @@ fn code_blocks(text: &str) -> Vec<(String, String)> {
     blocks
 }
 
-/// Each spec the skills show whole is one lengua accepts, its tests included.
+/// Each idea the skills show whole is one lengua accepts, its tests included.
 #[test]
 fn examples_in_the_skills_pass_lenguas_own_checks() {
-    let mut specs = 0;
+    let mut ideas = 0;
     for (document, text) in documents() {
         for (language, block) in code_blocks(&text) {
-            if language == "markdown" && block.contains("type: lengua/program-spec") {
-                let spec = lengua::spec::parse(&block).unwrap_or_else(|problems| {
-                    panic!("{document} shows an invalid spec: {problems:#?}")
+            if language == "markdown" && block.contains("type: lengua/program-idea") {
+                let idea = lengua::idea::parse(&block).unwrap_or_else(|problems| {
+                    panic!("{document} shows an invalid idea: {problems:#?}")
                 });
-                if let Err(problems) = lengua::testfile::check(&spec) {
-                    panic!("{document} shows a spec whose tests fail check: {problems:#?}");
+                if let Err(problems) = lengua::testfile::check(&idea) {
+                    panic!("{document} shows an idea whose tests fail check: {problems:#?}");
                 }
-                specs += 1;
+                ideas += 1;
             }
         }
     }
-    assert!(specs >= 4, "found only {specs} example specs");
+    assert!(ideas >= 4, "found only {ideas} example ideas");
 }

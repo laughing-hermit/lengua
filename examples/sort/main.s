@@ -1,5 +1,5 @@
 .intel_syntax noprefix
-# lengua: compiled from spec.md sha256:433865db91d0f5e52443c349f339603e39f26320c735fcf8947eca824ba7a769 for linux-x86_64
+# lengua: compiled from idea.md sha256:18c418b79b3b41601fc38372960981cbc647e824ae92ac032f90981b09bc8eb8 for linux-x86_64
 
 # File descriptors
 .equ STDIN, 0

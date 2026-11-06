@@ -2,7 +2,7 @@
 //! semantic mutants of its main.s (a number moved by one, a branch's condition flipped, a named
 //! constant moved by one) each go through `check`, and each must be caught, by the rules, a
 //! test, or a proof, never come out proven. A mutant that survives is a missing test or proof, or
-//! one that changes nothing a spec can see, which its report shows for a person to judge.
+//! one that changes nothing an idea can see, which its report shows for a person to judge.
 //!
 //! Slow (a check of every mutant, its proofs included), so it's ignored: run it by hand, or on
 //! CI's dispatch, with `--ignored every_proven_programs_mutants_are_caught`, and
@@ -21,14 +21,14 @@ const MUTANTS: usize = 8;
 /// How long a mutant's proofs may take, in seconds.
 const PROOF_SECONDS: u64 = 60;
 
-/// Mutants that change nothing a spec can see, each with why: they come out proven, rightly.
+/// Mutants that change nothing an idea can see, each with why: they come out proven, rightly.
 /// Found by this test's first run, 2026-11-02; any other survivor fails it. write_all's error
 /// test flipped came out proven too, until a test could close standard output (2026-11-02):
 /// now the write fails, and that test catches it.
 const EQUIVALENT: &[(&str, &str)] = &[
     (
         "examples/echo/main.s L8:const+1",
-        "LINE_MAX one more, past the spec's longest line",
+        "LINE_MAX one more, past the idea's longest line",
     ),
     (
         "examples/echo/main.s L39:cond",
@@ -36,7 +36,7 @@ const EQUIVALENT: &[(&str, &str)] = &[
     ),
     (
         "tests/fixtures/linux-aarch64/cat-stream/main.s L13:const+1",
-        "fill's end byte 0, which the spec's input never holds",
+        "fill's end byte 0, which the idea's input never holds",
     ),
     // Found by the first run that moved AArch64's numbers (2026-11-04), after the mutator stopped
     // cutting every line at its first `#`.
@@ -57,7 +57,7 @@ const EQUIVALENT: &[(&str, &str)] = &[
     (
         "tests/fixtures/linux-aarch64/echo/main.s L31:cond",
         "echo_line's failure closes the connection and goes on; the flipped test asserts on it \
-         instead, and no behavior of the spec has a failed read: its clients send whole lines \
+         instead, and no behavior of the idea has a failed read: its clients send whole lines \
          and close",
     ),
 ];
@@ -225,12 +225,12 @@ async fn survivors(session: &Session, programs: &[(&str, &str)]) -> Vec<String> 
             .is_none_or(|only| only.split(',').any(|part| code.contains(part)))
     };
     let mut survived = Vec::new();
-    for (spec, code) in programs.iter().filter(|(_, code)| wanted(code)) {
-        let (spec_text, code_text) = (read(spec), read(code));
+    for (idea, code) in programs.iter().filter(|(_, code)| wanted(code)) {
+        let (idea_text, code_text) = (read(idea), read(code));
         let mut tally = std::collections::BTreeMap::new();
         for (name, mutant) in mutants(&code_text) {
             let program = Program::new();
-            program.write("spec.md", &spec_text);
+            program.write("idea.md", &idea_text);
             program.write("main.s", &mutant);
             session.record(&program).await;
             let report = session.settle(&program).await;
@@ -257,17 +257,17 @@ async fn every_proven_programs_mutants_are_caught() {
             survivors(
                 &session,
                 &[
-                    ("examples/add/spec.md", "examples/add/main.s"),
-                    ("examples/upcase/spec.md", "examples/upcase/main.s"),
-                    ("examples/fetch/spec.md", "examples/fetch/main.s"),
-                    ("examples/echo/spec.md", "examples/echo/main.s"),
+                    ("examples/add/idea.md", "examples/add/main.s"),
+                    ("examples/upcase/idea.md", "examples/upcase/main.s"),
+                    ("examples/fetch/idea.md", "examples/fetch/main.s"),
+                    ("examples/echo/idea.md", "examples/echo/main.s"),
                     (
-                        "plugin/skills/compile/assets/template-spec.md",
+                        "plugin/skills/compile/assets/template-idea.md",
                         "plugin/skills/compile/assets/main-template.s",
                     ),
-                    ("tests/fixtures/cat/spec.md", "tests/fixtures/cat/main.s"),
+                    ("tests/fixtures/cat/idea.md", "tests/fixtures/cat/main.s"),
                     (
-                        "tests/fixtures/cat-stream/spec.md",
+                        "tests/fixtures/cat-stream/idea.md",
                         "tests/fixtures/cat-stream/main.s",
                     ),
                 ],
@@ -285,7 +285,7 @@ async fn every_proven_programs_mutants_are_caught() {
         };
         let fixture = |name: &str| {
             (
-                format!("tests/fixtures/linux-aarch64/{name}/spec.md"),
+                format!("tests/fixtures/linux-aarch64/{name}/idea.md"),
                 format!("tests/fixtures/linux-aarch64/{name}/main.s"),
             )
         };
@@ -296,12 +296,12 @@ async fn every_proven_programs_mutants_are_caught() {
                 .collect();
         // The template, as x86-64's is among its programs.
         programs.push((
-            "plugin/skills/compile/assets/template-spec.md".to_owned(),
+            "plugin/skills/compile/assets/template-idea.md".to_owned(),
             "plugin/skills/compile/assets/linux-aarch64/main-template.s".to_owned(),
         ));
         let borrowed: Vec<(&str, &str)> = programs
             .iter()
-            .map(|(spec, code)| (spec.as_str(), code.as_str()))
+            .map(|(idea, code)| (idea.as_str(), code.as_str()))
             .collect();
         survived.extend(survivors(&session, &borrowed).await);
         session.service.cancel().await.expect("close the session");

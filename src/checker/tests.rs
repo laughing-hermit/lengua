@@ -17,12 +17,12 @@ async fn check_with(text: &str, features: CpuFeatures) -> Report {
 }
 
 /// A program is given every operation: these helpers check its own rules, not which operations its
-/// spec allows (`check_edge` says them).
+/// idea allows (`check_edge` says them).
 async fn check_full(text: &str, features: CpuFeatures, threads: Option<u32>) -> Report {
     check_allowing(text, features, &crate::edge::Op::ALL, threads).await
 }
 
-/// A program checked with the operations its spec allows.
+/// A program checked with the operations its idea allows.
 async fn check_edge(text: &str, ops: &[crate::edge::Op]) -> Report {
     check_allowing(text, CpuFeatures::all(), ops, None).await
 }
@@ -401,7 +401,7 @@ async fn jumps_go_through_registers_only_as_checked_tables() {
 }
 
 /// Every program in the repository follows every rule, memory rules included, with what its own
-/// spec allows: the examples, the fixtures Claude Code wrote, the skill's assets and the
+/// idea allows: the examples, the fixtures Claude Code wrote, the skill's assets and the
 /// benchmark's own programs.
 #[tokio::test]
 async fn every_program_in_the_repository_follows_every_rule() {
@@ -416,33 +416,33 @@ async fn every_program_in_the_repository_follows_every_rule() {
         for entry in std::fs::read_dir(root.join(folder)).expect("a folder of programs") {
             let path = entry.expect("an entry").path();
             if path.join("main.s").is_file() {
-                programs.push((path.join("spec.md"), path.join("main.s")));
+                programs.push((path.join("idea.md"), path.join("main.s")));
             }
         }
     }
-    for (spec, code) in [
-        ("template-spec.md", "main-template.s"),
-        ("vector-template-spec.md", "vector-template.s"),
-        ("parallel-template-spec.md", "parallel-template.s"),
-        ("server-template-spec.md", "server-template.s"),
-        ("terminal-template-spec.md", "terminal-template.s"),
+    for (idea, code) in [
+        ("template-idea.md", "main-template.s"),
+        ("vector-template-idea.md", "vector-template.s"),
+        ("parallel-template-idea.md", "parallel-template.s"),
+        ("server-template-idea.md", "server-template.s"),
+        ("terminal-template-idea.md", "terminal-template.s"),
     ] {
-        programs.push((assets.join(spec), assets.join(code)));
+        programs.push((assets.join(idea), assets.join(code)));
     }
     let benches = root.join("benches/programs");
-    for (spec, code) in [
-        ("examples/upcase/spec.md", "upcase/avx512.s"),
-        ("examples/count/spec.md", "count/avx512.s"),
+    for (idea, code) in [
+        ("examples/upcase/idea.md", "upcase/avx512.s"),
+        ("examples/count/idea.md", "count/avx512.s"),
         (
-            "plugin/skills/compile/assets/parallel-template-spec.md",
+            "plugin/skills/compile/assets/parallel-template-idea.md",
             "shout/avx512.s",
         ),
         (
-            "plugin/skills/compile/assets/parallel-template-spec.md",
+            "plugin/skills/compile/assets/parallel-template-idea.md",
             "shout/avx512-one.s",
         ),
     ] {
-        programs.push((root.join(spec), benches.join(code)));
+        programs.push((root.join(idea), benches.join(code)));
     }
     // On x86-64 each program is held to this CPU's features, as check holds it; on another CPU
     // the programs can't run, and the checker, which doesn't depend on the computer it runs on,
@@ -455,9 +455,9 @@ async fn every_program_in_the_repository_follows_every_rule() {
         CpuFeatures::all()
     };
     let mut failed = Vec::new();
-    for (spec, code) in &programs {
-        let spec = crate::spec::parse(&std::fs::read_to_string(spec).expect("a spec"))
-            .unwrap_or_else(|problems| panic!("{}: {problems:?}", spec.display()));
+    for (idea, code) in &programs {
+        let idea = crate::idea::parse(&std::fs::read_to_string(idea).expect("an idea"))
+            .unwrap_or_else(|problems| panic!("{}: {problems:?}", idea.display()));
         let text = std::fs::read_to_string(code).expect("a program");
         let needs_more = text.contains("vpcmpub") || text.contains("zmm");
         // The fast tiers of SHA-256, AES and the CRC-32C use instructions an older CPU lacks
@@ -470,7 +470,7 @@ async fn every_program_in_the_repository_follows_every_rule() {
         } else {
             features
         };
-        let report = check_allowing(&text, features, &spec.ops, spec.threads).await;
+        let report = check_allowing(&text, features, &idea.ops, idea.threads).await;
         if !report.passed() {
             let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
             failed.push(format!("{}: {all:#?}", code.display()));
@@ -1078,7 +1078,7 @@ enum Plan {
 /// added to lengua breaks every table until its cells are written.
 type Fixtures = &'static [(&'static str, PerCpu<Plan>)];
 
-/// The programs a table's fixtures are made of: one for each target, and the threads its spec
+/// The programs a table's fixtures are made of: one for each target, and the threads its idea
 /// allows.
 struct Programs {
     texts: PerCpu<&'static str>,
@@ -1097,13 +1097,13 @@ const PARALLEL_TEMPLATES: PerCpu<&str> = PerCpu {
     aarch64: include_str!("../../plugin/skills/compile/assets/linux-aarch64/parallel-template.s"),
 };
 
-/// The main templates, with what their spec allows.
+/// The main templates, with what their idea allows.
 const ON_THE_TEMPLATE: Programs = Programs {
     texts: TEMPLATES,
     threads: None,
 };
 
-/// The parallel templates, with what their spec allows.
+/// The parallel templates, with what their idea allows.
 const ON_THE_PARALLEL_TEMPLATE: Programs = Programs {
     texts: PARALLEL_TEMPLATES,
     threads: Some(16),
@@ -2518,7 +2518,7 @@ async fn threads_follow_the_rules_of_the_thread_code() {
     hold(&ON_THE_PARALLEL_TEMPLATE, THREADS).await;
 }
 
-/// A program that starts threads, with the operations the template's spec allows and `threads`
+/// A program that starts threads, with the operations the template's idea allows and `threads`
 /// threads.
 async fn check_edge_threads(text: &str, threads: Option<u32>) -> Report {
     use crate::edge::Op;
@@ -2532,7 +2532,7 @@ async fn check_edge_threads(text: &str, threads: Option<u32>) -> Report {
     check_allowing(text, CpuFeatures::all(), &ops, threads).await
 }
 
-/// A program's threads follow the rules of the thread code: the template passes, a spec that
+/// A program's threads follow the rules of the thread code: the template passes, an idea that
 /// allows no threads or fewer is held to, and a count that isn't shown to be at most THREADS, a
 /// wrong slot size or slots, a worker that reaches the OS and a call of worker from main.s are
 /// found.
@@ -2614,7 +2614,7 @@ async fn an_edge_form_programs_threads_follow_the_rules() {
         let report = check_edge_threads(template, Some(16)).await;
         let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
         assert!(report.passed(), "{name}: {all:#?}");
-        // The spec's approval.
+        // The idea's approval.
         let call = if target == Profile::LinuxAarch64 {
             "    bl parallel_for\n"
         } else {
@@ -2625,14 +2625,14 @@ async fn an_edge_form_programs_threads_follow_the_rules() {
             &report,
             Rule::Resources,
             line_of(template, call),
-            "spec.md doesn't allow threads",
+            "idea.md doesn't allow threads",
         );
         let report = check_edge_threads(template, Some(8)).await;
         assert_violation(
             &report,
             Rule::Resources,
             line_of(template, ".equ THREADS, 16"),
-            "THREADS is 16, but the spec allows from 1 to 8 threads",
+            "THREADS is 16, but the idea allows from 1 to 8 threads",
         );
         for (old, new, at, needle) in cases {
             assert!(
@@ -3380,55 +3380,55 @@ async fn every_aarch64_asset_follows_every_rule() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let assets = root.join("plugin/skills/compile/assets");
     let mut programs = Vec::new();
-    for (spec, code) in [
-        ("template-spec.md", "linux-aarch64/main-template.s"),
-        ("vector-template-spec.md", "linux-aarch64/vector-template.s"),
-        ("stream-template-spec.md", "linux-aarch64/stream-template.s"),
-        ("tally-template-spec.md", "linux-aarch64/tally-template.s"),
-        ("server-template-spec.md", "linux-aarch64/server-template.s"),
+    for (idea, code) in [
+        ("template-idea.md", "linux-aarch64/main-template.s"),
+        ("vector-template-idea.md", "linux-aarch64/vector-template.s"),
+        ("stream-template-idea.md", "linux-aarch64/stream-template.s"),
+        ("tally-template-idea.md", "linux-aarch64/tally-template.s"),
+        ("server-template-idea.md", "linux-aarch64/server-template.s"),
         (
-            "terminal-template-spec.md",
+            "terminal-template-idea.md",
             "linux-aarch64/terminal-template.s",
         ),
-        ("fast/wc/spec.md", "linux-aarch64/fast/wc/main.s"),
-        ("fast/wc/spec.md", "linux-aarch64/fast/wc-sve/main.s"),
-        ("fast/crc32c/spec.md", "linux-aarch64/fast/crc32c/main.s"),
+        ("fast/wc/idea.md", "linux-aarch64/fast/wc/main.s"),
+        ("fast/wc/idea.md", "linux-aarch64/fast/wc-sve/main.s"),
+        ("fast/crc32c/idea.md", "linux-aarch64/fast/crc32c/main.s"),
         (
-            "fast/crc32c/spec.md",
+            "fast/crc32c/idea.md",
             "linux-aarch64/fast/crc32c-crc/main.s",
         ),
         (
-            "linux-aarch64/fast/sha256-sha2/spec.md",
+            "linux-aarch64/fast/sha256-sha2/idea.md",
             "linux-aarch64/fast/sha256-sha2/main.s",
         ),
         (
-            "linux-aarch64/fast/aes-aes/spec.md",
+            "linux-aarch64/fast/aes-aes/idea.md",
             "linux-aarch64/fast/aes-aes/main.s",
         ),
         (
-            "fast/histogram/spec.md",
+            "fast/histogram/idea.md",
             "linux-aarch64/fast/histogram/main.s",
         ),
         (
-            "parallel-template-spec.md",
+            "parallel-template-idea.md",
             "linux-aarch64/parallel-template.s",
         ),
     ] {
-        programs.push((assets.join(spec), assets.join(code)));
+        programs.push((assets.join(idea), assets.join(code)));
     }
-    // Each fixture is a folder of spec.md and main.s.
+    // Each fixture is a folder of idea.md and main.s.
     for entry in std::fs::read_dir(root.join("tests/fixtures/linux-aarch64")).expect("fixtures") {
         let path = entry.expect("an entry").path();
         if path.join("main.s").is_file() {
-            programs.push((path.join("spec.md"), path.join("main.s")));
+            programs.push((path.join("idea.md"), path.join("main.s")));
         }
     }
     let mut failed = Vec::new();
-    for (spec, code) in &programs {
-        let spec = crate::spec::parse(&std::fs::read_to_string(spec).expect("a spec"))
-            .unwrap_or_else(|problems| panic!("{}: {problems:?}", spec.display()));
+    for (idea, code) in &programs {
+        let idea = crate::idea::parse(&std::fs::read_to_string(idea).expect("an idea"))
+            .unwrap_or_else(|problems| panic!("{}: {problems:?}", idea.display()));
         let text = std::fs::read_to_string(code).expect("a program");
-        let report = check_full(&text, CpuFeatures::all(), spec.threads).await;
+        let report = check_full(&text, CpuFeatures::all(), idea.threads).await;
         if !report.passed() {
             let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
             failed.push(format!("{}: {all:#?}", code.display()));
@@ -3799,7 +3799,7 @@ async fn the_aarch64_messages_say_aarch64() {
     }
 }
 
-/// An AArch64 file program, the upcase example's spec compiled for AArch64: it reads one file
+/// An AArch64 file program, the upcase example's idea compiled for AArch64: it reads one file
 /// whole, capitalizes its letters with no branch on a byte, and writes another, passing every
 /// rule, memory rules included.
 #[tokio::test]
@@ -3865,7 +3865,7 @@ pub(crate) fn on_vectors(text: &str) -> String {
     changed
 }
 
-/// An AArch64 floating-point program, the hypotenuse example's spec compiled for AArch64: its
+/// An AArch64 floating-point program, the hypotenuse example's idea compiled for AArch64: its
 /// doubles (scvtf, fdiv, fmul, fadd, fsqrt, frintn, fcvtzs) pass every rule, and so do they on
 /// vectors. d8 to d15 are
 /// callee-saved, so a function that changes one saves it, in stp pairs after the frame record and
@@ -3951,7 +3951,7 @@ async fn an_aarch64_float_program_passes_every_rule() {
     );
 }
 
-/// The AArch64 vector template, x86-64's `shout` spec compiled with NEON, passes every rule. Its
+/// The AArch64 vector template, x86-64's `shout` idea compiled with NEON, passes every rule. Its
 /// 16-byte loads and stores are held to their buffer as x86-64's are, a V register a function
 /// changes from v8 to v15 is saved as d8 to d15 are, and x18, widened indexes and half precision
 /// on vectors stay out.
@@ -4143,7 +4143,7 @@ async fn expressions_mean_what_they_mean_to_llvm_mc() {
     }
 }
 
-/// The AArch64 calc fixture, the x86-64 one's spec compiled for AArch64: its `apply` picks its
+/// The AArch64 calc fixture, the x86-64 one's idea compiled for AArch64: its `apply` picks its
 /// operator's case through a checked jump table.
 fn aarch64_calc() -> String {
     std::fs::read_to_string(
@@ -4668,7 +4668,7 @@ const EDGE_BASE: PerCpu<&str> = PerCpu {
             .size main, . - main\n",
 };
 
-/// What the base's spec allows: output and exit, which every program has.
+/// What the base's idea allows: output and exit, which every program has.
 const BASE_OPS: [crate::edge::Op; 2] = [crate::edge::Op::Write, crate::edge::Op::Exit];
 
 /// The base passes every rule, on both CPUs.
@@ -4685,7 +4685,7 @@ async fn an_edge_form_program_can_pass_every_rule() {
 struct EdgeFixture {
     what: &'static str,
     edits: PerCpu<&'static [(&'static str, &'static str)]>,
-    /// The operations the spec allows.
+    /// The operations the idea allows.
     ops: &'static [crate::edge::Op],
     says: &'static str,
 }
@@ -4747,16 +4747,16 @@ const EDGE_FIXTURES: &[EdgeFixture] = &[
         says: "LENGUA_EXTRA is a name lengua keeps",
     },
     EdgeFixture {
-        what: "an operation the spec doesn't allow",
+        what: "an operation the idea doesn't allow",
         edits: PerCpu {
             x86_64: &[("    call os_write\n", "    call os_clock\n")],
             aarch64: &[("    bl os_write\n", "    bl os_clock\n")],
         },
         ops: &BASE_OPS,
-        says: "os_clock isn't one the spec allows",
+        says: "os_clock isn't one the idea allows",
     },
     EdgeFixture {
-        what: "a thread started by the program itself, though the spec allows threads",
+        what: "a thread started by the program itself, though the idea allows threads",
         // lengua's os_thread_start calls the program's `worker`, so linking it needs one.
         edits: PerCpu {
             x86_64: &[
@@ -4784,7 +4784,7 @@ const EDGE_FIXTURES: &[EdgeFixture] = &[
         says: "os_thread_start is called by lengua's parallel_for alone",
     },
     EdgeFixture {
-        what: "a thread joined by the program itself, though the spec allows threads",
+        what: "a thread joined by the program itself, though the idea allows threads",
         edits: PerCpu {
             x86_64: &[("    call os_write\n", "    call os_thread_join\n")],
             aarch64: &[("    bl os_write\n", "    bl os_thread_join\n")],
@@ -4874,13 +4874,13 @@ const EDGE_FIXTURES: &[EdgeFixture] = &[
         says: ".Llengua_hidden is a name lengua keeps",
     },
     EdgeFixture {
-        what: "a library function whose operations the spec doesn't allow",
+        what: "a library function whose operations the idea doesn't allow",
         edits: PerCpu {
             x86_64: &[("    call os_write\n", "    call fill\n")],
             aarch64: &[("    bl os_write\n", "    bl fill\n")],
         },
         ops: &BASE_OPS,
-        says: "fill isn't one the spec allows (it calls os_read)",
+        says: "fill isn't one the idea allows (it calls os_read)",
     },
     EdgeFixture {
         what: "a result nobody tests",

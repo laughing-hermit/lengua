@@ -73,7 +73,7 @@ pub enum Verdict {
 pub struct Bound {
     /// The longest text proven, with every shorter one.
     pub bytes: usize,
-    /// The longest the spec lets the block's texts be.
+    /// The longest the idea lets the block's texts be.
     pub of: usize,
     /// Whether proving on could reach further: the time ran out, not the model.
     pub more: bool,
@@ -95,7 +95,7 @@ pub struct Budget {
     pub max_shapes: usize,
     /// Each solver question's time limit, in milliseconds.
     pub question_ms: u64,
-    /// Whether the program has its listener at file descriptor 3, as a spec that listens gives
+    /// Whether the program has its listener at file descriptor 3, as an idea that listens gives
     /// it.
     pub listens: bool,
     /// Once set, the proof stops at its next input combination: the code it proves changed.
@@ -1186,7 +1186,7 @@ pub const UNSAFE: &str = "(unsafe)";
 pub use crate::edge::PIPE_WRITE;
 
 /// The most text lengths one proof lays out past where it starts, more than its time reaches: a
-/// text is proven up to the length the spec gives it, shortest first, as far as the proof's time
+/// text is proven up to the length the idea gives it, shortest first, as far as the proof's time
 /// goes, and the next check goes on from where it stopped.
 const WINDOW: usize = 1 << 16;
 
@@ -3137,7 +3137,7 @@ fn by_length(
     let characters = block.vars.iter().any(|(_, generator)| {
         matches!(generator, Generator::Str { charset, .. } if !charset.iter().all(char::is_ascii))
     });
-    // The longest the spec lets any of the block's texts be.
+    // The longest the idea lets any of the block's texts be.
     let of = block
         .vars
         .iter()
@@ -3621,7 +3621,7 @@ fn prove_shape(
         .iter()
         .map(|(_, _, reply)| pattern_bytes(&mut pool, reply, &inputs))
         .collect::<Result<_, _>>()?;
-    // Each connection the spec names is made before the program starts: answered by the test's
+    // Each connection the idea names is made before the program starts: answered by the test's
     // server for it, or ended.
     let made = made_connections(
         block.connections,
@@ -4198,7 +4198,7 @@ fn check_runs(
 }
 
 /// A question's answer once the long texts' bytes are held to their characters: where it found
-/// inputs, it's asked again with `held`, so a counterexample is one the spec can give.
+/// inputs, it's asked again with `held`, so a counterexample is one the idea can give.
 fn within(
     pool: &mut Pool,
     solver: &mut Solver,
@@ -4217,7 +4217,7 @@ fn within(
         .map_err(|error| Stop::Unproven(format!("the solver failed: {error}")))
 }
 
-/// The connections lengua makes before a test's program starts, in the spec's order: each the
+/// The connections lengua makes before a test's program starts, in the idea's order: each the
 /// place in the test's servers of the one that answers it, or `None` for one handed over ended.
 fn made_connections(count: usize, answering: impl Iterator<Item = usize>) -> Vec<Option<usize>> {
     let mut made = vec![None; count];

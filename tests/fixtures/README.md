@@ -40,7 +40,7 @@ And written for the tests themselves:
 
 **Every one has its twin on the other CPU.** `linux-aarch64/` holds the AArch64 twin of each
 fixture here and of each program in `examples/`, 29 in all, each compiled from the very same
-`spec.md` (the twin test, `every_program_has_its_twin_on_the_other_cpu`, asks for the same bytes),
+`idea.md` (the twin test, `every_program_has_its_twin_on_the_other_cpu`, asks for the same bytes),
 and a program added on either CPU comes with its twin. One test,
 `every_program_passes_its_checks_on_every_target` (tests/every_program.rs), takes them all
 through the server on each target a computer runs, and `tests/programs.rs` takes the ones a case
@@ -54,11 +54,11 @@ a cell for each target, run natively on each CPU's runner) start from the templa
 twins of `add`, `cat`, `cat-stream` and `echo`: `cat` is proven up to its 4,096-byte bound and has
 its proof interrupted by an edit, `cat-stream` is stamped, run on a long input and proven for every
 length, and `echo` is served from a shell until it is stopped. A fixture they use is needed on
-both CPUs, with the very same `spec.md`.
+both CPUs, with the very same `idea.md`.
 
 **Some are also the subject of a case written once for both CPUs.** `tests/network.rs` makes one
 change to a program of each CPU and holds the report to it: `second` read with a read of its own
-instead of `fill`, or with a spec whose first line the tests' cuts never end a read after (the
+instead of `fill`, or with an idea whose first line the tests' cuts never end a read after (the
 proof's cut finds it); the `echo` and `fetch` examples served, fetched from, proven, and edited to
 wait for the client to close or to stop after one connection; and `add` with the exit code of a
 failed write changed. Each case's edit is a cell for each CPU in the test, checked against that
@@ -69,13 +69,13 @@ like `examples/sha256` and `examples/aes`, are plain integer code (rotates, adds
 of 256 words for AES) that runs on every computer of its CPU; the forms that use the CPU's SHA and
 AES instructions are fast tiers in the compile skill's assets (`fast/sha256-ni` and `fast/aes-ni`;
 on ARM64 `linux-aarch64/fast/sha256-sha2` and `fast/aes-aes`), each beside the very same
-`spec.md`. `tests/crypto_forms.rs` holds that to account: the same spec bytes in every form, a
+`idea.md`. `tests/crypto_forms.rs` holds that to account: the same idea bytes in every form, a
 baseline that uses nothing beyond its CPU's baseline, and the tiers through the server where the
 CPU has what they use.
 
 **The prover proves both twins of a fixture from the same cases.** The prover's tests
 (`src/prove/tests.rs`) and the executor's (`src/prove/exec.rs`) are written once, as tables with a
-cell for each CPU (`PerCpu`): a fixture's two twins are proven from the very same `spec.md`
+cell for each CPU (`PerCpu`): a fixture's two twins are proven from the very same `idea.md`
 blocks, each test reading its target's folder (`tests/fixtures/<name>` and
 `tests/fixtures/linux-aarch64/<name>`), and a planted bug is an edit of each target's own
 `main.s`, listed beside the other's. Both CPUs' cells run on either runner, since a proof is

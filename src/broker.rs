@@ -176,17 +176,17 @@ impl Kind {
     }
 }
 
-/// What a program's spec lets it ask the broker for: names (opening, making, removing and
+/// What a program's idea lets it ask the broker for: names (opening, making, removing and
 /// renaming files and folders), the clock and random bytes. The broker does these in the server,
-/// outside the program's confinement, so the kernel can't hold the program to its spec for them:
+/// outside the program's confinement, so the kernel can't hold the program to its idea for them:
 /// the broker does. A note, which asks for nothing, is always allowed.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Permit {
-    /// Opening, making, removing and renaming: the spec names files.
+    /// Opening, making, removing and renaming: the idea names files.
     pub names: bool,
-    /// The clock: the spec names it.
+    /// The clock: the idea names it.
     pub clock: bool,
-    /// Random bytes: the spec names them.
+    /// Random bytes: the idea names them.
     pub random: bool,
 }
 
@@ -198,12 +198,12 @@ impl Permit {
         random: true,
     };
 
-    /// What a spec allows, from the system calls it allows: names when it allows any call that
-    /// makes or finds a path (a spec that names files allows them all), the clock when it allows
+    /// What an idea allows, from the system calls it allows: names when it allows any call that
+    /// makes or finds a path (an idea that names files allows them all), the clock when it allows
     /// reading it, random bytes when it allows drawing them.
     #[must_use]
-    pub fn of(calls: &[crate::spec::Syscall]) -> Self {
-        use crate::spec::Syscall;
+    pub fn of(calls: &[crate::idea::Syscall]) -> Self {
+        use crate::idea::Syscall;
         Self {
             names: calls.iter().any(|call| {
                 matches!(

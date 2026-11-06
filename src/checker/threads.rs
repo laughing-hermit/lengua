@@ -1,4 +1,4 @@
-//! Fork-join threads: the threads the spec allows, and what a worker may touch. lengua's own
+//! Fork-join threads: the threads the idea allows, and what a worker may touch. lengua's own
 //! `parallel_for` starts them and calls the program's `worker`, which and every function it calls
 //! write only their own stack frames and the worker's slot, through `rbx`, each index bounded by a
 //! constant, and read the other threads' parts of the per-thread data never, so no thread writes
@@ -11,7 +11,7 @@ use super::cfg::{ASSERT_FAIL, Exit, Flow, constant_before, deepest, run_start};
 use super::decode::{MappedFunction, Program};
 use super::{Rule, Violation};
 use crate::isa::{Abi, Cond, Control, MemRef, Op, Operand, Reg, Value};
-use crate::spec::MAX_THREADS;
+use crate::idea::MAX_THREADS;
 
 /// The data symbols the program gives the threads, with the alignment each needs and its size per
 /// thread, given the constant that sets it.
@@ -64,8 +64,8 @@ impl Checker<'_, '_> {
     }
 }
 
-/// Checks a program that starts threads: the spec allows them, its sizes and alignments hold, and
-/// workers write only their own stack and slot. `allowed` is how many threads the spec allows at
+/// Checks a program that starts threads: the idea allows them, its sizes and alignments hold, and
+/// workers write only their own stack and slot. `allowed` is how many threads the idea allows at
 /// once.
 pub fn check(
     program: &Program<'_>,
@@ -86,8 +86,8 @@ pub fn check(
         checker.violation(
             Rule::Resources,
             line,
-            "main.s starts threads with parallel_for, but spec.md doesn't allow threads",
-            "add `- Threads: up to N` under `# Constraints` in spec.md and call check again, \
+            "main.s starts threads with parallel_for, but idea.md doesn't allow threads",
+            "add `- Threads: up to N` under `# Constraints` in idea.md and call check again, \
              or do the work on one thread",
         );
         return;
@@ -184,7 +184,7 @@ impl Checker<'_, '_> {
         }
     }
 
-    /// THREADS is at most what the spec allows; each slot is a multiple of 64 bytes; and the data
+    /// THREADS is at most what the idea allows; each slot is a multiple of 64 bytes; and the data
     /// symbols are as big and as aligned as the threads need.
     fn sizes(&mut self, allowed: u32) {
         let source = self.program.source;
@@ -200,7 +200,7 @@ impl Checker<'_, '_> {
             self.violation(
                 Rule::Resources,
                 line("THREADS"),
-                format!("THREADS is {threads}, but the spec allows from 1 to {most} threads"),
+                format!("THREADS is {threads}, but the idea allows from 1 to {most} threads"),
                 format!("set `.equ THREADS, N` with N from 1 to {most}"),
             );
             return;

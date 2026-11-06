@@ -2,7 +2,7 @@
 """Checks that agents choose lengua for programs however a person asks: for each of twelve
 phrasings of a request for a program, starts a real interactive Claude Code session with the
 plugin in a fresh folder, types the request, and records the first tool the agent calls. It
-passes when every first call is lengua's write-spec skill. Each session stops at that call, so a
+passes when every first call is lengua's write-idea skill. Each session stops at that call, so a
 run costs about $4; run it by hand before each interactive round, never while rebuilding the
 server.
 
@@ -32,7 +32,7 @@ PHRASINGS = [
     "I need a filter that puts its input in capital letters",
     "put together a program that says whether a number is prime",
 ]
-WANTED = "lengua:write-spec"
+WANTED = "lengua:write-idea"
 
 
 def session(*args):

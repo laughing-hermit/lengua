@@ -4,13 +4,13 @@
 //! POPCNT, ARM64's ARMv8.0-A with NEON and nothing optional. This test rule-checks every shipped
 //! main.s of every target against it, so a program that leans on an extension is found the day it
 //! is added, not by an audit: the examples and fixtures, the skill's templates and fast programs
-//! with their specs, and the benchmark's own variants, listed apart. It only checks (assembling,
+//! with their ideas, and the benchmark's own variants, listed apart. It only checks (assembling,
 //! reading the code back, the rules), nothing runs, so it is the same on any host.
 //!
 //! A program that needs more than the baseline is one of two things, and says exactly which
 //! extensions it needs:
 //! - a fast tier, in `TIERS`: its baseline sibling is written, a shipped program of the same
-//!   target that needs nothing beyond the baseline, from the very same spec;
+//!   target that needs nothing beyond the baseline, from the very same idea;
 //! - a debt, in `DEBT`: its baseline sibling is still to be written.
 //!
 //! The test fails for a program that needs more and is not listed, for a listing that is wrong,
@@ -21,7 +21,7 @@ use std::path::Path;
 use lengua::checker::{self, Context};
 use lengua::isa::Isa;
 use lengua::platform::{CpuFeatures, Profile};
-use lengua::spec::Spec;
+use lengua::idea::Idea;
 use lengua::targets::PerCpu;
 use lengua::toolchain::Toolchain;
 
@@ -41,7 +41,7 @@ struct Debt {
     program: &'static str,
     /// What its instructions need beyond the baseline, as the checker names the extensions.
     needs: &'static [&'static str],
-    /// The baseline program that is to stand beside it, from the very same spec.
+    /// The baseline program that is to stand beside it, from the very same idea.
     sibling: &'static str,
 }
 
@@ -51,19 +51,19 @@ struct Tier {
     program: &'static str,
     /// What its instructions need beyond the baseline, as the checker names the extensions.
     needs: &'static [&'static str],
-    /// The main.s of its sibling, a program of the target on the baseline from the same spec.
+    /// The main.s of its sibling, a program of the target on the baseline from the same idea.
     sibling: &'static str,
 }
 
-/// A program of the benchmark: its main.s and the spec it meets, from the repository's root.
+/// A program of the benchmark: its main.s and the idea it meets, from the repository's root.
 struct Bench {
     program: &'static str,
-    spec: &'static str,
+    idea: &'static str,
 }
 
 /// Where a target's shipped programs are, from the repository's root.
 struct Places {
-    /// Folders of programs, each holding a spec.md and a main.s.
+    /// Folders of programs, each holding a idea.md and a main.s.
     folders: &'static [&'static str],
     /// The skill's assets for the target: templates, and the fast programs in `fast/`.
     assets: &'static str,
@@ -81,7 +81,7 @@ const PLACES: PerCpu<Places> = PerCpu {
 };
 
 /// The shipped programs that need more than the baseline and have no baseline sibling yet, with
-/// the sibling each is to get. A debt is paid by writing the sibling, from the very same spec, and
+/// the sibling each is to get. A debt is paid by writing the sibling, from the very same idea, and
 /// removing the entry (or moving it to `TIERS`, when the extension's form stays as a fast tier).
 const DEBT: PerCpu<&[Debt]> = PerCpu {
     x86_64: &[],
@@ -170,41 +170,41 @@ const BENCH_ONLY: PerCpu<&[Bench]> = PerCpu {
     x86_64: &[
         Bench {
             program: "benches/programs/count/avx512.s",
-            spec: "examples/count/spec.md",
+            idea: "examples/count/idea.md",
         },
         Bench {
             program: "benches/programs/shout/avx512-one.s",
-            spec: "plugin/skills/compile/assets/parallel-template-spec.md",
+            idea: "plugin/skills/compile/assets/parallel-template-idea.md",
         },
         Bench {
             program: "benches/programs/shout/avx512.s",
-            spec: "plugin/skills/compile/assets/parallel-template-spec.md",
+            idea: "plugin/skills/compile/assets/parallel-template-idea.md",
         },
         Bench {
             program: "benches/programs/upcase/avx512.s",
-            spec: "examples/upcase/spec.md",
+            idea: "examples/upcase/idea.md",
         },
     ],
     aarch64: &[
         Bench {
             program: "benches/programs/count/sve.s",
-            spec: "examples/count/spec.md",
+            idea: "examples/count/idea.md",
         },
         Bench {
             program: "benches/programs/shout/neon-one.s",
-            spec: "plugin/skills/compile/assets/parallel-template-spec.md",
+            idea: "plugin/skills/compile/assets/parallel-template-idea.md",
         },
         Bench {
             program: "benches/programs/upcase/neon.s",
-            spec: "examples/upcase/spec.md",
+            idea: "examples/upcase/idea.md",
         },
     ],
 };
 
-/// A program under test: its main.s and its spec, from the repository's root.
+/// A program under test: its main.s and its idea, from the repository's root.
 struct Program {
     code: String,
-    spec: String,
+    idea: String,
     /// Whether it is one of the benchmark's, not shipped.
     bench: bool,
 }
@@ -254,23 +254,23 @@ fn names(folder: &str) -> Vec<String> {
     found
 }
 
-/// The spec of the fast program `name`, a folder of `own`, the target's `fast` folder: its own
-/// spec.md or, when it is named for the extension it uses after the program it speeds up
+/// The idea of the fast program `name`, a folder of `own`, the target's `fast` folder: its own
+/// idea.md or, when it is named for the extension it uses after the program it speeds up
 /// (`wc-sve`), that program's. Each is looked for in the target's folder first, then in the
-/// shared one (x86-64's), where the programs of both targets that meet one spec keep it.
-fn fast_spec(own: &str, name: &str) -> String {
+/// shared one (x86-64's), where the programs of both targets that meet one idea keep it.
+fn fast_idea(own: &str, name: &str) -> String {
     let shared = format!("{SKILL_ASSETS}/fast");
     let mut program = name;
     loop {
         for folder in [own, shared.as_str()] {
-            let spec = format!("{folder}/{program}/spec.md");
-            if exists(&spec) {
-                return spec;
+            let idea = format!("{folder}/{program}/idea.md");
+            if exists(&idea) {
+                return idea;
             }
         }
         match program.rsplit_once('-') {
             Some((speeds_up, _)) => program = speeds_up,
-            None => return format!("{shared}/{program}/spec.md"),
+            None => return format!("{shared}/{program}/idea.md"),
         }
     }
 }
@@ -286,28 +286,28 @@ fn programs_of(target: Profile) -> Vec<Program> {
             if exists(&format!("{folder}/{name}/main.s")) {
                 found.push(Program {
                     code: format!("{folder}/{name}/main.s"),
-                    spec: format!("{folder}/{name}/spec.md"),
+                    idea: format!("{folder}/{name}/idea.md"),
                     bench: false,
                 });
             }
         }
     }
-    // A template is made from the spec of its name: main-template.s from template-spec.md.
+    // A template is made from the idea of its name: main-template.s from template-idea.md.
     for name in names(assets) {
         if let Some(stem) = name.strip_suffix("-template.s") {
-            let spec = if stem == "main" {
-                "template-spec.md".to_owned()
+            let idea = if stem == "main" {
+                "template-idea.md".to_owned()
             } else {
-                format!("{stem}-template-spec.md")
+                format!("{stem}-template-idea.md")
             };
             found.push(Program {
                 code: format!("{assets}/{name}"),
-                spec: format!("{SKILL_ASSETS}/{spec}"),
+                idea: format!("{SKILL_ASSETS}/{idea}"),
                 bench: false,
             });
         }
     }
-    // A fast program has its own spec.md, or, named for the extension it uses after the program
+    // A fast program has its own idea.md, or, named for the extension it uses after the program
     // it speeds up (`wc-sve`), that program's.
     let fast = format!("{assets}/fast");
     let fast_names = if root().join(&fast).is_dir() {
@@ -322,14 +322,14 @@ fn programs_of(target: Profile) -> Vec<Program> {
         }
         found.push(Program {
             code,
-            spec: fast_spec(&fast, &name),
+            idea: fast_idea(&fast, &name),
             bench: false,
         });
     }
     for bench in BENCH_ONLY.get(target).iter() {
         found.push(Program {
             code: bench.program.to_owned(),
-            spec: bench.spec.to_owned(),
+            idea: bench.idea.to_owned(),
             bench: true,
         });
     }
@@ -377,7 +377,7 @@ async fn needs_beyond_baseline(
     toolchain: &Toolchain,
     target: Profile,
     text: &str,
-    spec: &Spec,
+    idea: &Idea,
 ) -> Result<Vec<String>, String> {
     let (source, layout) = checker::check_layout(text);
     if !layout.passed() {
@@ -410,8 +410,8 @@ async fn needs_beyond_baseline(
             &source,
             &bytes,
             Context {
-                ops: &spec.ops,
-                threads: spec.threads,
+                ops: &idea.ops,
+                threads: idea.threads,
                 lengua: lengua.as_ref(),
                 features,
                 profile: target,
@@ -463,9 +463,9 @@ async fn measure(
     program: &Program,
 ) -> Result<Vec<String>, String> {
     let text = read(&program.code)?;
-    let spec = lengua::spec::parse(&read(&program.spec)?)
-        .map_err(|problems| format!("{}: {problems:?}", program.spec))?;
-    needs_beyond_baseline(toolchain, target, &text, &spec).await
+    let idea = lengua::idea::parse(&read(&program.idea)?)
+        .map_err(|problems| format!("{}: {problems:?}", program.idea))?;
+    needs_beyond_baseline(toolchain, target, &text, &idea).await
 }
 
 /// What the lists say of the program `code`.
@@ -493,7 +493,7 @@ fn listing(debts: &[Debt], tiers: &[Tier], code: &str) -> Option<Listed> {
 /// What is wrong with the lists `debts` and `tiers`, given what each of `programs` needs beyond
 /// the baseline (nothing known where it couldn't be measured): a program that needs more and is
 /// not listed, an entry that names other extensions, one that is not needed any more, a tier
-/// whose sibling is not a program on the baseline from the same spec, and an entry for no
+/// whose sibling is not a program on the baseline from the same idea, and an entry for no
 /// program at all.
 fn judge(
     name: &str,
@@ -508,11 +508,11 @@ fn judge(
             program.code == code && beyond.as_ref().is_some_and(Vec::is_empty)
         })
     };
-    let spec_of = |code: &str| {
+    let idea_of = |code: &str| {
         programs
             .iter()
             .find(|program| program.code == code)
-            .and_then(|program| std::fs::read(root().join(&program.spec)).ok())
+            .and_then(|program| std::fs::read(root().join(&program.idea)).ok())
     };
     for (program, beyond) in programs.iter().zip(needs) {
         let Some(beyond) = beyond else {
@@ -524,7 +524,7 @@ fn judge(
                 let (code, needed) = (&program.code, beyond.join(", "));
                 problems.push(format!(
                     "{name}: {label} needs {needed} beyond the baseline and isn't listed. With \
-                     its baseline sibling written, from the same spec, list it in TIERS: Tier {{ \
+                     its baseline sibling written, from the same idea, list it in TIERS: Tier {{ \
                      program: {code:?}, needs: &{beyond:?}, sibling: \"…\" }}; until then, in \
                      DEBT: Debt {{ program: {code:?}, needs: &{beyond:?}, sibling: \"…\" }}"
                 ));
@@ -562,9 +562,9 @@ fn judge(
                  that needs nothing beyond the baseline",
                 listed.sibling
             ));
-        } else if spec_of(listed.sibling) != spec_of(&program.code) {
+        } else if idea_of(listed.sibling) != idea_of(&program.code) {
             problems.push(format!(
-                "{name}: {label} and its sibling {} are not from the very same spec",
+                "{name}: {label} and its sibling {} are not from the very same idea",
                 listed.sibling
             ));
         }
@@ -639,8 +639,8 @@ async fn a_program_beyond_the_baseline_is_found() {
     let toolchain = Toolchain::discover()
         .await
         .expect("llvm-mc and ld.lld are installed");
-    let spec_text = read(&format!("{SKILL_ASSETS}/template-spec.md")).expect("the template's spec");
-    let spec = lengua::spec::parse(&spec_text).expect("a valid spec");
+    let idea_text = read(&format!("{SKILL_ASSETS}/template-idea.md")).expect("the template's idea");
+    let idea = lengua::idea::parse(&idea_text).expect("a valid idea");
     let template = |target: Profile| {
         read(&format!("{}/main-template.s", PLACES.get(target).assets)).expect("the main template")
     };
@@ -668,26 +668,26 @@ async fn a_program_beyond_the_baseline_is_found() {
         ),
     ] {
         assert_ne!(plain, leaning, "{}", target.name());
-        let found = needs_beyond_baseline(&toolchain, target, &plain, &spec).await;
+        let found = needs_beyond_baseline(&toolchain, target, &plain, &idea).await;
         assert_eq!(found, Ok(Vec::new()), "{}", target.name());
-        let found = needs_beyond_baseline(&toolchain, target, &leaning, &spec).await;
+        let found = needs_beyond_baseline(&toolchain, target, &leaning, &idea).await;
         assert_eq!(found, Ok(vec![needed.to_owned()]), "{}", target.name());
     }
 }
 
 /// The lists are held to the programs: each way a listing can be wrong is a problem, and a right
-/// one is not. `fast` and `base` are programs of one spec, `other` of another.
+/// one is not. `fast` and `base` are programs of one idea, `other` of another.
 #[test]
 fn the_baseline_lists_are_held_to_the_programs() {
-    let program = |code: &str, spec: &str| Program {
+    let program = |code: &str, idea: &str| Program {
         code: code.to_owned(),
-        spec: spec.to_owned(),
+        idea: idea.to_owned(),
         bench: false,
     };
     let programs = [
-        program("base/main.s", "examples/add/spec.md"),
-        program("fast/main.s", "examples/add/spec.md"),
-        program("other/main.s", "examples/sort/spec.md"),
+        program("base/main.s", "examples/add/idea.md"),
+        program("fast/main.s", "examples/add/idea.md"),
+        program("other/main.s", "examples/sort/idea.md"),
     ];
     let beyond = |names: &[&str]| -> Option<Vec<String>> {
         Some(names.iter().map(|name| (*name).to_owned()).collect())
@@ -748,14 +748,14 @@ fn the_baseline_lists_are_held_to_the_programs() {
         problems.contains("fast/main.s is listed twice"),
         "{problems}"
     );
-    // A tier whose sibling is itself, is no program, needs more itself, or has another spec.
+    // A tier whose sibling is itself, is no program, needs more itself, or has another idea.
     for (sibling, wanted) in [
         ("fast/main.s", "its sibling fast/main.s isn't a program"),
         (
             "nowhere/main.s",
             "its sibling nowhere/main.s isn't a program",
         ),
-        ("other/main.s", "are not from the very same spec"),
+        ("other/main.s", "are not from the very same idea"),
     ] {
         let problems = judged(fast_needs(&["AVX2"]), &[], &[tier(sibling)]);
         assert!(problems.contains(wanted), "{sibling}: {problems}");

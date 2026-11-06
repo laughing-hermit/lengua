@@ -38,7 +38,7 @@ impl Started {
     }
 
     /// lengua's ends of the connections that go to the test's own servers, each with its
-    /// connection's number in the spec, from 0.
+    /// connection's number in the idea, from 0.
     pub fn take_peers(&mut self) -> Vec<(usize, Peer)> {
         match self.never {}
     }

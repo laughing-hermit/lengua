@@ -1,5 +1,5 @@
 //! The connections lengua makes for a program. A program never connects by itself: for each
-//! place its spec names, lengua's runner, outside the sandbox, makes the connection before the
+//! place its idea names, lengua's runner, outside the sandbox, makes the connection before the
 //! program starts and hands the program one end of a local stream, which it relays to the place
 //! both ways. So the program holds no network at all, on every system, and a connection behaves
 //! the same everywhere:
@@ -35,10 +35,10 @@ use tokio::net::UnixStream;
 use tokio::sync::oneshot;
 
 /// The descriptor a program's first connection has: 3 is a server's listener, so each
-/// connection's number depends only on its place in the spec.
+/// connection's number depends only on its place in the idea.
 pub const FIRST_DESCRIPTOR: i32 = 4;
 
-/// The most connections a spec may name.
+/// The most connections an idea may name.
 pub const MAX_CONNECTIONS: usize = 16;
 
 /// How long lengua tries to make a connection before the program starts without it.
@@ -264,18 +264,18 @@ pub fn resolved(reach: &Reach, args: &[String]) -> Result<Reach, String> {
         ));
     };
     let host = given.to_ascii_lowercase();
-    match crate::spec::host_kind(&host) {
-        crate::spec::HostKind::Other => Ok(if *tls {
+    match crate::idea::host_kind(&host) {
+        crate::idea::HostKind::Other => Ok(if *tls {
             Reach::Tls(host, *port)
         } else {
             Reach::Host(host, *port)
         }),
-        crate::spec::HostKind::ThisComputer => Err(format!(
+        crate::idea::HostKind::ThisComputer => Err(format!(
             "argument {index}, `{}`, is this computer, which a connection to the computer an \
              argument names never goes to",
             given.escape_debug()
         )),
-        crate::spec::HostKind::NotAName => Err(format!(
+        crate::idea::HostKind::NotAName => Err(format!(
             "argument {index}, `{}`, isn't a computer's name or address",
             given.escape_debug()
         )),
@@ -389,7 +389,7 @@ mod tests {
     use super::*;
 
     /// A computer an argument names is read when the program starts: a name or another
-    /// computer's address goes there, over TLS when the spec says so; an argument that's missing,
+    /// computer's address goes there, over TLS when the idea says so; an argument that's missing,
     /// names this computer, or names nothing is a connection lengua can't make.
     #[test]
     fn the_computer_an_argument_names_is_read_when_the_program_starts() {

@@ -1,6 +1,6 @@
 //! The red team: programs written to get past lengua's own checks, on every target. Each attempt
 //! is the target's template with one change that tries it, and `check` must refuse it up front:
-//! a system call of main.s's own, an operation the spec doesn't allow, a name lengua keeps (a
+//! a system call of main.s's own, an operation the idea doesn't allow, a name lengua keeps (a
 //! function, a label, an assertion handler or its message), a jump or call that lands anywhere but
 //! the start of an operation or a function, lengua's data read or written, an operation called
 //! through a register, an exit status or an assertion number lengua keeps for itself, an access
@@ -52,7 +52,7 @@ enum Expect {
 /// The attempts that run together, as one test.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Family {
-    /// Ways to the OS other than an operation the spec allows, and into lengua's own code, data
+    /// Ways to the OS other than an operation the idea allows, and into lengua's own code, data
     /// and names.
     Edge,
     /// Accesses outside their owner.
@@ -149,9 +149,9 @@ const EXIT_AS_ASSERTION: &[Edit] = &[(
 
 /// Every attempt.
 const ATTEMPTS: &[Attempt] = &[
-    // Ways to the OS other than an operation the spec allows. main.s reaches the OS by calling the
+    // Ways to the OS other than an operation the idea allows. main.s reaches the OS by calling the
     // operations in lengua's text, which is assembled after it: it makes no system call of its
-    // own, calls no operation its spec doesn't name, defines none of lengua's names, and enters
+    // own, calls no operation its idea doesn't name, defines none of lengua's names, and enters
     // lengua's code only by a call to an operation or to a library function.
     Attempt {
         family: Family::Edge,
@@ -170,16 +170,16 @@ const ATTEMPTS: &[Attempt] = &[
     },
     Attempt {
         family: Family::Edge,
-        what: "an operation the spec doesn't allow",
+        what: "an operation the idea doesn't allow",
         expect: Expect::Refused,
         cells: PerCpu {
             x86_64: Cell::Try {
                 edits: &[("    call os_exit\n", "    call os_open\n    call os_exit\n")],
-                needles: &["isn't one the spec allows"],
+                needles: &["isn't one the idea allows"],
             },
             aarch64: Cell::Try {
                 edits: &[("    bl os_exit\n", "    bl os_open\n    bl os_exit\n")],
-                needles: &["isn't one the spec allows"],
+                needles: &["isn't one the idea allows"],
             },
         },
     },
@@ -198,7 +198,7 @@ const ATTEMPTS: &[Attempt] = &[
             },
         },
     },
-    // A jump to an operation the spec doesn't allow, which is no call of it for the rule on
+    // A jump to an operation the idea doesn't allow, which is no call of it for the rule on
     // operations to see.
     Attempt {
         family: Family::Edge,
@@ -1257,10 +1257,10 @@ fn planned(target: Profile, cell: Cell) -> Option<(String, &'static [&'static st
     }
 }
 
-/// A program folder holding the template's spec, recorded.
+/// A program folder holding the template's idea, recorded.
 async fn checked_template(session: &Session) -> Program {
     let program = Program::new();
-    program.write("spec.md", &asset("template-spec.md"));
+    program.write("idea.md", &asset("template-idea.md"));
     let report = session.record(&program).await;
     assert_eq!(report["state"], "write_code", "{report}");
     program
@@ -1362,7 +1362,7 @@ async fn run_family(family: Family) {
 }
 
 #[tokio::test]
-async fn the_os_is_reached_only_by_an_operation_the_spec_allows() {
+async fn the_os_is_reached_only_by_an_operation_the_idea_allows() {
     run_family(Family::Edge).await;
 }
 

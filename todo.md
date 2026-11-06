@@ -84,7 +84,7 @@ x86-64 stays dropped (the owner: Apple makes no Intel Macs).
 
 | Point | Now | Left |
 |---|---|---|
-| 1. AI language, Agent Plugin | The native plugin: `write-spec`, `compile`, `check`, `run`, `spec.md` and `main.s`, the `Builds on` graph | W1 (idea files), W5 (the compile skill for WebAssembly), W6 (the graph) |
+| 1. AI language, Agent Plugin | The native plugin: `write-idea`, `compile`, `check`, `run`, `idea.md` and `main.s`, the `Builds on` graph | W1 (idea files), W5 (the compile skill for WebAssembly), W6 (the graph) |
 | 2. One product everywhere | Two native Linux targets pass the one suite (run 42178888801) | W2 to W5 on all five runners |
 | 3. Tailored | CPU tiers for x86-64 and ARM64 | W2 (engine, caches), W8 |
 | 4. Competitive | Native programs measured, none gated | W8 (the gate) |
@@ -114,7 +114,7 @@ Each can be reversed.
   `computation: main.wat`, `run` its executor and `check` its attester. `check` writes
   `verified: { by: lengua/<version>, at }` when everything passes, and the lock's hash leaves the
   trust and lifecycle keys out.
-- **The skill `write-spec` is now `write-idea`.**
+- **The skill `write-idea` is now `write-idea`.**
 - **The graph is also an MCP resource**, read-only, beside the two tools.
 - **The performance finish line** compares lengua with C, C++ and Rust compiled to WebAssembly and
   run the same way, and publishes the gaps against their native builds (point 4).
@@ -127,7 +127,7 @@ Each can be reversed.
 Each merges to main when green on the runners it names; [ROADMAP.md](ROADMAP.md) has the detail.
 
 - **W0. Record the decision.** This file, ROADMAP.md, README's opening, the tag `native-final`.
-- **W1. Idea files.** `spec.md` becomes `idea.md` and `write-spec` becomes `write-idea`,
+- **W1. Idea files.** `idea.md` becomes `idea.md` and `write-idea` becomes `write-idea`,
   everywhere, with the lock's format bumped.
 - **W2. The WebAssembly foundation.** The engine, the build, lengua's WASI host, the runner, the
   `machine` line with the CPU's caches, the first WebAssembly fixtures, and CI on all five
@@ -148,7 +148,8 @@ Runs, as they land:
 
 | Milestone | Runs |
 |---|---|
-| W0 | (to come) |
+| W0 | 42295197937 (compile, both Linux runners); tag `native-final` at 723879e; main at fc86dd3 |
+| W1 | (to come) |
 
 ## Superseded by the pivot
 

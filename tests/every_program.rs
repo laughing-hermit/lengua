@@ -1,6 +1,6 @@
 //! Every program lengua ships, on every target, goes through the server: its rules, its tests and,
 //! with no time for proofs, nothing more. Each target ships a twin of every program, compiled from
-//! the very same spec, so neither CPU has a program the other CPU's suite doesn't check: one
+//! the very same idea, so neither CPU has a program the other CPU's suite doesn't check: one
 //! product on every target, only the hardware differing.
 //!
 //! The test is written once, with a cell for each target (`PerCpu`) saying where its programs
@@ -20,7 +20,7 @@ use per_target::Way;
 use serde_json::Value;
 
 /// The folders of each target's programs, relative to the repository: a program is a folder with
-/// a spec.md and a main.s.
+/// a idea.md and a main.s.
 const FOLDERS: PerCpu<&[&str]> = PerCpu {
     x86_64: &["examples", "tests/fixtures"],
     aarch64: &["tests/fixtures/linux-aarch64"],
@@ -154,7 +154,7 @@ async fn every_program_passes_its_checks_on_every_target() {
                 continue;
             }
             let program = Program::new();
-            for file in ["spec.md", "main.s"] {
+            for file in ["idea.md", "main.s"] {
                 program.write(file, &read(file));
             }
             session.record(&program).await;
@@ -177,7 +177,7 @@ async fn every_program_passes_its_checks_on_every_target() {
     }
 }
 
-/// Every program has its twin on every other target, compiled from the very same spec, and no
+/// Every program has its twin on every other target, compiled from the very same idea, and no
 /// target has a program the others lack: one product on every target, only the hardware
 /// differing.
 #[test]
@@ -187,7 +187,7 @@ fn every_program_has_its_twin_on_the_other_cpu() {
         .into_iter()
         .map(|target| (target, programs(root, FOLDERS.get(target))))
         .collect();
-    let spec = |folder: &Path| std::fs::read(folder.join("spec.md")).ok();
+    let idea = |folder: &Path| std::fs::read(folder.join("idea.md")).ok();
     let mut problems = Vec::new();
     for (target, found) in &shipped {
         for (name, folder) in found {
@@ -201,8 +201,8 @@ fn every_program_has_its_twin_on_the_other_cpu() {
                         target.name(),
                         other.name()
                     )),
-                    Some((_, twin)) if spec(folder) != spec(twin) => problems.push(format!(
-                        "{name}: its {} twin's spec differs from {}'s",
+                    Some((_, twin)) if idea(folder) != idea(twin) => problems.push(format!(
+                        "{name}: its {} twin's idea differs from {}'s",
                         other.name(),
                         target.name()
                     )),

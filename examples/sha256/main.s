@@ -1,7 +1,7 @@
 .intel_syntax noprefix
 
 # SHA-256 in plain integer code (rotates, adds and xors) and SSE2, so it runs on every x86-64
-# computer. The form that uses the CPU's SHA instructions, from the very same spec, is
+# computer. The form that uses the CPU's SHA instructions, from the very same idea, is
 # plugin/skills/compile/assets/fast/sha256-ni.
 
 # File descriptors

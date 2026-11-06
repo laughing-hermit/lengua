@@ -2,14 +2,14 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "lengua",
   "version": "0.1.0",
-  "description": "An AI language: a behavior-driven spec in plain words, its tests inside, which the agent compiles into assembly for this computer, Linux on x86-64 or ARM64, and lengua checks against those tests, proofs and an adapted NASA Power of 10.",
+  "description": "An AI language: a behavior-driven idea in plain words, its tests inside, which the agent compiles into assembly for this computer, Linux on x86-64 or ARM64, and lengua checks against those tests, proofs and an adapted NASA Power of 10.",
   "license": "Apache-2.0",
   "author": {
     "name": "lengua"
   },
   "keywords": [
     "assembly",
-    "spec-driven",
+    "idea-driven",
     "bdd",
     "mcp",
     "agent-skills",

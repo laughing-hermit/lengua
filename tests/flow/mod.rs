@@ -143,9 +143,9 @@ pub fn program_file(target: Profile, name: &str, file: &str) -> String {
     panic!("{} ships no program {name} with a {file}", target.name());
 }
 
-/// Both files of the program `name` as `target` ships it: its spec.md, then its main.s.
+/// Both files of the program `name` as `target` ships it: its idea.md, then its main.s.
 pub fn program_files(target: Profile, name: &str) -> [(&'static str, String); 2] {
-    ["spec.md", "main.s"].map(|file| (file, program_file(target, name, file)))
+    ["idea.md", "main.s"].map(|file| (file, program_file(target, name, file)))
 }
 
 /// `code` with `edits` made in order. Each `from` must be in the text as the edits before it
@@ -266,23 +266,23 @@ pub fn folder_of(files: [(&str, String); 2]) -> Program {
     program
 }
 
-/// A program folder holding both files of `files`, its spec recorded.
+/// A program folder holding both files of `files`, its idea recorded.
 pub async fn written(session: &Session, files: [(&str, String); 2]) -> Program {
     let program = folder_of(files);
     session.record(&program).await;
     program
 }
 
-/// The program `name` as `target` ships it, in a folder, its spec recorded.
+/// The program `name` as `target` ships it, in a folder, its idea recorded.
 pub async fn shipped(session: &Session, target: Profile, name: &str) -> Program {
     written(session, program_files(target, name)).await
 }
 
-/// A program folder holding the template's spec, tests included, recorded: the next step is its
+/// A program folder holding the template's idea, tests included, recorded: the next step is its
 /// code.
 pub async fn checked_template(session: &Session) -> Program {
     let program = Program::new();
-    program.write("spec.md", &asset("template-spec.md"));
+    program.write("idea.md", &asset("template-idea.md"));
     let report = session.record(&program).await;
     assert_eq!(report["state"], "write_code", "{report}");
     program
@@ -337,15 +337,15 @@ pub fn assert_passed(report: &Value, runs: usize, way: Way, what: &str) {
 }
 
 /// A program that passed has lengua's line second in main.s, as a comment of its CPU naming the
-/// spec it was compiled from, and a lock that names the target, the build and, through QEMU,
+/// idea it was compiled from, and a lock that names the target, the build and, through QEMU,
 /// what ran the tests.
-pub fn assert_stamped(program: &Program, target: Profile, way: Way, spec: &str) {
+pub fn assert_stamped(program: &Program, target: Profile, way: Way, idea: &str) {
     let name = target.name();
     let code = program.read("main.s").expect("main.s");
     let expected = format!(
-        "{} lengua: compiled from spec.md sha256:{} for {name}",
+        "{} lengua: compiled from idea.md sha256:{} for {name}",
         kit(target).comment,
-        Sha256Hex::of(spec.as_bytes())
+        Sha256Hex::of(idea.as_bytes())
     );
     assert_eq!(
         code.lines().nth(1),

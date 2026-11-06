@@ -7,7 +7,7 @@
 use serde::Serialize;
 
 use crate::isa::Isa;
-use crate::spec::Syscall;
+use crate::idea::Syscall;
 use crate::syscalls;
 
 /// The OS + CPU combinations lengua knows how to build for.
@@ -110,13 +110,13 @@ impl Profile {
     /// `CLONE_CHILD_CLEARTID`.
     pub const CLONE_FLAGS: u64 = 0x0035_0F00;
 
-    /// The system calls the kernel lets a program make: those its spec allows; `write` and
-    /// `exit_group`, which `assert_fail` may always make; for a program whose spec allows
+    /// The system calls the kernel lets a program make: those its idea allows; `write` and
+    /// `exit_group`, which `assert_fail` may always make; for a program whose idea allows
     /// threads, `clone` with exactly [`Self::CLONE_FLAGS`], `futex` and the thread's own `exit`;
     /// and what the launcher needs between confining itself and becoming the program
     /// (`rt_sigprocmask`, `rt_sigaction`, `execve`).
     #[must_use]
-    pub fn allowed_syscalls(self, spec: &[Syscall], threads: bool) -> Vec<Allowed> {
+    pub fn allowed_syscalls(self, idea: &[Syscall], threads: bool) -> Vec<Allowed> {
         let (launch, clone, futex): (&[i64], i64, i64) = match self {
             Self::LinuxX86_64 => {
                 use syscalls::x86_64::{CLONE, EXECVE, FUTEX, RT_SIGACTION, RT_SIGPROCMASK};
@@ -127,7 +127,7 @@ impl Profile {
                 (&[RT_SIGPROCMASK, RT_SIGACTION, EXECVE], CLONE, FUTEX)
             }
         };
-        let mut allowed: Vec<Allowed> = spec
+        let mut allowed: Vec<Allowed> = idea
             .iter()
             .chain(&[Syscall::Write, Syscall::ExitGroup])
             .chain(if threads { &[Syscall::Exit][..] } else { &[] })
@@ -361,7 +361,7 @@ impl CpuFeatures {
     /// The baseline of a CPU, the same on every system it runs on: the extensions every machine of
     /// `isa` has, and so all that a program lengua ships for it may rely on. An instruction
     /// beyond it belongs to a fast tier, a program of its own beside a baseline sibling that meets
-    /// the very same spec, which an agent picks only where the machine line lists the extension
+    /// the very same idea, which an agent picks only where the machine line lists the extension
     /// (DESIGN.md, "One product on every target"). `tests/baseline.rs` holds every shipped
     /// program to it.
     ///

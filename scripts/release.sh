@@ -2,13 +2,13 @@
 # Builds the release archive for this computer's CPU, dist/lengua-<version>-<cpu>-linux.tar.gz
 # (x86_64 or aarch64): the plugin with its server built, install.sh and a short README. Then
 # checks it as a user gets it: unpacked in a fresh folder, validated, and a program taken from its
-# spec to done through its own server and run from a shell. Nothing is published or pushed.
+# idea to done through its own server and run from a shell. Nothing is published or pushed.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 version="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$root/Cargo.toml" | head -n 1)"
 cpu="$(uname -m)"
-# The program the archive is checked with: add, from one spec, compiled for each CPU.
+# The program the archive is checked with: add, from one idea, compiled for each CPU.
 case "$cpu" in
     x86_64)
         label="x86-64"
@@ -41,7 +41,7 @@ printf '%s\n' "$cpu" > "$stage/$name/CPU"
 cat > "$stage/$name/README.md" <<EOF
 # lengua $version for Linux $label
 
-lengua is an AI language: an agent writes a program's spec in plain words, compiles it to
+lengua is an AI language: an agent writes a program's idea in plain words, compiles it to
 assembly for this computer, and lengua checks, tests and proves what it compiled.
 
 Install it with \`./install.sh\`, which checks what lengua needs (glibc 2.39 or later, LLVM's

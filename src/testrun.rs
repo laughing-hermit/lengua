@@ -18,8 +18,8 @@ use crate::checker::source::{Item, Operand, Source};
 use crate::connect::Reach;
 use crate::platform::Allowed;
 use crate::runner::{self, End, Job, Limits, Net, Run};
-use crate::spec::ASSERTION_EXIT_CODE;
-use crate::spec::Network;
+use crate::idea::ASSERTION_EXIT_CODE;
+use crate::idea::Network;
 use crate::testfile::{Case, Example, Exchange, Reply};
 use crate::testfile::{TestSuite, describe_inputs};
 
@@ -710,7 +710,7 @@ async fn check_one_way(
     let supply = crate::supply::Supply::parse(test.random, test.clock).unwrap_or_default();
     let args = test.args.to_vec();
     let stdin = test.stdin;
-    // A test's program reaches only the test's own servers: each connection its spec names is
+    // A test's program reaches only the test's own servers: each connection its idea names is
     // answered by the test's server for it, or handed over ended when the test has none.
     let connections = (0..network.connections.len())
         .map(|number| {
@@ -724,7 +724,7 @@ async fn check_one_way(
     let net = Net {
         connections,
         listen: network.listens.map(|_| 0),
-        // Tests serve on the loopback, whoever the spec serves.
+        // Tests serve on the loopback, whoever the idea serves.
         serve_anywhere: false,
     };
     // Standard input arrives as the run's delivery cuts it: whole, in the pieces every other
@@ -1050,7 +1050,7 @@ async fn talk_at_once(port: u16, exchanges: &[Exchange], now: i128) -> Result<()
             Err(_) if index == last && last > 0 => {
                 return Err(format!(
                     "the program answered nothing{on}, whose request was whole, while {} still \
-                     sending: its spec serves clients at once, so it must answer each as its \
+                     sending: its idea serves clients at once, so it must answer each as its \
                      request completes, whatever the others are doing, with poll over the \
                      listening socket and every connection",
                     if last == 1 {
@@ -1358,7 +1358,7 @@ pub async fn run_tests(
         }
         match problem {
             Some(problem) => {
-                let mut message = format!("{name} (spec.md line {}): {problem}", example.line);
+                let mut message = format!("{name} (idea.md line {}): {problem}", example.line);
                 if !example.args.is_empty() {
                     let _ = write!(message, " (args {:?})", example.args);
                 }
@@ -1429,7 +1429,7 @@ pub async fn run_tests(
             let (this, drawn) = joined.map_err(io::Error::other)??;
             let message = match drawn {
                 Drawn::Unfit((inputs, field, error)) => Some(format!(
-                    "{name} (spec.md line {}, seed {seed}): with {}, the expected {field} \
+                    "{name} (idea.md line {}, seed {seed}): with {}, the expected {field} \
                      {error}",
                     block.line,
                     describe_inputs(&inputs)
@@ -1441,7 +1441,7 @@ pub async fn run_tests(
                     outcome.runs += 1;
                     match problem {
                         Some(problem) => Some(format!(
-                            "{name} (spec.md line {}), run {} of {total} (seed {seed}): with \
+                            "{name} (idea.md line {}), run {} of {total} (seed {seed}): with \
                              {}: {problem}",
                             block.line,
                             this + 1,

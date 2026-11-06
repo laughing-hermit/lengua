@@ -164,17 +164,17 @@ const A64_FAMILIES: [(&str, &str); 20] = [
 pub(crate) struct Places {
     /// What its recordings are called: `checker-<label>.txt` and `prover-<label>.txt`.
     pub(crate) label: &'static str,
-    /// Folders of programs, each holding a spec.md and a main.s, from the repository's root.
+    /// Folders of programs, each holding a idea.md and a main.s, from the repository's root.
     folders: &'static [&'static str],
     /// The skill's assets for the target, where its templates and its fast programs are.
     assets: &'static str,
-    /// The benchmark's variants for the target: the spec each meets, and its main.s.
+    /// The benchmark's variants for the target: the idea each meets, and its main.s.
     benches: &'static [(&'static str, &'static str)],
     /// What starts a comment in its dialect.
     comment: &'static str,
 }
 
-/// The skill's assets that the targets share: the specs of the templates and of the fast
+/// The skill's assets that the targets share: the ideas of the templates and of the fast
 /// programs that have none of their own.
 const SHARED_ASSETS: &str = "plugin/skills/compile/assets";
 
@@ -186,16 +186,16 @@ pub(crate) static PLACES: PerCpu<Places> = PerCpu {
         assets: SHARED_ASSETS,
         benches: &[
             (
-                "examples/upcase/spec.md",
+                "examples/upcase/idea.md",
                 "benches/programs/upcase/avx512.s",
             ),
-            ("examples/count/spec.md", "benches/programs/count/avx512.s"),
+            ("examples/count/idea.md", "benches/programs/count/avx512.s"),
             (
-                "plugin/skills/compile/assets/parallel-template-spec.md",
+                "plugin/skills/compile/assets/parallel-template-idea.md",
                 "benches/programs/shout/avx512.s",
             ),
             (
-                "plugin/skills/compile/assets/parallel-template-spec.md",
+                "plugin/skills/compile/assets/parallel-template-idea.md",
                 "benches/programs/shout/avx512-one.s",
             ),
         ],
@@ -206,9 +206,9 @@ pub(crate) static PLACES: PerCpu<Places> = PerCpu {
         folders: &["tests/fixtures/linux-aarch64"],
         assets: "plugin/skills/compile/assets/linux-aarch64",
         benches: &[
-            ("examples/upcase/spec.md", "benches/programs/upcase/neon.s"),
+            ("examples/upcase/idea.md", "benches/programs/upcase/neon.s"),
             (
-                "plugin/skills/compile/assets/parallel-template-spec.md",
+                "plugin/skills/compile/assets/parallel-template-idea.md",
                 "benches/programs/shout/neon-one.s",
             ),
         ],
@@ -216,12 +216,12 @@ pub(crate) static PLACES: PerCpu<Places> = PerCpu {
     },
 };
 
-/// A program and the spec that says which system calls and threads it may use.
+/// A program and the idea that says which system calls and threads it may use.
 pub(crate) struct Program {
     /// Its path from the repository's root.
     pub(crate) name: String,
     pub(crate) text: String,
-    pub(crate) spec: Arc<crate::spec::Spec>,
+    pub(crate) idea: Arc<crate::idea::Idea>,
     ops: Arc<Vec<crate::edge::Op>>,
     threads: Option<u32>,
 }
@@ -247,11 +247,11 @@ fn names_ending(folder: &Path, suffix: &str) -> Vec<String> {
     found
 }
 
-/// The spec of the program in `folder`, a folder of a target's fast programs: its own spec.md or,
+/// The idea of the program in `folder`, a folder of a target's fast programs: its own idea.md or,
 /// for a program named for the extension it uses after the program it speeds up (`wc-sve`), that
 /// program's, looked for in the target's folder first and then in the shared one.
-fn spec_of(folder: &Path) -> PathBuf {
-    let own = folder.join("spec.md");
+fn idea_of(folder: &Path) -> PathBuf {
+    let own = folder.join("idea.md");
     if own.is_file() {
         return own;
     }
@@ -264,19 +264,19 @@ fn spec_of(folder: &Path) -> PathBuf {
         .into_owned();
     loop {
         for fast in [&beside, &shared] {
-            let spec = fast.join(&name).join("spec.md");
-            if spec.is_file() {
-                return spec;
+            let idea = fast.join(&name).join("idea.md");
+            if idea.is_file() {
+                return idea;
             }
         }
         match name.rsplit_once('-') {
             Some((speeds_up, _)) => name = speeds_up.to_owned(),
-            None => panic!("{} has no spec", folder.display()),
+            None => panic!("{} has no idea", folder.display()),
         }
     }
 }
 
-/// Every program of `profile`'s in the repository, with its spec: the examples and fixtures, the
+/// Every program of `profile`'s in the repository, with its idea: the examples and fixtures, the
 /// fast programs, the skill's templates, and the benchmark's variants.
 pub(crate) fn programs(profile: Profile) -> Vec<Program> {
     let root = root();
@@ -298,29 +298,29 @@ pub(crate) fn programs(profile: Profile) -> Vec<Program> {
         pairs.extend(
             entries
                 .into_iter()
-                .map(|path| (spec_of(&path), path.join("main.s"))),
+                .map(|path| (idea_of(&path), path.join("main.s"))),
         );
     }
-    // A template is made from the spec of its name: main-template.s from template-spec.md.
+    // A template is made from the idea of its name: main-template.s from template-idea.md.
     let assets = root.join(places.assets);
     for name in names_ending(&assets, "-template.s") {
         let stem = name.strip_suffix("-template.s").unwrap_or_default();
-        let spec = if stem == "main" {
-            "template-spec.md".to_owned()
+        let idea = if stem == "main" {
+            "template-idea.md".to_owned()
         } else {
-            format!("{stem}-template-spec.md")
+            format!("{stem}-template-idea.md")
         };
-        pairs.push((root.join(SHARED_ASSETS).join(spec), assets.join(name)));
+        pairs.push((root.join(SHARED_ASSETS).join(idea), assets.join(name)));
     }
-    for (spec, code) in places.benches {
-        pairs.push((root.join(spec), root.join(code)));
+    for (idea, code) in places.benches {
+        pairs.push((root.join(idea), root.join(code)));
     }
     pairs
         .into_iter()
-        .map(|(spec, code)| {
-            let spec_text = std::fs::read_to_string(&spec).expect("a spec");
-            let spec = crate::spec::parse(&spec_text)
-                .unwrap_or_else(|problems| panic!("{}: {problems:?}", spec.display()));
+        .map(|(idea, code)| {
+            let idea_text = std::fs::read_to_string(&idea).expect("an idea");
+            let idea = crate::idea::parse(&idea_text)
+                .unwrap_or_else(|problems| panic!("{}: {problems:?}", idea.display()));
             Program {
                 name: code
                     .strip_prefix(&root)
@@ -328,9 +328,9 @@ pub(crate) fn programs(profile: Profile) -> Vec<Program> {
                     .display()
                     .to_string(),
                 text: std::fs::read_to_string(&code).expect("a program"),
-                ops: Arc::new(spec.ops.clone()),
-                threads: spec.threads,
-                spec: Arc::new(spec),
+                ops: Arc::new(idea.ops.clone()),
+                threads: idea.threads,
+                idea: Arc::new(idea),
             }
         })
         .collect()

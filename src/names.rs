@@ -1,5 +1,5 @@
 //! The names every system takes for files and folders. lengua holds a program on every target
-//! to what the strictest of them allows, so a spec that works on one works on all of them:
+//! to what the strictest of them allows, so an idea that works on one works on all of them:
 //! Windows refuses some characters, device names and endings in a name, takes names that
 //! differ only in case as one, and can open a file by a short name such as `REPORT~1.TXT`
 //! that it gave a long one; macOS's APFS takes only UTF-8 names of characters Unicode 9.0
