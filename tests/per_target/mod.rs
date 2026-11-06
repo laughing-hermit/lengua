@@ -44,9 +44,7 @@ pub fn host() -> Profile {
 pub fn runs_programs() -> bool {
     let runs = this_target().is_some();
     if !runs {
-        lengua::skiplog::note(
-            "native programs run on Linux only",
-        );
+        lengua::skiplog::note("native programs run on Linux only");
     }
     runs
 }
