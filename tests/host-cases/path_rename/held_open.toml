@@ -1,0 +1,12 @@
+about = "path_rename of a file the program holds open gives BUSY on every system"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = { "a.txt" = "1" }
+
+[expect]
+exit = 10
+stdout = ""
+stderr = ""
+files = { "a.txt" = "1" }

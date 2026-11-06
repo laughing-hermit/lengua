@@ -1,0 +1,11 @@
+about = "path_filestat_get gives a folder's type, and a file's type and size by its path"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = { "dir/" = "", "dir/a.txt" = "abc" }
+
+[expect]
+exit = 0
+stdout = "3 4 3 0\n"
+stderr = ""

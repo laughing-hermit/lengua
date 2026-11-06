@@ -1,0 +1,12 @@
+about = "fd_write to a file opened with the append flag adds to its end"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = { "log.txt" = "one\n" }
+
+[expect]
+exit = 0
+stdout = ""
+stderr = ""
+files = { "log.txt" = "one\ntwo\n" }

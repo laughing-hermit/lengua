@@ -1,0 +1,12 @@
+about = "path_create_directory makes a folder, and a folder inside it"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = {}
+
+[expect]
+exit = 0
+stdout = ""
+stderr = ""
+files = { "new/" = "", "new/sub/" = "" }

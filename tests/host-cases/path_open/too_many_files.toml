@@ -1,0 +1,12 @@
+about = "path_open past the most files a program may hold open gives MFILE"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = { "f.txt" = "x" }
+
+[expect]
+exit = 33
+stdout = ""
+stderr = ""
+files = { "f.txt" = "x" }

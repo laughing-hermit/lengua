@@ -1,0 +1,11 @@
+about = "poll_oneoff with no subscriptions gives INVAL"
+uses = ["the clock"]
+network = ""
+args = []
+stdin = ""
+files = {}
+
+[expect]
+exit = 28
+stdout = ""
+stderr = ""

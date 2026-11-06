@@ -1,0 +1,12 @@
+about = "path_create_directory of a path of 1,024 bytes of short names gives NAMETOOLONG"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = {}
+
+[expect]
+exit = 37
+stdout = ""
+stderr = ""
+files = {}

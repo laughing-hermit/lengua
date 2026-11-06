@@ -1,0 +1,12 @@
+about = "random_get hands out the supplied bytes in order across calls"
+uses = ["random bytes"]
+network = ""
+args = []
+stdin = ""
+files = {}
+random_hex = "0102030405"
+
+[expect]
+exit = 0
+stdout_hex = "0102030405"
+stderr = ""

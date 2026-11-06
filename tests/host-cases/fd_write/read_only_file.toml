@@ -1,0 +1,12 @@
+about = "fd_write to a file opened only to read gives BADF and leaves the file as it was"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = { "in.txt" = "hello" }
+
+[expect]
+exit = 8
+stdout = ""
+stderr = ""
+files = { "in.txt" = "hello" }

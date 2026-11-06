@@ -1,0 +1,12 @@
+about = "path_rename gives a file a new name"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = { "a.txt" = "1" }
+
+[expect]
+exit = 0
+stdout = ""
+stderr = ""
+files = { "b.txt" = "1" }

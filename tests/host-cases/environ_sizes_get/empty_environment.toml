@@ -1,0 +1,12 @@
+about = "environ_sizes_get gives no variables when the test sets none"
+uses = ["the environment"]
+network = ""
+args = []
+env = {}
+stdin = ""
+files = {}
+
+[expect]
+exit = 0
+stdout = "0 0\n"
+stderr = ""

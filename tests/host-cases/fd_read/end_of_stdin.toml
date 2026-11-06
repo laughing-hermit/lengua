@@ -1,0 +1,11 @@
+about = "fd_read returns 0 at the end of standard input"
+uses = ["standard input"]
+network = ""
+args = []
+stdin = ""
+files = {}
+
+[expect]
+exit = 0
+stdout = "0\n"
+stderr = ""

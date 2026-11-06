@@ -1,0 +1,12 @@
+about = "path_create_directory of a name that is taken gives EXIST"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = { "dir/" = "" }
+
+[expect]
+exit = 20
+stdout = ""
+stderr = ""
+files = { "dir/" = "" }

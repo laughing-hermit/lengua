@@ -1,0 +1,12 @@
+about = "path_rename of a file onto a folder gives ISDIR"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = { "a.txt" = "1", "d/" = "" }
+
+[expect]
+exit = 31
+stdout = ""
+stderr = ""
+files = { "a.txt" = "1", "d/" = "" }

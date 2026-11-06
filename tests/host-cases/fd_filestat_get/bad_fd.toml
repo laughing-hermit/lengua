@@ -1,0 +1,11 @@
+about = "fd_filestat_get of a descriptor not in use gives BADF"
+uses = ["files"]
+network = ""
+args = []
+stdin = ""
+files = {}
+
+[expect]
+exit = 8
+stdout = ""
+stderr = ""
