@@ -149,12 +149,18 @@ async fn listen_to(
 ) {
     loop {
         match job::receive::<Event>(&mut stdout).await {
-            Ok(Some(Event::Listening { id: of, port: listening })) if of == id => {
+            Ok(Some(Event::Listening {
+                id: of,
+                port: listening,
+            })) if of == id => {
                 if let Some(port) = port.take() {
                     let _ = port.send(listening);
                 }
             }
-            Ok(Some(Event::Waiting { id: of, waiting: now })) if of == id => {
+            Ok(Some(Event::Waiting {
+                id: of,
+                waiting: now,
+            })) if of == id => {
                 waiting.store(now, Ordering::SeqCst);
             }
             Ok(Some(Event::Done(finished))) if finished.id == id => {
@@ -204,11 +210,10 @@ impl Pool {
 
     /// A fresh worker.
     fn spawn(&self) -> io::Result<Worker> {
-        let cache = self
-            .inner
-            .cache
-            .as_ref()
-            .map_or_else(|| OsString::from("none"), |cache| cache.as_os_str().to_owned());
+        let cache = self.inner.cache.as_ref().map_or_else(
+            || OsString::from("none"),
+            |cache| cache.as_os_str().to_owned(),
+        );
         let mut child = Command::new(&self.inner.launcher)
             .arg(WORKER_FLAG)
             .arg(cache)

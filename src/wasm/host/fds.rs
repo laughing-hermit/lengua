@@ -126,7 +126,10 @@ mod tests {
         let mut table = Table::new(FIRST_CONNECTION + 2);
         assert_eq!(table.len(), 3);
         assert!(matches!(table.get(STDIN), Some(Descriptor::Stdin)));
-        assert!(table.get(FOLDER).is_none(), "no folder unless the idea names files");
+        assert!(
+            table.get(FOLDER).is_none(),
+            "no folder unless the idea names files"
+        );
         assert_eq!(table.add(Descriptor::Stdout), Ok(7));
         assert_eq!(table.add(Descriptor::Stdout), Ok(8));
         assert!(table.remove(7).is_some());

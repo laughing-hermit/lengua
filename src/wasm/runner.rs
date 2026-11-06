@@ -82,9 +82,7 @@ fn ending_of(error: &wasmtime::Error) -> (Ending, Option<String>) {
                 return (Ending::TimedOut, None);
             }
             wasmtime::Trap::UnreachableCodeReached => Trap::Unreachable,
-            wasmtime::Trap::MemoryOutOfBounds | wasmtime::Trap::HeapMisaligned => {
-                Trap::OutOfBounds
-            }
+            wasmtime::Trap::MemoryOutOfBounds | wasmtime::Trap::HeapMisaligned => Trap::OutOfBounds,
             wasmtime::Trap::IntegerDivisionByZero => Trap::DivisionByZero,
             wasmtime::Trap::IntegerOverflow => Trap::Overflow,
             wasmtime::Trap::BadConversionToInteger => Trap::Conversion,
@@ -96,7 +94,10 @@ fn ending_of(error: &wasmtime::Error) -> (Ending, Option<String>) {
         };
         return (Ending::Trapped(kind, offset), None);
     }
-    (Ending::Trapped(Trap::Other, offset), Some(format!("{error:#}")))
+    (
+        Ending::Trapped(Trap::Other, offset),
+        Some(format!("{error:#}")),
+    )
 }
 
 /// Runs `module` with `host`, in this process, until its `_start` returns, it exits, or it is
@@ -487,8 +488,7 @@ pub fn run_here(wasm: &[u8], here: &Here<'_>) -> io::Result<End> {
 
 /// [`run_here`]'s work, on the program's own thread.
 fn run_on_this_thread(wasm: &[u8], here: &Here<'_>) -> io::Result<End> {
-    let engine =
-        crate::wasm::engine::engine(Setup::Shell, here.cache).map_err(io::Error::other)?;
+    let engine = crate::wasm::engine::engine(Setup::Shell, here.cache).map_err(io::Error::other)?;
     let linker = crate::wasm::host::linker(&engine).map_err(io::Error::other)?;
     let module = Module::from_binary(&engine, wasm).map_err(io::Error::other)?;
     let mut connections = Vec::new();
@@ -537,7 +537,14 @@ fn run_on_this_thread(wasm: &[u8], here: &Here<'_>) -> io::Result<End> {
         connections,
         clock: Vec::new(),
         random: None,
-        limits: Limits::new(None, Arc::new(AtomicBool::new(false)), usize::MAX, None, None, 0),
+        limits: Limits::new(
+            None,
+            Arc::new(AtomicBool::new(false)),
+            usize::MAX,
+            None,
+            None,
+            0,
+        ),
         instant_sleeps: false,
         events: None,
     };

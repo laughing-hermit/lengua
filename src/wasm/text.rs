@@ -92,10 +92,7 @@ pub fn line_at(lines: &BTreeMap<u64, usize>, bodies: &[(u64, u64)], offset: u64)
     {
         return None;
     }
-    lines
-        .range(..=offset)
-        .next_back()
-        .map(|(_, line)| *line)
+    lines.range(..=offset).next_back().map(|(_, line)| *line)
 }
 
 /// Where each line of `text` starts.
@@ -187,7 +184,10 @@ fn assertions(fields: &[ModuleField<'_>], starts: &[usize]) -> BTreeMap<i64, usi
             continue;
         };
         for (index, pair) in expression.instrs.windows(2).enumerate() {
-            if let [Instruction::i32_const(number), Instruction::call(Index::Id(id))] = pair
+            if let [
+                Instruction::i32_const(number),
+                Instruction::call(Index::Id(id)),
+            ] = pair
                 && id.name() == "assert_fail"
                 && let Some(span) = spans.get(index)
             {
@@ -416,7 +416,11 @@ mod tests {
         // main.wat's one function, every operator on its lines 6 to 8.
         assert_eq!(built.bodies.len(), 1);
         assert!(!built.lines.is_empty());
-        assert!(built.lines.values().all(|line| (6..=8).contains(line)), "{:?}", built.lines);
+        assert!(
+            built.lines.values().all(|line| (6..=8).contains(line)),
+            "{:?}",
+            built.lines
+        );
         // Imported twice, as `$exit` and as `$lengua.proc_exit`, is legal.
         assert!(crate::wasm::engine::validate(&built.wasm).is_ok());
     }
@@ -468,18 +472,19 @@ mod tests {
         let unknown = build("(module\n  (func (export \"_start\")\n    (call $nowhere)))")
             .expect_err("an unknown function");
         assert_eq!(unknown.line, Some(3), "{unknown}");
-        let mismatch = build(
-            "(module\n  (func (export \"_start\") (result i32)\n    (i64.const 1)))",
-        )
-        .expect_err("a type mismatch");
+        let mismatch =
+            build("(module\n  (func (export \"_start\") (result i32)\n    (i64.const 1)))")
+                .expect_err("a type mismatch");
         assert_eq!(mismatch.line, Some(3), "{mismatch}");
         let reserved = build("(module\n  (func $lengua.mine))").expect_err("a reserved name");
         assert!(reserved.message.contains("lengua keeps"), "{reserved}");
         assert_eq!(reserved.line, Some(2));
         let unparsed = build("(module (func (i32.nothing)))").expect_err("no such instruction");
         assert_eq!(unparsed.line, Some(1));
-        let no_memory = build("(module (func (export \"_start\") (call $assert_fail (i32.const \
-                               1))))")
+        let no_memory = build(
+            "(module (func (export \"_start\") (call $assert_fail (i32.const \
+                               1))))",
+        )
         .expect_err("the library needs a memory");
         assert!(no_memory.message.contains("needs a memory"), "{no_memory}");
     }

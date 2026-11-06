@@ -197,7 +197,10 @@ fn the_environment_is_empty_unless_the_idea_names_it() {
 
 #[test]
 fn proc_exit_keeps_the_low_eight_bits_as_every_system_does() {
-    let text = module(&[EXIT], r#"(func (export "_start") (call $exit (i32.const 300)))"#);
+    let text = module(
+        &[EXIT],
+        r#"(func (export "_start") (call $exit (i32.const 300)))"#,
+    );
     assert_eq!(exited(&run(&text, world(Policy::default()))), 44);
 }
 
@@ -370,10 +373,7 @@ fn a_trap_names_its_kind_and_its_place() {
     let text = module(&[], r#"(func (export "_start") (unreachable))"#);
     let executed = run(&text, world(Policy::default()));
     assert!(
-        matches!(
-            executed.ending,
-            Ending::Trapped(Trap::Unreachable, Some(_))
-        ),
+        matches!(executed.ending, Ending::Trapped(Trap::Unreachable, Some(_))),
         "{:?}",
         executed.ending
     );
@@ -398,9 +398,8 @@ fn a_buffer_outside_memory_stops_the_program_as_a_load_would() {
 
 #[test]
 fn a_module_without_memory_cant_reach_the_host() {
-    let text = format!(
-        "(module {CLOSE} (func (export \"_start\") (drop (call $close (i32.const 9)))))"
-    );
+    let text =
+        format!("(module {CLOSE} (func (export \"_start\") (drop (call $close (i32.const 9)))))");
     let executed = run(&text, world(Policy::default()));
     assert!(matches!(executed.ending, Ending::Trapped(Trap::Other, _)));
     assert!(
@@ -429,7 +428,10 @@ fn a_function_lengua_doesnt_give_answers_nosys() {
 
 #[test]
 fn a_program_past_its_time_is_stopped() {
-    let text = module(&[], r#"(func (export "_start") (loop $forever (br $forever)))"#);
+    let text = module(
+        &[],
+        r#"(func (export "_start") (loop $forever (br $forever)))"#,
+    );
     let executed = run_for(&text, world(Policy::default()), Duration::from_millis(200));
     assert_eq!(executed.ending, Ending::TimedOut);
 }
@@ -477,10 +479,7 @@ fn a_closed_standard_output_is_a_broken_pipe() {
 /// A module that opens `name` from the working folder with `oflags` and `rights` and exits with
 /// the error, or with 0 and the file written `written` when there is one.
 fn opening(name: &str, oflags: u32, rights: u64, written: &str) -> String {
-    let escaped: String = name
-        .bytes()
-        .map(|byte| format!("\\{byte:02x}"))
-        .collect();
+    let escaped: String = name.bytes().map(|byte| format!("\\{byte:02x}")).collect();
     let length = name.len();
     let size = written.len();
     module(

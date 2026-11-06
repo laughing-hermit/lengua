@@ -114,8 +114,8 @@ impl Socket {
             }
             Link::Place(place, runtime) => {
                 let wait = wait.unwrap_or(Duration::ZERO);
-                let received = runtime
-                    .block_on(async { tokio::time::timeout(wait, place.read(chunk)).await });
+                let received =
+                    runtime.block_on(async { tokio::time::timeout(wait, place.read(chunk)).await });
                 match received {
                     Ok(Ok(count)) => Some(count),
                     Ok(Err(_)) => Some(0),

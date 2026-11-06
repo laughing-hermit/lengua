@@ -221,7 +221,10 @@ mod tests {
         let folder = tempfile::tempdir().expect("a folder");
         let data_dir = crate::data_dir::DataDir::new(folder.path().join("data"));
         if std::env::var_os("PLUGIN_DATA").is_none() {
-            assert_eq!(cache_folder(&data_dir), folder.path().join("data").join("cache"));
+            assert_eq!(
+                cache_folder(&data_dir),
+                folder.path().join("data").join("cache")
+            );
         }
         let config = config(Setup::Test, Some(&folder.path().join("cache")));
         assert!(config.is_ok(), "{:?}", config.err());

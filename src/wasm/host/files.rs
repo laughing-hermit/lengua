@@ -771,7 +771,10 @@ mod tests {
 
     #[test]
     fn a_path_stays_beneath_the_folder() {
-        assert_eq!(names(&[], "a/./b/../c"), Ok(vec!["a".to_owned(), "c".to_owned()]));
+        assert_eq!(
+            names(&[], "a/./b/../c"),
+            Ok(vec!["a".to_owned(), "c".to_owned()])
+        );
         assert_eq!(names(&["sub"], "../x"), Ok(vec!["x".to_owned()]));
         assert_eq!(names(&[], "../x"), Err(errno::ACCES));
         assert_eq!(names(&[], "/etc/passwd"), Err(errno::ACCES));
