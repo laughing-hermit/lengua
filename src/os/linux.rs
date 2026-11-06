@@ -323,7 +323,8 @@ impl Started {
         let [instructions, cycles, cpu_time_ns] =
             self.counters.each_mut().map(|counter| match end {
                 End::Exited(_) | End::Signaled(_) => counter.as_mut().and_then(exact_count),
-                End::TimedOut | End::OutputTooLarge | End::Stopped => None,
+                // A native program never traps: that ending is a WebAssembly program's.
+                End::TimedOut | End::OutputTooLarge | End::Stopped | End::Trapped(..) => None,
             });
         let (files, folders) = match &self.work {
             Some(work) => match read_files(work) {

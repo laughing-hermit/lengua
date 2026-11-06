@@ -228,6 +228,47 @@ pub enum End {
     OutputTooLarge,
     /// lengua stopped it while it was still running, as a server is at the end of its test.
     Stopped,
+    /// A WebAssembly program trapped: the engine stopped it at an instruction that can't go on,
+    /// on this line of main.wat when lengua knows it.
+    Trapped(Trap, Option<usize>),
+}
+
+/// Why the engine stopped a WebAssembly program in the middle of an instruction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Trap {
+    /// It reached `unreachable`.
+    Unreachable,
+    /// A load, a store or a host call's buffer outside its memory.
+    OutOfBounds,
+    /// An integer division, or remainder, by zero.
+    DivisionByZero,
+    /// A signed division whose result doesn't fit.
+    Overflow,
+    /// A float converted to an integer that can't hold it, or a NaN.
+    Conversion,
+    /// Calls nested deeper than the stack holds.
+    StackOverflow,
+    /// An indirect call through a table entry that is missing, empty or of another type.
+    IndirectCall,
+    /// Any other trap.
+    Other,
+}
+
+impl Trap {
+    /// What happened, in words.
+    #[must_use]
+    pub const fn describe(self) -> &'static str {
+        match self {
+            Self::Unreachable => "it reached `unreachable`",
+            Self::OutOfBounds => "it reached memory outside its own",
+            Self::DivisionByZero => "an integer division by zero",
+            Self::Overflow => "a signed division whose result doesn't fit",
+            Self::Conversion => "a float converted to an integer that can't hold it",
+            Self::StackOverflow => "its calls went deeper than the stack holds",
+            Self::IndirectCall => "an indirect call through a missing or mismatched table entry",
+            Self::Other => "the engine couldn't go on",
+        }
+    }
 }
 
 impl End {
@@ -243,6 +284,10 @@ impl End {
                 limits.max_output
             ),
             Self::Stopped => "stopped by lengua while it was still running".into(),
+            Self::Trapped(trap, Some(line)) => {
+                format!("trapped at main.wat line {line}: {}", trap.describe())
+            }
+            Self::Trapped(trap, None) => format!("trapped: {}", trap.describe()),
         }
     }
 }
@@ -287,7 +332,8 @@ pub struct Run {
     /// Every folder in it afterwards, by name relative to it, empty ones included.
     pub folders: BTreeSet<String>,
     /// Why lengua's broker stopped serving the program, if it did, such as a message from the
-    /// program that isn't of the protocol or a channel that failed.
+    /// program that isn't of the protocol or a channel that failed; for a WebAssembly program,
+    /// why lengua's host couldn't run it as asked, such as a module it couldn't start.
     pub supplied: Option<String>,
     /// How many random bytes the program asked for, when the test supplied them.
     pub random_asked: Option<usize>,

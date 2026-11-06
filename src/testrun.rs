@@ -17,7 +17,7 @@ use serde::Serialize;
 use crate::checker::source::{Item, Operand, Source};
 use crate::connect::Reach;
 use crate::idea::ASSERTION_EXIT_CODE;
-use crate::idea::Network;
+use crate::idea::{Network, Use};
 use crate::platform::Allowed;
 use crate::runner::{self, End, Job, Limits, Net, Run};
 use crate::testfile::{Case, Example, Exchange, Reply};
@@ -222,6 +222,7 @@ pub fn explain_end(run: &Run, assertions: &BTreeMap<i64, usize>, limits: Limits)
                 now: 0,
                 random_supplied: None,
                 serves: false,
+                code: NATIVE_CODE,
             };
             compare(run, &expected, assertions).unwrap_or_else(|| run.end.describe(limits))
         }
@@ -250,7 +251,12 @@ struct Expected<'a> {
     random_supplied: Option<usize>,
     /// Whether the program must still be serving at the end, instead of exiting.
     serves: bool,
+    /// The code file a failed assertion's line is in: main.s or main.wat.
+    code: &'a str,
 }
+
+/// A native program's code file, which a failed assertion's line is in.
+const NATIVE_CODE: &str = "main.s";
 
 /// Why a run's files don't match, if they don't.
 fn compare_files(run: &Run, expected: &Expected<'_>, problems: &mut Vec<String>) {
@@ -359,6 +365,7 @@ fn compare(
         exit_code,
         now,
         serves,
+        code: code_file,
         ..
     } = *expected;
     // A broker that stopped serving the program is the failure to report; running out of the
@@ -393,7 +400,7 @@ fn compare(
             .and_then(|digits| digits.parse::<i64>().ok());
         return Some(match number {
             Some(number) => match assertions.get(&number) {
-                Some(line) => format!("assertion {number} failed at main.s:{line}"),
+                Some(line) => format!("assertion {number} failed at {code_file}:{line}"),
                 None => format!("assertion {number} failed"),
             },
             None => "it exited with 134, the failed-assertion code".to_owned(),
@@ -450,19 +457,134 @@ pub async fn check_case(
     delivery: Delivery,
     channel: Option<crate::broker::Permit>,
 ) -> io::Result<Option<String>> {
-    let (_, problem) = check_one(
+    let target = Target::Native {
         launcher,
-        program,
-        &Test::of_case(case),
+        executable: program,
         syscalls,
+        emulated: false,
+        channel,
+    };
+    let (_, problem) = check_one(
+        target,
+        &Test::of_case(case),
         network,
         delivery,
         &assertion_lines(source),
-        false,
-        channel,
     )
     .await?;
     Ok(problem)
+}
+
+/// What a test runs: a native executable through lengua's launcher, or a WebAssembly module in
+/// lengua's pool of workers.
+#[derive(Clone, Copy)]
+enum Target<'a> {
+    /// A native program.
+    Native {
+        /// This server's own binary, which launches it.
+        launcher: &'a Path,
+        /// The executable.
+        executable: &'a Path,
+        /// The system calls it may make.
+        syscalls: &'a [Allowed],
+        /// Whether QEMU's user mode runs it.
+        emulated: bool,
+        /// What lengua's broker does for it.
+        channel: Option<crate::broker::Permit>,
+    },
+    /// A WebAssembly program.
+    Wasm {
+        /// The workers it runs in.
+        pool: &'a crate::wasm::Pool,
+        /// The module.
+        module: &'a crate::wasm::Program,
+        /// What its idea lets it reach.
+        policy: crate::wasm::Policy,
+    },
+}
+
+impl Target<'_> {
+    /// The code file a failed assertion's line is in.
+    const fn code(&self) -> &'static str {
+        match self {
+            Self::Native { .. } => NATIVE_CODE,
+            Self::Wasm { .. } => crate::wasm::CODE_FILE,
+        }
+    }
+}
+
+/// A test's program that is running, native or WebAssembly.
+enum Started {
+    /// A native program.
+    Native(Box<runner::Started>),
+    /// A WebAssembly program.
+    Wasm(Box<crate::wasm::Running>),
+}
+
+impl Started {
+    /// A native program that started.
+    fn native(started: runner::Started) -> Self {
+        Self::Native(Box::new(started))
+    }
+
+    /// A WebAssembly program that started.
+    fn wasm(running: crate::wasm::Running) -> Self {
+        Self::Wasm(Box::new(running))
+    }
+
+    /// The loopback port it serves on, when it serves.
+    fn port(&self) -> Option<u16> {
+        match self {
+            Self::Native(started) => started.port(),
+            Self::Wasm(running) => running.port(),
+        }
+    }
+
+    /// Waits for it to end.
+    async fn wait(self) -> io::Result<Run> {
+        match self {
+            Self::Native(started) => started.wait().await,
+            Self::Wasm(running) => running.wait().await,
+        }
+    }
+
+    /// Stops it now, as lengua does a server that's still serving.
+    async fn stop(self) -> io::Result<Run> {
+        match self {
+            Self::Native(started) => started.stop().await,
+            Self::Wasm(running) => running.stop().await,
+        }
+    }
+}
+
+/// Starts the test's own servers on the program's connections, each from the start: `peers` are
+/// lengua's ends of them, by the connection's number in the idea.
+fn spawn_servers<S>(
+    peers: Vec<(usize, S)>,
+    test: &Test<'_>,
+    network: &Network,
+    delivery: Delivery,
+) -> Vec<tokio::task::JoinHandle<Result<(), String>>>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin + 'static,
+{
+    peers
+        .into_iter()
+        .map(|(number, stream)| {
+            let reply = test
+                .server
+                .iter()
+                .find(|reply| reply.connection == number)
+                .cloned();
+            let on = match network.connections.get(number) {
+                Some(place) if network.connections.len() > 1 => {
+                    format!(" on its connection to {}", place.describe())
+                }
+                _ => String::new(),
+            };
+            tokio::spawn(serve(stream, reply, delivery, on))
+        })
+        .collect()
 }
 
 /// How a test's server or client sends what it sends, as a network may deliver it.
@@ -653,35 +775,25 @@ const PEER_TIMEOUT: Duration = Duration::from_secs(2);
 /// The most the test's own server or client reads back on one connection.
 const MAX_ANSWER: u64 = 8 * 1024 * 1024;
 
-/// Runs one test, with the test's own server or client when it has one, and says what went
-/// wrong, if anything. `delivery` cuts what the test's server and client send into pieces, as a
-/// network may deliver them; `emulated` runs the program as QEMU's user mode runs it here.
+/// Runs one test of `target`, with the test's own server or client when it has one, and says
+/// what went wrong, if anything. `delivery` cuts what the test's server and client send into
+/// pieces, as a network may deliver them.
 ///
 /// A run that listed a folder runs again with each listing turned round: no system promises an
 /// order, each file system has its own, so a result that changes with the order is wrong on
 /// some system, and the test fails.
-#[allow(clippy::too_many_arguments)]
 async fn check_one(
-    launcher: &Path,
-    program: &Path,
+    target: Target<'_>,
     test: &Test<'_>,
-    syscalls: &[Allowed],
     network: &Network,
     delivery: Delivery,
     assertions: &BTreeMap<i64, usize>,
-    emulated: bool,
-    channel: Option<crate::broker::Permit>,
 ) -> io::Result<(Run, Option<String>)> {
-    let (run, mut problem) = check_one_way(
-        launcher, program, test, syscalls, network, delivery, assertions, emulated, channel, false,
-    )
-    .await?;
+    let (run, mut problem) =
+        check_one_way(target, test, network, delivery, assertions, false).await?;
     if problem.is_none() && run.listed {
-        let (_, turned) = check_one_way(
-            launcher, program, test, syscalls, network, delivery, assertions, emulated, channel,
-            true,
-        )
-        .await?;
+        let (_, turned) =
+            check_one_way(target, test, network, delivery, assertions, true).await?;
         if let Some(turned) = turned {
             problem = Some(format!(
                 "with its folder's entries listed the other way round, {turned}: each file \
@@ -694,17 +806,12 @@ async fn check_one(
 }
 
 /// [`check_one`], once: with each folder listing turned round when `reversed`.
-#[allow(clippy::too_many_arguments)]
 async fn check_one_way(
-    launcher: &Path,
-    program: &Path,
+    target: Target<'_>,
     test: &Test<'_>,
-    syscalls: &[Allowed],
     network: &Network,
     delivery: Delivery,
     assertions: &BTreeMap<i64, usize>,
-    emulated: bool,
-    channel: Option<crate::broker::Permit>,
     reversed: bool,
 ) -> io::Result<(Run, Option<String>)> {
     let supply = crate::supply::Supply::parse(test.random, test.clock).unwrap_or_default();
@@ -739,41 +846,56 @@ async fn check_one_way(
             delivery,
             Delivery::Pieces | Delivery::FirstTwo | Delivery::LastTwo
         );
-    let job = Job {
-        files: test.files,
-        folders: test.folders,
-        env: test.env,
-        supply: Some(&supply),
-        net: Some(&net),
-        stdin_pieces: &stdin_pieces,
-        emulated,
-        reversed,
-        channel,
-        stdout_closed: test.stdout_closed,
-        ..Job::new(program, &args, stdin.as_bytes(), syscalls)
-    };
     let now = crate::expect::now();
-    let mut started = runner::start(launcher, job, Limits::default()).await?;
+    let mut started = match target {
+        Target::Native {
+            launcher,
+            executable,
+            syscalls,
+            emulated,
+            channel,
+        } => {
+            let job = Job {
+                files: test.files,
+                folders: test.folders,
+                env: test.env,
+                supply: Some(&supply),
+                net: Some(&net),
+                stdin_pieces: &stdin_pieces,
+                emulated,
+                reversed,
+                channel,
+                stdout_closed: test.stdout_closed,
+                ..Job::new(executable, &args, stdin.as_bytes(), syscalls)
+            };
+            Started::native(runner::start(launcher, job, Limits::default()).await?)
+        }
+        Target::Wasm {
+            pool,
+            module,
+            policy,
+        } => {
+            let spec = crate::wasm::Spec {
+                stdin_pieces: &stdin_pieces,
+                files: test.files,
+                folders: test.folders,
+                env: test.env,
+                supply: Some(&supply),
+                connections: &net.connections,
+                listen: net.listen.map(|port| (port, false)),
+                reversed,
+                stdout_closed: test.stdout_closed,
+                ..crate::wasm::Spec::new(&args, stdin.as_bytes(), policy)
+            };
+            Started::wasm(pool.start(module, spec, Limits::default()).await?)
+        }
+    };
     let mut problem = None;
     // The test's servers speak on the program's own connections, each from the start.
-    let servers: Vec<_> = started
-        .take_peers()
-        .into_iter()
-        .map(|(number, stream)| {
-            let reply = test
-                .server
-                .iter()
-                .find(|reply| reply.connection == number)
-                .cloned();
-            let on = match network.connections.get(number) {
-                Some(place) if network.connections.len() > 1 => {
-                    format!(" on its connection to {}", place.describe())
-                }
-                _ => String::new(),
-            };
-            tokio::spawn(serve(stream, reply, delivery, on))
-        })
-        .collect();
+    let servers = match &mut started {
+        Started::Native(native) => spawn_servers(native.take_peers(), test, network, delivery),
+        Started::Wasm(running) => spawn_servers(running.take_peers(), test, network, delivery),
+    };
     let run = if let Some(port) = started
         .port()
         .filter(|_| !test.client.is_empty() || test.serves)
@@ -784,7 +906,11 @@ async fn check_one_way(
             talk(port, test.client, delivery, now).await.err()
         };
         if test.serves {
-            if problem.is_none() && !waiting_for_connections(&started).await {
+            let waiting = match &started {
+                Started::Native(native) => waiting_for_connections(native).await,
+                Started::Wasm(running) => wasm_waiting_for_connections(running).await,
+            };
+            if problem.is_none() && !waiting {
                 problem = Some(
                     "after its connections the program wasn't waiting for the next one, as a \
                      server that keeps serving does"
@@ -818,6 +944,7 @@ async fn check_one_way(
         now,
         random_supplied: supply.random.as_ref().map(Vec::len),
         serves: test.serves,
+        code: target.code(),
     };
     let problem = match (problem, compare(&run, &expected, assertions)) {
         (Some(network), Some(rest)) => Some(format!("{network}; {rest}")),
@@ -859,12 +986,15 @@ async fn send(
 /// The test's own server on one of the program's connections, which lengua made before the
 /// program started: reads exactly what the program must send, replies, closes its side, and
 /// expects nothing more. `on` names the connection when the program has more than one.
-async fn serve(
-    stream: crate::connect::Peer,
+async fn serve<S>(
+    stream: S,
     reply: Option<Reply>,
     delivery: Delivery,
     on: String,
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin + 'static,
+{
     use tokio::io::AsyncReadExt as _;
     let Some(reply) = reply else {
         return Ok(());
@@ -1116,6 +1246,18 @@ async fn waiting_for_connections(started: &runner::Started) -> bool {
     false
 }
 
+/// Whether a WebAssembly program is waiting for the next connection, checked for up to half a
+/// second: its host says so while it waits in `sock_accept` or `poll_oneoff`.
+async fn wasm_waiting_for_connections(running: &crate::wasm::Running) -> bool {
+    for _ in 0..100 {
+        if running.waiting() {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    false
+}
+
 /// Whether `call`, a line of `/proc/PID/syscall`, is a wait for connections: `accept4` on
 /// descriptor 3, or `poll` or `ppoll`, by this computer's numbers.
 fn waits_for_connections(call: &str) -> bool {
@@ -1211,12 +1353,32 @@ fn record(outcome: &mut Outcome, message: String) {
 
 /// What every run of a check shares.
 struct Shared {
-    launcher: PathBuf,
-    program: PathBuf,
-    syscalls: Vec<Allowed>,
+    program: Program,
     network: Network,
     assertions: BTreeMap<i64, usize>,
     setting: Setting,
+}
+
+/// The program a check's runs run.
+enum Program {
+    /// A native executable, through lengua's launcher.
+    Native {
+        /// This server's own binary.
+        launcher: PathBuf,
+        /// The executable.
+        executable: PathBuf,
+        /// The system calls it may make.
+        syscalls: Vec<Allowed>,
+    },
+    /// A WebAssembly module, in lengua's pool of workers.
+    Wasm {
+        /// The workers.
+        pool: crate::wasm::Pool,
+        /// The module.
+        module: Arc<crate::wasm::Program>,
+        /// What its idea lets it reach.
+        policy: crate::wasm::Policy,
+    },
 }
 
 /// A test a run owns, so runs can go at once.
@@ -1239,16 +1401,34 @@ async fn run_one(
     test: &Owned,
     delivery: Delivery,
 ) -> io::Result<(Run, Option<String>)> {
+    let target = match &shared.program {
+        Program::Native {
+            launcher,
+            executable,
+            syscalls,
+        } => Target::Native {
+            launcher,
+            executable,
+            syscalls,
+            emulated: shared.setting.emulated,
+            channel: shared.setting.channel,
+        },
+        Program::Wasm {
+            pool,
+            module,
+            policy,
+        } => Target::Wasm {
+            pool,
+            module,
+            policy: *policy,
+        },
+    };
     check_one(
-        &shared.launcher,
-        &shared.program,
+        target,
         &test.test(),
-        &shared.syscalls,
         &shared.network,
         delivery,
         &shared.assertions,
-        shared.setting.emulated,
-        shared.setting.channel,
     )
     .await
 }
@@ -1310,13 +1490,54 @@ pub async fn run_tests(
     setting: Setting,
 ) -> io::Result<Outcome> {
     let shared = Arc::new(Shared {
-        launcher: launcher.to_owned(),
-        program: program.to_owned(),
-        syscalls: syscalls.to_vec(),
+        program: Program::Native {
+            launcher: launcher.to_owned(),
+            executable: program.to_owned(),
+            syscalls: syscalls.to_vec(),
+        },
         network: network.clone(),
         assertions: assertion_lines(source),
         setting,
     });
+    run_all(suite, shared, seed, workers).await
+}
+
+/// Runs every test of `suite` against the WebAssembly program `module`, in `pool`'s workers, as
+/// [`run_tests`] runs a native one: its idea's `uses` and `network` say what its host gives it.
+///
+/// # Errors
+///
+/// Fails when the program can't be started at all.
+pub async fn run_wasm_tests(
+    suite: &TestSuite,
+    pool: &crate::wasm::Pool,
+    module: Arc<crate::wasm::Program>,
+    seed: u64,
+    uses: &[Use],
+    network: &Network,
+    workers: usize,
+) -> io::Result<Outcome> {
+    let shared = Arc::new(Shared {
+        assertions: module.built().assertions.clone(),
+        program: Program::Wasm {
+            pool: pool.clone(),
+            module,
+            policy: crate::wasm::Policy::of(uses, network),
+        },
+        network: network.clone(),
+        setting: Setting::default(),
+    });
+    run_all(suite, shared, seed, workers).await
+}
+
+/// [`run_tests`]' work, for either kind of program.
+async fn run_all(
+    suite: &TestSuite,
+    shared: Arc<Shared>,
+    seed: u64,
+    workers: usize,
+) -> io::Result<Outcome> {
+    let setting = shared.setting;
     let workers = workers.max(1);
     let deadline = Instant::now() + TOTAL_TIMEOUT;
     let mut outcome = Outcome::default();
@@ -1546,6 +1767,7 @@ mod tests {
             now: 1_735_689_600,
             random_supplied: None,
             serves: false,
+            code: NATIVE_CODE,
         }
     }
 
