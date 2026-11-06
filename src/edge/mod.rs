@@ -1042,9 +1042,10 @@ mod tests {
                 assert_eq!(found[name], wanted, "{profile:?} {name}");
             }
             // AArch64 builds the magic in two halves, as one instruction can't hold it.
-            if let (Some(low), Some(high)) =
-                (found.get("LENGUA_MAGIC_LOW"), found.get("LENGUA_MAGIC_HIGH"))
-            {
+            if let (Some(low), Some(high)) = (
+                found.get("LENGUA_MAGIC_LOW"),
+                found.get("LENGUA_MAGIC_HIGH"),
+            ) {
                 assert_eq!(low | (high << 16), found["LENGUA_MAGIC"], "{profile:?}");
             }
         }

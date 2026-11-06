@@ -1389,7 +1389,11 @@ async fn a_test_gives_the_program_its_clock_and_random_bytes_through_the_broker(
         let place = folder.path().join(target.name());
         let text = program(target, &case);
         let executable = per_target::build(target, &place, case.name, &text).await;
-        assert!(lengua::edge::uses_channel(target, &text), "{}", target.name());
+        assert!(
+            lengua::edge::uses_channel(target, &text),
+            "{}",
+            target.name()
+        );
         let Some(how) = per_target::way(target) else {
             continue;
         };
@@ -1605,10 +1609,7 @@ async fn the_broker_holds_names_to_what_every_system_does() {
 #[tokio::test]
 async fn every_operation_builds_alone_and_with_all_the_others() {
     let folder = tempfile::tempdir().expect("a folder");
-    let mut names: Vec<&'static str> = lengua::edge::Op::ALL
-        .iter()
-        .map(|op| op.symbol())
-        .collect();
+    let mut names: Vec<&'static str> = lengua::edge::Op::ALL.iter().map(|op| op.symbol()).collect();
     names.extend(["fill", "parallel_for", "assert_fail"]);
     let mut groups: Vec<(String, Vec<&'static str>)> = names
         .iter()

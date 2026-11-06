@@ -185,8 +185,32 @@ plan is ROADMAP.md's R2). Done, with the runs that show it:
   pseudo-terminal, with every call held to the registers it keeps. Runs: the edge tests on both
   Linux runners 42121334134, through QEMU 42121369789, the full suite on six runners
   42122543252.
+- **2, the checker takes the edge form** (2a–2d): two units (main.s's and lengua's), the
+  operations as `Exit::Edge`, the edge rules, and the thread rules for an edge-form program.
+  The golden raw diff against `e4163d4` is empty (run 42132982376).
+- **3, the prover takes it** (3a–3c): `edge_call` models every operation whole, thread operations
+  run as the code they are, and the library `fill` is found by its shape. The model agrees with
+  the system on every case on both CPUs (run 42137756844).
+- **4, an edge-form program runs; the pilots**: the main template and `cat`/`cat-stream`, with
+  their proofs and inductions unchanged, on both CPUs (runs 42137847004, 42137850804,
+  42137855171, 42137859008).
+- **5, the programs**: every shipped program, template and benchmark is in the edge form on both
+  CPUs, on stacked branches `wip/r2-5a` to `5h`. The stack's gate (run 42144788634 on
+  `wip/r2-5h`) found what the families' own tests hadn't, all fixed on `wip/r2-6a`: a rule on
+  registers the edge changes that took a pure helper's third result for stale (rcx after
+  `count_piece`), echo's fourth assertion, two frames (dates, the server template), the raw-read
+  proof test (it needs `fill` linked), the thread test's op list and the sessions tests' nop.
+- **6a, the broker alone**: its messages, parser (with a fuzz target) and service on Linux
+  (run 42144883542).
+- **6b and 6c, in progress**: the edge's channel code on both CPUs (descriptor 4,352, the first
+  message, requests for names, the clock and random bytes, notes of closes, waits and listings,
+  a listing turned round), the launcher's channel and the broker's thread for a job, no
+  supervisor for such a job, and the harness's switch to the broker's notes.
 
-Still to do, from round 1 and the plan's later steps:
+Still to do, from round 1 and the plan's later steps: 6d (Landlock with no path, the pins on the
+channel), 7 (the snippets in the tests), 8 (delete the inline form and the supervisor, the
+layout, the documents, the final verification: the full suite on six runners, the mutation test,
+the golden ledger against `e4163d4`, the bench against it).
 
 - **The QEMU job's seven failing cases** (run 42085247387: 528 passed, 7 failed). In
   `tests/programs.rs`: `a_program_gets_only_the_environment_its_test_or_run_gives`,
