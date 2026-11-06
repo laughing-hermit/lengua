@@ -10,7 +10,8 @@ use super::cfg::{ASSERT_FAIL, Exit, Flow, constant_before, deepest, run_start};
 use super::decode::{MappedFunction, Program};
 use super::source::Source;
 use super::{Rule, Violation};
-use crate::isa::{Abi, Cond, Control, MemRef, Op, Operand, Value};
+use crate::edge::Form;
+use crate::isa::{Abi, Cond, Control, MemRef, Op, Operand, Reg, Value};
 use crate::spec::MAX_THREADS;
 
 /// The canonical functions, copied word for word from the parallel template.
@@ -49,11 +50,15 @@ pub const WORKER: &str = "worker";
 /// Where the canonical code is, for messages.
 const TEMPLATE_PATH: &str = "assets/parallel-template.s";
 
-/// Whether main.s starts threads.
+/// Whether main.s of the inline form starts threads: it has the thread code. In the edge form
+/// the code is lengua's, and main.s starts threads by calling its `parallel_for`.
 #[must_use]
 pub fn used(source: &Source) -> bool {
     FUNCTIONS.iter().any(|name| source.function(name).is_some())
 }
+
+/// What lengua's `parallel_for` is called by in the edge form.
+const LIBRARY_PARALLEL_FOR: &str = "parallel_for";
 
 struct Checker<'a, 'p> {
     program: &'a Program<'p>,
@@ -97,20 +102,30 @@ pub fn check(
     violations: &mut Vec<Violation>,
 ) {
     let source = program.source;
-    if !used(source) {
-        return;
-    }
+    let edge = source.form == Form::Edge;
     let mut checker = Checker {
         program,
         flows,
         violations,
     };
-    let line = FUNCTIONS
-        .iter()
-        .filter_map(|name| source.function(name))
-        .map(|function| function.line)
-        .min()
-        .unwrap_or(1);
+    // Where main.s starts threads: its own thread code, or, in the edge form, its calls of
+    // lengua's parallel_for.
+    let line = if edge {
+        let Some(first) = checker.starts().first().copied() else {
+            return;
+        };
+        first
+    } else {
+        if !used(source) {
+            return;
+        }
+        FUNCTIONS
+            .iter()
+            .filter_map(|name| source.function(name))
+            .map(|function| function.line)
+            .min()
+            .unwrap_or(1)
+    };
     let Some(allowed) = allowed else {
         checker.violation(
             Rule::Resources,
@@ -121,10 +136,15 @@ pub fn check(
         );
         return;
     };
-    if !checker.canonical(template) {
+    if edge {
+        checker.worker_defined(line);
+    } else if !checker.canonical(template) {
         return;
     }
     checker.sizes(allowed);
+    if edge {
+        checker.counts();
+    }
     let region = checker.region();
     checker.callers(&region);
     checker.stack();
@@ -216,6 +236,85 @@ impl Checker<'_, '_> {
         self.violations.len() == before
     }
 
+    /// The lines of main.s's calls of lengua's parallel_for, in the edge form.
+    fn starts(&self) -> Vec<usize> {
+        self.calls()
+            .into_iter()
+            .filter(|(_, callee, _)| callee == LIBRARY_PARALLEL_FOR)
+            .map(|(_, _, line)| line)
+            .collect()
+    }
+
+    /// lengua's parallel_for calls main.s's `worker`, so the edge form needs one.
+    fn worker_defined(&mut self, line: usize) {
+        if self.program.source.function(WORKER).is_none() {
+            self.violation(
+                Rule::Resources,
+                line,
+                "main.s calls parallel_for but has no worker function",
+                "write `worker`: it gets its index in rdi and its slot in rsi, and returns a \
+                 result in rax",
+            );
+        }
+    }
+
+    /// Each call of parallel_for in the edge form hands it what the threads' data is sized for:
+    /// a count of at most THREADS, and the program's own `slots` and `results`, with SLOT_SIZE
+    /// for each slot, so lengua's code never reaches past them.
+    fn counts(&mut self) {
+        let abi = self.program.abi();
+        let threads = self.constant("THREADS").unwrap_or(0);
+        let slot_size = self.constant("SLOT_SIZE").unwrap_or(0);
+        let mut found = Vec::new();
+        for function in &self.program.functions {
+            let Some(flow) = self.flows.get(function.name()) else {
+                continue;
+            };
+            for (index, exit) in flow.exits.iter().enumerate() {
+                if !matches!(exit, Exit::Call { callee } if callee == LIBRARY_PARALLEL_FOR) {
+                    continue;
+                }
+                let line = function.steps[index].source.line;
+                if !count_at_most(function, index, threads, abi) {
+                    found.push((
+                        line,
+                        format!(
+                            "the count given to parallel_for isn't shown to be at most THREADS, \
+                             {threads}"
+                        ),
+                        "compare the count with THREADS and jump to an assertion when it is \
+                         above, in the same straight-line code as the call, before the count \
+                         is moved to its argument register"
+                            .to_owned(),
+                    ));
+                }
+                if constant_before(function, index, abi.arguments[2], abi)
+                    .map(|(_, value)| value)
+                    != Some(slot_size)
+                {
+                    found.push((
+                        line,
+                        "parallel_for's slot size isn't SLOT_SIZE".to_owned(),
+                        "set the third argument to SLOT_SIZE, as `mov edx, SLOT_SIZE`".to_owned(),
+                    ));
+                }
+                for (position, name) in [(1, "slots"), (3, "results")] {
+                    let set = symbol_before(self.program, function, index, abi.arguments[position]);
+                    if set.as_deref() != Some(name) {
+                        found.push((
+                            line,
+                            format!("parallel_for's argument {} isn't {name}", position + 1),
+                            format!("pass the address of {name}, as the template does"),
+                        ));
+                    }
+                }
+            }
+        }
+        for (line, problem, fix) in found {
+            self.violation(Rule::Resources, line, problem, fix);
+        }
+    }
+
     /// THREADS is at most what the spec allows; each stack and slot is a multiple of 64 bytes;
     /// and the data symbols are as big and as aligned as the threads need.
     fn sizes(&mut self, allowed: u32) {
@@ -237,7 +336,13 @@ impl Checker<'_, '_> {
             );
             return;
         }
-        for name in ["STACK_SIZE", "SLOT_SIZE"] {
+        // The stacks are lengua's in the edge form, so only the slots are the program's to size.
+        let sized: &[&str] = if source.form == Form::Edge {
+            &["SLOT_SIZE"]
+        } else {
+            &["STACK_SIZE", "SLOT_SIZE"]
+        };
+        for name in sized {
             let value = self.constant(name).unwrap_or(0);
             if value <= 0 || value % 64 != 0 {
                 self.violation(
@@ -327,12 +432,14 @@ impl Checker<'_, '_> {
     }
 
     /// Only parallel_for starts and joins threads and only the canonical code calls worker,
-    /// whose functions run on worker threads alone.
+    /// whose functions run on worker threads alone. In the edge form that code is lengua's, so
+    /// main.s never calls worker, and has no thread code of its own to call.
     fn callers(&mut self, region: &BTreeSet<String>) {
+        let edge = self.program.source.form == Form::Edge;
         for (caller, callee, line) in self.calls() {
             let allowed = match callee.as_str() {
-                "start_worker" | "join_worker" => caller == "parallel_for",
-                WORKER => caller == "parallel_for" || caller == "start_worker",
+                "start_worker" | "join_worker" => !edge && caller == "parallel_for",
+                WORKER => !edge && (caller == "parallel_for" || caller == "start_worker"),
                 _ if region.contains(&callee) => region.contains(&caller),
                 _ => true,
             };
@@ -356,6 +463,28 @@ impl Checker<'_, '_> {
 
     /// Each thread's stack holds the worker's deepest call path.
     fn stack(&mut self) {
+        // In the edge form lengua gives each thread its stack, and a worker starts at its top.
+        if self.program.source.form == Form::Edge {
+            let needed = deepest(WORKER, self.program, self.flows);
+            if needed > crate::edge::THREAD_STACK - crate::edge::THREAD_STACK_HEAD {
+                let line = self
+                    .program
+                    .source
+                    .function(WORKER)
+                    .map_or(1, |function| function.line);
+                self.violation(
+                    Rule::Resources,
+                    line,
+                    format!(
+                        "a worker's stack can reach {needed} bytes, but each thread has {} \
+                         bytes to use",
+                        crate::edge::THREAD_STACK - crate::edge::THREAD_STACK_HEAD
+                    ),
+                    "use less stack in the worker",
+                );
+            }
+            return;
+        }
         let Some(stack_size) = self.constant("STACK_SIZE") else {
             return;
         };
@@ -395,7 +524,16 @@ impl Checker<'_, '_> {
         for (index, step) in function.steps.iter().enumerate() {
             let insn = &step.insn;
             let line = step.source.line;
-            if matches!(flow.exits[index], Exit::Syscall { .. }) {
+            // A call that reaches the OS: a system call, or, in the edge form, an operation or a
+            // library function that makes one.
+            let reaches_the_os = match &flow.exits[index] {
+                Exit::Syscall { .. } | Exit::Edge { .. } => true,
+                Exit::Call { callee } => {
+                    callee != ASSERT_FAIL && crate::edge::LIBRARY.contains(&callee.as_str())
+                }
+                _ => false,
+            };
+            if reaches_the_os {
                 self.violation(
                     Rule::Resources,
                     line,
@@ -575,7 +713,60 @@ fn index_limit(
     access: MemRef,
     abi: &Abi,
 ) -> Option<i64> {
-    let register = access.index?.full();
+    register_limit(function, index, access.index?.full(), abi)
+}
+
+/// Whether the count in the first argument register at the call at `index` is at most `most`: a
+/// number moved there, or a register that a comparison with a constant bounded before it was
+/// copied.
+fn count_at_most(function: &MappedFunction<'_>, index: usize, most: i64, abi: &Abi) -> bool {
+    let count = abi.arguments[0];
+    if let Some((_, value)) = constant_before(function, index, count, abi) {
+        return value <= most;
+    }
+    for position in (run_start(function, index)..index).rev() {
+        let insn = &function.steps[position].insn;
+        if insn.changes(count, abi) {
+            return matches!(insn.op, Op::Move)
+                && matches!(
+                    insn.value,
+                    Value::Copy(Operand::Reg(source))
+                        if register_limit(function, position, source.full(), abi)
+                            .is_some_and(|limit| limit <= most)
+                );
+        }
+    }
+    false
+}
+
+/// The data symbol whose address the last instruction to set `register` made, since the last
+/// label before `index`: an x86-64 `lea [rip + name]`, or AArch64's `add :lo12:name`.
+fn symbol_before(
+    program: &Program<'_>,
+    function: &MappedFunction<'_>,
+    index: usize,
+    register: Reg,
+) -> Option<String> {
+    let abi = program.abi();
+    (run_start(function, index)..index)
+        .rev()
+        .find_map(|position| {
+            let step = &function.steps[position];
+            step.insn
+                .changes(register, abi)
+                .then(|| program.named(step).map(|(name, ..)| name.to_owned()))
+        })
+        .flatten()
+}
+
+/// The largest value `register` holds at `index`, from the comparison with a constant, and its
+/// `jae` or `ja`, in the same run of code before it.
+fn register_limit(
+    function: &MappedFunction<'_>,
+    index: usize,
+    register: Reg,
+    abi: &Abi,
+) -> Option<i64> {
     for position in (run_start(function, index)..index).rev() {
         let candidate = &function.steps[position].insn;
         // The limit a number, or a register holding a named constant, as AArch64 holds one too

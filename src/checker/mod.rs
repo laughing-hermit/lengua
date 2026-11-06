@@ -378,16 +378,15 @@ pub fn check_program(source: &Source, executable: &[u8], context: Context<'_>) -
         Isa::Aarch64 => PARALLEL_TEMPLATE_AARCH64,
     })
     .0;
-    // The thread code is canonical in the inline form; in the edge form it is lengua's.
-    if source.form == crate::edge::Form::Inline {
-        threads::check(
-            &program,
-            &flows,
-            &parallel_template,
-            context.threads,
-            &mut violations,
-        );
-    }
+    // The thread code is canonical in the inline form; in the edge form it is lengua's, and what
+    // main.s hands it and its worker are held to the same rules.
+    threads::check(
+        &program,
+        &flows,
+        &parallel_template,
+        context.threads,
+        &mut violations,
+    );
     if program.isa == Isa::Aarch64 {
         violations.iter_mut().for_each(aarch64::in_words);
     }

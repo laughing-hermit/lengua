@@ -27,6 +27,13 @@ use crate::spec::{Network, Syscall, Use};
 /// program passes it: a program holds [`crate::runner::OPEN_FILES`] descriptors, 0 to 4,351.
 pub const CHANNEL: u32 = 4352;
 
+/// How big the stack is that lengua gives each thread `os_thread_start` starts: 1 MiB, of which a
+/// worker has all but [`THREAD_STACK_HEAD`] bytes at the top.
+pub const THREAD_STACK: i64 = 1 << 20;
+
+/// What the thread's first frames take before its worker runs: the call of worker and a margin.
+pub const THREAD_STACK_HEAD: i64 = 64;
+
 /// The most bytes `os_random` fills in one call.
 pub const RANDOM_MOST: u64 = 256;
 
