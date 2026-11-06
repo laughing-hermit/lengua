@@ -51,6 +51,45 @@
 .equ LENGUA_TCSETS, 0x5402
 .equ LENGUA_TIOCGWINSZ, 0x5413
 .equ LENGUA_NOT_LINE_MODE, -11
+.equ LENGUA_SYS_SENDMSG, 46
+.equ LENGUA_SYS_RECVMSG, 47
+.equ LENGUA_ENOENT, -2
+.equ LENGUA_EMFILE, -24
+.equ LENGUA_ENAMETOOLONG, -36
+.equ LENGUA_MSG_DONTWAIT, 0x40
+.equ LENGUA_MSG_WAITALL, 0x100
+.equ LENGUA_MSG_NOSIGNAL, 0x4000
+.equ LENGUA_SOL_SOCKET, 1
+.equ LENGUA_SCM_RIGHTS, 1
+.equ LENGUA_MAGIC, 0x42474e4c
+.equ LENGUA_VERSION, 1
+.equ LENGUA_HELLO_LEN, 32
+.equ LENGUA_REQUEST_LEN, 16
+.equ LENGUA_REPLY_LEN, 16
+.equ LENGUA_PATH_MAX, 1023
+.equ LENGUA_PAYLOAD_MAX, 256
+.equ LENGUA_REPLY_AT, 2064
+.equ LENGUA_PAYLOAD_AT, 2080
+.equ LENGUA_ASK_OPEN, 1
+.equ LENGUA_ASK_MKDIR, 2
+.equ LENGUA_ASK_REMOVE, 3
+.equ LENGUA_ASK_RENAME, 4
+.equ LENGUA_NOTE_CLOSED, 5
+.equ LENGUA_NOTE_WAITING, 6
+.equ LENGUA_NOTE_LISTED, 7
+.equ LENGUA_ASK_CLOCK, 8
+.equ LENGUA_ASK_RANDOM, 9
+.equ LENGUA_NOTE_RESUMED, 10
+.equ LENGUA_FLAG_REVERSED, 1
+.equ LENGUA_FLAG_RANDOM, 2
+.equ LENGUA_FLAG_CLOCK, 4
+.equ LENGUA_LOOKED, 0x80000000
+.equ LENGUA_ON, 1
+.equ LENGUA_TESTING, 2
+.equ LENGUA_REVERSED, 4
+.equ LENGUA_RANDOM, 8
+.equ LENGUA_CLOCK, 16
+.equ LENGUA_LISTED, 32
 
 # == _start: os_exit
 .text
@@ -141,11 +180,11 @@ os_read:
     ret
 .size os_read, . - os_read
 
-# == os_close: lengua_error
+# == os_close: lengua_error lengua_tokens lengua_note
 .text
 .type os_close, @function
 # In: edi = the descriptor.
-# Out: rax = 0, or an error.
+# Out: rax = 0, or an error. A file the broker opened is told to it as closed.
 os_close:
     cmp edi, LENGUA_CHANNEL
     je .Llengua_close_refused
@@ -153,6 +192,19 @@ os_close:
     syscall
     test rax, rax
     js .Llengua_close_failed
+    cmp edi, LENGUA_CHANNEL
+    jae .Llengua_close_done
+    mov ecx, edi
+    lea r11, [rip + lengua_tokens]
+    mov eax, dword ptr [r11 + 4*rcx]
+    test eax, eax
+    jz .Llengua_close_done
+    mov dword ptr [r11 + 4*rcx], 0
+    mov ecx, eax
+    mov eax, LENGUA_NOTE_CLOSED
+    call lengua_note
+.Llengua_close_done:
+    xor eax, eax
     ret
 .Llengua_close_refused:
     mov rax, LENGUA_EBADF
@@ -186,12 +238,15 @@ os_seek:
     ret
 .size os_seek, . - os_seek
 
-# == os_mkdir: lengua_error
+# == os_mkdir: lengua_error lengua_ask lengua_channel_ready
 .text
 .type os_mkdir, @function
 # In: rdi = the name, NUL-terminated, relative to the working folder.
-# Out: rax = 0, or an error.
+# Out: rax = 0, or an error. Where lengua's broker serves the program, it makes the folder.
 os_mkdir:
+    call lengua_channel_ready
+    test eax, eax
+    jnz .Llengua_mkdir_asked
     push rdi
     push rsi
     push rdx
@@ -203,6 +258,12 @@ os_mkdir:
     pop rdx
     pop rsi
     pop rdi
+    jmp .Llengua_mkdir_result
+.Llengua_mkdir_asked:
+    mov eax, LENGUA_ASK_MKDIR
+    xor ecx, ecx
+    call lengua_ask
+.Llengua_mkdir_result:
     test rax, rax
     js .Llengua_mkdir_failed
     ret
@@ -212,14 +273,17 @@ os_mkdir:
     ret
 .size os_mkdir, . - os_mkdir
 
-# == os_remove: lengua_error
+# == os_remove: lengua_error lengua_ask lengua_channel_ready
 .text
 .type os_remove, @function
 # In: rdi = the name, esi = 0 for a file or 1 for an empty folder.
-# Out: rax = 0, or an error.
+# Out: rax = 0, or an error. Where lengua's broker serves the program, it removes the name.
 os_remove:
     cmp esi, 1
     ja .Llengua_remove_invalid
+    call lengua_channel_ready
+    test eax, eax
+    jnz .Llengua_remove_asked
     push rdi
     push rsi
     push rdx
@@ -235,6 +299,12 @@ os_remove:
     pop rdx
     pop rsi
     pop rdi
+    jmp .Llengua_remove_result
+.Llengua_remove_asked:
+    mov eax, LENGUA_ASK_REMOVE
+    mov ecx, esi
+    call lengua_ask
+.Llengua_remove_result:
     test rax, rax
     js .Llengua_remove_failed
     ret
@@ -247,12 +317,15 @@ os_remove:
     ret
 .size os_remove, . - os_remove
 
-# == os_rename: lengua_error
+# == os_rename: lengua_error lengua_ask lengua_channel_ready
 .text
 .type os_rename, @function
 # In: rdi = the name it has, rsi = the name it is to have, which is replaced.
-# Out: rax = 0, or an error.
+# Out: rax = 0, or an error. Where lengua's broker serves the program, it renames the file.
 os_rename:
+    call lengua_channel_ready
+    test eax, eax
+    jnz .Llengua_rename_asked
     push rdi
     push rsi
     push rdx
@@ -267,6 +340,12 @@ os_rename:
     pop rdx
     pop rsi
     pop rdi
+    jmp .Llengua_rename_result
+.Llengua_rename_asked:
+    mov eax, LENGUA_ASK_RENAME
+    xor ecx, ecx
+    call lengua_ask
+.Llengua_rename_result:
     test rax, rax
     js .Llengua_rename_failed
     ret
@@ -276,19 +355,35 @@ os_rename:
     ret
 .size os_rename, . - os_rename
 
-# == os_clock: lengua_error
+# == os_clock: lengua_error lengua_ask lengua_channel_ready
 .text
 .type os_clock, @function
 # In: edi = 0 for the time of day or 1 for a clock that only moves forward, rsi = 16 bytes for the
 # seconds and then the nanoseconds.
-# Out: rax = 0, or an error.
+# Out: rax = 0, or an error. A test that gives the program readings has the broker give them.
 os_clock:
     cmp edi, 1
     ja .Llengua_clock_invalid
+    call lengua_channel_ready
+    test eax, LENGUA_CLOCK
+    jnz .Llengua_clock_asked
     mov eax, LENGUA_SYS_CLOCK_GETTIME
     syscall
     test rax, rax
     js .Llengua_clock_failed
+    ret
+.Llengua_clock_asked:
+    mov eax, LENGUA_ASK_CLOCK
+    mov ecx, edi
+    call lengua_ask
+    test rax, rax
+    js .Llengua_clock_failed
+    lea r11, [rip + lengua_wire + LENGUA_PAYLOAD_AT]
+    mov rax, qword ptr [r11]
+    mov qword ptr [rsi], rax
+    mov rax, qword ptr [r11 + 8]
+    mov qword ptr [rsi + 8], rax
+    xor eax, eax
     ret
 .Llengua_clock_invalid:
     mov rax, LENGUA_EINVAL
@@ -299,17 +394,20 @@ os_clock:
     ret
 .size os_clock, . - os_clock
 
-# == os_sleep: lengua_error
+# == os_sleep: lengua_error lengua_channel_ready
 .text
 .type os_sleep, @function
 # In: edi = the clock as for os_clock, esi = 0 to wait that long or 1 to wait until that time,
 # rdx = 16 bytes for the seconds and then the nanoseconds.
-# Out: rax = 0, or an error.
+# Out: rax = 0, or an error. In a test the wait ends at once.
 os_sleep:
     cmp edi, 1
     ja .Llengua_sleep_invalid
     cmp esi, 1
     ja .Llengua_sleep_invalid
+    call lengua_channel_ready
+    test eax, LENGUA_TESTING
+    jnz .Llengua_sleep_skipped
     push r10
     xor r10d, r10d
     mov eax, LENGUA_SYS_CLOCK_NANOSLEEP
@@ -317,6 +415,9 @@ os_sleep:
     pop r10
     test rax, rax
     js .Llengua_sleep_failed
+    ret
+.Llengua_sleep_skipped:
+    xor eax, eax
     ret
 .Llengua_sleep_invalid:
     mov rax, LENGUA_EINVAL
@@ -327,14 +428,18 @@ os_sleep:
     ret
 .size os_sleep, . - os_sleep
 
-# == os_random: lengua_error
+# == os_random: lengua_error lengua_ask lengua_channel_ready
 .text
 .type os_random, @function
 # In: rdi = the buffer, rsi = how many bytes, at most 256.
-# Out: rax = how many it filled, all of them, or an error.
+# Out: rax = how many it filled, all of them, or an error. A test that gives the program bytes has
+# the broker give them.
 os_random:
     cmp rsi, LENGUA_RANDOM_MOST
     ja .Llengua_random_invalid
+    call lengua_channel_ready
+    test eax, LENGUA_RANDOM
+    jnz .Llengua_random_asked
     push rdx
     xor edx, edx
     mov eax, LENGUA_SYS_GETRANDOM
@@ -342,6 +447,27 @@ os_random:
     pop rdx
     test rax, rax
     js .Llengua_random_failed
+    ret
+.Llengua_random_asked:
+    test rsi, rsi
+    jz .Llengua_random_none
+    mov eax, LENGUA_ASK_RANDOM
+    xor ecx, ecx
+    call lengua_ask
+    test rax, rax
+    js .Llengua_random_failed
+    lea r11, [rip + lengua_wire + LENGUA_PAYLOAD_AT]
+    xor ecx, ecx
+.Llengua_random_copy:  # bound: 256
+    movzx eax, byte ptr [r11 + rcx]
+    mov byte ptr [rdi + rcx], al
+    inc ecx
+    cmp rcx, rsi
+    jb .Llengua_random_copy
+    mov rax, rsi
+    ret
+.Llengua_random_none:
+    xor eax, eax
     ret
 .Llengua_random_invalid:
     mov rax, LENGUA_EINVAL
@@ -352,11 +478,11 @@ os_random:
     ret
 .size os_random, . - os_random
 
-# == os_accept: lengua_error
+# == os_accept: lengua_error lengua_wait_note
 .text
 .type os_accept, @function
 # In: edi = 3, the listening socket lengua bound for the program.
-# Out: rax = the next connection's descriptor, or an error.
+# Out: rax = the next connection's descriptor, or an error. A test is told when the program waits.
 os_accept:
     cmp edi, LENGUA_LISTENER
     jne .Llengua_accept_refused
@@ -366,8 +492,14 @@ os_accept:
     xor esi, esi
     xor edx, edx
     xor r10d, r10d
+    mov eax, LENGUA_NOTE_WAITING
+    call lengua_wait_note
     mov eax, LENGUA_SYS_ACCEPT4
     syscall
+    push rax
+    mov eax, LENGUA_NOTE_RESUMED
+    call lengua_wait_note
+    pop rax
     pop r10
     pop rdx
     pop rsi
@@ -405,7 +537,7 @@ os_shutdown:
     ret
 .size os_shutdown, . - os_shutdown
 
-# == os_poll: lengua_error
+# == os_poll: lengua_error lengua_wait_note
 .text
 .type os_poll, @function
 # In: rdi = a table of 8-byte entries (the descriptor, 4 bytes; the events waited for, 2; the
@@ -422,8 +554,14 @@ os_poll:
     inc ecx
     jmp .Llengua_poll_scan
 .Llengua_poll_scanned:
+    mov eax, LENGUA_NOTE_WAITING
+    call lengua_wait_note
     mov eax, LENGUA_SYS_POLL
     syscall
+    push rax
+    mov eax, LENGUA_NOTE_RESUMED
+    call lengua_wait_note
+    pop rax
     test rax, rax
     js .Llengua_poll_failed
     ret
@@ -436,7 +574,7 @@ os_poll:
     ret
 .size os_poll, . - os_poll
 
-# == os_open: lengua_error
+# == os_open: lengua_error lengua_tokens lengua_ask lengua_channel_ready lengua_note
 .section .rodata
 .balign 4
 .type lengua_open_flags, @object
@@ -450,10 +588,14 @@ lengua_open_flags:
 # In: rdi = the name, NUL-terminated, relative to the working folder; esi = the mode: 0 to read, 1
 # to write, which makes the file and empties it, 2 to write at its end, 3 to write a file that
 # is not there yet, 4 to list a folder.
-# Out: rax = a descriptor, or an error.
+# Out: rax = a descriptor, or an error. Where lengua's broker serves the program, it opens the file
+# and the descriptor comes from it, with a token the edge keeps to tell it when the file is closed.
 os_open:
     cmp esi, 4
     ja .Llengua_open_invalid
+    call lengua_channel_ready
+    test eax, eax
+    jnz .Llengua_open_asked
     push rdi
     push rsi
     push rdx
@@ -472,6 +614,24 @@ os_open:
     pop rdi
     test rax, rax
     js .Llengua_open_failed
+    ret
+.Llengua_open_asked:
+    mov eax, LENGUA_ASK_OPEN
+    mov ecx, esi
+    call lengua_ask
+    test rax, rax
+    js .Llengua_open_failed
+    cmp ecx, LENGUA_CHANNEL
+    jae .Llengua_open_nothing
+    lea r11, [rip + lengua_tokens]
+    mov dword ptr [r11 + 4*rcx], eax
+    mov eax, ecx
+    ret
+.Llengua_open_nothing:
+    mov ecx, eax
+    mov eax, LENGUA_NOTE_CLOSED
+    call lengua_note
+    mov rax, LENGUA_EMFILE
     ret
 .Llengua_open_invalid:
     mov rax, LENGUA_EINVAL
@@ -531,7 +691,7 @@ os_info:
     ret
 .size os_info, . - os_info
 
-# == os_list: lengua_error
+# == os_list: lengua_error lengua_list_note
 .section .bss
 .balign 8
 .type lengua_dirents, @object
@@ -550,6 +710,7 @@ lengua_dirents:
 os_list:
     cmp edi, LENGUA_CHANNEL
     je .Llengua_list_refused
+    call lengua_list_note
     push rbx
     push rsi
     push rdx
@@ -924,3 +1085,385 @@ os_thread_join:
     mov rax, LENGUA_EINVAL
     ret
 .size os_thread_join, . - os_thread_join
+
+# == lengua_wire
+.section .bss
+.balign 8
+.type lengua_channel_state, @object
+# What the first look at descriptor 4,352 found: a dword that is 0 until it was looked at, then
+# LENGUA_LOOKED with LENGUA_ON and the first message's mode and flags where it is a channel to
+# lengua's broker, and the file limit the message names, 8 bytes, at 8.
+lengua_channel_state:
+    .zero 16
+.size lengua_channel_state, . - lengua_channel_state
+
+.balign 8
+.type lengua_wire, @object
+# What goes over the channel: a request, 16 bytes and the names after them, up to two paths; the
+# reply's 16 bytes at LENGUA_REPLY_AT and its payload, up to 256 bytes, at LENGUA_PAYLOAD_AT. The
+# first message, 32 bytes, is read into the start of it.
+lengua_wire:
+    .zero 2336
+.size lengua_wire, . - lengua_wire
+
+# == lengua_tokens
+.section .bss
+.balign 4
+.type lengua_tokens, @object
+# For each descriptor the broker gave os_open, the token it knows the file by, until it is closed.
+lengua_tokens:
+    .zero 17408
+.size lengua_tokens, . - lengua_tokens
+
+# == lengua_channel_ready: lengua_wire
+.text
+.type lengua_channel_ready, @function
+# Out: eax = 0 where descriptor 4,352 is not a channel to lengua's broker, else LENGUA_ON with the
+# bits LENGUA_TESTING, LENGUA_REVERSED, LENGUA_RANDOM and LENGUA_CLOCK the first message says. The
+# first call looks, the first message waiting already; every later one remembers. Changes rax, rcx,
+# r11 and the flags only.
+lengua_channel_ready:
+    lea r11, [rip + lengua_channel_state]
+    mov eax, dword ptr [r11]
+    test eax, eax
+    jz .Llengua_ready_look
+    and eax, 0x7fffffff
+    ret
+.Llengua_ready_look:
+    push rdi
+    push rsi
+    push rdx
+    push r8
+    push r9
+    push r10
+    sub rsp, 72
+    xor eax, eax
+    mov qword ptr [rsp], rax
+    mov qword ptr [rsp + 8], rax
+    mov qword ptr [rsp + 32], rax
+    mov qword ptr [rsp + 40], rax
+    mov qword ptr [rsp + 48], rax
+    lea rax, [rsp + 56]
+    mov qword ptr [rsp + 16], rax
+    mov eax, 1
+    mov qword ptr [rsp + 24], rax
+    lea rax, [rip + lengua_wire]
+    mov qword ptr [rsp + 56], rax
+    mov eax, LENGUA_HELLO_LEN
+    mov qword ptr [rsp + 64], rax
+    mov edi, LENGUA_CHANNEL
+    mov rsi, rsp
+    mov edx, LENGUA_MSG_DONTWAIT
+    mov eax, LENGUA_SYS_RECVMSG
+    syscall
+    cmp rax, LENGUA_HELLO_LEN
+    jne .Llengua_ready_none
+    lea r11, [rip + lengua_wire]
+    cmp dword ptr [r11], LENGUA_MAGIC
+    jne .Llengua_ready_none
+    cmp dword ptr [r11 + 4], LENGUA_VERSION
+    jne .Llengua_ready_none
+    mov eax, dword ptr [r11 + 8]
+    cmp eax, 1
+    ja .Llengua_ready_none
+    mov edx, dword ptr [r11 + 12]
+    cmp edx, 7
+    ja .Llengua_ready_none
+    lea eax, [rax + rax + LENGUA_ON]
+    lea eax, [rax + 4*rdx]
+    or eax, LENGUA_LOOKED
+    mov rcx, qword ptr [r11 + 16]
+    lea r11, [rip + lengua_channel_state]
+    mov dword ptr [r11], eax
+    mov qword ptr [r11 + 8], rcx
+    and eax, 0x7fffffff
+    jmp .Llengua_ready_leave
+.Llengua_ready_none:
+    lea r11, [rip + lengua_channel_state]
+    mov dword ptr [r11], LENGUA_LOOKED
+    xor eax, eax
+.Llengua_ready_leave:
+    add rsp, 72
+    pop r10
+    pop r9
+    pop r8
+    pop rdx
+    pop rsi
+    pop rdi
+    ret
+.size lengua_channel_ready, . - lengua_channel_ready
+
+# == lengua_name
+.text
+.type lengua_name, @function
+# In: r11 = a name, NUL-terminated; r9 = where its bytes go. Out: rax = how long it is, 1 to
+# LENGUA_PATH_MAX, and r9 after it; for none or a longer one, -ENOENT or -ENAMETOOLONG, and r9 as it
+# was. Changes rax, rcx, r9 and the flags only.
+lengua_name:
+    xor eax, eax
+.Llengua_name_copy:  # bound: 1024
+    movzx ecx, byte ptr [r11 + rax]
+    test ecx, ecx
+    jz .Llengua_name_end
+    cmp eax, LENGUA_PATH_MAX
+    jae .Llengua_name_long
+    mov byte ptr [r9 + rax], cl
+    inc eax
+    jmp .Llengua_name_copy
+.Llengua_name_end:
+    test eax, eax
+    jz .Llengua_name_empty
+    add r9, rax
+    ret
+.Llengua_name_empty:
+    mov rax, LENGUA_ENOENT
+    ret
+.Llengua_name_long:
+    mov rax, LENGUA_ENAMETOOLONG
+    ret
+.size lengua_name, . - lengua_name
+
+# == lengua_exchange: lengua_wire
+.text
+.type lengua_exchange, @function
+# In: eax = how long the request is, which is in lengua_wire. Out: rax = the reply's result, or -EIO
+# where the channel fails; ecx = the descriptor that came with the reply, or -1; the reply's payload
+# is in lengua_wire at LENGUA_PAYLOAD_AT. Changes rax, rcx, r11 and the flags only.
+lengua_exchange:
+    push rbx
+    push rdi
+    push rsi
+    push rdx
+    push r8
+    push r9
+    push r10
+    sub rsp, 96
+    mov ebx, eax
+    xor eax, eax
+    mov qword ptr [rsp], rax
+    mov qword ptr [rsp + 8], rax
+    mov qword ptr [rsp + 32], rax
+    mov qword ptr [rsp + 40], rax
+    mov qword ptr [rsp + 48], rax
+    lea rax, [rsp + 56]
+    mov qword ptr [rsp + 16], rax
+    mov eax, 1
+    mov qword ptr [rsp + 24], rax
+    lea rax, [rip + lengua_wire]
+    mov qword ptr [rsp + 56], rax
+    mov qword ptr [rsp + 64], rbx
+    mov edi, LENGUA_CHANNEL
+    mov rsi, rsp
+    mov edx, LENGUA_MSG_NOSIGNAL
+    mov eax, LENGUA_SYS_SENDMSG
+    syscall
+    cmp rax, rbx
+    jne .Llengua_exchange_failed
+    lea rax, [rip + lengua_wire + LENGUA_REPLY_AT]
+    mov qword ptr [rsp + 56], rax
+    mov eax, LENGUA_REPLY_LEN
+    mov qword ptr [rsp + 64], rax
+    lea rax, [rsp + 72]
+    mov qword ptr [rsp + 32], rax
+    mov eax, 24
+    mov qword ptr [rsp + 40], rax
+    xor eax, eax
+    mov qword ptr [rsp + 72], rax
+    mov edi, LENGUA_CHANNEL
+    mov rsi, rsp
+    mov edx, LENGUA_MSG_WAITALL
+    mov eax, LENGUA_SYS_RECVMSG
+    syscall
+    cmp rax, LENGUA_REPLY_LEN
+    jne .Llengua_exchange_failed
+    mov r10d, -1
+    cmp qword ptr [rsp + 40], 20
+    jb .Llengua_exchange_whole
+    cmp dword ptr [rsp + 80], LENGUA_SOL_SOCKET
+    jne .Llengua_exchange_whole
+    cmp dword ptr [rsp + 84], LENGUA_SCM_RIGHTS
+    jne .Llengua_exchange_whole
+    mov r10d, dword ptr [rsp + 88]
+.Llengua_exchange_whole:
+    lea r11, [rip + lengua_wire + LENGUA_REPLY_AT]
+    mov eax, dword ptr [r11 + 8]
+    test eax, eax
+    jz .Llengua_exchange_done
+    cmp eax, LENGUA_PAYLOAD_MAX
+    ja .Llengua_exchange_failed
+    mov ebx, eax
+    xor eax, eax
+    mov qword ptr [rsp + 32], rax
+    mov qword ptr [rsp + 40], rax
+    lea rax, [rip + lengua_wire + LENGUA_PAYLOAD_AT]
+    mov qword ptr [rsp + 56], rax
+    mov qword ptr [rsp + 64], rbx
+    mov edi, LENGUA_CHANNEL
+    mov rsi, rsp
+    mov edx, LENGUA_MSG_WAITALL
+    mov eax, LENGUA_SYS_RECVMSG
+    syscall
+    cmp rax, rbx
+    jne .Llengua_exchange_failed
+.Llengua_exchange_done:
+    lea r11, [rip + lengua_wire + LENGUA_REPLY_AT]
+    mov rax, qword ptr [r11]
+    mov ecx, r10d
+    jmp .Llengua_exchange_leave
+.Llengua_exchange_failed:
+    mov rax, LENGUA_EIO
+    mov ecx, -1
+.Llengua_exchange_leave:
+    add rsp, 96
+    pop r10
+    pop r9
+    pop r8
+    pop rdx
+    pop rsi
+    pop rdi
+    pop rbx
+    ret
+.size lengua_exchange, . - lengua_exchange
+
+# == lengua_ask: lengua_exchange lengua_name
+.text
+.type lengua_ask, @function
+# In: eax = what is asked, LENGUA_ASK_OPEN to LENGUA_ASK_RANDOM; ecx = its argument, the mode, kind or
+# clock; rdi = the first name, for what asks about names; rsi = the second name of a rename, or how
+# many random bytes. Out: as lengua_exchange, or a name's error from lengua_name with ecx = -1. Changes
+# rax, rcx, r11 and the flags only.
+lengua_ask:
+    push rbx
+    push rdi
+    push rsi
+    push rdx
+    push r8
+    push r9
+    push r10
+    mov ebx, eax
+    lea r8, [rip + lengua_wire]
+    xor eax, eax
+    mov qword ptr [r8], rax
+    mov qword ptr [r8 + 8], rax
+    mov byte ptr [r8], bl
+    mov byte ptr [r8 + 1], cl
+    lea r9, [r8 + LENGUA_REQUEST_LEN]
+    cmp ebx, LENGUA_ASK_RENAME
+    ja .Llengua_ask_unnamed
+    mov r11, rdi
+    call lengua_name
+    test rax, rax
+    js .Llengua_ask_refused
+    mov word ptr [r8 + 2], ax
+    cmp ebx, LENGUA_ASK_RENAME
+    jne .Llengua_ask_send
+    mov r11, rsi
+    call lengua_name
+    test rax, rax
+    js .Llengua_ask_refused
+    mov word ptr [r8 + 4], ax
+    jmp .Llengua_ask_send
+.Llengua_ask_unnamed:
+    cmp ebx, LENGUA_ASK_RANDOM
+    jne .Llengua_ask_send
+    mov qword ptr [r8 + 8], rsi
+.Llengua_ask_send:
+    sub r9, r8
+    mov eax, r9d
+    call lengua_exchange
+    jmp .Llengua_ask_leave
+.Llengua_ask_refused:
+    mov ecx, -1
+.Llengua_ask_leave:
+    pop r10
+    pop r9
+    pop r8
+    pop rdx
+    pop rsi
+    pop rdi
+    pop rbx
+    ret
+.size lengua_ask, . - lengua_ask
+
+# == lengua_note: lengua_wire
+.text
+.type lengua_note, @function
+# In: eax = what is told, LENGUA_NOTE_CLOSED and the like; rcx = its value, the token of a file
+# closed. The broker answers none, and a note that can't be sent is lost. Changes rax, rcx, r11 and
+# the flags only.
+lengua_note:
+    push rdi
+    push rsi
+    push rdx
+    push r8
+    push r9
+    push r10
+    sub rsp, 88
+    mov qword ptr [rsp], rax
+    mov qword ptr [rsp + 8], rcx
+    xor eax, eax
+    mov qword ptr [rsp + 16], rax
+    mov qword ptr [rsp + 24], rax
+    mov qword ptr [rsp + 48], rax
+    mov qword ptr [rsp + 56], rax
+    mov qword ptr [rsp + 64], rax
+    lea rax, [rsp + 72]
+    mov qword ptr [rsp + 32], rax
+    mov eax, 1
+    mov qword ptr [rsp + 40], rax
+    mov rax, rsp
+    mov qword ptr [rsp + 72], rax
+    mov eax, LENGUA_REQUEST_LEN
+    mov qword ptr [rsp + 80], rax
+    mov edi, LENGUA_CHANNEL
+    lea rsi, [rsp + 16]
+    mov edx, LENGUA_MSG_NOSIGNAL
+    mov eax, LENGUA_SYS_SENDMSG
+    syscall
+    add rsp, 88
+    pop r10
+    pop r9
+    pop r8
+    pop rdx
+    pop rsi
+    pop rdi
+    ret
+.size lengua_note, . - lengua_note
+
+# == lengua_wait_note: lengua_note lengua_channel_ready
+.text
+.type lengua_wait_note, @function
+# In: eax = LENGUA_NOTE_WAITING or LENGUA_NOTE_RESUMED. Tells the broker so when a test runs the
+# program over a channel, which waits for the program to wait before it connects. Changes rax, rcx,
+# r11 and the flags only.
+lengua_wait_note:
+    push rax
+    call lengua_channel_ready
+    test eax, LENGUA_TESTING
+    pop rax
+    jz .Llengua_wait_note_none
+    xor ecx, ecx
+    call lengua_note
+.Llengua_wait_note_none:
+    ret
+.size lengua_wait_note, . - lengua_wait_note
+
+# == lengua_list_note: lengua_note lengua_channel_ready
+.text
+.type lengua_list_note, @function
+# Tells the broker that the program lists a folder, once, when a test runs it over a channel.
+# Changes rax, rcx, r11 and the flags only.
+lengua_list_note:
+    call lengua_channel_ready
+    test eax, LENGUA_TESTING
+    jz .Llengua_list_note_none
+    lea r11, [rip + lengua_channel_state]
+    test dword ptr [r11], LENGUA_LISTED
+    jnz .Llengua_list_note_none
+    or dword ptr [r11], LENGUA_LISTED
+    mov eax, LENGUA_NOTE_LISTED
+    xor ecx, ecx
+    call lengua_note
+.Llengua_list_note_none:
+    ret
+.size lengua_list_note, . - lengua_list_note

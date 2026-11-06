@@ -379,7 +379,7 @@ pub fn parse_reply(bytes: &[u8]) -> Result<(i64, usize), Refusal> {
 mod linux;
 
 #[cfg(target_os = "linux")]
-pub use linux::{Answer, Broker, Notes, Outcome, serve};
+pub use linux::{Answer, Broker, Notes, Outcome, answer_all, greet, serve};
 
 #[cfg(test)]
 mod tests {

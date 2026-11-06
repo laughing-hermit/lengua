@@ -20,6 +20,7 @@ use std::io::{self, Write as _};
 use std::os::unix::process::ExitStatusExt as _;
 use std::path::Path;
 use std::process::{ExitCode, Stdio};
+use std::sync::Arc;
 use std::time::Duration;
 
 use landlock::{
@@ -38,13 +39,15 @@ use tokio::net::UnixListener;
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
+use crate::broker::{self, Broker, Hello, Mode, Notes, Outcome, flag};
 use crate::connect::{self, Made, Reach, Relay};
 use crate::platform::{Allowed, Pin};
 use crate::runner::{End, Job, LAUNCH_FLAG, Limits, OPEN_FILES, Run, portable_run};
 use crate::supervise::SUPERVISE_FLAG;
 use crate::supply::Supply;
 use crate::syscalls::host::{
-    CLOCK_GETTIME, CLOCK_NANOSLEEP, GETDENTS64, GETRANDOM, MKDIRAT, OPENAT, RENAMEAT, UNLINKAT,
+    CLOCK_GETTIME, CLOCK_NANOSLEEP, GETDENTS64, GETRANDOM, MKDIRAT, OPENAT, RECVMSG, RENAMEAT,
+    SENDMSG, UNLINKAT,
 };
 
 /// How long the launcher may take to start.
@@ -90,6 +93,9 @@ struct Handover {
     connections: usize,
     listen: Option<u16>,
     serve_anywhere: bool,
+    /// Whether the program's end of its channel to the broker comes with the go signal, to be
+    /// descriptor 4,352.
+    channel: bool,
 }
 
 impl Handover {
@@ -116,6 +122,7 @@ impl Handover {
                     net.listen = Some(port.parse().map_err(|_| bad())?);
                     net.serve_anywhere = true;
                 }
+                None if part == "channel" => net.channel = true,
                 _ => return Err(bad()),
             }
         }
@@ -136,6 +143,7 @@ pub struct Started {
     stderr: tokio::task::JoinHandle<io::Result<Vec<u8>>>,
     overflowed: mpsc::Receiver<()>,
     supervisor: Option<(tokio::process::Child, SupervisorLines)>,
+    broker: Option<Brokered>,
     connected: Connected,
     /// The fresh working folder to read back, when it isn't one of the user's.
     work: Option<std::path::PathBuf>,
@@ -143,6 +151,15 @@ pub struct Started {
 }
 
 type SupervisorLines = tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>;
+
+/// A program's broker while the program runs: its service, which ends when the program does, and
+/// what the program has told it.
+struct Brokered {
+    service: std::thread::JoinHandle<Outcome>,
+    notes: Arc<Notes>,
+    /// Whether the test supplies random bytes, so that how many the program asks for matters.
+    random: bool,
+}
 
 /// lengua's ends of the connections it made for a running program.
 #[derive(Default)]
@@ -180,6 +197,13 @@ impl Started {
     #[must_use]
     pub fn connections(&self) -> &[Made] {
         &self.connected.made
+    }
+
+    /// What the program's broker knows of whether the program waits for a connection or a key
+    /// now, when the program has a broker: its edge says so before it waits and after.
+    #[must_use]
+    pub fn waiting(&self) -> Option<bool> {
+        self.broker.as_ref().map(|broker| broker.notes.waiting())
     }
 
     /// Waits for the program to end, stopping it at the time or output limit.
@@ -243,12 +267,41 @@ impl Started {
         self.connected.held.clear();
         let stdout = self.stdout.await.map_err(io::Error::other)??;
         let stderr = self.stderr.await.map_err(io::Error::other)??;
-        let (supplied, random_asked, listed) = match self.supervisor.as_mut() {
-            Some((supervisor, lines)) => match supervisor_verdict(supervisor, lines).await {
-                Ok((asked, listed)) => (None, Some(asked), listed),
-                Err(problem) => (Some(problem), None, false),
-            },
-            None => (None, None, false),
+        let (supplied, random_asked, listed) = match (self.supervisor.as_mut(), self.broker.take())
+        {
+            (Some((supervisor, lines)), _) => {
+                match supervisor_verdict(supervisor, lines).await {
+                    Ok((asked, listed)) => (None, Some(asked), listed),
+                    Err(problem) => (Some(problem), None, false),
+                }
+            }
+            // The program ended, so its end of the channel has closed and the service with it.
+            (None, Some(Brokered {
+                service,
+                notes,
+                random,
+            })) => {
+                let outcome = tokio::task::spawn_blocking(move || service.join())
+                    .await
+                    .map_err(io::Error::other)?;
+                let problem = match outcome {
+                    Ok(Outcome::Closed) => None,
+                    Ok(Outcome::Refused(refusal)) => Some(format!(
+                        "lengua's broker stopped serving the program, which sent what isn't a \
+                         message of the protocol ({refusal:?})"
+                    )),
+                    Ok(Outcome::Failed(error)) => {
+                        Some(format!("lengua's broker stopped serving the program: {error}"))
+                    }
+                    Err(_) => Some("lengua's broker stopped serving the program".to_owned()),
+                };
+                (
+                    problem,
+                    random.then(|| notes.random_asked()),
+                    notes.listed(),
+                )
+            }
+            (None, None) => (None, None, false),
         };
         let [instructions, cycles, cpu_time_ns] =
             self.counters.each_mut().map(|counter| match end {
@@ -318,6 +371,7 @@ pub async fn start(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<
         pid,
         port,
         supervisor,
+        broker,
         counters,
         connected,
     } = launch_job(launcher, &job, &limits, &folder, scratch.path(), streams).await?;
@@ -381,6 +435,7 @@ pub async fn start(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<
         stderr,
         overflowed,
         supervisor,
+        broker,
         connected,
         work: job.folder.is_none().then_some(work),
         _scratch: scratch,
@@ -482,6 +537,7 @@ struct Launched {
     pid: i32,
     port: Option<u16>,
     supervisor: Option<(tokio::process::Child, SupervisorLines)>,
+    broker: Option<Brokered>,
     counters: [Option<Counter>; 3],
     connected: Connected,
 }
@@ -523,9 +579,10 @@ async fn launch_job(
             Err(problem) => Some(tokio::spawn(async move { Err(problem) })),
         });
     }
+    // A program with a channel is served by the broker; the supervisor follows the rest.
     let supply = job
         .supply
-        .filter(|supply| !supply.is_empty() && !job.emulated);
+        .filter(|supply| !supply.is_empty() && !job.emulated && !job.channel);
     // The calls the supply answers stop for the supervisor; the rest run as in any test.
     let mut traced = supply.map_or_else(Vec::new, |supply| {
         let mut traced = Vec::new();
@@ -540,6 +597,7 @@ async fn launch_job(
     // A test's sleeps end at once; a real run's take as long as they say.
     let sleeps = job.supply.is_some()
         && !job.emulated
+        && !job.channel
         && job
             .syscalls
             .iter()
@@ -550,6 +608,7 @@ async fn launch_job(
     // A program that uses files has its names held to what every system takes, and its listings
     // watched, by the supervisor, in tests and real runs alike, where it can follow them.
     let files = !job.emulated
+        && !job.channel
         && crate::supervise::AVAILABLE
         && job
             .syscalls
@@ -576,12 +635,28 @@ async fn launch_job(
         job.syscalls
             .iter()
             .map(|allowed| format!("{}{}", allowed.number, allowed.pin.encode()))
+            .chain(
+                job.channel
+                    .then_some([SENDMSG, RECVMSG])
+                    .into_iter()
+                    .flatten()
+                    .map(|number| format!("{number}:channel")),
+            )
             .chain(traced.iter().map(|number| format!("{number}:trace")))
             .collect()
     };
     let file_limit = limits
         .max_file_size
         .map_or_else(|| "none".to_owned(), |bytes| bytes.to_string());
+    // A program in the edge form that links the channel has a broker, a thread of this process:
+    // the program's end of the channel goes to the launcher with the go signal, and the first
+    // message is in it already, so that the program finds it when it starts.
+    let (channel, broker) = if job.channel {
+        let (program, broker) = start_broker(job, limits, folder)?;
+        (Some(program), Some(broker))
+    } else {
+        (None, None)
+    };
     let mut supervisor = match supply.filter(|_| watched) {
         None => None,
         Some(_) => Some(
@@ -606,7 +681,11 @@ async fn launch_job(
         .arg(syscalls.join(","))
         .arg(file_limit)
         .arg(tracer)
-        .arg(net.encode())
+        .arg(if job.channel {
+            format!("{};channel", net.encode())
+        } else {
+            net.encode()
+        })
         .arg(encode_environment(job.env))
         .arg(job.program)
         .args(job.args)
@@ -699,6 +778,8 @@ async fn launch_job(
         };
         connected.made.push(Made { place, problem });
     }
+    // The channel's end is the last the launcher is handed.
+    ends.extend(channel);
     send_go(&go, &ends).await?;
     // The program's ends are its own now: lengua's copies go, so the program's exit is the end
     // of what it sends.
@@ -709,12 +790,66 @@ async fn launch_job(
         pid,
         port,
         supervisor,
+        broker,
         counters,
         connected,
     })
 }
 
-/// Tells the launcher to go on, handing it the program's ends of its connections.
+/// Starts the broker of `job`, which serves the program's folder, and returns the program's end
+/// of the channel. The first message is sent now, so that the program finds it waiting, and a
+/// thread answers what the program asks until it ends.
+fn start_broker(
+    job: &Job<'_>,
+    limits: &Limits,
+    folder: &Path,
+) -> io::Result<(std::os::unix::net::UnixStream, Brokered)> {
+    use rustix::fs::{Mode as FileMode, OFlags};
+    let (program, mut lengua) = std::os::unix::net::UnixStream::pair()?;
+    let root = rustix::fs::open(
+        folder,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        FileMode::empty(),
+    )?;
+    let supply = job.supply.cloned().unwrap_or_default();
+    let random = supply.random.is_some();
+    let mut flags = 0;
+    if job.reversed {
+        flags |= flag::REVERSED;
+    }
+    if random {
+        flags |= flag::RANDOM;
+    }
+    if !supply.clock.is_empty() {
+        flags |= flag::CLOCK;
+    }
+    let hello = Hello {
+        mode: if job.supply.is_some() {
+            Mode::Test
+        } else {
+            Mode::Run
+        },
+        flags,
+        file_limit: limits.max_file_size.unwrap_or(0),
+    };
+    let mut broker = Broker::new(root, hello, supply);
+    broker::greet(&broker, &mut lengua)?;
+    let notes = broker.notes();
+    let service = std::thread::Builder::new()
+        .name("lengua broker".to_owned())
+        .spawn(move || broker::answer_all(&mut broker, &mut lengua))?;
+    Ok((
+        program,
+        Brokered {
+            service,
+            notes,
+            random,
+        },
+    ))
+}
+
+/// Tells the launcher to go on, handing it the program's ends of its connections, and last the
+/// channel's, when it has one.
 async fn send_go(
     go: &tokio::net::UnixStream,
     ends: &[std::os::unix::net::UnixStream],
@@ -727,7 +862,7 @@ async fn send_go(
     loop {
         go.writable().await?;
         let mut space =
-            [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(connect::MAX_CONNECTIONS))];
+            [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(connect::MAX_CONNECTIONS + 1))];
         let mut control = SendAncillaryBuffer::new(&mut space);
         if !descriptors.is_empty() && !control.push(SendAncillaryMessage::ScmRights(&descriptors)) {
             return Err(io::Error::other("too many connections to hand over"));
@@ -995,12 +1130,22 @@ pub fn launch(mut args: impl Iterator<Item = OsString>) -> ExitCode {
         }
         receive_go(&stream)
     });
-    let ends = match signalled {
+    let mut ends = match signalled {
         Ok(ends) => ends,
         Err(error) => {
             eprintln!("lengua-mcp: no go signal from the server: {error}");
             return ExitCode::from(127);
         }
+    };
+    // The channel's end is the last the server handed over.
+    let channel = if net.channel {
+        let Some(end) = ends.pop() else {
+            eprintln!("lengua-mcp: the server handed over no channel to its broker");
+            return ExitCode::from(127);
+        };
+        Some(end)
+    } else {
+        None
     };
     // Each connection at its own number, from 4, kept open into the program.
     let connections = match place_connections(ends, net.connections) {
@@ -1010,8 +1155,16 @@ pub fn launch(mut args: impl Iterator<Item = OsString>) -> ExitCode {
             return ExitCode::from(127);
         }
     };
+    // The channel at the number the edge looks for it at, kept open as well.
+    let channel = match channel.map(place_channel).transpose() {
+        Ok(channel) => channel,
+        Err(problem) => {
+            eprintln!("lengua-mcp: {problem}");
+            return ExitCode::from(127);
+        }
+    };
     // Nothing else reaches the program: no descriptor a parent of lengua's left open.
-    if let Err(problem) = close_strays(listener.is_some(), connections.len()) {
+    if let Err(problem) = close_strays(listener.is_some(), connections.len(), channel.is_some()) {
         eprintln!("lengua-mcp: {problem}");
         return ExitCode::from(127);
     }
@@ -1036,6 +1189,7 @@ pub fn launch(mut args: impl Iterator<Item = OsString>) -> ExitCode {
     // closed pipe or connection is an error on every target, as Windows makes it, not a signal.
     let error = become_program(&program, &rest, &environment);
     drop(connections);
+    drop(channel);
     eprintln!(
         "lengua-mcp: couldn't start {}: {error}",
         Path::new(&program).display()
@@ -1044,13 +1198,20 @@ pub fn launch(mut args: impl Iterator<Item = OsString>) -> ExitCode {
 }
 
 /// Closes every descriptor the launcher holds that the program isn't handed: all but standard
-/// input, output and error, a server's listener (3) and its connections (4 and on). lengua's
-/// own descriptors close on exec, but one a parent of lengua's left open without that flag, a
-/// harness or a CI runner, would otherwise reach the program, outside its confinement.
-fn close_strays(listening: bool, connections: usize) -> Result<(), String> {
+/// input, output and error, a server's listener (3), its connections (4 and on) and its channel
+/// to the broker. lengua's own descriptors close on exec, but one a parent of lengua's left open
+/// without that flag, a harness or a CI runner, would otherwise reach the program, outside its
+/// confinement.
+fn close_strays(listening: bool, connections: usize, channel: bool) -> Result<(), String> {
     let first = connect::FIRST_DESCRIPTOR;
     let last = first + i32::try_from(connections).unwrap_or(i32::MAX);
-    let kept = |fd: i32| fd <= 2 || (fd == 3 && listening) || (first..last).contains(&fd);
+    let channel_at = i32::try_from(crate::edge::CHANNEL).unwrap_or(i32::MAX);
+    let kept = |fd: i32| {
+        fd <= 2
+            || (fd == 3 && listening)
+            || (first..last).contains(&fd)
+            || (channel && fd == channel_at)
+    };
     let open: Vec<i32> = std::fs::read_dir("/proc/self/fd")
         .map_err(|error| format!("couldn't list the launcher's descriptors: {error}"))?
         .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse().ok())
@@ -1112,7 +1273,7 @@ fn receive_go(stream: &std::os::unix::net::UnixStream) -> io::Result<Vec<std::os
     use rustix::net::{RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags};
     let mut go = [0_u8; 1];
     let mut space =
-        [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(connect::MAX_CONNECTIONS))];
+        [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(connect::MAX_CONNECTIONS + 1))];
     let mut control = RecvAncillaryBuffer::new(&mut space);
     let received = rustix::net::recvmsg(
         stream,
@@ -1168,6 +1329,42 @@ fn place_connections(
         placed.push(moved);
     }
     Ok(placed)
+}
+
+/// Puts the program's end of its channel to the broker at descriptor [`crate::edge::CHANNEL`],
+/// kept open across `exec`. The launcher's own limit on descriptor numbers may be below it: the
+/// program's is set at its confinement, to the number of descriptors it holds, which leaves
+/// the channel above them.
+fn place_channel(end: std::os::fd::OwnedFd) -> Result<std::os::fd::OwnedFd, String> {
+    use std::os::fd::AsRawFd as _;
+
+    use rustix::process::{Resource, Rlimit, getrlimit, setrlimit};
+    let wanted = i32::try_from(crate::edge::CHANNEL).unwrap_or(i32::MAX);
+    let limit = getrlimit(Resource::Nofile);
+    let needed = u64::from(crate::edge::CHANNEL) + 1;
+    if limit.current.is_some_and(|current| current < needed) {
+        setrlimit(
+            Resource::Nofile,
+            Rlimit {
+                current: Some(needed),
+                maximum: limit.maximum,
+            },
+        )
+        .map_err(|error| {
+            format!(
+                "this computer won't let lengua hold descriptor {wanted} for a program's channel \
+                 ({error}); raise the hard limit (`ulimit -Hn`)"
+            )
+        })?;
+    }
+    let moved = rustix::io::fcntl_dupfd_cloexec(&end, wanted)
+        .map_err(|error| format!("couldn't keep the channel: {error}"))?;
+    if moved.as_raw_fd() != wanted {
+        return Err(format!("the channel isn't file descriptor {wanted}"));
+    }
+    rustix::io::fcntl_setfd(&moved, rustix::io::FdFlags::empty())
+        .map_err(|error| format!("couldn't keep the channel open: {error}"))?;
+    Ok(moved)
 }
 
 /// Listens on `port` of the loopback (any free port for 0) with file descriptor 3, kept open
@@ -1305,6 +1502,13 @@ fn pin_rules(pin: Pin) -> Result<Vec<SeccompRule>, seccompiler::BackendError> {
             Dword,
             SeccompCmpOp::Eq,
             3,
+        )?])?]),
+        // lengua's channel to its broker, and nothing else.
+        Pin::Channel => Ok(vec![SeccompRule::new(vec![condition(
+            0,
+            Dword,
+            SeccompCmpOp::Eq,
+            u64::from(crate::edge::CHANNEL),
         )?])?]),
         // TCGETS, TCSETS, TCSETSW, TCSETSF and TIOCGWINSZ, on standard input, output or error.
         Pin::Terminal => {

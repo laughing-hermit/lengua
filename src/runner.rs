@@ -173,6 +173,11 @@ pub struct Job<'a> {
     /// Whether its standard output is a pipe nobody reads, as after `prog | head -1` has read its
     /// line: every write to it fails with `EPIPE`, never a signal, since SIGPIPE stays ignored.
     pub stdout_closed: bool,
+    /// Whether lengua's broker serves the program over descriptor 4,352
+    /// ([`crate::edge::CHANNEL`]), as it does a program in the edge form that links the channel's
+    /// code: its names, and in a test its clock and random bytes, go through the broker, and no
+    /// supervisor follows its system calls.
+    pub channel: bool,
 }
 
 impl<'a> Job<'a> {
@@ -202,6 +207,7 @@ impl<'a> Job<'a> {
             emulated: false,
             reversed: false,
             stdout_closed: false,
+            channel: false,
         }
     }
 }

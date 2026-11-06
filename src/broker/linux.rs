@@ -505,16 +505,32 @@ fn gone(error: &std::io::Error) -> bool {
     )
 }
 
+/// Sends the first message. The program reads it when it starts, so a caller that starts the
+/// program sends it first.
+///
+/// # Errors
+///
+/// When the channel fails.
+pub fn greet(broker: &Broker, stream: &mut UnixStream) -> std::io::Result<()> {
+    stream.write_all(&broker.hello().encode())
+}
+
 /// Serves one program: says hello, then answers each request until the program ends, or sends
 /// what isn't a request.
 pub fn serve(broker: &mut Broker, stream: &mut UnixStream) -> Outcome {
-    if let Err(error) = stream.write_all(&broker.hello().encode()) {
+    if let Err(error) = greet(broker, stream) {
         return if gone(&error) {
             Outcome::Closed
         } else {
             Outcome::Failed(error)
         };
     }
+    answer_all(broker, stream)
+}
+
+/// Answers each request until the program ends, or sends what isn't a request, once the first
+/// message is sent.
+pub fn answer_all(broker: &mut Broker, stream: &mut UnixStream) -> Outcome {
     loop {
         let mut fixed = [0u8; REQUEST_LEN];
         if let Err(error) = stream.read_exact(&mut fixed) {

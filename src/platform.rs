@@ -190,11 +190,13 @@ pub enum Pin {
     /// `ioctl` on standard input, output or error, to read or set the terminal's mode or read
     /// its window's size, and nothing else.
     Terminal,
+    /// `sendmsg` or `recvmsg` on descriptor 4,352 alone, lengua's channel to its broker.
+    Channel,
 }
 
 impl Pin {
     /// How the launcher's argument writes it after the call's number: nothing, `:N`, `:tcp`,
-    /// `:listening`, `:noaddress` or `:terminal`.
+    /// `:listening`, `:noaddress`, `:terminal` or `:channel`.
     #[must_use]
     pub fn encode(self) -> String {
         match self {
@@ -203,6 +205,7 @@ impl Pin {
             Self::ListeningSocket => ":listening".into(),
             Self::NoAddress => ":noaddress".into(),
             Self::Terminal => ":terminal".into(),
+            Self::Channel => ":channel".into(),
         }
     }
 
@@ -213,6 +216,7 @@ impl Pin {
             "listening" => Some(Self::ListeningSocket),
             "noaddress" => Some(Self::NoAddress),
             "terminal" => Some(Self::Terminal),
+            "channel" => Some(Self::Channel),
             argument => argument.parse().ok().map(Self::First),
         }
     }

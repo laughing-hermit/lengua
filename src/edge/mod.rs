@@ -755,6 +755,14 @@ pub fn lengua_text(profile: Profile, main: &str) -> Option<String> {
     Some(text)
 }
 
+/// Whether a program in the edge form links the channel's code, and so talks to lengua's broker
+/// where it has one: the programs that open files, make or remove folders, ask the clock or for
+/// random bytes, sleep, wait for a connection or list a folder.
+#[must_use]
+pub fn uses_channel(profile: Profile, main: &str) -> bool {
+    lengua_text(profile, main).is_some_and(|text| text.contains("lengua_channel_ready:"))
+}
+
 /// The text a program is built from: main.s, and for a program in the edge form lengua.s after it,
 /// for the CPU main.s's first line names and the system this is. It is what lengua assembles, so
 /// that a program can be built outside lengua.
@@ -988,6 +996,49 @@ mod tests {
                 "{profile:?}"
             );
             assert_eq!(found["LENGUA_KIND_OTHER"], big(kind::OTHER), "{profile:?}");
+            // The channel's messages are the broker's, and its flags are the kernel's.
+            let size = |bytes: usize| i64::try_from(bytes).expect("a size");
+            let ask = |kind: crate::broker::Kind| kind as i64;
+            let widen = i64::from;
+            let reply_at = size(
+                (crate::broker::REQUEST_LEN + crate::broker::MAX_BODY).next_multiple_of(8),
+            );
+            let wire: [(&str, i64); 28] = [
+                ("LENGUA_MAGIC", i64::from(crate::broker::MAGIC)),
+                ("LENGUA_VERSION", i64::from(crate::broker::VERSION)),
+                ("LENGUA_HELLO_LEN", size(crate::broker::HELLO_LEN)),
+                ("LENGUA_REQUEST_LEN", size(crate::broker::REQUEST_LEN)),
+                ("LENGUA_REPLY_LEN", size(crate::broker::REPLY_LEN)),
+                ("LENGUA_PATH_MAX", size(crate::names::MAX_PATH)),
+                ("LENGUA_PAYLOAD_MAX", big(RANDOM_MOST)),
+                ("LENGUA_ASK_OPEN", ask(crate::broker::Kind::Open)),
+                ("LENGUA_ASK_MKDIR", ask(crate::broker::Kind::Mkdir)),
+                ("LENGUA_ASK_REMOVE", ask(crate::broker::Kind::Remove)),
+                ("LENGUA_ASK_RENAME", ask(crate::broker::Kind::Rename)),
+                ("LENGUA_ASK_CLOCK", ask(crate::broker::Kind::Clock)),
+                ("LENGUA_ASK_RANDOM", ask(crate::broker::Kind::Random)),
+                ("LENGUA_NOTE_CLOSED", ask(crate::broker::Kind::Closed)),
+                ("LENGUA_NOTE_WAITING", ask(crate::broker::Kind::Waiting)),
+                ("LENGUA_NOTE_LISTED", ask(crate::broker::Kind::Listed)),
+                ("LENGUA_NOTE_RESUMED", ask(crate::broker::Kind::Resumed)),
+                ("LENGUA_FLAG_REVERSED", widen(crate::broker::flag::REVERSED)),
+                ("LENGUA_FLAG_RANDOM", widen(crate::broker::flag::RANDOM)),
+                ("LENGUA_FLAG_CLOCK", widen(crate::broker::flag::CLOCK)),
+                // From the kernel's headers, the same on both CPUs.
+                ("LENGUA_MSG_DONTWAIT", 0x40),
+                ("LENGUA_MSG_WAITALL", 0x100),
+                ("LENGUA_MSG_NOSIGNAL", 0x4000),
+                ("LENGUA_SOL_SOCKET", 1),
+                ("LENGUA_SCM_RIGHTS", 1),
+                // The edge's own: where the reply and its payload are in the wire's buffer, which
+                // holds a request of two paths first.
+                ("LENGUA_REPLY_AT", reply_at),
+                ("LENGUA_PAYLOAD_AT", reply_at + size(crate::broker::REPLY_LEN)),
+                ("LENGUA_LOOKED", 1 << 31),
+            ];
+            for (name, wanted) in wire {
+                assert_eq!(found[name], wanted, "{profile:?} {name}");
+            }
         }
     }
 

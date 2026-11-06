@@ -860,6 +860,7 @@ impl LenguaServer {
             spec,
             syscalls,
             net,
+            channel,
             emulator,
         } = runnable(&self.data_dir, &folder, &params.env).await?;
         if let Some(wrong) = self.proven_wrong(&folder).await {
@@ -904,6 +905,7 @@ impl LenguaServer {
             stdin_file: stdin_file.as_deref(),
             env: &params.env,
             emulated: emulator.is_some(),
+            channel,
             ..Job::new(
                 &built.executable,
                 &params.args,
@@ -2364,6 +2366,9 @@ struct Runnable {
     spec: Spec,
     syscalls: Vec<crate::platform::Allowed>,
     net: Net,
+    /// Whether lengua's broker serves the program: it is in the edge form and links the channel's
+    /// code.
+    channel: bool,
     /// QEMU, when this computer runs the target's programs only through it.
     emulator: Option<Emulator>,
 }
@@ -2489,6 +2494,7 @@ async fn runnable(
         serve_anywhere: spec.network.serves_anywhere,
     };
     Ok(Runnable {
+        channel: crate::edge::uses_channel(profile, &code),
         built,
         source,
         spec,
@@ -2530,6 +2536,7 @@ pub async fn run_from_shell(data_dir: &DataDir, request: &ShellRun) -> Result<i3
         built,
         syscalls,
         net,
+        channel,
         emulator,
         ..
     } = runnable(data_dir, &folder, &request.env).await?;
@@ -2546,6 +2553,7 @@ pub async fn run_from_shell(data_dir: &DataDir, request: &ShellRun) -> Result<i3
         net: Some(&net),
         env: &request.env,
         emulated: emulator.is_some(),
+        channel,
         ..Job::new(&built.executable, &request.args, &[], &syscalls)
     };
     match runner::attached(&launcher, job)

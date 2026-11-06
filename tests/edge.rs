@@ -1232,11 +1232,11 @@ async fn every_operation_does_what_it_promises() {
         let mut built = Vec::new();
         for target in Profile::ALL {
             let place = folder.path().join(target.name());
-            let executable =
-                per_target::build(target, &place, case.name, &program(target, &case)).await;
-            built.push((target, executable));
+            let text = program(target, &case);
+            let executable = per_target::build(target, &place, case.name, &text).await;
+            built.push((target, executable, lengua::edge::uses_channel(target, &text)));
         }
-        for (target, executable) in built {
+        for (target, executable, channel) in built {
             let Some(how) = per_target::way(target) else {
                 continue;
             };
@@ -1260,17 +1260,29 @@ async fn every_operation_does_what_it_promises() {
                 .collect();
             let folders: BTreeSet<String> =
                 case.folders.iter().map(|name| (*name).to_owned()).collect();
+            // A program that links the channel runs twice: on its own, calling the system itself,
+            // and with lengua's broker serving it. It does the same both ways.
+            for brokered in [false, true] {
+            if brokered && !channel {
+                continue;
+            }
             let job = Job {
                 emulated: how == Way::Emulated,
                 env: &environment,
                 files: &files,
                 folders: &folders,
+                channel: brokered,
                 ..Job::new(&executable, &arguments, case.stdin, &allowed)
             };
             let ran = run(launcher(), job, Limits::default())
                 .await
                 .expect("the program runs");
-            let what = format!("{} on {}", case.name, target.name());
+            let what = format!(
+                "{} on {}{}",
+                case.name,
+                target.name(),
+                if brokered { ", through the broker" } else { "" }
+            );
             let exit = i32::try_from(case.exit).unwrap_or(-1);
             // 100 and a step's number: a register that call must keep has changed.
             let hint = match ran.end {
@@ -1292,6 +1304,7 @@ async fn every_operation_does_what_it_promises() {
                     .map(|(name, contents)| ((*name).to_owned(), contents.as_bytes().to_vec()))
                     .collect();
                 assert_eq!(*found, wanted, "{what}");
+            }
             }
         }
     }
