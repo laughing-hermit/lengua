@@ -751,6 +751,10 @@ pub fn parse(text: &str) -> Result<Idea, Vec<Problem>> {
         .find(|(_, line)| line.trim_start().starts_with("description:"))
     {
         parser.portable(index + 2, line, &subject);
+        // The description is prose, in STE as the rest of the idea is.
+        if let Some((_, Some(description))) = &header {
+            parser.prose.text(index + 2, description);
+        }
     }
     // An open code block: the line it starts on, its language, and its lines so far.
     let mut fence: Option<(usize, String, Vec<&str>)> = None;
@@ -758,6 +762,8 @@ pub fn parse(text: &str) -> Result<Idea, Vec<Problem>> {
         let number = index + 1;
         let trimmed = line.trim_start();
         if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            // A code block ends the prose before it, and its own lines aren't prose.
+            parser.prose.end();
             match fence.take() {
                 Some((start, language, body)) => parser.block(start, &language, &body),
                 None => {
@@ -772,6 +778,7 @@ pub fn parse(text: &str) -> Result<Idea, Vec<Problem>> {
             Some((_, _, body)) => body.push(line),
             None => {
                 parser.portable(number, line, &subject);
+                parser.ste(number, line);
                 parser.line(number, line);
                 parser.links_line(number, line);
             }
@@ -850,6 +857,8 @@ struct Parser {
     /// Whether `# Purpose` holds any text.
     purpose_written: bool,
     purpose_values: Vec<String>,
+    /// What STE's checks find in the idea's prose, reported after every other problem.
+    prose: crate::ste::Prose,
 }
 
 impl Default for Parser {
@@ -870,6 +879,7 @@ impl Default for Parser {
             links: Vec::new(),
             purpose_written: false,
             purpose_values: Vec::new(),
+            prose: crate::ste::Prose::default(),
         }
     }
 }
@@ -901,6 +911,63 @@ impl Parser {
                      the compile skill. Name it only when it's the program's subject, in its title"
                 ),
             );
+        }
+    }
+
+    /// Gives STE's checks the line when it's prose they read: a paragraph of `# Purpose`, a
+    /// behavior's title or a step. Any other line ends the paragraph or step before it.
+    fn ste(&mut self, number: usize, line: &str) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            // A blank line ends a paragraph; a step goes on until a line that isn't its own.
+            if self.section != Section::Behaviors {
+                self.prose.end();
+            }
+            return;
+        }
+        if trimmed.starts_with('|') || heading(line, 1).is_some() {
+            self.prose.end();
+            return;
+        }
+        match self.section {
+            Section::Purpose if is_heading(line) => self.prose.end(),
+            Section::Purpose => match list_item(line) {
+                // Each item of a list is a paragraph of its own.
+                Some(item) => {
+                    self.prose.end();
+                    self.prose.paragraph(number, item.trim());
+                }
+                None => self.prose.paragraph(number, trimmed),
+            },
+            Section::Behaviors => self.ste_behaviors(number, line),
+            Section::Preamble | Section::Constraints | Section::Other => self.prose.end(),
+        }
+    }
+
+    /// A line of `# Behaviors` for STE's checks: a behavior's title, a step, or a step's next line.
+    fn ste_behaviors(&mut self, number: usize, line: &str) {
+        if let Some(text) = heading(line, 2) {
+            self.prose.end();
+            // The title after `B1:`; a heading without one has a problem of its own.
+            let title = text
+                .split_once(':')
+                .filter(|(id, _)| BehaviorId::parse(id.trim()).is_some());
+            if let Some((_, title)) = title {
+                self.prose.title(number, title.trim());
+            }
+        } else if is_heading(line) {
+            self.prose.end();
+        } else if let Some(item) = list_item(line) {
+            let first = item.split_whitespace().next().unwrap_or_default();
+            if Keyword::parse(first).is_some() {
+                self.prose.step(number, item.trim());
+            } else {
+                self.prose.end();
+            }
+        } else if line.starts_with([' ', '\t']) {
+            self.prose.continuation(number, line.trim());
+        } else {
+            self.prose.end();
         }
     }
 
@@ -1352,8 +1419,8 @@ impl Parser {
                     Some(line),
                     format!(
                         "{id} doesn't say how the program exits; add a step such as \
-                         `- And it exits with code `0``, or for a server that keeps running, \
-                         `- And it keeps serving`"
+                         `- And it exits with code `0``, or for a server that does not stop, \
+                         `- And it does not stop`"
                     ),
                 );
                 None
@@ -1787,6 +1854,10 @@ impl Parser {
         let syscalls = self.syscalls_for(&uses);
         let ops = crate::edge::ops_for(&uses, &self.network, self.threads);
         self.check_network();
+        // STE's problems come last: what the idea says matters before how it says it.
+        for (line, message) in std::mem::take(&mut self.prose).finish() {
+            self.problem(Some(line), message);
+        }
         match header {
             Some((title, Some(description))) if self.problems.is_empty() => Ok(Idea {
                 title,
@@ -2209,10 +2280,13 @@ fn states_exit_code(text: &str) -> bool {
     words.contains("exit") && (words.contains("code") || words.contains("status"))
 }
 
-/// Whether a Then step says the program is still serving at the end, as a server does.
+/// Whether a Then step says the program is still serving at the end, as a server does:
+/// `it does not stop`. lengua's old phrasings still count, so STE's problem is an old one's only
+/// problem.
 fn keeps_serving(text: &str) -> bool {
     let words = words(text);
     [
+        "does not stop",
         "keeps serving",
         "keeps listening",
         "still serving",

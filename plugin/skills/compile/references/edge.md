@@ -124,8 +124,8 @@ open.
 Open an input with mode 0, create or replace an output with mode 1, and `os_close` each when
 done. lengua runs a program in a working folder of its own, an empty temporary folder, or the
 user's folder when they ask to run it on their files. A test gives the program the files and
-folders its Given steps name (``a file `notes.txt` holding TEXT``, ``an empty folder `archive` ``)
-and checks what it leaves with its Then steps (``the file `out.txt` holds TEXT``,
+folders its Given steps name (``a file `notes.txt` that contains TEXT``, ``an empty folder
+`archive` ``) and checks what it leaves with its Then steps (``the file `out.txt` contains TEXT``,
 ``there is no file `notes.txt` ``).
 
 ## The network

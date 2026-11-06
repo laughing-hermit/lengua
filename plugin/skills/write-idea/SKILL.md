@@ -1,6 +1,6 @@
 ---
 name: write-idea
-description: Writes or updates a lengua program's idea.md from the user's request. idea.md is the program's source in natural language, with its behaviors, each shown by an example in Given/When/Then steps, and the generated tests that try fresh inputs on every run; the compile skill then compiles it into checked assembly. Use when the user asks for a program, such as a command, a filter, a server or a client, unless they name another language; when they want to change a lengua program; or when the lengua check tool says to write or fix idea.md. Ends when the check tool records the idea with the user's own words, without waiting for an approval.
+description: Writes or updates a lengua program's idea.md from the user's request. idea.md is the program's source in natural language, written in ASD-STE100 Simplified Technical English (STE), with its behaviors, each shown by an example in Given/When/Then steps, and the generated tests that try fresh inputs on every run; the compile skill then compiles it into checked assembly. Use when the user asks for a program, such as a command, a filter, a server or a client, unless they name another language; when they want to change a lengua program; or when the lengua check tool says to write or fix idea.md. Ends when the check tool records the idea with the user's own words, without waiting for an approval.
 license: Apache-2.0
 compatibility: Needs the lengua MCP server from the lengua plugin.
 ---
@@ -60,8 +60,8 @@ by one concrete example in its steps, and its generated tests try that rule with
   at 0 without saying so. Keep text on standard input to at most `1048576` bytes, arguments
   short, at most `4096` bytes each (long text goes on standard input or in a file, so the program
   takes it the same way on every computer), and numbers within 64 bits. If the program reads
-  or writes, Purpose says which exit code it uses when reading or writing fails, without
-  backticks, such as: If writing the output fails, the program exits with code 2. Give a
+  or writes, Purpose says which exit code it uses when a read or a write fails, without
+  backticks, such as: If the program cannot write its output, it exits with code 2. Give a
   program that prints to standard output a behavior for that code, with ``- And standard output
   is closed`` and ``- Then it exits with code `2` ``, and inputs that make it print something:
   tests can make standard output fail, as a closed pipe does, but not reading, nor writing a
@@ -83,18 +83,19 @@ by one concrete example in its steps, and its generated tests try that rule with
   another with other values: adding negative numbers is still adding.
 - **Steps in lengua's phrasings,** which [the reference](references/test-format.md#the-steps)
   lists, so the steps are the behavior's example test and nothing is written twice. Given steps
-  set the scene (``- Given the arguments `2` and `3` ``, ``- Given standard input holding `…` ``,
-  ``- Given a file `notes.txt` holding `…` ``), the one When is ``- When the program runs``, and
-  Then steps say what the user can observe: ``- Then it prints `5` followed by a newline``, ``-
-  Then the file `loud.txt` holds `HELLO` ``, and last ``- And it exits with code `0` ``. `- And
-  …` continues the step before. Values go in backticks, exactly as the program reads or prints
-  them, with `\n`, `\r` and `\t` for line breaks and tabs; describe nothing in a step that isn't
-  one of these.
+  set the scene (``- Given the arguments `2` and `3` ``, ``- Given standard input that contains
+  `…` ``, ``- Given a file `notes.txt` that contains `…` ``), the one When is ``- When the
+  program runs``, and Then steps say what the user can see: ``- Then it prints `5` and a
+  newline``, ``- Then the file `loud.txt` contains `HELLO` ``, and last ``- And it exits with
+  code `0` ``. `- And …` continues the step before. Values go in backticks, exactly as the
+  program reads or prints them, with `\n`, `\r` and `\t` for line breaks and tabs; describe
+  nothing in a step that isn't one of these. Each step is a short sentence in Simplified
+  Technical English, as the next section says.
 - **Declarative steps:** say what the user gives and sees, never how the code works. No buffers,
   registers, system calls or function names in a behavior.
-- **One concrete example per behavior,** holding just the values its rule needs. A long input,
-  such as a line one character over a limit, is a repeat: ``standard input holding `a` repeated
-  `4097` times followed by a newline``.
+- **One concrete example per behavior,** with just the values its rule needs. A long input,
+  such as a line one character over a limit, is a repeat: ``standard input that contains `a`
+  `4097` times and a newline``.
 - **Exact output:** say what text is printed, whether a newline follows it, and whether it goes
   to standard output or standard error.
 - **Exit codes:** each behavior ends with one. Codes go from 0 to 255, and 134 is reserved for
@@ -136,7 +137,7 @@ by one concrete example in its steps, and its generated tests try that rule with
     may name several ports, as `ports 80 and 8080`, and an idea several lines, up to 16
     connections. Each is one connection, made before the program starts, in the order the lines
     name them; the program reads and writes the first on descriptor 4, the next on 5, and so on.
-    With nothing listening there, the program gets that connection already ended: its first
+    With no server there, the program gets that connection already ended: its first
     read gives the end and its first write fails. Give such a program a behavior for it, as
     fetch's "Says when the server can't be reached", with ``- And no server on port `8080` ``.
     The program needs no port or address in its arguments; the person running it can't point
@@ -156,7 +157,7 @@ by one concrete example in its steps, and its generated tests try that rule with
     reads plain bytes, so an HTTPS client speaks plain HTTP on its descriptor. TLS needs the
     computer's name, so never `over TLS` for this computer.
   - A server says `- Network: listens on TCP port 8080`: lengua listens on that port and hands
-    the program its connections, and its behaviors may end with ``- And it keeps serving``
+    the program its connections, and its behaviors may end with ``- And it does not stop``
     instead of an exit code. Only programs on this computer can
     connect to it, unless the line ends with `for any computer`: write that only when the user
     asks for a server other computers reach, and say so in your report. A server serves one
@@ -183,8 +184,8 @@ by one concrete example in its steps, and its generated tests try that rule with
   behavior gives them as its scene: ``- Given the random bytes `fc` and `2a` `` or
   ``- Given the clock at `1735689600` ``. The tests then supply exactly those bytes and readings,
   and the proof covers every value they could take. When the user only cares that output falls
-  in a range, the behavior says so with a rule: ``- Then it prints text matching
-  `rolled {any(1, 6)}` followed by a newline``.
+  in a range, the behavior says so with a rule: ``- Then it prints text that matches
+  `rolled {any(1, 6)}` and a newline``.
 - **Large inputs:** a program for data of any size says so in Purpose, such as "it reads standard
   input of any length, a piece at a time", and still gives the largest input the tests use in
   backticks (`1048576`): tests stay within a megabyte, and the program streams beyond it.
@@ -218,6 +219,79 @@ by one concrete example in its steps, and its generated tests try that rule with
   possible, add `- Threads: up to N` under `# Constraints`, with N up to the machine's cores
   (`check` reports them in `machine`; at most 64). The program may then split its work across
   that many cores. Behaviors don't change: the output is the same as on one thread.
+
+## Write it in Simplified Technical English
+
+Write the idea in ASD-STE100 Simplified Technical English (STE), the controlled English that ASD
+made for technical text, in the style of behavior-driven development. Then a reader for whom
+English is a second language, and an agent, read each sentence one way. Here are STE's rules in
+lengua's words; [the STE reference](references/ste.md) has the full guide and the link to ASD's
+free download of the standard.
+
+- **Words:** simple, common words, each with one meaning, and the same word for the same thing
+  every time. Technical names are words too: standard input, file, folder, argument, environment
+  variable, exit code, connection, port, byte, newline.
+- **Nouns:** at most three in a row. Write "the length of a line", not "line length limit
+  value".
+- **Verbs:** the simple present for what the program does ("it prints"), the simple past and
+  future where you need them, and the imperative for an instruction. Use a past participle only
+  as an adjective ("a closed output"), and no -ing form except in a technical name (string,
+  padding, encoding, floating point). Use the active voice, and the passive only when nobody
+  knows who acts.
+- **Sentences:** one idea in each, at most 25 words in a description and 20 in an instruction.
+  Keep the articles, verbs and subjects: never drop them to make a sentence shorter.
+- **Paragraphs:** one topic in each, at most six sentences. Use a list for complex text.
+- **Behaviors:** each is a `## B1:` title in the simple present ("Adds two numbers"), then its
+  Given/When/Then steps, each a short STE sentence in lengua's step words.
+
+`check` holds the idea to what a computer can see. It reads the description, the paragraphs of
+`# Purpose`, the behaviors' titles and every step, but not code blocks, and a value in backticks
+is one word there. A sentence has at most 25 words, and a paragraph at most six sentences, where
+each list item is a paragraph of its own. A word of 5 letters or more that ends in "ing" is
+refused, except lengua's technical names: string, strings, nothing, something, anything,
+everything, during, spring, ceiling, morning, evening, building, heading, padding, encoding,
+encodings, rounding, bring, thing, things, and "floating" before "point". A step may use none of
+lengua's old phrasings. Each problem starts with `STE:` and says what to write; the other rules
+are yours to keep.
+
+The steps' STE words are ``standard input that contains `…` ``, ``a file `notes.txt` that
+contains `…` ``, ``the environment variable `NAME` with the value `…` ``, ``it prints text that
+matches `rule` ``, ``the file `out.txt` contains `…` ``, ``the client receives `…` ``, `it does
+not stop` and ``no server on port `8080` ``. In a value's text, `and a newline` adds a line
+break, `then` joins two parts, and `` `4097` times`` after a value repeats it. [The
+reference](references/ste.md#the-step-words) gives the old phrasing that each one replaces.
+
+Before:
+
+```text
+## B2: Missing arguments
+- Given no arguments
+- When the program runs
+- Then it prints `usage: add <a> <b>` followed by a newline to standard error
+```
+
+After:
+
+```text
+## B2: Shows the usage when there are no arguments
+- Given no arguments
+- When the program runs
+- Then it prints `usage: add <a> <b>` and a newline to standard error
+```
+
+Before, in `# Purpose`:
+
+```text
+Reads standard input of any length, keeping only a piece of it in memory at a time, and if
+writing the output fails, the program exits with code 2.
+```
+
+After:
+
+```text
+Reads standard input of any length, one piece at a time. If the program cannot write its
+output, it exits with code 2.
+```
 
 ## The tests
 
@@ -279,30 +353,31 @@ title: add
 description: Adds two whole numbers given as arguments and prints the sum.
 ---
 # Purpose
-Lets a shell script add two whole numbers: it prints the sum of two numbers between `-1000000000`
-and `1000000000`, given as arguments. If writing the output fails, the program exits with code 2.
+Lets a shell script add two whole numbers. It prints the sum of two numbers between `-1000000000`
+and `1000000000`, which it gets as arguments. If the program cannot write its output, it exits
+with code 2.
 
 # Behaviors
 ## B1: Adds two numbers
 - Given the arguments `2` and `3`
 - When the program runs
-- Then it prints `5` followed by a newline
+- Then it prints `5` and a newline
 - And it exits with code `0`
 
 ### For any two numbers
 - Given the arguments `{a}` and `{b}`
 - When the program runs
-- Then it prints `{a + b}` followed by a newline
+- Then it prints `{a + b}` and a newline
 - And it exits with code `0`
 
 | a | b | runs |
 |---|---|---|
 | `int(-1000000000, 1000000000)` | `int(-1000000000, 1000000000)` | 200 |
 
-## B2: Shows usage when arguments are missing
+## B2: Shows the usage when there are no arguments
 - Given no arguments
 - When the program runs
-- Then it prints `usage: add <a> <b>` followed by a newline to standard error
+- Then it prints `usage: add <a> <b>` and a newline to standard error
 - And it exits with code `1`
 
 # Constraints
@@ -310,7 +385,8 @@ and `1000000000`, given as arguments. If writing the output fails, the program e
 ```
 
 B2 gives the program nothing, so it needs no generated tests. Each of B1's runs draws a new `a`
-and `b`, trying boundary values first (the range's ends, 0, 1 and -1), and expects their sum.
+and `b` and expects their sum. The first runs try the boundary values: the ends of the range, 0,
+1 and -1.
 
 ## After recording
 
