@@ -3437,6 +3437,46 @@ async fn proves_a_program_on_several_threads() {
     }
 }
 
+/// The same through lengua's own `parallel_for`: the template as shipped, in the edge form, whose
+/// threads lengua starts, proves like any other program, each worker run to its end as it starts.
+#[tokio::test]
+async fn proves_an_edge_form_program_on_several_threads() {
+    let spec = asset("parallel-template-spec.md")
+        .replacen(
+            "# Behaviors",
+            "Tests here give it up to `300` bytes.\n\n# Behaviors",
+            1,
+        )
+        .replace("string(0, 1048576,", "string(0, 300,");
+    for target in Profile::ALL {
+        let name = *PARALLEL_TEMPLATES.get(target);
+        let shipped = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("plugin/skills/compile/assets")
+                .join(name),
+        )
+        .expect("the template");
+        let source = shipped
+            .replace(".equ CHUNK, 65536", ".equ CHUNK, 128")
+            .replace(".equ INPUT_MAX, 1048576", ".equ INPUT_MAX, 2048");
+        assert!(source.contains(".equ CHUNK, 128") && source.contains(".equ INPUT_MAX, 2048"));
+        let machine = machine(&source).await;
+        let verdict = prove(&machine, &block(&spec, 0), &text_budget());
+        assert!(
+            matches!(
+                &verdict,
+                Verdict::Proven {
+                    bound: None,
+                    unreached,
+                    ..
+                } if unreached.is_empty()
+            ),
+            "{}: {verdict:?}",
+            target.name()
+        );
+    }
+}
+
 /// A program for the terminal proves as from a pipe, as its tests run: the terminal's mode
 /// can't be read or set, and a wait for the next key always finds one, or the input's end: on
 /// AArch64 a `ppoll` with a tenth of a second the kernel reads.

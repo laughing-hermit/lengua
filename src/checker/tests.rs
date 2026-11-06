@@ -490,13 +490,7 @@ async fn every_program_in_the_repository_follows_every_rule() {
 /// The programs that still define `_start`, in the inline form: they make their own system calls
 /// and carry their own `assert_fail`. The list only shrinks: a program that moves to the edge form
 /// leaves it in the same commit, and none joins it. Round 2 ends with it empty and the form gone.
-const INLINE_FORM: &[&str] = &[
-    "benches/programs/shout/avx512-one.s",
-    "benches/programs/shout/avx512.s",
-    "benches/programs/shout/neon-one.s",
-    "plugin/skills/compile/assets/linux-aarch64/parallel-template.s",
-    "plugin/skills/compile/assets/parallel-template.s",
-];
+const INLINE_FORM: &[&str] = &[];
 
 /// Every `.s` file under `folder` that defines `_start`, by its path from the repository's root.
 fn defining_start(root: &std::path::Path, folder: &std::path::Path, found: &mut Vec<String>) {
@@ -2841,6 +2835,141 @@ async fn the_parallel_templates_pass_every_rule() {
         let report = check_parallel(template).await;
         let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
         assert!(report.passed(), "{}: {all:#?}", target.name());
+    }
+}
+
+/// The parallel template of a CPU as shipped, in the edge form: lengua's parallel_for starts its
+/// threads and calls its worker.
+fn edge_parallel_template(target: Profile) -> String {
+    let file = if target == Profile::LinuxAarch64 {
+        "linux-aarch64/parallel-template.s"
+    } else {
+        "parallel-template.s"
+    };
+    std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("plugin/skills/compile/assets")
+            .join(file),
+    )
+    .expect("the template")
+}
+
+/// A program in the edge form that starts threads, with the operations the template's spec
+/// allows and `threads` threads.
+async fn check_edge_threads(text: &str, threads: Option<u32>) -> Report {
+    use crate::edge::Op;
+    let ops = [Op::Read, Op::Write, Op::ThreadStart, Op::ThreadJoin];
+    check_allowing(text, CpuFeatures::all(), &SYSCALLS, &ops, threads).await
+}
+
+/// An edge-form program's threads follow the rules of the thread code, as the inline form's do:
+/// the template passes, a spec that allows no threads or fewer is held to, and a count that isn't
+/// shown to be at most THREADS, a wrong slot size or slots, a worker that reaches the OS and a
+/// call of worker from main.s are found.
+#[tokio::test]
+async fn an_edge_form_programs_threads_follow_the_rules() {
+    // Each CPU's call of parallel_for and its edits: what to change, the line it is found on
+    // (the first text that starts it), the words of the violation.
+    type Case = (&'static str, &'static str, &'static str, &'static str);
+    let x86_64: [Case; 5] = [
+        (
+            "    cmp r12, THREADS\n    ja .Lmain_assert_threads\n",
+            "",
+            "    call parallel_for\n",
+            "isn't shown to be at most THREADS",
+        ),
+        (
+            "    mov edx, SLOT_SIZE\n",
+            "    mov edx, SLOT_SIZE + 64\n",
+            "    call parallel_for\n",
+            "parallel_for's slot size isn't SLOT_SIZE",
+        ),
+        (
+            "    lea rsi, [rip + slots]\n    mov edx, SLOT_SIZE\n",
+            "    lea rsi, [rip + input_size]\n    mov edx, SLOT_SIZE\n",
+            "    call parallel_for\n",
+            "parallel_for's argument 2 isn't slots",
+        ),
+        (
+            "worker:\n    push rbx\n    mov rbx, rsi\n",
+            "worker:\n    push rbx\n    mov rbx, rsi\n    call os_close\n",
+            "    call os_close\n",
+            "worker makes a system call on a worker thread",
+        ),
+        (
+            "    mov rdi, r12\n    call total_results\n",
+            "    call worker\n    mov rdi, r12\n    call total_results\n",
+            "    call worker\n",
+            "main calls worker, which only the thread code may call",
+        ),
+    ];
+    let aarch64: [Case; 5] = [
+        (
+            "    cmp x20, #THREADS\n    b.hi .Lmain_assert_threads\n",
+            "",
+            "    bl parallel_for\n",
+            "isn't shown to be at most THREADS",
+        ),
+        (
+            "    mov x2, #SLOT_SIZE\n",
+            "    mov x2, #SLOT_SIZE + 64\n",
+            "    bl parallel_for\n",
+            "parallel_for's slot size isn't SLOT_SIZE",
+        ),
+        (
+            "    adrp x1, slots\n    add x1, x1, :lo12:slots\n    mov x2, #SLOT_SIZE\n",
+            "    adrp x1, input_size\n    add x1, x1, :lo12:input_size\n    mov x2, #SLOT_SIZE\n",
+            "    bl parallel_for\n",
+            "parallel_for's argument 2 isn't slots",
+        ),
+        (
+            "worker:\n    stp x19, x20, [sp, #-16]!\n    mov x19, x1\n",
+            "worker:\n    stp x19, x20, [sp, #-16]!\n    mov x19, x1\n    bl os_close\n",
+            "    bl os_close\n",
+            "worker makes a system call on a worker thread",
+        ),
+        (
+            "    mov x0, x20\n    bl total_results\n",
+            "    bl worker\n    mov x0, x20\n    bl total_results\n",
+            "    bl worker\n",
+            "main calls worker, which only the thread code may call",
+        ),
+    ];
+    for (target, cases) in [
+        (Profile::LinuxX86_64, x86_64),
+        (Profile::LinuxAarch64, aarch64),
+    ] {
+        let template = edge_parallel_template(target);
+        let name = target.name();
+        let report = check_edge_threads(&template, Some(16)).await;
+        let all: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+        assert!(report.passed(), "{name}: {all:#?}");
+        // The spec's approval.
+        let call = if target == Profile::LinuxAarch64 {
+            "    bl parallel_for\n"
+        } else {
+            "    call parallel_for\n"
+        };
+        let report = check_edge_threads(&template, None).await;
+        assert_violation(
+            &report,
+            Rule::Resources,
+            line_of(&template, call),
+            "spec.md doesn't allow threads",
+        );
+        let report = check_edge_threads(&template, Some(8)).await;
+        assert_violation(
+            &report,
+            Rule::Resources,
+            line_of(&template, ".equ THREADS, 16"),
+            "THREADS is 16, but the spec allows from 1 to 8 threads",
+        );
+        for (old, new, at, needle) in cases {
+            assert!(template.contains(old), "{name}: {old:?} isn't in the template");
+            let changed = template.replacen(old, new, 1);
+            let report = check_edge_threads(&changed, Some(16)).await;
+            assert_violation(&report, Rule::Resources, line_of(&changed, at), needle);
+        }
     }
 }
 

@@ -150,6 +150,7 @@ impl Cpu<'_> {
             }
             // As in a test, none of the standard descriptors is a terminal.
             Op::Terminal | Op::Window => self.finish(op, (-ENOTTY).cast_unsigned()),
+            // Never reached: these run as the code they are (see `Image::new`).
             Op::ThreadStart | Op::ThreadJoin => Err(unsupported(
                 "starting or joining a thread, which only lengua's library does",
             )),

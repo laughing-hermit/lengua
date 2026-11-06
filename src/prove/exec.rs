@@ -235,7 +235,16 @@ impl Image {
                 .functions
                 .iter()
                 .filter_map(|(name, function)| {
-                    crate::edge::Op::from_symbol(name).map(|op| (function.address, op))
+                    crate::edge::Op::from_symbol(name)
+                        // The thread operations run as the code they are: the clone they make
+                        // and the thread's end are the model's own, as for any thread.
+                        .filter(|op| {
+                            !matches!(
+                                op,
+                                crate::edge::Op::ThreadStart | crate::edge::Op::ThreadJoin
+                            )
+                        })
+                        .map(|op| (function.address, op))
                 })
                 .collect()
         } else {
