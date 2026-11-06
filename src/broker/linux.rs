@@ -75,16 +75,17 @@ impl Answer {
 /// happens: a test waits for the note of a server's wait before it connects.
 #[derive(Debug, Default)]
 pub struct Notes {
-    waited: AtomicBool,
+    waiting: AtomicBool,
     listed: AtomicBool,
     random_asked: AtomicUsize,
 }
 
 impl Notes {
-    /// Whether the program waited for a connection or a key.
+    /// Whether the program is waiting for a connection or a key now: its last note of a wait
+    /// has no note of its return after it.
     #[must_use]
-    pub fn waited(&self) -> bool {
-        self.waited.load(Ordering::SeqCst)
+    pub fn waiting(&self) -> bool {
+        self.waiting.load(Ordering::SeqCst)
     }
 
     /// Whether the program listed a folder.
@@ -215,7 +216,11 @@ impl Broker {
                 Answer::result(0)
             }
             Kind::Waiting => {
-                self.notes.waited.store(true, Ordering::SeqCst);
+                self.notes.waiting.store(true, Ordering::SeqCst);
+                Answer::result(0)
+            }
+            Kind::Resumed => {
+                self.notes.waiting.store(false, Ordering::SeqCst);
                 Answer::result(0)
             }
             Kind::Listed => {
@@ -805,7 +810,10 @@ mod tests {
         // The notes.
         broker.answer(&request(Kind::Waiting, 0, "", ""));
         broker.answer(&request(Kind::Listed, 0, "", ""));
-        assert!(broker.notes().waited() && broker.notes().listed());
+        assert!(broker.notes().waiting() && broker.notes().listed());
+        // A wait ends with the note of the return from it.
+        broker.answer(&request(Kind::Resumed, 0, "", ""));
+        assert!(!broker.notes().waiting());
     }
 
     /// A client's side of the channel: a request goes out, and the reply and its descriptor come
@@ -893,7 +901,7 @@ mod tests {
             matches!(outcome, Outcome::Refused(Refusal::Kind(255))),
             "{outcome:?}"
         );
-        assert!(notes.waited());
+        assert!(notes.waiting());
     }
 
     #[test]

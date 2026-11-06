@@ -136,10 +136,12 @@ pub enum Kind {
     Rename = 4,
     /// A note, with no reply: the file with this token, the value, is closed.
     Closed = 5,
-    /// A note, with no reply: the program waits for a connection or a key.
+    /// A note, with no reply: the program waits for a connection or a key, blocked until one comes.
     Waiting = 6,
     /// A note, with no reply: the program lists a folder.
     Listed = 7,
+    /// A note, with no reply: the program is back from what it waited in.
+    Resumed = 10,
     /// The clock: the argument is 0 or 1; the reply's payload is the seconds and the nanoseconds.
     Clock = 8,
     /// Random bytes: the value is how many, from 1 to [`crate::edge::RANDOM_MOST`].
@@ -157,6 +159,7 @@ impl Kind {
             5 => Self::Closed,
             6 => Self::Waiting,
             7 => Self::Listed,
+            10 => Self::Resumed,
             8 => Self::Clock,
             9 => Self::Random,
             _ => return None,
@@ -166,7 +169,10 @@ impl Kind {
     /// Whether the broker answers it.
     #[must_use]
     pub const fn has_reply(self) -> bool {
-        !matches!(self, Self::Closed | Self::Waiting | Self::Listed)
+        !matches!(
+            self,
+            Self::Closed | Self::Waiting | Self::Listed | Self::Resumed
+        )
     }
 }
 
@@ -281,7 +287,7 @@ pub fn parse_header(bytes: &[u8]) -> Result<Header, Refusal> {
         Kind::Remove => (1, 0..=0, 1),
         Kind::Rename => (0, 0..=0, 2),
         Kind::Closed => (0, 1..=u64::from(u32::MAX), 0),
-        Kind::Waiting | Kind::Listed => (0, 0..=0, 0),
+        Kind::Waiting | Kind::Listed | Kind::Resumed => (0, 0..=0, 0),
         Kind::Clock => (1, 0..=0, 0),
         Kind::Random => (0, 1..=crate::edge::RANDOM_MOST, 0),
     };
@@ -397,6 +403,7 @@ mod tests {
             request(Kind::Closed, 0, 7, "", ""),
             request(Kind::Waiting, 0, 0, "", ""),
             request(Kind::Listed, 0, 0, "", ""),
+            request(Kind::Resumed, 0, 0, "", ""),
             request(Kind::Clock, 1, 0, "", ""),
             request(Kind::Random, 0, 256, "", ""),
         ]
@@ -470,7 +477,7 @@ mod tests {
             (good[..REQUEST_LEN].to_vec(), Refusal::Length(0)),
             ([good.clone(), vec![b'x']].concat(), Refusal::Length(2)),
             (with(0, 0), Refusal::Kind(0)),
-            (with(0, 10), Refusal::Kind(10)),
+            (with(0, 11), Refusal::Kind(11)),
             (with(0, 255), Refusal::Kind(255)),
             (with(1, 5), Refusal::Argument(5)),
             (with(2, 0), Refusal::Length(0)),

@@ -75,6 +75,10 @@ pub mod x86_64 {
     pub const SENDTO: i64 = 44;
     /// `recvfrom`, receive on a connection.
     pub const RECVFROM: i64 = 45;
+    /// `sendmsg`, send a message with a descriptor: the edge's only way to talk to the broker.
+    pub const SENDMSG: i64 = 46;
+    /// `recvmsg`, receive a message and the descriptor that came with it.
+    pub const RECVMSG: i64 = 47;
     /// `shutdown`, end one direction of a connection.
     pub const SHUTDOWN: i64 = 48;
     /// `clone`, start a thread (only through the parallel template's flags).
@@ -200,6 +204,10 @@ pub mod aarch64 {
     pub const SENDTO: i64 = 206;
     /// `recvfrom`, receive on a connection.
     pub const RECVFROM: i64 = 207;
+    /// `sendmsg`, send a message with a descriptor: the edge's only way to talk to the broker.
+    pub const SENDMSG: i64 = 211;
+    /// `recvmsg`, receive a message and the descriptor that came with it.
+    pub const RECVMSG: i64 = 212;
     /// `shutdown`, end one direction of a connection.
     pub const SHUTDOWN: i64 = 210;
     /// `clone`, start a thread.
@@ -317,6 +325,8 @@ mod tests {
             ("accept", x86_64::ACCEPT, aarch64::ACCEPT),
             ("sendto", x86_64::SENDTO, aarch64::SENDTO),
             ("recvfrom", x86_64::RECVFROM, aarch64::RECVFROM),
+            ("sendmsg", x86_64::SENDMSG, aarch64::SENDMSG),
+            ("recvmsg", x86_64::RECVMSG, aarch64::RECVMSG),
             ("shutdown", x86_64::SHUTDOWN, aarch64::SHUTDOWN),
             ("clone", x86_64::CLONE, aarch64::CLONE),
             ("execve", x86_64::EXECVE, aarch64::EXECVE),
@@ -411,6 +421,8 @@ mod tests {
             (host::RENAMEAT, libc::SYS_renameat),
             (host::CLONE, libc::SYS_clone),
             (host::EXECVE, libc::SYS_execve),
+            (host::SENDMSG, libc::SYS_sendmsg),
+            (host::RECVMSG, libc::SYS_recvmsg),
             (host::FUTEX, libc::SYS_futex),
             (host::GETRANDOM, libc::SYS_getrandom),
             (host::CLOCK_NANOSLEEP, libc::SYS_clock_nanosleep),

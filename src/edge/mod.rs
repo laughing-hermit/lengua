@@ -933,12 +933,12 @@ mod tests {
                 Profile::LinuxX86_64 => system_calls!(
                     x86_64: READ, WRITE, CLOSE, FSTAT, POLL, LSEEK, IOCTL, SHUTDOWN, CLONE, EXIT,
                     FUTEX, CLOCK_GETTIME, CLOCK_NANOSLEEP, EXIT_GROUP, MKDIRAT, UNLINKAT, RENAMEAT,
-                    GETDENTS64, OPENAT, ACCEPT4, GETRANDOM
+                    GETDENTS64, OPENAT, ACCEPT4, GETRANDOM, SENDMSG, RECVMSG
                 ),
                 Profile::LinuxAarch64 => system_calls!(
                     aarch64: IOCTL, MKDIRAT, UNLINKAT, RENAMEAT, OPENAT, CLOSE, GETDENTS64, LSEEK,
                     READ, WRITE, PPOLL, FSTAT, EXIT, EXIT_GROUP, FUTEX, CLOCK_GETTIME,
-                    CLOCK_NANOSLEEP, SHUTDOWN, ACCEPT4, CLONE, GETRANDOM
+                    CLOCK_NANOSLEEP, SHUTDOWN, ACCEPT4, CLONE, GETRANDOM, SENDMSG, RECVMSG
                 ),
             };
             for (name, value) in &found {
