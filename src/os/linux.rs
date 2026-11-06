@@ -636,13 +636,9 @@ async fn launch_job(
         job.syscalls
             .iter()
             .map(|allowed| format!("{}{}", allowed.number, allowed.pin.encode()))
-            .chain(
-                job.channel
-                    .then_some([SENDMSG, RECVMSG])
-                    .into_iter()
-                    .flatten()
-                    .map(|number| format!("{number}:channel")),
-            )
+            // The edge looks for its channel at its first need. Where lengua gave it none the
+            // look finds nothing, which the kernel lets it do on that descriptor alone.
+            .chain([SENDMSG, RECVMSG].map(|number| format!("{number}:channel")))
             .chain(traced.iter().map(|number| format!("{number}:trace")))
             .collect()
     };
