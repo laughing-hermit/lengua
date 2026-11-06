@@ -513,9 +513,7 @@ const INLINE_FORM: &[&str] = &[
     "plugin/skills/compile/assets/linux-aarch64/fast/wc/main.s",
     "plugin/skills/compile/assets/linux-aarch64/fast/wc-sve/main.s",
     "plugin/skills/compile/assets/linux-aarch64/parallel-template.s",
-    "plugin/skills/compile/assets/linux-aarch64/terminal-template.s",
     "plugin/skills/compile/assets/parallel-template.s",
-    "plugin/skills/compile/assets/terminal-template.s",
 ];
 
 /// Every `.s` file under `folder` that defines `_start`, by its path from the repository's root.
