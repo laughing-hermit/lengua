@@ -2,7 +2,8 @@
 name = "lengua-mcp"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.89"
+# Wasmtime 50's own floor (crates.io, 2026-10-29); CI's Rust, in scripts/ci/setup.sh, is above it.
+rust-version = "1.97"
 license = "Apache-2.0"
 description = "MCP server for lengua: idea-driven programming in checked x86-64 assembly"
 publish = false
@@ -19,6 +20,8 @@ name = "lengua-mcp"
 path = "src/main.rs"
 
 [dependencies]
+# A WebAssembly program's folder: every path resolved beneath it, with no unsafe code.
+cap-std = "=4.0.3"
 getrandom = "0.4"
 hmac = "0.13"
 iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder", "instr_info", "intel"] }
@@ -33,12 +36,19 @@ serde-saphyr = "2.0"
 serde_json = "1"
 sha2 = "0.11"
 tempfile = "3"
-tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 toml = "1.1"
 unicode-normalization = "0.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+# The WebAssembly engine, pinned: Cranelift, its own compiled-module cache, nothing else of its
+# defaults (no WASI of its own, no component model, no GC, no threads).
+wasmtime = { version = "=50.0.1", default-features = false, features = ["cranelift", "cache", "parallel-compilation", "runtime", "std"] }
+# The validator Wasmtime 50.0.1 itself uses (^0.261.0), so a module is checked as the engine reads it.
+wasmparser = { version = "=0.261.0", default-features = false, features = ["std", "validate", "features", "simd"] }
+# main.wat's text, with each instruction's place in it, and lengua's library merged in.
+wast = { version = "=261.0.0", default-features = false, features = ["wasm-module"] }
 webpki-roots = "1"
 
 # What only some systems have: the kernel's confinement and counters are Linux's, and the Unix

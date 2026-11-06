@@ -15,7 +15,8 @@ use tracing_subscriber::EnvFilter;
 const USAGE: &str = "usage: lengua-mcp [--data-dir <absolute path>] [--version]
        lengua-mcp [--data-dir <absolute path>] run <program folder> [--in <folder>] \
 [--env NAME=value]... [-- <argument>...]
-       lengua-mcp link <main.s>";
+       lengua-mcp link <main.s>
+       lengua-mcp wasm <main.wat> [-o <main.wasm>]";
 
 /// The exit code when lengua won't run a program or can't start it, as `timeout` and `env` use:
 /// the program's own codes stay its own.
@@ -27,6 +28,15 @@ fn main() -> ExitCode {
     if raw.peek().is_some_and(|arg| arg == runner::LAUNCH_FLAG) {
         raw.next();
         return runner::launch(raw);
+    }
+    // Worker mode, hidden: a child of the server that runs WebAssembly jobs until its standard
+    // input ends.
+    if raw
+        .peek()
+        .is_some_and(|arg| arg == lengua::wasm::WORKER_FLAG)
+    {
+        raw.next();
+        return lengua::wasm::worker::main(raw);
     }
 
     // stdout carries the MCP protocol, so all logging goes to stderr.
@@ -54,6 +64,7 @@ fn main() -> ExitCode {
         Ok(Command::Serve(data_dir)) => data_dir,
         Ok(Command::Run(data_dir, request)) => return run_from_shell(&data_dir, &request),
         Ok(Command::Link(path)) => return link(&path),
+        Ok(Command::Wasm(path, output)) => return wasm(&path, output),
         Ok(Command::Version) => {
             println!("lengua-mcp {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
@@ -109,6 +120,27 @@ fn link(path: &std::path::Path) -> ExitCode {
     }
 }
 
+/// Writes the standard WebAssembly module main.wat at `path` builds, with lengua's library merged
+/// in, to `output`, or beside main.wat as main.wasm: a WASI preview 1 module any WebAssembly
+/// runtime runs.
+fn wasm(path: &std::path::Path, output: Option<PathBuf>) -> ExitCode {
+    let output = output.unwrap_or_else(|| path.with_extension("wasm"));
+    let built = std::fs::read_to_string(path)
+        .map_err(|error| format!("can't read {}: {error}", path.display()))
+        .and_then(|text| lengua::wasm::text::build(&text).map_err(|problem| problem.to_string()))
+        .and_then(|built| {
+            std::fs::write(&output, built.wasm)
+                .map_err(|error| format!("can't write {}: {error}", output.display()))
+        });
+    match built {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            eprintln!("lengua-mcp: {message}");
+            ExitCode::from(REFUSED)
+        }
+    }
+}
+
 async fn serve(data_dir: DataDir) -> ExitCode {
     let server = LenguaServer::new(data_dir);
     let running = match server.serve(stdio()).await {
@@ -131,6 +163,7 @@ enum Command {
     Serve(DataDir),
     Run(DataDir, ShellRun),
     Link(PathBuf),
+    Wasm(PathBuf, Option<PathBuf>),
     Version,
 }
 
@@ -185,6 +218,21 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Command, String>
                     return Err(format!("link takes one file, not {extra:?}"));
                 }
                 return Ok(Command::Link(PathBuf::from(path)));
+            }
+            "wasm" => {
+                let path = args.next().ok_or("wasm needs a main.wat")?;
+                let mut output = None;
+                while let Some(arg) = args.next() {
+                    match arg.as_str() {
+                        "-o" => output = Some(PathBuf::from(args.next().ok_or("-o needs a file")?)),
+                        other => {
+                            return Err(format!(
+                                "wasm takes a main.wat and -o <file>, not {other:?}"
+                            ));
+                        }
+                    }
+                }
+                return Ok(Command::Wasm(PathBuf::from(path), output));
             }
             "--data-dir" => {
                 let value = args.next().ok_or("--data-dir needs a path")?;

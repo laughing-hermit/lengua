@@ -1,0 +1,561 @@
+//! Running a WebAssembly module: the part in this process, which a worker does for each job and
+//! a run from a shell does in place, and the parts around it, the working folder prepared and
+//! read back and how a job went turned into the runner's [`Run`], so everything that compares
+//! results compares a WebAssembly program's as it does a native one's.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::io;
+use std::net::{Ipv4Addr, SocketAddr, TcpStream};
+use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Sender;
+use std::time::{Duration, Instant};
+
+use wasmtime::{Engine, Linker, Module, Store, UpdateDeadline, WasmBacktrace};
+
+use crate::connect::{CONNECT_TIMEOUT, Made, Reach};
+use crate::runner::{End, Run, Trap};
+use crate::supply::Time;
+use crate::wasm::engine::Setup;
+use crate::wasm::host::limits::{self, Limits};
+use crate::wasm::host::net::{self, Link, Listener, Socket};
+use crate::wasm::host::policy::Policy;
+use crate::wasm::host::stdio::{Input, Output, Stream};
+use crate::wasm::host::{Host, Stop, World};
+use crate::wasm::job::{self, Connection, Done, Ending, Event, Job, Reached};
+
+/// The exit code a run that never started is given, as a shell gives a command it can't find:
+/// the run's `supplied` says why.
+pub const UNSTARTED: i32 = 127;
+
+/// The stack of the thread a program runs on: room for the engine's own and the program's.
+pub const STACK: usize = 16 * 1024 * 1024;
+
+/// The most files read back from a working folder after a run, as for a native program.
+const MAX_FILES_BACK: usize = 256;
+
+/// The most bytes read back from a working folder after a run.
+const MAX_BYTES_BACK: u64 = 256 * 1024 * 1024;
+
+/// What a run left in its working folder: every file, by name, with its bytes, or why they
+/// can't all be read; and every folder.
+pub type Left = (Result<BTreeMap<String, Vec<u8>>, String>, BTreeSet<String>);
+
+/// Every file a run left, by name, with its bytes, and every folder.
+type Found = (BTreeMap<String, Vec<u8>>, BTreeSet<String>);
+
+/// What running a module in this process came to.
+pub struct Executed {
+    /// How it ended.
+    pub ending: Ending,
+    /// The operations it executed, when the engine counted them.
+    pub instructions: Option<u64>,
+    /// Its time on the clock, in nanoseconds.
+    pub wall_time_ns: u64,
+    /// Its host, with what it wrote and what it told lengua.
+    pub host: Host,
+    /// Why lengua couldn't run it as asked, if it couldn't.
+    pub problem: Option<String>,
+}
+
+/// How a run that stopped with `error` ended, and what lengua has to say of it.
+fn ending_of(error: &wasmtime::Error) -> (Ending, Option<String>) {
+    let offset = error
+        .downcast_ref::<WasmBacktrace>()
+        .and_then(|trace| trace.frames().first())
+        .and_then(wasmtime::FrameInfo::module_offset)
+        .and_then(|offset| u64::try_from(offset).ok());
+    if let Some(stop) = error.downcast_ref::<Stop>() {
+        return match stop {
+            Stop::Exit(code) => (Ending::Exited(*code), None),
+            Stop::OutputTooLarge => (Ending::OutputTooLarge, None),
+            Stop::TimedOut => (Ending::TimedOut, None),
+            Stop::Stopped => (Ending::Stopped, None),
+            Stop::OutsideMemory => (Ending::Trapped(Trap::OutOfBounds, offset), None),
+            Stop::NoMemory => (Ending::Trapped(Trap::Other, offset), Some(stop.to_string())),
+        };
+    }
+    if let Some(trap) = error.downcast_ref::<wasmtime::Trap>() {
+        let kind = match trap {
+            wasmtime::Trap::OutOfFuel | wasmtime::Trap::Interrupt => {
+                return (Ending::TimedOut, None);
+            }
+            wasmtime::Trap::UnreachableCodeReached => Trap::Unreachable,
+            wasmtime::Trap::MemoryOutOfBounds | wasmtime::Trap::HeapMisaligned => {
+                Trap::OutOfBounds
+            }
+            wasmtime::Trap::IntegerDivisionByZero => Trap::DivisionByZero,
+            wasmtime::Trap::IntegerOverflow => Trap::Overflow,
+            wasmtime::Trap::BadConversionToInteger => Trap::Conversion,
+            wasmtime::Trap::StackOverflow => Trap::StackOverflow,
+            wasmtime::Trap::TableOutOfBounds
+            | wasmtime::Trap::IndirectCallToNull
+            | wasmtime::Trap::BadSignature => Trap::IndirectCall,
+            _ => Trap::Other,
+        };
+        return (Ending::Trapped(kind, offset), None);
+    }
+    (Ending::Trapped(Trap::Other, offset), Some(format!("{error:#}")))
+}
+
+/// Runs `module` with `host`, in this process, until its `_start` returns, it exits, or it is
+/// stopped: in `setup`'s configuration of `engine`, its memory held to what the module declares,
+/// and stopped `timeout` after it starts, if there's a timeout.
+#[must_use]
+pub fn execute(
+    engine: &Engine,
+    linker: &Linker<Host>,
+    module: &Module,
+    setup: Setup,
+    mut host: Host,
+    timeout: Option<Duration>,
+) -> Executed {
+    host.limits.store = limits::store_limits(limits::memory_limit(module));
+    host.limits.deadline = timeout.map(|timeout| Instant::now() + timeout);
+    let deadline = host.limits.deadline;
+    let stop = Arc::clone(&host.limits.stop);
+    let mut store = Store::new(engine, host);
+    store.limiter(|host| &mut host.limits.store);
+    if setup.counts() {
+        let _ = store.set_fuel(u64::MAX);
+    }
+    if setup.interrupts() {
+        store.set_epoch_deadline(1);
+        store.epoch_deadline_callback(move |_| {
+            if stop.load(Ordering::SeqCst) {
+                return Err(wasmtime::Error::new(Stop::Stopped));
+            }
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                return Err(wasmtime::Error::new(Stop::TimedOut));
+            }
+            Ok(UpdateDeadline::Continue(1))
+        });
+    }
+    let started = Instant::now();
+    let (ending, problem) = match linker.instantiate(&mut store, module) {
+        Err(error)
+            if error.downcast_ref::<Stop>().is_none()
+                && error.downcast_ref::<wasmtime::Trap>().is_none() =>
+        {
+            (
+                Ending::Unstarted,
+                Some(format!("lengua couldn't start the module: {error:#}")),
+            )
+        }
+        Err(error) => ending_of(&error),
+        Ok(instance) => match instance.get_typed_func::<(), ()>(&mut store, "_start") {
+            Err(error) => (
+                Ending::Unstarted,
+                Some(format!(
+                    "the module exports no `_start` that takes and gives nothing: {error:#}"
+                )),
+            ),
+            Ok(start) => match start.call(&mut store, ()) {
+                Ok(()) => (Ending::Exited(0), None),
+                Err(error) => ending_of(&error),
+            },
+        },
+    };
+    let wall_time_ns = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+    let instructions = if setup.counts() {
+        store.get_fuel().ok().map(|left| u64::MAX - left)
+    } else {
+        None
+    };
+    Executed {
+        ending,
+        instructions,
+        wall_time_ns,
+        host: store.into_data(),
+        problem,
+    }
+}
+
+/// The connection `connection` names, made now, and why it couldn't be when it couldn't.
+fn connect(connection: &Connection) -> (Link, Option<String>) {
+    match connection {
+        Connection::Test(port) => {
+            let address = SocketAddr::from((Ipv4Addr::LOCALHOST, *port));
+            match TcpStream::connect_timeout(&address, CONNECT_TIMEOUT) {
+                Ok(stream) => (Link::Tcp(stream), None),
+                Err(error) => (
+                    Link::Ended,
+                    Some(format!("the test's server didn't answer: {error}")),
+                ),
+            }
+        }
+        Connection::Place { host, port, tls } => {
+            let reach = match (host, tls) {
+                (None, _) => Reach::ThisComputer(*port),
+                (Some(host), true) => Reach::Tls(host.clone(), *port),
+                (Some(host), false) => Reach::Host(host.clone(), *port),
+            };
+            let Some(runtime) = net::runtime() else {
+                return (
+                    Link::Ended,
+                    Some("lengua couldn't start what makes its connections".to_owned()),
+                );
+            };
+            match runtime.block_on(crate::connect::make(&reach)) {
+                Ok(place) => (Link::Place(place, runtime), None),
+                Err(problem) => (Link::Ended, Some(problem)),
+            }
+        }
+        Connection::Ended(problem) => (Link::Ended, Some(problem.clone())),
+    }
+}
+
+/// What `job` gives its program, and what became of each connection lengua made for it: the
+/// connections made first, then the listener bound, which `events` hears of, then the folder.
+///
+/// # Errors
+///
+/// Why the program can't be given what it asks, such as a port that's taken.
+pub fn world(
+    job: &Job,
+    stop: Arc<AtomicBool>,
+    events: Option<Sender<Event>>,
+) -> Result<(World, Vec<Reached>), String> {
+    let stdin = job::unhex(&job.stdin)?;
+    let random = job.random.as_deref().map(job::unhex).transpose()?;
+    let mut connections = Vec::new();
+    let mut reached = Vec::new();
+    for made in &job.connections {
+        let (link, problem) = connect(&made.connection);
+        connections.push(Socket::new(link));
+        reached.push(Reached {
+            place: made.place.clone(),
+            problem,
+        });
+    }
+    let listener = match job.listen {
+        Some((port, anywhere)) => {
+            let listener = Listener::bind(port, anywhere)
+                .map_err(|error| format!("lengua couldn't listen on port {port}: {error}"))?;
+            let port = listener
+                .port()
+                .map_err(|error| format!("lengua couldn't read its listener's port: {error}"))?;
+            if let Some(events) = &events {
+                let _ = events.send(Event::Listening { id: job.id, port });
+            }
+            Some(listener)
+        }
+        None => None,
+    };
+    let folder = match &job.folder {
+        Some(path) if job.policy.files => Some(
+            cap_std::fs::Dir::open_ambient_dir(path, cap_std::ambient_authority())
+                .map_err(|error| format!("the working folder can't be opened: {error}"))?,
+        ),
+        _ => None,
+    };
+    let limits = Limits::new(
+        None,
+        stop,
+        job.limits.max_output,
+        job.limits.max_file,
+        job.limits.max_written,
+        0,
+    );
+    let world = World {
+        policy: job.policy,
+        args: job.args.clone(),
+        env: job.env.clone(),
+        stdin: Input::given(stdin, &job.stdin_pieces),
+        stdout: if job.stdout_closed {
+            Output::Closed
+        } else {
+            Output::kept(job.limits.max_output)
+        },
+        stderr: Output::kept(job.limits.max_output),
+        folder,
+        reversed: job.reversed,
+        listener,
+        connections,
+        clock: job
+            .clock
+            .iter()
+            .map(|(seconds, nanoseconds)| Time {
+                seconds: *seconds,
+                nanoseconds: *nanoseconds,
+            })
+            .collect(),
+        random,
+        limits,
+        instant_sleeps: job.instant_sleeps,
+        events: events.map(|events| (job.id, events)),
+    };
+    Ok((world, reached))
+}
+
+/// How a job went that never started, for `problem`.
+#[must_use]
+pub fn unstarted(id: u64, problem: String, connections: Vec<Reached>) -> Done {
+    Done {
+        id,
+        stdout: String::new(),
+        stderr: String::new(),
+        ending: Ending::Unstarted,
+        instructions: None,
+        wall_time_ns: 0,
+        random_asked: None,
+        listed: false,
+        connections,
+        problem: Some(problem),
+    }
+}
+
+/// How job `id` went, from what running it came to: its host is closed first, every file and
+/// connection with it, before the server hears of it and reads its folder.
+#[must_use]
+pub fn done(id: u64, executed: Executed, connections: Vec<Reached>) -> Done {
+    let Executed {
+        ending,
+        instructions,
+        wall_time_ns,
+        mut host,
+        problem,
+    } = executed;
+    let stdout = std::mem::replace(&mut host.stdout, Output::Closed).into_bytes();
+    let stderr = std::mem::replace(&mut host.stderr, Output::Closed).into_bytes();
+    let random_asked = host.random.asked();
+    let listed = host.notes.listed;
+    drop(host);
+    Done {
+        id,
+        stdout: job::hex(&stdout),
+        stderr: job::hex(&stderr),
+        ending,
+        instructions,
+        wall_time_ns,
+        random_asked,
+        listed,
+        connections,
+        problem,
+    }
+}
+
+/// How a run went, as the runner says it: `line` gives main.wat's line of a trap's offset, and
+/// `left` is what the run left in its working folder.
+#[must_use]
+pub fn run_of(done: Done, left: Left, line: impl Fn(u64) -> Option<usize>) -> Run {
+    let end = match done.ending {
+        Ending::Exited(code) => End::Exited(code),
+        Ending::TimedOut => End::TimedOut,
+        Ending::OutputTooLarge => End::OutputTooLarge,
+        Ending::Stopped => End::Stopped,
+        Ending::Trapped(trap, offset) => End::Trapped(trap, offset.and_then(line)),
+        Ending::Unstarted => End::Exited(UNSTARTED),
+    };
+    let instructions = match done.ending {
+        Ending::Exited(_) | Ending::Trapped(..) => done.instructions,
+        _ => None,
+    };
+    let (files, folders) = left;
+    Run {
+        stdout: job::unhex(&done.stdout).unwrap_or_default(),
+        stderr: job::unhex(&done.stderr).unwrap_or_default(),
+        end,
+        instructions,
+        cycles: None,
+        cpu_time_ns: None,
+        wall_time_ns: done.wall_time_ns,
+        files,
+        folders,
+        supplied: done.problem,
+        random_asked: done.random_asked,
+        connections: done
+            .connections
+            .into_iter()
+            .map(|reached| Made {
+                place: reached.place,
+                problem: reached.problem,
+            })
+            .collect(),
+        listed: done.listed,
+    }
+}
+
+/// Puts `files` and `folders` in `folder`, making the folders their names include.
+///
+/// # Errors
+///
+/// When the system can't.
+pub fn prepare(
+    folder: &Path,
+    files: &BTreeMap<String, String>,
+    folders: &BTreeSet<String>,
+) -> io::Result<()> {
+    for (name, contents) in files {
+        let path = folder.join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&path, contents)?;
+    }
+    for name in folders {
+        std::fs::create_dir_all(folder.join(name))?;
+    }
+    Ok(())
+}
+
+/// Every file under `folder`, and every folder, by name relative to it with `/` between names on
+/// every system, or why they can't all be read.
+#[must_use]
+pub fn left_in(folder: &Path) -> Left {
+    match read_left(folder) {
+        Ok((files, folders)) => (Ok(files), folders),
+        Err(problem) => (Err(problem), BTreeSet::new()),
+    }
+}
+
+/// [`left_in`]'s work.
+fn read_left(folder: &Path) -> Result<Found, String> {
+    let unreadable = |error: io::Error| format!("its working folder couldn't be read: {error}");
+    let mut files = BTreeMap::new();
+    let mut folders = BTreeSet::new();
+    let mut total = 0;
+    let mut pending = vec![(folder.to_path_buf(), String::new())];
+    while let Some((path, prefix)) = pending.pop() {
+        for entry in std::fs::read_dir(&path).map_err(unreadable)? {
+            let entry = entry.map_err(unreadable)?;
+            let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
+            let kind = entry.file_type().map_err(unreadable)?;
+            if kind.is_dir() {
+                pending.push((entry.path(), format!("{name}/")));
+                folders.insert(name);
+                continue;
+            }
+            if !kind.is_file() {
+                return Err(format!("it left {name}, which isn't a regular file"));
+            }
+            if files.len() == MAX_FILES_BACK {
+                return Err(format!("it left more than {MAX_FILES_BACK} files"));
+            }
+            total += entry.metadata().map_err(unreadable)?.len();
+            if total > MAX_BYTES_BACK {
+                return Err(format!(
+                    "its files hold more than {} MiB",
+                    MAX_BYTES_BACK / 1024 / 1024
+                ));
+            }
+            files.insert(name, std::fs::read(entry.path()).map_err(unreadable)?);
+        }
+    }
+    Ok((files, folders))
+}
+
+/// What a run from a shell gives its program: this process's own standard input, output and
+/// error, the shell's folder or the one it names, no time limit and nothing counted.
+#[derive(Debug, Clone, Copy)]
+pub struct Here<'a> {
+    /// Its arguments, after its name.
+    pub args: &'a [String],
+    /// Its environment variables.
+    pub env: &'a BTreeMap<String, String>,
+    /// Its working folder.
+    pub folder: &'a Path,
+    /// What its idea lets it reach.
+    pub policy: Policy,
+    /// The port it serves on, if it serves, and whether every address may reach it.
+    pub listen: Option<(u16, bool)>,
+    /// The connections lengua makes for it, in order.
+    pub connections: &'a [job::Made],
+    /// Where compiled modules are kept.
+    pub cache: Option<&'a Path>,
+}
+
+/// Runs the module `wasm` here, attached to this process's own streams, as `lengua-mcp run` does
+/// from a shell, on a thread of its own: how it ended. Everything happens on that thread, outside
+/// any async runtime the caller is in, since the connections lengua makes to places have a
+/// runtime of their own.
+///
+/// # Errors
+///
+/// When the module can't be compiled or given what it asks.
+pub fn run_here(wasm: &[u8], here: &Here<'_>) -> io::Result<End> {
+    let joined = std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .name("lengua program".to_owned())
+            .stack_size(STACK)
+            .spawn_scoped(scope, || run_on_this_thread(wasm, here))
+            .map(|running| running.join())
+    })?;
+    joined.map_err(|_| io::Error::other("the program's thread failed"))?
+}
+
+/// [`run_here`]'s work, on the program's own thread.
+fn run_on_this_thread(wasm: &[u8], here: &Here<'_>) -> io::Result<End> {
+    let engine =
+        crate::wasm::engine::engine(Setup::Shell, here.cache).map_err(io::Error::other)?;
+    let linker = crate::wasm::host::linker(&engine).map_err(io::Error::other)?;
+    let module = Module::from_binary(&engine, wasm).map_err(io::Error::other)?;
+    let mut connections = Vec::new();
+    for made in here.connections {
+        let (link, problem) = connect(&made.connection);
+        if let Some(problem) = problem {
+            eprintln!(
+                "lengua-mcp: couldn't connect to {} ({problem}), so the program got that \
+                 connection already ended",
+                made.place
+            );
+        }
+        connections.push(Socket::new(link));
+    }
+    let listener = match here.listen {
+        Some((port, anywhere)) => {
+            let listener = Listener::bind(port, anywhere)?;
+            let port = listener.port()?;
+            if anywhere {
+                eprintln!("lengua-mcp: serving on port {port} of every address of this computer");
+            } else {
+                eprintln!("lengua-mcp: serving on 127.0.0.1:{port}");
+            }
+            Some(listener)
+        }
+        None => None,
+    };
+    let folder = if here.policy.files {
+        Some(cap_std::fs::Dir::open_ambient_dir(
+            here.folder,
+            cap_std::ambient_authority(),
+        )?)
+    } else {
+        None
+    };
+    let world = World {
+        policy: here.policy,
+        args: here.args.to_vec(),
+        env: here.env.clone(),
+        stdin: Input::Here,
+        stdout: Output::Here(Stream::Out),
+        stderr: Output::Here(Stream::Err),
+        folder,
+        reversed: false,
+        listener,
+        connections,
+        clock: Vec::new(),
+        random: None,
+        limits: Limits::new(None, Arc::new(AtomicBool::new(false)), usize::MAX, None, None, 0),
+        instant_sleeps: false,
+        events: None,
+    };
+    let executed = execute(
+        &engine,
+        &linker,
+        &module,
+        Setup::Shell,
+        Host::new(world),
+        None,
+    );
+    if let Some(problem) = &executed.problem {
+        eprintln!("lengua-mcp: {problem}");
+    }
+    let run = run_of(
+        done(0, executed, Vec::new()),
+        (Ok(BTreeMap::new()), BTreeSet::new()),
+        |_| None,
+    );
+    Ok(run.end)
+}
