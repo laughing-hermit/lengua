@@ -5324,7 +5324,10 @@ async fn the_edge_form_rules_refuse_what_they_name() {
 async fn a_function_that_calls_an_operation_saves_the_link_register() {
     let call = |saved: bool| {
         let (open, close) = if saved {
-            ("    stp x29, x30, [sp, #-16]!\n", "    ldp x29, x30, [sp], #16\n")
+            (
+                "    stp x29, x30, [sp, #-16]!\n",
+                "    ldp x29, x30, [sp], #16\n",
+            )
         } else {
             ("", "")
         };
