@@ -2,8 +2,6 @@
 //! receive and what its `clock_gettime` calls read. They make output that depends on chance or
 //! the time exact, so tests can compare it and proofs can cover it.
 
-use std::fmt::Write as _;
-
 /// The most random bytes one test may supply.
 pub const MAX_RANDOM_BYTES: usize = 65_536;
 
@@ -115,58 +113,10 @@ impl Supply {
         })
     }
 
-    /// Whether the test supplies anything, so the run needs the supervisor.
+    /// Whether the test supplies nothing: the kernel answers every call.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.random.is_none() && self.clock.is_empty()
-    }
-
-    /// The supply as the supervisor reads it on its standard input: a line with the random
-    /// bytes in hex (or `-` for none), then one `seconds nanoseconds` line per reading.
-    #[must_use]
-    pub fn encode(&self) -> String {
-        let mut text = match &self.random {
-            None => "-".to_owned(),
-            Some(bytes) => bytes.iter().fold(String::new(), |mut text, byte| {
-                let _ = write!(text, "{byte:02x}");
-                text
-            }),
-        };
-        text.push('\n');
-        for time in &self.clock {
-            let _ = writeln!(text, "{} {}", time.seconds, time.nanoseconds);
-        }
-        text
-    }
-
-    /// Reads [`Self::encode`]'s text.
-    ///
-    /// # Errors
-    ///
-    /// When the text isn't in that form.
-    pub fn decode(text: &str) -> Result<Self, String> {
-        let mut lines = text.lines();
-        let random = match lines.next() {
-            None => return Err("no random line".into()),
-            Some("-") => None,
-            Some(bytes) => Some(hex(bytes)?),
-        };
-        let clock = lines
-            .map(|line| {
-                let (seconds, nanoseconds) = line
-                    .split_once(' ')
-                    .ok_or_else(|| format!("{line:?} isn't a clock reading"))?;
-                Ok(Time {
-                    seconds: seconds.parse().map_err(|_| format!("{line:?}"))?,
-                    nanoseconds: nanoseconds
-                        .parse()
-                        .ok()
-                        .filter(|nanoseconds| *nanoseconds < 1_000_000_000)
-                        .ok_or_else(|| format!("{line:?}"))?,
-                })
-            })
-            .collect::<Result<_, String>>()?;
-        Ok(Self { random, clock })
     }
 }
 
@@ -205,13 +155,7 @@ mod tests {
     }
 
     #[test]
-    fn travels_to_the_supervisor_and_back() {
-        let supply =
-            Supply::parse(Some("2a00"), &["5".into(), "7.000000001".into()]).expect("a supply");
-        assert_eq!(supply.encode(), "2a00\n5 0\n7 1\n");
-        assert_eq!(Supply::decode(&supply.encode()), Ok(supply));
-        let clock_only = Supply::parse(None, &["5".into()]).expect("a supply");
-        assert_eq!(Supply::decode(&clock_only.encode()), Ok(clock_only));
+    fn supplies_nothing_by_default() {
         assert!(Supply::default().is_empty());
     }
 }

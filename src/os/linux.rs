@@ -1,7 +1,7 @@
 //! Linux's way of running a program for the tests and for `run`: the launcher that confines
 //! itself and becomes the program, the kernel's own confinement (Landlock, seccomp and resource
-//! limits), the supervisor that answers the test's clock and random bytes and watches the file
-//! names, and the CPU's counters.
+//! limits), the broker's thread that serves the program its names, and its test's clock and
+//! random bytes, over a channel, and the CPU's counters.
 //!
 //! The count comes from the CPU's performance counters. The counter must be attached before the
 //! program starts, without `unsafe` code, so the server starts its own binary in launcher mode:
@@ -9,10 +9,11 @@
 //! then confines itself and replaces itself with the program. Only the program's own
 //! instructions are counted.
 //!
-//! The confinement is the kernel's. Landlock lets the program touch files only inside its working
-//! folder and execute only itself, with no network; a resource limit caps the files it writes;
-//! and seccomp stops it at any system call outside the list it was given. The checker has already
-//! made sure the code makes no other calls: this makes the kernel keep the same promise.
+//! The confinement is the kernel's. Landlock lets a program with a channel to its broker touch no
+//! file but its own binary, and one without it only inside its working folder, and execute only
+//! itself, with no network; a resource limit caps the files it writes; and seccomp stops it at any
+//! system call outside the list it was given. The checker has already made sure the code makes no
+//! other calls: this makes the kernel keep the same promise.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -43,12 +44,7 @@ use crate::broker::{self, Broker, Hello, Mode, Notes, Outcome, flag};
 use crate::connect::{self, Made, Reach, Relay};
 use crate::platform::{Allowed, Pin};
 use crate::runner::{End, Job, LAUNCH_FLAG, Limits, OPEN_FILES, Run, portable_run};
-use crate::supervise::SUPERVISE_FLAG;
-use crate::supply::Supply;
-use crate::syscalls::host::{
-    CLOCK_GETTIME, CLOCK_NANOSLEEP, GETDENTS64, GETRANDOM, MKDIRAT, OPENAT, RECVMSG, RENAMEAT,
-    SENDMSG, UNLINKAT,
-};
+use crate::syscalls::host::{RECVMSG, SENDMSG};
 
 /// How long the launcher may take to start.
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -142,15 +138,12 @@ pub struct Started {
     stdout: tokio::task::JoinHandle<io::Result<Vec<u8>>>,
     stderr: tokio::task::JoinHandle<io::Result<Vec<u8>>>,
     overflowed: mpsc::Receiver<()>,
-    supervisor: Option<(tokio::process::Child, SupervisorLines)>,
     broker: Option<Brokered>,
     connected: Connected,
     /// The fresh working folder to read back, when it isn't one of the user's.
     work: Option<std::path::PathBuf>,
     _scratch: tempfile::TempDir,
 }
-
-type SupervisorLines = tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>;
 
 /// A program's broker while the program runs: its service, which ends when the program does, and
 /// what the program has told it.
@@ -267,21 +260,13 @@ impl Started {
         self.connected.held.clear();
         let stdout = self.stdout.await.map_err(io::Error::other)??;
         let stderr = self.stderr.await.map_err(io::Error::other)??;
-        let (supplied, random_asked, listed) = match (self.supervisor.as_mut(), self.broker.take())
-        {
-            (Some((supervisor, lines)), _) => match supervisor_verdict(supervisor, lines).await {
-                Ok((asked, listed)) => (None, Some(asked), listed),
-                Err(problem) => (Some(problem), None, false),
-            },
+        let (supplied, random_asked, listed) = match self.broker.take() {
             // The program ended, so its end of the channel has closed and the service with it.
-            (
-                None,
-                Some(Brokered {
-                    service,
-                    notes,
-                    random,
-                }),
-            ) => {
+            Some(Brokered {
+                service,
+                notes,
+                random,
+            }) => {
                 let outcome = tokio::task::spawn_blocking(move || service.join())
                     .await
                     .map_err(io::Error::other)?;
@@ -302,7 +287,7 @@ impl Started {
                     notes.listed(),
                 )
             }
-            (None, None) => (None, None, false),
+            None => (None, None, false),
         };
         let [instructions, cycles, cpu_time_ns] =
             self.counters.each_mut().map(|counter| match end {
@@ -371,7 +356,6 @@ pub async fn start(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<
         mut child,
         pid,
         port,
-        supervisor,
         broker,
         counters,
         connected,
@@ -435,7 +419,6 @@ pub async fn start(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<
         stdout,
         stderr,
         overflowed,
-        supervisor,
         broker,
         connected,
         work: job.folder.is_none().then_some(work),
@@ -475,7 +458,6 @@ pub async fn attached(launcher: &Path, job: Job<'_>) -> io::Result<End> {
         mut child,
         pid,
         port,
-        supervisor,
         mut connected,
         ..
     } = launch_job(launcher, &job, &limits, &folder, scratch.path(), streams).await?;
@@ -515,9 +497,6 @@ pub async fn attached(launcher: &Path, job: Job<'_>) -> io::Result<End> {
         relay.finish().await;
     }
     connected.held.clear();
-    if let Some((mut supervisor, _)) = supervisor {
-        let _ = supervisor.wait().await;
-    }
     if let Some(terminal) = terminal {
         let _ = rustix::termios::tcsetattr(
             std::io::stdin(),
@@ -532,12 +511,11 @@ pub async fn attached(launcher: &Path, job: Job<'_>) -> io::Result<End> {
 }
 
 /// The launcher, confined and told to become the program, with its process id, the port it
-/// serves on if it serves, the supervisor tracing it if one does, and its counters.
+/// serves on if it serves, the broker serving it if one does, and its counters.
 struct Launched {
     child: tokio::process::Child,
     pid: i32,
     port: Option<u16>,
-    supervisor: Option<(tokio::process::Child, SupervisorLines)>,
     broker: Option<Brokered>,
     counters: [Option<Counter>; 3],
     connected: Connected,
@@ -580,56 +558,6 @@ async fn launch_job(
             Err(problem) => Some(tokio::spawn(async move { Err(problem) })),
         });
     }
-    // A program with a channel is served by the broker; the supervisor follows the rest.
-    let supply = job
-        .supply
-        .filter(|supply| !supply.is_empty() && !job.emulated && !job.channel);
-    // The calls the supply answers stop for the supervisor; the rest run as in any test.
-    let mut traced = supply.map_or_else(Vec::new, |supply| {
-        let mut traced = Vec::new();
-        if supply.random.is_some() {
-            traced.push(GETRANDOM);
-        }
-        if !supply.clock.is_empty() {
-            traced.push(CLOCK_GETTIME);
-        }
-        traced
-    });
-    // A test's sleeps end at once; a real run's take as long as they say.
-    let sleeps = job.supply.is_some()
-        && !job.emulated
-        && !job.channel
-        && job
-            .syscalls
-            .iter()
-            .any(|allowed| allowed.number == CLOCK_NANOSLEEP);
-    if sleeps {
-        traced.push(CLOCK_NANOSLEEP);
-    }
-    // A program that uses files has its names held to what every system takes, and its listings
-    // watched, by the supervisor, in tests and real runs alike, where it can follow them.
-    let files = !job.emulated
-        && !job.channel
-        && crate::supervise::AVAILABLE
-        && job
-            .syscalls
-            .iter()
-            .any(|allowed| FILE_CALLS.contains(&allowed.number));
-    if files {
-        traced.extend(
-            FILE_CALLS
-                .into_iter()
-                .filter(|call| job.syscalls.iter().any(|allowed| allowed.number == *call)),
-        );
-    }
-    let watched = supply.is_some() || sleeps || files;
-    let nothing_supplied = Supply::default();
-    let supply = supply.or_else(|| (sleeps || files).then_some(&nothing_supplied));
-    let mode = match (files, job.reversed) {
-        (false, _) => "plain",
-        (true, false) => "files",
-        (true, true) => "files reversed",
-    };
     let syscalls: Vec<String> = if job.emulated {
         vec![EMULATED.to_owned()]
     } else {
@@ -639,7 +567,6 @@ async fn launch_job(
             // The edge looks for its channel at its first need. Where lengua gave it none the
             // look finds nothing, which the kernel lets it do on that descriptor alone.
             .chain([SENDMSG, RECVMSG].map(|number| format!("{number}:channel")))
-            .chain(traced.iter().map(|number| format!("{number}:trace")))
             .collect()
     };
     let file_limit = limits
@@ -654,30 +581,12 @@ async fn launch_job(
     } else {
         (None, None)
     };
-    let mut supervisor = match supply.filter(|_| watched) {
-        None => None,
-        Some(_) => Some(
-            Command::new(launcher)
-                .arg(SUPERVISE_FLAG)
-                .env_clear()
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .kill_on_drop(true)
-                .spawn()?,
-        ),
-    };
-    let tracer = supervisor
-        .as_ref()
-        .and_then(tokio::process::Child::id)
-        .map_or_else(|| "none".to_owned(), |pid| pid.to_string());
     let [input, output, errors] = streams;
     let mut child = Command::new(launcher)
         .arg(LAUNCH_FLAG)
         .arg(&socket)
         .arg(syscalls.join(","))
         .arg(file_limit)
-        .arg(tracer)
         .arg(if job.channel {
             format!("{};channel", net.encode())
         } else {
@@ -719,14 +628,6 @@ async fn launch_job(
         go.read_exact(&mut bytes).await?;
         port = Some(u16::from_be_bytes(bytes));
     }
-    // The launcher has let the supervisor trace it; now it may, before the program starts.
-    let supervisor = match (supervisor.take(), supply) {
-        (Some(mut supervisor), Some(supply)) => {
-            let lines = attach_supervisor(&mut supervisor, pid, mode, supply).await?;
-            Some((supervisor, lines))
-        }
-        _ => None,
-    };
     // Count from the program's exec to its exit; unavailable when the system doesn't allow
     // performance counters, and not counted under QEMU, whose instructions they'd be.
     let counters = if job.emulated {
@@ -786,7 +687,6 @@ async fn launch_job(
         child,
         pid,
         port,
-        supervisor,
         broker,
         counters,
         connected,
@@ -880,66 +780,6 @@ async fn send_go(
         }
     }
 }
-
-/// Gives the supervisor the launcher's process id and the supply, and waits until it traces the
-/// launcher. Returns the reader of its last word.
-async fn attach_supervisor(
-    supervisor: &mut tokio::process::Child,
-    launcher: i32,
-    mode: &str,
-    supply: &Supply,
-) -> io::Result<SupervisorLines> {
-    use tokio::io::AsyncBufReadExt as _;
-    let mut input = supervisor
-        .stdin
-        .take()
-        .ok_or_else(|| io::Error::other("no supervisor stdin"))?;
-    input
-        .write_all(format!("{launcher}\n{mode}\n{}", supply.encode()).as_bytes())
-        .await?;
-    drop(input);
-    let output = supervisor
-        .stdout
-        .take()
-        .ok_or_else(|| io::Error::other("no supervisor stdout"))?;
-    let mut lines = tokio::io::BufReader::new(output).lines();
-    let first = tokio::time::timeout(LAUNCH_TIMEOUT, lines.next_line())
-        .await
-        .map_err(|_| io::Error::other("lengua's test supervisor didn't start"))??;
-    match first.as_deref() {
-        Some("attached") => Ok(lines),
-        Some(line) => Err(io::Error::other(
-            line.strip_prefix("error: ").unwrap_or(line).to_owned(),
-        )),
-        None => Err(io::Error::other(
-            "lengua's test supervisor ended before the program started",
-        )),
-    }
-}
-
-/// What the supervisor found once the program ended: how many random bytes the program asked
-/// for and whether it listed a folder, or what went wrong.
-async fn supervisor_verdict(
-    supervisor: &mut tokio::process::Child,
-    lines: &mut SupervisorLines,
-) -> Result<(usize, bool), String> {
-    let last = tokio::time::timeout(LAUNCH_TIMEOUT, lines.next_line()).await;
-    let _ = supervisor.kill().await;
-    let found = |line: &str| -> Option<(usize, bool)> {
-        let (asked, listed) = line.strip_prefix("ok ")?.split_once(' ')?;
-        Some((asked.parse().ok()?, listed == "1"))
-    };
-    match last {
-        Ok(Ok(Some(line))) => {
-            found(&line).ok_or_else(|| line.strip_prefix("error: ").unwrap_or(&line).to_owned())
-        }
-        _ => Err("lengua's test supervisor stopped before the program ended".into()),
-    }
-}
-
-/// The file calls whose names lengua's supervisor holds to what every system takes, and the
-/// listing it watches.
-const FILE_CALLS: [i64; 5] = [OPENAT, MKDIRAT, UNLINKAT, RENAMEAT, GETDENTS64];
 
 /// A program's environment as the launcher's argument: each `NAME=value` in hex, joined by
 /// commas, or `none`. Only the program gets it, never the launcher, which runs before its
@@ -1057,15 +897,14 @@ async fn read_capped(
 
 /// Launcher mode: waits for the server's go signal on `socket`, confines itself, then becomes
 /// the program with an empty environment. Arguments: the socket, the allowed system call numbers
-/// separated by commas, the file size limit in bytes (or `none`), the supervisor's process id
-/// (or `none`), the program, then the program's arguments.
+/// separated by commas, the file size limit in bytes (or `none`), the network setting, the
+/// environment, the program, then the program's arguments.
 #[must_use]
 pub fn launch(mut args: impl Iterator<Item = OsString>) -> ExitCode {
     let (
         Some(socket),
         Some(syscalls),
         Some(file_limit),
-        Some(tracer),
         Some(network),
         Some(environment),
         Some(program),
@@ -1076,12 +915,11 @@ pub fn launch(mut args: impl Iterator<Item = OsString>) -> ExitCode {
         args.next(),
         args.next(),
         args.next(),
-        args.next(),
     )
     else {
         eprintln!(
-            "lengua-mcp: {LAUNCH_FLAG} needs a socket, system calls, a file limit, a supervisor, \
-             a network setting, an environment and a program"
+            "lengua-mcp: {LAUNCH_FLAG} needs a socket, system calls, a file limit, a network \
+             setting, an environment and a program"
         );
         return ExitCode::from(127);
     };
@@ -1110,17 +948,6 @@ pub fn launch(mut args: impl Iterator<Item = OsString>) -> ExitCode {
             return ExitCode::from(127);
         }
     };
-    // Only the test's supervisor may trace the program, even where the system restricts tracing.
-    let supervisor = tracer
-        .to_str()
-        .and_then(|pid| pid.parse::<i32>().ok())
-        .and_then(rustix::process::Pid::from_raw);
-    if let Some(pid) = supervisor
-        && let Err(error) = rustix::process::set_ptracer(rustix::process::PTracer::ProcessID(pid))
-    {
-        eprintln!("lengua-mcp: couldn't let the supervisor trace the program: {error}");
-        return ExitCode::from(127);
-    }
     let signalled = std::os::unix::net::UnixStream::connect(&socket).and_then(|mut stream| {
         if let Some(listener) = &listener {
             stream.write_all(&listener.local_addr()?.port().to_be_bytes())?;
@@ -1166,11 +993,10 @@ pub fn launch(mut args: impl Iterator<Item = OsString>) -> ExitCode {
         return ExitCode::from(127);
     }
     let confined = parse_confinement(&syscalls, &file_limit).and_then(
-        |(syscalls, traced, file_limit, emulated)| {
+        |(syscalls, file_limit, emulated)| {
             confine(
                 Path::new(&program),
                 &syscalls,
-                &traced,
                 file_limit,
                 &net,
                 emulated,
@@ -1383,9 +1209,9 @@ fn listen_on_fd3(port: u16, anywhere: bool) -> Result<std::net::TcpListener, Str
     Ok(listener)
 }
 
-/// The launcher's confinement: the calls allowed, the calls the supervisor answers, the file
-/// size limit, and whether QEMU's user mode runs the program.
-type Confinement = (Vec<Allowed>, Vec<i64>, Option<u64>, bool);
+/// The launcher's confinement: the calls allowed, the file size limit, and whether QEMU's user
+/// mode runs the program.
+type Confinement = (Vec<Allowed>, Option<u64>, bool);
 
 /// The system call list the launcher gets for a program QEMU's user mode runs: the kernel sees
 /// QEMU's calls, not the program's, so it can't hold the program to its spec's.
@@ -1436,26 +1262,15 @@ const NEVER_EMULATED: [i64; 37] = [
     nix::libc::SYS_clock_settime,
 ];
 
-/// Reads the launcher's system call list ("0,1,56:3477248,318:trace": a number and, after a
-/// colon, the only first argument allowed, or `trace` for a call the supervisor answers; or
-/// [`EMULATED`]) and file limit ("1048576" or "none").
+/// Reads the launcher's system call list ("0,1,56:3477248,4352:channel": a number and, after a
+/// colon, the only first argument allowed or the name of a pin; or [`EMULATED`]) and file limit ("1048576" or "none").
 fn parse_confinement(syscalls: &OsString, file_limit: &OsString) -> Result<Confinement, String> {
     let syscalls = syscalls.to_string_lossy();
     let emulated = syscalls == EMULATED;
     let syscalls = if emulated { "".into() } else { syscalls };
-    let mut traced = Vec::new();
-    for entry in syscalls.split(',') {
-        if let Some(number) = entry.strip_suffix(":trace") {
-            traced.push(
-                number
-                    .parse()
-                    .map_err(|_| format!("{entry:?} isn't a system call"))?,
-            );
-        }
-    }
     let numbers = syscalls
         .split(',')
-        .filter(|entry| !entry.is_empty() && !entry.ends_with(":trace"))
+        .filter(|entry| !entry.is_empty())
         .map(|entry| {
             let bad = || format!("{entry:?} isn't a system call");
             let (number, pin) = match entry.split_once(':') {
@@ -1476,7 +1291,7 @@ fn parse_confinement(syscalls: &OsString, file_limit: &OsString) -> Result<Confi
                 .map_err(|_| format!("{bytes:?} isn't a file size limit"))?,
         ),
     };
-    Ok((numbers, traced, file_limit, emulated))
+    Ok((numbers, file_limit, emulated))
 }
 
 /// The seccomp rules a pin stands for: any one of them allows the call.
@@ -1552,7 +1367,6 @@ fn pin_rules(pin: Pin) -> Result<Vec<SeccompRule>, seccompiler::BackendError> {
 fn confine(
     program: &Path,
     syscalls: &[Allowed],
-    traced: &[i64],
     file_limit: Option<u64>,
     net: &Handover,
     emulated: bool,
@@ -1654,17 +1468,6 @@ fn confine(
     }
     for number in any {
         rules.insert(number, Vec::new());
-    }
-    // The calls a test's supply answers stop for its supervisor. This filter goes first: once
-    // the next one is in, installing another would be a call it kills. The kernel applies the
-    // stricter answer of the two, so these calls stop, and every other call is as below.
-    if !traced.is_empty() {
-        let stops = traced.iter().map(|number| (*number, Vec::new())).collect();
-        let filter: BpfProgram =
-            SeccompFilter::new(stops, SeccompAction::Allow, SeccompAction::Trace(0), arch)
-                .and_then(TryInto::try_into)
-                .map_err(|error| format!("seccomp: {error}"))?;
-        seccompiler::apply_filter(&filter).map_err(|error| format!("seccomp: {error}"))?;
     }
     let filter = SeccompFilter::new(
         rules,

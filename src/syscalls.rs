@@ -2,8 +2,8 @@
 //! that differ between CPUs, one module each.
 //!
 //! The profile ([`crate::platform`]), the prover's model of the machine ([`crate::prove`]) and the
-//! runtime (the ptrace supervisor [`crate::supervise`] and the sandbox [`crate::runner`]) read
-//! them here, so each target's table lives once; [`host`] is this computer's, for the runtime.
+//! runtime (the sandbox [`crate::runner`]) read them here, so each target's table lives once;
+//! [`host`] is this computer's, for the runtime.
 //! The numbers aren't portable: AArch64's `read` is 63 and x86-64's 0, and AArch64 has no `poll`,
 //! only `ppoll`. macOS and Windows take no direct system calls at all. Each table is pinned
 //! against the kernel's headers and the C library, where this computer has them. See

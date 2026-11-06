@@ -207,10 +207,6 @@ struct Passed {
     header: Header,
     /// QEMU, when it ran the tests for the target's CPU.
     under: Option<String>,
-    /// The tests not run here, each with what it needs that only the supervisor gives.
-    not_run: Vec<String>,
-    /// Why they weren't run here.
-    not_run_why: String,
 }
 
 /// One generated test's proof.
@@ -1195,7 +1191,6 @@ impl LenguaServer {
             testrun::workers(code.spec.threads),
             testrun::Setting {
                 emulated: code.emulator.is_some(),
-                sleeps: code.spec.syscalls.contains(&spec::Syscall::ClockNanosleep),
                 channel: code.channel,
             },
         )
@@ -1248,15 +1243,6 @@ impl LenguaServer {
                 shown: outcome.shown,
                 header,
                 under: code.emulator.as_ref().map(|emulator| emulator.name.clone()),
-                not_run: outcome.not_run,
-                not_run_why: if code.emulator.is_some() {
-                    format!("they need a {} computer", code.profile.name())
-                } else {
-                    format!(
-                        "lengua's supervisor, which they need, doesn't run on {} yet",
-                        code.profile.name()
-                    )
-                },
             });
         }
         checking.stage.send_replace(Stage::Proving(Instant::now()));
@@ -1768,13 +1754,6 @@ impl LenguaServer {
                 "under {emulator}, Landlock held each run to its files and network as on any \
                  run, but the kernel couldn't hold its system calls to the spec, which only \
                  lengua's rules did, and nothing was measured"
-            ));
-        }
-        if !passed.not_run.is_empty() {
-            tests.push(format!(
-                "not run here, since {}: {}",
-                passed.not_run_why,
-                passed.not_run.join("; ")
             ));
         }
         tests.extend(passed.every_value.iter().cloned());

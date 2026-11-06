@@ -133,48 +133,17 @@ pub struct Outcome {
     pub costs: Vec<Cost>,
     /// The first example as it ran, in one line, for a report to show.
     pub shown: Option<String>,
-    /// The tests not run here, each with what it needs that only the target's own CPU gives.
-    pub not_run: Vec<String>,
 }
 
-/// Where the tests run. lengua's supervisor supplies a test's random bytes and clock, ends its
-/// sleeps at once and checks where it connects; it can't follow a program that QEMU's user mode
-/// runs, and runs only on the CPUs whose registers it reads, so where it can't, the tests that
-/// need it aren't run. A program with a channel to lengua's broker needs no supervisor, on any CPU
-/// and under QEMU too. Under QEMU the runs aren't timed either: their instructions are QEMU's.
+/// Where the tests run. lengua's broker supplies a test's random bytes and clock, ends its sleeps at
+/// once and checks the names it uses, over a channel the program inherits, on any CPU and under
+/// QEMU too. Under QEMU the runs aren't timed: their instructions are QEMU's.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Setting {
     /// Whether QEMU's user mode runs the program, for the target's CPU.
     pub emulated: bool,
-    /// Whether the spec lets the program sleep, which a test ends at once.
-    pub sleeps: bool,
     /// Whether lengua's broker serves the program over a channel.
     pub channel: bool,
-}
-
-impl Setting {
-    /// Whether what a test supplies and watches can be done for the program here: its broker
-    /// does it, or the supervisor can follow it.
-    #[must_use]
-    pub fn supervised(self) -> bool {
-        self.channel || (!self.emulated && crate::supervise::AVAILABLE)
-    }
-}
-
-/// What `test` needs that only the supervisor gives, when the supervisor can't follow the
-/// program here.
-fn needs_the_supervisor(test: &Test<'_>, setting: Setting) -> Option<&'static str> {
-    if setting.supervised() {
-        None
-    } else if test.random.is_some() {
-        Some("random bytes the test supplies")
-    } else if !test.clock.is_empty() {
-        Some("a clock the test sets")
-    } else if setting.sleeps {
-        Some("sleeps the test ends at once")
-    } else {
-        None
-    }
 }
 
 impl Outcome {
@@ -688,8 +657,7 @@ const MAX_ANSWER: u64 = 8 * 1024 * 1024;
 ///
 /// A run that listed a folder runs again with each listing turned round: no system promises an
 /// order, each file system has its own, so a result that changes with the order is wrong on
-/// some system, and the test fails. Under QEMU, which the supervisor can't follow, the names the
-/// program left are held to every system's afterwards instead.
+/// some system, and the test fails.
 #[allow(clippy::too_many_arguments)]
 async fn check_one(
     launcher: &Path,
@@ -706,9 +674,6 @@ async fn check_one(
         launcher, program, test, syscalls, network, delivery, assertions, emulated, channel, false,
     )
     .await?;
-    if emulated && problem.is_none() {
-        problem = left_names_problem(&run);
-    }
     if problem.is_none() && run.listed {
         let (_, turned) = check_one_way(
             launcher, program, test, syscalls, network, delivery, assertions, emulated, channel,
@@ -724,19 +689,6 @@ async fn check_one(
         }
     }
     Ok((run, problem))
-}
-
-/// The names a program left that some system refuses, where nothing held its calls to them.
-fn left_names_problem(run: &Run) -> Option<String> {
-    let files = run.files.as_ref().ok()?;
-    files.keys().chain(run.folders.iter()).find_map(|name| {
-        crate::names::broken(name.as_bytes()).map(|broken| {
-            format!(
-                "it left {name}, a name not every system takes: {}",
-                broken.why
-            )
-        })
-    })
 }
 
 /// [`check_one`], once: with each folder listing turned round when `reversed`.
@@ -1379,13 +1331,6 @@ pub async fn run_tests(
                 return Ok(outcome);
             }
             let example = &suite.examples[next];
-            if let Some(why) = needs_the_supervisor(&Test::of_example(example), setting) {
-                outcome
-                    .not_run
-                    .push(format!("example {} ({why})", example.id));
-                next += 1;
-                continue;
-            }
             let test = Owned::Example(example.clone());
             let shared = Arc::clone(&shared);
             let index = next;
@@ -1436,16 +1381,6 @@ pub async fn run_tests(
     // the failure reported is the block's lowest-numbered one.
     for block in &suite.generated {
         let name = format!("generated {}", block.id);
-        if !setting.supervised() {
-            let first = block.case(block.inputs(seed).at(0), crate::expect::now());
-            if let Some(why) = first
-                .ok()
-                .and_then(|case| needs_the_supervisor(&Test::of_case(&case), setting))
-            {
-                outcome.not_run.push(format!("{name} ({why})"));
-                continue;
-            }
-        }
         let total = block.run_count();
         let shared_block = Arc::new(block.clone());
         let mut samples = Samples::default();

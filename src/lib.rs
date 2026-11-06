@@ -33,7 +33,6 @@ pub mod server;
 pub mod skiplog;
 pub mod spec;
 pub mod state;
-pub mod supervise;
 pub mod supply;
 pub mod syscalls;
 pub mod targets;
