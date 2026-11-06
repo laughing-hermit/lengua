@@ -359,33 +359,33 @@ fn sve_model(
     let mut pool = Pool::default();
     let mut state = State::start(image, &mut pool, &[], &[], Vec::new());
     for (slot, value) in values.registers.iter().enumerate() {
-        state.registers[slot] = pool.bv(64, u128::from(*value));
+        state.core.registers[slot] = pool.bv(64, u128::from(*value));
     }
     for (number, bytes) in values.z.iter().enumerate() {
-        let vector = std::rc::Rc::make_mut(&mut state.vectors[number]);
+        let vector = std::rc::Rc::make_mut(&mut state.core.vectors[number]);
         for (at, byte) in bytes.iter().enumerate() {
             vector[at] = pool.bv(8, u128::from(*byte));
         }
     }
     for (number, lanes) in values.p.iter().enumerate() {
-        let predicate = std::rc::Rc::make_mut(&mut state.predicates[number]);
+        let predicate = std::rc::Rc::make_mut(&mut state.core.predicates[number]);
         for (at, lane) in lanes.iter().enumerate() {
             predicate[at] = pool.boolean(*lane);
         }
     }
     let bit = |pool: &mut Pool, mask: u64| pool.boolean(values.nzcv & mask != 0);
-    state.sign = bit(&mut pool, 1 << 31);
-    state.zero = bit(&mut pool, 1 << 30);
-    state.carry = bit(&mut pool, 1 << 29);
-    state.overflow = bit(&mut pool, 1 << 28);
-    state.last = Last::Other;
+    state.core.sign = bit(&mut pool, 1 << 31);
+    state.core.zero = bit(&mut pool, 1 << 30);
+    state.core.carry = bit(&mut pool, 1 << 29);
+    state.core.overflow = bit(&mut pool, 1 << 28);
+    state.core.last = Last::Other;
     for (word, value) in values.cell.iter().enumerate() {
         let value = pool.bv(64, u128::from(*value));
-        state.store(&mut pool, cell_address + 8 * word as u64, value);
+        state.core.store(&mut pool, cell_address + 8 * word as u64, value);
     }
-    state.rip = start;
+    state.core.rip = start;
     let mut steps = 0;
-    while state.rip != end {
+    while state.core.rip != end {
         steps += 1;
         if steps > 16 {
             return Err("the model ran past the probe".into());
@@ -402,12 +402,13 @@ fn sve_model(
         pool.constant(term)
             .ok_or_else(|| format!("the model doesn't know {what}"))
     };
-    let registers = state.registers[..REGISTERS]
+    let core = &state.core;
+    let registers = core.registers[..REGISTERS]
         .iter()
         .enumerate()
         .map(|(slot, term)| known(&pool, *term, &format!("x{slot}")))
         .collect::<Result<_, _>>()?;
-    let flags = [state.sign, state.zero, state.carry, state.overflow]
+    let flags = [core.sign, core.zero, core.carry, core.overflow]
         .iter()
         .zip(FLAGS)
         .map(|(flag, (_, name))| {
@@ -417,7 +418,7 @@ fn sve_model(
         .collect::<Result<_, _>>()?;
     let mut cell = Vec::with_capacity(CELL_WORDS * 8);
     for at in 0..(CELL_WORDS * 8) as u64 {
-        let term = state
+        let term = core
             .memory
             .get(cell_address + at)
             .ok_or("the model lost a byte of the cell")?;
@@ -425,7 +426,7 @@ fn sve_model(
     }
     let mut z = Vec::new();
     for number in 0..SVE_REGISTERS {
-        let bytes = state.vectors[number][..vl]
+        let bytes = core.vectors[number][..vl]
             .iter()
             .map(|term| known(&pool, *term, &format!("z{number}")).map(|byte| byte as u8))
             .collect::<Result<Vec<u8>, _>>()?;
@@ -433,7 +434,7 @@ fn sve_model(
     }
     let mut p = Vec::new();
     for number in 0..SVE_REGISTERS {
-        let lanes = state.predicates[number][..vl]
+        let lanes = core.predicates[number][..vl]
             .iter()
             .map(|term| {
                 pool.truth(*term)

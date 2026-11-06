@@ -28,7 +28,7 @@ impl Cpu<'_> {
     /// instruction.
     pub(super) fn edge_call(&mut self, op: Op) -> Result<Step, Stop> {
         let convention = Convention::of(self.image.isa);
-        let given = convention.arguments.map(|slot| self.state.registers[slot]);
+        let given = convention.arguments.map(|slot| self.core.registers[slot]);
         let fdcwd = self.pool.bv(64, u128::from(AT_FDCWD));
         match op {
             // The same arguments as the system call's.
@@ -96,7 +96,7 @@ impl Cpu<'_> {
             }
             Op::List => {
                 let descriptor = self.constant(given[0])? & 0xffff_ffff;
-                if !self.state.open.contains_key(&descriptor) {
+                if !self.world.open.contains_key(&descriptor) {
                     return self.finish(op, (-EBADF).cast_unsigned());
                 }
                 Err(unsupported(
@@ -108,7 +108,7 @@ impl Cpu<'_> {
                 if descriptor <= 2 {
                     return self.finish(op, (-ESPIPE).cast_unsigned());
                 }
-                if !self.state.open.contains_key(&descriptor) {
+                if !self.world.open.contains_key(&descriptor) {
                     return self.finish(op, (-EBADF).cast_unsigned());
                 }
                 Err(unsupported(
@@ -117,9 +117,9 @@ impl Cpu<'_> {
             }
             Op::Mkdir => {
                 let name = self.name_at(fdcwd, 0, "os_mkdir")?;
-                let result = match self.state.refused(&name, true, false) {
+                let result = match self.world.refused(&name, true, false) {
                     Some(errno) => (-errno).cast_unsigned(),
-                    None => self.make_folder(name),
+                    None => self.world.make_folder(name),
                 };
                 self.finish(op, result)
             }
@@ -129,9 +129,10 @@ impl Cpu<'_> {
                     return self.finish(op, (-EINVAL).cast_unsigned());
                 }
                 let name = self.name_at(fdcwd, 0, "os_remove")?;
-                let result = match self.state.refused(&name, false, true) {
+                let flags = if kind == 1 { AT_REMOVEDIR } else { 0 };
+                let result = match self.world.refused(&name, false, true) {
                     Some(errno) => (-errno).cast_unsigned(),
-                    None => self.remove(name, if kind == 1 { AT_REMOVEDIR } else { 0 })?,
+                    None => self.world.remove(name, flags)?,
                 };
                 self.finish(op, result)
             }
@@ -139,12 +140,12 @@ impl Cpu<'_> {
                 let from = self.name_at(fdcwd, 0, "os_rename")?;
                 let to = self.name_at(fdcwd, 1, "os_rename")?;
                 let refused = self
-                    .state
+                    .world
                     .refused(&from, false, true)
-                    .or_else(|| self.state.refused(&to, true, true));
+                    .or_else(|| self.world.refused(&to, true, true));
                 let result = match refused {
                     Some(errno) => (-errno).cast_unsigned(),
-                    None => self.rename(from, to)?,
+                    None => self.world.rename(from, to)?,
                 };
                 self.finish(op, result)
             }
@@ -176,18 +177,18 @@ impl Cpu<'_> {
             .iter()
             .map(|(position, _)| {
                 let slot = slots[*position];
-                (slot, self.state.registers[slot], self.state.owners[slot])
+                (slot, self.core.registers[slot], self.core.owners[slot])
             })
             .collect();
         for (position, value) in fixed {
             let slot = slots[*position];
-            self.state.registers[slot] = self.pool.bv(64, u128::from(*value));
-            self.state.owners[slot] = None;
+            self.core.registers[slot] = self.pool.bv(64, u128::from(*value));
+            self.core.owners[slot] = None;
         }
         let step = self.perform(Some(call), u128::from(number));
         for (slot, term, owner) in kept {
-            self.state.registers[slot] = term;
-            self.state.owners[slot] = owner;
+            self.core.registers[slot] = term;
+            self.core.owners[slot] = owner;
         }
         let step = step?;
         self.normalize(op);
@@ -196,7 +197,7 @@ impl Cpu<'_> {
 
     /// The operation's `result`, and on to the next instruction.
     fn finish(&mut self, op: Op, result: u64) -> Result<Step, Stop> {
-        self.state.returns(self.pool, result, self.next);
+        self.core.returns(self.pool, result, self.next);
         self.normalize(op);
         Ok(Step::Next)
     }
@@ -206,7 +207,7 @@ impl Cpu<'_> {
     fn normalize(&mut self, op: Op) {
         let Some(value) = self
             .pool
-            .constant(self.state.registers[0])
+            .constant(self.core.registers[0])
             .and_then(|value| u64::try_from(value).ok())
         else {
             return;
@@ -217,7 +218,7 @@ impl Cpu<'_> {
             .filter(|errno| (1..=4095).contains(errno))
             && !u32::try_from(errno).is_ok_and(|errno| op.errors().contains(&errno))
         {
-            self.state.registers[0] = self.pool.bv(64, (-EIO).cast_unsigned().into());
+            self.core.registers[0] = self.pool.bv(64, (-EIO).cast_unsigned().into());
         }
     }
 
@@ -226,13 +227,12 @@ impl Cpu<'_> {
         let descriptor = self.constant(given[0])? & 0xffff_ffff;
         let out = self.constant(given[1])?;
         self.lent(1, out, 16, true, "os_info")?;
-        let Some(open) = self.state.open.get(&descriptor).cloned() else {
+        let Some(size) = self.world.size_of_open(descriptor) else {
             if descriptor <= 2 {
                 return Err(unsupported("the details of standard input or output"));
             }
             return Ok((-EBADF).cast_unsigned());
         };
-        let size = self.state.file(&open.name).map_or(0, <[Term]>::len);
         let size = self.pool.bv(64, size as u128);
         let file = self.pool.bv(64, u128::from(kind::FILE));
         self.save(out, size)?;

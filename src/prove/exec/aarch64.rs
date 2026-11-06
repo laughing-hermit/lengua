@@ -175,7 +175,7 @@ impl Cpu<'_> {
                     }
                     self.call_a64(target)?;
                 } else {
-                    self.state.rip = target;
+                    self.core.rip = target;
                 }
                 Ok(Step::Next)
             }
@@ -336,7 +336,7 @@ impl Cpu<'_> {
         let Some(slot) = slot(register) else {
             return self.pool.bv(bits(register), 0);
         };
-        let whole = self.state.registers[slot];
+        let whole = self.core.registers[slot];
         if register.wide {
             whole
         } else {
@@ -356,7 +356,7 @@ impl Cpu<'_> {
         } else {
             value
         };
-        self.state.registers[slot] = value;
+        self.core.registers[slot] = value;
     }
 
     /// `value` widened by `by` bits, with copies of its sign or with zeros.
@@ -455,11 +455,11 @@ impl Cpu<'_> {
                 let both = self.pool.and(a_result, b_result);
                 self.pool.slt(both, zero)
             };
-            self.state.sign = self.pool.slt(result, zero);
-            self.state.zero = self.pool.eq(result, zero);
-            self.state.carry = carry;
-            self.state.overflow = overflow;
-            self.state.last = if sub {
+            self.core.sign = self.pool.slt(result, zero);
+            self.core.zero = self.pool.eq(result, zero);
+            self.core.carry = carry;
+            self.core.overflow = overflow;
+            self.core.last = if sub {
                 Last::Compare(a, b)
             } else {
                 Last::Other
@@ -478,11 +478,11 @@ impl Cpu<'_> {
         if op == Logic::Ands {
             let width = self.pool.width(result);
             let zero = self.pool.bv(width, 0);
-            self.state.sign = self.pool.slt(result, zero);
-            self.state.zero = self.pool.eq(result, zero);
-            self.state.carry = self.pool.boolean(false);
-            self.state.overflow = self.pool.boolean(false);
-            self.state.last = Last::Logic(result);
+            self.core.sign = self.pool.slt(result, zero);
+            self.core.zero = self.pool.eq(result, zero);
+            self.core.carry = self.pool.boolean(false);
+            self.core.overflow = self.pool.boolean(false);
+            self.core.last = Last::Logic(result);
         }
         self.set_x(rd, result);
     }
@@ -726,7 +726,7 @@ impl Cpu<'_> {
         }
         // After `cmp` a condition is a plain comparison of its operands, and after `tst` one of
         // its result, which value ranges can often settle without the solver.
-        match self.state.last {
+        match self.core.last {
             Last::Compare(a, b) => {
                 let found = match cond {
                     A64Cond::Eq => Some(pool.eq(a, b)),
@@ -775,7 +775,7 @@ impl Cpu<'_> {
             }
             Last::Other => {}
         }
-        let state = &*self.state;
+        let state = &*self.core;
         let (n, z, c, v) = (state.sign, state.zero, state.carry, state.overflow);
         let both = pool.bool_and(n, v);
         let not_n = pool.bool_not(n);
@@ -812,13 +812,13 @@ impl Cpu<'_> {
     fn branch_if(&mut self, condition: Term, target: u64) -> Step {
         match self.pool.truth(condition) {
             Some(true) => {
-                self.state.rip = target;
+                self.core.rip = target;
                 Step::Next
             }
             Some(false) => Step::Next,
             None => {
-                let other = self.state.clone();
-                self.state.rip = target;
+                let other = self.fork();
+                self.core.rip = target;
                 Step::Split(condition, Box::new(other))
             }
         }
@@ -827,19 +827,19 @@ impl Cpu<'_> {
     /// `bl target`: the return address in x30, and a call that hasn't saved it anywhere yet.
     fn call_a64(&mut self, target: u64) -> Result<(), Stop> {
         let back = self.next;
-        self.state.registers[LINK] = self.pool.bv(64, u128::from(back));
-        let top = self.constant(self.state.registers[SP])?;
+        self.core.registers[LINK] = self.pool.bv(64, u128::from(back));
+        let top = self.constant(self.core.registers[SP])?;
         self.image.enter(target);
-        self.state.calls += 1;
-        self.state.returns.push(Return {
+        self.core.calls += 1;
+        self.core.returns.push(Return {
             top,
             pushed: 0,
             saved: None,
             back,
             callee: target,
-            frame: self.state.calls,
+            frame: self.core.calls,
         });
-        self.state.rip = target;
+        self.core.rip = target;
         Ok(())
     }
 
@@ -847,8 +847,8 @@ impl Cpu<'_> {
     fn return_a64(&mut self, rn: A64Reg) -> Result<Step, Stop> {
         let target = self.x(rn);
         let target = self.constant(target)?;
-        let sp = self.constant(self.state.registers[SP])?;
-        match self.state.returns.pop() {
+        let sp = self.constant(self.core.registers[SP])?;
+        match self.core.returns.pop() {
             Some(back) if back.back == target && back.top == sp => {}
             _ => {
                 return Err(End::Unsafe(format!(
@@ -857,7 +857,7 @@ impl Cpu<'_> {
                 )));
             }
         }
-        self.state.rip = target;
+        self.core.rip = target;
         Ok(Step::Next)
     }
 
@@ -918,12 +918,12 @@ impl Cpu<'_> {
         if slot == SP && !indexed {
             return None;
         }
-        if let Some(owner) = self.state.owner_of_slot(slot, SP) {
+        if let Some(owner) = self.core.owner_of_slot(slot, SP) {
             return Some(Held::Owner(owner));
         }
         let pointer = self
             .pool
-            .constant(self.state.registers[slot])
+            .constant(self.core.registers[slot])
             .and_then(|value| u64::try_from(value).ok())?;
         self.object(pointer, pointer)
             .is_some()
@@ -973,7 +973,7 @@ impl Cpu<'_> {
             && slot(from) == Some(LINK)
             && from.wide
             && let Some(known) = self.pool.constant(value)
-            && let Some(back) = self.state.returns.last_mut()
+            && let Some(back) = self.core.returns.last_mut()
             && back.saved.is_none()
             && known == u128::from(back.back)
         {
@@ -1050,7 +1050,7 @@ impl Cpu<'_> {
             if !register.wide {
                 return None;
             }
-            cpu.state.owner_of_slot(slot, SP)
+            cpu.core.owner_of_slot(slot, SP)
         };
         let set = |plan: &mut Plan, register: A64Reg, owner: Option<Owner>| {
             if let Some(slot) = slot(register)
@@ -1064,7 +1064,7 @@ impl Cpu<'_> {
         let value = |cpu: &Self, register: A64Reg| {
             slot(register).and_then(|slot| {
                 cpu.pool
-                    .constant(cpu.state.registers[slot])
+                    .constant(cpu.core.registers[slot])
                     .and_then(|value| u64::try_from(value).ok())
             })
         };
@@ -1128,11 +1128,11 @@ impl Cpu<'_> {
                     set(
                         &mut plan,
                         rt,
-                        at.and_then(|at| self.state.pointers.get(&at).copied()),
+                        at.and_then(|at| self.core.pointers.get(&at).copied()),
                     );
                 } else if let (Some(at), Some(owner), Some(slot)) = (at, owner(self, rt), slot(rt))
                 {
-                    plan.stores[0] = Some((at, self.state.registers[slot], owner));
+                    plan.stores[0] = Some((at, self.core.registers[slot], owner));
                 }
                 if let Some(base) = moved_base(address) {
                     set(&mut plan, base, owner(self, base));
@@ -1149,15 +1149,11 @@ impl Cpu<'_> {
                     for (number, register) in [rt, rt2].into_iter().enumerate() {
                         let place = at + 8 * number as u64;
                         if load {
-                            set(
-                                &mut plan,
-                                register,
-                                self.state.pointers.get(&place).copied(),
-                            );
+                            set(&mut plan, register, self.core.pointers.get(&place).copied());
                         } else if let (Some(owner), Some(slot)) =
                             (owner(self, register), slot(register))
                         {
-                            plan.stores[number] = Some((place, self.state.registers[slot], owner));
+                            plan.stores[number] = Some((place, self.core.registers[slot], owner));
                         }
                     }
                 }
@@ -1192,7 +1188,7 @@ impl Cpu<'_> {
         let value = |register: A64Reg| {
             slot(register).and_then(|slot| {
                 self.pool
-                    .constant(self.state.registers[slot])
+                    .constant(self.core.registers[slot])
                     .and_then(|value| u64::try_from(value).ok())
             })
         };

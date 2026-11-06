@@ -31,11 +31,12 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
-use super::exec::induction::{Fold, Hook, PhaseFold};
+use super::exec::induction::{Fold, Hook, PhaseFold, Slot};
 use super::exec::{self, End, Image, State};
 use super::formula::{self, Formula, WIDTH};
 use super::smt::Answer;
 use super::term::{Pool, Term};
+use super::world::Arrival;
 use super::{
     Budget, Known, MAX_CHOICES, Solvers, Witnessed, conjuncts, disjuncts, settled, text_is,
 };
@@ -208,25 +209,25 @@ fn streamed<'a>(image: &Image, block: &'a Generated) -> Result<Streamed<'a>, Str
 }
 
 /// What the count `expr`, the output's placeholder at `placeholder`, adds for `piece` from where
-/// the run stood at the head, whose registers were `at_head`: as from a text's start, or, for a
-/// part that overlaps itself, from the phase the head's phase register stands for.
+/// the run stood at the head, `at_head`: as from a text's start, or, for a part that overlaps
+/// itself, from the phase the head's phase slot stands for.
 fn grown_by(
     pool: &mut Pool,
     streamed: &Streamed<'_>,
     hook: &Hook,
-    at_head: &[Term],
+    at_head: &Arrival,
     (placeholder, expr): (usize, &Expr),
     piece: &[Term],
 ) -> Result<Term, String> {
     let Some(part) = phased_part(streamed, placeholder) else {
         return counted(pool, expr, streamed.name, piece);
     };
-    let (register, fold) = hook
+    let (slot, fold) = hook
         .phases
         .iter()
         .find(|(_, fold)| fold.placeholder == placeholder)
         .ok_or("a count of a part that overlaps itself whose phase no register keeps")?;
-    let phase = fold.phase(pool, at_head[*register], part.len());
+    let phase = fold.phase(pool, at_head.held(*slot), part.len());
     let texts = BTreeMap::from([(streamed.name.to_owned(), piece.to_vec())]);
     match formula::count_from(pool, expr, &texts, &phase)? {
         Formula::Number(number) => Ok(number.term),
@@ -234,22 +235,22 @@ fn grown_by(
     }
 }
 
-/// That each phase register, which held `at_head` at the head, holds one of its values after
-/// the time round, standing for the phase the formula's matcher is in after `piece`.
+/// That each phase slot of `run`, which held what `at_head` says at the head, holds one of its
+/// values after the time round, standing for the phase the formula's matcher is in after
+/// `piece`.
 fn phases_kept(
     pool: &mut Pool,
     streamed: &Streamed<'_>,
     hook: &Hook,
-    at_head: &[Term],
-    now: &[Term],
+    (at_head, run): (&Arrival, &State),
     piece: &[Term],
 ) -> Result<Term, String> {
     let mut checks = Vec::new();
-    for (register, fold) in &hook.phases {
+    for (slot, fold) in &hook.phases {
         let part = phased_part(streamed, fold.placeholder).ok_or("a phase of no count")?;
-        let before = fold.phase(pool, at_head[*register], part.len());
+        let before = fold.phase(pool, at_head.held(*slot), part.len());
         let (_, after) = formula::matches_from(pool, piece, part, &before);
-        let value = now[*register];
+        let value = run.held(*slot);
         checks.push(fold.holds(pool, value));
         let kept = fold.phase(pool, value, part.len());
         for (said, wanted) in kept.conditions().iter().zip(after.conditions()) {
@@ -291,6 +292,7 @@ fn phase_states(
     use rand::{RngExt, SeedableRng};
     // Every byte the run's input holds, the buffer-full and what's past it alike.
     let names: Vec<String> = run
+        .world
         .stdin_bytes()
         .iter()
         .map(|byte| pool.name(*byte).map(str::to_owned))
@@ -315,6 +317,7 @@ fn phase_states(
             .zip(bytes.iter().map(|byte| u128::from(*byte)))
             .collect();
         if run
+            .world
             .path
             .iter()
             .any(|condition| pool.evaluate(*condition, &values) != Some(1))
@@ -365,7 +368,8 @@ fn added(
 /// The run's standard input held to `characters`, byte by byte: the facts a question that
 /// finds inputs is asked again with, so its inputs are ones the idea can give.
 fn held(pool: &mut Pool, run: &State, characters: &[u8]) -> Vec<Term> {
-    run.stdin_bytes()
+    run.world
+        .stdin_bytes()
         .iter()
         .map(|byte| pool.is_one_of(*byte, characters))
         .collect()
@@ -382,21 +386,21 @@ enum Grows {
     No(Option<Vec<u8>>),
 }
 
-/// Whether the run's `register`, which held `before`, now holds `before` and `count`: the
-/// terms say so, or the solvers find no input with `held` that takes the run where it doesn't.
-/// Where they find one, its bytes `read` come with the answer.
+/// Whether the run's `slot`, which held `before`, now holds `before` and `count`: the terms say
+/// so, or the solvers find no input with `held` that takes the run where it doesn't. Where they
+/// find one, its bytes `read` come with the answer.
 #[allow(clippy::too_many_arguments)]
 fn grows(
     pool: &mut Pool,
     solvers: &mut Solvers,
     budget: &Budget,
     run: &State,
-    (register, before, count): (usize, Term, Term),
+    (slot, before, count): (Slot, Term, Term),
     (held, characters): (&[Term], &[u8]),
     read: &[Term],
 ) -> Result<Grows, String> {
     use rand::{RngExt, SeedableRng};
-    let now = pool.zero_extend(run.register_term(register), WIDTH - 64);
+    let now = pool.zero_extend(run.held(slot), WIDTH - 64);
     let before = pool.zero_extend(before, WIDTH - 64);
     let expected = pool.add(before, count);
     let same = pool.eq(now, expected);
@@ -405,13 +409,14 @@ fn grows(
         Some(false) => return Ok(Grows::No(None)),
         None => {}
     }
-    let mut conditions = run.path.clone();
+    let mut conditions = run.world.path.clone();
     conditions.push(pool.bool_not(same));
     // Most registers a time round changes aren't a count: an input of the text's characters
     // that the run's path allows and that shows this one isn't settles it with no solver.
     let mut rng = rand::rngs::ChaCha8Rng::seed_from_u64(0x6e05_5eed);
     for _ in 0..REFUTING_SAMPLES {
         let mut witness: HashMap<Term, u128> = run
+            .world
             .stdin_bytes()
             .iter()
             .map(|byte| {
@@ -487,7 +492,8 @@ fn explore(
         let runs = exec::explore(image, start, pool, &mut oracle, budget.max_paths)?;
         (runs, oracle.guessed)
     };
-    if guessed && runs.iter().any(|run| run.end == Some(End::TooManyPaths)) {
+    let too_many = Some(End::TooManyPaths);
+    if guessed && runs.iter().any(|run| run.world.end == too_many) {
         let mut oracle = Witnessed::new(solvers, limits, 0, false);
         return exec::explore(image, careful, pool, &mut oracle, budget.max_paths);
     }
@@ -530,73 +536,75 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
         paths += runs.len();
         let mut grown = hook.clone();
         let mut chunk = None;
-        // For counts that look back: the registers that went from a constant to it and the
-        // first buffer-full's count on every run.
-        let mut candidates: Option<BTreeMap<usize, Fold>> = None;
+        // For counts that look back: the slots that went from a constant to it and the first
+        // buffer-full's count on every run.
+        let mut candidates: Option<BTreeMap<Slot, Fold>> = None;
         for run in &runs {
-            if run.end != Some(End::Looped) {
+            if run.world.end != Some(End::Looped) {
                 continue;
             }
             let snapshot = run
+                .world
                 .at_head()
                 .ok_or("a run came back to a head it never left")?;
             // What one buffer-full changes: to the run's end, or to its second time at the
             // head where it reads two.
             let (changes, taken) = if hook.fulls() > 1 {
                 let second = run
+                    .world
                     .at_second()
                     .ok_or("a run read two buffer-fulls without coming back between them")?;
-                let changes = second
-                    .changes
-                    .clone()
+                let changes = run
+                    .changed()
+                    .cloned()
                     .ok_or("a run's first buffer-full left no changes")?;
                 (changes, second.stdin_read - snapshot.stdin_read)
             } else {
                 (
-                    run.changes(snapshot),
-                    run.stdin_taken() - snapshot.stdin_read,
+                    run.changes(),
+                    run.world.stdin_taken() - snapshot.stdin_read,
                 )
             };
             if let Some(why) = changes.other.first() {
                 return Err(why.clone().into());
             }
             let held = held(&mut pool, run, &streamed.characters);
-            let fed = run.stdin_bytes()[snapshot.stdin_read..].to_vec();
+            let fed = run.world.stdin_bytes()[snapshot.stdin_read..].to_vec();
             // A bound counter goes from its start one lower each time round; a count, from its
             // start, by what the buffer-full adds.
             if round == 0 {
-                for register in &changes.registers {
-                    let then = pool.constant(snapshot.registers[*register]);
-                    let now = pool.constant(run.register_term(*register));
+                for slot in &changes.slots {
+                    let then = pool.constant(snapshot.held(*slot));
+                    let now = pool.constant(run.held(*slot));
                     if let (Some(then), Some(now)) = (then, now)
                         && now.wrapping_add(1) == then
                         && then >= 3
                     {
-                        grown.counters.insert(*register, then);
+                        grown.counters.insert(*slot, then);
                     }
                 }
                 if let Output::Counts(counts) = &streamed.output
                     && (looks_back || grown.folds.is_empty())
                 {
-                    // Every register that went from a constant to it and the buffer-full's
-                    // count may keep the count: a later round keeps only those that go on
-                    // adding, as a register that holds only the last buffer-full's doesn't.
+                    // Every slot that went from a constant to it and the buffer-full's count
+                    // may keep the count: a later round keeps only those that go on adding, as
+                    // a register that holds only the last buffer-full's doesn't.
                     let first = &fed[..taken.min(fed.len())];
                     let mut these = BTreeMap::new();
                     for (placeholder, expr) in counts {
                         let count = counted(&mut pool, expr, streamed.name, first)?;
-                        for register in &changes.registers {
-                            let before = snapshot.registers[*register];
+                        for slot in &changes.slots {
+                            let before = snapshot.held(*slot);
                             if let Some(start) = pool.constant(before)
-                                && !grown.counters.contains_key(register)
-                                && !these.contains_key(register)
+                                && !grown.counters.contains_key(slot)
+                                && !these.contains_key(slot)
                                 && matches!(
                                     grows(
                                         &mut pool,
                                         &mut solvers,
                                         budget,
                                         run,
-                                        (*register, before, count),
+                                        (*slot, before, count),
                                         (&held, &streamed.characters),
                                         &[],
                                     )?,
@@ -604,7 +612,7 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
                                 )
                             {
                                 these.insert(
-                                    *register,
+                                    *slot,
                                     Fold {
                                         start,
                                         most: 0,
@@ -614,36 +622,36 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
                             }
                         }
                     }
-                    // Where a count is of a part that overlaps itself, the register whose value
+                    // Where a count is of a part that overlaps itself, the slot whose value
                     // after the first time round says the matcher's phase then, on every random
                     // buffer-full: it starts out standing for nothing matched, and the step shows
                     // each later time round keeps it so.
                     for (placeholder, part) in &streamed.phased {
                         let start = formula::Phase::start(&mut pool, part);
                         let (_, after) = formula::matches_from(&mut pool, first, part, &start);
-                        let found = changes.registers.iter().find_map(|register| {
-                            if grown.counters.contains_key(register)
-                                || these.contains_key(register)
-                                || grown.phases.contains_key(register)
+                        let found = changes.slots.iter().find_map(|slot| {
+                            if grown.counters.contains_key(slot)
+                                || these.contains_key(slot)
+                                || grown.phases.contains_key(slot)
                             {
                                 return None;
                             }
-                            let initial = pool.constant(snapshot.registers[*register])?;
+                            let initial = pool.constant(snapshot.held(*slot))?;
                             let states = phase_states(
                                 &pool,
                                 run,
-                                run.register_term(*register),
+                                run.held(*slot),
                                 &after,
                                 first.len(),
                                 part,
                                 initial,
                                 &streamed.characters,
                             )?;
-                            Some((*register, states))
+                            Some((*slot, states))
                         });
-                        if let Some((register, states)) = found {
+                        if let Some((slot, states)) = found {
                             grown.phases.insert(
-                                register,
+                                slot,
                                 PhaseFold {
                                     states,
                                     placeholder: *placeholder,
@@ -658,7 +666,7 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
                             None => these,
                             Some(kept) => kept
                                 .into_iter()
-                                .filter(|(register, fold)| these.get(register) == Some(fold))
+                                .filter(|(slot, fold)| these.get(slot) == Some(fold))
                                 .collect(),
                         });
                     } else {
@@ -666,8 +674,8 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
                     }
                 }
             } else if let Output::Counts(counts) = &streamed.output {
-                let kept: Vec<(usize, Fold)> = grown.folds.clone().into_iter().collect();
-                for (register, fold) in kept {
+                let kept: Vec<(Slot, Fold)> = grown.folds.clone().into_iter().collect();
+                for (slot, fold) in kept {
                     let Some((_, expr)) =
                         counts.iter().find(|(place, _)| *place == fold.placeholder)
                     else {
@@ -676,10 +684,11 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
                     let (before, count) = if looks_back {
                         // The second buffer-full's count after the first's last bytes.
                         let second = run
+                            .world
                             .at_second()
                             .ok_or("a run read two buffer-fulls without coming back")?;
                         let back = taken.saturating_sub(streamed.lookback);
-                        let read = run.stdin_taken() - snapshot.stdin_read;
+                        let read = run.world.stdin_taken() - snapshot.stdin_read;
                         let count = added(
                             &mut pool,
                             expr,
@@ -687,40 +696,41 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
                             &fed[back..taken],
                             &fed[taken..read.min(fed.len())],
                         )?;
-                        (second.registers[register], count)
+                        (second.held(slot), count)
                     } else {
                         let count = grown_by(
                             &mut pool,
                             &streamed,
                             &hook,
-                            &snapshot.registers,
+                            snapshot,
                             (fold.placeholder, expr),
                             &fed[..taken.min(fed.len())],
                         )?;
-                        (snapshot.registers[register], count)
+                        (snapshot.held(slot), count)
                     };
-                    let read = &fed[..(run.stdin_taken() - snapshot.stdin_read).min(fed.len())];
+                    let since = run.world.stdin_taken() - snapshot.stdin_read;
+                    let read = &fed[..since.min(fed.len())];
                     if let Grows::No(input) = grows(
                         &mut pool,
                         &mut solvers,
                         budget,
                         run,
-                        (register, before, count),
+                        (slot, before, count),
                         (&held, &streamed.characters),
                         read,
                     )? {
-                        grown.folds.remove(&register);
-                        grown.registers.insert(register);
+                        grown.folds.remove(&slot);
+                        grown.slots.insert(slot);
                         shown = shown.or(input);
                     }
                 }
             }
-            for register in changes.registers {
-                if !grown.counters.contains_key(&register)
-                    && !grown.folds.contains_key(&register)
-                    && !grown.phases.contains_key(&register)
+            for slot in changes.slots {
+                if !grown.counters.contains_key(&slot)
+                    && !grown.folds.contains_key(&slot)
+                    && !grown.phases.contains_key(&slot)
                 {
-                    grown.registers.insert(register);
+                    grown.slots.insert(slot);
                 }
             }
             grown.memory.extend(changes.memory);
@@ -729,8 +739,8 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
             chunk = Some(taken);
         }
         if let Some(found) = candidates {
-            for register in found.keys() {
-                grown.registers.remove(register);
+            for slot in found.keys() {
+                grown.slots.remove(slot);
             }
             grown.folds = found;
             // From here on a run reads two buffer-fulls, the second checked after the first.
@@ -848,14 +858,15 @@ fn looped_checks(
     hook: &Hook,
     chunk: usize,
 ) -> Result<Term, String> {
-    let snapshot = run
+    let world = &run.world;
+    let snapshot = world
         .at_head()
         .ok_or("a run came back to a head it never left")?;
-    let fed = &run.stdin_bytes()[snapshot.stdin_read..];
+    let fed = &world.stdin_bytes()[snapshot.stdin_read..];
     let fulls = usize::try_from(hook.fulls()).unwrap_or(1);
-    let second = run.at_second();
+    let second = world.at_second();
     let short = |read: usize| read != chunk * fulls || fed.len() <= chunk * fulls;
-    if short(run.stdin_taken() - snapshot.stdin_read)
+    if short(world.stdin_taken() - snapshot.stdin_read)
         || (fulls > 1
             && second.is_none_or(|second| second.stdin_read - snapshot.stdin_read != chunk))
     {
@@ -879,7 +890,7 @@ fn looped_checks(
             };
             checks.push(text_is(
                 pool,
-                &run.stdout[snapshot.stdout..],
+                &world.stdout[snapshot.stdout..],
                 &block.stdout,
                 &known,
             )?);
@@ -887,10 +898,10 @@ fn looped_checks(
         // Nothing yet, and each count grown by the buffer-full's: where the counts look back,
         // by what the second adds after the first's last bytes.
         Output::Counts(counts) => {
-            if run.stdout.len() != snapshot.stdout {
+            if world.stdout.len() != snapshot.stdout {
                 checks.push(pool.boolean(false));
             }
-            for (register, fold) in &hook.folds {
+            for (slot, fold) in &hook.folds {
                 let Some((_, expr)) = counts.iter().find(|(place, _)| *place == fold.placeholder)
                 else {
                     return Err("a count with no placeholder".into());
@@ -905,54 +916,50 @@ fn looped_checks(
                             &fed[back..chunk],
                             &fed[chunk..2 * chunk],
                         )?;
-                        (second.registers[*register], count)
+                        (second.held(*slot), count)
                     }
                     _ => (
-                        snapshot.registers[*register],
+                        snapshot.held(*slot),
                         grown_by(
                             pool,
                             streamed,
                             hook,
-                            &snapshot.registers,
+                            snapshot,
                             (fold.placeholder, expr),
                             &fed[..chunk],
                         )?,
                     ),
                 };
-                let now = pool.zero_extend(run.register_term(*register), WIDTH - 64);
+                let now = pool.zero_extend(run.held(*slot), WIDTH - 64);
                 let before = pool.zero_extend(before, WIDTH - 64);
                 let expected = pool.add(before, count);
                 checks.push(pool.eq(now, expected));
             }
-            // Each phase register back at one of its values, saying the phase after the
+            // Each phase slot back at one of its values, saying the phase after the
             // buffer-full.
-            let now: Vec<Term> = (0..snapshot.registers.len())
-                .map(|register| run.register_term(register))
-                .collect();
             checks.push(phases_kept(
                 pool,
                 streamed,
                 hook,
-                &snapshot.registers,
-                &now,
+                (snapshot, run),
                 &fed[..chunk],
             )?);
         }
     }
-    if run.stderr.len() != snapshot.stderr {
+    if world.stderr.len() != snapshot.stderr {
         checks.push(pool.boolean(false));
     }
     // Each counter one lower than it was at the head each time round.
-    for register in hook.counters.keys() {
-        let then = snapshot.registers[*register];
+    for slot in hook.counters.keys() {
+        let then = snapshot.held(*slot);
         if let Some(second) = second.filter(|_| fulls > 1) {
             let one = pool.bv(64, 1);
             let lower = pool.sub(then, one);
-            checks.push(pool.eq(second.registers[*register], lower));
+            checks.push(pool.eq(second.held(*slot), lower));
         }
         let rounds = pool.bv(64, fulls as u128);
         let lower = pool.sub(then, rounds);
-        checks.push(pool.eq(run.register_term(*register), lower));
+        checks.push(pool.eq(run.held(*slot), lower));
     }
     Ok(pool.all(&checks))
 }
@@ -978,26 +985,29 @@ fn verify(
         // they're held to them where a question finds inputs.
         let held = held(pool, run, &streamed.characters);
         // The buffer-fulls the step reads: what a counterexample would be made of.
+        let stdin = run.world.stdin_bytes();
         let read: Vec<Term> = run
+            .world
             .at_head()
             .map(|snapshot| {
-                let from = snapshot.stdin_read.min(run.stdin_bytes().len());
-                let to = (from + chunk * fulls).min(run.stdin_bytes().len());
-                run.stdin_bytes()[from..to].to_vec()
+                let from = snapshot.stdin_read.min(stdin.len());
+                let to = (from + chunk * fulls).min(stdin.len());
+                stdin[from..to].to_vec()
             })
             .unwrap_or_default();
         let mut questions: Vec<(Term, String, bool)> = run
+            .world
             .obligations
             .iter()
             .map(|(condition, problem)| (*condition, problem.clone(), false))
             .collect();
-        if let Some(End::Unsafe(problem)) = &run.end {
+        if let Some(End::Unsafe(problem)) = &run.world.end {
             questions.insert(0, (pool.boolean(true), problem.clone(), false));
         }
-        let broken = match &run.end {
+        let broken = match &run.world.end {
             Some(End::Looped) => {
                 let holds = looped_checks(pool, block, streamed, run, hook, chunk)?;
-                let holds = settled(pool, &run.path, holds, MAX_CHOICES);
+                let holds = settled(pool, &run.world.path, holds, MAX_CHOICES);
                 pool.bool_not(holds)
             }
             // A run that broke a memory rule is asked about as one above.
@@ -1017,9 +1027,10 @@ fn verify(
             }
             // Output whose terms are the formula's own can't break: nothing to ask.
             let holding = pool.bool_not(condition);
+            let path = &run.world.path;
             let branched = |part: &Term| {
                 pool.truth(*part) == Some(true)
-                    || run.path.iter().any(|given| pool.equivalent(*given, *part))
+                    || path.iter().any(|given| pool.equivalent(*given, *part))
             };
             if disjuncts(pool, holding)
                 .iter()
@@ -1027,7 +1038,7 @@ fn verify(
             {
                 continue;
             }
-            let mut conditions = run.path.clone();
+            let mut conditions = path.clone();
             conditions.push(condition);
             let values: &[Term] = if shows { &read } else { &[] };
             let solver = solvers.get(budget.deadline)?;

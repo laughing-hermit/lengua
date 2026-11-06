@@ -3,24 +3,26 @@
 //! way the input can be cut. A read can end after any byte, so fill can stop after any end byte
 //! that has arrived, or else when its buffer is full or the input has ended.
 
-use super::{Cpu, End, State, Step, Stop};
+use super::induction::Slot;
+use super::{Cpu, End, Step, Stop};
 use crate::isa::Isa;
 use crate::prove::term::Term;
 
-/// Where a CPU's fill keeps what it works with at its loop's head, as the slots of the prover's
-/// registers: x86-64's in rdi, rsi, rdx, r10 and r9, AArch64's in x9, x1, x2, w11 and x12.
+/// Where a CPU's fill keeps what it works with at its loop's head, as the core's slots, which
+/// are the prover's registers: x86-64's in rdi, rsi, rdx, r10 and r9, AArch64's in x9, x1, x2,
+/// w11 and x12.
 #[derive(Debug)]
 pub(super) struct FillAbi {
     /// The file descriptor it reads.
-    pub(super) fd: usize,
+    pub(super) fd: Slot,
     /// Where the next read goes.
-    pub(super) cursor: usize,
+    pub(super) cursor: Slot,
     /// How much room is left.
-    pub(super) space: usize,
+    pub(super) space: Slot,
     /// The end byte, or -1 for none.
-    pub(super) end: usize,
+    pub(super) end: Slot,
     /// How many reads it has left.
-    pub(super) counter: usize,
+    pub(super) counter: Slot,
 }
 
 impl FillAbi {
@@ -28,18 +30,18 @@ impl FillAbi {
     pub(super) const fn of(isa: Isa) -> &'static Self {
         match isa {
             Isa::X86_64 => &Self {
-                fd: 7,
-                cursor: 6,
-                space: 2,
-                end: 10,
-                counter: 9,
+                fd: Slot(7),
+                cursor: Slot(6),
+                space: Slot(2),
+                end: Slot(10),
+                counter: Slot(9),
             },
             Isa::Aarch64 => &Self {
-                fd: 9,
-                cursor: 1,
-                space: 2,
-                end: 11,
-                counter: 12,
+                fd: Slot(9),
+                cursor: Slot(1),
+                space: Slot(2),
+                end: Slot(11),
+                counter: Slot(12),
             },
         }
     }
@@ -190,17 +192,17 @@ impl Cpu<'_> {
     /// At fill's loop head: every way its reads can go, each its own run, or `None` to run the
     /// loop as code, as for a read that fails.
     pub(super) fn fill(&mut self, fill: Fill) -> Result<Option<Step>, Stop> {
-        let registers = self.state.registers;
+        let registers = self.core.registers;
         let roles = FillAbi::of(self.image.isa);
         let constant = |pool: &crate::prove::term::Pool, term: Term| {
             pool.constant(term)
                 .and_then(|value| u64::try_from(value).ok())
         };
         let (Some(fd), Some(cursor), Some(space), Some(end)) = (
-            constant(self.pool, registers[roles.fd]),
-            constant(self.pool, registers[roles.cursor]),
-            constant(self.pool, registers[roles.space]),
-            constant(self.pool, registers[roles.end]),
+            constant(self.pool, registers[roles.fd.0]),
+            constant(self.pool, registers[roles.cursor.0]),
+            constant(self.pool, registers[roles.space.0]),
+            constant(self.pool, registers[roles.end.0]),
         ) else {
             return Ok(None);
         };
@@ -220,15 +222,15 @@ impl Cpu<'_> {
         // Its bytes past that length go in too, standing for whatever the buffer held, which is
         // anything. What comes before it, as the buffer-full an induction's base puts first, is
         // read as any input of its own length is.
-        if let (Stream::Stdin, Some(length)) = (stream, self.state.stdin_length)
-            && self.state.stdin_read < self.state.stdin.len()
+        if let (Stream::Stdin, Some(length)) = (stream, self.world.stdin_length)
+            && self.world.stdin_read < self.world.stdin.len()
         {
-            let from = self.state.stdin_from;
-            if self.state.stdin_read < from {
-                available.truncate(from - self.state.stdin_read);
+            let from = self.world.stdin_from;
+            if self.world.stdin_read < from {
+                available.truncate(from - self.world.stdin_read);
             } else {
                 let room = usize::try_from(space).unwrap_or(usize::MAX);
-                if end.is_some() || self.state.stdin_read > from || room < available.len() {
+                if end.is_some() || self.world.stdin_read > from || room < available.len() {
                     return Err(super::unsupported(
                         "standard input of a length the input chooses read other than all at \
                          once",
@@ -245,7 +247,7 @@ impl Cpu<'_> {
         // A read of standard input or a connection can end right after any end byte that has
         // arrived: fill stops there. A file's read gives everything asked for.
         if let Some(end) = end
-            && self.state.every_cut
+            && self.world.every_cut
             && !matches!(stream, Stream::File(_))
         {
             let wanted = self.pool.bv(8, u128::from(end));
@@ -273,28 +275,28 @@ impl Cpu<'_> {
             }
         }
         let before = match stream {
-            Stream::Stdin => self.state.stdin_read,
-            Stream::Connection(number) => self.consumed(number),
+            Stream::Stdin => self.world.stdin_read,
+            Stream::Connection(number) => self.world.consumed(number),
             Stream::File(_) => 0,
         };
-        let original = self.state.clone();
+        let original = self.fork();
         let mut choices = Vec::new();
         for (condition, taken, at_end) in outcomes {
             if self.pool.truth(condition) == Some(false) {
                 continue;
             }
             let mut outcome = original.clone();
-            std::mem::swap(self.state, &mut outcome);
+            self.swap(&mut outcome);
             let applied = self.take(fill, &stream, &available, cursor, space, taken);
             if let Err(stop) = applied {
-                self.state.end = Some(stop);
+                self.world.end = Some(stop);
             } else if at_end && let After::Wait(why) = &after {
-                self.state.end = Some(End::Stuck(why.clone()));
+                self.world.end = Some(End::Stuck(why.clone()));
             }
             if taken < last {
-                self.state.fill_cut.get_or_insert(before + taken);
+                self.world.fill_cut.get_or_insert(before + taken);
             }
-            std::mem::swap(self.state, &mut outcome);
+            self.swap(&mut outcome);
             choices.push((condition, outcome));
         }
         Ok(Some(Step::Choose(choices)))
@@ -304,14 +306,14 @@ impl Cpu<'_> {
     /// read fails on, which the loop then runs as code.
     fn stream(&mut self, fd: u64) -> Result<Option<(Stream, Vec<Term>, After)>, Stop> {
         if fd == 0 {
-            let left = self.state.stdin[self.state.stdin_read..].to_vec();
+            let left = self.world.stdin[self.world.stdin_read..].to_vec();
             return Ok(Some((Stream::Stdin, left, After::End)));
         }
-        if let Ok(socket) = self.connection_of(fd) {
+        if let Ok(socket) = self.world.connection_of(fd) {
             let Some(number) = socket else {
                 return Ok(None);
             };
-            let (left, waits) = self.unread(number)?;
+            let (left, waits) = self.world.unread(number)?;
             let after = if waits {
                 After::Wait(
                     "fill reads to the end of the test's client's request, but the client, as \
@@ -324,10 +326,10 @@ impl Cpu<'_> {
             };
             return Ok(Some((Stream::Connection(number), left, after)));
         }
-        let Some(open) = self.state.open.get(&fd).filter(|open| !open.writing) else {
+        let Some(open) = self.world.open.get(&fd).filter(|open| !open.writing) else {
             return Ok(None);
         };
-        let files = std::rc::Rc::clone(&self.state.files);
+        let files = std::rc::Rc::clone(&self.world.files);
         let contents = files.get(&open.name).map_or(&[][..], Vec::as_slice);
         let left = contents[open.position.min(contents.len())..].to_vec();
         Ok(Some((Stream::File(fd), left, After::End)))
@@ -349,28 +351,28 @@ impl Cpu<'_> {
             self.save(cursor + offset as u64, *byte)?;
         }
         match stream {
-            Stream::Stdin => self.state.stdin_read += taken,
+            Stream::Stdin => self.world.stdin_read += taken,
             Stream::File(fd) => {
-                if let Some(open) = self.state.open.get_mut(fd) {
+                if let Some(open) = self.world.open.get_mut(fd) {
                     open.position += taken;
                 }
             }
-            Stream::Connection(number) => self.consume(*number, taken),
+            Stream::Connection(number) => self.world.consume(*number, taken),
         }
         let taken = taken as u64;
         let roles = FillAbi::of(self.image.isa);
-        self.state.registers[roles.cursor] = self.pool.bv(64, u128::from(cursor + taken));
-        self.state.registers[roles.space] = self.pool.bv(64, u128::from(space - taken));
+        self.core.registers[roles.cursor.0] = self.pool.bv(64, u128::from(cursor + taken));
+        self.core.registers[roles.space.0] = self.pool.bv(64, u128::from(space - taken));
         // What the reads leave: on x86-64 the kernel's rcx and r11, on AArch64 the SVE state the
         // kernel clears, and a loop count that depends on how the input was cut.
         if self.image.isa == Isa::X86_64 {
-            self.state.registers[1] = self.pool.bv(64, u128::from(fill.after_call));
-            self.state.registers[11] = self.pool.bv(64, 0x202);
+            self.core.registers[1] = self.pool.bv(64, u128::from(fill.after_call));
+            self.core.registers[11] = self.pool.bv(64, 0x202);
         }
-        self.state.clear_sve(self.pool);
+        self.core.clear_sve(self.pool);
         let count = self.pool.len();
-        self.state.registers[roles.counter] = self.pool.var(64, &format!("fill{count}.reads"));
-        self.state.rip = fill.done;
+        self.core.registers[roles.counter.0] = self.pool.var(64, &format!("fill{count}.reads"));
+        self.core.rip = fill.done;
         Ok(())
     }
 }
@@ -390,30 +392,20 @@ impl Cpu<'_> {
         for (offset, byte) in available.iter().enumerate() {
             self.save(cursor + offset as u64, *byte)?;
         }
-        self.state.stdin_read = self.state.stdin.len();
+        self.world.stdin_read = self.world.stdin.len();
         let roles = FillAbi::of(self.image.isa);
         let start = self.pool.bv(64, u128::from(cursor));
-        self.state.registers[roles.cursor] = self.pool.add(start, length);
+        self.core.registers[roles.cursor.0] = self.pool.add(start, length);
         let room = self.pool.bv(64, u128::from(space));
-        self.state.registers[roles.space] = self.pool.sub(room, length);
+        self.core.registers[roles.space.0] = self.pool.sub(room, length);
         if self.image.isa == Isa::X86_64 {
-            self.state.registers[1] = self.pool.bv(64, u128::from(fill.after_call));
-            self.state.registers[11] = self.pool.bv(64, 0x202);
+            self.core.registers[1] = self.pool.bv(64, u128::from(fill.after_call));
+            self.core.registers[11] = self.pool.bv(64, 0x202);
         }
-        self.state.clear_sve(self.pool);
+        self.core.clear_sve(self.pool);
         let count = self.pool.len();
-        self.state.registers[roles.counter] = self.pool.var(64, &format!("fill{count}.reads"));
-        self.state.rip = fill.done;
+        self.core.registers[roles.counter.0] = self.pool.var(64, &format!("fill{count}.reads"));
+        self.core.rip = fill.done;
         Ok(())
-    }
-}
-
-impl State {
-    /// The same state, proving for every way the input can be cut rather than running as one
-    /// read gives it.
-    #[must_use]
-    pub fn for_every_cut(mut self) -> Self {
-        self.every_cut = true;
-        self
     }
 }
