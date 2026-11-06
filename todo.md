@@ -100,8 +100,8 @@ free runners, whose id is written in the table below, and by nothing else.
    publishes them.
 
 **Where each stands.** Updated as rounds merge, with the run that shows it. First by target, from
-run 42178871938 (2026-11-06, commit 26ef909, the code of round 2's end; libtest counts a test that
-notes why it did nothing as passed):
+run 42192900115 (2026-11-06, main at aa30020; run 42178871938 on the branch counted the same;
+libtest counts a test that notes why it did nothing as passed):
 
 | target | runner | suite | programs run | against C, C++ and Rust | archive |
 |---|---|---|---|---|---|
@@ -138,8 +138,9 @@ Then by finish-line point:
      round 1; handed-over descriptors and handles are asked again in rounds 3 and 4. What a
      sandbox refuses is the owner's to try.
    - The Linux soundness items are fixed, each with a test.
-2. **The edge and the broker, on Linux, for both CPUs: done 2026-11-06** (run 42178871938,
-   commit 26ef909).
+2. **The edge and the broker, on Linux, for both CPUs: done 2026-11-06** (main at aa30020; its
+   push run 42192900115 passed on all six native jobs with the counts below, as did run
+   42178871938 on the branch).
    - Programs reach the OS only through lengua's linked edge: 21 operations defined once
      (`src/edge/mod.rs`) and one calling convention per CPU.
    - assert_fail, fill and parallel_for move into lengua's library instead of being copied into
@@ -170,8 +171,8 @@ Then by finish-line point:
 
 ### Round 2
 
-Done and merged on 2026-11-06 (the code of `26ef909`; the roadmap list above has its run). The
-runs that show each part:
+Done and merged on 2026-11-06 (main at `aa30020`, whose push run, 42192900115, passed on the six
+native jobs; its QEMU job fails the seven cases below). The runs that show each part:
 
 | part | runs |
 |---|---|
