@@ -28,7 +28,6 @@ use lengua::connect::Reach;
 use lengua::platform::{Allowed, Pin};
 use lengua::runner::{End, Job, Limits, Net, Run, run, start};
 use lengua::spec::{Syscall, Use};
-use lengua::supply::Supply;
 use lengua::syscalls::{aarch64, x86_64};
 use lengua::targets::PerCpu;
 
@@ -1029,55 +1028,6 @@ fn opens_until_it_cant() -> Programs {
     }
 }
 
-/// A program that makes the file `name` (`O_WRONLY | O_CREAT`) and exits with the error number it
-/// got, or 0.
-fn makes(name: &str) -> Programs {
-    let name = format!(".asciz \"{name}\"");
-    PerCpu {
-        x86_64: x86(
-            &[
-                "mov eax, 257",
-                "mov edi, -100",
-                "lea rsi, [rip + name]",
-                "mov edx, 0x41",
-                "mov r10d, 420",
-                "syscall",
-                "test rax, rax",
-                "jns 1f",
-                "neg eax",
-                "mov edi, eax",
-                "mov eax, 60",
-                "syscall",
-                "1:",
-                "xor edi, edi",
-                "mov eax, 60",
-                "syscall",
-            ],
-            &[".data", "name:", &name],
-        ),
-        aarch64: a64(
-            &[
-                "mov x0, #-100",
-                "adrp x1, name",
-                "add x1, x1, :lo12:name",
-                "mov x2, #0x41",
-                "mov x3, #420",
-                "mov x8, #56",
-                "svc #0",
-                "tbz x0, #63, 1f",
-                "neg x0, x0",
-                "mov x8, #93",
-                "svc #0",
-                "1:",
-                "mov x0, #0",
-                "mov x8, #93",
-                "svc #0",
-            ],
-            &[".data", "name:", &name],
-        ),
-    }
-}
-
 /// A program that asks the terminal's question, how many bytes wait to be read (`FIONREAD`),
 /// which a terminal program may not.
 fn asks_how_many_bytes_wait() -> Programs {
@@ -1478,31 +1428,6 @@ async fn the_clock_and_random_bytes_need_the_specs_approval() {
     assert_eq!(result.end, End::Exited(16), "16 bytes, and the clock read");
     let result = run_simply(&reader, &[], b"").await;
     assert_eq!(result.end, End::Signaled(31), "not approved: stopped");
-}
-
-fn time(seconds: i64, nanoseconds: i64) -> Vec<u8> {
-    [seconds.to_le_bytes(), nanoseconds.to_le_bytes()].concat()
-}
-
-/// Whether this computer lets a process count its CPU's instructions: a virtual machine may not
-/// give it the counters at all, and only Linux's perf events are read so far.
-#[cfg(not(target_os = "linux"))]
-fn counters_here() -> bool {
-    lengua::skiplog::note("this system's instruction counters aren't read yet (only Linux's are)");
-    false
-}
-
-/// Whether this computer lets a process count its CPU's instructions: a virtual machine may not
-/// give it the counters at all.
-#[cfg(target_os = "linux")]
-fn counters_here() -> bool {
-    let counts = perf_event::Builder::new(perf_event::events::Hardware::INSTRUCTIONS)
-        .build()
-        .is_ok();
-    if !counts {
-        lengua::skiplog::note("this computer gives a process no hardware instruction counters");
-    }
-    counts
 }
 
 fn network_syscalls(spec: &[Syscall]) -> Vec<Allowed> {
