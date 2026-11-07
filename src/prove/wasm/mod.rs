@@ -175,11 +175,7 @@ pub fn begin(
         .iter()
         .map(|(width, value)| pool.bv(*width, *value))
         .collect();
-    let mut fds = BTreeMap::from([
-        (0, Handle::Stdin),
-        (1, Handle::Stdout),
-        (2, Handle::Stderr),
-    ]);
+    let mut fds = BTreeMap::from([(0, Handle::Stdin), (1, Handle::Stdout), (2, Handle::Stderr)]);
     if module.policy.files {
         fds.insert(
             crate::wasm::host::fds::FOLDER,

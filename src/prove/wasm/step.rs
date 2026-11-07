@@ -268,11 +268,7 @@ fn enter(core: &mut Wasm, arity: Arity, looping: bool, target: usize) -> Result<
         .len()
         .checked_sub(arity.params)
         .ok_or_else(malformed)?;
-    let carries = if looping {
-        arity.params
-    } else {
-        arity.results
-    };
+    let carries = if looping { arity.params } else { arity.results };
     frame(core)?.labels.push(Label {
         looping,
         height,
@@ -318,7 +314,9 @@ fn choose(
 /// The program's exit, when `_start` returns.
 fn finish(module: &Module, core: &mut Wasm, pool: &mut Pool) -> Result<(), End> {
     let frame = core.frames.pop().ok_or_else(malformed)?;
-    let results = module.function(frame.function).map_or(0, |found| found.results);
+    let results = module
+        .function(frame.function)
+        .map_or(0, |found| found.results);
     let start = core
         .stack
         .len()
@@ -358,7 +356,9 @@ fn branch(module: &Module, core: &mut Wasm, pool: &mut Pool, depth: u32) -> Resu
     core.stack.truncate(label.height);
     core.stack.extend(values);
     let frame = frame(core)?;
-    frame.labels.truncate(if label.looping { index + 1 } else { index });
+    frame
+        .labels
+        .truncate(if label.looping { index + 1 } else { index });
     frame.pc = label.target;
     Ok(())
 }
@@ -486,7 +486,14 @@ fn guard_division(
     let width = pool.width(b);
     let zero = pool.bv(width, 0);
     let by_zero = pool.eq(b, zero);
-    must_not(module, state, pool, at, by_zero, "an integer division by zero")?;
+    must_not(
+        module,
+        state,
+        pool,
+        at,
+        by_zero,
+        "an integer division by zero",
+    )?;
     if operation == Binary::DivS {
         let least = pool.bv(width, 1 << (width - 1));
         let minus_one = pool.bv(width, mask(width));

@@ -41,15 +41,30 @@ fn exits_with(fields: &str, body: &str) -> String {
 /// bits, extensions and wraps, little-endian memory of every width, the data segments, bulk
 /// memory, globals, calls, multiple values, and every kind of branch.
 const CHECKS: &[(&str, &str)] = &[
-    ("", "(i32.eq (i32.div_s (i32.const -7) (i32.const 2)) (i32.const -3))"),
-    ("", "(i32.eq (i32.rem_s (i32.const -7) (i32.const 2)) (i32.const -1))"),
+    (
+        "",
+        "(i32.eq (i32.div_s (i32.const -7) (i32.const 2)) (i32.const -3))",
+    ),
+    (
+        "",
+        "(i32.eq (i32.rem_s (i32.const -7) (i32.const 2)) (i32.const -1))",
+    ),
     (
         "",
         "(i32.eq (i32.div_u (i32.const -1) (i32.const 2)) (i32.const 2147483647))",
     ),
-    ("", "(i32.eq (i32.rem_u (i32.const -1) (i32.const 10)) (i32.const 5))"),
-    ("", "(i32.eq (i32.shl (i32.const 1) (i32.const 33)) (i32.const 2))"),
-    ("", "(i32.eq (i32.shr_s (i32.const -8) (i32.const 1)) (i32.const -4))"),
+    (
+        "",
+        "(i32.eq (i32.rem_u (i32.const -1) (i32.const 10)) (i32.const 5))",
+    ),
+    (
+        "",
+        "(i32.eq (i32.shl (i32.const 1) (i32.const 33)) (i32.const 2))",
+    ),
+    (
+        "",
+        "(i32.eq (i32.shr_s (i32.const -8) (i32.const 1)) (i32.const -4))",
+    ),
     (
         "",
         "(i32.eq (i32.shr_u (i32.const -8) (i32.const 1)) (i32.const 2147483644))",
@@ -66,26 +81,56 @@ const CHECKS: &[(&str, &str)] = &[
     ("", "(i32.eq (i32.clz (i32.const 0)) (i32.const 32))"),
     ("", "(i32.eq (i32.ctz (i32.const 8)) (i32.const 3))"),
     ("", "(i32.eq (i32.ctz (i32.const 0)) (i32.const 32))"),
-    ("", "(i32.eq (i32.popcnt (i32.const 0xff00ff)) (i32.const 16))"),
-    ("", "(i32.eq (i32.extend8_s (i32.const 0x80)) (i32.const -128))"),
-    ("", "(i32.eq (i32.extend16_s (i32.const 0x8000)) (i32.const -32768))"),
-    ("", "(i64.eq (i64.extend_i32_s (i32.const -1)) (i64.const -1))"),
-    ("", "(i64.eq (i64.extend_i32_u (i32.const -1)) (i64.const 4294967295))"),
+    (
+        "",
+        "(i32.eq (i32.popcnt (i32.const 0xff00ff)) (i32.const 16))",
+    ),
+    (
+        "",
+        "(i32.eq (i32.extend8_s (i32.const 0x80)) (i32.const -128))",
+    ),
+    (
+        "",
+        "(i32.eq (i32.extend16_s (i32.const 0x8000)) (i32.const -32768))",
+    ),
+    (
+        "",
+        "(i64.eq (i64.extend_i32_s (i32.const -1)) (i64.const -1))",
+    ),
+    (
+        "",
+        "(i64.eq (i64.extend_i32_u (i32.const -1)) (i64.const 4294967295))",
+    ),
     (
         "",
         "(i64.eq (i64.extend32_s (i64.const 0x80000000)) (i64.const -2147483648))",
     ),
-    ("", "(i32.eq (i32.wrap_i64 (i64.const 0x100000005)) (i32.const 5))"),
+    (
+        "",
+        "(i32.eq (i32.wrap_i64 (i64.const 0x100000005)) (i32.const 5))",
+    ),
     (
         "",
         "(i64.eq (i64.rem_s (i64.const -9223372036854775808) (i64.const -1)) (i64.const 0))",
     ),
-    ("", "(i64.eq (i64.div_s (i64.const -9) (i64.const 4)) (i64.const -2))"),
+    (
+        "",
+        "(i64.eq (i64.div_s (i64.const -9) (i64.const 4)) (i64.const -2))",
+    ),
     ("", "(i64.eq (i64.clz (i64.const 1)) (i64.const 63))"),
-    ("", "(i64.eq (i64.ctz (i64.const 0x100000000)) (i64.const 32))"),
+    (
+        "",
+        "(i64.eq (i64.ctz (i64.const 0x100000000)) (i64.const 32))",
+    ),
     ("", "(i64.eq (i64.popcnt (i64.const -1)) (i64.const 64))"),
-    ("", "(i64.eq (i64.rotl (i64.const 1) (i64.const 65)) (i64.const 2))"),
-    ("", "(i64.eq (i64.shr_u (i64.const -1) (i64.const 127)) (i64.const 1))"),
+    (
+        "",
+        "(i64.eq (i64.rotl (i64.const 1) (i64.const 65)) (i64.const 2))",
+    ),
+    (
+        "",
+        "(i64.eq (i64.shr_u (i64.const -1) (i64.const 127)) (i64.const 1))",
+    ),
     ("", "(i32.lt_s (i32.const -1) (i32.const 0))"),
     ("", "(i32.gt_u (i32.const -1) (i32.const 0))"),
     ("", "(i32.le_u (i32.const 5) (i32.const 5))"),
@@ -342,7 +387,9 @@ fn chain(length: usize) -> String {
         let next = link + 1;
         text.push_str(&format!("  (func $f{link} (call $f{next}))\n"));
     }
-    text.push_str(&format!("  (func $f{length})\n  (func (export \"_start\") (call $f0)))\n"));
+    text.push_str(&format!(
+        "  (func $f{length})\n  (func (export \"_start\") (call $f0)))\n"
+    ));
     text
 }
 
@@ -854,8 +901,8 @@ fn fixture(name: &str, file: &str) -> String {
 fn blocks_of(name: &str) -> (Vec<Generated>, Policy) {
     let idea = crate::idea::parse(&fixture(name, "idea.md"))
         .unwrap_or_else(|problems| panic!("{name}: {problems:?}"));
-    let suite = crate::testfile::check(&idea)
-        .unwrap_or_else(|problems| panic!("{name}: {problems:?}"));
+    let suite =
+        crate::testfile::check(&idea).unwrap_or_else(|problems| panic!("{name}: {problems:?}"));
     (suite.generated, Policy::of(&idea.uses, &idea.network))
 }
 
@@ -988,7 +1035,10 @@ fn finds_a_planted_bug_in_each_fixture() {
     assert_eq!(a + b, 0, "a wrong constant: {found:?}");
     // An unguarded division: the digits go on past the last, and divide by a power of zero.
     let unguarded = edited(&add, (GUARD, ""));
-    let line = line_of(&unguarded, "(i64.div_u (local.get $magnitude) (local.get $power))");
+    let line = line_of(
+        &unguarded,
+        "(i64.div_u (local.get $magnitude) (local.get $power))",
+    );
     let built = build(&unguarded).expect("it builds");
     let verdict = prove_wasm(&built, adds, &sums(), &budget(900, false));
     assert_eq!(

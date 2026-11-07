@@ -741,8 +741,7 @@ impl Module {
                         if export.name == "_start" && matches!(export.kind, ExternalKind::Func) {
                             entry = Some(export.index);
                         }
-                        if export.name == "memory" && matches!(export.kind, ExternalKind::Memory)
-                        {
+                        if export.name == "memory" && matches!(export.kind, ExternalKind::Memory) {
                             exports_memory = true;
                         }
                     }
