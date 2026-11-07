@@ -1,7 +1,16 @@
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: my-program
 description: One sentence that says what the program does.
+runtime: webassembly
+computation: main.wat
+parameters:
+  - { name: n, type: integer, required: true, from: argument 1 }
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 

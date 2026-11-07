@@ -201,13 +201,16 @@ fn code_blocks(text: &str) -> Vec<(String, String)> {
     blocks
 }
 
-/// Each idea the skills show whole is one lengua accepts, its tests included.
+/// Each idea the skills show whole is one lengua accepts, its tests included: an Attested
+/// Computation, or an idea compiled to main.s.
 #[test]
 fn examples_in_the_skills_pass_lenguas_own_checks() {
     let mut ideas = 0;
     for (document, text) in documents() {
         for (language, block) in code_blocks(&text) {
-            if language == "markdown" && block.contains("type: lengua/program-idea") {
+            let whole = block.contains("type: Attested Computation")
+                || block.contains("type: lengua/program-idea");
+            if language == "markdown" && whole {
                 let idea = lengua::idea::parse(&block).unwrap_or_else(|problems| {
                     panic!("{document} shows an invalid idea: {problems:#?}")
                 });

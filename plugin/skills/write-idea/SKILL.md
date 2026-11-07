@@ -46,16 +46,29 @@ by one concrete example in its steps, and its generated tests try that rule with
   computer's limits; how the program is built for each computer is the compile skill's. Only a
   program whose subject is such a thing, such as an instruction decoder, names it, in its title
   too; `check` points out any other.
-- **Frontmatter:** `type: lengua/program-idea`, a short `title` and a one-sentence
-  `description`, which `check` requires and the bundle's `index.md` lists the program with.
-  Never add a `status` field: the record lives in `lengua.lock`, and any edit to the idea, even a
-  status change, is recorded again. Where `check` asks for an Attested Computation (it does where
-  lengua builds no `main.s`), the idea is an
-  [Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledge-format) Attested
-  Computation, whose code is `main.wat`: its frontmatter is `type: Attested Computation`, the same
-  `title` and `description`, then `runtime: webassembly`, `computation: main.wat`, and lengua's
-  `executor` and `attester`, which `check`'s problems give word for word. The rest of the idea is
-  the same.
+- **Frontmatter:** an idea is an Open Knowledge Format page of `type: Attested Computation`, as
+  [the template](assets/idea-template.md) begins: a short `title` and a one-sentence
+  `description`, which `check` requires and the bundle's `index.md` lists the program with, then
+  the keys that say how lengua runs and checks the computation, each as the template writes it:
+  - `runtime: webassembly` and `computation: main.wat`: the computation is `main.wat`, the
+    WebAssembly that the compile skill writes beside the idea.
+  - `parameters`: a list with one `{ name, type, required, from }` for each input a run fills, in
+    order. A `name` is lowercase letters, digits and `_`; a `type` is `integer`, `decimal`,
+    `text` or `bytes`; `required` is `true`, or `false` for an input a run may leave out; and
+    `from` says where the value comes from: `argument 1` (the arguments numbered from 1 without
+    gaps), `standard input`, `environment NAME` or `file NAME`, each source for one parameter. A
+    source other than an argument needs its word in `- Uses:`. A program that reads none of
+    these, such as a server, whose clients send its input, leaves `parameters` out.
+  - `executor`, whose `resource` is lengua's `run`,
+    `https://github.com/laughing-hermit/lengua/blob/main/docs/run.md`, and whose
+    `receipt: [stdout, stderr, exit]` lists what each run returns for the check; add `files` to
+    it for a program that leaves files.
+  - `attester`, whose `resource` is lengua's `check`, which attests each run:
+    `https://github.com/laughing-hermit/lengua/blob/main/docs/check.md`.
+
+  Copy both URLs exactly: they are lengua's own pages, and `check` refuses any other. Never add a
+  `status` field, nor `verified`, which `check` writes itself when the program is done: the record
+  lives in `lengua.lock`, and any edit to the idea, even a status change, is recorded again.
 - **Sections:** `# Purpose`, `# Behaviors` and `# Constraints`.
 - **Purpose** says in plain words what the program does, for whom and why. It then gives in
   backticks the range of every number the program reads and the length of any text it reads,
@@ -355,9 +368,19 @@ before the code, and they decide whether it's right.
 
 ```markdown
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: add
 description: Adds two whole numbers given as arguments and prints the sum.
+runtime: webassembly
+computation: main.wat
+parameters:
+  - { name: a, type: integer, required: true, from: argument 1 }
+  - { name: b, type: integer, required: true, from: argument 2 }
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 Lets a shell script add two whole numbers. It prints the sum of two numbers between `-1000000000`
