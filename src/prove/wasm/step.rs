@@ -4,7 +4,7 @@
 
 use super::host::{self, Handle};
 use super::image::{Arity, Binary, Function, Module, NOWHERE, Op, Unary};
-use super::{Frame, Label, Wasm, function_label, memory, must_not};
+use super::{Frame, Label, Wasm, fill, function_label, induction, memory, must_not};
 use crate::prove::exec::{End, MAX_STEPS, State, Step, TOO_LONG, unsupported};
 use crate::prove::term::{Pool, Term};
 
@@ -41,6 +41,13 @@ pub(super) fn execute(
     }
     if !state.core.handed {
         hand_over(module, state);
+    }
+    // The read loop's head, in a proof by induction, where every way the input is cut is taken.
+    if let Some(hook) = state.core.hook.clone()
+        && state.world.every_cut
+        && induction::at_head(&state.core, hook.head)
+    {
+        induction::arrive(module, state, pool, &hook)?;
     }
     let Some(frame) = state.core.frames.last_mut() else {
         // `_start` returned: the program exits with 0, as the host's run has it.
@@ -450,6 +457,14 @@ fn call(
     let callee = module.function(index).ok_or_else(malformed)?;
     if let Some(function) = callee.import {
         return host::call(module, state, pool, function, at);
+    }
+    // lengua's `$fill` on standard input, read as a whole, where a proof takes every way the
+    // input can be cut.
+    if module.fill == Some(index)
+        && state.world.every_cut
+        && fill::whole(module, state, pool)?
+    {
+        return Ok(Step::Next);
     }
     module.enter(index);
     let core = &mut state.core;

@@ -897,13 +897,24 @@ fn fixture(name: &str, file: &str) -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
 }
 
+/// A file of the compile skill's assets, its templates among them.
+fn asset(name: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("plugin/skills/compile/assets")
+        .join(name);
+    std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+}
+
+/// The generated blocks of the idea `text`, and what the idea lets its program reach.
+fn blocks_in(text: &str) -> (Vec<Generated>, Policy) {
+    let idea = crate::idea::parse(text).unwrap_or_else(|problems| panic!("{problems:?}"));
+    let suite = crate::testfile::check(&idea).unwrap_or_else(|problems| panic!("{problems:?}"));
+    (suite.generated, Policy::of(&idea.uses, &idea.network))
+}
+
 /// The generated blocks of the fixture `name`'s idea, and what its idea lets it reach.
 fn blocks_of(name: &str) -> (Vec<Generated>, Policy) {
-    let idea = crate::idea::parse(&fixture(name, "idea.md"))
-        .unwrap_or_else(|problems| panic!("{name}: {problems:?}"));
-    let suite =
-        crate::testfile::check(&idea).unwrap_or_else(|problems| panic!("{name}: {problems:?}"));
-    (suite.generated, Policy::of(&idea.uses, &idea.network))
+    blocks_in(&fixture(name, "idea.md"))
 }
 
 /// A proof's budget: at most `seconds`, its listener at descriptor 4 when it `listens`.
@@ -1091,5 +1102,219 @@ fn finds_a_planted_bug_in_each_fixture() {
     assert!(
         matches!(found.get("name"), Some(Value::Str(name)) if name.chars().count() == 8),
         "greet's off-by-one: {found:?}"
+    );
+}
+
+/// A loop that reads standard input with its own fd_read, 16 bytes at a time, four times.
+const RAW_LOOP: &str = r#"(module
+  (import "wasi_snapshot_preview1" "fd_read"
+    (func $fd_read (param i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))
+  (memory (export "memory") 1 1)
+  (func (export "_start")
+    (local $left i32)
+    (local.set $left (i32.const 4))
+    (loop $more
+      (i32.store (i32.const 1024) (i32.const 2048))
+      (i32.store (i32.const 1028) (i32.const 16))
+      (drop (call $fd_read (i32.const 0) (i32.const 1024) (i32.const 1) (i32.const 1032)))
+      (local.set $left (i32.sub (local.get $left) (i32.const 1)))
+      (br_if $more (local.get $left)))
+    (call $exit (i32.const 0))))
+"#;
+
+/// A proof's budget for texts of many lengths: at most `seconds`, and as many input
+/// combinations as a proof over every length up to a buffer-full or two takes.
+fn stream_budget(seconds: u64) -> Budget {
+    Budget {
+        max_paths: 64,
+        max_shapes: 100_000,
+        ..Budget::until(Instant::now() + Duration::from_secs(seconds), false)
+    }
+}
+
+/// `source` with each of `edits` made, the first of each `from` in it.
+fn with_edits(source: &str, edits: &[(&str, &str)]) -> String {
+    edits
+        .iter()
+        .fold(source.to_owned(), |text, edit| edited(&text, *edit))
+}
+
+/// What reads its input whole, for every way it can be cut, and where the read loop is: a
+/// program that reads standard input only through `$fill` to its end does, and its loop's call
+/// of `$fill` is the head; one with no loop has none; a `$fill` that stops at a newline, a
+/// program on the network, and a loop of the program's own fd_read don't.
+#[test]
+fn a_read_loop_is_found_where_a_program_reads_its_input_whole() {
+    let streams = module(&fixture("cat-stream", "main.wat"), blocks_of("cat-stream").1);
+    assert!(streams.reads_whole());
+    let head = streams.read_loop_head();
+    assert!(head.is_ok(), "{head:?}");
+    // cat reads its input with one `$fill`: whole, but in no loop.
+    let cat = module(&fixture("cat", "main.wat"), blocks_of("cat").1);
+    assert!(cat.reads_whole());
+    let why = cat.read_loop_head().expect_err("cat has no read loop");
+    assert!(why.contains("no loop"), "{why}");
+    // The vector template's `$fill` stops at a newline, which a cut changes.
+    let (_, shouts) = blocks_in(&asset("vector-template-wat-idea.md"));
+    let shout = module(&asset("vector-template.wat"), shouts);
+    assert!(!shout.reads_whole());
+    // The echo server is on the network.
+    let echo = module(&fixture("echo", "main.wat"), blocks_of("echo").1);
+    assert!(!echo.reads_whole());
+    // A loop of the program's own fd_read sees how its input is cut.
+    let reads = Policy {
+        standard_input: true,
+        ..Policy::default()
+    };
+    let raw = module(RAW_LOOP, reads);
+    assert!(!raw.reads_whole());
+    let why = raw.read_loop_head().expect_err("its reads are its own");
+    assert!(why.contains("fd_read itself"), "{why}");
+}
+
+/// In a proof, `$fill` to the end of the input reads it whole, however long: cat-stream copies
+/// 9000 bytes, more than two pipe writes, with no read of standard input through the world.
+#[test]
+fn a_fill_to_the_end_reads_input_of_any_length_whole_in_a_proof() {
+    let (_, policy) = blocks_of("cat-stream");
+    let module = module(&fixture("cat-stream", "main.wat"), policy);
+    let text: Vec<u8> = (0..9000_usize).map(|at| b"abehlo \n"[at % 8]).collect();
+    let mut pool = Pool::default();
+    let stdin = exec::bytes(&mut pool, &text);
+    let start = begin(&module, &mut pool, &[], &[], stdin).for_every_cut();
+    let runs = exec::explore(&module, start, &mut pool, &mut exec::Concrete, 2).expect("the run");
+    let [run] = runs.as_slice() else {
+        panic!("{} runs", runs.len());
+    };
+    let Some(End::Exit(code)) = &run.world.end else {
+        panic!("{:?}", run.world.end);
+    };
+    assert_eq!(pool.constant(*code), Some(0));
+    let out: Option<Vec<u8>> = run
+        .world
+        .stdout
+        .iter()
+        .map(|byte| {
+            pool.constant(*byte)
+                .and_then(|value| u8::try_from(value).ok())
+        })
+        .collect();
+    assert_eq!(out.as_deref(), Some(text.as_slice()));
+    assert!(!run.world.raw_reads);
+}
+
+/// cat-stream's copy, written a buffer-full at a time.
+const WRITES: &str = "(call $write_all (global.get $STDOUT) (global.get $buffer) (local.get $got))";
+
+/// The copy that drops the last byte of a full buffer-full: 4096 shifted down 12 places is 1.
+const DROPS_A_FULL_BUFFERS_LAST_BYTE: &str = "(call $write_all (global.get $STDOUT) (global.get \
+                                              $buffer) (i32.sub (local.get $got) (i32.shr_u \
+                                              (local.get $got) (i32.const 12))))";
+
+/// cat-stream is proven for every length by induction over its read loop, its input arriving
+/// cut any way: from any state the loop can be in at its head, one more buffer-full of 4096
+/// bytes is copied out, and every input of up to a buffer-full is proven from there. A copy that
+/// drops a byte only of a full buffer-full, which no input shorter than one shows, is found.
+#[test]
+fn proves_a_streaming_copy_for_every_length_by_induction() {
+    if !solvers_installed() {
+        return;
+    }
+    let (blocks, policy) = blocks_of("cat-stream");
+    let source = fixture("cat-stream", "main.wat");
+    let built = build(&source).expect("cat-stream builds");
+    let verdict = prove_wasm(&built, policy, &blocks[0], &stream_budget(900));
+    assert!(
+        matches!(
+            verdict,
+            Verdict::Proven {
+                bound: None,
+                induction: Some(4096),
+                cut_any_way: true,
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
+    let short = edited(&source, (WRITES, DROPS_A_FULL_BUFFERS_LAST_BYTE));
+    let built = build(&short).expect("it builds");
+    let verdict = prove_wasm(&built, policy, &blocks[0], &stream_budget(900));
+    let Verdict::Counterexample(found) = &verdict else {
+        panic!("a dropped byte: {verdict:?}");
+    };
+    let Some(Value::Str(text)) = found.get("text") else {
+        panic!("a dropped byte: {found:?}");
+    };
+    assert!(text.len() >= 4096, "a dropped byte: {} bytes", text.len());
+}
+
+/// The stream template with a buffer of 256 bytes, so the base's lengths go by quickly, as the
+/// native prover's own tests shrink theirs.
+const STREAM_AT_256: [(&str, &str); 1] = [(
+    "(global $buffer.size i32 (i32.const 65536))",
+    "(global $buffer.size i32 (i32.const 256))",
+)];
+
+/// The stream template's letters, which a wrong bound stops at `y`.
+const LETTERS: (&str, &str) = (
+    "(global $LETTERS i32 (i32.const 26))",
+    "(global $LETTERS i32 (i32.const 25))",
+);
+
+/// The stream template, which capitalizes its input a buffer-full at a time through `$fill`, is
+/// proven for every length its loop's bound allows, far past what a proof by length reaches, as
+/// the native template is; capitals that stop at `y` are still found.
+#[test]
+fn proves_the_stream_template_for_every_length_by_induction() {
+    if !solvers_installed() {
+        return;
+    }
+    let (blocks, policy) = blocks_in(&asset("stream-template-wat-idea.md"));
+    let source = with_edits(&asset("stream-template.wat"), &STREAM_AT_256);
+    let built = build(&source).expect("the template builds");
+    let verdict = prove_wasm(&built, policy, &blocks[0], &stream_budget(900));
+    assert!(
+        matches!(
+            verdict,
+            Verdict::Proven {
+                bound: None,
+                induction: Some(256),
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
+    let wrong = edited(&source, LETTERS);
+    let built = build(&wrong).expect("it builds");
+    let verdict = prove_wasm(&built, policy, &blocks[0], &stream_budget(900));
+    assert!(
+        matches!(verdict, Verdict::Counterexample(_)),
+        "capitals that stop at y: {verdict:?}"
+    );
+}
+
+/// cat reads its whole input with one `$fill`, so no read loop: its proof goes by length, and
+/// now every length its idea allows, 5000 bytes, past what one pipe write holds, however the
+/// input arrives.
+#[test]
+fn proves_one_whole_read_for_every_length_its_idea_allows() {
+    if !solvers_installed() {
+        return;
+    }
+    let (blocks, policy) = blocks_of("cat");
+    let built = build(&fixture("cat", "main.wat")).expect("cat builds");
+    let verdict = prove_wasm(&built, policy, &blocks[0], &stream_budget(900));
+    assert!(
+        matches!(
+            verdict,
+            Verdict::Proven {
+                bound: None,
+                induction: None,
+                cut_any_way: true,
+                ..
+            }
+        ),
+        "{verdict:?}"
     );
 }

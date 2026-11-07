@@ -507,6 +507,33 @@ impl Memory {
         Rc::make_mut(page)[(address % PAGE as u64) as usize] = Some(byte);
     }
 
+    /// The addresses whose bytes differ from `before`'s: written since to other bytes, or written
+    /// in one of the two and not the other. Pages the two still share are the same.
+    #[must_use]
+    pub fn differences(&self, before: &Self) -> BTreeSet<u64> {
+        let pages: BTreeSet<u64> = self
+            .pages
+            .keys()
+            .chain(before.pages.keys())
+            .copied()
+            .collect();
+        let mut found = BTreeSet::new();
+        for page in pages {
+            if let (Some(now), Some(then)) = (self.pages.get(&page), before.pages.get(&page))
+                && Rc::ptr_eq(now, then)
+            {
+                continue;
+            }
+            for offset in 0..PAGE as u64 {
+                let address = page * PAGE as u64 + offset;
+                if self.get(address) != before.get(address) {
+                    found.insert(address);
+                }
+            }
+        }
+        found
+    }
+
     /// Forgets the bytes from `start` up to `end`, as if never written.
     fn forget(&mut self, start: u64, end: u64) {
         for address in start..end {

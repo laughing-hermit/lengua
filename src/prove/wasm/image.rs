@@ -308,6 +308,10 @@ pub struct Module {
     pub(super) exports_memory: bool,
     /// What the program's idea lets it reach.
     pub(super) policy: Policy,
+    /// lengua's library's `$fill`, by index, when the module calls it.
+    pub(super) fill: Option<u32>,
+    /// How the module reads.
+    reading: Reading,
     /// main.wat's line of each of its own operators, by offset.
     lines: BTreeMap<u64, usize>,
     /// Where main.wat's own functions' bodies are.
@@ -315,6 +319,102 @@ pub struct Module {
     /// Whether some run has called each function, by index.
     entered: Vec<AtomicBool>,
 }
+
+/// How a module reads, as every way its input can be cut and a proof by induction need to know
+/// it.
+#[derive(Debug, Clone)]
+struct Reading {
+    /// Whether every read it makes goes through lengua's `$fill` to the end of the input: no
+    /// function but `$fill` calls `fd_read`, none waits on `poll_oneoff`, and each call of `$fill`
+    /// stops at no byte.
+    whole: bool,
+    /// The call of `$fill` in a loop of main.wat's own code, by function and operator, or why
+    /// there's none a proof by induction takes.
+    in_a_loop: Result<(u32, usize), String>,
+}
+
+/// Whether `stop`, the operator that leaves `$fill`'s stop operand, leaves -1: a constant, or a
+/// global the module never changes that holds it.
+fn reads_to_the_end(stop: Option<&Op>, globals: &[(u32, u128)], mutable: &[bool]) -> bool {
+    match stop {
+        Some(Op::Const { width: 32, value }) => *value == 0xffff_ffff,
+        Some(Op::GlobalGet(index)) => usize::try_from(*index).is_ok_and(|index| {
+            globals.get(index) == Some(&(32, 0xffff_ffff)) && mutable.get(index) == Some(&false)
+        }),
+        _ => false,
+    }
+}
+
+/// How the module of `functions` reads, `$fill` being the function `fill`.
+fn reading(
+    functions: &[Function],
+    fill: Option<u32>,
+    globals: &[(u32, u128)],
+    mutable: &[bool],
+) -> Reading {
+    let imports = |index: u32, name: &str| {
+        usize::try_from(index)
+            .ok()
+            .and_then(|index| functions.get(index))
+            .and_then(|function| function.import)
+            .is_some_and(|import| import.name == name)
+    };
+    let mut whole = fill.is_some();
+    // Each read in a loop of main.wat's own: its function, its operator, and whether it's an
+    // fd_read of the program's own.
+    let mut looped: Vec<(u32, usize, bool)> = Vec::new();
+    for (number, function) in (0_u32..).zip(functions) {
+        // Whether each block the operator is in is a loop.
+        let mut open: Vec<bool> = Vec::new();
+        for (at, op) in function.ops.iter().enumerate() {
+            match op {
+                Op::Block(_) | Op::If(_) => open.push(false),
+                Op::Loop(_) => open.push(true),
+                Op::End => {
+                    open.pop();
+                }
+                Op::Call(callee) => {
+                    let raw = imports(*callee, "fd_read") && Some(number) != fill;
+                    let fills = Some(*callee) == fill;
+                    let before = at.checked_sub(1).and_then(|before| function.ops.get(before));
+                    if raw
+                        || imports(*callee, "poll_oneoff")
+                        || (fills && !reads_to_the_end(before, globals, mutable))
+                    {
+                        whole = false;
+                    }
+                    if function.own && open.contains(&true) && (raw || fills) {
+                        looped.push((number, at, raw));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let in_a_loop = match looped.as_slice() {
+        [] => Err(NO_READ_LOOP.to_owned()),
+        [(_, _, true)] => Err(RAW_READ_LOOP.to_owned()),
+        [(function, at, false)] => Ok((*function, *at)),
+        _ => Err(READ_LOOPS.to_owned()),
+    };
+    Reading { whole, in_a_loop }
+}
+
+/// Why a module that reads in no loop isn't proven by induction.
+const NO_READ_LOOP: &str = "it reads in no loop of its own, which a buffer-full at a time needs";
+
+/// Why one whose loop reads with its own fd_read isn't.
+const RAW_READ_LOOP: &str = "its read loop reads with fd_read itself, whose reads see how the \
+                             input is cut: read with $fill to be proven for every length";
+
+/// Why one that reads in several places in its loops isn't.
+const READ_LOOPS: &str =
+    "it reads in more than one place in its loops, which the induction doesn't take";
+
+/// Why one that reads other than through `$fill` to the end of the input isn't.
+const NOT_WHOLE: &str = "it reads other than through $fill to the end of its input, or waits on \
+                         poll_oneoff, or is on the network, so its reads see how its input is \
+                         cut";
 
 /// A constant expression's value when it's one integer constant: its width and bits.
 fn constant(expression: &ConstExpr<'_>) -> Option<(u32, u128)> {
@@ -683,6 +783,7 @@ impl Module {
         let mut defined: Vec<u32> = Vec::new();
         let mut memory: Option<(u64, Option<u64>)> = None;
         let mut globals = Vec::new();
+        let mut mutable = Vec::new();
         let mut entry = None;
         let mut exports_memory = false;
         let mut segments: Vec<(Vec<u8>, Option<u64>)> = Vec::new();
@@ -733,6 +834,7 @@ impl Module {
                              model doesn't start",
                         )?;
                         globals.push(first);
+                        mutable.push(global.ty.mutable);
                     }
                 }
                 Payload::ExportSection(reader) => {
@@ -918,6 +1020,12 @@ impl Module {
             ));
         }
         let entered = functions.iter().map(|_| AtomicBool::new(false)).collect();
+        // lengua's `$fill`: the library's function of the name, never one of main.wat's own.
+        let fill = (0_u32..).zip(&functions).find_map(|(index, function)| {
+            (!function.own && function.import.is_none() && function.name.as_deref() == Some("fill"))
+                .then_some(index)
+        });
+        let reading = reading(&functions, fill, &globals, &mutable);
         Ok(Self {
             functions,
             globals,
@@ -929,6 +1037,8 @@ impl Module {
             entry,
             exports_memory,
             policy,
+            fill,
+            reading,
             lines: built.lines.clone(),
             bodies: built.bodies.clone(),
             entered,
@@ -938,6 +1048,30 @@ impl Module {
     /// The function with index `index`.
     pub(super) fn function(&self, index: u32) -> Option<&Function> {
         self.functions.get(usize::try_from(index).ok()?)
+    }
+
+    /// Whether every way the program's standard input can be cut gives each of its reads the same
+    /// bytes: it reads only through lengua's `$fill`, to the end of the input each time, never
+    /// waits on `poll_oneoff`, and isn't on the network. A proof then reads each `$fill` of
+    /// standard input as a whole, for input of any length ([`super::fill`]).
+    #[must_use]
+    pub fn reads_whole(&self) -> bool {
+        self.reading.whole && !self.policy.network()
+    }
+
+    /// Where the read loop a proof by induction goes round starts: the call of `$fill` in a loop
+    /// of main.wat's own code, as a hook names it.
+    ///
+    /// # Errors
+    ///
+    /// Why the program has no read loop the induction takes: it reads in no loop, in several
+    /// places, with its own `fd_read`, or other than through `$fill` to the end of its input.
+    pub fn read_loop_head(&self) -> Result<u64, String> {
+        let (function, at) = self.reading.in_a_loop.clone()?;
+        if !self.reads_whole() {
+            return Err(NOT_WHOLE.into());
+        }
+        Ok(super::induction::head_of(function, at))
     }
 
     /// main.wat's line of operator `at` of the function `function`, when it's one of main.wat's

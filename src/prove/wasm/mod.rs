@@ -10,9 +10,17 @@
 //! line: an access outside the memory, a division or remainder by zero, the least value divided
 //! by -1, and `unreachable` reached. The stack never runs out: [`Module`] refuses a module whose
 //! calls recurse, or may go deeper than the engine's stack holds.
+//!
+//! A proof takes every way the input can be cut where the program reads standard input only
+//! through lengua's `$fill` to the end ([`Module::reads_whole`]): each such `$fill` is then read
+//! as a whole, for input of any length (`fill`). And a program whose read loop calls `$fill` is
+//! proven for every length by induction, as the native prover proves one ([`hooked`]): its
+//! loop's head is that call, and its slots the globals, the calls' locals and the operands.
 
+mod fill;
 mod host;
 mod image;
+mod induction;
 mod memory;
 mod step;
 #[cfg(test)]
@@ -21,6 +29,7 @@ mod tests;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
+use super::exec::induction::{Changes, Hook};
 use super::exec::{self, Core, End, Memory, State, Step};
 use super::term::{Pool, Term};
 use super::world::{World, net};
@@ -28,7 +37,7 @@ use host::Handle;
 pub use image::Module;
 
 /// A label of a block a call is inside: where a branch to it goes, and what it carries there.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Label {
     /// Whether a branch to it goes back to its start, as a loop's does.
     looping: bool,
@@ -89,6 +98,17 @@ pub struct Wasm {
     /// How many bytes the program has written to files, with a block for each file or folder it
     /// made, as lengua's host counts them against a test's total.
     written: u64,
+    /// How the run takes the read loop's head, in a proof by induction.
+    hook: Option<Rc<Hook>>,
+    /// How many times it has reached that head.
+    arrivals: u32,
+    /// What it held the first time, beyond what the world keeps of it.
+    head: Option<Box<induction::Snapshot>>,
+    /// What one buffer-full changed, by the second time, for a run that reads two from the head.
+    changed: Option<Box<Changes>>,
+    /// A zero, for a slot the run has no place for: one a time round's checks never read, as a
+    /// run whose calls aren't the head's has stopped the induction first.
+    zero: Term,
 }
 
 impl Wasm {
@@ -214,11 +234,24 @@ pub fn begin(
         env: Rc::new(environment),
         reversed: None,
         written: 0,
+        hook: None,
+        arrivals: 0,
+        head: None,
+        changed: None,
+        zero: pool.bv(32, 0),
     };
     State {
         core,
         world: World::new(stdin),
     }
+}
+
+/// `state`, taking the read loop's head as `hook` says, for a proof by induction: its head is a
+/// call that reads in a loop of main.wat's own code ([`Module::read_loop_head`]).
+#[must_use]
+pub fn hooked(mut state: State<Wasm>, hook: Rc<Hook>) -> State<Wasm> {
+    state.core.hook = Some(hook);
+    state
 }
 
 /// WebAssembly's runs, each operator a step.

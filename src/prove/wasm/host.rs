@@ -54,9 +54,12 @@ const REMOVE_FOLDER: u64 = 0x200;
 /// Linux's `SHUT_WR`, as the world's `shutdown` takes it.
 const SHUT_WRITE: u64 = 1;
 
-/// Why a read the world would take every count of is beyond the model for now.
-const EVERY_CUT: &str = "a read whose every count a proof takes, which the WebAssembly model \
-                         follows from the prover's third step";
+/// Why a read the world would take every count of is beyond the model: a proof reads lengua's
+/// `$fill` to the end of the input as a whole instead ([`super::fill`]), and a module that reads
+/// any other way is proven for its input arriving whole.
+const EVERY_CUT: &str = "a read of standard input whose every count a proof takes, which the \
+                         WebAssembly model doesn't follow: read with $fill to the end of the \
+                         input to be proven however it arrives";
 
 /// How a run ends that waits on poll_oneoff for what doesn't come before a test's time limit
 /// stops it.

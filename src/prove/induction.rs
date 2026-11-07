@@ -26,19 +26,25 @@
 //! flag, a byte or a mask's bit, its count must come out so, which needs no telling where it
 //! keeps it. The base likewise reads a buffer-full from any state at the head before each final
 //! piece, and the shortest inputs are proven from the program's start.
+//!
+//! Machine code and WebAssembly are proven alike ([`Program`]): each finds its own read loop and
+//! takes its head its own way ([`Looping`]), and what follows is the same for both.
+//!
+//! [`Looping`]: super::exec::induction::Looping
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
-use super::exec::induction::{Fold, Hook, PhaseFold, Slot};
-use super::exec::{self, End, Image, State};
+use super::exec::induction::{Fold, Held, Hook, PhaseFold, Slot};
+use super::exec::{self, End, State};
 use super::formula::{self, Formula, WIDTH};
 use super::smt::Answer;
 use super::term::{Pool, Term};
 use super::world::Arrival;
 use super::{
-    Budget, Known, MAX_CHOICES, Solvers, Witnessed, conjuncts, disjuncts, settled, text_is,
+    Budget, Known, MAX_CHOICES, Program, Solvers, Witnessed, conjuncts, disjuncts, settled,
+    text_is,
 };
 use crate::expr::{Expr, Function, Generator, Piece, Value};
 use crate::testfile::{ExitCode, Generated};
@@ -115,13 +121,11 @@ enum Output<'a> {
     Counts(Vec<(usize, &'a Expr)>),
 }
 
-/// The text `block` streams, when it's one the induction applies to: a program whose standard
-/// input is one text, whose output is that text mapped byte by byte or counts of it that add
-/// up over its pieces, and which takes nothing else in.
-fn streamed<'a>(image: &Image, block: &'a Generated) -> Result<Streamed<'a>, String> {
-    if !image.has_fill() {
-        return Err("it doesn't read with fill".into());
-    }
+/// The text `block` streams, when it's one the induction applies to: a program with a read loop
+/// the induction takes, whose standard input is one text, whose output is that text mapped byte
+/// by byte or counts of it that add up over its pieces, and which takes nothing else in.
+fn streamed<'a, P: Program>(image: &P, block: &'a Generated) -> Result<Streamed<'a>, String> {
+    image.read_loop()?;
     let [(name, Generator::Str { charset, max, .. })] = block.vars.as_slice() else {
         return Err("its input isn't one text".into());
     };
@@ -238,13 +242,16 @@ fn grown_by(
 /// That each phase slot of `run`, which held what `at_head` says at the head, holds one of its
 /// values after the time round, standing for the phase the formula's matcher is in after
 /// `piece`.
-fn phases_kept(
+fn phases_kept<C>(
     pool: &mut Pool,
     streamed: &Streamed<'_>,
     hook: &Hook,
-    (at_head, run): (&Arrival, &State),
+    (at_head, run): (&Arrival, &State<C>),
     piece: &[Term],
-) -> Result<Term, String> {
+) -> Result<Term, String>
+where
+    State<C>: Held,
+{
     let mut checks = Vec::new();
     for (slot, fold) in &hook.phases {
         let part = phased_part(streamed, fold.placeholder).ok_or("a phase of no count")?;
@@ -279,9 +286,9 @@ const PHASE_SAMPLES: usize = 256;
 /// register's value before, stands for none. `None` where one value stands for two states, so
 /// the register doesn't keep the phase.
 #[allow(clippy::too_many_arguments)]
-fn phase_states(
+fn phase_states<C>(
     pool: &Pool,
-    run: &State,
+    run: &State<C>,
     term: Term,
     phase: &formula::Phase,
     chunk: usize,
@@ -367,7 +374,7 @@ fn added(
 
 /// The run's standard input held to `characters`, byte by byte: the facts a question that
 /// finds inputs is asked again with, so its inputs are ones the idea can give.
-fn held(pool: &mut Pool, run: &State, characters: &[u8]) -> Vec<Term> {
+fn held<C>(pool: &mut Pool, run: &State<C>, characters: &[u8]) -> Vec<Term> {
     run.world
         .stdin_bytes()
         .iter()
@@ -390,18 +397,21 @@ enum Grows {
 /// so, or the solvers find no input with `held` that takes the run where it doesn't. Where they
 /// find one, its bytes `read` come with the answer.
 #[allow(clippy::too_many_arguments)]
-fn grows(
+fn grows<C>(
     pool: &mut Pool,
     solvers: &mut Solvers,
     budget: &Budget,
-    run: &State,
+    run: &State<C>,
     (slot, before, count): (Slot, Term, Term),
     (held, characters): (&[Term], &[u8]),
     read: &[Term],
-) -> Result<Grows, String> {
+) -> Result<Grows, String>
+where
+    State<C>: Held,
+{
     use rand::{RngExt, SeedableRng};
-    let now = pool.zero_extend(run.held(slot), WIDTH - 64);
-    let before = pool.zero_extend(before, WIDTH - 64);
+    let now = widened(pool, run.held(slot));
+    let before = widened(pool, before);
     let expected = pool.add(before, count);
     let same = pool.eq(now, expected);
     match pool.truth(same) {
@@ -454,6 +464,13 @@ fn grows(
     })
 }
 
+/// `value`, a slot's, widened without its sign to the formulas' width: a CPU register's 64
+/// bits, or a WebAssembly local's own.
+fn widened(pool: &mut Pool, value: Term) -> Term {
+    let width = pool.width(value);
+    pool.zero_extend(value, WIDTH - width)
+}
+
 /// Whether `expr` maps the text `name` byte by byte, each byte's output a byte that depends on
 /// it alone: the text itself, or it through `upper`, `lower` and `tr` with fixed characters.
 fn byte_map(expr: &Expr, name: &str) -> bool {
@@ -473,13 +490,13 @@ fn byte_map(expr: &Expr, name: &str) -> bool {
 
 /// The runs from `start`, as a proof's shapes explore them: a branch no witness reaches is
 /// followed without asking, since each run's end is asked about anyway.
-fn explore(
-    image: &Image,
-    start: State,
+fn explore<P: Program>(
+    image: &P,
+    start: State<P::Core>,
     pool: &mut Pool,
     solvers: &mut Solvers,
     budget: &Budget,
-) -> Result<Vec<State>, String> {
+) -> Result<Vec<State<P::Core>>, String> {
     let careful = start.clone();
     let limits = (
         budget.deadline,
@@ -507,9 +524,13 @@ fn explore(
 ///
 /// Why the induction doesn't apply or its step doesn't hold, with the input a step that went
 /// wrong read: the proof then goes by length.
-pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, Refused> {
+pub(super) fn step<P: Program>(
+    image: &P,
+    block: &Generated,
+    budget: &Budget,
+) -> Result<Found, Refused> {
     let streamed = streamed(image, block)?;
-    let head = image.fill_head().ok_or("it has no fill")?;
+    let head = image.read_loop()?;
     let looks_back = streamed.lookback > 0;
     let mut solvers = Solvers::new(budget.question_ms);
     let mut hook = Hook {
@@ -529,9 +550,10 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
         }
         solvers.next();
         let mut pool = Pool::default();
-        let start = State::start(image, &mut pool, &[], &[], Vec::new())
-            .for_every_cut()
-            .with_hook(Rc::new(hook.clone()));
+        let start = image
+            .begin(&mut pool, &[], &[], Vec::new())
+            .for_every_cut();
+        let start = P::hooked(start, Rc::new(hook.clone()))?;
         let runs = explore(image, start, &mut pool, &mut solvers, budget)?;
         paths += runs.len();
         let mut grown = hook.clone();
@@ -614,6 +636,7 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
                                         start,
                                         most: 0,
                                         placeholder: *placeholder,
+                                        width: pool.width(before),
                                     },
                                 );
                             }
@@ -644,14 +667,15 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
                                 initial,
                                 &streamed.characters,
                             )?;
-                            Some((*slot, states))
+                            Some((*slot, states, pool.width(snapshot.held(*slot))))
                         });
-                        if let Some((slot, states)) = found {
+                        if let Some((slot, states, width)) = found {
                             grown.phases.insert(
                                 slot,
                                 PhaseFold {
                                     states,
                                     placeholder: *placeholder,
+                                    width,
                                 },
                             );
                         }
@@ -791,6 +815,14 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
         for fold in grown.folds.values_mut() {
             fold.most = reach - chunk as u128;
         }
+        // A count goes up by at most one a byte: one kept in fewer bits than the idea's longest
+        // text needs would wrap.
+        if grown.folds.values().any(|fold| {
+            let most = u128::MAX >> (128 - fold.width.clamp(1, 128));
+            fold.start.checked_add(reach).is_none_or(|top| top > most)
+        }) {
+            return Err("it keeps a count in fewer bits than the idea's longest text needs".into());
+        }
         if grown == hook {
             let questions = verify(
                 &mut pool,
@@ -847,14 +879,17 @@ pub fn step(image: &Image, block: &Generated, budget: &Budget) -> Result<Found, 
 /// The checks a run back at the head meets: it read a buffer-full (two, where its counts look
 /// back), wrote the formula's bytes for it and nothing to standard error, kept each count in
 /// step with the formula, and has each counter one lower each time round.
-fn looped_checks(
+fn looped_checks<C>(
     pool: &mut Pool,
     block: &Generated,
     streamed: &Streamed<'_>,
-    run: &State,
+    run: &State<C>,
     hook: &Hook,
     chunk: usize,
-) -> Result<Term, String> {
+) -> Result<Term, String>
+where
+    State<C>: Held,
+{
     let world = &run.world;
     let snapshot = world
         .at_head()
@@ -927,8 +962,8 @@ fn looped_checks(
                         )?,
                     ),
                 };
-                let now = pool.zero_extend(run.held(*slot), WIDTH - 64);
-                let before = pool.zero_extend(before, WIDTH - 64);
+                let now = widened(pool, run.held(*slot));
+                let before = widened(pool, before);
                 let expected = pool.add(before, count);
                 checks.push(pool.eq(now, expected));
             }
@@ -949,12 +984,13 @@ fn looped_checks(
     // Each counter one lower than it was at the head each time round.
     for slot in hook.counters.keys() {
         let then = snapshot.held(*slot);
+        let width = pool.width(then);
         if let Some(second) = second.filter(|_| fulls > 1) {
-            let one = pool.bv(64, 1);
+            let one = pool.bv(width, 1);
             let lower = pool.sub(then, one);
             checks.push(pool.eq(second.held(*slot), lower));
         }
-        let rounds = pool.bv(64, fulls as u128);
+        let rounds = pool.bv(width, fulls as u128);
         let lower = pool.sub(then, rounds);
         checks.push(pool.eq(run.held(*slot), lower));
     }
@@ -965,16 +1001,19 @@ fn looped_checks(
 /// back to the head having read one buffer-full, written the formula's bytes for it and
 /// nothing to standard error, with each counter one lower. Returns the questions asked.
 #[allow(clippy::too_many_arguments)]
-fn verify(
+fn verify<C>(
     pool: &mut Pool,
     block: &Generated,
     streamed: &Streamed<'_>,
-    runs: &[State],
+    runs: &[State<C>],
     hook: &Hook,
     solvers: &mut Solvers,
     budget: &Budget,
     chunk: usize,
-) -> Result<usize, Refused> {
+) -> Result<usize, Refused>
+where
+    State<C>: Held,
+{
     let before = solvers.solver.as_ref().map_or(0, |solver| solver.questions);
     let fulls = usize::try_from(hook.fulls()).unwrap_or(1);
     for run in runs {

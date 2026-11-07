@@ -2562,10 +2562,11 @@ fn same_terms(pool: &mut Pool, a: &[Term], b: &[Term]) -> Term {
 
 /// A program a proof runs: native machine code ([`Image`]) or a WebAssembly module
 /// ([`wasm::Module`]), each with the core its runs take their steps on. The driver lays out the
-/// inputs, explores the runs and checks each against the block the same way for both.
+/// inputs, explores the runs and checks each against the block the same way for both, and proves
+/// a read loop for every length by induction the same way too.
 trait Program: Sync + Sized {
-    /// The core its runs take their steps on.
-    type Core: exec::Core<Image = Self>;
+    /// The core its runs take their steps on, and the read loop's head with them.
+    type Core: exec::Core<Image = Self> + exec::induction::Looping;
 
     /// The state its runs start in: `args`, the environment's `NAME=value` strings and `stdin`
     /// as byte terms.
@@ -2584,7 +2585,7 @@ trait Program: Sync + Sized {
     /// The functions no run of the proof called, of which the proof says nothing.
     fn uncalled(&self) -> Vec<String>;
 
-    /// `state` taking the read loop's head as `hook` says, in an induction's base.
+    /// `state` taking the read loop's head as `hook` says, in an induction's base and step.
     ///
     /// # Errors
     ///
@@ -2593,6 +2594,13 @@ trait Program: Sync + Sized {
         state: State<Self::Core>,
         hook: std::rc::Rc<exec::induction::Hook>,
     ) -> Result<State<Self::Core>, String>;
+
+    /// Where the read loop a proof by induction goes round starts: the head its runs take.
+    ///
+    /// # Errors
+    ///
+    /// Why the program has no read loop the induction takes.
+    fn read_loop(&self) -> Result<u64, String>;
 }
 
 impl Program for Image {
@@ -2619,6 +2627,14 @@ impl Program for Image {
     fn hooked(state: State, hook: std::rc::Rc<exec::induction::Hook>) -> Result<State, String> {
         Ok(state.with_hook(hook))
     }
+
+    /// fill's own loop, which every read of the program's goes through.
+    fn read_loop(&self) -> Result<u64, String> {
+        if !self.has_fill() {
+            return Err("it doesn't read with fill".into());
+        }
+        self.fill_head().ok_or_else(|| "it has no fill".into())
+    }
 }
 
 impl Program for wasm::Module {
@@ -2634,9 +2650,12 @@ impl Program for wasm::Module {
         wasm::begin(self, pool, args, env, stdin)
     }
 
-    /// lengua's library's `$fill` runs as the code it is, each of its reads one the world gives.
+    /// A module that reads standard input only through lengua's library's `$fill`, to the end
+    /// of the input each time, and isn't on the network: every way the input is cut gives each
+    /// `$fill` the same bytes, which a proof then reads as a whole. Any other runs `$fill` as the
+    /// code it is, each of its reads one the world gives.
     fn fills(&self) -> bool {
-        false
+        self.reads_whole()
     }
 
     fn uncalled(&self) -> Vec<String> {
@@ -2644,14 +2663,15 @@ impl Program for wasm::Module {
     }
 
     fn hooked(
-        _state: State<wasm::Wasm>,
-        _hook: std::rc::Rc<exec::induction::Hook>,
+        state: State<wasm::Wasm>,
+        hook: std::rc::Rc<exec::induction::Hook>,
     ) -> Result<State<wasm::Wasm>, String> {
-        Err(
-            "the WebAssembly model takes no read loop's head yet: every length by induction is \
-             the prover's third step"
-                .into(),
-        )
+        Ok(wasm::hooked(state, hook))
+    }
+
+    /// The call of `$fill` in a loop of main.wat's own code.
+    fn read_loop(&self) -> Result<u64, String> {
+        self.read_loop_head()
     }
 }
 
@@ -2668,7 +2688,9 @@ pub fn prove(machine: &Machine, block: &Generated, budget: &Budget) -> Verdict {
 /// allows, within `budget`, as [`prove`] proves a native program: the same shapes of the inputs,
 /// the same paths, solvers and checks of every run, on the WebAssembly model's runs, and the
 /// same verdicts. A trap the engine would stop at is a counterexample that names main.wat's
-/// line. Texts are proven up to a length, a [`Bound`]; every length is the prover's next step.
+/// line. A program that streams its input through a read loop is proven for every length by
+/// induction where its step holds, as a native one is; texts are otherwise proven up to a
+/// length, a [`Bound`].
 #[must_use]
 pub fn prove_wasm(
     built: &crate::wasm::Built,
@@ -2689,7 +2711,7 @@ fn attempt_wasm(
         return Err(USES_NOW.into());
     }
     let module = wasm::Module::new(built, policy)?;
-    by_length(&module, block, budget, None)
+    either_way(&module, block, budget)
 }
 
 fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verdict, String> {
@@ -2697,10 +2719,14 @@ fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verd
         return Err(USES_NOW.into());
     }
     let image = Image::new(machine).ok_or("the program has no _start")?;
-    // A streaming filter is proven for every length at once where its read loop's step holds;
-    // otherwise, and for every other program, the proof goes length by length.
+    either_way(&image, block, budget)
+}
+
+/// Proves `block` about `image`: a streaming filter for every length at once where its read
+/// loop's step holds; otherwise, and for every other program, length by length.
+fn either_way<P: Program>(image: &P, block: &Generated, budget: &Budget) -> Result<Verdict, String> {
     if budget.from_length == 0 {
-        match by_induction(&image, block, budget) {
+        match by_induction(image, block, budget) {
             Ok(Some(verdict)) => return Ok(verdict),
             Ok(None) => {}
             Err(why) => {
@@ -2710,7 +2736,7 @@ fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verd
             }
         }
     }
-    by_length(&image, block, budget, None)
+    by_length(image, block, budget, None)
 }
 
 /// Proves `block` for every length by induction over its read loop: first the states the loop
@@ -2722,8 +2748,8 @@ fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verd
 /// # Errors
 ///
 /// Why no induction applies, or its step doesn't hold.
-fn by_induction(
-    image: &Image,
+fn by_induction<P: Program>(
+    image: &P,
     block: &Generated,
     budget: &Budget,
 ) -> Result<Option<Verdict>, String> {
@@ -2970,7 +2996,11 @@ fn by_induction(
 /// # Errors
 ///
 /// What the model can't run.
-fn replay(image: &Image, block: &Generated, input: &[u8]) -> Result<Option<Verdict>, String> {
+fn replay<P: Program>(
+    image: &P,
+    block: &Generated,
+    input: &[u8],
+) -> Result<Option<Verdict>, String> {
     let [(name, Generator::Str { max, charset, .. })] = block.vars.as_slice() else {
         return Ok(None);
     };
@@ -2991,8 +3021,9 @@ fn replay(image: &Image, block: &Generated, input: &[u8]) -> Result<Option<Verdi
     };
     let mut pool = Pool::default();
     let stdin = exec::bytes(&mut pool, case.stdin.as_bytes());
-    let start =
-        State::start(image, &mut pool, &[], &[], stdin).with_stdout_closed(case.stdout_closed);
+    let start = image
+        .begin(&mut pool, &[], &[], stdin)
+        .with_stdout_closed(case.stdout_closed);
     let mut runs = exec::explore(image, start, &mut pool, &mut exec::Concrete, 2)?;
     let Some(run) = runs.pop().map(|run| run.world) else {
         return Ok(None);
@@ -3852,7 +3883,7 @@ fn prove_shape<P: Program>(
                 continue;
             }
             let value = fold.value(&mut pool, *slot);
-            let wide = pool.zero_extend(value, WIDTH - 64);
+            let wide = pool.zero_extend(value, WIDTH - fold.width);
             let start = pool.bv(WIDTH, fold.start);
             let before = pool.sub(wide, start);
             let most = i128::try_from(fold.most).map_err(|_| "a count too large")?;
@@ -4190,7 +4221,8 @@ fn check_runs(
                 let mut offsets = HashMap::new();
                 for (slot, start, expr, back) in &relative.folds {
                     let value = second.held(*slot);
-                    let wide = pool.zero_extend(value, WIDTH - 64);
+                    let width = pool.width(value);
+                    let wide = pool.zero_extend(value, WIDTH - width);
                     let first = pool.bv(WIDTH, *start);
                     let before = pool.sub(wide, first);
                     let (lowest, highest) = pool.range(value);
