@@ -513,9 +513,7 @@ impl Call<'_> {
             }
             "fd_tell" => self.fd_seek(fd(0), 0, whence::CUR, numbers[1]),
             "fd_write" => self.fd_write(fd(0), (numbers[1], numbers[2]), numbers[3]),
-            "path_create_directory" => {
-                self.path_create_directory(fd(0), (numbers[1], numbers[2]))
-            }
+            "path_create_directory" => self.path_create_directory(fd(0), (numbers[1], numbers[2])),
             "path_filestat_get" => {
                 self.path_filestat_get(fd(0), (numbers[2], numbers[3]), numbers[4])
             }
@@ -527,9 +525,7 @@ impl Call<'_> {
                 );
                 self.path_open(fd(0), (numbers[2], numbers[3]), opening, numbers[8])
             }
-            "path_remove_directory" => {
-                self.path_remove_directory(fd(0), (numbers[1], numbers[2]))
-            }
+            "path_remove_directory" => self.path_remove_directory(fd(0), (numbers[1], numbers[2])),
             "path_rename" => self.path_rename(
                 (fd(0), numbers[1], numbers[2]),
                 (fd(3), numbers[4], numbers[5]),
