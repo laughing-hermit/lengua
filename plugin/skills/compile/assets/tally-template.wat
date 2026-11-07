@@ -267,7 +267,8 @@
       (br_if $differ
         (call $compare_bytes
           (i32.wrap_i64
-            (i64.and (i64.shr_u (local.get $held) (global.get $FIELD_BITS)) (global.get $FIELD_MASK)))
+            (i64.and (i64.shr_u (local.get $held) (global.get $FIELD_BITS))
+              (global.get $FIELD_MASK)))
           (local.get $length) (local.get $start) (local.get $length)))
       (i64.store (local.get $at) (i64.add (local.get $held) (global.get $ONE_MORE)))
       (local.set $same (i32.const 1)))
@@ -336,10 +337,12 @@
         (local.set $order
           (call $compare_bytes
             (i32.wrap_i64
-              (i64.and (i64.shr_u (local.get $x) (global.get $FIELD_BITS)) (global.get $FIELD_MASK)))
+              (i64.and (i64.shr_u (local.get $x) (global.get $FIELD_BITS))
+                (global.get $FIELD_MASK)))
             (i32.wrap_i64 (i64.and (local.get $x) (global.get $FIELD_MASK)))
             (i32.wrap_i64
-              (i64.and (i64.shr_u (local.get $y) (global.get $FIELD_BITS)) (global.get $FIELD_MASK)))
+              (i64.and (i64.shr_u (local.get $y) (global.get $FIELD_BITS))
+                (global.get $FIELD_MASK)))
             (i32.wrap_i64 (i64.and (local.get $y) (global.get $FIELD_MASK)))))))
     (local.get $order))
 
