@@ -10,10 +10,16 @@ compatibility: Needs the lengua MCP server from the lengua plugin; main.s also n
 > lengua is moving to WebAssembly: a program's code becomes `main.wat`, the same on every
 > computer, held to [the WebAssembly dialect](references/power-of-10-webassembly.md) and calling
 > only [lengua's host](references/host.md). For an idea of `type: Attested Computation`, `check`
-> takes `main.wat` and refuses `main.s`: write `<path>/main.wat` in the shape of
-> [the WebAssembly template](assets/main-template.wat), by those two references, then call
-> `check` and follow it until it says done, as below. For any other idea, compile `main.s` as
-> below.
+> takes `main.wat` and refuses `main.s`: write `<path>/main.wat` by those two references and
+> [Writing main.wat](references/wasm.md), in the shape of one of the WebAssembly templates, each a
+> checked program beside its idea: [the negate template](assets/main-template.wat),
+> [the streaming filter](assets/stream-template.wat),
+> [the vector template](assets/vector-template.wat),
+> [the event-loop server](assets/server-template.wat) and
+> [the word tally](assets/tally-template.wat). Then call `check` and follow it until it says
+> done, as below. The key reader has no WebAssembly form until lengua's host gives the
+> terminal's two imports, and the parallel template has none: a WebAssembly program has no
+> threads. For any other idea, compile `main.s` as below.
 
 `main.s` is the program: assembly for this computer's target, Linux on x86-64 or on AArch64,
 that you compile from `idea.md`; the first word of `check`'s `machine` line names the target,
@@ -90,7 +96,8 @@ and the CPU features the code needs; never write that line yourself.
    [the key reader](assets/terminal-template.s) ([its idea](assets/terminal-template-idea.md); on
    AArch64 [its form](assets/linux-aarch64/terminal-template.s)):
    keys one at a time with no echo, a wait for the next key, and the terminal set back at the
-   end. A program that counts or looks things up by key starts from
+   end; it has no WebAssembly form until lengua's host gives the terminal's two imports. A
+   program that counts or looks things up by key starts from
    [the word tally](assets/tally-template.s) ([its idea](assets/tally-template-idea.md); on
    AArch64 [its form](assets/linux-aarch64/tally-template.s)): a hash
    table of a million slots by FNV-1a with linear probing, its entries in the order the keys first
@@ -282,7 +289,8 @@ When the idea allows threads (`- Threads: up to N`), split heavy work across cor
 `parallel_for`: [the parallel template](assets/parallel-template.s) (with
 [its idea](assets/parallel-template-idea.md); on AArch64
 [its form](assets/linux-aarch64/parallel-template.s)) capitalizes up to a megabyte on 16
-threads, each worker filling its own slot. Call `parallel_for` as it does, follow "Threads" in
+threads, each worker filling its own slot; it has no WebAssembly form, since a WebAssembly program
+has no threads. Call `parallel_for` as it does, follow "Threads" in
 [the rules](references/power-of-10.md), and compare the time on the clock, which threads
 shorten. Starting a thread costs tens of microseconds, so give each one at least a few hundred
 kilobytes of vector work: on a megabyte, one 64-byte loop is as fast as sixteen threads.
