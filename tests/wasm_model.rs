@@ -1278,10 +1278,7 @@ fn vector_probes(rng: &mut ChaCha8Rng) -> Vec<Vec<Probe>> {
                 format!("({shape}.splat (i32.const {scalar:#x}))"),
             ));
         }
-        unary.push((
-            Kind::V128,
-            format!("(i64x2.splat (i64.const {scalar:#x}))"),
-        ));
+        unary.push((Kind::V128, format!("(i64x2.splat (i64.const {scalar:#x}))")));
     }
     modules.push(unary);
     modules

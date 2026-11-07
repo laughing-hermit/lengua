@@ -108,9 +108,8 @@ fn slot_place(core: &mut Wasm, slot: Slot) -> Option<&mut Term> {
 ///
 /// A slot the run has no place for, or a value of another width.
 fn set_slot(pool: &Pool, core: &mut Wasm, slot: Slot, value: Term) -> Result<(), End> {
-    let place = slot_place(core, slot).ok_or_else(|| {
-        End::Unsupported(format!("the read loop's head has no slot {slot}"))
-    })?;
+    let place = slot_place(core, slot)
+        .ok_or_else(|| End::Unsupported(format!("the read loop's head has no slot {slot}")))?;
     if pool.width(*place) != pool.width(value) {
         return Err(End::Unsupported(format!(
             "slot {slot} at the read loop's head holds another width than its count's"
