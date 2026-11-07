@@ -21,6 +21,18 @@ pub(super) const PAGE: u64 = 65_536;
 /// The most pages a 32-bit memory has.
 const MOST_PAGES: u64 = 65_536;
 
+/// The most bytes of the engine's stack the model lets a run's calls take: half of what the
+/// engine holds them to, as the model's count of a frame is an estimate, however generous.
+const STACK: u64 = crate::wasm::engine::MAX_WASM_STACK as u64 / 2;
+
+/// The bytes the model counts for a frame beside its values: the return address and the frame's
+/// link, the registers a function keeps for its caller (at most 224 bytes, on Windows), the
+/// arguments a call passes on the stack, and the trampoline a host call goes through.
+const FRAME: u64 = 1024;
+
+/// The bytes the model counts for each value a frame may hold: a vector's 16, the widest.
+const SLOT: u64 = 16;
+
 /// A value's type, which the model holds as a bit vector of its width.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Kind {
@@ -542,6 +554,112 @@ fn blocks(ops: &[Op]) -> Result<(Vec<usize>, Vec<usize>), String> {
     Ok((ends, elses))
 }
 
+/// What one call of `function` takes of the engine's stack, at most, by the model's count: a
+/// frame's fixed part, a slot for each of its parameters, results and locals and for another
+/// copy of each at every block, where the compiled code may keep one, and two slots for each
+/// operator. A host call's frame is its trampoline's, with its arguments and its result.
+fn frame(function: &Function) -> u64 {
+    let blocks = function
+        .ops
+        .iter()
+        .filter(|op| matches!(op, Op::Block(_) | Op::Loop(_) | Op::If(_)))
+        .count();
+    let values = function.params + function.results + function.locals.len();
+    let slots = values
+        .saturating_mul(blocks.saturating_add(1))
+        .saturating_add(function.ops.len().saturating_mul(2));
+    FRAME.saturating_add(SLOT.saturating_mul(slots as u64))
+}
+
+/// The functions `function` calls, each once, by index.
+fn called(function: &Function) -> Vec<usize> {
+    let mut called: Vec<usize> = function
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            Op::Call(index) => usize::try_from(*index).ok(),
+            _ => None,
+        })
+        .collect();
+    called.sort_unstable();
+    called.dedup();
+    called
+}
+
+/// How far the model has followed a function's calls, for [`deepest`].
+#[derive(Debug, Clone, Copy)]
+enum Followed {
+    /// Not yet.
+    Not,
+    /// Its calls are being followed.
+    Under,
+    /// Done: the most bytes of the stack a call of it takes, its callees' calls with it.
+    Done(u64),
+}
+
+/// Why the model refuses a module whose function `index` calls itself, directly or through others.
+fn recursion(functions: &[Function], index: usize) -> String {
+    let name = functions
+        .get(index)
+        .and_then(|function| function.name.clone())
+        .map_or_else(|| format!("function {index}"), |name| format!("${name}"));
+    format!(
+        "{name} calls itself, directly or through others: the dialect has no recursion \
+         (rule 1), and the model can't count the stack such calls take"
+    )
+}
+
+/// The most bytes of the engine's stack a run's calls take, by the model's count: the frames of
+/// the deepest calls from the function `entry`, `_start`. Without recursion, every run's calls
+/// are one of the call graph's paths from it.
+///
+/// # Errors
+///
+/// A function that calls itself, directly or through others.
+fn deepest(functions: &[Function], entry: usize) -> Result<u64, String> {
+    if entry >= functions.len() {
+        return Err("the module exports no `_start`".into());
+    }
+    let callees: Vec<Vec<usize>> = functions.iter().map(called).collect();
+    let mut followed = vec![Followed::Not; functions.len()];
+    followed[entry] = Followed::Under;
+    // The calls being followed, the newest last: each function, with how many of its callees
+    // are followed.
+    let mut path = vec![(entry, 0)];
+    while let Some(top) = path.len().checked_sub(1) {
+        let (function, done) = path[top];
+        let Some(&callee) = callees[function].get(done) else {
+            // Every callee followed: its own frame, and the deepest of theirs.
+            let below = callees[function]
+                .iter()
+                .filter_map(|callee| match followed[*callee] {
+                    Followed::Done(bytes) => Some(bytes),
+                    Followed::Not | Followed::Under => None,
+                })
+                .max()
+                .unwrap_or(0);
+            let bytes = frame(&functions[function]).saturating_add(below);
+            followed[function] = Followed::Done(bytes);
+            path.pop();
+            continue;
+        };
+        path[top].1 += 1;
+        match followed.get(callee).copied() {
+            Some(Followed::Not) => {
+                followed[callee] = Followed::Under;
+                path.push((callee, 0));
+            }
+            Some(Followed::Under) => return Err(recursion(functions, callee)),
+            Some(Followed::Done(_)) => {}
+            None => return Err("a call of a function the module doesn't have".into()),
+        }
+    }
+    match followed.get(entry) {
+        Some(Followed::Done(bytes)) => Ok(*bytes),
+        _ => Err("the module exports no `_start`".into()),
+    }
+}
+
 impl Module {
     /// Reads the module `built` holds, for a program whose idea lets it reach what `policy`
     /// allows.
@@ -550,8 +668,9 @@ impl Module {
     ///
     /// What the model can't run as the engine does: a module it can't read, an import lengua's
     /// host doesn't give or of another type than WASI's, which the engine doesn't link, a start
-    /// function, a table or an element segment, a value of a type it doesn't hold, or data past
-    /// the memory.
+    /// function, a table or an element segment, a value of a type it doesn't hold, data past the
+    /// memory, a function that calls itself, directly or through others, or calls that may go
+    /// deeper than the engine's stack holds.
     #[allow(clippy::too_many_lines)]
     pub fn new(built: &Built, policy: Policy) -> Result<Self, String> {
         let failed = |error: wasmparser::BinaryReaderError| {
@@ -785,6 +904,14 @@ impl Module {
             return Err(
                 "its `_start` isn't a function of its own that takes and gives nothing".into(),
             );
+        }
+        // The stack never runs out on a run the model takes: the deepest calls fit in it.
+        let stack = deepest(&functions, usize::try_from(entry).unwrap_or(usize::MAX))?;
+        if stack > STACK {
+            return Err(format!(
+                "its deepest calls may take {stack} bytes of the engine's stack, past the \
+                 {STACK} the model is sure it has (M8)"
+            ));
         }
         let entered = functions.iter().map(|_| AtomicBool::new(false)).collect();
         Ok(Self {

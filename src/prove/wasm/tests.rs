@@ -228,13 +228,6 @@ fn each_trap_ends_the_run_at_its_line() {
             "it reached memory outside its own",
         ),
         (
-            "(module\n  (memory (export \"memory\") 1 1)\n  (func $down\n    (call $down))\n  \
-             (func (export \"_start\")\n    (call $down)))\n"
-                .to_owned(),
-            4,
-            "its calls went deeper than the stack holds",
-        ),
-        (
             "(module\n  (import \"wasi_snapshot_preview1\" \"fd_write\"\n    (func $fd_write \
              (param i32 i32 i32 i32) (result i32)))\n  (memory (export \"memory\") 1 1)\n  (func \
              (export \"_start\")\n    (drop (call $fd_write (i32.const 1) (i32.const 65532) \
@@ -311,6 +304,84 @@ fn what_the_engine_doesnt_start_the_model_refuses() {
     }
     let refused = refusal(TABLED);
     assert!(refused.contains("a table"), "{refused}");
+}
+
+/// A module whose `_start` calls a chain of `length` functions, each the next.
+fn chain(length: usize) -> String {
+    let mut text = String::from("(module\n  (memory (export \"memory\") 1 1)\n");
+    for link in 0..length {
+        let next = link + 1;
+        text.push_str(&format!("  (func $f{link} (call $f{next}))\n"));
+    }
+    text.push_str(&format!("  (func $f{length})\n  (func (export \"_start\") (call $f0)))\n"));
+    text
+}
+
+/// A function that calls itself.
+const ITSELF: &str = r#"(module
+  (memory (export "memory") 1 1)
+  (func $down
+    (call $down))
+  (func (export "_start")
+    (call $down)))
+"#;
+
+/// Two functions that call each other.
+const THROUGH: &str = r#"(module
+  (memory (export "memory") 1 1)
+  (func $ping (call $pong))
+  (func $pong (call $ping))
+  (func (export "_start") (call $ping)))
+"#;
+
+/// The start of a module whose `_start` calls `$deep` with DEPTH, its locals still to come.
+const DEEP: &str = r#"(module
+  (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))
+  (memory (export "memory") 1 1)
+  (func (export "_start")
+    (drop (call $deep (i32.const DEPTH)))
+    (call $exit (i32.const 0)))
+  (func $deep (param $n i32) (result i64)
+    (local $sum i64)"#;
+
+/// A module whose `$deep` calls itself `depth` times, each call keeping `values` values of 64
+/// bits across the next: the engine's stack runs out once the calls keep more than its 512 KiB.
+fn recursing(depth: u32, values: u32) -> String {
+    let mut locals = String::new();
+    let mut loads = String::new();
+    let mut sums = String::new();
+    for value in 0..values {
+        let offset = value * 8;
+        locals.push_str(&format!("\n    (local $v{value} i64)"));
+        loads.push_str(&format!(
+            "\n    (local.set $v{value} (i64.load offset={offset} (i32.const 1024)))"
+        ));
+        sums.push_str(&format!(
+            "\n    (local.set $sum (i64.add (local.get $sum) (local.get $v{value})))"
+        ));
+    }
+    let call = "\n    (if (local.get $n)\n      (then (local.set $sum\n        (call $deep \
+                (i32.sub (local.get $n) (i32.const 1))))))";
+    let start = DEEP.replace("DEPTH", &depth.to_string());
+    format!("{start}{locals}{loads}{call}{sums}\n    (local.get $sum)))\n")
+}
+
+/// What the model refuses because the engine's stack could run out: a function that calls
+/// itself, directly or through others, and calls that may go deeper than the model is sure the
+/// engine's stack holds. The model once took a recursion of fewer than 1024 calls, which the
+/// engine traps on where its frames are large; a chain of calls well within the stack runs.
+#[test]
+fn recursion_and_calls_past_the_engines_stack_are_refused() {
+    let refused = refusal(ITSELF);
+    assert!(refused.starts_with("$down calls itself"), "{refused}");
+    let refused = refusal(THROUGH);
+    assert!(refused.starts_with("$ping calls itself"), "{refused}");
+    let refused = refusal(&recursing(1000, 80));
+    assert!(refused.starts_with("$deep calls itself"), "{refused}");
+    let refused = refusal(&chain(300));
+    assert!(refused.contains("deepest calls"), "{refused}");
+    let done = ran(&chain(100), Policy::default(), &Given::default());
+    assert_eq!(done.end, Ended::Exit(0));
 }
 
 /// Reads a line with lengua's library and writes it back, as tests/host.rs's own case does.

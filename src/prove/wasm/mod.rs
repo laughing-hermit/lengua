@@ -8,7 +8,8 @@
 //! ([`run`]). With inputs as terms, a run splits at each branch the inputs decide, and each trap
 //! the engine would stop at is an obligation the proof must meet on every path, with main.wat's
 //! line: an access outside the memory, a division or remainder by zero, the least value divided
-//! by -1, `unreachable` reached, and calls nested deeper than the stack holds.
+//! by -1, and `unreachable` reached. The stack never runs out: [`Module`] refuses a module whose
+//! calls recurse, or may go deeper than the engine's stack holds.
 
 mod host;
 mod image;
@@ -25,10 +26,6 @@ use super::term::{Pool, Term};
 use super::world::{World, net};
 use host::Handle;
 pub use image::Module;
-
-/// The most calls under way at once: past it a call traps, as the engine's stack runs out. The
-/// dialect has no recursion, so a program's calls nest no deeper than it has functions.
-pub const MAX_DEPTH: usize = 1024;
 
 /// A label of a block a call is inside: where a branch to it goes, and what it carries there.
 #[derive(Debug, Clone, Copy)]
