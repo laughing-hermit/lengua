@@ -14,7 +14,7 @@
 
 use lengua::checker::Rule;
 use lengua::checker::wasm::{Context, check};
-use lengua::idea::Network;
+use lengua::idea::{Network, constraints};
 use lengua::wasm::text::build;
 
 /// The WebAssembly main template, which most attempts change.
@@ -461,6 +461,34 @@ const ATTEMPTS: &[Attempt] = &[
         ),
     },
     Attempt {
+        name: "an early return through a branch to the function's own label",
+        edits: &[(
+            "    (local.set $magnitude (local.get $value))\n",
+            "    (if (i64.eqz (local.get $value)) (then (br 1 (global.get $NO_ERROR))))\n    \
+             (local.set $magnitude (local.get $value))\n",
+        )],
+        module: None,
+        refusal: Refusal::Rule(
+            Rule::Functions,
+            "this branch to the function's own label leaves $write_i64 before its end",
+        ),
+    },
+    Attempt {
+        name: "a br_table's default that falls into ordinary code",
+        edits: &[(
+            "    (local.set $start (local.get $i))\n",
+            "    (local.set $start (local.get $i))\n    (block $done\n      (block $other\n        \
+             (block $zero (br_table $zero $other (local.get $i)))\n        (local.set $c \
+             (global.get $NINE))\n        (br $done))\n      (local.set $c (global.get \
+             $MINUS)))\n",
+        )],
+        module: None,
+        refusal: Refusal::Rule(
+            Rule::ControlFlow,
+            "default doesn't lead to an assertion or an error",
+        ),
+    },
+    Attempt {
         name: "a loop without a bound",
         edits: &[("(loop $digit  ;; bound: 20", "(loop $digit")],
         module: None,
@@ -573,6 +601,35 @@ fn every_attempt_is_refused() {
     for attempt in ATTEMPTS {
         assert_refused(attempt);
     }
+}
+
+/// Only a server's loop that takes connections may run forever: in a program whose idea
+/// listens, a loop marked `;; bound: forever` that never calls `sock_accept` is refused.
+#[test]
+fn a_loop_that_runs_forever_must_take_connections() {
+    let at = "          (call $proc_exit (global.get $EXIT_OK))\n";
+    assert!(TEMPLATE.contains(at));
+    let text = TEMPLATE.replacen(
+        at,
+        "          (loop $spin  ;; bound: forever\n            (br $spin))\n          (call \
+         $proc_exit (global.get $EXIT_OK))\n",
+        1,
+    );
+    let built = build(&text).unwrap_or_else(|problem| panic!("it builds: {problem}"));
+    let server = constraints(&[], "listens on TCP port 8080");
+    let (uses, network) = server.expect("a server's idea");
+    let report = check(
+        &text,
+        &built,
+        &Context {
+            uses: &uses,
+            network: &network,
+        },
+    );
+    let found = report.violations.iter().any(|violation| {
+        violation.rule == Rule::Loops && violation.in_file("main.wat").contains("`sock_accept`")
+    });
+    assert!(found, "not refused: {:#?}", report.lines());
 }
 
 /// The template the attempts change passes, so each refusal is the attempt's.

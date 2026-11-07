@@ -5,14 +5,16 @@
 //! the deepest call path is known); `unreachable` only right after a call that never returns,
 //! and every such call followed by it; a `br_table`'s default leading to an assertion or an
 //! error; every loop counted (rule 2's pattern, `;; bound: N`) or a server's one accept loop,
-//! `;; bound: forever`, closed by an unconditional branch back; no `return` before a function's
-//! end (rule 4); and `_start` ending every path in `proc_exit`, so the exit status is named.
+//! `;; bound: forever`, which calls `sock_accept` and is closed by an unconditional branch back;
+//! no `return`, nor branch to the function's own label, before a function's end (rule 4); and
+//! `_start` ending every path in `proc_exit`, so the exit status is named.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use wasmparser::{BlockType, FrameKind, Operator};
 
 use super::model::{Function, Kind, Module, to_usize};
+use super::rules::returns_result;
 use crate::checker::{Rule, Violation};
 use crate::wasm::Policy;
 
@@ -259,7 +261,7 @@ pub fn analyze(module: &Module<'_>, policy: &Policy, violations: &mut Vec<Violat
         };
         checker.unreachable(function);
         checker.tables(function, shape);
-        checker.returns(function);
+        checker.returns(function, shape);
         for (at, op) in function.body.iter().enumerate() {
             if matches!(op.operator, Operator::Loop { .. }) {
                 checker.counted(function, shape, at, policy, &mut forever);
@@ -390,7 +392,9 @@ impl Checker<'_, '_, '_> {
     }
 
     /// Whether the code from `at` on, after an `end`, starts an assertion or an error path: a
-    /// call to `$assert_fail`, an exit, or an error number from a named constant.
+    /// call to `$assert_fail`; an exit with a status that isn't 0; or, in a function marked
+    /// `;; returns: result`, an error number from a named constant that is what the function
+    /// gives, nothing but the ends of blocks between it and the function's end.
     fn leads_to_error(&self, function: &Function<'_>, mut at: usize) -> bool {
         let module = self.module;
         let ops = &function.body;
@@ -408,24 +412,21 @@ impl Checker<'_, '_, '_> {
                 callee.is_library("assert_fail") || callee.name.as_deref() == Some("assert_fail")
             }),
             Operator::GlobalGet { global_index } => {
-                if next_call.is_some_and(|callee| callee.is_host("proc_exit")) {
-                    return true;
-                }
-                let error_number = module.global(global_index).is_some_and(|global| {
+                let failure = module.global(global_index).is_some_and(|global| {
                     global.unsigned().is_some_and(|value| value != 0)
                         && module.region_of(global_index).is_none()
                         && module.sized_by(global_index).is_none()
                 });
-                error_number
-                    && ops.get(at + 1).is_some_and(|next| {
-                        matches!(
-                            next.operator,
-                            Operator::LocalSet { .. }
-                                | Operator::LocalTee { .. }
-                                | Operator::Br { .. }
-                                | Operator::BrIf { .. }
-                        )
-                    })
+                if !failure {
+                    return false;
+                }
+                if next_call.is_some_and(|callee| callee.is_host("proc_exit")) {
+                    return true;
+                }
+                let given = ops[at + 1..]
+                    .iter()
+                    .all(|op| matches!(op.operator, Operator::End));
+                given && returns_result(module, function)
             }
             _ => false,
         }
@@ -458,25 +459,36 @@ impl Checker<'_, '_, '_> {
                     "this br_table's default doesn't lead to an assertion or an error, so an \
                      unexpected value could slip through",
                     "make the default a block whose end is followed by an assertion, `(call \
-                     $assert_fail (i32.const N)) unreachable`, or by an error: an exit, or an \
-                     error number from a named constant",
+                     $assert_fail (i32.const N)) unreachable`, or by an error: an exit with a \
+                     status that isn't 0, or, as the result of a function marked `;; returns: \
+                     result`, an error number from a named constant",
                 );
             }
         }
     }
 
-    /// Rule 4: a function ends once, at its end.
-    fn returns(&mut self, function: &Function<'_>) {
-        for op in &function.body {
-            if matches!(op.operator, Operator::Return) {
-                self.violation(
-                    Rule::Functions,
-                    op.line,
-                    format!("`return` leaves {} before its end", function.shown()),
-                    "end a function once, at its end: leave a block with `br` instead, and put \
-                     the result on the stack before the function's end",
-                );
+    /// Rule 4: a function ends once, at its end: no `return`, and no branch to the function's
+    /// own label, which leaves it as a `return` does.
+    fn returns(&mut self, function: &Function<'_>, shape: &Shape) {
+        for (at, targets) in &shape.targets {
+            let Some(op) = function.body.get(*at) else {
+                continue;
+            };
+            if !targets.contains(&None) {
+                continue;
             }
+            let what = if matches!(op.operator, Operator::Return) {
+                "`return`"
+            } else {
+                "this branch to the function's own label"
+            };
+            self.violation(
+                Rule::Functions,
+                op.line,
+                format!("{what} leaves {} before its end", function.shown()),
+                "end a function once, at its end: leave a block with `br` instead, and put the \
+                 result on the stack before the function's end",
+            );
         }
     }
 
@@ -650,6 +662,50 @@ impl Checker<'_, '_, '_> {
                 "end the loop with `(br $name)`, so it provably never ends by itself",
             );
         }
+        if !self.accepts(function, at, end) {
+            self.violation(
+                Rule::Loops,
+                line,
+                "this loop runs forever but takes no connections: nothing in it calls \
+                 `sock_accept`",
+                "take each connection in the loop with `sock_accept`, itself or through a \
+                 function it calls; give any other loop a counter and `;; bound: N`",
+            );
+        }
+    }
+
+    /// Whether the loop opened at `at` and ended at `end` takes connections: its body calls
+    /// `sock_accept`, itself or through main.wat's functions it calls.
+    fn accepts(&self, function: &Function<'_>, at: usize, end: usize) -> bool {
+        let module = self.module;
+        let mut pending: Vec<u32> = function
+            .body
+            .iter()
+            .take(end)
+            .skip(at + 1)
+            .filter_map(|op| match op.operator {
+                Operator::Call { function_index } => Some(function_index),
+                _ => None,
+            })
+            .collect();
+        let mut seen = BTreeSet::new();
+        while let Some(index) = pending.pop() {
+            if !seen.insert(index) {
+                continue;
+            }
+            let Some(callee) = module.function(index) else {
+                continue;
+            };
+            if callee.is_host("sock_accept") {
+                return true;
+            }
+            if callee.kind == Kind::Own
+                && let Some(shape) = self.flows.shapes.get(&index)
+            {
+                pending.extend(shape.calls.iter().map(|(_, callee)| *callee));
+            }
+        }
+        false
     }
 
     /// Rule 1: no recursion, directly or through other functions.

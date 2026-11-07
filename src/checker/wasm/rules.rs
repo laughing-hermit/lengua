@@ -38,7 +38,8 @@ struct Checker<'m, 'a, 'v> {
 }
 
 /// Whether `function` is marked `;; returns: result` on its line.
-fn returns_result(module: &Module<'_>, function: &Function<'_>) -> bool {
+#[must_use]
+pub fn returns_result(module: &Module<'_>, function: &Function<'_>) -> bool {
     function
         .line
         .and_then(|line| module.notes.marker(line, "returns:"))
