@@ -314,14 +314,43 @@ fn constant(expression: &ConstExpr<'_>) -> Option<(u32, u128)> {
     matches!(reader.read().ok()?, Operator::End).then_some(value)
 }
 
+/// A function type: its parameters' value types and its results'.
+type Signature = (Vec<ValType>, Vec<ValType>);
+
+/// The function type `index` among the module's `types`.
+fn signature(types: &[Option<Signature>], index: u32) -> Result<&Signature, String> {
+    usize::try_from(index)
+        .ok()
+        .and_then(|index| types.get(index))
+        .and_then(Option::as_ref)
+        .ok_or_else(|| "a function of a type the model doesn't follow".to_owned())
+}
+
+/// The value type WASI's `value` is, as a module imports it.
+const fn value_type(value: wasi::Value) -> ValType {
+    match value {
+        wasi::Value::I32 => ValType::I32,
+        wasi::Value::I64 => ValType::I64,
+    }
+}
+
+/// Whether an import's value types, `found`, are WASI's, `wanted`, one for one: the engine links
+/// an import only to a function of exactly its type, as lengua's host defines each.
+fn same_values(wanted: &[wasi::Value], found: &[ValType]) -> bool {
+    let types: Vec<ValType> = wanted.iter().copied().map(value_type).collect();
+    types == found
+}
+
 /// What a block of type `ty` takes and leaves, with the module's function `types`.
-fn arity(ty: BlockType, types: &[Option<(usize, usize)>]) -> Result<Arity, String> {
+fn arity(ty: BlockType, types: &[Option<Signature>]) -> Result<Arity, String> {
     if let BlockType::FuncType(index) = ty {
-        let (params, results) = usize::try_from(index)
-            .ok()
-            .and_then(|index| types.get(index).copied().flatten())
-            .ok_or("a block of a type the model doesn't follow")?;
-        return Ok(Arity { params, results });
+        let Ok((params, results)) = signature(types, index) else {
+            return Err("a block of a type the model doesn't follow".into());
+        };
+        return Ok(Arity {
+            params: params.len(),
+            results: results.len(),
+        });
     }
     let results = usize::from(matches!(ty, BlockType::Type(_)));
     Ok(Arity { params: 0, results })
@@ -356,7 +385,7 @@ fn variant(operator: &Operator<'_>) -> String {
 
 /// `operator` in the model's form, its blocks' types read with the module's function `types`.
 #[allow(clippy::too_many_lines)]
-fn op_of(operator: &Operator<'_>, types: &[Option<(usize, usize)>]) -> Result<Op, String> {
+fn op_of(operator: &Operator<'_>, types: &[Option<Signature>]) -> Result<Op, String> {
     use Binary as B;
     use Unary as U;
     Ok(match operator {
@@ -519,15 +548,17 @@ impl Module {
     ///
     /// # Errors
     ///
-    /// What the model can't run: a module it can't read, an import lengua's host doesn't give, a
-    /// start function, a value of a type it doesn't hold, or data past the memory.
+    /// What the model can't run as the engine does: a module it can't read, an import lengua's
+    /// host doesn't give or of another type than WASI's, which the engine doesn't link, a start
+    /// function, a table or an element segment, a value of a type it doesn't hold, or data past
+    /// the memory.
     #[allow(clippy::too_many_lines)]
     pub fn new(built: &Built, policy: Policy) -> Result<Self, String> {
         let failed = |error: wasmparser::BinaryReaderError| {
             format!("the model couldn't read the module: {error}")
         };
         // Each type's parameters and results, when it's a function's.
-        let mut types: Vec<Option<(usize, usize)>> = Vec::new();
+        let mut types: Vec<Option<Signature>> = Vec::new();
         let mut imports: Vec<(String, String, u32)> = Vec::new();
         let mut defined: Vec<u32> = Vec::new();
         let mut memory: Option<(u64, Option<u64>)> = None;
@@ -544,7 +575,7 @@ impl Module {
                         for sub in group.map_err(failed)?.into_types() {
                             types.push(match &sub.composite_type.inner {
                                 CompositeInnerType::Func(func) => {
-                                    Some((func.params().len(), func.results().len()))
+                                    Some((func.params().to_vec(), func.results().to_vec()))
                                 }
                                 _ => None,
                             });
@@ -599,6 +630,15 @@ impl Module {
                 Payload::StartSection { .. } => {
                     return Err(
                         "a start function, which the model doesn't run before `_start`".into(),
+                    );
+                }
+                // The engine sets a module's tables up as it starts it, and may trap there or
+                // refuse to start it: the model follows neither, as the dialect has no tables.
+                Payload::TableSection(_) | Payload::ElementSection(_) => {
+                    return Err(
+                        "a table or an element segment, which the dialect has none of (rule 9) \
+                         and the model doesn't set up"
+                            .into(),
                     );
                 }
                 Payload::DataSection(reader) => {
@@ -663,22 +703,16 @@ impl Module {
             data.push(bytes);
         }
 
-        let signature = |index: u32| -> Result<(usize, usize), String> {
-            usize::try_from(index)
-                .ok()
-                .and_then(|index| types.get(index).copied().flatten())
-                .ok_or_else(|| "a function of a type the model doesn't follow".to_owned())
-        };
         let mut functions = Vec::new();
         for (module, name, index) in &imports {
-            let (params, results) = signature(*index)?;
+            let (params, results) = signature(&types, *index)?;
             let host = (module.as_str() == wasi::MODULE)
                 .then(|| wasi::function(name))
                 .flatten()
                 .ok_or_else(|| {
                     format!("it imports {module}.{name}, which lengua's host doesn't give")
                 })?;
-            if host.params.len() != params || host.results.len() != results {
+            if !same_values(host.params, params) || !same_values(host.results, results) {
                 return Err(format!(
                     "it imports {name} with a signature other than WASI's, which the engine won't \
                      link"
@@ -686,8 +720,8 @@ impl Module {
             }
             functions.push(Function {
                 name: Some(name.clone()),
-                params,
-                results,
+                params: params.len(),
+                results: results.len(),
                 own: false,
                 import: Some(host),
                 locals: Vec::new(),
@@ -703,7 +737,7 @@ impl Module {
         let mut library = built.library.iter();
         for (type_index, body) in defined.iter().zip(&bodies) {
             let index = u32::try_from(functions.len()).map_err(|_| "too many functions")?;
-            let (params, results) = signature(*type_index)?;
+            let (params, results) = signature(&types, *type_index)?;
             let range = body.range();
             let own = built.bodies.contains(&(range.start, range.end));
             // The library's functions come after main.wat's, in the order it merged them.
@@ -730,8 +764,8 @@ impl Module {
             let (ends, elses) = blocks(&ops)?;
             functions.push(Function {
                 name,
-                params,
-                results,
+                params: params.len(),
+                results: results.len(),
                 own,
                 import: None,
                 locals,
