@@ -271,6 +271,7 @@ jobs:
       - name: The modules
         run: bash scripts/ci/bench-wasm.sh target/bench-wasm
 
+      # A run's every attempt keeps one set, the last built.
       - name: Keep the modules
         uses: actions/upload-artifact@v4
         with:
@@ -278,6 +279,7 @@ jobs:
           path: target/bench-wasm
           retention-days: 7
           if-no-files-found: error
+          overwrite: true
 
   test:
     name: ${{ matrix.mode }} (${{ matrix.target }})${{ matrix.label && format(' {0}', matrix.label) || '' }}
