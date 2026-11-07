@@ -47,7 +47,7 @@ type Call = (u32, usize, usize, Vec<Label>);
 
 /// The head `at`, operator `at` of the function `function`, as a hook names it.
 pub(super) fn head_of(function: u32, at: usize) -> u64 {
-    u64::from(function) << 32 | u64::try_from(at).unwrap_or(u64::from(u32::MAX))
+    (u64::from(function) << 32) | u64::try_from(at).unwrap_or(u64::from(u32::MAX))
 }
 
 /// Whether the newest call of `core` is about to run the operator `head` names.
@@ -188,8 +188,12 @@ pub(super) fn arrive(
     if arrivals == 2 {
         // One buffer-full on: where a count that looks back is checked from.
         if state.core.head.is_some() {
-            let changed = (hook.fulls() > 1).then(|| Wasm::changes(state));
-            state.core.changed = changed.map(Box::new);
+            let changed = if hook.fulls() > 1 {
+                Some(Box::new(Wasm::changes(state)))
+            } else {
+                None
+            };
+            state.core.changed = changed;
             state.world.second = Some(Box::new(arrival(state)));
         }
         return Ok(());

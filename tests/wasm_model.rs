@@ -1146,6 +1146,42 @@ fn vectors(rng: &mut ChaCha8Rng, random: usize) -> Vec<String> {
     values
 }
 
+/// The lane operators of SIMD128's 8- and 16-bit lanes, but the 16-bit lanes' `mul`.
+const NARROW_LANES: [&str; 21] = [
+    "add",
+    "sub",
+    "add_sat_s",
+    "add_sat_u",
+    "sub_sat_s",
+    "sub_sat_u",
+    "min_s",
+    "min_u",
+    "max_s",
+    "max_u",
+    "avgr_u",
+    "eq",
+    "ne",
+    "lt_s",
+    "lt_u",
+    "gt_s",
+    "gt_u",
+    "le_s",
+    "le_u",
+    "ge_s",
+    "ge_u",
+];
+
+/// The lane operators of its 32-bit lanes.
+const WORD_LANES: [&str; 17] = [
+    "add", "sub", "mul", "min_s", "min_u", "max_s", "max_u", "eq", "ne", "lt_s", "lt_u", "gt_s",
+    "gt_u", "le_s", "le_u", "ge_s", "ge_u",
+];
+
+/// The lane operators of its 64-bit lanes.
+const WIDE_LANES: [&str; 9] = [
+    "add", "sub", "mul", "eq", "ne", "lt_s", "gt_s", "le_s", "ge_s",
+];
+
 /// Probes of every SIMD128 operator the model follows, on chosen and random vectors, lanes,
 /// counts and picks.
 fn vector_probes(rng: &mut ChaCha8Rng) -> Vec<Vec<Probe>> {
@@ -1157,16 +1193,12 @@ fn vector_probes(rng: &mut ChaCha8Rng) -> Vec<Vec<Probe>> {
         pairs.push((a, &values[(index + 1) % values.len()]));
         pairs.push((a, a));
     }
-    let lanewise = [
-        ("i8x16", &["add", "sub", "add_sat_s", "add_sat_u", "sub_sat_s", "sub_sat_u", "min_s",
-            "min_u", "max_s", "max_u", "avgr_u", "eq", "ne", "lt_s", "lt_u", "gt_s", "gt_u", "le_s",
-            "le_u", "ge_s", "ge_u"][..]),
-        ("i16x8", &["add", "sub", "mul", "add_sat_s", "add_sat_u", "sub_sat_s", "sub_sat_u",
-            "min_s", "min_u", "max_s", "max_u", "avgr_u", "eq", "ne", "lt_s", "lt_u", "gt_s", "gt_u",
-            "le_s", "le_u", "ge_s", "ge_u"][..]),
-        ("i32x4", &["add", "sub", "mul", "min_s", "min_u", "max_s", "max_u", "eq", "ne", "lt_s",
-            "lt_u", "gt_s", "gt_u", "le_s", "le_u", "ge_s", "ge_u"][..]),
-        ("i64x2", &["add", "sub", "mul", "eq", "ne", "lt_s", "gt_s", "le_s", "ge_s"][..]),
+    let lanewise: [(&str, &[&str]); 5] = [
+        ("i8x16", &NARROW_LANES),
+        ("i16x8", &NARROW_LANES),
+        ("i16x8", &["mul"]),
+        ("i32x4", &WORD_LANES),
+        ("i64x2", &WIDE_LANES),
     ];
     for (shape, ops) in lanewise {
         for op in ops {

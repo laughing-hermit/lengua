@@ -2650,10 +2650,10 @@ impl Program for wasm::Module {
         wasm::begin(self, pool, args, env, stdin)
     }
 
-    /// A module that reads standard input only through lengua's library's `$fill`, to the end
-    /// of the input each time, and isn't on the network: every way the input is cut gives each
-    /// `$fill` the same bytes, which a proof then reads as a whole. Any other runs `$fill` as the
-    /// code it is, each of its reads one the world gives.
+    /// A module that reads standard input only through lengua's library's `$fill`, each with a
+    /// stop byte known before it runs, and isn't on the network: a proof then reads each `$fill`
+    /// as a whole, every place it can stop a run of its own, for every way the input is cut. Any
+    /// other runs `$fill` as the code it is, each of its reads one the world gives.
     fn fills(&self) -> bool {
         self.reads_whole()
     }
@@ -2724,7 +2724,11 @@ fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verd
 
 /// Proves `block` about `image`: a streaming filter for every length at once where its read
 /// loop's step holds; otherwise, and for every other program, length by length.
-fn either_way<P: Program>(image: &P, block: &Generated, budget: &Budget) -> Result<Verdict, String> {
+fn either_way<P: Program>(
+    image: &P,
+    block: &Generated,
+    budget: &Budget,
+) -> Result<Verdict, String> {
     if budget.from_length == 0 {
         match by_induction(image, block, budget) {
             Ok(Some(verdict)) => return Ok(verdict),
