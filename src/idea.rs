@@ -4,7 +4,8 @@
 //! markdown sections: `# Purpose`, `# Behaviors` with one `## B<n>: <title>` heading per behavior
 //! written as Given/When/Then steps, each followed by its generated tests under a `###` heading,
 //! and `# Constraints`, which names what the program uses: `- Uses:`, `- Network:` and
-//! `- Threads:` lines. Nothing in it is particular to one computer.
+//! `- Threads:` lines, and the inputs whose values must not decide how it runs, `- Secret:`.
+//! Nothing in it is particular to one computer.
 //!
 //! An idea that lengua compiles to WebAssembly is an OKF Attested Computation (OKF v0.2 §10):
 //! `type: Attested Computation`, with `runtime: webassembly`, `computation: main.wat`, the
@@ -78,6 +79,11 @@ pub struct Idea {
     pub purpose_values: Vec<String>,
     /// What it may do on the network.
     pub network: Network,
+    /// The inputs whose values must not decide how the program runs, as its `- Secret:` line
+    /// names them, in the line's order: lengua's checker refuses main.wat when a value computed
+    /// from one decides a branch, an address, a length, a loop's count, a division or a float
+    /// operation.
+    pub secrets: Vec<Source>,
     /// The programs it builds on, each a folder with its own idea and code: the nodes it links to
     /// in the graph of programs.
     pub parts: Vec<Part>,
@@ -152,7 +158,8 @@ impl ParameterType {
     }
 }
 
-/// Where a parameter's value comes from, as its `from` says.
+/// Where a value comes from: a parameter's, as its `from` says, or a secret's, as the
+/// `- Secret:` line names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Source {
     /// The program's argument at this place, from 1: `argument 1`.
@@ -187,6 +194,18 @@ impl Source {
             Self::StandardInput => Some(Use::StandardInput),
             Self::Environment(_) => Some(Use::Environment),
             Self::File(_) => Some(Use::Files),
+        }
+    }
+
+    /// The words of a `- Secret:` line that name it: `standard input`, ``a file `key.txt` ``,
+    /// ``the environment variable `TOKEN` `` or ``argument `2` ``.
+    #[must_use]
+    pub fn secret_words(&self) -> String {
+        match self {
+            Self::StandardInput => "standard input".to_owned(),
+            Self::File(name) => format!("a file `{name}`"),
+            Self::Environment(name) => format!("the environment variable `{name}`"),
+            Self::Argument(place) => format!("argument `{place}`"),
         }
     }
 }
@@ -1156,6 +1175,10 @@ struct Parser {
     /// Each parameter's name that reads, with the line it's on, whether or not the rest of the
     /// parameter reads.
     names: Vec<(String, usize)>,
+    /// The `- Secret:` line's line and the sources on it that read, once it's read.
+    secrets: Option<(usize, Vec<Source>)>,
+    /// Whether the idea is one that lengua compiles to main.s, whose checker follows no secret.
+    native: bool,
 }
 
 impl Default for Parser {
@@ -1180,6 +1203,8 @@ impl Default for Parser {
             attested: None,
             sources: Vec::new(),
             names: Vec::new(),
+            secrets: None,
+            native: false,
         }
     }
 }
@@ -1360,6 +1385,7 @@ impl Parser {
 
     /// An idea compiled to main.s has none of an Attested Computation's own keys.
     fn native_keys(&mut self, keys: &Keys, kind: &str) {
+        self.native = true;
         for key in ATTESTED_KEYS {
             if let Some(line) = keys.line(key) {
                 self.problem(
@@ -2404,12 +2430,16 @@ impl Parser {
             self.parts_line(number, rest);
             return;
         }
+        if let Some(rest) = strip_prefix_ignore_case(item, "secret:") {
+            self.secret_line(number, rest);
+            return;
+        }
         let Some(rest) = strip_prefix_ignore_case(item, "uses:") else {
             self.problem(
                 Some(number),
                 "`# Constraints` lists only what the program uses, which means the same on every \
-                 computer: `- Uses: …`, `- Network: …`, `- Threads: …` and `- Builds on: …`; say \
-                 anything else in `# Purpose`",
+                 computer: `- Uses: …`, `- Network: …`, `- Threads: …`, `- Secret: …` and `- \
+                 Builds on: …`; say anything else in `# Purpose`",
             );
             return;
         };
@@ -2672,6 +2702,80 @@ impl Parser {
         }
     }
 
+    /// ``- Secret: standard input, a file `key.txt` and argument `2` ``: the inputs whose values
+    /// must not decide how the program runs, several on one line.
+    fn secret_line(&mut self, number: usize, rest: &str) {
+        if let Some(first) = self.secrets.as_ref().map(|(line, _)| *line) {
+            self.problem(
+                Some(number),
+                format!(
+                    "the secrets are on two lines (also on line {first}). Keep one `- Secret:` \
+                     line"
+                ),
+            );
+            return;
+        }
+        let items = secret_items(rest);
+        if items.is_empty() {
+            self.problem(
+                Some(number),
+                format!("`- Secret:` names no input. {SECRET_FORMS}"),
+            );
+        }
+        let mut found: Vec<Source> = Vec::new();
+        for item in &items {
+            match secret_source(item) {
+                Ok(source) if found.contains(&source) => self.problem(
+                    Some(number),
+                    format!(
+                        "{} is secret twice on this line. Name each secret once",
+                        source.secret_words()
+                    ),
+                ),
+                Ok(source) => found.push(source),
+                Err(problem) => self.problem(Some(number), problem),
+            }
+        }
+        self.secrets = Some((number, found));
+    }
+
+    /// The `- Secret:` line's sources, each one the idea lets the program read: with the
+    /// `- Uses:` word it needs, but an argument, which needs none, and standard input, which the
+    /// terminal reads too. An idea compiled to main.s has none: its checker follows no secret.
+    fn secrets_used(&mut self, uses: &[Use]) -> Vec<Source> {
+        let Some((line, secrets)) = self.secrets.take() else {
+            return Vec::new();
+        };
+        if self.native {
+            self.problem(
+                Some(line),
+                "`- Secret:` is for an idea that lengua compiles to main.wat, `type: Attested \
+                 Computation`. lengua does not follow secrets in main.s. Change the type, or \
+                 remove the line",
+            );
+        }
+        for source in &secrets {
+            let needed = match source {
+                Source::StandardInput if uses.contains(&Use::Terminal) => None,
+                other => other.uses(),
+            };
+            if let Some(needed) = needed
+                && !uses.contains(&needed)
+            {
+                let word = needed.name();
+                self.problem(
+                    Some(line),
+                    format!(
+                        "{} is secret, but the `- Uses:` line does not name {word}. Add `{word}` \
+                         to the `- Uses:` line, as in `- Uses: {word}`",
+                        source.secret_words()
+                    ),
+                );
+            }
+        }
+        secrets
+    }
+
     fn finish(mut self, header: Option<(String, Option<String>)>) -> Result<Idea, Vec<Problem>> {
         if !self.purpose_written {
             self.problem(
@@ -2701,6 +2805,7 @@ impl Parser {
         let ops = crate::edge::ops_for(&uses, &self.network, self.threads);
         self.check_network();
         self.sources_used(&uses);
+        let secrets = self.secrets_used(&uses);
         // STE's problems come last: what the idea says matters before how it says it.
         for (line, message) in std::mem::take(&mut self.prose).finish() {
             self.problem(Some(line), message);
@@ -2716,6 +2821,7 @@ impl Parser {
                 threads: self.threads,
                 purpose_values: self.purpose_values,
                 network: self.network,
+                secrets,
                 parts: self.parts,
                 links: self.links,
                 attested: self.attested,
@@ -2770,6 +2876,88 @@ impl Parser {
                 ),
             );
         }
+    }
+}
+
+/// What a `- Secret:` line may name, as its problems say it.
+const SECRET_FORMS: &str = "Name standard input, a file `NAME`, the environment variable `NAME` \
+                            or argument `N`, as in `- Secret: standard input`";
+
+/// The items of a `- Secret:` line: its text cut at each comma and each ` and ` outside
+/// backticks, each without the spaces and the full stop around it.
+fn secret_items(text: &str) -> Vec<String> {
+    let mut items = Vec::new();
+    let mut item = String::new();
+    let mut inside = false;
+    let mut rest = text;
+    while let Some(character) = rest.chars().next() {
+        if !inside && let Some(after) = strip_prefix_ignore_case(rest, " and ") {
+            items.push(std::mem::take(&mut item));
+            rest = after;
+            continue;
+        }
+        if character == '`' {
+            inside = !inside;
+        }
+        if character == ',' && !inside {
+            items.push(std::mem::take(&mut item));
+        } else {
+            item.push(character);
+        }
+        rest = &rest[character.len_utf8()..];
+    }
+    items.push(item);
+    items
+        .iter()
+        .map(|item| item.trim().trim_end_matches('.').trim().to_owned())
+        .filter(|item| !item.is_empty())
+        .collect()
+}
+
+/// The input an item of a `- Secret:` line names: `standard input`, ``a file `NAME` ``, ``the
+/// environment variable `NAME` `` or ``argument `N` ``; or what's wrong with it, in STE.
+fn secret_source(item: &str) -> Result<Source, String> {
+    let unknown = || format!("`{item}` is not an input that can be secret. {SECRET_FORMS}");
+    if item.eq_ignore_ascii_case("standard input") {
+        return Ok(Source::StandardInput);
+    }
+    // The words before the value, and the value: in backticks, or for a number, bare.
+    let (words, value) = match item.split_once('`') {
+        Some((words, after)) => match after.split_once('`') {
+            Some((value, "")) => (words, value),
+            _ => return Err(unknown()),
+        },
+        None => item.rsplit_once(' ').ok_or_else(unknown)?,
+    };
+    let words = words.trim().to_ascii_lowercase();
+    let kind = ["the ", "a ", "an "]
+        .iter()
+        .find_map(|article| words.strip_prefix(*article))
+        .unwrap_or(words.as_str());
+    let value = value.trim();
+    match kind {
+        "file" => match file_problem(value) {
+            None => Ok(Source::File(value.to_owned())),
+            Some(why) => Err(format!(
+                "the secret file `{value}` is not a file in the working folder: {why}. Name it by \
+                 its path there, as in a file `key.txt`"
+            )),
+        },
+        "environment variable" | "variable" if variable_name(value) => {
+            Ok(Source::Environment(value.to_owned()))
+        }
+        "environment variable" | "variable" => Err(format!(
+            "`{value}` is not the name of an environment variable. Write it in capitals, digits \
+             and `_`, as in the environment variable `TOKEN`"
+        )),
+        "argument" => match value.parse::<usize>() {
+            Ok(place) if place >= 1 => Ok(Source::Argument(place)),
+            _ => Err(format!(
+                "`{value}` is not the place of an argument. Number the arguments from 1, as in \
+                 argument `1`"
+            )),
+        },
+        _ => Err(unknown()),
     }
 }
 
@@ -4469,6 +4657,110 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
             &ATTESTED.replace(ATTESTED_TYPE, "Metric"),
             "line 2: the frontmatter says `type: Metric`; a lengua idea is `type: Attested \
              Computation`",
+        );
+    }
+
+    /// A `- Secret:` line names the inputs whose values must not decide how the program runs,
+    /// several on one line; each needs the `- Uses:` word that lets the program read it, but an
+    /// argument; and each problem is on the line, with what to write.
+    #[test]
+    fn a_secret_line_names_the_inputs_that_decide_nothing() {
+        let with = |uses: &str, secret: &str| {
+            ATTESTED.replace("- Uses: nothing", &format!("{uses}\n{secret}"))
+        };
+        let all = with(
+            "- Uses: standard input, files and the environment",
+            "- Secret: standard input, a file `keys/key.txt`, the environment variable `TOKEN` \
+             and argument `2`.",
+        );
+        let idea = parse(&all).unwrap_or_else(|problems| panic!("{problems:#?}"));
+        assert_eq!(
+            idea.secrets,
+            [
+                Source::StandardInput,
+                Source::File("keys/key.txt".to_owned()),
+                Source::Environment("TOKEN".to_owned()),
+                Source::Argument(2),
+            ]
+        );
+        assert_eq!(idea.secrets[1].secret_words(), "a file `keys/key.txt`");
+        assert!(parse(ATTESTED).expect("the add idea").secrets.is_empty());
+        // An argument needs no `- Uses:` word, and the terminal reads standard input too.
+        for (uses, secret) in [
+            ("- Uses: nothing", "- Secret: argument `1`"),
+            ("- Uses: the terminal", "- Secret: standard input"),
+        ] {
+            let idea = parse(&with(uses, secret))
+                .unwrap_or_else(|problems| panic!("{secret}: {problems:#?}"));
+            assert_eq!(idea.secrets.len(), 1, "{secret}");
+        }
+        let refused = [
+            (
+                "- Uses: nothing",
+                "- Secret: standard input",
+                "standard input is secret, but the `- Uses:` line does not name standard input. \
+                 Add `standard input` to the `- Uses:` line",
+            ),
+            (
+                "- Uses: nothing",
+                "- Secret: a file `key.txt`",
+                "a file `key.txt` is secret, but the `- Uses:` line does not name files",
+            ),
+            (
+                "- Uses: nothing",
+                "- Secret: the environment variable `KEY`",
+                "does not name the environment",
+            ),
+            (
+                "- Uses: nothing",
+                "- Secret: the clock",
+                "`the clock` is not an input that can be secret. Name standard input",
+            ),
+            (
+                "- Uses: files",
+                "- Secret: a file `../key.txt`",
+                "`..` leaves the working folder",
+            ),
+            (
+                "- Uses: the environment",
+                "- Secret: the environment variable `key`",
+                "`key` is not the name of an environment variable",
+            ),
+            (
+                "- Uses: nothing",
+                "- Secret: argument `0`",
+                "`0` is not the place of an argument",
+            ),
+            (
+                "- Uses: nothing",
+                "- Secret: argument `1` and argument `1`",
+                "argument `1` is secret twice on this line",
+            ),
+            ("- Uses: nothing", "- Secret:", "`- Secret:` names no input"),
+        ];
+        for (uses, secret, needle) in refused {
+            let text = with(uses, secret);
+            let line = text.lines().count();
+            assert_problem(&text, &format!("line {line}: {needle}"));
+        }
+        // One line holds them all.
+        let twice = with(
+            "- Uses: nothing",
+            "- Secret: argument `1`\n- Secret: argument `2`",
+        );
+        let line = twice.lines().count();
+        assert_problem(
+            &twice,
+            &format!(
+                "line {line}: the secrets are on two lines (also on line {})",
+                line - 1
+            ),
+        );
+        // main.s's checker follows no secret.
+        let native = ADD.replace("- Uses: nothing", "- Uses: nothing\n- Secret: argument `1`");
+        assert_problem(
+            &native,
+            "`- Secret:` is for an idea that lengua compiles to main.wat",
         );
     }
 }

@@ -82,6 +82,8 @@ const TRICKY: &[&str] = &[
     "- Network: connects to TCP port ",
     " over TLS",
     "- Threads: up to ",
+    "- Secret: a file `",
+    " and argument `",
     "=",
     "\"",
     "'",
