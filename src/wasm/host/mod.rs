@@ -85,10 +85,15 @@ pub mod memory {
     use std::ops::Range;
 
     use super::{Fail, Stop};
-    use crate::wasm::wasi::size;
+    use crate::wasm::wasi::{errno, size};
 
     /// What an access outside the memory comes to.
     const OUTSIDE: Fail = Fail::Stop(Stop::OutsideMemory);
+
+    /// The most buffers one call takes, as every system's `readv` and `writev` take no more
+    /// (`IOV_MAX`): lengua keeps where each is while the call lasts, so a call can't make it keep
+    /// more.
+    pub const IOVECS: u32 = 1024;
 
     /// The `len` bytes at `at`, as a range of `memory`.
     ///
@@ -225,8 +230,11 @@ pub mod memory {
     ///
     /// # Errors
     ///
-    /// A stop, for a table or a buffer outside the memory.
+    /// `INVAL` for more than [`IOVECS`], and a stop for a table or a buffer outside the memory.
     pub fn iovecs(memory: &[u8], at: u32, count: u32) -> Result<Vec<Range<usize>>, Fail> {
+        if count > IOVECS {
+            return Err(Fail::Errno(errno::INVAL));
+        }
         check(memory, at, count.checked_mul(size::IOVEC).ok_or(OUTSIDE)?)?;
         let mut buffers = Vec::with_capacity(usize::try_from(count).unwrap_or(0));
         for index in 0..count {
