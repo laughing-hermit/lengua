@@ -233,38 +233,39 @@ impl Offset {
     }
 }
 
-/// What a fact the code's checks establish says of a local.
+/// What a fact the code's checks establish says of a local's value: of the version of it the
+/// check read, so once the local holds another value, the fact says nothing of it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fact {
     /// Its value is below `limit`, unsigned; `None` when the limit is one the rules don't
     /// bound.
     Below {
-        /// The local.
-        local: u32,
+        /// The local, at the version the check read.
+        local: Version,
         /// The limit.
         limit: Option<u64>,
     },
     /// Its value is at least `limit`, unsigned.
     AtLeast {
-        /// The local.
-        local: u32,
+        /// The local, at the version the check read.
+        local: Version,
         /// The limit.
         limit: u64,
     },
     /// Its value is zero.
     Zero {
-        /// The local.
-        local: u32,
+        /// The local, at the version the check read.
+        local: Version,
     },
     /// Its float isn't NaN.
     NotNan {
-        /// The local.
-        local: u32,
+        /// The local, at the version the check read.
+        local: Version,
     },
     /// A signed comparison looked at it, which bounds nothing.
     Signed {
-        /// The local.
-        local: u32,
+        /// The local, at the version the check read.
+        local: Version,
     },
 }
 
@@ -722,14 +723,20 @@ fn offset_minus(offset: Offset, value: &Value) -> Offset {
 struct Slot {
     /// The value.
     value: Value,
-    /// The local it was just read from.
-    local: Option<u32>,
+    /// The local it was just read from, at the version it read: a check of the value says
+    /// something of that version alone.
+    local: Option<Version>,
 }
 
 impl Slot {
     /// A value read from no local.
     fn new(value: Value) -> Self {
         Self { value, local: None }
+    }
+
+    /// The local it was just read from, for reports.
+    fn index(&self) -> Option<u32> {
+        self.local.map(|(_, index)| index)
     }
 
     /// `value`, as if read from the same local as this one: one of the addresses it may be.
@@ -753,11 +760,11 @@ fn plus(a: &Slot, b: &Slot, bits: u32) -> Value {
     let moved = |address: &Slot, other: &Slot| match &address.value {
         Value::Address { region, offset } => Value::Address {
             region: *region,
-            offset: offset_plus(*offset, &other.value, other.local),
+            offset: offset_plus(*offset, &other.value, other.index()),
         },
         Value::Param { param, offset } => Value::Param {
             param: *param,
-            offset: offset_plus(*offset, &other.value, other.local),
+            offset: offset_plus(*offset, &other.value, other.index()),
         },
         _ => Value::Mixed { number: false },
     };
@@ -766,15 +773,15 @@ fn plus(a: &Slot, b: &Slot, bits: u32) -> Value {
         // nothing checked.
         (Value::Param { param, offset }, Value::Param { .. }) => Value::Param {
             param: *param,
-            offset: offset_plus(*offset, &Value::Loaded, b.local),
+            offset: offset_plus(*offset, &Value::Loaded, b.index()),
         },
         (Value::Address { region, offset }, Value::Param { .. }) => Value::Address {
             region: *region,
-            offset: offset_plus(*offset, &Value::Loaded, b.local),
+            offset: offset_plus(*offset, &Value::Loaded, b.index()),
         },
         (Value::Param { .. }, Value::Address { region, offset }) => Value::Address {
             region: *region,
-            offset: offset_plus(*offset, &Value::Loaded, a.local),
+            offset: offset_plus(*offset, &Value::Loaded, a.index()),
         },
         // Two regions' addresses added: a plain number, the address of neither.
         (Value::Address { .. }, Value::Address { .. }) => Value::Number(Range::full()),
@@ -831,8 +838,9 @@ fn limit(slot: &Slot) -> (u64, Option<u64>) {
     (range.low, (range.high != u64::MAX).then_some(range.high))
 }
 
-/// What an unsigned comparison `local OP other` says when it's true and when it's false.
-fn bound_facts(local: u32, op: Compare, other: &Slot) -> Test {
+/// What an unsigned comparison `local OP other` says when it's true and when it's false, of the
+/// version of the local it read.
+fn bound_facts(local: Version, op: Compare, other: &Slot) -> Test {
     let (low, high) = limit(other);
     let below = |limit: Option<u64>| Fact::Below { local, limit };
     let at_least = |limit: u64| Fact::AtLeast { local, limit };
@@ -1009,8 +1017,9 @@ struct State {
     /// What the code wrote at a constant offset of a region, with a 4-byte store, by region and
     /// offset: what an iovec array holds.
     memory: BTreeMap<(usize, i64), Value>,
-    /// The locals a check has shown aren't zero, whatever their values are: a divisor's guard.
-    nonzero: BTreeSet<u32>,
+    /// The versions of locals a check has shown aren't zero, whatever their values are: a
+    /// divisor's guard.
+    nonzero: BTreeSet<Version>,
 }
 
 impl State {
@@ -1051,31 +1060,36 @@ impl State {
         }
     }
 
-    /// Applies `facts`, which hold here.
+    /// Applies `facts`, which hold here: each of the version of its local it was established
+    /// for, none of a value the local has held since.
     fn apply(&mut self, facts: &[Fact]) {
         for fact in facts {
             if !self.reachable {
                 return;
             }
-            let local = match fact {
+            let version = match fact {
                 Fact::Below { local, .. }
                 | Fact::AtLeast { local, .. }
                 | Fact::Zero { local }
                 | Fact::NotNan { local }
                 | Fact::Signed { local } => *local,
             };
+            let (_, index) = version;
+            let Some(slot) = self.locals.get_mut(to_usize(index)) else {
+                continue;
+            };
+            if slot.version != version {
+                continue;
+            }
             match fact {
                 Fact::AtLeast { limit, .. } if *limit >= 1 => {
-                    self.nonzero.insert(local);
+                    self.nonzero.insert(version);
                 }
                 Fact::Zero { .. } => {
-                    self.nonzero.remove(&local);
+                    self.nonzero.remove(&version);
                 }
                 _ => {}
             }
-            let Some(slot) = self.locals.get_mut(to_usize(local)) else {
-                continue;
-            };
             let mut impossible = false;
             let replaced = match (*fact, &mut slot.value) {
                 (Fact::Below { limit: Some(0), .. }, _) => {
@@ -1704,8 +1718,8 @@ impl Interpreter<'_, '_> {
                 slot.value = Self::anything(ty);
                 slot.version = (at, *local);
             }
-            state.nonzero.remove(local);
         }
+        state.nonzero.retain(|(_, index)| !written.contains(index));
         state.memory.clear();
     }
 
@@ -1956,17 +1970,18 @@ impl Interpreter<'_, '_> {
         }
         Slot {
             value,
-            local: Some(index),
+            local: Some(local.version),
         }
     }
 
-    /// Writes `value` to local `index` at `at`.
+    /// Writes `value` to local `index` at `at`: a new version of it, of which no check has said
+    /// anything yet.
     fn write_local(state: &mut State, at: usize, index: u32, value: Value) {
         if let Some(local) = state.locals.get_mut(to_usize(index)) {
             local.value = value.stored();
             local.version = (at, index);
         }
-        state.nonzero.remove(&index);
+        state.nonzero.retain(|(_, local)| *local != index);
     }
 
     /// What a store of `width` bytes through `address` at `at` does to what memory is known to
@@ -2023,10 +2038,7 @@ impl Interpreter<'_, '_> {
                 (ValType::I32, Kind::Library) => Value::Number(Range::full()),
                 (ValType::I32, Kind::Own) if function.results.len() == 1 => {
                     match summary.and_then(|summary| summary.returns.clone()) {
-                        Some(Value::Param { param, offset }) => {
-                            rebased(arguments.get(to_usize(param)), offset)
-                        }
-                        Some(value) => value,
+                        Some(value) => returned(value, arguments),
                         None => Value::Mixed { number: true },
                     }
                 }
@@ -2293,12 +2305,13 @@ impl Interpreter<'_, '_> {
         let result = result
             .or_else(|| float_result(operator, &operands))
             .unwrap_or(Value::Other);
-        // A divisor a check showed isn't zero is kept so, whatever else its value is.
+        // A divisor a check showed isn't zero is kept so, whatever else its value is: the
+        // version of its local the check read, not one written since.
         let divisor_checked = is_division(operator)
             && operands
                 .get(1)
                 .and_then(|slot| slot.local)
-                .is_some_and(|local| state.nonzero.contains(&local));
+                .is_some_and(|version| state.nonzero.contains(&version));
         let mut values: Vec<Value> = operands.into_iter().map(|slot| slot.value).collect();
         if divisor_checked && let Some(divisor) = values.get_mut(1) {
             let range = divisor.range();
@@ -2331,6 +2344,30 @@ fn shifted(address: &Value, by: u64) -> Value {
             Value::Several(items.iter().map(|item| shifted(item, by)).collect())
         }
         other => other.clone(),
+    }
+}
+
+/// What a callee's result `value` is for its caller, which passed `arguments`: what the callee
+/// was lent is what the caller lent it, and nothing that names one of the callee's own locals
+/// crosses the call, neither a comparison's facts nor an index's name.
+fn returned(value: Value, arguments: &[Value]) -> Value {
+    match value {
+        Value::Param { param, offset } => rebased(arguments.get(to_usize(param)), offset),
+        Value::Address { region, offset } => Value::Address {
+            region,
+            offset: Offset {
+                linear: None,
+                index: None,
+                ..offset
+            },
+        },
+        Value::Number(range) => Value::Number(Range {
+            linear: None,
+            ..range
+        }),
+        Value::Test(_) => Value::Number(Range::between(0, 1)),
+        Value::Several(items) => each(&items, |item| returned(item.clone(), arguments)),
+        other => other,
     }
 }
 
