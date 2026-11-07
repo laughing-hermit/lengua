@@ -520,7 +520,7 @@ fn serve(child: &mut Child, load: Load) -> Result<Ended, String> {
     child
         .wait()
         .map_err(|error| format!("couldn't wait for the server: {error}"))?;
-    let answered = outcomes.iter().filter_map(|outcome| outcome.as_ref().ok()).sum();
+    let answered = outcomes.iter().flatten().sum();
     let problem = outcomes.into_iter().find_map(Result::err);
     Ok(Ended {
         exit: None,
@@ -581,10 +581,10 @@ fn usage(_child: &Child) -> Result<(u64, u64, Option<u64>), String> {
     let usage =
         getrusage(UsageWho::RUSAGE_CHILDREN).map_err(|error| format!("getrusage: {error}"))?;
     let nanoseconds = |time: TimeVal| {
-        u64::try_from(time.tv_sec())
-            .unwrap_or(0)
-            .saturating_mul(1_000_000_000)
-            .saturating_add(u64::try_from(time.tv_usec()).unwrap_or(0).saturating_mul(1000))
+        let seconds = u64::try_from(time.tv_sec()).unwrap_or(0);
+        let microseconds = u64::try_from(time.tv_usec()).unwrap_or(0);
+        let whole = seconds.saturating_mul(1_000_000_000);
+        whole.saturating_add(microseconds.saturating_mul(1000))
     };
     // macOS gives the peak in bytes, Linux in KiB.
     let peak = u64::try_from(usage.max_rss()).ok().map(|peak| {
@@ -633,7 +633,8 @@ mod counters {
                     operation: CacheOp::READ,
                     result: CacheResult::MISS,
                 });
-                builder.observe_pid(pid).inherit(true).exclude_kernel(true);
+                builder.observe_pid(pid).inherit(true);
+                builder.exclude_kernel(true);
                 let mut counter = builder.build().ok()?;
                 counter.enable().ok()?;
                 Some(counter)
@@ -793,7 +794,8 @@ mod tests {
             "./server",
         ]))
         .expect("a request");
-        assert_eq!(few.serve.map(|load| (load.clients, load.requests)), Some((2, 3)));
+        let load = few.serve.map(|load| (load.clients, load.requests));
+        assert_eq!(load, Some((2, 3)));
         assert!(Request::parse(words(&["--clients", "2", "./server"])).is_err());
         assert!(Request::parse(words(&["--serve", "0", "./server"])).is_err());
         assert!(Request::parse(words(&["--serve", "8080", "--requests", "0", "./s"])).is_err());
@@ -805,7 +807,8 @@ mod tests {
         let line = request_line(3, 7);
         assert_eq!(line.len(), REQUEST_BYTES);
         assert_eq!(line[REQUEST_BYTES - 1], b'\n');
-        assert!(line[..REQUEST_BYTES - 1].iter().all(u8::is_ascii_lowercase));
+        let letters = &line[..REQUEST_BYTES - 1];
+        assert!(letters.iter().all(u8::is_ascii_lowercase));
         assert_ne!(line, request_line(3, 8));
     }
 

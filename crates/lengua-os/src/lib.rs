@@ -87,7 +87,8 @@ pub fn process_usage(child: &std::process::Child) -> Result<Usage, String> {
     }
     // A FILETIME counts 100-nanosecond intervals in two halves.
     let nanoseconds = |time: FILETIME| {
-        ((u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime)).saturating_mul(100)
+        let intervals = (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime);
+        intervals.saturating_mul(100)
     };
     Ok(Usage {
         user_ns: nanoseconds(user),
