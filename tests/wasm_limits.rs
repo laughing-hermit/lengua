@@ -3,7 +3,8 @@
 //! standard input that ends; no descriptor but the ones a program is given; every system's names;
 //! a file's limit and the files' total; nothing past the working folder, through a link or `..`;
 //! folders listed in order; the test's supplies; sleeps that end at once; connections, made and
-//! refused; a listener on port 0; and a worker that ends with its server.
+//! refused, and a server's said once it serves; a listener on port 0; and a worker that ends with
+//! its server.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::Ipv4Addr;
@@ -896,6 +897,42 @@ async fn a_server_still_serving_is_stopped() {
         .expect("it starts");
     let ran = running.stop().await.expect("it stops");
     assert_eq!(ran.end, End::Stopped);
+}
+
+/// A server says what became of the connections lengua made for it once it serves, as a native
+/// one does, before it takes a client: one that reached its place, and one refused.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_server_says_what_became_of_its_connections_once_it_serves() {
+    let policy = Policy {
+        listens: true,
+        connections: 2,
+        ..Policy::default()
+    };
+    let pool = Pool::new(launcher(), None);
+    let server = program(ECHO_SERVER);
+    let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("a free port");
+    let open = listener.local_addr().expect("its address").port();
+    let closed = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("a free port");
+    let refused = closed.local_addr().expect("its address").port();
+    drop(closed);
+    let places = [Reach::ThisComputer(open), Reach::ThisComputer(refused)];
+    let spec = Spec {
+        connections: &places,
+        listen: Some((0, false)),
+        ..Spec::new(&[], &[], policy)
+    };
+    let running = pool
+        .start(&server, spec, Limits::default())
+        .await
+        .expect("it starts");
+    assert!(running.port().is_some());
+    let connections = running.connections();
+    assert_eq!(connections.len(), 2, "{connections:?}");
+    assert_eq!(connections[0].problem, None, "{connections:?}");
+    assert!(connections[1].problem.is_some(), "{connections:?}");
+    let ran = running.stop().await.expect("it stops");
+    assert_eq!(ran.end, End::Stopped);
+    drop(listener);
 }
 
 #[test]

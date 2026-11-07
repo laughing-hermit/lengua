@@ -24,7 +24,7 @@ use crate::runner::{Limits, Run, Trap};
 use crate::supply::Supply;
 use crate::wasm::engine::Setup;
 use crate::wasm::host::policy::Policy;
-use crate::wasm::job::{self, Connection, Done, Ending, Event, Job, Made, Request};
+use crate::wasm::job::{self, Connection, Done, Ending, Event, Job, Made, Reached, Request};
 use crate::wasm::{Program, WORKER_FLAG, runner};
 
 /// How much longer than its program's own time limit a job may take before lengua gives up on
@@ -139,12 +139,13 @@ fn lost(id: u64, ending: Ending, why: String) -> Done {
 }
 
 /// Listens to a worker's events about job `id`: whether its program waits, the port it serves
-/// on, and how it went, which comes with the worker's output back for its next job.
+/// on with what became of its connections, and how it went, which comes with the worker's
+/// output back for its next job.
 async fn listen_to(
     mut stdout: ChildStdout,
     id: u64,
     waiting: Arc<AtomicBool>,
-    mut port: Option<oneshot::Sender<u16>>,
+    mut port: Option<oneshot::Sender<(u16, Vec<Reached>)>>,
     done: oneshot::Sender<io::Result<(Done, ChildStdout)>>,
 ) {
     loop {
@@ -152,9 +153,10 @@ async fn listen_to(
             Ok(Some(Event::Listening {
                 id: of,
                 port: listening,
+                connections,
             })) if of == id => {
                 if let Some(port) = port.take() {
-                    let _ = port.send(listening);
+                    let _ = port.send((listening, connections));
                 }
             }
             Ok(Some(Event::Waiting {
@@ -369,20 +371,29 @@ impl Pool {
                 peers.push((number, stream));
             }
         }
-        let port = if spec.listen.is_some() {
+        let (port, reached) = if spec.listen.is_some() {
             tokio::time::timeout(CONNECT_TIMEOUT + GRACE, port_receiver)
                 .await
                 .ok()
                 .and_then(Result::ok)
+                .map_or((None, Vec::new()), |(port, reached)| (Some(port), reached))
         } else {
-            None
+            (None, Vec::new())
         };
+        let connections = reached
+            .into_iter()
+            .map(|reached| crate::connect::Made {
+                place: reached.place,
+                problem: reached.problem,
+            })
+            .collect();
         Ok(Running {
             pool: self.clone(),
             stdin: Some(stdin),
             child: Some(child),
             id,
             port,
+            connections,
             peers,
             waiting,
             done: done_receiver,
@@ -419,6 +430,8 @@ pub struct Running {
     id: u64,
     /// The port it serves on, when it serves.
     port: Option<u16>,
+    /// What became of each connection lengua made for it, in order, once it serves.
+    connections: Vec<crate::connect::Made>,
     /// lengua's ends of its connections to the test's own servers, by the connection's number.
     peers: Vec<(usize, TcpStream)>,
     /// Whether it waits for a connection now.
@@ -442,6 +455,13 @@ impl Running {
     #[must_use]
     pub fn port(&self) -> Option<u16> {
         self.port
+    }
+
+    /// What became of each connection lengua made for it, in order, once it serves: as a native
+    /// server's, said before it takes a client. Empty for a program that doesn't serve.
+    #[must_use]
+    pub fn connections(&self) -> &[crate::connect::Made] {
+        &self.connections
     }
 
     /// lengua's ends of the connections that go to the test's own servers, each with its

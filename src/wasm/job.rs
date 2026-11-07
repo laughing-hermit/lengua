@@ -30,12 +30,14 @@ pub enum Request {
 /// What a worker tells the server while a job runs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Event {
-    /// The job's program serves on this port.
+    /// The job's program serves on this port, with the connections lengua made for it first.
     Listening {
         /// The job.
         id: u64,
         /// The port.
         port: u16,
+        /// What became of each connection, in order, as the job's [`Done`] says it again.
+        connections: Vec<Reached>,
     },
     /// The job's program waits for a connection now, or is back from waiting.
     Waiting {
