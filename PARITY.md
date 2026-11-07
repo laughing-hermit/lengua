@@ -18,8 +18,9 @@ programs stay in the repository until the native product is retired (W11); the t
 - **The native programs.** `tests/every_program.rs` takes all 29, on each CPU, through the
   server: every one follows its rules and passes its tests but `second`, which is wrong by design
   and whose tests fail, as the test expects. It passed on both Linux runners (Linux on x86-64 and
-  Linux on ARM64) in run 42361995155, as it did in the native suite at `native-final` (run
-  42178888801). Native programs run on Linux only; on the other runners their tests end at once.
+  Linux on ARM64) in run 42361995155, as it did in the native suite on the code of `native-final`
+  (run 42257174105, of f959a8d, the tag's parent, which differs from the tag only in todo.md).
+  Native programs run on Linux only; on the other runners their tests end at once.
 - **The WebAssembly twins.** `tests/wasm_every_program.rs` takes each folder of
   `tests/fixtures-wasm` from the user's request to done. In run 42361995155 (branch `wip/ports`
   at b229e01, on all five runners) 27 of the 29 went to done on every runner. `echo` and `greet`
@@ -40,7 +41,7 @@ programs stay in the repository until the native product is retired (W11); the t
 
 | | Native | WebAssembly |
 |---|---|---|
-| The idea's type | `lengua/program-idea` | `Attested Computation`, with `runtime`, `computation`, `parameters` (where each input comes from), `executor` and `attester` |
+| The idea's type | `lengua/program-idea` | `Attested Computation`, with `runtime`, `computation`, `parameters` (where each input comes from: an argument, standard input, an environment variable or a named file; clock, dice, nap and sweep take none of these and have no `parameters`, and echo's list is empty), `executor` and `attester` |
 | The code | `main.s` for each CPU: two programs, one in `examples/` or `tests/fixtures/` and its twin in `tests/fixtures/linux-aarch64/` | `main.wat`: one module for every computer |
 | Where it runs | Linux on x86-64 and Linux on ARM64 | the five runners: Linux on x86-64 and on ARM64, Windows on x86-64 and on ARM64, and macOS on ARM64 |
 | The rules | the native dialect 4 ([power-of-10.md](plugin/skills/compile/references/power-of-10.md)) | WebAssembly dialect 1 ([power-of-10-webassembly.md](plugin/skills/compile/references/power-of-10-webassembly.md)) |
@@ -51,7 +52,7 @@ programs stay in the repository until the native product is retired (W11); the t
 | The read loops | at most 2^40 buffer-fulls (sha256: 2^28) | at most 2^31 − 1, as a loop's counter is a 32-bit local (below) |
 | `check`'s `performance` | instructions, CPU cycles, CPU time and time on the clock | WebAssembly operations (the engine's fuel, the same on every computer) and time on the clock |
 | `check`'s `memory` line | each access inside the object its pointer was made from, on every run a proof covers | the rules M1 to M8 for every address they follow, WebAssembly's own bounds for the rest, and what the rules leave to the proofs, each on its line |
-| The record | lengua.lock, and lengua's line in main.s | lengua.lock in format 6, and lengua's entry in the idea's `verified` list at done |
+| The record | lengua.lock (format 6, `dialect = 4`, a `[code]` stamp with `executable_sha256` and `toolchain`), and lengua's line in main.s | lengua.lock (format 6, `dialect = "webassembly 1"`, a `[code]` stamp with `module_sha256` and `engine`), and lengua's entry in the idea's `verified` list at done |
 | The proofs | by induction over a read loop first, then by length; the model follows vector code, floats, names the input chooses and servers' waits | by length only; the model doesn't follow SIMD128, floats, a name the input chooses or a server's wait on `poll_oneoff` yet |
 
 ### Arguments
@@ -246,11 +247,12 @@ frontmatter is the native one's, byte for byte.
   says why the two bytes are missing.
 - **Program:** the same answers, 65536 bytes at a time and 16 a step in both (SSE2, NEON and
   SIMD128), with the lanes past the end masked; the read loop's bound as above.
-- **Proofs:** native: lines and words over text with accented letters and symbols, up to 8 bytes
-  (`src/prove/tests.rs`, `proves_a_word_count_over_text_beyond_ascii`, on a copy of the idea
-  narrowed to 16 characters, both Linux runners in run 42361995155). WebAssembly: the model stops at
-  main.wat line 149, `I8x16Splat`, on the runs of B1 and B2 (run 42361995155), so their proofs are
-  tested, not proven, with that reason; it follows B4's (arguments, the usage line).
+- **Proofs:** native: lines and words over text with accented letters and symbols, up to 8
+  characters of 1 to 3 bytes each (`src/prove/tests.rs`,
+  `proves_a_word_count_over_text_beyond_ascii`, on a copy of the idea narrowed to 16 characters,
+  both Linux runners in run 42361995155). WebAssembly: the model stops at main.wat line 149,
+  `I8x16Splat`, on the runs of B1 and B2 (run 42361995155), so their proofs are tested, not
+  proven, with that reason; it follows B4's (arguments, the usage line).
 
 ### dates
 
@@ -409,8 +411,9 @@ frontmatter is the native one's, byte for byte.
   as above.
 - **Proofs:** native: B1 proven for every length, by induction (`tests/programs.rs`,
   `a_count_of_a_part_that_overlaps_itself_is_proven_for_every_length`, and `src/prove/tests.rs`,
-  both Linux runners in run 42361995155). WebAssembly: by length only (`src/prove/mod.rs`); the
-  model follows every test (run 42361995155).
+  `proves_a_count_of_a_part_that_overlaps_itself_for_every_length`, both Linux runners in run
+  42361995155). WebAssembly: by length only (`src/prove/mod.rs`); the model follows every test
+  (run 42361995155).
 
 ### second
 
@@ -437,9 +440,11 @@ frontmatter is the native one's, byte for byte.
 
 - **Idea:** the same, but the frontmatter.
 - **Program:** the same answers, 4096 bytes at a time in both. The native baseline is integer
-  code; the twin reads a block's words 4 at a time, turns each word's bytes round with one shuffle,
-  and adds the rounds' constants 4 words at a time, the rounds themselves integer code on eight
-  locals. The read loop's bound as above.
+  code for the schedule and the rounds, with SSE2 on x86-64 to copy the eight state words, reverse
+  their order and add them, four at a time, and NEON on ARM64 to copy and add them and to turn the
+  bytes of a block's words round, four words at a time. The twin reads a block's words 4 at a
+  time, turns each word's bytes round with one shuffle, and adds the rounds' constants 4 words at
+  a time, the rounds themselves integer code on eight locals. The read loop's bound as above.
 - **Proofs:** its tests compute `sha256`, which the prover doesn't model on either path ("the test
   function sha256, which the proof doesn't model yet", `src/prove/formula.rs`), so they are tested,
   not proven; natively a proof can stop for memory first, as `scripts/ci/golden-expected.txt`
@@ -500,8 +505,9 @@ frontmatter is the native one's, byte for byte.
 - **Program:** the twin capitalizes a byte at a time, where the native x86-64 program takes 16
   bytes at a time with SSE2 (its ARM64 twin is a byte at a time, with no branch on the byte). A name
   over 1023 bytes, or arguments over 32 KiB, get the usage line and exit code 1 from the twin; the
-  native program passes the name on, and the broker's refusal gives exit code 4. Both are past the
-  idea's names of up to `255` bytes.
+  native program passes the name on: when the broker refuses the input file's name, it prints
+  `upcase: cannot open <name>` and exits with code 2, and when the broker refuses the output
+  file's name, it exits with code 4. Both are past the idea's names of up to `255` bytes.
 - **Why:** the port kept the stream template's scalar form; a vector form is left to the
   performance milestone, W12.
 - **Proofs:** native: B1 proven up to a length of its 1048576 bytes, with `prove_further` going
@@ -521,8 +527,8 @@ frontmatter is the native one's, byte for byte.
   one buffer-full to the next in both. The read loop's bound as above.
 - **Why:** so the model and the proof follow it (9852fb3); a vector form is W12's, as for upcase.
 - **Proofs:** native: B1 proven for every length, by induction (`tests/programs.rs`,
-  `a_word_count_is_proven_for_every_length`, and `src/prove/tests.rs`,
-  `proves_words_for_every_length_by_induction`, each on a copy with a buffer of 128 bytes, both
+  `a_word_count_is_proven_for_every_length`, on a copy with a buffer of 128 bytes, and
+  `src/prove/tests.rs`, `proves_words_for_every_length_by_induction`, on one of 256 bytes, both
   Linux runners in run 42361995155). WebAssembly: by length only (`src/prove/mod.rs`); the model
   follows every test (run 42361995155).
 
