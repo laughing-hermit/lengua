@@ -505,7 +505,9 @@ pub(crate) fn parse_body(body: &str) -> Result<Lock, LockError> {
     }
     // Format 5 came before main.wat: no lock of it holds WebAssembly code.
     if version < VERSION && lock.code.as_ref().is_some_and(CodeStamp::is_wasm) {
-        return Err(malformed("it holds WebAssembly code in lock format 5, which has none"));
+        return Err(malformed(
+            "it holds WebAssembly code in lock format 5, which has none",
+        ));
     }
     let fingerprint = file.fingerprint.as_deref().map(digest).transpose()?;
     if fingerprint != lock.fingerprint() {

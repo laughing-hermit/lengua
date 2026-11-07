@@ -280,7 +280,11 @@ mod tests {
         assert_eq!(found[0].body, "(func $f (nop))");
         // A `;; from:` inside a function is that function's own comment.
         let inside = "(module (func $f\n ;; from: ../x\n (nop)) (func $g))";
-        assert!(functions(inside).iter().all(|function| function.from.is_none()));
+        assert!(
+            functions(inside)
+                .iter()
+                .all(|function| function.from.is_none())
+        );
         // Fields written without `(module …)` are the text's own.
         assert_eq!(functions("(func $a) (func $b)").len(), 2);
     }

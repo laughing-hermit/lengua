@@ -158,7 +158,11 @@ pub(super) fn code_file_problem(folder: &ProgramFolder, wasm: bool) -> Option<Ch
         ),
         _ => return None,
     };
-    Some(CheckReport::problems("code_problems", vec![problem], next_step))
+    Some(CheckReport::problems(
+        "code_problems",
+        vec![problem],
+        next_step,
+    ))
 }
 
 /// Why an Attested Computation can't have its `- Threads:` line, when it has one: a WebAssembly
@@ -562,7 +566,11 @@ impl LenguaServer {
             None => match self.wasm_code(folder, &code, idea, suite) {
                 Ok(code) => self.start_wasm_checking(folder, files, code).await,
                 Err(problems) => {
-                    return Ok(CheckReport::problems("code_problems", problems, fix_code(folder)));
+                    return Ok(CheckReport::problems(
+                        "code_problems",
+                        problems,
+                        fix_code(folder),
+                    ));
                 }
             },
         };
@@ -979,7 +987,11 @@ async fn attest_into(path: &str, lines: &mut Vec<String>) -> bool {
     let idea = match idea::parse(&idea_text) {
         Ok(idea) => idea,
         Err(problems) => {
-            lines.extend(problems.iter().map(|problem| format!("{IDEA_FILE} {problem}")));
+            lines.extend(
+                problems
+                    .iter()
+                    .map(|problem| format!("{IDEA_FILE} {problem}")),
+            );
             return false;
         }
     };
@@ -998,7 +1010,11 @@ async fn attest_into(path: &str, lines: &mut Vec<String>) -> bool {
     let suite = match testfile::check(&idea) {
         Ok(suite) => suite,
         Err(problems) => {
-            lines.extend(problems.iter().map(|problem| format!("{IDEA_FILE} {problem}")));
+            lines.extend(
+                problems
+                    .iter()
+                    .map(|problem| format!("{IDEA_FILE} {problem}")),
+            );
             return false;
         }
     };
@@ -1157,8 +1173,7 @@ mod tests {
     #[test]
     fn one_code_file_and_the_idea_s_own() {
         let program = tempfile::tempdir().expect("a folder");
-        let folder =
-            ProgramFolder::new(program.path().to_str().expect("UTF-8")).expect("absolute");
+        let folder = ProgramFolder::new(program.path().to_str().expect("UTF-8")).expect("absolute");
         assert!(code_file_problem(&folder, true).is_none());
         std::fs::write(folder.file(WASM_CODE_FILE), "(module)").expect("write main.wat");
         assert!(code_file_problem(&folder, true).is_none());

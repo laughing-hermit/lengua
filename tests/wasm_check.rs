@@ -124,8 +124,7 @@ async fn add_goes_from_its_request_to_done_and_runs() {
         let done = session.settle(&program).await;
         assert_eq!(done["state"], "done", "{protocol:?}: {done}");
         assert_eq!(
-            done["tests"][0],
-            "main.wat follows every rule and passed all 202 test runs",
+            done["tests"][0], "main.wat follows every rule and passed all 202 test runs",
             "{done}"
         );
         // Tested, not proven: the proofs of main.wat come with the WebAssembly prover.

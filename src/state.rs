@@ -198,7 +198,9 @@ impl State {
         match (&lock.code, &snapshot.code) {
             (_, None) => Self::CodeMissing,
             (Some(stamp), Some(current))
-                if !snapshot.both && stamp.is_wasm() == snapshot.wasm && stamp.sha256 == *current =>
+                if !snapshot.both
+                    && stamp.is_wasm() == snapshot.wasm
+                    && stamp.sha256 == *current =>
             {
                 Self::Ready
             }

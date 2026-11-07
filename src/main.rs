@@ -319,8 +319,10 @@ mod tests {
             args(&["./add", "--", "-2", "3"]),
             Ok(vec!["-2".to_owned(), "3".to_owned()])
         );
-        let request = parse_run(words(&["./add", "--in", "/tmp", "--env", "A=b", "2", "--in"]))
-            .expect("a shell run");
+        let request = parse_run(words(&[
+            "./add", "--in", "/tmp", "--env", "A=b", "2", "--in",
+        ]))
+        .expect("a shell run");
         assert_eq!(request.folder.as_deref(), Some("/tmp"));
         assert_eq!(request.env.get("A").map(String::as_str), Some("b"));
         assert_eq!(request.args, ["2", "--in"]);
