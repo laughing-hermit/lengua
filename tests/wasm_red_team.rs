@@ -94,6 +94,7 @@ fn assert_refused(attempt: &Attempt) {
                 &Context {
                     uses: &[],
                     network: &network,
+                    secrets: &[],
                 },
             );
             assert!(!report.passed(), "{}: not refused", attempt.name);
@@ -689,6 +690,7 @@ fn a_loop_that_runs_forever_must_take_connections() {
         &Context {
             uses: &uses,
             network: &network,
+            secrets: &[],
         },
     );
     let found = report.violations.iter().any(|violation| {
@@ -708,6 +710,7 @@ fn the_template_itself_passes() {
         &Context {
             uses: &[],
             network: &network,
+            secrets: &[],
         },
     );
     assert!(report.passed(), "{:#?}", report.lines());

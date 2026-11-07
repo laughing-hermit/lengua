@@ -65,6 +65,7 @@ async fn template(pool: &Pool, code: &str, idea_file: &str) -> Result<usize, Str
         &Context {
             uses: &idea.uses,
             network: &idea.network,
+            secrets: &idea.secrets,
         },
     );
     if !report.passed() {

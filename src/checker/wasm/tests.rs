@@ -12,6 +12,12 @@ const TEMPLATE: &str = include_str!("../../../plugin/skills/compile/assets/main-
 /// Checks `text` with an idea whose `- Uses:` line names `uses` and whose `- Network:` line says
 /// `network`.
 fn check_with(text: &str, uses: &[&str], network: &str) -> Report {
+    check_secret(text, uses, network, &[])
+}
+
+/// Checks `text` with an idea whose `- Uses:` line names `uses`, whose `- Network:` line says
+/// `network`, and whose `- Secret:` line names `secrets`.
+fn check_secret(text: &str, uses: &[&str], network: &str, secrets: &[Source]) -> Report {
     let built = build(text).unwrap_or_else(|problem| panic!("it builds: {problem}"));
     let (uses, network) = crate::idea::constraints(uses, network).expect("valid constraints");
     check(
@@ -20,6 +26,7 @@ fn check_with(text: &str, uses: &[&str], network: &str) -> Report {
         &Context {
             uses: &uses,
             network: &network,
+            secrets,
         },
     )
 }
@@ -141,6 +148,7 @@ fn check_unvalidated(text: &str) -> Report {
         &Context {
             uses: &[],
             network: &crate::idea::Network::default(),
+            secrets: &[],
         },
     )
 }
@@ -1131,4 +1139,346 @@ fn every_division_is_guarded() {
         "{:#?}",
         report.facts.obligations
     );
+}
+
+/// A program that reads a secret from standard input, for the secret rule's tests: lengua's
+/// library reads it into `$text`, and `;; plant` is where each test puts its code. Only the
+/// secret rule's findings are the tests': the other rules' in it aren't.
+const SECRET: &str = r#"(module
+  (import "wasi_snapshot_preview1" "fd_write"
+    (func $fd_write (param i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
+  (memory (export "memory") 1 1)
+  (global $STDIN i32 (i32.const 0))
+  (global $STDOUT i32 (i32.const 1))
+  (global $EXIT_OK i32 (i32.const 0))
+  (global $READ_TO_END i32 (i32.const -1))
+  (global $NEWLINE i32 (i32.const 10))
+  (global $kept (mut i32) (i32.const 0))
+  (global $text i32 (i32.const 1024))
+  (global $text.size i32 (i32.const 64))
+  (global $out i32 (i32.const 2048))
+  (global $out.size i32 (i32.const 8))
+  (global $iovec i32 (i32.const 3072))
+  (global $iovec.size i32 (i32.const 16))
+  (func $main (export "_start")
+    (local $got i32)
+    (local $byte i32)
+    (local $word i32)
+    (local.set $got
+      (call $fill (global.get $STDIN) (global.get $text) (global.get $text.size)
+        (global.get $READ_TO_END)))
+    (local.set $byte (i32.load8_u (global.get $text)))
+    ;; plant
+    (i32.store8 (global.get $out) (local.get $byte))
+    (drop (call $write_all (global.get $STDOUT) (global.get $out) (global.get $out.size)))
+    (call $proc_exit (global.get $EXIT_OK))
+    unreachable)
+  (func $branch (param $value i32)
+    (if (local.get $value) (then (nop))))
+  (func $same (param $value i32) (result i32)
+    (local.get $value))
+  (func $first (param $at i32) (result i32)
+    (i32.load8_u (local.get $at))))
+"#;
+
+/// [`SECRET`] with `code` where it says `;; plant`, checked with standard input secret, or
+/// with nothing secret when `secret` is false.
+fn planted(code: &str, secret: bool) -> (String, Report) {
+    let text = SECRET.replacen("    ;; plant\n", &format!("    {code}\n"), 1);
+    let secrets = if secret {
+        vec![Source::StandardInput]
+    } else {
+        Vec::new()
+    };
+    let report = check_secret(&text, &["standard input"], "", &secrets);
+    (text, report)
+}
+
+/// The lines the secret rule refuses in `report`.
+fn secret_lines(report: &Report) -> Vec<usize> {
+    report
+        .violations
+        .iter()
+        .filter(|violation| violation.rule == Rule::Secrets)
+        .filter_map(|violation| violation.line)
+        .collect()
+}
+
+/// The secret rule refuses each way a value computed from a secret can decide how the program
+/// runs, on its line: a branch, a loop's count, a `select`, an address, a length, a division, a
+/// float operator, a host call's argument, a buffer a host call reads, and `$fill`'s stop byte.
+#[test]
+fn the_secret_rule_refuses_every_way_a_secret_decides_how_the_program_runs() {
+    let refused = [
+        (
+            "(if (local.get $byte) (then (nop)))",
+            "the condition of this `if` is computed from a secret",
+        ),
+        (
+            "(block $b (br_if $b (local.get $byte)))",
+            "the condition of this `br_if` is computed from a secret",
+        ),
+        (
+            "(block $a (block $b (br_table $a $b (local.get $byte))))",
+            "the condition of this `br_table` is computed from a secret",
+        ),
+        (
+            "(block $done (loop $again (br_if $done (local.get $byte)) (br $again)))",
+            "this `br_if` repeats or leaves the loop on line",
+        ),
+        (
+            "(local.set $word (select (i32.const 1) (i32.const 2) (local.get $byte)))",
+            "the condition of this `select` is computed from a secret",
+        ),
+        (
+            "(local.set $word (i32.load8_u (i32.add (global.get $text) (local.get $byte))))",
+            "the address of this `i32.load8_u` is computed from a secret",
+        ),
+        (
+            "(i32.store8 (i32.add (global.get $out) (local.get $byte)) (i32.const 0))",
+            "the address of this `i32.store8` is computed from a secret",
+        ),
+        (
+            "(memory.copy (global.get $out) (global.get $text) (local.get $byte))",
+            "the length of this `memory.copy` is computed from a secret",
+        ),
+        (
+            "(memory.fill (i32.add (global.get $out) (local.get $byte)) (i32.const 0) (i32.const \
+             1))",
+            "the address of this `memory.fill` is computed from a secret",
+        ),
+        (
+            "(local.set $word (i32.div_u (i32.const 100) (local.get $byte)))",
+            "an operand of this `i32.div_u` is computed from a secret",
+        ),
+        (
+            "(local.set $word (i32.rem_s (local.get $byte) (i32.const 7)))",
+            "an operand of this `i32.rem_s` is computed from a secret",
+        ),
+        (
+            "(drop (f64.convert_i32_u (local.get $byte)))",
+            "an operand of this `f64.convert_i32_u` is computed from a secret",
+        ),
+        (
+            "(drop (call $write_all (local.get $byte) (global.get $out) (global.get $out.size)))",
+            "argument 1 of this call of $write_all is computed from a secret",
+        ),
+        (
+            "(drop (call $write_all (global.get $STDOUT) (global.get $out) (local.get $byte)))",
+            "argument 3 of this call of $write_all is computed from a secret",
+        ),
+        (
+            "(i32.store (global.get $iovec) (global.get $out)) (i32.store offset=4 (global.get \
+             $iovec) (local.get $byte)) (drop (call $fd_write (global.get $STDOUT) (global.get \
+             $iovec) (i32.const 1) (i32.add (global.get $iovec) (i32.const 8))))",
+            "$fd_write reads a secret in the buffer of argument 2",
+        ),
+        (
+            "(local.set $got (call $fill (global.get $STDIN) (global.get $text) (global.get \
+             $text.size) (global.get $NEWLINE)))",
+            "`$fill` reads a secret here up to its stop byte",
+        ),
+    ];
+    for (code, needle) in refused {
+        let (text, report) = planted(code, true);
+        assert_violation(&report, Rule::Secrets, line_of(&text, code), needle);
+        // With nothing secret, the same code decides freely.
+        let (_, public) = planted(code, false);
+        assert_no(&public, Rule::Secrets);
+    }
+    let (text, report) = planted("(if (local.get $byte) (then (nop)))", true);
+    let line = line_of(&text, "(if (local.get $byte)");
+    assert!(
+        report.lines().iter().any(|shown| shown.starts_with(&format!(
+            "secrets main.wat:{line}: the condition of this `if` is computed from a secret"
+        ))),
+        "{:#?}",
+        report.lines()
+    );
+}
+
+/// What isn't secret decides freely: how many bytes came, a value stored over a secret one, and
+/// a callee called with what isn't secret, though another call gives it a secret; a mask chooses
+/// with no branch, and secret bytes may be written out.
+#[test]
+fn the_secret_rule_lets_what_isnt_secret_decide() {
+    let passing = [
+        "(if (local.get $got) (then (nop)))",
+        "(local.set $word (i32.or (i32.and (i32.const 1) (i32.sub (i32.const 0) (local.get \
+         $byte))) (i32.and (i32.const 2) (i32.xor (i32.sub (i32.const 0) (local.get $byte)) \
+         (i32.const -1)))))",
+        "(drop (call $write_all (global.get $STDOUT) (global.get $text) (local.get $got)))",
+        "(i32.store8 (global.get $text) (i32.const 0)) (if (i32.load8_u (global.get $text)) \
+         (then (nop)))",
+        "(call $branch (local.get $got))",
+        "(if (call $same (local.get $got)) (then (nop)))",
+        "(if (call $first (global.get $out)) (then (nop)))",
+    ];
+    for code in passing {
+        let (_, report) = planted(code, true);
+        assert_no(&report, Rule::Secrets);
+    }
+}
+
+/// A secret goes through calls, globals and memory: a callee branches on a secret argument, on
+/// its own line, a callee's result is secret where its argument is, and so is what it reads
+/// through an address it's lent, a global set from a secret, and the bytes a secret was stored
+/// in.
+#[test]
+fn a_secret_goes_through_calls_globals_and_memory() {
+    let (text, report) = planted(
+        "(call $branch (local.get $got)) (call $branch (local.get $byte))",
+        true,
+    );
+    assert_violation(
+        &report,
+        Rule::Secrets,
+        line_of(&text, "(if (local.get $value)"),
+        "the condition of this `if`",
+    );
+    for code in [
+        "(if (call $same (local.get $byte)) (then (nop)))",
+        "(if (call $first (global.get $text)) (then (nop)))",
+        "(global.set $kept (local.get $byte)) (if (global.get $kept) (then (nop)))",
+        "(i32.store (global.get $out) (local.get $byte)) (if (i32.load (global.get $out)) (then \
+         (nop)))",
+    ] {
+        let (text, report) = planted(code, true);
+        assert_violation(
+            &report,
+            Rule::Secrets,
+            line_of(&text, code),
+            "the condition of this `if`",
+        );
+    }
+}
+
+/// A program that reads its arguments' text, for the secret rule's test of an argument: where
+/// each argument starts isn't secret, its text is.
+const ARGUMENTS: &str = r#"(module
+  (import "wasi_snapshot_preview1" "args_get"
+    (func $args_get (param i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
+  (memory (export "memory") 1 1)
+  (global $EXIT_OK i32 (i32.const 0))
+  (global $argv i32 (i32.const 1024))
+  (global $argv.size i32 (i32.const 64))
+  (global $args i32 (i32.const 2048))
+  (global $args.size i32 (i32.const 256))
+  (func $main (export "_start")
+    (drop (call $args_get (global.get $argv) (global.get $args)))
+    (if (i32.load (global.get $argv)) (then (nop)))
+    (if (i32.load8_u (global.get $args)) (then (nop)))
+    (call $proc_exit (global.get $EXIT_OK))
+    unreachable))
+"#;
+
+/// A program that reads a file it opens, for the secret rule's test of a file.
+const FILE_READ: &str = r#"(module
+  (import "wasi_snapshot_preview1" "path_open"
+    (func $path_open (param i32 i32 i32 i32 i32 i64 i64 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "fd_read"
+    (func $fd_read (param i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
+  (memory (export "memory") 1 1)
+  (global $FOLDER i32 (i32.const 3))
+  (global $EXIT_OK i32 (i32.const 0))
+  (global $name i32 (i32.const 1024))
+  (global $name.rosize i32 (i32.const 7))
+  (data (i32.const 1024) "key.txt")
+  (global $opened i32 (i32.const 2048))
+  (global $opened.size i32 (i32.const 4))
+  (global $iovec i32 (i32.const 2064))
+  (global $iovec.size i32 (i32.const 12))
+  (global $key i32 (i32.const 3072))
+  (global $key.size i32 (i32.const 32))
+  (func $main (export "_start")
+    (drop
+      (call $path_open (global.get $FOLDER) (i32.const 0) (global.get $name)
+        (global.get $name.rosize) (i32.const 0) (i64.const 2) (i64.const 0) (i32.const 0)
+        (global.get $opened)))
+    (i32.store (global.get $iovec) (global.get $key))
+    (i32.store offset=4 (global.get $iovec) (global.get $key.size))
+    (drop
+      (call $fd_read (i32.load (global.get $opened)) (global.get $iovec) (i32.const 1)
+        (i32.add (global.get $iovec) (i32.const 8))))
+    (if (i32.load8_u (global.get $key)) (then (nop)))
+    (call $proc_exit (global.get $EXIT_OK))
+    unreachable))
+"#;
+
+/// Each input a `- Secret:` line names is secret where the host puts it: an argument's text
+/// (but where each argument starts), a variable's text, and a file's bytes read through the
+/// descriptor `path_open` gave; a program that parses a secret argument is refused at its first
+/// branch on the text, and at each loop the text ends.
+#[test]
+fn each_secret_input_is_secret_where_the_host_puts_it() {
+    let pointer = line_of(ARGUMENTS, "(if (i32.load (global.get $argv))");
+    let text = line_of(ARGUMENTS, "(if (i32.load8_u (global.get $args))");
+    let report = check_secret(ARGUMENTS, &[], "", &[Source::Argument(1)]);
+    assert_eq!(secret_lines(&report), [text], "{:#?}", report.lines());
+    let environment = ARGUMENTS.replace("\"args_get\"", "\"environ_get\"");
+    let report = check_secret(
+        &environment,
+        &["the environment"],
+        "",
+        &[Source::Environment("KEY".to_owned())],
+    );
+    assert_eq!(secret_lines(&report), [text], "{:#?}", report.lines());
+    assert!(secret_lines(&report).iter().all(|line| *line != pointer));
+    // A variable secret makes no argument so.
+    let report = check_secret(
+        ARGUMENTS,
+        &["the environment"],
+        "",
+        &[Source::Environment("KEY".to_owned())],
+    );
+    assert!(secret_lines(&report).is_empty(), "{:#?}", report.lines());
+    let report = check_secret(FILE_READ, &["files"], "", &[Source::File("key.txt".to_owned())]);
+    assert_eq!(
+        secret_lines(&report),
+        [line_of(FILE_READ, "(if (i32.load8_u (global.get $key))")],
+        "{:#?}",
+        report.lines()
+    );
+    // The template parses its argument, so with the argument secret its parse is refused.
+    let report = check_secret(TEMPLATE, &[], "", &[Source::Argument(1)]);
+    assert_violation(
+        &report,
+        Rule::Secrets,
+        line_of(
+            TEMPLATE,
+            "(if (i32.eq (i32.load8_u (i32.add (global.get $args) (local.get $i))) (global.get \
+             $MINUS))",
+        ),
+        "the condition of this `if`",
+    );
+    assert_violation(
+        &report,
+        Rule::Secrets,
+        line_of(TEMPLATE, "(br_if $end (i32.eqz (local.get $c)))"),
+        &format!(
+            "this `br_if` repeats or leaves the loop on line {}",
+            line_of(TEMPLATE, "(loop $digit  ;; bound: 20")
+        ),
+    );
+    assert!(check_text(TEMPLATE).passed());
+}
+
+/// The secret rule's reports read `secrets main.wat:LINE: …`, as the dialect's read `dialect`.
+#[test]
+fn the_secret_rules_reports_name_it() {
+    let violation = Violation {
+        rule: Rule::Secrets,
+        line: Some(7),
+        problem: "a secret decides it".into(),
+        fix: "mask it".into(),
+    };
+    assert_eq!(
+        violation.in_file(FILE),
+        "secrets main.wat:7: a secret decides it. Fix: mask it."
+    );
+    assert_eq!(Rule::Secrets.label(), "secrets");
+    assert_eq!(Rule::Dialect.label(), "dialect");
 }

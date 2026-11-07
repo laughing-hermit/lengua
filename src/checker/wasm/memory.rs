@@ -1275,12 +1275,12 @@ pub struct Analysis {
 
 /// A memory instruction: its immediate, the bytes it touches, whether it writes, how many values
 /// it takes and its name.
-type MemoryOp = (MemArg, u64, bool, usize, &'static str);
+pub(super) type MemoryOp = (MemArg, u64, bool, usize, &'static str);
 
 /// The memory instruction `operator` is, when it is one.
 #[must_use]
 #[allow(clippy::too_many_lines)]
-fn memory_op(operator: &Operator<'_>) -> Option<MemoryOp> {
+pub(super) fn memory_op(operator: &Operator<'_>) -> Option<MemoryOp> {
     use Operator as O;
     Some(match *operator {
         O::I32Load { memarg } => (memarg, 4, false, 1, "i32.load"),
@@ -2397,7 +2397,7 @@ impl Interpreter<'_, '_> {
 }
 
 /// An address `by` bytes on, as a memory instruction's offset moves it.
-fn shifted(address: &Value, by: u64) -> Value {
+pub(super) fn shifted(address: &Value, by: u64) -> Value {
     let Some(bytes) = signed(by) else {
         return Value::Mixed { number: false };
     };

@@ -790,6 +790,7 @@ impl LenguaServer {
         let context = checker::wasm::Context {
             uses: &idea.uses,
             network: &idea.network,
+            secrets: &idea.secrets,
         };
         let report = checker::wasm::check(code, &built, &context);
         if !report.passed() {
@@ -1309,6 +1310,7 @@ async fn attest_into(path: &str, lines: &mut Vec<String>) -> bool {
     let context = checker::wasm::Context {
         uses: &idea.uses,
         network: &idea.network,
+        secrets: &idea.secrets,
     };
     let report = checker::wasm::check(&code, &built, &context);
     if !report.passed() {
