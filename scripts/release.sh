@@ -398,20 +398,27 @@ EOF
 # What the archive is for, which the install script holds the computer to, and how to install
 # it.
 printf '%s\n' "$target" > "$out/TARGET"
+try='load this folder for one session:'
 case "$target" in
   windows-*)
     cp "$root/scripts/install.ps1" "$out/install.ps1"
     install='In PowerShell, in this folder, run `powershell -ExecutionPolicy Bypass -File .\install.ps1`.'
-    options='`-Check` only checks, and `-Prefix <folder>` installs into another folder.'
+    options="\`-Check\` only checks, and \`-Prefix <folder>\` makes \`<folder>\` lengua's marketplace folder, with the plugin in a \`lengua\` folder in it, where what it replaces must be an earlier lengua install."
     destination='`%LOCALAPPDATA%\lengua\plugins\lengua`'
     ;;
   *)
     cp "$root/scripts/install.sh" "$out/install.sh"
     chmod 755 "$out/install.sh"
     install='In this folder, run `./install.sh`.'
-    options='`./install.sh --check` only checks, `--prefix=<folder>` installs into another folder, and `--link` also puts `lengua-mcp` in `~/.local/bin`, to run programs from a shell.'
+    options="\`./install.sh --check\` only checks, \`--prefix=<folder>\` makes \`<folder>\` lengua's marketplace folder, with the plugin in its \`lengua/\` folder, where what it replaces must be an earlier lengua install, and \`--link\` also puts \`lengua-mcp\` in \`~/.local/bin\`, to run programs from a shell."
     case "$target" in
-      macos-*) destination='`~/Library/Application Support/lengua/plugins/lengua`' ;;
+      macos-*)
+        destination='`~/Library/Application Support/lengua/plugins/lengua`'
+        # A browser marks what it downloads, and macOS won't start an unsigned program so marked:
+        # the install script clears the mark, and --plugin-dir needs it cleared first.
+        options="$options On macOS the script, with \`--check\` too, clears the mark a browser puts on a download, under which macOS won't start the server or the solvers."
+        try='clear that mark from this folder first (`xattr -dr com.apple.quarantine <this folder>`), then load it for one session:'
+        ;;
       *) destination='`~/.local/share/lengua/plugins/lengua` (under `$XDG_DATA_HOME` when it is set)' ;;
     esac
     ;;
@@ -428,9 +435,9 @@ it to Claude Code when the \`claude\` command is installed (or says the two comm
 and runs \`lengua-mcp doctor\`, which says whether lengua has what it needs here and what to do
 about anything missing. $options
 
-To try it without installing, load this folder for one session: \`claude --plugin-dir <this
-folder>\`. Other agent harnesses load it as an Agent Plugins plugin, from \`plugin.json\` and
-\`mcp.json\`. The archive is unsigned.
+To try it without installing, $try \`claude --plugin-dir <this folder>\`. Other agent
+harnesses load it as an Agent Plugins plugin, from \`plugin.json\` and \`mcp.json\`. The archive
+is unsigned.
 EOF
 
 mkdir -p "$root/dist"

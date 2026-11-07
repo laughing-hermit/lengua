@@ -9,7 +9,9 @@ wrong. It runs in Windows PowerShell 5.1 and in PowerShell 7.
 
 usage: powershell -ExecutionPolicy Bypass -File .\install.ps1 [-Check] [-Prefix <folder>]
   -Check            only check this computer; install nothing
-  -Prefix <folder>  install into that folder instead of lengua's own
+  -Prefix <folder>  make <folder> lengua's marketplace folder, the plugin in a lengua folder in
+                    it, instead of lengua's own; what it replaces there must be lengua's (an
+                    earlier install), or not there yet
 #>
 param(
     [switch]$Check,
@@ -54,6 +56,13 @@ if (-not (Test-Path -LiteralPath $targetFile)) {
 $target = (Get-Content -Raw -LiteralPath $targetFile).Trim()
 $version = (Get-Content -Raw -LiteralPath (Join-Path $here 'plugin.json') | ConvertFrom-Json).version
 
+# PowerShell 7 runs on Linux and macOS too, which no archive with install.ps1 is for. Windows
+# PowerShell 5.1 has no $IsWindows, and runs on Windows alone.
+if ((Test-Path -LiteralPath 'variable:IsWindows') -and -not $IsWindows) {
+    [Console]::Error.WriteLine("This archive is lengua for $(Get-Described $target), and this computer isn't Windows: use the archive for its system and CPU (linux-x86_64, linux-aarch64 or macos-aarch64), and its install.sh.")
+    exit 1
+}
+
 # The CPU Windows itself runs on, as the system's own environment names it: an x64 PowerShell
 # is emulated on ARM64, where its process's PROCESSOR_ARCHITECTURE says AMD64.
 $environment = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
@@ -85,6 +94,27 @@ if ($Prefix) {
 }
 $dest = Join-Path $market 'lengua'
 $staging = "$dest.new"
+$marketplace = Join-Path $market '.claude-plugin\marketplace.json'
+# What the install replaces must be lengua's: an earlier install, which holds its TARGET file,
+# and the marketplace.json that names lengua, or nothing yet.
+foreach ($folder in $dest, $staging) {
+    if ((Test-Path -LiteralPath $folder) -and -not (Test-Path -LiteralPath (Join-Path $folder 'TARGET'))) {
+        [Console]::Error.WriteLine("$folder is there and isn't lengua (it has no TARGET file), so the install won't replace it: give -Prefix a folder of lengua's own, or move $folder away.")
+        exit 1
+    }
+}
+if (Test-Path -LiteralPath $marketplace) {
+    $named = $null
+    try {
+        $named = (Get-Content -Raw -LiteralPath $marketplace | ConvertFrom-Json).name
+    } catch {
+        $named = $null
+    }
+    if ($named -ne 'lengua') {
+        [Console]::Error.WriteLine("$marketplace is another marketplace's, so the install won't replace it: give -Prefix a folder of lengua's own.")
+        exit 1
+    }
+}
 New-Item -ItemType Directory -Force -Path (Join-Path $market '.claude-plugin') | Out-Null
 if (Test-Path -LiteralPath $staging) {
     Remove-Item -Recurse -Force -LiteralPath $staging
@@ -118,7 +148,6 @@ $manifest = @"
 }
 "@
 # UTF-8 without a byte order mark, which a JSON reader may refuse.
-$marketplace = Join-Path $market '.claude-plugin\marketplace.json'
 [System.IO.File]::WriteAllText($marketplace, $manifest, (New-Object System.Text.UTF8Encoding $false))
 $server = Join-Path $dest 'server\lengua-mcp.exe'
 

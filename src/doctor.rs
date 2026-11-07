@@ -196,6 +196,16 @@ fn cpu() -> Finding {
 /// How long a solver may take to print its version.
 const VERSION_WAIT: Duration = Duration::from_secs(10);
 
+/// What doctor adds on macOS to what to do about a solver that didn't run: macOS won't start an
+/// unsigned program a browser downloaded until the mark the download got is cleared.
+#[cfg(target_os = "macos")]
+const MARKED: &str = "; if macOS refused to start it, as it does an unsigned program a browser \
+                      downloaded, run xattr -dr com.apple.quarantine on the folder lengua is in";
+
+/// What doctor adds elsewhere: nothing.
+#[cfg(not(target_os = "macos"))]
+const MARKED: &str = "";
+
 /// z3 or cvc5: where the prover finds it, and its version against the one lengua pins.
 fn solver(kind: Kind) -> Finding {
     let (name, pinned) = (kind.name(), kind.pinned());
@@ -225,7 +235,7 @@ fn solver(kind: Kind) -> Finding {
         Err(error) => {
             return Finding::wrong(
                 format!("{name}: {place}, which didn't run: {error}"),
-                format!("Proofs need {name} to run: {archive}."),
+                format!("Proofs need {name} to run: {archive}{MARKED}."),
             );
         }
     };

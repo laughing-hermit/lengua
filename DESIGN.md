@@ -123,8 +123,11 @@ files of the system libraries it holds), every Rust crate compiled into the serv
 licence and the licence files it ships, and a `README.md` that lists them all; `TARGET`;
 and `install.sh` or `install.ps1`. The prover, and `lengua-mcp doctor`, look for each solver in
 the `solvers` folder beside the server's own folder first, then on PATH. The install script
-refuses another system or CPU (on Linux, a glibc older than 2.39 too), copies the plugin into a
-marketplace folder of lengua's own, `plugins` in lengua's data folder (or `--prefix`), adds it
+refuses another system or CPU (on Linux, a glibc older than 2.39 too), naming the archive and
+install script to use, clears macOS's download mark (with `--check` too), copies the plugin into
+a marketplace folder of lengua's own, `plugins` in lengua's data folder (or `--prefix`, where it
+replaces only an earlier install, which its `TARGET` file shows, and lengua's own
+`marketplace.json`), adds it
 to Claude Code with `claude plugin marketplace add` and `claude plugin install` when `claude` is
 installed, and runs `lengua-mcp doctor`: the server, the engine (compiling and running a module
 with every feature on), the CPU, both solvers and their pinned versions, whether the data folder

@@ -8,9 +8,13 @@
 # doctor's: 0 when nothing is wrong.
 #
 # usage: install.sh [--check] [--link] [--prefix=<folder>]
-#   --check            only check this computer; install nothing
+#   --check            only check this computer; install nothing (on macOS, it first clears
+#                      from this folder the mark a browser puts on a download, under which
+#                      macOS won't start the server)
 #   --link             also link lengua-mcp into ~/.local/bin, to run programs from a shell
-#   --prefix=<folder>  install into that folder instead of lengua's own
+#   --prefix=<folder>  make <folder> lengua's marketplace folder, the plugin in its lengua/
+#                      folder, instead of lengua's own; what it replaces there must be lengua's
+#                      (an earlier install), or not there yet
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -63,6 +67,13 @@ case "$(uname -s)" in
             cpu=x86_64
         fi
         ;;
+    # A Unix shell on Windows (Git Bash, MSYS2, Cygwin), which no archive with install.sh is for.
+    MINGW* | MSYS* | CYGWIN*)
+        echo "This archive is lengua for $(described "$target"), and this computer is Windows:" \
+            "use the archive for Windows on its CPU (windows-x86_64 or windows-aarch64), and" \
+            "its install.ps1, in PowerShell." >&2
+        exit 1
+        ;;
     *)
         system=$(uname -s)
         cpu=$(uname -m)
@@ -73,9 +84,17 @@ if [ "$cpu" = arm64 ]; then
 fi
 computer="$system-$cpu"
 if [ "$computer" != "$target" ]; then
-    echo "This archive is lengua for $(described "$target"), and this computer is" \
-        "$(described "$computer"): use the archive for $computer, if lengua is built for it" \
-        "(linux-x86_64, linux-aarch64, macos-aarch64, windows-x86_64 or windows-aarch64)." >&2
+    case "$computer" in
+        linux-x86_64 | linux-aarch64 | macos-aarch64)
+            echo "This archive is lengua for $(described "$target"), and this computer is" \
+                "$(described "$computer"): use the archive for $computer, with its install.sh." >&2
+            ;;
+        *)
+            echo "This archive is lengua for $(described "$target"), and this computer is" \
+                "$(described "$computer"), which lengua isn't built for: it is built for" \
+                "linux-x86_64, linux-aarch64, macos-aarch64, windows-x86_64 and windows-aarch64." >&2
+            ;;
+    esac
     exit 1
 fi
 
@@ -96,6 +115,10 @@ if [ "$system" = linux ]; then
 fi
 
 if [ "$check_only" = true ]; then
+    if [ "$system" = macos ] && command -v xattr >/dev/null 2>&1; then
+        # A browser marks what it downloads, and macOS won't start an unsigned program so marked.
+        xattr -dr com.apple.quarantine "$here" 2>/dev/null || true
+    fi
     echo "This computer is $(described "$computer"), which this archive is for."
     echo
     exec "$here/server/lengua-mcp" doctor
@@ -109,6 +132,22 @@ case "$system" in
 esac
 market="${prefix:-$data/lengua/plugins}"
 dest="$market/lengua"
+marketplace="$market/.claude-plugin/marketplace.json"
+# What the install replaces must be lengua's: an earlier install, which holds its TARGET file,
+# and the marketplace.json that names lengua, or nothing yet.
+for folder in "$dest" "$dest.new"; do
+    if [ -e "$folder" ] && [ ! -f "$folder/TARGET" ]; then
+        echo "$folder is there and isn't lengua (it has no TARGET file), so the install won't" \
+            "replace it: give --prefix a folder of lengua's own, or move $folder away." >&2
+        exit 1
+    fi
+done
+if [ -e "$marketplace" ] \
+    && [ "$(sed -n 's/^ *"name": *"\([^"]*\)".*/\1/p' "$marketplace" | head -n 1)" != lengua ]; then
+    echo "$marketplace is another marketplace's, so the install won't replace it: give" \
+        "--prefix a folder of lengua's own." >&2
+    exit 1
+fi
 mkdir -p "$market/.claude-plugin"
 rm -rf "$dest.new"
 cp -R "$here" "$dest.new"
@@ -119,7 +158,7 @@ if [ "$system" = macos ] && command -v xattr >/dev/null 2>&1; then
     # A browser marks what it downloads, and macOS won't start an unsigned program so marked.
     xattr -dr com.apple.quarantine "$dest" 2>/dev/null || true
 fi
-cat > "$market/.claude-plugin/marketplace.json" <<EOF
+cat > "$marketplace" <<EOF
 {
   "name": "lengua",
   "owner": {
