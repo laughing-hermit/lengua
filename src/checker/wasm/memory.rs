@@ -2004,8 +2004,9 @@ impl Interpreter<'_, '_> {
         };
         match (global.ty, global.unsigned()) {
             (ValType::I32 | ValType::I64, Some(value)) => Value::Number(Range::exact(value)),
-            // A global that changes may hold an address the rules don't follow.
-            (ValType::I32, None) => Value::Loaded,
+            // A global that changes starts as a plain number, its initial value, and an address
+            // is made only from a region's global: what it holds may be a plain number.
+            (ValType::I32, None) => Value::Mixed { number: true },
             (ValType::I64, None) => Value::Number(Range::full()),
             (ValType::F32 | ValType::F64, _) => Value::Float { nan: true },
             _ => Value::Other,
