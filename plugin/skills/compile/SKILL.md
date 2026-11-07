@@ -91,7 +91,7 @@ which to write.
    | `state` | What it means, and what to do |
    |---|---|
    | `write_code` | The idea is recorded and there's no main.wat yet: write it. |
-   | `code_problems` | Every problem, each on its line: one the build finds as `main.wat line N: …`, text that doesn't parse or validate, and each broken rule as `rule N (name) main.wat:LINE: problem. Fix: …`; or a part's function that differs from the part's, or a second code file. Fix them all, then call `check` again. |
+   | `code_problems` | Every problem, each on its line: one the build finds as `main.wat line N: …`, text that doesn't parse or validate, and each broken rule as `rule N (name) main.wat:LINE: problem. Fix: …` (`rule M2 (bounds)` for a memory rule), or as `dialect main.wat:LINE: …` for what the dialect doesn't allow, such as a trapping float conversion, the bits of a float that may be NaN, relaxed SIMD or a division by a value that may be zero; or a part's function that differs from the part's, or a second code file. At most 20 broken rules are listed, then `…and N more`. Fix them all, then call `check` again. |
    | `testing` | The tests are running: call `check` again; nothing needs to change. |
    | `tests_failed` | Each failure gives the test, its inputs and the seed, what was expected and what happened, as `example B1 (idea.md line 20): stdout should be "5\n", but was "-1\n"`, with `assertion 9 failed at main.wat:LINE` when an assertion fires. Decide from `idea.md` whether main.wat or the test is wrong: fix main.wat, or fix the test by the write-idea skill's rules, and call `check` again. |
    | `proving` | Every test passed, and the proofs are running: call `check` again. |
@@ -107,8 +107,9 @@ which to write.
    stands: fix what `blocks` first.
 6. **Read the proofs and the memory line.** Once the tests pass, lengua proves each generated
    test for every input it can, with each solver question confirmed by z3 and cvc5: for about 20
-   seconds before `check` says done, then on in the background for up to five minutes in all,
-   each proof recorded in lengua.lock as it ends. Each line of `proofs` is one generated test:
+   seconds before `check` says done, then on in the background for up to five minutes in all. A
+   proof that finds main.wat wrong goes into lengua.lock at once; what the others proved goes in
+   together once the last one ends. Each line of `proofs` is one generated test:
    - `proven for every input in range (… input combinations, … paths through the WebAssembly)`:
      every input its ranges allow. The rest of the line says whether two solvers confirmed each
      step, the terms settled every one, or one solver answered alone, and then which to install.
@@ -131,11 +132,12 @@ which to write.
 
    `memory` says what's known of memory safety. The rules (M1 to M8) hold every address they can
    follow to its owner, for every input, and WebAssembly holds every access inside the program's
-   own memory. What the rules can't follow, such as an address loaded from memory or a division
-   no check guards, they leave to the proofs, each on its line of main.wat, and the line says what
-   the proofs settled of it on the runs they cover. The proofs follow no region, so whether such
-   an access stays inside its own region is tested, not proven. A proof that found main.wat
-   wrong comes first.
+   own memory. What the rules can't follow, such as an address loaded from memory or a signed
+   division that may divide the most negative number by -1 (a divisor that may be zero is a code
+   problem, as step 4 says), they leave to the proofs, each on its line of main.wat, and the line
+   says what the proofs settled of it on the runs they cover. The proofs follow no region, so
+   whether such an access stays inside its own region is tested, not proven. A proof that found
+   main.wat wrong comes first.
 
    At done, `check` writes lengua's entry in idea.md's `verified` list: lengua and its version,
    the time, and the hashes of the idea and the main.wat it checked. Never write or edit it. The
