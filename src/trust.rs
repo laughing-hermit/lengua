@@ -993,8 +993,9 @@ mod tests {
             with(IDEA, "verified_by: human:ana\n"),
             // A key of that name inside another key's value is that key's.
             IDEA.replace(
-                "  resource: lengua check\n",
-                "  resource: lengua check\n  verified: yes\n",
+                "  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md\n",
+                "  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md\n  \
+                 verified: yes\n",
             ),
         ];
         for changed in changes {

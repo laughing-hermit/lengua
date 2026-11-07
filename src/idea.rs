@@ -4125,7 +4125,9 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
         for written in ["[]", "stdout"] {
             assert_eq!(
                 problems(&receipt(written)),
-                [format!("line 12: `executor` says `receipt: {written}`; {usage}")]
+                [format!(
+                    "line 12: `executor` says `receipt: {written}`; {usage}"
+                )]
             );
         }
         assert_eq!(
@@ -4203,7 +4205,9 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
         );
         assert_eq!(
             one(&A.replace("type: integer, ", "")),
-            [format!("line 8: the parameter `a` has no `type`; add one of {types}")]
+            [format!(
+                "line 8: the parameter `a` has no `type`; add one of {types}"
+            )]
         );
         // Only `true` and `false` are booleans, so YAML's older words for them are refused.
         for required in ["maybe", "yes"] {
