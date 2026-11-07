@@ -37,12 +37,15 @@ pub const ENGINE_VERSION: &str = "50.0.1";
 /// The engine and its version, as lengua.lock records what runs a module.
 pub const ENGINE: &str = "wasmtime 50.0.1";
 
-/// The features [`FEATURES`] turns on beyond WebAssembly 1.0, which has floats, each by the
-/// name its proposal has, in the order WebAssembly 2.0 lists them.
-pub const OPTIONAL_FEATURES: [&str; 7] = [
+/// What WebAssembly 1.0 has of [`FEATURES`]: floats, and mutable globals, which it may import
+/// and export.
+const WASM1: WasmFeatures = WasmFeatures::FLOATS.union(WasmFeatures::MUTABLE_GLOBAL);
+
+/// The features [`FEATURES`] turns on beyond WebAssembly 1.0, each by the name its proposal has,
+/// in the order WebAssembly 2.0 lists them.
+pub const OPTIONAL_FEATURES: [&str; 6] = [
     "sign-extension",
     "saturating-float-to-int",
-    "mutable-global",
     "multi-value",
     "reference-types",
     "bulk-memory",
@@ -54,10 +57,9 @@ fn optional_feature(at: usize) -> WasmFeatures {
     match at {
         0 => WasmFeatures::SIGN_EXTENSION,
         1 => WasmFeatures::SATURATING_FLOAT_TO_INT,
-        2 => WasmFeatures::MUTABLE_GLOBAL,
-        3 => WasmFeatures::MULTI_VALUE,
-        4 => WasmFeatures::REFERENCE_TYPES,
-        5 => WasmFeatures::BULK_MEMORY,
+        2 => WasmFeatures::MULTI_VALUE,
+        3 => WasmFeatures::REFERENCE_TYPES,
+        4 => WasmFeatures::BULK_MEMORY,
         _ => WasmFeatures::SIMD,
     }
 }
@@ -70,9 +72,7 @@ pub fn features_used(wasm: &[u8]) -> Vec<String> {
         .filter(|&left_out| {
             let without = (0..OPTIONAL_FEATURES.len())
                 .filter(|&at| at != left_out)
-                .fold(WasmFeatures::FLOATS, |features, at| {
-                    features.union(optional_feature(at))
-                });
+                .fold(WASM1, |features, at| features.union(optional_feature(at)));
             wasmparser::Validator::new_with_features(without)
                 .validate_all(wasm)
                 .is_err()
@@ -300,6 +300,9 @@ mod tests {
             features_used(&built.wasm)
         };
         assert!(used("(module (func))").is_empty());
+        // A mutable global, exported too, is WebAssembly 1.0's.
+        let global = "(module (global (export \"counter\") (mut i32) (i32.const 0)))";
+        assert!(used(global).is_empty(), "{:?}", used(global));
         let simd = "(module (func (result v128) (v128.const i32x4 1 2 3 4)))";
         assert_eq!(used(simd), ["simd"]);
         let bulk = "(module (memory 1) (func (memory.fill (i32.const 0) (i32.const 0) (i32.const \

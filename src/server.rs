@@ -412,7 +412,7 @@ pub struct CheckReport {
     pub problems: Vec<String>,
     /// The machine the code runs on, while it isn't written yet: for main.s, its cores, which an
     /// idea's threads may use, and the CPU extensions main.s may use; for main.wat, the engine
-    /// that compiles it for this CPU, and the WebAssembly features the engine has on.
+    /// that compiles it for this CPU, and the WebAssembly features main.wat may use.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<String>,
     /// What the tests found, once they pass.
@@ -509,7 +509,7 @@ pub struct RunParams {
     #[serde(default)]
     pub stop: bool,
     /// The name of a file in `folder` to give the program as its standard input instead of
-    /// `stdin`, read by the program itself however large it is.
+    /// `stdin`: main.s reads it itself however large it is; main.wat gets it whole, at most 16 MiB.
     #[serde(default)]
     pub stdin_file: Option<String>,
     /// How many seconds the program may run, 1 to 40; 10 when not given.
@@ -772,7 +772,8 @@ impl LenguaServer {
             its standard input; folder: absolute path of a folder of the user's files to run in, \
             naming the files in args relative to it (\"notes.txt\", not \"/home/me/notes.txt\"); \
             stdin_file: a file in folder to read as standard input instead of stdin, however \
-            large; timeout_seconds: up to 40 (10 by default); env: environment variables, for a \
+            large for main.s and up to 16 MiB for main.wat; timeout_seconds: up to 40 (10 by \
+            default); env: environment variables, for a \
             idea that uses the environment; stop: true to stop the server run started.",
         annotations(title = "Run program", read_only_hint = false, open_world_hint = false)
     )]
@@ -953,10 +954,15 @@ impl LenguaServer {
     ) -> Result<CheckReport, String> {
         let began = Instant::now();
         let machine = Machine::detect();
+        // lengua's entry in idea.md's `verified` stays only while it names the idea and main.wat
+        // as they are, whatever stage this check stops at and whichever path it takes.
+        let idea_text = match read_optional(folder, IDEA_FILE)? {
+            Some(text) => Some(self.keep_verified(folder, text).await),
+            None => None,
+        };
         // The idea's type chooses the path. An Attested Computation is compiled to main.wat,
         // which needs no LLVM, no Linux kernel and no CPU target: it is checked the same way on
         // every system.
-        let idea_text = read_optional(folder, IDEA_FILE)?;
         if let Some(text) = idea_text.as_deref().filter(|text| wat::attested(text)) {
             return self
                 .check_wasm(folder, params, events, (began, &machine), text)
@@ -1007,15 +1013,8 @@ impl LenguaServer {
         };
         let idea_hash = trust::idea_hash(idea_text.as_bytes());
         // A native idea's code is main.s: main.wat beside it is another path's.
-        if let Some(problem) = wat::code_file_problem(folder, false) {
-            return Ok(CheckReport::problems(
-                "code_problems",
-                vec![problem],
-                format!(
-                    "Next: keep the code file {IDEA_FILE}'s type asks for, then call check with \
-                     path {folder}."
-                ),
-            ));
+        if let Some(report) = wat::code_file_problem(folder, false) {
+            return Ok(report);
         }
 
         // main.s, checked against the rules, then tested and proven in the background.
@@ -1540,10 +1539,16 @@ impl LenguaServer {
     /// Writes lengua's line into main.s once `checking` has ended with its tests passed and no
     /// input the proof found wrong, provided main.s is still the code it checked and its line
     /// says something else. The code's hash leaves the line out, so the lock still holds. For
-    /// main.wat, which has no such line, lengua's entry goes in idea.md's `verified` instead.
+    /// main.wat, which has no such line, lengua's entry goes in idea.md's `verified` instead, and
+    /// only for a job whose tests all passed, which stamped the code.
     async fn write_header(&self, folder: &ProgramFolder, checking: &Checking) {
         if checking.code == WASM_CODE_FILE {
-            self.write_verified(folder, checking).await;
+            let passed = checking.found.lock().is_ok_and(|found| {
+                found.passed.is_some() && found.failures.is_empty() && !found.wrong
+            });
+            if passed {
+                self.write_verified(folder, checking).await;
+            }
             return;
         }
         let header = match checking.found.lock() {
@@ -2169,16 +2174,19 @@ impl LenguaServer {
     /// What changed after the user's request: idea.md, tests included, since the build's first
     /// request, against the copy lengua kept.
     fn changes(&self, folder: &ProgramFolder, lock: &Lock) -> Changes {
+        // lengua's own entry in `verified` is no change of the user's, in the copy lengua kept as
+        // in idea.md now.
+        let theirs = |text: String| trust::without_lengua_verified(&text).unwrap_or(text);
         let kept = |hash: &Sha256Hex| {
             std::fs::read_to_string(stamped_copy(self.data_dir.path(), hash))
                 .ok()
                 .filter(|text| trust::idea_hash(text.as_bytes()) == *hash)
+                .map(theirs)
         };
         let unseen = "the first version isn't on this machine to compare";
         let idea = match std::fs::read_to_string(folder.file(IDEA_FILE)) {
             Ok(now) if trust::idea_hash(now.as_bytes()) != lock.request.idea => {
-                // lengua's own entry in `verified` is no change of the user's.
-                let now = trust::without_lengua_verified(&now).unwrap_or(now);
+                let now = theirs(now);
                 Some(kept(&lock.request.idea).map_or_else(
                     || format!("{IDEA_FILE} changed; {unseen}"),
                     |before| testdiff::line_diff(&before, &now),
@@ -2562,10 +2570,10 @@ fn missing_parts(folder: &ProgramFolder, idea: &idea::Idea, code: &str) -> Vec<S
 }
 
 /// What keeps main.s from building on its idea's parts: a part that isn't checked on this
-/// computer, a function taken from one that isn't its current code word for word, a function
-/// that names a part the idea doesn't build on, and a part the idea builds on that main.s takes
-/// nothing from. Each part is a node checked on its own: what main.s takes from it is its checked
-/// code, and changes to it show here.
+/// computer or has no main.s, a function taken from one that isn't its current code word for
+/// word, a function that names a part the idea doesn't build on, and a part the idea builds on
+/// that main.s takes nothing from. Each part is a node checked on its own: what main.s takes from
+/// it is its checked code, and changes to it show here.
 fn parts_problems(
     data_dir: &DataDir,
     folder: &ProgramFolder,
@@ -2611,7 +2619,14 @@ fn parts_problems(
                 continue;
             }
         }
+        // A part checked as WebAssembly has main.wat, which main.s can take nothing from.
         let Ok(part_code) = std::fs::read_to_string(part_folder.join(CODE_FILE)) else {
+            problems.push(format!(
+                "the part [{}]({}) has no {CODE_FILE}: {CODE_FILE} takes functions only from parts \
+                 in {CODE_FILE}; write {} in {CODE_FILE} yourself, without its `# from:` line, and \
+                 drop the part from `- Builds on:`",
+                part.name, part.idea, function.name
+            ));
             continue;
         };
         let (part_source, _) = checker::check_layout(&part_code);
