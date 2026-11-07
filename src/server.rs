@@ -92,6 +92,10 @@ fn green_grace() -> Duration {
 /// What a proof that stopped short of the idea's lengths says it can do.
 const FURTHER: &str = "; check with prove_further to prove on from there";
 
+/// How the line of a test whose proof neither proved it nor found it wrong begins, before why,
+/// which lengua.lock keeps.
+const UNPROVEN: &str = "tested, not proven: ";
+
 /// What `check`'s done reply for main.wat says of lengua's entry in idea.md's `verified`, which
 /// check writes as it replies done; a reply leaves it out when the entry didn't go in.
 const VERIFIED_NOTE: &str = " idea.md's verified list now holds lengua's entry for this idea and \
@@ -1603,8 +1607,9 @@ impl LenguaServer {
     }
 
     /// Takes the proofs lengua.lock records about this very build, after a restart lost the job
-    /// that made them, or when the job is to prove on. Returns `None` when there are none, and
-    /// otherwise the blocks to prove on, each with the length to start at.
+    /// that made them, or when the job is to prove on, with why each other test is tested, not
+    /// proven. Returns `None` when there are none, and otherwise the blocks to prove on, each
+    /// with the length to start at.
     fn recorded_proofs(
         &self,
         folder: &ProgramFolder,
@@ -1647,6 +1652,8 @@ impl LenguaServer {
                     bounded.of,
                     if bounded.more { FURTHER } else { "" }
                 )
+            } else if let Some((_, why)) = stamp.unproven.iter().find(|(known, _)| *known == id) {
+                format!("{UNPROVEN}{why}")
             } else {
                 "tested, not proven".to_owned()
             });
@@ -1656,9 +1663,9 @@ impl LenguaServer {
     }
 
     /// Proves each generated test in turn, each with its share of [`PROOF_TIME`], and records
-    /// what was proven: main.s's machine code, or main.wat's module, as `prover` holds it, whose
-    /// tests just passed every run drawn from `seed`. With `further`, proves only those blocks,
-    /// each from its length on, and keeps what lengua.lock records of the others.
+    /// what was proven, or why not: main.s's machine code, or main.wat's module, as `prover`
+    /// holds it, whose tests just passed every run drawn from `seed`. With `further`, proves only
+    /// those blocks, each from its length on, and keeps what lengua.lock records of the others.
     async fn prove_all(
         &self,
         folder: &ProgramFolder,
@@ -1690,11 +1697,12 @@ impl LenguaServer {
         };
         let idea = prover.idea();
         let deadline = Instant::now() + proof_time();
-        // The ids proven, those found wrong, how many the solvers proved, and why any rested on
-        // one solver.
+        // The ids proven, those found wrong, those tested, not proven with why, how many the
+        // solvers proved, and why any rested on one solver.
         let mut proven_ids = Vec::new();
         let mut bounded_ids: Vec<(usize, lock::Bounded)> = Vec::new();
         let mut wrong_ids: Vec<(String, String)> = Vec::new();
+        let mut unproven_ids: Vec<(usize, (String, String))> = Vec::new();
         let mut solved = 0;
         let mut alone_reason: Option<String> = None;
         // Proving on keeps what the lock records of every block it doesn't prove.
@@ -1720,6 +1728,9 @@ impl LenguaServer {
                 }
                 if let Some(wrong) = stamp.wrong.iter().find(|(known, _)| *known == id) {
                     wrong_ids.push(wrong.clone());
+                }
+                if let Some(unproven) = stamp.unproven.iter().find(|(known, _)| *known == id) {
+                    unproven_ids.push((index, unproven.clone()));
                 }
             }
             recorded_solvers = Some(stamp.solvers.clone());
@@ -1791,6 +1802,7 @@ impl LenguaServer {
             if checking.cancel.load(Ordering::Relaxed) {
                 return;
             }
+            let proved = matches!(verdict, Ok(prove::Verdict::Proven { .. }));
             let (detail, wrong) = match verdict {
                 Err(reason) | Ok(prove::Verdict::NotProven(reason)) => {
                     (format!("tested, not proven: {reason}"), false)
@@ -1852,19 +1864,25 @@ impl LenguaServer {
                     }
                 },
             };
+            // Why a test is tested, not proven outlasts this job too, so a check after a restart
+            // says why again.
+            if !proved && !wrong {
+                let why = detail.strip_prefix(UNPROVEN).unwrap_or(&detail);
+                unproven_ids.push((index, (block.id.to_string(), why.to_owned())));
+            }
             if wrong {
                 // At once, so the finding outlasts this job: run refuses the build from now on.
                 wrong_ids.push((block.id.to_string(), detail.clone()));
-                let ids =
-                    |list: &[(usize, String)]| list.iter().map(|(_, id)| id.clone()).collect();
-                let bounds = bounded_ids.iter().map(|(_, bound)| bound.clone()).collect();
                 self.stamp_proofs(
                     folder,
-                    executable,
-                    ids(&proven_ids),
-                    bounds,
-                    wrong_ids.clone(),
-                    "z3 and cvc5".to_owned(),
+                    ProofStamp {
+                        executable_sha256: executable.clone(),
+                        proven: proven_ids.iter().map(|(_, id)| id.clone()).collect(),
+                        bounded: bounded_ids.iter().map(|(_, bound)| bound.clone()).collect(),
+                        solvers: "z3 and cvc5".to_owned(),
+                        wrong: wrong_ids.clone(),
+                        unproven: unproven_ids.iter().map(|(_, test)| test.clone()).collect(),
+                    },
                 )
                 .await;
                 // main.wat's entry in idea.md's `verified` goes at once too, before any reply
@@ -1897,15 +1915,17 @@ impl LenguaServer {
         // In the tests' own order, however they were proven.
         proven_ids.sort_unstable();
         bounded_ids.sort_unstable_by_key(|(index, _)| *index);
-        let proven_ids = proven_ids.into_iter().map(|(_, id)| id).collect();
-        let bounded_ids = bounded_ids.into_iter().map(|(_, bound)| bound).collect();
+        unproven_ids.sort_unstable_by_key(|(index, _)| *index);
         self.stamp_proofs(
             folder,
-            executable,
-            proven_ids,
-            bounded_ids,
-            wrong_ids,
-            solvers,
+            ProofStamp {
+                executable_sha256: executable.clone(),
+                proven: proven_ids.into_iter().map(|(_, id)| id).collect(),
+                bounded: bounded_ids.into_iter().map(|(_, bound)| bound).collect(),
+                solvers,
+                wrong: wrong_ids,
+                unproven: unproven_ids.into_iter().map(|(_, test)| test).collect(),
+            },
         )
         .await;
         release(last_line);
@@ -2208,17 +2228,9 @@ impl LenguaServer {
             .map_err(|error| format!("couldn't write {folder}/{}: {error}", lock::LOCK_FILE))
     }
 
-    /// Records in the lock what the proof proved about the build `executable`, provided the lock
-    /// still records that build as the checked code. Returns whether it did.
-    async fn stamp_proofs(
-        &self,
-        folder: &ProgramFolder,
-        executable: &Sha256Hex,
-        proven: Vec<String>,
-        bounded: Vec<lock::Bounded>,
-        wrong: Vec<(String, String)>,
-        solvers: String,
-    ) -> bool {
+    /// Records in the lock what the proofs found, `proofs`, about the build they name, provided
+    /// the lock still records that build as the checked code. Returns whether it did.
+    async fn stamp_proofs(&self, folder: &ProgramFolder, proofs: ProofStamp) -> bool {
         let delay = stamp_delay();
         if !delay.is_zero() {
             tokio::time::sleep(delay).await;
@@ -2233,18 +2245,12 @@ impl LenguaServer {
         if lock
             .code
             .as_ref()
-            .is_none_or(|code| code.executable_sha256 != *executable)
+            .is_none_or(|code| code.executable_sha256 != proofs.executable_sha256)
         {
             return false;
         }
         let lock = Lock {
-            proofs: Some(Box::new(ProofStamp {
-                executable_sha256: executable.clone(),
-                proven,
-                bounded,
-                solvers,
-                wrong,
-            })),
+            proofs: Some(Box::new(proofs)),
             ..lock
         };
         lock::write(folder.path(), &lock, &key).is_ok()

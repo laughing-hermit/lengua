@@ -146,6 +146,10 @@ pub struct ProofStamp {
     /// The generated tests a proof found wrong, each id with what it found: `run` refuses this
     /// build for them however often lengua has restarted since.
     pub wrong: Vec<(String, String)>,
+    /// The other generated tests the proofs ended without proving, each id with why they are
+    /// tested, not proven: what the model doesn't follow, the time running out, or what a real
+    /// run made of what a proof found. A check after a restart says why again.
+    pub unproven: Vec<(String, String)>,
 }
 
 impl Lock {
@@ -301,6 +305,20 @@ impl Lock {
                     .collect();
                 let _ = writeln!(text, "wrong = [{}]", wrong.join(", "));
             }
+            if !proofs.unproven.is_empty() {
+                let unproven: Vec<String> = proofs
+                    .unproven
+                    .iter()
+                    .map(|(id, reason)| {
+                        format!(
+                            "{{ id = {}, why = {} }}",
+                            toml_string(id),
+                            toml_string(reason)
+                        )
+                    })
+                    .collect();
+                let _ = writeln!(text, "unproven = [{}]", unproven.join(", "));
+            }
         }
         text
     }
@@ -349,6 +367,8 @@ struct ProofsTable {
     solvers: String,
     #[serde(default)]
     wrong: Vec<WrongTable>,
+    #[serde(default)]
+    unproven: Vec<UnprovenTable>,
 }
 
 #[derive(Deserialize)]
@@ -356,6 +376,13 @@ struct ProofsTable {
 struct WrongTable {
     id: String,
     found: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UnprovenTable {
+    id: String,
+    why: String,
 }
 
 #[derive(Deserialize)]
@@ -490,6 +517,11 @@ pub(crate) fn parse_body(body: &str) -> Result<Lock, LockError> {
                         .wrong
                         .into_iter()
                         .map(|wrong| (wrong.id, wrong.found))
+                        .collect(),
+                    unproven: proofs
+                        .unproven
+                        .into_iter()
+                        .map(|unproven| (unproven.id, unproven.why))
                         .collect(),
                 }))
             })
@@ -857,10 +889,12 @@ mod tests {
             bounded: Vec::new(),
             solvers: "z3 and cvc5".into(),
             wrong: Vec::new(),
+            unproven: Vec::new(),
         }));
         let text = lock.to_signed_text(&key(1));
         assert!(text.contains("proven = [\"B1\", \"B\\\"2\"]\n"), "{text}");
         assert!(!text.contains("bounded"), "{text}");
+        assert!(!text.contains("unproven"), "{text}");
         assert_eq!(Lock::from_signed_text(&text, &key(1)), Ok(lock.clone()));
         // A proof that holds only up to a length is recorded with it, apart from full ones.
         let mut bounded = lock.clone();
@@ -895,6 +929,18 @@ mod tests {
             "{wrong_text}"
         );
         assert_eq!(Lock::from_signed_text(&wrong_text, &key(1)), Ok(wrong));
+        // Why a test is tested, not proven is recorded too, so a check after a restart says it.
+        let mut unproven = lock.clone();
+        if let Some(proofs) = &mut unproven.proofs {
+            proofs.unproven = vec![("B4".into(), "the proof ran out of time".into())];
+        }
+        let unproven_text = unproven.to_signed_text(&key(1));
+        assert!(
+            unproven_text
+                .contains("unproven = [{ id = \"B4\", why = \"the proof ran out of time\" }]\n"),
+            "{unproven_text}"
+        );
+        assert_eq!(Lock::from_signed_text(&unproven_text, &key(1)), Ok(unproven));
         // Proofs about some other build can't be in a lock lengua wrote.
         let other = text
             .split("\n[signature]")

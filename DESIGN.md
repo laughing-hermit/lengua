@@ -330,12 +330,13 @@ goes on to the program; and the exit code is the program's, or 128 plus the sign
 When lengua won't run it, it says why and exits with 125, as `timeout` and `env` do.
 
 The proof records its results in a `[proofs]` table: the executable it's about, the generated
-tests proven for every input in range or up to a length, the solvers that checked them, and the
-tests it found wrong, with what it found, the moment it finds them. `run` refuses a build that
-table finds wrong, however often lengua restarts, and a later `check` shows what was found. A
-test proven there is proven memory-safe on the same runs, so the table says that too, with no
-field of its own. Checking tests again drops them; a build that is byte for byte the same keeps
-them, and any other build is proven again by itself.
+tests proven for every input in range or up to a length, the solvers that checked them, the tests
+it found wrong, with what it found, the moment it finds them, and why each other test is tested,
+not proven. `run` refuses a build that table finds wrong, however often lengua restarts, and a
+later `check` shows what was found, and why a test isn't proven. A test proven there is proven
+memory-safe on the same runs, so the table says that too, with no field of its own. Checking
+tests again drops them; a build that is byte for byte the same keeps them, and any other build is
+proven again by itself.
 
 ## The edge
 
