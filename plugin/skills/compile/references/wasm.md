@@ -83,10 +83,12 @@ provably unneeded. A template uses no unsafe block; neither should a program tha
               (then (call $assert_fail (i32.const 1)) unreachable))
 ```
 
-`$fill (fd, at, room, stop)` reads until `room` bytes are in, the input ends, or the last byte
-read is `stop` (a byte, or -1 for none). It gives the count, or a negative error. However the
-input arrives, cut into any pieces, it reads the same, so read through it rather than calling
-`fd_read` yourself.
+`$fill (fd, at, room, stop)` reads until `room` bytes are in, the input ends, or a read ends with
+the byte `stop` (-1 for none). It gives the count, or a negative error. Read through it rather
+than calling `fd_read` yourself. With `stop` -1 it reads the same however the input arrives, cut
+into any pieces. With a stop byte it can read past the first one, when a piece goes on after it:
+only the bytes up to the first stop byte are certain, so find that byte yourself and keep what
+follows it for the next line.
 
 - **Test it at once**, `i32.lt_s` against 0, then bound the count before using it: the rules know
   nothing of what the library gives.
@@ -140,7 +142,9 @@ only with 0 or with a named constant, as host.md names them.
 
 - The counter is an `i32` local, set from a named constant in the two instructions right before
   `loop`, its value from 1 to the `;; bound: N` on the loop's line, so at most 2147483647.
-- The loop ends with those two instructions, and nothing else in it writes the counter.
+- The loop ends with two instructions of its own, directly inside it, not in a block within it:
+  `(local.set $left (i32.sub (local.get $left) (i32.const 1)))`, then
+  `(br_if $byte (local.get $left))`. Nothing else in the loop writes the counter.
 - Leave early with `br` or `br_if` to a block around the loop. A loop whose counter runs out
   either has done its work (the counter was the most it could do) or meets an assertion right
   after its end, when running out can't happen: `(call $assert_fail (i32.const 2)) unreachable`.
@@ -155,9 +159,11 @@ The rules follow each value: a region's address plus a number, a number with the
 checks give it, or a value loaded from memory, which has no range at all. An access is safe when
 every byte of it lies inside its region for every value the number can have.
 
-- **Check the local you index with**, after its last write and before the access, unsigned,
-  against the region's size less the access's width, plus one: `(i32.ge_u (local.get $i)
-  (global.get $out.size))` before a byte, `$LAST_CHUNK`, the size less 16, before a vector.
+- **Check the local you index with**, after its last write and before the access, unsigned:
+  `i32.ge_u` against the region's size less the access's width, plus one, as `(i32.ge_u
+  (local.get $i) (global.get $out.size))` before a byte; or `i32.gt_u` against the size less the
+  width, as `(i32.gt_u (local.get $i) (global.get $LAST_CHUNK))` before a vector, where
+  `$LAST_CHUNK`, the size less 16, is the last place a vector may start.
 - **Inside a loop**, check each time round: what a loop changes has no bound where the loop
   starts, so a check before the loop says nothing inside it.
 - **A comparison bounds the local it reads directly.** `(i32.gt_u (i32.add (local.get $i)
@@ -171,7 +177,8 @@ every byte of it lies inside its region for every value the number can have.
   (local.get $at))` in one call do: the rules see those add up to the region's size. A buffer
   whose start and length both vary in other ways can't be shown to fit, so give it a fixed start.
   The server receives into `$chunk` at its region's start, and then copies the bytes into the
-  slot's line one at a time, each place checked.
+  slot's line one at a time, each place checked; it sends from the start of the slot's line, where
+  `$shift` moves what a send leaves.
 - **iovecs**: write the array with `i32.store` at fixed offsets of its region, in the function
   that makes the call, so the rules follow each buffer it points to.
 - **Lent addresses**: a callee checks its own indexes against its own limits, and the rules sum
@@ -238,7 +245,7 @@ A server's listener is descriptor 4, and lengua numbers each connection it accep
   in regions, and answer once the request is whole, by its newline, blank line or length.
 - **Answer and close**: `sock_send` until the whole answer has gone, then `fd_close`, then free
   the slot. A send takes what goes at once, which may be only the first part of a buffer: bound
-  the count it wrote, and send the rest, as `$finish` does once `$shift` has moved the rest to the
+  the count it wrote and send what is left, as `$finish` does once `$shift` has moved it to the
   line's start. Test each call's error number, even where every path goes on the same way.
 
 ## What the build and the checker refuse
@@ -247,9 +254,10 @@ The build refuses text that doesn't parse or validate with the engine's features
 named by its number, and any name starting with `$lengua.`. The checker refuses, each on its line
 with a fix:
 
-- imports the idea doesn't allow, or with another type; exports but `_start` and `memory`; a
-  start function, a table, an element segment, `memory.grow`, `memory.init`, a second memory, or
-  a memory whose sizes differ;
+- imports the idea doesn't allow, or with another type; a call of `$fill` when the idea allows
+  no `fd_read` ([the host](host.md) lists the lines that do); exports but `_start` and `memory`;
+  a start function, a table, an element segment, `memory.grow`, `memory.init`, a second memory,
+  or a memory whose sizes differ;
 - regions below 1024, overlapping, past the memory, or without their size; data outside a
   read-only region; a `$x.rosize` that isn't its data's length;
 - recursion; `return`, or a branch to the function's own label; `unreachable` anywhere but right
@@ -263,6 +271,9 @@ with a fix:
 - an untested error number; a bare number as a descriptor, a length, a mode, an exit status, a
   bound against a local, or an error number; a changing global without `;; shared:`, or a
   writable region two functions use without it;
+- an address not made from a region's global plus offsets (M1): a plain number, as in
+  `(i32.load (i32.const 2048))`, two regions' addresses added, or one that is a plain number on
+  some path;
 - an access with a computed index that no check keeps inside its region, or a constant one past
   it; a write to a read-only region; a call that writes a buffer while another argument names the
   same bytes; a call path too deep for the engine's stack;
