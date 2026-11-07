@@ -905,7 +905,10 @@ struct Row {
 
 /// The row of `other` against `lengua`, over the runs both have: CPU and wall time decided by
 /// the test at a look's level, peak memory by the median of each one's peaks, and size as it is.
-fn row(lengua: &Measured, other: &Measured) -> Row {
+/// Against a native build, lengua's size is its module's and `runtime`'s, the bytes of the
+/// lengua-mcp that runs it, as a native build needs nothing of lengua's to run; against another
+/// module, which runs in the same lengua-mcp, it is the module's alone.
+fn row(lengua: &Measured, other: &Measured, runtime: u64) -> Row {
     let runs = lengua.cpu_ns.len().min(other.cpu_ns.len());
     let problem = other.problem.clone().or_else(|| lengua.problem.clone());
     if problem.is_some() || runs == 0 {
@@ -924,6 +927,11 @@ fn row(lengua: &Measured, other: &Measured) -> Row {
         (Some(ours), Some(theirs)) => Decided::measured(ours, theirs),
         _ => Decided::undecided(),
     };
+    let size = if NATIVE.contains(&other.name.as_str()) {
+        lengua.size.saturating_add(runtime)
+    } else {
+        lengua.size
+    };
     Row {
         versus: other.name.clone(),
         runs,
@@ -931,16 +939,20 @@ fn row(lengua: &Measured, other: &Measured) -> Row {
             Decided::tested(&lengua.cpu_ns, &other.cpu_ns, runs),
             Decided::tested(&lengua.wall_ns, &other.wall_ns, runs),
             memory,
-            Decided::measured(lengua.size as f64, other.size as f64),
+            Decided::measured(size as f64, other.size as f64),
         ],
         problem: None,
     }
 }
 
-/// The rows of a workload's `versions`, lengua's first: one for each other version.
-fn rows_of(versions: &[Measured]) -> Vec<Row> {
+/// The rows of a workload's `versions`, lengua's first: one for each other version, with
+/// `runtime`, lengua-mcp's bytes, in lengua's size against a native build.
+fn rows_of(versions: &[Measured], runtime: u64) -> Vec<Row> {
     match versions.split_first() {
-        Some((lengua, others)) => others.iter().map(|other| row(lengua, other)).collect(),
+        Some((lengua, others)) => others
+            .iter()
+            .map(|other| row(lengua, other, runtime))
+            .collect(),
         None => Vec::new(),
     }
 }
@@ -989,6 +1001,10 @@ struct Results {
     engine: String,
     /// Each other version's compilers and flags, by its name.
     toolchains: BTreeMap<String, String>,
+    /// The bytes of the lengua-mcp executable that ran lengua's programs, which lengua's size
+    /// counts against a native build.
+    #[serde(default)]
+    runtime: u64,
     /// The counts of runs at which the gate looks at a row.
     looks: Vec<usize>,
     /// The level each row's measure is decided at, over all its looks.
@@ -1025,6 +1041,8 @@ struct Context {
     wasm: PathBuf,
     /// The longest a workload's rows run, in seconds.
     seconds: u64,
+    /// The bytes of lengua-mcp's executable, which lengua's size counts against a native build.
+    runtime: u64,
 }
 
 /// lengua's programs, each checked from its idea to done, or why it isn't, by workload.
@@ -1283,7 +1301,7 @@ fn outcome_of(context: &Context, name: &str, made: Vec<Made>) -> Outcome {
             }
         }
     }
-    outcome.rows = rows_of(&outcome.versions);
+    outcome.rows = rows_of(&outcome.versions, context.runtime);
     outcome
 }
 
@@ -1730,6 +1748,15 @@ fn report(results: &Results) -> String {
          run in lengua's host, in the same engine ({engine}) with the same cache of compiled \
          modules; their native builds, made on this runner, run as a shell starts them.\n"
     );
+    let runtime = bytes(results.runtime as f64);
+    let _ = writeln!(
+        out,
+        "Size is a module's bytes on the rows against other modules, which run in the same \
+         lengua-mcp. Against a native build, lengua's size is its module's and that of the \
+         lengua-mcp it needs to run ({runtime}), and the native build's is its executable's \
+         alone: what it loads from the system's libraries, C's C library and C++'s where they \
+         are linked dynamically, isn't counted, and Rust's standard library, linked in, is.\n"
+    );
     let _ = writeln!(
         out,
         "The runs alternate: each round runs every version once, in an order shuffled from \
@@ -1772,7 +1799,7 @@ fn report(results: &Results) -> String {
     let _ = writeln!(
         out,
         "lengua's median over that of the best native build, C's, C++'s or Rust's, on each \
-         measure: above 1, lengua takes that many times as much.\n"
+         measure, its size with lengua-mcp's: above 1, lengua takes that many times as much.\n"
     );
     out.push_str("| workload | CPU time | wall time | peak memory | size |\n");
     out.push_str("|---|---|---|---|---|\n");
@@ -1865,16 +1892,19 @@ async fn gate_run(root: &Path) -> Result<bool, String> {
     let data_dir = session.data_dir.path().to_path_buf();
     let _ = session.service.cancel().await;
     let build = tempfile::tempdir_in(&out).map_err(|error| failed(out.display(), error))?;
+    let server = PathBuf::from(env!("CARGO_BIN_EXE_lengua-mcp"));
+    let runtime = std::fs::metadata(&server).map_err(|error| failed(server.display(), error))?;
     let context = Context {
         root: root.to_path_buf(),
         out: out.clone(),
         build: build.path().to_path_buf(),
         runner: Runner {
-            lengua: PathBuf::from(env!("CARGO_BIN_EXE_lengua-mcp")),
+            lengua: server,
             data_dir,
         },
         wasm,
         seconds,
+        runtime: runtime.len(),
     };
     let (commit, run) = provenance(root);
     let mut results = Results {
@@ -1885,6 +1915,7 @@ async fn gate_run(root: &Path) -> Result<bool, String> {
         cores: std::thread::available_parallelism().map_or(1, std::num::NonZero::get),
         engine: lengua::wasm::ENGINE.to_owned(),
         toolchains: wasm_toolchains(&context.wasm),
+        runtime: context.runtime,
         looks: gate::LOOKS.to_vec(),
         alpha: gate::ALPHA,
         look_alpha: gate::LOOK_ALPHA,
