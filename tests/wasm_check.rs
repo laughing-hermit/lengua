@@ -3,7 +3,10 @@
 //! arguments, run from a shell with `lengua-mcp run`, and attested with `lengua-mcp check`; its
 //! lock's stamp, format 6; lengua's entry in the idea's `verified`, written at done and taken away
 //! once the idea changes; and how check answers a folder with both code files, a rule broken on
-//! its line, and failing tests. Nothing here needs LLVM, a Linux kernel or a CPU target.
+//! its line, and failing tests. Then, with the solvers, main.wat's proofs through check as main.s's
+//! go: add's proof named in the reply and kept in the lock, a planted wrong constant found as a
+//! counterexample, and a program the model refuses left tested, not proven, with the reason.
+//! Nothing here needs LLVM, a Linux kernel or a CPU target.
 
 mod common;
 
@@ -21,6 +24,48 @@ const IDEA: &str = include_str!("fixtures-wasm/add/idea.md");
 
 /// Its code, in WebAssembly text.
 const CODE: &str = include_str!("fixtures-wasm/add/main.wat");
+
+/// add's generated test as its idea has it: every pair of numbers up to 10^9, a longer proof
+/// than a test waits for.
+const ADD_TABLE: &str = "| `int(-1000000000, 1000000000)` | `int(-1000000000, 1000000000)` | \
+                         200 |";
+
+/// add's generated test over numbers of up to three digits, which its proof covers well within a
+/// test's time, as the prover's own test of add does.
+const SMALL_TABLE: &str = "| `int(-999, 999)` | `int(-999, 999)` | 200 |";
+
+/// add's generated test with `b` from 2 to 500, running only its ten boundary values, of which
+/// none sums to zero: no test tries a sum of zero.
+const NO_ZERO_TABLE: &str = "| `int(-999, 999)` | `int(2, 500)` | 10 |";
+
+/// add's sign for a value below zero, which a wrong constant makes zero's too.
+const SIGN: &str = ";; The sign, for a value below zero.\n    (if (i64.lt_s (local.get $value) \
+                    (i64.const 0))";
+
+/// add's sum.
+const SUM: &str = "(i64.add (local.get $a) (i64.load (global.get $number)))";
+
+/// The sum through a 64-bit float and back, on one line: exact for every sum add's idea allows,
+/// and an operator the WebAssembly model doesn't follow.
+const FLOAT_SUM: &str = "(i64.trunc_sat_f64_s (f64.convert_i64_s (i64.add (local.get $a) \
+                         (i64.load (global.get $number)))))";
+
+/// How long the sessions and the attester that prove give the proofs: far more than add's numbers
+/// of up to three digits need on any runner.
+const PROOF_SECONDS: u64 = 600;
+
+/// What `run` says of a build a proof found wrong.
+const WRONG_BUILD: &str = "The proof found inputs where main.wat is wrong";
+
+/// Whether z3 is installed, which the proofs' questions need; a note in the run's summary says so
+/// when it isn't.
+fn solvers_installed() -> bool {
+    let installed = Command::new("z3").arg("--version").output().is_ok();
+    if !installed {
+        lengua::skiplog::note("z3 isn't installed");
+    }
+    installed
+}
 
 /// A value of a reply as text, or none.
 fn text(value: &Value) -> &str {
@@ -76,13 +121,25 @@ fn run_from_shell(session: &Session, folder: &Path, args: &[&str]) -> Output {
     lengua_mcp(&all)
 }
 
-/// `lengua-mcp check` of the program in `folder`: its exit code, and what it printed.
-fn attest(folder: &Path) -> (Option<i32>, String) {
-    let attested = lengua_mcp(&[OsStr::new("check"), folder.as_os_str()]);
+/// `lengua-mcp check` of the program in `folder`, giving its proofs `seconds` in all: its exit
+/// code, and what it printed.
+fn attest_for(folder: &Path, seconds: u64) -> (Option<i32>, String) {
+    let attested = Command::new(env!("CARGO_BIN_EXE_lengua-mcp"))
+        .arg("check")
+        .arg(folder)
+        .env("LENGUA_PROOF_SECONDS", seconds.to_string())
+        .output()
+        .expect("lengua-mcp runs");
     (
         attested.status.code(),
         String::from_utf8_lossy(&attested.stdout).into_owned(),
     )
+}
+
+/// `lengua-mcp check` of the program in `folder`, giving its proofs no time, as the sessions of
+/// tests that aren't about proofs do.
+fn attest(folder: &Path) -> (Option<i32>, String) {
+    attest_for(folder, 0)
 }
 
 /// A program folder holding add's idea, recorded with the user's words, and its main.wat.
@@ -96,8 +153,9 @@ async fn add(session: &Session) -> Program {
 }
 
 /// add from the user's request to done, in both protocol generations: the machine line names
-/// the engine and no LLVM, the tests pass and say tested, not proven, the lock stamps main.wat
-/// in format 6, the idea's `verified` holds lengua's entry, and `run` runs it.
+/// the engine and no LLVM, the tests pass, the proof, which this session gives no time, says
+/// tested, not proven, and only it does, the lock stamps main.wat in format 6, the idea's
+/// `verified` holds lengua's entry, and `run` runs it.
 #[tokio::test]
 async fn add_goes_from_its_request_to_done_and_runs() {
     for protocol in Protocol::ALL {
@@ -127,18 +185,23 @@ async fn add_goes_from_its_request_to_done_and_runs() {
             done["tests"][0], "main.wat follows every rule and passed all 202 test runs",
             "{done}"
         );
-        // Tested, not proven: the proofs of main.wat come with the WebAssembly prover.
-        assert!(any_line(&done["tests"], "tested, not proven"), "{done}");
+        // The proof had no time, so its line says tested, not proven, and nothing else says
+        // main.wat's proofs are still to come.
+        assert!(!any_line(&done["tests"], "tested, not proven"), "{done}");
         assert!(
-            any_line(&done["proofs"], "generated B1: tested, not proven"),
+            any_line(&done["proofs"], "generated B1: tested, not proven: "),
             "{done}"
         );
         assert!(
-            text(&done["memory"]).contains("tested, not proven"),
+            text(&done["memory"]).starts_with("the rules (M1 to M8) hold"),
             "{done}"
         );
         assert!(
-            text(&done["next_step"]).contains("tested, not proven"),
+            !text(&done["memory"]).contains("WebAssembly prover"),
+            "{done}"
+        );
+        assert!(
+            text(&done["next_step"]).contains("and what's proven, memory included."),
             "{done}"
         );
         assert_eq!(
@@ -149,7 +212,7 @@ async fn add_goes_from_its_request_to_done_and_runs() {
         );
 
         // The lock stamps main.wat as it is, its module and the engine, in format 6, and no
-        // proof.
+        // proof, which had no time.
         let lock = program.read("lengua.lock").expect("the lock");
         let module = lengua::wasm::text::build(CODE)
             .expect("main.wat builds")
@@ -236,6 +299,11 @@ async fn a_shell_runs_and_attests_the_checked_program() {
     assert_eq!(said.lines().last(), Some("attested"), "{said}");
     assert!(said.contains("tests: passed all 202 test runs"), "{said}");
     assert!(said.contains("main.wat: follows every rule"), "{said}");
+    // It proves too, here with no time for it, and says so.
+    assert!(
+        said.contains("\nproofs: generated B1: tested, not proven: "),
+        "{said}"
+    );
     assert!(
         said.contains(&format!("verified: {}", trust::ACTOR)),
         "{said}"
@@ -436,5 +504,157 @@ async fn a_failing_test_is_reported_as_native_ones_are() {
         ),
         "{failed}"
     );
+    session.service.cancel().await.expect("close the session");
+}
+
+/// add's proof, over numbers of up to three digits: the reply names it, proven for every input in
+/// range through the WebAssembly, with a memory line that says what it settles of the rules'
+/// obligations; the lock keeps it, and a restarted server replays it from there; and
+/// `lengua-mcp check` proves it too, within its own time, and says so.
+#[tokio::test]
+async fn add_s_proof_is_named_and_the_lock_keeps_it() {
+    if !solvers_installed() {
+        return;
+    }
+    let session = Session::proving_for(Protocol::Discover, PROOF_SECONDS).await;
+    let program = Program::new();
+    program.write("idea.md", &changed(IDEA, ADD_TABLE, SMALL_TABLE));
+    let report = session.record(&program).await;
+    assert_eq!(report["state"], "write_code", "{report}");
+    program.write("main.wat", CODE);
+    let done = session.settle(&program).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let proof = text(&done["proofs"][0]);
+    assert!(
+        proof.starts_with("generated B1: proven for every input in range (")
+            && proof.contains(" through the WebAssembly), "),
+        "{done}"
+    );
+    assert!(!any_line(&done["tests"], "tested, not proven"), "{done}");
+    let memory = text(&done["memory"]);
+    assert!(
+        memory.contains("; on every run the proofs of B1 cover, ")
+            || memory.ends_with("so they leave nothing to the proofs"),
+        "{done}"
+    );
+    // The lock keeps the proof, of the module check tested.
+    let module = lengua::wasm::text::build(CODE)
+        .expect("main.wat builds")
+        .wasm;
+    let kept = format!(
+        "\n[proofs]\nexecutable_sha256 = \"{}\"\nproven = [\"B1\"]\n",
+        Sha256Hex::of(&module)
+    );
+    let lock = program.read("lengua.lock").expect("the lock");
+    assert!(lock.contains(&kept), "{lock}");
+    // A restarted server has no job in memory: it runs the tests again and takes the proof the
+    // lock records of this very module.
+    let session = session.restart().await;
+    let again = session.settle(&program).await;
+    assert_eq!(again["state"], "done", "{again}");
+    let replayed = "generated B1: proven for every input in range, as lengua.lock records";
+    assert_eq!(again["proofs"][0], replayed, "{again}");
+    session.service.cancel().await.expect("close the session");
+    // The attester proves it too, in its own time, and says so.
+    let (code, said) = attest_for(program.path(), PROOF_SECONDS);
+    assert_eq!(code, Some(0), "{said}");
+    assert!(
+        said.contains("\nproofs: generated B1: proven for every input in range ("),
+        "{said}"
+    );
+    assert!(
+        said.contains("\nmemory: the rules (M1 to M8) hold every address"),
+        "{said}"
+    );
+    assert_eq!(said.lines().last(), Some("attested"), "{said}");
+}
+
+/// A wrong constant planted in add's main.wat, so that a sum of zero prints as "-0", is a
+/// counterexample through check, the same state as a native program's: B1 runs only its ten
+/// boundary values, none of which sums to zero, so the tests pass, and the proof finds the sum,
+/// which a real run confirms. The lock records it, so run refuses the build, after a restart
+/// too, and lengua's entry never goes in; the attester, given an entry written by hand, doesn't
+/// take its word but finds the sum too.
+#[tokio::test]
+async fn a_planted_wrong_constant_is_a_counterexample_through_check() {
+    if !solvers_installed() {
+        return;
+    }
+    let session = Session::proving_for(Protocol::Discover, PROOF_SECONDS).await;
+    let program = Program::new();
+    program.write("idea.md", &changed(IDEA, ADD_TABLE, NO_ZERO_TABLE));
+    let report = session.record(&program).await;
+    assert_eq!(report["state"], "write_code", "{report}");
+    let below_one = SIGN.replace("(i64.const 0)", "(i64.const 1)");
+    let wrong = changed(CODE, SIGN, &below_one);
+    program.write("main.wat", &wrong);
+    let failed = session.settle(&program).await;
+    assert_eq!(failed["state"], "tests_failed", "{failed}");
+    assert_eq!(
+        failed["tests"][0], "main.wat follows every rule and passed all 12 test runs",
+        "{failed}"
+    );
+    let found = "generated B1: the proof found inputs the tests didn't try where main.wat is \
+                 wrong: with a = ";
+    assert!(any_line(&failed["problems"], found), "{failed}");
+    assert!(
+        any_line(
+            &failed["problems"],
+            "stdout should be \"0\\n\", but was \"-0\\n\""
+        ),
+        "{failed}"
+    );
+    let idea = program.read("idea.md").expect("idea.md");
+    assert!(trust::lengua_entries(&idea).is_empty(), "{idea}");
+    // run refuses the build, after a restart too: the lock records what the proof found.
+    let lock = program.read("lengua.lock").expect("the lock");
+    let recorded = "wrong = [{ id = \"B1\", found = \"the proof found inputs the tests didn't try";
+    assert!(lock.contains(recorded), "{lock}");
+    let refused = session
+        .call_error("run", with_args(&program, &["-2", "2"]))
+        .await;
+    assert!(refused.contains(WRONG_BUILD), "{refused}");
+    let session = session.restart().await;
+    let refused = session
+        .call_error("run", with_args(&program, &["-2", "2"]))
+        .await;
+    assert!(refused.contains(WRONG_BUILD), "{refused}");
+    let again = session.settle(&program).await;
+    assert_eq!(again["state"], "tests_failed", "{again}");
+    assert!(any_line(&again["problems"], found), "{again}");
+    session.service.cancel().await.expect("close the session");
+    // The attester doesn't take an entry's word for it: given one by hand, it proves main.wat
+    // and finds the sum too.
+    let entry = trust::Verified::new(
+        "2026-11-07T00:00:00Z",
+        trust::idea_hash(idea.as_bytes()),
+        Sha256Hex::of(wrong.as_bytes()),
+    );
+    program.write("idea.md", &trust::with_lengua_verified(&idea, &entry));
+    let (code, said) = attest_for(program.path(), PROOF_SECONDS);
+    assert_eq!(code, Some(1), "{said}");
+    assert!(said.contains(&format!("\nproofs: {found}")), "{said}");
+    assert_eq!(said.lines().last(), Some("not attested"), "{said}");
+}
+
+/// A program the WebAssembly model refuses, here for the float add's sum goes through, passes its
+/// tests, and its proof stays tested, not proven, with the model's reason on its line of
+/// main.wat; the lock records no proof.
+#[tokio::test]
+async fn a_program_the_model_refuses_stays_tested_not_proven() {
+    let session = Session::proving_for(Protocol::Discover, 60).await;
+    let program = add(&session).await;
+    let floats = changed(CODE, SUM, FLOAT_SUM);
+    program.write("main.wat", &floats);
+    let done = session.settle(&program).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let line = line_of(&floats, "(f64.convert_i64_s");
+    let refused = format!(
+        "generated B1: tested, not proven: main.wat line {line}: `F64ConvertI64S`, which the \
+         WebAssembly model doesn't follow yet"
+    );
+    assert_eq!(done["proofs"][0], refused, "{done}");
+    let lock = program.read("lengua.lock").expect("the lock");
+    assert!(!lock.contains("[proofs]"), "{lock}");
     session.service.cancel().await.expect("close the session");
 }

@@ -2,10 +2,11 @@
 //! Computation (OKF v0.2 §10) is compiled to main.wat, which lengua builds into one WebAssembly
 //! module, checks against the WebAssembly dialect's rules, tests in the server's pool of workers
 //! and runs in its own WASI host, the same way on every system: no LLVM, no Linux kernel and no
-//! CPU target take part. main.wat has no proofs yet; they come with lengua's WebAssembly prover.
-//! Once its tests pass, idea.md's `verified` list holds lengua's entry for the idea and the code
-//! it checked, and `lengua-mcp check`, the idea's attester, attests the folder on any computer,
-//! with no lock and no key.
+//! CPU target take part. Once its tests pass, lengua's WebAssembly prover proves each generated
+//! test as main.s's are proven, in the background, with the same budgets, replies and record in
+//! lengua.lock. At done, idea.md's `verified` list holds lengua's entry for the idea and the code
+//! it checked, until a proof finds the code wrong, and `lengua-mcp check`, the idea's attester,
+//! attests the folder on any computer, with no lock and no key, proving it too.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -16,20 +17,22 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
 use super::{
-    BlockProof, CheckParams, CheckReport, Checking, ConnectionReport, Found, IdeaStage,
-    LenguaServer, NOT_MODELLED, Passed, RUN_SECONDS, RunParams, RunReport, Serving, ShellRun,
-    Stage, already_serving, background_limits, check_wait, cost_line_in, counted, ended_report,
-    idea_problems, random_seed, reaches, read_idea, read_optional, state_of, wait_for,
-    working_folder,
+    BlockProof, CheckParams, CheckReport, Checking, ConnectionReport, FURTHER, Found, IdeaStage,
+    LenguaServer, Model, Passed, Prover, RUN_SECONDS, RunParams, RunReport, Serving, ShellRun,
+    Stage, Witness, already_serving, background_limits, check_wait, cost_line_in, counted,
+    ended_report, idea_problems, proof_time, proven_detail, random_seed, reaches, read_idea,
+    read_optional, settled, state_of, wait_for, working_folder,
 };
-use crate::checker;
+use crate::checker::{self, wasm::Obligation};
 use crate::connect::Reach;
 use crate::data_dir::DataDir;
+use crate::expr;
 use crate::graph;
 use crate::hash::Sha256Hex;
 use crate::idea::{self, Idea, Use};
 use crate::lock::{self, CodeStamp, Key};
 use crate::platform::Machine;
+use crate::prove::{self, Verdict};
 use crate::runner::{End, Limits};
 use crate::state::{CODE_FILE, IDEA_FILE, ProgramFolder, State, WASM_CODE_FILE};
 use crate::testfile::{self, TestSuite};
@@ -41,10 +44,6 @@ use crate::wasm::runner::{Here, run_here};
 use crate::wasm::text::{self, Built};
 use crate::wasm::{Policy, Pool, Program, Spec, parts};
 
-/// What a reply says of main.wat's proofs, until lengua's WebAssembly prover.
-pub(super) const NOT_PROVEN: &str =
-    "main.wat is tested, not proven: its proofs come with lengua's WebAssembly prover";
-
 /// The exit code `lengua-mcp run` gives a program that trapped: an abort's, 128 and SIGABRT's 6,
 /// as WebAssembly runtimes give on a Unix, here on every system.
 const TRAPPED: i32 = 134;
@@ -53,17 +52,119 @@ const TRAPPED: i32 = 134;
 /// whole, with the job.
 const MAX_STDIN_FILE: u64 = 16 * 1024 * 1024;
 
-/// A generated test's proof line for main.wat, after `generated B1: `.
-fn no_proof() -> String {
-    format!("{NOT_MODELLED}the proofs of main.wat come with lengua's WebAssembly prover")
+/// The most of what the rules leave to the proofs that main.wat's memory line names, each on its
+/// line of main.wat; it counts the rest.
+const SHOWN_OBLIGATIONS: usize = 4;
+
+/// What a reply says of main.wat's memory safety once its tests pass: what the rules settle for
+/// every input, what they leave to the proofs, `obligations`, and what the proofs, `proofs`,
+/// settle of that on every run they cover. The model the proofs run on holds every access inside
+/// the program's memory and every division away from its traps, as the engine does, but follows
+/// no region: whether an access the rules leave stays inside its region is as far as the tests
+/// show it.
+pub(super) fn memory_line(obligations: &[Obligation], proofs: &[BlockProof]) -> String {
+    let rules = "the rules (M1 to M8) hold every address they can follow to its owner, and \
+                 WebAssembly holds every access inside the program's own memory";
+    if obligations.is_empty() {
+        return format!(
+            "{rules}; the rules follow every address and division of main.wat, so they leave \
+             nothing to the proofs"
+        );
+    }
+    let mut left: Vec<String> = obligations
+        .iter()
+        .take(SHOWN_OBLIGATIONS)
+        .map(|obligation| match obligation.line {
+            Some(line) => format!("main.wat line {line}: {}", obligation.what),
+            None => obligation.what.clone(),
+        })
+        .collect();
+    let unshown = obligations.len().saturating_sub(SHOWN_OBLIGATIONS);
+    if unshown > 0 {
+        left.push(format!("and {unshown} more"));
+    }
+    let proven: Vec<&str> = proofs
+        .iter()
+        .filter(|proof| {
+            proof
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.starts_with("proven"))
+        })
+        .map(|proof| proof.test.trim_start_matches("generated "))
+        .collect();
+    let running = proofs.iter().any(|proof| proof.detail.is_none());
+    let divisions = obligations.iter().any(|obligation| obligation.division);
+    let accesses = obligations.iter().any(|obligation| !obligation.division);
+    let covered = if proven.is_empty() && running {
+        "the proofs check them on every run they cover".to_owned()
+    } else if proven.is_empty() {
+        "no proof covers a run, so they are tested, not proven".to_owned()
+    } else {
+        let held = match (divisions, accesses) {
+            (true, true) => "no division traps and every access stays inside the program's memory",
+            (true, false) => "no division traps",
+            (false, _) => "every access stays inside the program's memory",
+        };
+        let regions = if accesses {
+            ", but the proofs follow no region, so whether the accesses the rules leave stay \
+             inside their regions is tested, not proven"
+        } else {
+            ""
+        };
+        format!(
+            "on every run the proofs of {} cover, {held}{regions}",
+            listed(&proven)
+        )
+    };
+    format!(
+        "{rules}; they leave the proofs {}: {}; {covered}",
+        counted(obligations.len(), "obligation"),
+        left.join("; ")
+    )
 }
 
-/// What a reply says of main.wat's memory safety once its tests pass.
-pub(super) fn memory_line() -> String {
-    "the rules (M1 to M8) hold every address they can follow to its owner, and WebAssembly holds \
-     every access inside the program's own memory; the rest is tested, not proven: the proofs of \
-     main.wat come with lengua's WebAssembly prover"
-        .to_owned()
+/// Whether a run of `block` reads values none of its variables fixes: random bytes or clock
+/// readings its test doesn't supply, which lengua's host gives a program whose idea uses them.
+/// Then every value of the variables isn't every input, and a real run can't replay what a
+/// proof found.
+pub(super) fn host_values(idea: &Idea, block: &testfile::Generated) -> bool {
+    (idea.uses.contains(&Use::RandomBytes) && block.random.is_none())
+        || (idea.uses.contains(&Use::Clock) && block.clock.is_empty())
+}
+
+/// Runs the inputs a proof of `block` found, `values`, for real: main.wat's `program`, in
+/// `pool`'s workers, reaching what `idea` allows, so a counterexample is reported only when
+/// main.wat really is wrong on them, and a trap with its line of main.wat. A trap the model
+/// found runs too: the engine traps there as well, or the model was wrong. Gives the proof's
+/// line and whether main.wat is wrong; `host` says whether the run reads values a real run
+/// can't be given ([`host_values`]).
+pub(super) async fn replay(
+    pool: &Pool,
+    program: &Program,
+    idea: &Idea,
+    block: &testfile::Generated,
+    values: BTreeMap<String, expr::Value>,
+    host: bool,
+) -> (String, bool) {
+    let Witness {
+        inputs,
+        delivery,
+        broken,
+        described,
+    } = Witness::of(block, values);
+    let case = match block.case(inputs, crate::expect::now()) {
+        Ok(case) => case,
+        Err((_, field, error)) => {
+            return (
+                format!("tested, not proven: with {described}, {field} {error}"),
+                false,
+            );
+        }
+    };
+    let ran =
+        testrun::check_wasm_case(pool, program, &case, &idea.uses, &idea.network, delivery).await;
+    settled(WASM_CODE_FILE, &described, broken.as_deref(), ran, host)
 }
 
 /// Whether `text`, an idea, is an Attested Computation, whose code is main.wat, as its
@@ -270,14 +371,14 @@ fn replace(path: &Path, text: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Everything a checking job needs about the main.wat it tests.
-struct WasmCode {
+/// Everything a checking job needs about the main.wat it tests and proves.
+pub(super) struct WasmCode {
     /// The idea.
-    idea: Idea,
+    pub(super) idea: Idea,
     /// Its tests.
-    suite: TestSuite,
-    /// The module main.wat builds, kept for the workers.
-    program: Arc<Program>,
+    pub(super) suite: TestSuite,
+    /// The module main.wat builds, kept for the workers and the proofs.
+    pub(super) program: Arc<Program>,
     /// The module's SHA-256.
     module: Sha256Hex,
     /// The WebAssembly features the module uses beyond WebAssembly 1.0.
@@ -286,6 +387,8 @@ struct WasmCode {
     max_stack_bytes: u64,
     /// How many `;; unsafe:` blocks main.wat has.
     unsafe_blocks: usize,
+    /// What the rules leave to the proofs.
+    obligations: Vec<Obligation>,
 }
 
 /// What keeps main.wat from building on its idea's parts, as for main.s: a part that isn't
@@ -382,9 +485,10 @@ fn parts_problems(
 }
 
 /// Checks that `folder` holds main.wat lengua may run, as `run` does from MCP and from a shell:
-/// its idea and code match lengua.lock, whose stamp is main.wat's, and the module built from it
-/// now is byte for byte the one check tested. Environment variables reach only a program whose
-/// idea uses the environment. Gives the build and the idea.
+/// its idea and code match lengua.lock, whose stamp is main.wat's, no proof the lock records
+/// found that module wrong, and the module built from it now is byte for byte the one check
+/// tested. Environment variables reach only a program whose idea uses the environment. Gives
+/// the build and the idea.
 fn runnable(
     data_dir: &DataDir,
     folder: &ProgramFolder,
@@ -409,6 +513,22 @@ fn runnable(
         .as_ref()
         .filter(|stamp| stamp.is_wasm())
         .ok_or_else(|| format!("{WASM_CODE_FILE} isn't checked; call check with path {folder}."))?;
+    // What a proof found wrong outlasts lengua's restarts: lengua.lock records it.
+    if let Some(proofs) = &lock.proofs
+        && proofs.executable_sha256 == stamp.executable_sha256
+        && !proofs.wrong.is_empty()
+    {
+        let wrong: Vec<String> = proofs
+            .wrong
+            .iter()
+            .map(|(id, found)| format!("generated {id}: {found}"))
+            .collect();
+        return Err(format!(
+            "The proof found inputs where {WASM_CODE_FILE} is wrong, so it won't run: {}. Call \
+             check with path {folder} to see them, then fix {WASM_CODE_FILE}.",
+            wrong.join("; ")
+        ));
+    }
     let code = read_optional(folder, WASM_CODE_FILE)?.ok_or_else(|| {
         format!("There's no {WASM_CODE_FILE} in {folder}. Write it with the compile skill.")
     })?;
@@ -529,9 +649,10 @@ pub(super) fn run_from_shell(
 impl LenguaServer {
     /// `check`'s stages for an Attested Computation, `idea_text`, up to the first that needs
     /// work, as for main.s: the idea stage; main.wat built, held to its parts and checked against
-    /// every rule; its tests in the background; and, once they pass, lengua's entry in idea.md's
-    /// `verified`, which every check takes away first once the idea or the code no longer is what
-    /// it names ([`Self::keep_verified`]).
+    /// every rule; its tests, then its proofs, in the background; and at done, lengua's entry in
+    /// idea.md's `verified`, which every check takes away first once the idea or the code no
+    /// longer is what it names ([`Self::keep_verified`]), and a proof that finds main.wat wrong
+    /// takes away at once ([`Self::unverify`]).
     pub(super) async fn check_wasm(
         &self,
         folder: &ProgramFolder,
@@ -561,10 +682,14 @@ impl LenguaServer {
         };
         let idea_hash = trust::idea_hash(idea_text.as_bytes());
         let files = [idea_hash, Sha256Hex::of(code.as_bytes())];
-        let checking = match self.current_checking(folder, &files, false).await {
+        let prove_further = params.prove_further;
+        let checking = match self.current_checking(folder, &files, prove_further).await {
             Some(checking) => checking,
             None => match self.wasm_code(folder, &code, idea, suite) {
-                Ok(code) => self.start_wasm_checking(folder, files, code).await,
+                Ok(code) => {
+                    self.start_wasm_checking(folder, files, code, prove_further)
+                        .await
+                }
                 Err(problems) => {
                     return Ok(CheckReport::problems(
                         "code_problems",
@@ -579,8 +704,13 @@ impl LenguaServer {
             self.write_header(folder, &checking).await;
         }
         let report = self.checking_report(folder, &checking);
+        let proven_wrong = checking.found.lock().is_ok_and(|found| found.wrong);
         if report.state == "done" {
+            // lengua's entry as the reply says done, though proofs may still be running.
+            self.write_verified(folder, &checking).await;
             events.push(graph::Event::Done);
+        } else if proven_wrong {
+            events.push(graph::Event::ProvenWrong);
         }
         Ok(report)
     }
@@ -619,15 +749,18 @@ impl LenguaServer {
             features,
             max_stack_bytes: report.facts.max_stack_bytes,
             unsafe_blocks: report.unsafe_blocks.len(),
+            obligations: report.facts.obligations.clone(),
         })
     }
 
-    /// Starts testing `code` in the background, stopping any job on older files.
+    /// Starts testing and proving `code` in the background, stopping any job on older files;
+    /// with `further`, the proof goes on from where lengua.lock says it stopped short.
     async fn start_wasm_checking(
         &self,
         folder: &ProgramFolder,
         files: [Sha256Hex; 2],
         code: WasmCode,
+        further: bool,
     ) -> Arc<Checking> {
         let proofs: Vec<BlockProof> = code
             .suite
@@ -651,7 +784,8 @@ impl LenguaServer {
             }),
             stage: watch::Sender::new(Stage::Testing),
             green_told: AtomicBool::new(false),
-            further: false,
+            further,
+            obligations: code.obligations.clone(),
         });
         if let Some(old) = self
             .checks
@@ -663,16 +797,23 @@ impl LenguaServer {
         }
         let (server, folder, job) = (self.clone(), folder.clone(), Arc::clone(&checking));
         tokio::spawn(async move {
-            server.test_wasm(&folder, &job, code).await;
+            server.test_and_prove_wasm(&folder, &job, code).await;
             job.stage.send_replace(Stage::Ended);
         });
         checking
     }
 
-    /// The job itself for main.wat: every test, in the pool's workers; once they all pass, the
-    /// code's stamp in lengua.lock and lengua's entry in idea.md's `verified`. No proof runs:
-    /// each generated test's line says so.
-    async fn test_wasm(&self, folder: &ProgramFolder, checking: &Checking, code: WasmCode) {
+    /// The job itself for main.wat, as for main.s: every test, in the pool's workers; once they
+    /// all pass, the code's stamp in lengua.lock, then the proofs, each generated test proven
+    /// with lengua's WebAssembly prover, or taken from what lengua.lock records of this very
+    /// module; and once they end with no input found wrong, lengua's entry in idea.md's
+    /// `verified`.
+    async fn test_and_prove_wasm(
+        &self,
+        folder: &ProgramFolder,
+        checking: &Checking,
+        code: WasmCode,
+    ) {
         let fail = |failures: Vec<String>| {
             if let Ok(mut found) = checking.found.lock() {
                 found.failures = failures;
@@ -713,11 +854,6 @@ impl LenguaServer {
         if let Err(error) = self.stamp_code(folder, &idea_hash, stamp).await {
             return fail(vec![error]);
         }
-        if checking.cancel.load(Ordering::Relaxed) {
-            return;
-        }
-        // lengua's entry first, so a reply that says done finds it there.
-        self.write_verified(folder, checking).await;
         let every_value: Vec<String> = code
             .suite
             .generated
@@ -734,9 +870,6 @@ impl LenguaServer {
             .map(|cost| cost_line_in(cost, "WebAssembly operations"))
             .collect();
         if let Ok(mut found) = checking.found.lock() {
-            for proof in &mut found.proofs {
-                proof.detail = Some(no_proof());
-            }
             found.passed = Some(Passed {
                 runs: outcome.runs,
                 every_value,
@@ -746,15 +879,57 @@ impl LenguaServer {
                 under: None,
             });
         }
+        checking.stage.send_replace(Stage::Proving(Instant::now()));
+        let executable = checking.executable.clone();
+        let prover = Prover::Wasm(&code);
+        match self.recorded_proofs(folder, checking, &code.suite, &executable) {
+            None => {
+                self.prove_all(folder, checking, prover, &executable, &[])
+                    .await;
+            }
+            Some(further) if !further.is_empty() => {
+                self.prove_all(folder, checking, prover, &executable, &further)
+                    .await;
+            }
+            Some(_) => {}
+        }
+        if checking.cancel.load(Ordering::Relaxed) {
+            return;
+        }
+        // A proof that found main.wat wrong, now or as lengua.lock records, leaves lengua no
+        // entry in idea.md's `verified`; otherwise the entry goes in, as at done.
+        let wrong = checking.found.lock().is_ok_and(|found| found.wrong);
+        if wrong {
+            self.unverify(folder, checking).await;
+        }
+        self.write_header(folder, checking).await;
     }
 
-    /// Writes lengua's entry into idea.md's `verified` once main.wat's tests pass: lengua and its
-    /// version, the time, and the idea and the code it checked, provided both files are still
-    /// those and lengua's entry doesn't say so already. idea.md's hash leaves `verified` out, so
-    /// the lock still holds.
+    /// Writes lengua's entry into idea.md's `verified` once check says main.wat is done, or its
+    /// job ends with every test passed: lengua and its version, the time, and the idea and the
+    /// code it checked, provided both files are still those, no proof found the code wrong, and
+    /// lengua's entry doesn't say so already. idea.md's hash leaves `verified` out, so the lock
+    /// still holds.
     pub(super) async fn write_verified(&self, folder: &ProgramFolder, checking: &Checking) {
         let [idea, code] = &checking.files;
         let _writing = self.lock_writes.lock().await;
+        // Under the lock of the writes: a proof that finds main.wat wrong records it in
+        // lengua.lock, then takes the entry away, each under this lock too, so whichever comes
+        // first, no entry is left for a build found wrong.
+        if checking.found.lock().is_ok_and(|found| found.wrong) {
+            return;
+        }
+        let recorded_wrong = Key::load(&self.data_dir)
+            .ok()
+            .flatten()
+            .and_then(|key| lock::read(folder.path(), Some(&key)).ok().flatten())
+            .and_then(|lock| lock.proofs)
+            .is_some_and(|proofs| {
+                proofs.executable_sha256 == checking.executable && !proofs.wrong.is_empty()
+            });
+        if recorded_wrong {
+            return;
+        }
         let path = folder.file(IDEA_FILE);
         let Ok(text) = std::fs::read_to_string(&path) else {
             return;
@@ -824,15 +999,49 @@ impl LenguaServer {
         }
     }
 
+    /// Takes lengua's entry out of idea.md's `verified` once a proof found the main.wat that
+    /// `checking` checked wrong: the entry says lengua checked this idea and this code, which no
+    /// longer holds. Only an entry that names those very files goes, and everyone else's stay.
+    pub(super) async fn unverify(&self, folder: &ProgramFolder, checking: &Checking) {
+        let [idea, code] = &checking.files;
+        let _writing = self.lock_writes.lock().await;
+        let path = folder.file(IDEA_FILE);
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        let names_them = trust::lengua_entries(&text)
+            .iter()
+            .any(|entry| entry.idea == *idea && entry.code == *code);
+        if !names_them {
+            return;
+        }
+        let Some(without) = trust::without_lengua_verified(&text) else {
+            return;
+        };
+        if let Err(error) = replace(&path, &without) {
+            eprintln!(
+                "lengua: couldn't take lengua's entry out of {}: {error}",
+                path.display()
+            );
+        }
+    }
+
     /// `run` for main.wat: in a worker of its own, in the engine's configuration for runs (a
     /// deadline, nothing counted), reaching only what its idea allows, in `folder` or a fresh
-    /// one; a server stays serving in the background. Its reply is native's.
+    /// one; a server stays serving in the background. Its reply is native's, and as for main.s,
+    /// a build a proof found wrong doesn't run.
     pub(super) async fn run_wasm(
         &self,
         folder: &ProgramFolder,
         params: &RunParams,
     ) -> Result<RunReport, String> {
         let (built, idea) = runnable(&self.data_dir, folder, &params.env)?;
+        if let Some(wrong) = self.proven_wrong(folder).await {
+            return Err(format!(
+                "The proof found inputs where {WASM_CODE_FILE} is wrong, so it won't run: \
+                 {wrong}. Call check with path {folder} to see them, then fix {WASM_CODE_FILE}."
+            ));
+        }
         let workspace = params.folder.as_deref().map(working_folder).transpose()?;
         let seconds = params.timeout_seconds.unwrap_or(10);
         if !(1..=RUN_SECONDS).contains(&seconds) {
@@ -930,15 +1139,17 @@ pub struct Attestation {
     /// What it found, one line a finding, and its verdict last: `attested` or `not attested`.
     pub lines: Vec<String>,
     /// Whether the folder is attested: its idea and main.wat build, follow every rule and pass
-    /// every test, and lengua's entry in the idea's `verified` names them both.
+    /// every test, no proof found main.wat wrong, and lengua's entry in the idea's `verified`
+    /// names them both.
     pub attested: bool,
 }
 
 /// Attests the program folder at `path`, absolute or from the current folder, as the attester an
 /// Attested Computation names: reads its idea.md and main.wat, builds main.wat, checks it
-/// against every rule, runs every test of the idea, and compares lengua's entry in the idea's
-/// `verified` with the files. It writes nothing (no lock, no index.md, no log.md) and needs no
-/// lock and no signing key, so it attests a folder on any computer.
+/// against every rule, runs every test of the idea, proves each generated test within the
+/// attester's own time, and compares lengua's entry in the idea's `verified` with the files. It
+/// writes nothing (no lock, no index.md, no log.md) and needs no lock and no signing key, so it
+/// attests a folder on any computer.
 pub async fn attest(path: &str) -> Attestation {
     let mut lines = Vec::new();
     let attests = attest_into(path, &mut lines).await;
@@ -1068,7 +1279,7 @@ async fn attest_into(path: &str, lines: &mut Vec<String>) -> bool {
     match testrun::run_wasm_tests(
         &suite,
         &pool,
-        program,
+        Arc::clone(&program),
         seed,
         &idea.uses,
         &idea.network,
@@ -1076,10 +1287,23 @@ async fn attest_into(path: &str, lines: &mut Vec<String>) -> bool {
     )
     .await
     {
-        Ok(outcome) if outcome.passed() => lines.push(format!(
-            "tests: passed all {} test runs, the generated ones drawn from seed {seed}",
-            outcome.runs
-        )),
+        Ok(outcome) if outcome.passed() => {
+            lines.push(format!(
+                "tests: passed all {} test runs, the generated ones drawn from seed {seed}",
+                outcome.runs
+            ));
+            // The proofs take minutes: a folder that isn't attested for another reason needs
+            // none to say so.
+            if attests {
+                let proofs = attest_proofs(&pool, &program, &idea, &suite).await;
+                for proof in &proofs {
+                    lines.push(format!("proofs: {}", proof.line()));
+                }
+                let obligations = &report.facts.obligations;
+                lines.push(format!("memory: {}", memory_line(obligations, &proofs)));
+                attests = !proofs.iter().any(|proof| proof.wrong);
+            }
+        }
         Ok(outcome) => {
             lines.extend(
                 outcome
@@ -1095,6 +1319,92 @@ async fn attest_into(path: &str, lines: &mut Vec<String>) -> bool {
         }
     }
     attests
+}
+
+/// The attester's proofs of main.wat, `program`, whose idea is `idea`, as check proves them but
+/// within the attester's own time: each generated test of `suite` in turn, the smallest first,
+/// each with its share of [`proof_time`], and what a proof finds run for real in `pool`'s
+/// workers. Gives each test's proof, in the tests' order.
+async fn attest_proofs(
+    pool: &Pool,
+    program: &Arc<Program>,
+    idea: &Idea,
+    suite: &TestSuite,
+) -> Vec<BlockProof> {
+    let model = Model::Wasm(Arc::clone(program), Policy::of(&idea.uses, &idea.network));
+    let listens = idea.network.listens.is_some();
+    let deadline = Instant::now() + proof_time();
+    let blocks = suite.generated.len();
+    let mut order: Vec<usize> = (0..blocks).collect();
+    order.sort_by_key(|index| prove::size(&suite.generated[*index]));
+    let mut proofs: Vec<BlockProof> = suite
+        .generated
+        .iter()
+        .map(|block| BlockProof {
+            test: format!("generated {}", block.id),
+            progress: None,
+            detail: None,
+            wrong: false,
+        })
+        .collect();
+    for (turn, &index) in order.iter().enumerate() {
+        let block = &suite.generated[index];
+        // Each test gets its share of the time left, as check gives it.
+        let now = Instant::now();
+        let share = deadline.saturating_duration_since(now)
+            / u32::try_from(blocks - turn).unwrap_or(u32::MAX).max(1);
+        let host = host_values(idea, block);
+        let (detail, wrong) = match block
+            .every_value_text()
+            .filter(|_| !host && !block.uses_now())
+        {
+            Some(every) => (format!("proven: the tests tried {every}"), false),
+            None => {
+                let budget = prove::Budget::until(now + share, listens);
+                let samples: Vec<testfile::Case> =
+                    block.cases(1).take(24).filter_map(Result::ok).collect();
+                match model.verdict(block, samples, listens, budget).await {
+                    Err(reason) | Ok(Verdict::NotProven(reason)) => {
+                        (format!("tested, not proven: {reason}"), false)
+                    }
+                    Ok(Verdict::Proven {
+                        shapes,
+                        paths,
+                        questions,
+                        alone,
+                        bound,
+                        cut_any_way,
+                        unreached,
+                        induction,
+                        lookback,
+                    }) => {
+                        let detail = proven_detail(
+                            block,
+                            shapes,
+                            paths,
+                            questions,
+                            alone,
+                            bound,
+                            cut_any_way,
+                            &unreached,
+                            induction.map(|chunk| (chunk, lookback)),
+                            WASM_CODE_FILE,
+                        );
+                        // Proving on from where a proof stopped is check's, which keeps a lock.
+                        (detail.replace(FURTHER, ""), false)
+                    }
+                    Ok(Verdict::Counterexample(values)) => {
+                        replay(pool, program, idea, block, values, host).await
+                    }
+                }
+            }
+        };
+        if let Some(proof) = proofs.get_mut(index) {
+            proof.detail = Some(detail);
+            proof.wrong = wrong;
+        }
+    }
+    proofs
 }
 
 /// The lines on lengua's entry in `idea_text`'s `verified`, compared with the idea and with
@@ -1272,5 +1582,86 @@ mod tests {
         let mut lines = Vec::new();
         assert!(!verified_lines(&edited, code, &mut lines));
         assert!(lines[0].contains("names the idea"), "{lines:?}");
+    }
+
+    /// A generated test's proof with `detail`, or still running without one.
+    fn proof(detail: Option<&str>) -> BlockProof {
+        BlockProof {
+            test: "generated B1".to_owned(),
+            progress: None,
+            detail: detail.map(str::to_owned),
+            wrong: false,
+        }
+    }
+
+    /// An access the rules leave to the proofs, on line 12.
+    fn access() -> Obligation {
+        Obligation {
+            line: Some(12),
+            what: "the buffer $args_get borrows in argument 2 touches as many bytes of $args as \
+                   the call is given, which the rules don't follow"
+                .to_owned(),
+            division: false,
+        }
+    }
+
+    /// A division the rules leave to the proofs, on line 30.
+    fn division() -> Obligation {
+        Obligation {
+            line: Some(30),
+            what: "`i32.div_s` never divides the most negative number by -1, which traps"
+                .to_owned(),
+            division: true,
+        }
+    }
+
+    /// main.wat's memory line says what the rules settle, what they leave to the proofs, and what
+    /// the proofs settle of that: a division in full, an access inside the program's memory but
+    /// not inside its region, which the model doesn't follow; "tested, not proven" is said only
+    /// of what no proof settles.
+    #[test]
+    fn the_memory_line_says_what_the_proofs_settle_of_the_rules_obligations() {
+        let proven = [proof(Some("proven for every input in range"))];
+        let line = memory_line(&[], &proven);
+        assert!(
+            line.ends_with("so they leave nothing to the proofs"),
+            "{line}"
+        );
+        assert!(!line.contains("tested, not proven"), "{line}");
+        let line = memory_line(&[access()], &proven);
+        assert!(
+            line.contains("; they leave the proofs 1 obligation: main.wat line 12: the buffer"),
+            "{line}"
+        );
+        assert!(
+            line.contains(
+                "; on every run the proofs of B1 cover, every access stays inside the program's \
+                 memory, but the proofs follow no region"
+            ),
+            "{line}"
+        );
+        assert!(line.ends_with("is tested, not proven"), "{line}");
+        let line = memory_line(&[division()], &proven);
+        assert!(
+            line.ends_with("; on every run the proofs of B1 cover, no division traps"),
+            "{line}"
+        );
+        assert!(!line.contains("tested, not proven"), "{line}");
+        let line = memory_line(&[access(), division()], &[proof(None)]);
+        assert!(
+            line.contains("they leave the proofs 2 obligations: ")
+                && line.ends_with("; the proofs check them on every run they cover"),
+            "{line}"
+        );
+        let unproven = [proof(Some("tested, not proven: the proof ran out of time"))];
+        let line = memory_line(&[access()], &unproven);
+        assert!(
+            line.ends_with("; no proof covers a run, so they are tested, not proven"),
+            "{line}"
+        );
+        // Past four, the rest are counted.
+        let many: Vec<Obligation> = (0..6).map(|_| access()).collect();
+        let line = memory_line(&many, &proven);
+        assert!(line.contains("; and 2 more; "), "{line}");
     }
 }

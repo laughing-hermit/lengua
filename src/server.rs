@@ -220,6 +220,9 @@ struct Checking {
     green_told: AtomicBool,
     /// Whether to prove on from where lengua.lock says this build's proofs stopped short.
     further: bool,
+    /// What main.wat's rules leave to its proofs, which its memory line names; main.s's memory
+    /// line names none.
+    obligations: Vec<checker::wasm::Obligation>,
 }
 
 impl std::fmt::Debug for Checking {
@@ -250,7 +253,7 @@ struct Found {
     passed: Option<Passed>,
     /// Each generated test's proof, in order.
     proofs: Vec<BlockProof>,
-    /// Whether the proof found inputs where main.s is wrong.
+    /// Whether the proof found inputs where the code, main.s or main.wat, is wrong.
     wrong: bool,
 }
 
@@ -281,7 +284,7 @@ struct BlockProof {
     progress: Option<Arc<prove::Progress>>,
     /// What was proven, or why not, once it ended.
     detail: Option<String>,
-    /// Whether it found inputs where main.s is wrong.
+    /// Whether it found inputs where the code is wrong.
     wrong: bool,
 }
 
@@ -1230,11 +1233,12 @@ impl LenguaServer {
     }
 
     /// What the proof found wrong in the code now in `folder`, when its job confirmed a
-    /// counterexample: the tests passed, but these inputs, run for real, show main.s is wrong.
+    /// counterexample: the tests passed, but these inputs, run for real, show the code, main.s or
+    /// main.wat, is wrong.
     async fn proven_wrong(&self, folder: &ProgramFolder) -> Option<String> {
         let checking = self.checks.lock().await.get(folder.path()).cloned()?;
-        let code = std::fs::read(folder.file(CODE_FILE)).ok()?;
-        if header::code_hash(&code) != checking.files[1] {
+        let code = std::fs::read(folder.file(checking.code)).ok()?;
+        if crate::state::code_hash(checking.code, &code) != checking.files[1] {
             return None;
         }
         let found = checking.found.lock().ok()?;
@@ -1414,6 +1418,7 @@ impl LenguaServer {
             stage: watch::Sender::new(Stage::Testing),
             green_told: AtomicBool::new(false),
             further,
+            obligations: Vec::new(),
         });
         if let Some(old) = self
             .checks
@@ -1519,13 +1524,14 @@ impl LenguaServer {
                 }
             }
         } else {
+            let prover = Prover::Native(&code, &syscalls);
             match self.recorded_proofs(folder, checking, &code.suite, &executable) {
                 None => {
-                    self.prove_all(folder, checking, &code, &syscalls, &executable, &[])
+                    self.prove_all(folder, checking, prover, &executable, &[])
                         .await;
                 }
                 Some(further) if !further.is_empty() => {
-                    self.prove_all(folder, checking, &code, &syscalls, &executable, &further)
+                    self.prove_all(folder, checking, prover, &executable, &further)
                         .await;
                 }
                 Some(_) => {}
@@ -1540,7 +1546,8 @@ impl LenguaServer {
     /// input the proof found wrong, provided main.s is still the code it checked and its line
     /// says something else. The code's hash leaves the line out, so the lock still holds. For
     /// main.wat, which has no such line, lengua's entry goes in idea.md's `verified` instead, and
-    /// only for a job whose tests all passed, which stamped the code.
+    /// only for a job whose tests all passed, which stamped the code, and whose proofs found no
+    /// input wrong.
     async fn write_header(&self, folder: &ProgramFolder, checking: &Checking) {
         if checking.code == WASM_CODE_FILE {
             let passed = checking.found.lock().is_ok_and(|found| {
@@ -1644,14 +1651,14 @@ impl LenguaServer {
     }
 
     /// Proves each generated test in turn, each with its share of [`PROOF_TIME`], and records
-    /// what was proven. With `further`, proves only those blocks, each from its length on, and
-    /// keeps what lengua.lock records of the others.
+    /// what was proven: main.s's machine code, or main.wat's module, as `prover` holds it. With
+    /// `further`, proves only those blocks, each from its length on, and keeps what lengua.lock
+    /// records of the others.
     async fn prove_all(
         &self,
         folder: &ProgramFolder,
         checking: &Checking,
-        code: &Code,
-        syscalls: &[crate::platform::Allowed],
+        prover: Prover<'_>,
         executable: &Sha256Hex,
         further: &[(usize, usize)],
     ) {
@@ -1665,24 +1672,17 @@ impl LenguaServer {
                 }
             }
         };
-        let mut decoded = match checker::decode::read(&code.built.bytes) {
-            Ok(decoded) => decoded,
+        let suite = prover.suite();
+        let model = match prover.model() {
+            Ok(model) => model,
             Err(error) => {
-                for index in 0..code.suite.generated.len() {
+                for index in 0..suite.generated.len() {
                     set(index, format!("tested, not proven: {error}"), false);
                 }
                 return;
             }
         };
-        // Which symbol each [rip + name] names, so proofs hold a pointer just past one
-        // symbol's end to that symbol, not to the one starting there; and each checked jump
-        // table's cases, so proofs follow every one.
-        if let Some(facts) = &code.report.facts {
-            decoded.named.clone_from(&facts.named);
-            decoded.tables.clone_from(&facts.tables);
-            decoded.sve_bytes = facts.sve_bytes;
-        }
-        let idea = &code.idea;
+        let idea = prover.idea();
         let deadline = Instant::now() + proof_time();
         // The ids proven, those found wrong, how many the solvers proved, and why any rested on
         // one solver.
@@ -1701,7 +1701,7 @@ impl LenguaServer {
                 .and_then(|lock| lock.proofs)
                 .filter(|proofs| proofs.executable_sha256 == *executable)
         {
-            for (index, block) in code.suite.generated.iter().enumerate() {
+            for (index, block) in suite.generated.iter().enumerate() {
                 if further.iter().any(|(again, _)| *again == index) {
                     continue;
                 }
@@ -1718,9 +1718,8 @@ impl LenguaServer {
             }
             recorded_solvers = Some(stamp.solvers.clone());
         }
-        let allows = |call: idea::Syscall| idea.syscalls.contains(&call);
         let listens = idea.network.listens.is_some();
-        let blocks = code.suite.generated.len();
+        let blocks = suite.generated.len();
         // Small blocks first: they finish in their share and pass the rest on to the big ones.
         let mut order: Vec<usize> = if further.is_empty() {
             (0..blocks).collect()
@@ -1728,7 +1727,7 @@ impl LenguaServer {
             further.iter().map(|(index, _)| *index).collect()
         };
         let blocks = order.len();
-        order.sort_by_key(|index| prove::size(&code.suite.generated[*index]));
+        order.sort_by_key(|index| prove::size(&suite.generated[*index]));
         // The last block's line goes final only once the lock records the proofs, so a caller that
         // sees every proof settled, or a server restarted at that moment, finds them there.
         let mut last_line: Option<(usize, String, bool)> = None;
@@ -1738,7 +1737,7 @@ impl LenguaServer {
             }
         };
         for (turn, &index) in order.iter().enumerate() {
-            let block = &code.suite.generated[index];
+            let block = &suite.generated[index];
             let last = turn + 1 == blocks;
             if checking.cancel.load(Ordering::Relaxed) {
                 return;
@@ -1751,8 +1750,7 @@ impl LenguaServer {
             // Every value of a block's variables is every input only when the program reads
             // nothing else: no random bytes or clock readings the test doesn't supply, and no
             // `now` in the expected results.
-            let kernel_values = (allows(idea::Syscall::Getrandom) && block.random.is_none())
-                || (allows(idea::Syscall::ClockGettime) && block.clock.is_empty());
+            let kernel_values = prover.kernel_values(block);
             if let Some(every) = block
                 .every_value_text()
                 .filter(|_| !kernel_values && !block.uses_now())
@@ -1783,13 +1781,7 @@ impl LenguaServer {
             // trusted to cover the rest.
             let samples: Vec<testfile::Case> =
                 block.cases(1).take(24).filter_map(Result::ok).collect();
-            let (machine, owned) = (decoded.clone(), block.clone());
-            let verdict = tokio::task::spawn_blocking(move || {
-                prove::agrees_until(&machine, &samples, listens, budget.deadline)
-                    .map(|found| found.unwrap_or_else(|| prove::prove(&machine, &owned, &budget)))
-            })
-            .await
-            .unwrap_or_else(|error| Err(format!("the proof stopped: {error}")));
+            let verdict = model.verdict(block, samples, listens, budget).await;
             if checking.cancel.load(Ordering::Relaxed) {
                 return;
             }
@@ -1837,14 +1829,22 @@ impl LenguaServer {
                             cut_any_way,
                             &unreached,
                             induction.map(|chunk| (chunk, lookback)),
+                            checking.code,
                         ),
                         false,
                     )
                 }
-                Ok(prove::Verdict::Counterexample(values)) => {
-                    self.replay(code, syscalls, block, values, kernel_values)
-                        .await
-                }
+                Ok(prove::Verdict::Counterexample(values)) => match prover {
+                    Prover::Native(code, syscalls) => {
+                        self.replay(code, syscalls, block, values, kernel_values)
+                            .await
+                    }
+                    Prover::Wasm(code) => {
+                        let pool = self.pool();
+                        wat::replay(&pool, &code.program, idea, block, values, kernel_values)
+                            .await
+                    }
+                },
             };
             if wrong {
                 // At once, so the finding outlasts this job: run refuses the build from now on.
@@ -1861,6 +1861,11 @@ impl LenguaServer {
                     "z3 and cvc5".to_owned(),
                 )
                 .await;
+                // main.wat's entry in idea.md's `verified` goes at once too, before any reply
+                // says the build is wrong; the lock now keeps another from going in.
+                if checking.code == WASM_CODE_FILE {
+                    self.unverify(folder, checking).await;
+                }
             }
             if last {
                 last_line = Some((index, detail, wrong));
@@ -1898,46 +1903,24 @@ impl LenguaServer {
         release(last_line);
     }
 
-    /// Runs inputs the proof found for real, so a counterexample is reported only when the
-    /// program really is wrong on it. Returns the detail and whether main.s is wrong.
+    /// Runs inputs the proof found in main.s for real, so a counterexample is reported only when
+    /// the program really is wrong on it. Returns the detail and whether main.s is wrong.
     async fn replay(
         &self,
         code: &Code,
         syscalls: &[crate::platform::Allowed],
         block: &testfile::Generated,
-        mut values: BTreeMap<String, expr::Value>,
+        values: BTreeMap<String, expr::Value>,
         kernel_values: bool,
     ) -> (String, bool) {
-        // The delivery it was found with isn't the test's input: a real run is given it.
-        let delivery = match values.remove(prove::DELIVERY) {
-            Some(expr::Value::Str(found)) => {
-                testrun::Delivery::described(&found).unwrap_or(testrun::Delivery::Whole)
-            }
-            _ => testrun::Delivery::Whole,
-        };
-        let networked = !block.server.is_empty() || !block.client.is_empty();
-        let broken_rule = match values.remove(prove::UNSAFE) {
-            Some(expr::Value::Str(problem)) => Some(problem),
-            _ => None,
-        };
-        let inputs: expr::Env = values.into_iter().collect();
-        let described = if networked {
-            format!(
-                "{}, what the test's peer sends arriving {}",
-                testfile::describe_inputs(&inputs),
-                delivery.describe()
-            )
-        } else if delivery == testrun::Delivery::Whole {
-            testfile::describe_inputs(&inputs)
-        } else {
-            format!(
-                "{}, standard input arriving {}",
-                testfile::describe_inputs(&inputs),
-                delivery.describe()
-            )
-        };
+        let Witness {
+            inputs,
+            delivery,
+            broken,
+            described,
+        } = Witness::of(block, values);
         // A real run can pass without showing it, so the proof's model is the witness.
-        if let Some(problem) = broken_rule {
+        if let Some(problem) = broken {
             return (
                 format!(
                     "the proof found inputs where main.s breaks the memory rules: with \
@@ -1955,7 +1938,7 @@ impl LenguaServer {
                 );
             }
         };
-        match testrun::check_case(
+        let ran = testrun::check_case(
             &self.launcher,
             &code.built.executable,
             &code.source,
@@ -1965,37 +1948,8 @@ impl LenguaServer {
             delivery,
             code.channel,
         )
-        .await
-        {
-            Err(error) => (
-                format!("tested, not proven: couldn't run the program: {error}"),
-                false,
-            ),
-            Ok(Some(problem)) => (
-                format!(
-                    "the proof found inputs the tests didn't try where main.s is wrong: with \
-                     {described}: {problem}"
-                ),
-                true,
-            ),
-            // A real run draws its own random bytes and reads its own clock, so it can't replay
-            // what the proof found.
-            Ok(None) if kernel_values => (
-                format!(
-                    "tested, not proven: with {described}, the prover found random bytes or a \
-                     clock reading for which main.s's output breaks the test, which a real run \
-                     can't replay; check how main.s turns them into output"
-                ),
-                false,
-            ),
-            Ok(None) => (
-                format!(
-                    "tested, not proven: the prover's model disagreed with a real run on \
-                     {described}"
-                ),
-                false,
-            ),
-        }
+        .await;
+        settled(CODE_FILE, &described, None, ran, kernel_values)
     }
 
     /// What `check` replies about a checking job.
@@ -2029,10 +1983,6 @@ impl LenguaServer {
             "{code} follows every rule and passed all {} test runs",
             passed.runs
         )];
-        // main.wat has no proofs until lengua's WebAssembly prover.
-        if code == WASM_CODE_FILE {
-            tests.push(wat::NOT_PROVEN.to_owned());
-        }
         if let Some(emulator) = &passed.under {
             tests[0].push_str(&format!(" under {emulator}"));
             tests.push(format!(
@@ -2068,7 +2018,7 @@ impl LenguaServer {
                 return CheckReport {
                     tests,
                     proofs,
-                    memory: Some(memory_line(&found.proofs)),
+                    memory: Some(memory_of(checking, &found.proofs)),
                     ..CheckReport::new(
                         "proving",
                         format!(
@@ -2103,23 +2053,17 @@ impl LenguaServer {
         } else {
             ""
         };
-        let (memory, proven) = if code == WASM_CODE_FILE {
-            (
-                wat::memory_line(),
-                "and that it is tested, not proven: the proofs of main.wat come with lengua's \
-                 WebAssembly prover. idea.md's verified list now holds lengua's entry for this \
-                 idea and this main.wat.",
-            )
+        // check writes lengua's entry in main.wat's idea as it replies done.
+        let verified = if code == WASM_CODE_FILE {
+            " idea.md's verified list now holds lengua's entry for this idea and this main.wat, \
+             until a proof finds main.wat wrong."
         } else {
-            (
-                memory_line(&found.proofs),
-                "and what's proven, memory included.",
-            )
+            ""
         };
         CheckReport {
             tests,
             proofs,
-            memory: Some(memory),
+            memory: Some(memory_of(checking, &found.proofs)),
             example: passed.shown.clone(),
             performance: passed.performance.clone(),
             changes,
@@ -2128,8 +2072,9 @@ impl LenguaServer {
                 "done",
                 format!(
                     "Done: tell the user where the program is, what its idea promises, that it \
-                     passed every test, {proven}{running}{shown} run runs it on their own inputs \
-                     here; give them the shell command, followed by its arguments, for their own \
+                     passed every test, and what's proven, memory \
+                     included.{verified}{running}{shown} run runs it on their own inputs here; \
+                     give them the shell command, followed by its arguments, for their own \
                      terminal, scripts and services."
                 ),
             )
@@ -2329,7 +2274,233 @@ fn again(folder: &ProgramFolder) -> String {
     )
 }
 
-/// What a proven block's proof covered, in a line.
+/// What a reply says of memory safety for `checking`'s code: main.s's line, or main.wat's, which
+/// names what its rules leave to the proofs.
+fn memory_of(checking: &Checking, proofs: &[BlockProof]) -> String {
+    if checking.code == WASM_CODE_FILE {
+        wat::memory_line(&checking.obligations, proofs)
+    } else {
+        memory_line(proofs)
+    }
+}
+
+/// The build whose generated tests a job proves: main.s's, with the system calls its idea
+/// allows, which a real run of what a proof finds is held to, or main.wat's.
+#[derive(Clone, Copy)]
+enum Prover<'a> {
+    /// main.s's build, and the system calls its idea allows.
+    Native(&'a Code, &'a [crate::platform::Allowed]),
+    /// main.wat's build.
+    Wasm(&'a wat::WasmCode),
+}
+
+impl<'a> Prover<'a> {
+    /// The idea the code was checked against.
+    fn idea(self) -> &'a Idea {
+        match self {
+            Self::Native(code, _) => &code.idea,
+            Self::Wasm(code) => &code.idea,
+        }
+    }
+
+    /// The idea's tests.
+    fn suite(self) -> &'a TestSuite {
+        match self {
+            Self::Native(code, _) => &code.suite,
+            Self::Wasm(code) => &code.suite,
+        }
+    }
+
+    /// Whether a run of `block` reads values none of its variables fixes: random bytes or clock
+    /// readings the test doesn't supply, which the kernel gives main.s and lengua's host gives
+    /// main.wat. Then every value of the variables isn't every input, and a real run can't
+    /// replay what a proof found.
+    fn kernel_values(self, block: &testfile::Generated) -> bool {
+        match self {
+            Self::Native(code, _) => {
+                let allows = |call: idea::Syscall| code.idea.syscalls.contains(&call);
+                (allows(idea::Syscall::Getrandom) && block.random.is_none())
+                    || (allows(idea::Syscall::ClockGettime) && block.clock.is_empty())
+            }
+            Self::Wasm(code) => wat::host_values(&code.idea, block),
+        }
+    }
+
+    /// What the proofs run on: main.s's executable decoded, with what the rules found of it, or
+    /// main.wat's module, with what its idea lets it reach.
+    ///
+    /// # Errors
+    ///
+    /// Why main.s's executable can't be decoded.
+    fn model(self) -> Result<Model, String> {
+        match self {
+            Self::Native(code, _) => {
+                let mut decoded = checker::decode::read(&code.built.bytes)?;
+                // Which symbol each [rip + name] names, so proofs hold a pointer just past one
+                // symbol's end to that symbol, not to the one starting there; and each checked
+                // jump table's cases, so proofs follow every one.
+                if let Some(facts) = &code.report.facts {
+                    decoded.named.clone_from(&facts.named);
+                    decoded.tables.clone_from(&facts.tables);
+                    decoded.sve_bytes = facts.sve_bytes;
+                }
+                Ok(Model::Native(decoded))
+            }
+            Self::Wasm(code) => Ok(Model::Wasm(
+                Arc::clone(&code.program),
+                crate::wasm::Policy::of(&code.idea.uses, &code.idea.network),
+            )),
+        }
+    }
+}
+
+/// What a proof runs on: main.s's executable, decoded, or main.wat's module, with what its idea
+/// lets it reach.
+#[derive(Clone)]
+enum Model {
+    /// main.s's executable, with what the rules found of its symbols and jump tables.
+    Native(checker::decode::Machine),
+    /// main.wat's module, and what its idea lets it reach.
+    Wasm(Arc<crate::wasm::Program>, crate::wasm::Policy),
+}
+
+impl Model {
+    /// The verdict on `block` within `budget`, in a thread of its own: the model must agree with
+    /// the real program on `samples`, inputs it passed, before it's trusted to cover the rest.
+    async fn verdict(
+        &self,
+        block: &testfile::Generated,
+        samples: Vec<testfile::Case>,
+        listens: bool,
+        budget: prove::Budget,
+    ) -> Result<prove::Verdict, String> {
+        let (model, block) = (self.clone(), block.clone());
+        tokio::task::spawn_blocking(move || match &model {
+            Self::Native(machine) => {
+                prove::agrees_until(machine, &samples, listens, budget.deadline)
+                    .map(|found| found.unwrap_or_else(|| prove::prove(machine, &block, &budget)))
+            }
+            Self::Wasm(program, policy) => {
+                let built = program.built();
+                let found = prove::agrees_wasm(built, *policy, &samples, listens, budget.deadline);
+                found.map(|found| {
+                    found.unwrap_or_else(|| prove::prove_wasm(built, *policy, &block, &budget))
+                })
+            }
+        })
+        .await
+        .unwrap_or_else(|error| Err(format!("the proof stopped: {error}")))
+    }
+}
+
+/// Inputs a proof found, as a real run is given them: the generated test's values, how what the
+/// test's peer or standard input sends arrives, what the model said a run broke, and all of it
+/// in words.
+struct Witness {
+    /// The test's values.
+    inputs: expr::Env,
+    /// How what the test sends arrives: the delivery the proof found them with.
+    delivery: testrun::Delivery,
+    /// What the model said a run broke: a memory rule of main.s's, or a trap of main.wat's.
+    broken: Option<String>,
+    /// All of it, in words.
+    described: String,
+}
+
+impl Witness {
+    /// The witness in `values`, a counterexample of `block`'s: its inputs, beside the delivery it
+    /// was found with and what broke, under the names [`prove::DELIVERY`] and [`prove::UNSAFE`].
+    fn of(block: &testfile::Generated, mut values: BTreeMap<String, expr::Value>) -> Self {
+        // The delivery it was found with isn't the test's input: a real run is given it.
+        let delivery = match values.remove(prove::DELIVERY) {
+            Some(expr::Value::Str(found)) => {
+                testrun::Delivery::described(&found).unwrap_or(testrun::Delivery::Whole)
+            }
+            _ => testrun::Delivery::Whole,
+        };
+        let networked = !block.server.is_empty() || !block.client.is_empty();
+        let broken = match values.remove(prove::UNSAFE) {
+            Some(expr::Value::Str(problem)) => Some(problem),
+            _ => None,
+        };
+        let inputs: expr::Env = values.into_iter().collect();
+        let described = if networked {
+            format!(
+                "{}, what the test's peer sends arriving {}",
+                testfile::describe_inputs(&inputs),
+                delivery.describe()
+            )
+        } else if delivery == testrun::Delivery::Whole {
+            testfile::describe_inputs(&inputs)
+        } else {
+            format!(
+                "{}, standard input arriving {}",
+                testfile::describe_inputs(&inputs),
+                delivery.describe()
+            )
+        };
+        Self {
+            inputs,
+            delivery,
+            broken,
+            described,
+        }
+    }
+}
+
+/// A proof's line for what a real run of the inputs it found came to, `ran`, in the words of
+/// `file`, the code: whether the code is wrong on them, `described`, and whether it is. Where the
+/// run passed, the model was wrong about them, and about what it said the run broke, `broken`.
+fn settled(
+    file: &str,
+    described: &str,
+    broken: Option<&str>,
+    ran: std::io::Result<Option<String>>,
+    kernel_values: bool,
+) -> (String, bool) {
+    match ran {
+        Err(error) => (
+            format!("tested, not proven: couldn't run the program: {error}"),
+            false,
+        ),
+        Ok(Some(problem)) => (
+            format!(
+                "the proof found inputs the tests didn't try where {file} is wrong: with \
+                 {described}: {problem}"
+            ),
+            true,
+        ),
+        // A real run draws its own random bytes and reads its own clock, so it can't replay
+        // what the proof found.
+        Ok(None) if kernel_values => (
+            format!(
+                "tested, not proven: with {described}, the prover found random bytes or a clock \
+                 reading for which {file}'s output breaks the test, which a real run can't \
+                 replay; check how {file} turns them into output"
+            ),
+            false,
+        ),
+        Ok(None) => match broken {
+            Some(problem) => (
+                format!(
+                    "tested, not proven: the prover's model trapped with {described} \
+                     ({problem}), and a real run didn't"
+                ),
+                false,
+            ),
+            None => (
+                format!(
+                    "tested, not proven: the prover's model disagreed with a real run on \
+                     {described}"
+                ),
+                false,
+            ),
+        },
+    }
+}
+
+/// What a proven block's proof covered, in a line, for `code`, main.s or main.wat, whose paths
+/// it followed through the machine code or the WebAssembly.
 #[allow(clippy::too_many_arguments)]
 fn proven_detail(
     block: &testfile::Generated,
@@ -2341,9 +2512,15 @@ fn proven_detail(
     cut_any_way: bool,
     unreached: &[String],
     induction: Option<(usize, usize)>,
+    code: &str,
 ) -> String {
+    let through = if code == WASM_CODE_FILE {
+        "the WebAssembly"
+    } else {
+        "the machine code"
+    };
     let mut detail = format!(
-        "proven for every input {} ({}, {} through the machine code), {}",
+        "proven for every input {} ({}, {} through {through}), {}",
         bound.as_ref().map_or_else(
             || "in range".to_owned(),
             |bound| {
