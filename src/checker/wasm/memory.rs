@@ -2,14 +2,15 @@
 //!
 //! The checker follows each value through each function: a region's address (from
 //! `global.get $x`), that address plus a number, a parameter (an address the caller lent, or a
-//! number), a plain number with the range the code's checks give it, or a value it doesn't
-//! follow (one loaded from memory). Functions are followed callees first, so each call knows
-//! what its callee does with what it's lent. Every access, and every buffer a call borrows, is
-//! then judged against its region:
+//! number), a plain number with the range the code's checks give it, a value it doesn't follow
+//! (one loaded from memory), or, where paths meet, one of several of these addresses, each
+//! kept. Functions are followed callees first, so each call knows what its callee does with
+//! what it's lent. Every access, and every buffer a call borrows, is then judged against its
+//! region, and one of several addresses against each region it may be in:
 //!
-//! - **M1, owners.** An address is a region's, or one a caller lent; never a plain number.
-//!   Regions start at 1024 or above, don't overlap and fit in the memory: the structure pass
-//!   checks that.
+//! - **M1, owners.** An address is a region's, or one a caller lent; never a plain number, nor
+//!   two addresses added together. Regions start at 1024 or above, don't overlap and fit in the
+//!   memory: the structure pass checks that.
 //! - **M2, bounds.** An access at a constant offset stays inside its region, through every width
 //!   from 1 to 16 bytes; one with a computed index is rule 9's, held to the same bounds.
 //! - **M3, lifetimes.** Locals can't be addressed and nothing is freed, so no address outlives
@@ -298,8 +299,10 @@ pub enum Value {
     },
     /// A value loaded from memory, or another the rules don't follow.
     Loaded,
-    /// Different kinds of value on different paths, or two addresses combined: `number` when it
-    /// may be a plain number.
+    /// One of several addresses, where paths meet: each owner's (a region's, a parameter's, or
+    /// one the rules don't follow) once, in their order.
+    Several(Vec<Value>),
+    /// Different kinds of value on different paths: `number` when it may be a plain number.
     Mixed {
         /// Whether it may be a plain number.
         number: bool,
@@ -316,9 +319,9 @@ pub enum Value {
 }
 
 impl Value {
-    /// Whether it's an address: a region's, or a parameter's.
+    /// Whether it's an address: a region's, a parameter's, or one of several.
     fn is_address(&self) -> bool {
-        matches!(self, Self::Address { .. } | Self::Param { .. })
+        matches!(self, Self::Address { .. } | Self::Param { .. } | Self::Several(_))
     }
 
     /// Whether it may be a plain number.
@@ -344,10 +347,72 @@ impl Value {
         match &mut self {
             Self::Number(range) => range.linear = None,
             Self::Address { offset, .. } | Self::Param { offset, .. } => offset.linear = None,
+            Self::Several(items) => {
+                for item in items.iter_mut() {
+                    *item = item.clone().stored();
+                }
+            }
             _ => {}
         }
         self
     }
+}
+
+/// The addresses `value` may be, each the address of one owner, when it's an address: a
+/// region's, a parameter's, or one the rules don't follow.
+fn addresses(value: &Value) -> Option<Vec<Value>> {
+    match value {
+        Value::Address { .. } | Value::Param { .. } | Value::Loaded => Some(vec![value.clone()]),
+        Value::Mixed { number: false } => Some(vec![Value::Loaded]),
+        Value::Several(items) => Some(items.clone()),
+        _ => None,
+    }
+}
+
+/// The addresses a value an access goes through may be: each of several, or itself.
+fn parts(value: &Value) -> &[Value] {
+    match value {
+        Value::Several(items) => items.as_slice(),
+        other => std::slice::from_ref(other),
+    }
+}
+
+/// Whose an address is, to keep each owner's once and in order: a region's, a parameter's, or
+/// one the rules don't follow.
+fn owner(value: &Value) -> (u8, usize) {
+    match value {
+        Value::Address { region, .. } => (0, *region),
+        Value::Param { param, .. } => (1, to_usize(*param)),
+        _ => (2, 0),
+    }
+}
+
+/// What a value is when it may be any of the addresses `a` or `b`: each owner's once, joined.
+fn several(a: Vec<Value>, b: Vec<Value>) -> Value {
+    let mut items = a;
+    for item in b {
+        match items.iter().position(|kept| owner(kept) == owner(&item)) {
+            Some(at) => {
+                let joined = join(&items[at], &item);
+                items[at] = joined;
+            }
+            None => items.push(item),
+        }
+    }
+    items.sort_by_key(owner);
+    match items.len() {
+        1 => items.pop().unwrap_or(Value::Loaded),
+        _ => Value::Several(items),
+    }
+}
+
+/// What `f` gives for each of `items`, joined: an operation on one of several addresses.
+fn each(items: &[Value], f: impl Fn(&Value) -> Value) -> Value {
+    items
+        .iter()
+        .map(f)
+        .reduce(|a, b| join(&a, &b))
+        .unwrap_or(Value::Mixed { number: true })
 }
 
 /// The smallest range both `a` and `b` are in.
@@ -402,8 +467,13 @@ pub fn join(a: &Value, b: &Value) -> Value {
             offset: offset_join(*offset, *also),
         },
         (Value::Float { nan }, Value::Float { nan: also }) => Value::Float { nan: *nan || *also },
-        _ => Value::Mixed {
-            number: a.may_be_number() || b.may_be_number(),
+        _ => match (addresses(a), addresses(b)) {
+            // Addresses of different owners: each kept, so an access through the value is judged
+            // against every region it may be in.
+            (Some(mine), Some(theirs)) => several(mine, theirs),
+            _ => Value::Mixed {
+                number: a.may_be_number() || b.may_be_number(),
+            },
         },
     }
 }
@@ -661,10 +731,25 @@ impl Slot {
     fn new(value: Value) -> Self {
         Self { value, local: None }
     }
+
+    /// `value`, as if read from the same local as this one: one of the addresses it may be.
+    fn with(&self, value: &Value) -> Self {
+        Self {
+            value: value.clone(),
+            local: self.local,
+        }
+    }
 }
 
 /// `a + b`, for numbers of `bits` bits.
 fn plus(a: &Slot, b: &Slot, bits: u32) -> Value {
+    // One of several addresses: each moved alike.
+    if let Value::Several(items) = &a.value {
+        return each(items, |item| plus(&a.with(item), b, bits));
+    }
+    if let Value::Several(items) = &b.value {
+        return each(items, |item| plus(a, &b.with(item), bits));
+    }
     let moved = |address: &Slot, other: &Slot| match &address.value {
         Value::Address { region, offset } => Value::Address {
             region: *region,
@@ -677,12 +762,22 @@ fn plus(a: &Slot, b: &Slot, bits: u32) -> Value {
         _ => Value::Mixed { number: false },
     };
     match (&a.value, &b.value) {
-        // A parameter added to another: the second is an index nothing checked.
+        // A parameter added to another, or to a region's address: the parameter is an index
+        // nothing checked.
         (Value::Param { param, offset }, Value::Param { .. }) => Value::Param {
             param: *param,
             offset: offset_plus(*offset, &Value::Loaded, b.local),
         },
-        (x, y) if x.is_address() && y.is_address() => Value::Mixed { number: false },
+        (Value::Address { region, offset }, Value::Param { .. }) => Value::Address {
+            region: *region,
+            offset: offset_plus(*offset, &Value::Loaded, b.local),
+        },
+        (Value::Param { .. }, Value::Address { region, offset }) => Value::Address {
+            region: *region,
+            offset: offset_plus(*offset, &Value::Loaded, a.local),
+        },
+        // Two regions' addresses added: a plain number, the address of neither.
+        (Value::Address { .. }, Value::Address { .. }) => Value::Number(Range::full()),
         (x, _) if x.is_address() => moved(a, b),
         (_, y) if y.is_address() => moved(b, a),
         (Value::Loaded, _) | (_, Value::Loaded) => Value::Loaded,
@@ -695,6 +790,13 @@ fn plus(a: &Slot, b: &Slot, bits: u32) -> Value {
 
 /// `a - b`, for numbers of `bits` bits.
 fn minus(a: &Slot, b: &Slot, bits: u32) -> Value {
+    // One of several addresses: each moved alike.
+    if let Value::Several(items) = &a.value {
+        return each(items, |item| minus(&a.with(item), b, bits));
+    }
+    if let Value::Several(items) = &b.value {
+        return each(items, |item| minus(a, &b.with(item), bits));
+    }
     match (&a.value, &b.value) {
         (
             Value::Address { region, offset },
@@ -1449,6 +1551,15 @@ fn widened(before: &Value, after: &Value) -> Value {
             param: *param,
             offset: offset_widened(*was, *offset),
         },
+        // One of several: each owner's grown past what it was.
+        (_, Value::Several(now)) => {
+            let was = addresses(before).unwrap_or_default();
+            let grown = now.iter().map(|item| {
+                let old = was.iter().find(|old| owner(old) == owner(item));
+                old.map_or_else(|| item.clone(), |old| widened(old, item))
+            });
+            Value::Several(grown.collect())
+        }
         _ => after.clone(),
     }
 }
@@ -2204,18 +2315,21 @@ impl Interpreter<'_, '_> {
 
 /// An address `by` bytes on, as a memory instruction's offset moves it.
 fn shifted(address: &Value, by: u64) -> Value {
-    let Some(by) = signed(by) else {
+    let Some(bytes) = signed(by) else {
         return Value::Mixed { number: false };
     };
     match address {
         Value::Address { region, offset } => Value::Address {
             region: *region,
-            offset: offset.shifted(by),
+            offset: offset.shifted(bytes),
         },
         Value::Param { param, offset } => Value::Param {
             param: *param,
-            offset: offset.shifted(by),
+            offset: offset.shifted(bytes),
         },
+        Value::Several(items) => {
+            Value::Several(items.iter().map(|item| shifted(item, by)).collect())
+        }
         other => other.clone(),
     }
 }
@@ -2248,6 +2362,8 @@ fn rebased(argument: Option<&Value>, offset: Offset) -> Value {
             param: *param,
             offset: add(*base),
         },
+        Some(Value::Several(items)) => each(items, |item| rebased(Some(item), offset)),
+        Some(Value::Loaded) => Value::Loaded,
         _ => Value::Mixed { number: true },
     }
 }
@@ -2450,12 +2566,6 @@ fn summarize(function: &Function<'_>, accesses: &[Access], returns: Option<Value
         ..Summary::default()
     };
     for access in accesses {
-        let Value::Param { param, offset } = &access.address else {
-            continue;
-        };
-        if function.params.get(to_usize(*param)) != Some(&ValType::I32) {
-            continue;
-        }
         let room = match &access.room {
             Room::Bytes(bytes) => Some(*bytes),
             Room::Length(length) => {
@@ -2464,43 +2574,54 @@ fn summarize(function: &Function<'_>, accesses: &[Access], returns: Option<Value
             }
             Room::Unsettled => None,
         };
-        let reach = match (offset.high, room) {
-            (Some(high), Some(room)) => u64::try_from(high)
-                .ok()
-                .and_then(|high| high.checked_add(room))
-                .map_or(Reach::Unsettled, Reach::Bytes),
-            _ => Reach::Unsettled,
-        };
-        let borrow = summary.borrows.entry(*param).or_insert(Borrow {
-            written: false,
-            reach: Reach::Bytes(0),
-        });
-        borrow.written |= access.written;
-        borrow.reach = borrow.reach.farther(reach);
+        // Each address the access may go through, of several.
+        for address in parts(&access.address) {
+            let Value::Param { param, offset } = address else {
+                continue;
+            };
+            if function.params.get(to_usize(*param)) != Some(&ValType::I32) {
+                continue;
+            }
+            let reach = match (offset.high, room) {
+                (Some(high), Some(room)) => u64::try_from(high)
+                    .ok()
+                    .and_then(|high| high.checked_add(room))
+                    .map_or(Reach::Unsettled, Reach::Bytes),
+                _ => Reach::Unsettled,
+            };
+            let borrow = summary.borrows.entry(*param).or_insert(Borrow {
+                written: false,
+                reach: Reach::Bytes(0),
+            });
+            borrow.written |= access.written;
+            borrow.reach = borrow.reach.farther(reach);
+        }
     }
     // A call that writes through one lent address while it reads another needs them apart.
     for written in accesses.iter().filter(|access| access.written) {
         for other in accesses {
-            let (
-                Value::Param { param, .. },
-                Value::Param {
-                    param: other_param, ..
-                },
-            ) = (&written.address, &other.address)
-            else {
+            let both_lent = written.argument.is_some() && other.argument.is_some();
+            if written.at != other.at || !both_lent || written.argument == other.argument {
                 continue;
-            };
-            if written.at == other.at
-                && written.argument.is_some()
-                && other.argument.is_some()
-                && written.argument != other.argument
-                && param != other_param
-            {
-                summary.apart.insert((*param, *other_param));
+            }
+            for mine in parts(&written.address).iter().filter_map(lent) {
+                for theirs in parts(&other.address).iter().filter_map(lent) {
+                    if mine != theirs {
+                        summary.apart.insert((mine, theirs));
+                    }
+                }
             }
         }
     }
     summary
+}
+
+/// The parameter an address is, when it's one a caller lent.
+fn lent(value: &Value) -> Option<u32> {
+    match value {
+        Value::Param { param, .. } => Some(*param),
+        _ => None,
+    }
 }
 
 /// Follows every function of main.wat, callees first.
@@ -2559,10 +2680,23 @@ pub fn judge(module: &Module<'_>, function: &Function<'_>, access: &Access) -> V
             (*offset, Some(region), format!("${}", region.name))
         }
         Value::Param { param, offset } => (*offset, None, function.local_shown(*param)),
+        // One of several addresses: judged as each of them, against each one's region.
+        Value::Several(items) => {
+            return items
+                .iter()
+                .flat_map(|item| {
+                    let one = Access {
+                        address: item.clone(),
+                        ..access.clone()
+                    };
+                    judge(module, function, &one)
+                })
+                .collect();
+        }
         Value::Loaded | Value::Mixed { number: false } => {
             return vec![Verdict::Unsettled(format!(
-                "{what} goes through an address loaded from memory, or one of several regions, \
-                 which the rules don't follow"
+                "{what} goes through an address loaded from memory, or another the rules don't \
+                 follow"
             ))];
         }
         Value::Mixed { number: true } => {
@@ -2692,9 +2826,12 @@ fn span(access: &Access) -> Option<(i64, i64)> {
     Some((offset.low?, offset.high?.checked_add(signed(room)?)?))
 }
 
-/// Whether `a` and `b` name the same region or the same lent address.
+/// Whether `a` and `b` may name the same region or the same lent address.
 fn same_owner(a: &Value, b: &Value) -> bool {
     match (a, b) {
+        (Value::Several(items), other) | (other, Value::Several(items)) => {
+            items.iter().any(|item| same_owner(item, other))
+        }
         (Value::Address { region, .. }, Value::Address { region: other, .. }) => region == other,
         (Value::Param { param, .. }, Value::Param { param: other, .. }) => param == other,
         _ => false,
