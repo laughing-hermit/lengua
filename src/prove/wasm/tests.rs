@@ -254,6 +254,65 @@ fn each_trap_ends_the_run_at_its_line() {
     }
 }
 
+/// Why the model refuses the module of `text`.
+fn refusal(text: &str) -> String {
+    let built = build(text).unwrap_or_else(|problem| panic!("{problem}: {text}"));
+    Module::new(&built, Policy::default())
+        .err()
+        .unwrap_or_else(|| panic!("the model took {text}"))
+}
+
+/// Imports that count WASI's values but aren't of its types, which the engine doesn't link:
+/// clock_time_get's precision and fd_seek's offset are 64 bits, and proc_exit's code 32.
+const MISTYPED: [&str; 3] = [
+    r#"(module
+  (import "wasi_snapshot_preview1" "clock_time_get"
+    (func $time (param i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))
+  (memory (export "memory") 1 1)
+  (func (export "_start")
+    (call $exit (call $time (i32.const 0) (i32.const 0) (i32.const 1024)))))
+"#,
+    r#"(module
+  (import "wasi_snapshot_preview1" "fd_seek"
+    (func $seek (param i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))
+  (memory (export "memory") 1 1)
+  (func (export "_start")
+    (call $exit (call $seek (i32.const 1) (i32.const -1) (i32.const 0) (i32.const 1024)))))
+"#,
+    r#"(module
+  (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i64)))
+  (memory (export "memory") 1 1)
+  (func (export "_start")
+    (call $exit (i64.const 0))))
+"#,
+];
+
+/// A table, and an element segment past its end, which the engine traps on as it starts the
+/// module.
+const TABLED: &str = r#"(module
+  (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))
+  (memory (export "memory") 1 1)
+  (table 1 funcref)
+  (func $f)
+  (elem (i32.const 1) $f)
+  (func (export "_start")
+    (call $exit (i32.const 0))))
+"#;
+
+/// What the engine doesn't start, or traps on as it starts it, the model refuses, so no proof of
+/// it holds: an import of another type than WASI's, and a table or an element segment.
+#[test]
+fn what_the_engine_doesnt_start_the_model_refuses() {
+    for text in MISTYPED {
+        let refused = refusal(text);
+        assert!(refused.contains("other than WASI's"), "{refused}");
+    }
+    let refused = refusal(TABLED);
+    assert!(refused.contains("a table"), "{refused}");
+}
+
 /// Reads a line with lengua's library and writes it back, as tests/host.rs's own case does.
 const LINE: &str = r#"(module
   (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))

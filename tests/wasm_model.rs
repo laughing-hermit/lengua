@@ -566,3 +566,67 @@ async fn the_model_does_what_the_engine_does_on_every_test_of_the_fixtures() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// A module that imports clock_time_get with a 32-bit precision, where WASI's is 64 bits.
+const NARROW_CLOCK: &str = r#"(module
+  (import "wasi_snapshot_preview1" "clock_time_get"
+    (func $time (param i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))
+  (memory (export "memory") 1 1)
+  (func (export "_start")
+    (call $exit (call $time (i32.const 0) (i32.const 0) (i32.const 1024)))))
+"#;
+
+/// A module that imports fd_seek with a 32-bit offset, where WASI's is 64 bits.
+const NARROW_SEEK: &str = r#"(module
+  (import "wasi_snapshot_preview1" "fd_seek"
+    (func $seek (param i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))
+  (memory (export "memory") 1 1)
+  (func (export "_start")
+    (call $exit (call $seek (i32.const 1) (i32.const -1) (i32.const 0) (i32.const 1024)))))
+"#;
+
+/// A module that imports proc_exit with a 64-bit code, where WASI's is 32 bits.
+const WIDE_EXIT: &str = r#"(module
+  (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i64)))
+  (memory (export "memory") 1 1)
+  (func (export "_start")
+    (call $exit (i64.const 0))))
+"#;
+
+/// A module with a table and an element segment past its end.
+const TABLED: &str = r#"(module
+  (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))
+  (memory (export "memory") 1 1)
+  (table 1 funcref)
+  (func $f)
+  (elem (i32.const 1) $f)
+  (func (export "_start")
+    (call $exit (i32.const 0))))
+"#;
+
+/// What the engine doesn't start, or traps on as it starts it, the model refuses: the model, which
+/// once ran each of these to an exit, can't prove what the engine never does.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_model_refuses_what_the_engine_doesnt_start() {
+    let pool = Pool::new(launcher(), None);
+    let policy = Policy {
+        clock: true,
+        files: true,
+        ..Policy::default()
+    };
+    for text in [NARROW_CLOCK, NARROW_SEEK, WIDE_EXIT, TABLED] {
+        let program = Program::of_text(text).unwrap_or_else(|problem| panic!("{problem}"));
+        let engine = pool
+            .run(&program, Spec::new(&[], &[], policy), Limits::default())
+            .await
+            .unwrap_or_else(|error| panic!("{error}: {text}"));
+        assert!(
+            !matches!(engine.end, End::Exited(0)),
+            "the engine ran it: {text}"
+        );
+        let model = Module::new(program.built(), policy);
+        assert!(model.is_err(), "the model took it: {text}");
+    }
+}
