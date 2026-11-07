@@ -127,14 +127,15 @@ refuses another system or CPU (on Linux, a glibc older than 2.39 too), naming th
 install script to use, clears macOS's download mark (with `--check` too), copies the plugin into
 a marketplace folder of lengua's own, `plugins` in lengua's data folder (or `--prefix`, where it
 replaces only an earlier install, which its `TARGET` file shows, and lengua's own
-`marketplace.json`), adds it
-to Claude Code with `claude plugin marketplace add` and `claude plugin install` when `claude` is
-installed, and runs `lengua-mcp doctor`: the server, the engine (compiling and running a module
-with every feature on), the CPU, both solvers and their pinned versions, whether the data folder
-and `PLUGIN_DATA` can be written, and the clock's resolution, one line each and what to do about a
-problem. CI's `release` mode builds each archive on its own runner, then installs it on a clean
-runner of the same system and CPU, runs doctor, and runs the release check
-(`tests/release_check.rs`): add from its idea to done through the archive's own server with
+`marketplace.json`), adds it to Claude Code with `claude plugin marketplace add` and `claude
+plugin install` when `claude` is installed, and runs `lengua-mcp doctor`: the server, the engine
+(compiling and running a module with every feature on), the CPU, both solvers and their pinned
+versions, whether the data folder and `PLUGIN_DATA` can be written, and the clock's resolution,
+one line each and what to do about a problem. CI's `release` mode builds each archive on its own
+runner, then installs it on a clean runner of the same system and CPU where the install script
+installs for any user (after holding it to keeping a `lengua` folder of someone else's that
+`--prefix` names), and runs doctor and the release check (`tests/release_check.rs`) with PATH
+cut to the system's own folders: add from its idea to done through the archive's own server with
 rmcp's client, run through `run` and from a shell, and attested. Nothing is published or signed.
 A test holds the crate's version and both manifests' to one. The server keeps its private data in
 `~/.local/share/lengua` (or `$XDG_DATA_HOME/lengua`): one signing key per user, shared by every
