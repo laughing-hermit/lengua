@@ -1,7 +1,17 @@
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: add
 description: Adds the two whole numbers in its arguments and prints the sum.
+runtime: webassembly
+computation: main.wat
+parameters:
+  - { name: a, type: integer, required: true, from: argument 1 }
+  - { name: b, type: integer, required: true, from: argument 2 }
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 A shell script can use this program to add two numbers. The program adds two whole numbers
