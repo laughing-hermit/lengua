@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 
 use wasmparser::{
     BlockType, CompositeInnerType, ConstExpr, ContType, DataKind, ExternalKind, FrameKind,
-    FuncType, KnownCustom, MemoryType, ModuleArity, Name, NameSectionReader, Operator, Parser,
-    Payload, RefType, SubType, TypeRef, ValType,
+    FuncType, KnownCustom, MemoryType, ModuleArity, Name, NameMap, NameSectionReader, Operator,
+    Parser, Payload, RefType, SubType, TypeRef, ValType,
 };
 use wast::Wat;
 use wast::core::{FuncKind, GlobalKind, ItemKind, MemoryKind, ModuleField, ModuleKind, TableKind};
@@ -324,6 +324,9 @@ pub struct Module<'a> {
     pub other_imports: Vec<(String, String, &'static str, Option<usize>)>,
     /// The regions its globals name.
     pub regions: Vec<Region>,
+    /// The names its name section gives besides functions', locals' and globals': what each
+    /// names, its index there, and the name.
+    pub other_names: Vec<(Named, u32, String)>,
     /// What its text says beside the code.
     pub notes: Notes,
     /// Its `;; unsafe:` … `;; end unsafe` blocks.
@@ -357,6 +360,41 @@ struct Places {
     start: Option<usize>,
 }
 
+/// What a name of the name section names, besides a function, a local or a global.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Named {
+    /// The module.
+    Module,
+    /// A type.
+    Type,
+    /// A table.
+    Table,
+    /// A memory.
+    Memory,
+    /// An element segment.
+    Element,
+    /// A tag.
+    Tag,
+    /// A block's label in the function of this index.
+    Label(u32),
+}
+
+impl Named {
+    /// How a report says what it is.
+    #[must_use]
+    pub fn shown(self) -> &'static str {
+        match self {
+            Self::Module => "the module",
+            Self::Type => "a type",
+            Self::Table => "a table",
+            Self::Memory => "a memory",
+            Self::Element => "an element segment",
+            Self::Tag => "a tag",
+            Self::Label(_) => "a label",
+        }
+    }
+}
+
 /// The names of the module's name section.
 #[derive(Debug, Default)]
 struct Names {
@@ -366,6 +404,8 @@ struct Names {
     locals: BTreeMap<u32, BTreeMap<u32, String>>,
     /// Globals'.
     globals: BTreeMap<u32, String>,
+    /// The others: what each names, its index there, and the name.
+    others: Vec<(Named, u32, String)>,
 }
 
 impl Names {
@@ -393,8 +433,28 @@ impl Names {
                         self.globals.insert(naming.index, naming.name.to_owned());
                     }
                 }
+                Name::Label(map) => {
+                    for function in map.flatten() {
+                        self.other(Named::Label(function.index), function.names);
+                    }
+                }
+                Name::Module { name, .. } => {
+                    self.others.push((Named::Module, 0, name.to_owned()));
+                }
+                Name::Type(map) => self.other(Named::Type, map),
+                Name::Table(map) => self.other(Named::Table, map),
+                Name::Memory(map) => self.other(Named::Memory, map),
+                Name::Element(map) => self.other(Named::Element, map),
+                Name::Tag(map) => self.other(Named::Tag, map),
                 _ => {}
             }
+        }
+    }
+
+    /// Keeps the names `map` gives to what it names, each `named`.
+    fn other(&mut self, named: Named, map: NameMap<'_>) {
+        for naming in map.flatten() {
+            self.others.push((named, naming.index, naming.name.to_owned()));
         }
     }
 }
@@ -976,6 +1036,7 @@ impl<'a> Module<'a> {
             customs,
             other_imports,
             regions,
+            other_names: names.others,
             notes,
             unsafe_blocks,
             unsafe_marks,

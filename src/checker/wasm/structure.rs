@@ -3,13 +3,14 @@
 //! that the idea allows too) and exports (only `_start` and `memory`); no start function, tables
 //! or element segments; one memory sized once; its regions by the convention (`$x`, an immutable
 //! i32 global, with `$x.size` or `$x.rosize`), from 1024 up, apart and inside the memory; data
-//! only inside read-only regions; no `memory.grow`; and none of the names lengua keeps.
+//! only inside read-only regions; no `memory.grow`; none of the names lengua keeps, on anything
+//! the module names; and no reference types, which the engine takes for other toolchains alone.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use wasmparser::{ExternalKind, Operator, ValType};
+use wasmparser::{BlockType, CompositeInnerType, ExternalKind, Operator, ValType};
 
-use super::model::{FIRST_ADDRESS, Function, Kind, Module, Region};
+use super::model::{FIRST_ADDRESS, Function, Kind, Module, Named, Region, to_usize};
 use crate::checker::{Rule, Violation};
 use crate::edge::Allowance;
 use crate::wasm::Policy;
@@ -620,12 +621,15 @@ impl Checker<'_, '_, '_> {
     }
 
     /// The names lengua keeps: its library's functions, which main.wat calls and never defines,
-    /// and every name that starts with `$lengua.`.
+    /// and every name that starts with `$lengua.`, whatever it names.
     fn reserved(&mut self) {
         let module = self.module;
         for function in &module.functions {
             if !matches!(function.kind, Kind::Own | Kind::Import) {
                 continue;
+            }
+            for name in function.local_names.values() {
+                self.kept(name, "a local", function.line);
             }
             let Some(name) = function.name.as_deref() else {
                 continue;
@@ -641,6 +645,117 @@ impl Checker<'_, '_, '_> {
                     ),
                 );
             }
+        }
+        for global in &module.globals {
+            if let Some(name) = &global.name {
+                self.kept(name, "a global", global.line);
+            }
+        }
+        for (named, index, name) in &module.other_names {
+            let line = match named {
+                Named::Memory => module
+                    .memories
+                    .get(to_usize(*index))
+                    .and_then(|memory| memory.line),
+                Named::Table => module.tables.get(to_usize(*index)).copied().flatten(),
+                Named::Element => module.elements.get(to_usize(*index)).copied().flatten(),
+                Named::Label(function) => match module.function(*function) {
+                    Some(function) if function.kind == Kind::Own => function.line,
+                    // The library's labels are lengua's own.
+                    _ => continue,
+                },
+                Named::Module | Named::Type | Named::Tag => None,
+            };
+            self.kept(name, named.shown(), line);
+        }
+    }
+
+    /// The dialect: a name `name` main.wat gives to `what`, on `line`, doesn't start with
+    /// `$lengua.`.
+    fn kept(&mut self, name: &str, what: &str, line: Option<usize>) {
+        if name.starts_with(RESERVED) {
+            self.violation(
+                Rule::Dialect,
+                line,
+                format!(
+                    "main.wat names {what} ${name}, but names that start with `$lengua.` are \
+                     lengua's"
+                ),
+                "give it another name",
+            );
+        }
+    }
+
+    /// The dialect: no reference types, which the engine takes only for the tables of other
+    /// languages' toolchains; a program has no tables, so a reference names nothing it may use.
+    fn references(&mut self) {
+        let module = self.module;
+        let fix = "keep to numbers and vectors: a program has no tables, and no references";
+        let reference = |ty: &ValType| matches!(ty, ValType::Ref(_));
+        for function in module.own() {
+            let typed = function
+                .params
+                .iter()
+                .chain(&function.results)
+                .chain(&function.locals)
+                .any(reference);
+            if typed {
+                self.violation(
+                    Rule::Dialect,
+                    function.line,
+                    format!("{} takes, gives or keeps a reference", function.shown()),
+                    fix,
+                );
+            }
+            for op in &function.body {
+                let what = match &op.operator {
+                    Operator::RefNull { .. } => "`ref.null`",
+                    Operator::RefIsNull => "`ref.is_null`",
+                    Operator::RefFunc { .. } => "`ref.func`",
+                    Operator::TypedSelect { ty } if reference(ty) => "a `select` of references",
+                    Operator::Block { blockty }
+                    | Operator::Loop { blockty }
+                    | Operator::If { blockty }
+                        if self.block_references(*blockty) =>
+                    {
+                        "a block of references"
+                    }
+                    _ => continue,
+                };
+                self.violation(
+                    Rule::Dialect,
+                    op.line,
+                    format!("{what} uses a reference, which the dialect doesn't have"),
+                    fix,
+                );
+            }
+        }
+        for global in module.globals.iter().filter(|global| reference(&global.ty)) {
+            self.violation(
+                Rule::Dialect,
+                global.line,
+                format!("{} holds a reference", global.shown()),
+                fix,
+            );
+        }
+    }
+
+    /// Whether a block of type `ty` takes or gives a reference.
+    fn block_references(&self, ty: BlockType) -> bool {
+        let module = self.module;
+        let reference = |ty: &ValType| matches!(ty, ValType::Ref(_));
+        match ty {
+            BlockType::Empty => false,
+            BlockType::Type(ty) => reference(&ty),
+            BlockType::FuncType(index) => module
+                .sub_types
+                .get(to_usize(index))
+                .is_some_and(|sub| match &sub.composite_type.inner {
+                    CompositeInnerType::Func(func) => {
+                        func.params().iter().chain(func.results()).any(reference)
+                    }
+                    _ => false,
+                }),
         }
     }
 }
@@ -658,4 +773,5 @@ pub fn check(module: &Module<'_>, built: &Built, policy: &Policy, violations: &m
     checker.regions();
     checker.data();
     checker.reserved();
+    checker.references();
 }
