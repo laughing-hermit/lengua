@@ -58,7 +58,8 @@ provably unneeded. A template uses no unsafe block; neither should a program tha
   keeps, the longest line it prints. One byte past a limit is how a program sees input that is
   too long: the tally's `$input` holds `1048577` bytes for a limit of `1048576`.
 - **Place them apart**, each starting at or after the end of the one before, and align large ones
-  to 64 bytes. Write the addresses out: a global's value is a constant, never an expression.
+  to 64 bytes ([caches.md](caches.md) says more of laying them out for the CPU's caches). Write
+  the addresses out: a global's value is a constant, never an expression.
 - **Writable memory starts at zero**, and a writable region can't hold data. So choose 0 as the
   mark of "nothing yet": the server's free slot is descriptor 0, which no connection is.
 - **One owner each.** A writable region that one function uses (`global.get $x`) needs nothing
@@ -279,7 +280,10 @@ with a fix:
   same bytes; a call path too deep for the engine's stack;
 - the trapping float-to-integer conversions (use `trunc_sat`), `reinterpret` of a float that may
   be NaN, a division whose divisor may be 0, relaxed SIMD, atomics, reference types, annotations;
-- a function never called, a local or a constant never read, and code that never runs.
+- a function never called, a local or a constant never read, and code that never runs;
+- for an idea with a `- Secret:` line, a secret that decides a branch, a `select`, an address, a
+  length, a loop's count, a division or a float operation, or reaches a host call but as the bytes
+  it writes out: [constant-time.md](constant-time.md) says what to write instead.
 
 What the rules can't settle, such as an address loaded from memory or what `args_get` writes, is
 left to the proof, which `check` reports with the rest.
