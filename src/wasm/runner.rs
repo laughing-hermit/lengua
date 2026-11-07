@@ -98,21 +98,35 @@ pub struct Executed {
     pub problem: Option<String>,
 }
 
+/// Where `error` stopped the program: each frame's offset in its module, the innermost first, as
+/// far as the engine kept them (its 20 innermost).
+fn offsets_of(error: &wasmtime::Error) -> Vec<u64> {
+    error
+        .downcast_ref::<WasmBacktrace>()
+        .map(|trace| {
+            trace
+                .frames()
+                .iter()
+                .filter_map(wasmtime::FrameInfo::module_offset)
+                .filter_map(|offset| u64::try_from(offset).ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// How a run that stopped with `error` ended, and what lengua has to say of it.
 fn ending_of(error: &wasmtime::Error) -> (Ending, Option<String>) {
-    let offset = error
-        .downcast_ref::<WasmBacktrace>()
-        .and_then(|trace| trace.frames().first())
-        .and_then(wasmtime::FrameInfo::module_offset)
-        .and_then(|offset| u64::try_from(offset).ok());
     if let Some(stop) = error.downcast_ref::<Stop>() {
         return match stop {
             Stop::Exit(code) => (Ending::Exited(*code), None),
             Stop::OutputTooLarge => (Ending::OutputTooLarge, None),
             Stop::TimedOut => (Ending::TimedOut, None),
             Stop::Stopped => (Ending::Stopped, None),
-            Stop::OutsideMemory => (Ending::Trapped(Trap::OutOfBounds, offset), None),
-            Stop::NoMemory => (Ending::Trapped(Trap::Other, offset), Some(stop.to_string())),
+            Stop::OutsideMemory => (Ending::Trapped(Trap::OutOfBounds, offsets_of(error)), None),
+            Stop::NoMemory => (
+                Ending::Trapped(Trap::Other, offsets_of(error)),
+                Some(stop.to_string()),
+            ),
         };
     }
     if let Some(trap) = error.downcast_ref::<wasmtime::Trap>() {
@@ -131,10 +145,10 @@ fn ending_of(error: &wasmtime::Error) -> (Ending, Option<String>) {
             | wasmtime::Trap::BadSignature => Trap::IndirectCall,
             _ => Trap::Other,
         };
-        return (Ending::Trapped(kind, offset), None);
+        return (Ending::Trapped(kind, offsets_of(error)), None);
     }
     (
-        Ending::Trapped(Trap::Other, offset),
+        Ending::Trapped(Trap::Other, offsets_of(error)),
         Some(format!("{error:#}")),
     )
 }
@@ -377,21 +391,22 @@ pub fn done(id: u64, executed: Executed, connections: Vec<Reached>) -> Done {
     }
 }
 
-/// How a run went, as the runner says it: `line` gives main.wat's line of a trap's offset, and
-/// `left` is what the run left in its working folder.
+/// How a run went, as the runner says it: `line` gives main.wat's line of an offset in its own
+/// code, which places a trap at its innermost frame there, and `left` is what the run left in its
+/// working folder.
 #[must_use]
 pub fn run_of(done: Done, left: Left, line: impl Fn(u64) -> Option<usize>) -> Run {
+    let instructions = match done.ending {
+        Ending::Exited(_) | Ending::Trapped(..) => done.instructions,
+        _ => None,
+    };
     let end = match done.ending {
         Ending::Exited(code) => End::Exited(code),
         Ending::TimedOut => End::TimedOut,
         Ending::OutputTooLarge => End::OutputTooLarge,
         Ending::Stopped => End::Stopped,
-        Ending::Trapped(trap, offset) => End::Trapped(trap, offset.and_then(line)),
+        Ending::Trapped(trap, offsets) => End::Trapped(trap, offsets.into_iter().find_map(line)),
         Ending::Unstarted => End::Exited(UNSTARTED),
-    };
-    let instructions = match done.ending {
-        Ending::Exited(_) | Ending::Trapped(..) => done.instructions,
-        _ => None,
     };
     let (files, folders) = left;
     Run {
