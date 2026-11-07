@@ -33,11 +33,17 @@ fn asset(name: &str) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))
 }
 
-/// A seed drawn afresh, as `check` draws one for each check: a failure names it.
+/// The seed the generated tests draw from: the one `LENGUA_RANDOM_SEED` names, to run a failure
+/// again, or else one drawn afresh, as `check` draws one for each check. A failure names it.
 fn seed() -> u64 {
-    let mut bytes = [0_u8; 8];
-    getrandom::fill(&mut bytes).expect("random bytes for a seed");
-    u64::from_le_bytes(bytes)
+    std::env::var("LENGUA_RANDOM_SEED")
+        .ok()
+        .and_then(|seed| seed.parse().ok())
+        .unwrap_or_else(|| {
+            let mut bytes = [0_u8; 8];
+            getrandom::fill(&mut bytes).expect("random bytes for a seed");
+            u64::from_le_bytes(bytes)
+        })
 }
 
 /// Checks the template `code`, made from the idea `idea_file`, from its idea to its tests, and
@@ -71,19 +77,23 @@ async fn template(pool: &Pool, code: &str, idea_file: &str) -> Result<usize, Str
         ));
     }
     let program = Program::new(built).map_err(|error| format!("its module isn't kept: {error}"))?;
+    let seed = seed();
     let outcome = lengua::testrun::run_wasm_tests(
         &suite,
         pool,
         Arc::new(program),
-        seed(),
+        seed,
         &idea.uses,
         &idea.network,
         lengua::testrun::workers(idea.threads),
     )
     .await
-    .map_err(|error| format!("its tests couldn't run: {error}"))?;
+    .map_err(|error| format!("its tests couldn't run (seed {seed}): {error}"))?;
     if !outcome.passed() {
-        return Err(format!("its tests failed: {}", outcome.failures.join("; ")));
+        return Err(format!(
+            "its tests failed with seed {seed}, which LENGUA_RANDOM_SEED={seed} repeats: {}",
+            outcome.failures.join("; ")
+        ));
     }
     if outcome.runs == 0 {
         return Err(format!("{idea_file} gave it no test to run"));
