@@ -103,15 +103,12 @@ Which kernel Lima's Ubuntu 24.04 boots is not checked yet. On Ubuntu 24.04's sto
 lengua runs every program but refuses those that use the network, below the 6.12 floor, until
 round 3 settles the floor ([todo.md](todo.md), "Round 3").
 
-**One package, tested where it runs.** Every route ends in the same Ubuntu 24.04, so lengua ships as
-one package for it, an archive for each CPU, whose install script will run the same steps CI runs
-on the runners, with the same pinned tools (planned: [todo.md](todo.md), "Round 3"). CI tests that
-package on clean Ubuntu 24.04 runners of both CPUs. Only the kernels under WSL 2 and Lima differ,
-and everything is tested on GitHub's runners, so each route is promised once a runner has run
-lengua's checks inside it: WSL 2 on a Windows runner, and the Ubuntu cloud image Lima boots on a
-Mac, which the Linux runners can boot too. Until then the Windows and Mac routes are documented,
-not yet tested; a probe is reading their kernels first. Native macOS and Windows ports are
-deferred ("Deferred" there).
+**These routes are for `main.s`.** They bring the Linux that a native `main.s` program needs. A
+`main.wat` program, which every Attested Computation compiles to, runs on macOS and Windows
+themselves: lengua's release archive for each of the five systems and CPUs it is built for holds
+the plugin, its server and both solvers, and CI installs and checks each archive on a clean
+runner of its own system and CPU ("Build" below). The rest of this README, written for the
+native product, waits for its rewrite in W15 ([ROADMAP.md](ROADMAP.md)).
 
 **Containers, later.** A container image of the same package may come later, for dev containers,
 Codespaces or an agent that must stay on the Windows or Mac side: run by a working Docker (a
