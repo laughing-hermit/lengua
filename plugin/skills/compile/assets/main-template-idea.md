@@ -1,7 +1,16 @@
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: negate
 description: Prints the negative of the whole number in its argument.
+runtime: webassembly
+computation: main.wat
+parameters:
+  - { name: n, type: integer, required: true, from: argument 1 }
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 A shell script can use this program to negate a number. It reads one whole number between `-9223372036854775807`
