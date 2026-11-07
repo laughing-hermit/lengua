@@ -68,7 +68,10 @@ async fn template(pool: &Pool, code: &str, idea_file: &str) -> Result<usize, Str
         },
     );
     if !report.passed() {
-        return Err(format!("it breaks the rules: {}", report.lines().join("; ")));
+        return Err(format!(
+            "it breaks the rules: {}",
+            report.lines().join("; ")
+        ));
     }
     if !report.unsafe_blocks.is_empty() {
         return Err(format!(
