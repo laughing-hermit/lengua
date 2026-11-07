@@ -31,7 +31,7 @@ use crate::graph;
 use crate::hash::Sha256Hex;
 use crate::idea::{self, Idea, Use};
 use crate::lock::{self, CodeStamp, Key};
-use crate::platform::Machine;
+use crate::platform::{Cache, CacheHolds, Machine};
 use crate::prove::{self, Verdict};
 use crate::runner::{End, Limits};
 use crate::state::{CODE_FILE, IDEA_FILE, ProgramFolder, State, WASM_CODE_FILE};
@@ -375,8 +375,9 @@ fn dialect_features() -> Vec<&'static str> {
 }
 
 /// The machine in one line for main.wat: this computer and its cores, the CPU the engine compiles
-/// main.wat for, with how wide its vectors go, and the engine, with the WebAssembly features
-/// main.wat may use. No LLVM and no CPU target: one module runs on every computer.
+/// main.wat for, with how wide its vectors go, the engine, with the WebAssembly features main.wat
+/// may use, and the CPU's caches as the system describes them. No LLVM and no CPU target: one
+/// module runs on every computer.
 pub(super) fn machine_line(machine: &Machine) -> String {
     let cpu = machine.cpu_model.as_deref().map_or_else(
         || format!("its {} CPU", machine.arch),
@@ -384,14 +385,63 @@ pub(super) fn machine_line(machine: &Machine) -> String {
     );
     format!(
         "{}-{}, {}; Wasmtime {} compiles main.wat with Cranelift for {cpu} whose vectors go up \
-         to {}; main.wat is WebAssembly 1.0 with {}, and no tables or references",
+         to {}; main.wat is WebAssembly 1.0 with {}, and no tables or references; {}",
         machine.os,
         machine.arch,
         counted(machine.cores, "core"),
         engine::ENGINE_VERSION,
         simd_level(machine),
         listed(&dialect_features()),
+        caches_text(&machine.caches),
     )
+}
+
+/// The CPU's caches in words, as the system describes them: each level that holds data, with its
+/// size, and the size of its lines, which the compile skill's references/caches.md lays work out
+/// for. Instruction caches aren't named, and neither is a level the system doesn't describe.
+fn caches_text(caches: &[Cache]) -> String {
+    let named: Vec<&Cache> = caches
+        .iter()
+        .filter(|cache| cache.holds != CacheHolds::Instructions)
+        .collect();
+    if named.is_empty() {
+        return "the system describes none of the CPU's caches".to_owned();
+    }
+    let one_line = named.windows(2).all(|pair| pair[0].line == pair[1].line);
+    let each: Vec<String> = named
+        .iter()
+        .map(|cache| {
+            let holds = if cache.holds == CacheHolds::Data {
+                " data"
+            } else {
+                ""
+            };
+            let line = match cache.line {
+                Some(line) if !one_line => format!(" in {line}-byte lines"),
+                _ => String::new(),
+            };
+            format!("L{}{holds} {}{line}", cache.level, bytes_text(cache.bytes))
+        })
+        .collect();
+    let shown: Vec<&str> = each.iter().map(String::as_str).collect();
+    let lines = match named.first().and_then(|cache| cache.line) {
+        Some(line) if one_line => format!(", in {line}-byte lines"),
+        _ => String::new(),
+    };
+    format!("the CPU's caches are {}{lines}", listed(&shown))
+}
+
+/// `bytes` in the largest unit that holds them whole: `48 KiB`, `2 MiB`, or bytes.
+fn bytes_text(bytes: u64) -> String {
+    const KIB: u64 = 1 << 10;
+    const MIB: u64 = 1 << 20;
+    if bytes >= MIB && bytes.is_multiple_of(MIB) {
+        format!("{} MiB", bytes / MIB)
+    } else if bytes >= KIB && bytes.is_multiple_of(KIB) {
+        format!("{} KiB", bytes / KIB)
+    } else {
+        format!("{bytes} bytes")
+    }
 }
 
 /// The next step after main.wat's own problems.
@@ -1625,6 +1675,55 @@ mod tests {
         );
         assert!(
             !line.contains("reference-types") && !line.contains("mutable-global"),
+            "{line}"
+        );
+    }
+
+    /// The machine line names the caches the system describes, each level that holds data with
+    /// its size, and the size of the lines; and none the system doesn't describe.
+    #[test]
+    fn the_machine_line_names_the_caches_the_system_describes() {
+        let cache = |level, holds, bytes, line| Cache {
+            level,
+            holds,
+            bytes,
+            line,
+        };
+        let described = [
+            cache(1, CacheHolds::Instructions, 32 << 10, Some(64)),
+            cache(1, CacheHolds::Data, 48 << 10, Some(64)),
+            cache(2, CacheHolds::Both, 2 << 20, Some(64)),
+            cache(3, CacheHolds::Both, 36 << 20, Some(64)),
+        ];
+        assert_eq!(
+            caches_text(&described),
+            "the CPU's caches are L1 data 48 KiB, L2 2 MiB and L3 36 MiB, in 64-byte lines"
+        );
+        let apple = [
+            cache(1, CacheHolds::Data, 128 << 10, Some(128)),
+            cache(2, CacheHolds::Both, 16 << 20, Some(128)),
+        ];
+        assert_eq!(
+            caches_text(&apple),
+            "the CPU's caches are L1 data 128 KiB and L2 16 MiB, in 128-byte lines"
+        );
+        let mixed = [
+            cache(1, CacheHolds::Data, 1280 << 10, Some(64)),
+            cache(2, CacheHolds::Both, 3 << 19, None),
+        ];
+        assert_eq!(
+            caches_text(&mixed),
+            "the CPU's caches are L1 data 1280 KiB in 64-byte lines and L2 1536 KiB"
+        );
+        assert_eq!(
+            caches_text(&[]),
+            "the system describes none of the CPU's caches"
+        );
+        assert_eq!(bytes_text(100), "100 bytes");
+        let machine = Machine::detect();
+        let line = machine_line(&machine);
+        assert!(
+            line.ends_with(&format!("; {}", caches_text(&machine.caches))),
             "{line}"
         );
     }
