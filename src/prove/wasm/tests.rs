@@ -485,8 +485,7 @@ fn a_listing_is_taken_in_both_orders() {
         ("b".to_owned(), exec::bytes(&mut pool, b"2")),
     ]);
     let start = begin(&module, &mut pool, &[], &[], Vec::new()).with_files(given);
-    let runs =
-        exec::explore(&module, start, &mut pool, &mut exec::Concrete, 4).expect("the runs");
+    let runs = exec::explore(&module, start, &mut pool, &mut exec::Concrete, 4).expect("the runs");
     // The first entry's name, after its 24-byte head: `a` sorted, `b` turned round.
     let mut first: Vec<Option<u128>> = runs
         .iter()
