@@ -29,7 +29,11 @@ fn doctor_of(
     path: Option<&str>,
 ) -> (Option<i32>, String) {
     let mut command = Command::new(server);
-    command.arg("--data-dir").arg(data).arg("doctor");
+    command
+        .arg("--data-dir")
+        .arg(data)
+        .arg("doctor")
+        .env_remove("CLAUDE_PLUGIN_DATA");
     match plugin_data {
         Some(folder) => command.env("PLUGIN_DATA", folder),
         None => command.env_remove("PLUGIN_DATA"),

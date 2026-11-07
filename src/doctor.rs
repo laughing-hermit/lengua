@@ -322,7 +322,7 @@ fn data_folder(data_dir: Option<&DataDir>) -> Finding {
 /// `PLUGIN_DATA`, the folder an agent harness gives the plugin, where lengua keeps compiled
 /// modules as [`engine::cache_folder`] does: whether it can be written.
 fn plugin_data() -> Finding {
-    let Some(value) = std::env::var_os("PLUGIN_DATA") else {
+    let Some(value) = crate::wasm::engine::plugin_data() else {
         return Finding::fine(
             "PLUGIN_DATA: not set, so compiled modules are kept in the data folder".to_owned(),
         );

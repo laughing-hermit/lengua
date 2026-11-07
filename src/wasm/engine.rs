@@ -187,12 +187,19 @@ fn tick(engine: &Engine) {
     }
 }
 
-/// Where compiled modules are kept: `$PLUGIN_DATA/cache` when the agent's harness gives the
-/// plugin a data folder, else the `cache` folder of lengua's own. The lock's signing key stays
-/// in lengua's own folder either way.
+/// The data folder the agent's harness gives the plugin, when it gives one: `PLUGIN_DATA`, as
+/// Agent Plugins names it, or else `CLAUDE_PLUGIN_DATA`, as Claude Code sets it.
+#[must_use]
+pub fn plugin_data() -> Option<std::ffi::OsString> {
+    std::env::var_os("PLUGIN_DATA").or_else(|| std::env::var_os("CLAUDE_PLUGIN_DATA"))
+}
+
+/// Where compiled modules are kept: the `cache` folder of the plugin's data folder when the
+/// agent's harness gives one ([`plugin_data`]), else the `cache` folder of lengua's own. The
+/// lock's signing key stays in lengua's own folder either way.
 #[must_use]
 pub fn cache_folder(data_dir: &crate::data_dir::DataDir) -> PathBuf {
-    match std::env::var_os("PLUGIN_DATA")
+    match plugin_data()
         .map(PathBuf::from)
         .filter(|folder| folder.is_absolute())
     {
@@ -342,7 +349,7 @@ mod tests {
     fn compiled_modules_are_kept_in_the_data_folders_cache() {
         let folder = tempfile::tempdir().expect("a folder");
         let data_dir = crate::data_dir::DataDir::new(folder.path().join("data"));
-        if std::env::var_os("PLUGIN_DATA").is_none() {
+        if plugin_data().is_none() {
             assert_eq!(
                 cache_folder(&data_dir),
                 folder.path().join("data").join("cache")

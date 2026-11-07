@@ -130,7 +130,7 @@ replaces only an earlier install, which its `TARGET` file shows, and lengua's ow
 `marketplace.json`), adds it to Claude Code with `claude plugin marketplace add` and `claude
 plugin install` when `claude` is installed, and runs `lengua-mcp doctor`: the server, the engine
 (compiling and running a module with every feature on), the CPU, both solvers and their pinned
-versions, whether the data folder and `PLUGIN_DATA` can be written, and the clock's resolution,
+versions, whether the data folder and the plugin's own (`PLUGIN_DATA`, or `CLAUDE_PLUGIN_DATA` as Claude Code names it) can be written, and the clock's resolution,
 one line each and what to do about a problem. CI's `release` mode builds each archive on its own
 runner, then installs it on a clean runner of the same system and CPU where the install script
 installs for any user (after holding it to keeping a `lengua` folder of someone else's that
