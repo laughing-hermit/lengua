@@ -5,7 +5,8 @@
 //!   from one in its folder only in case or normalization is refused with `EXIST`;
 //! - names are byte-exact: a name that a case-insensitive system would take as another's, such
 //!   as `README.TXT` for `readme.txt`, isn't found, as on Linux;
-//! - no path leads through a link or out of the folder: either is `ACCES`;
+//! - no path leads out of the folder, which is `NOTCAPABLE` (the compile skill's host.md), or
+//!   through a link, which is `ACCES`;
 //! - a file or folder the program holds open isn't renamed or removed: `BUSY`;
 //! - a folder lists sorted by name, turned round in a test's second run, without `.` and `..`;
 //! - a write that takes a file past its limit, or the files past their total, is cut short and
@@ -154,8 +155,8 @@ fn broken_errno(number: i64) -> u16 {
 ///
 /// # Errors
 ///
-/// A rule of every system's names it breaks, `NOENT` for an empty path, and `ACCES` for one that
-/// starts at the root or climbs out of the working folder.
+/// A rule of every system's names it breaks, `NOENT` for an empty path, and `NOTCAPABLE` for one
+/// that starts at the root or climbs out of the working folder.
 pub fn names_in(base: &[String], text: &[u8]) -> Result<Vec<String>, u16> {
     if text.is_empty() {
         return Err(errno::NOENT);
@@ -165,7 +166,7 @@ pub fn names_in(base: &[String], text: &[u8]) -> Result<Vec<String>, u16> {
     }
     let text = std::str::from_utf8(text).map_err(|_| errno::ILSEQ)?;
     if text.starts_with('/') {
-        return Err(errno::ACCES);
+        return Err(errno::NOTCAPABLE);
     }
     let mut names = base.to_vec();
     for name in text.split('/') {
@@ -173,7 +174,7 @@ pub fn names_in(base: &[String], text: &[u8]) -> Result<Vec<String>, u16> {
             "" | "." => {}
             ".." => {
                 if names.pop().is_none() {
-                    return Err(errno::ACCES);
+                    return Err(errno::NOTCAPABLE);
                 }
             }
             other => names.push(other.to_owned()),
@@ -776,8 +777,8 @@ mod tests {
             Ok(vec!["a".to_owned(), "c".to_owned()])
         );
         assert_eq!(names(&["sub"], "../x"), Ok(vec!["x".to_owned()]));
-        assert_eq!(names(&[], "../x"), Err(errno::ACCES));
-        assert_eq!(names(&[], "/etc/passwd"), Err(errno::ACCES));
+        assert_eq!(names(&[], "../x"), Err(errno::NOTCAPABLE));
+        assert_eq!(names(&[], "/etc/passwd"), Err(errno::NOTCAPABLE));
         assert_eq!(names(&[], "."), Ok(Vec::new()));
         assert_eq!(names(&[], ""), Err(errno::NOENT));
     }
