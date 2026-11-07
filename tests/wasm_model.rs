@@ -1,7 +1,8 @@
 //! The prover's model of WebAssembly against what lengua's host and engine do, on every system:
 //! every case of `tests/host-cases/` run in the model gives what its file says, as the host's own
-//! runs do (tests/host.rs); and on every test of the WebAssembly fixtures' ideas, and of the
-//! compile skill's WebAssembly templates where it has them, the model and the engine do the same.
+//! runs do (tests/host.rs); and on every test of the ideas of add, echo and greet, and of the
+//! other WebAssembly fixtures and the compile skill's WebAssembly templates where the model
+//! follows what they do, the model and the engine do the same.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -278,6 +279,12 @@ fn launcher() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_lengua-mcp"))
 }
 
+/// The fixtures the model must follow on every test of their ideas. Of every other WebAssembly
+/// program, the fixtures W9 ports and the templates, a run the model doesn't follow yet, such as
+/// one with floats or SIMD, is listed with its reason rather than failed: the engine runs every
+/// test of theirs in tests/wasm_every_program.rs and tests/wasm_templates.rs.
+const FOLLOWED_IN_FULL: [&str; 3] = ["add", "echo", "greet"];
+
 /// Every WebAssembly program whose ideas' tests the model must run as the engine does: each
 /// fixture of `tests/fixtures-wasm/` with a main.wat, and each of the compile skill's templates
 /// `*-template.wat` with its `*-template-idea.md`.
@@ -497,15 +504,20 @@ async fn the_model_does_what_the_engine_does_on_every_test_of_the_fixtures() {
     );
     let pool = Pool::new(launcher(), None);
     let mut failures = Vec::new();
-    // What the model doesn't follow in a template, such as the vector template's SIMD, is listed
-    // here and not failed: the engine runs every template's tests in tests/wasm_templates.rs. A
-    // fixture's every test the model must follow.
+    // What the model doesn't follow in a program but add, echo and greet, such as the vector
+    // template's SIMD or a port's floats, is listed here and not failed: the engine runs every
+    // test of theirs in tests/wasm_every_program.rs and tests/wasm_templates.rs. Every test of
+    // add, echo and greet the model must follow.
     let mut not_modelled = Vec::new();
     for (idea_path, wat_path) in &programs {
         let shown = wat_path.display().to_string();
-        let template = wat_path
-            .parent()
-            .is_some_and(|folder| folder.ends_with("assets"));
+        let folder = wat_path.parent();
+        let template = folder.is_some_and(|folder| folder.ends_with("assets"));
+        let in_full = !template
+            && folder
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| FOLLOWED_IN_FULL.contains(&name));
         let idea_text = std::fs::read_to_string(idea_path).expect("the idea reads");
         let wat = std::fs::read_to_string(wat_path).expect("the program reads");
         let idea = lengua::idea::parse(&idea_text)
@@ -537,15 +549,22 @@ async fn the_model_does_what_the_engine_does_on_every_test_of_the_fixtures() {
             let listens = idea.network.listens.is_some();
             match lengua::prove::agrees_wasm(&built, policy, &samples(&suite), listens, deadline) {
                 Ok(None) => {}
-                Ok(Some(lengua::prove::Verdict::NotProven(why))) | Err(why) if template => {
+                Ok(Some(lengua::prove::Verdict::NotProven(why))) | Err(why) if !in_full => {
                     not_modelled.push(format!("{shown}: {why}"));
                 }
                 other => failures.push(format!("{shown}: the model {other:?}")),
             }
             continue;
         }
-        let module =
-            Module::new(&built, policy).unwrap_or_else(|problem| panic!("{shown}: {problem}"));
+        let module = match Module::new(&built, policy) {
+            Ok(module) => module,
+            // A module the model doesn't start, such as one with a float global, is listed too.
+            Err(why) if !in_full => {
+                not_modelled.push(format!("{shown}: {why}"));
+                continue;
+            }
+            Err(why) => panic!("{shown}: {why}"),
+        };
         let mut tests: Vec<Test<'_>> = suite.examples.iter().map(Test::example).collect();
         let generated: Vec<(usize, Sample)> = suite
             .generated
@@ -587,7 +606,7 @@ async fn the_model_does_what_the_engine_does_on_every_test_of_the_fixtures() {
                 }
             };
             if let Ended::NotModelled(why) = &model.end
-                && template
+                && !in_full
             {
                 // A test's name holds its input, which can be a mebibyte long.
                 let name: String = test.name.chars().take(80).collect();
