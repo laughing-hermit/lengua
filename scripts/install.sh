@@ -1,22 +1,27 @@
 #!/bin/sh
-# Installs lengua from its release archive: checks what lengua needs on this computer, says how
-# to install anything missing, copies the plugin, and says how to use it.
+# Installs lengua from its release archive, on Linux or macOS: checks that this computer is the
+# system and CPU the archive is for (its TARGET), copies the plugin where Claude Code finds
+# plugins, a marketplace folder of lengua's own, which it adds to Claude Code when the claude
+# command is installed (and says the commands that do, when it isn't), then runs
+# lengua-mcp doctor, which says whether lengua has what it needs here. The archive ships every
+# part lengua needs, the solvers included, so nothing else is installed. Its exit code is
+# doctor's: 0 when nothing is wrong.
 #
 # usage: install.sh [--check] [--link] [--prefix=<folder>]
-#   --check            only check what lengua needs; install nothing
+#   --check            only check this computer; install nothing
 #   --link             also link lengua-mcp into ~/.local/bin, to run programs from a shell
-#   --prefix=<folder>  install the plugin there instead of ~/.local/share/lengua/plugin
+#   --prefix=<folder>  install into that folder instead of lengua's own
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
-dest="${XDG_DATA_HOME:-$HOME/.local/share}/lengua/plugin"
 check_only=false
 link=false
+prefix=""
 for arg in "$@"; do
     case "$arg" in
         --check) check_only=true ;;
         --link) link=true ;;
-        --prefix=*) dest="${arg#--prefix=}" ;;
+        --prefix=*) prefix="${arg#--prefix=}" ;;
         *)
             echo "usage: install.sh [--check] [--link] [--prefix=<folder>]" >&2
             exit 2
@@ -24,80 +29,147 @@ for arg in "$@"; do
     esac
 done
 
-cpu=$(uname -m)
-if [ "$(uname -s)" != Linux ] || { [ "$cpu" != x86_64 ] && [ "$cpu" != aarch64 ]; }; then
-    echo "lengua runs on Linux x86-64 and ARM64 for now; this is $(uname -s) $cpu." >&2
+# A target's name as people say it.
+described() {
+    case "$1" in
+        linux-x86_64) echo "Linux on x86-64" ;;
+        linux-aarch64) echo "Linux on ARM64" ;;
+        macos-aarch64) echo "macOS on ARM64 (Apple silicon)" ;;
+        macos-x86_64) echo "macOS on x86-64 (an Intel Mac)" ;;
+        windows-x86_64) echo "Windows on x86-64" ;;
+        windows-aarch64) echo "Windows on ARM64" ;;
+        *) echo "$1" ;;
+    esac
+}
+
+target=$(cat "$here/TARGET" 2>/dev/null || true)
+if [ -z "$target" ]; then
+    echo "This folder has no TARGET file: install lengua from its release archive, unpacked." >&2
     exit 1
 fi
-# An archive's server is built for one CPU, which its CPU file names.
-built=$(cat "$here/CPU" 2>/dev/null || echo "$cpu")
-if [ "$built" != "$cpu" ]; then
-    echo "This is lengua for Linux $built, and this computer is $cpu: use the $cpu archive." >&2
+version=$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' "$here/plugin.json" | head -n 1)
+
+case "$(uname -s)" in
+    Linux)
+        system=linux
+        cpu=$(uname -m)
+        ;;
+    Darwin)
+        system=macos
+        # A shell under Rosetta says x86_64: the hardware's own answer is hw.optional.arm64.
+        if [ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" = 1 ]; then
+            cpu=aarch64
+        else
+            cpu=x86_64
+        fi
+        ;;
+    *)
+        system=$(uname -s)
+        cpu=$(uname -m)
+        ;;
+esac
+if [ "$cpu" = arm64 ]; then
+    cpu=aarch64
+fi
+computer="$system-$cpu"
+if [ "$computer" != "$target" ]; then
+    echo "This archive is lengua for $(described "$target"), and this computer is" \
+        "$(described "$computer"): use the archive for $computer, if lengua is built for it" \
+        "(linux-x86_64, linux-aarch64, macos-aarch64, windows-x86_64 or windows-aarch64)." >&2
     exit 1
 fi
 
-# The server is built against glibc 2.39: Ubuntu 24.04, Debian 13, Fedora 40 and later.
-glibc=$(ldd --version 2>/dev/null | head -n 1 | grep -o '[0-9][0-9]*\.[0-9][0-9]*$' || true)
-if [ -z "$glibc" ]; then
-    echo "lengua needs glibc 2.39 or later, and this computer's C library isn't glibc." >&2
-    exit 1
-fi
-major=${glibc%%.*}
-minor=${glibc#*.}
-if [ "$major" -lt 2 ] || { [ "$major" -eq 2 ] && [ "$minor" -lt 39 ]; }; then
-    echo "lengua needs glibc 2.39 or later; this computer has $glibc." >&2
-    exit 1
+# Linux's server and solvers are built against glibc 2.39: Ubuntu 24.04, Debian 13, Fedora 40
+# and later.
+if [ "$system" = linux ]; then
+    glibc=$(ldd --version 2>/dev/null | head -n 1 | grep -o '[0-9][0-9]*\.[0-9][0-9]*$' || true)
+    if [ -z "$glibc" ]; then
+        echo "lengua needs glibc 2.39 or later, and this computer's C library isn't glibc." >&2
+        exit 1
+    fi
+    major=${glibc%%.*}
+    minor=${glibc#*.}
+    if [ "$major" -lt 2 ] || { [ "$major" -eq 2 ] && [ "$minor" -lt 39 ]; }; then
+        echo "lengua needs glibc 2.39 or later, and this computer has $glibc." >&2
+        exit 1
+    fi
 fi
 
-if command -v dnf >/dev/null 2>&1; then
-    installer="sudo dnf install"
-elif command -v apt-get >/dev/null 2>&1; then
-    installer="sudo apt install"
-else
-    installer="your package manager's install for"
-fi
-needed=""
-for tool in llvm-mc ld.lld; do
-    command -v "$tool" >/dev/null 2>&1 || needed="$needed $tool"
-done
-solvers=""
-for solver in z3 cvc5; do
-    command -v "$solver" >/dev/null 2>&1 || solvers="$solvers $solver"
-done
-if [ -n "$needed" ]; then
-    echo "lengua builds programs with LLVM's assembler and linker, and${needed} isn't installed:"
-    echo "    $installer llvm lld"
-fi
-if [ -n "$solvers" ]; then
-    echo "Proofs use the z3 and cvc5 solvers, and${solvers} isn't installed; programs are still"
-    echo "checked and tested without them:"
-    echo "    $installer z3 cvc5"
-fi
-if [ -n "$needed" ]; then
-    exit 1
-fi
 if [ "$check_only" = true ]; then
-    echo "This computer has what lengua needs."
-    exit 0
+    echo "This computer is $(described "$computer"), which this archive is for."
+    echo
+    exec "$here/server/lengua-mcp" doctor
 fi
 
-mkdir -p "$(dirname "$dest")"
+# lengua's marketplace folder: the plugin in lengua/, and .claude-plugin/marketplace.json,
+# which names it for Claude Code.
+case "$system" in
+    macos) data="$HOME/Library/Application Support" ;;
+    *) data="${XDG_DATA_HOME:-$HOME/.local/share}" ;;
+esac
+market="${prefix:-$data/lengua/plugins}"
+dest="$market/lengua"
+mkdir -p "$market/.claude-plugin"
 rm -rf "$dest.new"
-cp -R "$here/plugin" "$dest.new"
+cp -R "$here" "$dest.new"
+rm -f "$dest.new/install.sh" "$dest.new/install.ps1" "$dest.new/INSTALL.md"
 rm -rf "$dest"
 mv "$dest.new" "$dest"
+if [ "$system" = macos ] && command -v xattr >/dev/null 2>&1; then
+    # A browser marks what it downloads, and macOS won't start an unsigned program so marked.
+    xattr -dr com.apple.quarantine "$dest" 2>/dev/null || true
+fi
+cat > "$market/.claude-plugin/marketplace.json" <<EOF
+{
+  "name": "lengua",
+  "owner": {
+    "name": "lengua"
+  },
+  "plugins": [
+    {
+      "name": "lengua",
+      "source": "./lengua",
+      "version": "$version"
+    }
+  ]
+}
+EOF
 server="$dest/server/lengua-mcp"
 if [ "$link" = true ]; then
     mkdir -p "$HOME/.local/bin"
     ln -sf "$server" "$HOME/.local/bin/lengua-mcp"
-    server=lengua-mcp
 fi
 
-echo "Installed $("$dest/server/lengua-mcp" --version) in $dest."
+echo "Installed lengua $version for $(described "$target") in $dest."
 echo
-echo "Load it in Claude Code:"
-echo "    claude --plugin-dir $dest"
-echo "and describe a program: \"Use lengua to write a program that ...\"."
+# Claude Code installs a plugin from a marketplace it knows: lengua's, added once and updated
+# after.
+registered=false
+if command -v claude >/dev/null 2>&1; then
+    if claude plugin marketplace add "$market" >/dev/null 2>&1 \
+        || claude plugin marketplace update lengua >/dev/null 2>&1; then
+        if claude plugin update lengua@lengua >/dev/null 2>&1 \
+            || claude plugin install lengua@lengua >/dev/null 2>&1; then
+            registered=true
+        fi
+    fi
+fi
+if [ "$registered" = true ]; then
+    echo "Claude Code has lengua now: start a new session, or run /reload-plugins in one."
+else
+    echo "Add it to Claude Code:"
+    echo "    claude plugin marketplace add '$market'"
+    echo "    claude plugin install lengua@lengua"
+    echo "or load it for one session: claude --plugin-dir '$dest'"
+fi
+echo "Other agent harnesses load the plugin folder $dest."
+echo "Then describe a program: \"Use lengua to write a program that ...\"."
 echo
 echo "Run a program it built from a shell, script or service:"
-echo "    $server run <program folder> -- <arguments>"
+if [ "$link" = true ]; then
+    echo "    lengua-mcp run <program folder> -- <arguments>"
+else
+    echo "    '$server' run <program folder> -- <arguments>"
+fi
+echo
+"$server" doctor
