@@ -61,7 +61,7 @@ const SHOWN_OBLIGATIONS: usize = 4;
 /// settle of that on every run they cover. The model the proofs run on holds every access inside
 /// the program's memory and every division away from its traps, as the engine does, but follows
 /// no region: whether an access the rules leave stays inside its region is as far as the tests
-/// show it.
+/// show it. A proof that found main.wat wrong comes first, with the obligations its inputs broke.
 pub(super) fn memory_line(obligations: &[Obligation], proofs: &[BlockProof]) -> String {
     let rules = "the rules (M1 to M8) hold every address they can follow to its owner, and \
                  WebAssembly holds every access inside the program's own memory";
@@ -96,11 +96,10 @@ pub(super) fn memory_line(obligations: &[Obligation], proofs: &[BlockProof]) -> 
     let running = proofs.iter().any(|proof| proof.detail.is_none());
     let divisions = obligations.iter().any(|obligation| obligation.division);
     let accesses = obligations.iter().any(|obligation| !obligation.division);
-    let covered = if proven.is_empty() && running {
-        "the proofs check them on every run they cover".to_owned()
-    } else if proven.is_empty() {
-        "no proof covers a run, so they are tested, not proven".to_owned()
-    } else {
+    // What a proof that found main.wat wrong found comes first, so that no line calls an
+    // obligation its inputs broke tested, not proven.
+    let mut covered: Vec<String> = found_wrong(obligations, proofs).into_iter().collect();
+    if !proven.is_empty() {
         let held = match (divisions, accesses) {
             (true, true) => "no division traps and every access stays inside the program's memory",
             (true, false) => "no division traps",
@@ -112,16 +111,69 @@ pub(super) fn memory_line(obligations: &[Obligation], proofs: &[BlockProof]) -> 
         } else {
             ""
         };
-        format!(
+        covered.push(format!(
             "on every run the proofs of {} cover, {held}{regions}",
             listed(&proven)
-        )
-    };
+        ));
+    } else if running {
+        covered.push("the proofs check them on every run they cover".to_owned());
+    } else if covered.is_empty() {
+        covered.push("no proof covers a run, so they are tested, not proven".to_owned());
+    }
     format!(
-        "{rules}; they leave the proofs {}: {}; {covered}",
+        "{rules}; they leave the proofs {}: {}; {}",
         counted(obligations.len(), "obligation"),
-        left.join("; ")
+        left.join("; "),
+        covered.join("; ")
     )
+}
+
+/// What the proofs of `proofs` that found main.wat wrong found of what the rules leave to them,
+/// `obligations`: inputs where main.wat is wrong, as their lines say, and each obligation on
+/// whose line a real run of those inputs trapped, which they break. None when no proof found
+/// main.wat wrong.
+fn found_wrong(obligations: &[Obligation], proofs: &[BlockProof]) -> Option<String> {
+    let wrong: Vec<&BlockProof> = proofs.iter().filter(|proof| proof.wrong).collect();
+    if wrong.is_empty() {
+        return None;
+    }
+    let tests: Vec<&str> = wrong
+        .iter()
+        .map(|proof| proof.test.trim_start_matches("generated "))
+        .collect();
+    let mut broken: Vec<usize> = wrong
+        .iter()
+        .filter_map(|proof| proof.detail.as_deref().and_then(trapped_line))
+        .filter(|line| {
+            obligations
+                .iter()
+                .any(|obligation| obligation.line == Some(*line))
+        })
+        .collect();
+    broken.sort_unstable();
+    broken.dedup();
+    let lines: Vec<String> = broken.iter().map(ToString::to_string).collect();
+    let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let fails = match lines.as_slice() {
+        [] => String::new(),
+        [line] => format!("; on them the obligation on main.wat line {line} fails"),
+        _ => format!(
+            "; on them the obligations on main.wat lines {} fail",
+            listed(&lines)
+        ),
+    };
+    Some(format!(
+        "the proofs of {} found inputs where main.wat is wrong, as their lines say{fails}",
+        listed(&tests)
+    ))
+}
+
+/// The line of main.wat on which the real run a proof's `detail` describes trapped, in the
+/// words the run's end has for it.
+fn trapped_line(detail: &str) -> Option<usize> {
+    let (_, after) = detail.rsplit_once("trapped at main.wat line ")?;
+    let digits: String = after.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
 }
 
 /// Whether a run of `block` reads values none of its variables fixes: random bytes or clock
@@ -1677,5 +1729,45 @@ mod tests {
         let many: Vec<Obligation> = (0..6).map(|_| access()).collect();
         let line = memory_line(&many, &proven);
         assert!(line.contains("; and 2 more; "), "{line}");
+    }
+
+    /// A proof that found main.wat wrong comes first in its memory line, with the obligation a
+    /// real run of its inputs trapped on, which they break: nothing a proof found broken is
+    /// called tested, not proven, and what the other proofs settle follows.
+    #[test]
+    fn the_memory_line_says_what_a_proof_found_wrong() {
+        let trapped = "the proof found inputs the tests didn't try where main.wat is wrong: \
+                       with a = 1: the program was trapped at main.wat line 30: integer overflow";
+        let found = BlockProof {
+            wrong: true,
+            ..proof(Some(trapped))
+        };
+        let line = memory_line(&[access(), division()], &[found]);
+        assert!(
+            line.ends_with(
+                "; the proofs of B1 found inputs where main.wat is wrong, as their lines say; on \
+                 them the obligation on main.wat line 30 fails"
+            ),
+            "{line}"
+        );
+        assert!(!line.contains("tested, not proven"), "{line}");
+        // Output a test didn't expect breaks no obligation; another test's proof still settles
+        // its runs.
+        let printed = "the proof found inputs the tests didn't try where main.wat is wrong: \
+                       with a = 1: stdout should be \"1\\n\", but was \"2\\n\"";
+        let found = BlockProof {
+            wrong: true,
+            ..proof(Some(printed))
+        };
+        let mut other = proof(Some("proven for every input in range"));
+        other.test = "generated B2".to_owned();
+        let line = memory_line(&[division()], &[found, other]);
+        assert!(
+            line.ends_with(
+                "; the proofs of B1 found inputs where main.wat is wrong, as their lines say; on \
+                 every run the proofs of B2 cover, no division traps"
+            ),
+            "{line}"
+        );
     }
 }
