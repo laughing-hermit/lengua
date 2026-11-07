@@ -486,6 +486,37 @@ pub async fn check_case(
     Ok(problem)
 }
 
+/// Runs the WebAssembly program `module` on one generated case, in `pool`'s workers, and says
+/// what's wrong, if anything, as [`check_case`] does a native program: its idea's `uses` and
+/// `network` say what its host gives it.
+///
+/// # Errors
+///
+/// Fails when the program can't be started.
+pub async fn check_wasm_case(
+    pool: &crate::wasm::Pool,
+    module: &crate::wasm::Program,
+    case: &crate::testfile::Case,
+    uses: &[Use],
+    network: &Network,
+    delivery: Delivery,
+) -> io::Result<Option<String>> {
+    let target = Target::Wasm {
+        pool,
+        module,
+        policy: crate::wasm::Policy::of(uses, network),
+    };
+    let (_, problem) = check_one(
+        target,
+        &Test::of_case(case),
+        network,
+        delivery,
+        &module.built().assertions,
+    )
+    .await?;
+    Ok(problem)
+}
+
 /// What a test runs: a native executable through lengua's launcher, or a WebAssembly module in
 /// lengua's pool of workers.
 #[derive(Clone, Copy)]
