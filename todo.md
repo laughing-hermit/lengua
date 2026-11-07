@@ -216,6 +216,10 @@ Runs, as they land:
 | W3 | 42308171081 (the suite on all five runners at 5acdb65; its format patch is applied at e9f4700) |
 | W3b | 42317583638 (at 2fb46f1, the chain's tip: format, the suite on all five runners and the gate, green); main fast-forwarded to it |
 | W4 | 42327997413 (the runtime at 63af1eb: format, the suite on all five runners and the gate, green, with the 109 host cases and the limit tests passing the same on every runner); its security and correctness review's 15 findings fixed before it; main fast-forwarded to the same code |
+| W5 | 42336485988 (the rules at 0534a06, on the seam: format, the suite on all five runners and the gate, green; the red team's refusals and the template passing every rule); its review's 23 findings fixed before it |
+| W6 | 42329274411 (the Attested Computation form alone, at 5791d73); 42345074041 (check and run for main.wat at 1c75e7d: format, the suite on all five runners and the gate, green, add from the request to done, run, `lengua-mcp run` and `lengua-mcp check`); the reviews' 15 and 17 findings fixed before them |
+| W7 | 42325471157 (the golden ledger, raw: the checker's and the prover's recordings identical, byte for byte); 42336209846 (the seam on main at d280fa1: format, the suite on all five runners and the gate, green) |
+| W8 | 42344545735 (the WebAssembly model and proofs, z3 and cvc5 on every runner, with add, echo and greet proven and planted bugs found); 42348682819 (stacked on W6 at dac4c7d: format, the suite on all five runners and the gate, green); the review's 11 findings fixed before them. Every length (step 3) and SIMD and floats (step 4) are to come |
 
 ## Superseded by the pivot
 
