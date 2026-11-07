@@ -114,11 +114,21 @@ if [ "$system" = linux ]; then
     fi
 fi
 
-if [ "$check_only" = true ]; then
-    if [ "$system" = macos ] && command -v xattr >/dev/null 2>&1; then
-        # A browser marks what it downloads, and macOS won't start an unsigned program so marked.
-        xattr -dr com.apple.quarantine "$here" 2>/dev/null || true
+# A browser marks what it downloads, and macOS won't start an unsigned program so marked. The
+# archive isn't signed, so whether to trust it is the user's choice: this says how, and changes
+# nothing itself.
+quarantine_note() {
+    if [ "$system" = macos ] && command -v xattr >/dev/null 2>&1 \
+        && xattr -r "$1" 2>/dev/null | grep -q com.apple.quarantine; then
+        echo "macOS marks these files as downloaded, and won't start the unsigned server so marked."
+        echo "If you trust this archive, clear the mark with:"
+        echo "  xattr -dr com.apple.quarantine '$1'"
+        echo
     fi
+}
+
+if [ "$check_only" = true ]; then
+    quarantine_note "$here"
     echo "This computer is $(described "$computer"), which this archive is for."
     echo
     exec "$here/server/lengua-mcp" doctor
@@ -154,10 +164,7 @@ cp -R "$here" "$dest.new"
 rm -f "$dest.new/install.sh" "$dest.new/install.ps1" "$dest.new/INSTALL.md"
 rm -rf "$dest"
 mv "$dest.new" "$dest"
-if [ "$system" = macos ] && command -v xattr >/dev/null 2>&1; then
-    # A browser marks what it downloads, and macOS won't start an unsigned program so marked.
-    xattr -dr com.apple.quarantine "$dest" 2>/dev/null || true
-fi
+quarantine_note "$dest"
 cat > "$marketplace" <<EOF
 {
   "name": "lengua",

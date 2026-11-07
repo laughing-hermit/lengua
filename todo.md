@@ -163,6 +163,9 @@ Each can be reversed.
   never quotes a request's words. An `index.md` in the parent without `okf_version`, such as a
   site's home page, isn't lengua's: lengua leaves it as it is and writes no `log.md` beside it.
   **No MCP resource**: the files are the graph.
+- **The install scripts don't clear a download's mark** (macOS's quarantine, Windows's mark of the
+  web): the archives are unsigned, so trusting one is the user's choice, and the scripts and
+  doctor only say how. Signing and notarizing the archives are the owner's, with publishing.
 - **The signing key stays in the per-user data folder**, so a lock made in one agent harness
   verifies in another; `PLUGIN_DATA` holds only caches.
 - **Memory regions** in `main.wat`: a region `$x` is an immutable global holding its address,

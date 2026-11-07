@@ -134,8 +134,17 @@ if (Test-Path -LiteralPath $dest) {
     Remove-Item -Recurse -Force -LiteralPath $dest
 }
 Move-Item -LiteralPath $staging -Destination $dest
-# A browser marks what it downloads, and Windows may stop an unsigned program so marked.
-Get-ChildItem -Recurse -Force -File -LiteralPath $dest | Unblock-File
+# A browser marks what it downloads, and Windows may stop an unsigned program so marked. The
+# archive isn't signed, so whether to trust it is the user's choice: this says how, and changes
+# nothing itself.
+$marked = Get-ChildItem -Recurse -Force -File -LiteralPath $dest |
+    Where-Object { Get-Item -LiteralPath $_.FullName -Stream Zone.Identifier -ErrorAction SilentlyContinue }
+if ($marked) {
+    Write-Output "Windows marks these files as downloaded, and may stop the unsigned server so marked."
+    Write-Output "If you trust this archive, clear the mark with:"
+    Write-Output "  Get-ChildItem -Recurse -File -LiteralPath '$dest' | Unblock-File"
+    Write-Output ""
+}
 $manifest = @"
 {
   "name": "lengua",

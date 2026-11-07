@@ -415,8 +415,8 @@ case "$target" in
       macos-*)
         destination='`~/Library/Application Support/lengua/plugins/lengua`'
         # A browser marks what it downloads, and macOS won't start an unsigned program so marked:
-        # the install script clears the mark, and --plugin-dir needs it cleared first.
-        options="$options On macOS the script, with \`--check\` too, clears the mark a browser puts on a download, under which macOS won't start the server or the solvers."
+        # whether to trust the archive is the user's, so the install script only says how.
+        options="$options On macOS a browser marks what it downloads, and macOS won't start the unsigned server or solvers so marked: the script says so, with the command that clears the mark, and clears nothing itself, since whether to trust this unsigned archive is yours to decide."
         try='clear that mark from this folder first (`xattr -dr com.apple.quarantine <this folder>`), then load it for one session:'
         ;;
       *) destination='`~/.local/share/lengua/plugins/lengua` (under `$XDG_DATA_HOME` when it is set)' ;;
