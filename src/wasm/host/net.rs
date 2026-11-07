@@ -22,8 +22,10 @@ use super::{Fail, Host, memory};
 use crate::connect::Place;
 use crate::wasm::wasi::{errno, fdflags, sock};
 
-/// The most a socket reads ahead at once.
-const CHUNK: usize = 16 * 1024;
+/// The most a socket reads ahead at once. A read of a connection gives only what one take
+/// brought in, so none gives more, and none goes past where a take ended: the prover's model
+/// of WebAssembly cuts its reads where the host does.
+pub const CHUNK: usize = 16 * 1024;
 
 /// The first nap a wait on a TCP stream takes between two looks at it. Each nap is twice the one
 /// before, up to [`LAST_NAP`], so an answer that comes soon is seen soon, and a long wait costs
@@ -576,6 +578,25 @@ mod tests {
         drop(other);
         assert_eq!(socket.read(&mut buffer, &limits, false).ok(), Some(0));
         assert!(socket.readable());
+    }
+
+    /// A read gives at most what one take of what arrived brought in, and no more than that take
+    /// has left, as the prover's model has it: 40,000 bytes there at once are read as 16 KiB,
+    /// then 10,000 and 6,384 bytes from the next 16 KiB, then the rest.
+    #[test]
+    fn a_read_gives_only_what_one_take_brought_in() {
+        let (mut socket, mut other) = connected();
+        let limits = limits();
+        std::io::Write::write_all(&mut other, &[7; 40_000]).expect("sent");
+        // Everything there before the first take.
+        std::thread::sleep(Duration::from_millis(200));
+        let mut buffer = vec![0_u8; 32_768];
+        let mut counts = Vec::new();
+        for room in [32_768, 10_000, 32_768, 32_768] {
+            counts.push(socket.read(&mut buffer[..room], &limits, false).ok());
+        }
+        let wanted = [Some(16_384), Some(10_000), Some(6_384), Some(7_232)];
+        assert_eq!(counts, wanted);
     }
 
     #[test]
