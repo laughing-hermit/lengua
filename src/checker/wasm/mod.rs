@@ -5,8 +5,9 @@
 //! It reads the module back ([`model`]), then checks its structure: imports, exports, memory,
 //! regions and data ([`structure`]); each function's control flow, its loops and the call graph
 //! ([`flow`]); every value that becomes an address, every access and every buffer a call borrows
-//! ([`memory`]); the Power of 10's other rules ([`rules`]); and that every computer computes the
-//! same bits ([`determinism`]). Violations are the native checker's [`Rule`]s and
+//! ([`memory`]); the Power of 10's other rules ([`rules`]); that every computer computes the
+//! same bits ([`determinism`]); and, for an idea with a `- Secret:` line, that no secret decides
+//! how the program runs ([`secret`]). Violations are the native checker's [`Rule`]s and
 //! [`Violation`]s, reported against main.wat's lines: `rule 4 (small functions) main.wat:12: …`.
 //! What the rules can't settle is left to the proof, as an [`Obligation`].
 
@@ -15,26 +16,31 @@ pub mod flow;
 pub mod memory;
 pub mod model;
 pub mod rules;
+pub mod secret;
 pub mod structure;
 
 #[cfg(test)]
 mod tests;
 
 use crate::checker::{MAX_VIOLATIONS, Rule, UnsafeBlock, Violation};
-use crate::idea::{Network, Use};
+use crate::idea::{Network, Source, Use};
 use crate::wasm::Policy;
 use crate::wasm::text::Built;
 
 /// The file violations name.
 pub const FILE: &str = crate::wasm::CODE_FILE;
 
-/// What the checker needs besides main.wat and its module: what the idea allows.
+/// What the checker needs besides main.wat and its module: what the idea allows, and what it
+/// names as secret.
 #[derive(Debug, Clone, Copy)]
 pub struct Context<'a> {
     /// What the idea's `- Uses:` line names.
     pub uses: &'a [Use],
     /// What its `- Network:` line says.
     pub network: &'a Network,
+    /// The inputs its `- Secret:` line names, whose values must decide nothing of how the
+    /// program runs; none for an idea without the line.
+    pub secrets: &'a [Source],
 }
 
 impl Context<'_> {
@@ -170,5 +176,6 @@ pub fn check(text: &str, built: &Built, context: &Context<'_>) -> Report {
     memory::check(&module, &flows, &analysis, &mut violations, &mut facts);
     rules::check(&module, &flows, &analysis, &mut violations, &mut facts);
     determinism::check(&module, &analysis, &mut violations, &mut facts);
+    secret::check(&module, &flows, &analysis, context.secrets, &mut violations);
     Report::new(violations, facts, module.unsafe_blocks.clone())
 }

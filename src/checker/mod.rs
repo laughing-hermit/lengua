@@ -77,16 +77,20 @@ pub enum Rule {
     Races,
     /// M8: the stack stays within its limit.
     StackSize,
+    /// The secret rule, of the WebAssembly dialect: no value computed from an input the idea's
+    /// `- Secret:` line names decides a branch, an address, a length, a loop's count, a division
+    /// or a float operation, or reaches a host call but as the bytes it writes out.
+    Secrets,
 }
 
 impl Rule {
-    /// How reports name the rule: `rule 4`, `rule M3`, or `dialect`.
+    /// How reports name the rule: `rule 4`, `rule M3`, `dialect` or `secrets`.
     #[must_use]
     pub fn label(self) -> String {
         match (self.number(), self.memory_number()) {
             (Some(number), _) => format!("rule {number}"),
             (None, Some(number)) => format!("rule M{number}"),
-            (None, None) => "dialect".to_owned(),
+            (None, None) => self.name().to_owned(),
         }
     }
 
@@ -148,6 +152,7 @@ impl Rule {
             Self::Immutability => "immutability",
             Self::Races => "no races",
             Self::StackSize => "stack size",
+            Self::Secrets => "secrets",
         }
     }
 }
@@ -167,11 +172,12 @@ pub struct Violation {
 
 impl Violation {
     /// How a report shows the violation of a line of `file`: `rule 4 (small functions)
-    /// main.wat:12: problem. Fix: fix.` for main.wat's, as [`fmt::Display`] shows main.s's.
+    /// main.wat:12: problem. Fix: fix.` for main.wat's, as [`fmt::Display`] shows main.s's, and
+    /// `dialect` or `secrets` for a rule with no number.
     #[must_use]
     pub fn in_file(&self, file: &str) -> String {
         let rule = match self.rule {
-            Rule::Dialect => "dialect".to_owned(),
+            rule @ (Rule::Dialect | Rule::Secrets) => rule.label(),
             rule => format!("{} ({})", rule.label(), rule.name()),
         };
         let place = self
