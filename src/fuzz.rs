@@ -19,8 +19,8 @@ use rand::{RngExt, SeedableRng};
 /// The longest any one input may take a reader.
 const SLOW: Duration = Duration::from_secs(5);
 
-/// Pieces that tend to break readers: the format's own markers, numbers past every width,
-/// unclosed quotes and braces, and bytes text rarely holds.
+/// Pieces that tend to break readers: the format's own markers, an idea's trust record, numbers
+/// past every width, unclosed quotes and braces, and bytes text rarely holds.
 const TRICKY: &[&str] = &[
     "`",
     "``",
@@ -73,6 +73,11 @@ const TRICKY: &[&str] = &[
     "x:\n",
     "---\n",
     "type: lengua/program-idea\n",
+    "verified:\n",
+    "  - { by: human:a, at: 2026-01-01T00:00:00Z }\n",
+    "  - { by: lengua/0.0.1 }\n",
+    "verified: [",
+    "generated: {",
     "- Uses: ",
     "- Network: connects to TCP port ",
     " over TLS",
@@ -92,6 +97,7 @@ fn corpus() -> Vec<(PathBuf, Vec<u8>)> {
     let mut pending = vec![
         root.join("examples"),
         root.join("tests/fixtures"),
+        root.join("tests/fixtures-wasm"),
         root.join("plugin/skills/compile/assets"),
     ];
     while let Some(folder) = pending.pop() {
