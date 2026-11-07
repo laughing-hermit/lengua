@@ -1028,10 +1028,13 @@ fn compiler(language: &str) -> &'static str {
 /// with the libraries to link after the source: for speed on this CPU, as the system's
 /// developers build. Where the compiler doesn't take the CPU's own name, a CPU flag that every
 /// runner of its kind takes (AArch64's CRC instructions or x86-64's SSE4.2, which crc32c's
-/// native versions need), and last, without link-time optimization.
+/// native versions need), and last, without link-time optimization. Every executable ships
+/// without its symbols, on every system: C and C++ with `-s` on Linux and `-Wl,-x` on macOS
+/// (Windows's linker keeps none in the executable), Rust with `strip=symbols`, which rustc runs
+/// its system's tool for.
 fn flag_sets(language: &str) -> Vec<(Vec<&'static str>, Vec<&'static str>)> {
     if language == "rust" {
-        let mut flags = vec![
+        let flags = vec![
             "--edition",
             "2024",
             "-C",
@@ -1044,10 +1047,9 @@ fn flag_sets(language: &str) -> Vec<(Vec<&'static str>, Vec<&'static str>)> {
             "lto=fat",
             "-C",
             "panic=abort",
+            "-C",
+            "strip=symbols",
         ];
-        if cfg!(target_os = "linux") {
-            flags.extend(["-C", "strip=symbols"]);
-        }
         return vec![(flags, Vec::new())];
     }
     let cpus: &[&str] = match (std::env::consts::OS, std::env::consts::ARCH) {
