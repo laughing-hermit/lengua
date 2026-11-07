@@ -52,6 +52,10 @@ pub struct Obligation {
     pub line: Option<usize>,
     /// What must hold.
     pub what: String,
+    /// Whether it's a division's, that it never traps, which a proof settles in full; otherwise
+    /// it's an access's, which a proof holds inside the program's memory but not inside its
+    /// region, since the proof's model follows no region.
+    pub division: bool,
 }
 
 /// What the rules learned about the program.

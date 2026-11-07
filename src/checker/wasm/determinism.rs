@@ -190,6 +190,7 @@ pub fn check(
                     what: format!(
                         "`{name}` never divides the most negative number by -1, which traps"
                     ),
+                    division: true,
                 });
             }
         }

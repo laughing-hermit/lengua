@@ -3012,6 +3012,7 @@ pub fn check(
                     Verdict::Unsettled(what) => facts.obligations.push(Obligation {
                         line: access.line,
                         what,
+                        division: false,
                     }),
                     // Rule 9's, reported with the rules.
                     Verdict::Unchecked(_) | Verdict::Loose(_) => {}
@@ -3140,6 +3141,7 @@ fn iovecs_followed(
                      iovecs at constant offsets in this function for the rules to follow them",
                     callee.shown()
                 ),
+                division: false,
             });
         }
     }
