@@ -156,13 +156,26 @@ fn program(kind: Kind) -> OsString {
 }
 
 /// The version a solver's `--version` prints: `4.16.0` from z3's `Z3 version 4.16.0 - 64 bit`,
-/// and `1.3.4` from cvc5's `This is cvc5 version 1.3.4 [git tag 1.3.4 branch HEAD]`.
+/// and `1.3.4` from cvc5's `cvc5 1.3.4 [git tag 1.3.4 branch HEAD]` or its older
+/// `This is cvc5 version 1.3.4 …`: the first word shaped like a version on the first line that
+/// names the solver, never the compiler's version a later line gives.
 #[must_use]
 pub fn version_of(printed: &str) -> Option<&str> {
     printed.lines().find_map(|line| {
-        let (_, rest) = line.split_once("version ")?;
-        rest.split_whitespace().next()
+        let lower = line.to_ascii_lowercase();
+        if !lower.contains("z3") && !lower.contains("cvc5") {
+            return None;
+        }
+        line.split_whitespace().find(|word| is_version(word))
     })
+}
+
+/// Whether `word` is a version: two or more groups of digits with dots between them.
+fn is_version(word: &str) -> bool {
+    word.split('.').count() >= 2
+        && word
+            .split('.')
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 /// The z3 strategy: bit-blast straight into the SAT solver. z3 4.16's own simplifier gets some
@@ -1658,6 +1671,14 @@ mod tests {
             ),
             Some("1.3.4")
         );
+        // cvc5 1.3.4's own first line, then the compiler's version, which isn't the solver's.
+        assert_eq!(
+            version_of(
+                "cvc5 1.3.4 [git tag 1.3.4 branch HEAD]\ncompiled with GCC version 11.4.0\n"
+            ),
+            Some("1.3.4")
+        );
+        assert_eq!(version_of("compiled with GCC version 11.4.0\n"), None);
         assert_eq!(version_of("lengua-mcp 0.1.0\n"), None);
     }
 
